@@ -33,11 +33,9 @@ func feedKinds(page worklet.FeedPage) []string {
 	return out
 }
 
-// ONE ROW PER COMMIT, UNDER ONE KIND, NEWEST FIRST.
-//
-// A create, a hand-off and a delivery, each at its own instant; a comment and
-// a title edit, which the feed does not carry. A create that is also a
-// delivery is filed as the create, and asking for completions alone finds it.
+// ONE ROW PER COMMIT, UNDER ONE KIND, NEWEST FIRST. A title edit is not
+// carried; a create that is also a delivery is filed as the create, and
+// asking for completions alone finds it.
 func TestTheFeedFilesEachCommitUnderOneKindNewestFirst(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -95,7 +93,7 @@ func TestTheFeedCursorContinuesWithoutRepeatOrGap(t *testing.T) {
 	base := time.Date(2031, 4, 14, 9, 0, 0, 0, time.UTC)
 	for i := range 7 {
 		r.file(fmt.Sprintf("t%d", i))
-		// TWO ROWS PER INSTANT, so the position has to break the tie.
+		// Two rows per instant, so the position has to break the tie.
 		clock.at(base.Add(time.Duration(i/2) * time.Minute))
 	}
 	seen := map[string]bool{}

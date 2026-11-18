@@ -22,9 +22,9 @@ var ReproducibleTables = []string{
 	"code_repos", "code_names", "code_refs", "code_packs", "code_pushes",
 	"code_protections", "code_path_owners",
 
-	// A repository's viewed key, the 32 random bytes its persons' viewed marks digest each path and
-	// file under: written once by the viewed_key record on its own subject, and removed with the
-	// repository by its purge.
+	// A repository's viewed key, the 32 random bytes its persons' viewed marks
+	// digest each path and file under: written once by the viewed_key record,
+	// removed by the repository's purge.
 	"code_viewed_keys",
 
 	// A repository's pushes by UTC day and quarter-hour and by pusher and UTC day: kept with
@@ -32,50 +32,40 @@ var ReproducibleTables = []string{
 	"code_push_days", "code_pusher_days",
 
 	// The packs a record retired, each kept from the collector until a
-	// retire_sweep record removes it past RetireGrace — every node derives
-	// the same rows from the same records, so they are state a replay
-	// rebuilds like any other.
+	// retire_sweep record removes it past RetireGrace.
 	"code_packs_retired",
 
 	// The objects a forced update or a deletion moved a ref off, each kept
 	// until a push record of its repository forgets it past PruneGrace or a
-	// purge removes it with the rest — written only by the records that do
-	// those, so a replay rebuilds them too.
+	// purge removes it.
 	"code_ref_drops",
 
-	// A repository's changes, each with who wrote it, every revision of its
-	// head and its body — a row of its own, kept off the row every head
-	// move rewrites — written by the records on the repository's own
-	// subject, like its refs, and removed with the repository, a change's
-	// revisions, authors and body before its row.
+	// A repository's changes, their authors, every revision of a head, and the
+	// body (its own row, off the one every head move rewrites): written on the
+	// repository's subject and removed with it, each change's revisions,
+	// authors and body before its row.
 	"code_changes", "code_change_authors", "code_revisions", "code_change_bodies",
 
-	// A change's conversation — who is asked to review it, its comments, who
-	// takes part, its reviews and their findings, its counters, and the facts
-	// and the mergeability its repository's home recorded of its revisions —
-	// written by the records on the CHANGE's own subject, which no record on
-	// the repository's writes, and removed with the repository's changes, each
-	// change's before its row.
+	// A change's conversation — reviewers, comments, participants, reviews and
+	// findings, counters, and the facts and mergeability the repository's home
+	// recorded of its revisions: written on the CHANGE's subject alone, removed
+	// with the repository's changes, each change's before its row.
 	"code_reviewers", "code_comments", "code_participants", "code_conversations",
 	"code_reviews", "code_findings", "code_finding_texts", "code_revision_facts", "code_mergeability",
 
-	// A repository's checks — each attempt of each check of each commit, and
-	// the log a failed run kept — written by the records on the repository's
-	// CHECKS subject alone, each apply a join, and removed past CheckHistory
-	// by those records and by the code-retention duty's checks_sweep, and
-	// with the repository by its purge. Beside them what the repository's
-	// home dispatched: each target's checks file as the home last read it,
-	// and the file each change head was dispatched under — written by the
-	// check_dispatched records on the same subject (which write the attempts
-	// they queue into code_checks too), each apply a join, and removed with
-	// the repository by its purge.
+	// A repository's checks — each attempt of each check of each commit, and a
+	// failed run's log — and what its home dispatched: each target's checks
+	// file as last read and the file each change head was dispatched under.
+	// Written on the repository's CHECKS subject alone, each apply a join
+	// (check_dispatched also writes the attempts it queues); attempts removed
+	// past CheckHistory by those records and the code-retention duty's
+	// checks_sweep, and all of it with the repository by its purge.
 	"code_checks", "code_check_logs", "code_check_targets", "code_check_dispatches",
 
-	// A repository's merge queues — each entry a change's enqueue made, the
-	// candidates a queue builds, the landings on its protected branches, each
-	// branch's green row and the tip work it is owed — written by the records
-	// on the repository's own subject, beside its pushes and its changes'
-	// lifecycles, and removed with the repository by its purge.
+	// A repository's merge queues — enqueued entries, the candidates a queue
+	// builds, landings on protected branches, each branch's green row and the
+	// tip work it is owed: written on the repository's subject, removed by its
+	// purge.
 	"code_queue", "code_candidates", "code_landings", "code_green", "code_tips_due",
 
 	// A repository's published chain and the objects its layers are stored
@@ -83,17 +73,15 @@ var ReproducibleTables = []string{
 	// replacing the chain's top, and removed whole by its purge.
 	"code_layers", "code_layer_parts",
 
-	// A seat's pushes counted on its company day, one row a seat and day,
-	// for the decide's pushes_per_seat_day: the push apply's own counter,
-	// a function of the push records alone — each agent entry counted on
-	// the day its decide stamped — so a replay rebuilds it, and every node
-	// counts alike with no clock of its own.
+	// A seat's pushes on its company day, for the decide's
+	// pushes_per_seat_day: counted by the push apply, each agent entry on the
+	// day its decide stamped, so every node counts alike with no clock of its
+	// own.
 	"code_seat_days",
 
 	// How many repositories of each kind the log holds, every status short
 	// of purged, for a tool's create of a project (repo_limit): counted in
-	// by a create's apply and out by the purge's that removes the row, so a
-	// replay rebuilds it from those records alone.
+	// by a create's apply and out by the purge's.
 	"code_repo_kinds",
 
 	// The changes of the repositories in use by state, a row for each owner and visibility:
@@ -104,17 +92,16 @@ var ReproducibleTables = []string{
 	// re-derived by the applier (apply_repotallies.go).
 	"code_repo_tallies",
 
-	// A person's marks over their code notices — how far they have read on
-	// this log, what they marked out of order or put off, which reasons are
-	// theirs — written by the records on the person's own subject alone,
-	// each a gesture applied to the row its predecessor left, at the
-	// record's broker instant (marks.go): state a replay rebuilds like any
-	// other. Not a repository's, so no purge removes it.
+	// A person's marks over their code notices (marks.go): written on the
+	// person's subject alone, each a gesture applied to the row its
+	// predecessor left at the record's broker instant. Not a repository's, so
+	// no purge removes it.
 	"code_person_marks",
 
-	// The files a person marked viewed on a change, by keyed digests: written by the viewed records on
-	// their own subject alone (viewed.go). Not a repository's, so no purge removes them; its purge
-	// deletes the key, after which they name no file once the log is trimmed past the key's record.
+	// The files a person marked viewed on a change, by keyed digests
+	// (viewed.go): written on the person's subject alone. Not a repository's,
+	// so no purge removes them; the repository's purge deletes the key, after
+	// which they name no file once the log is trimmed past the key's record.
 	"code_viewed_files",
 
 	// The activation fence: the configuration activation every

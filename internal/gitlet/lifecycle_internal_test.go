@@ -6,33 +6,23 @@ import (
 	"testing"
 )
 
-// EVERY CONTROL OF A PROTECTION IS JUDGED FOR LOOSENING. A seat may add a rule
-// or tighten one and never loosen one (ADR-0088), so a field ADDED to
-// Protection that loosenings skips is a control every unit's lead may switch
-// off unseen — and a direct_push value added to the closed set, one it may
-// switch to. So the cases are keyed by field name and held to the struct's own
-// fields by reflection, and the direct_push cases to every pair of values the
-// closed set holds: a new field, or a new value, fails this test until it is
-// given a case, and with it its clause in loosenings.
+// EVERY CONTROL OF A PROTECTION IS JUDGED FOR LOOSENING (ADR-0088): a field
+// added to Protection, or a value to direct_push's closed set, that loosenings
+// skips is a control every unit's lead may switch off unseen. So the cases are
+// held by reflection to the struct's fields, and to every pair of direct_push
+// values: a new one fails here until it has a case, and loosenings a clause.
+// The merge gate changed opens what MergeGate.LoosenedBy names
+// (TestEveryGateFieldIsJudged); removed it opens, added it does not.
 //
-// THE MERGE GATE: removed it opens, added where the rule had none it does
-// not, and changed it opens what MergeGate.LoosenedBy names — field by field,
-// each held by TestEveryGateFieldIsJudged — so the rule's own gate sent back,
-// another pointer to an equal value, opens nothing, a gate tightened opens
-// nothing, and one loosened in two fields opens those two alone.
-//
-// Mutations: drop allow_force's clause from loosenings — its case names no
-// opening, red; judge direct_push by a rank (none below persons, a value this
-// build does not know above both) and call only a rise a loosening — the
-// unknown value made persons is none, red; drop the gate's removal arm — the
-// gate removed opens nothing, red; drop the gate's field arm — the gate
-// lowered in two fields opens nothing, red.
+// Mutations: drop allow_force's clause from loosenings, red; call only a rise
+// in a direct_push rank (none < persons < unknown) a loosening — unknown →
+// persons is missed, red; drop the gate's removal arm, red; drop the gate's
+// field arm — the gate lowered in two fields opens nothing, red.
 func TestEveryProtectionControlIsJudged(t *testing.T) {
 	t.Parallel()
 	const pattern = "refs/heads/main"
-	// judged is a change of the one rule from to the rule to — removed where
-	// to is nil — as the decide judges it: the rules it read, and the rules
-	// the change leaves.
+	// judged judges a change of the one rule from to to (nil removes it) as
+	// the decide does.
 	judged := func(from Protection, to *Protection) []string {
 		return loosenings([]Protection{from}, onlyRule(pattern, to), pattern)
 	}
@@ -55,9 +45,7 @@ func TestEveryProtectionControlIsJudged(t *testing.T) {
 		"Gate": {Protection{PushRule: PushRule{Pattern: pattern, DirectPush: DirectPersons}, Gate: gate()},
 			Protection{PushRule: PushRule{Pattern: pattern, DirectPush: DirectPersons}}},
 	}
-	// EVERY FIELD A RULE HOLDS, its push rule's included: the embedded
-	// PushRule's own fields are the rule's, and a control added to either is
-	// one more field here.
+	// EVERY FIELD A RULE HOLDS, the embedded PushRule's included.
 	ignored := map[string]bool{"Pattern": true}
 	for _, field := range reflect.VisibleFields(reflect.TypeFor[Protection]()) {
 		if field.Anonymous {
@@ -120,9 +108,9 @@ func TestEveryProtectionControlIsJudged(t *testing.T) {
 		}
 	}
 
-	// THE GATE, FIELD BY FIELD: the rule's own gate sent back as it stands,
-	// another pointer to an equal value, opens nothing; raised, nothing; and
-	// lowered in two fields, those two alone, as LoosenedBy names them.
+	// THE GATE, FIELD BY FIELD: sent back as it stands (another pointer to an
+	// equal value) or raised, it opens nothing; lowered in two fields, those
+	// two alone, as LoosenedBy names them.
 	gated := Protection{PushRule: PushRule{Pattern: pattern, DirectPush: DirectPersons}, Gate: gate()}
 	if got := judged(gated, &Protection{PushRule: PushRule{DirectPush: DirectPersons}, Gate: gate()}); len(got) != 0 {
 		t.Errorf("the rule's own gate sent back as it stands is judged %q, want no loosening", got)

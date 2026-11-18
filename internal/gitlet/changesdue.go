@@ -14,135 +14,94 @@ import (
 )
 
 // THE HOME'S DUE CHANGE WORK, READ FROM THE ROWS: a `changes_due` read
-// ([ReadChangesDue]) is what a repository's home Gitlet node polls for, and is
-// nudged into reading, to learn which changes it owes work. A LIVE change, on
-// an ACTIVE repository, its target a live branch, owes its home:
-//
-//   - its head revision's FACTS, where it holds none against the branch it
-//     merges into, matched against the path owners and the rules' human
-//     paths its repository holds (code_revision_facts by its key — a revision
-//     with no row, one read against another branch, the change retargeted
-//     since, or one whose owners_digest or human_paths_digest is not its
-//     repository's, its owners or its rules changed since), which the home
-//     reads and records ([Revise]) — or, finding a head its target holds,
-//     lands ([ChangeLanded]);
-//   - its head revision's MERGE, where it holds no mergeability of that
-//     revision against that branch (code_mergeability by its key), which the
-//     home merges and records ([Mergeability]) — or lands, as above;
-//   - a REFRESH of its readiness ([Mergeability.Refresh]), where it holds a
-//     mergeability of its head revision against that branch whose readiness
-//     was judged at versions its own row (code_changes.version) or its
-//     conversation's readiness inputs (code_conversations.readiness_version)
-//     have moved past since — a review, an ask, an answer to findings, its
-//     facts, an edit of its row — or at a position of its head's checks
-//     (code_mergeability.checks_position) an attempt at its head commit for
-//     its target was queued or ended past since — THE CHECK TERM: a finished
-//     head check, a requeue (code_checks' key, one seek of the commit and the
-//     target) — or by a chart EARLIER than the one the home holds
-//     ([ChangesDueQuery.ChartEpoch]) — THE CHART TERM: who may approve and
-//     who maintains the repository are the chart's, which no record moves —
-//     which the home records over the merge the row holds, running none;
-//   - and a RECHECK of that merge — the change's mergeability is of its head
-//     revision against its branch, and its target has moved past the tip it
-//     merged into since, or the merge was undecided — once the mergeability
-//     was recorded at or before [ChangesDueQuery.RecheckBefore]: its home's
-//     clock less its refresh, so a target that moves on every push asks its
-//     changes' merges again at the home's pace, never at its own.
-//
-// And a change, LIVE OR ENDED, owes its home a SETTLING OF ITS ASKS for
-// review with its lifecycle ([AskSettle]) where its asks no longer match its
-// state: an ended change whose asks still wait (code_conversations.asked),
-// which nobody owes a review any more, and a live one holding asks its end
-// left (code_conversations.ended), reopened since — on an active repository
-// whatever its target, since the settling reads no branch. The change's
-// lifecycle is its repository's records, which write nothing of its
-// conversation, so this is how an ask stops waiting when its change ends:
-// the listing of the changes waiting on a reviewer walks the waiting asks
-// alone, and holds an ended change's only until its home settles them.
-//
-// Every record the home makes takes its change off the list by its own row,
-// so the rows and the home's chart are the work list and nothing else is: a
-// merge and a refresh each store the versions and the chart they judged the
-// readiness at, and a settling moves the counts its change is found by. A
-// chart apply makes every live change of a home's repositories due ONE
-// refresh, recorded at its next pass — a record a change, which the decide
-// stores whether or not the answer moved, since the row must say the later
-// chart judged it — and a refresh decided by a committing node behind that
-// chart is judged by its own, or refused superseded where nothing else
-// moved, so a home ahead of its repositories' committer finds the change due
-// again at its next pass until the committer has applied the activation too.
-//
-// A CHANGE ON AN ARCHIVED OR A DELETED REPOSITORY IS NOBODY'S WORK: every write
-// of it would be refused (repo_archived, repo_deleted), and listed it would be
-// read again on every pass for ever. A change whose target branch is gone is
-// nobody's either, until a push makes the branch again or the change is
-// retargeted: there is no tip to read its facts against or merge it into.
-// A PULL MIRROR'S live changes STAY its home's work, though nothing merges
-// into one (repo_mirrored): its source merges them, and the home's merge is
-// what finds that — the change's head inside the target a sync moved, LANDED
-// ([ChangeLanded]), which a pull mirror takes. Its facts and its merges are
-// conversation records a pull mirror takes too, so each lands and takes the
-// change off the list until a sync moves its target again, at the home's
-// recheck pace: the work of any repository's open change, over a set no open
-// adds to on a mirror.
-//
-// TWO SHAPES, one per caller: with no repository it pages the repositories
-// holding such a change, by id — what a home's backstop asks its placement
-// about, a repository at a time being no question a pass can afford — walking
-// code_changes_open_idx, which holds the live changes alone, in its own order
-// and grouped on its leading column, so a page is read in index order and
-// never sorted; with one ([ChangesDueQuery]) it pages that repository's
-// changes owing their facts, their merge or a refresh by source branch, the
-// same index's range, each with its target's tip from code_refs' key, and —
-// on a page naming a change owing its facts, and no other — the repository's
-// path owners beside them, read in the same snapshot as the changes they are
-// matched for — and on its FIRST PAGE the changes owing a
-// recheck, at most as many as the home asks ([ChangesDueQuery.Rechecks]), THE
-// OLDEST MERGE FIRST. Every change a page names is checked against its facts'
-// key, its mergeability's and its conversation's, one seek of each a change.
-//
-// OLDEST FIRST, because a page cut at the home's budget in any other order
-// starves the rest: in source-branch order a repository with more changes due
-// a recheck than its home's budget covers in one refresh would recheck the
-// same first ones at every refresh and the last ones never, while the oldest
-// merge first walks them all in turn. The one sort a listing here makes, of
-// one repository's live changes behind a moved target — at most one a live
-// branch of it (code_changes_open_idx), so MaxRefsPerRepo bounds it — since no
-// index orders a repository's changes by when their merge was recorded
-// without one written by the records of two subjects.
-//
-// MEASURED (BenchmarkChangesDue: 1 000 repositories of 10 live changes each,
-// every one's facts and merge held and nothing due, beside ONE repository of
-// 10 000 live changes behind a moved target; -benchtime 3x and one count on
-// the runner's two E-cores of a Core Ultra 7 265U, the machine loaded;
-// 2026-11-01): a backstop pass's listing of the repositories, every page, is
-// 215 ms — some 10 µs a live change of the company, each checked by its facts'
-// key, its mergeability's and its conversation's; that repository's due
-// changes, every page, 168 ms; and its first page asking 64 rechecks, the
-// oldest merge first, 226 ms — the one sort, of every change behind the moved
-// target, some 58 ms of it. EVERY GITLET NODE LISTS EVERY REPOSITORY once a
-// Backstop (internal/gitlet/home), so a fleet of G Gitlet nodes asks its data nodes
-// G × 215 ms of reads a minute at this size — about 1 % of one core for three
-// — and a busy repository's home pays its 226 ms once a turn, a nudge's or a
-// pass's. Both grow with the live changes, the walk being
-// code_changes_open_idx whole: a pass's listing nearing a tenth of a Backstop
-// (6 s, some 600 000 live changes at this rate) is what moves it off the walk
-// of every live change.
-//
+// ([ReadChangesDue]) is what a repository's home Gitlet node polls, and is
+// nudged into reading, to learn the changes it owes work. A LIVE change on an
+// ACTIVE repository, its target a live branch, owes its home:
+//   - its head revision's FACTS ([Revise], or [ChangeLanded] where the target
+//     holds the head) where code_revision_facts holds none against that branch
+//     at its repository's owners_digest and human_paths_digest;
+//   - its head revision's MERGE ([Mergeability], or lands, as above) where
+//     code_mergeability holds none against that branch.
+
+// It owes too a REFRESH of its readiness ([Mergeability.Refresh], over the
+// merge its row holds, running none) where the readiness was judged at a
+// code_changes.version or code_conversations.readiness_version since moved, at
+// a code_mergeability.checks_position a head check for its target was queued
+// or ended past since (THE CHECK TERM), or by a chart earlier than
+// [ChangesDueQuery.ChartEpoch] (THE CHART TERM: who may approve and who
+// maintains are the chart's, which no record moves); and a RECHECK of a merge
+// behind its target's tip or undecided, once recorded at or before
+// [ChangesDueQuery.RecheckBefore] (the home's clock less its refresh), so a
+// target moving on every push is rechecked at the home's pace, never its own.
+
+// Any change on an active repository, LIVE OR ENDED, whatever its target, owes
+// a SETTLING OF ITS ASKS ([AskSettle]) where they no longer match its state: an
+// ended change whose asks still wait (code_conversations.asked), or a reopened
+// live one holding asks its end left (code_conversations.ended). A change's
+// lifecycle records write nothing of its conversation, and the listing of the
+// changes waiting on a reviewer walks the waiting asks alone, so this is how
+// an ask stops waiting when its change ends.
+
+// Every record the home makes takes its change off the list by its own row (a
+// merge and a refresh store the versions and chart they judged at; a settling
+// moves the counts), so the rows and the home's chart are the whole work list.
+// A chart apply makes every live change due ONE refresh, which the decide
+// stores even where the answer did not move, since the row must say the later
+// chart judged it; a committer behind that chart judges by its own, or refuses
+// it superseded where nothing else moved, so the change stays due until it
+// applies the activation too.
+
+// A change on an ARCHIVED OR DELETED repository is nobody's work: every write
+// would be refused (repo_archived, repo_deleted), and listed it would be read
+// on every pass for ever. Nor is one whose target branch is gone, until a push
+// makes it again or the change is retargeted: there is no tip to read against.
+// A PULL MIRROR'S live changes stay its home's work though nothing merges into
+// one (repo_mirrored): its source merges them, and the home's merge finds the
+// head inside the target a sync moved, [ChangeLanded]. Facts and merges are
+// records a pull mirror takes, so each takes the change off the list until a
+// sync moves its target again.
+
+// TWO SHAPES: with no repository it pages the repositories holding a due
+// change, by id — a home's backstop asks about its whole placement, a
+// repository at a time being no question a pass can afford — walking
+// code_changes_open_idx (the live changes alone) grouped on its leading
+// column, so a page is read in index order and never sorted. With one
+// ([ChangesDueQuery]) it pages that repository's changes owing facts, a merge
+// or a refresh by source branch, the same index's range, each with its
+// target's tip by code_refs' key; the path owners only on a page naming a
+// change owing its facts, in the same snapshot; and on its FIRST PAGE up to
+// [ChangesDueQuery.Rechecks] rechecks, THE OLDEST MERGE FIRST. Each change is
+// checked against its facts' key, its mergeability's and its conversation's.
+
+// OLDEST FIRST, because a page cut at the home's budget in source-branch order
+// would recheck the same first changes at every refresh and the last never. It
+// is the one sort a listing here makes, of one repository's live changes
+// behind a moved target — at most one a live branch (code_changes_open_idx),
+// so MaxRefsPerRepo bounds it — since no index orders a repository's changes
+// by when their merge was recorded without one written by the records of two
+// subjects.
+
+// MEASURED (BenchmarkChangesDue -benchtime 3x; two E-cores of a Core Ultra 7 265U, loaded,
+// 2026-11-01): 1 000 repositories of 10 live changes with nothing due beside
+// ONE of 10 000 behind a moved target. A backstop pass's listing of the
+// repositories, every page, is 215 ms, some 10 µs a live change; that
+// repository's due changes 168 ms; its first page with 64 rechecks 226 ms, the
+// sort some 58 ms of it. EVERY GITLET NODE LISTS EVERY REPOSITORY once a
+// Backstop (internal/gitlet/home), so G nodes ask G × 215 ms of reads a minute
+// here, about 1 % of one core for three. Both grow with the live changes: a
+// listing nearing a tenth of a Backstop (6 s, some 600 000 live changes) is
+// what moves it off the walk of every live change.
+
 // READ STALE BY DEFAULT, as every duty listing is: a change listed a moment
-// behind the head costs a record the decide refuses superseded, and one a
-// moment early is listed again at the next pass — the decide holds every guard
-// to its own snapshot. A home nudged by a record reads at that record's
-// position instead, so the change it was nudged about is in the rows it reads
-// ([checkFreshness]: `session` beside a position on the code log).
+// behind costs a record the decide refuses superseded, and one a moment early
+// is listed again at the next pass. A home nudged by a record reads at its
+// position instead ([checkFreshness]: `session` beside a code log position),
+// so the change it was nudged about is in the rows it reads.
 
 // validateChangesDue is [ReadQuery.validate] for a `changes_due` read: the
-// engine's own, so it names NO asker and no seat it reads for, for the
-// `compaction_due` read's reason; its own query, REQUIRED, with the instant a
-// recheck is due by, its one repository, where it names one, by id in its
-// canonical spelling, and the rechecks it asks only beside one, 0 to
-// MaxSnapshotItems; and nothing else a listing names — no repository's name,
-// filter, range, floor or limit, since a page is MaxSnapshotItems rows.
+// engine's own, so it names no asker or seat (the `compaction_due` read's
+// reason), and nothing a listing names beyond its own query, since a page is
+// MaxSnapshotItems rows.
 func (q ReadQuery) validateChangesDue() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	switch d := q.ChangesDue; {
@@ -197,12 +156,11 @@ func (q ReadQuery) validateChangesDue() error {
 	return nil
 }
 
-// changesDueQuery is the framework read a `changes_due` read resolves to: a
-// SET READ OF THE DOMAIN for the listing of repositories, as every duty listing
-// is, and of the one repository for its due changes — whose records' scope
-// names the repository's path, a change's conversation's among them — so a
-// repository a deferred record holds back is read as its rows stand, and the
-// decide that follows judges again from its own snapshot.
+// changesDueQuery is a set read of the domain for the listing of repositories,
+// as every duty listing is, and of the one repository for its due changes (its
+// records' scope names its path, a conversation's among them), so a repository
+// a deferred record holds back is read as its rows stand; the decide that
+// follows judges again from its own snapshot.
 func (q ReadQuery) changesDueQuery(fresh statelog.Freshness) statelog.Query {
 	if q.ChangesDue.RepoID == "" {
 		return fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
@@ -224,12 +182,11 @@ func (r *Reader) dueRepos(ctx context.Context, tx *sql.Tx, q ReadQuery, out *Rea
 	if q.Cursor != "" && !canonicalUUID(q.Cursor) {
 		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 	}
-	// TWO WALKS, MERGED: the live changes owing their facts, their merge, a
-	// refresh, a recheck or the asks their end left, by
-	// code_changes_open_idx; and the ended changes whose asks still wait, by
-	// code_conversations_asked_idx — each in its index's order, at most a
-	// page of repositories after the cursor, so the first page's worth of the
-	// two merged is the first page's worth of their union.
+	// TWO WALKS, MERGED: the live changes owing work or holding asks their end
+	// left (code_changes_open_idx), and the ended changes whose asks still wait
+	// (code_conversations_asked_idx), each at most a page of repositories after
+	// the cursor in index order, so the first page of the two merged is the
+	// first page of their union.
 	live, err := reposOf(ctx, tx, dueReposSQL, q.Cursor, r.pageRows, store.EncodeTime(q.ChangesDue.RecheckBefore),
 		q.ChangesDue.ChartEpoch)
 	if err != nil {
@@ -280,12 +237,10 @@ func mergeSorted(a, b []string) []string {
 	return out
 }
 
-// dueChanges serves a page of a repository's changes owing their facts or
-// their merge, by source branch, after the cursor — the last source branch a
-// page named — beside the repository's path owners where one of them owes its
-// facts — and on its first page the
-// changes owing a recheck, oldest merge first: none at all, and no owners, for
-// a repository that is not active or not there.
+// dueChanges serves a page of a repository's due changes by source branch
+// after the cursor (the last source branch a page named), beside its path
+// owners and gates where one owes its facts: none at all for a repository that
+// is not active or not there.
 func (r *Reader) dueChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	repoID := q.ChangesDue.RepoID
 	if q.Cursor != "" && !ValidRef(q.Cursor) {
@@ -301,14 +256,11 @@ func (r *Reader) dueChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 		return nil
 	}
 	// THE OWNERS AND THE GATES RIDE ONLY A PAGE NAMING A CHANGE OWING ITS
-	// FACTS — what its home matches the touched paths against — read last, in
-	// the same snapshot as the changes they are matched for. Most reads a
-	// nudge makes name none, and at their bounds the owners are a quarter of
-	// a mebibyte and the gates half of one, which every such read would read,
-	// encode and, answered from another node, ship for nothing. Their ROOM is
-	// their bounds ([MaxPathOwnersBytes], [maxGatesBytes]), reserved before
-	// the changes are read, so a page that turns out to need them always
-	// fits them.
+	// FACTS, read last in the same snapshot: most nudged reads name none, and
+	// at their bounds they weigh three quarters of a mebibyte every read would
+	// encode and ship for nothing. Their room ([MaxPathOwnersBytes],
+	// [maxGatesBytes]) is reserved before the changes are read, so a page that
+	// turns out to need them always fits them.
 	pg := page{maxRows: r.pageRows, maxB: r.pageBytes - MaxPathOwnersBytes - maxGatesBytes}
 	if err := dueChangesPage(ctx, tx, q, &pg, r.pageRows, out); err != nil {
 		return err
@@ -328,11 +280,8 @@ func (r *Reader) dueChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	return nil
 }
 
-// maxGatesBytes is the most a repository's merge gates, each named by its
-// rule's pattern ([RuleGate]), may weigh as JSON: MaxProtectionsPerRepo rules,
-// each a gate of at most MaxGateBytes beside a pattern of at most a ref's
-// bytes and the object around them — the half a mebibyte a due page reserves
-// for them beside the owners.
+// maxGatesBytes is the most a repository's merge gates ([RuleGate]) weigh as
+// JSON: the half mebibyte a due page reserves for them beside the owners.
 const maxGatesBytes = MaxProtectionsPerRepo * (MaxGateBytes + gitref.MaxRefNameBytes + len(`{"pattern":"","gate":},`))
 
 // dueChangesPage is a page of a repository's due changes into out — its asks
@@ -379,12 +328,10 @@ func dueChangesPage(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, page
 }
 
 // dueAskSettles is a repository's changes whose asks its home owes a settling
-// ([ReadAnswer.AskSettles]), at most [MaxAskSettlesPerRead] — counted against
-// the first page's budget, which they ride: its ENDED changes holding an ask
-// still waiting, each found through code_conversations_asked_idx, which holds
-// the changes with a waiting ask and never the repository's history; and its
-// LIVE changes holding an ask their end left, each found on the walk of the
-// repository's live changes, its conversation's counters read by their key.
+// ([ReadAnswer.AskSettles]), at most [MaxAskSettlesPerRead], counted against
+// the first page's budget: its ended changes with a waiting ask, by
+// code_conversations_asked_idx (never the repository's history), then its live
+// ones holding asks their end left, on the walk of its live changes.
 func dueAskSettles(ctx context.Context, tx *sql.Tx, repoID string, pg *page, out *ReadAnswer) error {
 	// EACH STATEMENT SPELLED AT ITS CALL, a constant the read-index gate
 	// follows to its registered plan.
@@ -417,8 +364,8 @@ func dueAskSettles(ctx context.Context, tx *sql.Tx, repoID string, pg *page, out
 }
 
 // dueRechecks is a repository's changes owing a recheck of their merge, the
-// oldest merge first, at most as many as q asks — counted against the first
-// page's budget, which they ride.
+// oldest first, at most as many as q asks, counted against the first page's
+// budget.
 func dueRechecks(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, out *ReadAnswer) error {
 	repoID := q.ChangesDue.RepoID
 	rows, err := tx.QueryContext(ctx, dueRechecksSQL, repoID, store.EncodeTime(q.ChangesDue.RecheckBefore),
@@ -438,56 +385,25 @@ func dueRechecks(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, out *Re
 		}
 		c.TipPosition, c.Checked = statelog.Unpack(topics.CodeLogStream, at), store.DecodeTime(checked)
 		out.Rechecks = append(out.Rechecks, c)
-		// COUNTED, NEVER A REASON TO STOP: the home asks at most its pass's
-		// budget, a few dozen rows, and a page always serves at least one
-		// change after them, so the pages that follow start where it ends.
+		// COUNTED, NEVER A REASON TO STOP: the home asks a few dozen at most,
+		// and a page always serves a change after them, so the next page
+		// starts where it ends.
 		pg.add(c.encodedBytes())
 	}
 	return rows.Err()
 }
 
-// The due listing's reads, each registered in plan_test.go. Each walks
-// code_changes_open_idx, its predicate spelled as the index declares it
-// ([liveChanges]), and reaches each change's target's live row by code_refs'
-// key, its facts by theirs and its mergeability by its key:
-//
-//   - the repositories holding a due change, after a cursor, in the index's
-//     order and grouped on its leading column, each repository's state by its
-//     key — a change due its facts, its merge, a refresh, or a recheck of its
-//     merge recorded at or before ?3;
-//   - the repositories holding an ended change whose asks for review still
-//     wait, after a cursor, walking code_conversations_asked_idx — which holds
-//     the changes with a waiting ask alone, never a repository's history — in
-//     its order and grouped on its leading column, each change's state and
-//     its repository's by their keys; and, in the walk above, a live change
-//     holding asks its end left, its conversation's counters by their key;
-//   - one repository's ended changes whose asks still wait, and its live
-//     changes holding asks their end left (endedAsksSQL, reopenedAsksSQL);
-//   - one repository's state by its key;
-//   - one repository's changes owing their facts, their merge or a refresh
-//     after a source branch, the index's range, each saying which it owes;
-//   - one repository's changes owing a recheck — a mergeability of the head
-//     revision against the branch, behind its target's tip or undecided,
-//     recorded at or before ?2 — oldest first, at most ?3, the walk's one sort
-//     (this file's head says why).
+// The due listing's reads, each registered in plan_test.go: each walks
+// code_changes_open_idx by [liveChanges], the predicate as the index declares
+// it, or code_conversations_asked_idx for the asks still waiting, grouping the
+// listing of repositories on the index's leading column, and reaches each
+// row it checks by its key or, for a head's checks, code_checks' prefix.
+// dueRechecksSQL alone sorts (this file's head says why).
 //
 // THE MERGEABILITY IS READ IN A SUBQUERY, NEVER JOINED: its `state` beside the
-// change's would make [liveChanges] — the index's predicate, spelled as the
-// index declares it, unqualified — an ambiguous column, which the driver
-// refuses to plan.
-//
-// A MERGE IS HELD, so not due, where the change's mergeability is of its head
-// revision against its branch and either still of the target's tip and
-// decided, or recorded after the instant a recheck is due by — [mergeHeld],
-// what the listing of repositories asks of every live change it walks, where a
-// repository's own read asks the two halves of it apart. A REFRESH IS DUE
-// where that mergeability's readiness was judged at versions the change's row
-// or its conversation have moved past, at a position its head's checks have
-// moved past, or by a chart earlier than the home's, ?4 — [refreshDue], its
-// conversation's readiness version read by the conversations' key, its head's
-// attempts for its target by code_checks' (repo_id, commit_oid, target_ref)
-// prefix, its chart off the row. Both statements that ask it bind the home's
-// chart as ?4.
+// change's would make [liveChanges], unqualified, an ambiguous column, which
+// the driver refuses to plan. The listing of repositories asks [mergeHeld] of
+// every live change, where a repository's own read asks its two halves apart.
 const (
 	dueReposSQL = `SELECT c.repo_id FROM code_changes AS c INDEXED BY code_changes_open_idx
 		WHERE c.repo_id > ?1 AND ` + liveChanges + `
@@ -509,11 +425,9 @@ const (
 			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = v.repo_id AND r.status = 'active')
 		GROUP BY v.repo_id ORDER BY v.repo_id LIMIT ?2`
 	// endedAsksSQL is one repository's ended changes whose asks still wait,
-	// at most ?2, by the index that holds the changes with a waiting ask —
-	// its partial predicate repeated verbatim, for changesWaitingSQL's reason
-	// — each change's state by its key; reopenedAsksSQL its live changes
-	// holding asks their end left, the live changes' index's range, each
-	// conversation's counters by their key.
+	// at most ?2, by the asked index, its partial predicate repeated
+	// verbatim for changesWaitingSQL's reason; reopenedAsksSQL its live
+	// changes holding asks their end left.
 	endedAsksSQL = `SELECT v.change_id FROM code_conversations AS v INDEXED BY ` + askedKey + `
 		WHERE v.repo_id = ?1 AND asked > 0
 			AND EXISTS (SELECT 1 FROM code_changes AS c WHERE c.id = v.change_id AND ` + endedChanges + `)
@@ -557,19 +471,17 @@ const (
 				WHERE m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref
 					AND (m.target_position < t.position OR m.state = 'unknown') AND m.at <= ?2)
 		ORDER BY checked, c.id LIMIT ?3`
-	// mergeHeld is a change's mergeability, m, as one its home owes no merge
-	// of: of the change's head revision against its branch, and either of
-	// the target's tip, t, and decided, or recorded after the instant a
-	// recheck is due by, ?3.
+	// mergeHeld is a mergeability, m, its home owes no merge of: of the
+	// change's head revision against its branch, and either of the target's
+	// tip, t, and decided, or recorded after the recheck instant, ?3.
 	mergeHeld = `m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref
 		AND ((m.target_position >= t.position AND m.state != 'unknown') OR m.at > ?3)`
-	// refreshDue is a change's mergeability, m, as one its home owes a
-	// refresh of: of the change's head revision against its branch, its
+	// refreshDue is a mergeability, m, its home owes a refresh of: its
 	// readiness judged at a version of the change's row, c, or of its
-	// conversation's readiness inputs, that each has moved past since — at
-	// a position of its head's checks an attempt at the head commit for its
-	// target was queued or ended past since (Mergeability.ChecksPosition) —
-	// or by a chart earlier than the home's, ?4 (Mergeability.ChartEpoch).
+	// conversation's readiness inputs since moved, at a checks position a
+	// head check for its target was queued or ended past since
+	// (Mergeability.ChecksPosition), or by a chart earlier than the home's,
+	// ?4 (Mergeability.ChartEpoch), which every statement using it binds.
 	refreshDue = `m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref
 		AND (m.change_version < c.version OR m.chart_epoch < ?4
 			OR m.readiness_version < (SELECT v.readiness_version FROM code_conversations AS v WHERE v.change_id = c.id)

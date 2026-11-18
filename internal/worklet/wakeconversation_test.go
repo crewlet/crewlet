@@ -9,19 +9,13 @@ import (
 
 // A TASK'S CONVERSATION IS THE TASK, BY ITS ID — never the key it answers to.
 //
-// Two facts about a key make it the wrong name for a thread. Two tasks can
-// hold one: a counter restored beside newer work mints numbers they already
-// hold, and the applier flags every holder but the claimant `key_collision`.
-// Keyed on the key, a wake about the duplicate coalesced with the claimant's
-// into one digest and filed its turn in the claimant's ledger, so the seat was
-// handed another task's thread as its own. And a key moves: a cross-project
-// move re-keys the task, and keyed on the key its conversation started over
-// under the new one, every earlier turn filed where the next never looked.
-//
-// THROUGH THE PARSER AND THE SPINE'S OWN NAMESPACING, because the partition a
-// seat's inbox groups on is what the parser stamps and the registry composes,
-// and a case that called PartitionKey with metadata it built itself would pass
-// whatever the parser put there.
+// Two tasks can hold one key (a restored counter re-mints keys; the applier
+// flags all but the claimant `key_collision`), and keyed on it a duplicate's
+// wake joins the claimant's digest and ledger. And a move re-keys a task,
+// which would start its thread over. Through the parser and the spine's own
+// namespacing, because the partition is what the parser stamps and the
+// registry composes; metadata built by the case would pass whatever the parser
+// put there.
 //
 // Mutation: key PartitionKey on MetaTaskKey again and both halves fail — the
 // two holders of ENG-7 share one conversation, and the moved task has two.

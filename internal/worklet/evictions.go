@@ -9,24 +9,17 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// Evictions is every eviction this log's applied rows hold — the rows the trim
-// reads to stop counting an evicted node on THIS log once its fence window has
-// passed. See [statelog.EvictionRow] for why the fleet's tombstones live in each
-// domain's own rows rather than in coordination.
+// Evictions is every eviction this log's applied rows hold: what the trim
+// reads to stop counting an evicted node on THIS log once its fence window
+// has passed ([statelog.EvictionRow] says why the tombstones live in each
+// domain's rows rather than in coordination).
 //
-// ON THE DOMAIN, AND ABOUT THIS LOG ONLY. It took the stream as an argument,
-// and the trim passed every identity-claiming domain's own — so for the pages
-// log it asked this table for rows filed under the pages stream, found none,
-// and went on counting an evicted node there for as long as the fleet ran.
-// Each domain answers for its own log now, and the trim asks the domain it is
-// trimming.
-//
-// THROUGH THE REPLICATED ESTATE'S HANDLE, resolved on this call, and that is a
-// correctness property rather than a style: the estate is legitimately not
-// open while an adoption swaps its file and after the node closes, and a
-// statement issued on a closed pool panics inside database/sql — which is what
-// an earlier shape of this did when the trim's own tick raced a shutdown.
-// [store.ReplicatedReader.Read] answers [store.ErrNoEstate] instead.
+// ON THE DOMAIN, about this log only: the trim asks the domain it trims, since
+// one domain's table asked about another log's stream finds no rows and the
+// evicted node is counted there for ever. THROUGH db, resolved on this call: the
+// estate is not open while an adoption swaps its file or after close, and a
+// statement on a closed pool panics in database/sql, where
+// [store.ReplicatedReader.Read] answers [store.ErrNoEstate].
 func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	var out []statelog.EvictionRow
 	err := db.Read(ctx, func(tx *sql.Tx) error {
@@ -53,8 +46,7 @@ func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]state
 			e.From = uint64(from)
 			e.Readmitted = uint64(readmitted.Int64)
 			// THE COMPARISON [Fence.Evicted] MAKES, so the trim and the
-			// node's own fence can never disagree about whether it is
-			// back.
+			// node's own fence never disagree about whether it is back.
 			e.Back = readmitted.Valid && readmitted.Int64 > from
 			out = append(out, e)
 		}

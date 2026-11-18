@@ -30,10 +30,8 @@ func seedTree(t *testing.T, r *roundTrip, root, sub string,
 
 // A SUBTREE RIDES ALONG WITH ITS ROOT, and that is what `collapsed` means.
 //
-// [SubtaskMode]'s own contract: collapsed and expanded filter ROOT tasks and
-// let their subtrees ride along unfiltered; separate filters every task on its
-// own. It was parsed, defaulted and compiled by nothing, so every query in the
-// engine has always behaved as `separate` while the grammar said otherwise.
+// [SubtaskMode]'s contract: collapsed and expanded filter ROOT tasks and let
+// their subtrees ride along unfiltered; separate filters every task on its own.
 func TestASubtreeRidesAlongWithItsRoot(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -53,8 +51,7 @@ func TestASubtreeRidesAlongWithItsRoot(t *testing.T) {
 	}))
 	assertIDs(t, separate, []string{"root-a"})
 
-	// EXPANDED IS THE SAME SET as collapsed — the difference between them
-	// is a RENDER hint, and a caller folds or does not.
+	// EXPANDED IS THE SAME SET as collapsed: the difference is a RENDER hint.
 	expanded := ids(r.ask(map[string]any{
 		"container": "project:ENG", "status": "todo",
 		"subtasks": "expanded", "show_closed": "true",
@@ -78,8 +75,7 @@ func TestASubtaskWhoseRootDoesNotMatchIsOut(t *testing.T) {
 		t.Fatalf("a todo subtask under a done root is in a collapsed answer: "+
 			"%v — the mode filters ROOTS, so its tree did not match", collapsed)
 	}
-	// AND `separate` IS WHERE IT COMES BACK, because that mode filters
-	// every task on its own.
+	// `separate` brings it back: that mode filters every task on its own.
 	assertIDs(t, ids(r.ask(map[string]any{
 		"container": "project:ENG", "status": "todo",
 		"subtasks": "separate", "show_closed": "true",
@@ -114,11 +110,8 @@ func TestARemovedSubtaskDoesNotRideAlong(t *testing.T) {
 	r := newRoundTrip(t)
 	seedTree(t, r, "root-d", "sub-d", worklet.StatusTodo, worklet.StatusTodo)
 
-	// A SECOND SUBTASK, already carrying its tombstone. The write path is
-	// what stamps one in production; what is under test here is the
-	// PREDICATE that reads it, and the tree predicate tests the ROOT's
-	// tombstone — so the row's own has to be tested out here, or removing
-	// a subtask would leave it on every board its parent is on.
+	// A SECOND SUBTASK, seeded already tombstoned: the PREDICATE that
+	// reads the tombstone is under test, not the write path that stamps it.
 	parentID := "root-d"
 	removed := newTask("sub-gone")
 	removed.Key = "ENG-gone"
@@ -134,10 +127,9 @@ func TestARemovedSubtaskDoesNotRideAlong(t *testing.T) {
 
 	assertIDs(t, ids(r.ask(map[string]any{"container": "project:ENG"})),
 		[]string{"root-d", "sub-d"})
-	// AND THE TRASH STILL REACHES IT, because a removal hides a task
-	// rather than destroying it — in every subtask mode, since its
-	// tombstone names no other task's removal and so it is a removal of its
-	// own, listed on its own in the default mode too.
+	// THE TRASH STILL REACHES IT, in every subtask mode: a removal hides a
+	// task rather than destroying it, and a tombstone naming no other task's
+	// removal is a removal of its own, listed alone in the default mode too.
 	for _, mode := range []string{"", "collapsed", "separate"} {
 		params := map[string]any{"container": "project:ENG", "removed": "true"}
 		if mode != "" {
@@ -152,8 +144,8 @@ func TestARemovedSubtaskDoesNotRideAlong(t *testing.T) {
 
 // THE TOTALS AND THE HINT FOLLOW THE MODE.
 //
-// A header that counted the roots while the board showed their subtrees would
-// be a number nobody can reconcile with what is in front of them.
+// A header counting the roots while the board shows their subtrees is a
+// number nobody can reconcile with what is in front of them.
 func TestTheHintAndTheTotalsFollowTheSubtaskMode(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

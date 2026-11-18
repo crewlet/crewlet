@@ -11,9 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// asBob is the writer for the person whose inbox these cases read. An inbox
-// is written ONLY on behalf of the person whose it is, so the harness's own
-// actor cannot mark it — which is the rule, not the harness's shortcoming.
+// asBob is the writer for the person whose inbox these cases read: an inbox is
+// written ONLY on behalf of its owner, so the harness's own actor cannot mark it.
 func asBob(r *roundTrip) *worklet.Writer {
 	return r.writer.As("bob", worklet.AuthorHuman, worklet.Provenance{})
 }
@@ -24,9 +23,7 @@ func (r *roundTrip) inbox(q worklet.InboxQuery) worklet.InboxAnswer {
 		q.Level = statelog.ReadStale
 	}
 	if q.Snoozed == "" {
-		// WHAT EVERY SURFACE DEFAULTS TO — the reader itself refuses the
-		// zero value, so a harness that did not state one would be
-		// testing a question no caller can ask.
+		// What every surface defaults to; the reader refuses the zero value.
 		q.Snoozed = inbox.SnoozeExclude
 	}
 	answer, err := r.reader.Inbox(r.t.Context(), q, wednesday)
@@ -37,11 +34,8 @@ func (r *roundTrip) inbox(q worklet.InboxQuery) worklet.InboxAnswer {
 }
 
 // routeTo files work at somebody, so a case gets an inbox row without
-// restating the create and its notification.
-//
-// THE NOTIFY IS THE CALLER'S, which is the design: a record states who it
-// concerns, and the applier routes from that rather than re-deriving it from
-// the task (see [worklet.Candidates]).
+// restating the create and its notification. The notify is the caller's: the
+// applier routes from what a record says it concerns (see [worklet.Candidates]).
 func routeTo(t *testing.T, r *roundTrip, id, key, assignee string) {
 	routeAs(t, r, r.writer, id, key, assignee)
 }
@@ -69,12 +63,8 @@ func routeAs(t *testing.T, r *roundTrip, w *worklet.Writer, id, key,
 	r.drain()
 }
 
-// TestAnInboxIsReadableAtAll is the finding this reader answers. The applier
-// has written `tracker_notifications` since the domain landed — one row per
-// (commit, recipient), with the reason, the subject and the excerpt — and the
-// table shipped two indexes naming a reader that was never written. A company
-// routed every change to the people it concerned, wrote them all down,
-// replicated them, and offered no way to ask what was in them.
+// TestAnInboxIsReadableAtAll: the rows the applier writes to
+// `tracker_notifications`, one per (commit, recipient), can be read back.
 func TestAnInboxIsReadableAtAll(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -102,18 +92,16 @@ func TestAnInboxIsReadableAtAll(t *testing.T) {
 		t.Fatal("the notice has no instant")
 	}
 
-	// AND NOBODY ELSE'S INBOX HAS IT, which is the recipient predicate
-	// doing its job rather than the table being read whole.
+	// AND NOBODY ELSE'S INBOX HAS IT: the recipient predicate filters, rather
+	// than the table being read whole.
 	if other := r.inbox(worklet.InboxQuery{Handle: "cy"}); len(other.Notices) != 0 {
 		t.Fatalf("cy's inbox holds %d notices about bob's work",
 			len(other.Notices))
 	}
 }
 
-// TestTheActorJoinsFromTheHistory keeps the one column this read cannot get
-// from the notification row: who made the change. A notice saying something
-// happened without saying who did it is a notice its reader has to open the
-// task to understand.
+// TestTheActorJoinsFromTheHistory keeps the one column the notification row
+// lacks: who made the change, joined from the history.
 func TestTheActorJoinsFromTheHistory(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -132,11 +120,10 @@ func TestTheActorJoinsFromTheHistory(t *testing.T) {
 	}
 }
 
-// TestThePrimarySplitDefaultsRatherThanEmptying is the whole reason
-// [worklet.Person.PrimaryReasons] could be read as a preference at all: an
-// empty list is "I have not said", and reading it as "nothing is primary"
-// would give every person in a fresh company an inbox whose primary half is
-// blank — which is the state the field was in before it had a reader.
+// TestThePrimarySplitDefaultsRatherThanEmptying: an empty
+// [worklet.Person.PrimaryReasons] is "I have not said", so it takes the
+// default; read as "nothing is primary" it would blank every fresh person's
+// primary half.
 func TestThePrimarySplitDefaultsRatherThanEmptying(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -152,8 +139,7 @@ func TestThePrimarySplitDefaultsRatherThanEmptying(t *testing.T) {
 			"primary=%d notice=%+v", got.Primary, got.Notices[0])
 	}
 
-	// AND A DECLARED LIST REPLACES IT, so the preference has an effect
-	// rather than being storage for a rule nobody wrote.
+	// AND A DECLARED LIST REPLACES IT, so the preference has an effect.
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		PrimaryReasons: &[]worklet.Reason{worklet.ReasonMention},
 	}, worklet.PersonAuthority{}); err != nil {
@@ -180,11 +166,9 @@ func TestThePrimarySplitDefaultsRatherThanEmptying(t *testing.T) {
 	}
 }
 
-// TestReadIsTheSeenThroughPositionAndTheEntries protects the half of the mark
-// that is easy to leave out. The read list is PRUNED at every write to what
-// sits above the seen-through position, so reading only the lists reports
-// every pruned notice unread — which is every notice older than the person's
-// last visit, the exact set an inbox must not resurface.
+// TestReadIsTheSeenThroughPositionAndTheEntries: the read list is PRUNED at
+// every write to what sits above the seen-through position, so reading only
+// the lists would resurface every notice older than the person's last visit.
 func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -195,7 +179,7 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 	if len(got.Notices) != 2 {
 		t.Fatalf("bob's inbox holds %d notices, want 2", len(got.Notices))
 	}
-	// NEWEST FIRST, which is what the cursor pages backwards through.
+	// NEWEST FIRST, which the cursor pages backwards through.
 	newest, oldest := got.Notices[0], got.Notices[1]
 	if newest.LogSeq <= oldest.LogSeq {
 		t.Fatalf("the inbox is not newest-first: %d then %d",
@@ -206,8 +190,8 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 			"marked nothing", got.Unread)
 	}
 
-	// THE POSITION MARKS EVERYTHING AT OR BELOW IT, with no entry rows
-	// at all, which is the pruned state.
+	// THE POSITION MARKS EVERYTHING AT OR BELOW IT, with no entry rows: the
+	// pruned state.
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-seen", "bob", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		ReadThrough: &statelog.Position{
 			Stream: oldest.LogStream, Generation: oldest.LogGeneration,
@@ -231,8 +215,8 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 		}
 	}
 
-	// AND AN ENTRY ABOVE IT IS MARKED TOO, which is what a person working
-	// their queue out of order does.
+	// AND AN ENTRY ABOVE IT IS MARKED TOO, as when a queue is worked out of
+	// order.
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-read", "bob", statelog.Position{},
 		inbox.Gesture[worklet.Reason]{Read: []string{newest.RecordID}}, worklet.PersonAuthority{}); err != nil {
 
@@ -248,10 +232,9 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 	}
 }
 
-// TestAStreamMismatchIsNotReadPast is what the position TRIPLE is for. A
-// sequence from a dead stream compares as current against a live one, so a
-// founder whose stream was recreated would open an inbox in which everything
-// below their old position reads as already seen — the whole backlog, silently.
+// TestAStreamMismatchIsNotReadPast is what the position TRIPLE is for: a
+// sequence from a dead stream compares as current against a live one, so after
+// a stream is recreated the whole backlog would silently read as seen.
 func TestAStreamMismatchIsNotReadPast(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -263,10 +246,8 @@ func TestAStreamMismatchIsNotReadPast(t *testing.T) {
 	}
 	notice := got.Notices[0]
 
-	// A WRITER REFUSES such a position outright, so the row this case is
-	// about — a position left behind by a stream that was recreated — is
-	// planted: it is the state a person's record is in after the fact, and
-	// the reader is what has to survive it.
+	// A writer refuses such a position, so it is planted: the state a person's
+	// record is in after the stream was recreated, which the reader must survive.
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", statelog.Position{}, inbox.Gesture[worklet.Reason]{
 		PrimaryReasons: &[]worklet.Reason{},
 	}, worklet.PersonAuthority{}); err != nil {
@@ -288,9 +269,9 @@ func TestAStreamMismatchIsNotReadPast(t *testing.T) {
 	}
 }
 
-// TestASnoozeMeansNotNow. An inbox that returned a snoozed notice anyway would
-// make the gesture do nothing; one that dropped a snooze whose time has come
-// would lose it, which is why [splitSnoozes] reports due rather than promoting.
+// TestASnoozeMeansNotNow: a snoozed notice is withheld until its time, and
+// then returns without a write; dropping a due snooze would lose it, which is
+// why [splitSnoozes] reports due rather than promoting.
 func TestASnoozeMeansNotNow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -316,8 +297,8 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 			got.Notices)
 	}
 
-	// AND ONE WHOSE TIME HAS COME IS BACK, without a write to promote it:
-	// the same rows, read after the instant.
+	// AND ONE WHOSE TIME HAS COME IS BACK, from the same rows read after the
+	// instant.
 	back, err := r.reader.Inbox(t.Context(), worklet.InboxQuery{
 		Handle: "bob", Level: statelog.ReadStale,
 		Snoozed: inbox.SnoozeExclude,
@@ -331,10 +312,9 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 	}
 }
 
-// TestTheInboxPagesAndRefuses covers the cursor and the two gates. A page that
-// returned its own evidence row would overrun the caller's limit, and an
-// unknown reason silently narrowing to nothing is worse than a refusal — the
-// caller reads an empty inbox as an empty inbox.
+// TestTheInboxPagesAndRefuses covers the cursor and the two gates: a page
+// must not overrun the caller's limit with its own evidence row, and an
+// unknown reason is refused, since narrowing to nothing reads as an empty inbox.
 func TestTheInboxPagesAndRefuses(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -383,9 +363,8 @@ func TestTheInboxPagesAndRefuses(t *testing.T) {
 		"an unknown reason": {Handle: "bob", Level: statelog.ReadStale,
 			Snoozed: inbox.SnoozeExclude,
 			Reasons: []worklet.Reason{"because-i-said-so"}},
-		// THE ZERO SCOPE IS REFUSED, not read as one of the three: each
-		// is some caller's right default, so a reader that picked one
-		// would answer the other two's question wrong without saying so.
+		// THE ZERO SCOPE IS REFUSED: each of the three is some caller's right
+		// default, so picking one would answer the others' question wrong silently.
 		"no snoozed scope": {Handle: "bob", Level: statelog.ReadStale},
 		"an unknown snoozed scope": {Handle: "bob",
 			Level: statelog.ReadStale, Snoozed: "sometimes"},
@@ -398,10 +377,9 @@ func TestTheInboxPagesAndRefuses(t *testing.T) {
 	}
 }
 
-// TestReasonsFilterRatherThanClassify keeps the two narrowings apart. The
-// split labels every row and returns them all; `reasons` returns fewer rows.
-// One verb doing both would make "show me only mentions" and "mentions are
-// what I act on" the same gesture, and they are not.
+// TestReasonsFilterRatherThanClassify keeps the two narrowings apart: the
+// split labels every row and returns them all, `reasons` returns fewer rows.
+// "Show me only mentions" and "mentions are what I act on" differ.
 func TestReasonsFilterRatherThanClassify(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -423,17 +401,11 @@ func TestReasonsFilterRatherThanClassify(t *testing.T) {
 	}
 }
 
-// A CREATION'S NOTICE CARRIES THE ITEM'S KEY, and nothing but the applier
-// could have put it there.
-//
-// The key is MINTED BY THE WRITE — `ENG-1` comes from the project's own
-// counter — so a record's notification snapshot cannot state it, and for as
-// long as the inbox row took that snapshot every creation in every company
-// wrote a notice whose subject was a uuid. `SubjectKey`'s own doc says what
-// that costs: "an inbox of uuids is an inbox nobody reads."
-//
-// The existing cases could not see it, because the harness states the key on
-// the snapshot itself. This one deliberately does not.
+// A CREATION'S NOTICE CARRIES THE ITEM'S KEY. The key is MINTED BY THE WRITE
+// (`ENG-1` from the project's counter), so the record's snapshot cannot state
+// it and only the applier's row can supply it: "an inbox of uuids is an inbox
+// nobody reads" (`SubjectKey`). The other cases state the key on the
+// snapshot; this one deliberately does not.
 func TestACreationsNoticeCarriesTheKeyTheWriteMinted(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -443,8 +415,7 @@ func TestACreationsNoticeCarriesTheKeyTheWriteMinted(t *testing.T) {
 	task.Title = "work for bob"
 	if _, err := r.writer.CreateTask(t.Context(), "op-t-key", task, &worklet.Notify{
 		Kind: worklet.ChangeCreated,
-		// NO Snapshot.Key — which is what a real create looks like, since
-		// the key does not exist until the write assigns it.
+		// NO Snapshot.Key, as in a real create: the write assigns it.
 		Snapshot: worklet.Snapshot{Project: "ENG", Title: task.Title, Assignee: "bob"},
 		Excerpt:  task.Title,
 	}); err != nil {
@@ -453,9 +424,8 @@ func TestACreationsNoticeCarriesTheKeyTheWriteMinted(t *testing.T) {
 	}
 	r.drain()
 
-	// WHAT THE ITEM IS ACTUALLY CALLED, read back rather than asserted as
-	// a literal: the key comes from the project's counter, so a literal
-	// here would be this suite's own bookkeeping rather than the rule.
+	// Read back rather than a literal: the key comes from the project's
+	// counter, so a literal would test this suite's bookkeeping, not the rule.
 	detail := r.task(t, "t-key")
 	if detail.Task.Key == "" {
 		t.Fatal("the write minted no key at all")
@@ -471,11 +441,9 @@ func TestACreationsNoticeCarriesTheKeyTheWriteMinted(t *testing.T) {
 	}
 }
 
-// AND THE WAKE THE SEAT IS DELIVERED NAMES IT TOO. The notice reads its key
-// off the applier's row; the wake is the record's own snapshot, which the
-// caller built before the write minted a key — so a seat woken by a create
-// was handed `item_key: ""`, its turn was charged to the task's uuid alone,
-// and every turn list drew that turn as `native:<uuid>`.
+// AND THE WAKE THE SEAT IS DELIVERED NAMES IT TOO, though the wake is the
+// record's own snapshot, built before the write minted the key; an empty `item_key`
+// charges the turn to the task's uuid alone (`native:<uuid>` in turn lists).
 func TestACreatesWakeCarriesTheKeyTheWriteMinted(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -511,13 +479,11 @@ func createOf(r *roundTrip, key string) string {
 	return ids[0]
 }
 
-// A CHANGE IS NOT NEWS TO THE PERSON WHO MADE IT — whatever credential they
-// made it through. A founder who files work on her own seat through her
-// assistant must not find it in her own inbox, unread, as "assigned to you":
-// that is a notice about what she just did, and every one inflated her unread
-// count. The wake already dropped her ([worklet.Route]); the inbox rows did
-// not. A person bound to a seat writes AS it (iam.ActorFor), the credential
-// riding beside the actor, so her own write's actor IS the recipient.
+// A CHANGE IS NOT NEWS TO THE PERSON WHO MADE IT, whatever credential they
+// made it through: a founder filing work on her own seat through her assistant
+// must not find it in her inbox as unread "assigned to you". The wake already
+// drops her ([worklet.Route]); a person bound to a seat writes AS it
+// (iam.ActorFor), so her own write's actor IS the recipient.
 func TestYourOwnChangeIsNotInYourInbox(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -525,8 +491,8 @@ func TestYourOwnChangeIsNotInYourInbox(t *testing.T) {
 		OperatorID: "pat:founder",
 	})
 	routeAs(t, r, jane, "t-own", "ENG-1", "jane-founder")
-	// AND A COLLEAGUE'S CHANGE STILL REACHES HER, or the rule would be
-	// emptying the inbox rather than keeping her own actions out of it.
+	// AND A COLLEAGUE'S CHANGE STILL REACHES HER, or the rule would just empty
+	// the inbox.
 	bob := r.writer.As("bob", worklet.AuthorHuman, worklet.Provenance{})
 	routeAs(t, r, bob, "t-bob", "ENG-2", "jane-founder")
 
@@ -538,9 +504,8 @@ func TestYourOwnChangeIsNotInYourInbox(t *testing.T) {
 	if !slices.Equal(keys, []string{"ENG-2"}) {
 		t.Fatalf("jane's inbox holds %v, want only the task bob filed on her", keys)
 	}
-	// AND NO ROW WAS WRITTEN FOR HER: `work_routing` reads this table by
-	// record, and "every candidate was the actor" is what it says an empty
-	// one means.
+	// AND NO ROW WAS WRITTEN FOR HER: `work_routing` reads an empty set for a
+	// record as "every candidate was the actor".
 	if rows := r.strings(`SELECT recipient FROM tracker_notifications
 		WHERE record_id = ?`, createOf(r, "ENG-1")); len(rows) != 0 {
 		t.Errorf("the change jane made wrote notification rows for %v", rows)

@@ -12,20 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY DUTY JOB IS GATED ON A FACT SOMEBODY WROTE DOWN.
-//
-// # Why that is the property rather than "the duty is correct"
-//
-// A duty that goes looking costs the same whether or not anything is wrong, on
-// every node, for ever — and this one runs every fifteen minutes against a
-// company with hundreds of thousands of tasks. So each job asks one indexed
-// question first, and on a healthy company a whole tick is those questions and
-// nothing else.
-//
-// The exception is named rather than hidden: the missed-unblocked repair has
-// no flag to read, because the fact it looks for is a comparison between two
-// instants rather than something a writer could have stamped. It is bounded by
-// its own last position instead.
+// EVERY DUTY JOB IS GATED ON A FACT SOMEBODY WROTE DOWN: the duty runs every
+// fifteen minutes on every node against hundreds of thousands of tasks, so
+// each job asks one indexed question first and a healthy company's tick is
+// those questions alone. The exception, named: the missed-unblocked repair
+// compares two instants, which no writer could stamp, so it is bounded by its
+// own last position instead.
 func TestEveryTrackerJobIsGatedOrSaysWhyNot(t *testing.T) {
 	t.Parallel()
 	jobs := worklet.Jobs(worklet.DutyDeps{NodeID: "node-a"})
@@ -34,9 +26,8 @@ func TestEveryTrackerJobIsGatedOrSaysWhyNot(t *testing.T) {
 			"measuring its own reader")
 	}
 	ungated := map[string]bool{
-		// The repair has no flag to read: what it looks for is a
-		// comparison between a blocker's clearing instant and what its
-		// dependent was told, and neither is a column a writer stamps.
+		// No flag to read: it compares a blocker's clearing instant with what
+		// its dependent was told, and a writer stamps neither.
 		"tracker_unblocked": true,
 	}
 	for _, job := range jobs {
@@ -73,12 +64,9 @@ func TestAQuietTickRunsNoJob(t *testing.T) {
 	}
 }
 
-// THE DUTY FINISHES A RE-SPREAD THE INLINE WINDOW COULD NOT.
-//
-// A drag past the inline cap still succeeds with its long key, and the applier
-// flags the project from that key's own length — on every node, so the fact is
-// the fleet's rather than the writer's. The duty is what turns that flag into
-// a walk.
+// THE DUTY FINISHES A RE-SPREAD THE INLINE WINDOW COULD NOT: a drag past
+// the inline cap succeeds with its long key, every node's applier flags the
+// project from that key's length, and the duty turns the flag into a walk.
 func TestTheDutyWalksAFlaggedProject(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -117,11 +105,9 @@ func TestTheDutyWalksAFlaggedProject(t *testing.T) {
 	}
 }
 
-// THE DUTY GIVES ONE OF TWO TASKS SHARING A RANK A FRESH KEY.
-//
-// A duplicate is a COSMETIC anomaly — two cards whose order is undefined
-// between them — and it is repaired rather than refused, because a unique
-// index here would turn it into a deterministic fleet-wide stalled log.
+// THE DUTY GIVES ONE OF TWO TASKS SHARING A RANK A FRESH KEY. A duplicate is
+// COSMETIC (two cards in undefined order), so it is repaired, not refused: a
+// unique index would make it a deterministic fleet-wide stalled log.
 func TestTheDutyClearsADuplicateRank(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -147,8 +133,7 @@ func TestTheDutyClearsADuplicateRank(t *testing.T) {
 	}
 
 	// THE TICK RUNS BESIDE A LIVE APPLIER, which holds the estate's pin for
-	// the life of the process: a repair that asked for one of its own was
-	// refused on every tick of a running node.
+	// the process's life, so a repair asking for its own would be refused.
 	holdTheAppliersPin(t, r)
 	if _, err := trackerWorker(t, r).Tick(t.Context()); err != nil {
 		t.Fatalf("Tick: %v", err)
@@ -163,13 +148,9 @@ func TestTheDutyClearsADuplicateRank(t *testing.T) {
 }
 
 // EVERY LOSER OF ONE KEY GETS A KEY OF ITS OWN, and none of them is the next
-// create's.
-//
-// The repair used to mint "the key after this one" for each loser separately:
-// three cards sharing a key left two of them sharing the next one, and after a
-// pure integer the next key is the next INTEGER — the create lattice — so a
-// duplicate at the bottom of a board was repaired onto the key the project's
-// next create mints.
+// create's: minting "the key after" per loser leaves two of three cards
+// sharing the next key, and after a pure integer that next key is the create
+// lattice's, the one the project's next create mints.
 func TestTheDutyGivesEveryLoserOfOneKeyItsOwn(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -213,13 +194,10 @@ func TestTheDutyGivesEveryLoserOfOneKeyItsOwn(t *testing.T) {
 	}
 }
 
-// A MARKER WHOSE RELATION NEVER LANDED IS CLEARED AND NOTHING ELSE.
-//
-// The mark writes the `duplicates` edge and the marker in ONE append, so a
-// marker with no edge is an append whose relation gesture resolved to nothing.
-// The merge did not happen — so cancelling the task here would close an item
-// nobody merged, and leaving the flag set would run this job against it on
-// every tick for ever.
+// A MARKER WHOSE RELATION NEVER LANDED IS CLEARED AND NOTHING ELSE. The mark
+// writes the `duplicates` edge and the marker in ONE append, so no edge means
+// the relation resolved to nothing and no merge happened: cancelling would
+// close an item nobody merged, and a flag left set reruns this job every tick.
 func TestTheDutyClearsAnAbandonedMerge(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -261,22 +239,18 @@ func TestTheDutyClearsAnAbandonedMerge(t *testing.T) {
 		t.Error("the marker is still set after the duty completed the merge, " +
 			"so the duty runs against it on every tick for ever")
 	}
-	// AND THE TASK IS STILL OPEN. Nothing was merged into anything, so
-	// closing it would be the duty inventing the outcome of a gesture that
-	// never linked two items.
+	// AND THE TASK IS STILL OPEN: nothing was merged, and closing it would
+	// invent the outcome of a gesture that never linked two items.
 	if got := r.task(t, "t-1").Task.Status; got == worklet.StatusCancelled {
 		t.Error("the duty cancelled a task whose merge named no target — the " +
 			"marker is all that landed, so there is no merge to complete")
 	}
 }
 
-// THE DUTY FINISHES THE MERGE, rather than tidying away its marker.
-//
-// The residue a holder that died leaves is: the mark landed, some subtasks
-// moved, the close did not. Clearing the marker alone left the duplicate OPEN
-// and half-merged for ever — on a board, a live item linked as a duplicate of
-// another live item, with its subtasks still under it. That is the exact
-// state the merge exists to remove, and the repair reached it and stopped.
+// THE DUTY FINISHES THE MERGE, rather than tidying away its marker. A dead
+// holder leaves the mark landed, some subtasks moved and no close; clearing
+// the marker alone leaves the duplicate open and half-merged for ever, the
+// state the merge exists to remove.
 func TestTheDutyFinishesAnAbandonedMergeRatherThanTidyingIt(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -284,10 +258,8 @@ func TestTheDutyFinishesAnAbandonedMergeRatherThanTidyingIt(t *testing.T) {
 		reparent bool
 		want     string
 	}{
-		// AND IT RE-PARENTS ONLY IF THE MERGE SAID TO. A repair that
-		// guessed would silently override a `move_subtasks: false`
-		// somebody typed, which is the one direction that cannot be
-		// undone by waiting.
+		// AND IT RE-PARENTS ONLY IF THE MERGE SAID TO: a guess would silently
+		// override a typed `move_subtasks: false`, which waiting cannot undo.
 		{"a walk that meant to move the subtasks", true, "keep"},
 		{"a walk that was told to leave them", false, "dup"},
 	} {
@@ -310,8 +282,8 @@ func TestTheDutyFinishesAnAbandonedMergeRatherThanTidyingIt(t *testing.T) {
 			r.drain()
 
 			// EXACTLY THE MARK [worklet.Writer.MergeDuplicates]
-			// publishes, and then nothing — which is a holder that
-			// died between its first append and its last.
+			// publishes, then nothing: a holder that died between
+			// its first append and its last.
 			merging := true
 			if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "dup", "ENG",
 				worklet.NoIfMatch, worklet.TaskPatch{
@@ -351,15 +323,11 @@ func TestTheDutyFinishesAnAbandonedMergeRatherThanTidyingIt(t *testing.T) {
 	}
 }
 
-// THE DUTY FINISHES ONLY A MERGE NOBODY IS WALKING.
-//
-// A task carries the marker for the whole of a LIVE merge, from its first
-// append to its last, so the marker says "unfinished" and never "abandoned" —
-// the walk's own claim is what says that. A duty selecting on the marker alone
-// finished every merge that happened to be mid-walk when a tick fired, beside
-// its holder: the children re-parented twice and the duplicate closed twice.
-//
-// And a merge left alone does not hold up the next one.
+// THE DUTY FINISHES ONLY A MERGE NOBODY IS WALKING. The marker stays for
+// the whole of a LIVE merge, so it says "unfinished", never "abandoned": only
+// the walk's lapsed claim says that. Selecting on the marker alone finishes a
+// mid-walk merge beside its holder, re-parenting the children and closing the
+// duplicate twice. And a merge left alone does not hold up the next one.
 func TestTheDutyLeavesAMergeWhoseWalkHoldsItsClaim(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -416,12 +384,9 @@ func TestTheDutyLeavesAMergeWhoseWalkHoldsItsClaim(t *testing.T) {
 	}
 }
 
-// ONE MERGE THE DUTY CANNOT FINISH DOES NOT HOLD UP THE REST.
-//
-// The merges are independent — different tasks, different subjects — and the
-// job used to return at the first that failed, so a merge whose close kept
-// failing left every merge after it in id order unfinished for as long as it
-// did.
+// ONE MERGE THE DUTY CANNOT FINISH DOES NOT HOLD UP THE REST: the merges are
+// independent, so a merge whose close keeps failing must not leave every
+// merge after it in id order unfinished.
 func TestOneMergeTheDutyCannotFinishDoesNotHoldUpTheRest(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

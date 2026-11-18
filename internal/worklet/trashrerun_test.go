@@ -23,8 +23,8 @@ func underRoot(t *testing.T, r *roundTrip) {
 	}
 }
 
-// clearDeferred takes back what [roundTrip.deferRecordOn] wrote — the node
-// catching up with the newer build whose record it had to set aside.
+// clearDeferred takes back what [roundTrip.deferRecordOn] wrote: the node
+// catching up with the newer build whose record it set aside.
 func (r *roundTrip) clearDeferred() {
 	r.t.Helper()
 	if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
@@ -39,15 +39,10 @@ func (r *roundTrip) clearDeferred() {
 	}
 }
 
-// A RESTORE THAT HALF-FINISHED RESTORES THE REST WHEN IT IS RE-RUN.
-//
-// The restore's own error says to re-run it, and says the re-run is
-// idempotent. It was not: the list a restore walks is what is STILL in the
-// trash, so every task the first run restored dropped out of the re-run's list
-// and every one after it moved up a place — and the steps were named for the
-// place. The re-run's first step read the first run's ledger row for a
-// different task, reported it done, and left the task it was about in the
-// trash under a restored parent.
+// A RESTORE THAT HALF-FINISHED RESTORES THE REST WHEN IT IS RE-RUN, as its
+// error promises: the re-run's list is what is STILL in the trash, so a step
+// named by its place in that list would read another task's ledger row and
+// leave its own task in the trash under a restored parent.
 func TestARestoreThatHalfFinishedRestoresTheRestOnARerun(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -58,8 +53,7 @@ func TestARestoreThatHalfFinishedRestoresTheRestOnARerun(t *testing.T) {
 	}
 	r.drain()
 
-	// THE FIRST RUN STOPS AT t-b, whose scope this node has set a newer
-	// build's record aside on.
+	// THE FIRST RUN STOPS AT t-b, whose scope holds a deferred newer record.
 	r.deferRecordOn("t-b", "ENG")
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "t-root",
 		"ENG", false, nil); err == nil {
@@ -86,13 +80,9 @@ func TestARestoreThatHalfFinishedRestoresTheRestOnARerun(t *testing.T) {
 }
 
 // A REMOVAL THAT HALF-FINISHED REMOVES THE REST WHEN IT IS RE-RUN, even when a
-// task it already removed was purged in between.
-//
-// The purge takes that task out of the subtree the re-run walks, so every
-// descendant after it moves up a place — and with the steps named for the
-// place, the re-run's step for a live task read the first run's ledger row for
-// the purged one and left it live under a removed parent: the orphan the
-// depth order exists to avoid.
+// task it already removed was purged in between: the purge shifts every later
+// descendant up a place in the walk, so a step named by place would read the
+// purged task's ledger row and leave a live task under a removed parent.
 func TestARemovalThatHalfFinishedRemovesTheRestOnARerun(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

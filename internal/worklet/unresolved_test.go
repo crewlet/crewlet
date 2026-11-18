@@ -14,12 +14,10 @@ import (
 
 // A MOVE STOPS AT A DESCENDANT WHOSE STEP IS UNKNOWN: the ones after it stay
 // where they are, the root keeps its mark, and the caller is told the walk
-// stopped under which operation — never that it succeeded.
-//
-// The step's append lands and its answer is lost, and so is the probe's, so
-// the write answers `unknown` with a nil error. The walk checked only the
-// error: it carried on to the next descendant, took the mark down over a task
-// that might still be in the old project, and reported the move done.
+// stopped under which operation, never that it succeeded. An append whose
+// answer and probe are both lost answers `unknown` with a nil error, so a walk
+// checking only the error would take the mark down over a task that may still
+// be in the old project.
 func TestAMoveStopsAtAnUnknownDescendant(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid-a", "m-kid-b", "m-kid-c")
@@ -207,13 +205,9 @@ func TestTheDutyDoesNotCountAnUnknownClose(t *testing.T) {
 }
 
 // A TAG DECLARATION WHOSE OUTCOME IS UNKNOWN IS AN UNRESOLVED STEP, never a
-// declaration that created nothing.
-//
-// The inline declare runs before the write that uses the tag, and that write
-// is refused over a tag its project does not declare. Answered `unknown` with
-// a nil error, the declare reported no new tags, and the create behind it was
-// refused telling the caller to pass `labels_create_missing` — the flag it had
-// passed — about a tag that may well have landed.
+// declaration that created nothing: read as nothing, the write that uses the
+// tag is refused, telling the caller to pass the `labels_create_missing` it
+// had passed, about a tag that may well have landed.
 func TestAnUnknownTagDeclarationIsAnUnresolvedStep(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

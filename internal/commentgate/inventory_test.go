@@ -40,7 +40,7 @@ var excessInventory = map[string]int{
 	"internal/api/livestate":                        294,
 	"internal/api/llmapi":                           6,
 	"internal/api/mcpapi":                           63,
-	"internal/api/mcpbridge":                        481,
+	"internal/api/mcpbridge":                        334,
 	"internal/api/operator":                         234,
 	"internal/api/opkey":                            40,
 	"internal/api/paced":                            141,
@@ -108,7 +108,6 @@ var excessInventory = map[string]int{
 	"internal/engine":                               2797,
 	"internal/envfile":                              15,
 	"internal/envref":                               14,
-	"internal/estate":                               1472,
 	"internal/eventfan":                             200,
 	"internal/eventfan/eventfantest":                1,
 	"internal/events":                               92,
@@ -121,7 +120,7 @@ var excessInventory = map[string]int{
 	"internal/flock":                                10,
 	"internal/github":                               622,
 	"internal/gitlab":                               303,
-	"internal/gitlet":                               8591,
+	"internal/gitlet":                               90,
 	"internal/gitlet/cache":                         5339,
 	"internal/gitlet/checkrun":                      100,
 	"internal/gitlet/compact":                       759,
@@ -162,7 +161,6 @@ var excessInventory = map[string]int{
 	"internal/knowledge":                            74,
 	"internal/learning":                             610,
 	"internal/learning/memread":                     24,
-	"internal/learning/memsync":                     826,
 	"internal/logging":                              226,
 	"internal/maintenance":                          306,
 	"internal/mattermost":                           345,
@@ -243,7 +241,7 @@ var excessInventory = map[string]int{
 	"internal/trashreap":                            6,
 	"internal/usage":                                574,
 	"internal/words":                                66,
-	"internal/worklet":                              4885,
+	"internal/worklet":                              166,
 	"static":                                        53,
 }
 
@@ -480,5 +478,4 @@ var rowInventory = map[string]int{
 	"version":                                1492,
 	"whsec":                                  374,
 	"words":                                  3660,
-	"worklet":                                16270,
 }

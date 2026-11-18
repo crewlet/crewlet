@@ -9,22 +9,17 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A BRANCH IS NAMED BY THE LIVE CHANGE IT HEADS: a `branch_changes` read — the
-// engine's own, what it names a collected executor's delivered refs by —
-// answers each branch it names that heads a live change, a draft's included,
-// in the order it names the repositories and their branches, and leaves out
-// one that heads none, one whose change is closed, and one that does not
-// exist. EVERY REPOSITORY IN ONE READ: one answer names the branches of each
-// repository of the run, each by its repository, so a collection pays one
-// read for all of them. It is the engine's, so it names no asker, and it names
-// each repository by id and once, each with its branches, each branch once,
-// whole, under refs/heads/.
+// A BRANCH IS NAMED BY THE LIVE CHANGE IT HEADS: the engine's
+// `branch_changes` read (how it names a collected executor's delivered refs)
+// answers each named branch heading a live change, drafts included, in the
+// query's order of repositories and branches, leaving out one heading none, a
+// closed change's and a missing one. EVERY REPOSITORY IN ONE READ, each by id
+// and once, each branch once, whole, under refs/heads/; no asker is named.
 //
-// Mutations: order a repository's changes against the query's order — feature's
-// change after release's draft, red; serve the first repository alone — api's
-// change missing, red. (Dropping the order's sort leaves this green: the
-// statement's CROSS JOIN drives it from the query's list in its order, and the
-// sort is what keeps the answer in that order should a plan ever stop.)
+// Mutations: order a repository's changes against the query's (feature's
+// change after release's draft, red); serve the first repository alone (api's
+// change missing, red). Dropping the sort stays green: the CROSS JOIN drives
+// the query's order today, and the sort keeps it should a plan change.
 func TestABranchIsNamedByTheLiveChangeItHeads(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

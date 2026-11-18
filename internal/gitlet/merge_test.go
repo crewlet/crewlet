@@ -16,25 +16,23 @@ import (
 )
 
 // A CHANGE'S MERGE, decided by the shipped committer from one snapshot on a
-// real embedded broker, applied by the shipped applier as one record and read
-// back from the rows it wrote (ADR-0096).
+// real embedded broker, applied as one record and read back from its rows
+// (ADR-0096).
 
-// seatRef is dev's own branch, under the seats' namespace: what a seat's
-// change is opened from, and what its merge deletes by default (Q4).
+// seatRef is dev's own branch in the seats' namespace: what a seat's change
+// opens from, and what its merge deletes by default (Q4).
 const seatRef = "refs/heads/seats/dev/fix"
 
-// mergeGate is main's gate on a merge case's repository: one counted
-// approval, no check — so a change merges into main directly, and main's
-// green row moves with every merge.
+// mergeGate is main's gate in a merge case: one approval, no check, so a
+// change merges into main directly and main's green row moves with each merge.
 func mergeGate() *gitlet.MergeGate {
 	return &gitlet.MergeGate{MergeBy: gitlet.MergeByWriters, Approvals: gitlet.ApprovalsOne,
 		Landing: gitlet.Landing{Depth: 4, Batch: 4}, DeleteSource: gitlet.DeleteSeats}
 }
 
-// mergeRepo is a fresh repository named name — the one Engineering owns, its
-// main protected by rule (taking direct pushes as direct says) with gate —
-// holding main at A and dev's own branch at B, and dev's change from that
-// branch into main on it.
+// mergeRepo is a fresh repository name, owned by Engineering, its main
+// protected (direct pushes as direct says) with gate, holding main at A and
+// dev's branch at B, and dev's change from that branch into main.
 func mergeRepo(t *testing.T, n *node, c *gitlet.Committer, name string, direct gitlet.DirectPush,
 	gate *gitlet.MergeGate) (repo, change string) {
 
@@ -50,8 +48,8 @@ func mergeRepo(t *testing.T, n *node, c *gitlet.Committer, name string, direct g
 	return repo, opened.ChangeID
 }
 
-// approved makes change's revision 1 — head B — meet a gate asking one
-// approval: its facts against main recorded, and plat-lead's approval.
+// approved makes change's revision 1 (head B) meet a one-approval gate: its
+// facts against main recorded, and plat-lead's approval.
 func approved(t *testing.T, n *node, w *gitlet.ChangeWriter, repo, change string) {
 	t.Helper()
 	converse(t, w, n.revising(repo, change, 1, oidOf("B"), mainRef, nil))
@@ -59,9 +57,8 @@ func approved(t *testing.T, n *node, w *gitlet.ChangeWriter, repo, change string
 }
 
 // merging is asker's merge of change into main, method built onto base from
-// head as commit, under an operation id of its own, made for nobody but the
-// asker — carrying the pack its build stored, but for a fast-forward, which
-// builds none.
+// head as commit, under its own operation id, written for nobody, carrying
+// the pack its build stored unless it is a fast-forward, which builds none.
 func merging(repo, change string, asker gitlet.Principal, method gitlet.MergeMethod, base, head,
 	commit string) gitlet.MergeProposal {
 
@@ -77,8 +74,7 @@ func merging(repo, change string, asker gitlet.Principal, method gitlet.MergeMet
 	return gitlet.MergeProposal{OpID: opID, Asker: asker, WrittenFor: types.ForNobody(), Merge: m}
 }
 
-// requireMerged fails t unless res is a merge applied at a position, its
-// target moved to commit.
+// requireMerged fails t unless res applied at a position, merged at commit.
 func requireMerged(t *testing.T, res gitlet.MergeResult, err error, commit string) {
 	t.Helper()
 	if err != nil {
@@ -90,8 +86,8 @@ func requireMerged(t *testing.T, res gitlet.MergeResult, err error, commit strin
 	}
 }
 
-// requireMergeRefused fails t unless res is refused under refusal with a
-// sentence holding says, and nothing was appended to n's log since before.
+// requireMergeRefused fails t unless res is refused as refusal with a detail
+// holding says, and n's log has not moved since before.
 func requireMergeRefused(t *testing.T, n *node, before uint64, res gitlet.MergeResult, err error,
 	refusal gitlet.MergeRefusal, says string) {
 
@@ -115,7 +111,7 @@ type mergedChange struct {
 	closed                    bool
 }
 
-// merged is change id's merge as n's rows hold it.
+// mergedChange is change id's merge as n's rows hold it.
 func (n *node) mergedChange(id string) mergedChange {
 	n.t.Helper()
 	var m mergedChange
@@ -131,8 +127,8 @@ func (n *node) mergedChange(id string) mergedChange {
 	return m
 }
 
-// mergeStream is a committer on n over its own publisher, announcing on an
-// event stream of its own.
+// mergeStream is a committer on n over its own publisher, announcing on its
+// own event stream.
 func mergeStream(t *testing.T, n *node) (*gitlet.Committer, *announced) {
 	t.Helper()
 	stream := &announced{}
@@ -140,25 +136,18 @@ func mergeStream(t *testing.T, n *node) (*gitlet.Committer, *announced) {
 	return c, stream
 }
 
-// A MERGE MOVES ITS TARGET AND DELETES ITS SOURCE IN ONE RECORD: dev's change
-// from its own branch, its gate met, merges as ONE record — the log one record
-// longer — which marks the change MERGED (via direct, at the merge's commit,
-// by dev), never closed though its source branch is deleted in the same
-// record; moves main from its base onto the merge's commit; deletes dev's
-// branch, as main's delete_source seats asks; lands that as a push `via merge`
-// naming dev and the commit it introduced, with its pack's row of kind merge;
-// and writes main's landing row, green, and moves main's green row to the
-// commit — every row at the one position — clearing the stored readiness its
-// home's merge stamped ready, since a merged change is ready for nobody. The
-// node that landed it announces one change_merged, naming the change, the
-// commit and dev.
+// A MERGE MOVES ITS TARGET AND DELETES ITS SOURCE IN ONE RECORD: dev's gated
+// change merges as ONE record, every row at its position: the change reads
+// merged (via direct, at the commit, by dev), never closed though its source
+// is deleted; main moves onto the commit; dev's branch is deleted
+// (delete_source seats); a push `via merge` by dev introduces the commit, its
+// pack's row of kind merge; main's landing row is green and its green row
+// moves; and the stored readiness clears, a merged change being ready for
+// nobody. The landing node announces one change_merged.
 //
-// Mutations: land the push before marking the change merged — the source's
-// deletion closes the change (M4's close on a deleted source), and it reads
-// closed, red; leave the stored readiness out of the merge's apply → it still
-// reads ready, red; announce a merge the ledger collapsed (drop
-// appliedMerge's res.Collapsed arm) → the stopped committer has published it
-// twice, red.
+// Mutations: land the push before marking the change merged → the source's
+// deletion closes it (M4), red; leave the readiness out of the apply → still
+// ready, red; drop appliedMerge's res.Collapsed arm → announced twice, red.
 func TestAMergeMovesTargetDeletesSourceInOneRecord(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -230,8 +219,7 @@ func TestAMergeMovesTargetDeletesSourceInOneRecord(t *testing.T) {
 			ev.Type, ev.Source, ev.Data, n.id)
 	}
 
-	// THE SAME OPERATION ASKED AGAIN is the same merge: collapsed onto the
-	// record that landed, announced once.
+	// THE SAME OPERATION ASKED AGAIN collapses onto the landed record, announced once.
 	again, err := c.ProposeMerge(t.Context(), p)
 	requireMerged(t, again, err, oidOf("M"))
 	if again.Position != res.Position || n.end() != before+1 {
@@ -245,15 +233,13 @@ func TestAMergeMovesTargetDeletesSourceInOneRecord(t *testing.T) {
 }
 
 // A MERGE IS DECIDED FROM ONE SNAPSHOT: a merge built onto main at A, asked
-// after a push moved main to A2, is refused target_moved — read off the
-// snapshot's refs, never off the proposal, which still says A — and appends
-// nothing: main stays at A2 and the change open. Built again onto A2, it
-// merges. And a merge built from a head the change has moved from is refused
-// head_moved, as one into a target the change no longer has is stale.
+// after a push moved main to A2, is refused target_moved (read off the
+// snapshot's refs, never the proposal's base) and appends nothing. Built again
+// onto A2, it merges. A merge from a head the change has left is refused
+// head_moved; one into a target the change no longer has, stale.
 //
-// Mutation: decide from the proposal's base rather than the snapshot's tip —
-// the stale merge is appended, its apply skips it, and the answer is no
-// target_moved refusal, red.
+// Mutation: decide from the proposal's base → the stale merge is appended,
+// its apply skips it, and no target_moved refusal comes back, red.
 func TestAMergeIsDecidedFromOneSnapshot(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -264,7 +250,7 @@ func TestAMergeIsDecidedFromOneSnapshot(t *testing.T) {
 	approved(t, n, w, repo, change)
 
 	built := merging(repo, change, dev, gitlet.MergeMethodMerge, oidOf("A"), oidOf("B"), oidOf("M"))
-	// THE TARGET MOVES between the build and the decide: a person's push.
+	// A person's push moves the target between the build and the decide.
 	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, oidOf("A"), oidOf("A2"))))
 	before := n.end()
 	res, err := c.ProposeMerge(t.Context(), built)
@@ -290,17 +276,16 @@ func TestAMergeIsDecidedFromOneSnapshot(t *testing.T) {
 	}
 }
 
-// AN OVERRIDE IS A PERSON'S: a change that meets no gate yet — no approval —
-// is refused gate_unmet when dev merges it, naming the approval it waits for;
-// dev's override is refused not_person, and so is a token bound to nobody's;
-// a person's override merges it, the reason recorded on the change's row with
-// the person's human seat and the credential they merged with, and announced.
-// A target whose gate requires a check merges through its queue: a merge
-// asked there directly is refused queue_target — a person's too, unless they
-// override — and a person's override merges a QUEUED change directly, its
-// entry dequeued as merged, its landing not green: the gate requires checks.
+// AN OVERRIDE IS A PERSON'S: dev's merge of an unapproved change is refused
+// gate_unmet, naming the approval; dev's override, and an unbound token's, is
+// refused not_person; a person's override merges it, the reason recorded on
+// the change's row with their human seat and credential, and announced. A
+// target whose gate requires a check merges through its queue: a direct merge
+// there is refused queue_target, a person's too unless they override; their
+// override merges a QUEUED change, its entry dequeued as merged, its landing
+// not green: the gate requires checks.
 //
-// Mutation: take a seat's override as a person's — dev's override merges the
+// Mutation: take a seat's override as a person's → dev's override merges the
 // unapproved change, red.
 func TestAnOverrideIsAPersons(t *testing.T) {
 	t.Parallel()
@@ -372,18 +357,16 @@ func TestAnOverrideIsAPersons(t *testing.T) {
 	}
 }
 
-// A PROTECTED REF MOVES ONLY BY A GATED RECORD: main is protected with
-// direct_push none and a gate asking one approval. A person's push to it and
-// a seat's are refused protected_direct; a merge of a change that does not
-// meet the gate is refused gate_unmet; and main moves only once the change
-// meets its gate, by the merge's record — a fast-forward here, its push row
-// introducing nothing the change's own pushes had not. Under direct_push
-// persons a person's push lands — that person's own override, recorded on
-// its push row under their credential and human seat — and a seat's is still
-// refused.
+// A PROTECTED REF MOVES ONLY BY A GATED RECORD: under direct_push none and a
+// one-approval gate, a person's push to main and a seat's are refused
+// protected_direct, and an ungated merge gate_unmet; main moves only by the
+// approved change's merge, here a fast-forward whose push row introduces
+// nothing the change's own pushes had not. Under direct_push persons a
+// person's push lands as their own override, its push row under their
+// credential and human seat; a seat's is still refused.
 //
-// Mutation: decide a merge without its gate — the unapproved change's merge
-// moves main, red.
+// Mutation: decide a merge without its gate → the unapproved merge moves
+// main, red.
 func TestAProtectedRefMovesOnlyByAGatedRecord(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -449,12 +432,11 @@ func TestAProtectedRefMovesOnlyByAGatedRecord(t *testing.T) {
 }
 
 // A MERGE ASKED TO DELETE A SOURCE ITS MERGER MAY NOT DELETE is refused
-// source_refused, appending nothing: dev's merge of a change from main's
-// sibling release — a branch outside the seats' namespace, whose deletion
-// takes a principal maintaining the repository — names the push refusal it
-// would meet; asked keeping its source, it merges.
+// source_refused, appending nothing: dev's merge from release (outside the
+// seats' namespace, so only a maintainer deletes it) names the push refusal
+// it would meet; asked keeping its source, it merges.
 //
-// Mutation: judge every source as a seat's own branch — dev deletes release,
+// Mutation: judge every source as a seat's own branch → dev deletes release,
 // red.
 func TestAMergeDeletesOnlyASourceItsMergerMay(t *testing.T) {
 	t.Parallel()
@@ -485,10 +467,9 @@ func TestAMergeDeletesOnlyASourceItsMergerMay(t *testing.T) {
 }
 
 // A MERGE PROPOSAL IS REFUSED BEFORE IT IS QUEUED where no committer could
-// decide it: a fast-forward to anything but the change's head, or carrying a
-// pack; a merge or a squash carrying none; a merge id that is not its
-// operation's push id; a field the committer stamps sent by the asker; and an
-// asker naming an executor.
+// decide it: a fast-forward to anything but the head, or with a pack; a merge
+// or squash with none; a merge id not its operation's push id; a field the
+// committer stamps sent by the asker; an asker naming an executor.
 func TestAMergeProposalIsHeldToItsShape(t *testing.T) {
 	t.Parallel()
 	ok := merging("019a0c2e-0000-7000-8000-0000000000aa", "019a0c2e-0000-7000-8000-0000000000bb", dev,
@@ -533,10 +514,10 @@ func TestAMergeProposalIsHeldToItsShape(t *testing.T) {
 	}
 }
 
-// A MERGE RECORD FITS ITS ROWS: the most one merge record writes before its
-// horizons — its own rows, its push's, and every change its push moves — is
-// a record's row bound with the horizons' room, so a merge's decide counts no
-// change of its push's as a push batch's must.
+// A MERGE RECORD FITS ITS ROWS: the most a merge record writes (its rows, its
+// push's, every change the push moves) plus the horizons' room is within
+// MaxRecordRows, so a merge's decide need not count its push's changes as a
+// push batch's must.
 func TestAMergeRecordFitsItsRows(t *testing.T) {
 	t.Parallel()
 	if got := gitlet.RecordRows(gitlet.MergeRecordRows); got > gitlet.MaxRecordRows {
@@ -545,15 +526,14 @@ func TestAMergeRecordFitsItsRows(t *testing.T) {
 	}
 }
 
-// A MERGE THAT DELETES ITS SOURCE RECORDS THE DROP (M6-D2): the head its
-// source branch held is an object no ref names once the merge's record deletes
-// the branch — a squash's commit does not reach it — so the record writes the
-// ref drop an expunge keeps for its grace, as any deletion's: one row naming
-// the source and the head, at the record's position. The target's move onto
-// the merge's commit, whose old tip the commit still reaches, leaves none.
+// A MERGE THAT DELETES ITS SOURCE RECORDS THE DROP (M6-D2): once the branch
+// is deleted no ref names its head (a squash's commit does not reach it), so
+// the record writes one ref drop naming the source and the head at its
+// position, for an expunge's grace as any deletion's. The target's move
+// leaves none: the merge's commit still reaches the old tip.
 //
-// Mutation: hand the merge's push its source deletion with no old object, or
-// leave a deletion out of what leaves an object, and no drop names the head.
+// Mutation: hand the push its source deletion with no old object, or leave a
+// deletion out of what leaves an object → no drop names the head.
 func TestAMergeThatDeletesItsSourceRecordsTheDrop(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -576,16 +556,15 @@ func TestAMergeThatDeletesItsSourceRecordsTheDrop(t *testing.T) {
 	}
 }
 
-// A MERGE BUILT BEFORE A BEGIN IS REFUSED EXPUNGING (M6-D4): once an expunge's
-// begin has moved its repository's drop epoch, a merge whose builder's copy
-// held the epoch before — its objects read while the begin's dropping ones
-// were live — is refused expunging, before any rule of its own, its sentence
-// naming both epochs and its builder, and nothing is appended; built again at
-// the begin's epoch, it merges. A drop epoch below zero is no proposal.
+// A MERGE BUILT BEFORE A BEGIN IS REFUSED EXPUNGING (M6-D4): after an
+// expunge's begin moves the drop epoch, a merge built at the earlier epoch
+// (its objects read while the dropping ones were live) is refused expunging
+// before any rule of its own, naming both epochs and its builder, appending
+// nothing; built again at the new epoch, it merges. A negative epoch is no
+// proposal.
 //
-// Mutation: drop the decide's comparison of the epochs, and the merge built
-// before the begin lands a target the expunge's commit could leave reaching
-// an object it retired.
+// Mutation: drop the decide's epoch comparison → the stale merge lands a
+// target that could reach an object the expunge retired.
 func TestAMergeBuiltBeforeABeginIsRefusedExpunging(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

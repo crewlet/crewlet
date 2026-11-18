@@ -11,16 +11,12 @@ import (
 )
 
 // EVERY CODE READER CARRIES THE CALLER'S STALENESS BOUND INTO THE FRAMEWORK'S
-// OWN QUERY — the hop nothing above this package can see.
-//
-// A reader that drops the bound produces an answer identical in every visible
-// respect to one that honoured it, so the only way to observe the difference
-// is to put the node BEHIND the bound and require the refusal — in both units,
-// because a reader that threads one field and forgets the other is the exact
-// shape the tracker shipped. A push's outcome and the retention pass's two
-// reads take no caller bound — the outcome and the pass's confirmation of a
-// purge are always read at their record's own position, and its listing is
-// the pass's own stale read — so they are not rows here.
+// OWN QUERY — the hop nothing above this package can see. A dropped bound
+// answers identically, so the node is put BEHIND the bound and the refusal
+// required, in both units, since a reader may thread one field and forget the
+// other. A push's outcome and the retention pass's two reads take no caller
+// bound (read at their record's own position, or the pass's own stale read),
+// so they are not rows here.
 func TestEveryCodeReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

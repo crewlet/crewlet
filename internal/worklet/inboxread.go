@@ -16,50 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// One person's inbox — what the company asked of them, in the order the log
-// asked it.
+// One person's inbox, in the order the log asked it. The applier's
+// `tracker_notifications` rows (one per commit and recipient) are the SOURCE;
+// the person's [Person] record is the READ STATE, a mark over this feed (an
+// [inbox.Entry] carries a record id and a position, no content). Only this
+// reader holds both, and a person who has marked nothing still has an inbox,
+// because the applier wrote it.
 //
-// # The rows were always here
-//
-// The applier has written `tracker_notifications` since the domain landed: one
-// row per (commit, recipient), carrying the reason that handle hears under,
-// the subject, the excerpt and the log position. The table ships two indexes
-// naming this reader — `(recipient, log_seq DESC)` and `(recipient, reason,
-// log_seq DESC)` for the primary/other split — and until now NOTHING read a
-// single row of it. A company routed every change to the people it concerned,
-// wrote them all down, replicated them, snapshotted them, and offered no way
-// to ask what was in them.
-//
-// # Why it is not [Person]
-//
-// [Person] is the person's OWN state: which entries they have read, what they
-// snoozed, how far they have got. It is written by the seat bound to them and
-// it is a MARK over this feed, not the feed itself — which is why an
-// [inbox.Entry] carries a record id and a position and no content at all.
-//
-// The two halves compose here: the notification rows are the SOURCE, the
-// person record is the READ STATE, and this reader is the only place that
-// holds both. That split is deliberate and is what makes the inbox survive a
-// seat that never writes: a person who has marked nothing still has an inbox,
-// because the applier — which outlives every writer — wrote it.
-//
-// # The primary split
-//
-// [inbox.Marks.PrimaryReasons] is the person's own answer to "which of these
-// are mine to act on". Empty means the shipped default, [DefaultPrimaryReasons],
-// rather than "nothing is primary": a person who has never expressed a
-// preference wants a useful inbox, not an empty primary list. The split is a
-// classification of the SAME rows rather than a filter — `other` is still
-// returned, because a notice nobody can see is a notice that was not delivered.
-//
-// # What is NOT here
-//
-// An unread COUNT over the whole table. The rows a person has read are named
-// by their own [Person] record as entries, so "unread" is a set difference
-// this reader computes over the page it returns and cannot compute over rows
-// it did not read. An `unread` page starts its index range at the person's
-// seen-through position on its own ([inboxStatements]), so "what have I not
-// read" never walks what they have.
+// The primary split CLASSIFIES the same rows rather than filtering them:
+// `other` is still returned, since a notice nobody can see was not delivered.
+// There is no unread count over the whole table: "unread" is a difference over
+// the page read, and an `unread` page seeks from the seen-through position
+// ([inboxStatements]).
 
 // InboxNotice is one thing the company told somebody.
 type InboxNotice struct {
@@ -72,9 +40,8 @@ type InboxNotice struct {
 	LogStream     string `json:"log_stream"`
 	LogGeneration uint32 `json:"log_generation"`
 
-	// At is the AUTHORED instant, for the reason the activity feed gives:
-	// a card saying "yesterday" must not move because a record was
-	// redelivered.
+	// At is the AUTHORED instant: a card saying "yesterday" must not move
+	// because a record was redelivered.
 	At time.Time `json:"at"`
 
 	// Reason is the ONE reason this handle hears under — the first in
@@ -112,20 +79,14 @@ type InboxNotice struct {
 	// SubjectKeyCollision says [InboxNotice.SubjectKey] does not open the
 	// task this notice is about: the key directory names another task for
 	// it, so a link built from the key reaches THAT task and this notice's
-	// is reached by [InboxNotice.Task]. See [ItemAddress]. Never set on a
-	// notice that names no task, whose key is the only address it carries.
+	// is reached by [InboxNotice.Task] ([ItemAddress]).
+	// Never set on a notice that names no task.
 	//
-	// ASKED OF THE STORED KEY, not read off the task's own flag, because
-	// the two can name different keys: the key here is the one the task
-	// held when the notice was written, and a task moved since answers to
-	// a new one. What a reader follows is THIS key, so the question is
-	// whether THIS key resolves to the task — one probe of the directory's
-	// primary key per row of a bounded page.
-	//
-	// AGAINST [InboxNotice.Task], NEVER [InboxNotice.SubjectID]: a
-	// prioritised notice's subject is a person, so asked of the subject
-	// every one of them read as a collision and was sent to the person's
-	// handle as though it were a task.
+	// ASKED OF THE STORED KEY, not the task's own flag: the key here is the
+	// one the task held when the notice was written, and a moved task
+	// answers to a new one; one probe of the directory's key per row of a
+	// bounded page. Asked AGAINST [InboxNotice.Task], never
+	// [InboxNotice.SubjectID]: a prioritised notice's subject is a person.
 	SubjectKeyCollision bool `json:"subject_key_collision,omitempty"`
 
 	Excerpt string `json:"excerpt,omitempty" untrusted:"fence"`
@@ -186,17 +147,13 @@ type InboxAnswer struct {
 }
 
 // DefaultPrimaryReasons is the split a person who has expressed no preference
-// gets.
+// gets: the addressed reasons plus the ownership ones, each a change to what
+// they should do next. A thread they are in or a task they watch is context,
+// and context competing with action turns an inbox into a feed nobody reads.
 //
-// THE ADDRESSED ONES PLUS THE OWNERSHIP ONES. A mention, a question, an answer
-// to a question you asked, work assigned to you, work you reported, and work
-// that became unblocked are all things that change what you should do next.
-// Everything else — a thread you are in, a task you watch — is context, and
-// context that competes with action turns an inbox into a feed nobody reads.
-//
-// It is deliberately NOT every reason with `Addressed` set: addressed is a
-// property of one ROW and this is a property of a REASON, so a default derived
-// from the rows would differ between two people with the same preferences.
+// It is NOT every reason with `Addressed` set: that is a property of one ROW,
+// so a default derived from rows would differ between two people with the
+// same preferences.
 var DefaultPrimaryReasons = []Reason{
 	ReasonMention,
 	ReasonAsked,
@@ -234,12 +191,11 @@ type InboxQuery struct {
 	// page AFTER it was read short-pages it. See [inboxFilter].
 	Unread bool
 
-	// Snoozed is what this read does with the notices this person put off,
-	// and it is REQUIRED: the zero value is refused rather than read as one
-	// of the three, because each of them is a sensible default for SOME
-	// caller and a reader that picked one silently would answer the other
-	// two's question wrong. A surface defaults it — to
-	// [inbox.SnoozeExclude], which is what "my inbox" means.
+	// Snoozed is what this read does with the notices this person put off.
+	// REQUIRED, the zero value refused: each of the three is a sensible
+	// default for SOME caller, so reading it as one would answer the other
+	// two's question wrong.
+	// A surface defaults it to [inbox.SnoozeExclude], what "my inbox" means.
 	Snoozed inbox.SnoozeScope
 
 	Limit  int
@@ -308,11 +264,9 @@ func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 		answer.PrimaryReasons = effectivePrimary(person.PrimaryReasons)
 		marks = person.Classifier(answer.PrimaryReasons)
 
-		// THE MARKS ARE READ FIRST because the page is filtered BY them:
-		// read, unread and snoozed are this person's record, and the
-		// notices this page may return are a function of it. Read in the
-		// same transaction, so the filter and the rows it selects are one
-		// instant.
+		// THE MARKS ARE READ FIRST, in the same transaction, because the
+		// page is filtered BY them: the filter and the rows it selects are
+		// one instant.
 		notices, next, err := readInbox(ctx, tx, handle, q,
 			inboxFilterOf(q, marks, now), limit)
 		if err != nil {
@@ -343,11 +297,9 @@ func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 
 // effectivePrimary is the person's split, or the shipped default.
 //
-// AN EMPTY LIST IS "I HAVE NOT SAID", not "nothing is primary". The two are
-// only distinguishable by a sentinel nobody would type, and the cost of
-// getting it wrong is asymmetric: defaulting to the shipped set gives a person
-// who never configured anything a useful inbox, while defaulting to empty
-// gives every person in the company an inbox whose primary half is blank.
+// AN EMPTY LIST IS "I HAVE NOT SAID", not "nothing is primary": the default
+// gives a person who never configured anything a useful inbox, where empty
+// would blank every person's primary half.
 func effectivePrimary(declared []Reason) []Reason {
 	if len(declared) == 0 {
 		return slices.Clone(DefaultPrimaryReasons)
@@ -363,27 +315,14 @@ func inboxScope() statelog.ScopeSet {
 // inboxFilter is every narrowing an inbox read applies, resolved against the
 // person's own record so it can be stated as SQL.
 //
-// # EVERY FILTER IS IN THE SCAN, NEVER ON THE PAGE
-//
-// The snooze scope, `unread` and `primary_only` used to be applied to the page
-// AFTER it was read, while the cursor was computed from the page BEFORE. So a
-// person with sixty snoozed notices among their newest fifty opened an inbox
-// of nothing with a cursor behind it; the default read — unread, snoozes
-// hidden, which is the dashboard's landing question — returned short or empty
-// pages that a screen could only describe as "none on this page, there are
-// more"; and the snoozed scope could not be asked at all, because the flag it
-// rode on returned every notice with the snoozed ones among it. Stated as
-// predicates on the scan, a page holds `limit` notices whenever the table
-// holds them, and `next_cursor` means what it says.
-//
-// It is affordable because everything it binds is bounded by the person's own
-// record — each list at most [inbox.MaxEntries] ids, bound as ONE JSON array
-// parameter — and everything it compares is a column of the row the index
-// range is already reading.
-//
-// EVERY SET IT BINDS IS THE CLASSIFIER'S ([inbox.Classifier]), the same
-// lookups the page is then marked by, so the scan and the marks are one rule:
-// a notice this filter hides is exactly one the page would have marked.
+// EVERY FILTER IS IN THE SCAN, NEVER ON THE PAGE: filtered after the read,
+// with the cursor computed before, a page comes back short or empty with a
+// cursor behind it. In the scan, a page holds `limit` notices whenever the
+// table holds them. It is affordable because each bound list is the person's
+// own (at most [inbox.MaxEntries] ids, bound as ONE JSON array) and every
+// comparison is a column of the row the index range already reads. Every set
+// is the classifier's ([inbox.Classifier]), so a notice this filter hides is
+// exactly one the page would have marked.
 type inboxFilter struct {
 	// reasons is the set a row's reason must be in — `reasons` intersected
 	// with the primary split under `primary_only` — and nil for every
@@ -404,13 +343,10 @@ type inboxFilter struct {
 }
 
 // inboxFilterOf resolves the query against the person's own record, as the
-// classifier the page is marked by holds it.
-//
-// A SNOOZE IS LIVE BY THE SAME TEST THE PAGE IS MARKED BY
-// ([inbox.Classifier.Asleep]) — no instant, or one after now — so a notice this
-// filter hides is exactly a notice the page would have marked snoozed, and one
-// whose time has come is back under every scope. Every set is SORTED there, so
-// one question is one statement.
+// classifier the page is marked by holds it. A snooze is live by
+// [inbox.Classifier.Asleep] (no instant, or one after now), so one whose time
+// has come is back under every scope. Every set is SORTED there, so one
+// question is one statement.
 func inboxFilterOf(q InboxQuery, marks inbox.Classifier, now time.Time) inboxFilter {
 	f := inboxFilter{unread: q.Unread, seen: marks.Seen(), scope: q.Snoozed,
 		read: marks.ReadMarks(), marked: marks.UnreadMarks(), asleep: marks.Asleep(now)}
@@ -520,14 +456,13 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 			return cmp.Or(cmp.Compare(b.LogGeneration, a.LogGeneration), cmp.Compare(b.LogSeq, a.LogSeq))
 		})
 	}
-	// THE EXTRA ROW IS THE CURSOR'S EVIDENCE and never an answer, which is
-	// the activity feed's own rule: a page that returned it would overrun
-	// the caller's limit.
+	// THE EXTRA ROW IS THE CURSOR'S EVIDENCE and never an answer: returning
+	// it would overrun the caller's limit.
 	more := len(out) > limit
 	out = out[:min(len(out), limit)]
 
 	// THE ASK EACH NOTICE IS ABOUT, in one read over the page's comments
-	// — see [readAskViews].
+	// ([readAskViews]).
 	comments := make([]string, 0, len(out))
 	for _, notice := range out {
 		if notice.CommentID != "" {
@@ -572,25 +507,19 @@ var inboxSelect = `SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation
 // reading up to limit+1 notices newest first, and false where the filter
 // selects nothing at all.
 //
-// # `unread` reads nothing the person has read through
-//
 // Under `unread`, a notice at or below the seen-through position is read
-// unless an unread mark names it ([markInbox]), so the rows such a page can
-// hold are those above the position and the ones the unread list names. The
-// first statement's range of tracker_notifications_inbox_idx starts at the
-// position ([inboxFilter.floor]); where that raised it, a second seeks the
-// notices the unread list names below it by the table's key — at most
-// [inbox.MaxEntries] — and the page merges the two. Bounded only by the
-// filter's predicate on each row, a person who had marked everything read
-// walked every notice they hold, the whole of `inbox.retention_days`, to
-// answer nothing — on every badge poll.
+// unless an unread mark names it ([markInbox]). So the first statement's
+// range of tracker_notifications_inbox_idx starts at the position
+// ([inboxFilter.floor]) and, where that raised it, a second seeks the notices
+// the unread list names below it by the table's key (at most
+// [inbox.MaxEntries]); the page merges the two. Otherwise an all-read
+// person's badge poll walks every notice they hold to answer nothing.
 func inboxStatements(handle string, q InboxQuery, filter inboxFilter, limit int) ([]inboxStatement, bool,
 	error) {
 
-	// THE KEYSET IS THE COMPOSED POSITION, for the reason the activity
-	// feed gives: `log_seq` already carries `(generation << 40) | seq`, so
-	// the generation is IN the ordering rather than beside it — which is
-	// what lets a cursor span a reanchor with no gap and no repeat.
+	// THE KEYSET IS THE COMPOSED POSITION: `log_seq` carries
+	// `(generation << 40) | seq`, so the generation is IN the ordering and
+	// a cursor spans a reanchor with no gap and no repeat.
 	var bounds []string
 	var boundArgs []any
 	if cursor := strings.TrimSpace(q.Cursor); cursor != "" {
@@ -725,15 +654,11 @@ func countInbox(notices []InboxNotice) (int, int) {
 
 // idList is ids as the one JSON array a `json_each(?)` term binds.
 //
-// ONE PARAMETER RATHER THAN ONE PER ID, because the lists are the person's own
-// and the parameter ceiling is the ENGINE's: [store.Capabilities.MaxVariables]
-// reports the probe's own 32 766 on the pinned driver, whose real limit lies
-// past it, but an engine in this family may stop at the 999 the probe falls
-// back to — and three full lists are 768 ids ([inbox.MaxEntries] each) before
-// the page's own arguments. One bind is one parameter at any length, so the
-// statement fits every engine and no list's length is a reason it fails. An
-// empty list is "[]", the one spelling of an empty set: `NOT IN` over it keeps
-// every row and `IN` none.
+// ONE PARAMETER RATHER THAN ONE PER ID: an engine in this family may stop at
+// the 999 parameters [store.Capabilities.MaxVariables]'s probe falls back to,
+// and three full lists are 768 ids ([inbox.MaxEntries] each) before the
+// page's own arguments. An empty list is "[]": `NOT IN` over it keeps every
+// row and `IN` none.
 func idList(ids []string) string {
 	if len(ids) == 0 {
 		return "[]"

@@ -9,47 +9,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE EXECUTOR LOG AS OPERATIONS: the engine's record of each seat's executor
-// sessions (ADR-0073), reached from whichever node holds the seat whose box
-// ran. A box runs where its seat is held, a seats-only leaf included, and a
-// state-log publisher exists only on a data node, so without these a session
-// captured off a data node would be an uploaded object nothing names, which
-// the collector deletes a day later — and the next launch there could not read
-// the conversation it continues.
+// The executor log as operations (ADR-0073), reached from whichever node holds
+// the seat whose box ran. Only a data node publishes, so without these a
+// session captured off one would be an object nothing names, which the
+// collector deletes, and the next launch could not continue its conversation.
 //
-// # Every write is the engine's
-//
-// Nobody asks for a turn's first read to be recorded, a session to be
-// captured, a turn to be ended, a session to be aged out or a removed seat's to
-// be taken away: the engine records what its own runs did. So every write here
-// is ENGINE-ORIGINATED ([originEngine]): the log is in no list of the domains a
-// surface writes ([SurfaceWriteDomains]), so the person's write surfaces have
-// no refusal of it to class and no object of it to name, and its writer facade
-// ([ExecutorWrites]) is the engine's alone, which a gate over the packages
-// serving a person or a model holds. A turn's first launch records its first
-// read through it, as its captures and its end are recorded.
-//
-// # Each write is the same operation however often it is asked
-//
-// Every write carries, on its [executordomain.Call], the operation id the
-// domain derives PER EXECUTION — a begin's from its turn, a capture's from its
-// turn, its launch and its ordinal, an end's from its turn, a retention
-// delete's from its turn and the reaper's slot, a removed seat's from the seat
-// and the instant its retirement was marked — and the log's ledger answers a
-// repeat with the first copy's outcome. So every write is an
-// [opIdempotentWrite]: one some data node never answered, or answered
-// unvouched, is asked of the next under the same id, and [ErrOutcomeUnknown] is
-// the caller's to retry under it, never under a fresh one.
-//
-// # Reads at the caller's level, on this log's floor
-//
-// Every read is answered at the level its caller passes and carries this
-// node's floor on the executor log, so a read after this node's own write is
-// answered by a copy that has applied it. A LAUNCH READS ITS CONVERSATION AT
-// `linearizable`: the previous turn's end may have been published through
-// another node, and a seat that moved holds no floor for it, so only the read
-// index's barrier, on whichever data node answers, holds the head to it. The
-// reads are ordinary ones, which a surface may hold ([ExecutorReads]).
+// Every write is the engine's ([originEngine]; package doc, "Who originates a
+// write: a surface, or the engine") and an [opIdempotentWrite]: its
+// [executordomain.Call] carries the id the domain derives per execution, so an
+// unanswered or unvouched write, or an [ErrOutcomeUnknown], is retried under
+// that id, never a fresh one. Reads run at the caller's level on this log's
+// floor; a launch reads its conversation `linearizable`: a seat that moved
+// holds no floor for an end published through another node.
 
 // ExecutorReader is the executor log's read side: exactly the domain reader's
 // method set, which [ExecutorReads] answers routed and a data node's own
@@ -92,12 +63,10 @@ var (
 	_ ExecutorWriter = (*executordomain.Writer)(nil)
 )
 
-// ExecutorHalf is the executor log a data node serves: its reader and its
-// writer, which every data node runs. A nil half is one this node's core
-// runtime has not built, answered like any half a node does not run, and a nil
-// writer beside a reader is a node that publishes nothing (a maintenance
-// mode), whose reads are served and whose writes move on to a node that
-// publishes.
+// ExecutorHalf is the executor log a data node serves. A nil half is one this
+// node's core runtime has not built, answered like any half a node does not
+// run; a nil writer beside a reader is a node that publishes nothing (a
+// maintenance mode), whose reads are served and whose writes move on.
 type ExecutorHalf struct {
 	Reader ExecutorReader
 	Writer ExecutorWriter
@@ -127,9 +96,8 @@ type executorHeadArgs struct {
 	Fresh           statelog.Freshness
 }
 
-// A CONVERSATION'S HEAD, its other ended turns and its siblings, read in one
-// transaction on the node that answers, at the level the caller asked: a
-// launch asks `linearizable` (see the file comment).
+// A conversation's head, its other ended turns and its siblings, read in one
+// transaction at the caller's level: a launch asks `linearizable` (file comment).
 var opExecutorHead = define("executor.head", opRead, executorDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a executorHeadArgs) (executordomain.Head, error) {
 		r, err := b.executorReader()
@@ -145,8 +113,8 @@ type executorSessionArgs struct {
 	Fresh  statelog.Freshness
 }
 
-// ONE TURN'S ROW, and where the copy that answers read it: a surface states
-// the position beside the row, as it does a page's.
+// One turn's row, and the position it was read at, which a surface states
+// beside the row.
 var opExecutorSession = define("executor.session", opRead, executorDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a executorSessionArgs) (executordomain.SessionRead, error) {
 		r, err := b.executorReader()
@@ -178,11 +146,10 @@ type executorSearchArgs struct {
 	Fresh  statelog.Freshness
 }
 
-// A SEARCH OF A SEAT'S SESSIONS by the words of their rows, answered where the
-// rows are: the node that answers examines a page of the seat's rows in one
-// read and sends back its hits alone, so a node without `data` never has a
-// seat's history shipped to it to be filtered. A data node of a build before
-// this operation answers it unknown, unserved, and the router asks the next.
+// A search of a seat's sessions runs where the rows are, one page in one read,
+// sending back only its hits: a node without `data` is never shipped a seat's
+// history to filter. An older data node answers it unknown, unserved, and the
+// router asks the next.
 var opExecutorSearch = define("executor.search", opRead, executorDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a executorSearchArgs) (executordomain.SearchPage, error) {
 		r, err := b.executorReader()
@@ -221,9 +188,9 @@ type executorHandlesArgs struct {
 	Fresh statelog.Freshness
 }
 
-// EVERY SEAT HOLDING A ROW, or [executordomain.ErrIncomplete] where the node
-// that answers may be missing one: never a shorter list, which a retirement
-// would match a departed seat against and find nothing to remove.
+// Every seat holding a row, or [executordomain.ErrIncomplete] where the node
+// may be missing one: never a shorter list, against which a retirement would
+// find nothing to remove for a departed seat.
 var opExecutorHandles = define("executor.handles", opRead, executorDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a executorHandlesArgs) ([]string, error) {
 		r, err := b.executorReader()
@@ -252,10 +219,9 @@ type executorBeginArgs struct {
 	Begin executordomain.NewBegin
 }
 
-// A TURN'S BEGIN records its first read of its conversation and the base that
-// read froze, under the operation its turn derives, and answers whether the
-// row the serving node holds holds that base now
-// ([executordomain.BeginResult.Held]), read back on that node.
+// A turn's begin records its first read of its conversation and the base it
+// froze, and answers whether the serving node's row holds that base now
+// ([executordomain.BeginResult.Held]).
 var opExecutorBegin = define("executor.begin", opIdempotentWrite, executorDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a executorBeginArgs) (executordomain.BeginResult, error) {
 		w, err := b.executorWriter()
@@ -270,10 +236,8 @@ type executorCaptureArgs struct {
 	Capture executordomain.NewCapture
 }
 
-// A CAPTURE names a session's object for a live turn, under the operation its
-// turn, launch and ordinal derive, and answers whether the row the serving
-// node holds names it now ([executordomain.CaptureResult.Recorded]), read back
-// on that node.
+// A capture names a session's object for a live turn, and answers whether the
+// serving node's row names it now ([executordomain.CaptureResult.Recorded]).
 var opExecutorCapture = define("executor.capture", opIdempotentWrite, executorDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a executorCaptureArgs) (executordomain.CaptureResult, error) {
 		w, err := b.executorWriter()
@@ -345,9 +309,8 @@ type executorSeatArgs struct {
 	Handle string
 }
 
-// A REMOVED SEAT'S DELETE is always published, whatever the serving node's
-// copy holds ([executordomain.Writer.DeleteSeat]), so where it lands is the
-// log's, never the copy's that took the request.
+// A removed seat's delete is always published, whatever the serving copy holds
+// ([executordomain.Writer.DeleteSeat]): what it removes is the log's to decide.
 var opExecutorDeleteSeat = define("executor.delete_seat", opIdempotentWrite, executorDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a executorSeatArgs) (statelog.Result, error) {
 		w, err := b.executorWriter()
@@ -361,11 +324,8 @@ var opExecutorDeleteSeat = define("executor.delete_seat", opIdempotentWrite, exe
 
 // ExecutorReads is the executor log's reads, answered by a data node whose copy
 // serves (this one where it does): exactly the domain reader's method set, so
-// a consumer cannot tell local from routed.
-//
-// AN ORDINARY READ, which a surface may hold — a person's view of a seat's
-// sessions, a run's search of its own — as much as the engine's launch and its
-// retention may.
+// a consumer cannot tell local from routed. They are ordinary reads, which a
+// surface may hold as much as the engine may.
 type ExecutorReads struct{ r *Router }
 
 // ExecutorReads answers the executor log's reads.
@@ -428,10 +388,8 @@ func (x ExecutorReads) Handles(ctx context.Context, fresh statelog.Freshness) ([
 func (x ExecutorReads) SealedKeys(ctx context.Context) (executordomain.SealedCount, error) {
 	out, err := call(ctx, x.r, opExecutorSealedKeys, nil, executorSealedArgs{})
 	if out.Values == nil && err == nil {
-		// AN EMPTY COUNT IS AN EMPTY MAP, as the domain answers it: the
-		// wire leaves an empty map out, and an answer that came back from a
-		// peer as no map at all would be one a caller could tell from the
-		// same answer read in-process.
+		// The wire leaves an empty map out: answer the empty map the domain
+		// answers in-process, so routed and local stay alike.
 		out.Values = secrets.KeyCounts{}
 	}
 	return out, err
@@ -441,12 +399,10 @@ func (x ExecutorReads) SealedKeys(ctx context.Context) (executordomain.SealedCou
 // copy serves (this one where it does): exactly the domain writer's method
 // set, so a consumer cannot tell local from routed.
 //
-// THE ENGINE'S ALONE ([originEngine]): it is for the engine's record of what
-// its own runs did — a turn's first read, the executor's captures and ends, the
-// retention's deletes and a removed seat's — and no package that serves a
-// person or a model names it, which the gate over those packages holds. Each
-// write's position is this node's next floor on the log, so the read that
-// follows it, on whichever data node answers, includes it.
+// The engine's alone ([originEngine]): no package that serves a person or a
+// model names it (TestNoSurfaceHoldsTheEnginesExecutorWrites). Each write's
+// position becomes this node's floor on the log, so the next read, on whichever
+// data node answers, includes it.
 type ExecutorWrites struct{ r *Router }
 
 // ExecutorWrites answers the executor log's writes.
@@ -455,8 +411,6 @@ func (r *Router) ExecutorWrites() ExecutorWrites { return ExecutorWrites{r: r} }
 var _ ExecutorWriter = ExecutorWrites{}
 
 // Begin records a turn's first read of its conversation and the base it froze.
-// Asked again of the next data node, under the operation its call carries,
-// wherever one did not answer — and so is every write below.
 func (x ExecutorWrites) Begin(ctx context.Context, c executordomain.Call,
 	n executordomain.NewBegin) (executordomain.BeginResult, error) {
 	out, err := call(ctx, x.r, opExecutorBegin, nil, executorBeginArgs{Call: c, Begin: n})
@@ -478,16 +432,14 @@ func (x ExecutorWrites) End(ctx context.Context, c executordomain.Call,
 	return x.written(call(ctx, x.r, opExecutorEnd, nil, executorEndArgs{Call: c, End: n}))
 }
 
-// EndLost records a turn whose end was lost as ended `lost`, as the retention
-// duty.
+// EndLost records a turn whose end was lost as ended `lost`, for the retention.
 func (x ExecutorWrites) EndLost(ctx context.Context, c executordomain.Call, handle, conversationKey,
 	turn string, before time.Time) (statelog.Result, error) {
 	return x.written(call(ctx, x.r, opExecutorEndLost, nil, executorTurnArgs{Call: c, Handle: handle,
 		ConversationKey: conversationKey, Turn: turn, At: before}))
 }
 
-// DeleteExpired removes one turn's row and tombstone past the retention, as
-// the retention duty.
+// DeleteExpired removes one turn's row and tombstone past the retention.
 func (x ExecutorWrites) DeleteExpired(ctx context.Context, c executordomain.Call, handle,
 	conversationKey, turn string, cutoff time.Time) (statelog.Result, error) {
 	return x.written(call(ctx, x.r, opExecutorDeleteExpired, nil, executorTurnArgs{Call: c, Handle: handle,
@@ -495,22 +447,21 @@ func (x ExecutorWrites) DeleteExpired(ctx context.Context, c executordomain.Call
 }
 
 // ExpireRemoval forgets a removed seat's record of its removal past the
-// retention, as the retention duty.
+// retention.
 func (x ExecutorWrites) ExpireRemoval(ctx context.Context, c executordomain.Call, handle string,
 	cutoff time.Time) (statelog.Result, error) {
 	return x.written(call(ctx, x.r, opExecutorExpireRemoval, nil,
 		executorRemovalArgs{Call: c, Handle: handle, Cutoff: cutoff}))
 }
 
-// DeleteSeat removes every row a seat the company removed holds, as the
-// mailbox retirement.
+// DeleteSeat removes every row of a seat the company removed, for the mailbox
+// retirement.
 func (x ExecutorWrites) DeleteSeat(ctx context.Context, c executordomain.Call,
 	handle string) (statelog.Result, error) {
 	return x.written(call(ctx, x.r, opExecutorDeleteSeat, nil, executorSeatArgs{Call: c, Handle: handle}))
 }
 
-// written observes a write's position for the next read's floor and answers
-// it.
+// written observes a write's position as the next read's floor.
 func (x ExecutorWrites) written(out statelog.Result, err error) (statelog.Result, error) {
 	x.r.Observe(out.Position)
 	return out, err

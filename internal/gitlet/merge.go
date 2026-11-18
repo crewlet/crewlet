@@ -17,184 +17,139 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A CHANGE'S MERGE, AS ONE RECORD ITS GATE DECIDES (ADR-0096): a change merges
-// into its target by a MERGE RECORD ([Merge]) on the REPOSITORY's own subject,
-// the one its pushes, its changes' lifecycles and its merge queues are on,
-// decided by its committer alone ([Committer.ProposeMerge]) — so a change's
-// merge, its close, its entry in a queue and the pushes that move either branch
-// have one writer, and contend on one subject.
-//
+// A CHANGE'S MERGE IS ONE RECORD ITS GATE DECIDES (ADR-0096): a [Merge] on the
+// repository's own subject, decided by its committer alone
+// ([Committer.ProposeMerge]), so a change's merge, its close, its queue entry and
+// the pushes moving either branch have one writer and contend on one subject: a
+// record landing after a decide's snapshot fails its append, and the decide runs
+// again on the rows it left.
+
 // # Decided from one snapshot
 //
-// A merge is built elsewhere — its commit and its pack written by the
-// repository's home Gitlet node onto the tip it read of the target — and proposed
-// with what it was built from: the target's tip (BaseOID) and the change's head
-// (HeadOID). Its decide reads ONE snapshot and proves every precondition in
-// it: the repository active; the copy the merge was built from at the
-// repository's drop epoch ([MergeProposal.DropEpoch]), since a merge built
-// before an expunge's begin may reach an object the begin left dropping
-// (expunging, which its builder answers by building again, as a push checked
-// before one is refused); the change open, not a draft, into the target and
-// at the head its builder merged; the target AT THE TIP THE MERGE WAS BUILT
-// ONTO, read from the snapshot's refs and never from the proposal, since a
-// merge built onto a tip the target has moved from merges a branch that is no
-// longer there (target_moved, which its builder answers by building again);
-// and the change's merge gate ([JudgeGate]) met with the record's principal as
-// the merger — every precondition but `mergeable`, which the merge's own build
-// proved against the base it names — or a person's OVERRIDE of it, the reason
-// recorded. A target whose gate requires a check lands its merges through its
-// queue ([GateRules.QueueTarget]), so a merge asked of it directly is refused
-// queue_target unless a person overrides. Between the snapshot and the record
-// that moves the branch, the race is the broker's: the record is arbitrated on
-// the repository's subject, so a record that landed after the snapshot fails
-// the append and the decide runs again on the rows it left.
-//
+// A merge is built on the repository's home Gitlet node onto the target tip it
+// read and proposed with that tip (BaseOID) and the change's head (HeadOID). Its
+// decide proves in ONE snapshot: the repository active; the build's copy at its
+// drop epoch (else expunging: an expunge begun since may leave an object the
+// merge reaches dropping); the change open, not a draft, into the target, at the
+// head merged; the target AT BaseOID by the snapshot's refs, never the proposal
+// (else target_moved); and the gate ([JudgeGate]) met by the merger, all but
+// `mergeable`, which the build proved, or a person's recorded OVERRIDE, a gate
+// requiring a check only through the queue ([GateRules.QueueTarget], else
+// queue_target). Builders answer expunging and target_moved by building again.
+
 // # Applied as one record
 //
-// The record does everything a merge is, in one apply ([Applier.applyMerge]):
-// the change MERGED FIRST — `merged_via direct`, the commit, who merged it and
-// any override's reason — so that the push the record then lands finds it
-// merged, as a push that set its target to its head (M4's merge by push) and
-// one that deleted its source (M4's close on a deleted source) would otherwise
-// find it live; the target moved from its base onto the merge's commit; a push
-// row `via merge` naming the merger, the commit it introduced (none for a
-// fast-forward, whose head its own pushes brought) and the pack; the source
-// branch deleted where the merge asks it (Q4: a seat's branch, by default),
-// and the head it held recorded as that deletion's ref drop, which an expunge
-// keeps for its grace as any deletion's ([leavesObject]); the change's live
-// queue entry ended, where a person's override merged a queued
-// change directly; the target's landing row, where a rule protects it; and its
-// green row, where its gate requires no check. Every guard of the apply is a
-// skip, never a refusal: a record that finds what its decide held untrue —
-// which no correct log carries but a record the ledger would have collapsed —
-// applies as nothing, logged (code_merge_not_applied).
-//
+// [Applier.applyMerge] does all of a merge in one apply: the change MERGED FIRST
+// (`merged_via direct`, the commit, the merger, any override's reason), so the
+// push it then lands finds it merged, not live (M4's merge by push and close on
+// a deleted source would fire); the target moved base to commit; a push row
+// `via merge` (no commit for a fast-forward); the source deleted where asked (Q4:
+// a seat's branch, by default), its head a ref drop an expunge keeps for its
+// grace ([leavesObject]); a queued change's live entry ended; and the target's
+// landing and green rows. Every guard is a skip, never a refusal: a record whose
+// decide's facts no longer hold (only one the ledger would have collapsed)
+// applies as nothing, logged code_merge_not_applied.
+
 // # Base format
 //
-// The op, its payload and every field here are in the base format
-// ([RecordVersion]): the domain landed on main with them, and with the values
-// a merge adds to closed sets (`merged_via direct` on a change's row and
-// `via merge` on a push's), so every build that meets a merge reads it — all
-// but whom an agent's merge was made for ([Merge.WorkingFor]) and its
-// routing's ([ChangeRouting.WorkingFor]), which came with version 2. It is
-// no gate.
+// The op, its payload and every field are in the base format ([RecordVersion]),
+// as are `merged_via direct` and `via merge` in their closed sets: the domain
+// landed with them. Only [Merge.WorkingFor] and [ChangeRouting.WorkingFor] came
+// with version 2. It is no gate.
 
 // Merge moves a change's target onto the commit its merge built: the record of
-// op merge on the repository's subject.
-//
-// BASE FORMAT, as this file's head says, but for [Merge.WorkingFor].
+// op merge on the repository's subject, in the base format but for
+// [Merge.WorkingFor].
 type Merge struct {
 	RepoID string `json:"repo_id"`
-	// MergeID is the push the merge lands as — [WritePushID] of the
-	// proposal's operation id, the id its builder's scratch and its push row
-	// are named by — so a merge asked again under its operation is the same
-	// push.
+	// MergeID is the push the merge lands as, [WritePushID] of the proposal's
+	// operation id, so a merge asked again under its operation is the same push.
 	MergeID  string `json:"merge_id"`
 	ChangeID string `json:"change_id"`
 	// Method is how the change merged: a merge commit, one squashed commit,
 	// or a fast-forward of the target to the change's head.
 	Method MergeMethod `json:"method"`
-	// TargetRef is the branch the change merges into; BaseOID the tip of it
-	// the merge was built onto, which the decide holds the branch to; HeadOID
-	// the change's head the merge took, which it holds the change to; and
-	// CommitOID what the target moves to — the merge commit, the squashed
-	// one, or HeadOID itself for a fast-forward.
+	// TargetRef is the branch merged into; BaseOID its tip the merge was built
+	// onto and HeadOID the change's head it took, which the decide holds the
+	// branch and the change to; CommitOID what the target moves to (HeadOID
+	// itself for a fast-forward).
 	TargetRef string `json:"target_ref"`
 	BaseOID   string `json:"base_oid"`
 	HeadOID   string `json:"head_oid"`
 	CommitOID string `json:"commit_oid"`
-	// Pack is the pack of the objects the merge built — its commit and the
-	// trees and blobs the merge wrote — stored before it was proposed, and
+	// Pack holds the objects the merge built, stored before it was proposed;
 	// nil for a fast-forward, which builds none.
 	Pack *PackRef `json:"pack,omitempty"`
 	// DeleteSource is whether the merge deletes the change's source branch
-	// (Q4: a seat's branch, by default, its `delete_source`); SourceRef is
-	// the branch it deletes, STAMPED BY THE DECIDE from the change it read
-	// and "" where it deletes none.
+	// (Q4: a seat's, by default); SourceRef is that branch, STAMPED BY THE
+	// DECIDE from the change it read, "" where it deletes none.
 	DeleteSource bool   `json:"delete_source,omitempty"`
 	SourceRef    string `json:"source_ref,omitempty"`
 	// Override is a person's reason for merging past the target's merge
 	// gate, at most [MaxOverrideReasonBytes]; "" for a merge its gate holds.
 	Override string `json:"override,omitempty"`
 	// Node is the Gitlet node that built the merge and ReceivedAt when it was
-	// asked to — the push row's node and received_at, as an engine write's
-	// are.
+	// asked to: the push row's node and received_at.
 	Node       string    `json:"node"`
 	ReceivedAt time.Time `json:"received_at"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
-	// COMMITTER: the change's authors, told it merged — all but who merged
-	// it.
+	// COMMITTER: the change's authors but the merger.
 	Routing *ChangeRouting `json:"routing,omitempty"`
-	// Principal is who merged it — the proposal's asker, STAMPED by the
-	// committer: the merger its gate judged, and whom its push row and the
-	// change's row name.
+	// Principal is the merger, the proposal's asker STAMPED by the committer:
+	// whom the gate judged and the push and change rows name.
 	Principal Principal `json:"principal"`
-	// WorkingFor is whom an agent's merge was made for (ADR-0109), whatever
-	// the record wakes: the carrier its proposal states
-	// ([MergeProposal.WrittenFor]), STAMPED BY THE COMMITTER beside Principal;
-	// an asker sends none. nil for a merge made for nobody — the seat's own
-	// work — and for a person's. The apply keeps it on the merge's push row
-	// (code_pushes.working_for), which the home's record of a change that
-	// push landed reads it back from ([landingPusher]).
+	// WorkingFor is whom an agent's merge was made for (ADR-0109), STAMPED BY
+	// THE COMMITTER from [MergeProposal.WrittenFor]; nil for a person's merge
+	// or one made for nobody. The apply keeps it on the push row
+	// (code_pushes.working_for), where [landingPusher] reads it back.
 	//
 	// VERSION 2, as every payload's working_for is ([versionedFields]).
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 	// Protected and Green are what the decide's snapshot held of the target,
-	// STAMPED BY THE DECIDE so the apply matches no pattern: Protected that a
-	// rule protects it, so the merge writes its landing row; Green that its
-	// gate requires no check besides, so the landing is green as it lands
-	// and the target's green row moves to it.
+	// STAMPED BY THE DECIDE so the apply matches no pattern: Protected writes
+	// its landing row; Green (no check required besides) lands it green and
+	// moves the target's green row to it.
 	Protected bool `json:"protected,omitempty"`
 	Green     bool `json:"green,omitempty"`
 }
 
 // MergeProposal is one merge of a change as its builder hands it to the
-// repository's committer ([Committer.ProposeMerge]): the record, beside who
-// asks and the floor they read at. Its OpID is the record's operation id — the
-// merge's push id is derived from it ([WritePushID]) — and its Seen the
-// publish's session floor.
+// repository's committer ([Committer.ProposeMerge]): the record, who asks and
+// the floor they read at. OpID is the record's operation id, which the push id
+// derives from ([WritePushID]).
 type MergeProposal struct {
 	OpID string `json:"op_id"`
-	// Asker is who merges: a person, or a seat — whose merge authority, like
-	// every approval its gate counts, is judged from the chart of the
-	// deciding node's epoch. A token bound to nobody merges nothing. A seat's
-	// merge may name the turn that asked it, which its push row records; it
-	// names no executor, since a merge is a tool call's, never a box's.
+	// Asker is who merges: a person, or a seat whose merge authority, like
+	// every approval its gate counts, is judged by the deciding node's chart.
+	// A token bound to nobody merges nothing. A seat's merge may name its
+	// turn, which the push row records, but no executor: a merge is a tool
+	// call's, never a box's.
 	Asker Principal `json:"asker"`
-	// Seen is the code log's position the merge was built at — zero for one
-	// that read none. The committer DECIDES AT OR PAST IT, or refuses
-	// `behind` about itself, so the runner-up decides.
+	// Seen is the code log's position the merge was built at, zero for none:
+	// the publish's session floor. The committer DECIDES AT OR PAST IT, or
+	// refuses `behind` about itself so the runner-up decides.
 	Seen statelog.Position `json:"seen,omitzero"`
-	// DropEpoch is the repository's drop epoch as the copy the merge was
-	// built from held it (internal/gitlet/cache's Synced.DropEpoch, its
-	// landing's pinned copy), as a push's is ([Proposal.DropEpoch]): the
-	// committer refuses the merge `expunging` where the repository's epoch is
-	// another ([MergeRefusalExpunging]) — an expunge's begin since has left
-	// dropping objects that copy held live, and a merge built over them would
-	// move the target onto a commit reaching an object the expunge's commit
-	// retires — and its builder builds it again. NEVER RECORDED, as Seen is
-	// not: the decide reads it and nothing else does, so the merge record's
+	// DropEpoch is the repository's drop epoch in the copy the merge was built
+	// from (internal/gitlet/cache's Synced.DropEpoch), as [Proposal.DropEpoch]
+	// is a push's. Where the repository's is another, an expunge begun since
+	// may have left dropping objects that copy held live, which the merge's
+	// commit may reach and the expunge's commit retires, so the committer
+	// refuses it [MergeRefusalExpunging] and the builder builds again. NEVER
+	// RECORDED, as Seen is not: only the decide reads it, so the record's
 	// format does not move for it.
 	DropEpoch int64 `json:"drop_epoch,omitempty"`
 	// WrittenFor is whom a SEAT'S merge is made for (ADR-0109), as
-	// [ChangeProposal.WrittenFor] is: whoever the turn that asked it works
-	// for, handed on by the Gitlet node that builds the merge from the engine
-	// write it was asked ([EngineWrite.WrittenFor]), or stated nobody; a
-	// person's states nothing. Held to the asker by [writtenForInvalid]: a
-	// merge carries no ceiling, the Gitlet node that built it having held the
-	// write to its ceiling already.
+	// [ChangeProposal.WrittenFor] is: the asking turn's carrier, handed on from
+	// the engine write the building node was asked ([EngineWrite.WrittenFor]),
+	// or stated nobody; a person's states nothing. [writtenForInvalid] holds it
+	// to the asker, ceiling-free: the building node held the write to one.
 	//
-	// A proposal is no record, so this field takes no versionedFields row; the
-	// merge record carries it ([Merge.WorkingFor]) and beside the merger on its
-	// routing ([ChangeRouting.WorkingFor]), which take theirs. It crosses the
-	// estate's wire to whichever data node decides it, and a node of a build
-	// without it refuses a merge carrying somebody, naming args.written_for, so
-	// the walk asks one that reads it, and a node of a build that does not know
-	// its carrier's kind, or an app a credential's carrier names, refuses it
-	// alike, naming args.written_for.kind or args.written_for.apps[]
-	// ([unknownToThisBuild]); one made for nobody sends no member, as such a
-	// build does. What such a build sends arrives stated nobody
-	// ([MergeProposal.UnmarshalJSONFrom]).
+	// No versionedFields row, a proposal being no record ([Merge.WorkingFor]
+	// and [ChangeRouting.WorkingFor] take theirs). A data node whose build lacks
+	// it, or its carrier's kind or apps, refuses a merge carrying somebody,
+	// naming args.written_for (.kind, .apps[]) ([unknownToThisBuild]), so the
+	// walk asks one that reads it; one made for nobody sends no member, and an
+	// older build's arrives stated nobody ([MergeProposal.UnmarshalJSONFrom]).
 	WrittenFor types.WrittenFor `json:"written_for,omitzero"`
 	Merge      Merge            `json:"merge"`
 }
@@ -202,60 +157,46 @@ type MergeProposal struct {
 // MergeResult is what became of one merge proposal.
 type MergeResult struct {
 	// Outcome is applied, pending or unknown for a proposal whose record was
-	// appended, and empty for one refused. Applied is answered from the
-	// change's row the record wrote.
+	// appended, empty for one refused; applied is read from the change's row.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
 	// MergeID is the push the merge lands as; MergeOID the commit its target
 	// moved to, once its record applied.
 	MergeID  string `json:"merge_id,omitempty"`
 	MergeOID string `json:"merge_oid,omitempty"`
-	// Position is where the record landed — for one asked again under its
-	// own operation id, the record the ledger found — and, for a not_applied
-	// or repo_deleted refusal the log made after the append, where that
-	// record lies applying nowhere.
+	// Position is where the record landed (for a retry, the one the ledger
+	// found), or, for a not_applied or repo_deleted refusal after the append,
+	// where it lies applying nowhere.
 	Position statelog.Position `json:"position,omitzero"`
 	// Refusal is why it was refused with no record, Detail its one sentence,
-	// and Unmet every precondition of the change's merge gate a merge refused
-	// gate_unmet did not meet, each naming whom it waits on.
+	// and Unmet, for gate_unmet, every precondition not met, each naming whom
+	// it waits on.
 	Refusal MergeRefusal   `json:"refusal,omitempty"`
 	Detail  string         `json:"detail,omitempty"`
 	Unmet   []Precondition `json:"unmet,omitempty"`
 }
 
-// Validate refuses a proposal no committer could decide ([ErrInvalidProposal],
-// naming the field), before it is queued: an operation id this engine does not
-// accept; an asker that is no principal, or names an executor; whom the merge
-// is made for, where its asker may not state it so ([writtenForInvalid]); a
-// Seen that is no position on the code log; a drop epoch below zero; a
-// repository id that is no UUID in its canonical spelling; a merge id that is
-// not [WritePushID] of the operation id; a change id that is no bare UUIDv7; a
-// target that is no branch a change may name; a method this build does not
-// know; a base, a head or a commit that is no whole object id, or a commit that
-// is the base, which moves nothing; a fast-forward to anything but the head, or
-// carrying a pack; a merge or a squash carrying none, or a commit that is the
-// head; a pack whose row is no bundle's ([PackRef.Check]) or past what an
-// engine-built pack may store ([MaxWritePackBytes]); an override past
-// [MaxOverrideReasonBytes] or not valid text; no node, or no instant it was
-// asked at; a field the committer stamps (the principal, the source, Protected
-// and Green) set by the asker; and a record past what one proposal may carry
-// ([EntryRoom]).
+// Validate refuses, before it is queued, a proposal no committer could decide
+// ([ErrInvalidProposal], naming the field): a field malformed or past its bound;
+// an asker naming an executor or stating whom it works for as it may not
+// ([writtenForInvalid]); a merge id not [WritePushID] of the operation id; a
+// commit that is the base; a fast-forward to anything but the head or carrying
+// a pack; a merge or squash carrying none or committing the head; a pack past
+// [MaxWritePackBytes]; a field the committer stamps set by the asker; and a
+// record past [EntryRoom].
 //
-// Before any of it, a value whom the merge is made for names that this build
-// does not know is answered as its decoder answers it on the wire, never as
-// ErrInvalidProposal, whatever else the proposal holds ([unknownToThisBuild]):
-// this build cannot judge the merge at all, and a committer of a build that
-// knows the value does.
+// First, a written_for value this build does not know is answered as its decoder
+// answers it on the wire, never ErrInvalidProposal ([unknownToThisBuild]): this
+// build cannot judge the merge, and a committer that knows the value can.
 func (p MergeProposal) Validate() error {
 	_, err := p.measure()
 	return err
 }
 
-// ValidateUnstored is [MergeProposal.Validate] of a merge whose pack is not
-// stored yet — its builder's check while the bundle uploads, as
-// [Proposal.ValidateUnstored] is a push's: the pack named by the widest
-// object key and hash a stored one could take, so a merge that passes here
-// passes Validate once its bundle is stored. A pack already stored is the
-// caller's mistake: Validate checks one.
+// ValidateUnstored is [MergeProposal.Validate] of a merge whose pack is still
+// uploading, as [Proposal.ValidateUnstored] is a push's: the pack is named by
+// the widest object key and hash a stored one could take, so a merge passing
+// here passes Validate once stored. A pack already stored is the caller's
+// mistake.
 func (p MergeProposal) ValidateUnstored() error {
 	if p.Merge.Pack != nil {
 		if !p.Merge.Pack.Object.IsZero() || p.Merge.Pack.Hash != "" {
@@ -270,9 +211,9 @@ func (p MergeProposal) ValidateUnstored() error {
 }
 
 // measure validates p and answers its queued byte charge: its record's payload
-// as the committer stamps it — its source at the longest a ref's encoding may
-// be, every byte past its prefix one JSON writes as six, since the decide
-// stamps one the proposal does not carry — encoded, held under [EntryRoom].
+// as the committer stamps it, held under [EntryRoom]. The source, which the
+// decide stamps, counts at the longest a ref may encode to: every byte past
+// its prefix one JSON escapes as six.
 func (p MergeProposal) measure() (int, error) {
 	if err := p.validFields(); err != nil {
 		return 0, err
@@ -286,7 +227,7 @@ func (p MergeProposal) measure() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%w: merge: encode it: %w", ErrInvalidProposal, err)
 	}
-	// AND THE ROOM ITS ROUTING KEEPS, which its committer stamps.
+	// Plus the room of the routing its committer stamps.
 	if bytes := len(encoded) + MaxRoutingBytes; bytes > EntryRoom {
 		return 0, fmt.Errorf("%w: merge: %d bytes with the routing it carries, past the %d one proposal may "+
 			"take of its record", ErrInvalidProposal, bytes, EntryRoom)
@@ -417,14 +358,12 @@ func (p MergeProposal) stamped() Merge {
 // floor for.
 func (p MergeProposal) RepoID() string { return p.Merge.RepoID }
 
-// JudgesChart reports a proposal whose decide reads the deciding node's chart,
-// which a node holding none, or one confirmed behind the company's
-// configuration, never decides: EVERY MERGE, whoever asks — its gate counts an
-// approval by who may approve the change, an owner's by the lead chain above
-// it and a seat's merge authority by its grant, each the chart's
-// ([JudgeGate]), as an enqueue's is ([QueueProposal.JudgesChart]). ONE ANSWER,
-// which the committer queues and decides by and the estate declares the
-// operation's grant by.
+// JudgesChart reports that p's decide reads the deciding node's chart, so a
+// node holding none, or confirmed behind the company's configuration, never
+// decides it: EVERY MERGE, since its gate judges approvals, owners' lead chains
+// and a seat's merge authority by the chart ([JudgeGate]), as
+// [QueueProposal.JudgesChart] does. ONE ANSWER, which the committer queues and
+// decides by and the estate declares the operation's grant by.
 func (p MergeProposal) JudgesChart() bool { return true }
 
 // mergeDecidedRows is the most rows a merge's OWN writes make its apply touch,
@@ -444,33 +383,28 @@ const mergePushRows = 1 + 1 + 3 + 1 + seatDayRows + pusherDayRows
 
 // mergeRecordRows is the most rows one merge record makes its apply write
 // before its horizons: its own ([mergeDecidedRows]); its push's
-// ([mergePushRows]); and the changes its push moves of others' ([changeBook]):
-// the live change the target heads as a source, revised with a revision and an author
-// and its queue entry ended, and up to [MaxPushMerges] live changes into the
-// target at the merge's commit, each merged with its queue entry ended and its
-// stored readiness cleared, and the tally row those merges move. Its
-// own change the record merges first, so the push finds it merged and moves
-// it no further. Far under MaxRecordRows with the horizons' room
-// ([recordRows]), which [TestAMergeRecordFitsItsRows] holds — so a merge's
-// decide counts no change of its push's, as a push batch's must.
+// ([mergePushRows]); and others' changes its push moves ([changeBook]): the
+// live change the target heads as a source (a revision, an author, its queue
+// entry ended), and up to [MaxPushMerges] live changes into the target at the
+// merge's commit (each merged, queue entry ended, readiness cleared), plus
+// their tally row. Its own change is merged first, so the push moves it no
+// further. Far under MaxRecordRows with the horizons' room ([recordRows]),
+// which [TestAMergeRecordFitsItsRows] holds, so a merge's decide counts no
+// change of its push's, as a push batch's must.
 const mergeRecordRows = mergeDecidedRows + mergePushRows + 4 + 3*MaxPushMerges + tallyRows
 
 // ProposeMerge decides one merge as a batch of its own in the repository's
-// queue — the push's queue and bounds ([Committer.Propose]), as a queue's
-// write's are ([Committer.ProposeQueue]): a full queue or a node holding its
-// bytes is busy at once, a merge whose caller's deadline leaves too little for
-// a batch and its answer is busy undecided, a stopping committer answers
-// [ErrNotServing] — as does one that cannot judge it, behind the company's
-// configuration or holding no chart yet, since the chart judges every merge —
-// and a proposal that is not one answers [ErrInvalidProposal]. ctx bounds only
-// this caller's wait.
+// queue, under a push's queue and bounds ([Committer.Propose]) as
+// [Committer.ProposeQueue] is: busy at once for a full queue or a node holding
+// its bytes, busy undecided for a deadline too short for a batch;
+// [ErrNotServing] from a stopping committer or one holding no current chart,
+// which judges every merge; [ErrInvalidProposal] for an invalid one. ctx bounds
+// only this caller's wait.
 //
-// ITS OPERATION ID IS THE PROPOSAL'S OWN, so a merge its builder hands the
-// repository's runner-up after this node went silent is the same merge there,
-// collapsed by the ledger onto the record that landed. ITS SESSION IS ITS
-// SEEN. Applied is answered FROM THE CHANGE'S ROW the record wrote, never from
-// the decision; and the node whose committer landed the record — never a
-// retry the ledger collapsed onto it — announces it (`change_merged`).
+// ITS OPERATION ID IS THE PROPOSAL'S OWN, so the same merge handed to the
+// runner-up collapses onto the record that landed; ITS SESSION IS ITS SEEN.
+// Applied is read FROM THE CHANGE'S ROW, and only the committer that landed
+// the record, never a collapsed retry, announces it (`change_merged`).
 func (c *Committer) ProposeMerge(ctx context.Context, p MergeProposal) (MergeResult, error) {
 	bytes, err := p.measure()
 	if err != nil {
@@ -520,13 +454,12 @@ func (d mergeDecision) refuse(code MergeRefusal, detail string) (mergeDecision, 
 	return d, nil
 }
 
-// decideMerge is one round's decision of p over the rows tx holds — see this
-// file's head, in the order its rules are read. Pure over (the rows, p, seats,
-// limits, retention, now): seats is the deciding epoch's chart, which the
-// gate judges by; limits its code.limits — the merge_by floor the gate holds
-// a merger to, and the size a merge's pack is held to as a push's is;
-// retention its code.deleted_retention_days, which a repo_deleted refusal
-// names; now the decide's clock, which an upload's age is judged by.
+// decideMerge is one round's decision of p over the rows tx holds, its rules in
+// the order this file's head reads them. Pure over (the rows, p, seats,
+// limits, retention, now): seats is the deciding epoch's chart the gate judges
+// by; limits its code.limits (the merge_by floor, and the pack's size bound,
+// as a push's); retention its code.deleted_retention_days, which a
+// repo_deleted refusal names; now the clock an upload's age is judged by.
 func decideMerge(ctx context.Context, tx *sql.Tx, p MergeProposal, seats SeatRules, limits Limits,
 	retention time.Duration, now time.Time) (mergeDecision, error) {
 
@@ -550,15 +483,13 @@ func decideMerge(ctx context.Context, tx *sql.Tx, p MergeProposal, seats SeatRul
 	case repo.status == RepoStatusImporting:
 		return d.refuse(MergeRefusalRepoImporting, ImportingDetail(repo.name))
 	case repo.mirrored:
-		// A MERGE MOVES ITS TARGET, and a pull mirror moves only by its syncs
-		// from its source: a merge its source made is recorded once a sync
-		// brings it in, as a landing.
+		// A pull mirror moves only by its syncs, which record a merge its
+		// source made as a landing.
 		return d.refuse(MergeRefusalRepoMirrored, MirroredDetail(repo.name, repo.managedBy))
 	case p.DropEpoch != repo.dropEpoch:
-		// THE DROP EPOCH, before every rule of the merge's own, as a push's
-		// is: built against a copy at another epoch, its commit may reach an
-		// object an expunge begun since left dropping, and its builder builds
-		// it again against the repository as the begin left it.
+		// THE DROP EPOCH, before every rule of the merge's own, as a push's:
+		// built on a copy at another epoch, its commit may reach an object an
+		// expunge begun since left dropping.
 		return d.refuse(MergeRefusalExpunging, ExpungingBuiltDetail(repo.name, "merge", "its builder",
 			p.DropEpoch, repo.dropEpoch))
 	case seats.Roster == nil:
@@ -591,9 +522,8 @@ func decideMerge(ctx context.Context, tx *sql.Tx, p MergeProposal, seats SeatRul
 		return d.refuse(MergeRefusalHeadMoved, fmt.Sprintf("%s's head is %s, and this merge was built from %s: "+
 			"read it again", named, short(c.Head), short(m.HeadOID)))
 	}
-	// THE TARGET AS THIS SNAPSHOT HOLDS IT, never as the proposal says it
-	// was: the merge's commit is a merge of its base, and the branch moves
-	// onto it only where the branch is still there.
+	// THE TARGET AS THIS SNAPSHOT HOLDS IT, never as the proposal says: the
+	// commit merges its base, so the branch moves only if still there.
 	refs, err := refsNamed(ctx, tx, m.RepoID, []string{c.TargetRef, c.SourceRef})
 	if err != nil {
 		return mergeDecision{}, fmt.Errorf("gitlet: read %s's and %s's tips on %s: %w", c.TargetRef, c.SourceRef,
@@ -619,8 +549,7 @@ func decideMerge(ctx context.Context, tx *sql.Tx, p MergeProposal, seats SeatRul
 			return d.refuse(MergeRefusalQueueTarget, fmt.Sprintf("%s's merge gate requires a check, so a change "+
 				"merges into it through its queue: enqueue %s, or a person overrides the gate", c.TargetRef, named))
 		}
-		// THE GATE, every precondition but the change's merge into its
-		// target, which the merge's own build proved against its base.
+		// THE GATE, all but `mergeable`, which the build proved on its base.
 		r := JudgeGate(f, gate)
 		for _, pre := range r.Preconditions {
 			if pre.State != PreconditionMet && pre.Kind != PreconditionMergeable {
@@ -641,10 +570,9 @@ func decideMerge(ctx context.Context, tx *sql.Tx, p MergeProposal, seats SeatRul
 		}
 	}
 	// THE PACK, held to a push's rules ([working.decide], [working.behind]):
-	// its upload young enough for a record to name, the repository's size
-	// past it within its bound — half of it for a seat outside the
-	// repository's owners — and the repository's live packs under the
-	// bound compaction keeps them to, judged last as a push's is.
+	// its upload young enough to name, the repository's size with it within
+	// bound ([OutsideSeatShare] of it for a seat outside the owners), and the
+	// live packs under compaction's bound, judged last as a push's is.
 	if m.Pack != nil {
 		bound := limits.RepoMaxBytes
 		if grant.outside() {
@@ -667,8 +595,8 @@ func decideMerge(ctx context.Context, tx *sql.Tx, p MergeProposal, seats SeatRul
 	}
 	payload.Protected = gate.Protected()
 	payload.Green = gate.Protected() && len(gate.Checks) == 0
-	// WHOM IT CONCERNS: the change's authors, told it merged — all but who
-	// merged it, its record's actor, beside whom the merge was made for.
+	// WHOM IT CONCERNS: the change's authors but the merger, the record's
+	// actor, beside whom the merge was made for.
 	row, _, err := changeRowIn(ctx, tx, m.ChangeID)
 	if err != nil {
 		return mergeDecision{}, err
@@ -691,17 +619,13 @@ func refTip(refs map[string]string, ref string) string {
 	return ZeroOID
 }
 
-// sourceDeletion is why a merge may not delete its change's source, at tip,
-// for merger — the push refusal a push deleting it would meet and its
-// sentence — or "": the rules no state decides ([StatelessRefusal]); the
-// merger's grant on a source OUTSIDE the seats' namespace ([Grant.RefRule]) —
-// a seat's own branch is the merge's to delete whoever merges it (Q4: what
-// carried the change ends with it), and a branch anybody else named is
-// deleted only by whoever may delete it; every protection matching it
-// ([ProtectionRefusal]), which binds a merge's deletion as it binds a push's;
-// and the repository's default branch ([DefaultBranchRefusal]), which no
-// merge deletes, as no push does: a change proposing main into a release
-// branch merges keeping main.
+// sourceDeletion is the refusal and sentence a push deleting the change's
+// source, at tip, would meet from merger, or "": [StatelessRefusal]; the
+// merger's grant ([Grant.RefRule]) on a source OUTSIDE the seats' namespace,
+// since a seat's own branch is the merge's to delete whoever merges (Q4: what
+// carried the change ends with it); every matching protection
+// ([ProtectionRefusal]); and [DefaultBranchRefusal], so a change proposing
+// main into a release branch merges keeping main.
 func sourceDeletion(rules []Protection, repo pushRepo, source, tip string, merger Principal,
 	grant Grant) (Refusal, string) {
 	del := Command{Ref: source, Old: tip, New: ZeroOID}
@@ -715,8 +639,8 @@ func sourceDeletion(rules []Protection, repo pushRepo, source, tip string, merge
 	}
 	protections, err := ParseProtections(pushRules(rules))
 	if err != nil {
-		// A RULE THIS BUILD CANNOT READ keeps the branch, FAIL CLOSED:
-		// every stored rule passed validation before a record carried it.
+		// FAIL CLOSED: every stored rule passed validation before a record
+		// carried it, so one this build cannot read keeps the branch.
 		return RefusalProtectedDelete, err.Error()
 	}
 	if r, rule := ProtectionRefusal(del, protections, merger.Kind); r != "" {
@@ -737,9 +661,8 @@ func askerNamed(p Principal) string {
 	return "a credential bound to nobody"
 }
 
-// mergeWrite publishes one merge and answers it — the merge's batch of its own,
-// under the committer's own lifetime and one CommitBudget, as a queue's write
-// is ([Committer.queueWrite]).
+// mergeWrite publishes one merge and answers it, a batch of its own under the
+// committer's lifetime and one CommitBudget, as [Committer.queueWrite] is.
 func (c *Committer) mergeWrite(repoID string, q *queued) {
 	p := *q.merge
 	seats, held := c.seatRules()
@@ -752,10 +675,9 @@ func (c *Committer) mergeWrite(repoID string, q *queued) {
 	defer cancel()
 	retention, limits := c.retention(), c.limits()
 	subject := RepoSubject(repoID)
-	// THE SCOPE NAMES WHAT THE DECIDE READS (M5-D33), stated before it runs:
-	// the gate reads the change's conversation and facts and the repository's
-	// checks beside the repository, so a node holding a deferred record of
-	// any of them decides no merge.
+	// THE SCOPE NAMES WHAT THE DECIDE READS (M5-D33): the gate reads the
+	// change's conversation and facts and the repository's checks, so a node
+	// holding a deferred record of any of them decides no merge.
 	scope := []string{RepoPath(repoID), ChecksPath(repoID), ChangePath(p.Merge.ChangeID)}
 	var (
 		last    mergeDecision
@@ -825,11 +747,10 @@ func (c *Committer) mergeAnswer(ctx context.Context, p MergeProposal, last merge
 	return MergeResult{Outcome: statelog.OutcomeUnknown, MergeID: p.Merge.MergeID}, nil, nil
 }
 
-// appliedMerge answers a merge whose record applied at res.Position, FROM THE
-// CHANGE'S ROW: merged by that record — at its position, at the commit the
-// merge names — or the record wrote what this node does not hold, logged at
-// ERROR and answered unknown. Its own fresh landing, never a retry the ledger
-// collapsed onto an earlier one, is the event it answers beside.
+// appliedMerge answers a merge whose record applied at res.Position FROM THE
+// CHANGE'S ROW: merged at that position and commit, or unknown, logged at
+// ERROR, where the row does not carry it. Only a fresh landing, never a retry
+// the ledger collapsed, answers its event beside.
 func (c *Committer) appliedMerge(ctx context.Context, p MergeProposal, res statelog.Result) (MergeResult,
 	*types.ChangeMerged, error) {
 
@@ -866,8 +787,7 @@ func (c *Committer) appliedMerge(ctx context.Context, p MergeProposal, res state
 	}
 	out := MergeResult{Outcome: statelog.OutcomeApplied, MergeID: m.MergeID, MergeOID: row.mergeOID, Position: at}
 	if res.Collapsed {
-		// A RETRY COLLAPSED ONTO AN EARLIER LANDING is that landing's, whose
-		// call announced it.
+		// A collapsed retry: the earlier landing's call announced it.
 		return out, nil, nil
 	}
 	return out, &types.ChangeMerged{RepoID: m.RepoID, RepoName: repoName, ChangeID: m.ChangeID,
@@ -875,11 +795,10 @@ func (c *Committer) appliedMerge(ctx context.Context, p MergeProposal, res state
 		MergedBy: row.mergedBy, MergedByKind: string(row.mergedByKind), Override: row.overrideReason}, nil
 }
 
-// announceMerged publishes a merge's event on this node's event stream,
-// stamped when, under ctx — the announcer's one [checkEventBudget]: a stream
-// that does not take it is logged, and the change's row still says it merged.
-// The announcer runs it once the merge's answer is handed back, so neither its
-// asker nor the repository's next write waits on any of it (announce.go).
+// announceMerged publishes a merge's event, stamped when, under ctx, the
+// announcer's one [checkEventBudget]: a failure is logged, the change's row
+// still saying it merged. It runs after the answer is handed back, so neither
+// the asker nor the repository's next write waits on it (announce.go).
 func (c *Committer) announceMerged(ctx context.Context, when time.Time, e *types.ChangeMerged) {
 	if err := announceOn(ctx, c.events, c.nodeID, when, *e); err != nil {
 		c.log.WarnContext(ctx, "change_merged_unpublished", "repo", e.RepoID, "change", e.ChangeID,
@@ -888,8 +807,8 @@ func (c *Committer) announceMerged(ctx context.Context, when time.Time, e *types
 	}
 }
 
-// refusedMerge answers a merge whose publish failed — a queue's write's
-// mapping ([Committer.refusedQueue]) in a merge's words.
+// refusedMerge answers a merge whose publish failed: [Committer.refusedQueue]'s
+// mapping in a merge's words.
 func (c *Committer) refusedMerge(ctx context.Context, p MergeProposal, err error) (MergeResult, error) {
 	var refusal *statelog.Unavailable
 	switch {

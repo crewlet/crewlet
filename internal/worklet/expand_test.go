@@ -9,11 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A VIEW IS A SET OF DEFAULTS, never a lock.
-//
-// The grammar's own doc has always said so — "loaded FIRST and explicit keys
-// override them" — and nothing loaded one: `view=` was parsed and never read,
-// so opening a saved board answered the UNFILTERED list.
+// A VIEW IS A SET OF DEFAULTS, never a lock: it is loaded first and explicit
+// keys override it, and opening a saved board never answers the unfiltered
+// list.
 func TestASavedViewIsDefaultsTheCallerCanOverride(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -46,9 +44,7 @@ func TestASavedViewIsDefaultsTheCallerCanOverride(t *testing.T) {
 		t.Fatalf("the view's sort reached the query as %v", q.Sort)
 	}
 
-	// AND AN EXPLICIT KEY WINS, which is the whole of "defaults rather
-	// than a lock": somebody who opens a saved board and picks another
-	// assignee gets the view with that one key changed.
+	// AN EXPLICIT KEY WINS, and only that key changes.
 	q, err = r.reader.ExpandedQuery(t.Context(), map[string]any{
 		"container": "project:ENG", "view": "v-mine", "assignee": "bob",
 	}, worklet.Viewer{}, wednesday, berlin)
@@ -69,20 +65,17 @@ func TestAPresetExpandsToTheQuestionItNames(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	// MY QUEUE NEEDS A VIEWER, and the surface supplies it — with the
-	// viewer's own PROJECT, because the preset asks two things about the
-	// reader rather than one.
+	// MY QUEUE NEEDS A VIEWER and the viewer's own PROJECT: the preset
+	// asks two things about the reader.
 	q, err := r.reader.ExpandedQuery(t.Context(),
 		map[string]any{"container": "project:ENG", "preset": "my_queue"},
 		worklet.Viewer{Handle: "ana", Project: "ENG"}, wednesday, berlin)
 	if err != nil {
 		t.Fatalf("ExpandedQuery: %v", err)
 	}
-	// "WHAT CAN I PICK UP" IS A DISJUNCTION, and both arms matter: the
-	// work this person HOLDS, and the work in their own project that
-	// NOBODY holds. Written as `assignee=me` alone it answered only the
-	// first, so a seat with an empty queue read the company as having
-	// nothing for it while its project's unclaimed backlog sat there.
+	// "WHAT CAN I PICK UP" IS A DISJUNCTION: the work this person holds,
+	// and the work in their own project nobody holds. `assignee=me` alone
+	// would show an empty queue over an unclaimed backlog.
 	if len(q.Any) != 2 {
 		t.Fatalf("my_queue expanded to %d branches, want two — mine, and the "+
 			"unclaimed work in my own project", len(q.Any))
@@ -99,9 +92,8 @@ func TestAPresetExpandsToTheQuestionItNames(t *testing.T) {
 			"unclaimed task in the company",
 			unclaimed.Assignee, unclaimed.Scope.Project)
 	}
-	// AND BLOCKED WORK IS NOT SOMETHING TO PICK UP: it is
-	// `preset=blocked`'s answer, and leaving it here would make the two
-	// presets return the same rows for the wrong reason.
+	// BLOCKED WORK IS NOT SOMETHING TO PICK UP: it is `preset=blocked`'s
+	// answer.
 	if q.Blocked == nil || *q.Blocked {
 		t.Fatalf("my_queue's blocked filter is %v, want false", q.Blocked)
 	}
@@ -115,11 +107,9 @@ func TestAPresetExpandsToTheQuestionItNames(t *testing.T) {
 		t.Fatalf("my_queue's order is %v, want priority then due", q.Sort)
 	}
 
-	// A VIEWER WITH NO PROJECT OF THEIR OWN PICKS UP WHAT THEY HOLD. The
-	// unclaimed arm is scoped to the viewer's project, and with no project
-	// it used to go unscoped — offering every unassigned task in the
-	// company to a seat whose unit files none, and to every caller the
-	// directory binds to no seat.
+	// A VIEWER WITH NO PROJECT OF THEIR OWN PICKS UP WHAT THEY HOLD: an
+	// unscoped unclaimed arm would offer every unassigned task in the
+	// company.
 	homeless, err := r.reader.ExpandedQuery(t.Context(),
 		map[string]any{"container": "workspace", "preset": "my_queue"},
 		worklet.Viewer{Handle: "jane.doe"}, wednesday, berlin)
@@ -152,9 +142,8 @@ func TestAPresetExpandsToTheQuestionItNames(t *testing.T) {
 		t.Fatalf("blocked resolved to %v", blocked.Blocked)
 	}
 
-	// OVERDUE IS THE ALIAS, not a second predicate: `due=overdue` carries
-	// its own open condition, and writing it again would be two spellings
-	// of one question that drift apart.
+	// OVERDUE IS THE ALIAS `due=overdue`, not a second predicate that
+	// could drift from it.
 	overdue, err := r.reader.ExpandedQuery(t.Context(),
 		map[string]any{"preset": "overdue"}, worklet.Viewer{Handle: "ana"}, wednesday, berlin)
 	if err != nil {
@@ -170,10 +159,8 @@ func TestAPresetExpandsToTheQuestionItNames(t *testing.T) {
 	}
 }
 
-// A VIEW OVERRIDES A PRESET, and the caller overrides both.
-//
-// A view is the more specific thing — somebody saved it — and what was typed
-// is more specific still.
+// A VIEW OVERRIDES A PRESET, and the caller overrides both: each is more
+// specific than the last.
 func TestAViewBeatsAPresetAndTheCallerBeatsBoth(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -199,8 +186,8 @@ func TestAViewBeatsAPresetAndTheCallerBeatsBoth(t *testing.T) {
 		t.Fatalf("the assignee is %v, want the view's over the preset's",
 			q.Assignee)
 	}
-	// AND THE PRESET'S OTHER KEYS SURVIVE, because a view overrides the
-	// keys it names and not the ones it does not.
+	// THE PRESET'S OTHER KEYS SURVIVE: a view overrides only the keys it
+	// names.
 	if len(q.StatusGroups) != 2 {
 		t.Fatalf("the preset's groups are %v, want both — a view overriding "+
 			"one key must not drop the rest", q.StatusGroups)
@@ -218,11 +205,9 @@ func TestAViewBeatsAPresetAndTheCallerBeatsBoth(t *testing.T) {
 	}
 }
 
-// A SAVED VIEW MAY NOT CARRY A KEY ABOUT THE CALLER'S OWN READ.
-//
-// `view` would expand into itself, `cursor` would resume a page nobody asked
-// for, and a stored `read_level` would let a board silently downgrade a seat's
-// own read.
+// A SAVED VIEW MAY NOT CARRY A KEY ABOUT THE CALLER'S OWN READ: `view` would
+// expand into itself, `cursor` resume a page nobody asked for, and a stored
+// `read_level` silently downgrade a seat's own read.
 func TestASavedViewCannotCarryTheCallersOwnKeys(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -262,13 +247,10 @@ func TestAMissingViewIsRefusedRatherThanIgnored(t *testing.T) {
 	}
 }
 
-// AN ANSWER SAYS WHAT IT WAS EXPANDED FROM.
-//
-// A request knows what it sent; an answer does not otherwise, and these travel
-// detached from their requests — a socket frame, a cached payload, a screen
-// restored from a URL. Without the echo a board cannot say which saved view it
-// is showing, and a caller cannot tell an expansion that resolved from one
-// that was quietly dropped.
+// AN ANSWER SAYS WHAT IT WAS EXPANDED FROM: answers travel detached from
+// their requests (a socket frame, a cached payload, a URL), and without the
+// echo a board cannot say which view it shows, nor a caller tell a resolved
+// expansion from a dropped one.
 func TestAnAnswerSaysWhatItWasExpandedFrom(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -303,8 +285,7 @@ func TestAnAnswerSaysWhatItWasExpandedFrom(t *testing.T) {
 			answer.Preset)
 	}
 
-	// AND AN ORDINARY QUERY CLAIMS NEITHER, or every board would report a
-	// view it was never opened from.
+	// AN ORDINARY QUERY CLAIMS NEITHER.
 	plain := r.ask(map[string]any{"container": "project:ENG"})
 	if plain.View != "" || plain.Preset != "" {
 		t.Fatalf("an ordinary answer claims view %q and preset %q",
@@ -312,12 +293,10 @@ func TestAnAnswerSaysWhatItWasExpandedFrom(t *testing.T) {
 	}
 }
 
-// THE TWO LISTS A PERSON HAS that the rows alone cannot express.
-//
-// `priorities` is the ORDER somebody arranged, which lives on their own
-// object and has no column to sort by; `triage` is the work nobody has picked
-// up, which with one fixed status set is the only honest definition of
-// "needs somebody to decide" — a company cannot declare an intake status.
+// THE TWO LISTS A PERSON HAS that the rows alone cannot express: `priorities`
+// is the order somebody arranged, on their own object with no column to sort
+// by; `triage` is the work nobody has picked up, the only honest "needs
+// somebody to decide" while a company cannot declare an intake status.
 func TestThePersonalPresets(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -355,8 +334,7 @@ func TestThePersonalPresets(t *testing.T) {
 			"list IS the answer, and there is no column to sort by", got)
 	}
 
-	// TRIAGE IS THE UNASSIGNED OPEN WORK, so the one task somebody holds
-	// is out of it.
+	// TRIAGE IS THE UNASSIGNED OPEN WORK.
 	triage, err := r.reader.ExpandedQuery(t.Context(),
 		map[string]any{"container": "project:ENG", "preset": "triage"},
 		worklet.Viewer{Handle: "ana", Project: "ENG"}, wednesday, berlin)
@@ -379,8 +357,7 @@ func TestThePersonalPresets(t *testing.T) {
 			len(unclaimed.Rows))
 	}
 
-	// AND `priorities` NEEDS A VIEWER, exactly as `my_queue` does: a list
-	// with nobody's name on it is nobody's list.
+	// `priorities` NEEDS A VIEWER, as `my_queue` does.
 	if _, err := r.reader.ExpandedQuery(t.Context(),
 		map[string]any{"preset": "priorities"}, worklet.Viewer{},
 		wednesday, berlin); err == nil {

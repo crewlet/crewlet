@@ -19,11 +19,10 @@ import (
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
-// The gates a DETACHED run's calls pass, beyond the surface's own, as only the
-// bridge keeps them. The gates every dispatcher keeps — the fence, a panic, the
-// run's context, a call after the run ended, the order calls arrived in, an
-// activation's answer and the class of every refusal — are toolsessiontest's,
-// which this package runs (contract_test.go).
+// The gates only the bridge keeps for a DETACHED run's calls. Those every
+// dispatcher keeps (fence, panic, context, a call after the run ended, arrival
+// order, an activation's answer, every refusal's class) are toolsessiontest's,
+// run here by contract_test.go.
 
 // heldTool holds a call until freed, saying when it has begun.
 type heldTool struct {
@@ -38,8 +37,8 @@ func newHeldTool(name string) *heldTool {
 }
 
 // free lets every held call return, once. A case registers it AFTER the server
-// and the client it dials, so a case that fails with a call still held does
-// not leave the server's close waiting on it for ever.
+// and its client, so cleanup frees a held call before the server's close waits
+// on it.
 func (h *heldTool) free() { h.freed.Do(func() { close(h.release) }) }
 
 func (h *heldTool) Name() string        { return h.name }
@@ -143,12 +142,11 @@ func newGatedParking(t *testing.T, parks map[string]bool, extra ...tools.Callabl
 
 func (g *gated) closeFence(err error) { g.fenceErr.Store(&err) }
 
-// A BOX IS ANSWERED AT ONCE WHEN ITS RUN'S TOOLS CLOSE. The tool loop stops the
-// harness of a run it ends and withholds every answer until it is gone; nothing
-// here can stop the harness in a box. So the box is answered at once: the call its
-// tools closed under with what it did, since it ran, and every call after it
-// refused, told to end its turn — never told why, which is the engine's log's
-// and names the seat's grant.
+// A BOX IS ANSWERED AT ONCE WHEN ITS RUN'S TOOLS CLOSE, since nothing here can
+// stop a box's harness as the tool loop stops its own: the call the tools
+// closed under gets what it did, since it ran, and every later call is refused
+// and told to end its turn, never why (that is the engine log's, and names the
+// seat's grant).
 //
 // Mutation: answer the call the fence closed under as refused, or name the
 // fence's reason in a refusal, and a case goes red.
@@ -213,12 +211,11 @@ func TestABoxIsAnsweredAtOnceWhenItsRunsToolsClose(t *testing.T) {
 	}
 }
 
-// A SUSPEND IS REFUSED, AND THE CALL THAT RAN IS RECORDED. A detached run's
-// loop is its harness's own, which would wait for ever on a call parked unanswered,
-// so the box is told at once the tool cannot be used from an executor — and
-// the run goes on. But the tool ran, and started what it would have parked on,
-// so the run's record holds the call as it holds any call that ran: when, for
-// how long, who answered, and refused as forbidden.
+// A SUSPEND IS REFUSED, AND THE CALL THAT RAN IS RECORDED. A box's harness
+// would wait for ever on a parked call, so the box is told at once the tool is
+// unusable from an executor and the run goes on. But the tool ran and started
+// its work, so the record holds the call like any that ran, refused as
+// forbidden.
 //
 // Mutation: answer the suspend without recording it, and the ledger is empty.
 func TestASuspendIsRefusedAndRecordedAsACallThatRan(t *testing.T) {
@@ -311,16 +308,13 @@ func TestClosingOneRunLeavesAnotherServing(t *testing.T) {
 	}
 }
 
-// A CALL NOBODY WAITED FOR IS RECORDED SO. The bridge runs a call under its
-// run's context, so a call goes on once its harness cancels it — Claude
-// Code cancels the request at its tool timeout and discards a late answer — and
-// once the opening it was made on ends, which answers it at once that it is
-// still running and closes the box's sessions behind that answer. Either way its
-// effect happens and no harness is handed its answer: the session of the job
-// that made it holds it with no outcome, a failed one or the end's, so its
-// record says nobody waited (mcpbridge.Call.Abandoned), as decided the moment
-// its tool returned. A call returned to a harness still waiting for it, and one
-// no request carries, are recorded as ever.
+// A CALL NOBODY WAITED FOR IS RECORDED SO. A call runs under its run's context,
+// so it goes on after its harness cancels it (Claude Code does at its tool
+// timeout) and after its opening ends (which answers it as still running and
+// closes the box's sessions). Its effect happens with no harness handed the
+// answer, so its record says so (mcpbridge.Call.Abandoned), decided when its
+// tool returns. A call answered to a waiting harness, or carried by no
+// request, is recorded as ever.
 //
 // Mutation: read nothing of whether the harness still waits, or nothing of the
 // opening's end, and a call nobody was handed the answer of is recorded as one

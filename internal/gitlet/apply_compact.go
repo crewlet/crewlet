@@ -11,53 +11,22 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// applyLog is the applier's own voice: what it says is about a record applied
-// here — today only a publication that applies as nothing — and an operator
-// grepping for that should not have to know it was filed under the committer.
+// applyLog is the applier's own voice: an operator grepping for a record
+// applied here need not know it was filed under the committer.
 var applyLog = logging.Get("gitlet.apply")
 
-// applyCompact applies one compaction ([Compaction]): the rows of the packs it
-// retires leave code_packs for code_packs_retired, stamped with the record's
-// position and broker instant, the outputs code_packs does not hold are written
-// there, and the repository's counters move by exactly what moved — in the one
-// transaction the framework holds a record's apply to. A PUBLICATION — a
-// compaction carrying a layer — also replaces the top of the repository's
-// published chain with its layer ([applyLayer]).
-//
-// PURE IN THE RECORD, ITS POSITION AND ITS INSTANT, like every apply here: it
-// reads no clock and no configuration and decides nothing again. The decide
-// already held every input live, every output a bundle and the objects to what
-// the inputs held, and a publication's layer to the chain it builds on, and
-// the broker's arbitration on the repository's subject guarantees the record
-// applies against the rows that decide read. So every guard here is a SKIP,
-// never a refusal, which would stop the log on every node:
-//
-//   - a pack id the record retires that code_packs no longer holds is passed
-//     over — a replay of a record whose packs a later one has since moved, or
-//     a record a newer build formed — and every row of one it holds moves,
-//     whatever its part;
-//   - an output code_packs already holds is not written again;
-//   - a record that finds nothing to retire and nothing to add, and carries
-//     no layer, has applied already, and writes nothing at all;
-//   - and a publication whose layer the chain does not fit applies as
-//     NOTHING, whole — the replay of one applied already silently, and one no
-//     correct log carries logged (code_layer_not_applied) — because its
-//     repack without its layer would retire the packs of layers that stay.
-//
-// THE COUNTERS ARE THE ROWS: live_packs, live_bytes and live_objects move by
-// the rows this apply found and wrote — the live ones among those it retires,
-// as a purge part counts them — never by the record's lists, so a replay over
-// rows it already moved moves nothing, and an input named twice counts once;
-// and a publication's published_packs and published_objects are RECOUNTED from
-// the rows it leaves. Nothing else is touched: no ref, no push row, no
-// tombstone, and not the retired mark, which only a sweep raises.
-//
-// NO GUARD ON ITS SIZE: a compaction this build's committer forms writes at
-// most compactDecidedRows rows ([CompactionProposal.Validate], and the decide's
-// withinCompaction), and one formed otherwise — a newer build that raised
-// MaxCompactInputs — is applied whole, as a push record is: the framework
-// checks its transaction budget only at a record's boundary, and a record this
-// build reads and refused at its apply would stop the applier on every node.
+// applyCompact applies one compaction ([Compaction]): its retired packs move
+// from code_packs to code_packs_retired, the outputs code_packs lacks are
+// written, and a publication (one carrying a layer) replaces the chain's top
+// ([Applier.applyLayer]). It reads no clock or config: the decide proved inputs
+// live and the layer's fit on the rows the subject's arbitration hands this apply,
+// so every guard is a SKIP, never a refusal stopping the log on every node: a
+// retired id no longer held, an output already held, a layer the chain does not
+// fit (NOTHING applies, code_layer_not_applied unless a replay: its repack alone
+// would retire packs of layers that stay). Counters move by the rows found and
+// written, never the record's lists; published_* are recounted. Beyond
+// [CompactionProposal.Validate]'s compactDecidedRows no size guard: the budget is
+// checked only at a record's boundary. Only a sweep marks retired.
 func (a *Applier) applyCompact(ctx context.Context, tx *sql.Tx, at applyContext, c Compaction) (int, error) {
 	var chain []LayerRow
 	if c.Layer != nil {
@@ -82,7 +51,7 @@ func (a *Applier) applyCompact(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, fmt.Errorf("gitlet: the compaction at %s: %w", at.position, err)
 	}
 	if c.Layer == nil && plan.idle() {
-		// APPLIED ALREADY: nothing of it is left to move.
+		// Applied already.
 		return 0, nil
 	}
 	m, err := plan.apply(ctx, tx, at, c.RepoID)
@@ -115,12 +84,9 @@ func (a *Applier) applyCompact(ctx context.Context, tx *sql.Tx, at applyContext,
 	return moved + placed, nil
 }
 
-// A REWRITE'S PACKS, MOVED IN ONE PLACE: a compaction's ([Applier.applyCompact])
-// and an expunge's begin's and commit's (apply_expunge.go) — every record that
-// replaces some of a repository's packs by others — so the rows it retires,
-// the outputs it writes, the date their content is read at by a purge and the
-// counters it moves them by are one reading for every kind of rewrite
-// (ADR-0008).
+// A REWRITE'S PACKS, MOVED IN ONE PLACE: a compaction's and an expunge's begin
+// and commit (apply_expunge.go) share one reading of the rows retired, the
+// outputs written, their content date and the counters (ADR-0008).
 
 // packTally is what a set of pack rows holds.
 type packTally struct {
@@ -141,20 +107,16 @@ func (t *packTally) add(size, objects int64) {
 type rewritePlan struct {
 	leaving []namedPack
 	adds    []rewriteOutput
-	// content is the position its outputs' content dates from as a purge
-	// reads it ([PackRow.Content]): the least of the rows it retires, since
-	// moving content judges none of it — a merge's output holds whatever the
-	// oldest of its inputs held — and 0, below every position, where it
-	// retires none: a record whose inputs a later one moved first, whose
-	// outputs then claim nothing about what they hold. A purge's begin dates
-	// its outputs at its scan instead ([Applier.applyExpungeBegin]).
+	// content is the position its outputs' content dates from ([PackRow.Content]):
+	// the least of the retired rows', since a merge's output holds whatever its
+	// oldest input held; 0 where it retires none (a later record moved its
+	// inputs first, so its outputs claim nothing). A purge's begin dates its
+	// outputs at its scan instead ([Applier.applyExpungeBegin]).
 	content int64
-	// arrived is when its outputs' NEWEST content arrived ([PackRow.Arrived]),
-	// encoded: the greatest of the rows it retires, since moving content
-	// brings none — and 0 where it retires none, which [rewritePlan.apply]
-	// writes as the record's own broker instant: outputs that claim nothing
-	// about what they hold are as young as the record, the side an expunge's
-	// grace keeps whole.
+	// arrived is when its outputs' newest content arrived ([PackRow.Arrived]):
+	// the greatest of the retired rows'; 0 where it retires none, which
+	// [rewritePlan.apply] writes as the record's broker instant, so an
+	// expunge's grace keeps such outputs whole.
 	arrived int64
 }
 
@@ -176,14 +138,11 @@ type rewritten struct {
 	addedLive packTally
 }
 
-// planRewrite reads what a rewrite of repoID's packs will move: every row of
-// code_packs whose pack id retire names — those retiring keeps, where it is
-// given — leaves; and of its n outputs, output(i) is the i-th and the kind and
-// state it is written in, each written where code_packs will not hold it once
-// those rows have left, its content dated from the oldest of the leaving rows'
-// ([rewritePlan.content]). An output code_packs holds already is not written
-// again, unless it is also an input — which no writer forms — and is leaving;
-// and a record naming one output twice writes it once.
+// planRewrite reads what a rewrite of repoID's packs will move: every
+// code_packs row whose id retire names (and retiring keeps, where given)
+// leaves; output(i) is the i-th of n outputs with its kind and state, written
+// unless code_packs still holds it once those rows leave. A record naming one
+// output twice writes it once.
 func planRewrite(ctx context.Context, tx *sql.Tx, repoID string, retire []string, retiring func(namedPack) bool,
 	n int, output func(i int) (PackRef, PackKind, PackState)) (rewritePlan, error) {
 
@@ -303,13 +262,11 @@ func (p rewritePlan) apply(ctx context.Context, tx *sql.Tx, at applyContext, rep
 	return moved, nil
 }
 
-// layerFits is the apply's guard over a publication's layer, read against the
-// chain its rows hold: fits where the layers it replaces are the chain's top,
-// its base the layer below them, and its id none of that base's — the decide's
-// own reading ([replacedTop]); otherwise applied reports the layer's id already
-// in the chain, the replay of a record that applied — every write of one is
-// in its one transaction, so its layer's row is there exactly when the rest
-// is — and false a record no correct log carries.
+// layerFits reports whether a publication's layer fits chain, by the decide's
+// own reading ([replacedTop]): the layers it replaces are the top, its base the
+// layer below, and its id none of the base's. Otherwise applied reports a
+// replay (its id already in the chain, there exactly when the rest of its one
+// transaction is); false is a record no correct log carries.
 func layerFits(chain []LayerRow, l LayerRef) (fits, applied bool) {
 	inChain := slices.ContainsFunc(chain, func(row LayerRow) bool { return row.Layer.LayerID == l.LayerID })
 	if !replacedTop(chain, l.BaseID, l.Replaces) {
@@ -322,12 +279,10 @@ func layerFits(chain []LayerRow, l LayerRef) (fits, applied bool) {
 	return true, false
 }
 
-// applyLayer replaces the top of a repository's published chain with a
-// publication's layer — the layers it replaces and their parts removed, the
-// layer written above its base with its parts — and answers the rows it wrote
-// or deleted. The chain is renumbered by nothing: the layer takes its base's
-// place plus one, the replaced layers being exactly the rows above the base,
-// which [layerFits] read as the chain's top.
+// applyLayer replaces the chain's top with the publication's layer and its
+// parts, answering the rows it wrote or deleted. Nothing is renumbered: the
+// layer takes its base's seq plus one, the replaced layers being exactly the
+// rows above the base ([layerFits]).
 func (a *Applier) applyLayer(ctx context.Context, tx *sql.Tx, at applyContext, c Compaction,
 	chain []LayerRow) (int, error) {
 
@@ -377,9 +332,8 @@ func (a *Applier) applyLayer(ctx context.Context, tx *sql.Tx, at applyContext, c
 }
 
 // publishedIn counts the repository's live packs the layers of chain cover,
-// and the objects they hold — FROM THE ROWS, by checksum, so a pack row
-// byte-identical to a published one (two rows, one checksum) is published to
-// this count as it is to git.
+// and their objects, from the rows by checksum: a pack row byte-identical to a
+// published one is published, to this count as to git.
 func publishedIn(ctx context.Context, tx *sql.Tx, repoID string, chain []LayerRow) (int, int64, error) {
 	covered := map[string]bool{}
 	for _, row := range chain {
@@ -402,13 +356,9 @@ func publishedIn(ctx context.Context, tx *sql.Tx, repoID string, chain []LayerRo
 	return packs, objects, nil
 }
 
-// The compaction apply's statements — registered in plan_test.go where they
-// read: compactCountersSQL moves a repository's live-pack counters by what one
-// compaction's apply found and wrote, and its version to the record's;
-// publishCountersSQL does that for a publication with its recount and its
-// layers' mark; a publication's replaced layers go by the key's range above
-// their base, their parts by the parts' key, driven from the list of their
-// ids (planner.go).
+// The compaction apply's statements, registered in plan_test.go: a
+// publication's replaced layers go by the key's range above their base, their
+// parts by the parts' key, driven from the list of their ids (planner.go).
 const (
 	compactCountersSQL = `UPDATE code_repos SET live_packs = live_packs - ? + ?,
 		live_bytes = live_bytes - ? + ?, live_objects = live_objects - ? + ?, version = ? WHERE id = ?`

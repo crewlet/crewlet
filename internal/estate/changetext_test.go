@@ -7,9 +7,10 @@ import (
 	"testing"
 )
 
-// A CHANGES LISTING NARROWED BY WORDS IS READ, OR REFUSED UNREAD: a `changes` read naming its words
-// reaches the code half; one naming a sibling no build declares, standing for the words on a build
-// that does not read them, is refused naming it, the code half never asked, so the router asks another.
+// A CHANGES LISTING NARROWED BY WORDS IS READ, OR REFUSED UNREAD: a `changes` read naming its
+// words reaches the code half; one naming a key this build does not declare (text_later, standing
+// for words this build cannot read) is refused naming it, the code half unasked, so the router
+// asks another.
 // Mutation: drop Text from gitlet.ReadQuery, and the first read is refused naming args.text.
 func TestAChangesListingNarrowedByWordsIsReadOrRefusedUnread(t *testing.T) {
 	t.Parallel()

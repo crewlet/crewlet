@@ -5,17 +5,9 @@ import (
 	"testing"
 )
 
-// TestTheAllOperatorCountsDistinctMembers is the arm that had no test at all,
-// and a no-op sat inside it saying otherwise.
-//
-// `all` is a COUNT rather than an intersection — one subquery counting the
-// distinct members a task holds from the named set, compared against the size
-// of that set — and the shape that makes it one is a GROUP BY and a HAVING
-// appended INSIDE the subquery's own parentheses. A `strings.Replace` of the
-// select list with itself stood at the head of that arm, left over from a
-// shape that widened the projection, and it read as though the count needed a
-// different SELECT to work. Nothing exercised the arm, so nothing said
-// otherwise.
+// TestTheAllOperatorCountsDistinctMembers: `all` is a count of the distinct
+// members a task holds from the set, compared with the set's size, by a
+// GROUP BY and HAVING inside the subquery's own parentheses.
 func TestTheAllOperatorCountsDistinctMembers(t *testing.T) {
 	t.Parallel()
 	field := resolvedField{
@@ -28,9 +20,8 @@ func TestTheAllOperatorCountsDistinctMembers(t *testing.T) {
 		t.Fatalf("all: %v", err)
 	}
 
-	// THE GROUPING IS INSIDE THE SUBQUERY. Appended after its closing
-	// paren the statement would not parse at all; appended to the OUTER
-	// query it would group the task rows a board is drawing.
+	// The grouping is inside the subquery: on the outer query it would
+	// group the task rows a board draws.
 	if !strings.HasSuffix(clause, ")") {
 		t.Fatalf("the subquery is not closed: %s", clause)
 	}
@@ -47,8 +38,7 @@ func TestTheAllOperatorCountsDistinctMembers(t *testing.T) {
 		t.Fatalf("the grouping is outside the subquery: %s", clause)
 	}
 
-	// AND THE SET'S SIZE IS THE LAST ARGUMENT, or the HAVING compares
-	// against whatever the previous placeholder bound.
+	// The set's size is the last argument, the HAVING's placeholder.
 	if len(args) == 0 {
 		t.Fatal("no arguments")
 	}
@@ -56,8 +46,7 @@ func TestTheAllOperatorCountsDistinctMembers(t *testing.T) {
 		t.Fatalf("the count is compared against %v, want the set size 2 — "+
 			"args %v", got, args)
 	}
-	// The option SPELLINGS are resolved to their ids, because that is
-	// what a stored value holds.
+	// Option spellings resolve to the ids a stored value holds.
 	for _, want := range []any{"f-tags", "o-api", "o-ui", 2} {
 		if !containsArg(args, want) {
 			t.Fatalf("args %v do not carry %v", args, want)
@@ -65,11 +54,8 @@ func TestTheAllOperatorCountsDistinctMembers(t *testing.T) {
 	}
 }
 
-// TestNotAllNegatesTheWholeMembership, which is the same distinction `not_any`
-// carries one arm above: "this task does not hold all of these" is the
-// negation of the COUNT, never a row-wise inequality — a task holding one of
-// two named options satisfies a row-wise test for the other one and must not
-// come back.
+// TestNotAllNegatesTheWholeMembership: `not_all` negates the count, never a
+// row-wise inequality, which a task holding one of two options would meet.
 func TestNotAllNegatesTheWholeMembership(t *testing.T) {
 	t.Parallel()
 	field := resolvedField{

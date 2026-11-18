@@ -11,97 +11,53 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE TWO GATES, and they are in one file because they are ONE CATEGORY: a
-// gate is a rule under which a record the broker ACCEPTED produces rows on no
-// node. There are exactly two, and a third must not be added casually.
-//
-//  1. THE DELETION GATE. A commit about a task a purge destroyed applies
-//     nowhere, for ever, whatever its position — otherwise a redelivery months
-//     later resurrects rows an operator deliberately removed.
-//  2. THE EVICTION GATE. A commit written by a node the fleet evicted, at a
-//     position above the eviction's own, is dropped everywhere. It depends on
-//     nothing but the log's order, which is what makes it the fence that holds
-//     when coordination cannot be reached at all.
-//
-// # Two things that look like gates and are not
-//
-// A DEFERRAL is not one: a record this build cannot decode is RETAINED at its
-// position and applied by a build that can, which is the opposite of dropped.
-// A BARRIER is not one either: it writes no row anywhere by design, and a rule
-// that dropped it would be a rule about a record that has nothing to drop.
-//
-// # `applied` is not permanent, and that is stated rather than discovered
-//
-// "Whatever its position" cuts both ways. A deletion marker committed ABOVE a
-// position P retroactively drops a record that already applied at P and was
-// truthfully reported `applied` at the time. Resolving through P does not
-// close that and must not try: it is a LATER DESTRUCTION of a record that
-// genuinely applied, not a false answer at the moment the answer was given.
-// The purge report is where a person sees it, and the reject counter on the
-// marker is how many records the gate has dropped since.
-//
-// The order-independence is what makes a late reprocess sound at all:
-// retention-and-reprocess rests on a gate that gives the same answer whatever
-// order the records arrive in.
+// The gates share a file because they are one category: a rule under which a
+// record the broker ACCEPTED produces rows on no node. There are exactly two,
+// and a third must not be added casually.
+//  1. Deletion: a commit about a purged task applies nowhere, whatever its
+//     position, or a late redelivery resurrects rows an operator removed.
+//  2. Eviction: an evicted node's commit above its eviction's position is
+//     dropped everywhere; it needs only the log's order, so it holds when
+//     coordination is unreachable.
+// Not gates: a deferral (retained, applied later) and a barrier (writes no
+// row). `applied` is not permanent: a marker above P drops a record already
+// applied at P (the purge report and marker's reject counter show it). Answers
+// independent of arrival order are what make retention-and-reprocess sound.
 
-// The two seams that answer "should this node be writing at all", and the one
-// thing they have in common: both are asked BEFORE an append, and both are
-// wrong in a way that is silent.
-
-// Fence refuses a write this node must not make.
+// Fence refuses a write this node must not make; it is asked before an append.
 //
-// # Why it asks THIS NODE'S OWN ROWS and not coordination
+// It asks this node's own applied eviction rows, not coordination: an eviction
+// is permitted only once the target's presence lease lapsed (45 s of
+// coordination silence), so the evicted node is exactly the one whose
+// coordination path is broken. Wrong here is a stream of records every node
+// drops while this one collects acknowledgements for them.
 //
-// An eviction is permitted only while the target's presence lease has LAPSED —
-// at least forty-five seconds of coordination silence — so by construction the
-// evicted node is the node whose coordination path is not answering. A fence
-// that asked coordination would be asking the one source the situation has
-// already broken.
-//
-// So it asks this node's own APPLIED EVICTION ROWS, which its own applier
-// wrote from its own log and which are the only source still fresh when
-// everything else is wedged. Being wrong here is not a refused write: it is a
-// stream of records every node drops while this one collects acknowledgements
-// for them.
-//
-// There WAS a cache in front of that read — "the coordination-derived answer,
-// refreshed on the same loop that reads the tombstones", declared as an
-// optimisation that "can be stale, because the durable row below is what makes
-// staleness safe". Nothing ever assigned it, in this package or any other, and
-// the safety argument does not survive being written out: the lookup returned
-// the cached answer in BOTH directions, so a stale `false` is precisely an
-// evicted node going on publishing — the one failure this type exists to
-// prevent, bought to save an indexed single-row read. It was removed rather
-// than wired, and [doclet.Fence] never had one, so the two fences now answer the
-// same question the same way.
+// No cache fronts the read: a stale `false` is an evicted node going on
+// publishing, the failure this type exists to prevent. [doclet.Fence] answers
+// the same way.
 type Fence struct {
 	db     store.ReplicatedReader
 	nodeID string
 
 	// Floor is the fleet's published trim floor at a generation and Ends
-	// the log's two ends, read live: the first surviving sequence is the
-	// other bound the one check that costs a round trip takes the higher
-	// of, and the last is what says this node is on this log at all — see
-	// [Fence.ClearForZero].
+	// the log's two ends, read live: [Fence.ClearForZero] takes the higher
+	// of the floor and the first surviving sequence, and the last says this
+	// node is on this log at all.
 	//
-	// The cursor the floor is compared against is the caller's, passed per
-	// call, and the floor is read at THAT CURSOR'S GENERATION. The cursor
-	// is the checkpoint the write's own snapshot read
-	// ([statelog.Snap.Checkpoint]), because the floor theorem concludes
-	// that a trimmed record is already in the rows the decision was made
-	// from: the applier's live position only moves forward, so a check
-	// against it clears a node whose decision never saw a record it has
-	// applied since. And a floor published at another generation names
-	// another sequence space — read at the live one, a snapshot taken
-	// before an adoption moved this node would be compared against numbers
-	// that say nothing about it.
+	// The floor is compared against the caller's cursor, the checkpoint the
+	// write's own snapshot read ([statelog.Snap.Checkpoint]), and read at
+	// that cursor's generation. The floor theorem says a trimmed record is
+	// in the rows the decision was made from, so the applier's live
+	// position, which moves forward, would clear a decision that never saw
+	// a record; and a floor at another generation names another sequence
+	// space.
 	Floor func(ctx context.Context, generation uint32) (uint64, error)
 	Ends  func(ctx context.Context) (statelog.LogEnds, error)
 
 	// Committed is this node's applier's live checkpoint, which the end is
-	// compared against instead of the cursor — where a record this node
-	// appends lands against where its applier stands is a property of the
-	// node rather than of one decision. See [statelog.ZeroFence].
+	// compared against instead of the cursor: where this node's appends land
+	// against its applier is a property of the node, not of one decision.
+	// See [statelog.ZeroFence].
 	Committed func() statelog.Position
 }
 
@@ -112,11 +68,9 @@ func NewFence(db store.ReplicatedReader, nodeID string) *Fence {
 
 // Evicted reports this node's own eviction.
 //
-// ON EVERY APPEND, and therefore answered from what this node already knows:
-// the durable row its own applier wrote, which is one indexed single-row read
-// of a table this node owns. A coordination round trip here would put a
-// NETWORK call on the hot path of every write in the company, and it would be
-// a call to the estate an eviction has already established is silent.
+// Asked on every append, so it reads the durable row this node's own applier
+// wrote (one indexed single-row read), never a network call on every write's
+// hot path to the coordination an eviction has already found silent.
 func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 	var from, readmitted sql.NullInt64
 	err := f.db.Read(ctx, func(tx *sql.Tx) error {
@@ -129,10 +83,9 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 	case errors.Is(err, sql.ErrNoRows):
 		return false, nil
 	case err != nil:
-		// UNKNOWN IS NOT "NOT EVICTED". A store this node cannot read is
-		// a node that cannot establish it may write, and publishing
-		// anyway is how an evicted node collects acknowledgements for
-		// records every peer drops.
+		// UNKNOWN IS NOT "NOT EVICTED": publishing anyway is how an
+		// evicted node collects acknowledgements for records every peer
+		// drops.
 		return false, fmt.Errorf("worklet: read this node's own eviction row: %w", err)
 	}
 	if !from.Valid {
@@ -144,41 +97,14 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 // ClearForZero verifies, freshly, that publishing at an expectation of ZERO is
 // safe from this node.
 //
-// # Why this one pays for a fresh answer
-//
-// An expectation of zero says "this subject holds nothing". It is formed when
-// the anchor is absent, and an anchor is absent for two very different
-// reasons: the subject was never written, or it was written and the record has
-// been TRIMMED away beneath this node. In the second case publishing at zero
-// overwrites a mutation nothing can recover.
-//
-// What makes the first case safe is that nothing was removed which this node
-// has not already consumed, so an absent anchor really does mean an empty
-// subject. That reading has to be FRESH — a cached floor is a floor that moved
-// — and A READ THAT ANSWERS UNKNOWN MUST REFUSE, which is a deliberate
-// departure from the fail-open rule the delivery claim uses: failing open
-// there is a duplicate delivery and is recoverable, failing open here is a
-// lost update and is not.
-//
-// # Why it asks of TWO bounds, and takes the higher
-//
-// "Nothing was removed below this" has two witnesses and neither is enough
-// alone. The published floor is written before the purge it licenses, so it
-// covers a purge in flight and one the stream's own answer has not caught up
-// with. The stream's first sequence covers what the floor cannot see — a
-// floor published at another generation reads as zero here. Asked of the
-// floor alone, this check cleared a node below the log whenever the floor
-// said zero; asked of the stream alone, it cleared one a purge was about to
-// pass. The floor theorem in [statelog] is stated over the higher of the two.
-//
-// # Why the check itself is not here
-//
-// It is [statelog.ZeroFence], and this supplies the four reads. It was
-// written here and again in the pages fence, and both copies refused an
-// evicted node with [statelog.ErrConflict] — the refusal a model reads as a
-// colleague editing the item — and a node below the floor with prose rather
-// than a reason, so neither `below_floor` nor `floor_unknown` was ever
-// produced. Every refusal is now an [*statelog.Unavailable] naming its reason.
+// An anchor is absent because the subject was never written, or its record was
+// TRIMMED beneath this node, where zero overwrites a mutation nothing recovers.
+// So the read is fresh, and unknown refuses: fail-open here is a lost update,
+// not the delivery claim's duplicate.
+// It takes the higher of the published floor (written before the purge it
+// licenses) and the stream's first sequence (covering a floor published at
+// another generation, which reads as zero), as the floor theorem in [statelog]
+// does. The check is [statelog.ZeroFence]; this supplies its four reads.
 func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) error {
 	return statelog.ZeroFence{
 		Evicted: f.Evicted, Floor: f.Floor, Ends: f.Ends, Committed: f.Committed,
@@ -187,10 +113,9 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 
 // Gates answers whether a durable record produced rows on NO node.
 //
-// Without it the resolution rule reads "the operation ledger is empty, so
-// somebody else won": the writer re-decides, republishes, is dropped by the
-// same gate again, and burns its whole round budget to a conflict a model
-// reads as a colleague editing the same object.
+// Without it the resolution rule reads an empty operation ledger as "somebody
+// else won": the writer republishes, is dropped by the same gate again, and
+// burns its round budget to a conflict a model reads as a colleague's edit.
 type Gates struct {
 	db store.ReplicatedReader
 }
@@ -199,31 +124,24 @@ type Gates struct {
 func NewGates(db store.ReplicatedReader) *Gates { return &Gates{db: db} }
 
 // GatedAt reports whether a record at a position applies nowhere, and the
-// gate that answers for it, by the rule [statelog.Gates] states — which the
-// knowledge base's reader keeps too, and statelogtest.RunGates certifies for
-// both.
+// gate that answers for it, by the rule [statelog.Gates] states (the
+// knowledge base's reader keeps it too; statelogtest.RunGates certifies both).
 //
-// The record's body is not read: every record this log holds about an object
-// is published on that object's subject (or its tree's, which the marker
-// covers), so the subject names what the deletion gate is keyed on.
+// The body is not read: every record about an object is published on its
+// subject (or its tree's, which the marker covers), so the subject names what
+// the deletion gate is keyed on.
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID string,
 	p statelog.Position, _ []byte) (statelog.Reason, bool, error) {
 
 	var reason statelog.Reason
 	var gated bool
 	err := g.db.Read(ctx, func(tx *sql.Tx) error {
-		// THE DELETION GATE FIRST, by the rule [statelog.Gates] states: the
-		// marker holds the task for every writer for ever, where an
-		// eviction is one writer's and a readmission ends it, so `deleted`
-		// is the answer that stays true. The applier's opposite order
-		// decides only which gate a drop is COUNTED under.
-		//
-		// AND OVER THE SAME SUBJECTS, by asking the one function the
-		// applier asks: a task's own and its turns'. This read used to
-		// spell its own test — the task's subject alone — so a turn
-		// that landed after its task's purge was dropped `deleted` by
-		// every applier and reported ungated here, and its writer was
-		// told the store had broken the ledger contract.
+		// THE DELETION GATE FIRST, per [statelog.Gates]: the marker holds
+		// the task for every writer for ever, while an eviction is one
+		// writer's and a readmission ends it, so `deleted` is the answer
+		// that stays true. The applier's opposite order decides only which
+		// gate a drop is COUNTED under. The subjects are [markedTask]'s,
+		// the function the applier asks too.
 		if taskID, ok := markedTask(subj); ok {
 			var author sql.NullString
 			err := tx.QueryRowContext(ctx,
@@ -235,10 +153,8 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 				return fmt.Errorf("worklet: read the deletion gate: %w", err)
 			case author.Valid && author.String == opID:
 				// THE RECORD THAT WROTE THE MARKER IS NOT GATED BY IT,
-				// by its own id. Without this a purge whose
-				// acknowledgement was lost resolves as "applied
-				// nowhere" — and its caller is told the destruction it
-				// asked for did not happen, when it did.
+				// by its own id, or a purge whose acknowledgement was
+				// lost resolves as "applied nowhere", when it did.
 			default:
 				reason, gated = statelog.ReasonDeleted, true
 				return nil
@@ -274,27 +190,12 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 // markedTask is the task whose deletion marker gates a record on subj, and
 // false for a subject no task's marker covers.
 //
-// # Two subjects, because two kinds of record are ABOUT a task
-//
-// The task's own, and its TURNS': a turn's subject is the task it spent on
-// ([TurnSubject]), and it is the record a purge races most often — a seat's
-// turn records its spend when it ENDS, which is after whatever the turn did,
-// its own task's purge included. Ungated, a turn landing after its task's
-// purge would reach an apply with no row to add to, which is a malformed
-// record there and stops the log on every node.
-//
-// # One function, asked by both sides of the gate
-//
-// [Applier.Gated] drops what this covers and [Gates.GatedAt] reports why, and
-// [statelog.Gates] holds the two to one answer — so the set is stated once.
-// It was two tests that looked alike, the applier's naming both kinds and the
-// reader's only the task, and every turn the marker dropped resolved as a
-// record applied without its ledger row: a contract violation reported to
-// the writer, counted under `error` rather than `deleted`.
-//
-// FROM THE SUBJECT ALONE, because the reader is handed nothing else — so
-// whatever a record names in its payload cannot decide whether a marker
-// holds it.
+// It covers the task's own subject and its TURNS' ([TurnSubject]): a turn
+// records its spend when it ENDS, often after its task's purge, and ungated it
+// would reach an apply with no row to add to, a malformed record that stops
+// the log on every node. [Applier.Gated] drops and [Gates.GatedAt] reports by
+// this one function, which [statelog.Gates] holds to one answer. It reads the
+// subject alone because the reader is handed nothing else.
 func markedTask(subj statelog.Subject) (string, bool) {
 	if ObjectKind(subj.Kind).GatedByPurge() {
 		return subj.ID, true
@@ -305,33 +206,14 @@ func markedTask(subj statelog.Subject) (string, bool) {
 // GateRecordVersion is the SHAPE version every gate-installing record's
 // payload carries, FOR EVER.
 //
-// # Why this one number never moves
-//
-// A record whose version this build does not know is normally RETAINED and
-// applied later by a build that does. That is exactly wrong for a gate: a node
-// that deferred an eviction would leave its own gate table empty and go on
-// applying every record the evicted node appends, and there is no inverse that
-// repairs it. So an un-decodable gate record STOPS that build's applier
-// instead — and a stop takes a node out of the fleet until it is upgraded, so
-// no mere change of SHAPE may cost one. That is what pinning this at one buys:
-// a gate record's shape can only ever grow by addition, never by reshaping,
-// for the life of the deployment, and an older build reads every one of them.
-//
-// # What does move, and why a stop is then the right answer
-//
-// A change to what a gate's APPLY does is not a change of shape, and no older
-// build can honour it: applied the old way it leaves rows every newer node
-// does not hold, and deferred it is the licence described above. So such a
-// record is written at a RECORD version above every build that predates the
-// change — a row in [versionedFields] carrying [statelog.VersionedField.Gate]
-// — and the framework halts that build at it, while every record written
-// before it keeps the rule it was applied by. The halt needs the older build
-// to know the record for a gate, and it does, because [Domain.InstallsGate] is answered from the envelope: an
-// eviction by its kind and a purge by its op. That is also why a changed gate
-// is NOT given a new kind or a new op: one an older build does not know is not
-// a gate to it, so at a raised version it would be deferred — the licence
-// above — and at this one it would reach its dispatch as a failure retried in
-// place for ever rather than a stop.
+// A node that deferred a gate would go on applying every record it gates, with
+// no inverse to repair it, so an un-decodable gate record STOPS the applier
+// until the node is upgraded, and pinning the shape (it only grows by addition)
+// means no shape change can cost a stop. A change to what a gate's APPLY does
+// is written instead at a RECORD version above every older build (a
+// [versionedFields] row carrying [statelog.VersionedField.Gate]), where the
+// framework halts that build. It keeps its kind and op: [Domain.InstallsGate] reads the envelope, and one an
+// older build does not know is no gate to it, deferred or retried for ever.
 const GateRecordVersion = 1
 
 // purgeMutation is a purge's payload.
@@ -341,24 +223,12 @@ type purgeMutation struct {
 }
 
 // PurgeResult is what an operator is told after a purge, in THREE SIBLING
-// GROUPS.
+// GROUPS, and with no duration.
 //
-// # And there is no duration in it
-//
-// A purge destroys rows on every node that applies the record. What it cannot
-// do is reach a node that is not applying — one that is offline, or evicted,
-// or holding a store file nobody has replayed — and a copy on such a disk ends
-// in exactly three ways, NONE OF THEM A CLOCK: the node returns and replays,
-// it adopts a snapshot (whose install replaces the store file), or the disk is
-// replaced or destroyed.
-//
-// The tempting sentence — "gone from every copy within seven days" — reads the
-// log's minimum trim age as a retention ceiling. It is a FLOOR on trimming,
-// which is a LOWER bound on how long the log keeps a record, and it says
-// nothing whatever about any node's own store file. So the `stale` group below
-// is a REPORTING word: the fleet has passed the window the operator's own
-// retention configured, and that triggers nothing, evicts nobody, and makes no
-// claim about whether that node has been trimmed past.
+// A copy on a node that is not applying ends only when the node replays,
+// adopts a snapshot, or loses its disk: no clock. The log's minimum trim age
+// is a lower bound on how long the log keeps a record, not a ceiling on any
+// node's store file, so "gone from every copy within seven days" would be false.
 type PurgeResult struct {
 	// Position is where the purge record landed.
 	Position statelog.Position
@@ -373,37 +243,18 @@ type PurgeResult struct {
 	Pending []string
 
 	// Stale are counted nodes the fleet has not heard from within the
-	// window its own retention configures. A REPORTING GROUP: it triggers
-	// nothing and says nothing about whether that node has been trimmed
-	// past — only that nobody can currently say when it will apply.
+	// window its own retention configures. Reporting only: it triggers
+	// nothing and says nothing about whether that node was trimmed past.
 	Stale []string
 }
 
-// purgeWake is what the one irreversible operation announces, and to whom.
+// purgeWake is what a purge announces, and to whom: the project lead alone,
+// for their accountability for the project, hence reason `purged`. The
+// snapshot carries no watchers, collaborators or reporter: naming them would
+// keep a copy of the destroyed content on the log for its retention window.
 //
-// # Why it exists at all
-//
-// Because it did not, and the absence was invisible from both ends. Every
-// purge published with a nil notification, so nobody was ever told that a
-// task and every comment, revision, history row and turn record on it had
-// been destroyed — while [Candidates] carried a `ChangePurged` branch and
-// [ReasonPurged] sat in the reason list, neither of which any record could
-// ever reach. Dead code on one side, silence on the other, and the two looked
-// like each other's explanation.
-//
-// # The project lead, and only the project lead
-//
-// A purge has no assignee to tell — the row is gone, and the snapshot
-// deliberately carries no watchers, no collaborators and no reporter, because
-// a notification that named them would be a copy of the content the purge
-// exists to destroy, retained on the log for its whole retention window. What
-// survives is that it HAPPENED, to which key, by whom: the lead's own
-// accountability for their project, which is exactly why the reason is
-// `purged` rather than `watcher`.
-//
-// NIL WHEN THERE IS NO LEAD: a company with nobody to
-// tell is told nothing, and the record still names itself `purged` because the
-// kind is the writer's and not the notification's.
+// Nil when there is no lead; the record still names itself `purged`, because
+// the kind is the writer's and not the notification's.
 func purgeWake(task Task, collision bool, reason, actor string, leads Leads) *Notify {
 	if leads == nil {
 		return nil
@@ -429,20 +280,11 @@ const maxPurgeKey = 10 + 1 + 19
 
 // purgeExcerpt is the line the lead reads.
 //
-// IT NAMES THE KEY AND NOT THE TITLE. A purge destroys the content; an
-// excerpt quoting it would keep a copy on the log for the whole retention
-// window, which is the one thing this operation is for. The key is an
-// identifier the person already has in whatever ticket asked for the purge.
-//
-// AND THE ID BESIDE IT where another task claimed that key first
-// ([ItemNamed]): the key then names a task that was NOT purged, and a lead
-// told "ENG-7 was purged" opens ENG-7 to find it still there.
-//
-// The REASON is the operator's own sentence and is kept WHOLE: it is why they
-// did it, and a record of an irreversible act with a reason cut off half way
-// is the shape nobody can audit afterwards. A reason too long for the line is
-// refused by [Writer.PurgeTask] before anything is destroyed, so this never
-// has to choose what to drop.
+// It names the key, never the title: quoting the content would keep a copy on
+// the log, which a purge exists to prevent. Where another task claimed the key
+// first it adds the id ([ItemNamed]), since the key then opens a task that was
+// not purged. The operator's reason is kept WHOLE; one too long for the line is
+// refused by [Writer.PurgeTask] before anything is destroyed.
 func purgeExcerpt(task Task, collision bool, reason, actor string) string {
 	out := ItemNamed(task.ID, task.Key, collision) + " was purged"
 	if actor != "" {
@@ -457,10 +299,9 @@ func purgeExcerpt(task Task, collision bool, reason, actor string) string {
 
 // PurgeTask destroys a task and every row it produced.
 //
-// THE ONE SEQUENCE NO DUTY EVER COMPLETES, because nothing may destroy data
-// without the confirmation present at that moment. A purge interrupted is a
-// purge that did not happen, and re-running it is the operator's own gesture
-// rather than a repair somebody's cron performs on their behalf.
+// No duty ever completes it: destroying data needs the confirmation present at
+// that moment, so an interrupted purge did not happen, and re-running it is
+// the operator's own gesture.
 //
 // A task already purged is refused with [ErrNoTask], naming the purge: a retry
 // of the purge that did it is answered by its own operation id with that
@@ -473,24 +314,18 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 		return WriteResult{}, fmt.Errorf("worklet: a purge on task %s names no "+
 			"project", id)
 	case w.ActorKind != AuthorHuman && w.ActorKind != AuthorOperator:
-		// A PERSON OR A TOKEN, never an agent and never the engine: this
-		// is the one operation with no inverse, and the confirmation
-		// that licenses it is a person's.
+		// A PERSON OR A TOKEN: the one operation with no inverse is
+		// licensed by a person's confirmation.
 		return WriteResult{}, fmt.Errorf("worklet: a purge is an operator "+
 			"gesture and this writer acts as %q — nothing else may destroy "+
 			"a task, because nothing else can be asked to confirm it",
 			w.ActorKind)
 	}
-	// THE REASON FITS ITS NOTICE OR THE PURGE IS REFUSED, before anything
-	// is decided: the lead is told in one line carrying the reason whole,
-	// and an irreversible act audited by half a sentence is worse than an
-	// operator asked to say it shorter. Judged against the LONGEST LINE this
-	// purge could write — the longest key a project mints, on a task whose
-	// key another task claimed first, so the line names it by its id with the
-	// key beside it ([ItemNamed]) — so the answer cannot depend on the task's
-	// own key or on whether it collides, which only the decide reads. Measured
-	// on the common key alone, a collided task's line overflowed the notice
-	// the check had just cleared, and the purge failed inside its decide.
+	// THE REASON FITS ITS ONE-LINE NOTICE WHOLE OR THE PURGE IS REFUSED,
+	// before anything is decided. Judged against the LONGEST line this
+	// purge could write (the longest key, collided so [ItemNamed] adds the
+	// id), so the answer cannot depend on the task's key or collision,
+	// which only the decide reads.
 	worst := Task{ID: id, Key: strings.Repeat("K", maxPurgeKey)}
 	if line := purgeExcerpt(worst, true, reason, w.Actor); len(line) > MaxExcerpt {
 		return WriteResult{}, fmt.Errorf("%w: a purge's reason is carried whole on the "+
@@ -498,14 +333,11 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 			"reason makes it %d — say it in fewer words", ErrInvalid, MaxExcerpt, len(line))
 	}
 	subject := TaskSubject(id)
-	// EVERY TASK ITS APPLY WRITES, not the purged task alone: the apply
-	// rewrites its dependents, the blockers that list it, the tasks relating
-	// to it or referencing it, and its subtree ([purgeReach]), and a scope
-	// that named only the task let a record deferred under any of them be
-	// overtaken by the purge on the node that deferred it. AND EVERY KEY IT
-	// HOLDS, which the apply releases and hands on ([keyTerm]): named by
-	// the task alone, a purge overtook a retained create of a duplicate and
-	// handed the key to a different task on that node than on every other.
+	// The scope names EVERY TASK ITS APPLY WRITES (dependents, blockers
+	// listing it, relating and referencing tasks, its subtree:
+	// [purgeReach]) and EVERY KEY IT HANDS ON ([keyTerm]), or a record
+	// deferred under any of them is overtaken by the purge on the node
+	// that deferred it.
 	scope, err := w.scopeForPurge(ctx, id, project)
 	if err != nil {
 		return WriteResult{}, err
@@ -523,28 +355,22 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 				return statelog.Decision{}, err
 			case !held:
 				// A TASK ALREADY PURGED IS FINAL, never "not on this
-				// node": that refusal is the one the CALLER retries — the
-				// estate's router hands it back as the holder gave it —
-				// and every node that holds the marker would say it
-				// again. A retry of the SAME purge never reaches here —
-				// its ledger row answers it with the first outcome
-				// before anything is decided.
+				// node", which the caller retries and every node holding
+				// the marker would repeat. A retry of the SAME purge is
+				// answered by its ledger row before reaching here.
 				return statelog.Decision{}, missingTask(ctx, tx, id,
 					"there is nothing left to purge: its deletion marker is "+
 						"the account of it that survives")
 			}
 			// THE PROJECT THE CALLER NAMED IS A PRECONDITION — see
-			// [stillIn]. The purge was licensed on that project, and its
-			// scope names it: filed under a container the task is not in,
-			// a deferral on its real project would not hold the purge
-			// back.
+			// [stillIn]: the purge's scope names it, and under the wrong
+			// one a deferral on the real project would not hold it back.
 			if moved := stillIn(current, project); moved != nil {
 				return statelog.Decision{}, moved
 			}
-			// THE SCOPE THE REQUEST CLAIMED STILL COVERS THIS PURGE,
-			// checked against the rows it decides on: a dependent, a
-			// relation or a child that arrived since the scope was read
-			// is one the apply will write.
+			// THE CLAIMED SCOPE STILL COVERS THE ROWS DECIDED ON: a
+			// dependent, relation or child arriving since the scope was
+			// read is one the apply will write.
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			reach, err := readPurgeReach(ctx, tx, id)
 			if err != nil {
@@ -554,9 +380,8 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 			if err := scope.coversReach(reach); err != nil {
 				return statelog.Decision{}, err
 			}
-			// AND THE KEYS IT HANDS ON, which a move landing since the
-			// scope was read has changed: the task is back in the project
-			// the caller named, under a key the request never probed.
+			// AND THE KEYS IT HANDS ON: a move since the scope was read
+			// can leave the task under a key the request never probed.
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := scope.coversKeys(keysOf(current)); err != nil {
 				return statelog.Decision{}, err
@@ -580,26 +405,15 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 
 // EvictNode installs the gate that drops a node's records on this log.
 //
-// # Why the record carries the position and not a time
+// The gate is "records this node wrote ABOVE this position", the log's own,
+// so every node reaches the same verdict with no clock or coordination read.
 //
-// The gate is "records this node wrote ABOVE this position", and the position
-// is the log's own — so every node reaches the same verdict about every record
-// with no clock, no coordination read and no agreement beyond the order they
-// all already have. That is what makes it the fence that holds when
-// coordination cannot be reached at all.
-//
-// # And why nothing here judges whether the node may be evicted
-//
-// An eviction is ONE fleet gesture over every identity-claiming log, and
-// whether it is permitted — the target must not be holding a live presence
-// lease ([statelog.PermitEviction]) — is asked once, before the first log is
-// written, by the engine's node gate. Judged here, and again beside every
-// other log's gate record, one gesture could reach two answers about one node
-// and leave it evicted on one log and counted on the other. The gate is the
-// one production caller of this method and of [Writer.ReadmitNode].
-//
-// EvictedBy is this writer's own actor, so the caller hands it a writer acting
-// as the operator who ran the gesture — see [Writer.As].
+// Whether the eviction is permitted ([statelog.PermitEviction]) is judged once
+// for the whole fleet gesture by the engine's node gate, the one production
+// caller of this and [Writer.ReadmitNode], before any log is written: judged
+// per log, one gesture could leave a node evicted on one log and counted on
+// another. EvictedBy is this writer's actor, so the caller hands it a writer
+// acting as the operator who ran the gesture — see [Writer.As].
 func (w *Writer) EvictNode(ctx context.Context, opID, nodeID string) (WriteResult, error) {
 	return w.gateNode(ctx, opID, nodeID, false)
 }

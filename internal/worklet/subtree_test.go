@@ -13,14 +13,10 @@ import (
 // A SUBTASK IS FILED IN ITS PARENT'S PROJECT, and under a parent that is not
 // in the trash.
 //
-// A board draws a project's roots and lets their subtrees ride along, with the
-// container on the outer row too — so a subtask in another project from its
-// root is on NEITHER board. Nothing refused it: the create checked the project
-// it was filed in and never looked at the parent, and the create tool
-// defaulted a subtask to the CALLER's team, so a seat breaking down a
-// colleague's item scattered its pieces into its own project. And a child
-// filed under a removed parent is a live row under a parent nobody can see,
-// which a restore does not bring back with it.
+// A board draws a project's roots and lets their subtrees ride along, the
+// container filtering the outer row, so a subtask in another project from its
+// root is on NEITHER board. A child filed under a removed parent is a live row
+// under a parent nobody can see, which a restore does not bring back.
 func TestASubtaskIsFiledInItsParentsProject(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -72,16 +68,15 @@ func TestASubtaskIsFiledInItsParentsProject(t *testing.T) {
 // A MERGE ACROSS PROJECTS THAT WOULD MOVE THE SUBTASKS IS REFUSED BEFORE THE
 // MARK.
 //
-// Every re-parent it would publish is refused on its own subject, since a
-// subtask lives in its parent's project — so a merge that marked the
-// duplicate first would leave a mark nothing can finish, and the duty that
-// completes an abandoned merge would retry it on every tick for ever. Without
-// moving the subtasks the fold is fine: they stay where they are.
+// Every re-parent it would publish is refused on its own subject (a subtask
+// lives in its parent's project), so a merge that marked the duplicate first
+// would leave a mark nothing can finish, retried by the abandoned-merge duty
+// on every tick for ever. Without moving the subtasks the fold is fine.
 func TestAMergeAcrossProjectsCannotMoveTheSubtasks(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	// A MERGE'S CLOSE WAITS FOR ITS MARK, so this node has to apply while
-	// the sequence writes. See applyWhileWriting.
+	// A MERGE'S CLOSE WAITS FOR ITS MARK, so this node applies while the
+	// sequence writes (applyWhileWriting).
 	r.applyWhileWriting()
 	seedProject(t, r, worklet.Project{Key: "OPS", Name: "Operations"})
 	keep := newTask("m-keep")
@@ -124,8 +119,8 @@ func TestAMergeAcrossProjectsCannotMoveTheSubtasks(t *testing.T) {
 	}
 }
 
-// A RE-PARENT IS HELD TO THE SAME RULE, at the write — which is the only other
-// gesture that sets a parent.
+// A RE-PARENT IS HELD TO THE SAME RULE, at the write: the only other gesture
+// that sets a parent.
 func TestAReparentIntoAnotherProjectIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -160,10 +155,9 @@ func TestAReparentIntoAnotherProjectIsRefused(t *testing.T) {
 
 // A RECORD THAT CARRIES THE SHAPE ANYWAY IS APPLIED AND FLAGGED.
 //
-// The writer refuses it, and the applier cannot: a record the broker committed
-// is one every node must consume, and refusing it at apply stalls the log on
-// every node over one task. `inconsistent_project` is the attention flag that
-// names it, and until now nothing ever raised it.
+// The writer refuses it, and the applier cannot: every node must consume a
+// committed record, and refusing it at apply stalls the log on every node over
+// one task. `inconsistent_project` is the attention flag that names it.
 func TestASubtaskInAnotherProjectFromItsRootIsFlagged(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)

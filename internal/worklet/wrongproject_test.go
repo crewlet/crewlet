@@ -9,11 +9,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A TASK OUTSIDE THE PROJECT A WRITE NAMES IS REFUSED, not written under a
-// scope that names another container. The caller resolved the task and read
-// its project outside the write's snapshot, so a task moved since — or named
-// with the wrong project — would otherwise be decided on one project's rules
-// and filed under its container while it lives in another.
+// A TASK OUTSIDE THE PROJECT A WRITE NAMES IS REFUSED: the caller read its
+// project outside the write's snapshot, so a task moved since, or named with
+// the wrong project, would be decided on one project's rules and filed under
+// its container while living in another.
 func TestAWriteNamingTheWrongProjectIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

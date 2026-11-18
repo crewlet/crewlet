@@ -591,8 +591,9 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 	writer, writable := engine.OperatorWorkWriter(e)
 	if readable {
 		work = builtin.WorkDeps{
-			Reader:    reader,
-			ChangeRef: e.ChangeRef,
+			Reader:       reader,
+			ArtifactLink: e.ArtifactLink,
+			ChangeRef:    e.ChangeRef,
 			// A PERSON'S ANSWER THAT APPROVES AN ACT is decided as that
 			// act's approval, at its proof (ADR-0125).
 			ApprovesAct: e.ApprovesAct,

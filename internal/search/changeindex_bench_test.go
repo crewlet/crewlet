@@ -7,27 +7,31 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/search"
 )
 
-// BenchmarkTheChangeIndexBuild walks changes from an empty index, as a first build does, and reports
-// the time and bytes a change costs: short, typical (150 distinct words, 110 of them rare words at
-// random places in the term key) at two corpus sizes, so the time's growth shows, and long.
+// BenchmarkTheChangeIndexBuild runs a first build (newest first) over changes minted at 40 000 a day and
+// reports time and bytes a change: short, typical (150 distinct words) at two corpus sizes and at the
+// write hold's smaller batches, and long.
 func BenchmarkTheChangeIndexBuild(b *testing.B) {
 	for _, arm := range []struct {
 		name    string
 		changes int
 		text    func(rng *rand.Rand, i int) (string, string)
+		batch   int // the batch cap, 0 for ChangeIndexBatchBytes
 	}{
 		{"short", 10_000, func(rng *rand.Rand, i int) (string, string) {
 			return words(rng, i, 8, 8, 400), padTo(words(rng, i, 60, 40, 400), 300)
-		}},
-		{"typical", 10_000, typicalChange},
-		{"typical at 30 000", 30_000, typicalChange},
+		}, 0},
+		{"typical", 10_000, typicalChange, 0},
+		{"typical at 30 000", 30_000, typicalChange, 0},
+		{"typical at a 64 KiB batch", 10_000, typicalChange, 64 << 10},
+		{"typical at a 32 KiB batch", 10_000, typicalChange, 32 << 10},
 		{"long", 1_000, func(rng *rand.Rand, i int) (string, string) {
 			return words(rng, i, 8, 8, 400), padTo(words(rng, i, 6_000, 0, 1_000), 32<<10)
-		}},
+		}, 0},
 	} {
 		b.Run(arm.name, func(b *testing.B) {
 			var grown int64
@@ -35,15 +39,10 @@ func BenchmarkTheChangeIndexBuild(b *testing.B) {
 				b.StopTimer()
 				f := newChangeFixture(b)
 				f.addRepo("repo-a")
-				rng := rand.New(rand.NewPCG(24, 1))
-				rows := make([]changeFixtureRow, arm.changes)
-				for i := range rows {
-					title, body := arm.text(rng, i)
-					rows[i] = changeFixtureRow{id: changeUUID(i + 1), repo: "repo-a", owner: "ada", state: "open",
-						title: title, body: body}
+				if arm.batch > 0 {
+					search.SetChangeBatchCap(f.x, arm.batch)
 				}
-				f.writeAll(rows)
-				f.numberFrom(1 << 24)
+				f.writeAll(benchRows(arm.changes, arm.text))
 				before := f.fileBytes()
 				b.StartTimer()
 				f.sweepAll()
@@ -54,6 +53,39 @@ func BenchmarkTheChangeIndexBuild(b *testing.B) {
 			b.ReportMetric(float64(grown)/float64(b.N*arm.changes), "bytes/change")
 		})
 	}
+}
+
+// BenchmarkTheChangeIndexRebuild begins the first build again over a typical index of 10 000 changes
+// whose estate is as it was, as a replaced copy mostly is, and reports the time a change costs.
+func BenchmarkTheChangeIndexRebuild(b *testing.B) {
+	const changes = 10_000
+	for range b.N {
+		b.StopTimer()
+		f := newChangeFixture(b)
+		f.addRepo("repo-a")
+		f.writeAll(benchRows(changes, typicalChange))
+		f.sweepAll()
+		f.x.RequestRebuild()
+		b.StartTimer()
+		f.sweepAll()
+		b.StopTimer()
+		if held := f.holding(search.ChangeQuery{Terms: []string{"s001"}, Limit: 1}); held.BackFloor != "" {
+			b.Fatalf("the rebuild stopped at %q", held.BackFloor)
+		}
+	}
+	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*changes), "ns/change")
+}
+
+// benchRows is n changes of one repository with text's title and description, minted at 40 000 a day.
+func benchRows(n int, text func(rng *rand.Rand, i int) (string, string)) []changeFixtureRow {
+	rng := rand.New(rand.NewPCG(24, 1))
+	rows := make([]changeFixtureRow, n)
+	for i := range rows {
+		title, body := text(rng, i)
+		rows[i] = changeFixtureRow{id: benchChangeID(rng, i), repo: "repo-a", owner: "ada", state: "open",
+			title: title, body: body}
+	}
+	return rows
 }
 
 // BenchmarkAChangeSearchAtItsScanBound is one search whose every word and scope holds more changes
@@ -162,15 +194,9 @@ func (f *changeFixture) writeAll(rows []changeFixtureRow) {
 	f.settle(int64(len(rows)))
 }
 
-// numberFrom has the index number its next document after seq, as an index a year in does.
-func (f *changeFixture) numberFrom(seq int64) {
-	f.t.Helper()
-	if err := f.db.Tx(f.ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(f.ctx, `UPDATE change_index_state SET last_seq = ?`, seq)
-		return err
-	}); err != nil {
-		f.t.Fatalf("number the index's documents from %d: %v", seq, err)
-	}
+// benchChangeID is the i-th change's id as 40 000 changes a day mint them, 2.16 s apart, with random bits.
+func benchChangeID(rng *rand.Rand, i int) string {
+	return mintedChangeID(changeEpoch.Add(time.Duration(i)*2160*time.Millisecond), byte(rng.IntN(32)), rng.Uint64())
 }
 
 // fileBytes is this node's own file's size once a truncating checkpoint folded every committed page

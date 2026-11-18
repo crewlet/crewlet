@@ -25,18 +25,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// requestBeside is what an engine write's request holds beside its payload at
-// the longest the engine stamps every other field of it: the run's work item
-// and model at gitlet.MaxProvenanceBytes of a character JSON spells in six
-// bytes, a branch at the 255 bytes a ref may be of the same, a seat's handle
-// at iam.MaxLogin, an operation id at statelog.MaxCallerOpIDBytes, whom the
-// write is made for at its widest (a credential's login at iam.MaxLogin and
-// every app, some 180 bytes), the field names, the request's own fields and
-// its signed frame — some 6.9 KiB as measured
-// (TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound: 7 089 bytes beside
-// a commit_files' payload, 7 125 beside a revert's), held to SIXTEEN, over
-// twice that: what a slot of a Gitlet node's writes' lane holds of a write's
-// request is the payload's bound and this beside it.
+// requestBeside is what an engine write's request holds beside its payload,
+// every other field at the longest the engine stamps it (work item and model at
+// gitlet.MaxProvenanceBytes of six-byte JSON characters, a 255-byte branch, a
+// handle at iam.MaxLogin, an op id at statelog.MaxCallerOpIDBytes, the widest
+// carrier) plus field names and the signed frame: 7 089 bytes beside a
+// commit_files' payload and 7 125 beside a revert's
+// (TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound), held to over twice
+// that. A writes'-lane slot holds the payload's bound and this beside it.
 const requestBeside = 16 << 10
 
 // sizer is a broker registration that records the size of every request each
@@ -70,13 +66,11 @@ func (s *sizer) sent(subject string) []int {
 }
 
 // largestWrite is the largest engine write of kind — a commit_files or a
-// revert — that gitlet.EngineWrite.Validate admits: its payload's message of
-// '<', which JSON spells in six bytes, filled to the bound exactly, and every
-// other field at the longest the engine stamps it — whom it is made for among
-// them, a credential's carrier at its widest (a login of iam.MaxLogin bytes and
-// every app) beside the ceiling of nobody it comes with. The rule is the judge
-// of "largest": the write is admitted, and the same write one '<' longer is
-// refused.
+// revert — that gitlet.EngineWrite.Validate admits: its message of '<' (six
+// JSON bytes) filled to the bound exactly, every other field at the longest
+// the engine stamps it, made for a credential's carrier at its widest (a login
+// of iam.MaxLogin bytes and every app) beside a ceiling of nobody. The rule
+// judges "largest": the same write one '<' longer is refused.
 func largestWrite(t *testing.T, kind gitlet.EngineWriteKind) gitlet.EngineWrite {
 	t.Helper()
 	widest := strings.Repeat("&", gitlet.MaxProvenanceBytes)
@@ -126,16 +120,13 @@ func largestWrite(t *testing.T, kind gitlet.EngineWriteKind) gitlet.EngineWrite 
 
 // AN ENGINE WRITE THE ONE RULE ADMITS CROSSES THE WIRE, ITS REQUEST THE
 // PAYLOAD'S BOUND AND A FEW KIBIBYTES BESIDE IT: the largest write
-// gitlet.EngineWrite.Validate admits — a commit_files' or a revert's, its
-// message of '<', which JSON spells in six bytes, filled to the bound and one
-// '<' more refused, every other field at the longest the engine stamps — is
-// carried to a peer Gitlet node and built, its request as that node's broker
-// client holds it under queue.MaxPayloadBytes and within requestBeside of
-// gitlet.MaxCommitPayloadBytes: what a slot of a Gitlet node's writes' lane is
-// sized by. Measured by its length, a commit_files' message admitted at the
-// bound crossed at six times it, and a revert's message at whatever the
-// transport would carry — past it, refused to every peer by the transport
-// while the home's own seat had it built in process.
+// gitlet.EngineWrite.Validate admits (largestWrite) is carried to a peer Gitlet
+// node and built, its request as that node's broker client holds it under
+// queue.MaxPayloadBytes and within requestBeside of
+// gitlet.MaxCommitPayloadBytes: what a writes'-lane slot is sized by. A bound
+// on the message's length would let a message of '<' cross at six times it,
+// and past the transport's limit be refused to every peer while the home built
+// it in process.
 //
 // Mutation: measure the message by its length (gitlet.EngineWrite.Validate) —
 // the one-'<'-past writes are admitted, red.
@@ -175,10 +166,10 @@ func TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound(t *testing.T) {
 	}
 }
 
-// heldGit is a git half that HOLDS every engine write it is asked until it is
-// released — as Gitlet holds one through its sync, its build, its
-// upload, its proposal and the wait for its push's row, the decoded write kept
-// to the end — counting the writes it was asked and those it holds now.
+// heldGit is a git half that HOLDS every engine write it is asked until
+// released, the decoded write kept to the end as Gitlet keeps it through sync,
+// build, upload, proposal and the push's row, counting the writes asked and
+// those held now.
 type heldGit struct {
 	release chan struct{}
 	asked   atomic.Int64
@@ -301,17 +292,14 @@ func holdWrites(t *testing.T, q *memory.Queue, half *heldGit, n int, write func(
 }
 
 // A GIT WRITE PAST THE ONES A GITLET NODE HOLDS IS ANSWERED AT ONCE: with all
-// gitWritesHeld engine writes git-a holds for its peers held, the next — the
-// largest write the one rule admits — is answered `behind`, at its share,
-// naming the bound, its git half never asked, while every held write still
-// holds its slot; and once they end, the next write is built. Left to wait
-// for a slot it waited unseen in the broker client's buffer, which drops a
-// request past its bytes — its asker hearing nothing for a whole write attempt
-// and then taking the healthy node for a gone one.
+// gitWritesHeld of git-a's held, the next — the largest the one rule admits —
+// is answered `behind`, at its share, naming the bound, its git half never
+// asked, while every held write still holds its slot; once they end, the next
+// is built. Left waiting, it waits unseen in the broker client's buffer (which
+// drops a request past its bytes) and its asker takes the node for gone.
 //
-// JUDGED BY WHAT WAS STILL HELD, never by a clock: the next write's asker
-// waits up to a minute, and what proves it never waited for a slot is that no
-// held write had let go of one when it was answered.
+// JUDGED BY WHAT WAS STILL HELD, never by a clock: the asker waits up to a
+// minute; no held write having let go of a slot proves it never waited for one.
 //
 // Mutation: register the writes' lane gitWritesHeld wide and answer nothing at
 // once — the next write waits for a slot until its asker gives up, red.
@@ -363,31 +351,21 @@ func TestAGitWritePastTheOnesANodeHoldsIsAnsweredAtOnce(t *testing.T) {
 	}
 }
 
-// heldBeside bounds what a held write's slot holds beside its three copies of
-// the payload, each at its longest: each copy's other fields (requestBeside),
-// the allocator's rounding of each copy — a large object — up to its next
-// 8 KiB page, and the slot's own state — its context, timer and channels
-// (here its asker's too, which in a fleet are on another node) and its
-// replay-guard entry — held to one requestBeside more: 88 KiB. Measured under
-// -race with the heap read after two collections (liveHeap), a slot of the
-// test's writes, whose other fields are short, holds a steady 3.02 payloads,
-// some 21 KB beside the copies (TestWhatAHeldGitWriteHolds: 3 163 613 to
-// 3 167 442 bytes over 18 runs at GOMAXPROCS 2, 4 and 8, and 3 167 003 in a
-// run of the whole package), so the bound has room for every other field at
-// its longest and none for a fourth copy. It was a quarter of a payload while
-// the heap was read after one collection, which counted a pool's buffers
-// once a processor and moved by some 130 KiB a slot from one run to the next.
+// heldBeside bounds what a held write's slot holds beside its three payload
+// copies: each copy's other fields (requestBeside), each copy's rounding up to
+// its next 8 KiB page, and the slot's own state (context, timer, channels —
+// here its asker's too — and replay-guard entry) at one requestBeside more:
+// 88 KiB. Measured (TestWhatAHeldGitWriteHolds, under -race, via liveHeap), a
+// slot of this test's short-fielded writes holds a steady 3.02 payloads, some
+// 21 KB beside the copies, so the bound has room for every other field at its
+// longest and none for a fourth copy.
 const heldBeside = 3*requestBeside + 3*(8<<10) + requestBeside
 
-// liveHeap is the heap's allocated bytes once TWO collections have run. A
-// sync.Pool keeps what was put back in it, one cache a processor, and a
-// collection only moves that to the pool's victim cache, which still counts
-// as allocated: the second frees it. Read after one, a buffer pooled from
-// encoding a write at the payload's bound was counted as a held write's, once
-// a processor: the same writes measured 3.02 payloads a slot at GOMAXPROCS 2
-// and up to 3.27 at 8, past three payloads and heldBeside, and 3.28 on CI's
-// runner. What a slot holds does not depend on how many processors share the
-// pools.
+// liveHeap is the heap's allocated bytes once TWO collections have run: one
+// only moves a sync.Pool's per-processor caches to its victim cache, still
+// counted as allocated, and the second frees them. After one, pooled encoding
+// buffers counted as a held write's once per processor, so the measure grew
+// with GOMAXPROCS past heldBeside.
 func liveHeap() int64 {
 	runtime.GC()
 	runtime.GC()
@@ -396,16 +374,13 @@ func liveHeap() int64 {
 	return int64(m.HeapAlloc)
 }
 
-// WHAT A HELD GIT WRITE HOLDS IS MEASURED, not assumed: a Gitlet node holds, in
-// each slot of its writes' lane a peer's write takes, the write's request as
-// its broker client delivered it, the request as admitted — its arguments
-// copied out of it — and the write decoded, which its git half keeps through
-// the sync, the build, the upload, the proposal and the wait for the push's
-// row. At the payload's bound, in plain bytes — which JSON spells as long as
-// their text, so the decoded copy is as large as the encoding: the most a
-// write at the bound holds — a slot holds three payloads and at most
-// heldBeside beside them: what the writes' lane's doc states of a full lane
-// ([lane.answers]).
+// WHAT A HELD GIT WRITE HOLDS IS MEASURED, not assumed: each writes'-lane slot
+// a peer's write takes holds the request as the broker client delivered it,
+// the request as admitted (its arguments copied out) and the decoded write
+// its git half keeps to the push's row. At the bound in plain bytes (the
+// worst case: JSON spells them as long as their text, so the decoded copy is
+// as large as the encoding), a slot holds three payloads and at most
+// heldBeside beside them, as [lane.answers] states.
 //
 // NOT PARALLEL, since it reads the heap: no other case allocates beside it.
 //

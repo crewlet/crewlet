@@ -19,17 +19,12 @@ const benchInboxChanges = inbox.MaxRows
 
 // BenchmarkACodeInbox times the two reads a person's code inbox costs
 // (inboxread.go's head) over one repository whose main asks one counted
-// approval, holding benchInboxChanges live changes dev opened, each
-// mentioning founder — so founder's inbox holds a page of notices, each about
-// a live change whose merge gate its card judges:
+// approval, holding benchInboxChanges live changes each mentioning founder:
 //
 //   - bare: one `inbox` read of founder's page, as every count of what waits
 //     on them, Home's Updates and the Snoozed link's count read it;
 //   - cards: that read and the `notice_cards` read of the page's changes, as
-//     the Inbox screen's list reads them — the readiness judged, the
-//     descriptions and the open findings read, for every change.
-//
-// The figure inboxread.go's head names is each's time an iteration.
+//     the Inbox screen's list reads them, every card's readiness judged.
 func BenchmarkACodeInbox(b *testing.B) {
 	n := newNode(b)
 	n.chart = testChart()

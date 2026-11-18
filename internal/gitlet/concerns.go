@@ -14,194 +14,147 @@ import (
 	"github.com/crewlet/crewlet/internal/routing"
 )
 
-// WHOM A CHANGE RECORD CONCERNS: every record about a change — a write of its
-// lifecycle on the repository's subject, a push that merges or opens one, every
-// write of its conversation on the change's own — carries a ROUTING SNAPSHOT
-// ([ChangeRouting]): who made it, and the handles each reason it routes under
-// reaches, as the deciding snapshot and chart held them. The writer stamps it,
-// through ONE function ([routingFor]) whichever writer decides the record — the
-// committer for the repository's records, the change writer for the change's —
-// and everything that tells somebody about the record afterwards reads the
-// snapshot and nothing else: [Concerns] is pure over it, through the one
-// precedence rule every native domain routes by (internal/routing).
+// WHOM A CHANGE RECORD CONCERNS: every record about a change carries a ROUTING
+// SNAPSHOT ([ChangeRouting]): who made it, and the handles each reason it
+// routes under reaches, as the deciding snapshot and chart held them. Every
+// writer stamps it through ONE function ([routingFor]), and everything that
+// tells somebody about the record reads the snapshot alone: [Concerns] is pure
+// over it, through internal/routing's one precedence rule.
 //
-// # Why a snapshot, and not the rows
-//
-// Who a record concerns is a fact of the moment it was decided. The rows move
-// on — a reviewer is withdrawn, an author joins by pushing, a thread grows —
-// and a reader that derived the audience from the rows minutes later, on
-// another node, would tell different people about the same record than the
-// node that applied it. The record carries the answer, so every reader of it
-// agrees: the applier that writes a notice row per recipient, and the change
-// feed that wakes the seats among them.
-//
+// A SNAPSHOT, NOT THE ROWS: who a record concerns is a fact of the moment it
+// was decided. The rows move on (a reviewer withdrawn, a thread grown), and a
+// reader deriving the audience later, on another node, would tell different
+// people than the applier did; carrying the answer makes the applier's notice
+// rows and the feed's wakes agree.
+
 // # One role per reason, filled for the reasons the op routes by
 //
-// A record fills only the roles its op routes by — a close its watchers, a
-// review its authors and its mentions, a revise the path owners and the
-// reviewers it asks to look again — never every role of the change on every
-// record: a comment that carried the change's sixty-four watchers beside its
-// own audience would pay for a fan-out nobody reads, on every node's log.
+// A record fills only the roles its op routes by (a close its watchers, a
+// review its authors and mentions, a revise the path owners and reviewers it
+// asks again): a comment carrying the change's sixty-four watchers would pay
+// for a fan-out nobody reads. A push moving no change concerns nobody.
 //
-//   - mention: the handles the write's text names, held to the deciding chart
-//     (an open, an edit, a review, a comment; a push's options).
+//   - mention: the handles an open's, edit's, review's or comment's text or a
+//     push's options name, held to the deciding chart.
 //   - review_requested: the reviewers an ask names that were not asked
 //     already, and the path owners a revision's facts ask.
-//   - changes_requested, review_submitted: the change's authors, by the
-//     review's verdict.
-//   - checks_failed: the authors and the record's actor — the pusher of the
-//     head the check measured, or the person whose CI reported it — on the
-//     ending of a check of the change's current head that failed, or errored
-//     past the home's own requeue, whether the engine ran it or a person's
-//     CI reported it onto the same rows: the one reason that is news to its
-//     actor too ([Reason.WakesActor]), since a pusher learns that their
-//     commit fails its checks only from this.
-//   - target_broken: the authors and the effective lead of the repository's
-//     owner, on the broken record naming the landing that merged the change
-//     — never an enqueuer, since only a landing ahead of its checks, which
-//     no queue made, can be broken.
-//   - conflicted: the authors, on the mergeability that TURNED the change's
-//     merge into a conflict — not on every recheck that finds it still one —
-//     and on a queue's ejection of it for a conflicting merge.
-//   - dequeued: the authors and the enqueuer, on a record that put the
-//     change's entry out of its target's queue — an ejection, or a dequeue
-//     somebody asked.
+
+//   - changes_requested, review_submitted: the authors, by the review's verdict.
+//   - checks_failed: the authors and the record's actor (the head's pusher, or
+//     whoever's CI reported it), on a check of the current head that failed or
+//     errored past the home's requeue: the one reason news to its actor
+//     ([Reason.WakesActor]), since only this tells a pusher their commit fails.
+//   - target_broken: the authors and the owner's effective lead, on the broken
+//     record naming the landing that merged the change; never an enqueuer, as
+//     only a landing ahead of its checks, which no queue made, can break.
+//   - conflicted: the authors, on the mergeability that TURNED the merge into a
+//     conflict (not every recheck finding it still one), and on a queue's
+//     ejection of it for a conflicting merge.
+//   - dequeued: the authors and the enqueuer, on an ejection or an asked dequeue.
+
 //   - finding_replied: the raiser of the finding a comment replies to, and of
 //     every finding an answer answers.
-//   - ready_to_merge: the change's authors who may merge it into its target
-//     ([PreconditionMergeAuthority] judged for each), else the effective
-//     lead of the repository's owner, on the mergeability whose stored
-//     answer goes from not ready to ready (below).
-//   - merged: the authors, on the push that set the target to the change's
-//     head and on its home's landing, on the merge record that merged it and
-//     on the queue's landing of it — each but who merged it: on the home's
-//     landing, whoever made the push its home found bringing the head into
-//     the target, never whoever moved the target last.
+//   - ready_to_merge: the authors who may merge it into its target
+//     ([PreconditionMergeAuthority] judged for each), else the owner's
+//     effective lead, on the mergeability whose stored answer turns ready.
+//   - merged: the authors, on the push that set the target to the head and on
+//     its home's landing, on the merge record and on the queue's landing; each
+//     but who merged it, which on the home's landing is whoever made the push
+//     it found bringing the head in, never whoever moved the target last.
 //   - re_review: the reviewers whose standing verdict asks for changes on an
 //     earlier revision, on a revision's first facts.
 //   - thread: the participants of the thread a comment is said in.
-//   - watcher: the change's participants, on a close, a reopen, a retarget
-//     and a draft's state.
+
+//   - watcher: the participants, on a close, a reopen, a retarget and a
+//     draft's state.
 //   - lead_fallback: the lead of the repository's owner, on a change's first
 //     facts where nobody who may review it is asked.
-//
-// A push that moves no change concerns nobody: a head move, a close by a
-// deleted source branch and a push to a ref no change uses are bookkeeping —
-// what a change's page says, never what a wake is for.
-//
+
 // # A record with no audience carries no routing
 //
-// The snapshot is stamped only where some role the record's op routes by is
-// filled ([routingFor] answers nil otherwise): a comment nobody is mentioned
-// in, said outside any thread, a thread's resolution, a revision's facts that
-// ask nobody, and a mergeability that turns nothing tell nobody, and the
-// change's context — its reference, its repository, its title, its owner and
-// its work item, about three hundred bytes a record at the reference
-// company's — would ride every such record on every node's log for a fan-out
-// of none. A record without a routing takes the path an empty audience took:
-// [RoutingsOf] names none for it, so the applier writes no notice and the
-// feed acknowledges it without a wake. Where there IS an audience the routing
-// stays whole, context included, because the feed's node routes a record
-// without reading a row it may lag on.
-//
+// [routingFor] answers nil where no role the op routes by is filled (a comment
+// mentioning nobody outside any thread, a thread's resolution, facts that ask
+// nobody, a mergeability that turns nothing): else the change's context, some
+// three hundred bytes, would ride every such record on every node's log for a
+// fan-out of none. [RoutingsOf] names none for it, so the applier writes no
+// notice and the feed acknowledges it without a wake. Where there IS an
+// audience the routing stays whole, context included: the feed's node routes
+// a record without reading a row it may lag on.
+
 // # ready_to_merge is announced by ONE record, and why it is that one
 //
-// Whether a change may merge is judged from one snapshot of the change's rows
-// ([ReadinessOf]), and the inputs live on TWO subjects: a draft's state and a
-// revision on the repository's, an approval and a blocker's answer on the
-// change's. A record on either that computed readiness from its own snapshot
-// would miss the other: an approval and an undraft decided at once each see
-// the other not yet applied, each finds the change not ready, and the
-// transition both complete is announced by neither — write skew across two
-// subjects. So the transition is the stored answer's: a mergeability record —
-// the home's merge or its refresh, which follows any readiness input that
-// moved — stores the change's readiness, and the record whose decide finds
-// the stored `ready` going false to true is the one that announces it.
-//
+// Readiness is judged from one snapshot of the change's rows ([ReadinessOf]),
+// but its inputs live on TWO subjects: a draft's state and a revision on the
+// repository's, an approval and a blocker's answer on the change's. A record
+// on either computing it from its own snapshot is write skew: an approval and
+// an undraft decided at once each see the other unapplied, and the transition
+// both complete is announced by neither. So a mergeability record (the home's
+// merge or its refresh, which follows any input that moved) stores readiness,
+// and the record whose decide finds the stored `ready` going false to true is
+// the one that announces it.
+
 // # The actor
 //
-// Every record of this domain names the deciding NODE as its actor
-// ([ActorSystem]): the principal is in its payload. So the routing names who
-// acted ([ChangeRouting.Actor]) — the asker, the pusher of a push's entry, the
-// enqueuer of an entry a queue landed, the pusher of the head a check
-// measured and of the revision whose facts the home records, the pusher of
-// the push the home found bringing a change's head into its target
-// ([landingPusher]) — the move after which the target held the head through
-// to the tip it found, which merged the change though only the home's git
-// could see so, and never the push that moved the target last, which may be
-// somebody's push on top — and nobody for the home's other records — and a
-// code reason is news to whoever made the
-// change only where [Reason.WakesActor] says so: a reviewer is not told of
-// their own review, a pusher of their own merge, whether their push set the
-// target to the head or moved it past, and a pusher IS told that the head
-// they pushed fails its checks.
-//
+// Every record names the deciding NODE as its actor ([ActorSystem]), so the
+// routing names who acted ([ChangeRouting.Actor]; [concerning]'s actor says
+// who, record by record). On the home's landing that is the pusher of the push
+// the home found bringing the head into the target ([landingPusher]), never
+// the push that moved the target last, which may be somebody's on top. A
+// reason is news to its actor only where [Reason.WakesActor] says: a reviewer
+// is not told of their own review, nor a pusher of their own merge, but a
+// pusher IS told the head they pushed fails its checks.
+
 // # Whom the actor acted for
 //
 // A seat acts for whoever its turn works for, and a routing that may wake a
 // seat says so beside its actor ([ChangeRouting.WorkingFor], ADR-0109): whom
-// the asker's request was made for, as every node that decides it holds it
-// (writtenForInvalid, writtenForUnder), so the turn the record wakes works for
-// them, held to what they may use, never for the writing seat alone. Only
-// beside an agent's actor, and only where the routing wakes a seat
-// ([wakesASeat]): a person and a credential write for nobody but themselves,
-// and so does the engine, save the one exception below; and a routing that
-// tells only persons, who read notices, wakes no turn to carry it to.
-//
-// THE ENGINE'S RECORDS THAT NAME AN EARLIER ACTOR carry whom that actor's act
-// was made for, as the row the act left keeps it (code_revisions, code_pushes
-// and code_queue, the replicated migration
-// a_code_row_keeps_whom_an_agents_write_was_made_for), under the same two
-// conditions: a revision's facts and a failed check of a change's head the
-// carrier of the open or the push that made the revision ([revisionPusher]),
-// the home's landing the carrier of the push it found merging the change
-// ([landingPusher]) — each read by the statement that reads the actor — and a
-// queue's landing the carrier of each entry's enqueue, beside the enqueuer it
-// names, off the entry's row its decide reads ([decideLand]), all in the
-// deciding snapshot. The facts ask for the review the push asked for, the
-// failure is news about the push, and a landing is that push's merge or that
-// enqueue's, so the turn each wakes works for whom the act was made for, as
-// the act's own wake did — never for the acting seat alone. A row that keeps
-// nobody — an act made for nobody, a person's, or one applied before the
-// carrier's build filled the column — carries nobody, and the turn works for
-// the actor's seat, as before the carrier.
-//
+// the asker's request was made for (writtenForInvalid, writtenForUnder), so
+// the turn it wakes works for them, held to what they may use. Only beside an
+// agent's actor, and only where the routing wakes a seat ([wakesASeat]): a
+// person, a credential and the engine (save the exception below) write for
+// nobody but themselves, and a routing telling only persons wakes no turn.
+
+// THE ENGINE'S RECORDS THAT NAME AN EARLIER ACTOR carry whom that act was made
+// for, as its row keeps it (code_revisions, code_pushes and code_queue; the
+// replicated migration a_code_row_keeps_whom_an_agents_write_was_made_for),
+// under the same two conditions, all read in the deciding snapshot: a
+// revision's facts and a failed head check the revision pusher's
+// ([revisionPusher]), the home's landing the merging push's ([landingPusher]),
+// a queue's landing each entry's enqueue's ([decideLand]). Each wake is about
+// that act, so it works for whom the act was made for, as the act's own wake
+// did. A row that keeps nobody (made for nobody, a person's, or applied before
+// the column was filled) carries nobody, and the turn works for the actor.
+
 // THE ONE EXCEPTION, BESIDE NO ACTOR: the merge queue's own records about an
-// entry's enqueue that no principal's act made — its ejection ([decideEject])
-// and a close of the landed change's work item it could not make, settled
-// not_closed ([decideCloseSettled]) — name no actor, and tell the entry's
-// enqueuer and its change's authors about that enqueue. So each carries whom
-// the enqueue was made for, off the entry's row ([concerning.enqueuedFor]),
-// where its routing wakes a seat, and the turn it wakes works for them, held
-// to what they may use: worked for the told seat's own, it would fix the
-// conflict and queue the change again, or close the item its requester could
-// not, with every app the seat holds (ADR-0109's amendment). Every other
-// record the engine writes about no earlier act — a mergeability, a broken
-// landing — carries nobody, and its wake states the engine alone (wake.go's
-// writerOf, which hands the engine's carrier on for these two ops alone).
-//
+// entry's enqueue, its ejection ([decideEject]) and a close of the landed
+// change's work item settled not_closed ([decideCloseSettled]), name no actor,
+// tell the enqueuer and the authors about that enqueue, so each carries whom
+// it was made for ([concerning.enqueuedFor]) where it wakes a seat. Worked for
+// the told seat's own, the turn would re-queue the change or close the item
+// its requester could not, with every app the seat holds (ADR-0109's
+// amendment). Every other engine record about no earlier act (a mergeability,
+// a broken landing) carries nobody: wake.go's writerOf hands the engine's
+// carrier on for these two ops alone.
+
 // # Who hears what the gate does
 //
-// The gate's records — a merge, a dequeue, a queue's ejection and landing, a
-// broken landing and a head check's ending — carry a routing as every other
-// record about a change does, each stamped by the record's own writer through
-// [routingFor]: the committer for the repository's, the checks writer for an
-// ending. A record of several changes (an ejection, a landing) carries one a
-// change, KEPT WITHIN THE RECORD'S ROOM ([keptRoutings]) as a push's are: the
-// record must land, and a change past the room is told to nobody. A landing
-// no change made — a person's push onto a protected branch — concerns no
-// change's audience, and its broken record carries no routing: the
-// `code_target_broken` event on the activity feed is what reports it.
-//
+// The gate's records (a merge, a dequeue, a queue's ejection and landing, a
+// broken landing, a head check's ending) are stamped through [routingFor] by
+// their own writer: the committer, or the checks writer for an ending. A
+// record of several changes carries one routing a change, KEPT WITHIN THE
+// RECORD'S ROOM ([keptRoutings]): the record must land, so a change past the
+// room is told to nobody. A landing no change made (a person's push onto a
+// protected branch) carries no routing; the activity feed's
+// `code_target_broken` event reports it.
+
 // # The record format
 //
-// Every routing field below rides the one field each payload carries, and all
-// but one are in the base format ([RecordVersion]): the domain landed on main
-// with them. [ChangeRouting.WorkingFor] came with version 2, and a record
-// whose routing carries it is stamped there ([versionedFields]), so a build
-// before it retains the record rather than read it short of whom its actor
-// acted for. An open's, an edit's, a review's and a comment's mentions ride
-// the routing alone (withRouting takes the asker's off the record).
+// Every routing field but one is in the base format ([RecordVersion]);
+// [ChangeRouting.WorkingFor] came with version 2, and a record whose routing
+// carries it is stamped there ([versionedFields]), so an older build retains
+// the record rather than read it short of whom its actor acted for. An open's,
+// an edit's, a review's and a comment's mentions ride the routing alone
+// ([withRouting]).
 
 // Reason is why one handle hears about a change (code_notifications.reason) —
 // a closed set, in precedence order ([Reasons]).
@@ -227,22 +180,16 @@ const (
 	ReasonLeadFallback     Reason = "lead_fallback"
 )
 
-// Reasons is the fifteen, IN PRECEDENCE ORDER: the first reason that names a
-// handle is the one that handle hears under, and [Concerns] OFFERS them in
-// exactly this order — the list is the offer order, so the precedence is
-// written once. WHAT THIS RECORD DID TO YOU OUTRANKS THE ROLE YOU HOLD: being
-// named comes first, then being asked, then the change's state turning under
-// you, then what you hold (a review you gave, a thread you are in, a change you
-// watch), and the lead's copy last.
+// Reasons is the fifteen, IN PRECEDENCE ORDER: the first reason naming a
+// handle is the one it hears under, and [Concerns] offers them in this order,
+// so the precedence is written once. WHAT THIS RECORD DID TO YOU OUTRANKS THE
+// ROLE YOU HOLD: being named, then asked, then the change's state turning
+// under you, then what you hold (a review, a thread, a watch), the lead's copy
+// last. A failed check sits right after a request for changes (both say the
+// change must change), a broken target next, before a conflict (it stops
+// everybody merging), and a dequeue after a conflict, which says why.
 //
-// The gate's own sit among them by the same rule: a failed check of your head
-// right after a request for changes — both say your change must change — and a
-// target your landing broke right after it, before a conflict, since a broken
-// branch stops everybody merging into it; a removal from the queue after a
-// conflict, which says why the change left it.
-//
-// BASE FORMAT ([RecordVersion]): the domain landed on main with every reason
-// here, checks_failed, target_broken and dequeued among them, so every build's
+// All fifteen are in the base format ([RecordVersion]), so every build's
 // [Reason.Valid] and every reader of code_notifications knows them.
 func Reasons() []Reason {
 	return []Reason{ReasonMention, ReasonReviewRequested, ReasonChangesRequested, ReasonChecksFailed,
@@ -253,13 +200,10 @@ func Reasons() []Reason {
 // Valid reports a reason this build knows.
 func (r Reason) Valid() bool { return slices.Contains(Reasons(), r) }
 
-// Addressed reports whether a notice under r ASKS its recipient something — a
-// turn that must answer rather than absorb: being named, being asked to
-// review, a request for changes, a failed check of your head, a target your
-// landing broke, a conflict, a removal from the queue, a reply to a finding
-// raised, a change ready to merge, and a request to look again. Everything
-// after them is news to absorb. For which reasons lead a PERSON's inbox, see
-// [DefaultPrimaryReasons].
+// Addressed reports whether a notice under r ASKS its recipient something, a
+// turn that must answer rather than absorb: every reason through
+// ready_to_merge in [Reasons], and re_review. The rest is news to absorb; a
+// PERSON's inbox leads with [DefaultPrimaryReasons].
 func (r Reason) Addressed() bool {
 	switch r {
 	case ReasonMention, ReasonReviewRequested, ReasonChangesRequested, ReasonChecksFailed, ReasonTargetBroken,
@@ -270,21 +214,18 @@ func (r Reason) Addressed() bool {
 }
 
 // WakesActor reports whether a notice under r reaches the record's own actor
-// too: only checks_failed. A pushed head that fails its checks is news to its
-// pusher above all — nothing else they did tells them — as a failed pipeline
-// is to whoever pushed on GitHub and GitLab (their prompts' WakesActor).
+// too: only checks_failed, since nothing else tells a pusher their head fails
+// its checks (as a failed pipeline tells its pusher on GitHub and GitLab: their
+// prompts' WakesActor).
 // Every other reason is about something the actor did and knows.
 func (r Reason) WakesActor() bool { return r == ReasonChecksFailed }
 
 // DefaultPrimaryReasons is the code reasons that lead the inbox of a person who
-// has expressed no preference.
-//
-// THE ADDRESSED ONES PLUS WHAT HAPPENED TO YOUR OWN CHANGE: a change of yours
-// merged, or reviewed, changes what you do next as surely as an ask does, and
-// asks nothing. A thread you are in, a change you watch and a lead's copy are
-// context, and context that competes with action turns an inbox into a feed
-// nobody reads. Deliberately NOT [Reason.Addressed]'s set — the two questions
-// differ, as the tracker's own two lists do.
+// has expressed no preference: the addressed ones plus your own change merged
+// or reviewed, which changes what you do next as surely as an ask. A thread, a
+// watch and a lead's copy are context, and context competing with action turns
+// an inbox into a feed nobody reads. Deliberately NOT [Reason.Addressed]'s
+// set: the two questions differ, as the tracker's own two lists do.
 var DefaultPrimaryReasons = []Reason{
 	ReasonMention, ReasonReviewRequested, ReasonChangesRequested, ReasonChecksFailed, ReasonTargetBroken,
 	ReasonConflicted, ReasonDequeued, ReasonFindingReplied, ReasonReadyToMerge, ReasonMerged,
@@ -304,30 +245,20 @@ type ChangeRouting struct {
 	// the record leaves them.
 	RepoName string `json:"repo_name"`
 	Title    string `json:"title" untrusted:"name"`
-	// Actor is who made the change the record records — its asker, a push
-	// entry's pusher, and for the home's records of a revision's facts and of
-	// a landing, whoever pushed the revision and whoever made the push the
-	// home found bringing the change's head into its target — and "" for the
-	// home's other records, which no principal's act made. Nobody hears of a
-	// change they made.
+	// Actor is who made the change the record records ([concerning]'s actor),
+	// "" for the home's records no principal's act made. Nobody hears of a
+	// change they made, save under [Reason.WakesActor].
 	Actor string `json:"actor,omitempty"`
-	// WorkingFor is whom Actor made the change for (ADR-0109): whoever the
-	// turn that asked the write worked for, as the asker's request stated it
-	// — a person's seat, a colleague seat's, or a credential acting as no seat
-	// with the apps that turn was held to — so the turn the record wakes works
-	// for them, held to what they may use. STAMPED BY [routingFor], and only
-	// where Actor is an agent's seat and the routing wakes a seat
-	// ([wakesASeat]); nil on every other routing, and for a write made for
-	// nobody, the seat's own work. The engine's records that name an earlier
-	// actor carry whom that actor's act was made for, as the act's row keeps
-	// it, under the same two conditions, and the merge queue's ejection and a
-	// close it could not make carry whom the entry's enqueue was made for
-	// beside no actor, where the routing wakes a seat (this file's head, "Whom
-	// the actor acted for").
+	// WorkingFor is whom Actor made the change for (ADR-0109): whoever the turn
+	// that asked the write worked for (a person's seat, a colleague seat's, or
+	// a credential acting as no seat with the apps it was held to), so the
+	// woken turn works for them. Stamped by [routingFor] only on a routing that
+	// wakes a seat ([wakesASeat]), beside an agent's Actor or, on the merge
+	// queue's ejection and unclosed close, beside none; nil otherwise and for
+	// the seat's own work (this file's head, "Whom the actor acted for").
 	//
-	// VERSION 2 ([versionedFields]): a record whose routing carries it is
-	// stamped there, so a build before it retains the record rather than wake
-	// a turn for the writing seat alone.
+	// VERSION 2 ([versionedFields]): an older build retains the record rather
+	// than wake a turn for the writing seat alone.
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 	// Owner is the change's owner, and OwnerKind what it is.
 	Owner     string    `json:"owner,omitempty"`
@@ -357,10 +288,8 @@ type ChangeRouting struct {
 	Conflicted bool `json:"conflicted,omitempty"`
 	Merged     bool `json:"merged,omitempty"`
 	// NotClosed is, on a close_settled's routing of a change whose close
-	// ended not_closed, why the merged change's work item was not closed
-	// (M5-D27): its authors and its Enqueuer hear it under `merged`, the
-	// sentence beside — the excerpt of their notice, each change its own.
-	// It is in the base format, as this file's head says.
+	// ended not_closed, why its work item was not closed (M5-D27): its authors
+	// and Enqueuer hear it under `merged`, as their notice's excerpt.
 	NotClosed string `json:"not_closed,omitempty"`
 	// ChecksFailed is a check of the change's head that failed, or errored
 	// past the home's own requeue: its authors and its actor hear.
@@ -492,28 +421,18 @@ type Concern struct {
 	Change *ChangeRouting
 }
 
-// Concerns is every handle routings concern, change by change in the order
-// they first appear, each change's in precedence order — one record's
-// routings, which a push record carries one of for every change it merges or
-// opens, a queue's landing or ejection one for every entry it lands or puts
-// out, and every other record one of. PURE OVER THE ROUTINGS: it reads no row,
-// no chart and no clock, so the applier that writes a notice row per concern
-// and the feed that wakes the seats among them, on any node and at any time,
-// derive one set.
+// Concerns is every handle one record's routings concern, change by change in
+// first-appearance order, each in precedence order. PURE OVER THE ROUTINGS (no
+// row, chart or clock), so the applier's notices and the feed's wakes derive
+// one set on any node at any time.
 //
 // THE ADD-ONCE RULE IS PER CHANGE: a handle one change's routings name under
-// two reasons hears under the stronger (internal/routing's Builder, offered
-// in [Reasons]' order), and a handle two changes of one record name hears
-// about each. The record's identity alone cannot be the notice's: the
-// committer folds up to [MaxPushesPerRecord] pushes from unrelated clients
-// into one record, so a seat mentioned by two of them, or the author of two
-// changes one landing merges, would hear about whichever routing came first
-// and nothing of the other — the busier the repository, the more news lost. So
-// a notice is keyed on the record, the change and the recipient ([NoticeID],
-// replicated 0133), and a wake's id is derived from the same three.
-// Routings that name one change twice — a push that opens a change and a
-// later push of the same record that merges it — share one builder, so a
-// handle hears about that change once.
+// two reasons hears under the stronger (internal/routing's Builder), and a
+// handle two of a record's changes name hears about each: the committer folds
+// up to [MaxPushesPerRecord] unrelated pushes into one record, and keying on
+// the record alone would lose all but the first. So a notice is keyed on record,
+// change and recipient ([NoticeID], replicated 0133), as a wake's id is;
+// routings naming one change twice (opened, then merged) share a builder.
 func Concerns(routings []*ChangeRouting) []Concern {
 	var (
 		order  []string
@@ -553,12 +472,10 @@ func Concerns(routings []*ChangeRouting) []Concern {
 	return out
 }
 
-// wakesASeat reports whether concerns tell a seat anything: some handle
-// hears ([Concern.Hears]) that is not a person's. THE ONE TEST of whether a
-// routing may wake a turn, which the feed relays a record by (feed.go) and
-// [routingFor] stamps whom a routing's actor acted for by, so the two never
-// disagree about a routing — the repository lead's fallback counting, as a
-// seat it may wake.
+// wakesASeat reports whether concerns tell a seat anything: some handle hears
+// ([Concern.Hears]) that is not a person's, the lead's fallback included. THE
+// ONE TEST the feed relays a record by (feed.go) and [routingFor] stamps
+// WorkingFor by, so the two never disagree about a routing.
 func wakesASeat(concerns []Concern) bool {
 	for _, c := range concerns {
 		if c.Hears() && !c.Change.Person(c.Handle) {
@@ -569,14 +486,12 @@ func wakesASeat(concerns []Concern) bool {
 }
 
 // NoticeID is one notice's identity among its recipient's: the record that
-// reached them ([RecordID]) and the change it told them about. It is what a
-// person's mark names and an inbox notice carries as its record_id, and what a
-// wake's id is derived from ([changefeed.WakeID] over it and the seat), so a
-// record that tells one handle about two changes — a batched push, a landing
-// of two entries — leaves two notices and two wakes, and a redelivery of the
-// record still collapses into the ones it made. Separated by "/", which no
-// change id holds (a change's id is a bare UUID: [OpenChangeID], [PushChangeID]), so
-// [splitNoticeID] reads it back at the last one.
+// reached them ([RecordID]) and the change it told them about. A person's mark
+// names it, an inbox notice carries it as record_id, and a wake's id derives
+// from it ([changefeed.WakeID]), so a record telling one handle about two
+// changes leaves two notices and two wakes, and a redelivery collapses into
+// them. "/" separates, which no change id (a bare UUID: [OpenChangeID],
+// [PushChangeID]) holds, so [splitNoticeID] splits at the last one.
 func NoticeID(recordID, changeID string) string { return recordID + "/" + changeID }
 
 // splitNoticeID is id's record and change ([NoticeID]), and false for an id
@@ -601,12 +516,10 @@ type changeNotices struct {
 }
 
 // noticesByChange is, for every change routings tell anybody about, how many
-// handles hear of it ([Concern.Hears]), in the order each change's first
-// hearer comes in [Concerns]. [Concerns] keeps a handle once a CHANGE, so a
-// handle two of a record's changes concern counts once under each. PURE OVER
-// THE ROUTINGS, as [Concerns] is: the count a change's notices column takes
-// from a record (code_changes.notices, replicated 0130) is the same on every
-// node, whatever the horizon let each write.
+// handles hear of it ([Concern.Hears]), in [Concerns]' order of first hearers;
+// a handle two changes concern counts under each. PURE OVER THE ROUTINGS, so
+// code_changes.notices (replicated 0130) takes the same count on every node,
+// whatever the horizon let each write.
 func noticesByChange(routings ...*ChangeRouting) []changeNotices {
 	var out []changeNotices
 	for _, c := range Concerns(routings) {
@@ -623,13 +536,12 @@ func noticesByChange(routings ...*ChangeRouting) []changeNotices {
 	return out
 }
 
-// noticeWrites is the rows a record's apply writes for whom routings tell —
-// a notice a (change, handle) ([Applier.writeNotices]) and, for each change
-// they tell anybody about, the one row its count is kept on — which every
-// decide counts with the record's rows. A push decide counts each entry's
-// routings apart, so a change two of a record's entries route is counted
-// twice and written once: an over-count, which only ever carries an entry to
-// the next record early.
+// noticeWrites is the rows a record's apply writes for whom routings tell (a
+// notice per (change, handle), [Applier.writeNotices], plus one count row per
+// change told), which every decide counts with the record's rows. A push
+// decide counts each entry's routings apart, so a change two entries route is
+// counted twice and written once: an over-count, which only carries an entry
+// to the next record early.
 func noticeWrites(routings ...*ChangeRouting) int {
 	by := noticesByChange(routings...)
 	n := len(by)
@@ -716,13 +628,12 @@ func pointersTo(routings []ChangeRouting) []*ChangeRouting {
 	return out
 }
 
-// pushRoutings is the routings a push record carries, one for each change its
-// entries merge or open, each pointing into the record's own entries. A
-// function of its own so the batch is a typed parameter where its routings
-// are handed to append: inline, a type switch's variable is a value
-// internal/sourcetree/decltype cannot type, and the code cache's writers gate
-// (TestNothingButSyncWritesACache) refuses one handed to a call it cannot type
-// either, append among them, since it cannot tell it from a gitproc.Cmd.
+// pushRoutings is the routings a push record carries, one per change its
+// entries merge or open, each pointing into the record's entries. A function
+// of its own so the batch is a typed parameter: internal/sourcetree/decltype
+// cannot type a type switch's variable, and the cache-writers gate
+// (TestNothingButSyncWritesACache) refuses one handed to append, which it
+// cannot tell from a gitproc.Cmd.
 func pushRoutings(b PushBatch) []*ChangeRouting {
 	var out []*ChangeRouting
 	for i := range b.Pushes {
@@ -751,9 +662,9 @@ func routingRoomBeside(payload any) (int, error) {
 }
 
 // keptRoutings is routings, in their order, as many as fit within room bytes
-// of their record and rows notice rows — this file's head: a record of
-// several changes lands whatever it would tell, and a change past the room is
-// told to nobody, as a push's leading entry keeps what fits ([routingRoom]).
+// and rows notice rows: the record lands whatever it would tell, and a change
+// past the room is told to nobody (this file's head), as a push's leading
+// entry keeps what fits ([routingRoom]).
 func keptRoutings(routings []ChangeRouting, room, rows int) ([]ChangeRouting, error) {
 	for len(routings) > 0 {
 		size, err := routingBytes(routings)
@@ -768,16 +679,11 @@ func keptRoutings(routings []ChangeRouting, room, rows int) ([]ChangeRouting, er
 	return nil, nil
 }
 
-// withRouting is payload with r stamped on it — every payload of a change's
-// records takes one ([RoutingsOf]), nil where the record concerns nobody.
-//
-// AND THE ASKER'S MENTIONS TAKEN OFF an open, an edit, a comment and a review:
-// what the asker named is the request, which [routingFor] holds to the
-// deciding chart into the routing's mentions — every one the chart holds,
-// each marked a person or a seat — and the routing's are the copy every
-// reader reads (the applier's participants and notices, the feed's wakes).
-// Recorded beside them they would be a second copy nobody reads, of a list
-// that may name handles the chart does not hold, on every node's log.
+// withRouting is payload with r stamped on it (nil where the record concerns
+// nobody), and an open's, an edit's, a comment's and a review's asker mentions
+// taken off: [routingFor] holds them to the deciding chart into the routing,
+// the copy every reader reads, so a copy beside it would be read by nobody and
+// may name handles the chart does not hold, on every node's log.
 func withRouting(payload any, r *ChangeRouting) any {
 	switch p := payload.(type) {
 	case ChangeOpen:
@@ -846,28 +752,23 @@ type concerning struct {
 	// change is the change's row as the record leaves it: its id, number,
 	// title, owner and work item.
 	change changeRow
-	// actor is who made the change — for a revision's facts and a failed
-	// check of a head, its pusher, for a landing, the pusher of the push the
-	// home found merging it, and for a queue's landing, the entry's enqueuer
-	// — "" for the home's other records, and actorKind what it is: a
-	// person's actor is named among the routing's persons, so a wake says a
-	// person wrote what it announces.
+	// actor is who made the change: the asker or a push entry's pusher; for a
+	// revision's facts and a failed head check its pusher, for a landing the
+	// merging push's pusher, for a queue's landing the entry's enqueuer; "" for
+	// the home's other records. actorKind names a person's actor among the persons, so a wake
+	// says a person wrote what it announces.
 	actor     string
 	actorKind PartyKind
-	// workingFor is whom actor made the change for — the carrier the asker's
-	// request stated, and for a record naming an earlier actor the carrier
-	// that actor's act left on its row ([revisionPusher], [landingPusher],
-	// the entry's for a queue's landing); nil for nobody and for the home's
-	// other records — which [routingFor] stamps beside an agent's actor
-	// alone, on a routing that wakes a seat.
+	// workingFor is whom actor made the change for: the asker's stated
+	// carrier, or for an earlier actor the one its act left on its row
+	// ([revisionPusher], [landingPusher], the entry's); [routingFor] stamps it
+	// beside an agent's actor alone, on a routing that wakes a seat.
 	workingFor *types.WorkingFor
-	// enqueuedFor is whom an entry's enqueue was made for, as its row keeps it
-	// (code_queue.working_for): what the merge queue's own records about that
-	// enqueue carry beside NO actor — its ejection and a close it could not
-	// make, the two that name none and set it — which [routingFor] stamps
-	// beside no actor alone, on a routing that wakes a seat (this file's head,
-	// "Whom the actor acted for"); nil on every other record's, so no other
-	// record of the engine's ever carries a carrier beside no actor.
+	// enqueuedFor is whom an entry's enqueue was made for
+	// (code_queue.working_for), set only by the merge queue's ejection and
+	// unclosed close, which name no actor; [routingFor] stamps it beside no
+	// actor alone, on a routing that wakes a seat, so no other engine record
+	// carries a carrier beside no actor.
 	enqueuedFor *types.WorkingFor
 	// roster is the deciding chart: what a mention is held to and what says
 	// whether a handle is a person's. Nil only for a record that names no
@@ -902,16 +803,14 @@ type concerning struct {
 	thread       string
 }
 
-// routingFor is the routing of one record about a change — nil for a record
-// whose op fills no role, which carries none (this file's head) — read in the deciding
-// snapshot tx — THE ONE FUNCTION every writer of a change's records stamps its
-// routing by, so the committer and the change writer never disagree about whom
-// a record concerns. Each role is read in its key's order and bounded
-// ([MaxRoutedParticipants]); whom an agent's actor made the change for, and
-// beside no actor whom an entry's enqueue was made for, is stamped where the
-// routing wakes a seat ([ChangeRouting.WorkingFor]); the result is held to
-// [MaxRoutingBytes], which those bounds keep it far inside — past it is a
-// writer's bug, never a refusal.
+// routingFor is the routing of one record about a change, read in the
+// deciding snapshot tx; nil where the op fills no role (this file's head). THE
+// ONE FUNCTION every writer of a change's records stamps by, so the committer
+// and the change writer never disagree. Each role is read in its key's order
+// and bounded ([MaxRoutedParticipants]); WorkingFor is stamped as
+// [ChangeRouting.WorkingFor] says. The result is held to [MaxRoutingBytes],
+// which those bounds keep it far inside: past it is a writer's bug, never a
+// refusal.
 func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, error) {
 	row := c.change
 	r := &ChangeRouting{ChangeID: row.id, ChangeRef: ChangeRef(c.repoName, row.number), RepoName: c.repoName,
@@ -943,9 +842,8 @@ func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, 
 		if c.roster == nil || slices.Contains(r.Mentions, m) || len(r.Mentions) >= MaxMentions {
 			continue
 		}
-		// HELD TO THE DECIDING CHART: a name nobody holds is no seat to
-		// tell, and a mention past the chart would be a notice nobody can
-		// receive.
+		// HELD TO THE DECIDING CHART: a name nobody holds would be a notice
+		// nobody can receive.
 		seat, ok := c.roster.Seat(m)
 		if !ok {
 			continue
@@ -1005,21 +903,16 @@ func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, 
 		r.ThreadParticipants = parties(said)
 	}
 	if len(Concerns([]*ChangeRouting{r})) == 0 {
-		// NOBODY TO TELL: no role the record's op routes by is filled, so the
-		// record carries no routing at all (this file's head) — never the
-		// change's context for a fan-out of none.
+		// NOBODY TO TELL: no routing at all (this file's head).
 		return nil, nil
 	}
 	for handle := range persons {
 		r.Persons = append(r.Persons, handle)
 	}
 	slices.Sort(r.Persons)
-	// AND WHOM ITS ACTOR MADE IT FOR, beside an agent's actor alone, or
-	// beside no actor whom the entry's enqueue a queue's own record names was
-	// made for — never beside a person's or a credential's — and only where
-	// the routing wakes a seat: read once the persons are named, since a
-	// handle the routing names as a person's wakes nobody, and before the
-	// routing is measured, which counts it.
+	// WorkingFor ([ChangeRouting.WorkingFor]): after the persons are named,
+	// since a person's handle wakes nobody, and before the routing is
+	// measured, which counts it.
 	carrier := c.workingFor
 	switch {
 	case c.actor == "":
@@ -1064,11 +957,9 @@ func partiesOf(ctx context.Context, tx *sql.Tx, query, changeID string) ([]Revie
 
 // threadParticipants is everybody who said something in thread on changeID —
 // its root's author first, then the authors of its newest comments, each
-// once, at most MaxRoutedParticipants. THE NEWEST, read back from the end of
-// the thread by its index, at most [threadParticipantRows] of them: a thread
-// that ran to thousands of comments is read no deeper than the people who
-// still talk in it, so a comment's decide costs what its audience is, never
-// what its thread's history is.
+// once, at most MaxRoutedParticipants. Only the newest [threadParticipantRows]
+// are read, back from the thread's end by its index, so a comment's decide
+// costs its audience, never its thread's history.
 func threadParticipants(ctx context.Context, tx *sql.Tx, changeID, thread string) ([]Reviewer, error) {
 	var out []Reviewer
 	add := func(p Reviewer) {
@@ -1156,33 +1047,18 @@ func revisionPusher(ctx context.Context, tx *sql.Tx, changeID string, n int64) (
 	return pusher, PartyKind(kind), storedCarrier(madeFor), nil
 }
 
-// landingPusher is who merged change changeID of repoID that its home found
-// landed (l), as a routing's actor names them: the principal of the push l
-// names, where that push's row holds an applied command setting l's target to
-// a commit and lies where a merge of the change's head revision can — at or
-// after the record of that revision, before which no move brought its head in
-// as this change's, and at or before moved, the record the target's row says
-// last moved it, past which nothing has — and whom they made that push for, as
-// its row keeps it (code_pushes.working_for, [storedCarrier]): nil for a push
-// made for nobody, a person's, and one applied before the carrier's build. ""
-// and nil where l names no push (its home's walk found none), where the push
-// is none of that, where its row is gone (past the history's horizon, or
-// purged), and where its principal names no party (a token bound to nobody,
-// the engine's own expiry), which made it for nobody else either.
+// landingPusher is who merged changeID of repoID, landed by its home (l), and
+// whom they pushed for (code_pushes.working_for, [storedCarrier]): the
+// principal of the push l names, held to the rows: an applied command setting
+// l's target to a commit, at or after the record of l's revision and at or
+// before moved, the target's last move. "" and nil where l names no such push,
+// its row is gone, or its principal names no party.
 //
-// WHY THE PUSH THE HOME NAMES, AND NEVER THE ONE AT THE TARGET'S POSITION:
-// the record that last moved the target holds whoever moved it LAST, and the
-// target may move again after the merge — somebody's push on top, in the same
-// group-commit record (up to [MaxPushesPerRecord] pushes share one) or in a
-// later one landed before the home's pass read it, a race whose odds grow
-// with how many seats push to the target. That pusher merged nothing: the
-// head was already in the target before their push. The push that merged is
-// the move after which the target held the head through to the tip, and
-// telling it takes git (one commit holding another), which the home runs and
-// a committer's decide never does; so the home walks the target's moves and
-// names it, and the decide holds the name to the rows — a seek of the
-// revisions' key and one of the pushes' — as it holds the tip the home names
-// to the target's row.
+// WHY THE PUSH THE HOME NAMES, never the target's last mover: the target may
+// move again after the merge (a push on top, in the same group-commit record
+// or a later one), and that pusher merged nothing. Telling which move merged
+// takes git (one commit holding another), which the home runs and a decide
+// never does.
 func landingPusher(ctx context.Context, tx *sql.Tx, repoID, changeID string, l ChangeLanded, moved int64) (string,
 	PartyKind, *types.WorkingFor, error) {
 
@@ -1241,13 +1117,11 @@ const (
 	// facts, and whom it acted for ([revisionPusher]) — one seek of the
 	// revisions' key, the carrier read off the row the seek finds.
 	headPusherSQL = `SELECT pusher, pusher_kind, working_for FROM code_revisions WHERE change_id = ? AND n = ?`
-	// revisionPositionSQL is where a change's revision was pushed — the
-	// oldest record a push that merged it can be in ([landingPusher]) — one
-	// seek of the revisions' key; landingPushSQL is the push a landing names
-	// as its merger, with its commands and whom it was made for, one seek of
-	// the pushes' key — held to the repository and the position named, so a
-	// push of another record or another repository is no push of this
-	// landing's.
+	// revisionPositionSQL is where a change's revision was pushed, the oldest
+	// record a push merging it can be in ([landingPusher]); landingPushSQL is
+	// the push a landing names as its merger, held to the repository and the
+	// position named so another record's or repository's push is not it. Each
+	// one seek of its table's key.
 	revisionPositionSQL = `SELECT position FROM code_revisions WHERE change_id = ? AND n = ?`
 	landingPushSQL      = `SELECT actor_kind, actor_seat, commands, working_for FROM code_pushes
 		WHERE push_id = ? AND repo_id = ? AND position = ?`

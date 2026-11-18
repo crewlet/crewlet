@@ -53,7 +53,7 @@ func (e *estate) changeCountsMatchRows() {
 	}
 }
 
-// changeCountsDrift names the first difference between the counts and the rows, "" for none.
+// changeCountsDrift is [changeCountsDrift] read from the estate.
 func (e *estate) changeCountsDrift() string {
 	e.t.Helper()
 	var drift string

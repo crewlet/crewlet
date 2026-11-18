@@ -13,9 +13,8 @@ import (
 )
 
 // THE PACK REFERENCES ARE READ THROUGH THE CODE ESTATE, as the collector, its
-// audit and the backup read them — through the declaration and the statements
-// it builds, never a query of this package's — from a push's pack to its
-// purge.
+// audit and the backup read them (the declaration's own statements, never a
+// query of this package's), from a push's pack to its purge.
 func TestThePackReferencesAreReadThroughTheCodeEstate(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -61,9 +60,8 @@ func TestThePackReferencesAreReadThroughTheCodeEstate(t *testing.T) {
 			objstore.JoinOwner(id, push.Pack.PackID, "pack"))
 	}
 
-	// THE PURGE TAKES THE REFERENCE WITH IT, and the collector then deletes
-	// the object a day after it was written, as it deletes anything no row
-	// names.
+	// THE PURGE TAKES THE REFERENCE WITH IT, so the collector deletes the
+	// object as it deletes anything no row names.
 	if _, err := n.store.DeleteRepo(t.Context(), n.activate(t2), id); err != nil {
 		t.Fatalf("DeleteRepo: %v", err)
 	}
@@ -137,10 +135,9 @@ func TestARecordNamesThePackRowsItsApplyWrites(t *testing.T) {
 		t.Errorf("a sweep's references = %+v, %v; want none", got, err)
 	}
 
-	// A COMPACTION writes a row for each output, which names its bundle, and
-	// removes its inputs' rows, which then name nothing: a backup's walk
-	// carries every output a compaction made live and reads the inputs as
-	// gone from code_packs.
+	// A COMPACTION writes a row naming each output's bundle and removes its
+	// inputs' rows: a backup's walk carries every output and reads the inputs
+	// as gone from code_packs.
 	cid := statelog.NewOpID(harnessAt, "")
 	outputs := []gitlet.PackRef{compactOutput(cid, 0, 2, harnessAt), compactOutput(cid, 1, 1, harnessAt)}
 	compaction, err := json.Marshal(gitlet.Compaction{RepoID: "repo-a", CompactionID: cid, Node: "node-a",
@@ -208,9 +205,8 @@ func TestARecordNamesThePackRowsItsApplyWrites(t *testing.T) {
 	if _, err := records(future); !errors.Is(err, objstore.ErrRecordUnreadable) {
 		t.Fatalf("a newer push = %v, want ErrRecordUnreadable", err)
 	}
-	// A KIND THIS BUILD HAS NEVER HEARD OF, scoped to the name claims alone:
-	// still unreadable, since what a kind it does not know writes is
-	// unknowable here.
+	// A KIND THIS BUILD HAS NEVER HEARD OF, even scoped to name claims alone,
+	// is unreadable: what it writes is unknowable here.
 	unknown := mustEncode(t, gitlet.MutationRecord{RecordEnvelope: gitlet.RecordEnvelope{
 		V: gitlet.RecordVersion + 1, OpID: "op-3", Subject: gitlet.Subject{Kind: "mirror", ID: "x"},
 		Op: "sync", Gen: 1, Scope: gitlet.Scope{gitlet.NamePath("abc")},
@@ -230,12 +226,11 @@ func TestARecordNamesThePackRowsItsApplyWrites(t *testing.T) {
 }
 
 // AN EXPUNGE RECORD NAMES THE PACKS ITS APPLY WRITES: a begin names a row for
-// each pack it keeps and each it leaves dropping — a dropping pack is a row of
-// code_packs that names its object as a live one does, until its commit — and
-// tells each input's row removed; a commit names its rescue's rows and tells
-// its dropping packs' removed; and a request writes no pack row at all. So a
-// backup taken while an expunge is open carries the dropping packs a restore's
-// rows name, and one taken after its commit reads them as gone.
+// each pack it keeps and each it leaves dropping (a code_packs row naming its
+// object until the commit) and tells its inputs' rows removed; a commit names
+// its rescue's rows and tells its dropping packs' removed; a request writes no
+// pack row. So a backup mid-expunge carries the dropping packs a restore's
+// rows name, and one after the commit reads them as gone.
 //
 // Mutation: answer a begin's kept packs alone, and a backup taken mid-expunge
 // misses the dropping packs its restore's rows name.

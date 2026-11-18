@@ -156,27 +156,18 @@ func TestAQueuedChangesReadNamesItsEntry(t *testing.T) {
 	}
 }
 
-// AN ENQUEUE IS DECIDED BY THE GATE: a change that meets no term of main's
-// gate yet — no approval, its required check never run — is refused
-// gate_unmet, naming every term it misses and whom each waits on, and nothing
-// is appended; the same change once approved and checked joins the queue,
-// first, its readiness then saying the queue lands it — computing, waiting on
-// nobody — and a read of the queue listing it with its change's number. An
-// enqueue formed against another target is refused stale, and one of a
-// change into a branch whose gate requires no check no_queue. The enqueuer
-// is a person, whose enqueue the chart judges all the same: it is what says
-// the seat plat-lead's approval counts. And an attempt of the required check
-// that passed on the change's head CHECKED FOR ANOTHER BRANCH counts for
-// nothing: it ran that branch's checks file, and the gate reads the attempts
-// of the change's own target alone.
+// AN ENQUEUE IS DECIDED BY THE GATE: a change meeting no term of main's gate
+// is refused gate_unmet, naming each missed term and whom it waits on, and
+// appends nothing; approved and checked, it joins the queue first, its
+// readiness computing and waiting on nobody, and the queue read lists it by
+// number. An enqueue against another target is refused stale, one into a
+// branch whose gate needs no check no_queue. The chart judges a person's
+// enqueue too (it is what counts plat-lead's approval), and a pass CHECKED FOR
+// ANOTHER BRANCH counts nothing: the gate reads its own target's attempts.
 //
-// Mutations: decide an enqueue without its gate — the first enqueue applies,
-// red; judge the chart for a seat's enqueue alone (QueueProposal.JudgesChart)
-// — the person's enqueue is decided with no chart, plat-lead's approval
-// counts for nothing, and the second is refused gate_unmet, red; read the
-// gate's attempts by (repository, commit, check), whatever their target — the
-// first refusal names no check, since release's passed unit is read for main,
-// red.
+// Mutations, each red: no gate (the first enqueue applies); chart for a seat
+// alone, QueueProposal.JudgesChart (the second is refused gate_unmet); read
+// attempts whatever their target (the first refusal names no check).
 func TestAnEnqueueIsDecidedByTheGate(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -363,18 +354,17 @@ func TestAClosedChangeLeavesTheQueue(t *testing.T) {
 	})
 }
 
-// A SEAT'S DEQUEUE IS HELD TO WHOEVER ITS TURN WORKS FOR (QueueProposal.
-// Ceiling, M3-decisions U40 (a)): cto, who maintains the repository and so
-// may take dev's entry out itself, does not for nobody — a stranger, or a
-// person who may not act — nor for reader, a colleague who is neither the
-// entry's enqueuer, its change's owner nor a maintainer, each refused
-// not_permitted in words saying whom the work is for, appending nothing; and
-// dev takes its own entry out for nobody, since its own work is steered by
+// A SEAT'S DEQUEUE IS HELD TO WHOEVER ITS TURN WORKS FOR
+// (QueueProposal.Ceiling, M3-decisions U40 (a)): cto, a maintainer who may
+// take dev's entry out itself, does not for nobody (a stranger, or a person
+// who may not act) nor for reader, neither enqueuer, owner nor maintainer:
+// each is refused not_permitted, saying whom the work is for, appending
+// nothing. dev takes its own entry out for nobody, its work steered by
 // whoever woke it. A ceiling rides a seat's dequeue alone.
 //
-// Mutations: decide a dequeue without its ceiling — cto's dequeues for nobody
-// and reader apply, red; refuse the seat's own entry under a ceiling — dev's
-// dequeue is refused, red.
+// Mutations: decide a dequeue without its ceiling (cto's dequeues for nobody
+// and reader apply, red); refuse the seat's own entry under a ceiling (dev's
+// dequeue is refused, red).
 func TestASeatsDequeueIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

@@ -12,51 +12,32 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// THE BRANCH A SEAT'S EXECUTOR WORKS ON when its code_checkout call names
-// none: seats/<handle>/<the work item's key, spelled for a ref>, inside the
-// seat's own namespace ([SeatNamespace]) — so every run on one work item works
-// on ONE branch, and a second run on the item continues the first's pushed
-// work — or seats/<handle>/run-<12 hex> for a turn charged to no work item.
-//
-// The key is the work ITEM's (types.WorkItem.Key: "ENG-412", "acme/api#88" —
-// the label its tracker shows), never turnctx.Turn.WorkKey, which is the
-// dedupe key over a turn's trigger events: a digest no person reads, different
-// for two turns on one item.
+// THE BRANCH A SEAT'S EXECUTOR WORKS ON ([SeatBranch]) is one per work item,
+// so a second run on the item continues the first's pushed work. The key is
+// the work ITEM's (types.WorkItem.Key, the label its tracker shows), never
+// turnctx.Turn.WorkKey: that dedupes trigger events and differs for two turns
+// on one item.
 
-// seatBranchDigestHex is how many hex digits of a key's SHA-256 a respelled
-// key carries: 48 bits, so two keys that spell alike are two branches unless
-// their digests collide in that prefix, and the suffix costs 13 bytes of a
-// ref (the digits and the '-' before them).
+// seatBranchDigestHex is the hex digits of SHA-256 a respelled key carries:
+// 48 bits, at 13 bytes of the ref with its '-'.
 const seatBranchDigestHex = 12
 
-// seatBranchRunHex is how many hex digits of the run id the run form carries:
-// the LAST 12 of a UUIDv7, its random tail. The first digits are its
-// millisecond clock, which two runs a minute apart share.
+// seatBranchRunHex is the run form's digits: the LAST 12 of a UUIDv7, its
+// random tail, since the leading millisecond clock is shared by nearby runs.
 const seatBranchRunHex = 12
 
-// SeatBranch is the branch a seat's executor works on when its code_checkout
-// call names none: seats/<handle>/<workKey, spelled for a ref> where the turn
-// is charged to a work item with a key, else seats/<handle>/run-<the last 12
-// hex digits of runID>. Always a branch [gitref.ValidBranch] accepts, inside
-// [SeatNamespace](handle).
+// SeatBranch is the branch a seat's executor works on when code_checkout names
+// none: seats/<handle>/<workKey spelled for a ref>, else seats/<handle>/run-<the
+// last 12 hex digits of runID>; always [gitref.ValidBranch] in [SeatNamespace].
+// A spelling that changed the key, is cut (before the digest, to the room it
+// leaves in [gitref.MaxRefNameBytes]) or is [digestShaped] takes '-' and
+// [keyDigest]: "acme/api#88" and "acme-api-88" stay two branches. A key that
+// spells to nothing takes the run form. Case is kept: tracker keys are unique
+// as written, and folding would merge two items on every host.
 //
-// THE KEY IS SPELLED FOR A REF: every byte outside [A-Za-z0-9_-] becomes '-',
-// runs of '-' collapse to one, and '-' is trimmed from both ends. Where that
-// changed the key at all — or where the unchanged spelling already ends in '-'
-// and 12 lowercase hex digits, the shape a digest takes, so no unchanged key
-// reads as a respelled one — '-' and the first 12 hex digits of SHA-256(key)
-// are appended: two keys that spell alike ("acme/api#88", "acme-api-88") are
-// two branches, injective up to a 48-bit SHA-256 prefix collision. A spelling
-// past what the 255-byte ref leaves ([gitref.MaxRefNameBytes], less
-// refs/heads/seats/, the handle and its '/') is cut, before the digest, at the
-// room the digest leaves, and takes the digest because the cut changed it. A
-// key that spells to nothing ("###") takes the run form. CASE IS KEPT: a
-// tracker's keys are unique as written, and folding them would make two items
-// one branch on every host.
-//
-// ErrInvalid for a handle [org.ValidHandle] refuses, naming it, and for a run
-// id that is no UUID where the run form is needed. A seat's handle is at most
-// 64 bytes, so the run form always fits and a key keeps at least 173 bytes.
+// ErrInvalid for a handle [org.ValidHandle] refuses, and for a non-UUID run id
+// where the run form is needed. A handle is at most 64 bytes, so the run form
+// always fits and a key keeps at least 173 bytes.
 func SeatBranch(handle, workKey, runID string) (string, error) {
 	if !org.ValidHandle(handle) {
 		return "", fmt.Errorf("%w: seat handle %q is not a seat's handle", ErrInvalid, handle)
@@ -79,9 +60,8 @@ func SeatBranch(handle, workKey, runID string) (string, error) {
 	return namespace + "run-" + canonical[len(canonical)-seatBranchRunHex:], nil
 }
 
-// spellForRef is key with every byte outside [A-Za-z0-9_-] written '-', runs
-// of '-' collapsed to one, and '-' trimmed from both ends: a component every
-// ref grammar takes, since it holds no '.', '/', control byte or space.
+// spellForRef writes every byte outside [A-Za-z0-9_-] as '-', collapses runs
+// of '-' and trims them from both ends: a component every ref grammar takes.
 func spellForRef(key string) string {
 	var b strings.Builder
 	b.Grow(len(key))
@@ -107,7 +87,8 @@ func keyByte(c byte) bool {
 }
 
 // digestShaped reports a spelling that ends as a respelled key's does: '-' and
-// [seatBranchDigestHex] lowercase hex digits.
+// [seatBranchDigestHex] lowercase hex digits. Such a key takes the digest even
+// unchanged, so no kept key reads as a respelled one.
 func digestShaped(s string) bool {
 	if len(s) < seatBranchDigestHex+1 || s[len(s)-seatBranchDigestHex-1] != '-' {
 		return false

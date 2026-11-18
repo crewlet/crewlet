@@ -12,16 +12,14 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// chartUnit is one unit of a test chart: its id and name (a reference matches
-// either, folded, an id before a name — the chart's own durable lookup), the
-// key of the unit above it, and its own lead ("" inherits the nearest
-// ancestor's).
+// chartUnit is one unit of a test chart: its id and name (a reference matches either, folded, an
+// id before a name, as the chart's durable lookup does), its parent's key, and its lead ("" inherits
+// the nearest ancestor's).
 type chartUnit struct{ id, name, parent, lead string }
 
-// chart is a gitlet.Roster over a hand-built organization, keeping the roster's
-// contract — every unit argument a REFERENCE, resolved as org.Index.UnitByRef
-// resolves one — so a grant that compared references as strings instead of
-// asking the roster reads a unit spelled two ways as two units, and fails.
+// chart is a gitlet.Roster over a hand-built organization that takes every unit argument as a
+// REFERENCE, resolved as org.Index.UnitByRef resolves one, so a grant comparing references as
+// strings instead of asking the roster reads a unit spelled two ways as two units, and fails.
 type chart struct {
 	units []chartUnit
 	seats map[string]gitlet.RosterSeat
@@ -107,8 +105,8 @@ func (c chart) Within(unit, ancestor string) bool {
 //	    Infra (no id, no lead of its own: plat-lead leads it)
 //	Sales (id sales, lead vp-sales)
 //
-// Every seat's Unit is its unit's key in this epoch; the repositories below
-// name their owners as they were written, by name where a unit has an id.
+// Every seat's Unit is its unit's key; the repositories below name their owners as written, by
+// name where a unit has an id.
 func testChart() chart {
 	seat := func(handle string, tier gitlet.Tier, unit string) gitlet.RosterSeat {
 		return gitlet.RosterSeat{Handle: handle, Tier: tier, Unit: unit}
@@ -137,8 +135,7 @@ func agent(handle string) gitlet.Principal {
 	return gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: handle}
 }
 
-// ownedBy is a `visibility: company` repository named name, owned by ref of
-// kind.
+// ownedBy is a `visibility: company` repository named name, owned by ref of kind.
 func ownedBy(name string, kind gitlet.OwnerKind, ref string) gitlet.RepoRef {
 	return gitlet.RepoRef{ID: "id-" + name, Name: name, Owner: gitlet.Owner{Kind: kind, Ref: ref},
 		Visibility: gitlet.VisibilityCompany}
@@ -150,21 +147,17 @@ func unitOnly(repo gitlet.RepoRef) gitlet.RepoRef {
 	return repo
 }
 
-// A GRANT FOLLOWS THE CHART: a seat's relation to a repository is the first of
-// §2.3's rows that holds — the owning unit's effective lead maintains, its
-// subtree writes, the lead chain above it reads, the owning seat maintains and
-// its unit's leads read, any other seat reads a `visibility: company`
-// repository and nothing of a `visibility: unit` one — and what it may do is
-// the minimum of that and its tier. Each unit is named as the repository wrote
-// it, so a grant that compared the owner's reference with a seat's unit as
-// strings would lose Platform's members their write (the unit is "Platform"
-// on the repository and "plat" on the seat).
+// A GRANT FOLLOWS THE CHART: a seat's relation is the first of §2.3's rows that holds (the owning
+// unit's effective lead maintains, its subtree writes, the lead chain above reads, the owning seat
+// maintains and its unit's leads read, any other seat reads a `visibility: company` repository and
+// nothing of a `visibility: unit` one), and its access is the minimum of that and its tier. Units
+// are named as the repository wrote them, so a grant comparing the owner's reference with a seat's
+// unit as strings loses Platform's members their write ("Platform" on the repository, "plat" on
+// the seat).
 //
-// Mutations: Within replaced by a string compare of the two references → the
-// Platform rows of dev and unset read; a seat's access left at its relation
-// (no tier cap) → plat-lead maintains Platform; a human seat granted as a
-// seat → founder reads; the last row ignoring the visibility → vp-sales and
-// root-bot read the unit repositories.
+// Mutations: Within replaced by a string compare → dev's and unset's Platform rows read; no tier
+// cap → plat-lead maintains Platform; a human seat granted as a seat → founder reads; the last row
+// ignoring the visibility → vp-sales and root-bot read the unit repositories.
 func TestGrantsFollowTheChart(t *testing.T) {
 	t.Parallel()
 	r := testChart()
@@ -186,8 +179,8 @@ func TestGrantsFollowTheChart(t *testing.T) {
 		{platform, "cto", gitlet.AccessRead, gitlet.AccessRead},
 		{platform, "vp-sales", gitlet.AccessRead, gitlet.AccessRead},
 		{platform, "root-bot", gitlet.AccessRead, gitlet.AccessRead},
-		// Infra has no lead of its own: Platform's lead is its effective
-		// lead, and the chain above is the same seat once, then the cto.
+		// Infra has no lead of its own: Platform's is its effective lead, and the chain above is
+		// that seat once, then the cto.
 		{infra, "plat-lead", gitlet.AccessMaintain, gitlet.AccessReview},
 		{infra, "dev", gitlet.AccessWrite, gitlet.AccessWrite},
 		{infra, "unset", gitlet.AccessRead, gitlet.AccessRead},
@@ -203,9 +196,7 @@ func TestGrantsFollowTheChart(t *testing.T) {
 		{orphan, "cto", gitlet.AccessRead, gitlet.AccessRead},
 		{orphan, "dev", gitlet.AccessRead, gitlet.AccessRead},
 
-		// VISIBILITY: UNIT keeps every row above the last and takes the
-		// last away: the owning unit's lead, its subtree and the lead chain
-		// above it read as before, and every other seat reads nothing.
+		// VISIBILITY: UNIT takes away only the last row: every other seat reads nothing.
 		{unitOnly(platform), "plat-lead", gitlet.AccessMaintain, gitlet.AccessReview},
 		{unitOnly(platform), "dev", gitlet.AccessWrite, gitlet.AccessWrite},
 		{unitOnly(platform), "reader", gitlet.AccessWrite, gitlet.AccessRead},
@@ -213,15 +204,13 @@ func TestGrantsFollowTheChart(t *testing.T) {
 		{unitOnly(platform), "vp-sales", gitlet.AccessNone, gitlet.AccessNone},
 		{unitOnly(platform), "root-bot", gitlet.AccessNone, gitlet.AccessNone},
 		{unitOnly(infra), "unset", gitlet.AccessNone, gitlet.AccessNone},
-		// A seat's own: the seat and the leads above its unit, and not the
-		// seats beside it in that unit.
+		// A seat's own: the seat and its unit's leads, not the seats beside it.
 		{unitOnly(notes), "dev", gitlet.AccessMaintain, gitlet.AccessMaintain},
 		{unitOnly(notes), "plat-lead", gitlet.AccessRead, gitlet.AccessRead},
 		{unitOnly(notes), "cto", gitlet.AccessRead, gitlet.AccessRead},
 		{unitOnly(notes), "reader", gitlet.AccessNone, gitlet.AccessNone},
 		{unitOnly(rootOwned), "cto", gitlet.AccessNone, gitlet.AccessNone},
-		// A unit the chart no longer holds, at unit visibility, is read by
-		// no seat at all — persons only.
+		// A unit the chart no longer holds, at unit visibility, is read by persons only.
 		{unitOnly(orphan), "cto", gitlet.AccessNone, gitlet.AccessNone},
 	} {
 		g := gitlet.GrantOf(agent(tc.seat), tc.repo, r)
@@ -236,8 +225,8 @@ func TestGrantsFollowTheChart(t *testing.T) {
 			t.Errorf("%s on %s: MayRead %v at access %s", tc.seat, tc.repo.Name, g.MayRead(), g.Access)
 		}
 		if tc.access == gitlet.AccessNone {
-			// TOLD WHY, AND WHO DOES READ IT: the visibility and the owner,
-			// so the seat — or a person reading its turn — knows whom to ask.
+			// TOLD WHY, AND WHO DOES READ IT: the visibility and the owner, so the seat (or a
+			// person reading its turn) knows whom to ask.
 			refusal := g.ReadRefusal()
 			if !strings.Contains(refusal, "visibility: unit") || !strings.Contains(refusal, tc.repo.Owner.Ref) ||
 				!strings.Contains(refusal, strconv.Quote(tc.repo.Name)) {
@@ -251,9 +240,8 @@ func TestGrantsFollowTheChart(t *testing.T) {
 		}
 	}
 
-	// NOBODY'S STANDING without a seat of the chart behind it: a human seat
-	// asked as an agent, a handle the chart lacks, and any seat on a node
-	// with no chart. Each is none, and its read refusal says why.
+	// NOBODY'S STANDING without a seat of the chart behind it: a human seat asked as an agent, a
+	// handle the chart lacks, any seat on a node with no chart. Each is none, and says why.
 	for _, tc := range []struct {
 		g   gitlet.Grant
 		why string
@@ -272,10 +260,9 @@ func TestGrantsFollowTheChart(t *testing.T) {
 		}
 	}
 
-	// A PERSON'S STANDING READS NO CHART, AND NO VISIBILITY: a bound
-	// credential maintains, one bound to nobody reads — with a roster and
-	// without one, on a company repository and on a unit one (ADR-0088:
-	// visibility narrows seats only).
+	// A PERSON'S STANDING READS NO CHART, AND NO VISIBILITY: a bound credential maintains, one bound
+	// to nobody reads, with or without a roster, at either visibility (ADR-0088: visibility narrows
+	// seats only).
 	for _, roster := range []gitlet.Roster{r, nil} {
 		for _, repo := range []gitlet.RepoRef{orphan, unitOnly(orphan), unitOnly(platform)} {
 			bound := gitlet.GrantOf(gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "tok",
@@ -289,15 +276,13 @@ func TestGrantsFollowTheChart(t *testing.T) {
 	}
 }
 
-// A VISIBILITY THIS BUILD DOES NOT KNOW NARROWS, NEVER WIDENS: the domain
-// records none it does not know, so such a row is a newer build's, and reading
-// it as `company` would guess that build meant every seat. The rows above the
-// last still hold — the owning unit's members and leads read as before — and
-// the seat it shuts out is told the visibility the row carries, never `unit`
-// as though the repository said so.
+// A VISIBILITY THIS BUILD DOES NOT KNOW NARROWS, NEVER WIDENS: the domain records none it does not
+// know, so such a row is a newer build's, and reading it as `company` would guess that build meant
+// every seat. The rows above the last still hold, and the seat shut out is told the row's own
+// visibility, never `unit`.
 //
-// Mutations: the last row reading only `unit` as narrow (any other value read)
-// → vp-sales reads; the refusal spelling `unit` → the value is not named.
+// Mutations: only `unit` read as narrow → vp-sales reads; the refusal spelling `unit` → the value
+// is not named.
 func TestAVisibilityThisBuildDoesNotKnowNarrows(t *testing.T) {
 	t.Parallel()
 	r := testChart()
@@ -320,8 +305,8 @@ func TestAVisibilityThisBuildDoesNotKnowNarrows(t *testing.T) {
 	}
 }
 
-// A ROSTER IS NEVER ASKED ABOUT A PERSON: ADR-0085's rules need no chart, and
-// a person's push must not depend on a node having read one.
+// A ROSTER IS NEVER ASKED ABOUT A PERSON: ADR-0085's rules need no chart, and a person's push must
+// not depend on a node having read one.
 func TestAPersonsGrantAsksNoRoster(t *testing.T) {
 	t.Parallel()
 	asked := askedRoster{}
@@ -332,22 +317,17 @@ func TestAPersonsGrantAsksNoRoster(t *testing.T) {
 	}
 }
 
-// A READ MADE FOR ANOTHER SEAT IS HELD TO BOTH GRANTS — the requester ceiling
-// on a repository's grant, judged as one: the asker's own first, refused about
-// ITSELF (ErrNotPermitted) where it reads nothing, which is the remedy it can
-// act on; then the seat it reads for, ErrAboveCeiling where that seat reads
-// nothing of the repository, naming why — never ErrNotPermitted, which would
-// be false of an asker that reads it. A read made for nobody is the asker's
-// alone, and what a judged read carries is always the ASKER's grant. The
-// ceiling is a seat's grant judged as the seat would be judged asking itself,
-// so a seat the chart lacks bounds the read to nothing, and so does a human
-// seat — a person is never asked as a seat, which is why no caller sends one:
-// the closed end of a value that should not arrive.
+// A READ MADE FOR ANOTHER SEAT IS HELD TO BOTH GRANTS, the asker's first: an asker that reads
+// nothing is refused about ITSELF (ErrNotPermitted), the remedy it can act on; then a seat read for
+// that reads nothing gives ErrAboveCeiling naming why, never ErrNotPermitted, which is false of an
+// asker that reads. A read for nobody is the asker's alone, and a judged read always carries the
+// ASKER's grant. The ceiling is judged as the seat asking itself, so a seat the chart lacks bounds
+// the read to nothing, and so does a human seat (a person is never asked as a seat, so no caller
+// sends one: the closed end of a value that should not arrive).
 //
-// Mutations: JudgeRead ignoring its ceiling → dev reads plat-private for
-// vp-sales; the ceiling judged first → vp-sales's read for root-bot is told
-// about root-bot rather than itself; the ceiling's grant carried as the
-// answer → dev's read for cto reads at cto's level.
+// Mutations: JudgeRead ignoring its ceiling → dev reads plat-private for vp-sales; the ceiling
+// judged first → vp-sales's read for root-bot is told about root-bot; the ceiling's grant carried
+// → dev's read for cto reads at cto's level.
 func TestAReadForAnotherSeatIsHeldToBothGrants(t *testing.T) {
 	t.Parallel()
 	r := testChart()
@@ -395,23 +375,18 @@ func TestAReadForAnotherSeatIsHeldToBothGrants(t *testing.T) {
 	}
 }
 
-// A GRANT UNDER A COLLEAGUE'S CEILING IS HELD TO BOTH (M3-decisions U40 (a),
-// a coding box working for the seat whose ask woke its turn): every command
-// of RefRule's table passes exactly where the seat's own grant passes it AND —
-// outside the seat's own namespace, which is its own work — the colleague's
-// grant passes the very same command; a read passes where both read; and
-// whether any push could pass is the seat's own answer, since its namespace
-// is never the ceiling's to refuse. Exhaustively, at every tier and relation
-// of both seats, for a seat of a short handle and of a handle four refs long:
-// every refusal the ceiling adds says the same for both and fits what a
-// receiver carries into a proposal. A seat that reads a repository for a
-// colleague who reads nothing of it is told about the colleague.
+// A GRANT UNDER A COLLEAGUE'S CEILING IS HELD TO BOTH (M3-decisions U40 (a): a coding box working
+// for the seat whose ask woke its turn). A command of RefRule's table passes where the seat's own
+// grant passes it AND, outside the seat's own namespace, the colleague's does too; a read passes
+// where both read; MayPush is the seat's own answer, since its namespace is never the ceiling's to
+// refuse. Exhaustive over both seats' tiers and relations, for a short handle and one four refs
+// long: every refusal the ceiling adds reads the same for both and fits MaxDetailBytes. A seat
+// reading for a colleague who reads nothing of the repository is told about the colleague.
 //
-// Mutations: Under ignored by RefRule → the rows the colleague refuses pass,
-// red; the namespace not exempted → the seat's own rows under a read-only
-// colleague refused, red; MayRead ignoring the ceiling → the colleague who
-// reads nothing lets the seat read, red; the colleague's handle in the
-// sentence → the long handle's sentences differ and pass the bound, red.
+// Mutations: Under ignored by RefRule → rows the colleague refuses pass; the namespace not exempted
+// → the seat's own rows under a read-only colleague refused; MayRead ignoring the ceiling → the
+// seat reads for a colleague who reads nothing; the colleague's handle in the sentence → the long
+// handle's sentences differ and pass the bound.
 func TestAGrantUnderAColleaguesCeilingIsHeldToBoth(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("a", 4*gitlet.MaxRefNameBytes)
@@ -473,31 +448,25 @@ func TestAGrantUnderAColleaguesCeilingIsHeldToBoth(t *testing.T) {
 		t.Errorf("dev reading platform-private for vp-sales: MayRead %v, told %q", shut.MayRead(),
 			shut.ReadRefusal())
 	}
-	// A CEILING NEVER WIDENS: a read-only seat working for a colleague who
-	// writes still creates no branch.
+	// A CEILING NEVER WIDENS: a read-only seat working for a colleague who writes creates no branch.
 	if reason, _ := gitlet.GrantOf(agent("reader"), private, r).Under(gitlet.GrantOf(agent("dev"), private,
 		r)).RefRule(commands["create a branch"]); reason == "" {
 		t.Error("a read-only seat working for a colleague who writes created a branch")
 	}
 }
 
-// A SEAT'S OWN WORK IS STEERED BY WHOEVER WOKE ITS TURN, and nothing else is
-// (gitlet.WriteCeiling, M3-decisions U40 (a)): dev — full_access in Infra —
-// working for vp-sales, who only reads a company repository, or for nobody (a
-// stranger, a person who may not act), moves a branch under its own namespace
-// and any branch of a repository its seat owns, its scratch repository and a
-// project handed to it, and no other branch of Platform's repository it writes
-// for itself; the moment that project is handed to a unit it is steered no
-// more. Nobody's ceiling reads nothing, and its refusal says the work is for
-// somebody who may change nothing. A colleague's ceiling is that colleague's
-// own grant (WriteCeiling.Grant), and a ceiling no build writes — nobody's
-// naming a seat, a seat's naming the writer itself or no handle, a person's
-// write carrying any — is refused on the write.
+// A SEAT'S OWN WORK IS STEERED BY WHOEVER WOKE ITS TURN, and nothing else is (gitlet.WriteCeiling,
+// M3-decisions U40 (a)): dev, full_access in Infra, working for vp-sales (who only reads a company
+// repository) or for nobody (a stranger, a person who may not act), moves any branch under its own
+// namespace or of a repository its seat owns (its scratch, a project handed to it), and no other
+// branch of Platform's; once that project is handed to a unit it is steered no more. Nobody's
+// ceiling reads nothing and says the work is for somebody who may change nothing. A colleague's
+// ceiling is its own grant (WriteCeiling.Grant); a ceiling no build writes (nobody's naming a seat,
+// a seat's naming the writer or no handle, any on a person's write) is refused on the write.
 //
-// Mutations: OwnWork answering only the namespace — the scratch repository's
-// and the seat-owned project's main are refused, red; OwnWork answering true
-// for every repository — Platform's main lands for both, red; WriteCeiling.Grant
-// granting nobody what GrantOf grants a seat — nobody's main lands, red.
+// Mutations: OwnWork answering only the namespace → the scratch's and seat-owned project's main
+// refused; OwnWork true for every repository → Platform's main lands; WriteCeiling.Grant granting
+// nobody what GrantOf grants a seat → nobody's main lands.
 func TestASeatsOwnWorkIsSteeredByWhoeverWokeItsTurn(t *testing.T) {
 	t.Parallel()
 	r := testChart()
@@ -616,9 +585,8 @@ var (
 	}
 )
 
-// need is RefRule's table written out plainly, row by row (§2.4): what a
-// command needs of a principal that is not a seat in its own namespace, or
-// -1 for a ref nobody pushes.
+// need is RefRule's table written out plainly (§2.4): what a command needs of a principal that is
+// not a seat in its own namespace, or -1 for a ref nobody pushes.
 func need(c gitlet.Command) gitlet.Access {
 	switch {
 	case strings.HasPrefix(c.Ref, "refs/crewlet/"), c.Ref == "refs/heads/seats",
@@ -636,8 +604,8 @@ func need(c gitlet.Command) gitlet.Access {
 	return gitlet.AccessWrite
 }
 
-// grantFor is the grant a seat holds at tier and relation — Access by the
-// definition GrantOf computes, which TestGrantsFollowTheChart holds.
+// grantFor is the grant a seat holds at tier and relation, Access as GrantOf computes it
+// (TestGrantsFollowTheChart holds that).
 func grantFor(tier gitlet.Tier, relation gitlet.Access) gitlet.Grant {
 	return grantAs("ana", tier, relation)
 }
@@ -649,18 +617,14 @@ func grantAs(handle string, tier gitlet.Tier, relation gitlet.Access) gitlet.Gra
 		Access: min(tier.Cap(), relation)}
 }
 
-// A REFUSAL SAYS THE SAME FOR EVERY SEAT: a sentence RefRule forms names no
-// handle, ref or repository, so its length is the same whoever asks and it
-// fits what a receiver may carry into a proposal (maxDetailBytes) whatever the
-// chart spells — a handle is a role name's slug, and org.ValidHandle bounds
-// its length by nothing. Every row of RefRule's table, for a seat of the
-// handle "ana" and of a handle four refs long, at every tier and relation —
-// the namespace rows spelled for each seat's own handle — and the sentences of
-// a principal that stands nowhere: no seat of the chart, a kind this build
-// grants nothing, a tier it does not know.
+// A REFUSAL SAYS THE SAME FOR EVERY SEAT: a sentence RefRule forms names no handle, ref or
+// repository, so it fits MaxDetailBytes whatever the chart spells (a handle is a role name's slug,
+// and org.ValidHandle bounds its length by nothing). Every row of RefRule's table at every tier and
+// relation, for "ana" and a handle four refs long (namespace rows spelled for each), and the
+// sentences of a principal that stands nowhere: no seat of the chart, an unknown kind or tier.
 //
-// Mutation: name the seat's namespace by its handle in the remedy → the long
-// handle's sentences differ and pass the bound, red.
+// Mutation: the remedy naming the seat's namespace by its handle → the long handle's sentences
+// differ and pass the bound, red.
 func TestARefusalSaysTheSameForEverySeat(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("a", 4*gitlet.MaxRefNameBytes)
@@ -704,21 +668,16 @@ func TestARefusalSaysTheSameForEverySeat(t *testing.T) {
 	}
 }
 
-// REFRULE IS ITS TABLE, for every principal: a bound person passes every row
-// but the reserved refs, a token bound to nobody is refused every one with the
-// sentence git printed before grants existed, and a seat at every tier and
-// relation is held to each row — its own namespace by a read relation and the
-// full_access tier, everything else by its access against what the command
-// needs. Every refusal is not_permitted, names no ref (git prints it beside),
-// fits what a receiver may carry into a proposal, and offers a remedy RefRule
-// itself would admit. MayPush says whether any command could pass. A coding
-// box's grant is held to its run's (Within) at every tier and relation.
+// REFRULE IS ITS TABLE, for every principal: a bound person passes every row but the reserved refs,
+// a token bound to nobody is refused every one with UnboundDetail, and a seat at every tier and
+// relation is held to each row: its own namespace by a read relation and the full_access tier, the
+// rest by its access against what the command needs. Every refusal is not_permitted, names no ref
+// (git prints it beside), fits MaxDetailBytes, and offers a remedy RefRule admits (remedyAdmits).
+// MayPush says whether any command could pass. A coding box's grant is held to its run's (Within).
 //
-// Mutations: RefRule permitting a read-level create → the read rows red; the
-// namespace row ignoring the tier → its review and read_only rows red; a
-// remedy offering the namespace to a seat that does not own one → the remedy
-// check red; Within returning the seat's grant → every row of a run given
-// read red.
+// Mutations: RefRule permitting a read-level create → the read rows red; the namespace row ignoring
+// the tier → its review and read_only rows red; a remedy offering the namespace to a seat owning
+// none → remedyAdmits red; Within returning the seat's grant → every row of a run given read red.
 func TestRefRuleTable(t *testing.T) {
 	t.Parallel()
 	bound := gitlet.GrantOf(gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "tok", Seat: "founder"},
@@ -794,12 +753,9 @@ func TestRefRuleTable(t *testing.T) {
 		}
 	}
 
-	// A CODING BOX'S GRANT IS HELD TO ITS RUN'S (Within): a run given the
-	// repository to read refuses every row, its seat's own namespace's
-	// included; one given it to write holds every row outside the namespace
-	// to write, whatever the seat maintains; and maintain is the seat's grant
-	// unchanged. What the seat READS is never narrowed by a run that was
-	// given the repository at all.
+	// A CODING BOX'S GRANT IS HELD TO ITS RUN'S (Within): a run given read refuses every row, its
+	// seat's namespace included; one given write caps every row outside the namespace at write;
+	// maintain leaves the seat's grant unchanged. What the seat READS is never narrowed by its run.
 	for _, tier := range tiers {
 		for _, relation := range gitlet.Accesses() {
 			seat := grantFor(tier, relation)
@@ -874,8 +830,8 @@ func TestRefRuleTable(t *testing.T) {
 	}
 }
 
-// remedyAdmits holds a refusal's remedy to RefRule itself: whatever the
-// sentence offers, the grant it describes permits.
+// remedyAdmits holds a refusal's remedy to RefRule itself: whatever the sentence offers, the grant
+// it describes permits.
 func remedyAdmits(t *testing.T, g gitlet.Grant, c gitlet.Command, words string) {
 	t.Helper()
 	own := gitlet.Command{Ref: gitlet.SeatNamespace("ana") + "work", Old: gitlet.ZeroOID, New: oidB}
@@ -907,16 +863,14 @@ func remedyAdmits(t *testing.T, g gitlet.Grant, c gitlet.Command, words string) 
 	}
 }
 
-// A SEAT'S NAMESPACE IS UNDER THE SEATS' ROOT, never at its handle: a
-// full_access seat that only reads a repository creates, moves, forces and
-// deletes under refs/heads/seats/<handle>/ and is refused every one at
-// refs/heads/<handle>/, where people's branches live; and the root and a
-// seat's namespace as a branch are reserved to everybody, since no ref is
-// created beside a directory of its name (ref_conflict) and either would block
-// seats' namespaces.
+// A SEAT'S NAMESPACE IS UNDER THE SEATS' ROOT, never at its handle: a full_access seat that only
+// reads a repository creates, moves, forces and deletes under refs/heads/seats/<handle>/ and is
+// refused each at refs/heads/<handle>/, where people's branches live. The root and a namespace as a
+// branch are reserved to everybody: no ref is created beside a directory of its name
+// (ref_conflict), so either would block seats' namespaces.
 //
-// Mutations: the namespace matching refs/heads/<handle>/ → the <handle>/x rows
-// permitted; drop the reserved shapes → the two reserved_ref rows red.
+// Mutations: the namespace matching refs/heads/<handle>/ → the <handle>/x rows permitted; the
+// reserved shapes dropped → the two reserved_ref rows red.
 func TestASeatsNamespaceIsUnderTheSeatsRoot(t *testing.T) {
 	t.Parallel()
 	if got := gitlet.SeatNamespace("ana"); got != "refs/heads/seats/ana/" {
@@ -953,10 +907,9 @@ func TestASeatsNamespaceIsUnderTheSeatsRoot(t *testing.T) {
 	}
 }
 
-// NO REPOSITORY TAKES A RESERVED SEAT BRANCH AS ITS DEFAULT: no push may create
-// one (reserved_ref), so a repository declared with one would have a default
-// branch nobody can ever push. The domain's own guard refuses it whatever
-// door the settings came through, beside configuration's refusal of the field.
+// NO REPOSITORY TAKES A RESERVED SEAT BRANCH AS ITS DEFAULT: no push may create one
+// (reserved_ref), so it would be a default branch nobody can push. The domain's own guard refuses
+// it whatever door the settings came through, beside configuration's refusal of the field.
 func TestARepositorysDefaultBranchIsNoReservedSeatBranch(t *testing.T) {
 	t.Parallel()
 	for branch, reserved := range map[string]bool{
@@ -980,16 +933,13 @@ func TestARepositorysDefaultBranchIsNoReservedSeatBranch(t *testing.T) {
 	}
 }
 
-// A PRINCIPAL NAMES ITSELF ONE WAY: an operator its credential and, where it is
-// bound, a person's handle, and no run; a seat its handle and no credential,
-// and a run only one that names its turn — and a coding box's, its run by the
-// launch's UUID in its canonical spelling together with its harness —
-// and holds every field within the rules. A proposal refuses a seat's push
-// naming no run, a token bound to nobody's and a principal naming no
-// credential.
+// A PRINCIPAL NAMES ITSELF ONE WAY: an operator by its credential and, where bound, a person's
+// handle, and no run; a seat by its handle and no credential, and a run only one naming its turn (a
+// coding box's also its launch's canonical UUID together with its harness), every field within the
+// rules. A proposal refuses a seat's push naming no run, a token bound to nobody's and a principal
+// naming no credential.
 //
-// Mutation: take a run id that is not a canonical UUID (invalid() skipping
-// canonicalUUID) — the uppercase launch id is a run, red.
+// Mutation: invalid() skipping canonicalUUID → the uppercase launch id is a run, red.
 func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 	t.Parallel()
 	run := gitlet.RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001", WorkBackend: "native",
@@ -1078,8 +1028,8 @@ func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 		{gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "ana/x"}, false},
 		{gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: "ana", OperatorID: "tok"}, false},
 		{gitlet.Principal{Kind: "robot", Seat: "ana"}, false},
-		// THE ENGINE'S OWN ACCOUNT asks, reads and writes nothing: only its
-		// expiry's proposal carries it, which Proposal.Validate judges.
+		// THE ENGINE'S OWN ACCOUNT asks, reads and writes nothing: only its expiry's proposal
+		// carries it, which Proposal.Validate judges.
 		{gitlet.Principal{Kind: gitlet.PrincipalSystem}, false},
 	} {
 		err := tc.p.Validate()
@@ -1110,8 +1060,8 @@ func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 	}
 }
 
-// THE LEVELS ARE ORDERED AND NAMED, and a tier caps at its own level: the
-// minimum a grant takes is only meaningful over an order.
+// THE LEVELS ARE ORDERED AND NAMED, and a tier caps at its own level: the minimum a grant takes is
+// only meaningful over an order.
 func TestTheLevelsAreOrdered(t *testing.T) {
 	t.Parallel()
 	levels := gitlet.Accesses()

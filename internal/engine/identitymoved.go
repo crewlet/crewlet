@@ -71,8 +71,8 @@ func (s *stateLog) estateReplaced() {
 }
 
 // estateReplaced is what this node does once its replicated estate was replaced
-// under it: the chat index and the index of changes' words, both walking only
-// forward, drop what they hold and rewalk ([search.ChatIndexer.RequestRebuild],
+// under it: the chat index drops what it holds and rewalks, the index of
+// changes' words rewalks over what it keeps ([search.ChatIndexer.RequestRebuild],
 // [search.ChangeIndexer.RequestRebuild]), or a document indexed from the
 // replaced copy answers searches indefinitely. The knowledge base's lexical
 // index laps by id and repairs drift itself.

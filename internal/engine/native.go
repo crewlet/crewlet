@@ -204,7 +204,7 @@ type native struct {
 	chatIndex *search.ChatIndexer
 
 	// changeIndex is this node's index of Gitlet changes' words (ADR-0156),
-	// built where the company hosts code; a forward walk of chat's shape.
+	// built where the company hosts code: first newest first, then walked forward.
 	changeIndex *search.ChangeIndexer
 
 	// searcher is Doclet's answer to the knowledge seam.
@@ -1470,7 +1470,8 @@ func (e *Engine) workDeps(c *Company) builtin.WorkDeps {
 		return builtin.WorkDeps{}
 	}
 	return builtin.WorkDeps{
-		Reader: halves.reader,
+		Reader:       halves.reader,
+		ArtifactLink: e.ArtifactLink,
 		// ONE WRITER PER ACTOR: the party is the immutable seat the tool surface
 		// bound, never anything a model can name. Its provenance carries the
 		// turn's write log ([builtin.Actor.Provenance]).

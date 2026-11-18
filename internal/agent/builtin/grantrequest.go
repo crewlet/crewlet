@@ -1,7 +1,6 @@
 package builtin
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -153,7 +152,7 @@ func (t *requestAccess) requestGrant(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	res, _, err := tools.Invoke(decision.WithEngineOptions(ctx), tools.Invocation{
 		Name: CommentOnWorkTool, Tool: t.comment,
-		Args:   tools.ArgsOf(t.comment, false, grantDecision(turn.Seat, req, entry, name)),
+		Args:   tools.ArgsOf(t.comment, false, grantAsk(turn.Seat, req, entry)),
 		AsSeat: true, Turn: turn, Where: RequestAccessTool,
 	})
 	if err != nil || res.Failed {
@@ -194,66 +193,17 @@ func askable(turn *turnctx.Turn, person, why string) *tools.Result {
 	return &refused
 }
 
-// grantDecision is the request as the engine's own decision: grant for this
-// change (recommended), for good unless the permission is granted for one
-// change, or not now. The question and the options are the engine's words;
-// the agent's reason is the rationale.
-func grantDecision(seat *org.Role, req seataccess.GrantRequest, entry seataccess.GrantEntry,
-	vendor string) map[string]any {
-
-	reach := grantReach(entry, req.Scope, seataccess.GrantTermsOf(req.Lane))
-	question := fmt.Sprintf("Grant %s %s on %s at %s?", seat.Name, entry.Name, reach, vendor)
-	if req.Target != "" {
-		question = fmt.Sprintf("Grant %s %s on %s at %s, for one change to %s?", seat.Name, entry.Name,
-			reach, vendor, req.Target)
+// grantAsk is the comment_on_work_item arguments that post req as the
+// engine's own decision ([seataccess.RequestAsk]), in the wire form the tool reads.
+func grantAsk(seat *org.Role, req seataccess.GrantRequest, entry seataccess.GrantEntry) map[string]any {
+	body, asked := seataccess.RequestAsk(seat.Name, req, entry)
+	options := make([]any, 0, len(asked.Options))
+	for _, o := range asked.Options {
+		options = append(options, map[string]any{"id": o.ID, "label": o.Label, "detail": o.Detail})
 	}
-	note := ""
-	if entry.Note != "" {
-		note += " " + entry.Note
-	}
-	if entry.Write {
-		note += " It can change things there, so granting it asks you to sign in again."
-	}
-	if entry.Unavailable != "" {
-		note += fmt.Sprintf(" %s must first give the company's own credential %s.", vendor,
-			words.And(entry.Missing))
-	}
-	hours := words.Count(req.Hours, "hour", "hours")
-	options := []any{
-		map[string]any{"id": seataccess.GrantOptionTemporary(req.ID),
-			"label": fmt.Sprintf("Grant for this change (expires in %s)", hours),
-			"detail": fmt.Sprintf("%s can use %s on %s for %s from when you grant it. You "+
-				"review the exact change first.%s", seat.Name, entry.Name, reach, hours, note)},
-	}
-	if !entry.OneChange() {
-		options = append(options, map[string]any{"id": seataccess.GrantOptionPermanent(req.ID),
-			"label": "Add to this agent permanently",
-			"detail": fmt.Sprintf("%s keeps %s on %s until somebody removes it on the Agents tab. "+
-				"You review the exact change first.%s", seat.Name, entry.Name, reach, note)})
-	}
-	options = append(options, map[string]any{"id": declineOption, "label": "Not now",
-		"detail": "Nothing changes, and the agent is told."})
-	return map[string]any{
-		"item": req.Item, "body": req.Reason, "ask": req.Ask, "asks": true,
-		"decision": map[string]any{
-			"question": question, "role": string(decision.RoleApprover),
-			"recommended": seataccess.GrantOptionTemporary(req.ID), "rationale": req.Reason,
-			"options": options,
-		},
-	}
-}
-
-// grantReach is where a grant would apply, as the question says it: its
-// entries, or what the lane's grant reaches naming none ([seataccess.GrantTerms]).
-func grantReach(entry seataccess.GrantEntry, scope []string, w seataccess.GrantTerms) string {
-	switch {
-	case len(scope) > 0:
-		return strings.Join(scope, ", ")
-	case entry.ScopeKind == seataccess.GrantScopeAccount:
-		return cmp.Or(w.Account, "the account")
-	default:
-		return cmp.Or(w.Whole, "every "+string(entry.ScopeKind)+" the company's agents reach")
-	}
+	return map[string]any{"item": req.Item, "body": body, "ask": req.Ask, "asks": true,
+		"decision": map[string]any{"question": asked.Question, "role": string(asked.Role),
+			"recommended": asked.Recommended, "rationale": asked.Rationale, "options": options}}
 }
 
 // grantLaneTerms is one sentence part per lane an agent may ask a grant on:

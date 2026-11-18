@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // ClassSandboxOutOfMemory is an agent whose runs the kernel stopped at its
@@ -15,11 +17,14 @@ const ClassSandboxOutOfMemory Class = "sandbox.out_of_memory"
 // spike, two in a week is a box too small for the work.
 const minOutOfMemory = 2
 
-// MemoryKill is one run of an agent the kernel stopped for memory, with its
-// box's ceiling where the run named one.
-type MemoryKill struct {
-	Seat        string
-	MemoryBytes int64
+// EndedRun is one executor run of an agent that ended for memory or on its
+// round cap ([types.ExecutorErrorOutOfMemory], [types.ExecutorErrorMaxTurns]),
+// and for memory its box's ceiling where the caller read one.
+type EndedRun struct {
+	Seat, Kind, Turn string
+	// Tokens is what it spent, and Rounds the model calls its harness made.
+	Tokens, Rounds int64
+	MemoryBytes    int64
 }
 
 // sandboxOutOfMemory is one finding per agent with [minOutOfMemory] runs or
@@ -28,7 +33,10 @@ type MemoryKill struct {
 func sandboxOutOfMemory(ev Evidence, _ func(string) SeatKind) []Finding {
 	runs := map[string]int{}
 	ceiling := map[string]int64{}
-	for _, k := range ev.MemoryKills {
+	for _, k := range ev.Runs {
+		if k.Kind != types.ExecutorErrorOutOfMemory {
+			continue
+		}
 		runs[k.Seat]++
 		ceiling[k.Seat] = max(ceiling[k.Seat], k.MemoryBytes)
 	}

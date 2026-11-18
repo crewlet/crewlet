@@ -9,15 +9,13 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A HYDRATION'S PULL IS BOUNDED IN BYTES AS WELL AS IN ROWS
-// (crewlet/crewlet#1052).
+// A HYDRATION'S PULL IS BOUNDED IN BYTES AS WELL AS IN ROWS.
 //
-// A replay pull asked for up to fetchBatch rows and was bounded by nothing
-// else, and it is held whole until its transaction writes it, while a row is
-// bounded only by the transport: 256 rows of up to 8 MiB each on the embedded
-// broker, inside seat acquisition. The cases below watch every pull a
-// hydration makes (spyCopies), on a broker carrying the max_payload each
-// names.
+// A pull is held whole until its transaction writes it, and a row is bounded
+// only by the transport (8 MiB on the embedded broker), so a pull bounded in
+// rows alone could hold fetchBatch such rows inside seat acquisition. The
+// cases below watch every pull a hydration makes (spyCopies), on a broker
+// carrying the max_payload each names.
 
 // writeNotesOfSize writes n diary notes for the seat whose content is size
 // bytes each.
@@ -37,18 +35,15 @@ func writeNotesOfSize(t *testing.T, db *store.DB, n, size int) {
 // A REPLAY LARGER THAN A PULL TAKES SEVERAL, AND EVERY ROW ARRIVES IN A
 // HYDRATION THAT SUCCEEDS.
 //
-// A pull is bounded in bytes, at one message at the connection's max_payload
-// and the room the broker counts beside it, so a table whose rows outweigh
-// that takes as many pulls as its bytes need, none holding more; and in rows,
-// so a table whose rows outnumber fetchBatch takes as many as its rows need.
-// Either way every row arrives, once. The bytes here are six notes, each over
-// half a pull's bound so no pull holds two, on a broker carrying 64 KiB; the
-// rows are three hundred short notes on one carrying a mebibyte, in fewer
-// bytes than a pull holds, so only their count divides them.
+// A pull is bounded in bytes (one message at the connection's max_payload and
+// the room the broker counts beside it) and in rows (fetchBatch), so a table
+// takes as many pulls as its bytes or rows need, and every row arrives once.
+// Bytes: six notes, each over half a pull's bound, on a broker carrying 64 KiB.
+// Rows: fetchBatch and 44 more short notes on one carrying a mebibyte, in
+// fewer bytes than a pull holds.
 //
-// Mutation: drop the byte bound, so one pull holds every note; raise it, so a
-// pull holds two of them; or ask for every row the copy holds in one pull;
-// and this goes red.
+// Mutation: drop the byte bound, raise it so a pull holds two notes, or ask
+// for every row the copy holds in one pull, and this goes red.
 func TestAReplayLargerThanAPullTakesSeveralAndDeliversEveryRow(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -134,20 +129,15 @@ func TestAReplayLargerThanAPullTakesSeveralAndDeliversEveryRow(t *testing.T) {
 // A ROW AT THE TRANSPORT'S LIMIT STILL HYDRATES.
 //
 // The broker sends a pull nothing past what is left of its bytes, so a pull
-// bounded below the next row ends with no row, and so does every pull after
-// it, and the seat is refused, on every node at every sweep. A pull's bound
-// therefore holds the largest row the changelog can hold: a message at the
-// connection's max_payload, its headers and payload together, and the subject
-// and the acknowledgement subject the broker counts beside it. The row here is
-// a note whose message is exactly the limit, on brokers carrying three: a
-// small one; the 8 MiB the embedded broker carries (queue.MaxPayloadBytes);
-// and more, as an operator may raise an external broker's, which the engine
-// refuses only below the 8 MiB, so a row that large is published there and a
-// bound fixed at the 8 MiB would refuse its seat everywhere.
+// bounded below the next row ends empty, as does every pull after it, and the
+// seat is refused everywhere. A pull's bound holds the largest row the
+// changelog can: a message at the connection's max_payload (headers and
+// payload) and the subject and acknowledgement subject counted beside it. The
+// note's message is exactly the limit: 64 KiB, the embedded 8 MiB
+// (queue.MaxPayloadBytes), and past it, which an external broker may carry.
 //
-// Mutation: bound a pull by the max_payload alone, without the room for the
-// subjects beside it, or by the embedded broker's 8 MiB rather than the
-// connection's limit, and this goes red.
+// Mutation: bound a pull by the max_payload without the subjects' room, or by
+// the embedded 8 MiB rather than the connection's limit, and this goes red.
 func TestARowAtTheTransportsLimitStillHydrates(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

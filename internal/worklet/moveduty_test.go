@@ -16,10 +16,10 @@ import (
 //
 // The retry finds the root still in its old project, so it takes the path of a
 // move that never started: it mints a range of its own and asks for the root's
-// step — which the ledger answers with the first run's record once this node
+// step, which the ledger answers with the first run's record once this node
 // has applied it. The root's key is that record's number, read off its row;
 // this call's range is the gap, and the descendant the first run never reached
-// takes a number from it. The path had no test at all.
+// takes a number from it.
 func TestARetryThatReadTheRootBeforeItsMoveAppliedFinishesTheWalk(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid-a", "m-kid-b")
@@ -71,11 +71,9 @@ func TestARetryThatReadTheRootBeforeItsMoveAppliedFinishesTheWalk(t *testing.T) 
 
 // A MOVE THAT STOPPED AND WAS NEVER RE-RUN IS FINISHED BY THE DUTY.
 //
-// Nothing re-runs a gesture its caller did not retry — a turn that crashed, a
-// process that was killed, a descendant's append a full stream refused — and a
-// re-run was the only repair there was, so the subtree stayed split across two
-// projects for good. The root's own move now marks it, and the duty finishes
-// what the mark says is unfinished.
+// Nothing re-runs a gesture its caller did not retry (a crashed turn, a killed
+// process, a descendant's append a full stream refused), so the root's own
+// move marks it, and the duty finishes what the mark says is unfinished.
 func TestTheDutyFinishesAMoveNobodyReran(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid-a", "m-kid-b")
@@ -112,10 +110,9 @@ func TestTheDutyFinishesAMoveNobodyReran(t *testing.T) {
 			"every tick for ever")
 	}
 
-	// AND THE CALLER'S OWN RE-RUN, arriving after the duty finished its
-	// walk, is answered with nothing to do — the mark it would take down is
-	// already down, which is an empty decision rather than a history row
-	// saying nothing moved.
+	// AND THE CALLER'S OWN RE-RUN, after the duty finished, has nothing to
+	// do: the mark is already down, an empty decision rather than a history
+	// row saying nothing moved.
 	end := r.logEnd(t)
 	retry, err := r.writer.MoveTaskToProject(t.Context(), op, "m-root", "OPS", nil)
 	if err != nil || retry.Outcome != statelog.OutcomeApplied {
@@ -190,11 +187,9 @@ func TestTheDutyLeavesAMoveWhoseWalkHoldsItsClaim(t *testing.T) {
 	}
 }
 
-// A MOVE REFUSES A SUBTREE WITH A TASK IN THE TRASH, before its first append.
-//
-// A tombstoned task refuses every write, so its step stopped the walk — and
-// the re-run, and the duty behind both — on the same task for good, with the
-// subtree split around it.
+// A MOVE REFUSES A SUBTREE WITH A TASK IN THE TRASH, before its first append:
+// a tombstoned task refuses every write, so its step would stop the walk, the
+// re-run and the duty on it for good, with the subtree split around it.
 func TestAMoveRefusesASubtreeWithATaskInTheTrash(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, removed, want string }{
@@ -329,13 +324,8 @@ func TestAMoveOnALaggingNodeTakesItsMarkDown(t *testing.T) {
 	}
 }
 
-// A SUBTASK LEFT IN ANOTHER PROJECT THAN ITS ROOT IS IN THE ATTENTION QUEUE,
-// and leaves it when the walk carries it.
-//
-// The flag shipped with the schema — a column and a filter value — and nothing
-// ever set it, so `flag=inconsistent_project` answered nothing on every
-// company, including one holding the split subtree a stopped move leaves
-// behind.
+// A SUBTASK LEFT IN ANOTHER PROJECT THAN ITS ROOT IS IN THE ATTENTION QUEUE
+// (`flag=inconsistent_project`), and leaves it when the walk carries it.
 func TestASubtaskOutsideItsRootsProjectIsFlagged(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid-a", "m-kid-b")

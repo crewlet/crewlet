@@ -14,12 +14,11 @@ import (
 
 // THE DUTY LEAVES A MERGE ITS OWN NODE IS WALKING, and releases nothing.
 //
-// On a single-node deployment — the default — a live merge and the duty's
-// completion of it run on the same node, and both took the walk's claim under
-// that node's id. Coordination reads an owner that already holds a lease as the
-// holder RENEWING it, so the duty was told yes beside the live walk: it
-// re-parented and closed the duplicate under its own operation, and then
-// released the claim in the middle of the walk it had just finished for it.
+// On a single node (the default) a live merge and the duty's completion of it
+// run side by side, and coordination reads an owner already holding a lease as
+// RENEWING it. A claim under the bare node id would tell the duty yes beside
+// the live walk: it would finish the merge under its own operation and release
+// the claim mid-walk.
 func TestTheDutyLeavesAMergeItsOwnNodeIsWalking(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -122,12 +121,10 @@ func TestASecondWalkOnTheSameNodeIsRefused(t *testing.T) {
 
 // A CLAIM THE MIXED-VERSION GATE REFUSED IS NOT ANOTHER WALK.
 //
-// The gate refuses every claim a node makes while a node on a lower lease
-// protocol is live, and a tracker claim that read every refusal as a peer's
-// hold would tell a walk it was already running, and its caller would wait
-// for a walk nobody had started for as long as that node stayed. So a
-// lower-protocol lease is staged, and a walk fails closed naming the
-// lower-protocol node rather than a walk.
+// The gate refuses every claim while a node on a lower lease protocol is live;
+// read as a peer's hold, the caller would wait for a walk nobody started for
+// as long as that node stayed. The walk fails closed naming the lower-protocol
+// node.
 func TestAClaimTheGateRefusedIsNotAnotherWalk(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -155,14 +152,13 @@ func claimOf(t *testing.T, r *roundTrip, resource string) *coord.Lease {
 }
 
 // stageAnOlderNode puts this rig's writer one lease protocol AHEAD of a live
-// node, which is the arrangement the mixed-version gate refuses every claim
-// in: a node on this build's protocol holds its presence lease, and the
-// writer claims as the build after it.
+// node, where the mixed-version gate refuses every claim: a node on this
+// build's protocol holds its presence lease, and the writer claims as the
+// build after it.
 //
-// THE WRITER IS MOVED UP rather than the peer staged below, because this build
-// may already speak the lowest protocol there is — and a protocol of zero or
-// less is not "older", it is "this build" ([coord.AcquireOptions.Protocol]),
-// so a peer staged one below the first version is a peer the gate never sees.
+// THE WRITER MOVES UP rather than the peer down: this build may speak the
+// lowest protocol, and a protocol of zero or less means "this build"
+// ([coord.AcquireOptions.Protocol]), a peer the gate never sees.
 func stageAnOlderNode(t *testing.T, r *roundTrip) {
 	t.Helper()
 	if lease, _, err := r.claims.TryAcquire(t.Context(), coord.NodeResource("old"), coord.AcquireOptions{

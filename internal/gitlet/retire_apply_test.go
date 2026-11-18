@@ -18,9 +18,9 @@ func codeAt(seq uint64) statelog.Position {
 	return statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: seq}
 }
 
-// seedRetired writes count retired pack rows of id straight into the estate,
-// all retired by the record at seq — a case's rows, never the applier's — in
-// one transaction, since a benchmark seeds a whole record's worth.
+// seedRetired writes count retired pack rows of id, all retired by the record
+// at seq, straight into the estate (not through the applier), in one
+// transaction since a benchmark seeds a whole record's worth.
 func (e *estate) seedRetired(id string, seq uint64, at time.Time, count int) {
 	e.t.Helper()
 	ctx := context.Background()
@@ -48,11 +48,9 @@ func sweepOf(t testing.TB, id string, seq uint64) built {
 }
 
 // A SWEEP REMOVES ONLY WHAT ITS RECORD NAMES: the retired rows at or below its
-// Through, and the repository's mark raised to it — never a row above it,
-// whatever that row's instant says, since the apply reads no clock and the
-// record is the whole decision — and applied again it deletes nothing and
-// leaves the mark where it was. A Through no writer forms is refused rather
-// than applied.
+// Through, with the repository's mark raised to it, never a row above it
+// whatever its instant (the apply reads no clock); applied again it deletes
+// nothing and leaves the mark. A Through no writer forms is refused.
 //
 // Mutation: delete the rows strictly below Through, and its own position's
 // stay; judge the rows by the record's broker instant instead, and the row
@@ -63,8 +61,8 @@ func TestASweepRemovesOnlyWhatItsRecordNames(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
 	e.apply(create(t, "repo-a", "a"))
-	// THREE RETIRING RECORDS, at positions 2, 3 and 4, all a day and an hour
-	// before the sweep's own instant: the rows' age is not what decides.
+	// THREE RETIRING RECORDS, at positions 2, 3 and 4, all past the grace: the
+	// rows' age is not what decides.
 	old := applyClock.Add(-RetireGrace - time.Hour)
 	e.seedRetired("repo-a", 2, old, 2)
 	e.seedRetired("repo-a", 3, old, 3)

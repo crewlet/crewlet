@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/delegated"
@@ -130,6 +131,11 @@ type WorkDeps struct {
 	// act of kind now, at the proof its approval asks (ADR-0125); nil admits
 	// nobody, so an answer approving an act is refused by the tracker.
 	ApprovesAct func(ctx context.Context, kind delegated.Kind) bool
+
+	// ArtifactLink is the address the artifact tools hand out for an artifact
+	// ([ArtifactDeps.Link]), so a decision citing one cites the artifact
+	// (ADR-0160); nil, or an empty address, recognises none.
+	ArtifactLink func(artifacts.ID) string
 
 	// ChangeRef is a pull request's tracker name, where raw is one under the
 	// company's GitHub owners, or why one on its host is refused; both empty,

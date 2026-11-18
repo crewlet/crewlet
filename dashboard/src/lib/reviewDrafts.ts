@@ -101,6 +101,8 @@ export interface ReviewDrafts {
   drafts: readonly DraftFinding[];
   add: (draft: Omit<DraftFinding, "id">) => void;
   remove: (id: string) => void;
+  /** Rewrite a draft in place, keeping its id and its place among the others. */
+  update: (id: string, draft: Omit<DraftFinding, "id">) => void;
   /** Forget them all: what a review that carried them does once it lands. */
   clear: () => void;
 }
@@ -129,8 +131,13 @@ export function useReviewDrafts(changeId: string, revision: number): ReviewDraft
     (id: string) => keep(readDrafts(changeId, revision).filter((d) => d.id !== id)),
     [changeId, revision, keep],
   );
+  const update = useCallback(
+    (id: string, draft: Omit<DraftFinding, "id">) =>
+      keep(readDrafts(changeId, revision).map((d) => (d.id === id ? { ...draft, id } : d))),
+    [changeId, revision, keep],
+  );
   const clear = useCallback(() => keep([]), [keep]);
-  return { drafts, add, remove, clear };
+  return { drafts, add, remove, update, clear };
 }
 
 /** A draft as the review sends it: every field the tool takes, and nothing of the tab's. */

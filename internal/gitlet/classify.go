@@ -16,17 +16,14 @@ import (
 // the layout around one are code, is the package doc's "A change's class is
 // lexed, and a directive is code".
 
-// ChangeClass names what a change does NOT touch. A class only ever RELAXES —
-// a rule may exempt a change of a class from an approval it would otherwise
-// ask — so a class is given only where it is true of the program and of every
-// tool that reads the file, and whatever cannot be proved so gets none.
+// ChangeClass names what a change does NOT touch. A class only RELAXES an
+// approval, so one is given only where it is provably true.
 type ChangeClass string
 
 const (
 	// ChangeClassNoCodeChange is a REVISION whose base and head trees are
-	// those of the revision before it: it moved nothing, so what held of the
-	// one before holds of it. It is carried from revision to revision, and is
-	// never a path's.
+	// those of the revision before it, so what held of that one holds of it.
+	// It is carried from revision to revision, and is never a path's.
 	ChangeClassNoCodeChange ChangeClass = "no_code_change"
 	// ChangeClassWhitespaceOnly is a path whose two versions lex to one token
 	// stream, comments included: only the space between tokens moved, none of
@@ -58,47 +55,27 @@ func (c ChangeClass) Valid() bool { return slices.Contains(ChangeClasses(), c) }
 // MaxClassedBlobBytes is the largest version of a file [ClassifyGo] lexes; a
 // change with a version past it gets no class.
 //
-// 1 MiB, PAST EVERY HAND-WRITTEN FILE OF A GO TREE: of the 8 088 .go files in
-// Go 1.27.2's own src/, the median is 2.7 KB, the 99.9th percentile 523 KB,
-// and the three past 1 MiB (cmd/compile's opGen.go and rewriteAMD64.go,
-// time/tzdata's zzipdata.go) are all generated — files a generator rewrites
-// and no person reads line by line, so a class on one would exempt nothing a
-// reviewer reads.
-//
-// WHAT A PATH AT THE BOUND COSTS follows its bytes, whatever they hold,
-// because the walk keeps nothing of a version but the comments between two
-// code tokens, as offsets, and drops them once the token after them is read.
-// Two versions at the bound, classed to the end (BenchmarkClassifyGo, one
-// bounded run of five iterations an arm on two E-cores of a Core Ultra 7
-// 265U shared with other builds), took 34 ms and 9 MB of allocation as
-// ordinary code, and 106 ms and 85 MB as nothing but comments, one to a
-// line, the most lexemes the bound holds — 116 ms where a //go:noinline
-// governs every one of them. Half the comments' allocation is the lexer's
-// own, a line table and a text a comment; the walk's is one gap of 24-byte
-// records, here the whole file. What a whole revision may cost is the bound
-// of its classification, which takes the comment arms as its worst, not of
-// one file.
+// 1 MiB is past every hand-written file of a Go tree: in Go 1.27.2's src/ the
+// median .go file is 2.7 KB, the 99.9th percentile 523 KB, and the three past
+// 1 MiB are generated, read by no reviewer. A path's cost follows its bytes
+// whatever they hold (judgement): two versions at the bound, classed to the
+// end (BenchmarkClassifyGo, two E-cores of a Core Ultra 7 265U), took 34 ms
+// and 9 MB allocated as code, 106 ms and 85 MB as one comment a line, and
+// 116 ms with a //go:noinline governing them all. A revision's whole cost is
+// [MaxClassedBytes]'.
 const MaxClassedBlobBytes = 1 << 20
 
-// MaxClassedBytes is the most Go a revision's classification lexes — both
-// versions of every path it classes, counted together — in the touched
-// list's order: the path whose two versions would take it past this is not
-// read, nor is any after it, and the revision's classes are INCOMPLETE
-// ([RevisionClasses]). How MANY paths it lexes is bounded by the touched list
-// itself ([MaxTouchedPaths]): a pair of small files costs a lookup and a
-// lexer's setup, nothing a thousand of them make long.
+// MaxClassedBytes is the most Go a revision's classification lexes, both
+// versions of every path counted together, in the touched list's order: the
+// path that would pass it is not read, nor any after it, and the revision's
+// classes are INCOMPLETE ([RevisionClasses]). The path count is bounded by
+// [MaxTouchedPaths]; a small file costs little more than a lookup.
 //
-// 16 MIB, A TENTH OF A READ'S GIT: lexing costs what the bytes cost, at most
-// 58 ms a MiB — two versions at MaxClassedBlobBytes of nothing but comments
-// under a //go:noinline, the arm costing most of BenchmarkClassifyGo
-// (MaxClassedBlobBytes has the figures) — so the bound is some 0.93 s of
-// lexing, a tenth of the ten seconds a read's own git is given
-// (gitproc.ReadDeadline), which the lexing runs inside of, since it reads
-// the blobs off their cat-file as git writes them. The rest of the budget is
-// the facts' own: their walk, their patch and its id. The paths' bound is
-// the one reached first by ordinary code — a thousand files at the median of
-// Go's own tree, 2.7 KB, are some 5 MiB of both versions — so this cuts a
-// revision of large files alone: generated code, or a vendored tree.
+// 16 MiB at the worst arm's 58 ms a MiB ([MaxClassedBlobBytes]) is some
+// 0.93 s, a tenth of gitproc.ReadDeadline, which the lexing runs inside since
+// it reads the blobs off cat-file; the rest is the facts' walk, patch and id.
+// Ordinary code reaches the path bound first (a thousand median files are some
+// 5 MiB), so this cuts only large files: generated code, a vendored tree.
 const MaxClassedBytes = 16 << 20
 
 // byteOrderMark is the UTF-8 byte-order mark, which go/scanner skips at a
@@ -107,94 +84,17 @@ const MaxClassedBytes = 16 << 20
 var byteOrderMark = []byte("\uFEFF")
 
 // ClassifyGo answers the narrowest class of the change from before to after,
-// two versions of one Go source file, and false where no class holds.
+// two versions of one Go source file, and false where no class holds. Why it
+// lexes and why a directive and its layout are code is the package doc's "A
+// change's class is lexed, and a directive is code"; kindOf says what is a
+// directive, and directiveText, sameGenerateLines, buildConstraints and
+// sameHeldLines read each as its tool does. A `;` swapped for a newline is
+// not whitespace, and a line ending's carriage return, which the language
+// drops even in a raw string, is.
 //
-// IT LEXES, WITH THE LANGUAGE'S OWN LEXER. Both versions go through
-// go/scanner with comments returned, and their tokens are compared one for
-// one, literals by their text — the semicolons the lexer inserts where a line
-// ends a statement included, because in Go a newline there IS a token:
-// `return` and x on two lines return nothing, and on one line return x.
-// whitespace_only is two versions whose tokens and comments are the same,
-// comment_only two whose tokens are the same once the comments are set aside.
-// So a raw string's spaces are its value's and count as code, a `;` swapped
-// for a newline is not whitespace though it compiles alike, and a line
-// ending's carriage return, which the language discards even inside a raw
-// string, is. Never `git diff -w`, which calls a newline that ends a statement
-// a space, and never a pattern over the text, which cannot tell a comment
-// from a string holding one.
-//
-// A DIRECTIVE IS CODE. A comment something reads as an instruction changes
-// what the file builds, runs or reports, so no class holds where one was
-// added, removed, edited or moved:
-//   - every comment go/ast calls a directive — //go:… (pragmas, //go:embed,
-//     //go:generate, //go:linkname, //go:build), //line and its /*line …*/
-//     form, //export, //extern, and every //name:value line of the form
-//     [a-z0-9]+:[a-z0-9], //lint:ignore and //nolint:errcheck among them,
-//     read past the blanks before it as revive reads // revive:disable;
-//   - the build's // +build lines, and every // +word marker a generator
-//     reads (Kubernetes' +k8s:…, controller-gen's +kubebuilder:…);
-//   - a linter's suppression: //nolint as golangci-lint reads it, so
-//     // nolint and a bare //nolint too, gosec's #nosec, and — in the
-//     file's header — a generated-code marker, Go's "Code generated …
-//     DO NOT EDIT." or a looser phrase golangci-lint takes for one, under
-//     which it lints none of the file;
-//   - an example's Output: or Unordered output:, which go test compares
-//     the example's output with — and, because that is the LAST comment
-//     group of the example's body, every comment of a top-level body holding
-//     one: a comment added below it is a test that compares nothing;
-//   - a cgo preamble — every comment before an import of "C", where cgo
-//     reads the declaration's doc and the spec's — which is C source.
-//
-// A directive governs what FOLLOWS it, so every comment after the first one in
-// a run of comments, up to the next token, is the directive's: a comment
-// added between //go:embed and its variable is a change to the embed. The
-// rest of a file's comments — its documentation — may say anything: the doc
-// comment above a //go:noinline may be rewritten, and a license header edited
-// above a //go:build line.
-//
-// AND SO IS THE LAYOUT AROUND ONE, because whitespace alone changes what a
-// directive does: a //line or //go:generate indented off its line's start is
-// ignored, a //go: pragma after code on its line is an error, a blank line
-// between //export and its function detaches it, and one inside an example's
-// Output splits off what go test compares. So each comment of a directive's
-// run keeps, beside its text, where it starts on its line, whether anything
-// precedes it there, how many lines part it from what comes before it and
-// after it (one, or a blank line between), and the column of what follows
-// it; a comment in the directive's own group above it keeps that layout and
-// may change its text. And the build constraints a file states are compared
-// as go/build reads them from its header (buildConstraints), the one place a
-// blank line or a block comment far from a constraint decides whether it
-// holds.
-//
-// EACH IS READ AS ITS TOOL READS IT, which is not always as the lexer does.
-// go generate reads LINES, not tokens: every line of the file that starts
-// //go:generate and a blank is a command it runs, whatever lexeme the line
-// sits in — a block comment or a raw string as much as a comment of its own
-// (cmd/go: "lines that look like directives in comments or multiline strings
-// will be treated as directives"). And the compiler reads a directive with
-// every carriage return the lexer drops from a comment's text, but for the
-// one a Windows line ending leaves at its end — so a carriage return can
-// split a pragma, or sit in an embed's pattern or a //line directive's file
-// name, as one in front of a //go:generate hides its line from go generate.
-// So the lines go generate runs are compared as it reads them
-// (sameGenerateLines), and a directive's text as the compiler reads it: a
-// command planted in a comment, or one a carriage return's removal arms, is
-// code. Documentation keeps the lexer's reading, under which a carriage
-// return is whitespace.
-//
-// AND A LINTER'S DIRECTIVE HOLDS ITS FILE'S LINES, because its reach is lines
-// (sameHeldLines' line record says whose): in a file holding one, a token
-// moved onto or off a line is code wherever it is, and so is a comment that,
-// grown or shrunk by a line, moves a directive a line nearer to or further
-// from the statement go/ast attaches it to. A reindent, a blank line between
-// statements, and documentation that keeps its lines keep their class. Go's
-// own directives attach by order — a pragma, an embed or an export to what
-// follows it — and hold no lines.
-//
-// NO CLASS for a version that is empty — a file added or deleted, which a
-// caller judges before it asks — or past [MaxClassedBlobBytes], for one with a
-// lexical error, or where one version has a byte-order mark and the other
-// none.
+// No class for an empty version (an add or a delete, which a caller judges
+// first), one past [MaxClassedBlobBytes], one with a lexical error, or a
+// byte-order mark on one side only.
 func ClassifyGo(before, after []byte) (ChangeClass, bool) {
 	if len(before) == 0 || len(after) == 0 || len(before) > MaxClassedBlobBytes || len(after) > MaxClassedBlobBytes {
 		return "", false
@@ -218,22 +118,14 @@ func ClassifyGo(before, after []byte) (ChangeClass, bool) {
 // judgement is what the walk has found of a change so far, and what it holds
 // of a gap a later token decides.
 //
-// THE WALK KEEPS ONE GAP. Both versions are lexed in step, a code token at a
-// time; the comments each reads before code token k — gap k — are compared
-// with the other's the moment both have read token k, and dropped. A gap's
-// comments are code whole where a LATER token says so — an import's path
-// that turns out to be "C", the closing brace of a body that turns out to
-// hold an example's output — so such a gap is compared both ways when it is
-// read, and the walk keeps the two answers, never the comments, until that
-// token. A version's comments are offsets into its source, the text the
-// lexer returned for one left behind: so what a classification holds is two
-// gaps of offsets, and the rest of its cost is the lexer's own. Keeping every
-// comment of both versions to the end instead — its text, its layout, and the
-// entries a directive's context made of them — cost two versions at
-// [MaxClassedBlobBytes] of nothing but comments 247 ms and 374 MB, and 321 ms
-// and 577 MB where a directive governed them all: nine times the time and
-// thirty times the allocation of code as long (BenchmarkClassifyGo, measured
-// as MaxClassedBlobBytes' doc says).
+// THE WALK KEEPS ONE GAP: both versions are lexed in step, and the comments
+// each reads before code token k (gap k) are compared once both have read
+// token k, then dropped. A gap a LATER token may make code whole (an import
+// path of "C", a body's closing brace over an example's output) is compared
+// both ways when read, and only the two answers wait for that token. A
+// comment is offsets into its source, never its text. Keeping every comment
+// to the end cost nine times the time and thirty times the allocation of code
+// as long (BenchmarkClassifyGo).
 type judgement struct {
 	same      bool // every token, and every directive's context, alike: comment_only so far
 	sameText  bool // every comment alike too: whitespace_only so far
@@ -280,7 +172,9 @@ type lexComment struct {
 	output   bool // an example's Output: or Unordered output:
 }
 
-// layout is where a comment sits, as far as a directive's meaning reads it.
+// layout is where a comment sits, as far as a directive's meaning reads it:
+// a //line indented off its line's start is ignored, a //go: pragma after
+// code is an error, and a blank line parts an //export from its function.
 type layout struct {
 	col    int32 // bytes before it on its line
 	next   int32 // the column the lexeme after it starts at, or -1 at the end of the file
@@ -366,12 +260,9 @@ func (f *goFile) code(k int) (token.Token, string) {
 		case tok == token.EOF:
 			f.closeOpen(len(f.src))
 		case tok == token.SEMICOLON && lit == "\n":
-			// An inserted semicolon sits at the newline that ended its line,
-			// or inside the comment that held one: no lexeme a layout is
-			// measured from. What follows the gap's last comment is the
-			// lexeme the lexer reaches next, past the blanks it skips, which
-			// is read now rather than when the next gap begins, so that the
-			// gap is whole when the walk compares it.
+			// An inserted semicolon is no lexeme a layout is measured from.
+			// The gap's last comment is closed by the next real lexeme now,
+			// not when the next gap begins, so the gap is whole when compared.
 			if f.open {
 				f.closeOpen(f.nextLexeme(int(f.gap[len(f.gap)-1].end)))
 			}
@@ -450,14 +341,11 @@ func (f *goFile) nextLexeme(off int) int {
 	return off
 }
 
-// judgeGap compares the comments both versions read before code token tok —
-// a gap, every comment of which knows what follows it — and files what it
-// found where the token says the gap belongs: before an import declaration
-// or one of its specs, where the import's path says whether it is a cgo
-// preamble; in a top-level body, whose closing brace says whether it holds
-// an example; or nowhere a later token decides, where only a directive's
-// context counts. And it moves both versions' line records on over the gap
-// and the token, lit the token's literal.
+// judgeGap compares the gap both versions read before code token tok (lit its
+// literal) and files the result where the gap belongs: pending an import's
+// path (a cgo preamble?), pending a top-level body's closing brace (an
+// example?), or, where no later token decides, as a directive's context. It
+// moves both line records on over the gap and the token.
 func (j *judgement) judgeGap(a, b *goFile, tok token.Token, lit string) {
 	empty := len(a.gap) == 0 && len(b.gap) == 0
 	fa, ga := directiveStart(a.gap)
@@ -520,12 +408,9 @@ func (j *judgement) sameWholes(a, b *goFile) bool {
 	return true
 }
 
-// sameContexts reports whether the two versions' comments of the gap hold
-// the same entries a directive's context is, in order: from the gap's first
-// directive on, every comment whole, text and layout; ahead of it, a header
-// comment's text, and the layout of each other comment of the directive's
-// own group — free to say anything, not to move. The entries are walked in
-// step and never gathered; fa and ga, fb and gb are each version's
+// sameContexts reports whether the two versions' gaps hold the same entries
+// of a directive's context, in order (entryPart says what each holds), walked
+// in step and never gathered; fa and ga, fb and gb are each version's
 // directiveStart.
 func (j *judgement) sameContexts(a *goFile, fa, ga int, b *goFile, fb, gb int) bool {
 	x, y := 0, 0
@@ -599,33 +484,18 @@ func directiveStart(gap []lexComment) (first, group int) {
 	return len(gap), len(gap)
 }
 
-// THE LINE RECORD is what a linter's directive reads of where the code sits.
-// A suppression's reach is lines: golangci-lint's nolint covers the lines of
-// its comment group and of the statement under it, staticcheck's lint:ignore
-// the first line of the node go/ast attaches it to, gosec's #nosec that
-// node, revive's the next line or every line to its enable — and which node
-// go/ast attaches a comment to is its own reading of the lines around it. So
-// each version keeps, for every code token but an inserted semicolon and
-// every comment of a directive's context from its group on — the lexemes the
-// record holds — the line breaks since the one it held before, and for a
-// comment those inside it too, and a file holding a linter's directive gets
-// no class unless the two versions' records agree. Between them the two
-// counts reach every byte from one held lexeme to the next, so a token moved
-// onto or off a line moves one of them, wherever the line break was: a
-// directive's text and a code token's are compared whole, but the
-// documentation in a directive's group may say anything, and a line it grows
-// inside itself moves what follows it a line on as surely as a line break
-// after it would. The record runs through the whole file, since a reach may:
-// revive's //revive:disable runs to its enable or the file's end, and a
-// nolint above the package clause covers the file; a window drawn round each
-// directive instead would be each linter's own rule for the node it attaches
-// to, restated, and any rule it missed a reach left open.
-//
 // sameHeldLines moves both versions' line records on over a gap's held
-// comments, ha of version a and hb of b, and over the code token after them
-// where atToken says the walk is at one the lexer did not insert, and reports
-// whether each sits as many lines from the lexeme held before it in both,
-// and each comment spans as many.
+// comments (ha of a, hb of b) and, where atToken, the code token after them,
+// and reports whether each sits as many lines from the lexeme held before it,
+// and each comment spans as many, in both.
+//
+// THE LINE RECORD is what a linter's directive reads: its reach is lines
+// (nolint's group and the statement under it, lint:ignore's node, revive's
+// next line or all to its enable), and go/ast attaches by the lines around a
+// comment. It holds every code token but an inserted semicolon and every
+// comment of a directive's context from its group on, and its breaks reach
+// every byte, so a token moved onto or off a line moves one. It runs the
+// whole file: a window per directive would miss some linter's reach.
 func sameHeldLines(a *goFile, ha []lexComment, b *goFile, hb []lexComment, atToken bool) bool {
 	if len(ha) != len(hb) {
 		return false
@@ -720,9 +590,10 @@ func stripCR(dst, b []byte, block bool) []byte {
 	return dst
 }
 
-// pendingBody is the open top-level body's gaps — a function's, a
-// composite's — compared both ways until its closing brace says whether it
-// holds an example's output, which makes every comment in it code.
+// pendingBody is the open top-level body's gaps, compared both ways until its
+// closing brace says whether it holds an example's output. Output: must be
+// the body's last comment group, so a comment added below it is a test that
+// compares nothing: every comment of such a body is code.
 type pendingBody struct {
 	output  bool // an example's output marker in either version
 	whole   bool // every gap so far alike, text and layout
@@ -957,11 +828,9 @@ func goDirective(body string) bool {
 }
 
 // nameValue reports a directive body of the form [a-z0-9]+:[a-z0-9]…, and its
-// name, read past any blanks before it as revive reads its own
-// (`^//[\s]*revive:`): go/ast's form wants none, but // revive:disable, with
-// the space most comments carry, turns revive's rules off to the file's end
-// all the same — and a person's prose that takes the form erring toward code
-// is the safe side.
+// name, read past leading blanks as revive reads its own (`^//[\s]*revive:`):
+// go/ast's form allows none, but // revive:disable works all the same, and
+// prose taking the form erring toward code is the safe side.
 func nameValue(body string) (string, bool) {
 	name, rest, ok := strings.Cut(strings.TrimLeft(body, " \t\v\f"), ":")
 	return name, ok && name != "" && rest != "" && lowerAlnum(name) && lowerAlnum(rest[:1])
@@ -1046,12 +915,10 @@ func outputMarker(text string) bool {
 // buildConstraints is what go/build reads of a file's build constraints: every
 // //go:build line of its header, and the // +build lines it honours — those
 // above the last blank line before the header's first line that is not a //
-// comment — following go/build's reading of a header line for line (its
-// parseFileHeader). It is why a blank line, or a block comment above a +build
-// line, is code there, while a //go:build line may sit anywhere in the
-// header. A header ends at the first line holding anything but comments, so
-// a header may be a file of comments: a line is made a string only once it
-// holds a constraint's word.
+// comment — as go/build's parseFileHeader reads it, which is why a blank line
+// or a block comment above a +build line is code there. A header may be a
+// whole file of comments, so a line becomes a string only once it holds a
+// constraint's word.
 func buildConstraints(src []byte) []string {
 	src = bytes.TrimPrefix(src, byteOrderMark)
 	var lines []string
@@ -1116,19 +983,15 @@ var goGenerate = []byte("//go:generate")
 const generateLineBytes = 4096
 
 // sameGenerateLines reports whether two versions hold the same commands go
-// generate runs, read as it reads them (cmd/go's generate.go): the file a line
-// at a time, up to each newline, whatever lexeme a line sits in — a line that
-// starts //go:generate and a blank, in a comment of its own, inside a block
-// comment or a raw string, is a command — less the one carriage return a
-// Windows line ending leaves before the newline. A command go generate fails
-// on instead — one no newline ends, or one longer than its reader holds
-// (generateLineBytes) — stops it with an error, and it runs nothing after it
-// in the package; so whether it runs each line is compared beside the line,
-// and a carriage return that takes a command past the reader's bound, or
-// back within it, is code. A line's number, which go generate gives its
-// command as GOLINE, is not held: a whitespace change above a command moves
-// it as it moves every position a tool reports, and a command that reads its
-// own file reads every byte of it, which no class can be true of.
+// generate runs, read as cmd/go's generate.go reads them: a line at a time,
+// whatever lexeme it sits in (a //go:generate line in a block comment or a raw
+// string is a command), less a Windows line ending's carriage return. A
+// command go generate fails on (no newline ends it, or it passes
+// generateLineBytes) stops the package's generation, so whether each line
+// runs is compared too, and a carriage return moving a command across the
+// bound is code. GOLINE is not held: whitespace above a command moves it as it
+// moves every position a tool reports, and a command reading its own file
+// reads every byte, which no class can be true of.
 func sameGenerateLines(a, b []byte) bool {
 	at, bt := 0, 0
 	for {

@@ -11,154 +11,92 @@ import (
 )
 
 // THE BUSY ALARM'S READING: what this node's committer turned away for a
-// backlog, over the window code_commit_busy stands for.
-//
-// # Five reasons, three alarmed
-//
-// A proposal refused busy is decided by nobody and sent again by whoever made
-// it, and it is refused for one of five reasons ([busyReason]) that point at
-// different remedies, so the busy counter (crewlet.code.commit.busy) carries
-// the reason beside the proposal's kind. Only a BACKLOG says THIS committer
-// turns proposals away, so only a backlog raises the alarm, and a backlog
-// turns a proposal away three ways: a repository's queue full by its count or
-// its bytes ([busyQueue]), the node holding its whole bound across its
-// repositories ([busyNode]), and the queue's TIME (CommitterInbox's doc) — a
-// proposal that queued with more of its asker's attempt left than a batch and
-// its answer, and lost it waiting behind the repository's earlier proposals
-// ([busyWaited]).
-//
-// THE TIME BOUND IS THE ONE A SLOW COMMITTER MEETS. One whose batches commit a
-// repository's proposals more slowly than they arrive holds those that
-// arrived in the twenty-odd to thirty seconds a proposal may wait — fewer than
-// CommitterInbox while fewer than some thirty-five to forty a second arrive —
-// and turns the rest away as they run out of time, never at the count: at the
-// decide's worst measured arm (CommitBudget's doc), some 2.4 s a record of 64,
-// thirty pushes a second to one repository leave about nine hundred queued
-// and three a second refused, for as long as they come. Filed as late, those
-// refusals left the alarm silent on exactly that committer, while the same
-// overload on a faster one raised it.
-//
-// A LATE proposal ([busyLate]) is one that ARRIVED with no more of its asker's
-// attempt left than a batch and its answer: a symptom whose cause is upstream
-// of the committer — the attempt spent by the receiving node, the router's
-// walk or the serving node's floor wait, each with an instrument of its own.
-// A CONTENDED one ([busyContended]) lost every compare-and-set round, which is
-// a second committer deciding the repository during a handoff. Both are
-// counted and logged, never alarmed.
-//
-// # A bucket a minute, expired by its minute
-//
-// The window is fifteen one-minute buckets of per-repository counts, a ring
-// whose slots are expired by comparing their minute rather than by a sweep —
-// the recorder's rolling window's rule (statelog/metrics' Window) — so nothing
-// runs on a timer to keep it right, and it holds an entry for each repository
-// refused in the window and nothing for one that was not. A refusal therefore
-// stands between fourteen and fifteen minutes, by the minute it fell in, so the
-// alarm's "in the last fifteen minutes" is never said of an older one. The
-// window counts every kind a backlog turns away — a compaction, an expunge
-// record or a change's write waits in the same queue under the same bounds as
-// the pushes around it, and meeting a full queue, or running out of time in
-// it, is the same backlog.
-//
-// EVERY MINUTE IS ONE A CLOCK CAN READ — the epoch's first, every one before
-// it, the zero time's — so no minute marks a slot nothing was filed in: a slot
-// is empty while it has no map ([busyMinute.filled]), and the window has no
-// newest minute until its first filing or reading ([busyWindow.begun]).
-// Marked by minute zero, a refusal stamped in 1970's first minute — a node's
-// clock reset to the epoch — or at any instant before it, moved there by a
-// newest minute that began at zero, met a slot that seemed to hold its minute
-// already, with no map to count it in, and panicked on the goroutine that
-// refused it; and that minute was neither counted nor logged.
-//
-// No repository is an attribute of the counter (a time series a repository is
-// how a metrics backend falls over), so which one is hot is the reading's and
-// the log's: one code_commit_busy warning a repository a minute, with that
-// minute's counts by reason, never one a refusal — written once the minute has
-// closed, at the committer's next refusal or the next reading of its window,
-// whichever comes first; a data node reads it at every alarm evaluation, every
-// statelog.AlarmInterval.
+// backlog over CommitBusyWindow. A busy refusal carries one of five reasons
+// ([busyReason]) on crewlet.code.commit.busy, since each points at a
+// different remedy, but only the three of THIS committer's backlog raise
+// code_commit_busy ([busyCounts.backlog]). [busyWaited] is the bound a slow
+// committer meets: one committing a repository slower than it is pushed turns
+// the excess away as it runs out of time in the queue, never at
+// CommitterInbox's count, so filing it as late would silence the alarm on
+// exactly that committer. [busyLate] and [busyContended] are counted and
+// logged, never alarmed. Every kind a queue holds (a compaction, an expunge,
+// a change's write) counts, since it waits under the same bounds as a push.
+
+// The window is a ring of one-minute buckets expired by comparing each slot's
+// minute, not by a sweep (statelog/metrics' Window), so nothing runs on a
+// timer and a refusal stands fourteen to fifteen minutes. Every minute,
+// before the epoch and the zero time's included, is one a clock can read, so
+// none marks an empty slot: a slot is empty while it has no map
+// ([busyMinute.filled]) and the window has no newest minute until
+// [busyWindow.begun]; a minute-zero sentinel would panic on a refusal stamped
+// at or before the epoch's first minute. No repository is a counter attribute
+// (unbounded series), so the hot one is the reading's and the log's: one
+// code_commit_busy warning a repository a closed minute, written at the next
+// refusal or reading, whichever comes first.
 
 // CommitBusyWindow is how long a backlog's refusal keeps code_commit_busy
-// raised: the trim's measurement tick itself, BORROWED (ADR-0015) — the span
-// the store's connection-pool waits are measured over for pool_starved's p95,
-// so the alarm and the figures a person reads beside it describe one stretch
-// of time. A JUDGMENT CALL (fifteen minutes):
-// shorter flaps between the ten-second evaluations of a sustained backlog,
-// whose refusals come in bursts as its queue drains and refills; longer
-// outlives the person's fix. The trim's constant itself rather than a copy a
-// test holds equal: the alarm's detail names the window by the same constant,
-// which this package cannot hand to a framework that imports none of it.
+// raised: statelog.TrimInterval, borrowed (ADR-0015), so the alarm and
+// pool_starved's p95 beside it describe one stretch of time. A judgment call
+// (fifteen minutes): shorter flaps between the ten-second evaluations of a
+// bursty sustained backlog, longer outlives the person's fix. The constant
+// itself, not a test-held copy, because the alarm's detail names the window
+// by it.
 const CommitBusyWindow = statelog.TrimInterval
 
-// busyBucket is one bucket's span: a MINUTE, the cadence of the log line a
-// repository, and fine enough that the window's edge moves by a minute at most.
+// busyBucket is one bucket's span: a minute, the log line's cadence, so the
+// window's edge moves by a minute at most.
 const busyBucket = time.Minute
 
-// busyBuckets is how many buckets hold CommitBusyWindow — fifteen at its
-// fifteen minutes — rounded up, so a window that is no whole number of minutes
-// is still held whole.
+// busyBuckets is how many buckets hold CommitBusyWindow, rounded up so a
+// window of no whole number of minutes is still held whole.
 const busyBuckets = int((CommitBusyWindow + busyBucket - 1) / busyBucket)
 
 // busyReason is why a proposal was refused busy: the busy counter's `reason`
-// attribute, and which of a minute's counts the refusal is filed under
-// ([busyCounts]) — three of which raise code_commit_busy
-// ([busyCounts.backlog]).
+// attribute and the minute's count it is filed under ([busyCounts]).
 type busyReason string
 
 const (
 	// busyQueue is a repository's queue at CommitterInbox proposals or
-	// CommitterInboxBytes of entries: the repository takes proposals faster
-	// than one committer commits them.
+	// CommitterInboxBytes: the repository takes proposals faster than one
+	// committer commits them.
 	busyQueue busyReason = "queue"
-	// busyNode is the node holding CommitterNodeProposals proposals, or
-	// CommitterNodeBytes of them, across its repositories: one node
-	// committing for too many busy repositories at once.
+	// busyNode is the node at CommitterNodeProposals or CommitterNodeBytes
+	// across its repositories: too many busy repositories at once.
 	busyNode busyReason = "node"
-	// busyWaited is a proposal that QUEUED with more of its asker's attempt
-	// left than a batch and its answer (CommitBudget and ReplyMargin) and
-	// lost it waiting behind the repository's earlier proposals on this
-	// node — withdrawn as it waits, or refused as its batch forms — or, asked
-	// with no deadline, one that waited a whole CommitBudget: the queue's
-	// time bound, met behind this committer's own batches.
+	// busyWaited is a proposal that QUEUED with more than a batch and its
+	// answer (CommitBudget and ReplyMargin) of its asker's attempt left and
+	// lost it behind the repository's earlier proposals, or, asked with no
+	// deadline, waited a whole CommitBudget: the queue's time bound.
 	busyWaited busyReason = "waited"
-	// busyLate is a proposal whose asker's attempt left no more than a batch
-	// and its answer as it ARRIVED, before it took a place in the queue: the
-	// attempt was spent upstream of the committer.
+	// busyLate is a proposal that ARRIVED with no more than a batch and its
+	// answer left: the attempt was spent upstream of the committer.
 	busyLate busyReason = "late"
 	// busyContended is a record that lost every compare-and-set round the
-	// publisher may take: the repository kept changing under it.
+	// publisher may take: a second committer during a handoff.
 	busyContended busyReason = "contended"
 )
 
-// BusyReading is this committer's BACKLOG refusals over the last
-// CommitBusyWindow — the proposals it refused busy because a repository's
-// queue or the node's whole bound could not hold them, or because they waited
-// in a queue until their asker could wait no longer — which the engine
-// carries into the alarm reading (statelog's code_commit_busy). A late or a
-// contended refusal is no part of it. The zero value is a committer that
-// turned nothing away.
+// BusyReading is this committer's backlog refusals ([busyCounts.backlog])
+// over the last CommitBusyWindow, which the engine carries into statelog's
+// code_commit_busy. The zero value is a committer that turned nothing away.
 type BusyReading struct {
 	// Refused is how many proposals were refused for a backlog.
 	Refused int
-	// Repo is the repository with the most of them, by id — the smaller id
-	// of two with as many — and "" where none was refused.
+	// Repo is the repository with the most of them by id (the smaller id on
+	// a tie), "" where none was refused.
 	Repo string
 	// OfRepo is how many of them were Repo's.
 	OfRepo int
-	// Node is how many met the node's whole bound (CommitterNodeBytes)
-	// rather than one repository's queue.
+	// Node is how many met the node's whole bound ([busyNode]).
 	Node int
-	// Waited is how many waited in a queue until their asker could wait no
-	// longer ([busyWaited]): the queue's time bound, which a committer slower
-	// than its pushes meets before its count.
+	// Waited is how many met the queue's time bound ([busyWaited]).
 	Waited int
 }
 
-// AlarmReading is this committer's backlog refusals over the CommitBusyWindow
-// ending at now ([BusyReading]): what raises code_commit_busy on the data node
-// that decides the repository's pushes. It writes the code_commit_busy lines of
-// every minute that has closed by now, once each, since a reading is the one
-// thing that reaches a committer that has stopped refusing.
+// AlarmReading is this committer's [BusyReading] over the CommitBusyWindow
+// ending at now. It also writes the code_commit_busy lines of every minute
+// closed by now, once each, since a reading is the one thing that reaches a
+// committer that has stopped refusing.
 func (c *Committer) AlarmReading(now time.Time) BusyReading {
 	reading, lines := c.busyWindow.reading(now)
 	c.sayBusy(lines)
@@ -183,29 +121,24 @@ type busyWindow struct {
 	// minutes is a ring: a minute's bucket is the slot at its minute modulo
 	// busyBuckets, and a slot holding an older minute is that minute expired.
 	minutes [busyBuckets]busyMinute
-	// newest is the latest minute a refusal was filed in or a reading was
-	// taken at, once begun. A refusal stamped before it — an instant read
-	// before a reading's, or another refusal's, and filed after it, or a
-	// wall clock stepped back — is filed in it instead, so a minute whose
+	// newest is the latest minute filed in or read at, once begun. A refusal
+	// stamped before it (read before another's instant and filed after it,
+	// or a clock stepped back) is filed in it instead, so a minute whose
 	// lines were written never gains a refusal they did not count.
 	newest int64
-	// begun reports newest set: before the first filing or reading there is
-	// no newest minute, and the first refusal is filed in its own — where a
-	// newest that began at zero, the epoch's first minute, moved every
-	// earlier refusal into that minute.
+	// begun reports newest set; a newest that began at zero would move every
+	// earlier refusal into the epoch's first minute.
 	begun bool
 }
 
 // busyMinute is one minute's refusals, by repository. The zero value is a
 // slot nothing has been filed in.
 type busyMinute struct {
-	// at is the minute, counted in minutes since the Unix epoch — negative
-	// before it — and meaningful only in a filled slot.
+	// at is minutes since the Unix epoch (negative before it), meaningful
+	// only in a filled slot.
 	at int64
-	// repos is each repository refused in the minute, by id: made when the
-	// slot's first refusal is filed, and nil in a slot nothing has been filed
-	// in — which is how the two are told apart, since every minute is one a
-	// clock can read and none can mark an empty slot.
+	// repos is each repository refused in the minute, by id; nil marks an
+	// empty slot, since no minute can.
 	repos map[string]*busyCounts
 	// said reports the minute's lines written.
 	said bool
@@ -236,10 +169,8 @@ func (b *busyCounts) add(reason busyReason, n int) {
 // total is every refusal counted, whatever its reason.
 func (b busyCounts) total() int { return b.queue + b.node + b.waited + b.late + b.contended }
 
-// backlog is the refusals of this committer's own backlog — a repository's
-// queue full, the node's whole bound, or a queue's time run out — the three
-// reasons that raise code_commit_busy. A late or a contended refusal is no
-// part of it.
+// backlog is the refusals of this committer's own backlog, the three reasons
+// that raise code_commit_busy: late and contended are no part of it.
 func (b busyCounts) backlog() int { return b.queue + b.node + b.waited }
 
 // busyLine is one code_commit_busy warning: a repository's refusals in one
@@ -250,10 +181,9 @@ type busyLine struct {
 	counts busyCounts
 }
 
-// minuteOf is at's minute, in minutes since the Unix epoch — the wall clock's,
-// so a refusal stamped by the committer's clock and a reading taken by another
-// read the same minute. FLOORED: Go's division truncates toward zero, which
-// would file the half minute before the epoch in the minute after it.
+// minuteOf is at's wall-clock minute since the Unix epoch, so the committer's
+// clock and a reader's agree. FLOORED: Go's division truncates toward zero,
+// which would file the half minute before the epoch in the minute after it.
 func minuteOf(at time.Time) int64 {
 	const perMinute = int64(busyBucket / time.Second)
 	seconds := at.Unix()
@@ -312,9 +242,8 @@ func (w *busyWindow) reading(now time.Time) (BusyReading, []busyLine) {
 	var of map[string]int
 	for i := range w.minutes {
 		s := &w.minutes[i]
-		// A MINUTE PAST THE WINDOW is expired; one later than now's is a
-		// refusal stamped a moment after the reading's clock was read, and
-		// stands.
+		// Past the window is expired; later than now's is a refusal stamped
+		// just after the reading's clock was read, and stands.
 		if !s.filled() || s.at <= minute-int64(busyBuckets) {
 			continue
 		}
@@ -340,10 +269,9 @@ func (w *busyWindow) reading(now time.Time) (BusyReading, []busyLine) {
 	return out, lines
 }
 
-// closeBefore marks every minute before minute whose lines are unwritten as
-// said, and answers its lines — a repository a minute, in the order of the
-// minutes and then of the repositories, so two readers of one log read one
-// order.
+// closeBefore marks every unsaid minute before minute said and answers its
+// lines, ordered by minute then repository so every reader of the log reads
+// one order.
 func (w *busyWindow) closeBefore(minute int64) []busyLine {
 	var closed []*busyMinute
 	for i := range w.minutes {

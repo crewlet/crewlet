@@ -10,9 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// newSyncer is [New] for a node in its broker's own process, which a case
-// over a real broker's own connection is: answered whole, since New refuses
-// only a meter handed to a node that crosses no link.
+// newSyncer is [New] for a node in its broker's own process, as a case over
+// a real broker's connection is; it cannot fail, since New refuses only a
+// meter on a node that crosses no link.
 func newSyncer(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) *Syncer {
 	return mustNew(db, js, agentID, Config{})
 }
@@ -31,9 +31,9 @@ func mustNew(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Confi
 	return s
 }
 
-// bubbleSyncer is a syncer of the seat over db whose changelog is the model
-// copies is played over (copyfake_test.go): in this node's own process, or
-// across a link where link says so.
+// bubbleSyncer is a syncer of the seat over db on copies' model changelog
+// (copyfake_test.go), in the broker's process or, where link says so, across
+// a link.
 func bubbleSyncer(t *testing.T, db *store.DB, copies *fakeCopies, link bool) *Syncer {
 	t.Helper()
 	js := &fakeJS{log: copies.log, created: time.Unix(1_700_000_000, 0).UTC()}

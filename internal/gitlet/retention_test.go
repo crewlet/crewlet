@@ -15,19 +15,19 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE RETENTION PASS — the code-retention duty's body. Each case runs it
-// against the whole path (a real broker, store and applier) on a clock the
-// case sets, at a retention of an hour, because what the pass decides is a
-// question about the rows its steps read and never about the calendar.
+// THE RETENTION PASS, the code-retention duty's body. Each case runs it on the
+// whole path (a real broker, store and applier) at a retention of an hour on a
+// clock it sets: the pass decides from the rows its steps read, never the
+// calendar.
 
 // keep is the retention a case passes unless a longer one is its subject: an
 // hour.
 const keep = time.Hour
 
-// deleteAt deletes a repository the activation t1 declared, its delete
-// applied at the broker instant at — the deleted_at a retention is judged
-// from. Every case declares its repositories first: a declaration at t1
-// after the fence stands at t2 is a superseded activation.
+// deleteAt deletes a repository the activation t1 declared at the broker
+// instant at, the deleted_at a retention is judged from. A case declares its
+// repositories first: one declared at t1 after the fence stands at t2 is a
+// superseded activation.
 func (n *node) deleteAt(id string, at time.Time) {
 	n.t.Helper()
 	n.storedAt = func(uint64, time.Time) time.Time { return at }
@@ -57,11 +57,10 @@ func (p *purged) got() []string {
 	return slices.Clone(p.names)
 }
 
-// passOver is a retention pass at the harness's clock over a store and a
-// reader, handing every purged name to p — under the default scratch policy,
-// with no live turn holding anything, and no committer to propose an expiry
-// to: the cases built on it make no seat branch, and one that does hands the
-// pass a committer of its own (expiryPassOn).
+// passOver is a retention pass at the harness's clock handing every purged
+// name to p, under the default scratch policy, with no live turn holding
+// anything and no committer: its cases make no seat branch, and one that does
+// brings its own (expiryPassOn).
 func passOver(s *gitlet.Store, r *gitlet.Reader, p *purged) *gitlet.Retention {
 	return &gitlet.Retention{
 		Store: s, Reader: r,
@@ -203,12 +202,11 @@ func TestAPurgedNameCanBeDeclaredAgain(t *testing.T) {
 	}
 }
 
-// A REPOSITORY THAT MOVED ON SINCE THE LISTING IS NOT A FAILURE: the pass
-// lists what is due from a stale read of its node's rows and every step
-// decides again inside its own snapshot, so a repository a later activation
-// restored — or restored and deleted again, inside its retention — after the
-// listing read it is simply no longer due. Staged on two nodes: the listing
-// is read on one held behind the change, the steps decided on one past it.
+// A REPOSITORY THAT MOVED ON SINCE THE LISTING IS NOT A FAILURE: the listing
+// is a stale read and every step decides again in its own snapshot, so a
+// repository restored (or restored and deleted again, inside its retention)
+// after the listing is simply no longer due. Staged on two nodes: the listing
+// read on one held behind the change, the steps decided on one past it.
 func TestARepositoryThatMovedOnSinceTheListingIsNotAFailure(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -264,11 +262,10 @@ func TestARepositoryThatMovedOnSinceTheListingIsNotAFailure(t *testing.T) {
 	}
 }
 
-// A PURGE AN EARLIER PASS FINISHED IS HANDED ON AGAIN, and costs no record:
-// a pass whose listing was read before the purge's last record applied steps
-// the repository once, finds its marker and writes nothing — and still
-// reports it purged and hands its name to OnPurged, which is why OnPurged
-// must be safe to call twice for one name.
+// A PURGE AN EARLIER PASS FINISHED IS HANDED ON AGAIN, and costs no record: a
+// pass that listed it before the purge's last record applied steps it once,
+// finds its marker, writes nothing, and still hands the name to OnPurged,
+// which must therefore be safe to call twice for one name.
 func TestAPurgeAnEarlierPassFinishedIsHandedOnAgain(t *testing.T) {
 	t.Parallel()
 	a, b := newTwoNodes(t)
@@ -423,12 +420,10 @@ func (h *holdingAfter) Publish(ctx context.Context, req statelog.Request) (state
 	return res, err
 }
 
-// A PURGE IS HANDED ON ONLY ONCE THIS NODE'S ROWS HOLD IT. Its last record
-// can resolve pending — durable on the log, not yet applied here — and
-// OnPurged's re-declaration decides from this node's rows, where the
-// repository would still read purging and the name would be refused. So the
-// pass holds the name, reports it unhanded, and the next pass hands it on
-// once this node has applied the purge: OnPurged never sees the row.
+// A PURGE IS HANDED ON ONLY ONCE THIS NODE'S ROWS HOLD IT. Its last record can
+// resolve pending, and OnPurged's re-declaration decides from this node's rows,
+// where the repository would still read purging and the name be refused. So
+// the pass reports it unhanded and a later pass hands it on once applied here.
 //
 // Mutation: hand the name on whatever the last record's outcome, and OnPurged
 // meets the row still purging.
@@ -568,11 +563,10 @@ func TestANameThePassCouldNotHandOnIsHandedOnByTheNext(t *testing.T) {
 }
 
 // A PURGE ONCE BEGUN IS FINISHED WHATEVER THE RETENTION. A pass cut short
-// leaves a repository purging — half its rows gone, its name held, no restore
-// — and the next pass may run at a LONGER retention: a revision lengthened
-// it, or the duty moved to a node on another epoch. That retention saves only
-// a repository still merely deleted; the purging one is listed and finished,
-// and its name handed on.
+// leaves a repository purging (rows half gone, name held, no restore), and the
+// next pass may run at a LONGER retention (a revision, or the duty on another
+// epoch's node). That saves only a repository merely deleted; the purging one
+// is finished and its name handed on.
 //
 // Mutation: list purging repositories only past the retention, as deleted
 // ones are, and big stays purging.
@@ -620,11 +614,9 @@ func TestAPurgeOnceBegunIsFinishedWhateverTheRetention(t *testing.T) {
 }
 
 // THE LISTING IS READ A PAGE AT A TIME, IN THE ORDER IT IS STEPPED: every
-// purging repository first, whatever its deletion's age, then the deleted
-// ones oldest first — read here a repository a page, so every boundary
-// between pages and between the two phases is crossed — and each page
-// resumes AFTER the one before, so a repository that failed is not listed
-// again in the same pass.
+// purging repository first, whatever its age, then the deleted oldest first.
+// Read here a repository a page, crossing every page and phase boundary; each
+// page resumes AFTER the last, so a failed repository is not listed again.
 //
 // Mutation: the deleted phase first, and the order changes; a page resuming
 // at its phase's first row, and the pass steps the failed repository until
@@ -674,9 +666,9 @@ func TestTheListingIsReadAPageAtATimeInTheOrderItIsStepped(t *testing.T) {
 	}
 }
 
-// laneClock is a pass's clock and timer and a write authority that takes a
-// fixed time a step on that clock — the pacing and the budget staged exactly,
-// with no wall clock in them — counting the records it took.
+// laneClock is a pass's clock and timer, and a write authority whose every
+// record takes a fixed step on that clock and is counted: pacing and budget
+// staged exactly, with no wall clock.
 type laneClock struct {
 	gitlet.Publisher
 	step time.Duration
@@ -711,12 +703,10 @@ func (c *laneClock) sleep(ctx context.Context, d time.Duration) error {
 }
 
 // A PASS PACES ITS STEPS AND STOPS AT ITS BUDGET, and the next resumes: after
-// each step it waits RetentionIdlePerStep times as long as the step took — a
-// third of the lane — and it takes no step whose turn would come at or after
-// its budget's end. Staged on a clock only the steps and the waits move:
-// steps of 30 ms in a budget of 200 ms begin at 0, 90 and 180 ms, and the
-// fourth's turn at 270 ms is past it — the pass reports Remain, with no
-// error, and the next pass takes the last step.
+// each step it waits RetentionIdlePerStep times the step's duration, and takes
+// no step whose turn comes at or after its budget's end. Steps of 30 ms in a
+// 200 ms budget begin at 0, 90 and 180 ms; the fourth's turn at 270 ms is past
+// it, so the pass reports Remain, no error, and the next takes the last step.
 //
 // Mutation: no wait after a step, and the pass takes all four in its budget;
 // no budget, and it does too.
@@ -761,14 +751,11 @@ func TestAPassPacesItsStepsAndStopsAtItsBudget(t *testing.T) {
 	}
 }
 
-// A PASS HOLDS AT MOST A THIRD OF THE WRITE LANE, measured on the whole path
-// — the real store, its reads and its records — on a clock only the records
-// and the pass's own waits move: each record takes a step of it, and between
-// one step's record answering and the next being asked for, over four parts
-// and the purge, the pass waits RetentionIdlePerStep times as long as the
-// step took, so each step's turn holds the lane a third of it. What share of
-// the pass its records held is logged. The pace's own clock and timer, the
-// wall clock's and a timer's, are held to the same in a bubble
+// A PASS HOLDS AT MOST A THIRD OF THE WRITE LANE, on the whole path (the real
+// store, reads and records) and a clock only the records and the pass's waits
+// move: over four parts and the purge it waits RetentionIdlePerStep times each
+// step's duration before the next, and logs its records' share. The default
+// wall clock and timer are held to the same in a bubble
 // (TestAPassPacesOnTheWallClockByDefault).
 //
 // Mutation: no wait after a step, and the records follow one another at once.

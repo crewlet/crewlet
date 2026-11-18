@@ -12,23 +12,17 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE CHECKS SUBJECT'S APPLIES: every record on a repository's checks subject
-// ([KindChecks]), each PURE IN THE RECORD, ITS POSITION AND ITS INSTANT like
-// every apply here — and each a JOIN ([joinCheck]), so the records commute, as
-// PatternAdditive requires of them (checks.go states the join).
+// The checks subject's applies ([KindChecks]) are pure in the record, its
+// position and its instant, and each a join ([joinCheck]), so the records
+// commute as PatternAdditive requires (checks.go states the join).
 //
-// THE SUBJECT GUARD: a record on one repository's checks subject may write
-// only that repository's checks — its payload names the subject's repository —
-// or it is one no correct writer forms, an error rather than a skip: a record
-// about one repository's checks that named another would escape that
-// repository's deletion gate, which [Applier.Gated] reads off the subject.
-//
-// IT READS NO ROW BUT ITS OWN. Not the repository's: a check's row says
-// nothing that depends on the repository's, and the repository a purge
-// removed is held off by its marker at the gate, before any apply. So its
-// scope names its checks alone (ChecksPath), and a record here waits behind
-// none of the repository's own records but its purge's steps, which delete
-// its rows and name the same path.
+// A record may write only its subject's repository's checks: one naming another
+// is an error, not a skip, since no correct writer forms it and it would escape
+// that repository's deletion gate, which [Applier.Gated] reads off the subject.
+// It reads no row but its own: a check depends on nothing in the repository's
+// row, and a purged repository is held off by its marker at the gate. So its
+// scope is its checks alone (ChecksPath), waiting behind none of the
+// repository's records but its purge's steps, which name the same path.
 
 // applyChecks is every record on a repository's checks subject.
 func (a *Applier) applyChecks(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
@@ -63,8 +57,8 @@ func (a *Applier) applyChecks(ctx context.Context, tx *sql.Tx, at applyContext) 
 	case CheckStarted:
 		return joinCheck(ctx, tx, at, p.CheckKey, startedPart(p))
 	case CheckFinished:
-		// A FAILED HEAD'S NOTICES beside its ending: its routing, stamped by
-		// the checks writer, names whom it concerns.
+		// A failed head's notices: the routing the checks writer stamped
+		// names whom it concerns.
 		n, err := applyCheckFinished(ctx, tx, at, p)
 		return a.noticed(ctx, tx, at, repoID, payload, n, err)
 	case ChecksSweep:
@@ -75,10 +69,9 @@ func (a *Applier) applyChecks(ctx context.Context, tx *sql.Tx, at applyContext) 
 	return 0, fmt.Errorf("gitlet: the record at %s carries a %T", at.position, payload)
 }
 
-// applyCheckFinished joins an ending into its attempt's row, and then removes
-// ITS OWN REPOSITORY'S HISTORY past the record's broker instant less
-// [CheckHistory]: an ending is what keeps the rows' removal in step with the
-// checks that end.
+// applyCheckFinished joins an ending into its attempt's row, then removes its
+// repository's history older than the broker instant less [CheckHistory], so
+// removal keeps step with the checks that end.
 func applyCheckFinished(ctx context.Context, tx *sql.Tx, at applyContext, f CheckFinished) (int, error) {
 	part, err := finishedPart(f, at)
 	if err != nil {
@@ -93,12 +86,9 @@ func applyCheckFinished(ctx context.Context, tx *sql.Tx, at applyContext, f Chec
 }
 
 // applyChecksSweep removes the repository's check rows that ended before the
-// sweep's Through, as an ending's horizon does.
-//
-// A THROUGH NO WRITER FORMS IS AN ERROR, not a skip, as a retire sweep's: a
-// cutoff at or past the record's own broker instant would remove checks that
-// ended after the sweep landed — a history no duty holder's clock, held within
-// an hour of the fleet's by `clock_skew`, can name.
+// sweep's Through. A Through at or past the record's broker instant is an
+// error, not a skip: no duty holder's clock, held within an hour by
+// `clock_skew`, names one, and it would remove checks ended after the sweep.
 func applyChecksSweep(ctx context.Context, tx *sql.Tx, at applyContext, s ChecksSweep) (int, error) {
 	if s.Through.IsZero() || !s.Through.Before(at.brokerAt) {
 		return 0, fmt.Errorf("gitlet: the checks sweep at %s removes the checks that ended before %s, not before "+
@@ -117,14 +107,11 @@ type checkQueue struct {
 	queuedAt, position                                                 int64
 }
 
-// overdueAt is the instant, in the store's microseconds, the queue's attempt
-// falls overdue — waits for a runner longer than its own definition's
-// timeout, which the code_checks_backlog alarm counts — or 0 for an attempt
-// with no timeout: one a person's CI reports, which no runner of the engine
-// claims, and one errored at its dispatch for a checks file that does not
-// run, which ends as it is queued — neither of which is ever overdue.
-// code_checks_overdue_idx holds the queued attempts by it, so the backlog's
-// walk reads them in the order they fell overdue (replicated 0111).
+// overdueAt is the instant, in the store's microseconds, the attempt falls
+// overdue (waits for a runner past its definition's timeout, which the
+// code_checks_backlog alarm counts), or 0 with no timeout: a person's CI's,
+// which no engine runner claims, or one errored at dispatch, which ends as
+// queued. code_checks_overdue_idx orders queued attempts by it (replicated 0111).
 func (q checkQueue) overdueAt() int64 {
 	if q.timeoutSeconds <= 0 {
 		return 0
@@ -170,8 +157,8 @@ func queuedPart(q CheckQueued, at applyContext) checkPart {
 		required: q.Required, queuedAt: store.EncodeTime(q.QueuedAt), position: at.packed,
 	}}
 	if q.Def != nil {
-		// THE DEFINITION AS THE RECORD CARRIES IT, re-encoded by the one
-		// encoder every node runs, so every node stores it byte for byte.
+		// Re-encoded by the one encoder every node runs, so every node
+		// stores it byte for byte.
 		def, _ := json.Marshal(q.Def)
 		part.queue.def, part.queue.runIn, part.queue.timeoutSeconds = string(def), string(q.Def.RunIn),
 			int64(q.Def.TimeoutSeconds)
@@ -187,11 +174,10 @@ func queuedPart(q CheckQueued, at applyContext) checkPart {
 	return part
 }
 
-// startedPart is a started attempt's part: its run. A function of its own, as
-// each record's part is, so the record is a typed parameter wherever its fields
-// are converted — inline, a type switch's variable handed to a conversion is
-// a value the code cache's writers gate cannot type, and refuses
-// (TestNothingButSyncWritesACache).
+// startedPart is a started attempt's part: its run. Each part is a function so
+// the record is a typed parameter where its fields are converted: the cache's
+// writers gate (TestNothingButSyncWritesACache) cannot type, and refuses, a
+// type switch's variable handed to a conversion.
 func startedPart(s CheckStarted) checkPart {
 	return checkPart{run: &checkRun{
 		runner: s.Runner, placement: string(s.Placement), box: s.Box,
@@ -215,8 +201,7 @@ func finishedPart(f CheckFinished, at applyContext) (checkPart, error) {
 		e.exitCode = sql.NullInt64{Int64: int64(*f.ExitCode), Valid: true}
 	}
 	if f.Reporter != nil {
-		// A PERSON, by the human seat they hold — who reported it, as every
-		// row names a person; the credential is the record's.
+		// A person is named by their human seat; the credential is the record's.
 		e.reporter = f.Reporter.Seat
 	}
 	if len(f.Failures) > 0 {
@@ -252,11 +237,9 @@ func (r checkRow) state() CheckState {
 	return CheckStateQueued
 }
 
-// rowBytes is what the row's wide columns weigh, as code_checks.row_bytes
-// records it: its definition, its link, its summary, its tail and its
-// failures — the columns that make one row wider than another, whose overflow
-// pages a row's deletion frees and the horizon and a purge part are bounded
-// by. Every other column is a few dozen bytes on every row.
+// rowBytes is what code_checks.row_bytes records: the wide columns (definition,
+// link, summary, tail, failures), whose overflow pages a deletion frees and
+// which bound the horizon and a purge part. Every other column is a few dozen bytes on every row.
 func (r checkRow) rowBytes() int64 {
 	return int64(len(r.queue.def) + len(r.ending.url) + len(r.ending.summary) + len(r.ending.tail) +
 		len(r.ending.failures))
@@ -273,11 +256,10 @@ func (r *checkRow) joinQueue(q checkQueue) bool {
 	return true
 }
 
-// joinRun keeps the claim with the lower (startedAt, runner); and of ONE
-// claim — its holder's later record repeats its StartedAt and Runner — the
-// box it names, set once (two different, which no holder names, keep the
-// lesser, so either order holds one), and the placement likewise. It reports
-// whether the row changed.
+// joinRun keeps the claim with the lower (startedAt, runner); within one claim
+// (its holder's later record repeats both) the box and placement, set once, or
+// the lesser of two, so either order keeps one. It reports whether the row
+// changed.
 func (r *checkRow) joinRun(s checkRun) bool {
 	held := r.run
 	switch {
@@ -313,11 +295,10 @@ func (r *checkRow) joinEnding(e checkEnding) bool {
 	return true
 }
 
-// endsBefore orders two endings of one attempt, TOTALLY, so a join of any of
-// them in any order keeps one: a measurement before infrastructure's — a run
-// that passed or failed measured the commit, and one that errored, was
-// cancelled or skipped did not — then the earlier finishedAt, then the lower
-// reporter, then the lower position, which no two records share.
+// endsBefore orders two endings of one attempt TOTALLY, so joins in any order
+// keep one: a measurement (passed or failed) before an errored, cancelled or
+// skipped run, then the earlier finishedAt, the lower reporter, and the lower
+// position, which no two records share.
 func endsBefore(a, b checkEnding) bool {
 	if am, bm := CheckState(a.state).Measured(), CheckState(b.state).Measured(); am != bm {
 		return am
@@ -331,10 +312,9 @@ func endsBefore(a, b checkEnding) bool {
 	return a.position < b.position
 }
 
-// joinCheck joins one record's part into the row at key — making the row from
-// the part where none is held — writes the row back where the join changed
-// it, and the log of the ending it keeps where that changed: the rows it
-// wrote and deleted.
+// joinCheck joins one record's part into the row at key (made from the part
+// where none is held), writes back what changed, the kept ending's log
+// included, and answers the rows it wrote and deleted.
 func joinCheck(ctx context.Context, tx *sql.Tx, at applyContext, key CheckKey, part checkPart) (int, error) {
 	row, held, err := readCheckRow(ctx, tx, key)
 	if err != nil {
@@ -373,10 +353,9 @@ func joinCheck(ctx context.Context, tx *sql.Tx, at applyContext, key CheckKey, p
 	return 1 + logs, err
 }
 
-// writeEndingLog makes the attempt's log row the KEPT ENDING'S: the ending it
-// replaced named its own log or none, and the one it keeps names its own or
-// none, so the row is dropped and, for an ending that kept a log, written. It
-// answers the rows it deleted and wrote.
+// writeEndingLog makes the attempt's log row the kept ending's: either ending
+// may name a log or none, so the row is dropped and written again only where
+// the kept one names a log. It answers the rows it deleted and wrote.
 func writeEndingLog(ctx context.Context, tx *sql.Tx, at applyContext, key CheckKey, l *CheckLog) (int, error) {
 	res, err := tx.ExecContext(ctx, dropCheckLogSQL, key.RepoID, key.OID, key.Target, key.Name, key.Attempt)
 	if err != nil {
@@ -412,19 +391,18 @@ func readCheckRow(ctx context.Context, tx *sql.Tx, key CheckKey) (checkRow, bool
 		return checkRow{}, false, err
 	}
 	if e.position == 0 {
-		// THE STATE COLUMN IS DERIVED: an ending's state is the ending's
-		// only once there is one.
+		// The state column is derived ([checkRow.state]); it is the
+		// ending's only once there is one.
 		e.state = ""
 	}
 	return r, true, nil
 }
 
-// checksHorizon removes repoID's check rows that ended before cutoff — each
-// with its log — oldest first, at most [CheckHorizonRows] of them and only
-// while what they weigh is under [CheckHorizonBytes], the first whatever it
-// weighs, so a record always advances the history; it answers the rows it
-// deleted. Every node removes the same rows: the order is the index's own, its
-// key the row's whole key.
+// checksHorizon removes repoID's check rows, with their logs, that ended
+// before cutoff, oldest first: at most [CheckHorizonRows], under
+// [CheckHorizonBytes], but always the first, so a record always advances the
+// history. Every node removes the same rows, ordered by the index's whole-row
+// key. It answers the rows it deleted.
 func checksHorizon(ctx context.Context, tx *sql.Tx, at applyContext, repoID string, cutoff int64) (int, error) {
 	take, _, err := checksEndedBefore(ctx, tx, repoID, 1, cutoff, CheckHorizonRows, CheckHorizonBytes)
 	if err != nil {
@@ -433,13 +411,11 @@ func checksHorizon(ctx context.Context, tx *sql.Tx, at applyContext, repoID stri
 	return deleteOldestChecks(ctx, tx, repoID, 1, cutoff, take)
 }
 
-// checksEndedBefore reads repoID's check rows whose finished_at is in [lo,
-// hi), oldest first, and answers how many of them one removal takes — at most
-// maxRows, and only while the row_bytes of those taken are under maxBytes, the
-// first whatever it weighs — and whether rows in the range remain past them.
-// The horizon and a checks sweep's decide ask it of the ended rows before a
-// cutoff (lo 1: an ending's instant; 0 is no ending), a purge part of every
-// row a repository holds.
+// checksEndedBefore answers how many of repoID's rows with finished_at in
+// [lo, hi), oldest first, one removal takes (at most maxRows, while their
+// row_bytes are under maxBytes, the first whatever it weighs) and whether more
+// remain. The horizon and a sweep's decide pass lo 1, since 0 is no ending; a
+// purge part passes the whole range.
 func checksEndedBefore(ctx context.Context, tx *sql.Tx, repoID string, lo, hi int64, maxRows int,
 	maxBytes int64) (take int, more bool, err error) {
 
@@ -483,12 +459,11 @@ func deleteOldestChecks(ctx context.Context, tx *sql.Tx, repoID string, lo, hi i
 	return deleted, nil
 }
 
-// purgeChecks deletes, for a purge part, a deleted repository's check rows —
-// each with its log — in the horizon's order, at most half of budget of them,
-// since each may take its log with it, and only while the part weighs under
-// PurgePartBytes with weighed already taken, the first whatever it weighs; it
-// answers the rows it deleted. A check's rows are the last a part reaches, so
-// a repository's pushes, refs, packs and changes go before them.
+// purgeChecks deletes, for a purge part, a deleted repository's check rows with
+// their logs in the horizon's order: at most budget/2, since each may take its
+// log, and while the part, weighed already taken, is under PurgePartBytes, the
+// first whatever it weighs. Checks are the last rows a part reaches. It
+// answers the rows it deleted.
 func purgeChecks(ctx context.Context, tx *sql.Tx, repoID string, budget int, weighed int64) (int, error) {
 	if budget < 2 || weighed >= PurgePartBytes {
 		return 0, nil
@@ -522,9 +497,8 @@ const (
 		tests_skipped, log_lines, tail_cut
 		FROM code_checks INDEXED BY ` + checksKey + `
 		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`
-	// writeCheckSQL writes a row whole, the join's: every column the join
-	// computed, over whatever the row held — overdue_at derived from its
-	// queue (checkQueue.overdueAt).
+	// writeCheckSQL writes the join's row whole over whatever was held,
+	// overdue_at derived by checkQueue.overdueAt.
 	writeCheckSQL = `INSERT INTO code_checks (repo_id, commit_oid, name, attempt, state, purpose,
 			change_id, revision, candidate_id, entry_id, target_ref, base_oid, defs_oid, required, run_in,
 			timeout_seconds, reason, runner_node, placement, box_handle, reporter, queued_at,
@@ -562,9 +536,8 @@ const (
 		WHERE repo_id = ?1 AND finished_at >= ?2 AND finished_at < ?3
 		ORDER BY finished_at, commit_oid, target_ref, name, attempt LIMIT ?4`
 	// deleteOldestCheckLogsSQL and deleteOldestChecksSQL delete the first ?4
-	// of those rows: the logs through the rows they belong to, each by its
-	// key, then the rows — the rowid idiom, so they are the rows the order
-	// reaches first and no more.
+	// of those rows, logs first, found through their rows by key; the rowid
+	// idiom keeps them to the rows the order reaches first.
 	deleteOldestCheckLogsSQL = `DELETE FROM code_check_logs WHERE rowid IN (SELECT l.rowid
 		FROM (SELECT commit_oid, target_ref, name, attempt FROM code_checks INDEXED BY ` + checksEndedKey + `
 			WHERE repo_id = ?1 AND finished_at >= ?2 AND finished_at < ?3
@@ -576,8 +549,7 @@ const (
 		FROM code_checks INDEXED BY ` + checksEndedKey + `
 		WHERE repo_id = ?1 AND finished_at >= ?2 AND finished_at < ?3
 		ORDER BY finished_at, commit_oid, target_ref, name, attempt LIMIT ?4)`
-	// THE FINAL PURGE'S, each of a repository's whole set: its logs, then
-	// its rows.
+	// The final purge's: a repository's whole set, logs first.
 	purgeAllCheckLogsSQL = `DELETE FROM code_check_logs WHERE repo_id = ?`
 	purgeAllChecksSQL    = `DELETE FROM code_checks WHERE repo_id = ?`
 )

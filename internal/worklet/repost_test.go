@@ -14,12 +14,11 @@ import (
 // A REMARK ALREADY POSTED IS ANSWERED BY ITS ROW, and nothing is published.
 //
 // A re-run of the call that posted a remark names the same comment id — a
-// rebased attempt included, whose operation is new and which the ledger
-// therefore does not answer. Published, the post re-sent the remark as first
-// written: a second history row, a second wake, and its automatic watch put
-// back on the item somebody who had stopped following it. And it is answered
-// whatever became of the item since: the post landed, so an item trashed after
-// it is no reason to tell its author to restore it first.
+// rebased attempt included, whose new operation the ledger does not answer.
+// Published, it would write a second history row and a second wake, and its
+// automatic watch would put back somebody who had stopped following the item.
+// It is answered whatever became of the item since: the post landed, so an
+// item trashed after it is no reason to tell its author to restore it first.
 func TestARemarkAlreadyPostedIsAnsweredByItsRow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -117,12 +116,10 @@ func TestARemarkAlreadyPostedIsAnsweredByItsRow(t *testing.T) {
 	}
 }
 
-// A REMARK IS REWRITTEN ONLY THROUGH EditComment.
-//
-// The edit kind is what the applier rewrites a remark's words on, and
-// EditComment is the one door that forms the edit from the stored row and
-// refuses anybody but the author. A plain patch stating that kind would be a
-// rewrite under an author rule nothing checked.
+// A REMARK IS REWRITTEN ONLY THROUGH EditComment, the one door that forms the
+// edit kind from the stored row and refuses anybody but the author. A plain
+// patch stating that kind would be a rewrite under an author rule nothing
+// checked.
 func TestARemarkIsRewrittenOnlyThroughEditComment(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -155,9 +152,9 @@ func TestARemarkIsRewrittenOnlyThroughEditComment(t *testing.T) {
 }
 
 // A REMARK'S ID IS ITS ITEM'S: a post under an id another item's remark holds
-// is refused rather than answered by that row. Answered, it would tell its
-// caller a remark landed on this item when nothing did — the row it met is
-// somebody else's remark, on somebody else's thread.
+// is refused rather than answered by that row, which would tell its caller a
+// remark landed on this item when the row is somebody else's, on another
+// thread.
 func TestAPostUnderAnIdAnotherItemHoldsIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -191,24 +188,17 @@ func TestAPostUnderAnIdAnotherItemHoldsIsRefused(t *testing.T) {
 }
 
 // A REMARK POSTED AGAIN IS RESOLVED FROM ITS ROW, before anything is inferred.
+// Resolved from the asks open now, which its own post changed, an inferred
+// answer finds its question closed and claims a question asked since. From
+// the row, the re-run asks and answers what its post did (a choice still
+// checked against its decision), a remark that answered nothing still answers
+// nothing once an ask arrives, and nothing is published; a new remark, the
+// control, infers what is open now. The write reports the remark it answered
+// from ([worklet.WriteResult.Posted]), whatever the re-run carried.
 //
-// A re-run of the call that posted a remark names the same comment id, and the
-// write answers it from that row with nothing published. The thread read used
-// to resolve it from the asks open NOW, which its own post had changed: an
-// answer whose question it had inferred found that question closed, so its
-// choice had no question to be one of and its words answered nothing, and a
-// question asked since was claimed as the one it answered while its write
-// closed nothing. Resolved from the row, the re-run asks and answers what its
-// post did — a choice still checked against the decision it chose from — and a
-// remark that answered nothing answers nothing once an ask has arrived. A new
-// remark is the control: it infers what is open now. And the write reports the
-// remark it answered from ([worklet.WriteResult.Posted]), whatever the re-run
-// carried.
-//
-// Mutation: skip the row in Reader.Thread and the inferred answer's re-run
-// answers nothing (with its choice or without), the explicit one is refused as
-// already answered by itself, and the re-runs after a second ask claim it;
-// leave Posted unset and the write reports nothing.
+// Mutation: skip the row in Reader.Thread and the inferred re-run answers
+// nothing, the explicit one is refused as answered by itself, the re-runs after
+// a second ask claim it, and with Posted unset the write reports nothing.
 func TestARemarkPostedAgainIsResolvedFromItsRow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -339,9 +329,8 @@ func TestARemarkPostedAgainIsResolvedFromItsRow(t *testing.T) {
 }
 
 // A POST UNDER AN ID ANOTHER AUTHOR'S REMARK HOLDS IS REFUSED, as one another
-// item's holds is. An id is derived from its author's own call, so the row is
-// somebody else's remark; answered from it, the post would tell its caller that
-// a remark they never made was theirs.
+// item's holds is: an id derives from its author's own call, so answered from
+// that row the post would tell its caller a remark they never made was theirs.
 //
 // Mutation: drop the author from postedComment's check and the post answers
 // applied from bob's row.
@@ -372,13 +361,11 @@ func TestAPostUnderAnIdAnotherAuthorsRemarkHoldsIsRefused(t *testing.T) {
 	}
 }
 
-// A REMARK IS TAKEN DOWN BY NO PATCH.
-//
-// RemoveComment is the one door that forms the removal kind, from the stored
-// row inside the decide and under the author rule. A patch carrying a comment
-// under that kind is a removal stating a remark read in another transaction,
-// under no rule at all, so it is refused before anything is published, its
-// author's own included.
+// A REMARK IS TAKEN DOWN BY NO PATCH: RemoveComment is the one door that forms
+// the removal kind, from the stored row inside the decide and under the author
+// rule. A patch carrying that kind states a remark read in another transaction
+// under no rule, so it is refused before anything is published, its author's
+// own included.
 //
 // Mutation: drop UpdateTask's refusal of the kind and the removal of a remark
 // nobody posted posts it, and the removal of a posted one answers applied.

@@ -11,91 +11,56 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A PROTECTED TARGET'S TIP WORK, READ FROM THE ROWS (ADR-0098): every landing
-// on a protected target leaves a row (code_landings) and moves its green row
-// (code_green) only where its record proved the target's required checks —
-// a queue's landing, which its candidates' checks proved, and a
-// merge or a push into a target whose gate requires none. Every other landing
-// — a merge a person's override landed, a person's own push under
-// `direct_push: persons` — lies ABOVE ITS TARGET'S GREEN until a check of a
-// tip proves it, and its home owes the target that work: a `checks_due` read
-// of one repository answers it on its first pages ([ReadAnswer.DueTips], paged
-// by [ReadAnswer.TipsNext] before its heads), one [TipDue] a target holding
-// a landing neither green nor broken.
+// A protected target's tip work (ADR-0098). Every landing on a protected
+// target leaves a code_landings row, and moves the target's green row
+// (code_green) only where its record proved the required checks: a queue's
+// landing, or a merge or push into a target whose gate requires none. Any other
+// landing (an override's merge, a `direct_push: persons` push) lies above the
+// green until a tip check proves it, and a `checks_due` read answers that work
+// on its first pages: [ReadAnswer.DueTips], paged by [ReadAnswer.TipsNext]
+// before its heads.
 //
-// A LANDING IS GREEN BY ITS POSITION — at or below its target's green row —
-// never by a flag of its own: a green record moves the one row, so it writes
-// the same few rows however many landings lie beneath it, and a target that
-// gathered any backlog of unproven landings behind a red tip greens again on
-// the first tip that passes (replicated 0142).
-//
-// A TipDue is everything the home decides its next step from, in ONE
-// snapshot: the target's green row, the checks its gate requires, and its
-// landings above the green, oldest first, each with the latest attempt of
-// each required check recorded on its commit FOR THE TARGET — whatever the
-// attempt's purpose, since a check is a measurement of a commit, and a
-// fast-forward lands the very commit its change's head checks measured. The
-// home then (internal/gitlet/home's tips) dispatches the newest landing's tip
-// where it holds no attempt — coalesced, ONE ROUND AT A TIME: a landing that
-// is no longer the newest is never dispatched, and the newest waits while a
-// tip round on another of the target's commits is still queued or running
-// ([TipDue.InFlight]), so the landings that arrive meanwhile are measured
-// together by the next round — moves the green row onto it where every
-// required check passed, and where one failed BISECTS the failed checks over
-// the landing rows — never over git's history, which a merge's second parent
-// would walk into — down to the first landing they failed on, which it
-// records broken.
-//
-// THE WINDOW is [MaxTipLandings] landings above the green: a bisect over it
-// takes log₂ of it rounds of checks. A target holding more is read as its
-// oldest MaxTipLandings and its newest ([TipDue.More]), so a dispatch always
-// reaches the tip; a culprit past the window is the one thing it cannot name
-// until a green tip clears the landings before it (see the home's bisect).
-//
-// LISTED BY ONE ROW A TARGET: a target holding a landing above its green that
-// no bisect found broken holds a row of tip work (code_tips_due), which the
-// landing's record inserts and the record that moves the green past it, or
-// names the last of them broken, removes. The listings walk those rows — the
-// repositories owing tip work, and one repository's targets — so they cost a
-// row a target, never one a landing above a stuck tip, and never the thirty
-// days of green ones each target keeps behind it. A target whose culprit is
-// named stays listed while landings lie above the culprit, until a tip passes
-// — a home's pass reads its window and finds nothing owed — which costs a
-// broken target's home a few reads a minute and is what lets a fix's landing
-// be dispatched by the backstop as well as by its nudge.
+// A landing is green by its position, at or below the green row, never by a
+// flag: a green record writes one row however many landings lie beneath it, so
+// a backlog behind a red tip greens on the first passing tip (replicated 0142).
 
 // MaxTipLandings is the most landings above its green one target's tip work
-// reads: 256, so a bisect over a whole window takes eight rounds of checks
-// (log₂ 256), and a window's attempts — at most MaxRequiredChecks a landing,
-// recorded only where a dispatch or a probe ran one — stay a small part of a
-// page. JUDGMENT: 256 landings unproven on one target are days of a person's
-// direct pushes with every tip red; a team that lands that much past a red
-// tip has a branch to revert, not a bisect to wait for.
+// reads: a bisect over a whole window takes eight rounds of checks (log₂ 256),
+// and its attempts (at most MaxRequiredChecks a landing, only where a dispatch
+// or probe ran one) stay a small part of a page. A target holding more is read
+// as its oldest MaxTipLandings and its newest ([TipDue.More]), so a dispatch
+// always reaches the tip; a culprit past the window cannot be named until a
+// green tip clears the landings before it (the home's bisect). JUDGMENT: 256
+// unproven landings on one target are days of direct pushes with every tip
+// red: a branch to revert, not a bisect to wait for.
 const MaxTipLandings = 256
 
 // TipDue is one protected target's tip work as one snapshot holds it
-// ([ReadAnswer.DueTips]).
+// ([ReadAnswer.DueTips]): everything its home decides the next step from. The
+// home (internal/gitlet/home's tips) dispatches the newest landing's tip where
+// it holds no attempt, one round at a time ([TipDue.InFlight]) so landings
+// arriving meanwhile are measured together; moves the green onto it where every
+// required check passed; and where one failed, bisects the failed checks over
+// the landing rows (never git's history, which a merge's second parent would
+// walk into) to the first landing they failed on, which it records broken.
 type TipDue struct {
 	TargetRef string `json:"target_ref"`
-	// Green is the target's green row; nil for a target none of whose tips
-	// has passed yet, whose first landing's base its tip checks are defined
-	// at.
+	// Green is the target's green row; nil before any of its tips passed, when
+	// its tip checks are defined at its first landing's base ([TipDue.Base]).
 	Green *GreenRow `json:"green,omitempty"`
 	// Required is every check the target's gate requires, sorted: what a tip
-	// dispatch queues, and what its green row moves on. None where its gate
-	// requires none, when the newest landing is green as it stands.
+	// dispatch queues and its green row moves on. None where the gate requires
+	// none, when the newest landing is green as it stands.
 	Required []string `json:"required,omitempty"`
 	// Landings are the target's landings above its green, oldest first: all
-	// of them, or, for a target holding more than MaxTipLandings, its oldest
-	// MaxTipLandings and then its newest — More where landings lie between
-	// those two, which the window does not read.
+	// of them, or past MaxTipLandings its oldest MaxTipLandings and then its
+	// newest, More where unread landings lie between the two.
 	Landings []TipLanding `json:"landings"`
 	More     bool         `json:"more,omitempty"`
-	// InFlight is a commit of the target's other than its newest landing's
-	// that a tip attempt is still queued or running on — the ROUND IN FLIGHT,
-	// which the newest waits for before it is dispatched — read by the index
-	// partial on exactly those attempts (replicated 0143), so it is found
-	// wherever that commit lies, past the window included; "" for none.
+	// InFlight is a commit of the target's, other than its newest landing's,
+	// that a tip attempt is still queued or running on: the round in flight,
+	// which the newest waits for. Read by the index partial on exactly those
+	// attempts (replicated 0143), so found past the window too; "" for none.
 	InFlight string `json:"in_flight,omitempty"`
 }
 
@@ -112,9 +77,10 @@ func (t TipDue) Base() string { return t.Landings[0].Base }
 
 // TipLanding is one landing above its target's green as tip work reads it:
 // its key on the target, the target before and after it, whether it ends its
-// record — the commit a green row may name — whether a bisect already found
-// it broken, and the latest attempt of each required check recorded on its
-// commit for the target, none for a name never queued there.
+// record (the commit a green row may name), whether a bisect found it broken,
+// and the latest attempt of each required check on its commit for the target,
+// whatever the attempt's purpose: a check measures a commit, and a fast-forward
+// lands the very commit its change's head checks measured.
 type TipLanding struct {
 	Position statelog.Position `json:"position"`
 	Ordinal  int               `json:"ordinal"`
@@ -144,15 +110,13 @@ type TipCheck struct {
 	Reason  CheckReason `json:"reason,omitempty"`
 }
 
-// dueTips files the tip work of repository repoID's targets after after — ""
-// for the first — into out, within pg: each target owing it, by name, its
-// window read whole, with required, its gate's checks by target. It answers
-// whether the page ended among them, when [ReadAnswer.TipsNext] names the
-// last target it answered — the one that filled the page among them, which a
-// page APPENDS BEFORE IT ASKS whether it is full, as every page here does —
-// and the next page of the same turn goes on after it, before any head. A
-// target past a page is never left to a later pass, which would list the same
-// targets first again and never reach it while they stay owed.
+// dueTips files into out, within pg, the tip work of repoID's targets after
+// after ("" for the first): each target owing it, by name, its window read
+// whole, required naming its gate's checks. It answers whether the page ended
+// among them, [ReadAnswer.TipsNext] then naming the last target answered (a
+// page APPENDS BEFORE IT ASKS whether it is full), and the turn's next page
+// resumes after it, before any head: a later pass would list the same targets
+// first again and never reach one past the page while they stay owed.
 func (r *Reader) dueTips(ctx context.Context, tx *sql.Tx, repoID, after string, required *requiredChecks,
 	pg *page, out *ReadAnswer) (bool, error) {
 
@@ -186,9 +150,14 @@ func (r *Reader) dueTips(ctx context.Context, tx *sql.Tx, repoID, after string, 
 	return false, nil
 }
 
-// dueTipTargetsIn is repoID's targets owing tip work after after — each
-// holding a landing above its green that no bisect found broken — by name, at
-// most limit.
+// dueTipTargetsIn is repoID's targets owing tip work after after (a landing
+// above the green no bisect found broken), by name, at most limit. Each holds
+// one code_tips_due row, which a landing's record inserts and the record that
+// moves the green past it, or names the last of them broken, removes: a listing
+// costs a row a target, never one a landing. A target whose culprit is named
+// stays listed while landings lie above the culprit, until a tip passes: a few
+// reads a minute for its home, so the backstop, not only its nudge, can
+// dispatch a fix's landing.
 func dueTipTargetsIn(ctx context.Context, tx *sql.Tx, repoID, after string, limit int) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, dueTipTargetsSQL, repoID, after, limit)
 	if err != nil {
@@ -207,8 +176,8 @@ func dueTipTargetsIn(ctx context.Context, tx *sql.Tx, repoID, after string, limi
 }
 
 // tipDueOf is target's tip work on repoID: its green, its gate's checks, its
-// window of at most bound landings above the green — MaxTipLandings — then
-// its newest, and each one's latest attempts.
+// window of at most bound (MaxTipLandings) landings above the green, then its
+// newest, and each one's latest attempts.
 func tipDueOf(ctx context.Context, tx *sql.Tx, repoID, target string, required *requiredChecks,
 	bound int) (TipDue, error) {
 	t := TipDue{TargetRef: target}

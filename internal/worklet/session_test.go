@@ -13,16 +13,12 @@ import (
 // A GESTURE'S SECOND APPEND ON ONE SUBJECT WAITS FOR ITS FIRST, and it waits
 // BEFORE it opens a snapshot.
 //
-// This is the state every multi-append sequence here is in between its own
-// steps: the row this node holds is the one the earlier append MOVED, and the
-// record that moved it is still on its way to this node's applier. Deciding
-// from that row forms an expectation the earlier append has already made
-// stale, so the broker refuses it — and the framework then waits for exactly
-// the position the writer was holding all along, having spent a snapshot, a
-// decide and a round trip to discover it.
-//
-// [worklet.Writer.After] is that wait moved ahead of all of it, and until
-// something called it [statelog.Request.Session] had no producer at all.
+// Between a multi-append sequence's steps, this node's row is the one the
+// earlier append MOVED while its record is still on the way to the applier. A
+// decision from that row is already stale, so the broker refuses it and the
+// framework waits for the position the writer held all along, a snapshot, a
+// decide and a round trip later. [worklet.Writer.After] moves that wait ahead
+// of all of it, as [statelog.Request.Session]'s producer.
 func TestASecondWriteOnOneSubjectWaitsBeforeItSnapshots(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -37,8 +33,7 @@ func TestASecondWriteOnOneSubjectWaitsBeforeItSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the first write: %v", err)
 	}
-	// DELIBERATELY NOT DRAINED. The row is here; the record that changed
-	// it is not.
+	// DELIBERATELY NOT DRAINED: the row is here, its record is not.
 
 	second := "second"
 	two, err := r.writer.After(one.Position).UpdateTask(t.Context(), "op-3", "t-1",
@@ -53,16 +48,14 @@ func TestASecondWriteOnOneSubjectWaitsBeforeItSnapshots(t *testing.T) {
 	case refusal.Reason != statelog.ReasonBehind:
 		t.Fatalf("the reason is %q, want %q", refusal.Reason, statelog.ReasonBehind)
 	}
-	// NO SNAPSHOT WAS OPENED, which is the whole of what the mark buys:
-	// the framework's own recovery reaches the same wait, but only after a
-	// round has formed a decision from rows that are about to move.
+	// NO SNAPSHOT WAS OPENED, which is what the mark buys: the framework's own
+	// recovery reaches the same wait only after a round decided from stale rows.
 	if two.Rounds != 0 {
 		t.Errorf("the write reports %d round(s), so it snapshotted and decided "+
 			"before it found out it was behind its own previous write", two.Rounds)
 	}
-	// AND THE REFUSAL SAYS WHOSE WRITE IT IS WAITING FOR. "My applier is
-	// lagging" and "a colleague is editing this" are one reason and two
-	// different things to do about it.
+	// AND THE REFUSAL SAYS WHOSE WRITE IT WAITS FOR: "my applier is lagging"
+	// and "a colleague is editing this" are one reason, two different remedies.
 	if !strings.Contains(refusal.Detail, "own") {
 		t.Errorf("the detail is %q and does not name the write as the "+
 			"caller's own", refusal.Detail)
@@ -72,11 +65,10 @@ func TestASecondWriteOnOneSubjectWaitsBeforeItSnapshots(t *testing.T) {
 // A DEPENDENCY NAMING BOTH DIRECTIONS WRITES ITS OWN TASK TWICE, and the
 // second of those commits carries the first as its mark.
 //
-// Step 2 publishes this task's `waiting_on` edges on its own subject, and step
-// 3 publishes the dependents it gains on that same subject. Nothing about the
-// two is visible in the result — a mirror that loses is collected as one-sided
-// rather than raised — so the instrument is the witness: the session wait is a
-// histogram, and it is observed by nothing else in this package.
+// Step 2 publishes this task's `waiting_on` edges and step 3 the dependents it
+// gains, both on its own subject. A mirror that loses is collected as
+// one-sided rather than raised, so the result shows nothing: the witness is the
+// session-wait histogram, which nothing else in this package observes.
 func TestADependencyOnBothSidesWaitsForItsOwnAuthoredCommit(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

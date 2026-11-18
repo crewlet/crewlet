@@ -187,6 +187,10 @@ var tagKeys = map[string]string{
 	// records under the assistant transport), so the Audit log lists every
 	// turn and write of one conversation from a listing.
 	"conversation_id": "conversation_id",
+	// HOW THE REPORTED WORK FAILED, in its type's closed words (an executor
+	// launch's `max_turns`, a turn's `budget_exhausted`), for a listing of
+	// failures to tell them apart without reading each payload.
+	"error_kind": "error_kind",
 }
 
 // The three events that carry an LLM call's cost: a phase's record, one launch

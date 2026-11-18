@@ -7,63 +7,35 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// What a DECLARATION may say, and why a name is checked as carefully as a slug.
+// What a declaration may say.
 //
-// # The name is a resolution key, not a label
+// A type, field or option resolves by id, by slug and BY NAME (a model writes
+// `severity: High` after reading it off a board), so names colliding under
+// [NormName] are refused like slugs: one lookup could not tell them apart,
+// and `OptionIDs` would keep whichever came last.
 //
-// A type, a field and an option are each resolvable three ways — by id, by
-// slug, and BY NAME — which is what lets a model write `severity: High` after
-// reading "High" off a board. So two declarations whose names differ only in
-// case are two rows one lookup cannot tell apart, and the resolution picks
-// whichever the index reached first: the same collision the slug rule exists
-// to prevent, through the door nobody closed.
-//
-// The schema has been carrying the column for it all along — `name_norm`, with
-// an index annotated "the case-insensitive collision rule" — and the rule was
-// never written. So "Bug" and "bug " both landed, and `OptionIDs` mapped both
-// to one key, silently keeping whichever option came last in the slice: a
-// value written by name resolved differently after somebody reordered the
-// list.
-//
-// # And a config knob on a type that has none is a caller who believes they
-// configured something
-//
-// `Precision` on a checkbox, `Time` on a number, a `Rollup` on a text field:
-// each is a setting stored, replicated and read by nothing. The options check
-// already refuses its own version of this — "options belong to the three types
-// that have them" — and the rest of the struct was unchecked, so every other
-// knob was accepted anywhere.
-//
-// The type is not the whole question, either. A `tracking` list on its OWN
-// type is still read by nothing, because the only mode that would count it is
-// `auto` and this build refuses that — so the pair is checked, not just each
-// half against the field.
+// A config knob its type cannot read (`Precision` on a checkbox, `Time` on a
+// number) is refused: it is stored, replicated and read by nothing, while the
+// caller believes they configured something. Knobs are checked in pairs too:
+// a `tracking` list on a manual progress field is read by nothing.
 
-// NormName is the one normalisation a name is compared under.
-//
-// ONE FUNCTION, because there were three inline copies — the applier writes
-// `name_norm` for types, for fields and for options — and the check added
-// beside them would have been a fourth. A collision rule that normalises one
-// way and a column that normalises another is a rule that passes a write the
-// index then treats as a duplicate.
+// NormName is the one normalisation a name is compared under, by the
+// collision check and by the applier's `name_norm` column alike: two that
+// differed would pass a write the index then treats as a duplicate.
 func NormName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
-// MaxUnit is how long a number field's unit may be.
-//
-// 16 BYTES, because a unit is rendered INLINE beside every value on every row
-// — "8 h", "3 story points" — and anything longer is a label rather than a
-// unit. It is the design's own figure.
+// MaxUnit is how long a number field's unit may be, in bytes: a unit is
+// rendered inline beside every value ("8 h", "3 story points"), and anything
+// longer is a label.
 const MaxUnit = 16
 
 // MaxOptionName bounds an option's own label.
 const MaxOptionName = 64
 
-// The closed sets a [FieldConfig] draws from. Each is a named slice rather
-// than a switch, so a refusal can LIST what was allowed — a refusal naming the
-// set is one a caller's next attempt satisfies, and one that does not is a
-// guess.
+// The closed sets a [FieldConfig] draws from, slices rather than a switch so a
+// refusal can list what is allowed.
 var (
 	// ProgressModes are how a progress field is filled.
 	ProgressModes = []string{"manual", "auto"}
@@ -74,8 +46,8 @@ var (
 	// RollupSources are the relation a rollup gathers across.
 	RollupSources = []string{"waiting_on", "blocking", "linked", "children"}
 
-	// RollupFields are the built-in columns a rollup may gather. A field
-	// ID is also accepted, which is why this is not the whole set.
+	// RollupFields are the built-in columns a rollup may gather; a field
+	// ID is also accepted.
 	RollupFields = []string{
 		"due", "start", "points", "estimate_min", "spend_tokens", "status_group",
 	}
@@ -83,9 +55,7 @@ var (
 	// RollupOps are the aggregations.
 	RollupOps = []string{"sum", "avg", "min", "max", "count", "earliest", "latest"}
 
-	// DateRollupOps apply to a DATE source and to nothing else: the
-	// earliest of a set of numbers is its minimum, under a word that says
-	// something else.
+	// DateRollupOps apply to a date source and nothing else.
 	DateRollupOps = []string{"earliest", "latest"}
 )
 
@@ -108,18 +78,15 @@ func checkConfig(f *FieldDef) error {
 	case (c.Min != nil || c.Max != nil) && !numeric:
 		return unusable(f, "a minimum or maximum", "number, progress and rollup")
 	case c.Min != nil && c.Max != nil && *c.Min > *c.Max:
-		// A RANGE NO VALUE SATISFIES is a field nothing can ever be
-		// written to, refused at the declaration rather than at every
-		// write that fails against it.
+		// Refused at the declaration rather than at every write that
+		// would fail against it.
 		return invalid("field %s has a minimum of %v above its "+
 			"maximum of %v, so no value could satisfy it", f.Slug, *c.Min, *c.Max)
 	case c.Time && f.Type != FieldDate:
 		return unusable(f, "a time flag", "date")
 	case c.Multi && !MultiValued(f.Type) && f.Type != FieldDropdown:
-		// WHICH TYPES HOLD SEVERAL IS [MultiValued]'s ANSWER, plus the
-		// one type whose declaration genuinely chooses: a dropdown is
-		// single-valued unless it says otherwise, and `labels` is the
-		// same field type that always is.
+		// [MultiValued] decides which types hold several, plus the
+		// dropdown, the one type whose declaration chooses.
 		return unusable(f, "a multi flag", "dropdown, labels, people and relationship")
 	}
 	if err := checkProgress(f); err != nil {
@@ -128,12 +95,9 @@ func checkConfig(f *FieldDef) error {
 	return checkRollup(f)
 }
 
-// MaxPrecision is how many decimal places a number field may declare.
-//
-// SIX, which is the design's own figure and is what a float64 carries exactly
-// for the magnitudes a tracker holds. Past it the declaration promises an
-// exactness the storage does not have, and the coercion table would refuse
-// values for a precision nothing could represent.
+// MaxPrecision is how many decimal places a number field may declare: what a
+// float64 carries exactly for a tracker's magnitudes. Past it the declaration
+// promises an exactness the storage does not have.
 const MaxPrecision = 6
 
 // checkProgress is the two knobs only a progress field has.
@@ -162,41 +126,20 @@ func checkProgress(f *FieldDef) error {
 		seen[source] = true
 	}
 	if c.Progress == "auto" {
-		// AND THIS BUILD DOES NOT COMPUTE ONE, which is the same
-		// objection the refusal below this used to make about tracking
-		// nothing: an automatic field reads whatever was last written
-		// into it and calls itself automatic, which is worse than a
-		// manual field because nobody knows to keep it up to date.
-		//
-		// Refused rather than accepted and left empty, on the rule the
-		// tracking check already stated: a bar that never moves reads as
-		// work that never started. The sources it would count —
-		// subtasks, checklists, asked comments — are rows a READ would
-		// have to aggregate per task, which is a decision about a
-		// board's cost rather than a line of missing code.
+		// This build computes no automatic progress: the field would hold
+		// whatever was last typed while calling itself automatic, worse
+		// than a manual one because nobody knows to keep it up to date.
+		// Computing it means a per-task aggregate on every read, a
+		// decision about a board's cost rather than missing code.
 		return invalid("field %s is filled automatically and this "+
 			"build computes no automatic progress — the value would be "+
 			"whatever somebody last typed into it. Set `progress: manual` "+
 			"and write the number, or leave the field out", f.Slug)
 	}
 	if len(c.Tracking) > 0 {
-		// AND A TRACKING LIST WITHOUT IT COUNTS NOTHING EITHER. The list
-		// names what an AUTOMATIC progress field counts, the mode above
-		// is the only thing that would ever read it, and that mode is
-		// refused — so on a `manual` field it is a setting stored,
-		// replicated and read by nothing, which is the objection this
-		// file opens with.
-		//
-		// It was the one knob the type check let through on its OWN
-		// type: `progress` and `tracking` were checked together against
-		// the field type, and nothing then asked whether the pair made
-		// sense. An operator who declared the sources and set the mode
-		// to `manual` to get past the refusal above was told their
-		// field was declared, and it counted nothing.
-		//
-		// AFTER the automatic refusal, so a field that declares both is
-		// told about the mode — the setting it would have to change
-		// first — rather than about the list under it.
+		// Only the refused `auto` mode reads a tracking list, so on a
+		// manual field it is read by nothing. Checked after the mode, so
+		// a field declaring both is told about the setting to change first.
 		return invalid("field %s tracks %s and nothing counts "+
 			"them — a tracking list is what an AUTOMATIC progress field "+
 			"counts, and this build computes no automatic progress. Drop "+
@@ -216,17 +159,10 @@ func checkRollup(f *FieldDef) error {
 	if f.Type != FieldRollup {
 		return unusable(f, "a rollup", "rollup")
 	}
-	// AND THIS BUILD GATHERS NOTHING. A rollup is a correlated aggregate
-	// over a relation — read-time, per row, over a set the row does not
-	// contain — and none of that exists here: the declaration was
-	// validated, stored, replicated and snapshotted, and the value stayed
-	// whatever somebody typed. Refused for [checkProgress]'s reason: a
-	// field that calls itself gathered and is not is worse than a plain
-	// number, because nobody knows to maintain it.
-	//
-	// The checks below run FIRST, so an operator removing the block is
-	// told about its other mistakes at the same time rather than one per
-	// validate.
+	// This build gathers no rollup (a read-time aggregate over a relation),
+	// so it is refused, for [checkProgress]'s reason: a field that calls itself
+	// gathered and is not is worse than a plain number. The shape checks run
+	// first, so an operator learns every other mistake in one validate.
 	switch {
 	case r.Source == "":
 		return invalid("field %s is a rollup and names nothing to "+
@@ -240,9 +176,8 @@ func checkRollup(f *FieldDef) error {
 		return invalid("field %s rolls up with %q, which isn't an "+
 			"aggregation. Use %s", f.Slug, clip(r.Op), words.Or(RollupOps))
 	}
-	// A DATE AGGREGATION ON A NUMBER is the earliest of a set of numbers
-	// under a word that means something else — and the reverse, a sum of
-	// dates, is a number of microseconds nobody meant.
+	// `earliest` of numbers is `min` under another word; a sum of dates is
+	// microseconds nobody meant.
 	dateField := r.Field == "due" || r.Field == "start"
 	if slices.Contains(DateRollupOps, r.Op) && !dateField {
 		return invalid("field %s takes the %s of %q, and %s applies "+
@@ -255,8 +190,7 @@ func checkRollup(f *FieldDef) error {
 			"nobody meant. Use %s",
 			f.Slug, r.Op, r.Field, words.Or(append(slices.Clone(DateRollupOps), "count")))
 	}
-	// A STATUS GROUP IS A WORD, so the only thing to do with a set of them
-	// is count them.
+	// A status group is a word: the only aggregation is a count.
 	if r.Field == "status_group" && r.Op != "count" {
 		return invalid("field %s takes the %s of the status group, "+
 			"which is a word — the only aggregation over words is `count`",
@@ -275,16 +209,9 @@ func unusable(f *FieldDef, what, types string) error {
 		"replicated and applied by nothing", f.Slug, f.Type, what, types)
 }
 
-// checkNames refuses two declarations whose names collide case-insensitively.
-//
-// THE NAME IS A RESOLUTION KEY. A model writes what it read off a board, and
-// two rows one lookup cannot tell apart resolve to whichever the index reached
-// first — which is not even stable, because it moves when somebody reorders
-// the list.
-//
-// AN ARCHIVED DECLARATION'S NAME IS FREE, on the same rule its slug already
-// follows: nothing resolves against it, so the word is available for whatever
-// replaces it.
+// checkNames refuses two declarations whose names collide under [NormName],
+// since a name is a resolution key. An archived declaration's name is free,
+// as its slug is: nothing resolves against it.
 func checkNames(kind string, names []namedDeclaration) error {
 	seen := make(map[string]string, len(names))
 	for _, one := range names {

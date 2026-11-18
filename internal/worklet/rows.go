@@ -9,18 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// NewRows builds the publisher's read seam for this domain.
-//
-// THE FRAMEWORK IMPLEMENTS IT. Three of the four things a snapshot returns are
-// the framework's own — the arbitration anchor, the deferred record and its
-// scope index all live in tables it writes — and the two-clause containment
-// probe over them is the one piece of SQL in this design where getting a clause
-// wrong is silent data loss rather than a wrong answer. A second copy here
-// would be a second chance to get it wrong, in the package least likely to be
-// the one somebody re-reads.
-//
-// What is genuinely this domain's is the pair of GUARDS below. spec is the log
-// the publisher writes, whose checkpoint and anchors the seam reads.
+// NewRows builds the publisher's read seam for this domain; spec is the log
+// the publisher writes, whose checkpoint and anchors the seam reads. The
+// framework implements it: the arbitration anchor, the deferred record and its
+// scope index live in its tables, and a second copy of the containment probe
+// over them, where a wrong clause is silent data loss, would be a second
+// chance to get it wrong. Only the guards ([taskGuards]) are this domain's.
 func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows, error) {
 	return statelog.NewRows(db, Domain{}, spec, taskGuards)
 }
@@ -31,17 +25,13 @@ const taskGuardsStatement = `
 			(SELECT COUNT(*) FROM tracker_deletions WHERE task_id = ?),
 			(SELECT COUNT(*) FROM tracker_tasks WHERE id = ?)`
 
-// taskGuards answers the two object-level facts a first write needs.
-//
-// THE DELETION MARKER IS PERMANENT WHERE A GUARDING ROW IS NOT: a task below
-// the trim floor has no record left on the log to prove it existed, and its own
-// row is what still says so — while a purge's marker outlives the row itself
-// and is what makes the removal irreversible.
-//
-// Only a task has either. Every other object in this domain is created by its
-// first record and removed by nothing — or, a file, removed by a stamp that the
-// next put at its path lifts, since its address is meant to be used again —
-// so answering false for both is the correct answer rather than an omission.
+// taskGuards answers the two object-level facts a first write needs. The
+// deletion marker is permanent where the guarding row is not: a task below the
+// trim floor has only its row to prove it existed, while a purge's marker
+// outlives the row and makes the removal irreversible. Only a task has either:
+// every other object here is created by its first record and removed by
+// nothing (a file's removal stamp is lifted by the next put at its path), so
+// false for both is correct, not an omission.
 func taskGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 	deleted, guard bool, err error) {
 
@@ -58,14 +48,10 @@ func taskGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 	return removed > 0, present > 0, nil
 }
 
-// ReadScope is the closure a READ is about.
-//
-// It is the same alphabet a record's own scope resolves into, which is what
-// makes the coverage probe one comparison rather than a translation between
-// two vocabularies. A query with no container is the DOMAIN — not because it
-// touches everything, but because a read that cannot say what it is about is
-// one every deferred record concerns, and the honest answer to "is this
-// complete" is then "no".
+// ReadScope is the closure a READ is about, in the alphabet a record's scope
+// resolves into, so the coverage probe is one comparison. A query with no
+// container is the DOMAIN: a read that cannot say what it is about is one
+// every deferred record concerns, so "is this complete" honestly answers "no".
 func ReadScope(q Query) statelog.ScopeSet {
 	var paths []string
 	switch {
@@ -74,16 +60,12 @@ func ReadScope(q Query) statelog.ScopeSet {
 			Kind: TermContainer, ID: q.Scope.Project,
 		}.Path())
 	case q.Scope.Workspace:
-		// THE EVERYTHING LEVEL IS EVERY CONTAINER, not the workspace
-		// container. [WorkspaceContainer] is where an object with no
-		// project lives, and the Everything board reads the tasks of
-		// every project — so a closure naming only it probed a container
-		// no task is filed in, and a board holding a deferred record in
-		// any project reported itself complete. The container level
-		// itself is the tightest term that covers every project and
-		// nothing else the tracker files: the families (the catalogue,
-		// the people) sit beside it, and a board that names a field
-		// adds the catalogue below.
+		// The Everything level is every container, not [WorkspaceContainer]
+		// (where an object with no project lives): naming only that probes a
+		// container no task is filed in, so a board with a deferred record
+		// in any project would call itself complete. The container level is
+		// the tightest term covering every project and nothing else; the
+		// families sit beside it, and naming a field adds the catalogue below.
 		paths = append(paths, statelog.ScopePath(pathDomain, pathContainer))
 	default:
 		paths = append(paths, pathDomain)
@@ -94,13 +76,11 @@ func ReadScope(q Query) statelog.ScopeSet {
 	for _, branch := range q.Any {
 		paths = append(paths, ReadScope(branch).Paths...)
 	}
-	// AND SO DOES A CUSTOM FIELD, because such a query is answered from
-	// the CATALOGUE as well as from the rows: `f.<slug>` resolves against
-	// the declarations, and a node holding a catalogue record it cannot
-	// decode would resolve the slug against a stale declaration — the
-	// wrong column, the wrong option id — and report the answer complete.
-	// The declarations live under the catalogue FAMILY, which no
-	// container's closure reaches.
+	// AND SO DOES A CUSTOM FIELD: `f.<slug>` resolves against the
+	// declarations, so a node holding back an undecodable catalogue
+	// record would resolve it against a stale one (wrong column, wrong
+	// option id) and call the answer complete. The declarations live
+	// under the catalogue FAMILY, which no container's closure reaches.
 	if namesAField(q) || q.sortsBy("type") {
 		paths = append(paths,
 			ScopeTerm{Kind: TermFamily, ID: string(KindCatalogue)}.Path())
@@ -115,12 +95,10 @@ func ReadScope(q Query) statelog.ScopeSet {
 	return statelog.ScopeSet{Paths: paths}.Normalised()
 }
 
-// namesAField reports whether a query is answered from the catalogue too.
-//
-// EVERY PLACE A REF CAN APPEAR, which is [collectFieldRefs]' own set: a filter,
-// a sort, a total and a grouping axis all resolve one, and a closure that
-// covered only the filter would leave a board grouped on a stale declaration
-// reporting itself complete.
+// namesAField reports whether a query is answered from the catalogue too: a
+// ref anywhere [collectFieldRefs] finds one (filter, sort, total, grouping
+// axis), since a closure covering only the filter would let a board grouped on
+// a stale declaration report itself complete.
 func namesAField(q Query) bool {
 	refs := map[string]bool{}
 	collectFieldRefs(q, refs)

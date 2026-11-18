@@ -42,14 +42,12 @@ func ranTo(t *testing.T, w *gitlet.ChecksWriter, key gitlet.CheckKey, state gitl
 	requireChecked(t, "the ending", res, err)
 }
 
-// A SEAT RERUNS ONLY WHAT ITS INFRASTRUCTURE ENDED: a measurement stands
-// against a seat however its grant reads — `failed` is refused
-// rerun_genuine, so no agent re-rolls a red check until a flake turns it
-// green — while a person reruns it, the attempt carrying the definition the
-// one before ran under and naming who asked; an errored attempt a seat that
-// may write the repository reruns, and a seat that may only read it may not;
-// and a rerun of a latest the rows have moved past is answered from the
-// attempt already queued.
+// A SEAT RERUNS ONLY WHAT ITS INFRASTRUCTURE ENDED: a seat's rerun of
+// `failed` is refused rerun_genuine whatever its grant, so no agent re-rolls a
+// red check until a flake turns it green, while a person's runs under the
+// prior attempt's definition, naming who asked; an errored attempt a writer
+// seat reruns and a reader seat may not; and a rerun of a superseded latest is
+// answered from the attempt already queued.
 func TestAnAgentCannotRerunAGenuineFailure(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -82,12 +80,12 @@ func TestAnAgentCannotRerunAGenuineFailure(t *testing.T) {
 }
 
 // A CHECK IS ONE RUNNER'S OR ONE CI'S: a person's CI reports a check the
-// engine does not run onto the same rows — running as its claim, its ending
-// naming the person — and its ending sent again is answered from the row;
-// a report of a check the engine queued, and a rerun of one a CI reports, are
-// refused native_check; a report is a person's, so a seat's is no request the
-// writer decides; and a reported ending is the CI's, placed external where it
-// is announced and counted, whether or not its run was reported first.
+// engine does not run onto the same rows (running as its claim, its ending
+// naming the person), and an ending sent again is answered from the row; a
+// report of a check the engine queued, and a rerun of a reported one, are
+// refused native_check; a seat's report is an invalid proposal; and a reported
+// ending is announced and counted placed external, whether or not its run was
+// reported first.
 //
 // Mutation: drop the native_check refusal of a report, let a seat report, or
 // count a reported ending by its row's placement alone → red.
@@ -122,9 +120,8 @@ func TestAReportedCheckIsItsCIsAlone(t *testing.T) {
 	res, err = w.Publish(t.Context(), reporting(native, gitlet.CheckStateFailed, ""))
 	requireCheckRefused(t, "a report of the engine's check", res, err, gitlet.CheckRefusalNativeCheck)
 
-	// A SEAT'S REPORT, of a run started as of one ended: the claim names no
-	// reporter a record's own rules could hold to a person, so the request's
-	// asker is what refuses it.
+	// A SEAT'S REPORT, of a run started or ended: the claim names no reporter
+	// a record's rules could hold to a person, so the asker is what refuses it.
 	for _, state := range []gitlet.CheckState{gitlet.CheckStateRunning, gitlet.CheckStatePassed} {
 		seatsCheck := checkOn(repo, 1)
 		seatsCheck.Name = "seat-" + string(state)
@@ -135,8 +132,8 @@ func TestAReportedCheckIsItsCIsAlone(t *testing.T) {
 		}
 	}
 
-	// AN ENDING REPORTED WITH NO RUN BEFORE IT is a CI's all the same: it is
-	// announced and counted placed external, as lint's is.
+	// AN ENDING REPORTED WITH NO RUN BEFORE IT is announced and counted placed
+	// external, as lint's is.
 	e2e := checkOn(repo, 1)
 	e2e.Name = "e2e"
 	res, err = w.Publish(t.Context(), reporting(e2e, gitlet.CheckStateFailed, ""))
@@ -158,11 +155,10 @@ func TestAReportedCheckIsItsCIsAlone(t *testing.T) {
 	}
 }
 
-// A PRINCIPAL'S CHECK WRITE WEIGHS WHAT IT ASKS: a rerun or a report carries
-// no record until its decide forms one, so the checks writer's node bytes
-// weigh what it asks — a report's tail among it — and never the nothing its
-// record is before the decide, which would let a burst of the largest reports
-// past the bytes bound at a few bytes each.
+// A PRINCIPAL'S CHECK WRITE WEIGHS WHAT IT ASKS: a rerun or a report has no
+// record until its decide forms one, so the checks writer weighs the request,
+// a report's tail included; weighing the empty record would let a burst of the
+// largest reports past the bytes bound at a few bytes each.
 //
 // Mutation: weigh a principal's write by its record alone — the report weighs
 // four bytes, red.

@@ -13,14 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// ONE TASK READS BACK WHOLE, and by any name it has ever had.
-//
-// A board answers "what is there" over many rows and returns what a card
-// renders; this is the other question — "tell me everything about this" — and
-// every part comes from a different table. The parts a caller did not ask for
-// are ABSENT rather than empty, because the costs differ by an order of
-// magnitude: a task is one indexed read, a thread can be hundreds of rows, and
-// the history grows for the life of the task.
+// ONE TASK READS BACK WHOLE, and by any name it has ever had. Each part comes
+// from its own table, and a part not asked for is ABSENT rather than empty:
+// a task is one indexed read, while a thread can be hundreds of rows and the
+// history grows for the task's life.
 func TestATaskReadsBackWholeAndByEveryNameItHasHad(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -74,11 +70,8 @@ func TestATaskReadsBackWholeAndByEveryNameItHasHad(t *testing.T) {
 	}
 }
 
-// A TASK NOBODY HAS IS ITS OWN ANSWER.
-//
-// Its own sentinel, because the caller's answer differs: a tool says "no such
-// task" to a model and an API says 404, and neither should say either when
-// what actually happened is that this node cannot reach its store.
+// A TASK NOBODY HAS IS ITS OWN ANSWER: its own sentinel, so "no such task"
+// and a 404 are never said when the store is merely unreachable.
 func TestAMissingTaskIsItsOwnAnswer(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -93,12 +86,9 @@ func TestAMissingTaskIsItsOwnAnswer(t *testing.T) {
 	}
 }
 
-// A DEFERRED RECORD ABOUT ANOTHER TASK DOES NOT MAKE THIS ONE INCOMPLETE.
-//
-// The coverage probe is scoped to the OBJECT here and to the container on a
-// board, and the difference is the whole reason they are two calls: a company
-// holding one undecodable record about one task would otherwise carry a
-// permanent warning on every task it has.
+// A DEFERRED RECORD ABOUT ANOTHER TASK DOES NOT MAKE THIS ONE INCOMPLETE:
+// the coverage probe is scoped to the OBJECT here (the container on a board),
+// or one undecodable record would warn on every task.
 func TestAnUnrelatedDeferredRecordDoesNotFlagThisTask(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -131,11 +121,8 @@ func TestAnUnrelatedDeferredRecordDoesNotFlagThisTask(t *testing.T) {
 	}
 }
 
-// BOTH DIRECTIONS OF A LINK COME BACK, and the mirror says it is the mirror.
-//
-// A reader sees "blocks" and "blocked by" without a second query and without
-// knowing which end authored which — and an editor knows which end to change,
-// which is what `derived` is for.
+// BOTH DIRECTIONS OF A LINK COME BACK, and the mirror says it is the mirror:
+// `derived` tells an editor which end to change.
 func TestALinkComesBackFromBothEnds(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -206,8 +193,8 @@ func (r *roundTrip) relate(from, to string, kind worklet.RelationKind) {
 	r.drain()
 }
 
-// deferRecordOn writes a deferred record naming one task, which is what a
-// record from a newer build looks like on this node.
+// deferRecordOn writes a deferred record naming one task, as a newer build's
+// record looks on this node.
 func (r *roundTrip) deferRecordOn(taskID, project string) {
 	r.t.Helper()
 	r.deferRecordAt(taskID, worklet.ScopeTerm{
@@ -241,13 +228,9 @@ func strptr(s string) *string { return &s }
 
 func isNoTask(err error) bool { return errors.Is(err, worklet.ErrNoTask) }
 
-// A COMMENT IS A ROW, and until one was written the whole thread was invisible.
-//
-// `tracker_comments` was DELETEd on purge, READ by get_task's thread, by
-// `has_open_asks`, by `asked_of`, by `asked_by` and by my_work's own block —
-// and INSERTed by nothing. Every comment the company had ever written landed
-// in its task's document and produced no row, so every one of those answered
-// as though nobody had ever said anything.
+// A COMMENT IS A ROW: get_task's thread, `has_open_asks`, `asked_of`,
+// `asked_by` and my_work all read `tracker_comments`, and without the row
+// they answer as though nobody had said anything.
 func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -286,9 +269,8 @@ func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 		t.Fatalf("asked_of=bob answers %v, want the task", got)
 	}
 
-	// AN ANSWER CLOSES IT. The two are separate rows — a reply is its own
-	// comment — so without the stamp the ask stayed open on every board
-	// and in the answerer's own queue for ever.
+	// AN ANSWER CLOSES IT: a reply is its own row, so without the stamp
+	// the ask stays open on every board and in the answerer's queue.
 	answers := "cm-1"
 	if _, err := r.writer.UpdateTask(t.Context(), "op-answer", created.ID, "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{Comment: &worklet.Comment{
@@ -306,11 +288,8 @@ func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 			"answered", got)
 	}
 
-	// AND AN EDIT REWRITES THE ROW rather than adding one, and rewrites
-	// its WORDS alone: an author correcting a question somebody answered
-	// changes what it says, never whether it is answered — the edit wrote
-	// NULL over the answer, and the question was open again on every board
-	// and in the answerer's own queue.
+	// AND AN EDIT REWRITES THE ROW rather than adding one, and its WORDS
+	// alone: correcting an answered question never reopens it.
 	if _, err := r.writer.EditComment(t.Context(), "op-edit", created.ID, "ENG",
 		"cm-1", "who owns the rollback now?", nil); err != nil {
 		t.Fatalf("edit: %v", err)
@@ -344,11 +323,10 @@ func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 	}
 }
 
-// A CHECKLIST ITEM IS A ROW TOO, and it lives on somebody else's task.
-//
-// No assignee filter over tasks reaches one, so a seat holding six checklist
-// items and no assignment read its queue as empty — and `checklist_assignee=`,
-// which the shipped partial index is named for, matched nothing at all.
+// A CHECKLIST ITEM IS A ROW TOO, and it lives on somebody else's task: no
+// assignee filter over tasks reaches it, so without the row a seat holding
+// only checklist items reads an empty queue and `checklist_assignee=` (its
+// partial index's filter) matches nothing.
 func TestAChecklistItemIsARow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -372,9 +350,8 @@ func TestAChecklistItemIsARow(t *testing.T) {
 			"his item", got)
 	}
 
-	// AND A REMOVED ITEM LEAVES THE TABLE. The collection is rebuilt from
-	// the document on every apply, so an upsert-only write would keep
-	// answering for an item nobody can see any more.
+	// AND A REMOVED ITEM LEAVES THE TABLE: an upsert-only rebuild would
+	// keep answering for an item nobody can see.
 	shorter := []worklet.Checklist{{ID: "l-1", Name: "Release",
 		Items: []worklet.ChecklistItem{lists[0].Items[1]}}}
 	if _, err := r.writer.UpdateTask(t.Context(), "op-shorter", created.ID,
@@ -392,13 +369,10 @@ func TestAChecklistItemIsARow(t *testing.T) {
 }
 
 // EVERY COMMENT ON A PAGE IS WHOLE, AND THE BYTES END A PAGE, NEVER A COMMENT.
-//
-// The page used to carry each body cut to two kilobytes, so a comment past
-// that read as a comment that ended there. Now a page holds whole comments up
-// to [worklet.CommentPageBytes] (at least one), and its cursor continues
-// exactly where it stopped. This writes a thread of long comments, each with a
-// non-ASCII character where the old cut fell, and walks it: every comment must
-// arrive exactly once and byte for byte as written.
+// A page holds whole comments up to [worklet.CommentPageBytes] (at least one)
+// and its cursor continues where it stopped. The thread's long comments put a
+// non-ASCII character at two kilobytes, where a body cut would fall: each must
+// arrive exactly once, byte for byte.
 func TestAThreadPageCarriesWholeCommentsAndPagesByBytes(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -473,13 +447,10 @@ func TestAThreadPageCarriesWholeCommentsAndPagesByBytes(t *testing.T) {
 	}
 }
 
-// EVERY COMMENT IS REACHABLE, PAST THE DETAIL'S TWENTY.
-//
-// The detail returns the newest [worklet.DetailComments] and a cursor, and a
-// thread longer than that was cut there on every screen: nothing followed the
-// cursor. This walks a thread of 57 at a page of 25 and must meet every
-// comment exactly once, oldest-to-newest inside each page, and end with no
-// cursor — and a page asked above the ceiling is held to it.
+// EVERY COMMENT IS REACHABLE, PAST THE DETAIL'S [worklet.DetailComments]: a
+// thread of 57 walked at a page of 25 meets every comment exactly once,
+// oldest-to-newest inside each page, and ends with no cursor; a page asked
+// above the ceiling is held to it.
 func TestWorkCommentsPagesPastTheDetailsTwenty(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -494,8 +465,8 @@ func TestWorkCommentsPagesPastTheDetailsTwenty(t *testing.T) {
 			}}, worklet.ChangeComment, nil); err != nil {
 			t.Fatalf("comment %d: %v", i, err)
 		}
-		// APPLIED BEFORE THE NEXT, since each write is decided from the
-		// state the one before it left.
+		// APPLIED BEFORE THE NEXT: each write is decided from the state
+		// the one before it left.
 		r.drain()
 	}
 
@@ -552,11 +523,9 @@ func TestWorkCommentsPagesPastTheDetailsTwenty(t *testing.T) {
 }
 
 // A TASK FILED AND A REMARK MADE THROUGH A PERSON'S OWN TOKEN NAME THE PERSON.
-//
-// Bound to a seat, a person writes AS it (iam.ActorFor): the reporter and the
-// comment's author ARE the seat, and the token is the operator id the history
-// keeps beside the actor. There is no second "the seat behind the token" field
-// a screen must prefer over the record.
+// Bound to a seat, a person writes AS it (iam.ActorFor): reporter and author
+// ARE the seat, and the token is the operator id history keeps beside the
+// actor, with no second field a screen must prefer over the record.
 func TestATaskFiledThroughAPersonsTokenNamesThePerson(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -604,12 +573,10 @@ func TestATaskFiledThroughAPersonsTokenNamesThePerson(t *testing.T) {
 	}
 }
 
-// A COMMENT ID THAT IS NOT ON THIS TASK IS ITS OWN ANSWER.
-//
-// Its own sentinel beside ErrNoTask, because the caller's answer differs: a
-// mistyped id is not an empty thread, and a reader told "no comments" would go
-// looking for the wrong thing. Scoped to the task for the same reason — an id
-// from another item must not quietly open a thread the caller was not reading.
+// A COMMENT ID THAT IS NOT ON THIS TASK IS ITS OWN ANSWER: its own sentinel
+// beside ErrNoTask, since a mistyped id is not an empty thread, and scoped to
+// the task so another item's id never opens a thread the caller was not
+// reading.
 func TestAnUnknownCommentIsItsOwnAnswer(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -636,13 +603,10 @@ func TestAnUnknownCommentIsItsOwnAnswer(t *testing.T) {
 	}
 }
 
-// A THREAD READ REFUSES WHERE ITS TASK IS FILED.
-//
-// A thread read decides who a wake reaches, so a record this node cannot
-// decode covering the task means the comment rows it routes from may already
-// be wrong — and it refuses. It used to form its scope from the task id alone,
-// under the workspace rather than the project the task is filed in, so it
-// probed a path no record is filed under and routed from those rows anyway.
+// A THREAD READ REFUSES WHERE ITS TASK IS FILED. It decides who a wake
+// reaches, so an undecodable record covering the task means its comment rows
+// may be wrong; the probe's scope is the task's project, not the workspace,
+// where no record is filed.
 func TestAThreadReadRefusesWhereItsTaskIsFiled(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -662,12 +626,9 @@ func TestAThreadReadRefusesWhereItsTaskIsFiled(t *testing.T) {
 	}
 }
 
-// A TASK READ BY KEY ACCOUNTS FOR THE KEY'S OWN ADDRESS.
-//
-// A deferred alias claim or re-key is filed under the key rather than under
-// the task, so a read that names the task BY that key is about it too. The
-// probe used to cover only the task's own path, so a record rewriting what the
-// key points at left the answer complete.
+// A TASK READ BY KEY ACCOUNTS FOR THE KEY'S OWN ADDRESS: a deferred alias
+// claim or re-key is filed under the key, so a read naming the task BY that
+// key is incomplete while one is deferred.
 func TestATaskReadByKeyAccountsForTheKeysOwnAddress(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -686,8 +647,8 @@ func TestATaskReadByKeyAccountsForTheKeysOwnAddress(t *testing.T) {
 			"complete: %+v", byKey.Incomplete)
 	}
 
-	// THE CONTROL: the same task read by id is not about that address, so
-	// the case above cannot pass on a probe that flags every read.
+	// THE CONTROL: read by id it is not about that address, so the case
+	// above cannot pass on a probe that flags every read.
 	byID, err := r.reader.Task(t.Context(), task.ID, worklet.DetailWants{},
 		statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
@@ -699,12 +660,9 @@ func TestATaskReadByKeyAccountsForTheKeysOwnAddress(t *testing.T) {
 	}
 }
 
-// A TASK NAMES THE TASK IT IS FILED UNDER.
-//
-// A task carries its parent's id — the record — and a page heading itself
-// "Part of LEAD-12 · 2.4 release" needed a second read of the parent to say
-// it. The detail answers the parent's key, title and status in its own
-// transaction, and a top-level task names none.
+// A TASK NAMES THE TASK IT IS FILED UNDER: the detail answers the parent's
+// key, title and status in its own transaction ("Part of LEAD-12 · 2.4
+// release" without a second read), and a top-level task names none.
 func TestTheDetailNamesTheTaskItIsFiledUnder(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -737,13 +695,10 @@ func TestTheDetailNamesTheTaskItIsFiledUnder(t *testing.T) {
 }
 
 // A THREAD'S CURSOR SAYS WHETHER THAT THREAD GOES BACK, NOT THE TASK.
-//
-// A pane drawing one question's replies used to page the task's whole thread
-// and keep the replies, so a task with more than a page of comments offered
-// "earlier" replies to a question nobody had replied to. Narrowed by
-// [worklet.CommentThread], an unanswered ask on a busy task is one empty page
-// with no cursor, and its replies and answer walk back exactly once each
-// with nothing else on the task among them; the root joins only when asked.
+// Narrowed by [worklet.CommentThread], an unanswered ask on a busy task is one
+// empty page with no cursor, and its replies and answer walk back exactly once
+// each with nothing else from the task among them; the root joins only when
+// asked.
 func TestACommentThreadPagesOnlyItsOwnConversation(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

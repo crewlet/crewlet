@@ -271,7 +271,8 @@ type ExecutorCollected struct {
 	// reason, redacted; the kind is [ExecutorErrorContextExhausted] where the
 	// harness said its conversation no longer fits the model's context,
 	// [ExecutorErrorOutOfMemory] where the kernel killed its harness for
-	// memory, and [ExecutorErrorLaunchFailed] for every other cause.
+	// memory, [ExecutorErrorMaxTurns] where it ended on its round cap, and
+	// [ExecutorErrorLaunchFailed] for every other cause.
 	Failed    bool   `json:"failed"`
 	Error     string `json:"error"`
 	ErrorKind string `json:"error_kind"`
@@ -349,6 +350,10 @@ const (
 	// memory: its box's ceiling, which the same work meets again until the
 	// box is larger or a person changes the work.
 	ExecutorErrorOutOfMemory = "out_of_memory"
+	// ExecutorErrorMaxTurns is a run its harness ended on the round cap the
+	// launch handed it (role.sandbox.max_turns, else the provider default)
+	// before it finished: Claude Code's `error_max_turns`.
+	ExecutorErrorMaxTurns = "max_turns"
 )
 
 // EventType is the "executor_collected" wire type.

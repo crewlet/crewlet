@@ -13,126 +13,70 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// "Everything about me" — the one call a seat makes at the start of a turn.
+// my_work, "everything about me": the one call a seat makes at a turn's start.
 //
-// # ONE CALL, EIGHT LISTS, ONE TRANSACTION
-//
-// A turn opens by asking what it is expected to do. Assembled from eight
-// separate reads that would be eight round trips, eight coverage probes and
-// eight different instants — so a seat could see a task in `assigned` that had
-// already moved out of it by the time `priorities` was read, and spend its
-// turn on work somebody else had taken.
-//
-// It is its OWN reader method rather than a preset of the task query for the
-// reason §6 gives: `list_tasks` always answers one shape, and a preset that
-// returned eight lists would make every caller of that grammar handle a second
-// one.
-//
-// # Why these eight, and not a longer list
-//
-// Each is a different CLAIM on the reader's attention, and a seat that saw
-// only its assignments would miss all but the first:
-//
-//   - `priorities` — what a lead put at the top of this person's list, in the
-//     order they put it. It is first because it is the only block somebody
-//     else arranged deliberately.
-//   - `assigned` — the open work this seat owns.
-//   - `asked_of_me` — questions waiting on an answer, with the comment to
-//     answer and the form to answer it with.
-//   - `checklist_items` — the sub-item claims, which live on somebody else's
-//     task and are invisible to every assignee filter.
-//   - `collaborating` — work this seat was brought onto without owning.
-//   - `watching_recent` — what moved on the tasks it follows.
-//   - `unblocked_recent` — what became workable, which is the one block that
-//     is about a change rather than a state.
-//   - `holding_up` — the open work this person holds that somebody else's open
-//     work waits on, the most waited on first, with whom it holds up
-//     ([HoldingRow]). Every other block is about what waits on this person;
-//     this one is about who waits on them.
-//
-// # Each is bounded, and the bound is the same
-//
-// Twenty rows each. A turn-start block is read by a model beside its prompt,
-// and eight unbounded lists is an answer that crowds out the work.
-//
-// # And each is COUNTED in full beside its page
-//
-// [MyWork.Totals] carries how many rows each block would hold without the
-// bound, counted by the SAME predicate in the SAME transaction as the rows.
-// The page is twenty; the claim is not — and a sidebar badge or a tab heading
-// drawn from `len(assigned)` reads "20" for the person with two hundred, which
-// is the one person the number is for. A count taken by a second read beside
-// this one would describe a different instant from the rows it heads.
+// ONE TRANSACTION for all eight blocks: eight reads would be eight instants,
+// and a seat could spend its turn on an `assigned` task that had already moved.
+// Its own reader rather than a task-query preset, because `list_tasks` answers
+// one shape. Each block is a different claim on attention ([MyWork]'s fields),
+// each is a page of [MyWorkRows], and [MyWork.Totals] counts each in full by
+// the same predicate in the same transaction: a badge drawn from the page reads
+// "20" for the person with two hundred, the one person the number is for.
 
-// MyWorkAskBytes is how much ask text the my_work block carries WHOLE.
-//
-// Sixteen kibibytes — a quarter of the 64 KiB one tool answer may weigh, for
-// the reason [CommentPageBytes] gives — because my_work is the call a turn
-// opens with and twenty asks at their 32 KiB cap would be ten answers' worth.
-// Past it, the asks still listed carry their decision, their author and the
-// call that answers them, and say how large the body they left out is; the
-// body itself is one get_work_item away. Never a body cut to fit.
+// MyWorkAskBytes is how much ask text the my_work block carries WHOLE: 16 KiB,
+// a quarter of one tool answer's 64 KiB for [CommentPageBytes]'s reason, since
+// twenty asks at their 32 KiB cap would be ten answers' worth. Past it an ask
+// keeps its decision, author and answering call and says how large its omitted
+// body is, one get_work_item away. Never a body cut to fit.
 const MyWorkAskBytes = 16 << 10
 
-// MyWorkRows is how many rows each block carries.
-//
-// TWENTY, and the same for all eight so no block can crowd out another: the
-// whole answer is read as one prompt block, and a caller with two hundred
-// assignments would otherwise push its asks off the end of the context. A seat
-// with more than twenty of anything here has a queue problem the list cannot
-// fix by being longer.
+// MyWorkRows is how many rows each block carries: the same for all eight, so
+// no block pushes another off the end of the one prompt block they are read
+// as. A seat with more than twenty of anything has a queue problem a longer
+// list cannot fix.
 const MyWorkRows = 20
 
 // AskRow is one question waiting on this person, with what to do about it.
 type AskRow struct {
 	TaskRow
 
-	// Comment is the ask itself — the id an answer replies to, and the
-	// body, WHOLE, so a model can decide without a second read.
+	// Comment is the id an answer replies to; Body is carried WHOLE, so a
+	// model decides without a second read.
 	Comment string    `json:"comment"`
 	AskedBy string    `json:"asked_by"`
 	AskedAt time.Time `json:"asked_at"`
 	Body    string    `json:"body" untrusted:"fence"`
 
-	// BodyNotIncluded says the body was left out of this answer, how large
-	// it is, and the call that reads it — set only where a block's byte
-	// budget ([MyWorkAskBytes]) was spent by the asks before it. An ask is
-	// carried WHOLE OR BY REFERENCE, never cut: a question cut at six
-	// hundred bytes is a question whose condition is past the cut.
+	// BodyNotIncluded says the body was left out, how large it is and the
+	// call that reads it, set only once earlier asks spent [MyWorkAskBytes].
+	// An ask is whole or by reference, never cut: a cut question loses the
+	// condition past the cut.
 	BodyNotIncluded string `json:"body_not_included,omitempty"`
 
-	// Decision is the structure the ask carries when it asks somebody to
-	// choose — the options, the recommendation and the evidence — so the
-	// person or the model answering it decides from the same read.
+	// Decision is the ask's structured choice (options, recommendation,
+	// evidence), so a person and a model decide from the same read.
 	Decision *decision.Decision `json:"decision,omitempty"`
 
-	// Open says the ask is still waiting on an answer. Every row my_work
-	// lists is — the block is what is still owed — but the row is the
-	// shape every surface listing asks shares, and a list that also holds
-	// answered ones must be able to say which is which without the reader
-	// inferring it from which list it came from.
+	// Open says the ask still waits on an answer. Every my_work row does,
+	// but the row shape is shared with lists that also hold answered asks.
 	Open bool `json:"open"`
 
-	// Answer is the literal call that answers it. A model handed the
-	// comment id still has to compose the call, and every one it composes
-	// differently is a round spent being refused. Absent on an answered
-	// ask, which nothing answers again.
+	// Answer is the literal call that answers it (see [answerCall]).
+	// Absent on an answered ask, which nothing answers again.
 	Answer string `json:"answer_with,omitempty"`
 }
 
 // ChecklistRow is one sub-item claimed by this person.
 //
-// IT LIVES ON SOMEBODY ELSE'S TASK, which is the whole reason it is its own
-// block: no assignee filter over tasks reaches it, so a seat holding six
-// checklist items and no assignment reads its queue as empty.
+// It lives on somebody else's task, so no assignee filter reaches it: without
+// this block a seat holding only checklist items reads its queue as empty.
 type ChecklistRow struct {
 	Task    string `json:"task"`
 	TaskKey string `json:"task_key"`
 
-	// TaskKeyCollision is the task's [TaskRow.KeyCollision]: its key is
-	// one another task claimed first, so a link built from
-	// [ChecklistRow.TaskKey] opens that task and this one is reached by
-	// [ChecklistRow.Task]. See [ItemAddress].
+	// TaskKeyCollision is the task's [TaskRow.KeyCollision]: a link built
+	// from TaskKey opens another task, so reach this one by Task
+	// ([ItemAddress]).
 	TaskKeyCollision bool `json:"task_key_collision,omitempty"`
 
 	TaskTitle string `json:"task_title" untrusted:"name"`
@@ -145,9 +89,8 @@ type ChecklistRow struct {
 // ClaimTotal is how many rows one block holds in full, beside the page of
 // [MyWorkRows] it carries.
 //
-// CAPPED AT [TotalHintCeiling] and saying so, for [Answer.TotalCapped]'s
-// reason: a count over an unbounded set is the query that turns a poll into a
-// scan, and a clamped number read as exact is the lie the flag exists to stop.
+// Capped at [TotalHintCeiling], and saying so, for [Answer.TotalCapped]'s
+// reason.
 type ClaimTotal struct {
 	Total  int  `json:"total"`
 	Capped bool `json:"capped,omitempty"`
@@ -155,9 +98,8 @@ type ClaimTotal struct {
 
 // MyWorkTotals is one [ClaimTotal] per block, keyed by the block's own name.
 //
-// A NAMED FIELD PER BLOCK rather than a map, so a block added to [MyWork]
-// without its total is a struct a test can walk rather than a key nobody
-// thought to write — see TestEveryMyWorkBlockHasATotal.
+// A named field per block rather than a map, so TestEveryMyWorkBlockHasATotal
+// can catch a block added without its total.
 type MyWorkTotals struct {
 	Priorities      ClaimTotal `json:"priorities"`
 	Assigned        ClaimTotal `json:"assigned"`
@@ -173,9 +115,8 @@ type MyWorkTotals struct {
 type MyWork struct {
 	Handle string `json:"handle"`
 
-	// Priorities is in the STORED ORDER, not re-sorted: the order is the
-	// content — it is what somebody decided — and sorting it by anything
-	// else would discard the decision.
+	// Priorities keeps the STORED ORDER, never re-sorted: the order is what
+	// a lead decided, and it comes first as the one block arranged on purpose.
 	Priorities []TaskRow `json:"priorities"`
 
 	Assigned        []TaskRow      `json:"assigned"`
@@ -190,8 +131,8 @@ type MyWork struct {
 	// walked: what a person's Inbox leads with ([HoldingAgents]).
 	HoldingAgents HoldingAgents `json:"holding_agents"`
 
-	// Totals is every block counted in full — see [MyWorkTotals]. A block's
-	// slice is a PAGE of at most [MyWorkRows]; its total is the claim.
+	// Totals is every block counted in full; a block's slice is a PAGE of
+	// at most [MyWorkRows].
 	Totals MyWorkTotals `json:"totals"`
 
 	Level          statelog.ReadLevel `json:"read_level"`
@@ -204,11 +145,10 @@ type MyWork struct {
 
 // MyWorkQuery asks for one person's own day.
 type MyWorkQuery struct {
-	// Handle is whose — the person's record name (iam.RecordOwner), which
-	// for a person bound to a seat is that seat whatever credential they
-	// hold. Required — "mine" is resolved by the surface from its own
-	// credential, never by this reader, because a reader that defaulted it
-	// would answer about whoever it happened to pick.
+	// Handle is whose: the person's record name (iam.RecordOwner), for a
+	// person bound to a seat that seat whatever credential they hold.
+	// Required: the surface resolves "mine" from its own credential, since
+	// a reader that defaulted it would answer about whoever it picked.
 	Handle string
 
 	Level   statelog.ReadLevel
@@ -216,10 +156,9 @@ type MyWorkQuery struct {
 	Floors  []statelog.Position
 	MaxLag  time.Duration
 
-	// MaxLagSeq is the same bound counted in RECORDS, which is what
-	// the broker actually answers — the duration above is derived
-	// from it through this node's own drain rate. Both may be set
-	// and the read refuses past whichever is reached first.
+	// MaxLagSeq is the same bound in RECORDS, what the broker answers;
+	// MaxLag is derived from it through this node's drain rate. The read
+	// refuses past whichever is reached first.
 	MaxLagSeq uint64
 
 	// Agents are the company's agent seats, by handle: `holding_up` counts
@@ -250,10 +189,9 @@ func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time,
 	out := MyWork{Handle: q.Handle}
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level: q.Level,
-		// THE DOMAIN, honestly: this person's work is in every container
-		// and a narrower closure would certify the answer complete while
-		// a deferred record in some project held the task that belongs
-		// in it.
+		// THE WHOLE DOMAIN: this person's work is in every container, and
+		// a narrower closure would certify complete an answer a deferred
+		// record elsewhere should change.
 		Scope:     statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
 		Session:   q.Session,
 		Floors:    q.Floors,
@@ -278,14 +216,9 @@ func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time,
 func readMyWork(ctx context.Context, tx *sql.Tx, handle string, agents []string, now time.Time,
 	loc *time.Location, out *MyWork) error {
 
-	// THE DAY BOUNDARY the `overdue` column on every row is computed
-	// against: the company's own midnight, on the clock the surface
-	// passed. It was UTC once, on the reasoning that this answer had no
-	// caller-supplied zone — and that put every row a day out from the
-	// board for the hours between the company's midnight and UTC's, with a
-	// task due today marked overdue on one screen and not on the other.
-	// Never the process's own clock, which would put one node's rows a
-	// day out from another's.
+	// `overdue` is cut at the company's own midnight on the surface's
+	// clock, so it agrees with the board; neither UTC nor the process's
+	// clock, which would put rows a day out from the board or another node.
 	anchor, err := period.Resolve("today", now, loc)
 	if err != nil {
 		return err
@@ -337,9 +270,8 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, agents []string,
 	return nil
 }
 
-// blockQuery is one task block of [readMyWork]: the predicate over the task
-// table, its arguments, and the order its page is read in — everything
-// [taskBlock] reads the page and the total from.
+// blockQuery is one task block of [readMyWork]: the predicate, its arguments
+// and its page order, from which [taskBlock] reads the page and the total.
 type blockQuery struct {
 	where string
 	args  []any
@@ -348,9 +280,8 @@ type blockQuery struct {
 
 // The task blocks [readMyWork] reads, each named for the plan test.
 //
-// ASSIGNED is in the queue's own order — priority then due, which is exactly
-// what `tracker_tasks_queue_idx` is built in, so the block a turn opens on is
-// the query the index is named for.
+// ASSIGNED is in the queue's order, priority then due: exactly
+// `tracker_tasks_queue_idx`'s.
 func assignedBlock(handle string) blockQuery {
 	open := openGroups()
 	return blockQuery{
@@ -364,10 +295,8 @@ func assignedBlock(handle string) blockQuery {
 	}
 }
 
-// COLLABORATING EXCLUDES WHAT THIS PERSON OWNS, because a task already in
-// `assigned` listed again here is one row spending two of the eight blocks —
-// and the distinction the block exists for is precisely "brought on without
-// owning".
+// COLLABORATING EXCLUDES WHAT THIS PERSON OWNS: the block is "brought on
+// without owning", and an owned task is already in `assigned`.
 func collaboratingBlock(handle string) blockQuery {
 	open := openGroups()
 	return blockQuery{
@@ -379,9 +308,8 @@ func collaboratingBlock(handle string) blockQuery {
 	}
 }
 
-// WATCHING, MINUS THE MUTED. A mute is how somebody says "keep me on this but
-// stop telling me", and a block that ignored it would put every muted task
-// back in front of them once a turn.
+// WATCHING, MINUS THE MUTED: a mute says "keep me on this but stop telling
+// me", and ignoring it would show every muted task once a turn.
 func watchingBlock(handle string) blockQuery {
 	return blockQuery{
 		where: "t.removed_at IS NULL AND t.assignee <> ? AND " +
@@ -392,15 +320,10 @@ func watchingBlock(handle string) blockQuery {
 	}
 }
 
-// UNBLOCKED: this person's open work that HAD a blocker and no longer has an
-// open one. The only block about a CHANGE rather than a state, and the reason
-// it is here at all — a task that became workable while nobody was looking
-// has nothing else to announce it at turn start.
-//
-// THE EXISTS/NOT-EXISTS PAIR IS THE WHOLE PREDICATE. Without the first leg
-// every task that never had a dependency qualifies, which is most of the
-// board; without the second, a task with one blocker cleared and another
-// still open reads as workable and is not.
+// UNBLOCKED: this person's open work that HAD a blocker and has no open one
+// left; the one block about a change rather than a state. Both legs are
+// needed: without EXISTS every task that never had a dependency qualifies,
+// and without NOT EXISTS one with a blocker still open reads as workable.
 func unblockedBlock(handle string) blockQuery {
 	open := openGroups()
 	return blockQuery{
@@ -416,10 +339,8 @@ func unblockedBlock(handle string) blockQuery {
 
 // taskBlock reads one task block's page AND its total, from ONE predicate.
 //
-// ONE PREDICATE FOR BOTH is the whole point: a total written as a second
-// statement beside the page's is a second copy of the claim, and the first
-// edit to one of them makes a heading count rows the list below it would
-// never show.
+// A total in a second statement is a second copy of the predicate, and the
+// first edit to one makes a heading count rows its list would never show.
 func taskBlock(ctx context.Context, tx *sql.Tx, block blockQuery,
 	dayStart time.Time) ([]TaskRow, ClaimTotal, error) {
 
@@ -437,9 +358,8 @@ func taskBlock(ctx context.Context, tx *sql.Tx, block blockQuery,
 
 // openGroups is the two status groups where work has not stopped.
 //
-// DERIVED from [StatusGroups] rather than typed, for the reason
-// [deliveredClause] derives its own: a group added to the set has to reach
-// every reader, and a literal pair is the reader it would not reach.
+// Derived from [StatusGroups] rather than a literal pair, so a group added to
+// the set reaches this reader too ([deliveredClause] does the same).
 func openGroups() []any {
 	out := make([]any, 0, len(StatusGroups))
 	for _, group := range StatusGroups {
@@ -453,18 +373,13 @@ func openGroups() []any {
 // readPriorityRows reads the stored list, IN ITS STORED ORDER, and how many
 // of its entries are still open work.
 //
-// The order is the content — somebody decided it — so the rows are re-ordered
-// to match the list rather than sorted by anything. A finished or removed task
-// is filtered out HERE rather than rewritten out of the list, because the list
-// is a person's own object and a read must not write to it: the next write to
-// the list drops it for good.
+// Rows follow the list, never a sort. A finished or removed task is filtered
+// here rather than rewritten out: a read must not write a person's own list,
+// and the list's next write drops it for good.
 //
-// THE WHOLE LIST IS READ AND THE PAGE IS CUT AFTER THE FILTER. It was cut
-// first — the stored list truncated to [MyWorkRows] and then filtered — so a
-// list of twenty-five whose first five were finished answered fifteen rows
-// while twenty open ones stood in it, and entries twenty-one to twenty-five
-// were never reachable at all. The list is bounded by [MaxPriorities], so the
-// whole of it is one small read, and its total is exact.
+// The WHOLE list is read and the page cut AFTER the filter, or finished
+// entries would hide open ones past the page; [MaxPriorities] keeps it one
+// small read with an exact total.
 func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 	dayStart time.Time) ([]TaskRow, int, error) {
 
@@ -473,9 +388,7 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 		return nil, 0, err
 	}
 	if !held || len(person.Priorities) == 0 {
-		// EMPTY, NOT NIL — see [readTasks]. A person with no
-		// stored list has an empty one, and the block renders as
-		// absent rather than throwing on its own length.
+		// Empty, not nil: see [readTasks].
 		return []TaskRow{}, 0, nil
 	}
 	ids := person.Priorities
@@ -503,10 +416,8 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 		if !listed {
 			continue
 		}
-		// A LIST NAMING ONE TASK TWICE counts it once. The priorities
-		// write deduplicates, but a person record is also written whole
-		// by [Writer.WriteDocument], and a heading counting one task
-		// twice would disagree with the board it links to.
+		// A task listed twice counts once: [Writer.WriteDocument] writes
+		// a person record whole, past the priorities write's dedupe.
 		delete(byID, id)
 		live++
 		if len(out) < MyWorkRows {
@@ -537,18 +448,14 @@ const (
 
 // readAsks reads the questions waiting on this person.
 //
-// THE OPEN ONES ONLY, which is the shipped partial index's own predicate: an
-// ask is open until somebody answers it or resolves it, and a removed comment
-// is not an ask at all.
-//
-// maxBytes is the ask text carried WHOLE before the rest are listed by
-// reference — see [AskRow.BodyNotIncluded]; 0 carries every body, which is
-// what a screen with no ceiling reads.
+// The open ones only, the partial index's own predicate. maxBytes is the ask
+// text carried whole before the rest go by reference
+// ([AskRow.BodyNotIncluded]); 0, for a screen with no ceiling, carries all.
 func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 	dayStart time.Time, limit, maxBytes int) ([]AskRow, ClaimTotal, error) {
 
-	// ONE FROM-AND-WHERE for the page and the count — see [taskBlock] —
-	// and for the oldest ask's instant [Reader.Decisions] reads beside them.
+	// One FROM-and-WHERE for the page, the count and [Reader.Decisions]'
+	// oldest-ask instant, for [taskBlock]'s reason.
 	total, capped, err := countCapped(ctx, tx, openAsksFrom, openAsksWhere,
 		[]any{handle})
 	if err != nil {
@@ -594,16 +501,11 @@ type askRecord struct {
 	document                    []byte
 }
 
-// askRowsOf is the asks' rows, each beside the task it is on, in the order
-// given: the ONE shape every list of asks shares ([readAsks], [readAnswered]),
-// so an open ask and an answered one read the same.
-//
-// An ask on a task the task read does not return is left out rather than
-// listed with no task.
-//
-// open is whether the asks are still waiting: an open one carries the literal
-// call that answers it, and an answered one none, since nothing answers it
-// again (an ask is answered once, ADR-0023). maxBytes is [readAsks]'.
+// askRowsOf is the asks' rows beside their tasks, in the order given: the one
+// shape every list of asks shares ([readAsks], [readAnswered]). An ask whose
+// task the read does not return is left out. open says they still wait, so
+// each carries its answering call (an ask is answered once, ADR-0023).
+// maxBytes is [readAsks]'.
 func askRowsOf(ctx context.Context, tx *sql.Tx, pending []askRecord,
 	dayStart time.Time, maxBytes int, open bool) ([]AskRow, error) {
 
@@ -645,21 +547,14 @@ func askRowsOf(ctx context.Context, tx *sql.Tx, pending []askRecord,
 			Open:     open,
 		}
 		if open {
-			// THE LITERAL CALL, composed here rather than described.
-			// A model handed a comment id still has to compose the
-			// answer, and every one it composes differently is a
-			// round spent being refused.
-			//
-			// ON THE TASK'S ADDRESS, not its key: an ask on a task
-			// whose key another task claimed first, answered through
-			// the key, would post the answer on the claimant, where
-			// the comment it `answers` does not exist.
+			// On the task's ADDRESS, not its key: through a key
+			// another task claimed first, the answer would land on
+			// the claimant, where the comment it `answers` is not.
 			ask.Answer = answerCall(row.Address(), a.comment, stored.Decision)
 		}
-		// WHOLE OR BY REFERENCE: the first ask is always whole, and an
-		// ask past the block's budget names its size and its read
-		// rather than arriving as its opening, read on the same
-		// address the answer is.
+		// Whole or by reference: the first ask is always whole; one
+		// past the budget names its size and its read, on the answer's
+		// address.
 		if maxBytes > 0 && len(out) > 0 && weight+len(a.body) > maxBytes {
 			ask.Body = ""
 			ask.BodyNotIncluded = fmt.Sprintf("%d bytes, left out to keep this answer "+
@@ -675,12 +570,10 @@ func askRowsOf(ctx context.Context, tx *sql.Tx, pending []askRecord,
 
 // answerCall is the literal call that answers an ask.
 //
-// A DECISION'S CALL CARRIES ITS RECOMMENDATION as the choice, because that is
-// the answer the asker proposed and the one most answers are: a reader who
-// agrees sends it as written, and one who does not changes one value rather
-// than composing a call from the options.
-//
-// The item is the task's ADDRESS ([ItemAddress]), never its bare key.
+// Composed here, not described: every call a model composes differently is a
+// round spent being refused. A decision's call carries its recommendation as
+// the choice, the answer most give; a dissenter changes one value. The item is
+// the task's ADDRESS ([ItemAddress]), never its bare key.
 func answerCall(address, comment string, decision *decision.Decision) string {
 	if decision != nil && decision.Recommended != "" {
 		return fmt.Sprintf("%s(item: %q, body: \"…\", answers: %q, choice: %q)",
@@ -693,11 +586,10 @@ func answerCall(address, comment string, decision *decision.Decision) string {
 // The checklist items one person owns, bound to their record name as the one
 // argument, and [readChecklistClaims]' page of them, named for the plan test.
 //
-// AN OWNER IS NEVER EMPTY, and saying so is the index's own predicate —
-// `tracker_checklist_items_assignee_idx` holds only the items that have an
-// owner — stated because the planner does not prove that an equality implies
-// it: without it the claims every turn opens on read every checklist item in
-// the company from the heap, where the person's own items are one seek.
+// The non-empty owner test is `tracker_checklist_items_assignee_idx`'s partial
+// predicate, stated because the planner does not infer it from the equality:
+// without it every turn's claims scan the company's checklist items from the
+// heap instead of one seek.
 const (
 	claimsFrom = `tracker_checklist_items i
 		JOIN tracker_tasks t ON t.id = i.task_id`
@@ -716,9 +608,7 @@ const (
 func readChecklistClaims(ctx context.Context, tx *sql.Tx, handle string) (
 	[]ChecklistRow, ClaimTotal, error) {
 
-	// THE OPEN ONES, on live tasks. A done item is not a claim, and an
-	// item on a removed task is an item nobody can act on. ONE
-	// FROM-AND-WHERE for the page and the count — see [taskBlock].
+	// One FROM-and-WHERE for the page and the count: see [taskBlock].
 	total, capped, err := countCapped(ctx, tx, claimsFrom, claimsWhere,
 		[]any{handle})
 	if err != nil {

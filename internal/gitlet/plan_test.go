@@ -1967,12 +1967,17 @@ func searchReads() map[string]statement {
 	reach, reachArgs := search.ChangeReachRead(0, search.ChangeIndexBatchRows)
 	batch, batchArgs := search.ChangeBatchRead(0, 1<<40)
 	repos, reposArgs := search.ChangeReposRead([]string{"repo-1", "repo-2"})
+	backReach, backReachArgs := search.ChangeBackReachRead("~", search.ChangeIndexBatchRows)
+	backBatch, backBatchArgs := search.ChangeBackBatchRead("~", "", 1<<40)
 	return map[string]statement{
 		"the index of changes' words' reach": {reach, reachArgs,
 			[]string{changesPositionKey + " (position>?)"}},
 		"the index of changes' words' batch": {batch, batchArgs,
 			[]string{changesPositionKey + " (position>? AND position<=?)", bodyKey + " (change_id=?)"}},
 		"the index of changes' words' repositories": {repos, reposArgs, []string{repoKey + " (id=?)"}},
+		"the first build's reach":                   {backReach, backReachArgs, []string{changeKey + " (id<?)"}},
+		"the first build's batch": {backBatch, backBatchArgs,
+			[]string{changeKey + " (id<? AND id>=?)", bodyKey + " (change_id=?)"}},
 	}
 }
 

@@ -599,6 +599,11 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-diff-view__body",
+    why: "uilet's DiffView writes it on the box its lines sit in. styles/frame.css drops its border and rounding where a change's file card holds the diff (`.code-file__diff`, the DiffView's `className`), so the lines run flush under the file's head; the shell's sheet, since a lazy one may carry no kit rule. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-app-shell__content",
     why: "uilet's AppShell writes it on the content column. styles/frame.css lifts its prose-width cap, because this product's screens are tables, boards and charts and a cap throws away the width a wide window bought, and names its gap as `--toolbar-host-gap`, which a toolbar in the column hands back below itself. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",

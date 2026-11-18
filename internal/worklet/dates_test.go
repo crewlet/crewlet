@@ -25,12 +25,8 @@ func at(t *testing.T, token string) time.Time {
 	return got.At
 }
 
-// THE VENDOR'S ALIASES EXPAND INTO THIS GRAMMAR RATHER THAN BESIDE IT.
-//
-// An alias implemented separately drifts from the token it means the first
-// time either is tuned. `overdue` is the sharpest case: it is also a preset,
-// and the two compile to the same predicate precisely because one expands into
-// the other.
+// THE VENDOR'S ALIASES EXPAND INTO THIS GRAMMAR RATHER THAN BESIDE IT, so an
+// alias and the token it means resolve identically.
 func TestTheVendorAliasesExpandRatherThanDuplicate(t *testing.T) {
 	t.Parallel()
 	for alias, want := range map[string]string{
@@ -60,11 +56,8 @@ func TestTheVendorAliasesExpandRatherThanDuplicate(t *testing.T) {
 	}
 }
 
-// `overdue` IS NOT PURELY A DATE, AND THE FILTER SAYS SO.
-//
-// It carries an open-status condition, and the preset that means the same
-// thing compiles to exactly this — so a caller cannot get one answer from the
-// alias and another from the preset.
+// `overdue` IS NOT PURELY A DATE, AND THE FILTER SAYS SO: it carries an
+// open-status condition, as the preset meaning the same does.
 func TestOverdueCarriesItsOpenCondition(t *testing.T) {
 	t.Parallel()
 	got, err := worklet.ParseDateFilter("overdue", wednesday, berlin)
@@ -80,10 +73,8 @@ func TestOverdueCarriesItsOpenCondition(t *testing.T) {
 	}
 }
 
-// A RANGE THAT ENDS BEFORE IT STARTS IS REFUSED.
-//
-// It matches nothing, and a filter that matches nothing is indistinguishable
-// from a company with no work in it.
+// A RANGE THAT ENDS BEFORE IT STARTS IS REFUSED: matching nothing, it would
+// read as a company with no work in it.
 func TestABackwardsRangeIsRefused(t *testing.T) {
 	t.Parallel()
 	if _, err := worklet.ParseDateFilter("range:eow..sow", wednesday, berlin); err == nil {
