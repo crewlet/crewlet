@@ -30,7 +30,15 @@
  */
 
 import { Fragment, type ReactNode } from "react";
-import { Card, Copyable, EmptyState, EmptyValue, Skeleton, Stack } from "@crewlethq/ui";
+import {
+  Card,
+  Copyable,
+  EmptyState,
+  EmptyValue,
+  Skeleton,
+  Stack,
+  VisuallyHidden,
+} from "@crewlethq/ui";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { href } from "~/app/router.tsx";
@@ -54,7 +62,7 @@ import { ChangeStateTag } from "../ChangeRow.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
 import { Byline, Face, RefName } from "../ui.tsx";
 import { CommitWrites } from "./CommitWrites.tsx";
-import { DiffFiles } from "./DiffFiles.tsx";
+import { DiffFiles, type DiffAgainst } from "./DiffFiles.tsx";
 import "~/styles/gitlet.css";
 
 /** Every way a push's commits came to be, in words (`gitlet.PushVias`). */
@@ -114,18 +122,14 @@ export function CommitPage({ repo, sha }: { repo: string; sha: string }) {
         <BelongsTo answer={answer} />
       </div>
       <section aria-label="What it changed" className="code-section">
-        {base === EMPTY_TREE ? (
-          <h2 className="code-section__title">What it changed: every file of a root commit</h2>
-        ) : parents.length > 1 ? (
-          <h2 className="code-section__title">
-            What it changed against its first parent, <span className="mono">{shortOID(base)}</span>
-            , of {plural(parents.length, "parent")}
-          </h2>
-        ) : (
-          <h2 className="code-section__title">What it changed</h2>
-        )}
+        <VisuallyHidden as="h2">What it changed</VisuallyHidden>
         {base ? (
-          <DiffFiles repo={repo} base={base} head={c.oid} />
+          <DiffFiles
+            repo={repo}
+            base={base}
+            head={c.oid}
+            against={againstOf(repo, base, parents)}
+          />
         ) : (
           <p className="muted">
             {`It names ${plural(c.parent_count ?? 0, "parent")}, more than a history lists: open it in git to read its diff.`}
@@ -134,6 +138,29 @@ export function CommitPage({ repo, sha }: { repo: string; sha: string }) {
       </section>
     </Stack>
   );
+}
+
+/** What the commit's diff is against, said after its totals and at the tree's foot. */
+function againstOf(repo: string, base: string, parents: readonly string[]): DiffAgainst {
+  if (base === EMPTY_TREE) {
+    return {
+      words: " of a root commit, every file it holds",
+      foot: <p className="code-tree__said">Compared with git's empty tree</p>,
+    };
+  }
+  const parent = (
+    <a className="mono t-link" href={href(commitPath(repo, base))} title={base}>
+      {shortOID(base)}
+    </a>
+  );
+  return {
+    words: parents.length > 1 && <> against its first parent {parent}</>,
+    foot: (
+      <p className="code-tree__said">
+        Compared with its first parent at <code>{shortOID(base)}</code>
+      </p>
+    ),
+  };
 }
 
 /**

@@ -942,12 +942,6 @@
   }
 }
 
-.code-files__totals {
-  margin: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
 /* THE FILE TREE: the kit's tree rows (`.code-tree__item`), each file's
    badges, counts and status square at its end. */
 .code-ftree {
@@ -1003,32 +997,6 @@
   flex-direction: column;
   gap: var(--spacing-3);
   min-width: 0;
-}
-
-.code-diff-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-1) var(--spacing-3);
-  padding: var(--spacing-2) var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
-}
-
-.code-diff-head__path {
-  min-width: 0;
-  font-weight: var(--font-weight-semibold);
-  overflow-wrap: anywhere;
-}
-
-.code-diff-head__facts {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-.code-diff-head__view {
-  margin-inline-start: auto;
 }
 
 /* A FINDING, as a card under its review or its line: its weight, subject,
@@ -3561,6 +3529,15 @@
 .code-files-bar__words {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
+}
+
+/* A DIFF'S TOTALS, its figures in the diffstat's inks. */
+.code-files-bar__totals {
+  margin: 0;
+}
+
+.code-files-bar__totals > strong {
+  font-weight: var(--font-weight-semibold);
 }
 
 .code-files-bar .code-files-bar__find {

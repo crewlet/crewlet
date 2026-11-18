@@ -71,7 +71,7 @@ import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { type FileBadges } from "../FileTree.tsx";
 import { FIND_LIMIT, Matched } from "../repo/GoToFile.tsx";
 import { FileStack, fileKey, matchPath, type StackJump, type StackSource } from "../FileStack.tsx";
-import { FilesPane, useFileArrival } from "../FilesPane.tsx";
+import { FilesPane, TREE_BESIDE_FROM, useFileArrival } from "../FilesPane.tsx";
 import { changeHref } from "../paths.ts";
 import { ChangeLines, StackNotesContext } from "./StackNotes.tsx";
 import { findingStands } from "./FindingAnswer.tsx";
@@ -88,9 +88,6 @@ import {
   usePagedFindings,
 } from "./reads.ts";
 import "~/styles/gitlet.css";
-
-/** The page's width from which the tree sits beside the stack (the sheet's 720 px fold). */
-const TREE_BESIDE_FROM = 720;
 
 /** A whole number from 1 off the address, or null. */
 function wholeParam(value: string): number | null {

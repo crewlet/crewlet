@@ -7,6 +7,9 @@ import { sourceParams, useSourceRead, type StackSource } from "./FileStack.tsx";
 import { FileTree, type FileBadges } from "./FileTree.tsx";
 import "~/styles/gitlet.css";
 
+/** The page's width from which the tree sits beside the stack (the sheet's 720 px fold). */
+export const TREE_BESIDE_FROM = 720;
+
 /** The files' tree in its own scroller beside the stack, its current row kept in the list's view. */
 export function FilesPane({
   files,

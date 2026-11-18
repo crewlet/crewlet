@@ -25,6 +25,7 @@ import { load } from "~/lib/syntax/index.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { blobAnswer, inkedLine, type StubBlob } from "~/test/codeScreens.tsx";
+import { NearBy } from "~/test/nearBy.ts";
 import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { CommitPage } from "./CommitPage.tsx";
@@ -33,6 +34,7 @@ import { ComparePage } from "./ComparePage.tsx";
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   location.hash = "";
 });
 
@@ -126,6 +128,38 @@ function commit(extra: Record<string, unknown> = {}, commitExtra: Record<string,
   };
 }
 
+/** A listed file the engine writes a patch for: not binary, with lines changed. */
+const patched = (f: Record<string, unknown>) =>
+  !f.binary && Number(f.added ?? 0) + Number(f.deleted ?? 0) > 0;
+
+/** The walk of every patch as the engine pages it: the first file's patch a page at a time, every
+ *  other file's whole on the last page. */
+function walkOf(files: readonly (readonly Record<string, unknown>[])[], patch: readonly string[]) {
+  const listed = files.flat();
+  const first = listed[0];
+  const pages = patch.map((text, n) =>
+    first && patched(first)
+      ? [
+          {
+            file: 0,
+            path: first.path,
+            status: first.status,
+            patch: text,
+            continues: n + 1 < patch.length,
+          },
+        ]
+      : [],
+  );
+  listed.forEach((f, i) => {
+    if (i > 0 && patched(f)) {
+      pages
+        .at(-1)!
+        .push({ file: i, path: f.path, status: f.status, patch: patch.join(""), continues: false });
+    }
+  });
+  return pages;
+}
+
 interface Acted {
   tool: string;
   args: Record<string, unknown>;
@@ -139,6 +173,8 @@ function stubEngine({
   patch = [PATCH],
   files = [[{ path: "app.go", status: "M", added: 1, deleted: 1 }]],
   blobs = {},
+  walk,
+  totals = { added: 1, deleted: 1 },
 }: {
   commitAnswer?: unknown;
   compare?: Record<string, unknown>;
@@ -149,6 +185,10 @@ function stubEngine({
   files?: readonly (readonly Record<string, unknown>[])[];
   /** Each side's blob by its whole id, read with no path. */
   blobs?: Readonly<Record<string, StubBlob>>;
+  /** The walk's pages of fragments (cursor `w:<n>`), or refused as an older fleet does. */
+  walk?: readonly (readonly Record<string, unknown>[])[] | "refused";
+  /** The lines the diff adds and deletes, as each answer totals them. */
+  totals?: { added: number; deleted: number };
 } = {}) {
   const asked: URL[] = [];
   const acted: Acted[] = [];
@@ -203,6 +243,26 @@ function stubEngine({
         case "/query/code_blob":
           return blobAnswer(url, blobs);
         case "/query/code_diff": {
+          if (p.get("patches") === "true") {
+            if (walk === "refused") {
+              return json({ error: "bad_params", detail: "unknown key patches" }, 400);
+            }
+            const pages = walk ?? walkOf(files, patch);
+            const at = Number((p.get("cursor") ?? "w:0").slice(2));
+            return json({
+              repo: "web",
+              kind: "diff",
+              ...(at + 1 < pages.length ? { next: `w:${at + 1}` } : {}),
+              diff: {
+                base: p.get("base"),
+                head: p.get("head"),
+                files: [],
+                total: files.flat().length,
+                ...totals,
+                patches: pages[at],
+              },
+            });
+          }
           const file = p.get("file");
           const page = Number((p.get("cursor") ?? "p:0").slice(2));
           const pages = file !== null ? patch.length : files.length;
@@ -217,8 +277,7 @@ function stubEngine({
               // is; a listing with its page of files.
               files: file !== null ? files.flat().filter((f) => f.path === file) : files[page],
               total: files.flat().length,
-              added: 1,
-              deleted: 1,
+              ...totals,
               ...(file !== null ? { patch: patch[page] } : {}),
             },
           });
@@ -275,6 +334,15 @@ function mount(ui: ReactElement, hash: string, viewer: unknown = VIEWER) {
 }
 
 const reads = (asked: URL[], what: string) => asked.filter((u) => u.pathname === `/query/${what}`);
+
+/** A file's section of the stack, named by its head's path. */
+const section = (path: string) => screen.findByRole("region", { name: path });
+
+/** Sections come near only when a case says so (`NearBy.near`). */
+function holdSectionsFar() {
+  NearBy.made = [];
+  vi.stubGlobal("IntersectionObserver", NearBy);
+}
 
 // WHO PUSHED IT IS THE ENGINE'S RECORD: the seat, its turn, its executor
 // and its work item from the push that introduced the commit, never the
@@ -335,26 +403,27 @@ test("a commit's changes wear their state pill, and the refs it moved a branch c
 });
 
 // A COMMIT'S DIFF IS AGAINST ITS FIRST PARENT, read by both whole ids, and
-// its first file's patch is drawn in the one DiffView. Mutation: diff against
-// the default branch, or against the commit itself, and this fails.
-test("a commit's diff is against its first parent, its patch drawn", async () => {
+// every file's patch by the one walk. Mutation: diff against the default
+// branch, or against the commit itself, and this fails.
+test("a commit's diff is against its first parent, its patches walked", async () => {
   const { asked } = stubEngine();
   mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
 
   expect(await screen.findByText("new")).toBeTruthy();
-  const stat = reads(asked, "code_diff").find((u) => !u.searchParams.has("file"));
-  expect(stat?.searchParams.get("base")).toBe(PARENT);
-  expect(stat?.searchParams.get("head")).toBe(SHA);
-  const patch = reads(asked, "code_diff").find((u) => u.searchParams.get("file") === "app.go");
-  expect(patch?.searchParams.get("base")).toBe(PARENT);
+  for (const u of reads(asked, "code_diff")) {
+    expect(u.searchParams.get("base")).toBe(PARENT);
+    expect(u.searchParams.get("head")).toBe(SHA);
+  }
+  expect(reads(asked, "code_diff").some((u) => u.searchParams.get("patches") === "true")).toBe(
+    true,
+  );
 });
 
-// A FILE'S PATCH IS READ WHOLE, A PAGE AT A TIME: the engine cuts a patch
-// past one answer's bound at a line, and the page after it is asked from the
-// cursor the page before ended at, its hunks drawn under the first's — never
-// a first page drawn as the file's whole change. Mutation: ask the next page
-// without its cursor, or draw the first page's text alone, and this fails.
-test("a patch past one page draws the rest of its hunks when the reader asks", async () => {
+// THE WALK IS READ A PAGE AT A TIME, the page after asked from the cursor
+// the page before ended at, its hunks drawn under the first's. Mutation: ask
+// the next page without its cursor, or draw the first page alone.
+test("a patch past one page of the walk draws the rest of its hunks when the reader asks", async () => {
+  holdSectionsFar();
   const { asked } = stubEngine({
     patch: [
       `${["--- a/app.go", "+++ b/app.go", "@@ -1,2 +1,2 @@", " keep", "-old", "+new"].join("\n")}\n`,
@@ -370,17 +439,15 @@ test("a patch past one page draws the rest of its hunks when the reader asks", a
   expect(await screen.findByText("omega")).toBeTruthy();
   expect(screen.getByText("new")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Load more lines" })).toBeNull();
-  const second = reads(asked, "code_diff").find((u) => u.searchParams.get("cursor") === "p:1");
-  expect(second?.searchParams.get("file")).toBe("app.go");
+  const second = reads(asked, "code_diff").find((u) => u.searchParams.get("cursor") === "w:1");
+  expect(second?.searchParams.get("patches")).toBe("true");
   expect(second?.searchParams.get("head")).toBe(SHA);
+  expect(reads(asked, "code_diff").some((u) => u.searchParams.has("file"))).toBe(false);
 });
 
-// THE FILE THE ADDRESS NAMES IS OPENED WHEREVER IT IS LISTED: a diff's files
-// are a page at a time, and a link or a reload naming a file past the first
-// page reads its patch all the same, the file described by that patch's own
-// answer — a binary one said as binary, with no line drawn. Mutation: open
-// only a file the loaded pages list, or take a file's kind from the listing
-// alone, and this fails.
+// THE FILE THE ADDRESS NAMES IS OPENED WHEREVER IT IS LISTED: past the first
+// page it is asked alone and the pages read on to it; a binary one is said as
+// binary. Mutation: open only a file the loaded pages list.
 test.each([
   ["its patch", { path: "z.go", status: "A", added: 2, deleted: 0 }, "new"],
   [
@@ -394,9 +461,11 @@ test.each([
   });
   mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}?file=z.go`);
 
-  const region = await screen.findByRole("region", { name: "Changes to z.go" });
+  const region = await section("z.go");
   expect(await within(region).findByText(drawn)).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Load more files" })).toBeTruthy();
+  // THE PAGES ARE READ ON TO LIST IT, once the engine says the diff changes it.
+  const list = screen.getByRole("tree", { name: "Files changed" });
+  expect(within(list).getByRole("treeitem", { name: /z\.go/ })).toBeTruthy();
   expect(reads(asked, "code_diff").some((u) => u.searchParams.get("file") === "z.go")).toBe(true);
 });
 
@@ -413,7 +482,7 @@ test("a line the address names is marked in its file's patch", async () => {
     `#/gitlet/repos/web/commits/${SHA}?file=app.go&line=2`,
   );
 
-  const region = await screen.findByRole("region", { name: "Changes to app.go" });
+  const region = await section("app.go");
   await within(region).findByText("new");
   const marked = region.querySelectorAll(".crewlet-diff-view__line--picked");
   expect(marked.length).toBe(1);
@@ -428,7 +497,7 @@ test("a line the patch does not draw offers the file at the head on that line", 
     `#/gitlet/repos/web/commits/${SHA}?file=app.go&line=40`,
   );
 
-  const region = await screen.findByRole("region", { name: "Changes to app.go" });
+  const region = await section("app.go");
   const open = await within(region).findByRole("link", { name: "Open app.go at line 40" });
   const target = new URL(open.getAttribute("href")!, "http://x");
   expect(target.hash).toContain("/gitlet/repos/web");
@@ -459,7 +528,7 @@ test("a line on a later page of the patch is read to and marked with no press", 
     `#/gitlet/repos/web/commits/${SHA}?file=app.go&line=41`,
   );
 
-  const region = await screen.findByRole("region", { name: "Changes to app.go" });
+  const region = await section("app.go");
   expect(await within(region).findByText("omega")).toBeTruthy();
   const marked = region.querySelectorAll(".crewlet-diff-view__line--picked");
   expect(marked.length).toBe(1);
@@ -478,7 +547,7 @@ test("a line between two hunks is outside the diff once a hunk past it is read",
     `#/gitlet/repos/web/commits/${SHA}?file=app.go&line=20`,
   );
 
-  const region = await screen.findByRole("region", { name: "Changes to app.go" });
+  const region = await section("app.go");
   expect(await within(region).findByRole("link", { name: "Open app.go at line 20" })).toBeTruthy();
   expect(within(region).getByText("omega")).toBeTruthy();
   expect(within(region).queryByText("gamma")).toBeNull();
@@ -507,11 +576,11 @@ test("opening another file drops the line the address named", async () => {
     `#/gitlet/repos/web/commits/${SHA}?file=app.go&line=2`,
   );
 
-  await screen.findByRole("region", { name: "Changes to app.go" });
+  await section("app.go");
   const list = screen.getByRole("tree", { name: "Files changed" });
   fireEvent.click(within(list).getByRole("treeitem", { name: /z\.go/ }));
 
-  const region = await screen.findByRole("region", { name: "Changes to z.go" });
+  const region = await section("z.go");
   await within(region).findByText("new");
   const query = new URLSearchParams(location.hash.split("?")[1] ?? "");
   expect(query.get("file")).toBe("z.go");
@@ -526,8 +595,16 @@ test("a root commit's diff is from git's empty tree", async () => {
   const { asked } = stubEngine({ commitAnswer: commit({}, { parents: undefined }) });
   mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
 
-  await waitFor(() => expect(reads(asked, "code_diff").length).toBeGreaterThan(0));
-  expect(reads(asked, "code_diff")[0]?.searchParams.get("base")).toBe(EMPTY_TREE);
+  await waitFor(() => expect(reads(asked, "code_diff").length).toBeGreaterThan(1));
+  for (const u of reads(asked, "code_diff")) {
+    expect(u.searchParams.get("base")).toBe(EMPTY_TREE);
+  }
+  expect(reads(asked, "code_diff").some((u) => u.searchParams.get("patches") === "true")).toBe(
+    true,
+  );
+  // Mutation: drop the host's words from the toolbar.
+  const words = await screen.findByText(/^Showing/);
+  expect(words.textContent).toMatch(/of a root commit, every file it holds$/);
 });
 
 // A COMPARISON'S FILES ARE WHAT HEAD CHANGED SINCE THE MERGE BASE, read by
@@ -724,6 +801,174 @@ test("a commit is picked onto another branch at that branch's head", async () =>
     tool: "code_cherry_pick",
     args: { repo: "web", branch: "retry", expected_head: SHA, commit: SHA },
   });
+});
+
+// ---- Every changed file on one page ---------------------------------------------
+
+const THREE = [
+  [
+    { path: "cmd/app.go", status: "M", added: 1, deleted: 1 },
+    { path: "cmd/b.go", status: "M", added: 1, deleted: 1 },
+    { path: "web/c.go", status: "M", added: 1, deleted: 1 },
+  ],
+];
+const COMMIT_PAGE = `#/gitlet/repos/web/commits/${SHA}`;
+const sectionPaths = () =>
+  screen
+    .getAllByRole("region")
+    .filter((r) => r.classList.contains("code-file"))
+    .map((r) => r.getAttribute("data-path"));
+
+// EVERY CHANGED FILE IS A SECTION OF ONE STACK, read by the walk of code_diff
+// and never file by file. Mutation: read each file alone.
+test("every changed file is a section of one stack read by the walk of code_diff", async () => {
+  const { asked } = stubEngine({ files: THREE });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_PAGE);
+
+  const c = await section("web/c.go");
+  await within(c).findByText("new");
+  expect(sectionPaths()).toEqual(["cmd/app.go", "cmd/b.go", "web/c.go"]);
+  const walks = reads(asked, "code_diff").filter((u) => u.searchParams.get("patches") === "true");
+  expect(walks).toHaveLength(1);
+  expect(walks[0]!.searchParams.get("base")).toBe(PARENT);
+  expect(walks[0]!.searchParams.get("head")).toBe(SHA);
+  expect(reads(asked, "code_diff").some((u) => u.searchParams.has("file"))).toBe(false);
+});
+
+// A FILE THE ADDRESS NAMES OPENS THE STACK AT IT: its head takes the focus and
+// its line is marked and scrolled to. Mutation: drop the arrival's jump, or
+// drop the target from reveal.
+test("a file the address names opens the stack at it, its line marked", async () => {
+  const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+  stubEngine({ files: THREE });
+  mount(<CommitPage repo="web" sha={SHA} />, `${COMMIT_PAGE}?file=web/c.go&line=2`);
+
+  const c = await section("web/c.go");
+  await within(c).findByText("new");
+  expect(document.activeElement).toBe(within(c).getByRole("heading", { level: 3 }));
+  const marked = c.querySelectorAll(".crewlet-diff-view__line--picked");
+  expect(marked).toHaveLength(1);
+  expect(marked[0]?.textContent).toContain("new");
+  await waitFor(() => expect(scrolled.mock.contexts).toContain(marked[0]));
+  const app = await section("cmd/app.go");
+  expect(app.querySelectorAll(".crewlet-diff-view__line--picked")).toHaveLength(0);
+});
+
+// THE TOOLBAR SAYS THE DIFF'S TOTALS, not the page of files listed, and
+// Split draws every section split. Mutation: count the listed page.
+test("the toolbar says the diff's totals, and Split draws every file split", async () => {
+  stubEngine({ files: [[THREE[0]![0]!], [THREE[0]![1]!]] });
+  mount(<CommitPage repo="web" sha={SHA} />, `${COMMIT_PAGE}?layout=split`);
+
+  const words = await screen.findByText(/^Showing/);
+  expect(words.textContent).toBe("Showing 2 changed files with 1 addition and 1 deletion");
+  expect(within(words).getByText("1 addition").className).toBe("code-diffstat__added");
+  expect(within(words).getByText("1 deletion").className).toBe("code-diffstat__removed");
+  const app = await section("cmd/app.go");
+  await within(app).findByText("new");
+  expect(app.querySelector(".crewlet-diff-view--split")).not.toBeNull();
+  expect(screen.getByRole("radio", { name: "Split" }).getAttribute("aria-checked")).toBe("true");
+});
+
+// LARGE TOTALS ARE SHORT FIGURES, as the diffstat writes them. Mutation: write
+// the whole figure.
+test("the toolbar writes a total of ten thousand or more as a short figure", async () => {
+  stubEngine({ files: THREE, totals: { added: 12_345, deleted: 1 } });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_PAGE);
+
+  const words = await screen.findByText(/^Showing/);
+  expect(words.textContent).toBe("Showing 3 changed files with 12.3k additions and 1 deletion");
+});
+
+// A MERGE IS SAID AGAINST ITS FIRST PARENT, linked. Mutation: drop the host's
+// words from the toolbar.
+test("a merge's toolbar says it is against its first parent", async () => {
+  stubEngine({ commitAnswer: commit({}, { parents: [PARENT, MAIN] }), files: THREE });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_PAGE);
+
+  const words = await screen.findByText(/^Showing/);
+  expect(words.textContent).toMatch(/ against its first parent 89abcde$/);
+  expect(within(words).getByRole("link", { name: "89abcde" }).getAttribute("href")).toBe(
+    `#/gitlet/repos/web/commits/${PARENT}`,
+  );
+});
+
+// A PATH THE DIFF DOES NOT CHANGE is said at the stack's lead, never opened.
+// Mutation: turn the unchanged sentence off.
+test("a file the address names that the diff does not change is said so", async () => {
+  stubEngine({ files: [[THREE[0]![0]!], [THREE[0]![1]!]] });
+  mount(<CommitPage repo="web" sha={SHA} />, `${COMMIT_PAGE}?file=docs/README.md`);
+
+  expect(
+    await screen.findByText(
+      "The two revisions hold the same docs/README.md: this diff does not change it.",
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "docs/README.md" })).toBeNull();
+});
+
+// FILTER FILES NARROWS THE TREE AND THE STACK alike. Mutation: filter the
+// tree only, and the stack keeps three sections.
+test("Filter files narrows the tree and the stack", async () => {
+  stubEngine({ files: THREE });
+  mount(<CommitPage repo="web" sha={SHA} />, `${COMMIT_PAGE}?q=cmd`);
+
+  await section("cmd/b.go");
+  expect(sectionPaths()).toEqual(["cmd/app.go", "cmd/b.go"]);
+  const tree = screen.getByRole("tree", { name: "Files changed" });
+  expect(within(tree).queryByRole("treeitem", { name: /c\.go/ })).toBeNull();
+  expect(screen.getAllByText("Showing 2 of 3 files").length).toBeGreaterThan(0);
+  fireEvent.click(screen.getAllByRole("button", { name: "Clear filter" })[0]!);
+  expect(await section("web/c.go")).toBeTruthy();
+});
+
+// A COMMIT ASKS NOTHING OF A CHANGE and draws no finding on its lines.
+// Mutation: hand the stack the change's lines.
+test("a commit's page asks nothing of a change and draws no finding card", async () => {
+  const { asked } = stubEngine({ files: THREE });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_PAGE);
+
+  const c = await section("web/c.go");
+  await within(c).findByText("new");
+  expect(reads(asked, "code_change")).toHaveLength(0);
+  expect(document.querySelector(".code-finding")).toBeNull();
+});
+
+// AN OLDER FLEET REFUSES THE WALK: said once, and each file read when asked.
+// Mutation: say it on every section, or read every file alone unasked.
+test("a walk an older fleet refuses is said once, each file read when asked", async () => {
+  const { asked } = stubEngine({ files: THREE, walk: "refused" });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_PAGE);
+
+  expect(
+    await screen.findAllByText(/Every file's patch on one page is unavailable on this fleet yet/),
+  ).toHaveLength(1);
+  expect(reads(asked, "code_diff").some((u) => u.searchParams.has("file"))).toBe(false);
+  const b = await section("cmd/b.go");
+  fireEvent.click(within(b).getByRole("button", { name: "Show its changes" }));
+  await within(b).findByText("new");
+  const alone = reads(asked, "code_diff").filter((u) => u.searchParams.has("file"));
+  expect(alone.map((u) => u.searchParams.get("file"))).toEqual(["cmd/b.go"]);
+});
+
+// A COMPARISON DRAWS THE SAME TOOLBAR, TREE AND STACK, compared with its
+// merge base. Mutation: draw a commit's words on a comparison.
+test("a comparison draws the same toolbar, tree and stack as a commit", async () => {
+  const { asked } = stubEngine({ files: THREE });
+  mount(<ComparePage repo="web" />, "#/gitlet/repos/web/compare?head=retry");
+
+  const c = await section("web/c.go");
+  await within(c).findByText("new");
+  expect((await screen.findByText(/^Showing/)).textContent).toBe(
+    "Showing 3 changed files with 1 addition and 1 deletion",
+  );
+  const pane = screen.getByRole("complementary", { name: "Files changed" });
+  expect(within(pane).getByText(/Compared with the merge base at/).textContent).toBe(
+    "Compared with the merge base at 89abcde",
+  );
+  const walk = reads(asked, "code_diff").find((u) => u.searchParams.get("patches") === "true");
+  expect(walk?.searchParams.get("base")).toBe(PARENT);
+  expect(walk?.searchParams.get("head")).toBe(SHA);
 });
 
 // ---- Code coloured by kind in a diff ------------------------------------------
@@ -970,7 +1215,9 @@ test.each([
     await waitFor(() => expect(document.querySelector(".code-syn-keyword")).not.toBeNull());
   } else {
     const said =
-      "binary" in file ? "A binary file: git draws no lines of it." : "No line of it changed.";
+      "binary" in file
+        ? "A binary file: git draws no lines of it."
+        : "Renamed from old.go, its lines unchanged.";
     expect(await screen.findByText(said)).toBeTruthy();
     await new Promise((resolve) => setTimeout(resolve, 50));
   }

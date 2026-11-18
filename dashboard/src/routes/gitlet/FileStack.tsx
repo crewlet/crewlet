@@ -249,6 +249,21 @@ export function useStackPatches(args: { source: StackSource; moved: string }): S
   return useMemo(() => ({ paged, files, frontier, refused }), [paged, files, frontier, refused]);
 }
 
+/** Where read hunks stand to a newer line: whether one draws it, and the furthest newer line
+ *  reached. Git writes hunks in the newer side's order, so a line reached past is outside. */
+function placeOf(hunks: readonly DiffHunk[], line: number): { drawn: boolean; reached: number } {
+  let drawn = false;
+  let reached = 0;
+  for (const hunk of hunks) {
+    for (const l of hunk.lines) {
+      if (l.after === null) continue;
+      if (l.after === line) drawn = true;
+      if (l.after > reached) reached = l.after;
+    }
+  }
+  return { drawn: line > 0 && drawn, reached };
+}
+
 /** A jump to a file: its key, and a count so the same file is jumped to again. */
 export interface StackJump {
   key: string;
@@ -284,6 +299,7 @@ export function FileStack({
   layout,
   linkOf,
   lines,
+  target,
   jump,
   onCurrent,
   lead,
@@ -304,6 +320,8 @@ export function FileStack({
   linkOf: (f: CodeDiffFile) => string;
   /** What a host draws on a section's lines; none draws the diff alone. */
   lines?: ComponentType<StackLinesProps> | undefined;
+  /** A file and line of its newer side the address names: read to, marked and revealed. */
+  target?: { key: string; line: number } | undefined;
   jump: StackJump | null;
   onCurrent: (path: string) => void;
   /** What is said above the sections: how many a filter shows. */
@@ -510,6 +528,7 @@ export function FileStack({
             onOpen={onOpen}
             linkOf={linkOf}
             Lines={lines}
+            line={target?.key === key ? target.line : 0}
           />
         );
       })}
@@ -564,6 +583,7 @@ const FileSection = memo(function FileSection({
   onOpen,
   linkOf,
   Lines,
+  line,
 }: {
   source: StackSource;
   repo: string;
@@ -585,6 +605,8 @@ const FileSection = memo(function FileSection({
   onOpen: (key: string) => void;
   linkOf: (f: CodeDiffFile) => string;
   Lines: ComponentType<StackLinesProps> | undefined;
+  /** The newer side's line the address names on this file, or 0. */
+  line: number;
 }) {
   const path = entry.path;
   const key = fileKey(entry);
@@ -602,6 +624,17 @@ const FileSection = memo(function FileSection({
   const { paged, hunks: aloneHunks } = usePatchPages(patch, params, page);
   useAskAgainWhenMoved(moved, reading, paged.refresh);
   const hunks = alone ? (patch.data ? aloneHunks : null) : (fromWalk?.hunks ?? null);
+  // A NAMED LINE: its file's pages followed to it with no press, stopping at a failed page.
+  const { drawn: lineDrawn, reached } = useMemo(() => placeOf(hunks ?? [], line), [hunks, line]);
+  const short = line > 0 && !lineDrawn && reached < line;
+  const follow = alone && short && paged.more && !paged.paging && !paged.pageError;
+  const { next: nextPage } = paged;
+  useEffect(() => {
+    if (follow) nextPage();
+  }, [follow, nextPage]);
+  const complete = alone ? patch.data !== undefined && !paged.more : Boolean(fromWalk?.complete);
+  const outside = line > 0 && hunks !== null && !lineDrawn && (reached >= line || complete);
+  const isLine = useCallback((d: DiffLine) => d.after === line, [line]);
   const drawn = hunks !== null && !folded && (!large || opened);
   const sides = useDiffSides({ repo, file: drawn ? entry : undefined });
   // EXPANDED LINES ARE THE DIFF'S: a moved diff forgets them.
@@ -820,9 +853,9 @@ const FileSection = memo(function FileSection({
             notes={l.notes}
             expand={expandable ? expand : undefined}
             trailing={trailingLeft}
-            reveal={l.reveal}
+            reveal={line > 0 ? isLine : l.reveal}
             onPick={l.onPick}
-            picked={l.picked}
+            picked={line > 0 ? isLine : l.picked}
           />
           {alone ? (
             <PatchPager paged={paged} />
@@ -853,6 +886,14 @@ const FileSection = memo(function FileSection({
                 {walkPager.pageError && <PageFailed error={walkPager.pageError} />}
               </div>
             )
+          )}
+          {outside && (
+            <p className="code-file__note">
+              {`Line ${line} is outside what this diff changes. `}
+              <a className="t-link" href={repoHref(repo, { ref: head, path, lines: String(line) })}>
+                {`Open ${path} at line ${line}`}
+              </a>
+            </p>
           )}
           {fromWalk?.restOmitted && (
             <p className="code-file__note">

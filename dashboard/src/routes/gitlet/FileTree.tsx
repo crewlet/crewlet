@@ -29,16 +29,6 @@ import { EntryGlyph } from "./ui.tsx";
 import "~/styles/gitlet.css";
 
 /** What git's status letter says of a file, in a word. */
-/** `+207 −51`: lines added and removed, each figure in its diff ink. */
-export function DiffCounts({ added, deleted }: { added: number; deleted: number }) {
-  return (
-    <>
-      <span className="code-diffstat__added">+{fmtCount(added)}</span>{" "}
-      <span className="code-diffstat__removed">−{fmtCount(deleted)}</span>
-    </>
-  );
-}
-
 export function statusWord(f: Pick<CodeDiffFile, "status" | "old_path">): string {
   switch (f.status) {
     case "A":
@@ -314,44 +304,5 @@ export function FileTree({
         );
       })}
     </ul>
-  );
-}
-
-/**
- * The head of one file's diff, as a code host draws it across the diff: the
- * file's path, what became of it, how many lines it added and removed, and
- * the way to the file itself at the revision the diff reads to.
- */
-export function DiffHead({
-  path,
-  file,
-  viewHref,
-}: {
-  path: string;
-  /** The file as the listing or its patch describes it, where either does. */
-  file: CodeDiffFile | undefined;
-  /** The file at the newer revision, where it still exists there. */
-  viewHref: string | undefined;
-}) {
-  return (
-    <div className="code-diff-head">
-      <span className="code-diff-head__path mono">{path}</span>
-      {file && (
-        <span className="code-diff-head__facts">
-          {statusWord(file)}
-          {!file.binary && (
-            <>
-              {" · "}
-              <DiffCounts added={file.added} deleted={file.deleted} />
-            </>
-          )}
-        </span>
-      )}
-      {viewHref && file?.status !== "D" && (
-        <a className="t-link code-diff-head__view" href={viewHref}>
-          View the file
-        </a>
-      )}
-    </div>
   );
 }
