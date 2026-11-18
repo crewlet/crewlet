@@ -73,7 +73,7 @@ type RunSteer struct {
 	// session that its hook took it after its last restart ([HookSettle.Held]).
 	// Kept by every relaunch that carries the round on, after the item itself
 	// is gone ([openNotes]); cleared by one that starts a new round, whose log
-	// numbers its calls afresh. One a call, at its lowest place; at most
+	// numbers its calls afresh. One a call, at its highest place; at most
 	// [MaxCallTellings] ([withTelling]). See the package doc, "A late call its
 	// job's session took is told to no continuation of it again".
 	Tellings []CallTelling `json:"tellings,omitempty"`
@@ -217,15 +217,20 @@ type CallTelling struct {
 }
 
 // withTelling is tellings with t recorded ([RunSteer.Tellings]): one a call, by
-// its round and its place in that round's log, at the lowest place among the
+// its round and its place in that round's log, at the HIGHEST place among the
 // reads either names; ordered by that place; and held to [MaxCallTellings], the
 // lowest places going first. A list of its own: tellings is the record's.
+//
+// The highest, since a session that took the call only there holds it from
+// there alone, and the lower credits a capture of it between the two. No write
+// hands one call to two jobs (the package doc's ordering), so it is the safe
+// side of a case that does not arise.
 func withTelling(tellings []CallTelling, t CallTelling) []CallTelling {
 	out := slices.Clone(tellings)
 	if i := slices.IndexFunc(out, func(held CallTelling) bool {
 		return held.Round == t.Round && held.Appended == t.Appended
 	}); i >= 0 {
-		if out[i].Place <= t.Place {
+		if out[i].Place >= t.Place {
 			return out
 		}
 		out = slices.Delete(out, i, i+1)

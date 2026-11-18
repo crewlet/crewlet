@@ -4284,11 +4284,19 @@
 // answer may never reach its harness, not the review's, not a brief. A telling
 // outlives its item, is kept by every relaunch that carries the round on, and
 // is cleared by one that starts a new round, whose log numbers its calls
-// afresh; one a call, at its lowest place, at most [MaxCallTellings]. A
-// continuation credits it only to a session not cut off or possibly a summary,
-// whose cursor is at or past it, and whose briefs counted no read of the call
-// without listing it ([BriefTold.LateOmitted]): internal/agent/runner's
-// heldByTelling, ADR-0073.
+// afresh; one a call, at most [MaxCallTellings]. A continuation credits it only
+// to a session not cut off or possibly a summary, whose cursor is at or past
+// it, and whose briefs counted no read of the call without listing it
+// ([BriefTold.LateOmitted]): internal/agent/runner's heldByTelling, ADR-0073.
+//
+// ONE JOB A CALL, BY THE ORDER OF THE WRITES: an item is filed only by the
+// write that appends its call or opens a job's log, for a job launching or
+// running, and a relaunch's briefs read the log only once the collection has
+// claimed the job before. So a call filed for that job was in the log those
+// briefs read, and the opening that carries the round on walks only the calls
+// past it. Were one call told to two jobs all the same, the telling keeps the
+// HIGHER place ([withTelling]): a session that took it only there holds it from
+// there alone, and the lower would credit a capture of it read between the two.
 //
 // # Stopping a seat's running work
 //

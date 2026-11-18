@@ -211,19 +211,23 @@ func testANewRoundClearsTheTellings(t *testing.T, s sandbox.PendingStore) {
 }
 
 // TELLINGS ARE ONE PER CALL, AND BOUNDED. A call told to two jobs (the second
-// handed it again by its opening's walk) is told once, at the lower place, the
-// first job's; and past [sandbox.MaxCallTellings] the lowest places go first,
-// the newest kept.
+// handed it again by its opening's walk, which a brief read before the call
+// forces here) is told once, at the higher place, the second job's: that job's
+// session holds it from there alone; and past [sandbox.MaxCallTellings] the
+// lowest places go first, the newest kept.
 //
-// Mutation: keep a telling per job (telling-per-job), or drop the newest past
-// the bound (telling-drop-newest), and a check goes red.
+// Mutation: keep a telling per job (telling-per-job), keep the lower place
+// (telling-keeps-lower), or drop the newest past the bound
+// (telling-drop-newest), and a check goes red.
 func testTellingsAreOnePerCallAndBounded(t *testing.T, s sandbox.PendingStore) {
 	t.Run("one per call", func(t *testing.T) {
 		const turn = "t-telling-once"
 		first, round, next := lateRound(t, s, turn)
 		item := mustLate(t, s, turn, first, round, "delegate", 1)
 		mustTake(t, s, turn, confirmTake(next, item.ID))
-		want := tellingsOf(t, s, turn)
+		if len(tellingsOf(t, s, turn)) != 1 {
+			t.Fatal("the premise: the first job's confirmation recorded no telling")
+		}
 		told := 0
 		walked := run(turn)
 		walked.Continues, walked.BriefRead = true, &told
@@ -234,8 +238,9 @@ func testTellingsAreOnePerCallAndBounded(t *testing.T, s sandbox.PendingStore) {
 				third)
 		}
 		mustTake(t, s, turn, confirmTake(third, items[0].ID))
-		if got := tellingsOf(t, s, turn); len(want) != 1 || !slices.Equal(got, want) {
-			t.Errorf("the call told to two jobs is told %v, want once, at the first's place: %v", got, want)
+		want := []string{telling(round, 1, third, mustGet(t, s, turn).Steer.Reads)}
+		if got := tellingsOf(t, s, turn); !slices.Equal(got, want) {
+			t.Errorf("the call told to two jobs is told %v, want once, at the second's place: %v", got, want)
 		}
 	})
 	t.Run("bounded", func(t *testing.T) {

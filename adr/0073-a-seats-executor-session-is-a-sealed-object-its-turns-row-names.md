@@ -3887,7 +3887,7 @@ the round, the call's place in its log, the job, and the write's OWN new place
 among the turn's reads, never the item's. Nothing else records one: not a
 hook's take, whose answer may never reach its harness, not the review's, not a
 brief. A telling outlives its item, goes with its round, and is held to
-`sandbox.MaxCallTellings`, one a call at its lowest place. A continuation credits
+`sandbox.MaxCallTellings`, one a call at its highest place. A continuation credits
 it (`runner.heldByTelling`) only to a session not cut off, not restarted in its
 job and not a possible summary, whose capture's note cursor, as stamped, is at
 or past the telling's place, and whose briefs counted no read of the call
@@ -3904,6 +3904,13 @@ none. Credited, the call is held as a call at the save point is. Sound because:
    session it continued, told the call whole, or counted it, which the launch
    records APART from the reads it owes (`sandbox.BriefTold.LateOmitted`) and
    which credits no telling to that session.
+4. One call is handed to one job: an item is filed only by the write that
+   appends its call or opens a job's log, for a job launching or running, and a
+   relaunch's briefs read the log only once the collection has claimed the job
+   before, so the opening carrying the round on never walks a call that job was
+   handed. Were it handed to two all the same, the telling keeps the higher
+   place, since the lower would credit a capture of the later session read
+   between the two.
 
 Apart, because a call the log drops from its middle keeps no mark: recorded
 among the owed reads, a dropped late call was counted twice in one brief, as an
