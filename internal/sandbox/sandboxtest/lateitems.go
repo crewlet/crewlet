@@ -26,6 +26,7 @@ var lateItemCases = []struct {
 	{"NoItemIsFiledForAJobThatCannotTakeIt", testNoItemIsFiledForAJobThatCannotTakeIt},
 	{"AJobsLateItemsStopAtMaxJobItems", testAJobsLateItemsStopAtMaxJobItems},
 	{"AnItemKeepsTheOrdinaryShareOfItsCall", testAnItemKeepsTheOrdinaryShareOfItsCall},
+	{"AnEarlierRoundsCallIsHandedToTheJobTheNextRoundRunsOn", testAnEarlierRoundsCallIsHandedToTheJobTheNextRoundRunsOn},
 }
 
 // lateItemStagedCases are the item cases whose subject is a write of the
@@ -350,5 +351,35 @@ func testNoItemIsFiledForAJobTheRowNoLongerNames(t *testing.T, runs *stagedRuns,
 	}
 	if got := itemCalls(lateItems(t, s, turn)); len(got) != 0 {
 		t.Errorf("the record holds items %v, want none: the row names no job the log is open to", got)
+	}
+}
+
+// AN EARLIER ROUND'S CALL IS HANDED TO THE JOB THE NEXT ROUND RUNS ON. The
+// append that lists a record of an earlier round late, in the round a
+// send-back opened, files one item for that round's job, never the job that
+// made it: unsealed, of the round that listed it, the call marked late with no
+// place.
+//
+// Mutation: file items for a late call of the log's own round alone, and the
+// earlier round's call is handed to nobody.
+func testAnEarlierRoundsCallIsHandedToTheJobTheNextRoundRunsOn(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-item-earlier"
+	first := mustLaunched(t, s, run(turn))
+	round := mustGet(t, s, turn).Round
+	next := sendBack(t, s, turn)
+	nextRound := mustGet(t, s, turn).Round
+	if !recordLate(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round,
+		Call: madeAt("delegate", 3, 3)}) {
+		t.Fatal("the record of the earlier round was not recorded")
+	}
+	items := lateItems(t, s, turn)
+	if got, want := itemCalls(items), []string{next + "/delegate#1"}; !slices.Equal(got, want) {
+		t.Fatalf("the record holds items %v, want %v: the call, for the job the next round runs on", got, want)
+	}
+	item := items[0]
+	if len(item.Sealed) != 0 || !item.Waiting() || item.LateCall.Round != nextRound || !item.LateCall.Call.Late ||
+		item.LateCall.Call.Seq != 0 || item.IsFor(first) || !item.IsFor(next) {
+		t.Errorf("the item is %+v, want it unsealed, waiting, of round %s, its call late with no place, and the "+
+			"next round's job's alone", item, nextRound)
 	}
 }

@@ -17,8 +17,8 @@ import (
 // job's harness died, gave up on it or was replaced, by which time a relaunch
 // may have opened the run's log to the next job. Where that relaunch carried
 // the round on, the call is a late call of the round ([sandbox.BridgeCall.Late]);
-// where it started a new round, the call is dropped
-// (testABridgedCallOutlivingItsRoundIsNotTheNextRounds).
+// where it started a new round, its record is a late call of that round, with
+// no place (testARecordOfAnEarlierRoundIsListedLateInTheRoundAfterIt).
 var lateCases = []struct {
 	name string
 	fn   func(*testing.T, sandbox.PendingStore)
@@ -32,6 +32,11 @@ var lateCases = []struct {
 	{"ACallNobodyWaitedForKeepsItsMarkAndIsPaidByItsJob", testACallNobodyWaitedForKeepsItsMarkAndIsPaidByItsJob},
 	{"WhatALateCallOrOneNobodyWaitedForCommittedIsTheRounds",
 		testWhatALateCallOrOneNobodyWaitedForCommittedIsTheRounds},
+	{"ARecordOfAnEarlierRoundIsListedLateInTheRoundAfterIt", testARecordOfAnEarlierRoundIsListedLateInTheRoundAfterIt},
+	{"ABeginOrWithdrawalOfAnEarlierRoundIsNeverTaken", testABeginOrWithdrawalOfAnEarlierRoundIsNeverTaken},
+	{"ARecordOfAnEarlierRoundAskedAgainIsListedOnce", testARecordOfAnEarlierRoundAskedAgainIsListedOnce},
+	{"AnEarlierRoundsCallMovesNoPlaceOfTheRound", testAnEarlierRoundsCallMovesNoPlaceOfTheRound},
+	{"WhatAnEarlierRoundsCallCommittedIsTheNextRounds", testWhatAnEarlierRoundsCallCommittedIsTheNextRounds},
 }
 
 // lateStagedCases are the late-call cases whose subject is what the store asks
@@ -56,6 +61,18 @@ func carryRoundOn(t *testing.T, s sandbox.PendingStore, turnID string) string {
 	job := mustLaunched(t, s, next)
 	if got := mustGet(t, s, turnID).Round; got != round || round == "" {
 		t.Fatalf("the relaunch works in round %q, want the round it carried on, %q", got, round)
+	}
+	return job
+}
+
+// sendBack relaunches turnID's run in a new round, as a send-back does, and
+// answers the new job, after checking its round is not the one the row held.
+func sendBack(t *testing.T, s sandbox.PendingStore, turnID string) string {
+	t.Helper()
+	round := mustGet(t, s, turnID).Round
+	job := mustLaunched(t, s, run(turnID))
+	if got := mustGet(t, s, turnID).Round; got == round || got == "" {
+		t.Fatalf("the send-back works in round %q, want a new one, not %q", got, round)
 	}
 	return job
 }
@@ -575,5 +592,223 @@ func testWhatALateCallOrOneNobodyWaitedForCommittedIsTheRounds(t *testing.T, s s
 	if got := dropped.Changes(); !slices.Equal(got, want) {
 		t.Errorf("once the bound dropped both, the round committed %q, want %q", strings.Join(got, ", "),
 			strings.Join(want, ", "))
+	}
+}
+
+// A RECORD OF AN EARLIER ROUND IS LISTED LATE IN THE ROUND AFTER IT. A call
+// still in flight as its round's collection read the log lands once a
+// send-back's opening moved the log on to a new round, or two: listed late in
+// the round the log holds, with NO PLACE (its place was its own round's),
+// numbered as that round's next append, the bridge's mark that nobody waited
+// for it kept, what its own work called folded into the round's absorbed
+// tally, its spend nobody's and answered so. The new job's own call keeps the
+// round's order: the log's last place is its.
+//
+// Mutation: answer an earlier round's record as taken for nothing, fold none
+// of what it absorbed, or clear its Abandoned mark, and this goes red.
+func testARecordOfAnEarlierRoundIsListedLateInTheRoundAfterIt(t *testing.T, s sandbox.PendingStore) {
+	for _, sendBacks := range []int{1, 2} {
+		t.Run(fmt.Sprintf("after %d send-backs", sendBacks), func(t *testing.T) {
+			turn := fmt.Sprintf("t-earlier-listed-%d", sendBacks)
+			first := mustLaunched(t, s, run(turn))
+			round := mustGet(t, s, turn).Round
+			if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round,
+				Call: madeAt("read_page", 1, 1), Spent: bridged(1)}) {
+				t.Fatal("the first job's own call was not recorded")
+			}
+			var next string
+			for range sendBacks {
+				next = sendBack(t, s, turn)
+			}
+			if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: next, Round: mustGet(t, s, turn).Round,
+				Call: madeAt("post_message", 1, 3), Spent: bridged(2)}) {
+				t.Fatal("the sent-back job's own call was not recorded")
+			}
+			outlived := madeAt("delegate", 2, 2)
+			outlived.Abandoned = true
+			if !recordLate(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round, Call: outlived,
+				Absorbed: []sandbox.ElidedCall{{Name: "read_file", Digest: "d1", Calls: 2}}, Spent: bridged(7)}) {
+				t.Fatal("the record of the earlier round was not recorded")
+			}
+
+			got := mustLogged(t, s, turn)
+			listsExactly(t, got.Log.Calls, []wantCall{
+				{"post_message", 1, 1, false},
+				{"delegate", 0, 2, true},
+			})
+			if !got.Log.Calls[1].Abandoned {
+				t.Error("the record of the earlier round lost the bridge's mark that nobody waited for it")
+			}
+			if a := got.Log.Absorbed(); len(a) != 1 || a[0].Name != "read_file" || a[0].Digest != "d1" ||
+				a[0].Calls != 2 {
+				t.Errorf("the round's absorbed tally is %+v, want the record's read_file d1 x2", a)
+			}
+			if last := got.Log.LastSeq(); last != 1 {
+				t.Errorf("the round's last place is %d, want 1, the sent-back job's own", last)
+			}
+			if got.Launch.Bridged != bridged(2) {
+				t.Errorf("the sent-back job's record holds a bridged spend of %+v, want its own %+v",
+					got.Launch.Bridged, bridged(2))
+			}
+		})
+	}
+}
+
+// A BEGIN OR WITHDRAWAL OF AN EARLIER ROUND IS NEVER TAKEN. No call of a closed
+// round starts: its begin is answered not taken, so the bridge does not run it,
+// and a withdrawal, whose entry went with its round's log, takes nothing. The
+// log the send-back opened is left as it was.
+//
+// Mutation: take an earlier round's begin as its record is, and it is listed.
+func testABeginOrWithdrawalOfAnEarlierRoundIsNeverTaken(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-earlier-begin"
+	first := mustLaunched(t, s, run(turn))
+	round := mustGet(t, s, turn).Round
+	sendBack(t, s, turn)
+	for _, step := range []sandbox.AppendStep{sandbox.AppendBegin, sandbox.AppendWithdraw} {
+		taken, err := s.AppendBridgeCall(t.Context(), turn, sandbox.BridgeAppend{Step: step, Launch: first,
+			Round: round, Call: madeAt("delegate", 2, 2)})
+		if err != nil || taken {
+			t.Errorf("the earlier round's %q step = %v, %v; want it not taken, and no error", step, taken, err)
+		}
+	}
+	if got := mustLogged(t, s, turn).Log; len(got.Calls) != 0 || len(got.InFlight) != 0 || got.Appends() != 0 {
+		t.Errorf("the sent-back round's log holds calls %+v, entries %+v and %d appends, want none",
+			got.Calls, got.InFlight, got.Appends())
+	}
+}
+
+// A RECORD OF AN EARLIER ROUND ASKED AGAIN IS LISTED ONCE. A session that
+// cannot tell a record that did not land from one whose answer was lost asks
+// again; with no place to match, the log finds the call by its instant, name
+// and identity, lists it once, its number unchanged, and counts what it
+// absorbed once.
+//
+// Mutation: list an earlier round's record without asking whether the log
+// lists it already, and it is listed twice.
+func testARecordOfAnEarlierRoundAskedAgainIsListedOnce(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-earlier-again"
+	first := mustLaunched(t, s, run(turn))
+	round := mustGet(t, s, turn).Round
+	sendBack(t, s, turn)
+	late := sandbox.BridgeAppend{Launch: first, Round: round, Call: madeAt("delegate", 4, 4),
+		Absorbed: []sandbox.ElidedCall{{Name: "read_file", Digest: "d1", Calls: 1}}}
+	for ask := 1; ask <= 2; ask++ {
+		if !recordLate(t, s, turn, late) {
+			t.Errorf("ask %d of the earlier round's record was not answered recorded", ask)
+		}
+	}
+	got := mustLogged(t, s, turn).Log
+	listsExactly(t, got.Calls, []wantCall{{"delegate", 0, 1, true}})
+	if n := got.Appends(); n != 1 {
+		t.Errorf("the log counts %d appends, want the 1 call it took", n)
+	}
+	if a := got.Absorbed(); len(a) != 1 || a[0].Calls != 1 {
+		t.Errorf("the round's absorbed tally is %+v, want the record's one call, counted once", a)
+	}
+}
+
+// AN EARLIER ROUND'S CALL MOVES NO PLACE OF THE ROUND. The record lands with
+// the place its own round gave it, 40, past the sent-back job's last, 3. The
+// round's places are what an answer's cut, the next job's numbering and the
+// call a person approved are taken from ([sandbox.BridgeLog.LastSeq]), and
+// with no place the earlier round's call moves none of them: an answer cuts
+// the round at 3 and its relaunch numbers from 4, and an approved call is 4.
+//
+// Mutation: keep the record's own place, and each is taken past 40.
+func testAnEarlierRoundsCallMovesNoPlaceOfTheRound(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	// sentBack makes turn's run a sent-back round whose job made three calls
+	// before the first round's call at place 40 landed, answering that job.
+	sentBack := func(t *testing.T, turn string) string {
+		t.Helper()
+		first := mustLaunched(t, s, run(turn))
+		round := mustGet(t, s, turn).Round
+		job := sendBack(t, s, turn)
+		nextRound := mustGet(t, s, turn).Round
+		for seq := 1; seq <= 3; seq++ {
+			if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: job, Round: nextRound,
+				Call: madeAt(fmt.Sprintf("read_%d", seq), seq, seq)}) {
+				t.Fatalf("the sent-back job's call %d was not recorded", seq)
+			}
+		}
+		if !recordLate(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round,
+			Call: madeAt("delegate", 40, 4)}) {
+			t.Fatal("the record of the earlier round was not recorded")
+		}
+		return job
+	}
+	t.Run("an answer's relaunch", func(t *testing.T) {
+		const turn = "t-earlier-answer"
+		job := sentBack(t, turn)
+		if got, err := s.RecordAsk(ctx, turn, job, branchAsk()); err != nil || got != sandbox.AskRecorded {
+			t.Fatalf("RecordAsk = %q, %v; want it recorded", got, err)
+		}
+		next := run(turn)
+		next.Continues = true
+		opened, err := s.BeginLaunch(ctx, next, sandbox.Fence{})
+		if err != nil {
+			t.Fatalf("the answer's relaunch: %v", err)
+		}
+		if opened.OpenedAfter != 3 {
+			t.Errorf("the answer's relaunch numbers its calls after %d, want 3", opened.OpenedAfter)
+		}
+		if cut := mustLogged(t, s, turn).Log.AnsweredThrough; cut != 3 {
+			t.Errorf("the answer cut the round at %d, want 3, the asking job's last place", cut)
+		}
+	})
+	t.Run("a held call a person approved", func(t *testing.T) {
+		const turn = "t-earlier-approved"
+		job := sentBack(t, turn)
+		if got, err := s.RecordAsk(ctx, turn, job, heldAsk(t, turn, job)); err != nil ||
+			got != sandbox.AskRecorded {
+			t.Fatalf("RecordAsk of a held call = %v, %v", got, err)
+		}
+		if err := s.MarkAwaiting(ctx, turn, sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
+			t.Fatalf("MarkAwaiting: %v", err)
+		}
+		if _, ok, err := s.RecordAnswer(ctx, turn, job, answerOf("r1", "once"), sandbox.Fence{}); err != nil || !ok {
+			t.Fatalf("RecordAnswer = %v, %v", ok, err)
+		}
+		if _, ok, err := s.ClaimForResume(ctx, turn, sandbox.RecordedAnswerTail(job), sandbox.Fence{}); err != nil ||
+			!ok {
+			t.Fatalf("ClaimForResume = %v, %v", ok, err)
+		}
+		if _, first, err := s.MarkHeldCall(ctx, turn, job, sandbox.Fence{}); err != nil || !first {
+			t.Fatalf("MarkHeldCall = %v, %v", first, err)
+		}
+		if ok, err := s.RecordHeldResult(ctx, turn, job, heldMade("sealed-result"), sandbox.Fence{}); err != nil ||
+			!ok {
+			t.Fatalf("RecordHeldResult = %v, %v", ok, err)
+		}
+		i := slices.IndexFunc(mustLogged(t, s, turn).Log.Calls, func(c sandbox.BridgeCall) bool { return c.Approved })
+		if i < 0 {
+			t.Fatal("the round's log does not list the approved call")
+		}
+		if seq := mustLogged(t, s, turn).Log.Calls[i].Seq; seq != 4 {
+			t.Errorf("the approved call is at place %d, want 4, after the sent-back job's last", seq)
+		}
+	})
+}
+
+// WHAT AN EARLIER ROUND'S CALL COMMITTED IS THE NEXT ROUND'S. Its effect
+// happened in the turn and no earlier collection read it, so the kinds it
+// committed join the union the round after settles the turn's outcome by
+// ([sandbox.BridgeLog.Changes]).
+//
+// Mutation: drop the kinds of a record of an earlier round, and the round
+// after committed nothing.
+func testWhatAnEarlierRoundsCallCommittedIsTheNextRounds(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-earlier-committed"
+	first := mustLaunched(t, s, run(turn))
+	round := mustGet(t, s, turn).Round
+	sendBack(t, s, turn)
+	late := madeAt("create_work_item", 2, 2)
+	late.Committed = []string{string(types.CommittedItem)}
+	if !recordLate(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round, Call: late}) {
+		t.Fatal("the record of the earlier round was not recorded")
+	}
+	if got, want := mustLogged(t, s, turn).Log.Changes(), late.Committed; !slices.Equal(got, want) {
+		t.Errorf("the round after committed %q, want %q", strings.Join(got, ", "), strings.Join(want, ", "))
 	}
 }

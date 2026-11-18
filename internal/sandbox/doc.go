@@ -5066,6 +5066,42 @@
 // HIGHER place ([withTelling]): a session that took it only there holds it from
 // there alone, and the lower would credit a capture of it read between the two.
 //
+// # A call that outlives its round's collection is a late call of the round after
+//
+// A collection drains its round's calls in flight only up to each call's
+// bound, the turn's cap or its process gone, so a call can still run as the
+// collection reads the log. Where a send-back's opening has moved the log on to
+// a new round by the time its record lands, the log takes it as a LATE CALL OF
+// THAT ROUND ([takeEarlier]): listed and numbered in the round's order of
+// appends ([BridgeCall.Appended]), marked late, what it committed and what its
+// own work called folded into the round's tallies ([BridgeLog.Committed],
+// [BridgeLog.AbsorbedCalls]), its spend nobody's, answered recorded beside
+// [ErrJobReplaced]. So the item, the continuations' telling and the round's
+// collection reach it as they reach any late call of the round. It counts
+// toward the round's delivery check, as a late call of the round does: its
+// effect happened in the turn, and no earlier collection counted it, which is
+// not what a new round's fresh start ([CoordStore.openLog]) guards against. A
+// begin or a withdrawal of an earlier round is taken for nothing: the call
+// never starts.
+//
+// WITH NO PLACE ([BridgeCall.Seq] zero). Its place was its own round's order.
+// Kept, it would enter [BridgeLog.LastSeq], by which this round numbers its
+// next opening, the answer's cut ([BridgeLog.AnsweredThrough]) and the call a
+// person approved: a cut could land past the round's own later calls and drop
+// a submission made after the answer, and the next calls would be numbered
+// after a foreign place. With none, no reader of the round's order sees it, and
+// none needs it: a late call is never the round's submission, a job's own, or
+// held by a save point. The cost is that it sorts first in admission order and
+// shows no place. It is found again by its instant, name and digest
+// ([BridgeLog.listsEarlier]), so a record asked again is listed once; one with
+// no instant, answered without running, is listed again, the safe direction.
+//
+// ANY EARLIER ROUND, not only the one just replaced: a second send-back can
+// open while the call still runs, the turn's log holds no other turn's calls,
+// and no append names a later round than the log's. A call of an earlier RUN
+// under the same turn id, whose row was made again, is the turn's too: its
+// kinds join the later run's outcome and its job is told.
+//
 // # Stopping a seat's running work
 //
 // A pause with `stop_running` is a person saying the seat's work in flight must

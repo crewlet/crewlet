@@ -343,3 +343,33 @@ func TestALateSubmissionIsToldOnceUnderItsOwnWords(t *testing.T) {
 		t.Errorf("the session is told %d times that a submission does not stand, want once:\n%s", n, brief)
 	}
 }
+
+// A LATE CALL WITH NO PLACE IS TOLD BY THE NEXT ROUND'S CONTINUATION. A call of
+// an earlier round that the next round's log took late has no place
+// (sandbox.BridgeCall.Seq zero): a continuation of that round is told it under
+// the late calls' words whatever its save point, and a late `submit_work` with
+// no place is never the round's submission.
+//
+// Mutation: skip the calls with no place in the continuation's walk, and the
+// earlier round's call goes untold.
+func TestALateCallWithNoPlaceIsToldByTheNextRoundsContinuation(t *testing.T) {
+	t.Parallel()
+	const lateHeading = "## Calls the run that made them stopped waiting for, or whose outcome is unknown"
+	earlier := runner.BridgedCall{Call: ledger.Call{Name: "jira_create",
+		Args: map[string]any{"summary": "the earlier round's"}, Result: "done", Late: true}, Appended: 2}
+	brief := afterSaveBrief(t, 3, []runner.BridgedCall{
+		numbered("slack_post", map[string]any{"text": "held by the session"}, 1, 1),
+		earlier,
+		numbered("slack_post", map[string]any{"text": "held too"}, 2, 3),
+	}, nil)
+	if _, apart, found := strings.Cut(brief, lateHeading); !found || !strings.Contains(apart, "the earlier round's") {
+		t.Errorf("the continuation is not told the earlier round's call under the late calls' words:\n%s", brief)
+	}
+	lost := &runner.Lost{Why: "its host was drained", Losses: 1, Limit: 2}
+	submitted := []runner.BridgedCall{{Call: ledger.Call{Name: runner.SubmitWorkTool,
+		Args: map[string]any{"outcome": "delivered", "summary": "posted it"}, Late: true}, Appended: 1}}
+	if !(runner.Resume{Lost: lost, Bridged: submitted}).CarriesOn() {
+		t.Error("a lost round whose only submission is an earlier round's, with no place, is collected on it, " +
+			"want it carried on")
+	}
+}

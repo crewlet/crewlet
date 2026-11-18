@@ -693,12 +693,41 @@ func itemCall(call BridgeCall) BridgeCall {
 // session's calls was still in flight, which reuses it; an instant alone is
 // not set on a call nothing ran; and the same tool called with other arguments
 // at the same place and instant is another call, as is another tool. A call
-// with no place is never one the log holds: the bridge numbers every call it
-// records. AND NEVER BY THE ID ITS HARNESS GAVE IT ([BridgeCall.CallID]),
-// which is the box's word: a harness that makes a call again may send the id
-// it sent before, and two calls under one id are two calls.
+// with no place is never one this matches: [BridgeLog.listsEarlier] finds a
+// late call of an earlier round. AND NEVER BY THE ID ITS HARNESS GAVE IT
+// ([BridgeCall.CallID]), the box's word: a harness that makes a call again may
+// send the id it sent before, and two calls under one id are two calls.
 func (l BridgeLog) lists(call BridgeCall) bool {
 	_, listed := l.listedAs(call)
+	return listed
+}
+
+// listedEarlierAs is call as the log lists it where the log took it as a late
+// call of an earlier round ([takeEarlier]), and false where it does not: a
+// listed late call with no place, the same nonzero instant, and the same name
+// and identity as the log keeps them. Three of [BridgeLog.lists]' four: the
+// place guards against a reused one, which a call with none cannot be, and no
+// two calls share an instant ([BridgeLog.inFlightAt]). A call with no instant,
+// answered without running, is never matched.
+func (l BridgeLog) listedEarlierAs(call BridgeCall) (BridgeCall, bool) {
+	if call.StartedAt.IsZero() {
+		return BridgeCall{}, false
+	}
+	kept := keptCall(call, MaxBridgeArgsBytes)
+	i := slices.IndexFunc(l.Calls, func(c BridgeCall) bool {
+		return c.Seq == 0 && c.Late && c.StartedAt.Equal(kept.StartedAt) && c.Name == kept.Name &&
+			c.Digest == kept.Digest
+	})
+	if i < 0 {
+		return BridgeCall{}, false
+	}
+	return l.Calls[i], true
+}
+
+// listsEarlier reports whether the log lists call already as a late call of an
+// earlier round ([BridgeLog.listedEarlierAs]).
+func (l BridgeLog) listsEarlier(call BridgeCall) bool {
+	_, listed := l.listedEarlierAs(call)
 	return listed
 }
 

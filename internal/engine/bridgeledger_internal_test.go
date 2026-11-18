@@ -58,8 +58,8 @@ func (m *steppingMeter) Total() runner.Bridged {
 // A SESSION'S CALLS ARE FILED UNDER THE JOB IT WAS BOUND TO, AND CARRY ITS
 // METER. Every append, the first included, names the job the launch bound the
 // session to before its box existed, so a call outliving its job never lands on
-// the next job's record as that job's (the store lists it late in its own round,
-// or drops it once a new round started). Every append carries the meter's
+// the next job's record as that job's (the store lists it late, in its own
+// round or the one after it). Every append carries the meter's
 // running total, every figure (cache shares, workers) included, for the
 // resuming segment to pay.
 //
@@ -387,8 +387,8 @@ var errSpendRefused = errors.New("the record took the call's log but not its spe
 // spendlessStore is a pending store whose log takes the first attempt of the
 // first record while its record refuses the spend beside it, and which answers
 // every later attempt as then does: the spend refused again, the store out of
-// reach, or the job replaced (by a new round, or a later job of its own round
-// that lists the call).
+// reach, the run's log gone, or the job replaced (by a later job, of its own
+// round or a new one, that lists the call).
 type spendlessStore struct {
 	sandbox.PendingStore
 	then  func() (bool, error)
@@ -428,8 +428,8 @@ func TestACallTheLogTookIsNeverSaidToHaveLostItsOutcomeWhateverBecameOfItsSpend(
 		{"the store out of reach after the attempt the log took", func() (bool, error) {
 			return false, errors.New("the coordination store is electing a leader")
 		}},
-		{"the log moved on after the attempt it took", func() (bool, error) { return false, nil }},
-		{"a later job of its round took the log after the attempt it took", func() (bool, error) {
+		{"the run's log gone after the attempt it took", func() (bool, error) { return false, nil }},
+		{"a later job took the log after the attempt it took", func() (bool, error) {
 			return true, sandbox.ErrJobReplaced
 		}},
 	} {

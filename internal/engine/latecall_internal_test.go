@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -75,6 +76,65 @@ func TestALateCallReachesItsRoundsLogThroughItsSessionsLedger(t *testing.T) {
 	if row.Launch.Bridged != (sandbox.EngineSpend{}) {
 		t.Errorf("the next job's record holds a bridged spend of %+v, want none: the late call's is no job's",
 			row.Launch.Bridged)
+	}
+}
+
+// appendCounter is a pending store that counts the bridged appends asked of
+// the store it wraps.
+type appendCounter struct {
+	sandbox.PendingStore
+	asked atomic.Int32
+}
+
+func (s *appendCounter) AppendBridgeCall(ctx context.Context, turnID string, a sandbox.BridgeAppend) (bool, error) {
+	s.asked.Add(1)
+	return s.PendingStore.AppendBridgeCall(ctx, turnID, a)
+}
+
+// A RECORD OF AN EARLIER ROUND REACHES THE NEXT ROUND'S LOG THROUGH ITS
+// SESSION'S LEDGER. A call nobody waited for, still running as its round was
+// collected, returns once a send-back opened the run's log to a new round: the
+// store lists it late in that round, with no place, and answers it recorded
+// beside sandbox.ErrJobReplaced, so the ledger asks once, answers no error,
+// and says nothing at warning, the call being on the run's log.
+//
+// Mutation: answer a record of another round as taken for nothing, and the
+// call is on no log and named at warning.
+func TestARecordOfAnEarlierRoundReachesTheNextRoundsLogThroughItsSessionsLedger(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := &appendCounter{PendingStore: sandbox.NewCoordStore(memory.NewFleet())}
+	first, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe"}, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	l, logs := readingLedger(store)
+	l.bind(first.NamedJob(first.OpenedAfter, ""))
+	next, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe"}, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("the send-back's launch: %v", err)
+	}
+	if next.Round == first.Round {
+		t.Fatalf("the send-back works in round %q, the one before it: the case exercises nothing", next.Round)
+	}
+	started := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
+	if err := l.Record(ctx, "run-1", mcpbridge.Call{Call: tools.Call{Name: "delegate"}, Seq: 4,
+		StartedAt: started, Abandoned: true}); err != nil {
+		t.Fatalf("the record of the earlier round answered %v, want no error", err)
+	}
+	if n := store.asked.Load(); n != 1 {
+		t.Errorf("the record was asked of the store %d times, want once", n)
+	}
+	logged, err := store.BridgeLog(ctx, next)
+	if err != nil {
+		t.Fatalf("BridgeLog: %v", err)
+	}
+	if len(logged.Calls) != 1 || logged.Calls[0].Name != "delegate" || !logged.Calls[0].Late ||
+		logged.Calls[0].Seq != 0 {
+		t.Errorf("the next round's log lists %+v, want the earlier round's call, late with no place", logged.Calls)
+	}
+	if line := logLine(t, logs, "bridge_abandoned_call_after_its_job"); line != nil {
+		t.Errorf("the ledger named the call at warning, though the next round's log took it: %v", line)
 	}
 }
 

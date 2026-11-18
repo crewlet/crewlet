@@ -473,8 +473,8 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// own, which are the round's when the job carries it on — counted before
 	// the answer's cut, which the opening takes off the same write — and are
 	// dropped with the rest when it does not; after the opening, it lists one
-	// of a round carried on marked late, its spend dropped with its job
-	// ([BridgeLog.take]).
+	// marked late, of a round carried on or, a record, of an earlier one, its
+	// spend dropped with its job ([BridgeLog.take]).
 	last, walked, logged, err := s.openLog(ctx, run.TurnID, opened.LaunchID, opening)
 	switch {
 	case err != nil:
@@ -2495,12 +2495,12 @@ func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 // and of its spend, so the job check and the spend stay in one place.
 //
 // A run whose log is gone is not an error: the run ended while a late call was
-// in flight, which is the ordinary shape of a box shutting down. Nor is a call
-// of a round the log has moved on from, or an append naming no job at all (see
-// the pin on [PendingStore]). The append is simply dropped, and the caller —
-// which must not fail the box's call over a record, and runs no call whose
-// begin was dropped — goes on as it would have. A late call of the round is
-// answered recorded, beside [ErrJobReplaced]: its spend can reach no record.
+// in flight, the ordinary shape of a box shutting down. Nor is a begin or
+// withdrawal of a round the log has moved on from, or an append naming no job
+// (see the pin on [PendingStore]). The append is dropped, and the caller, which
+// must not fail the box's call over a record and runs no call whose begin was
+// dropped, goes on as it would have. A late call, of the round or an earlier
+// one, is answered recorded beside [ErrJobReplaced]: its spend reaches no record.
 func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error) {
 	if !a.Step.Valid() {
 		return false, fmt.Errorf("sandbox: %q is no step of a bridged call", a.Step)
@@ -2541,18 +2541,22 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 	case taken == takeNone, wrote && !won:
 		// NO LOG OPEN FOR THE JOB OR ITS ROUND, or one the run's end removed
 		// under the write that landed in it, which the store undid: a run
-		// that is gone, or a round that is over.
+		// that is gone, or a begin or withdrawal of a round that is over.
 		return false, nil
 	case a.Step != AppendRecord:
 		// A BEGIN OR A WITHDRAWAL: no spend rides it.
 		return true, nil
 	case taken != takeOwn:
-		// A LATE CALL OF THE ROUND, in the log and paid by nobody: the row
-		// holds a later job, whose resume would pay it as its own. Said, so a
-		// caller asking again for an earlier attempt's spend stops asking.
-		// HANDED TO THE JOB THE LOG IS OPEN TO, as the log lists it, which
-		// files it once however often the append is asked.
-		if listed, ok := logged.listedAs(a.Call); ok {
+		// A LATE CALL, of the round or of an earlier one, in the log and paid
+		// by nobody: the row holds a later job, whose resume would pay it as
+		// its own. Said, so a caller asking again for an earlier attempt's
+		// spend stops asking. HANDED TO THE JOB THE LOG IS OPEN TO, as the log
+		// lists it, which files it once however often the append is asked.
+		listed, ok := logged.listedAs(a.Call)
+		if taken == takeEarlier {
+			listed, ok = logged.listedEarlierAs(a.Call)
+		}
+		if ok {
 			s.fileLateItems(ctx, turnID, logged.Launch, logged.Round, []BridgeCall{listed})
 		}
 		return true, ErrJobReplaced
@@ -2592,10 +2596,9 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 type logTake int
 
 const (
-	// takeNone is an append the log takes nothing of: one naming no job, or
-	// a job of a round the log has moved on from, or a job the log is not on
-	// and no round — a call that outlived a round a relaunch replaced with a
-	// new one, or the run's end.
+	// takeNone is an append the log takes nothing of: one naming no job, a
+	// job the log is not on and no round, or a begin or withdrawal of a round
+	// the log has moved on from — a call of a closed round never starts.
 	takeNone logTake = iota
 	// takeOwn is an append of the log's own job ([BridgeLog.Launch]): its
 	// calls listed, and its spend written onto the job's record.
@@ -2604,6 +2607,13 @@ const (
 	// ([BridgeLog.Round]): its calls listed, marked late ([BridgeCall.Late]),
 	// and its spend written nowhere.
 	takeLate
+	// takeEarlier is a RECORD of a job of an earlier round of the turn, an
+	// earlier run's under the same turn id included ([BridgeAppend.Round] set
+	// and not the log's): a call still in flight as its round's collection
+	// read the log, which landed once a later round's opening moved the log
+	// on. Listed as a late call of this round with NO PLACE ([BridgeCall.Seq]
+	// zero), its spend nobody's (the package doc says why).
+	takeEarlier
 )
 
 // take decides what l does with one bridged append, a, and does it: THE ONE
@@ -2618,13 +2628,14 @@ const (
 // BY THE LOG'S OWN FIELDS: the job it is open for, and the round it holds,
 // which an opening for a later job of the same round keeps and one of another
 // round replaces ([BridgeLog.opened]). So a call still running when a relaunch
-// carried its round on is listed in the round it was made in, and one of a
-// round a send-back replaced is not: the new round numbers its own calls. An
-// append that names no round ([BridgeAppend.Round]) is taken by its own job's
-// log alone. A BEGIN IS TAKEN AS A RECORD IS: a call a replaced job's box makes
-// while its opening still serves it — the relaunch that replaced the job opens
-// its own session a moment after it moved the log on — is a call of the round,
-// whose update the log marks late.
+// carried its round on is listed in the round it was made in, and a RECORD of
+// an earlier round in the round after, late and with no place (the package
+// doc, "A call that outlives its round's collection is a late call of the round
+// after"). An append that names no round ([BridgeAppend.Round]) is taken by its
+// own job's log alone. A BEGIN IS TAKEN AS A RECORD IS within the round: a call
+// a replaced job's box makes while its opening still serves it — the relaunch
+// that replaced the job opens its own session a moment after it moved the log
+// on — is a call of the round, whose update the log marks late.
 //
 // BY THE STEP ([AppendStep]):
 //
@@ -2653,6 +2664,8 @@ func (l *BridgeLog) take(a BridgeAppend, stamp func(BridgeCall) BridgeCall) (log
 		taken = takeOwn
 	case a.Round != "" && a.Round == l.Round:
 		taken = takeLate
+	case a.Round != "" && a.Step == AppendRecord:
+		return takeEarlier, l.takeEarlier(a, stamp), nil
 	default:
 		return takeNone, false, nil
 	}
@@ -2689,6 +2702,21 @@ func (l *BridgeLog) take(a BridgeAppend, stamp func(BridgeCall) BridgeCall) (log
 		l.appendCall(stamp(call), a.Absorbed)
 	}
 	return taken, true, nil
+}
+
+// takeEarlier lists a, a record of an earlier round ([takeEarlier]), as a late
+// call of l's round with no place, its absorbed calls folded in and the
+// bridge's [BridgeCall.Abandoned] kept, answering whether it wrote: nothing
+// where l lists it already, a record asked again. No entry is looked up: an
+// earlier round's entry went with its log.
+func (l *BridgeLog) takeEarlier(a BridgeAppend, stamp func(BridgeCall) BridgeCall) bool {
+	if l.listsEarlier(a.Call) {
+		return false
+	}
+	call := a.Call
+	call.Seq, call.Late = 0, true
+	l.appendCall(stamp(call), a.Absorbed)
+	return true
 }
 
 // WatchLog follows the bridged tool log beside run turnID's record. See the
