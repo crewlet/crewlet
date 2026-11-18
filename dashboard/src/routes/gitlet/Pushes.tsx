@@ -5,6 +5,7 @@
 
 import { Fragment, memo, useId, useMemo, useState, type ReactNode } from "react";
 import {
+  AsideLayout,
   AvatarStack,
   Button,
   Callout,
@@ -68,6 +69,7 @@ import {
   type PushPart,
 } from "./pushWords.ts";
 import { PUSHER_DAYS } from "./activity.tsx";
+import { PushesRail } from "./PushesRail.tsx";
 import { usePushActivity } from "./railParts.tsx";
 import { REFUSED_CODES, refusalSentence } from "./repo/marks.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
@@ -97,7 +99,9 @@ const VIA_WORDS: Readonly<Record<string, string>> = {
 export function Pushes() {
   const [repo, setRepo] = useParam(REPO_PARAM, "", "filter");
   const picker = <RepoPicker size="sm" repo={repo} onChoose={setRepo} />;
-  if (repo !== "" && isRepoName(repo)) return <PushHistory repo={repo} toolbarLead={picker} />;
+  if (repo !== "" && isRepoName(repo)) {
+    return <PushHistory repo={repo} toolbarLead={picker} rail />;
+  }
 
   return (
     <>
@@ -152,9 +156,18 @@ function historyRefused(error: string | null, refusal: unknown, detail?: string)
 
 /**
  * One repository's pushes, newest first, a page at a time, under day headings, narrowed on the
- * engine by who pushed (`by=`) and when (`when=`). `repo` is a name a repository can have.
+ * engine by who pushed (`by=`) and when (`when=`). `repo` is a name a repository can have; `rail`
+ * draws the pushers and protection beside it, and the total in the toolbar.
  */
-export function PushHistory({ repo, toolbarLead }: { repo: string; toolbarLead?: ReactNode }) {
+export function PushHistory({
+  repo,
+  toolbarLead,
+  rail = false,
+}: {
+  repo: string;
+  toolbarLead?: ReactNode;
+  rail?: boolean;
+}) {
   const [by, setBy] = useParam("by", "", "filter");
   const [when, setWhen] = useParam("when", "", "filter");
   const nav = useNavigator();
@@ -163,6 +176,12 @@ export function PushHistory({ repo, toolbarLead }: { repo: string; toolbarLead?:
   const today = useClock((t) => readerDay(t));
   const inZone = zone();
   const activity = usePushActivity(repo, PUSHES_POLL_MS);
+  const rules = useCodeQuery(
+    "code_repo",
+    { name: repo, gates: true },
+    { enabled: rail, pollMs: PUSHES_POLL_MS },
+  );
+  const total = rail ? rules.data?.repo?.pushes : undefined;
   const seats = usePusherChoices(activity.read.data?.repo?.pushers, by);
   const kind = by === "" ? "" : (pusherParams(by, seats.kindOf).pusher_kind ?? "");
   const since = sinceOf(when, today);
@@ -248,6 +267,14 @@ export function PushHistory({ repo, toolbarLead }: { repo: string; toolbarLead?:
           active={when !== ""}
         />
       </span>
+      {total !== undefined && (
+        <span
+          className="code-pushes-total"
+          title={`Every push it has had; the history keeps the last ${PUSH_HISTORY_DAYS} days.`}
+        >
+          <strong>{fmtCount(total)}</strong> {total === 1 ? "push" : "pushes"} to {repo}
+        </span>
+      )}
     </PageToolbar>
   );
 
@@ -263,9 +290,8 @@ export function PushHistory({ repo, toolbarLead }: { repo: string; toolbarLead?:
       </>
     );
   }
-  return (
+  const feed = (
     <>
-      {toolbar}
       {paged.loading && rows.length === 0 && refused === null && (
         <Skeleton variant="text" rows={6} label={`Loading the pushes to ${repo}`} />
       )}
@@ -314,6 +340,23 @@ export function PushHistory({ repo, toolbarLead }: { repo: string; toolbarLead?:
             />
           </div>
         </QueryState>
+      )}
+    </>
+  );
+  return (
+    <>
+      {toolbar}
+      {rail ? (
+        <AsideLayout
+          fit="page"
+          sticky
+          asideLabel={`Pushes to ${repo}`}
+          aside={<PushesRail repo={repo} activity={activity} rules={rules} />}
+        >
+          {feed}
+        </AsideLayout>
+      ) : (
+        feed
       )}
     </>
   );

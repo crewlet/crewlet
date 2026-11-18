@@ -9276,6 +9276,8 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   ([A log is an axis, then its rows](#a-log-is-an-axis-then-its-rows)).
   It narrows on the engine by who pushed (`by=`) and when (`when=`); a narrowed page that read
   short says how far back it looked.
+  Its rail draws pushes by day, who pushes here and the repository's protection in the
+  settings' words, and its toolbar how many pushes the repository has had.
 
 **Code is read over REST, never on the socket** (`lib/useCodeQuery.ts`). Its
 questions are the registry's like every other, one answer on every transport,

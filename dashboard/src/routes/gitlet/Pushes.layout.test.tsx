@@ -71,9 +71,49 @@ function answer(url: URL): Response {
       });
     case "/query/code_repos":
       return json({ repos: [{ name: "web" }], ...PAGE });
+    case "/query/code_repo":
+      return json({ repo: url.searchParams.has("gates") ? RULES : FACTS, ...PAGE });
   }
   return json(PAGE);
 }
+
+/** Who pushed and a count a day, as the facts read answers. */
+const FACTS = {
+  name: "web",
+  spark: Array.from({ length: 30 }, (_, i) => (i * 7) % 19),
+  pushers: {
+    from: "2026-10-17T00:00:00Z",
+    until: "2026-11-16T00:00:00Z",
+    top: [
+      { kind: "agent", handle: "frontend", pushes: 88 },
+      { kind: "gitlet", pushes: 23 },
+      { kind: "person", handle: "jane", pushes: 6 },
+    ],
+  },
+};
+
+/** web's rules, as the gates read answers. */
+const RULES = {
+  name: "web",
+  pushes: 214,
+  protections: [
+    { pattern: "refs/heads/main", direct_push: "none" },
+    { pattern: "refs/heads/release/2026.11", direct_push: "none" },
+  ],
+  gates: [
+    {
+      pattern: "refs/heads/main",
+      gate: {
+        merge_by: "writers",
+        approvals: "one",
+        checks: ["unit", "e2e"],
+        landing: { depth: 2, batch: 1 },
+        owners_approve: true,
+        delete_source: "seats",
+      },
+    },
+  ],
+};
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -119,6 +159,28 @@ const drawnFeed = () =>
     return feed!;
   });
 
+/** The rail, once its rules have drawn. */
+const drawnRail = () =>
+  eventually(() => {
+    const rail = document.querySelector<HTMLElement>(".crewlet-aside-layout__aside");
+    expect(rail?.querySelectorAll(".code-pushes-rule")).toHaveLength(2);
+    return rail!;
+  });
+
+// Mutation: draw the rail without `sticky`, or under the feed, and this fails.
+test("the pushes feed stands beside its rail at 1440 px", async () => {
+  await page.viewport(1440, 900);
+  mount(1180);
+  const feed = await drawnFeed();
+  const rail = await drawnRail();
+  expect(rail.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+    feed.getBoundingClientRect().right,
+  );
+  const stick = rail.querySelector<HTMLElement>(".crewlet-aside-layout__stick")!;
+  expect(getComputedStyle(stick).position).toBe("sticky");
+  expect(overflowing(rail)).toEqual([]);
+});
+
 // Mutation: drop `overflow-wrap: anywhere` from a ref's name, and the long branch runs out.
 test("a push's row keeps its time and pack at its end at 1024 px with a long branch name", async () => {
   await page.viewport(1024, 900);
@@ -136,6 +198,12 @@ test("the pushes feed holds its width at 390 px", async () => {
   await page.viewport(390, 900);
   mount(358);
   const feed = await drawnFeed();
-  expect(overflowing(feed)).toEqual([]);
-  expect(sidewaysScrollers(feed)).toEqual([]);
+  const rail = await drawnRail();
+  expect(rail.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+    feed.getBoundingClientRect().bottom,
+  );
+  for (const box of [feed, rail, document.querySelector<HTMLElement>(".app")!]) {
+    expect(overflowing(box)).toEqual([]);
+    expect(sidewaysScrollers(box)).toEqual([]);
+  }
 });

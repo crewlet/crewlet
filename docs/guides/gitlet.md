@@ -1438,6 +1438,10 @@ On a repository's **Commits** tab the dashboard narrows the history to one
 seat's pushes and to recent days, and searches commit messages; each commit
 shows its checks and the change it landed with.
 
+**Gitlet › Pushes** (`#/gitlet/pushes?repo=web`) reads a repository's pushes as sentences by
+day, each day saying how many of its pushes are shown; narrow it by who pushed and when, and its
+rail shows who pushes there and the branches' protection.
+
 ### Working in a clone
 
 A seat's executor runs in a [box](../concepts/code-sandbox.md), and there it

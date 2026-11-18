@@ -8,6 +8,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
 import { commandWord } from "~/lib/code.ts";
+import { gateLine, pushRuleLine } from "~/lib/protection.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { pinZoneForTest } from "~/lib/prefs.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -224,15 +225,41 @@ const PUSHERS = {
   omitted_pushes: 5,
 };
 
-/** The facts read (pushers and a 30-day spark), refused for anything else. */
+/** Thirty days of pushes, the last fourteen the spark draws. */
+const SPARK = [...Array<number>(16).fill(2), 9, 14, 6, 1, 3, 12, 17, 11, 8, 15, 19, 7, 13, 8];
+
+/** main's merge gate: one approval, its owners, two checks through its queue. */
+const MAIN_GATE = {
+  merge_by: "writers",
+  approvals: "one",
+  checks: ["unit", "e2e"],
+  landing: { depth: 2, batch: 1 },
+  owners_approve: true,
+  delete_source: "seats",
+};
+
+/** web's rules and gates and every push it has had, as `gates=true` answers. */
+const RULES = {
+  name: "web",
+  pushes: 214,
+  protections: [
+    { pattern: "refs/heads/main", direct_push: "none" },
+    { pattern: "refs/heads/release/2026.11", direct_push: "none" },
+  ],
+  gates: [{ pattern: "refs/heads/main", gate: MAIN_GATE }],
+};
+
+/** The facts read (pushers and a 30-day spark) and the rules read, each as its question asks. */
 const FACTS = (url: URL) =>
   url.searchParams.get("repo_facts") === "true"
     ? json({
-        repo: { name: "web", spark: Array<number>(30).fill(2), pushers: PUSHERS },
+        repo: { name: "web", spark: SPARK, pushers: PUSHERS },
         position: POSITION,
         level: "stale",
       })
-    : json({}, 404);
+    : url.searchParams.get("gates") === "true"
+      ? json({ repo: RULES, position: POSITION, level: "stale" })
+      : json({}, 404);
 
 /** The engine's REST answers, by path; every request made. */
 function stubFetch(history: (url: URL) => Response, repo: (url: URL) => Response = FACTS) {
@@ -871,4 +898,74 @@ test("a narrowed history the fleet refuses offers Clear filters beside the refus
   fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
   await afterMicrotasks();
   expect(location.hash).toBe("#/gitlet/pushes?repo=web");
+});
+
+/** A rail section by its heading. */
+const railSection = async (title: string) =>
+  (await screen.findByRole("heading", { name: title })).closest("section")!;
+
+// THE RAIL READS ONE RULE ONE WAY: the settings' own words, from lib/protection.ts.
+// Mutation: word the rule here instead, and main's line no longer equals the settings'.
+test("the rail draws the pushes by day, who pushes here on UTC days, and each rule in the settings' words", async () => {
+  atTheStory();
+  const asked = stubFetch((url) => pageOf(url, STORY));
+  mount("#/gitlet/pushes?repo=web");
+  await feedOf();
+  const rail = screen.getByRole("complementary", { name: "Pushes to web" });
+  const figure = await within(rail).findByRole("figure");
+  expect(figure.querySelectorAll(".crewlet-histogram__bar")).toHaveLength(14);
+  const pushers = await railSection("Who pushes here");
+  expect(within(pushers).getByText("30 days, UTC")).toBeTruthy();
+  const protection = await railSection("Protection");
+  await within(protection).findByText("main");
+  const lines = [...protection.querySelectorAll(".code-repo-rail__words")].map(
+    (l) => l.textContent,
+  );
+  expect(lines).toEqual([
+    `main${pushRuleLine(RULES.protections[0]!)}; a merge into it is ${gateLine(MAIN_GATE)}`,
+    `release/2026.11${pushRuleLine(RULES.protections[1]!)}`,
+    "Every other branch and tag: anybody who may write pushes to it.",
+  ]);
+  expect(
+    within(protection).getByRole("link", { name: "Its rules in settings" }).getAttribute("href"),
+  ).toBe("#/gitlet/repos/web?tab=settings");
+  const repos = asked.filter((u) => u.pathname === "/query/code_repo");
+  expect(repos.filter((u) => u.searchParams.get("gates") === "true")).toHaveLength(1);
+  expect(repos.filter((u) => u.searchParams.get("repo_facts") === "true")).toHaveLength(1);
+});
+
+// Mutation: let a refused rules read take the rail down, and the feed is not drawn.
+test("each rail section that is refused says so in its place, and the feed still draws", async () => {
+  atTheStory();
+  stubFetch(
+    (url) => pageOf(url, STORY),
+    () => json({ error: "bad_params", detail: "gates is not a key this node reads" }, 400),
+  );
+  mount("#/gitlet/pushes?repo=web");
+  const feed = await feedOf();
+  expect(sentences(feed)).toHaveLength(10);
+  const protection = await railSection("Protection");
+  expect(
+    await within(protection).findByText(
+      "Its rules are unavailable: gates is not a key this node reads.",
+    ),
+  ).toBeTruthy();
+  expect(
+    await screen.findByText("Pushes by day are unavailable: gates is not a key this node reads."),
+  ).toBeTruthy();
+  expect(document.querySelector(".code-pushes-total")).toBeNull();
+});
+
+// Mutation: count the loaded pushes for the total, and it reads 10.
+test("the toolbar says how many pushes the repository has had", async () => {
+  atTheStory();
+  stubFetch((url) => pageOf(url, STORY));
+  mount("#/gitlet/pushes?repo=web");
+  await feedOf();
+  await screen.findByText("214");
+  const total = document.querySelector(".code-pushes-total")!;
+  expect(total.textContent).toBe("214 pushes to web");
+  expect(total.getAttribute("title")).toBe(
+    "Every push it has had; the history keeps the last 181 days.",
+  );
 });
