@@ -119,9 +119,10 @@ function outcomeOf(raw: unknown): SteerOutcome | "unknown" {
 /**
  * What the bar's badge says of each outcome that names a step: the note was
  * read there, taken there and never reached its reader (a review's take whose
- * answer was lost, or a hook's serve its harness gave up or its job's whole
- * session proves it never took), or handed over there and never confirmed. An
- * expired note names no step, so no bar carries it.
+ * answer was lost, or a hook's serves all lost, a serve's session proving it
+ * absent), or handed over there and never confirmed (a note whose every lost
+ * serve its harness gave up among them). An expired note names no step, so no
+ * bar carries it.
  */
 const MARKED_AT: Record<Exclude<SteerOutcome, "expired">, string> = {
   delivered: "Your note was read here",
@@ -544,12 +545,12 @@ function readAt(m: SteerMark): string {
  * Where a missed note was taken, in words: at a round of a phase, for the
  * executor at a step of its own, or, for a step this build cannot name, by the
  * turn in that phase; and that its reader never had it. The executor's is said
- * as never reaching it: a hook's serve was answered, and its harness gave it
- * up or its job's whole session proves it never took it; a serve its session
- * was not shown to hold is unconfirmed ([handedTo]). A round's, a review's
- * take whose answer was lost, keeps "never handed over". An unknown step's says
- * only what `missed` records, as the badge does: a newer build's step may be
- * one that handed the note over.
+ * as never reaching it: its hook's serves were answered and all lost, a serve's
+ * session proving it absent; a note a serve's session was not shown to hold,
+ * or whose every lost serve its harness gave up, is unconfirmed ([handedTo]).
+ * A round's, a review's take whose answer was lost, keeps "never handed over".
+ * An unknown step's says only what `missed` records, as the badge does: a
+ * newer build's step may be one that handed the note over.
  */
 function takenAt(m: SteerMark): string {
   const phase = phaseOf(m);
