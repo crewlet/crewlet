@@ -21,50 +21,34 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE STATE FILE: what an incarnation's directory reflects, as a handful of
-// scalars and one entry a declared derived file. CONSTANT-SIZE on purpose —
-// it carries no list of packs, because the installed pack set is the
-// directory itself (a pack is present once its .idx is, which is git's own
-// rule), and a map of every pack rewritten and made durable on every sync
-// would be write amplification proportional to the pack count on every
-// push's path on every node: 10 000 packs is about 2 MB a sync. Its one map
-// is keyed by DECLARATION (derived.go), never by file, so it grows with the
-// kinds of derived file a build declares and never with the repository. It is
-// renamed in LAST, after everything it describes is durable, so a state is
-// never ahead of the directory it describes.
-//
-// FORMAT 2 records each declared derived file as its own entry (Derived),
-// keyed by the declaration's name — its bytes, the packs the write that made
-// it covered, and which write that was — beside the repository's last
-// maintenance run (Maintained). Format 1 spelled the multi-pack-index's and
-// the commit-graph's facts as one struct of their own fields, so every kind
-// of derived file a later part declares would have been one more field
-// beside them: the shape ADR-0086 replaces. A boot restores both halves of
-// what an incarnation holds — the packs' bytes and each derived file's — and
-// what the maintainer needs to judge it due, without measuring a file.
+// THE STATE FILE: what an incarnation's directory reflects, CONSTANT-SIZE on
+// purpose. It lists no packs, because the installed pack set is the directory
+// itself (a pack is present once its .idx is, git's own rule), and a list
+// rewritten durably at every sync would cost every push on every node in
+// proportion to the pack count. Its one map is keyed by DECLARATION
+// (derived.go), never by file (ADR-0086), so it grows with the kinds a build
+// declares, never with the repository. It is renamed in LAST, after
+// everything it describes is durable, so a state is never ahead of its
+// directory. A boot restores from it both halves of what an incarnation holds
+// (the packs' bytes and each derived file's) and what the maintainer needs to
+// judge it due, without measuring a file.
 
 // stateFormat is the layout this build writes and reads. A reshape takes a
 // new number and its own reader; nothing migrates a cache, which is
-// disposable, so a state of another format — format 1 included — is a reason
-// to start the incarnation cold rather than a document to convert.
+// disposable, so a state of another format is a reason to start the
+// incarnation cold rather than a document to convert.
 const stateFormat = 2
 
 // stateName is the state file, in the incarnation's root.
 const stateName = "crewlet-state.json"
 
 // maxStateBytes bounds the read of a state file. A state at the domain's
-// bounds is about 120 KB, nearly all of it the repository row's rules: 64 of
-// them (gitlet.MaxProtectionsPerRepo), each a 255-byte pattern every byte of
-// which is one JSON spells as six, beside a 1 KB description and a default
-// branch spelled the same way, a few hundred bytes of scalars, the derived
-// files' map at a few dozen bytes a declaration, the provenance index's
-// record, MaxProvenanceRuns runs of about 150 bytes each, the memo's, at most
-// maxStateCohorts cohorts of about 30, and the two chains' layer ids — and
-// never a rule's merge gate, which the row does not carry (gitlet.PushRule):
-// with every gate at its bound the state would be five times as wide, and it
-// is rewritten and made durable at every push. So a mebibyte is eight times
-// anything this cache writes (TestTheWidestStateFitsItsRead holds it to four),
-// and a file past it is not one this cache wrote, whatever is in it.
+// bounds is about 120 KB, nearly all of it the repository row's 64 rules
+// (gitlet.MaxProtectionsPerRepo), each a 255-byte pattern JSON may spell at
+// six bytes a byte; the row carries no rule's merge gate (gitlet.PushRule),
+// which would make it five times wider at every push. A mebibyte is eight
+// times anything this cache writes (TestTheWidestStateFitsItsRead holds it to
+// four), so a file past it is not one this cache wrote.
 const maxStateBytes = 1 << 20
 
 // state is the state file.
@@ -97,25 +81,21 @@ type state struct {
 	DroppingBytes int64 `json:"dropping_bytes,omitempty"`
 	// Derived is every declared derived file with a file of it on disk, by
 	// its declaration's name: a declaration with none on disk has no entry.
-	// One entry a declaration rather than one field a fact, so a kind a
-	// later part declares is an entry here, never a field beside the
-	// others (ADR-0086).
+	// One entry a declaration, never one field a fact (ADR-0086).
 	Derived map[DerivedName]derivedState `json:"derived,omitempty"`
 	// Maintained is the repository's last maintenance run: the duty cycle's
 	// clock (MidxMinInterval, MidxDutyCycle). The REPOSITORY'S, never one
 	// file's, because the duty cycle bounds a run of up to two steps — an
 	// index and a graph — over one repository.
 	Maintained maintainedState `json:"maintained"`
-	// LeavingSince is, where the directory still holds pack files a
-	// compaction retired that the swap has not taken out of it yet
-	// (incarnation.leaving: a crash, or a swap that failed, between a round
-	// and its swap), the position the retirements of them are all above:
-	// what a boot's first round asks its full answer's retirements from
-	// (StateQuery.RetiredSince) in place of Position, at or past which none
-	// of them lies — so that round reads them as the retirements they are,
-	// and keeps what a retirement keeps (the commit-graph, X04), rather than
-	// as packs no row accounts for. Zero where the directory holds none: one
-	// position whatever it holds, so the state stays constant-size.
+	// LeavingSince is, while the directory still holds packs a compaction
+	// retired that the swap has not taken out (incarnation.leaving: a crash or
+	// a failed swap between a round and its swap), the position all their
+	// retirements are above. A boot's first round asks retirements from it
+	// (StateQuery.RetiredSince) in place of Position, so it reads them as the
+	// retirements they are and keeps what a retirement keeps (the
+	// commit-graph, X04), not as packs no row accounts for. Zero where it
+	// holds none: one position, so the state stays constant-size.
 	LeavingSince statelog.Position `json:"leaving_since,omitzero"`
 
 	// memoVersion is the version of the memo's record this value holds
@@ -169,29 +149,24 @@ type derivedState struct {
 	CodeIndex *codeIndexState `json:"codeindex,omitempty"`
 	// Layers is an installed published chain's record (layers.go), which only
 	// the two chains' entries carry, and only with their Step: the ids their
-	// chain file lists, root first — what a boot's first round holds that
-	// chain file to before any round has read the rows' chain (chainWants),
-	// and reads what the copy holds by (bootInstalled). At most
-	// gitlet.MaxPublishedLayers ids, so a state stays constant-size. A state
-	// written before any chain was installed carries none, which reads as
-	// nothing installed — what such a copy holds. IMMUTABLE once stored, as
-	// Provenance is.
+	// chain file lists, root first, which a boot's first round holds that file
+	// to before any round has read the rows' chain (chainWants), and reads what
+	// the copy holds by (bootInstalled). None reads as nothing installed. At
+	// most gitlet.MaxPublishedLayers ids, so a state stays constant-size.
+	// IMMUTABLE once stored, as Provenance is.
 	Layers []string `json:"layers,omitempty"`
 	// Tip is the node's tip commit-graph layer (maintain.go), which only the
-	// commit-graph chain's entry carries: its id, the last line its chain file
-	// lists after Layers — what a boot's first round holds that file to, and
-	// keeps the tip by where the copy keeps every layer it was written over
-	// (planChain). Its bytes are counted in Bytes. A state written before any
-	// tip was carries none, which reads as no tip — what such a copy holds.
+	// commit-graph chain's entry carries: its id, the line its chain file lists
+	// after Layers, which a boot's first round holds that file to and keeps the
+	// tip by where the copy keeps every layer it was written over (planChain).
+	// Its bytes are counted in Bytes. None reads as no tip.
 	Tip string `json:"tip,omitempty"`
 	// TipOver is the digest of the TAIL the last tip write that succeeded
 	// covered (incarnation.tipOver, thirty-two hex digits), which only the
-	// commit-graph chain's entry carries — with its tip, or with none where
-	// that write found the tail held no commit the layers lack. A boot that
-	// keeps the tip and every layer beneath it reads the copy's tail as
-	// covered while it is still that tail, and writes the tip again only once
-	// it moves: absent, a quiet copy's tip is written again after every
-	// restart.
+	// commit-graph chain's entry carries, with its tip or with none where that
+	// write found the tail held no commit the layers lack. A boot that keeps
+	// the tip and the layers beneath it writes the tip again only once the
+	// tail moves; without it a quiet copy's tip is rewritten every restart.
 	TipOver string `json:"tip_over,omitempty"`
 }
 
@@ -228,11 +203,9 @@ func (st *state) derivedBytes() int64 {
 // check refuses a state whose derived files are not ones this build
 // declares, or are recorded as no write of theirs could leave them: a key
 // none of DerivedFiles names, a negative size or count, packs covered by
-// files no write made (only a write sets Covers, and a measurement that finds
-// files no recorded write made records none), a step none of its
-// declaration's writes takes. What such an entry would mean is the build's
-// that wrote it — and its bytes, counted by a boot, would be a total no
-// declaration's files make up.
+// files no write made (only a write sets Covers), a step none of its
+// declaration's writes takes. Such an entry's meaning is the writing build's,
+// and its bytes, counted by a boot, would be a total no declaration makes up.
 func (st *state) check() error {
 	steps := declaredSteps()
 	for name, d := range st.Derived {
@@ -338,8 +311,7 @@ const maxStateCohorts = 2 * maxMemoCohorts
 // checkCohorts refuses a memo's record no write of this build leaves: cohorts
 // out of order or repeated, of no number, holding a negative size, more of
 // them than any state this cache writes, or adding up to other than the
-// record's bytes — the record a build that kept the memo in one flat
-// directory wrote among them, which names bytes and no cohort.
+// record's bytes.
 func checkCohorts(d derivedState) error {
 	if len(d.Cohorts) > maxStateCohorts {
 		return fmt.Errorf("a memo of %d cohorts, past the %d any state records", len(d.Cohorts), maxStateCohorts)
@@ -365,11 +337,8 @@ func checkCohorts(d derivedState) error {
 // declaredSteps is the build's declarations (DerivedFiles) as state.check
 // holds a state to them: each declaration's name, and the steps its writes
 // take. Built ONCE A PROCESS, never once a state: a boot reads a state a
-// repository, and one an older incarnation, and DerivedFiles builds every
-// declaration anew on each call — its slices and its closure — which, asked
-// once a state, was 11 of the 16 allocations and about 3 µs of the 8 that
-// format 2 first added to a state's read (BenchmarkReadState; cache doc.go,
-// "Measured").
+// repository, and DerivedFiles builds every declaration anew on each call
+// (package doc, "Measured").
 var declaredSteps = sync.OnceValue(func() map[DerivedName][]Step {
 	steps := map[DerivedName][]Step{}
 	for _, d := range DerivedFiles() {
@@ -442,16 +411,15 @@ func readState(dir, id string) (*state, error) {
 }
 
 // persist writes inc's state from its in-memory fields: the whole value,
-// under the entry's stateMu, so whichever of two writers — a round and the
-// maintainer — writes last writes the latest values. A round passes round,
+// under the entry's stateMu, so whichever of two writers (a round, the
+// maintainer) writes last writes the latest values. A round passes round,
 // which hits the sync.state fault point between the state's staging and its
 // rename (gitletfault.SyncState).
 //
-// THE RUNS OF THE INDEX OF PUSHES RETIRED BEFORE THE VALUE IS TAKEN GO ONCE IT
-// IS ON THE DISK (incarnation.retiredRuns): the value names none of them, and
-// until it is written the state there still does, so a crash before then
-// boots on a state naming runs that are all still there. A write that fails
-// leaves them waiting for the next — any writer's.
+// The index of pushes' runs retired before the value is taken
+// (incarnation.retiredRuns) are trashed only ONCE IT IS ON THE DISK: until
+// then the state there still names them, so a crash boots on a state whose
+// runs are all present. A failed write leaves them for the next writer.
 func (c *Cache) persist(ctx context.Context, e *entry, inc *incarnation, round bool) error {
 	e.stateMu.Lock()
 	defer e.stateMu.Unlock()
@@ -499,14 +467,12 @@ func (c *Cache) writeState(ctx context.Context, e *entry, inc *incarnation, st s
 		return err
 	}
 	// A STATE CARRIES THE COPY'S LAST USE, never the moment it was written: a
-	// boot reads the last use from the state's modification time (lastUsedOn),
-	// and a state is written for work that is no use — the maintainer's run,
-	// the backfill's step, the memo's moves at the janitor's tick, every copy
-	// whose oldest cohort a trim took among them — which, stamped with the
-	// moment of the write, brought a copy nobody had read in a week back from
-	// a restart as the one read last, and the budget evicted the copies seats
-	// do read in its place. Stamped as the janitor's tick stamps it (stampUse),
-	// before the directory's sync that makes the rename durable.
+	// boot reads the last use from its modification time (lastUsedOn), and a
+	// state is also written for work that is no use (the maintainer, the
+	// backfill, the memo's trims), which would bring an unread copy back from a
+	// restart as the last read and have the budget evict copies seats do read.
+	// Stamped as the janitor stamps it (stampUse), before the directory's sync
+	// makes the rename durable.
 	if !st.lastUsed.IsZero() {
 		if err = stampUse(inc.dir, st.lastUsed); err != nil {
 			return fmt.Errorf("cache: stamping %s's state with its last use: %w", e.id, err)

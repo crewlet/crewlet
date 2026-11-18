@@ -15,106 +15,58 @@ import (
 	"github.com/crewlet/crewlet/internal/hostbox"
 )
 
-// THE SWEEP, on a FULL answer only: the incarnation made exactly its IMAGE,
-// and nothing else. The image is a grammar — anything outside it is renamed
-// into trash/, one rename per top-level entry, and removed by the janitor:
-//
-//	the root        HEAD, config, packed-refs, crewlet-state.json, refs/, objects/
-//	refs/           heads/ and tags/, each EMPTY: there are never loose refs,
-//	                which outrank packed-refs for every reader
-//	objects/        pack/ and info/: nothing the engine runs in a cache
-//	                creates a loose object
-//	objects/info/   nothing fixed: an alternates file here would serve
-//	                another repository's objects by id, and the pool refuses
-//	                it (gitproc.ShapeAlternates)
-//	objects/pack/   pack-<cs>.{pack,idx,rev} for every pack a live row names
-//	objects-dropping/pack/
-//	                pack-<cs>.{pack,idx,rev} for every pack only rows an
-//	                expunge's begin left dropping name: the DROPPING VIEW,
-//	                which only a process serving the copy reads
-//	                (gitproc.Cmd.Dropping), there while it holds a pack
-//	declared        every file a declaration of derived.go owns, in the
-//	                directory it names — the commit-graph in objects/info, the
-//	                multi-pack-index's files in objects/pack — unless a change
-//	                it is built over drops it (dropFor)
-//
-// Every FILE named here is a REGULAR file, and every directory a directory:
-// a symbolic link, or anything else, at one of their names is outside the
-// image (image.imaged), whatever it points at.
-//
-// It runs in TWO HALVES around the install. Everything but the pack files
-// first (tidy), because a git process — the round's peel, its index — runs
-// in the directory before the packs' half could: the pool refuses one whose
-// config is not gitproc.RepoConfig or that holds a commondir or an alternates
-// file — every gitproc.ShapeRule an incarnation can break — and git cannot
-// read a repository whose HEAD is not a symbolic ref, so a cache damaged there
-// would refuse every round that could repair it. This half is what REPAIRS a
-// cache the pool refused for its shape, in place, reusing every pack it holds
-// (markWhole); and what it leaves is held to gitproc.CheckShape, the
-// pool's own predicate. objects/pack is listed once, after the install (packStrays), and
-// whatever there is no pack's file goes at that listing, before the round's
-// index: no reader of any ref reads one, and a dead writer's lock among them
-// — a maintenance run killed with its node — would refuse the index, since git
-// writes none over another writer's lock. The pack files last (sweepPacks),
-// once the new refs are in, so a reader of the old refs never loses a pack
-// they name — and that only in an incarnation NOBODY may hold: in one a
-// reader may hold, a pack file no row names leaves by the SWAP into the next
-// incarnation instead (swap.go), since git opens a pack lazily, part way
-// through a run, and no pin of a file could say which a running process will
-// touch.
-//
-// A DELTA SWEEPS NOTHING: between two rounds of one process nothing but this
-// package has written the directory, and every writer here leaves only image
-// entries — so the steady-state work of a sync is proportional to what moved,
-// never to the directory.
+// THE SWEEP, on a FULL answer only (package doc, "Convergence, priced for a
+// push on every node"): the incarnation made exactly its IMAGE, anything
+// outside it renamed into trash/ for the janitor. The image (image.imaged):
+// the root's HEAD, config, packed-refs and state; refs/heads and refs/tags,
+// EMPTY, since a loose ref outranks packed-refs; objects/info and
+// objects/pack, with no loose object and no alternates file
+// (gitproc.ShapeAlternates); the packs the rows place in objects/pack or the
+// dropping view (packStrays); and every file a declaration owns (derived.go).
+// Every file is a REGULAR file and every directory a directory. TWO HALVES
+// around the install: tidy first, since the round's git processes run before
+// the packs' half could; pack files last (sweepPacks), once the new refs are
+// in, so a reader of the old refs never loses a pack (or by the swap).
 
-// THE GRAMMAR, one predicate an entry: what the sweep keeps and Verify
-// admits, written once so the two never disagree about what a cache is — the
-// image's FIXED entries below, and every file a DECLARATION owns (derived.go),
-// read from the declarations rather than spelled beside them, so a derived
-// file is added to the image by adding its declaration.
+// THE GRAMMAR, one predicate an entry, so the sweep and Verify never disagree
+// about what a cache is: the FIXED entries below, and every file a
+// DECLARATION owns, read from the declarations (derived.go), never spelled
+// beside them.
 
-// rootFiles are the root's fixed files: the repository's HEAD, config and
-// packed-refs, and the cache's state — each a regular file (image.imaged).
+// rootFiles are the root's fixed files, each a regular file (image.imaged).
 var rootFiles = []string{"HEAD", "config", "packed-refs", stateName}
 
-// requiredDirs are the image's directories below its root that every
-// incarnation has: the skeleton makes them, a swap's staging too (swap.go),
-// and the sweep makes them again.
-// refs/heads and refs/tags stay EMPTY: there are never loose refs, which
-// outrank packed-refs for every reader.
+// requiredDirs are the directories below the root every incarnation has: the
+// skeleton, a swap's staging (swap.go) and the sweep make them. refs/heads
+// and refs/tags stay EMPTY: a loose ref outranks packed-refs for every reader.
 var requiredDirs = []string{"refs/heads", "refs/tags", "objects/pack", "objects/info"}
 
 // fixedDirs are the image's directories whatever the declarations say,
-// parents first, in the order Verify lists them: the root, refs/ and its two
-// empty directories, objects/ and its two. Every one is required.
+// parents first, in the order Verify lists them. Every one is required.
 var fixedDirs = []string{".", "refs", "refs/heads", "refs/tags", "objects", "objects/info", "objects/pack"}
 
 // packFileName matches a pack's three files, its checksum the first group:
-// which of them the image keeps is the rows' to say. Compiled at its first
-// use, as every file-name pattern of this package is (lazyPattern).
+// which of them the image keeps is the rows' to say.
 var packFileName = lazyPattern(`^pack-([0-9a-f]{40})\.(pack|idx|rev)$`)
 
-// packRel is the directory of an incarnation its packs live in, relative to
-// it; where each derived file lives is its declaration's (derived.go).
+// packRel is where an incarnation's live packs live, relative to it.
 var packRel = filepath.Join("objects", "pack")
 
-// droppingRel is the directory of an incarnation its DROPPING packs live in,
-// relative to it (packPlace, M6-D3): objects-dropping/pack, in an object
-// directory of its own BESIDE objects/ (gitproc.DroppingDir), which a process
-// serving the copy names and nothing leaning on the copy's objects/ — a push's
-// scratch, a build — reaches. Not under objects/, where a scratch's alternate
-// would find it; and no alternates file names it, which git would follow from
-// every repository that names the copy as ITS alternate.
+// droppingRel is where an incarnation's DROPPING packs live, relative to it
+// (packPlace, M6-D3): an object directory BESIDE objects/
+// (gitproc.DroppingDir) that only a process serving the copy names. Not under
+// objects/, where a push's scratch's alternate would reach it; and no
+// alternates file names it, which git would follow from every repository
+// naming the copy as ITS alternate.
 var droppingRel = filepath.Join(gitproc.DroppingDir, "pack")
 
-// packDirs is the directories of an incarnation pack files live in, each a
-// place's (packPlace.rel): objects/pack, then the dropping view's.
+// packDirs is the directories pack files live in (packPlace.rel):
+// objects/pack, then the dropping view's.
 var packDirs = []string{packRel, droppingRel}
 
 // droppingDirs is the dropping view's directories, parents first: in the
-// image whenever they are there, and made by whatever places a pack in them —
-// required of no incarnation, since most never hold a dropping pack.
+// image when present, made by whatever places a pack there, and required of
+// no incarnation.
 var droppingDirs = []string{gitproc.DroppingDir, droppingRel}
 
 // entryKind is what a directory entry is: a regular file, a directory, or
@@ -140,31 +92,26 @@ func kindOf(d fs.DirEntry) entryKind {
 }
 
 // image is the grammar of an incarnation's directory, built ONCE at Open from
-// the cache's declarations (newImage) — DerivedFiles in production — so no
-// reader spells a derived file's name and none rebuilds the grammar per
-// entry. Read-only once built, so every goroutine of the cache shares it.
+// the declarations (newImage), so no reader spells a derived file's name or
+// rebuilds the grammar per entry. Read-only once built: every goroutine
+// shares it.
 type image struct {
-	// decls is the declarations, in DerivedFiles' order: a derivedSet's bit i
+	// decls is the declarations in DerivedFiles' order: a derivedSet's bit i
 	// is decls[i].
 	decls []Derived
-	// dirs is every directory of the image, parents first: fixedDirs, the
-	// dropping view's (droppingDirs), then every directory a declaration owns
-	// or holds a file in, with its parents, each as the filepath of the
-	// incarnation's.
+	// dirs is every image directory, parents first: fixedDirs, droppingDirs,
+	// then each a declaration owns or holds a file in, with its parents.
 	dirs []string
-	// dir is dirs as a set, and required those of them every incarnation
-	// has: fixedDirs. A declared directory git has not yet written is no
-	// directory missing, and nor is a dropping view a copy holds no pack in.
+	// dir is dirs as a set; required is fixedDirs. A declared directory git
+	// has not yet written, or a dropping view holding no pack, is not missing.
 	dir, required map[string]bool
-	// stating, when set, is told the path relative to the incarnation of
-	// every entry sizes is about to stat: the suite's count of what a
-	// measure reads (knobs.stating), set before the image is shared.
+	// stating, when set, is told every path sizes is about to stat (the
+	// suite's count, knobs.stating); set before the image is shared.
 	stating func(rel string)
 }
 
-// newImage is the grammar of the declarations decls, which it holds to
-// validateAll first: a build whose declarations leave anything unsaid opens
-// no cache.
+// newImage is the grammar of decls, held to validateAll first: a build whose
+// declarations leave anything unsaid opens no cache.
 func newImage(decls []Derived) (*image, error) {
 	if err := validateAll(decls); err != nil {
 		return nil, err
@@ -226,31 +173,16 @@ func (d *Derived) holds() []FilePattern {
 }
 
 // imaged reports whether name, an entry of the image directory rel, is part
-// of the image whatever the rows say: one of the image's directories as a
-// directory, or — as a REGULAR file, and as nothing else — one of the root's
-// fixed files or a file a declaration owns. The rows' pack files are judged
-// apart (packFileName): against the snapshot by the sweep, against the
+// of the image whatever the rows say: an image directory as a directory, or a
+// root fixed file or declared file as a REGULAR file only. Pack files are
+// judged apart (packFileName): against the snapshot by the sweep, against the
 // listing by Verify, and there too only a regular file is one.
 //
-// EVERY FILE OF THE IMAGE IS A REGULAR FILE (ADR-0086). git reads through a
-// link at a derived file's name, at config or at packed-refs: a symbolic link
-// named commit-graph had git read the graph it pointed at, outside the
-// incarnation, and one named config over a file holding gitproc.RepoConfig
-// passed the sweep's replace and the pool's shape check alike — both read
-// through it — so the repository's configuration lived wherever the link
-// pointed, outside the budget and outside what a rebuild replaces. A link at
-// HEAD git does not read through: it refuses the whole repository unless the
-// link's text begins refs/ (setup.c's validate_headref checks only that
-// prefix, so text that climbs back out of refs/ has git read the file it
-// leads to), and with a target holding a HEAD tidy's replace accepts — it
-// reads through the link — every git process in the copy failed, a request's
-// and the round's own alike, through every full round. Admitted as anything
-// but a directory, as the root and objects/info each admitted before the
-// grammar was one predicate, each was kept by the sweep and admitted by
-// Verify. Outside the image, it is moved into trash/ by a full round — never
-// followed: trash/ takes the link itself — whose tidy then writes config and
-// HEAD afresh, writeRefs packed-refs and persist the state, and named by
-// Verify.
+// A link is outside the image whatever it points at (ADR-0086; package doc,
+// "Derived files"): git reads through one at config, packed-refs or a derived
+// file's name, and fails every process over one at HEAD. A full round moves
+// it into trash/ without following it, then writes the fixed files afresh;
+// Verify names it.
 func (im *image) imaged(rel, name string, kind entryKind) bool {
 	if im.dir[filepath.Join(rel, name)] {
 		return kind == dirEntry
@@ -335,11 +267,10 @@ func (im *image) listed(dir, rel string) ([]fs.DirEntry, error) {
 	return list, err
 }
 
-// ownedFile is a file of an incarnation a declaration owns: its path
-// relative to the incarnation, and the declaration — by its index, a
-// derivedSet's bit — and owned pattern it is a file of, which say what is
-// done with it: how a check and the scrub hold it to its bytes (held, by
-// Derived.Check), and what a check of it is counted as (Owned.File).
+// ownedFile is a file of an incarnation a declaration owns: its path relative
+// to the incarnation, the declaration (by index, a derivedSet's bit) and the
+// owned pattern, which say how a check and the scrub hold it to its bytes
+// (Derived.Check) and what a check of it counts as (Owned.File).
 type ownedFile struct {
 	rel string
 	i   int
@@ -380,33 +311,25 @@ func (im *image) present(dir string) ([]ownedFile, error) {
 	return out, nil
 }
 
-// derivedMeasure is one measurement of an incarnation's derived files: the
-// bytes each declaration's owned files hold, keyed by its name for every
-// declaration with a file on disk — none for one with none — and the
-// declarations whose main file (Owned.Main) is there. What
-// Cache.recordDerived sets an incarnation's record from; a declaration with no
-// main file is present where its record says it is, so no bit of mains is
-// about it, and a tree's bytes are none of a measure's (sizes): its bit says
-// only that it is there.
+// derivedMeasure is one measurement of an incarnation's derived files, which
+// Cache.recordDerived records: each declaration's owned bytes by name (none
+// for one with no file on disk), and the declarations whose main file
+// (Owned.Main) is there. A declaration with no main file is present where its
+// record says, so no bit of mains is about it; a tree's bit says only that it
+// is there, its bytes none of a measure's (sizes).
 type derivedMeasure struct {
 	bytes map[DerivedName]int64
 	mains derivedSet
 }
 
-// derivedSizes measures every file of the incarnation at dir a declaration
-// owns, whatever its kind: what the budget counts of them, declaration by
-// declaration. Each owned directory is listed once, and ONLY THE FILES A
-// DECLARATION OWNS GET A STAT: objects/pack holds three files a pack beside
-// the index's, with no cap on the packs, and derivedSizes runs at the end of
-// every maintenance run — which a full round's stopMaintenance and every
-// dropFor that stops a run wait for, so the request that round answers waits
-// on it too — and on the full round that writes its own index. A stat of
-// every entry there would put three stats a pack on those waits: 12.9–13.3 ms
-// at 1 000 packs and 145–148 ms at 10 000, against 3.0–3.3 ms and 49–57 ms for
-// the listing and the owned files alone (measured on four cores over a warm
-// page cache, three runs each), the listing being what is left. A caller that
-// has listed a directory already — measure, objects/pack — reads it from its
-// own listing (ownedIn).
+// derivedSizes measures every file a declaration owns in the incarnation at
+// dir, whatever its kind: what the budget counts of them. Each owned
+// directory is listed once and ONLY OWNED FILES GET A STAT: objects/pack holds
+// three files a pack, uncapped, and this runs at the end of every maintenance
+// run, which a full round (and the request it answers) and dropFor wait on. A
+// stat of every entry costs ~145 ms at 10 000 packs against ~50 ms for the
+// listing and owned files alone. A caller that has listed a directory already
+// reads it from that listing (ownedIn).
 func (im *image) derivedSizes(dir string) (derivedMeasure, error) {
 	m := derivedMeasure{bytes: map[DerivedName]int64{}}
 	for _, rel := range im.ownedDirs(im.all()) {
@@ -428,16 +351,15 @@ func (im *image) owns(rel string) func(name string) bool {
 	}
 }
 
-// sizes is the size of every entry of the image directory rel of the
-// incarnation at dir that keep admits — every entry for a nil keep — by name,
-// from ONE listing, an entry gone since the listing omitted, and none for a
-// declared directory git has not written. An entry keep refuses gets no stat:
-// the listing names it, and its size would be a stat of its own.
+// sizes is the size, by name, of every entry of the image directory rel of
+// the incarnation at dir that keep admits (all for a nil keep), from ONE
+// listing: an entry gone since is omitted, and a declared directory git has
+// not written has none. An entry keep refuses gets no stat.
 //
-// A TREE A DECLARATION OWNS WHOLE (Owned.Tree) gets no stat either: it is
-// there, as a directory, at size zero, and nothing at all otherwise — its
-// bytes are its writer's running total (Cache.recordDerived), and its inode's
-// size is a few KiB whatever it holds (TestTheHeldBytesCountTheMemo).
+// A TREE A DECLARATION OWNS WHOLE (Owned.Tree) gets none either: it is there
+// at size zero as a directory, its bytes its writer's running total
+// (Cache.recordDerived), since its inode's size is a few KiB whatever it holds
+// (TestTheHeldBytesCountTheMemo).
 func (im *image) sizes(dir, rel string, keep func(name string) bool) (map[string]int64, error) {
 	list, err := im.listed(dir, rel)
 	if err != nil {
@@ -469,10 +391,9 @@ func (im *image) sizes(dir, rel string, keep func(name string) bool) (map[string
 	return sizes, nil
 }
 
-// ownedIn adds to m what the declarations own of one listing of the image
-// directory rel, whatever each entry's kind: the bytes of each declaration's
-// files there, and the declarations whose main file (Owned.Main) it holds —
-// read from a listing a caller already has, never from another.
+// ownedIn adds to m what the declarations own in sizes, a listing of the
+// image directory rel a caller already has, whatever each entry's kind: each
+// declaration's bytes, and those whose main file (Owned.Main) it holds.
 func (im *image) ownedIn(rel string, sizes map[string]int64, m *derivedMeasure) {
 	for name, size := range sizes {
 		i, o := im.ownerOf(rel, name)
@@ -504,9 +425,8 @@ func (im *image) mainRel(name DerivedName) string {
 	return ""
 }
 
-// derivedSet is a set of the image's declarations, bit i its decls[i]: what a
-// drop was asked and did, and what was written, named in declaration order
-// wherever a line names it.
+// derivedSet is a set of the image's declarations, bit i its decls[i], named
+// in declaration order wherever a line names it.
 type derivedSet uint32
 
 // maxDerived is how many declarations a derivedSet holds.
@@ -550,13 +470,11 @@ func (im *image) reported(parts gitproc.Part) derivedSet {
 }
 
 // holding is the declarations inc holds a file of: those its record has an
-// entry for, which a declaration has exactly while a file of it is on disk
-// (setDerived). A REPORT REACHES ONLY THESE: a part names the files git read
-// of it, and an incarnation in CHAIN mode holds no own-mode index or graph
-// (layers.go), so a multi-pack-index's or a commit-graph's report there names
-// the installed chain alone — which keeps its files on a report, the scrub
-// deciding — and never a drop of files that are not there, which would read
-// the copy whole for nothing. e.mu is held.
+// entry for, exactly while a file is on disk (setDerived). A REPORT REACHES ONLY THESE: in CHAIN mode an
+// incarnation holds no own-mode index or graph (layers.go), so such a report
+// names the installed chain alone (which keeps its files, the scrub
+// deciding), never a drop of absent files, which would read the copy whole
+// for nothing. e.mu is held.
 func (im *image) holding(inc *incarnation) derivedSet {
 	var s derivedSet
 	for i, d := range im.decls {
@@ -567,11 +485,10 @@ func (im *image) holding(inc *incarnation) derivedSet {
 	return s
 }
 
-// naming is the parts of derived — a report's derived parts — that name a
-// declaration of s (gitproc.Damage.Drops, the one map from a part to the
-// files it names): what a report is counted by under what became of the
-// declarations of s. A chunk-format part names both files, so it is counted
-// under each route its declarations take.
+// naming is the parts of derived, a report's derived parts, that name a
+// declaration of s (gitproc.Damage.Drops): what a report is counted by under
+// what became of s. A chunk-format part names both files, so it counts under
+// each route its declarations take.
 func (im *image) naming(derived gitproc.Part, s derivedSet) gitproc.Part {
 	var out gitproc.Part
 	for _, p := range []gitproc.Part{gitproc.PartMultiPackIndex, gitproc.PartCommitGraph, gitproc.PartChunk} {
@@ -582,12 +499,10 @@ func (im *image) naming(derived gitproc.Part, s derivedSet) gitproc.Part {
 	return out
 }
 
-// dropping is the declarations whose answer to ev is Drop (Derived.On): what
-// a change ev drops, and — for EventReported — the only declarations a drop
-// can repair, since a report of one that keeps its files moves nothing. For
-// eventFailedCheck it is every declaration but the installed chain's: a file
-// that fails its check is dropped whatever its declaration says of a report,
-// and a chain's is CUT at the layer that holds it (cutting).
+// dropping is the declarations whose answer to ev is Drop (Derived.On): for
+// EventReported, the only ones a drop can repair. For eventFailedCheck it is
+// every declaration but the installed chain's, whatever it says of a report;
+// a chain's failing file is CUT at its layer instead (cutting).
 func (im *image) dropping(ev Event) derivedSet {
 	var s derivedSet
 	for i, d := range im.decls {
@@ -644,15 +559,15 @@ func (im *image) files(s derivedSet) []string {
 	return out
 }
 
-// tidy is the sweep's first half: every directory of the image made, every
-// entry outside it but the pack files moved into trash/, config made
-// gitproc.RepoConfig and a HEAD git cannot read made the snapshot's — and the
-// directory it leaves held to gitproc.CheckShape, whose refusal it answers. It
-// reports whether it moved anything.
+// tidy is the sweep's first half: every image directory made, every entry
+// outside the image but the pack files moved into trash/, config made
+// gitproc.RepoConfig and an unreadable HEAD the snapshot's. It runs before
+// the install because the round's git processes do, which the pool refuses
+// in a directory of the wrong shape: it is what REPAIRS a copy refused for
+// its shape, in place (markWhole). It reports whether it moved anything.
 func (c *Cache) tidy(inc *incarnation, snap snapshot) (bool, error) {
-	// The root first: a symbolic link named objects or refs is outside the
-	// image, and a directory made through it would be made wherever it
-	// points.
+	// The root first: a directory made through a link named objects or refs
+	// would be made wherever it points.
 	t := &trashing{c: c}
 	t.outside(inc.dir, ".")
 	if t.err != nil {
@@ -663,10 +578,8 @@ func (c *Cache) tidy(inc *incarnation, snap snapshot) (bool, error) {
 			return t.moved, err
 		}
 	}
-	// Every other directory of the image, parents first, so a declared
-	// directory that is something else than a directory went with its
-	// parent's listing before its own is read. objects/pack and the dropping
-	// view's pack directory are the second half's (packStrays).
+	// Parents first, so a non-directory at a declared directory's name went
+	// with its parent's listing. The pack directories are packStrays'.
 	for _, rel := range c.image.dirs {
 		if rel != "." && !slices.Contains(packDirs, rel) {
 			t.outside(inc.dir, rel)
@@ -709,13 +622,10 @@ func (c *Cache) tidy(inc *incarnation, snap snapshot) (bool, error) {
 	if c.knobs != nil && c.knobs.swept != nil {
 		c.knobs.swept(inc.dir)
 	}
-	// HELD TO THE POOL'S OWN PREDICATE, not a copy of it: what the sweep
-	// leaves is exactly what every git process in the incarnation is checked
-	// against, so a full round never answers a directory the pool refuses —
-	// the image grammar already moved a commondir and an alternates file
-	// out, and config is RepoConfig, so a refusal here is a shape the sweep
-	// could not put right (a filesystem that does not keep what it is
-	// given), which Cache.run answers with a rebuild.
+	// HELD TO THE POOL'S OWN PREDICATE, not a copy of it, so a full round
+	// never answers a directory the pool refuses. A refusal here is a shape
+	// the sweep could not put right (a filesystem that does not keep what it
+	// is given), which Cache.run answers with a rebuild.
 	return t.moved, gitproc.CheckShape(inc.dir, "")
 }
 
@@ -794,52 +704,18 @@ func (t *trashing) dirs(inc string) []string {
 	return out
 }
 
-// packStrays decides the sweep's second half on a full answer, before the
-// round's index and its refs: every pack file of a pack directory that the
-// snapshot does not place there — a stray: a pack no row names any more, or
-// one its rows now place in the other directory (snapshot.places: the
-// dropping view for a pack only dropping rows name, objects/pack for any
-// other) — and what took each out: a COMPACTION'S RETIREMENT
-// (EventPackRetired) where the snapshot's retired phase names its checksum
-// and the log under the incarnation is the history it was read from (history
-// false), or where its rows still place the pack in the other directory, its
-// objects staying in the copy; AN EXPUNGE (EventPackExpunged) for a pack of
-// the dropping view no row names, however that came about, since nothing
-// else takes one out of the view; and otherwise a pack REMOVED
-// (EventPackRemoved): a log gone back or recreated, or a full answer that
-// served no retirements, which leaves no stray accounted for. A stray's
-// leaving is what a declaration built over the packs answers (On): an index
-// is dropped by a retirement and a removal, the commit-graph by a removal and
-// an expunge but never a retirement — a merge drops no commit (X04).
-//
-// HOW THEY LEAVE turns on who may hold the incarnation. One NOBODY HOLDS and
-// that is not converged — a boot's first round, a rebuild's product before it
-// is promoted: no Synced of it was ever handed out, since nothing is answered
-// at once before an incarnation's first round, and nothing can pin it while
-// this round holds its write lock — has its strays answered for sweepPacks to
-// move once the new refs are in, and every derived file built over the packs
-// is dropped NOW, first, by each event among them over its own packs
-// (dropFor): an index naming a missing pack fails every read of the
-// repository, and the round's own index is then written over exactly the
-// snapshot's packs. A dropping view the snapshot places no pack in goes
-// whole with its strays, so a push's scratch leaning on the copy is spared
-// the paranoia a view asks of it (gitproc.Cmd.Dropping). Any OTHER —
-// converged, so atOnce may hand it
-// to a reader while this round runs, or pinned — keeps every file a reader
-// may open, and its strays are answered as leaving, by where they are and
-// their checksum: the round's end swaps the incarnation for the next
-// (swap.go), which holds each pack its rows name where they place it and
-// nothing else, and nothing of them is dropped or moved here.
-//
-// Every other entry the image does not admit goes now too, at this one
-// listing: it is no pack's file, so no reader of the old refs reads it, and
-// what such entries are — a lock or a temporary file a maintenance run
-// killed with its node left, since no run is in flight beside a full round —
-// is what would refuse the round's index below. Kept for sweepPacks, the lock
-// was refused the index, whose failure removed it from under the sweep that
-// had listed it, and the round failed on the move. It reports whether it
-// moved anything, or will once the refs are in; the strays it answers are
-// paths relative to the incarnation.
+// packStrays decides the sweep's second half, before the round's index and
+// refs: each STRAY, a pack file the snapshot does not place in its directory
+// (snapshot.places), and what took it out: EventPackRetired where the
+// snapshot's retirements name it (history false) or its rows place it in the
+// other directory; EventPackExpunged for a dropping-view pack no row names;
+// else EventPackRemoved. In an incarnation nobody holds (unconverged and
+// unpinned) it drops what each event drops NOW and answers the strays as
+// paths for sweepPacks; in any other they leave by the swap (package doc, "A
+// pack leaves a copy a reader may hold by a swap"). Any other entry outside
+// the image goes now: a dead maintenance run's lock kept for sweepPacks would
+// refuse the round's index. It reports whether it moved anything, or will
+// once the refs are in.
 func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bool) ([]string,
 	map[leaveKey]Event, bool, error) {
 
@@ -853,8 +729,7 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 		}
 	}
 	// THE CHAIN HOLDS ITS PACKS (layers.go): a pack an installed layer names
-	// is no stray of objects/pack, whatever its rows say, until the layer
-	// goes.
+	// is no stray, whatever its rows say, until the layer goes.
 	e.mu.Lock()
 	for cs := range inc.installedPacks {
 		for _, ext := range bundleOrder {
@@ -868,8 +743,8 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 	}
 	var strays []stray
 	now := &trashing{c: c}
-	// The view's directory there at all: tidy has held it to the image, a
-	// directory, or moved it aside.
+	// tidy has held the view's directory to the image, so it is a directory
+	// or absent.
 	_, err := os.Lstat(filepath.Join(inc.dir, gitproc.DroppingDir))
 	viewHeld := err == nil
 	for _, place := range []packPlace{placeLive, placeDropping} {
@@ -907,16 +782,15 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 	emptied := viewHeld && !viewWanted && !held
 	if len(strays) == 0 {
 		if emptied {
-			// A view the rows place nothing in, left by a crash or a hand:
-			// it goes, so no scratch over the copy is paranoid for nothing.
+			// A view the rows place nothing in goes, so no scratch over the
+			// copy is paranoid for nothing (gitproc.Cmd.Dropping).
 			return []string{gitproc.DroppingDir}, nil, true, nil
 		}
 		return nil, nil, now.moved, nil
 	}
-	// What took a stray out is what this answer's retirements say, or what
-	// the incarnation already knew of it: a pack an earlier round's
-	// retirements took out, whose swap failed, may lie below the floor this
-	// answer serves retirements above.
+	// This answer's retirements, or what the incarnation already knew: a pack
+	// an earlier round retired, whose swap failed, may lie below the floor
+	// this answer serves retirements above.
 	var retired map[string]bool
 	if !history && !snap.retiredFrom.IsZero() {
 		retired = snap.retiredChecksums()
@@ -928,20 +802,17 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 			key.name = m[1]
 			switch {
 			case s.place == placeDropping && places[key.name] == placeNone:
-				// A DROPPING PACK NO ROW NAMES left the repository whatever
-				// accounts for it — an expunge's commit, or a log gone back
-				// past the begin that made it — since nothing else takes a
-				// pack out of the view: what it held may be gone from every
-				// copy, and a graph or an answer about it with it.
+				// A DROPPING PACK NO ROW NAMES left as an expunge however it
+				// came about, since nothing else takes a pack out of the view:
+				// what it held may be gone from every copy.
 				ev = EventPackExpunged
 			case places[key.name] != placeNone:
 				ev = EventPackRetired
 			case !history && (retired[key.name] || known[key] == EventPackRetired):
 				// A RETIREMENT, unless the round crossed an expunge's commit
-				// this copy never placed the dropping pack of
-				// (crossedACommit): then what the begin added to hold this
-				// pack's objects is not all here, and it leaves as the
-				// commit's.
+				// whose dropping pack this copy never placed (crossedACommit):
+				// then this pack's objects are not all here, and it leaves as
+				// the commit's.
 				ev = EventPackRetired
 				if purged {
 					ev = EventPackExpunged
@@ -955,11 +826,9 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 	if held {
 		return nil, leaving, now.moved, nil
 	}
-	// IN PLACE, EACH EVENT ITS OWN DROP, over the packs it took out: a
-	// retirement's keeps the graph and the memo, an expunge's drops them, and
-	// a pack removed with no retirement drops the graph and the index — so
-	// what any of them drops goes, and the chain is cut below the lowest
-	// layer naming any of their packs (prefixOf, the one cut).
+	// IN PLACE, EACH EVENT ITS OWN DROP over the packs it took out (dropFor),
+	// before the move: an index naming a missing pack fails every read. The
+	// chain is cut below the lowest layer naming any of them (prefixOf).
 	byEvent := map[Event]map[string]bool{}
 	for key, v := range leaving {
 		if byEvent[v] == nil {
@@ -982,18 +851,16 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 	}
 	if emptied {
 		// The view whole, its strays in it: one rename, and no directory left
-		// behind to make every scratch over the copy paranoid for nothing.
+		// to make a scratch over the copy paranoid.
 		rels = append(rels, gitproc.DroppingDir)
 	}
 	return rels, nil, true, nil
 }
 
 // sweepPacks is the sweep's second half, once the refs are in: every stray
-// packStrays answered to move — none where the strays leave by the swap — is
-// moved into trash/, so a reader of the old refs never loses a pack they name
-// — and then the incarnation's counts are MEASURED, whatever they had drifted
-// to: strays the swap is about to take out included. strays are paths
-// relative to the incarnation: a pack's file, or a dropping view whole.
+// packStrays answered (a pack's file, or the dropping view whole) is moved
+// into trash/, so a reader of the old refs never loses a pack, and then the
+// incarnation's counts are MEASURED, strays the swap will take included.
 func (c *Cache) sweepPacks(e *entry, inc *incarnation, strays []string) (bool, error) {
 	t := &trashing{c: c}
 	for _, rel := range strays {
@@ -1027,66 +894,35 @@ func (c *Cache) sweepPacks(e *entry, inc *incarnation, strays []string) (bool, e
 	return t.moved, nil
 }
 
-// dropFor is THE ONE REMOVAL OF A DERIVED FILE: it moves into trash/ every
-// file of inc that a declaration whose On(ev) is Drop owns — for
-// EventReported and eventFailedCheck, of the declarations named alone, since
-// a report and a check each name which files they found damaged, and a file
-// failing its check whatever its declaration says (image.dropping) — syncs
-// each directory it moved a file out of once,
-// and answers the declarations it dropped, whether or not a file of theirs
-// was there. Each file moved takes its vouch with it (check.go): a file
-// written there next is vouched as it is written, or checked. And each
-// declaration a file of which it moved is stamped written (wrote, the guard of
-// a report's drop) and the copy repaired (repaired: git looks an object up
-// through the packs' own indexes once a multi-pack-index that placed it
-// wrongly is gone); a drop that found nothing to move stamps neither.
-//
-// With no declaration dropping on ev it does NOTHING — no listing, no sync —
-// so a call at every change costs a loop over the declarations.
-//
-// THE ORDER RULE: a drop precedes the change it answers becoming visible to
-// any git process — a pack removed, a pack placed, packed-refs renamed in — so
-// every caller calls it BEFORE its change, whatever the declarations say of
-// that change today, and a declaration changing its answer needs no new call.
-//
-// A maintenance run writing what it drops or cuts is STOPPED first, and
-// waited for (stopWriting, below). It moves what a declaration OWNS and never what a
-// write of it holds while it runs (Write.Holds): that is a running writer's
-// own, whose rename it would break, and a writer that does not succeed —
-// one it stopped among them — removes it as it ends (clearWriting). Its
-// caller holds the repository's write lock — whole for a round, a share for
-// an adoption — and not entry.mu.
-//
-// THE INSTALLED CHAIN IS CUT, NEVER DROPPED (Prefix): every declaration of
-// it the change cuts (image.cutting) keeps the longest prefix of the chain
-// that d's packs, its failing layers and — for EventLayersMoved — the chain
-// it wants leave valid (prefixOf, the one cut both chains share), and the
-// rest goes (cutChain), the node's tip with it. A change that keeps the whole
-// chain moves nothing of it but the tip, which every change but a retirement
-// takes (tipGoes). d names what the change takes out: for EventReported and
-// eventFailedCheck the declarations named (d.named), for a pack's leaving its
-// checksums (d.packs), for the chain moving the chain wanted (d.want), and
-// for a failed check the layers whose files failed (d.failing).
+// dropFor is THE ONE REMOVAL OF A DERIVED FILE in place (package doc,
+// "Derived files"): it moves into trash/ every file of inc that a declaration
+// dropping on ev owns (image.dropping; for EventReported and eventFailedCheck
+// only d.named's), each taking its vouch (check.go) and stamping its
+// declaration written and the copy repaired (droppedDerived), and answers the
+// declarations dropped. The installed chain is CUT, never dropped (cutting,
+// prefixOf, cutChain, tipGoes). THE ORDER RULE: every caller calls it BEFORE
+// its change is visible to any git process, whatever the declarations say of
+// it today. A run writing what it drops or cuts is stopped first; what a
+// running write holds (Write.Holds) is never moved. The caller holds the
+// repository's write lock (whole for a round, a share for an adoption), not
+// entry.mu. With nothing dropping on ev it does nothing.
 func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, d eventDetail) (derivedSet, error) {
 	drop := c.image.dropping(ev)
 	if ev == EventReported || ev == eventFailedCheck {
 		drop &= d.named
 	}
 	if cut := c.image.cutting(ev); cut != 0 && (ev != eventFailedCheck || cut&d.named != 0) {
-		// A RUN WRITING THE NODE'S TIP is stopped first, and waited for, as a
-		// run writing what a drop takes is (below): it writes over the chain
-		// files a cut writes again, and over packs the change takes out —
-		// recorded after the change, its tip would name what is gone.
+		// A RUN WRITING THE NODE'S TIP is stopped first, and waited for: it
+		// writes over chain files a cut rewrites and over packs the change
+		// takes out, so its tip would name what is gone.
 		c.stopWriting(e, inc, cut)
 		e.mu.Lock()
 		installed, tip := slices.Clone(inc.installed), inc.tip.id
 		e.mu.Unlock()
-		// THE CHAIN MOVING makes the chain's directories exactly the prefix it
-		// keeps, whatever the cut: a placement in place is where a previous
-		// process's files no record names, or a crashed placement's, go. And
-		// a change that keeps every layer still takes the node's tip where it
-		// takes the tip's base or commits the tip names (tipGoes): a pack
-		// removed from the tail.
+		// THE CHAIN MOVING makes the chain's directories exactly the kept
+		// prefix, so files no record names go. A change keeping every layer
+		// still takes the tip where it takes the tip's base or commits
+		// (tipGoes).
 		k := prefixOf(installed, ev, d)
 		if k < len(installed) || ev == EventLayersMoved || (tip != "" && tipGoes(installed, k, ev)) {
 			if err := c.cutChain(e, inc, k, ev); err != nil {
@@ -1098,14 +934,11 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, d eventDetail) (de
 		return 0, nil
 	}
 	// A RUN IN FLIGHT WRITING WHAT THIS DROPS IS STOPPED FIRST, and waited
-	// for: git reads a write's inputs as it starts, so a file it renamed in
-	// after this drop would be built over the inputs before the change, and
-	// the run would record it current — covering, graphed, vouched — over
-	// inputs it does not describe. A step it finished before it stopped is
-	// on disk, and the listing below drops it. None starts until the change
-	// is visible, since no run starts while a round runs or an adoption
-	// holds the repository (runnable); a full round has stopped every run
-	// already (apply).
+	// for: git reads a write's inputs as it starts, so a file renamed in
+	// after the drop would be recorded current over inputs it does not
+	// describe. A step finished before it stopped is dropped by the listing
+	// below. None starts while a round runs or an adoption holds the
+	// repository (runnable).
 	c.stopWriting(e, inc, drop)
 	for _, rel := range c.image.ownedDirs(drop) {
 		list, err := c.image.listed(inc.dir, rel)
@@ -1166,11 +999,9 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, d eventDetail) (de
 			}
 		}
 	}
-	// A TREE GOES WHOLE (Owned.Tree), its record and its index with it, under
-	// its writer's lock (memo.go's dropMemo): an answer placed into the tree
-	// while it moved would otherwise be counted for a directory no longer
-	// there, and its record reset after it, a directory counted as none. The
-	// memo is the one tree there is.
+	// A TREE GOES WHOLE (Owned.Tree), with its record and index, under its
+	// writer's lock (memo.go's dropMemo), so an answer placed into it while it
+	// moved is not counted for a directory gone. The memo is the one tree.
 	tree := false
 	c.image.each(drop, func(_ int, d *Derived) { tree = tree || d.tree() })
 	if tree {
@@ -1178,12 +1009,9 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, d eventDetail) (de
 			return 0, err
 		}
 	}
-	// What the incarnation records it holds follows what it holds, whatever
-	// kind of round dropped it: a delta measures nothing after, and a
-	// derived file recorded as present that is gone is one the maintainer
-	// never writes again — so each dropped declaration's entry goes, its
-	// bytes with it: an index gone covers nothing and has no bitmap, a graph
-	// gone is due again.
+	// The record follows the disk whatever kind of round dropped: a delta
+	// measures nothing after, and a file recorded present but gone is one the
+	// maintainer never writes again.
 	e.mu.Lock()
 	c.image.each(drop, func(_ int, d *Derived) {
 		if !d.tree() {
@@ -1230,17 +1058,12 @@ func (c *Cache) droppedDerived(inc *incarnation, s derivedSet) {
 
 // measure sets inc's counts from its directory: the packs installed in
 // objects/pack (an .idx with its .pack), the bytes of their files, of the
-// dropping view's and of packed-refs, and each derived file's
-// (recordDerived). A derived file whose main file is no longer on disk
-// is no longer recorded as made — an index gone covers nothing, a graph gone
-// is due again — and a declaration with no file on disk has no entry.
-//
-// EACH DIRECTORY IS LISTED ONCE. objects/pack holds three files a pack until
-// compaction, with no cap on the packs, and measure runs at every full round
-// — a boot's first among them, which the first request to the repository
-// waits on — so the derived files' bytes and presence there are read from the
-// one listing that counts the packs (ownedIn), and only the other owned
-// directories (objects/info) are listed beside it.
+// dropping view's and of packed-refs, and each derived file's (recordDerived:
+// one whose main file is gone is no longer made, and a declaration with no
+// file on disk has no entry). EACH DIRECTORY IS LISTED ONCE: objects/pack is
+// uncapped and measure runs at every full round, which a boot's first request
+// waits on, so its derived files are read from the listing that counts the
+// packs (ownedIn).
 func (c *Cache) measure(e *entry, inc *incarnation) error {
 	// Every entry of objects/pack: the packs' files are what it counts.
 	sizes, err := c.image.sizes(inc.dir, packRel, nil)

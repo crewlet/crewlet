@@ -28,28 +28,17 @@ import (
 )
 
 // A COLD SYNC DOWNLOADS SIXTEEN AT ONCE: on S3 a GET is bound by its first
-// byte, so width is what a cold sync is bought with. Every GET is held open
-// here, so the sync opens as many as it downloads at once and then parks, and
-// how many is read in a synctest bubble, twice: once every goroutine of the
-// case is durably blocked (synctest.Wait) — the sixteenth GET has been made
-// by then, however late its worker ran, and so has a seventeenth the round
-// was free to make, while a sync of fewer at once has parked short of
-// sixteen — and again once the clock has moved past every timer the cache
-// arms (pastEveryTimer) and every goroutine has blocked again — a seventeenth
-// a wait on that clock let through has been made by then too. On a healthy
-// build the round, its GETs held, waits on no clock, so nothing runs in the
-// span. Once they are let go and the sync has ended, it never had more than
-// sixteen open at once. The opens are counted above the store, whatever
-// serves them, so the bubble's world keeps its packs in memory: the S3 fake
-// answers over a socket, and a goroutine waiting on one is never durably
-// blocked.
+// byte, so width is what a cold sync is bought with. Every GET is held open,
+// so the sync parks with as many open as it downloads at once, read twice
+// (pastEveryTimer); a healthy round, its GETs held, waits on no clock, so
+// nothing runs in the span. Packs are kept in memory: a goroutine waiting on
+// the S3 fake's socket is never durably blocked.
 //
-// Mutations: a round downloads one fewer at once (its share one narrower) —
-// it parks with fifteen GETs open; or one more — seventeen; or its sixteenth
-// GET waits a minute for its share — fifteen, at the first read; or a worker
-// whose share has not come within a minute takes its GET without one, or a
-// round one wider has its seventeenth wait a minute for its share — sixteen at
-// the first read, and more once the clock has moved.
+// Mutations: a round one narrower (fifteen open) or one wider (seventeen); its
+// sixteenth GET waits a minute for its share (fifteen at the first read); a
+// worker takes its GET without a share after a minute, or a round one wider
+// has its seventeenth wait a minute for it (sixteen at the first read, more at
+// the second).
 func TestAColdSyncDownloadsSixteenAtOnce(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -122,12 +111,10 @@ func TestEveryCacheOnANodeSharesItsFetches(t *testing.T) {
 	}
 }
 
-// THE NODE'S DOWNLOAD BUFFERS ARE ITS SLOTS: a copy buffer is handed out with
-// a node slot and taken back with it, so however many repositories' rounds
-// wait for one — a node that just joined a fleet, asked for every repository
-// at once — the node holds NodeFetches buffers, never one for every round's
-// every worker. A round waiting for a slot, or for a pack in hand before it,
-// holds no buffer at all.
+// THE NODE'S DOWNLOAD BUFFERS ARE ITS SLOTS: a copy buffer goes out and back
+// with a node slot, so however many rounds wait (a node just joined, asked for
+// every repository at once) the node holds NodeFetches buffers, never one per
+// worker. A round waiting for a slot or a pack in hand holds none.
 func TestTheNodesDownloadBuffersAreItsSlots(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -159,13 +146,11 @@ func TestTheNodesDownloadBuffersAreItsSlots(t *testing.T) {
 			s.Release()
 		})
 	}
-	// Two rounds' downloads hold the node's two slots, and each of those
-	// rounds holds a second pack in hand waiting on its own share — the
-	// node's four — so every other round waits for a pack in hand, holding
-	// no files, no slot and no buffer. The two are started one after the
-	// other, each once the one before holds its two packs: rounds started
-	// together share the node's four packs in hand however they reach
-	// them, and a round holding one waits for its next as the others do.
+	// Two rounds hold the node's two slots, each with a second pack in hand
+	// on its own share (the node's four), so every other round waits for a
+	// pack in hand holding no files, slot or buffer. The two start one at a
+	// time, each once the one before holds its two packs: rounds started
+	// together split the four however they reach them.
 	for i, repo := range repos[:2] {
 		start(repo)
 		eventually(t, fmt.Sprintf("round %d's download held and its second pack in hand", i+1), func() bool {
@@ -189,12 +174,11 @@ func TestTheNodesDownloadBuffersAreItsSlots(t *testing.T) {
 	}
 }
 
-// A NODE SLOT GOES BACK WHEN THE GET ENDS: what follows a download — the
-// seal's check, the files made durable, the renames — is this node's disk, and
-// a slot held through it is a GET the node does not make. With every install
-// held at its first stage, the node's one slot is free for the next download,
-// up to the packs the node holds in hand for it (installsPerFetch, two) and
-// no further.
+// A NODE SLOT GOES BACK WHEN THE GET ENDS: what follows a download (the seal's
+// check, the syncs, the renames) is this node's disk, and a slot held through
+// it is a GET the node does not make. With every install held at its first
+// stage, the one slot serves the next download, up to the packs in hand
+// (installsPerFetch, two) and no further.
 func TestANodeSlotGoesBackWhenTheGetEnds(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -223,9 +207,8 @@ func TestANodeSlotGoesBackWhenTheGetEnds(t *testing.T) {
 		}
 		done <- err
 	}()
-	// Downloads through one slot, each install held after its GET: only a
-	// slot given back before the install lets the next GET start — and the
-	// node's two packs in hand stop the third.
+	// Only a slot given back before the install lets the next GET start, and
+	// the node's two packs in hand stop the third.
 	eventually(t, "two downloads fetched through one slot while their installs wait", func() bool {
 		return installing.Load() == 2
 	})
@@ -242,13 +225,11 @@ func TestANodeSlotGoesBackWhenTheGetEnds(t *testing.T) {
 }
 
 // A PACK IN HAND WAITS FOR ITS GET WITH ITS FILES MADE: creating a bundle's
-// three files is the dearest step of its disk work on the measured machine —
-// a third of a millisecond a file, made one at a time in tmp/ — and made
-// while the GET's share and slot are held it is time no GET runs in. So the
-// round makes a pack's files as it hands the pack out, and its worker only
-// then waits for its turn and the round's share: with a round of one GET at
-// a time and that GET held open, the round's second pack in hand already has
-// its three files in tmp/.
+// three files is its dearest disk step (measured: a third of a millisecond a
+// file), and done under the GET's share and slot it is time no GET runs in.
+// So the round makes them as it hands the pack out, before the worker waits
+// for its turn and share: with one GET at a time, held, the second pack in
+// hand already has its three files in tmp/.
 func TestAPackInHandWaitsForItsGetWithItsFilesMade(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -304,31 +285,17 @@ func TestTheLargestPackIsFetchedFirst(t *testing.T) {
 }
 
 // A ROUND GRANTS ITS GETS IN ITS ORDER, LARGEST FIRST, and makes its bundles'
-// files in that order too. Its workers run in whatever order the scheduler
-// picks — usually the one started last first — so a round whose workers each
-// asked for a GET as soon as they could gave its first shares to the packs it
-// handed out last, and a round whose workers made their own files held its
-// first GET behind whichever pack's files were made last. Here the order the
-// round made the files in is read, and the largest pack's worker is held as it
-// asks for its GET, its files made, while the case reads the round in a
-// synctest bubble: once every goroutine of the case is durably blocked
-// (synctest.Wait), and again once the clock has moved past every timer the
-// cache arms (pastEveryTimer) and every goroutine has blocked again. The
-// round's other workers in hand are parked on their turns by then, so a round
-// that grants in its order has started no GET — while one whose workers ask
-// as soon as they can has given its whole share away by the first read,
-// however late its workers ran, and one whose workers ask once a wait on that
-// clock of their own has passed, by the second. Eight packs at a share of
-// two, more than the four a round holds in hand, every GET held until the
-// case lets it go, one at a time, and the round read the same two ways after
-// each — so the order is checked at every grant, across every window the hand
-// moves through, and never at the instant two GETs start together. On a
-// healthy build the round waits on no clock, so nothing runs in the spans.
+// files in that order too: workers run in the scheduler's order (often the
+// last started first), so ones asking when they could gave the first GETs to
+// the last packs handed out, and ones making their own files held the first
+// behind the last made. The largest pack's worker, its files made, is held as
+// it asks while the round is read twice (pastEveryTimer): the others in hand
+// park on their turns, so an in-order round has started none. Eight packs (past
+// the four in hand) at a share of two, each GET let go in turn and the round
+// read after each, check every grant; a healthy round waits on no clock.
 //
-// Mutations: a worker asks for its GET as soon as its pack is in hand
-// (getSlot's turn taken out) — the round's first two GETs are two smaller
-// packs'; a worker waits for its turn a minute at most — the same, once the
-// clock has moved.
+// Mutations: getSlot's turn taken out (the first two GETs are smaller packs');
+// a worker waits for its turn a minute at most (the same, at the second read).
 func TestARoundGrantsItsGetsInItsOrder(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -360,9 +327,9 @@ func TestARoundGrantsItsGetsInItsOrder(t *testing.T) {
 			staged = append(staged, k)
 		}), cache.AskingWith(func(k objstore.Key) {
 			if k == largest[0] {
-				// Held as it asks while the case reads the round: its other
-				// workers in hand park meanwhile, on their turns or — granting
-				// out of its order — in GETs of their own, held.
+				// Held as it asks while the case reads the round: the other
+				// workers in hand park on their turns or, granting out of
+				// order, in held GETs of their own.
 				close(asking)
 				<-asked
 			}
@@ -400,10 +367,8 @@ func TestARoundGrantsItsGetsInItsOrder(t *testing.T) {
 			}
 			return out
 		}
-		// started is the round's GETs so far, in the order they started, read
-		// once every goroutine of the case is durably blocked; then read again
-		// once the clock has moved past every timer the cache arms, which must
-		// have started none.
+		// started is the round's GETs so far, in start order, read twice
+		// (pastEveryTimer): the second read must find none more.
 		started := func(when string) []objstore.Key {
 			t.Helper()
 			synctest.Wait()
@@ -428,9 +393,8 @@ func TestARoundGrantsItsGetsInItsOrder(t *testing.T) {
 				describe(got), describe(largest[:share]))
 		}
 		for i := share; i < len(largest); i++ {
-			// The earliest GET still held ends, and its share is the round's
-			// one grant: exactly one more GET starts, and it is the next
-			// largest.
+			// The earliest held GET ends, and its share is the one grant:
+			// exactly one more GET starts, the next largest.
 			let(got[i-share])
 			got = started(fmt.Sprintf("once GET %d ended,", i-share+1))
 			if len(got) != i+1 || got[i] != largest[i] {
@@ -454,23 +418,16 @@ func TestARoundGrantsItsGetsInItsOrder(t *testing.T) {
 }
 
 // A ROUND'S GETS NEVER WAIT ON ITS DISK: the round's share goes back when a GET
-// ends, so with every file's sync held, a round of one GET at a time still
-// downloads its next bundle — and stops at the packs it may hold in hand
-// (installsPerFetch, two), so the disk it does wait on holds its GETs back
-// rather than a growing backlog of downloads. Where the round stops is read in
-// a synctest bubble, twice: once every goroutine of the case is durably
-// blocked (synctest.Wait) — a third GET the round was free to make has been
-// made by then — and again once the clock has moved past every timer the
-// cache arms (pastEveryTimer) and every goroutine has blocked again — a third
-// GET a pack in hand given back behind a wait on that clock let through has
-// been made by then too. On a healthy build the round, held on its syncs,
-// waits on no clock, so nothing runs in the span.
+// ends, so with every file's sync held a round of one GET at a time still
+// downloads its next bundle, and stops at the packs it may hold in hand
+// (installsPerFetch, two): a stalled disk holds GETs back rather than growing
+// a backlog of downloads. Read twice (pastEveryTimer); a healthy round, held
+// on its syncs, waits on no clock, so nothing runs in the span.
 //
-// Mutations: a round holds a pack in hand more (inHand of installsPerFetch ×
-// fetchConcurrency + 1), or gives one back at its GET's end rather than once
-// it is placed — a third GET is made while the first two wait on the disk; or
-// gives one back a minute after its GET's end — the same, once the clock has
-// moved.
+// Mutations: a pack in hand more (inHand of installsPerFetch × fetchConcurrency
+// + 1), or one given back at its GET's end rather than once placed (a third
+// GET while the first two wait on the disk); one given back a minute after its
+// GET's end (the same, at the second read).
 func TestARoundsGetsNeverWaitOnItsDisk(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -520,23 +477,17 @@ func TestARoundsGetsNeverWaitOnItsDisk(t *testing.T) {
 }
 
 // THE NODE HOLDS TWO SHARES OF PACKS IN HAND: however many rounds run, the
-// node's packs between their GET and their place — downloading, or downloaded
-// and waiting on the disk — are at most installsPerFetch × NodeFetches, so a
-// joining node whose disk stalls under a burst of cold syncs stops starting
-// GETs rather than piling up downloads, and syncs in flight, without end.
-// Where the rounds stop is read in a synctest bubble, twice: once every
-// goroutine of the case is durably blocked (synctest.Wait) — a GET the node
-// was free to start has been started by then — and again once the clock has
-// moved past every timer the cache arms (pastEveryTimer) and every goroutine
-// has blocked again — a GET a pack in hand given back behind a wait on that
-// clock let through has been started by then too. On a healthy build the
-// rounds, held on their syncs and their hands, wait on no clock, so nothing
-// runs in the span.
+// node's packs between their GET and their place (downloading, or waiting on
+// the disk) are at most installsPerFetch × NodeFetches, so a joining node whose
+// disk stalls under a burst of cold syncs stops starting GETs rather than
+// piling up downloads without end. Read twice (pastEveryTimer); healthy
+// rounds, held on their syncs and hands, wait on no clock, so nothing runs in
+// the span.
 //
-// Mutations: the node holds a pack in hand more (installsPerFetch ×
-// NodeFetches + 1), or gives one back at its GET's end rather than once it is
-// placed — a third GET is made while the first two wait on the disk; or gives
-// one back a minute after its GET's end — the same, once the clock has moved.
+// Mutations: a pack in hand more (installsPerFetch × NodeFetches + 1), or one
+// given back at its GET's end rather than once placed (a third GET while the
+// first two wait on the disk); one given back a minute after its GET's end
+// (the same, at the second read).
 func TestTheNodeHoldsTwoSharesOfPacksInHand(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -569,8 +520,8 @@ func TestTheNodeHoldsTwoSharesOfPacksInHand(t *testing.T) {
 				s.Release()
 			})
 		}
-		// Every round parked: the node's two packs in hand downloaded, their
-		// syncs held, and each round waiting for a pack in hand of its own.
+		// Parked: the node's two packs in hand downloaded, their syncs held,
+		// each round waiting for a pack in hand.
 		parked := func(when string) {
 			t.Helper()
 			if got := w.objects.total(); got != 2 {
@@ -591,10 +542,9 @@ func TestTheNodeHoldsTwoSharesOfPacksInHand(t *testing.T) {
 	})
 }
 
-// A BUNDLE IS DURABLE BEFORE ANY OF IT IS PLACED: every file of a bundle is
-// synced while it is still in tmp/, the three of a bundle in flight together
-// — syncs one after another each pay a journal commit of their own — and no
-// file of the bundle is in objects/pack until all of them have been synced.
+// A BUNDLE IS DURABLE BEFORE ANY OF IT IS PLACED: its files are synced in tmp/,
+// all three in flight together (syncs one after another each pay a journal
+// commit), and none is in objects/pack until all three are synced.
 func TestABundleIsDurableBeforeAnyOfItIsPlaced(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -682,15 +632,14 @@ func noise(seed, size int) string {
 	return string(b)
 }
 
-// A COLD SYNC RUNS NO GIT: a bundle carries the index and the reverse index
-// its receiving git wrote, so installing it is renames — no node but the
-// receiving one ever runs index-pack. The only processes a round may run are
-// the peel of the tags it sets and the dates of those tags (tags.go) and, from
-// MidxRoundPacks packs (lowered here to caseRoundPacks), the index it writes
-// before it answers.
+// A COLD SYNC RUNS NO GIT: a bundle carries the index and reverse index its
+// receiving git wrote, so installing it is renames and only the receiving node
+// runs index-pack. A round runs only the peel of the tags it sets, their dates
+// (tags.go) and, from MidxRoundPacks packs (caseRoundPacks here), the
+// multi-pack-index it writes before it answers.
 //
-// Mutation: run the step's own batch-check where the peel read the tags → a
-// third process, red.
+// Mutation: the step's own batch-check where the peel read the tags (a third
+// process).
 func TestAColdSyncRunsNoGit(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -722,8 +671,8 @@ func TestAColdSyncRunsNoGit(t *testing.T) {
 				w.tag(t, repo, "v1", c.annotated)
 			}
 			cc := w.open(t, cache.RoundPacksAt(caseRoundPacks))
-			// The recording lists its calls in no order: what the sync ran
-			// is what is there now and was not before.
+			// The recording is unordered: the sync ran what is there now and
+			// was not before.
 			seen := map[string]int{}
 			for _, call := range calls() {
 				seen[fmt.Sprint(call.Args)]++
@@ -749,9 +698,8 @@ func TestAColdSyncRunsNoGit(t *testing.T) {
 }
 
 // A BUNDLE IS SPLIT AS ITS ROW SAYS: the pack, the index and the reverse index
-// at the row's sizes, each byte for byte what the receiving git wrote. That
-// all three are in tmp/, checked and durable, before any of them is in
-// objects/pack is TestABundleIsDurableBeforeAnyOfItIsPlaced's.
+// at the row's sizes, each byte for byte what the receiving git wrote. Their
+// durability before placing is TestABundleIsDurableBeforeAnyOfItIsPlaced's.
 func TestABundleIsSplitAsItsRowSays(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -787,10 +735,9 @@ func TestABundleIsSplitAsItsRowSays(t *testing.T) {
 }
 
 // A SYNC INSTALLS PACKS BEFORE REFS: a reader never sees a ref before its
-// objects. Held at the moment the refs are staged, the new commit is already
-// readable in the incarnation and packed-refs still names the old tip; and
-// at every step of an install, a pack's .idx — what makes git count it — is
-// there only once its .pack is.
+// objects. Held as the refs are staged, the new commit is readable and
+// packed-refs still names the old tip; and at every install step a pack's .idx
+// (what makes git count it) is there only once its .pack is.
 func TestASyncInstallsPacksBeforeRefs(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -836,16 +783,14 @@ func TestASyncInstallsPacksBeforeRefs(t *testing.T) {
 
 // A MISSING PACK IS ASKED AGAIN LINEARIZABLY, ONCE, WHATEVER THE ROUND READ
 // AT: a copy behind the log may name a pack a purge has since removed with its
-// row, and even a read at the log's head was made before the store answered,
-// so a round reads at linearizable once more before it calls the pack missing
-// — where the repository may be gone, or the pack definitely is. Only that
-// final answer is logged: a not-found the log's head explains is no alarm.
-// And it is final: a pack the store has lost costs its round one read more,
-// never a loop — a third read is failed, so a round that kept asking fails
-// the case rather than hangs it.
+// row, and even a read at the head predates the store's answer, so the round
+// reads at linearizable once more before calling the pack missing. Only that
+// final answer is logged (a not-found the head explains is no alarm), and it
+// is final: one read more, never a loop. A third read is failed, so a round
+// that kept asking fails the case rather than hangs it.
 //
-// Mutation: ask again only from a round below linearizable (the linearizable
-// rounds read once, and the purged one calls the pack missing).
+// Mutation: ask again only below linearizable (the purged linearizable round
+// calls the pack missing).
 func TestAMissingPackIsAskedAgainLinearizably(t *testing.T) {
 	t.Parallel()
 	thirdRead := errors.New("a round read its snapshot a third time")
@@ -865,8 +810,8 @@ func TestAMissingPackIsAskedAgainLinearizably(t *testing.T) {
 						switch reads.Add(1) {
 						case 2:
 							if purged {
-								// Between the round's read and the one it asks
-								// the log's head after the store's answer.
+								// Between the round's read and its read of
+								// the head after the store's answer.
 								w.log.purge(repo)
 							}
 						case 3:
@@ -888,9 +833,8 @@ func TestAMissingPackIsAskedAgainLinearizably(t *testing.T) {
 					if !errors.Is(err, gitlet.ErrRepoNotFound) {
 						t.Errorf("Sync: %v, want gitlet.ErrRepoNotFound", err)
 					}
-					// The pack was never missing: the read that named it
-					// predates a purge, and nothing is logged against the
-					// store.
+					// The pack was never missing: the read naming it
+					// predates a purge, so nothing is logged.
 					if got := w.logs.lines(t, "code_pack_missing"); len(got) != 0 {
 						t.Errorf("logged %d code_pack_missing lines for a pack a purge removed with its row", len(got))
 					}
@@ -910,23 +854,17 @@ func TestAMissingPackIsAskedAgainLinearizably(t *testing.T) {
 }
 
 // A PACK RETIRED UNDER A ROUND IS ASKED ABOUT AGAIN: even a linearizable
-// round's barrier is taken before it downloads what its snapshot names, and a
-// row can leave the log while it downloads — a compaction retires the packs it
-// merged into one, and once their grace has passed (ADR-0081) the collector
-// deletes their objects. So the store's not-found is asked of the log's head
-// once more, and a head that no longer names the pack converges the round to
-// what the log holds now: the merged pack, which holds every object the
-// retired ones did. Failing the round instead failed every caller of it for a
-// pack no row names, and logged code_pack_missing — the line the
-// objects_missing alarm stands behind — for a pack nobody lost.
+// round's barrier precedes its downloads, and meanwhile a compaction may retire
+// the packs it merged and the collector delete their objects once their grace
+// passes (ADR-0081). So the store's not-found is asked of the head once more,
+// and a head no longer naming the pack converges the round on what the log
+// holds now (the merged pack, holding every retired object), failing no caller
+// and logging no code_pack_missing, the line behind the objects_missing alarm.
+// Cold and warm rounds; the log retires rows as a compaction's record applies
+// them, the merge added at the record's position.
 //
-// Both shapes of round: a cold one reading the rows whole, and a warm one's
-// delta from the position it holds. The log here retires the rows directly,
-// as a compaction's record applies them: the inputs leave the live rows, and
-// the merged pack is added at the record's own position.
-//
-// Mutation: ask the head again only from a round below linearizable (the
-// round fails ErrPackMissing naming a retired pack).
+// Mutation: ask the head again only below linearizable (ErrPackMissing naming
+// a retired pack).
 func TestAPackRetiredUnderARoundIsAskedAboutAgain(t *testing.T) {
 	t.Parallel()
 	for _, warm := range []bool{false, true} {
@@ -941,16 +879,14 @@ func TestAPackRetiredUnderARoundIsAskedAboutAgain(t *testing.T) {
 			}
 			_, first := w.push(t, repo, "refs/heads/main", nil)
 			tip, second := w.push(t, repo, "refs/heads/main", nil)
-			// The merge of the two, stored before its record as every pack is:
-			// one pack of every object either of them holds.
+			// The merge of the two, stored before its record as every pack is.
 			bare := gittest.Empty(t)
 			merged := w.storeBundle(t, gittest.Bundle(t, bare,
 				gittest.Pack(t, w.client, bare, w.repos[repo].work, tip, "^"+kept)), "")
 			var retired sync.Once
 			w.log.set(func(f *fakeLog) {
-				// Once the round has its answer, and before it downloads: the
-				// compaction applies, and its inputs' objects go, as the
-				// collector deletes them once their grace has passed.
+				// Once the round has its answer, before it downloads: the
+				// compaction applies and the collector deletes its inputs.
 				f.after = func(fakeCall, *gitlet.RepoSnapshot) {
 					retired.Do(func() {
 						w.log.set(func(f *fakeLog) {
@@ -1003,21 +939,18 @@ func TestAPackRetiredUnderARoundIsAskedAboutAgain(t *testing.T) {
 	}
 }
 
-// A LOST PACK ENDS ITS ROUND AT THE HEAD'S ANSWER. The read made after the
-// store's not-found decides the pack: one that still names it names an object
-// the store lost while a live row named it, and the round fails there, having
-// fetched nothing twice. Applied again instead, it staged and fetched again
-// every pack the not-found had cancelled in flight — up to a share of partial
-// downloads, the largest first — and asked the store once more for the pack it
-// had just been told was not there, on every round of a repository with a
-// lost pack, holding its write lock.
+// A LOST PACK ENDS ITS ROUND AT THE HEAD'S ANSWER: the read after the store's
+// not-found decides the pack, and one still naming it names an object lost
+// under a live row, so the round fails there, fetching nothing twice. Applying
+// that answer would refetch every pack the not-found cancelled in flight and
+// ask again for the lost one, on every round of the repository, under its
+// write lock.
 //
 // Two packs: the larger's GET held in flight, the smaller's object deleted
-// while its row is live. A third read is failed, so a round that kept asking
+// under its live row. A third read is failed, so a round that kept asking
 // fails the case rather than hangs it.
 //
-// Mutation: apply the head's answer whatever it names (each object is opened
-// twice).
+// Mutation: apply the head's answer whatever it names (each object opened twice).
 func TestALostPackEndsItsRoundAtTheHeadsAnswer(t *testing.T) {
 	t.Parallel()
 	thirdRead := errors.New("a round read its snapshot a third time")
@@ -1042,8 +975,8 @@ func TestALostPackEndsItsRoundAtTheHeadsAnswer(t *testing.T) {
 		}
 	})
 	c := w.open(t)
-	// Held until the round's own failure cancels it: the larger is fetched
-	// first, so it is in flight when the smaller's not-found arrives.
+	// Held until the round's failure cancels it: the larger goes first, so it
+	// is in flight at the smaller's not-found.
 	held := make(chan struct{})
 	t.Cleanup(func() { close(held) }) // before the cache's Stop, which waits for the round
 	w.objects.hold = func(k objstore.Key) <-chan struct{} {
@@ -1080,26 +1013,18 @@ func TestALostPackEndsItsRoundAtTheHeadsAnswer(t *testing.T) {
 	w.tmpEmpty(t)
 }
 
-// EVERY PACK THE STORE LACKS IS ASKED OF THE HEAD AFTER ITS OWN NOT-FOUND.
-// The head's answer after one pack's not-found says nothing of a pack the
-// store fails afterwards: that pack's row may leave the log after the answer
-// and its object go with it — a compaction retiring it, the collector deleting
-// it — exactly as the first one's did. So each not-found is decided by a read
-// made after it. Decided by the first one's read, the second failed the round
-// naming a pack no row names, and logged code_pack_missing for it: what asking
-// the head again is there to stop.
+// EVERY PACK THE STORE LACKS IS ASKED OF THE HEAD AFTER ITS OWN NOT-FOUND: a
+// pack the store fails later may have left the log after the first answer
+// (retired, then collected), so each not-found is decided by a read made after
+// it; decided by the first, it fails the round naming a pack no row names.
 //
-// The retirements come one after the other: the round's first answer names
-// three pushes, two of which are merged and collected once that answer is
-// made; the head's answer after their not-found names that merge and the
-// third push, which are merged in turn and collected once THAT answer is made.
-// The third push's GET is held while the round installs from its first answer,
-// so the round meets it from its second however its downloads interleave. The
-// round converges on the second merge to a fresh cache's image, cold (a full
-// read) and warm (a delta).
+// The first answer names three pushes, two merged and collected once it is
+// made; the next names that merge and the third, merged and collected in turn.
+// The third's GET is held through the first answer's install, so the round
+// meets it from its second. Cold and warm rounds converge on a fresh image.
 //
-// Mutation: decide every not-found after the first by the first one's read
-// (the round fails ErrPackMissing naming the first merge or the third push).
+// Mutation: decide later not-founds by the first one's read (ErrPackMissing
+// naming the first merge or the third push, logged as code_pack_missing).
 func TestEveryPackTheStoreLacksIsAskedOfTheHeadAfterItsOwnNotFound(t *testing.T) {
 	t.Parallel()
 	for _, warm := range []bool{false, true} {
@@ -1115,16 +1040,15 @@ func TestEveryPackTheStoreLacksIsAskedOfTheHeadAfterItsOwnNotFound(t *testing.T)
 			_, first := w.push(t, repo, "refs/heads/main", nil)
 			two, second := w.push(t, repo, "refs/heads/main", nil)
 			tip, third := w.push(t, repo, "refs/heads/main", nil)
-			// Each merge stored before its record, as every pack is: one pack
-			// of every object the packs it replaces hold.
+			// Each merge is stored before its record, as every pack is.
 			merged := func(to string) gitlet.PackRow {
 				bare := gittest.Empty(t)
 				return w.storeBundle(t, gittest.Bundle(t, bare,
 					gittest.Pack(t, w.client, bare, w.repos[repo].work, to, "^"+kept)), "")
 			}
 			early, late := merged(two), merged(tip)
-			// retire applies a compaction of gone into into, and collects gone's
-			// objects as the collector does once their grace has passed.
+			// retire applies a compaction of gone into into, and collects
+			// gone's objects as the collector would.
 			retire := func(into gitlet.PackRow, gone ...gitlet.PackRow) {
 				w.log.set(func(f *fakeLog) {
 					r := f.repos[repo]
@@ -1193,18 +1117,15 @@ func TestEveryPackTheStoreLacksIsAskedOfTheHeadAfterItsOwnNotFound(t *testing.T)
 	}
 }
 
-// A FORCED ROUND THAT MEETS A LOST PACK HASHES ITS INDEX FILES ONCE. A
-// request's repair in place reads the copy whole at the log's head and holds
-// every index file to its checksum, vouched or not — about a quarter of the
-// copy's pack bytes, holding every reader of the repository. A pack the rows
-// name that the store has lost is decided by the head's answer after its
-// not-found, and the round ends there; applied again, it hashed every file a
-// second time for the same not-found.
+// A FORCED ROUND THAT MEETS A LOST PACK HASHES ITS INDEX FILES ONCE: a
+// request's repair in place holds every index file to its checksum, vouched or
+// not (about a quarter of the copy's pack bytes, holding every reader). A pack
+// the store lost is decided by the head's answer after its not-found and the
+// round ends there; applied again, every file would be hashed a second time. A
+// third read is failed, so a round that kept asking fails the case rather than
+// hangs it.
 //
-// A third read is failed, so a round that kept asking fails the case rather
-// than hangs it.
-//
-// Mutation: apply the head's answer whatever it names (every index file is
+// Mutation: apply the head's answer whatever it names (every index file
 // hashed twice).
 func TestAForcedRoundThatMeetsALostPackHashesOnce(t *testing.T) {
 	t.Parallel()
@@ -1274,11 +1195,10 @@ func (h *hashes) now() map[string]int {
 var errPushRefused = errors.New("the object store refuses the push's bundle")
 
 // refusePush pushes once more to h's repository and has the object store
-// refuse that push's bundle (errPushRefused) — so a round that adds it fails
-// at its install — and hold every GET of h's newer pack until the round that
-// asked it has failed, so no round installs that pack again first. The
-// answer lets both go, as the case's cleanup does before the cache's Stop,
-// which waits for the round.
+// refuse that push's bundle (errPushRefused), so a round adding it fails at its
+// install, and holds every GET of h's newer pack until the round asking it has
+// failed, so no round installs that pack again first. release lets both go; the case's cleanup calls it
+// before the cache's Stop, which waits for the round.
 func (w *syncWorld) refusePush(t *testing.T, h history) (release func()) {
 	t.Helper()
 	_, push := w.push(t, h.repo, "refs/heads/main", nil)
@@ -1307,29 +1227,18 @@ func (w *syncWorld) refusePush(t *testing.T, h history) (release func()) {
 	return release
 }
 
-// A FORCED ROUND THAT FAILS AT ITS INSTALL HAS SPENT ITS FORCES. A request's
-// repair in place holds every index file to its checksum, vouched or not, and
-// a round that then fails at its install — on a pack it ADDS, which the object
-// store will not hand over — has done all its forces asked: what its check
-// found waits on the repair mark for the rounds after it. Settled only once an
-// install had acted, the forces made every sync of the copy after it a forced
-// round of its own — every index file hashed again, about a quarter of the
-// copy's pack bytes, under the repository's write lock — for as long as the
-// store kept failing. And it is the FINDING the round leaves, not the forces:
-// an index damaged in place keeps its identity and the vouch an earlier check
-// gave it, which no check but a forced one reads past, so the round that can
-// install the pack at last knows of it only from the mark.
+// A FORCED ROUND THAT FAILS AT ITS INSTALL HAS SPENT ITS FORCES: a round that
+// held every index file to its checksum and then fails installing a pack it
+// ADDS has done all its forces asked. Settled only once an install acted, they
+// would make every sync a forced round (every index file rehashed under the
+// write lock) while the store kept failing. What carries over is the FINDING,
+// on the repair mark: an index damaged in place keeps its identity and vouch,
+// which only a forced check reads past, so the round that can finally install
+// knows of it only from the mark. refusePush sets up the failing install.
 //
-// The newer pack's index damaged in place, and a push the store refuses; the
-// newer pack's GET held until each round has failed, so no round installs it
-// again before the store answers (refusePush). The request's forced round
-// hashes each index file once and fails with the store's refusal; three syncs
-// while the store still refuses hash nothing; and once it answers, a sync
-// installs the damaged pack again from its finding, beside the push.
-//
-// Mutations: settle the forces only once an install has acted (each sync
-// hashes every index file again, forced); spend them and carry no finding (the
-// damaged index is never installed again).
+// Mutations: settle the forces only once an install acted (each sync rehashes,
+// forced); spend them and carry no finding (the damaged index is never
+// installed again).
 func TestAForcedRoundThatFailsAtItsInstallHasSpentItsForces(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1406,27 +1315,18 @@ func TestAForcedRoundThatFailsAtItsInstallHasSpentItsForces(t *testing.T) {
 	w.tmpEmpty(t)
 }
 
-// A FORCED ROUND WHOSE PACKS ARE RETIRED UNDER IT HASHES ONCE. The store's
-// not-found for a pack a round adds is decided by the log's head, read after
-// it (THE READ AFTER A NOT-FOUND DECIDES IT), and a head that no longer names
-// the pack — retired, its object collected, while the round downloaded — sends
-// the round on to apply what the head holds: a second apply of ONE round. A
-// forced round's check spent its forces in the first, so the second holds no
-// index file to its trailer again: the round hashes each once, where it hashed
-// every one twice. And the pack the copy lost — what the request's repair is
-// for — is put back by that second apply as the repair it is, so the request
-// is answered from the repaired copy, never escalated to the scrub.
+// A FORCED ROUND WHOSE PACKS ARE RETIRED UNDER IT HASHES ONCE: a head no
+// longer naming a pack the store lacks (THE READ AFTER A NOT-FOUND DECIDES IT,
+// sync.go) sends the round to a second apply, which holds no index file to its
+// trailer again, its forces spent; and it puts back the pack the copy lost as
+// a repair, so the request is answered from the repaired copy, never
+// escalated to the scrub. Two unread pushes are retired once the round has its
+// first answer, and the lost pack's GET is held until that apply fails, so the
+// second puts it back. A third read is failed rather than let the case hang.
 //
-// The copy lost its first push; two pushes it has not read are merged and
-// retired, their objects collected, once the round has its first answer; the
-// lost pack's GET is held until that answer's apply has failed, so the second
-// apply is what puts it back. A third read is failed, so a round that kept
-// asking fails the case rather than hangs it.
-//
-// Mutations: settle the forces only once an install has acted (the second
-// apply holds every index file to its trailer again); a lost pack counted only
-// by a forced round (the second apply's is no repair, and the request is
-// escalated to the scrub and a whole rebuild).
+// Mutations: settle the forces only once an install acted (the second apply
+// rehashes); a lost pack counted only by a forced round (the second apply's is
+// no repair, so the request escalates to the scrub and a whole rebuild).
 func TestAForcedRoundWhosePacksAreRetiredUnderItHashesOnce(t *testing.T) {
 	t.Parallel()
 	thirdRead := errors.New("a round read its snapshot a third time")
@@ -1455,8 +1355,8 @@ func TestAForcedRoundWhosePacksAreRetiredUnderItHashesOnce(t *testing.T) {
 			}
 			return nil
 		}
-		// Once the round has its first answer, and before it downloads: the
-		// compaction applies, and its inputs' objects go.
+		// Once the round has its first answer, before it downloads: the
+		// compaction applies and its inputs' objects go.
 		f.after = func(call fakeCall, _ *gitlet.RepoSnapshot) {
 			if call.Page != 1 || answers.Add(1) != 1 {
 				return
@@ -1535,21 +1435,15 @@ func TestAForcedRoundWhosePacksAreRetiredUnderItHashesOnce(t *testing.T) {
 	w.tmpEmpty(t)
 }
 
-// A PACK A FULL ANSWER NAMED IS DECIDED BY A FULL READ. The log may answer a
-// delta in full — page 1 decides, where the delta would outweigh its full
-// answer or reach below its swept tombstones or its swept retirements — and a
-// full answer names packs at or below the incarnation's position: one whose
-// files the copy lost is installed again from it. No delta from that position
-// names such a pack, so the read that decides its not-found is full. Asked as
-// a delta, a pack the store had lost as well was taken for a row gone from the
-// log, and the round converged the copy at the log's position without a pack
-// its rows name: every request over that pack's objects then failing on a copy
-// that says it is whole.
-//
-// The copy holds both pushes; the older one's files are removed from it and
-// its object from the store, and the log answers the round's delta in full,
-// and the read after it as the delta it asks. A third read is failed, so a
-// round that kept asking fails the case rather than hangs it.
+// A PACK A FULL ANSWER NAMED IS DECIDED BY A FULL READ: the log may answer a
+// delta in full (page 1 decides, where the delta would outweigh it or reach
+// below swept tombstones or retirements), naming packs at or below the
+// incarnation's position, so a pack whose files the copy lost is installed
+// again from it. No delta from that position names such a pack, so the
+// deciding read is full: asked as a delta, a pack the store lost too is taken
+// for a row gone from the log, and the copy converges without it, failing
+// every request over its objects while it says it is whole. A third read is
+// failed, so a round that kept asking fails the case rather than hangs it.
 //
 // Mutation: ask the deciding read as the round asked its own (the round
 // converges, its copy lacking the lost pack).
@@ -1629,10 +1523,9 @@ func TestADamagedPackIsNamed(t *testing.T) {
 }
 
 // A CHECKSUM MISMATCH IS NOT RETRIED: the store has just said these are the
-// bytes the receiver stored, so a bundle that is not its row's is the row's
-// or the uploader's fault, and asking again — at any level — fixes neither.
-// The round reads at stale, where a pack the store does not have WOULD be
-// asked about again at linearizable: a mismatch is not.
+// bytes the receiver stored, so a bundle not its row's is the row's or the
+// uploader's fault, and asking again at any level fixes neither. The round
+// reads at stale, where a missing pack WOULD be asked again at linearizable.
 func TestAChecksumMismatchIsNotRetried(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1731,23 +1624,15 @@ func sections(b gittest.Bundled) ([]byte, []byte, []byte) {
 	return b.Bytes[:b.PackBytes], b.Bytes[b.PackBytes : b.PackBytes+b.IndexBytes], b.Bytes[b.PackBytes+b.IndexBytes:]
 }
 
-// failFrom fails a round's downloads from its n'th on, until disarmed — the
-// n'th BY THE PACK, in the round's own order: staged numbers each bundle as
-// the round makes its files, which it does in that order as it hands the pack
-// out, and the failure is the object store's answer to that pack's open. It
-// was the n'th hit of the fault point at the top of a download (#856), which
-// numbers the workers in the order they REACH it — the scheduler's, which runs
-// a newly started worker first — so the third pack's worker could take hit 2
-// and the second pack's hit 3: the failing download was then one of the n-1
-// it waited to see placed, and it waited on itself, at first for 30 s and,
-// once that bound went, until the package's timeout. A pack's open comes after
-// its turn and its share, with one GET at a time after the GETs of every pack
-// before it, whose placing needs nothing the open holds; the n'th fails only
-// once those n-1 are placed (before, closed by the install hook), so which
-// packs a failed round installed is the round's ORDER, never the scheduler's
-// — nor whether a pack fetched before its round failed is placed after it.
-// Every pack after the n'th fails as well, so no later pack is installed
-// whatever runs first.
+// failFrom fails a round's downloads from its n'th on until disarmed: the n'th
+// BY THE PACK in the round's own order (staged numbers each bundle as the round
+// makes its files), failed at the store's open of that pack. Numbered in the
+// scheduler's order instead (hits of a fault point), the failing download
+// could be one of the n-1 it waits to see placed, waiting on itself. With one
+// GET at a time, a pack's open follows every earlier pack's GET, and the n'th
+// fails only once those n-1 are placed (before, closed by the install hook),
+// so which packs a failed round installed is the round's order, never the
+// scheduler's. Every pack after the n'th fails too.
 type failFrom struct {
 	n      int
 	before chan struct{}
@@ -1785,14 +1670,12 @@ func (f *failFrom) open(ctx context.Context, object objstore.Key) error {
 		// failure is its answer, and the case reads it now.
 		return context.Cause(ctx)
 	case <-time.After(hangDetector): //fixedwait:liveness
-		// If placing those packs ever waited on this open — the case
-		// failing one of them, as #856's did (failing the round's second
-		// pack rather than its third is that deadlock again), or a placer
-		// that waits for a later download — before would never close, and
-		// this bound makes that the case's failure rather than the
-		// package's timeout. A placement that hangs by itself holds the
-		// round's workers whatever this open answers, so only the package's
-		// timeout reports that.
+		// If placing those packs ever waited on this open (the case failing
+		// one of them, or a placer waiting for a later download), before
+		// would never close: this bound makes that the case's failure, not
+		// the package's timeout. A placement that hangs by itself holds the
+		// workers whatever this answers; only the package's timeout reports
+		// that.
 		return fmt.Errorf("the round's first %d packs were not placed in %v (its pack %d's open waited for them)",
 			f.n-1, hangDetector, at)
 	}
@@ -1806,16 +1689,14 @@ func (f *failFrom) disarm() {
 	f.off = true
 }
 
-// A FAILED ROUND LEAVES NO TEMPORARY FILES — and keeps what it installed:
-// the packs before the failure are named by rows, so the next round skips
-// them and downloads only the rest. One GET at a time, the round's third
-// download — the third pack in the round's order, whichever worker the
-// scheduler ran first — failing once the two before it are placed.
+// A FAILED ROUND LEAVES NO TEMPORARY FILES, and keeps what it installed: the
+// packs before the failure are named by rows, so the next round downloads only
+// the rest. One GET at a time, the third pack in the round's order fails once
+// the two before it are placed (failFrom).
 //
-// Mutations: a failed download leaves its staged files (download's fail
-// does not abandon them) — tmp/ is not empty; the next round downloads a
-// pack it holds whole (install's skip of an installed pack taken out) — it
-// downloads all six.
+// Mutations: download's fail does not abandon its staged files (tmp/ not
+// empty); install's skip of an installed pack taken out (the next round
+// downloads all six).
 func TestAFailedRoundLeavesNoTemporaryFiles(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)

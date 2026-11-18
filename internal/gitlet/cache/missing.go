@@ -17,22 +17,14 @@ import (
 // packs do not hold, or "" when they hold every one — what sends a fetch whose
 // wants this cache lacks to one linearizable sync.
 //
-// One `git cat-file --batch-check --buffer` in s's directory, fed the ids AS A
-// STREAM: a fetch's wants are the host's request, which may be spooled to disk
-// because a partial clone's checkout names every blob it lacks in one request
-// (tens of megabytes at a large tree), so they are read from wherever the
-// request is, one id at a time as cat-file takes them, and never joined into
-// one string or held whole. The answer is the FIRST absent id, and the process
-// is ended there rather than asked about the rest: one is enough to send the
-// fetch to its sync, which a list of every one would not change.
-//
-// Every id must be an object id — 40 lowercase hex digits, not the zero id —
-// and the first that is not is refused by name ([ErrInvalid]) as it is read:
-// what reaches cat-file's input is a revision expression to git. An error the
-// stream yields ends the check with it. A stream that yields nothing runs
-// nothing. The deadline follows the input's size (gitproc.PackWorkDeadline,
-// the pool's rule for a read proportional to its input), which the caller
-// states as inputBytes — the request's size, which bounds the ids it can name.
+// One `git cat-file --batch-check --buffer`, fed the ids AS A STREAM and never
+// held whole: a partial clone's checkout names every blob it lacks in one
+// request (tens of megabytes), which the host may spool to disk. It stops at
+// the first absent id, enough to send the fetch to its sync. Each id must be a
+// non-zero object id of 40 lowercase hex digits, and the first that is not is
+// refused ([ErrInvalid]): cat-file reads its input as revision expressions. A
+// stream error ends the check with it; an empty stream runs nothing.
+// inputBytes, the request's size, sets the deadline (gitproc.PackWorkDeadline).
 func (c *Cache) Missing(ctx context.Context, s Synced, wants iter.Seq2[string, error], inputBytes int64) (string, error) {
 	if err := c.handedOut(s, "a check of missing objects"); err != nil {
 		return "", err
@@ -66,51 +58,41 @@ func (c *Cache) Missing(ctx context.Context, s Synced, wants iter.Seq2[string, e
 		}
 		return nil
 	})
-	// --buffer: no answer is needed before the next id is sent, and without
-	// it git writes and flushes every line on its own — 14 ms against 22 ms
-	// a thousand ids (gitproc's measured section), seconds at the hundred
-	// thousand wants a ref-heavy clone may ask about, all of it silence on
-	// the client's connection before upload-pack starts.
-	// FOR s's READER (Synced.Repairer): the damage the check meets is its
-	// answer to the caller, who repairs it, so what the run reports is held
-	// for that repair rather than made the copy's scrub beside it.
-	// THROUGH s's DROPPING VIEW (Synced.Dropping): an object an expunge has
-	// left dropping is one the fetch's upload-pack serves by id, so it is no
-	// want the cache lacks, which a sync could only fail to bring.
+	// --buffer: no answer is needed before the next id, and unbuffered git flushes
+	// every line (gitproc's measured section) — seconds at a ref-heavy clone's
+	// hundred thousand wants, silence before upload-pack starts.
+	// FOR s's READER (Synced.Repairer): damage met is the caller's to repair, so
+	// it is not made the copy's scrub beside it.
+	// THROUGH s's DROPPING VIEW (Synced.Dropping): upload-pack serves a dropping
+	// object by id, so it is no want the cache lacks.
 	res, err := c.git.Run(ctx, gitproc.Cmd{
 		Dir: s.Dir, Dropping: s.Dropping, Repairer: s.Repairer,
 		Args:   []string{"cat-file", "--batch-check", "--buffer"},
 		Config: c.ServeConfig(), Loads: gitproc.PartMultiPackIndex, Stdin: in, Stdout: lines,
 		Class: gitproc.ClassRead, Deadline: gitproc.PackWorkDeadline(max(inputBytes, 0)),
 	})
-	// The check asks cat-file about object ids alone, which loads the
-	// multi-pack-index and never the commit-graph, so a chunk-format report
-	// it makes is the index's (gitproc.Damage.Narrow): its repair drops the
-	// index, and keeps the graph every walk of the repository goes by.
+	// cat-file by id loads the multi-pack-index and never the commit-graph, so a
+	// chunk-format report is the index's (gitproc.Damage.Narrow): the repair keeps
+	// the graph every walk goes by.
 	var damage error
 	if d := (*gitproc.Damage)(nil); errors.As(res.Damage, &d) {
 		damage = d.Narrow(gitproc.PartMultiPackIndex)
 	}
 	switch {
 	case damage != nil && (err == nil || errors.Is(err, errFoundMissing)):
-		// AN ANSWER READ OVER DAMAGE IS THE DAMAGE'S: cat-file calls an
-		// object in a pack whose index it cannot read `missing` and exits
-		// 0, only a report naming the index — read from the run's trace2
-		// events (gitproc), never its stderr. Taken as absent, the fetch's
-		// upload-pack refuses that want IN BAND (`not our ref`), past the
-		// first byte no repair can retry under — so damage any event named
-		// is the check's answer, whatever it said of the ids, and the host
-		// repairs the incarnation under it (cache.DamageReason). A pack
-		// whose files are gone reports nothing and is an absent id: the
-		// linearizable sync installs it again.
+		// AN ANSWER READ OVER DAMAGE IS THE DAMAGE'S: cat-file calls an object in a
+		// pack with an unreadable index `missing` and exits 0, only a trace2 report
+		// naming the index (gitproc). Taken as absent, upload-pack refuses the want in
+		// band (`not our ref`), past the first byte a repair can retry under, so the
+		// host repairs instead (cache.DamageReason). A pack whose files are gone
+		// reports nothing and is an absent id: the sync installs it again.
 		return "", fmt.Errorf("cache: which objects of %s are missing: git cat-file read a damaged repository: %w: %s",
 			s.entry.id, damage, res.LastLine())
 	case errors.Is(err, errFoundMissing):
 		return missing, nil
 	case damage != nil:
-		// A damage cat-file died of: named FIRST, so a repair reading the
-		// failure (cache.DamageReason) meets it as narrowed
-		// before the run's own.
+		// Damage cat-file died of, named FIRST so cache.DamageReason meets it narrowed
+		// before the run's own error.
 		return "", fmt.Errorf("cache: which objects of %s are missing: git cat-file read a damaged repository: %w — %w",
 			s.entry.id, damage, err)
 	case err == nil:
@@ -130,9 +112,8 @@ func (c *Cache) Missing(ctx context.Context, s Synced, wants iter.Seq2[string, e
 var errFoundMissing = errors.New("cache: a want is missing")
 
 // idStream is cat-file's input: the ids a stream yields, a line each, checked
-// one at a time as cat-file reads them. Every Read is bounded by the stream's
-// own next — the host's request, already read to its end into memory and a
-// local file — as gitproc's Stdin contract asks.
+// as cat-file reads them. Each Read is bounded by next, over a request already
+// read whole into memory and a local file, as gitproc's Stdin contract asks.
 type idStream struct {
 	next    func() (string, error, bool)
 	pending string // the next id to write, already pulled

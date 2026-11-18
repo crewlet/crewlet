@@ -22,54 +22,43 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE PUBLISHED CHAIN in an interleaving (ADR-0091): a repository's
-// publication by this node — its maintainer, which adopts what it built — and
-// by another Gitlet node, whose layer this node's installer fetches; the
-// installer's passes; a store that lost or spoiled a layer's part; and the
-// node's tip commit-graph over a chained copy's tail. Every publication is the
-// PRODUCTION COMPACTOR's (internal/gitlet/compact) over a cache and the world's
-// store, so what is interleaved is what a maintainer runs — its plan over the
-// copy's chain (a layer still at the installer waited for, a refused one
-// replaced, a base the store lost replaced), its scratch of links naming
-// exactly its base, its repack, its uploads and its adoption — and its
-// proposal is decided and applied on the world's log by fakeCommitter, to the
-// rules the code domain's decide holds a publication to.
+// THE PUBLISHED CHAIN in an interleaving (ADR-0091): publications by this node
+// (adopting what it built) and by another Gitlet node (fetched by this node's
+// installer), installer passes, a store that lost or spoiled a layer's part,
+// and the tip commit-graph over a chained copy's tail. Every publication is the
+// PRODUCTION COMPACTOR's (internal/gitlet/compact), decided and applied on the
+// world's log by fakeCommitter to the code domain's rules.
 
-// newerGit is the git another node's publication names its layer as written
-// by when it runs a newer git than this node: a release no pin reaches.
+// newerGit is the git a newer node's layer names as its writer: a release no
+// pin reaches.
 const newerGit = "9.0.0"
 
-// errStoreDown is a store that failed to answer for a layer's part: neither
-// missing nor damaged, which the installer tries again later.
+// errStoreDown is a store not answering for a layer's part: neither missing
+// nor damaged, so the installer retries later.
 var errStoreDown = errors.New("the store did not answer")
 
-// fakeCommitter is a repository's committer as an interleaving's compactor
-// reaches it: a publication decided from the log's rows as they stand when it
-// is proposed and, decided, applied there as one record
-// (fakeLog.publication) — its repack's outputs kept as bundles too, for a
-// later merge of them (syncWorld.merged). newerGit, when set, is the git the
-// record names the layer as written by: another Gitlet node's, newer than this
-// node's, whose layer this node will not read.
+// fakeCommitter is the committer the compactor reaches: it decides and applies
+// a publication as one record (fakeLog.publication), keeping repack outputs as
+// bundles for a later merge (syncWorld.merged). newerGit, when set, names the
+// layer's writer as a newer git, whose layer this node will not read.
 type fakeCommitter struct {
 	w        *syncWorld
 	newerGit string
 }
 
-// Read refuses: an interleaving asks its compactor for one publication at a
-// time (compact.Compactor.Publish), so nothing lists through its committer.
+// Read refuses: an interleaving asks for publications one at a time
+// (compact.Compactor.Publish), so nothing lists through its committer.
 func (f fakeCommitter) Read(context.Context, gitlet.ReadQuery) (gitlet.ReadAnswer, error) {
 	return gitlet.ReadAnswer{}, fmt.Errorf("%w: an interleaving's committer answers proposals alone", gitlet.ErrInvalid)
 }
 
-// Expunge refuses: an interleaving of the published chain asks its compactor
-// for publications alone, so nothing expunges through its committer.
+// Expunge refuses: the published chain's interleaving only publishes.
 func (f fakeCommitter) Expunge(context.Context, gitlet.ExpungeProposal) (gitlet.ExpungeResult, error) {
 	return gitlet.ExpungeResult{}, fmt.Errorf("%w: the publication's interleavings expunge nothing", gitlet.ErrInvalid)
 }
 
-// Compact decides p and applies it. Refused, it is stale with the rule's
-// sentence, as the code domain's decide answers a plan its rows no longer
-// hold.
+// Compact decides p and applies it; a refusal is stale with the rule's
+// sentence, as the code domain's decide answers.
 func (f fakeCommitter) Compact(ctx context.Context, p gitlet.CompactionProposal) (gitlet.CompactResult, error) {
 	if err := p.Validate(); err != nil {
 		return gitlet.CompactResult{}, err
@@ -93,20 +82,15 @@ func (f fakeCommitter) Compact(ctx context.Context, p gitlet.CompactionProposal)
 	return gitlet.CompactResult{Outcome: statelog.OutcomeApplied, Position: pos}, nil
 }
 
-// publication decides a publication of layer on repo, retiring retire and
-// adding outputs, from the rows as they stand — the decide's rules a plan read
-// off a copy is held to: the layers it replaces are the chain's top and its
-// base the layer below them, every input of its repack is live, no layer it
-// keeps names a pack it retires, every pack it names is live once it applies,
-// and every live pack is in a layer of the chain it makes (nothing pushes
-// between an interleaving's plan and its proposal, so no pack is exempt for
-// arriving after its Seen) — and, decided, applies it as the code domain's
-// apply writes one record: the layers it replaces gone, the layer on top of
-// the ones it keeps, ADDED BY THIS RECORD whatever it replaced (the same
-// packs write the same layer, so a repair may carry the id of the very layer
-// it replaces: what replaces it is the record), and the pack half
-// (retireAndAdd). It answers the record's position, or the refusal's
-// sentence.
+// publication decides a publication of layer on repo by the decide's rules: it
+// replaces the chain's top layers, its base the layer below; every repack input
+// is live, no kept layer names a retired pack, every pack it names is live
+// after, and every
+// live pack is in a layer (no push comes between an interleaving's plan and its
+// proposal, so none is exempt for arriving after its Seen). Applied as one
+// record, the new layer is ADDED BY THIS RECORD even when it carries the id of
+// the layer it repairs (the same packs write the same layer), plus the pack half
+// (retireAndAdd). It answers the record's position, or the refusal's sentence.
 func (f *fakeLog) publication(repo string, layer gitlet.LayerRef, retire []string,
 	outputs []gitlet.PackRow) (statelog.Position, string) {
 
@@ -171,8 +155,8 @@ func (f *fakeLog) publication(repo string, layer gitlet.LayerRef, retire []strin
 	return pos, ""
 }
 
-// baseIDOf is the id of the top layer of rows, "" for none: the base a layer
-// written over them names.
+// baseIDOf is the id of rows' top layer, "" for none: a layer over them names
+// it as its base.
 func baseIDOf(rows []gitlet.LayerRow) string {
 	if len(rows) == 0 {
 		return ""
@@ -191,10 +175,8 @@ func outputRows(add []gitlet.PackRef) []gitlet.PackRow {
 	return rows
 }
 
-// keepOutputs keeps each of a publication's repack outputs as a bundle the
-// world can merge again (merged reads the bundles it holds), read back from
-// the store whole: the pack, its index and its reverse index, back to back,
-// at the sizes its ref names.
+// keepOutputs reads each repack output back from the store (pack, index and
+// reverse index back to back) and keeps it as a bundle merged can merge again.
 func (w *syncWorld) keepOutputs(ctx context.Context, add []gitlet.PackRef) error {
 	for _, ref := range add {
 		rc, err := w.store.Open(ctx, ref.Content())
@@ -221,11 +203,9 @@ func (f *fakeLog) nameOf(repo string) string {
 	return f.repos[repo].ref.Name
 }
 
-// unpublishedPacks is repo's live pack rows no layer of its published chain
-// names: what a compaction may merge, since a node's chain loads only over
-// every pack it names and the decide refuses a compaction that retires one —
-// and none an expunge's begin left dropping, which the decide refuses as an
-// input too (its commit retires them).
+// unpublishedPacks is repo's live packs no layer names and no expunge left
+// dropping: the only ones a compaction may merge, since the decide refuses
+// retiring a pack a layer names (the chain loads over it) or a dropping one.
 func (f *fakeLog) unpublishedPacks(repo string) []gitlet.PackRow {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -245,17 +225,15 @@ func (f *fakeLog) unpublishedPacks(repo string) []gitlet.PackRow {
 	return out
 }
 
-// setFail sets the store's answer to an open of an object (fail), nil to open
-// every one.
+// setFail sets the store's answer to an object's open; nil opens every one.
 func (o *countingObjects) setFail(fail func(context.Context, objstore.Key) error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.fail = fail
 }
 
-// maintainsAll is a node that maintains every repository: an interleaving's
-// cache, and the Gitlet node that publishes beside it, are each a repository's
-// maintainer when it publishes.
+// maintainsAll maintains every repository: each node that publishes in an
+// interleaving is the maintainer when it does.
 type maintainsAll struct{}
 
 func (maintainsAll) MaintainerOf(charges map[string]int64) (map[string]bool, error) {
@@ -268,9 +246,9 @@ func (maintainsAll) MaintainerOf(charges map[string]int64) (map[string]bool, err
 
 func (maintainsAll) Listed() (bool, error) { return true, nil }
 
-// publisher is a compactor over c — the production one, never started: each
-// publication is asked of it — storing in the world's store and proposing to
-// committer, on the interleaving's clock.
+// publisher is the production compactor over c, never started (each
+// publication is asked of it), proposing to committer on the interleaving's
+// clock.
 func (in *interleaving) publisher(c *cache.Cache, committer fakeCommitter) *compact.Compactor {
 	in.t.Helper()
 	cp, err := compact.New(compact.Options{
@@ -283,18 +261,16 @@ func (in *interleaving) publisher(c *cache.Cache, committer fakeCommitter) *comp
 	return cp
 }
 
-// candidate is repo as a maintainer's pass hands it to a publication: its
-// name, and its row's version — the floor the publication syncs at.
+// candidate is repo as a maintainer's pass hands it to a publication; Version
+// is the floor the publication syncs at.
 func (in *interleaving) candidate(repo string) gitlet.PublicationCandidate {
 	return gitlet.PublicationCandidate{ID: repo, Name: in.w.log.nameOf(repo), Version: in.last[repo]}
 }
 
-// publishOn is one publication of repo by a compactor over c proposing to
-// committer: what became of it, and a line for the trace. Anything but a
-// publication applied, nothing to publish, or a plan waiting for its
-// installer fails the run: in an interleaving no other build holds the
-// repository, the node's memory holds every charge, and the plan is made over
-// the rows the committer decides it from, so a refusal is the plan's bug.
+// publishOn runs one publication of repo by a compactor over c, answering its
+// outcome and a trace line. Anything but Applied, NotDue or Waiting fails: no
+// other build holds the repository, memory holds every charge, and the plan
+// comes from the rows the committer decides by, so a refusal is the plan's bug.
 func (in *interleaving) publishOn(c *cache.Cache, repo string, committer fakeCommitter) (compact.Outcome, string) {
 	in.t.Helper()
 	cp := in.publisher(c, committer)
@@ -322,29 +298,23 @@ func (in *interleaving) publishOn(c *cache.Cache, repo string, committer fakeCom
 }
 
 // published is the repository the run publishes: the first. The second is
-// NEVER published, so every operation meets a copy in own mode too — the
-// maintainer's own index and graph, which a chained copy holds none of —
-// whose outcomes a run publishing both reached on no seed: every copy was
-// chained within a few steps. Each operation onPublished names is handed it
-// whichever repository was drawn.
+// NEVER published, so operations also meet a copy in own mode (the maintainer's
+// own index and graph, which a chained copy lacks); publishing both chains every
+// copy within a few steps.
 func (in *interleaving) published() string { return in.repos[0] }
 
-// onPublished is the operations of the published chain, which act on the
-// published repository whichever was drawn.
+// onPublished is the published chain's operations, which act on the published
+// repository whichever was drawn.
 var onPublished = map[string]bool{
 	"publish": true, "publish elsewhere": true, "install": true, "lose a layer's part": true,
 	"spoil a layer's part": true, "tip": true,
 }
 
-// publish is this node's publication of the published repository — what its
-// maintainer's pass runs — adopted here once its record applies, so this node
-// installs its own layer from the files it wrote; a third of the time after a
-// burst of pushes past compact.LayerRepackPacks, whose plan repacks the
-// burst's packs before it writes the layer. A plan that meets a layer still
-// at this node's installer waits for it; one over a layer this node refused
-// replaces it, a REPAIR (cache.Cache.Damaged is where a pass finds them); and
-// one over a base the store lost replaces that, holding its base to the
-// store.
+// publish is this node's maintainer publishing the published repository and
+// adopting its own layer once the record applies; a third of the time after a
+// burst past compact.LayerRepackPacks, so the plan repacks first. A plan waits
+// for a layer still at the installer, replaces one this node refused (a REPAIR,
+// found by cache.Cache.Damaged), and replaces a base the store lost.
 func (in *interleaving) publish(repo string) string {
 	burst := ""
 	if in.rng.IntN(3) == 0 {
@@ -372,19 +342,14 @@ func (in *interleaving) publish(repo string) string {
 	return burst + detail
 }
 
-// publishElsewhere is another Gitlet node's publication of the published
-// repository: a node of its own over the same log and store, which syncs the
-// repository from nothing — installing the chain as every cold round does,
-// its installer settling whatever the round left it (a missing part is asked
-// about at the log's head once, from there) — publishes and leaves, so this
-// node's copy meets a layer it did not write, its installer's to fetch. A
-// third of the time the other node runs a newer git than this one, whose
-// layer this node refuses unread until its own next publication replaces it;
-// and a third of the time this node's request syncs at once and its
-// installer's pass behind it meets a store that fails to answer for the new
-// layer's first part, which the installer counts failed and tries again a
-// minute later — a fetch drawn on its own met a layer still to fetch on no
-// seed.
+// publishElsewhere is another Gitlet node over the same log and store syncing
+// the repository cold (its installer settled), publishing and leaving, so this
+// node's installer must fetch a layer it did not write. A third of the time the
+// other node runs a newer git, whose layer this node refuses unread until its
+// own next publication replaces it. A third of the time this node installs at
+// once against a store failing the new layer's first part, which the installer
+// counts failed and retries a minute later: an install drawn on its own found a
+// layer still to fetch on no seed.
 func (in *interleaving) publishElsewhere(repo string) string {
 	committer := fakeCommitter{w: in.w}
 	draw := in.rng.IntN(3)
@@ -410,8 +375,8 @@ func (in *interleaving) publishElsewhere(repo string) string {
 	return detail
 }
 
-// withStoreDown runs f with the store failing to answer for the first layer
-// part this node's cache asks it for, and answering every other.
+// withStoreDown runs f with the store failing the first layer part this
+// node's cache asks for, and answering every other.
 func (in *interleaving) withStoreDown(f func()) {
 	parts := in.layerParts()
 	var failed atomic.Bool
@@ -425,11 +390,9 @@ func (in *interleaving) withStoreDown(f func()) {
 	f()
 }
 
-// install is a request's sync of the published repository — whose delta hands
-// every layer the rows name past the copy's chain to the installer, and
-// answers — and then a pass of this node's installer, what its goroutine runs
-// behind the serving, with the clock moved to the end of every wait a failed
-// try left, so every repository queued is taken up.
+// install is a request's sync, which queues every new layer for the installer,
+// then one installer pass, as its goroutine runs behind serving, with the clock
+// past every failed try's wait so every queued repository is taken up.
 func (in *interleaving) install(repo string) string {
 	in.syncAt(repo, linearizable).Release()
 	in.waitOutInstaller()
@@ -437,8 +400,7 @@ func (in *interleaving) install(repo string) string {
 	return fmt.Sprintf("%d repositories taken up", len(took))
 }
 
-// waitOutInstaller moves the clock to the end of the longest wait the
-// installer holds a repository to after a failed try.
+// waitOutInstaller moves the clock past the installer's longest retry wait.
 func (in *interleaving) waitOutInstaller() {
 	for _, repo := range in.repos {
 		//fixedwait:stated the retry instant is the installer's c.now() plus its window, on in.clk, compared with in.clk.Now()
@@ -461,10 +423,8 @@ func (in *interleaving) layerParts() map[objstore.Key]bool {
 	return out
 }
 
-// pickPart picks one part, not yet lost or spoiled, of the topmost layer of
-// repo's chain that has one — the layer a node is likeliest not to have
-// installed yet, whose fetch then meets the damage — and false when no layer
-// is left whole.
+// pickPart picks an undamaged part of the topmost layer that has one, the
+// likeliest not yet installed so a fetch meets the damage; false if none.
 func (in *interleaving) pickPart(repo string) (gitlet.LayerRef, objstore.Key, bool) {
 	chain := in.w.log.chainOf(repo)
 	for i := len(chain) - 1; i >= 0; i-- {
@@ -481,11 +441,9 @@ func (in *interleaving) pickPart(repo string) (gitlet.LayerRef, objstore.Key, bo
 	return gitlet.LayerRef{}, objstore.Key{}, false
 }
 
-// loseLayer is a store that lost one part of one of the published layers —
-// what a restore leaves of every layer, since no backup carries one: a copy
-// that installed the layer before keeps it, and every copy that fetches it
-// after refuses it missing, until the maintainer's next publication replaces
-// it.
+// loseLayer deletes one part of a published layer, as a restore does (no backup
+// carries layers): a copy that installed it keeps it, and a later fetch refuses
+// it missing until the next publication replaces it.
 func (in *interleaving) loseLayer(repo string) string {
 	layer, key, ok := in.pickPart(repo)
 	if !ok {
@@ -499,11 +457,9 @@ func (in *interleaving) loseLayer(repo string) string {
 	return fmt.Sprintf("a part of layer %s lost", layer.LayerID)
 }
 
-// spoilLayer is a store that hands back other bytes than it took for one
-// part of one of the published layers, which its hash refuses: a copy
-// that installed the layer before keeps it, and every copy that fetches it
-// after refuses it corrupt, until the maintainer's next publication replaces
-// it.
+// spoilLayer flips a byte of one part of a published layer: a copy that
+// installed it keeps it, and a later fetch refuses it corrupt by its hash until
+// the next publication replaces it.
 func (in *interleaving) spoilLayer(repo string) string {
 	layer, key, ok := in.pickPart(repo)
 	if !ok {
@@ -533,19 +489,16 @@ func (in *interleaving) spoilLayer(repo string) string {
 	return fmt.Sprintf("a part of layer %s spoiled", layer.LayerID)
 }
 
-// tip is a push into the published repository's tail and the maintainer's
-// pass over it, with the clock past its interval: over a chained copy its
-// plan is the node's tip commit-graph over the tail alone — the one step that
-// walks less than the history.
+// tip is a push and a maintainer's pass: over a chained copy the plan is the
+// tip commit-graph over the tail alone, the one step walking less than the
+// history.
 func (in *interleaving) tip(repo string) string {
 	ref := in.push(repo)
 	return ref + "; " + in.maintain(repo)
 }
 
-// noteLayers records the outcomes the layers reached on this node — every
-// outcome of crewlet.code.cache.layers it counted, each of which the seeds
-// must reach between them — and the node's tip commit-graph written over a
-// chained copy's tail.
+// noteLayers records every crewlet.code.cache.layers outcome this node counted
+// (the seeds must reach each between them), and a tip commit-graph written.
 func (in *interleaving) noteLayers() {
 	for _, o := range cache.LayerOutcomes() {
 		if counter(in.w.rec, metrics.CodeCacheLayers, "outcome", o) > 0 {
@@ -560,11 +513,9 @@ func (in *interleaving) noteLayers() {
 	}
 }
 
-// checkLayersAsTheyStand holds repo's copy at dir as it stands, before the
-// check lets its installer catch up: the layers it holds installed — whatever
-// the rows name now, a delta's new layers still at the installer — are sound,
-// its multi-pack-index-chain listing exactly them, each over packs it holds
-// and passing gitlet.CheckLayer (gitlettest.LayersHold).
+// checkLayersAsTheyStand holds repo's copy at dir before its installer catches
+// up: the installed layers, whatever the rows name now, are sound
+// (gitlettest.LayersHold).
 func (in *interleaving) checkLayersAsTheyStand(step int, repo, dir string) {
 	installed := cache.Installed(in.c, repo)
 	held := cache.Chain{Rows: installed, Installed: len(installed)}
@@ -574,15 +525,10 @@ func (in *interleaving) checkLayersAsTheyStand(step int, repo, dir string) {
 	}
 }
 
-// settledSync is c's copy of repo synced linearizable once its installer has
-// had its say — what a running node's installer does behind every request:
-// a request's sync, whose round hands the installer what is due, and while a
-// layer the rows name past the copy's installed prefix is neither installed
-// nor refused, or one the rows no longer name is still installed, a pass of
-// the installer, waitOut (nil for a cache on the wall clock, which waits out
-// nothing in a case) first moving the cache's clock past what a failed try
-// waits. A copy with no chain settles at its first sync. The caller releases
-// the Synced.
+// settledSync syncs c's copy of repo linearizable, then runs installer passes
+// until installSettled, as a running node's installer does behind requests.
+// waitOut first moves the clock past a failed try's wait (nil for a cache on
+// the wall clock). The caller releases the Synced.
 func settledSync(t testing.TB, c *cache.Cache, repo string, waitOut func()) cache.Synced {
 	t.Helper()
 	for range 8 {
@@ -605,9 +551,8 @@ func settledSync(t testing.TB, c *cache.Cache, repo string, waitOut func()) cach
 	return cache.Synced{}
 }
 
-// installSettled reports whether a copy holding installed, its chain ch,
-// leaves its installer nothing to do: every layer of the rows' chain
-// installed up to the first it refuses, and none past them.
+// installSettled reports whether the installer has nothing left to do: every
+// layer of ch installed up to the first it refuses, and none past ch.
 func installSettled(ch cache.Chain, installed []gitlet.LayerRow) bool {
 	if len(installed) != ch.Installed {
 		return false
@@ -619,14 +564,10 @@ func installSettled(ch cache.Chain, installed []gitlet.LayerRow) bool {
 	return refused
 }
 
-// checkLayersSettled holds repo's copy once its installer has had its say
-// (settledSync: installed up to the first layer it refuses, and nothing past
-// it), synced at the log's head — ch its chain, dir its directory: the chain
-// it read is the rows' and the layers it holds installed are sound; and
-// fresh, the chain of a cache rebuilt from nothing at the same position over
-// the same store, its installer settled too, is installed to the same layer —
-// but for a layer this copy installed before the store lost or spoiled a part
-// of it, which a copy fetching it now refuses.
+// checkLayersSettled holds repo's settled copy at the log's head (chain ch, at
+// dir): it read the rows' chain, its installed layers are sound, and fresh, a
+// settled cache rebuilt from nothing at the same position, is installed to the
+// same layer, unless the store has since damaged one this copy installed.
 func (in *interleaving) checkLayersSettled(step int, repo, dir string, ch, fresh cache.Chain) {
 	t := in.t
 	n := slices.Index(in.repos, repo) + 1
@@ -650,8 +591,7 @@ func (in *interleaving) checkLayersSettled(step int, repo, dir string, ch, fresh
 	}
 }
 
-// packsNamed is every pack each layer of repo's chain names, each marked
-// whether a live row holds it: what a copy installs a layer over.
+// packsNamed lists each layer's packs, marked whether a live row holds them.
 func (f *fakeLog) packsNamed(repo string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

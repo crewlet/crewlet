@@ -122,13 +122,11 @@ func TestAdoptedPacksAreNotDownloaded(t *testing.T) {
 	}
 }
 
-// AN ADOPTED PACK LEARNS WHEN IT ARRIVED FROM ITS ROW: a pack is adopted under
-// its ref alone, which says nothing of when its content arrived, and the next
-// sync that serves its row hands the plans that weigh it (Packs) the row's
-// instant — the one an expunge on its maintainer's schedule keeps a young pack
-// whole by, and passes over a pack it does not know. Without it every pack a
-// node's own pushes brought would be unknown on that node for the
-// incarnation's life, and its scheduled expunge would never take one.
+// AN ADOPTED PACK LEARNS WHEN IT ARRIVED FROM ITS ROW: Adopt's ref says
+// nothing of arrival, so the next sync serving the row hands Packs the row's
+// instant, by which a scheduled expunge keeps a young pack whole and without
+// which it passes the pack over. Missing it, a node's own pushes would stay
+// unknown for the incarnation's life, and its scheduled expunge never take one.
 //
 // Mutation: leave a row already live as it is in setLive, the arrival
 // included, and the adopted pack's arrival stays zero.
@@ -173,13 +171,11 @@ func TestAnAdoptedPackLearnsWhenItArrivedFromItsRow(t *testing.T) {
 	t.Fatalf("the sync after the adoption does not list the adopted pack %s", row.PackID)
 }
 
-// ONE ADOPTION, EVERY PACK IT NAMES: a compaction's scratch holds a pack an
-// output, and the Gitlet node that built them adopts them all in one call once
-// their rows have applied — each linked by the scratch's own files, each
-// counted, the directory synced ONCE for the call — so its next sync
-// downloads none of them, and the cache it leaves is the one a cache built
-// from nothing holds. A pack the scratch does not hold refuses the call
-// whole, nothing linked.
+// ONE ADOPTION, EVERY PACK IT NAMES: a compaction's outputs are adopted in one
+// call, each linked from the scratch's own files and counted, the directory
+// synced ONCE, so the next sync downloads none and the cache is the one a
+// cache built from nothing holds. A pack the scratch does not hold refuses
+// the call whole, nothing linked.
 func TestOneAdoptionLinksEveryPackItNames(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -339,12 +335,11 @@ func sameFiles(t *testing.T, dir, scratch, cs string) {
 }
 
 // AN ADOPTION THAT MEETS A ROUND HANDS IT THE PACK: a round writing the
-// directory — a full one sweeps what its snapshot does not name and recounts
-// what is installed — is never written beside, and never waited for, since a
-// push's answer would wait behind somebody else's downloads. So the adoption
-// stages the pack's files and returns, and the round installs them before it
-// lets the directory go — even a pack its rows were read too early to name.
-// The push is never downloaded back.
+// directory is never written beside, and never waited for (a push's answer
+// would wait behind somebody else's downloads). The adoption stages the files
+// and returns, and the round installs them before it lets the directory go,
+// even a pack its rows were read too early to name. The push is never
+// downloaded back.
 func TestARoundInstallsWhatAnAdoptionHandedIt(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -415,10 +410,9 @@ func TestARoundInstallsWhatAnAdoptionHandedIt(t *testing.T) {
 }
 
 // A ROUND ABOUT TO DOWNLOAD A PACK IT WAS HANDED INSTALLS IT FROM THE
-// STAGING: a round that read the rows after the push applied — the push's own
-// sync, a fetch's, any linearizable one, and on a busy repository one is
-// almost always in flight when a push is answered — names the push's pack,
-// and three links take the place of its GET.
+// STAGING: a round that read the rows after the push applied (on a busy
+// repository one is almost always in flight) names the push's pack, and three
+// links take the place of its GET.
 func TestARoundTakesAHandedPackInPlaceOfItsDownload(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -470,13 +464,10 @@ func TestARoundTakesAHandedPackInPlaceOfItsDownload(t *testing.T) {
 }
 
 // A PACK WHOSE DOWNLOAD HAD BEGUN IS DOWNLOADED, AND INSTALLED ONCE: a round
-// learns of a push's pack from its row, so the one round that still downloads
-// the receiving node's own push is one that read the row and began the pack's
-// GET before the adoption handed it the staging — the window from the row's
-// apply on this node to the adoption's registration. The GET is not
-// abandoned for the staging; the staging is found held as the round lets the
-// directory go, and dropped: the pack is the downloaded one, counted once,
-// and tmp/ holds nothing of the push.
+// that began the pack's GET before the adoption handed it the staging keeps
+// its GET; the staging is found held as the round lets the directory go, and
+// dropped. The pack is the downloaded one, counted once, and tmp/ holds
+// nothing of the push.
 func TestAPackWhoseDownloadHadBegunIsInstalledOnce(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -550,25 +541,17 @@ func TestAPackWhoseDownloadHadBegunIsInstalledOnce(t *testing.T) {
 }
 
 // ADOPTIONS OF ONE REPOSITORY NEVER EXCLUDE ONE ANOTHER: group commit answers
-// up to gitlet.MaxPushesPerRecord pushes of a repository with one record, so
-// every push session on the node that took them adopts at the same moment,
-// each linking files of its own. Held inside the directory together, every
-// one links its own pack — none is handed to another or left to a download.
+// up to gitlet.MaxPushesPerRecord pushes with one record, so their adoptions
+// arrive together, and each links its own pack, none handed or downloaded.
 //
-// Each adoption, inside the directory, waits there for all n to be inside at
-// once. One that excludes the others waits for adoptions that cannot come in
-// behind it, so only the hang detector ends its wait, and its end is the
-// failure: an adoption alone in the directory. Then every wait still to come
-// ends at once, so the case fails once, not n times over. That claim is read
-// only inside the directory, so the case also counts the adoptions that came
-// in: one that never reached it — sent down another path, or the knob gone
-// from Adopt's — held nothing, and a case where none did would pass having
-// checked nothing.
+// Each adoption waits inside the directory for all n. One that excluded the
+// rest waits alone until the hang detector, which is the failure, then ends
+// every later wait so the case fails once. It also counts arrivals: without
+// them, adoptions that never reached the knob would pass having held nothing.
 //
 // Mutation: hold one package-wide mutex in adopt from just after Adopt takes
-// its share of the repository's write lock, across the adopting knob and
-// placeStagings — the first adoption waits out the hang detector alone, and
-// the case fails.
+// its share of the write lock, across the adopting knob and placeStagings:
+// the first adoption waits out the hang detector alone, and the case fails.
 func TestAdoptionsOfOneRepositoryNeverExcludeOneAnother(t *testing.T) {
 	t.Parallel()
 	const n = 8
@@ -641,12 +624,10 @@ func TestAdoptionsOfOneRepositoryNeverExcludeOneAnother(t *testing.T) {
 }
 
 // A PACK ADOPTED IS KEPT WHEN ITS DIRECTORY CANNOT BE SYNCED: its names are
-// in the directory and served, exactly as a round's install keeps what it
-// renamed in when the sync after fails — what a failed sync costs is the
-// names surviving a crash, and a boot's first round is a full one, which
-// installs whatever a crash lost. So the pack stays and is counted once, and
-// the failure is returned; taken back, it would cost the next sync a GET to
-// repair nothing.
+// served, as a round's install keeps what it renamed in (a boot's first,
+// full round installs whatever a crash lost). The pack stays, counted once,
+// and the failure is returned; taken back, it would cost the next sync a GET
+// to repair nothing.
 func TestAnAdoptionWhoseDirectoryCannotBeSyncedKeepsItsPack(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)

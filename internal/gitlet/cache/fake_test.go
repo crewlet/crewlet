@@ -18,20 +18,17 @@ import (
 )
 
 // THE SNAPSHOT CONTRACT AS THE CACHE CONSUMES IT (gitlet.Reader.Snapshot), over
-// rows a case writes directly, so a case controls exactly when a page moves.
-// Nothing here is invented: page 1 decides full or delta as the reader does
-// (no Since, another stream name or generation, or a Since below the swept
-// tombstones or the swept retirements), and the floor the snapshot's
-// retirements are served above (a delta's Since; a full answer's
-// RetiredSince where it is on this generation, at or past the retired mark
-// and no more than gitlet.MaxFullRetirements below the checkpoint — else none),
-// serves the phases packs, refs, a delta's pushes, the retirements and — on a
-// snapshot of more than one page — tail, in the reader's orders and with its
-// cursor rules, and a later page answers gitlet.ErrSnapshotMoved when the
-// stream, the generation, (on a delta) the tombstone floor or the retired
-// floor moved since the cursor was made. The fake is held honest from the
-// other side by the host's suites, which run the cache against the real
-// reader.
+// rows a case writes directly, so a case controls when a page moves. Nothing
+// is invented: page 1 decides full or delta as the reader does (no Since,
+// another stream or generation, or a Since below the swept tombstones or
+// retirements); retirements are served above a delta's Since, or a full
+// answer's RetiredSince where it is on this generation, at or past the retired
+// mark and within gitlet.MaxFullRetirements of the checkpoint (else none); the
+// phases (packs, refs, a delta's pushes, retirements, tail on a multi-page
+// snapshot) come in the reader's orders and cursor rules; and a later page
+// answers gitlet.ErrSnapshotMoved when the stream, generation, tombstone floor
+// (on a delta) or retired floor moved. The host's suites, running the cache
+// against the real reader, keep the fake honest.
 
 // fakeLog is one code log's rows.
 type fakeLog struct {
@@ -104,12 +101,10 @@ type fakePush struct {
 var fakePusher = gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "token:ceo", Seat: "ceo"}
 
 // pusherOf is who made a fake log's n-th push, and how: one in three a seat's
-// push the engine built, its run naming its turn, its work item and its model;
-// one in three a coding box's push git received, its run naming as well the
-// run that pushed and its harness; and the rest fakePusher's — so every
-// index a case builds holds every kind of push, and a case that holds an index
-// to the rows (indexAgainstLog) compares each push's whole PushedBy, its run
-// included.
+// engine-built push (its run naming turn, work item and model), one in three a
+// coding box's push git received (its run also naming the run and harness), the
+// rest fakePusher's, so every index a case builds holds every kind of push and
+// indexAgainstLog compares each push's whole PushedBy, its run included.
 func pusherOf(n int) (gitlet.Principal, gitlet.PushVia) {
 	run := gitlet.RunProvenance{
 		TurnID:      uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("turn-%d", n))).String(),

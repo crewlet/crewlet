@@ -7,9 +7,8 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// The suite's knobs into the installed published chain (layers.go): what a
-// copy holds of it and the rows' account of it, the installer's queue and its
-// passes run synchronously, and the one cut both chains share.
+// The suite's hooks into the installed published chain (layers.go) and its
+// installer.
 
 // Installed is the published chain repoID's current incarnation holds, root
 // first, each layer with the row it was installed from; nil for none.
@@ -109,9 +108,9 @@ func InstallHandled(c *Cache) uint64 {
 	return in.handled
 }
 
-// InstallPass runs one pass of the installer synchronously, as work of the
-// cache's own, and waits for every task it started: the repositories it took
-// up, in queue order. A stopped cache runs none.
+// InstallPass runs one installer pass synchronously, as the cache's own work,
+// waits for its tasks, and returns the repositories it took up, in queue
+// order. A stopped cache runs none.
 func InstallPass(c *Cache) []string {
 	if !c.enter() {
 		return nil
@@ -207,9 +206,8 @@ func PlanSteps(c *Cache, repoID string) (index, graph, tip bool) {
 }
 
 // Tip is the node's tip commit-graph layer repoID's current incarnation
-// holds (incarnation.tip), "" for none, and whether its tail has moved since
-// the tip — or the write that found the tail held no commit — was written
-// over it (tipWanted).
+// holds (incarnation.tip), "" for none, and whether its tail moved since the
+// tip, or the write that found the tail empty of commits, was written (tipWanted).
 func Tip(c *Cache, repoID string) (string, bool) {
 	e := lookup(c, repoID)
 	e.mu.Lock()
@@ -227,10 +225,9 @@ func TailPacks(c *Cache, repoID string) int {
 }
 
 // TipCharge is what the node's tip over repoID's current incarnation's tail
-// is admitted at, spelled from the constants rather than read from the
-// declaration it holds to: TipGraphBytesPerObject an object of the tail,
-// GraphBaseBytes whatever the tail, and room for a clone of the whole
-// repository.
+// is admitted at, computed from the constants, not read from the declaration
+// it checks: TipGraphBytesPerObject per tail object, a flat GraphBaseBytes, and room
+// for a clone of the whole repository.
 func TipCharge(c *Cache, repoID string) int64 {
 	e := lookup(c, repoID)
 	e.mu.Lock()

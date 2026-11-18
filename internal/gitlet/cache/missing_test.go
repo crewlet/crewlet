@@ -17,11 +17,9 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// MISSING ANSWERS THE FIRST ABSENT WANT, read from a stream: what a fetch's
-// wants hold that the cache's packs do not, which is what sends the fetch to
-// one linearizable sync. One cat-file over the stream; an id that is not one
-// is refused by name, an error the stream yields ends the check with it, and
-// a stream that yields nothing runs nothing at all.
+// MISSING ANSWERS THE FIRST ABSENT WANT, read from a stream by one cat-file:
+// an id that is not one is refused by name, a stream error ends the check with
+// it, and an empty stream runs nothing.
 func TestMissingAnswersTheFirstAbsentWant(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -117,10 +115,9 @@ func TestMissingAnswersTheFirstAbsentWant(t *testing.T) {
 }
 
 // A CHECK THAT READ DAMAGE ANSWERS THE DAMAGE, never an absent want: cat-file
-// calls an object in a pack whose index is truncated `missing` and exits 0,
-// only its stderr saying why, and taken as absent the fetch's upload-pack
-// then refuses the want in band, past the first byte a repair can retry
-// under. A pack whose files are gone says nothing and IS an absent want: the
+// calls an object in a pack with a truncated index `missing` and exits 0, and
+// taken as absent upload-pack refuses the want in band, past the first byte a
+// repair can retry under. A pack whose files are gone IS an absent want: the
 // linearizable sync installs it again.
 func TestMissingAnswersTheDamageItRead(t *testing.T) {
 	t.Parallel()
@@ -171,11 +168,10 @@ func TestMissingAnswersTheDamageItRead(t *testing.T) {
 	}
 }
 
-// MISSING READS ITS WANTS AS THEY ARE ASKED ABOUT AND STOPS AT THE FIRST
-// ABSENT ONE: a stream that never ends after it is ended with the check,
-// because nothing ever holds the whole of a fetch's wants — a partial clone's
-// checkout names every blob it lacks in one request, which the host spools —
-// and one absent want is the whole answer.
+// MISSING READS ITS WANTS AS A STREAM AND STOPS AT THE FIRST ABSENT ONE, the
+// whole answer: a stream that never ends is ended with the check, since nothing
+// holds a fetch's wants whole (a partial clone's request names every blob it
+// lacks).
 func TestMissingStopsAtTheFirstAbsentWant(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)

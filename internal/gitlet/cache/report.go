@@ -13,118 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// WHAT ANY GIT PROCESS REPORTS DAMAGED IS REPAIRED, WHETHER OR NOT IT FAILED.
-// git reads around most damage to a derived file — it warns, and answers from
-// the packs' own indexes, walking by date — and a caller that got its answer
-// never looks at the warning: a clone over a truncated multi-pack-index
-// succeeds, slower, every time, and the maintainer's own write over an index
-// whose checksum is wrong says so and exits 0 having kept what it could read
-// of it. So the pool hands every run to the cache's OBSERVER
-// (gitproc.Pool.Observe, installed by Open), which records the derived parts a
-// run over one of the cache's incarnations named on that incarnation's REPAIR
-// MARK and queues a round to repair them — with no request waiting, and
-// without taking the incarnation out of service: it keeps answering (atOnce)
-// while git reads around the damage, where markWhole would hold every request
-// for the round.
-//
-//   - ROUTED BY THE PROCESS'S DIRECTORY (incarnationAt): a process run in an
-//     incarnation reports about it; one run in a push's scratch or an
-//     advertisement view reports about its ALTERNATE only its derived parts —
-//     a pack or object part there may be the client's pack (index-pack's
-//     `early EOF`), so it is counted `unrouted` and left to the next process
-//     over the incarnation itself. One run over a MERGE'S STORE — a
-//     compaction's build, in its scratch — reports about the incarnation the
-//     store's links came from (mergeAt): its pack, object and hint parts and
-//     a crash, since the store holds nothing but that copy's packs and the
-//     build reads nothing else; a derived part, of which the store holds
-//     none, is `unrouted`. A retired incarnation's successor was read whole
-//     and checked: a report about it is dropped.
-//   - REPAIRED BY THE NEXT FULL ROUND (repairRound): a linearizable one,
-//     queued with no waiter when none is queued — linearizable, because a
-//     full round's sweep removes every pack its snapshot does not name, and an
-//     adoption installs a pack past the incarnation's own position. Reports
-//     coalesce on the mark while one is queued. Only a part whose declaration
-//     drops on a report (OnReported) is recorded and queued: one that keeps
-//     its files is damage no drop repairs, and makes the scrub due like a
-//     stored report (below) — queued, it asked a round that moved nothing for
-//     every git process that reported it.
-//   - A DROP IS STILL GUARDED (dropDamaged): a part is not dropped when this
-//     process wrote its current file AFTER the reporting run began
-//     (gitproc.Result.Began against incarnation.written, on the monotonic
-//     clock) — that run may have read the file the write replaced, and without
-//     the guard every long clone that began over a damaged bitmap would drop
-//     each rewrite in turn. Counted `stale`.
-//   - NOTHING IS REPAIRED UNDER A CHECK. While a check of the repository is
-//     admitted (entry.verifying) a report is recorded but no round takes it
-//     (`deferred`): a check holds rounds off only for its listing, and a
-//     repair between its listing and its hashing would drop a file it
-//     admitted. The check's release queues the round.
-//   - A PART DAMAGED AGAIN WAITS ITS TURN (D13): a derived part dropped for
-//     damage again within RebuildQuiet of its last drop for damage — however
-//     many writes of it came between, the repair's and the maintainer's
-//     ordinary ones — is dropped but not made due at once: the index waits
-//     for the ordinary rules, the graph is graphFailed. Logged
-//     code_cache_derived_damaged_again once an incarnation and counted
-//     `again`, so a disk that keeps damaging, or a git that rejects its own
-//     write, costs one rewrite at once a RebuildQuiet and the ordinary
-//     schedule's after it, never a loop. (Cleared by the maintainer's next
-//     ordinary write, the mark let every other damage be written again at
-//     once: one rewrite at once and one ordinary, alternating for ever.)
-//   - A STORED REPORT, AN OBJECT REPORT, A HINT OR A CRASH MAKES THE SCRUB DUE
-//     AT ONCE (scrub.go), and drops nothing: a stored file is never dropped on
-//     a report, and neither is a derived file whose declaration keeps its
-//     files on one. `hash mismatch` names no file — the pack, its index or the
-//     multi-pack-index placed the wrong bytes — a hint names a pack in words a
-//     request may reach, and a crash names nothing at all (a pack-objects
-//     dying of a damaged reverse index or bitmap says only that it died), so
-//     what decides is the bytes: the scrub hashes every pack and index file of
-//     the copy, vouched or not, and what fails its checksum is reinstalled in
-//     place or dropped by the repair round. A crash in a scratch or a view is
-//     its alternate's like a derived part — neither ever holds a reverse index
-//     or a bitmap of its own — and its pack, object and hint reports may be the
-//     client's pack: `unrouted`. BOUNDED by ScrubCooldown: within an hour of a
-//     scrub that found nothing, a report makes nothing due (`cooldown`),
-//     whatever was written meanwhile — a push resetting it would leave a
-//     request that can provoke a crash beside a busy repository bounded by
-//     nothing — and within an hour of one whose findings still wait for
-//     their repair, the repair is the answer (`covered`).
-//   - HELD FOR THE REQUEST: a stored report, an object report, a hint or a
-//     crash — or a derived part no drop repairs — from a run IN the
-//     incarnation whose Cmd names one of its readers (gitproc.Cmd.Repairer,
-//     Synced.Repairer) is held for that reader (incarnation.held) and makes
-//     nothing due: the host names its reader on every process whose failure
-//     before its first byte it repairs, and that repair — a forced round in
-//     place, then the scrub for its own callers, then the rebuild
-//     (Cache.Rebuild) — is the answer to exactly what such a report names.
-//     Made due as well, the report's scrub ran beside the request's own
-//     repair of the same damage: a read of every byte of the copy, about
-//     1.13 times its pack bytes (some 24 GB for the largest repository the
-//     defaults admit), beside a repair of one pack, and a race between the
-//     two over which repaired it. The reader's repair of a pack's or an
-//     object's damage CONSUMES what is held for it (consume, counted
-//     `request`) once it has answered the reader. Its repair of a shape or a
-//     derived file IN PLACE reads no pack, so it answers none of a crash's
-//     or a stored part's and consumes nothing: it CARRIES what is held to
-//     the reader it hands the repaired copy to (carry) — the same request,
-//     which lets go of the pin it failed over before it runs again — so the
-//     hold is the request's across its repairs, never one pin's: handed on
-//     with that first pin, a crash beside a damaged graph went to the scrub
-//     while the request ran on, and on into a pack's repair when its retry
-//     met the pack beneath the graph, the escalation the host's repair limit
-//     is for. The reader's RELEASE hands what is left to the ordinary rules
-//     as though it had just arrived (handOn) — the report of a request that
-//     failed past its first byte, failed in a way the host does not repair,
-//     never failed at all, left before its repair answered, or was repaired
-//     for a shape or a derived file alone and then succeeded — so the bound
-//     on a hold is the request's own lifetime, which always ends, and no
-//     timer or grace stands beside it. A derived part a drop repairs is
-//     never held: its round drops it in place, races nothing and is the
-//     repair's own first step; nor is a report from a scratch or a view,
-//     whose process the host repairs only for its alternate's shape, which
-//     no process reports. A ROUND'S OWN GIT is held the same way: the peel
-//     names a reader the round mints (roundReader, sync.go), and what it
-//     reports is consumed by the round's repair of a pack's or an object's
-//     damage, or handed on as the round settles otherwise (settleReader).
+// WHAT ANY GIT PROCESS REPORTS DAMAGED IS REPAIRED, WHETHER OR NOT IT FAILED
+// (package doc, "What any git process reports damaged is repaired"). observe
+// routes each run by its directory (incarnationAt, swapAt, mergeAt) and
+// records a derived part whose declaration drops on a report (OnReported) on
+// the incarnation's repair mark, queuing repairRound; dropDamaged guards the
+// drop, and a part damaged again within RebuildQuiet waits for the ordinary
+// schedule (D13). A part that keeps its files on a report is damage no drop
+// repairs: like a stored part, a hint or a crash it makes the scrub due
+// (scrubAsked), since queued it would ask a round that moves nothing. HELD FOR
+// THE REQUEST: what the run's reader (gitproc.Cmd.Repairer; a round's
+// roundReader) will repair is held for it (incarnation.held), then consumed,
+// carried or handed on (consume, carry, handOn, settleReader).
 
 // reportPart is what a report names: the `part` attribute of
 // crewlet.code.cache.reports.
@@ -150,11 +50,9 @@ const (
 type reportOutcome string
 
 const (
-	// reportQueued: a repair asked — a derived part whose declaration drops
-	// on a report recorded on the incarnation's repair mark with a round
-	// queued to drop it; any other part, a hint or a crash, the
-	// incarnation's scrub made due, or answered by the one already due or
-	// running (scrub.go).
+	// reportQueued: a repair asked — a derived part a drop repairs recorded
+	// on the repair mark with a round queued; anything else made the scrub
+	// due, or answered by the one already due or running (scrub.go).
 	reportQueued reportOutcome = "queued"
 	// reportDeferred: recorded while a check of the repository is
 	// admitted; the check's release queues the round.
@@ -162,10 +60,9 @@ const (
 	// reportStale: not dropped — this process wrote the part's current file
 	// after the reporting run began.
 	reportStale reportOutcome = "stale"
-	// reportUnrouted: a pack or object part, or a hint, from a process in a
-	// push's scratch or a view, which may be the client's pack — or a derived
-	// part from a merge's build, whose store holds no derived file; nothing
-	// recorded.
+	// reportUnrouted: nothing recorded — a pack or object part, or a hint,
+	// from a push's scratch or a view (it may be the client's pack), or a
+	// derived part from a merge's build, whose store holds none.
 	reportUnrouted reportOutcome = "unrouted"
 	// reportAgain: a part dropped for damage again within RebuildQuiet of
 	// its last drop for damage: dropped, not due at once.
@@ -177,18 +74,16 @@ const (
 	// ScrubCooldown of a scrub whose findings still wait for their repair:
 	// the repair is the answer, and no scrub is made due.
 	reportCovered reportOutcome = "covered"
-	// reportRequest: a report HELD FOR THE REQUEST whose own run made it —
-	// or for the round whose own git did (roundReader) — and answered by the
-	// repair that request or that round asked (Cache.Rebuild, damagedRound):
-	// no scrub is made due beside it.
+	// reportRequest: a report HELD FOR THE REQUEST (or round, roundReader)
+	// whose run made it, answered by the repair it asked (Cache.Rebuild,
+	// damagedRound): no scrub is made due beside it.
 	reportRequest reportOutcome = "request"
 )
 
-// heldReport is what one run reported that the copy's scrub answers — its
-// stored parts (a pack's, an object's), the derived parts whose every
-// declaration keeps its files on a report, a hint, a crash — as the observer
-// takes it; HELD (incarnation.held) while the request whose run it was may
-// still repair it.
+// heldReport is what one run reported that the copy's scrub answers: stored
+// parts, derived parts whose every declaration keeps its files on a report, a
+// hint, a crash. HELD (incarnation.held) while the run's request may still
+// repair it.
 type heldReport struct {
 	stored, kept    gitproc.Part
 	hinted, crashed bool
@@ -208,20 +103,18 @@ func (c *Cache) countHeld(r heldReport, outcome reportOutcome) {
 	}
 }
 
-// toScrub hands r to inc's scrub (scrubAsked) and counts it with what became
-// of it — the ordinary rule for a report the scrub answers; e.mu is held.
+// toScrub hands r to inc's scrub (scrubAsked), counting the outcome; e.mu is
+// held.
 func (c *Cache) toScrub(inc *incarnation, r heldReport) {
 	c.countHeld(r, c.scrubAsked(inc))
 }
 
-// handOn takes every report held for reader by of inc and hands each to the
-// ordinary rules (toScrub) as though it had just arrived — while inc, or the
-// copy a swap made current in its place (serving), is the entry's copy in
-// service and the cache runs; a report about a copy a rebuild or a purge has
-// since replaced is dropped, as one arriving about it would be (observe).
-// Called as the reader lets inc go, so a request that ended without asking
-// its repair — it failed past its first byte, failed in a way the host does
-// not repair, or never failed — leaves nothing held. e.mu is held.
+// handOn hands every report held for reader by of inc to the ordinary rules
+// (toScrub) as though just arrived, as the reader lets inc go, so a request
+// that never asked its repair leaves nothing held. Held reports go to the copy
+// serving inc's files (serving); about a copy a rebuild or a purge has since
+// replaced, or once the cache stops, they are dropped, as observe drops one.
+// e.mu is held.
 func (c *Cache) handOn(e *entry, inc *incarnation, by gitproc.Repairer) {
 	held, ok := inc.held[by]
 	if !ok {
@@ -252,16 +145,12 @@ func (c *Cache) consume(inc *incarnation, by gitproc.Repairer) {
 }
 
 // carry moves every report held for from's reader onto to's: to is the copy
-// from's run failed over, repaired IN PLACE (a shape, a derived file;
-// Cache.Rebuild) and handed to the same request under a reader of its own.
-// The host lets go of from before it runs again over to (its repair loop), so
-// a report left under from would be handed on (handOn) while the request it
-// belongs to was still running — and still repairing, when its retry meets a
-// pack's damage beneath the derived file. Carried, it is consumed by that
-// pack's repair under to (awaitRequest) or handed on with to's release. A to
-// on another incarnation — the copy replaced by the round that answered — and
-// a to already let go take nothing: what from holds about a copy since
-// replaced is dropped with from's release, as handOn drops any. e.mu is held.
+// from's run failed over, repaired IN PLACE (Cache.Rebuild) and handed to the
+// same request. The host lets go of from before it runs over to, so a report
+// left under from would be handed on (handOn) while the request still runs and
+// may yet repair a pack beneath the derived file (awaitRequest). A to on
+// another incarnation, or already let go, takes nothing: from's release drops
+// what it holds about a replaced copy. e.mu is held.
 func (c *Cache) carry(from, to Synced) {
 	inc := from.inc
 	if to.inc != inc {
@@ -327,45 +216,36 @@ type repairMark struct {
 	// drops is the derived parts reports named.
 	drops derivedDrops
 	// found is every file a round's check or a scrub found failing its
-	// checksum that waits for its repair, by its path relative to the
-	// incarnation, at the identity it failed at: the round reinstalls a pack,
-	// or drops a derived file, only while it still has that identity
-	// (checked.still), and takes it off once it has (settleFound). A check's
-	// go on as it ends (recordCheck), so a round that cannot act on them —
-	// its install failing on a pack it adds, a finding's own download
-	// failing — leaves them to the next, as a scrub's. checkedFile.scrubbed
-	// tells the two apart: only a SCRUB's findings stand for a scrub's answer
-	// (scrubWaits) — a check reads no pack body. A FINDING FOUND AGAIN STAYS
-	// AS IT WAS FOUND: a check that finds a file failing at the identity its
-	// finding here names leaves that finding be — the same damage, a scrub's
-	// staying a scrub's — and replaces only one at another identity, damage
-	// newer than it (recordCheck); a scrub's replaces whatever is here for
-	// its file (runScrub).
+	// checksum and awaiting repair, by path relative to the incarnation, at
+	// the identity it failed at: the round acts only while the file keeps
+	// that identity (checked.still), then takes it off (settleFound); a round
+	// that cannot act leaves it to the next. Only a SCRUB's findings
+	// (checkedFile.scrubbed) stand for a scrub's answer (scrubWaits): a check
+	// reads no pack body. A FINDING FOUND AGAIN STAYS AS IT WAS FOUND: a check
+	// replaces only one at another identity (recordCheck), a scrub any
+	// (runScrub).
 	found map[string]checkedFile
 	// forces is how many in-place repairs of a pack's or an object's damage
-	// — a failed request's ([Cache.Rebuild]) or a round's own git's
-	// (repairDamaged) — asked the next full round to hold EVERY index file to
-	// its trailer, vouched or not; that round's check spends them once it has
-	// run, whatever the round meets after (recordCheck), what it found going
-	// on found.
+	// ([Cache.Rebuild], repairDamaged) asked the next full round to hold
+	// EVERY index file to its trailer, vouched or not; that round's check
+	// spends them once it has run, whatever follows (recordCheck).
 	forces int
 	// reinstall is the packs a confirmed hint named ([Failure].Packs), by
 	// checksum, each at the identity of its .pack when it was asked: the
 	// round installs each again, one GET, while it still has that identity.
 	reinstall map[string]checkedFile
 	// fetchFailed is the packs, by checksum, whose last download to install
-	// them again failed (install.go), each held off until its backoff has
-	// passed: RebuildCooldown after the first failure, twice as long after
-	// each one after it, up to RebuildBackoffCap — the store being down, or
-	// no longer holding the bundle, is not ended by asking it again every
-	// round. Taken off with the pack's findings once it is installed.
+	// them again failed (install.go), each held off for RebuildCooldown,
+	// doubling per failure up to RebuildBackoffCap: asking a store that is
+	// down or lost the bundle every round ends nothing. Taken off with the
+	// pack's findings once it is installed.
 	fetchFailed map[string]fetchBackoff
 }
 
 // fetchBackoff is a pack's download failures in a row, when the next attempt
-// may be made (Options.Now's clock), and what the last one failed with — the
-// store's own answer (ErrStoreRead, ErrPackMissing, ErrCorruptPack), which is
-// what a caller whose repair waits on the pack is answered (heldOffFor).
+// may be made (Options.Now's clock), and the store's last answer
+// (ErrStoreRead, ErrPackMissing, ErrCorruptPack), given to a caller whose
+// repair waits on the pack (heldOffFor).
 type fetchBackoff struct {
 	failures int
 	until    time.Time
@@ -377,11 +257,10 @@ func (m repairMark) pending() bool {
 	return len(m.drops) > 0 || len(m.found) > 0 || m.forces > 0 || len(m.reinstall) > 0
 }
 
-// scrubWaits reports whether a finding a SCRUB made still waits for its
-// repair: what answers a repair's step 3 in that scrub's place (scrubFor) and
-// covers a report within ScrubCooldown of it (scrubAsked). A round's check's
-// finding is neither — a check reads index files alone, and the scrub is
-// asked for the pack bodies it never reads.
+// scrubWaits reports whether a SCRUB's finding still waits for its repair: it
+// answers a repair's step 3 in that scrub's place (scrubFor) and covers a
+// report within ScrubCooldown (scrubAsked). A check's finding does neither: a
+// check reads no pack body.
 func (m repairMark) scrubWaits() bool {
 	for _, f := range m.found {
 		if f.scrubbed {
@@ -392,9 +271,8 @@ func (m repairMark) scrubWaits() bool {
 }
 
 // due reports whether the mark asks a full round anything it can do at now:
-// a drop, a forced check, or a finding that is a derived file's or a pack's
-// not held off. A mark whose every finding is a pack held off asks nothing,
-// so the copy's rounds stay deltas and keep answering until the backoff
+// a drop, a forced check, or a finding not on a held-off pack. A mark of
+// held-off packs alone asks nothing, so rounds stay deltas until the backoff
 // passes.
 func (m repairMark) due(now time.Time) bool {
 	if len(m.drops) > 0 || m.forces > 0 {
@@ -426,10 +304,9 @@ func (m repairMark) heldOff(now time.Time) map[string]bool {
 }
 
 // fetchable is the packs of packs whose download is not held off at now: what
-// a forced round asked to install them again (reinstallHinted) can fetch. A
-// held-off pack is no pack to that round — install leaves it as it stands —
-// so a repair whose named packs are all held off is decided as one that names
-// none (Cache.Rebuild's and repairDamaged's step 2).
+// a forced round can install again (reinstallHinted). install leaves a
+// held-off pack as it stands, so a repair whose named packs are all held off
+// is decided as one naming none (Cache.Rebuild's and repairDamaged's step 2).
 func (m repairMark) fetchable(packs []string, now time.Time) []string {
 	held := m.heldOff(now)
 	var out []string
@@ -454,20 +331,14 @@ func (m *repairMark) fetchFailedAt(cs string, now time.Time, err error) {
 }
 
 // heldOffFor is what a WHOLE REBUILD seeded with seed (seedRebuild) would
-// meet first, answered without asking it: the last download failure of a pack
-// whose download is held off at now and that seed does not link — or nil when
-// there is none. A rebuild downloads every pack it does not link, so it would
-// ask the store for that very pack again, under the same row, within the
-// backoff that holds its download off (fetchFailed): a GET the backoff exists
-// to spare, from a store that refused it moments ago, which ends nothing the
-// in-place reinstall the backoff allows next would not end — and every one of
-// them a new incarnation's directory made, its whole rows read and its line's
-// window grown, for a rebuild that cannot complete. Every such pack is one the
-// rows still name: they drop a pack only with the repository's purge, which
-// ends the entry. The answer names the earliest pack by checksum and how long
-// its backoff has left, and wraps the store's own failure, so a host answers
-// it as the store's (cache.ErrStoreRead's 503, ErrPackMissing's,
-// ErrCorruptPack's).
+// meet first, answered without running it: the last download failure of a
+// held-off pack seed does not link, or nil. A rebuild downloads every pack it
+// does not link, so it would ask the store for that pack again within the
+// backoff (fetchFailed), making a new incarnation for a rebuild that cannot
+// complete. The rows still name every such pack: only a purge drops one, and
+// it ends the entry. The error names the earliest pack and its backoff left,
+// and wraps the store's failure so a host answers it as the store's
+// (ErrStoreRead's 503, ErrPackMissing's, ErrCorruptPack's).
 func (m repairMark) heldOffFor(now time.Time, seed []string) error {
 	var held []string
 	for cs := range m.heldOff(now) {
@@ -498,15 +369,12 @@ func packOfRel(rel string) (string, bool) {
 	return m[1], true
 }
 
-// observe is the pool's observer (gitproc.Pool.Observe): called after every
-// git run with where it ran and how it ended, on the run's own goroutine. It
-// reads the parts the run's damage names, its hints and whether it crashed,
-// finds the incarnation they are about by the process's directory, records a
-// derived part a drop repairs on its repair mark and queues a round, and
-// makes its scrub due for the rest — or HOLDS the rest for the reader the run
-// names (Ran.Repairer), whose own repair answers it (HELD FOR THE REQUEST) —
-// under the entry's mu, never its write lock, and doing no I/O, so it never
-// holds its run.
+// observe is the pool's observer (gitproc.Pool.Observe), called after every
+// git run on the run's own goroutine. It finds the incarnation the run's
+// damage, hints and crash are about, records a derived part a drop repairs
+// and queues a round, and makes the scrub due for the rest — or HOLDS it for
+// the run's reader (Ran.Repairer; HELD FOR THE REQUEST). It takes the entry's
+// mu, never its write lock, and does no I/O, so it never holds its run.
 func (c *Cache) observe(ran gitproc.Ran) {
 	if c.isStopped() {
 		return
@@ -531,12 +399,10 @@ func (c *Cache) observe(ran gitproc.Ran) {
 	}
 	if !inIncarnation {
 		if e, inc = c.mergeAt(ran.Alternate); e != nil {
-			// A MERGE'S BUILD reads nothing but its store's links of the
-			// incarnation's own packs — the very inodes — and writes into its
-			// scratch, which nothing reads back: its pack, object and hint
-			// reports and its crash are that copy's, for its scrub. The store
-			// holds no derived file, so no derived part it names is the
-			// copy's.
+			// A MERGE'S BUILD reads only its store's links of the
+			// incarnation's own packs (the very inodes), so its pack, object
+			// and hint reports and its crash are that copy's; the store holds
+			// no derived file, so a derived part it names is not.
 			if derived != 0 {
 				c.countReports(derived, reportUnrouted)
 				derived = 0
@@ -572,22 +438,17 @@ func (c *Cache) observe(ran gitproc.Ran) {
 	// A REPORT ABOUT FILES A SWAP CARRIES (swap.go) — a run in a copy a swap
 	// replaced, or the round's own index in the staged next one — is the
 	// SCRUB'S EVIDENCE about the copy serving them, every part of it: the
-	// file it names may be one the swap left behind (the multi-pack-index
-	// never crosses one), which a drop on the copy serving would answer with
-	// a whole read of it for nothing, and the scrub holds every file that
-	// copy does hold to its checksum, dropping a derived one that fails.
-	// Dropped as a report about a replaced copy is, a damaged pack both copies
-	// share was found only by the next scrub a day later, though git had named
-	// it — the swap of a repository compacted every few minutes replacing the
-	// copy under nearly every long clone.
+	// named file may be one the swap left behind (the multi-pack-index never
+	// crosses one), so a drop on the serving copy would read it whole for
+	// nothing, while the scrub checks every file it holds. Dropped instead,
+	// a damaged pack both copies share waits for the next daily scrub.
 	evidence := staged || at != inc
 	var named, drops derivedSet
 	if derived != 0 {
-		// Of the declarations whose files the copy holds (image.holding): in
-		// CHAIN mode a part reaches the installed chain alone, and in either
-		// mode a part of no file the copy holds — gone since the run read it,
-		// dropped or cut — reaches nothing, counted stale: a drop of what is
-		// not there would read the copy whole for nothing.
+		// Only declarations whose files the copy holds (image.holding; in
+		// CHAIN mode, the installed chain): a part whose file is gone since
+		// the run read it is counted stale, since dropping what is not there
+		// would read the copy whole for nothing.
 		named = c.image.reported(dmg.Drops()) & c.image.holding(inc)
 		if named == 0 {
 			c.countReports(derived, reportStale)
@@ -595,19 +456,17 @@ func (c *Cache) observe(ran gitproc.Ran) {
 		if !evidence {
 			drops = named & c.image.dropping(EventReported)
 		}
-		// A DERIVED PART NO DROP REPAIRS — every declaration it names keeps
-		// its files on a report (OnReported) — goes where all damage a drop
-		// does not end goes: the copy's scrub, whose bytes decide, bounded
-		// by its cooldown. Recorded as a drop it queued a full round that
-		// could move nothing, for every git process that reported it.
+		// A DERIVED PART NO DROP REPAIRS (every declaration it names keeps
+		// its files on a report, OnReported) goes to the copy's scrub, whose
+		// bytes decide: recorded as a drop it would queue a full round that
+		// moves nothing, for every process that reported it.
 		r.kept = c.image.naming(derived, named&^drops)
 	}
 	if r.scrubs() {
-		// Held for its reader only where the run was IN the incarnation:
-		// the host repairs nothing a process in a scratch or a view meets
-		// but the alternate's shape, which no process started to report.
-		// Held on the incarnation the reader holds, a replaced one's too:
-		// its release hands them on to the copy serving (handOn).
+		// Held only for a run IN the incarnation: for a scratch or a view
+		// the host repairs only the alternate's shape, which no process
+		// reports. Held on the incarnation the reader holds, even a
+		// replaced one: its release hands them to the copy serving (handOn).
 		if held, ok := inc.held[ran.Repairer]; ok && inIncarnation && ran.Repairer != noReader {
 			inc.held[ran.Repairer] = append(held, r)
 		} else {
@@ -658,12 +517,11 @@ func (c *Cache) countReports(parts gitproc.Part, outcome reportOutcome) {
 	}
 }
 
-// incarnationAt is the entry and its incarnation whose directory dir is
+// incarnationAt is the entry and incarnation whose directory dir is
 // (repos/<id>.<n>.git) — its CURRENT one, or a retiring one a SWAP replaced,
-// whose files the current one serves as the very inodes it kept (swappedOut)
-// — or nil: the one parse of an incarnation's name, beside newIncarnation's.
-// A retiring incarnation a REBUILD replaced is none: its successor was read
-// whole and checked, and holds none of its files unchecked.
+// whose kept inodes the current one serves (swappedOut) — or nil; the one
+// parse of an incarnation's name besides newIncarnation's. One a REBUILD
+// replaced is none: its successor was read whole and checked.
 func (c *Cache) incarnationAt(dir string) (*entry, *incarnation) {
 	if dir == "" || filepath.Dir(dir) != filepath.Join(c.dir, reposDir) {
 		return nil, nil
@@ -712,23 +570,17 @@ func (c *Cache) repairRound(e *entry) {
 }
 
 // dropDamaged is a full round's drop of damaged derived files, before its own
-// index decides: what a failed request or the round's own git asked
+// index decides: what a failed request or the round's git asked
 // (incarnation.drop) and what reports asked (incarnation.repair, unless a
-// check of the repository is admitted) — EventReported for the declarations
-// they name, each of which drops on a report (no source asks it of one that
-// keeps its files, and dropFor reads the declaration again) — and what the
-// round's check or a scrub found failing its Check (ck.still), dropped
-// whatever its declaration says of a report (eventFailedCheck: the bytes
-// decided). Only what dropFor dropped is recorded as dropped. Each asked
-// declaration is TAKEN before the drop, so a run that names it while the
-// round runs marks it again for the next; a drop that fails puts it back.
-//
-// THE GUARD: an asked declaration whose current file this process wrote
-// after the asking run began is spared (`stale`). One dropped for damage again
-// within RebuildQuiet of its last drop for damage is not made due at once
-// (`again`, D13); any other dropped for damage is: the index as an
-// indexRepair, the graph by the maintainer's graph-first run. The check's own
-// drops are unguarded — the bytes decided.
+// check is admitted), under EventReported (dropFor reads each declaration
+// again); and what the round's check or a scrub found failing (ck.still),
+// under eventFailedCheck whatever its declaration says, since the bytes
+// decided. Each asked declaration is TAKEN first, so a run naming it meanwhile
+// marks it for the next round; a failed drop puts it back. THE GUARD: one whose
+// current file this process wrote after the asking run began is spared
+// (`stale`); one dropped for damage again within RebuildQuiet is not made due
+// at once (`again`, D13); any other is (the index as an indexRepair, the graph
+// by the maintainer's graph-first run). The check's drops are unguarded.
 func (c *Cache) dropDamaged(e *entry, inc *incarnation, res *applied) error {
 	im := c.image
 	e.mu.Lock()
@@ -767,10 +619,9 @@ func (c *Cache) dropDamaged(e *entry, inc *incarnation, res *applied) error {
 	}
 	if named := (drop | found) &^ res.dropped; named != 0 {
 		// Two drops, by what found the damage: git's word, which a
-		// declaration answers (OnReported); and the bytes', which none does
-		// — a file failing its check is never kept and served, and kept, a
-		// declaration that keeps its files on a report would be found
-		// failing by every scrub its reports asked, for ever.
+		// declaration answers (OnReported), and the bytes', which none does:
+		// a file failing its check is never kept, or every scrub its reports
+		// asked would find it failing for ever.
 		dropped, err := c.dropFor(e, inc, EventReported, eventDetail{named: drop & named})
 		if err != nil {
 			e.mu.Lock()
@@ -784,12 +635,9 @@ func (c *Cache) dropDamaged(e *entry, inc *incarnation, res *applied) error {
 			return err
 		}
 		dropped |= failed
-		// WHAT FOLLOWS RECORDS ONLY WHAT WAS DROPPED. A declaration dropFor
-		// kept was dropped by nothing, so nothing below may log it repaired,
-		// count it dropped, stamp its damage or make its write due: recorded
-		// as dropped, the round that met its damage read it as damage that
-		// survived a drop (damagedRound) and asked a pack's repair of a copy
-		// no drop had touched.
+		// WHAT FOLLOWS RECORDS ONLY WHAT WAS DROPPED: a declaration dropFor
+		// kept, recorded as dropped, reads as damage that survived a drop
+		// (damagedRound) and asks a pack's repair of an untouched copy.
 		kept := named &^ dropped
 		drop &^= kept
 		found &^= kept
@@ -804,9 +652,8 @@ func (c *Cache) dropDamaged(e *entry, inc *incarnation, res *applied) error {
 	res.trashed = res.trashed || drop|found != 0
 	res.dropped |= drop | found
 	for _, by := range slices.Sorted(maps.Keys(byTrigger)) {
-		// Derived files git could not read, or that failed their trailer,
-		// dropped in place: they were damaged, not the repository, and the
-		// round or the maintainer writes sound ones over the same packs.
+		// Dropped in place: the derived files were damaged, not the
+		// repository, and the round or the maintainer rewrites them.
 		c.log.Warn("code_cache_derived_repaired", "repo", e.id, "incarnation", inc.n,
 			"files", im.files(byTrigger[by]), "trigger", by)
 	}
@@ -817,10 +664,8 @@ func (c *Cache) dropDamaged(e *entry, inc *incarnation, res *applied) error {
 	im.each(im.all(), func(i int, d *Derived) {
 		s := derivedSet(1) << i
 		if (drop|found)&s != 0 {
-			// DAMAGED AGAIN: dropped for damage within RebuildQuiet of the
-			// last drop of it for damage, whatever was written between —
-			// the rewrite the first drop made due, and any ordinary one
-			// after it, which a disk that keeps damaging damages too.
+			// DAMAGED AGAIN within RebuildQuiet, whatever was written
+			// between: a disk that keeps damaging damages the rewrites too.
 			if at, ok := inc.damagedAt[d.Name]; ok && now.Sub(at) < RebuildQuiet {
 				again |= s
 			}
@@ -841,23 +686,22 @@ func (c *Cache) dropDamaged(e *entry, inc *incarnation, res *applied) error {
 				inc.graphFailed = true
 			}
 		case d.Name == DerivedMidx && (drop|found|res.dropped)&s != 0:
-			// A multi-pack-index dropped as damaged is due at once: every
-			// clone of the copy goes without its bitmap until it is written
-			// again, and nothing but a push would otherwise make it due. A
-			// graph dropped so needs nothing: the maintainer writes a
-			// missing graph first, at once.
+			// A dropped multi-pack-index is due at once: clones go without
+			// its bitmap until it is rewritten, and only a push would make it
+			// due. A graph needs nothing: the maintainer writes a missing one
+			// first.
 			inc.indexRepair = true
 		}
 	})
 	return nil
 }
 
-// wrote stamps that this process has just changed the files of each
-// declaration of s in inc — a write that moved a file's identity, or a drop —
-// as a time.Now() reading, compared on the monotonic clock with a report's
-// Began (D4); e.mu is held. Stamped as the write's step RETURNS, after its
-// rename, so a run that began between the rename and the stamp is presumed to
-// have read the file replaced: it spares a file, and never drops a fresh one.
+// wrote stamps that this process just changed the files of each declaration
+// of s in inc (a write that moved a file's identity, or a drop), as a
+// time.Now() reading compared on the monotonic clock with a report's Began
+// (D4); e.mu is held. Stamped after the rename, so a run begun between the
+// rename and the stamp is presumed to have read the replaced file: it spares a file, never drops a
+// fresh one.
 func (c *Cache) wrote(inc *incarnation, s derivedSet) {
 	now := time.Now()
 	c.image.each(s, func(_ int, d *Derived) {

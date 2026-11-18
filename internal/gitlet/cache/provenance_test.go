@@ -22,19 +22,15 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE INDEX OF PUSHES (provenance.go, backfill.go), held to the rows the log
-// holds: what each push introduced and every move it landed, folded by the
-// rounds, read back by the backfill, kept, linked and dropped as its
-// declaration says.
+// THE INDEX OF PUSHES (provenance.go, backfill.go): what each push introduced
+// and every move it landed, held to the push rows the log holds.
 
-// indexAgainstLog is every way repo's index in c, read through s, says what
-// the push rows the log holds do not: within the coverage it claims, every
-// commit a push introduced answers that push — the newest the coverage holds
-// listing it — as its row names it whole (who, how, and a seat's run), and
-// every ref's moves are the log's moves of it, in log order; outside its
-// coverage, no commit answers any push; and it is level with the incarnation
-// (its Through is s's position). None for an index that says exactly what the
-// rows say.
+// indexAgainstLog is every way repo's index in c, read through s, disagrees
+// with the log's push rows: within its coverage, every commit a push
+// introduced answers the newest covered push listing it, whole as its row
+// names it (who, how, a seat's run), and every ref's moves are the log's, in
+// log order; outside it, no commit answers any push; and its Through is s's
+// position. None for an index that says exactly what the rows say.
 func indexAgainstLog(c *cache.Cache, log *fakeLog, repo string, s cache.Synced) []string {
 	p, err := c.Provenance(s)
 	switch {
@@ -54,10 +50,9 @@ func indexAgainstLog(c *cache.Cache, log *fakeLog, repo string, s cache.Synced) 
 		problems = append(problems, fmt.Sprintf("it ends at %d, and its incarnation is at %d", through,
 			s.Position.Packed()))
 	}
-	// The commits in (position, push id) order, the order a run holds its
-	// pushes in, whose last listing a commit is the one it answers; the moves
-	// in the order the pushes LANDED, which group commit decided one after
-	// another inside a record and the log wrote in that order.
+	// Commits in (position, push id) order, a run's order, so a commit answers
+	// its last listing; moves in the order the pushes LANDED, which inside a
+	// group commit's record is the log's order.
 	introducer := map[string]gitlet.PushedBy{}
 	listed := map[string]bool{}
 	for _, r := range log.pushRows(repo) {
@@ -153,9 +148,9 @@ func mustIndex(t testing.TB, c *cache.Cache, repo string) cache.IndexState {
 	return idx
 }
 
-// backfill takes every backfill step due, failing t on a page the log did not
-// serve, and answers them — once its schedule is held to a look at every copy
-// (cache.BackfillAudit), before the pass and after it.
+// backfill takes every backfill step due and answers them, failing t on a page
+// the log did not serve or on a schedule cache.BackfillAudit faults, before
+// the pass or after it.
 func backfill(t testing.TB, c *cache.Cache) []string {
 	t.Helper()
 	if problems := cache.BackfillAudit(c); len(problems) > 0 {
@@ -171,12 +166,11 @@ func backfill(t testing.TB, c *cache.Cache) []string {
 	return steps
 }
 
-// A DELTA FOLDS ITS PUSHES BEFORE IT ANSWERS: the sync that applied a push is
-// answered from an index that already names it — the push that introduced
-// its commit, and the move it landed — with no backfill having run, since a
-// debounced index would miss a just-pushed change exactly when a reviewer
-// asks about it. The one run it wrote covers exactly (the incarnation's
-// position before, its position after].
+// A DELTA FOLDS ITS PUSHES BEFORE IT ANSWERS: the sync that applied a push
+// answers from an index already naming its commit's push and its move, with
+// no backfill run, since a debounced index would miss a just-pushed change
+// exactly when a reviewer asks. Its one run covers exactly (position before,
+// position after].
 //
 // Mutation: skip the delta's fold (foldPushes answers at once) — the commit
 // is answered by no push.
@@ -219,13 +213,12 @@ func TestADeltaFoldsItsPushesBeforeItAnswers(t *testing.T) {
 	}
 }
 
-// THE INDEX NAMES THE TURN THAT PUSHED: a seat's push the engine built is
-// answered, from the index alone, on the sync that folded it, with the whole
-// run its row names — the turn, the work item's tracker and key, the model —
-// and its way; a coding box's push git received with its run's launch and its
-// harness beside them; a person's push git received with no run. So what
-// a Gitlet node says of who pushed a commit (code_landed_in, every server-side
-// read naming the push behind a commit) is all its push row says, never the
+// THE INDEX NAMES THE TURN THAT PUSHED: from the index alone, on the sync
+// that folded it, an engine-built seat push is answered with its row's whole
+// run (turn, work item's tracker and key, model) and its way; a coding box's
+// git push with its run's launch and harness; a person's with no run. So what
+// a Gitlet node says of who pushed a commit (code_landed_in, every
+// server-side read naming a commit's push) is its push row, never the
 // credential alone.
 //
 // Mutations: write no work key into a run (pushPayload skipping tag 5) — the
@@ -276,11 +269,10 @@ func TestTheProvenanceIndexNamesTheTurnThatPushed(t *testing.T) {
 	}
 }
 
-// THE INDEX IS LEVEL WITH ITS INCARNATION after every round that answered: a
-// first full read, a delta that served pushes, a delta that served none (the
-// log moved on another repository), a delta of a group commit's record, and a
-// restart's full read — after each, the index ends exactly where the copy
-// does, and says exactly what the rows do within what it covers.
+// THE INDEX IS LEVEL WITH ITS INCARNATION after every answering round (a
+// first full read, a delta serving pushes, one serving none, one of a group
+// commit's record, a restart's full read): it ends where the copy does and
+// says what the rows say within its coverage.
 //
 // Mutation: leave Through where it was on a delta that served no pushes — the
 // index ends below its incarnation.
@@ -296,8 +288,7 @@ func TestTheIndexIsLevelWithItsIncarnation(t *testing.T) {
 		if idx := mustIndex(t, c, repo); idx.Through != s.Position.Packed() {
 			t.Errorf("after %s the index ends at %d, and the copy is at %d", when, idx.Through, s.Position.Packed())
 		}
-		// The runs a previous process left are read once the backfill has
-		// checked them.
+		// A previous process's runs are read only once the backfill checked them.
 		backfill(t, c)
 		if problems := indexAgainstLog(c, w.log, repo, s); len(problems) > 0 {
 			t.Errorf("after %s:\n\t%v", when, problems)
@@ -318,12 +309,11 @@ func TestTheIndexIsLevelWithItsIncarnation(t *testing.T) {
 	level("a restart's full read")
 }
 
-// A FULL ROUND LEAVES A GAP, AND THE BACKFILL FILLS IT. Pushes made while the
-// node was down are past what its index read; the restart's full read reads
-// no pushes, so it leaves the range between to the index's gap — and until the
-// backfill reads it, no commit pushed there is answered by any push, never by
-// a wrong one. The backfill reads the gap at the session floor of its end, so
-// whichever data node answers holds every push in it, and closes it.
+// A FULL ROUND LEAVES A GAP, AND THE BACKFILL FILLS IT. A restart's full read
+// reads no pushes, so those made while the node was down fall in the index's
+// gap, and until the backfill reads it no commit pushed there is answered by
+// any push, never by a wrong one. The backfill reads the gap at the session
+// floor of its end, so whichever data node answers holds every push in it.
 //
 // Mutation: close the gap without reading it (gapPage commits its move with no
 // rows) — the three commits are answered by no push.
@@ -372,10 +362,10 @@ func TestAFullRoundLeavesAGapTheBackfillFills(t *testing.T) {
 }
 
 // A PAGE CUT INSIDE A RECORD LEAVES THE RECORD WHOLE. Group commit lands
-// several pushes in one record, at one position, and a page — bounded by its
-// rows — ends inside one: the run a page makes is complete over its range, so
-// the record's pushes are all in one run and none is skipped, whether the
-// page ends inside the record or every row of a page is the record's.
+// several pushes in one record at one position, and a page bounded by rows
+// can end inside it: a page's run is complete over its range, so the record's
+// pushes land in one run and none is skipped, whether the page ends inside
+// the record or holds only its rows.
 //
 // Mutation: let a page's run cover the position its last row is at
 // (gapPage's upTo the last row's position, its rows kept) — the push of that
@@ -411,13 +401,12 @@ func TestAPageCutInsideARecordLeavesItWhole(t *testing.T) {
 	}
 }
 
-// ONLY A WANTED HISTORY IS BACKFILLED. A copy's index begins at its first full
-// read: every holder folds every delta and fills its own gap, but reads the
-// history before its first read only once a seat's read of the repository has
-// been answered here as its home (Cache.WantHistory), so a repository's 181
-// days are read once per fleet. Once wanted, the backfill reads it, newest
-// first, at the session floor of where the index begins, down to its start:
-// the index is Complete, and every commit any push introduced is answered.
+// ONLY A WANTED HISTORY IS BACKFILLED. A copy's index begins at its first
+// full read; every holder folds every delta and fills its own gap, but reads
+// the history before it only once a seat's read was answered here as the
+// repository's home (Cache.WantHistory), so its 181 days are read once per
+// fleet. Once wanted, the backfill reads it newest first, at the session floor
+// of the index's start, down to its start: the index is Complete.
 //
 // Mutation: read the history whether or not it is wanted (backfillDue's
 // wantHistory test dropped) — the unwanted arm reads history pages.
@@ -469,11 +458,10 @@ func TestOnlyAWantedHistoryIsBackfilled(t *testing.T) {
 }
 
 // THE BACKFILL PACES BY THE FLEET'S RATIO: after each page it waits
-// BackfillIdle × ⌈live Gitlet nodes ÷ live data nodes⌉ × the page's own duration,
-// the counts read from the fleet after every page, so the fleet's backfills
-// hold under half of one reader of each data node however many Gitlet nodes
-// share them — and counts it cannot read are waited on and read again, never
-// paced on a guess.
+// BackfillIdle × ⌈live Gitlet nodes ÷ live data nodes⌉ × the page's duration,
+// recounting the fleet after every page, so all backfills together hold under
+// half of one reader of each data node; counts it cannot read are retried,
+// never guessed.
 //
 // Mutation: pace by BackfillIdle × the page alone (drop the ratio) — the wait
 // is 20 ms, not 120 ms.
@@ -538,10 +526,10 @@ func TestTheBackfillPacesByTheFleetsRatio(t *testing.T) {
 }
 
 // THE HORIZON DROPS WHAT THE ROWS DROPPED. Once a day the backfill asks the
-// rows for the oldest push they keep; the index then holds nothing below it:
-// a run wholly below is retired at once, its file moved out of the copy, and
-// a commit only pushes below it introduced is answered by no push — so the
-// index holds the push history the rows do, and never grows past it.
+// rows for the oldest push they keep, and the index holds nothing below it: a
+// run wholly below is retired and its file moved out of the copy, and a commit
+// only pushes below it introduced is answered by no push, so the index never
+// outgrows the rows.
 //
 // Mutation: keep a run wholly below the horizon (horizonPage drops no run) —
 // its file stays in the copy.
@@ -554,9 +542,8 @@ func TestTheHorizonDropsWhatTheRowsDropped(t *testing.T) {
 	c := w.open(t, clk.on)
 	w.sync(t, c, repo)
 
-	// A run of one push, then a run of three: two runs, short of the
-	// ProvenanceMergeWidth a merge of the backfill takes, so it merges
-	// neither into the other.
+	// A run of one push, then one of three: two runs, short of the
+	// ProvenanceMergeWidth a backfill merge takes, so neither merges.
 	old, _ := w.push(t, repo, "refs/heads/main", nil)
 	expired := lastPush(t, w.log, repo).Position
 	w.sync(t, c, repo)
@@ -597,10 +584,9 @@ func TestTheHorizonDropsWhatTheRowsDropped(t *testing.T) {
 	}
 }
 
-// A RUN'S TRAILER IS CHECKED BEFORE ANYTHING READS IT. A run a previous
-// process left is no file this process wrote: until the backfill has held it
-// to its own trailer, a reader is answered without the index rather than
-// reading it, and a run that fails is the copy's repair's — its next round
+// A RUN'S TRAILER IS CHECKED BEFORE ANYTHING READS IT. Until the backfill has
+// held a previous process's run to its own trailer, a reader is answered
+// without the index; a run that fails goes to the copy's repair, whose round
 // drops the index and makes it anew, and the backfill reads again what the
 // dropped one held.
 //
@@ -651,24 +637,13 @@ func TestARunsTrailerIsChecked(t *testing.T) {
 	}
 }
 
-// A ROUND'S DROP OF AN INDEX IS MARKED AS IT GOES. The first run a drop moves
-// takes the index's record with it (dropFor), and the copy is marked for the
-// backfill's schedule in that same hold of its lock — so a look at it at any
-// moment of the drop finds its place in the schedule agreeing with it or the
-// copy marked, never queued for a horizon its index no longer has. Here the
-// repair round a failed check asks for is held until the backfill has placed
-// the copy behind its horizon, and the schedule is held to a look at every
-// copy the moment the round's drop has taken the record. Marked only at the
-// drop's end, after its directory's sync, an audit between found the copy
-// waiting a day for its horizon while a look said no step of it was ever due
-// (crewlet#794).
-//
-// THE DAY HAS PASSED BY THEN. The cache runs on the case's clock, moved to
-// that horizon before the drop is let go, so when the audit looks the copy's
-// time in the later queue has come — as it has on the machine's clock for a
-// runner that lost as long since the placement — and its place is held to a
-// look as of the instant before that time (cache.BackfillAudit). An audit that
-// left such a copy out, as one once did, passed the drop's missing mark.
+// A ROUND'S DROP OF AN INDEX IS MARKED AS IT GOES: the first run a drop moves
+// takes the index's record (dropFor), and the copy is marked for the
+// backfill's schedule in that same hold of its lock, so no look mid-drop finds
+// it queued for a horizon its index no longer has. The repair round is held
+// until the backfill has placed the copy behind its horizon, the clock moved
+// to that horizon (an audit must still judge a copy whose time has come), and
+// the schedule audited (cache.BackfillAudit) as the drop takes the record.
 //
 // Mutation: mark the drop at its end alone (dropFor's mark in the hold that
 // takes the record taken out) — the audit finds the copy queued for its
@@ -709,8 +684,8 @@ func TestARoundsDropOfAnIndexIsMarkedAsItGoes(t *testing.T) {
 	t.Cleanup(place) // before the cache's Stop, which waits for the held round
 	held = c
 	w.sync(t, c, repo)
-	// The run's check fails, and its repair round starts — held at its drop of
-	// the run — while the rest of the pass places the copy.
+	// The run's check fails and its repair round starts, held at the drop,
+	// while the rest of the pass places the copy.
 	steps, err := cache.BackfillPass(c)
 	if err != nil || len(steps) == 0 || steps[0] != "check" {
 		t.Fatalf("the backfill took %v (%v), want the damaged run's check first", steps, err)
@@ -733,9 +708,9 @@ func TestARoundsDropOfAnIndexIsMarkedAsItGoes(t *testing.T) {
 }
 
 // A REBUILD LINKS THE INDEX. The index is a function of the rows, which a
-// rebuild reads again unchanged, so the rebuild's new copy links every run of
-// the copy it replaces — the same inode — with its record, and reads no page
-// of pushes for it: its history and its gap are what they were.
+// rebuild reads unchanged, so the new copy links every run of the one it
+// replaces (the same inode) with its record and reads no page of pushes: its
+// history and gap are what they were.
 //
 // Mutation: seed nothing (seedIndex returns at once) — the new copy's index
 // is empty and its commits answered by no push.
@@ -789,11 +764,10 @@ func TestARebuildLinksTheIndex(t *testing.T) {
 	}
 }
 
-// A LOG GONE BACK DROPS THE INDEX. A log recreated under the cache — another
-// stream — or restored from an older copy on the same stream reuses positions
-// for other records, so the full read that converges the copy to it drops
-// every run the index held before anything reads the copy, and makes an index
-// anew at its own position: nothing the old history said is answered.
+// A LOG GONE BACK DROPS THE INDEX. A log recreated (another stream) or
+// restored from an older copy reuses positions for other records, so the full
+// read converging the copy drops every run before anything reads it and makes
+// the index anew at its position: nothing the old history said is answered.
 //
 // Mutation: drop nothing on a history gone (OnHistoryGone Keep) — the runs of
 // the old history are still read.
@@ -831,11 +805,10 @@ func TestARewoundLogDropsTheIndex(t *testing.T) {
 	}
 }
 
-// A MAINTENANCE RUN KEEPS THE INDEX'S RECORD. The index has no file whose
-// presence is its own — its record names its runs — so what a maintenance run
-// and a round's index record of the derived files they measured leaves the
-// index's coverage and runs whole, where reset by the main-file rule it was
-// wiped at every pass.
+// A MAINTENANCE RUN KEEPS THE INDEX'S RECORD. The index has no main file (its
+// record names its runs), so a maintenance run's or a round's record of the
+// derived files it measured leaves the index's coverage and runs whole rather
+// than resetting them by the main-file rule.
 //
 // Mutation: reset a declaration with no main file as one whose main file is
 // gone (recordDerived) — the index's record is wiped by the pass.
@@ -870,11 +843,10 @@ func TestAMaintenanceRunKeepsTheProvenanceState(t *testing.T) {
 	}
 }
 
-// A FILE UNDER crewlet/ IS COUNTED. The index's runs live in the engine's own
-// root of the incarnation, not under objects/ (M3-decisions M3-O77), so a boot
-// that measures a copy with no state walks every root a declaration owns:
-// the run's bytes are in what the layout holds, and in what the opened cache
-// holds itself to its budget by.
+// A FILE UNDER crewlet/ IS COUNTED. The index's runs live in the
+// incarnation's engine root, not objects/ (M3-decisions M3-O77), so a boot
+// measuring a copy with no state walks every root a declaration owns: the
+// run's bytes count in what the layout holds and in the opened cache's budget.
 //
 // Mutation: walk objects/ alone (derivedRoots answering objects/) — the run's
 // bytes are counted by neither.
@@ -922,19 +894,14 @@ func TestAFileUnderCrewletIsCountedInTheBudget(t *testing.T) {
 	}
 }
 
-// A CACHE NEVER STARTED BACKFILLS NOTHING, and a started one does: the backfill
-// is background work, begun by Start beside the janitor, the maintainer and the
-// scrubber — never by Open, so a cache opened to answer one command does no
-// work nobody asked for. "Nothing" is read in a synctest bubble, twice, never
-// after a pause: once every goroutine of the case is durably blocked
-// (synctest.Wait) — a backfill Open began has taken its first step, a page of
-// the gap read, by then, however late it ran — and again once the clock has
-// moved past every timer the cache arms (pastEveryTimer) and every goroutine
-// has blocked again — one Open began behind a wait on that clock has taken it
-// by then too. On a healthy build a cache never started runs nothing of its
-// own, so nothing runs in the span. The started one is waited for on the
-// bubble's clock, which moves only while every goroutine of the case is
-// blocked, so its paces pass at once.
+// A CACHE NEVER STARTED BACKFILLS NOTHING, and a started one does: Start
+// begins the backfill beside the janitor, maintainer and scrubber, never
+// Open, so a cache opened for one command does no unasked work. "Nothing" is
+// read in a synctest bubble twice, never after a pause: once every goroutine
+// is durably blocked (synctest.Wait), by when a backfill Open began has read
+// a page of the gap; and again once the clock has passed every timer the
+// cache arms (pastEveryTimer), for one Open began behind such a wait. The
+// started one's paces pass at once on the bubble's clock.
 //
 // Mutations: start the backfill in Open — the unstarted cache reads the gap;
 // start it from Open a minute later — it reads the gap once the clock has
@@ -973,15 +940,13 @@ func TestACacheNeverStartedBackfillsNothing(t *testing.T) {
 	})
 }
 
-// A FAILING COPY HOLDS UP NO OTHER. A step that fails waits on its own
-// repository: it is not taken again until its retry window ends — five
-// seconds, doubling with each failure in a row — while every other copy's
-// steps are taken meanwhile; and once the rows serve again, the copy's gap
-// closes at the end of its window. Sharing one wait, the copy used most
-// recently was picked again after every wait, so one repository the data
-// nodes could not serve — a record deferred on every data node through a
-// rolling upgrade, a row this build refuses — held every other copy's gap
-// open for good.
+// A FAILING COPY HOLDS UP NO OTHER. A failed step is not taken again until its
+// copy's retry window ends (five seconds, doubling with each failure in a
+// row), while every other copy's steps are taken meanwhile; once the rows
+// serve again its gap closes at the window's end. One shared wait would pick
+// the most recently used copy again after every wait, so one repository the
+// data nodes cannot serve (a record deferred through a rolling upgrade, a row
+// this build refuses) would hold every other gap open for good.
 //
 // Mutation: take a copy's steps inside its window (backfillDue reading no
 // bfRetryAt) — the failing copy is picked again at once, and the pass never
@@ -1050,15 +1015,12 @@ func TestAFailingCopyHoldsUpNoOther(t *testing.T) {
 	}
 }
 
-// A RUN GONE FROM THE DISK IS LOST, NOT TAKEN AGAIN FOR EVER. A run its index
-// names that something removed under the cache fails the merge that maps it,
-// and a check that met it gone answered "replaced" and nothing else: either
-// way the next look found the same step due, and the backfill took it again
-// at once, for ever — ten thousand merges in under a second, a warning each,
-// until a full round made the index anew. Now the merge's failure waits out
-// the copy's window, the run's vouch forgotten as the merge finds it gone,
-// and the run's check once the window ends finds it LOST, as a full round
-// finds one: the copy's repair round drops the index and makes it anew.
+// A RUN GONE FROM THE DISK IS LOST, NOT TAKEN AGAIN FOR EVER. A named run
+// removed under the cache fails the merge that maps it; that failure waits out
+// the copy's window, forgetting the run's vouch, and the run's check once the
+// window ends finds it LOST, as a full round would, so the repair round makes
+// the index anew. Answered "replaced", the same step stays due and the
+// backfill retakes it at once, for ever.
 //
 // Mutation: answer a run its index names that is gone "replaced"
 // (checkRuns) — its check is taken again at once, and the pass never ends.
@@ -1094,21 +1056,20 @@ func TestARunGoneFromTheDiskIsLostNotTakenAgainForEver(t *testing.T) {
 		t.Fatalf("once its window ended the pass took %v and answered %v, want the gone run's check first "+
 			"and no merge", steps, err)
 	}
-	// The repair round the check asked has run before this answers: a delta
-	// would have kept the run beside the lost one.
+	// The check's repair round has run before this answers; a delta would
+	// have kept the run beside the lost one.
 	s = w.sync(t, c, repo)
 	if idx = mustIndex(t, c, repo); len(idx.Runs) != 0 || idx.From != s.Position.Packed() {
 		t.Errorf("after its repair the index is %+v, want one made anew at %d", idx, s.Position.Packed())
 	}
 }
 
-// THE BEHIND GAUGE COUNTS WHAT THE BACKFILL OWES. crewlet.code.cache.
-// provenance.behind is the copies whose index has a gap, or whose history is
-// wanted and not read to its start — counted by the schedule as it places
-// each copy, never by a walk of them all: the three copies a restart left
-// gaps in, the log having moved under each; none once the backfill has read
-// the gaps; one once a seat's read wants a copy's history; none again once
-// that history is read.
+// THE BEHIND GAUGE COUNTS WHAT THE BACKFILL OWES:
+// crewlet.code.cache.provenance.behind is the copies whose index has a gap or
+// whose wanted history is unread to its start, counted by the schedule as it
+// places each copy, never by a walk of them all. Three after a restart left
+// gaps in three; none once they are read; one once a history is wanted; none
+// once it is read.
 //
 // Mutation: count a copy behind once and never again (place leaving the count
 // where a copy stops being behind) — the gauge stays at three.
@@ -1148,12 +1109,10 @@ func TestTheBehindGaugeCountsWhatTheBackfillOwes(t *testing.T) {
 	behind(0, "once that history is read")
 }
 
-// THE BACKFILL TAKES THE COPY USED LAST FIRST. Among the copies with a step
-// of one kind due, the backfill takes the one a reader used most recently —
-// the repositories people are asking about — and a read of a copy whose step
-// is due moves it to the front of its queue as it is made (touch), however it
-// is answered: a read answered from the copy as it stands, with no round
-// behind it, is a use like any other.
+// THE BACKFILL TAKES THE COPY USED LAST FIRST. Among copies with a step of one
+// kind due it takes the one read most recently (the repositories people ask
+// about), and a read moves its copy to the front of its queue as it is made
+// (touch), even one answered from the copy as it stands with no round.
 //
 // Mutation: leave the queue's key at the use its copy was placed with (used
 // moving no queued copy) — the copy read last is not the one taken.
@@ -1169,8 +1128,8 @@ func TestTheBackfillTakesTheCopyUsedLastFirst(t *testing.T) {
 	for _, repo := range repos {
 		w.sync(t, c, repo)
 	}
-	// A restart with a push of each meanwhile: each copy's first round
-	// leaves a gap, a step of the same kind due for both.
+	// A restart with a push to each meanwhile: each copy's first round leaves
+	// a gap, a step of the same kind due for both.
 	for _, repo := range repos {
 		w.push(t, repo, "refs/heads/main", nil)
 	}
@@ -1201,11 +1160,10 @@ func TestTheBackfillTakesTheCopyUsedLastFirst(t *testing.T) {
 	}
 }
 
-// SMALL RUNS MERGE A STRETCH AT A TIME. The runs one-push deltas fold wait
-// until ProvenanceMergeWidth of them stand side by side, and then merge as one
-// — one merge, where merged a pair at a time they merged on nearly every
-// push, four syncs and a state write each on every node holding the copy —
-// and the run that merge writes answers everything the eight did.
+// SMALL RUNS MERGE A STRETCH AT A TIME. One-push deltas' runs wait until
+// ProvenanceMergeWidth stand side by side, then merge as one, and the merged
+// run answers all they did. A pair at a time would merge on nearly every push,
+// at four syncs and a state write each on every node holding the copy.
 //
 // Mutation: merge spans of two (mergeDue reading a width of two) — the
 // backfill merges after the second delta.
@@ -1261,13 +1219,11 @@ func TestSmallRunsMergeAStretchAtATime(t *testing.T) {
 }
 
 // A RETIRED RUN LEAVES ONCE A WRITTEN STATE NO LONGER NAMES IT. A merge
-// retires the runs it replaces — the index stops naming them — but the state
-// on the disk names them until the next is written, so a crash before then
-// must find them there; and once a state that no longer names them is
-// written, by whichever writer, they go. Moved by the writer that retired
-// them once ITS state was written, runs whose state write failed stayed in
-// crewlet/ for good: named by nothing once a later write succeeded, and
-// counted by no record and no budget until a full round listed the directory.
+// retires the runs it replaces, but the state on the disk names them until the
+// next is written, so a crash before then must find them; once any writer
+// writes a state that no longer names them, they go. Moved only by the writer
+// that retired them, a failed state write would leave them in crewlet/ for
+// good, named, recorded and budgeted by nothing.
 //
 // Mutation: forget the runs a failed write would have taken (persist dropping
 // its retired runs on a failure) — the merge's inputs are still on the disk
@@ -1334,18 +1290,14 @@ func TestARetiredRunLeavesOnceAWrittenStateNoLongerNamesIt(t *testing.T) {
 	}
 }
 
-// THE RUNS A NODE HOLDS MAPPED STAY UNDER ITS BOUND. Every run a reader maps
-// is one mapping of the engine's process, which the kernel counts against
-// vm.max_map_count — one count for the whole node — and past it every mapping
-// the process asks for fails, the runtime's own heap growth among them, which
-// is fatal. Kept for as long as its index named it, a run of every copy ever
-// read stayed mapped, the count growing with the copies a node's seats read.
-// So twenty copies of two runs each, read one after another under a bound of
-// eight, hold at most eight runs mapped — the kernel's own count of them where
-// it says, Linux's /proc/self/maps — and every read is answered from its
-// index, the first copy's again once the bound has unmapped its runs; a
-// reader that finds every mapping held by readers is answered without the
-// index, and one let go makes room for it.
+// THE RUNS A NODE HOLDS MAPPED STAY UNDER ITS BOUND. Each mapped run counts
+// against the process's vm.max_map_count, past which every mapping fails, the
+// runtime's heap growth among them, fatally. So twenty copies of two runs
+// each, read in turn under a bound of eight, hold at most eight mapped (by the
+// kernel's own count, /proc/self/maps, on Linux), and every read is answered
+// from its index, the first copy's again once the bound unmapped it; a reader
+// finding every mapping held is answered without the index, and one let go
+// makes room for it.
 //
 // Mutation: keep every run let go (runMaps.reserve unmapping none, its bound
 // unchecked) — the twenty copies hold forty runs mapped.
@@ -1397,9 +1349,8 @@ func TestTheRunsANodeHoldsMappedStayUnderItsBound(t *testing.T) {
 		}
 	}
 	if runtime.GOOS == "linux" {
-		// The kernel names a mapping by its file's path with every link
-		// resolved; and this cache's runs are the ones under its directory,
-		// whatever the cases beside it map.
+		// The kernel names a mapping by its resolved path; this cache's runs
+		// are those under its directory, whatever parallel cases map.
 		dir, err := filepath.EvalSymlinks(w.layout.Dir)
 		if err != nil {
 			t.Fatal(err)
@@ -1421,8 +1372,8 @@ func TestTheRunsANodeHoldsMappedStayUnderItsBound(t *testing.T) {
 	}
 	answers(repos[0]) // its runs unmapped by the bound since, and mapped again
 
-	// Every mapping held: a reader past the bound is answered without the
-	// index, and one let go makes its room.
+	// Every mapping held: a reader past the bound goes without the index
+	// until one is let go.
 	var held []cache.Synced
 	for _, repo := range repos[:bound/2] {
 		s := pin(repo)
@@ -1445,13 +1396,11 @@ func TestTheRunsANodeHoldsMappedStayUnderItsBound(t *testing.T) {
 	}
 }
 
-// THE BACKFILL'S PICK READS A COPY'S LAST USE UNDER ITS LOCK. Among the copies
-// with a step due it takes the most recently used, and every reader's pin and
-// release writes that use under the entry's lock (used). Read once the lock
-// had gone, the walk raced every request that pinned a copy while the backfill
-// had work — on a node that has just joined, every request — which the race
-// detector reported in the cache's own suite, and a torn time ranks the copies
-// on a value no reader wrote.
+// THE BACKFILL'S PICK READS A COPY'S LAST USE UNDER ITS LOCK. It takes the
+// most recently used copy with a step due, and every reader's pin and release
+// writes that use under the entry's lock (used); read outside it, the walk
+// races every request pinning a copy while the backfill has work (on a newly
+// joined node, every request) and ranks copies on a torn time.
 //
 // Mutation: read inc.lastUsed in nextBackfill after e.mu.Unlock — the race
 // detector reports the walk's read against a pin's write.
@@ -1475,10 +1424,9 @@ func TestTheBackfillsPickReadsACopysLastUseUnderItsLock(t *testing.T) {
 		}
 	}
 
-	// The walk on a goroutine of its own, as the backfill's is, beside the
-	// requests' pins; the picks it made are counted, so a case whose walk
-	// found nothing due — and so read no copy's use — fails rather than
-	// passes.
+	// The walk on its own goroutine, as the backfill's is, beside the pins;
+	// its picks are counted so a walk that found nothing due (and read no
+	// copy's use) fails the case rather than passes it.
 	stop := make(chan struct{})
 	type result struct {
 		picks int

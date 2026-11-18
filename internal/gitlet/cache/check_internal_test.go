@@ -6,24 +6,17 @@ import (
 )
 
 // A FINDING FOUND AGAIN STAYS AS IT WAS FOUND, AND ONLY NEWER DAMAGE REPLACES
-// IT (recordCheck). A check that finds a file failing at the identity a
-// finding on the repair mark names has found the same damage: the finding the
-// mark holds stands, whatever found it — a scrub's above all, which answers a
-// request's scrub and covers a report while it waits (scrubWaits) — and so
-// does what the round is handed to act on, the repair logged as what found the
-// damage first; while a check of the repository is admitted the round is
-// handed this check's files alone, each as the mark holds it. A file failing
-// at ANOTHER identity is newer damage in a file put there since, which the
-// finding the mark holds no longer names: kept, the round's repair acted on
-// neither (checked.still acts only on a file still at its finding's identity),
-// and the round served the file its own check had just found failing.
-// TestAFindingFoundAgainStaysAsItWasFound is the same rule through a request's
-// whole repair.
+// IT (recordCheck). A file failing at the identity the repair mark names is
+// the same damage: the mark's finding stands, a scrub's above all
+// (scrubWaits), and the round is handed it as held, under an admitted check
+// this check's files alone. At another identity it is newer damage: were the
+// old finding kept, the repair would act on neither (checked.still) and the
+// round would serve the file. TestAFindingFoundAgainStaysAsItWasFound covers
+// a request's whole repair.
 //
-// Mutations: a check's finding replaces whatever the mark holds (the first,
-// second and fourth rows); the mark keeps whatever it holds (the third); the
-// round, under a check of the repository, is handed this check's own findings
-// as it found them (the fourth).
+// Mutations: a check's finding replaces what the mark holds (rows 1, 2, 4);
+// the mark keeps what it holds (row 3); under a check, the round is handed
+// this check's own findings as found (row 4).
 func TestOnlyDamageAtAnotherIdentityReplacesAFinding(t *testing.T) {
 	t.Parallel()
 	// The build's declarations, as Open takes them: a finding's file is
