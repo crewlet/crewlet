@@ -17,16 +17,12 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// THE CREDENTIAL NEVER REACHES AN ARGUMENT. While the remote holds the request
-// a run sent it — the remote helper waiting on its answer, git fetch waiting
-// on the helper — every process of the machine is read from /proc: no
-// process's command line, which every user of the machine can read, holds the
-// header's value, the credential in it or what a Basic credential encodes,
-// while the remote helper's environment, which only its own user can read,
-// holds the header — so the header the remote received reached it through the
-// environment alone. And the remote, which echoes what it was sent in the error
-// it answers with, has every one of them taken out of the lines the run hands
-// back, on every git a Gitlet node may run.
+// THE CREDENTIAL NEVER REACHES AN ARGUMENT. While the remote holds the run's
+// request, no command line in /proc, which every user can read, holds the
+// header's value, its credential or what a Basic credential encodes, while the
+// remote helper's environment, readable only by its own user, holds the
+// header. Every form the remote echoes back in its error is taken out of the
+// run's lines, on every git a Gitlet node may run.
 //
 // Mutation: hand git the header as a `-c http.extraHeader=…` before its
 // subcommand, and the command line of the git the pool starts holds it.

@@ -15,83 +15,23 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// THE MEMO (the cache's, its memo.go): every page a read's run cuts — the
-// asked one and every one after it the same run reaches — is kept beside the
-// pinned copy, keyed by everything it is a function of, so the next read that
-// asks for it is answered from a file rather than from git. A page is a
-// function of the object ids the read names, its arguments, its cursor and the
-// page bound; and of nothing a node or a moment holds: what Read stamps on an
-// answer (its repository and position, the push that introduced each commit it
-// names and the index's coverage) is stamped on a page from the memo as on one
-// cut, and never memoized.
-//
-// # Answered before any git runs
-//
-// A read naming whole ids asks the memo once the grant has judged it and before
-// ANY git runs — before even the check of what it names, which on a warm copy
-// is about half a miss's cost and would leave a hit no faster than two
-// processes. That is sound because the memo is the copy's: an entry is in an
-// incarnation's memo only where a read of that incarnation found every object
-// it names there, and a copy loses an object only with its history, which
-// drops the memo whole and shuts it until the change is visible (the cache's
-// memo.go). A read naming an abbreviation asks it once the abbreviation is
-// expanded from the objects — what an abbreviation names can change as the
-// copy gains objects, what a whole id names never — and its check has run. A
-// refusal the copy may be behind about is judged at the log's head as ever
-// (objects), and only then is the memo asked.
-//
-// # The run that misses cuts every page
-//
-// git cannot seek inside an object or a listing, so a page past the first is a
-// read of everything before it: the fiftieth page of a file streams the
-// forty-nine before it, and the recursive listing of a 100 000-file tree is
-// some 250 pages, each a whole `ls-tree -r`. So a run that misses cuts every
-// page from the one asked to the end of the answer — a listing's, a file's (or
-// its line range's), a stat's, a patch's — and stages each as it is cut
-// (cache.MemoBatch.Put), holding one page at a time beside the asked one; then
-// memoizes them all once git has answered whole and reported no damage, each
-// ending with what the run learned of it only at its end (its tail): a
-// listing's total, a file's line count, a diff's totals. A
-// stat's page's files' counts, which follow every file, are written into the
-// page's staged entry as soon as the stat has counted past the page
-// (cache.MemoBatch.Extend), so a stat's run holds one page's counts at a time
-// however many files it counts. Reading a file page by page costs one stream
-// of it. A comparison, whose answer is one page, is memoized whole; an
-// interdiff's pages as a diff's are; a blame's run cuts every page of its
-// range, as a file's does; a history's page is its walk's own — the walk ends
-// where the page does, since its cost is the walk — memoized where the walk
-// ended it, and never where the read's budget or its due instant did, which
-// is the machine's and the moment's; a directory's last commits' page is kept
-// as its read cut it, and its windows of answers apart, under the last commit
-// that changed the directory, its walk's first record (treecommits.go); and a landed-in read, a revision's facts
-// and a re-anchoring never (memoizable says why). A history's and a blame's
-// key carries the measure their pages were cut with (costModel), since a
-// fence they are measured with is a build's, and so does a diff's patches'.
-// A diff's patches, which git can begin at any file, are cut to
-// maxPatchesRunPages past the asked page (patches.go).
-//
-// # A page fits whatever it is stamped with
-//
-// A page is cut against the room its read's stamped fields leave, measured
-// with this read's: what the push index holds of a commit may grow before the
-// page is read again, so each entry carries its BUDGET — the most the stamped
-// fields may encode to and the page still fit its bound: the room its items
-// left, beside what those fields cost when it was cut. A page whose read's
-// stamped fields would take more is cut again, and that cut memoized over it.
-// Every envelope is measured with Memo set (room), so a page from the memo
-// fits as the one cut did.
-//
-// An UNSTAMPED read (gitlet.GitQuery.Unstamped) is stamped with nothing, so its
-// page is cut against a room nothing a node holds moves, and is the same page
-// whichever node cuts it and whenever: kept under a key of its own, since the
-// stamped cut of the same read is another page.
+// THE MEMO (package doc, "The memo"; the cache's memo.go). A page is a
+// function of the object ids its read names, its arguments, its cursor and
+// the page bound, never of what a node or a moment holds: what Read stamps
+// (repository, position, each commit's push, the index's coverage) is stamped
+// on a recalled page as on a cut one, and never memoized. Each kind's run
+// decides where its pages end: a history's where its walk ended, never where
+// the read's budget or due instant did (the machine's and the moment's); a
+// directory's last commits' under the last commit that changed it
+// (treecommits.go); a diff's patches to maxPatchesRunPages past the asked one
+// (patches.go). A history's, a blame's and a diff's patches' key carries
+// costModel, since the fences their pages were measured with are a build's.
 
-// memoFormat names what an entry of this build holds — a memoPage as
-// encodePage writes it and its tail as appendTail does — and is the first part
-// of every key, so an entry of another shape is never read as one of this:
-// TestAMemoEntryHoldsEveryFieldOfItsAnswer holds the encoding to the answers'
-// fields, and TestAnAnswersShapeIsItsMemoFormat holds this name to a
-// fingerprint of them, so a change to either fails until this moves with it.
+// memoFormat names the shape of this build's entries (encodePage, appendTail)
+// and leads every key, so an entry of another shape is never read as one of
+// this: TestAMemoEntryHoldsEveryFieldOfItsAnswer holds the encoding to the
+// answers' fields and TestAnAnswersShapeIsItsMemoFormat this name to their
+// fingerprint, so a change to either fails until this moves with it.
 const memoFormat = "page/10"
 
 // memoPage is one page as the memo keeps it.
@@ -103,16 +43,18 @@ type memoPage struct {
 	// (read.named), which a hit decorates as that read did.
 	commits []string
 	// budget is the most the stamped fields of an answer of it may encode to
-	// (read.stampCost) and the page still fit its bound.
+	// (read.stampCost) and the page still fit its bound: the room its items
+	// left plus those fields' cost when it was cut, since the push index may
+	// grow before a recall. recall declines a page this read would overrun,
+	// and its run cuts it anew over it; every envelope is measured with Memo
+	// set (room), so a recalled page fits as the cut one did.
 	budget int
 }
 
-// memoTail is what a run learns of a page only at its end: a listing's total,
-// a file's line count, a diff's totals and each of the page's files' counts
-// in their order — none known when the page is cut, since every page is
-// staged as it is cut and the run reads on to the answer's end. counted: the
-// files' counts are in the entry already, written as the stat counted past
-// the page (memoRun.extend), so the tail carries the totals alone.
+// memoTail is what a run learns of a page only at its end, after the page is
+// staged: a listing's total, a file's line count, a diff's totals and the
+// page's files' counts in order. counted: the counts are in the entry already
+// (memoRun.extend), so the tail carries the totals alone.
 type memoTail struct {
 	total, added, deleted, lines int
 	files                        []fileCounts
@@ -126,24 +68,22 @@ type fileCounts struct {
 	binary         bool
 }
 
-// errMemoPage is an entry this build cannot read as a page: what a hit that
-// fails to decode is, which the read answers as a miss — its run memoizes the
-// page anew, under the same key.
+// errMemoPage is an entry this build cannot read as a page: the read answers
+// it as a miss, and its run memoizes the page anew under the same key.
 var errMemoPage = errors.New("query: a memo entry that is no page of this build's")
 
-// memoKey is the key of the page at the cursor at of the read q names, its
-// revisions read as whole ids (whole, by the revision as q spells it): the
-// memo's format, the page bound and q's kind, then every argument the page is
-// a function of, normalised — a whole id for every revision, a path as its
-// bytes, a filter's paths sorted and once each, a line range from 1 — and the
-// cursor, canonical as every one a node issues (parseCursor).
+// memoKey is the key of the read's page at the cursor at, its revisions as
+// whole ids (whole, by q's spelling): the format, the page bound and the
+// kind, then every argument the page is a function of, normalised (a whole id
+// per revision, a path as its bytes, a filter's paths sorted and once each, a
+// line range from 1), and the cursor, canonical as a node issues it
+// (parseCursor).
 func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 	parts := []string{memoFormat, strconv.Itoa(r.s.pageBytes), string(r.q.Kind)}
-	// AN UNSTAMPED PAGE IS ANOTHER CUT of the same read — against a room no
-	// stamp takes (gitlet.GitQuery.Unstamped) — so it is kept apart: a stamped
-	// read recalling it would overrun its bound, and an unstamped one
-	// recalling a stamped page would answer a page whose extent its stamps
-	// chose.
+	// AN UNSTAMPED PAGE IS ANOTHER CUT of the same read, against a room no
+	// stamp takes (gitlet.GitQuery.Unstamped): a stamped read recalling it
+	// would overrun its bound, and an unstamped one recalling a stamped page
+	// would answer a page whose extent its stamps chose.
 	if r.q.Unstamped {
 		parts = append(parts, "unstamped")
 	}
@@ -165,10 +105,9 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 	case gitlet.GitCompare:
 		parts = append(parts, whole[q.Compare.Base], whole[q.Compare.Head])
 	case gitlet.GitInterdiff:
-		// THE FILTER AS THE READ APPLIES IT (interdiffFilter): none where
-		// the bases match or either revision touches all — two queries whose
-		// lists differ then read one page — and otherwise the union of the
-		// touched paths, sorted and once each.
+		// THE FILTER AS THE READ APPLIES IT (interdiffFilter): none where the
+		// bases match or either revision touches all (two queries whose lists
+		// differ then read one page), else the touched paths' sorted union.
 		file, _ := gitlet.GitPath("interdiff.file", q.Interdiff.File, q.Interdiff.FileB64, true)
 		f := r.interdiffFilter()
 		parts = append(parts, whole[q.Interdiff.FromHead], whole[q.Interdiff.ToHead], file,
@@ -178,9 +117,8 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 			parts = append(parts, costModel)
 		}
 	case gitlet.GitLog:
-		// Since as the second its walk stops before, Until as the last
-		// second it keeps, the limit as the page applies it, and the cost the
-		// page's fields were measured at. A PushedBy read is never memoized.
+		// Since as the second the walk stops before, Until as the last second
+		// it keeps, the limit as applied. A PushedBy read is never memoized.
 		path, _ := gitlet.GitPath("log.path", q.Log.Path, q.Log.PathB64, true)
 		since, until := "", ""
 		if !q.Log.Since.IsZero() {
@@ -198,11 +136,10 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 		// The span bounds the page's entries.
 		parts = append(parts, whole[q.TreeCommits.Rev], pathOf(q), strconv.Itoa(r.s.treeWalk.span))
 	case gitlet.GitSearch:
-		// The commit read and the ref that named it, then the query's every
-		// part: whichever path cut the page, its hits are the same lines.
-		// The place it continues after among them: a page of a search is
-		// another answer than its first (a path is never empty, so none is
-		// told from every place).
+		// The commit and the ref that named it, then every part of the query:
+		// whichever path cut the page, its hits are the same lines. After
+		// keys a later page apart from the first (a path is never empty, so
+		// none is told from every place).
 		s := q.Search
 		after, afterLine := "", 0
 		if s.After != nil {
@@ -215,8 +152,7 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 			strconv.Itoa(s.PerFile), after, strconv.Itoa(afterLine), strconv.Itoa(len(paths)))
 		parts = append(parts, paths...)
 	case gitlet.GitExcerpts:
-		// The context as applied, then every anchor whole: its revision, its blob, its path's
-		// bytes, its side and its range.
+		// The context as applied, then every anchor whole.
 		e := q.Excerpts
 		parts = append(parts, strconv.Itoa(e.ContextOf()), strconv.Itoa(len(e.Anchors)))
 		for _, a := range e.Anchors {
@@ -228,19 +164,16 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 	return cache.NewMemoKey(append(parts, formatCursor(at))...)
 }
 
-// memoizable reports whether q's kind is answered from the memo at all: every
-// kind but a landed-in read, whose answer moves with its target; a revision's
-// facts, asked once a revision and a target by whoever records them, and
-// whose patch-id a node too loaded to finish it omits — an answer no page
-// should keep; a re-anchoring, a check and one diff of a few blobs, keyed
-// by a list of anchors each caller makes anew; and a checks file, asked once
-// a target's tip by the home that keeps what it parsed of it — a whole file
-// the memo would hold for nobody else; a commit's deploy and dependency
-// files, asked once a tip by the scan that records what they declare; and a
-// find, which reads the tree's memoized listing and would add a page a keystroke.
+// memoizable reports whether q's kind is answered from the memo at all. Not:
+// a landed-in read (its answer moves with its target); a revision's facts
+// (asked once, and a loaded node omits the patch-id: no page should keep
+// it); a re-anchoring (keyed by anchors each caller makes anew); a checks
+// file or a commit's code files (asked once a tip by whoever records what
+// they hold); a find (it reads the tree's memoized listing, and would add a
+// page a keystroke).
 func memoizable(q gitlet.GitQuery) bool {
-	// A HISTORY NARROWED BY WHO PUSHED IT is a function of the node's index
-	// of pushes, which moves, never of the ids alone (gitlet.GitQuery.ReadsIndex).
+	// A HISTORY NARROWED BY WHO PUSHED IT is a function of the node's moving
+	// index of pushes, not of the ids alone (gitlet.GitQuery.ReadsIndex).
 	if q.ReadsIndex() {
 		return false
 	}
@@ -259,10 +192,13 @@ func memoizable(q gitlet.GitQuery) bool {
 }
 
 // recallWhole is the memo's answer to a read naming whole ids alone, asked
-// before any git runs — and on a miss, the answer of the read cutting the same
-// page now, waited for (await): none for a read that names an abbreviation, or
-// whose grant this copy refuses — objects judges that at the log's head, and
-// the memo is asked after it.
+// once the grant is judged and before ANY git runs, even the object check
+// (half a warm miss's cost); on a miss, await's. Sound because an entry is in
+// an incarnation's memo only where a read of it found every object the entry
+// names, and a copy loses an object only with its history, which drops the
+// memo whole and shuts it until the change is visible (the cache's memo.go). It declines an abbreviation (asked once
+// objects expands it: what one names changes as the copy gains objects) and
+// a grant this copy refuses (objects judges that at the log's head first).
 func (r *read) recallWhole(ctx context.Context, at cursor) (gitlet.GitAnswer, bool, error) {
 	if !memoizable(r.q) || r.grant() != nil {
 		//nolint:nilerr // a grant this copy refuses is objects' to judge at the log's head: the memo only declines.
@@ -283,15 +219,12 @@ func (r *read) recallWhole(ctx context.Context, at cursor) (gitlet.GitAnswer, bo
 }
 
 // await is a memo miss's SINGLE FLIGHT: where another read of this node is
-// cutting the page this one missed — the same repository and memo key — the
-// read waits for that read to answer, its pages placed, and asks the memo
-// again; where none is, it LEADS, its own run the page's flight until it has
-// answered (Read lands it). A read whose memo still misses after the wait —
-// the leader's run failed, was too large, or memoized nothing — runs its own,
-// as any miss does, leading nothing. The wait holds no unit of the share and
-// no slot of the read lane, and ends with the read's answer as a wait for the
-// share does: due, it answers unready (share), which another Gitlet node answers
-// meanwhile.
+// cutting the same page (repository and memo key), it waits for that read to
+// answer and asks the memo again; where none is, it LEADS until it answers
+// (Read lands it). A read still missing after the wait (the leader failed,
+// was too large or memoized nothing) runs its own, leading nothing. The wait
+// holds no unit of the share and no slot of the read lane, and falls due as
+// a wait for the share does: unready, which another Gitlet node answers.
 func (r *read) await(ctx context.Context, whole map[string]string, at cursor) (gitlet.GitAnswer, bool, error) {
 	k := flightKey{repo: r.q.RepoID, key: r.memoKey(whole, at)}
 	f, lead := r.s.join(k)
@@ -348,13 +281,11 @@ func wholeOf(q gitlet.GitQuery, objs found) map[string]string {
 	return whole
 }
 
-// stampCost is what the fields Read stamps on every answer of this read —
-// its repository, its copy's position, the push that introduced each commit
-// it names, the index's coverage, and Memo — encode to, beside an answer
-// holding nothing else: what a page's budget is held to. The difference it
-// makes to any answer is the same, since every answer encodes the same field
-// before them (Kind, which is never left out), so an answer's whole size moves
-// by the difference between two reads' stamp costs exactly.
+// stampCost is what the fields Read stamps on this read's answers
+// (repository, position, each commit's push, coverage, Memo) encode to beside
+// an answer holding nothing else: what a page's budget is held to. Every
+// answer encodes Kind before them, so an answer's size moves by exactly the
+// difference between two reads' stamp costs.
 func (r *read) stampCost() int {
 	var a gitlet.GitAnswer
 	r.stamp(&a, true)
@@ -362,9 +293,12 @@ func (r *read) stampCost() int {
 }
 
 // memoRun is the pages one run memoizes: a batch of the pinned copy's memo,
-// and how each page is keyed. Nil memoizes nothing — a cache that keeps no
-// memo, a copy whose memo is shut, a landed-in read — and its methods accept
-// it.
+// and how each page is keyed. git cannot seek inside an object or a listing,
+// so a page past the first costs a read of all before it: a missing run
+// stages (put) every page from the asked one to the answer's end, holding
+// one at a time beside the asked one, and places them only once git has
+// answered whole and reported no damage. Nil memoizes nothing (no memo, a
+// shut one, a kind memoizable refuses) and its methods accept it.
 type memoRun struct {
 	r     *read
 	batch *cache.MemoBatch
@@ -385,7 +319,7 @@ func (r *read) memoRun(objs found) *memoRun {
 
 // put stages a, the page at at, whose items left left of the room it was cut
 // against, and answers which put it was (-1 for none). Pages are put in the
-// order they are cut, which is what place's i-th tail is of.
+// order they are cut, which place's i indexes.
 func (m *memoRun) put(at cursor, a gitlet.GitAnswer, left int) int {
 	if m == nil {
 		return -1
@@ -423,19 +357,15 @@ func (m *memoRun) discard() {
 // same is a tail every page of a run shares.
 func same(t memoTail) func(int) memoTail { return func(int) memoTail { return t } }
 
-// THE ENCODING of a page and its tail: unsigned varints, and each string as
-// its length then its bytes, every field in its struct's order. A page's
-// fields its run learns only at its end are its tail's, never its own: a
-// listing's Total, a file's Lines, a diff's totals and its files' counts — a
-// stat's page and a patch's alike, the patch's naming its one file. A diff's
-// files' counts are a block of their own, after the page and before its
-// totals, so a stat writes each page's block as it is counted
-// (memoRun.extend) and a patch's tail carries its one file's: the same bytes
-// either way. Its Kind says which part follows; a comparison is one answer,
-// its counts in the page. Binary rather than JSON because a hit decodes a
-// whole page: a page of a listing is some 400 entries of five strings, which
-// encoding/json decodes at a few tens of megabytes a second, against a
-// varint reader slicing each string out of one copy.
+// THE ENCODING of a page and its tail: unsigned varints, each string as its
+// length then its bytes, fields in struct order, Kind saying which part
+// follows. What a run learns only at its end is the tail's: a listing's
+// Total, a file's Lines, a diff's totals and its files' counts (a stat's or a
+// patch's). The counts are a block between the page and its totals, so a
+// stat's written as counted (memoRun.extend) and a tail's are the same bytes.
+// A comparison, one answer, keeps its counts in the page. Binary, not JSON:
+// a hit decodes a whole page (a listing's is some 400 entries of five
+// strings), which encoding/json does at tens of megabytes a second.
 
 // pageWriter is an entry's bytes as they are written.
 type pageWriter []byte
@@ -445,8 +375,7 @@ func (w *pageWriter) int(n int)     { w.uint(uint64(max(n, 0))) }
 func (w *pageWriter) size(n int64)  { w.uint(uint64(max(n, 0))) }
 func (w *pageWriter) str(s string)  { w.uint(uint64(len(s))); *w = append(*w, s...) }
 
-// time writes an instant as its seconds since the epoch — signed, which a
-// commit's dates never need and the encoding costs nothing to allow — and its
+// time writes an instant as signed seconds since the epoch and its
 // nanoseconds, read back in UTC as every answer states one.
 func (w *pageWriter) time(t time.Time) {
 	*w = binary.AppendVarint(*w, t.Unix())
@@ -694,9 +623,8 @@ func appendFile(w *pageWriter, f gitlet.DiffFile, with bool) {
 }
 
 // appendTail is buf with t's encoding appended, as a page of kind ends: a
-// listing's total, a file's line count, a diff's files' counts — unless they
-// were counted into the entry already — and its totals, and nothing after a
-// comparison.
+// diff's files' counts unless counted into the entry already (t.counted), then
+// the kind's totals; nothing for a comparison.
 func appendTail(buf []byte, kind gitlet.GitReadKind, t memoTail) []byte {
 	diff := kind == gitlet.GitDiff || kind == gitlet.GitInterdiff
 	if diff && !t.counted {
@@ -729,10 +657,9 @@ func appendCounts(buf []byte, files []fileCounts) []byte {
 	return w
 }
 
-// pageReader reads an entry's bytes as encodePage and appendTail wrote them.
-// It reads a string as a slice of the one copy of the entry it holds, so a
-// page of four hundred entries costs one allocation for its strings, not two
-// thousand.
+// pageReader reads an entry's bytes as encodePage and appendTail wrote them,
+// each string a slice of its one copy of the entry, so a page's strings cost
+// one allocation rather than one each.
 type pageReader struct {
 	s   string
 	err error

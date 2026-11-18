@@ -8,11 +8,10 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 )
 
-// A POOL KNOWS THE MEMORY ITS LANES WERE SIZED BY: the node's own, read at
-// New, when nothing gives it a figure — positive and named, as the engine
-// boots — and read again on demand; and a figure the options give is held
-// for the pool's life, so a suite's lanes and budgets never follow the
-// machine it runs on.
+// A POOL KNOWS THE MEMORY ITS LANES WERE SIZED BY: the node's own, positive
+// and named, read at New when nothing gives a figure and again on demand; a
+// figure the options give is held for the pool's life, so a suite's lanes and
+// budgets never follow the machine it runs on.
 func TestAPoolKnowsTheMemoryItsLanesWereSizedBy(t *testing.T) {
 	t.Parallel()
 	node := fakePool(t, "exit 0", gitproc.Options{})

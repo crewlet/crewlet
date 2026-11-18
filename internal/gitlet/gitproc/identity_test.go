@@ -18,13 +18,13 @@ import (
 	"github.com/crewlet/crewlet/internal/hostbox"
 )
 
-// emptyTree is git's id of the tree with nothing in it: an argument the cases
-// that never reach a real git give a commit-tree.
+// emptyTree is git's id of the empty tree: the commit-tree argument of the
+// cases that never reach a real git.
 const emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
-// suiteIdentity is the identity the cases give a commit-tree: an author, the
-// committer an engine-built commit names, and a committer date an hour after
-// the author's, as a commit held to a later parent's committer date is dated.
+// suiteIdentity is the identity the cases give a commit-tree: the committer
+// an engine-built commit names, dated an hour after the author, as a commit
+// held to a later parent's committer date is.
 func suiteIdentity() gitproc.Identity {
 	return gitproc.Identity{
 		AuthorName: "Ada Author", AuthorEmail: "ada@example.com",
@@ -34,13 +34,12 @@ func suiteIdentity() gitproc.Identity {
 }
 
 // ONLY COMMIT-TREE TAKES AN IDENTITY, AND IT ALWAYS TAKES ONE: an identity on
-// any other subcommand, a commit-tree with none, and an identity whose part git
-// would not write as given — each of Unicode's 66 noncharacters among them — or
-// whose date it cannot are each refused before any process starts, naming what
-// to change; and the identity a commit-tree is given reaches its process as
-// exactly the six variables git reads it from, each date in the one form git
-// reads as seconds — the epoch included — while a run of any other subcommand
-// sees none of them.
+// another subcommand, a commit-tree with none, and an identity with a part git
+// would not write as given (each of Unicode's 66 noncharacters among them) or
+// a date it cannot are refused before any process starts, naming what to
+// change; a commit-tree's identity reaches it as exactly the six variables git
+// reads, each date in the one form git reads as seconds, the epoch included,
+// and any other run sees none of them.
 //
 // Mutations: drop the subcommand check, and a version given an identity runs;
 // drop the check of a commit-tree with none, and one runs with no identity;
@@ -104,9 +103,8 @@ func TestOnlyCommitTreeTakesAnIdentity(t *testing.T) {
 			t.Errorf("%s: %v, want ErrInvalid naming Cmd.Identity.%s", name, err, tc.field)
 		}
 	}
-	// Every code point Unicode names a noncharacter — read from Unicode's own
-	// table, not from the pool's rule, so the case cannot share its mistake —
-	// is refused, naming the code point.
+	// Every noncharacter, read from Unicode's table rather than the pool's rule
+	// so the case cannot share its mistake, is refused naming the code point.
 	noncharacters := everyRune(unicode.Noncharacter_Code_Point)
 	if len(noncharacters) != 66 {
 		t.Fatalf("Unicode's table names %d noncharacters, want its fixed 66", len(noncharacters))
@@ -175,14 +173,12 @@ func TestOnlyCommitTreeTakesAnIdentity(t *testing.T) {
 }
 
 // identityVariable reports whether git reads a commit's identity from the
-// variable name: an author's or a committer's, or the address git falls back
-// to (EMAIL).
+// variable name, EMAIL (git's fallback address) included.
 func identityVariable(name string) bool {
 	return strings.HasPrefix(name, "GIT_AUTHOR_") || strings.HasPrefix(name, "GIT_COMMITTER_") || name == "EMAIL"
 }
 
-// everyRune is every code point table names, in order: each range of its R16
-// and its R32 walked at the range's stride.
+// everyRune is every code point table names, in order.
 func everyRune(table *unicode.RangeTable) []rune {
 	var out []rune
 	for _, r := range table.R16 {
@@ -199,16 +195,12 @@ func everyRune(table *unicode.RangeTable) []rune {
 }
 
 // A COMMIT IS ITS IDENTITY AND NOTHING ELSE: a commit-tree given one identity
-// in two scratches over one cache writes one commit, and its bytes are exactly
-// the tree, the parent, the identity and the message the call states — while
-// the engine's own environment names another identity, another date and an
-// encoding that would add a header of its own, and the pool's HOME another
-// identity and that encoding. Run on both of the node's gits: what reaches
-// git from either is a claim about every git a Gitlet node may run.
-//
-// Not parallel, because the environment it plants is the process's
-// (t.Setenv); its two arms run beside each other once it returns, before the
-// environment is put back.
+// in two scratches over one cache writes one commit of exactly the tree,
+// parent, identity and message the call states, while the engine's environment
+// and the pool's HOME name another identity, date and an encoding that would
+// add a header. Run on both of the node's gits. Not parallel, because t.Setenv
+// plants the process's environment; its two arms run beside each other once
+// it returns, before the environment is put back.
 //
 // Mutations: let the engine's GIT_AUTHOR_DATE through, or GIT_CONFIG_PARAMETERS,
 // or read the HOME's configuration (no GIT_CONFIG_GLOBAL=/dev/null), and the
@@ -235,9 +227,8 @@ func commitIsItsIdentityOn(t *testing.T, git string) {
 	home := filepath.Join(t.TempDir(), "home")
 	p := poolOn(t, git, gitproc.Options{Home: home})
 	// Written after New checked the HOME was empty, as anything on the node
-	// could write it: a git that read it would name this identity, and add
-	// the encoding header the configuration asks for whatever identity it
-	// was given.
+	// could: a git that read it would name this identity and add the encoding
+	// header whatever identity it was given.
 	planted := "[user]\n\tname = Planted Home\n\temail = home@example.com\n" +
 		"[author]\n\tname = Planted Home\n[committer]\n\tname = Planted Home\n" +
 		"[i18n]\n\tcommitEncoding = ISO-8859-1\n"
@@ -280,25 +271,18 @@ func commitIsItsIdentityOn(t *testing.T, git string) {
 	}
 }
 
-// THE POOL ADMITS AN IDENTITY PART EXACTLY WHERE GIT WRITES IT AS GIVEN. Every
-// name and address of a corpus — plain, UTF-8, every mark git trims inside a
-// part and at either end of one, a line feed, a < and a >, bytes that are not
-// UTF-8, and Unicode's noncharacters, which are UTF-8 to Go and not to git,
-// beside the code points next to them — is put both to the pool, as a
-// commit-tree's identity, and to git itself, by a client whose environment
-// names it: the pool admits a part exactly where git writes it into the
-// commit byte for byte, and what the pool admits its commit-tree writes so.
-// The pool's own two rules are held apart, each beside what git would do: an
-// empty address, which git writes as <>, and a NUL, which no environment can
-// carry. And every date the pool admits is written as its second — the epoch,
-// a second and a day after it, and the last second of the year 9999 — which a
-// date written without its @ would not be. Run on both of the node's gits,
-// since what git writes as given is git's.
+// THE POOL ADMITS AN IDENTITY PART EXACTLY WHERE GIT WRITES IT AS GIVEN: each
+// name and address of a corpus (marks git trims, a line feed, < and >, bytes
+// not UTF-8, Unicode's noncharacters, UTF-8 to Go and not to git, and their
+// neighbours) goes to the pool's commit-tree and to git itself through a
+// client's environment, and the pool admits it exactly where git writes it
+// byte for byte. The pool's own two rules stand apart: an empty address, which
+// git writes as <>, and a NUL, which no environment carries. Every admitted
+// date, the epoch to 9999's last second, is written as its second. Both gits.
 //
 // Mutations: drop the rule for either end of a part, and " Ada" is admitted
-// and written "Ada"; drop the noncharacter rule, and a name ending in U+FFFE
-// is admitted and written as its bytes read as Latin-1, "Adaï¿¾"; write a date
-// without its @, and the epoch is refused by git as a date it cannot read.
+// and written "Ada"; drop the noncharacter rule, and "Ada"+U+FFFE is admitted
+// and written "Adaï¿¾"; write a date without its @, and git refuses the epoch.
 func TestThePoolAdmitsAnIdentityPartExactlyWhereGitWritesItAsGiven(t *testing.T) {
 	t.Parallel()
 	onNodeGits(t, identityPartsOn)
@@ -315,8 +299,8 @@ func identityPartsOn(t *testing.T, git string) {
 	repo := gittest.Empty(t)
 	gittest.Pack(t, c, repo, wt, commit)
 
-	// poolWrites runs a commit-tree of the tree through the pool under id:
-	// the commit it wrote, or admitted false where the pool refused id.
+	// poolWrites is the commit the pool's commit-tree writes under id, or
+	// admitted false where the pool refused id.
 	poolWrites := func(id gitproc.Identity) (written string, admitted bool) {
 		t.Helper()
 		res, err := p.Run(t.Context(), gitproc.Cmd{Dir: repo, Args: []string{"commit-tree", tree},
@@ -329,8 +313,8 @@ func identityPartsOn(t *testing.T, git string) {
 		}
 		return catCommit(t, p, repo, "", strings.TrimSpace(string(res.Stdout))), true
 	}
-	// field is one part of an identity: where the pool takes it, the
-	// variable git reads it from, and which line of a commit carries it.
+	// field is one identity part: its Identity field, git's variable, and
+	// the commit line carrying it.
 	type field struct {
 		name, variable, who string
 		email               bool
@@ -340,8 +324,8 @@ func identityPartsOn(t *testing.T, git string) {
 		{"AuthorName", "GIT_AUTHOR_NAME", "author", false, func(id *gitproc.Identity, s string) { id.AuthorName = s }},
 		{"CommitterEmail", "GIT_COMMITTER_EMAIL", "committer", true, func(id *gitproc.Identity, s string) { id.CommitterEmail = s }},
 	}
-	// gitWrites is what git itself writes for s as f, given it by its
-	// environment, and false where git refused it.
+	// gitWrites is what git itself writes for s as f, given by its
+	// environment, or false where git refused it.
 	gitWrites := func(f field, s string) (string, bool) {
 		t.Helper()
 		out, _, err := c.Env(f.variable+"="+s).Try(t, wt, strings.NewReader("m\n"), "commit-tree", tree)
@@ -356,11 +340,8 @@ func identityPartsOn(t *testing.T, git string) {
 		"ada@example.com", "a+b@example.com", "",
 		" Ada", "Ada ", "\tAda", "Ada\r", "Ada,", ",Ada", ":Ada", "Ada;", `"Ada"`, `Ada\`, "'t Hooft", ",",
 		"A\nda", "A<da", "Ad>a", "<ada@example.com>", "\xffAda", "Ada\xc3",
-		// Unicode's noncharacters, which Go's UTF-8 admits and git's does
-		// not — both ends of U+FDD0..U+FDEF, the last two code points of
-		// plane 0, one of the last two of plane 1 and of plane 16, and one
-		// inside a part — then the code points beside them, which git writes
-		// as given.
+		// Noncharacters (both ends of U+FDD0..U+FDEF, plane ends, one inside
+		// a part), then their neighbours, which git writes as given.
 		"Ada\U0000FDD0", "Ada\U0000FDEF", "Ada\U0000FFFE", "Ada\U0000FFFF", "Ada\U0001FFFE", "Ada\U0010FFFF",
 		"A\U0000FFFFda",
 		"Ada\U0000FDCF", "Ada\U0000FDF0", "Ada\U0000FFFD", "Ada\U0001FFFD", "Ada\U00010000",
@@ -418,8 +399,8 @@ func objectID(kind, body string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// catCommit is the commit oid as the pool reads it in dir, leaning on
-// alternate ("" for none), or why it could not be read.
+// catCommit is the commit oid as the pool reads it in dir over alternate
+// ("" for none), or why it could not be read.
 func catCommit(t *testing.T, p *gitproc.Pool, dir, alternate, oid string) string {
 	t.Helper()
 	res, err := p.Run(t.Context(), gitproc.Cmd{Dir: dir, Alternate: alternate, Args: []string{"cat-file", "commit", oid},
@@ -430,8 +411,8 @@ func catCommit(t *testing.T, p *gitproc.Pool, dir, alternate, oid string) string
 	return string(res.Stdout)
 }
 
-// identityLine is the rest of a commit's line for who ("author" or
-// "committer"), after its keyword: name <address> date zone.
+// identityLine is a commit's line for who ("author" or "committer") after
+// its keyword: name <address> date zone.
 func identityLine(t *testing.T, commit, who string) (name, email, when string) {
 	t.Helper()
 	headers, _, _ := strings.Cut(commit, "\n\n")

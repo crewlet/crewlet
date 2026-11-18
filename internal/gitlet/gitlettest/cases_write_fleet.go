@@ -10,10 +10,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ENGINE WRITE'S FLEET CASES (ADR-0089, ADR-0092): what only more than one
-// Gitlet node can make of a write asked through the estate's routing
-// (code.git_write) — the member it is asked through, the home that builds it,
-// the home that dies under it, a member behind the company's configuration.
+// The engine write's fleet cases (ADR-0089, ADR-0092): what only more than one
+// Gitlet node makes of a write asked through the estate's routing
+// (code.git_write).
 
 // writesOf is every push row of rc's repository that names push id.
 func (rc *repoCase) writesOf(id string) []gitlet.PushRow {
@@ -27,16 +26,13 @@ func (rc *repoCase) writesOf(id string) []gitlet.PushRow {
 	return rows
 }
 
-// F40: EVERY MEMBER ROUTES AN ENGINE WRITE TO THE REPOSITORY'S HOME (ADR-0089).
-// A seat's write asked through each member's own router — the home's among
-// them, which asks its own git half in process at its place — is built by the
-// repository's home and by no other member: the Gitlet node that built a write is
-// the one its push row names (gitlet.PushRow.Node), and every row names the
-// home. On a cluster every member is a data node and a Gitlet node, so the home
-// and the member a repository's pushes are committed by are one member, one
-// rendezvous order over one set. A router that asked its own member first
-// would warm a copy of the repository on every member a seat writes through,
-// and build each write beside a copy cold until it synced.
+// F40: every member routes an engine write to the repository's home
+// (ADR-0089). A seat's write asked through each member's router, the home's
+// included (it asks its own git half in process), is built by the home alone:
+// every push row names it (gitlet.PushRow.Node). On a cluster the home and the
+// repository's committer are one member, one rendezvous order over one set. A
+// router asking its own member first would warm a copy on every member a seat
+// writes through, and build each write beside a copy cold until it synced.
 func everyMemberRoutesAnEngineWriteToTheHome(t *testing.T, c Cluster) {
 	rc := newRepoCase(t, c, "fleet-f40")
 	home := rc.committer()
@@ -72,23 +68,18 @@ func everyMemberRoutesAnEngineWriteToTheHome(t *testing.T, c Cluster) {
 	rc.converged()
 }
 
-// F41: AN ENGINE WRITE WHOSE HOME DIES AFTER ITS APPEND IS ONE PUSH (ADR-0092).
-// The repository's home builds a seat's write and lands it — its proposal
-// answered, its record durable — and dies before it answers: a CRASH at
-// gitletfault.HostAfterPropose, never a Block (F21's rule), and the member KILLED,
-// its broker member with it. The member the write was asked through hears
-// nothing for its router's whole git write attempt, then asks the runner-up the
-// same write — the same operation, so the same push — and the runner-up, its
-// copy synced to the write's floor and the branch already at the write's own
-// commit, finds that push's row and answers from it, nothing built: applied,
-// under the write's own push id, ONE push row, built by the home. Every
-// member's copy is then the rows, the restarted home's too.
+// F41: an engine write whose home dies after its append is one push
+// (ADR-0092). The home lands a seat's write and is killed, broker member and
+// all, at gitletfault.HostAfterPropose (a Crash, as F21's). The member it was
+// asked through hears nothing for its router's git write attempt, asks the
+// runner-up the same operation, and is answered from that push's row, nothing
+// built: applied, one row, built by the home; every copy then converges.
 //
-// THE RUNNER-UP HOLDS A COPY BEFORE THE HOME DIES — the repository's first
-// push went through it — because the walk that meets a silent home asks the
-// runner-up unstamped (a silent node may be filling the copy it was asked to),
-// and a node that holds none fills nothing for a write not stamped its walk's
-// home (F27's rule): the case is the push's, not the fill's.
+// The runner-up holds a copy before the home dies (the first push went
+// through it): the walk past a silent home asks it unstamped (a silent node may
+// be filling the copy it was asked to), and a node holding none fills nothing
+// for a write not stamped its walk's home (F27's rule). The case is the
+// push's, not the fill's.
 func anEngineWriteWhoseHomeDiesAfterAppendIsOnePush(t *testing.T, c Cluster) {
 	rc := newRepoCase(t, c, "fleet-f41")
 	order := rendezvous.Order(rc.id, c.DataNodes())
@@ -145,25 +136,18 @@ func anEngineWriteWhoseHomeDiesAfterAppendIsOnePush(t *testing.T, c Cluster) {
 	rc.converged()
 }
 
-// F42: A REVOKED SEAT IS REFUSED ONCE THE LAGGING COMMITTER SHEDS
-// (M3-decisions M3-O8). A revision takes alice out of the chart. The
-// repository's committer — its home Gitlet node too, one rendezvous order over
-// one set — fails to apply it: it keeps the chart that still holds her and is
-// confirmed behind the company's configuration, while every other member
-// applies it. alice's write, asked through another member, is refused
-// not_permitted and nothing lands: the member behind judges no seat's grant
-// from the chart the fleet replaced — its git half answers her write
-// `behind_config`, which hands the walk to the runner-up — and the runner-up's
-// chart has no alice. A person's push to the same repository, whose grant
-// reads no chart, lands, its proposal decided by a current committer: a fleet
-// with a member behind refuses what the revision revoked and nothing else.
+// F42: a revoked seat is refused once the lagging committer sheds
+// (M3-decisions M3-O8). The repository's committer (its home too) keeps the
+// chart a revision took alice out of, confirmed behind the configuration. Her
+// write asked through another member is refused not_permitted with nothing
+// landed: the member behind answers it behind_config, handing the walk to the
+// runner-up, whose chart has no alice. A person's push, whose grant reads no
+// chart, lands: only what the revision revoked is refused.
 //
-// THE ARMS HOLD TOGETHER. Were the member behind to build alice's write — its
-// git half's refusal dropped (host.Options.Current) — its proposal would still
-// be asked of a current committer first (the soft arm, estate.Backend.Current),
-// and its own committer would hand a seat's proposal on unjudged
-// (gitlet.CommitterOptions.Current); with all three dropped, the member behind
-// builds the write by the chart it kept and lands it — red.
+// Red only with all three arms dropped: the git half's behind_config
+// (host.Options.Current), asking a current committer first
+// (estate.Backend.Current), and the committer behind handing a seat's proposal
+// on unjudged (gitlet.CommitterOptions.Current).
 func aRevokedSeatIsRefusedOnceTheLaggingCommitterSheds(t *testing.T, c Cluster) {
 	rc := newRepoCase(t, c, "fleet-f42")
 	behind := rc.committer()
@@ -174,7 +158,7 @@ func aRevokedSeatIsRefusedOnceTheLaggingCommitterSheds(t *testing.T, c Cluster) 
 	rc.mustPush(p, work, via, "main")
 	ref := "refs/heads/seats/" + FixtureAlice + "/f42"
 
-	// THE PREMISE: alice may write the branch before the revision.
+	// The premise: alice may write the branch before the revision.
 	granted, err := c.GitWriteThrough(rc.ctx, via, commitFiles(t, rc.id, seatAt(t, FixtureAlice), ref, "", head,
 		"before the revision", put("f42.txt", "before\n")))
 	if err != nil || granted.Outcome != statelog.OutcomeApplied {

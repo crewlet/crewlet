@@ -23,14 +23,13 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE PACK BOUND AT THE RECEIVER: a push carrying a pack into a repository its
-// own sync showed at gitlet.MaxPacksPerRepo live packs is refused
-// compaction_behind before its bundle is uploaded — but only once the
-// repository's row, read AGAIN, still says so. Each case pushes into a
-// repository that holds two pushes' packs while every answer about its row
-// says it holds gitlet.MaxPacksPerRepo − 2 more ([boundCase]), so a third push
-// meets the bound with no two thousand packs to store; the committer's decide
-// reads the rows themselves, and is the authority.
+// THE PACK BOUND AT THE RECEIVER: a push into a repository its own sync showed
+// at gitlet.MaxPacksPerRepo live packs is refused compaction_behind before its
+// bundle uploads, but only once the row, read AGAIN, still says so. A case's
+// repository holds two pushes' packs while every answer about its row adds
+// gitlet.MaxPacksPerRepo − 2 ([boundCase]), so a third push meets the bound
+// without storing two thousand packs; the committer's decide reads the rows
+// themselves and is the authority.
 
 // extraPacks is how many live packs more than its rows hold a bound case's
 // answers say its repository holds: two real pushes put the next at the bound.
@@ -60,8 +59,8 @@ type boundCase struct {
 	reread func(ctx context.Context, inner host.Estate, q gitlet.ResolveQuery) (gitlet.RepoRef, error)
 }
 
-// newBoundCase is a bound case: two pushes landed, each read again nowhere —
-// below the bound, a landing reads nothing more — and a third commit made.
+// newBoundCase is a bound case: two pushes landed with no row read again
+// (below the bound a landing reads nothing more), and a third commit made.
 func newBoundCase(t *testing.T) *boundCase {
 	t.Helper()
 	b := &boundCase{e: &recording{}}
@@ -130,10 +129,10 @@ func (b *boundCase) answerReadsWith(reread func(context.Context, host.Estate, gi
 	b.reread = reread
 }
 
-// push pushes the third commit to main through the first Gitlet node, holding the
-// push once its scratch exists — past its own sync, which pinned what the
-// landing judges — to run during (nil for nothing), and answers what git
-// printed and the position the push's sync pinned.
+// push pushes the third commit to main through the first Gitlet node, running
+// during (nil for nothing) while the push is held at its scratch, past the
+// sync that pinned what the landing judges; it answers what git printed and
+// that sync's position.
 func (b *boundCase) push(t *testing.T, during func()) (gitlettest.Pushed, statelog.Position) {
 	t.Helper()
 	held, reached := make(chan struct{}), make(chan struct{})
@@ -172,11 +171,10 @@ func (b *boundCase) readOnce(t *testing.T, pin statelog.Position) {
 	}
 }
 
-// compact merges the repository's two packs into one as a compaction does: a
-// pack of every object the two pushes stored, written by the person's git,
-// laid out and stored as one bundle and proposed to the data node's
-// committer, which applies it — so the rows hold one live pack fewer. It
-// answers the position the compaction applied at.
+// compact merges the repository's two packs into one as a compaction does
+// (one bundle of every object the two pushes stored, proposed to the data
+// node's committer), leaving one live pack fewer, and answers the position
+// it applied at.
 func (b *boundCase) compact(t *testing.T) statelog.Position {
 	t.Helper()
 	rows := b.Rows()
@@ -212,26 +210,18 @@ func (b *boundCase) compact(t *testing.T) statelog.Position {
 	return res.Position
 }
 
-// THE PRECHECK READS AGAIN BEFORE IT REFUSES. A push whose own sync showed its
-// repository at gitlet.MaxPacksPerRepo is refused compaction_behind by its
-// receiver only once ONE read of the repository's row — at session, floored at
-// that sync's position, through the estate, with no barrier and only on this
-// path — still finds it at the bound, so a retry that would only be refused
-// uploads nothing. A compaction applied since the sync lowers the row, and
-// the push lands rather than being refused by a figure that is no longer so;
-// a read that fails, answers another repository (a name claimed since the
-// sync) or finds the repository no longer active establishes nothing, and
-// the push goes on to its committer, whose decide is the authority.
+// THE PRECHECK READS AGAIN BEFORE IT REFUSES: a push whose own sync showed its
+// repository at gitlet.MaxPacksPerRepo is refused compaction_behind, before it
+// uploads, only once ONE read of the row (at session, floored at that sync,
+// through the estate, no barrier, only on this path) still finds it there. A
+// compaction since lets it land; a read that fails, finds it inactive or names
+// another repository (claimed since) establishes nothing: the committer decides.
 //
-// Mutation: refuse on the sync's own figure and the first case is refused;
-// read again through the cache's Sync at session floored at the sync — which
-// the cache answers at once from the very copy the push pinned (atOnce) — and
-// the first case is refused too; drop the precheck and the second case
-// uploads and lands; refuse on a read that failed, on an answer about another
-// repository or on one no longer active, and that case is refused; read again
-// through the barrier, or at any floor but the sync's, and every case fails
-// its count of reads; read again on every push and newBoundCase fails on the
-// two pushes below the bound.
+// Mutation: refuse on the sync's figure, or reread through the cache's Sync
+// (atOnce answers from the pinned copy): case one is refused. Drop the
+// precheck: case two uploads. Refuse on a failed, foreign or inactive read:
+// that case is refused. Reread through the barrier or at another floor: every
+// read count fails. Reread on every push: newBoundCase fails.
 func TestThePrecheckReadsAgainBeforeItRefuses(t *testing.T) {
 	t.Run("a compaction applied since the sync lets the push land", func(t *testing.T) {
 		b := newBoundCase(t)

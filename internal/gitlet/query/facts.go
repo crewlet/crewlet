@@ -18,133 +18,43 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// A REVISION'S FACTS are what one revision of a change IS against its target,
-// a function of two whole commit ids alone — its head, and its target's tip
-// as the asker read it — so any Gitlet node answers them alike, and whoever
-// records them reads them once a revision and target. Up to six processes of
-// the read lane, one after another:
-//
-//  1. THE BASE — `git merge-base <target> <head>`: the change is measured
-//     from where its history meets its target's, as a merge of it would be.
-//     Where that is the head itself the target holds the change already
-//     (HeadInTarget), and there is nothing left to measure. Histories that
-//     share no commit have no merge base: the change is measured from the
-//     empty tree, which every git knows without holding it — every file of
-//     the head is the change's.
-//  2. THE TOUCHED PATHS — `git diff-tree -r --raw -z --no-renames <base>
-//     <head>`: every file the change's merge would change, read until the
-//     list passes gitlet.MaxTouchedPaths, its JSON passes gitlet.MaxTouchedBytes
-//     (or the room its answer leaves), or a path is no UTF-8, which JSON
-//     cannot carry exactly. There the read stops git and the facts say the
-//     revision TOUCHES ALL, with no list: what every consumer reads as every
-//     path, where a list cut at its bound would leave the files past the cut
-//     out of everything that matches against it. Renames off, so a moved
-//     file is its two paths, as the merge would touch them. RAW records,
-//     whose modes, ids and status say which paths a lexer classes
-//     (lexableEntry) and by which two blobs.
-//  3. THE TREES AND THE BLOBS' SIZES — one `git cat-file --batch-check -Z`
-//     (read.check) of the head's tree, the base's, and each lexable path's
-//     two blobs: two revisions whose base and head trees are the same hold
-//     the same code (gitlet.ChangeClassNoCodeChange), and what a blob weighs
-//     decides whether it is read at all.
-//  4. THE PATCH — `git diff-tree -r -p --full-index --no-renames <base>
-//     <head>`, the cumulative diff of the change, every file in git's order,
-//     with three lines of context, written into a SPOOL (the cache's: a file
-//     with no name on its volume, gone when closed) and bounded there at
-//     MaxPatchIDDiffBytes.
-//  5. ITS ID — `git patch-id --verbatim`, reading the spool back: the hash of
-//     the patch's lines with their line numbers left out, so the same change
-//     rebased onto a target that moved nothing near its lines keeps its id.
-//  6. ITS CLASSES — one `git cat-file --batch --buffer` writing the lexable
-//     paths' blobs, a base's and a head's a path, each pair lexed as it
-//     arrives (gitlet.ClassifyGo) and dropped: within gitlet.MaxClassedBlobBytes
-//     a version and gitlet.MaxClassedBytes in all, in the touched list's order,
-//     so what a classification holds is two versions of one file.
-//
-// --VERBATIM, NEVER --STABLE: --stable strips all whitespace before it hashes,
-// and whitespace is meaningful — Python's and YAML's indentation, a
-// Makefile's tab, a string literal's spaces — so a change to it alone must not
-// read as the change a reviewer approved. --verbatim hashes the lines as they
-// are, and orders files as --stable does (each file's hash summed), where git
-// 2.39 and later carry it: every Gitlet node's floor.
-//
-// --FULL-INDEX because patch-id hashes a binary file by the two blob ids its
-// `index` line names, and git abbreviates them to however many digits make
-// them unique in the repository at hand — which grows with its objects — so
-// one change would hash apart on two copies holding different counts of
-// objects. Whole ids are the same on every node.
-//
-// A SPOOL, because the two processes run one after the other in the read
-// lane, never nested: piped together they would hold two of its slots at
-// once, and a lane filled with first halves would wait on itself for the
-// second. A patch held in memory instead would be MaxPatchIDDiffBytes a read,
-// and a spool is no file of the cache's: the kernel removes it however the
-// read ends. The NODE holds MaxPatchSpools of them at once, whatever its read
-// share, so the room they take is one the cache is sized beside.
-//
-// AN ID IS OPTIONAL, AND ITS OMISSION THE SAFE SIDE: past MaxPatchIDDiffBytes
-// the facts answer with the id omitted PAST ITS BOUND (gitlet.OmittedPastBound)
-// — an id that equals nothing, so no approval carries across it by its diff —
-// rather than fail: the base, the touched paths and the trees are what a
-// change cannot do without, and they cost little. Those fail the read as any
-// read's git does (server.go): a walk that ran its whole budget is too large,
-// a busy or damaged node unready. So are THE CLASSES OPTIONAL, for the same
-// reason and on the same side: a class only relaxes, so classes cut short by
-// their bound are answered INCOMPLETE — the paths lexed keep theirs, the rest
-// have none — and never fail the read. They run last, after the id, which
-// carries a reviewer's approval across a rebase: a common change the classes
-// would otherwise take the budget from.
-//
-// AN OMISSION FOR TIME IS ANSWERED APART (gitlet.OmittedOutOfTime): where the
-// patch or its id ran out what was left of the read's budget of git, or the
-// classes did, the facts say so in that word, never as the bound's. A bound
-// measures the two commits, and every node omits alike; the budget measures
-// the node at that moment — a slow one under load, where the one beside it
-// takes the id in a second — and facts recorded from it would drop every
-// approval's carry-forward for that revision for good, a re-review forced
-// exactly when the fleet is busiest. So such facts are not FINAL
-// (gitlet.RevisionFactsAnswer.Final): they are answered, since the paths and
-// trees in them are whole and every reader of those alone may take them, and
-// their recorder asks again rather than keep them.
+// A revision's facts are a function of two whole commit ids (its head, and its
+// target's tip as the asker read it), so every Gitlet node answers them alike
+// and a recorder reads them once a revision and target. Up to six processes of
+// the read lane, one after another (factsRead): the merge base (none: the
+// empty tree, every head file the change's; the head itself: HeadInTarget),
+// the touched paths (touched), the trees and lexable blobs' sizes (shapes),
+// the patch into a spool and its patch-id (patchID), and the Go classes
+// (classes). The base, paths and trees fail the read as any read's git does
+// (server.go); the id and the classes are only ever omitted (omission), the
+// safe side, since an omitted id equals nothing and a class only relaxes. The
+// classes run last so they never take the budget from the id, which carries
+// an approval across a rebase.
 
 // MaxPatchIDDiffBytes is the largest cumulative diff whose patch-id a
 // revision's facts take: past it the facts answer the id omitted past its
-// bound (gitlet.OmittedPastBound).
+// bound (gitlet.OmittedPastBound), and an approval carries to the next
+// revision by identical trees alone (gitlet.ChangeClassNoCodeChange).
 //
-// 256 MIB, MEASURED TO FIT: BenchmarkRevisionFacts read the facts of a change
-// whose patch is 249 MiB — 781 files of 256 KiB, every fourth line rewritten,
-// a formatter's run — in 2.30 s at p50 and 2.38 s at the slowest of three
-// reads (-benchtime 3x, one count, git 2.56.0 on two E-cores of a Core Ultra
-// 7 265U), some 114 MB of patch a second, as its 1, 16 and 64 MiB arms (18,
-// 170 and 621 ms) are: under a quarter of the one budget a read's own git
-// has, gitproc.ReadDeadline, so a node at its share, four times slower, still
-// takes the id. So the facts need NO DEADLINE OF THEIR OWN: a longer one would
-// outlast the attempt a git read's asker waits (estate.GitReadAttempt, which
-// that budget is a term of), answered late rather than omitted. A spool at
-// the bound is a quarter of a gigabyte on the cache's volume for the second
-// or two its read runs, two of them on a node at most (MaxPatchSpools). A
-// change whose diff passes it — a vendored tree, data
-// files — carries an approval from one revision to the next by its code alone:
-// the same base and head trees (gitlet.ChangeClassNoCodeChange).
+// 256 MiB reads in under a quarter of gitproc.ReadDeadline (package doc,
+// "Measured"), so a node at its share, four times slower, still takes the id,
+// and the facts need no deadline of their own: a longer one would outlast
+// estate.GitReadAttempt and answer late rather than omit. A spool at the bound
+// is a quarter of a gigabyte on the cache's volume for a second or two,
+// MaxPatchSpools of them at most.
 const MaxPatchIDDiffBytes = 256 << 20
 
 // MaxPatchSpools is how many revisions' patches one Gitlet node spools at once:
-// TWO, the facts reads one home asks at once — its loop works
+// two, the facts reads one home asks at once, since its loop works
 // internal/gitlet/home's Concurrency repositories at a time, each turn's facts
-// read one after another, and the router's walk asks a repository's home
-// first, so a node's facts reads are its own home's in the steady state
+// read one after another, and the router asks a repository's home first, so
+// a node's facts reads are its own home's
 // (engine.TestEveryFactsReadOfAHomeHasASpool holds the two equal). A third,
-// from another home's walk past a copy that could not answer, waits for a
-// spool as a read waits for a unit of the share — gitlet.GitShareWait at most —
-// and is then answered unready (share) for the walk's next node.
-//
-// THE BOUND IS THE NODE'S, NOT THE READ'S, because the volume is: a read's
-// spool is held to MaxPatchIDDiffBytes, but the reads at once were bounded
-// only by the share (half the read lane — 8 × 256 MiB = 2 GiB on a 16-core
-// Gitlet node, 8 GiB on 64 cores) and none of it was in the room the cache is
-// sized against, which on the shared layout is the store's headroom.
-// PatchSpoolAllowance is what these spools may hold, which the engine takes
-// out of the cache's room beside the host's request spools.
+// from another home's walk, waits as a read waits for its share
+// (gitlet.GitShareWait at most), then is answered unready (share). The bound is the node's, not the read's, because
+// the volume is: bounded by the share alone, spools would reach 8 GiB on 64
+// cores, outside the room the cache is sized against. PatchSpoolAllowance is
+// what the engine takes out of that room for them.
 const MaxPatchSpools = 2
 
 // PatchSpoolAllowance is the most every revision's patch spooled on a Gitlet
@@ -191,10 +101,9 @@ func (r *read) factsRead(ctx context.Context, objs found) (gitlet.GitAnswer, err
 	if base == "" {
 		base = emptyTree
 	}
-	// THE ROOM THE LIST HAS: the answer with every other field at its
-	// widest — an id where an id goes, every flag set, every place of a list
-	// at its bound classed — and the list's own brackets, which the envelope
-	// holds already.
+	// The room the list has: the answer with every other field at its widest
+	// (every id and flag set, every place of a bounded list classed), plus
+	// the list's own brackets, which the envelope counts already.
 	envelope := gitlet.GitAnswer{Kind: gitlet.GitRevisionFacts, RevisionFacts: &gitlet.RevisionFactsAnswer{
 		Head: f.Head, Target: f.Target, MergeBase: mb, BaseTree: f.Head, HeadTree: f.Head, PatchID: f.Head,
 		PatchIDOmission: gitlet.OmittedOutOfTime, Touched: []string{}, TouchesAll: true,
@@ -250,11 +159,12 @@ type lexable struct {
 	old, new string
 }
 
-// touched is every path the diff from base to head changes, in git's order —
-// or all, with no list, once the list would pass the read's bound on its paths
-// or on its JSON (limit), or meets a path that is no UTF-8 — read from
-// diff-tree's RAW records, whose modes, ids and status name the paths a lexer
-// classes (lexableEntry) with their two blobs.
+// touched is every path the diff from base to head changes, in git's order,
+// from diff-tree's raw records, whose modes, ids and status name the paths a
+// lexer classes (lexableEntry) and their two blobs. Renames are off, so a moved
+// file is its two paths, as a merge touches them. Past the read's bound on the
+// paths or their JSON (limit) it answers all, with no list: a list cut at its
+// bound would leave the files past the cut out of every match against it.
 func (r *read) touched(ctx context.Context, base, head string, limit int) (touchedWalk, error) {
 	w := touchedWalk{paths: []string{}}
 	cost := gitlet.TouchedCost(nil)
@@ -264,8 +174,7 @@ func (r *read) touched(ctx context.Context, base, head string, limit int) (touch
 	)
 	recs := newRecords(0, gitproc.MaxLine+gitlet.MaxGitPathBytes, func(rec []byte, long bool) error {
 		if need == 0 {
-			// A RECORD'S HEADER — its modes, ids and status — and then its
-			// path: one, with renames off.
+			// A record's header (modes, ids, status), then its one path.
 			if long {
 				return fmt.Errorf("query: diff-tree answered a record of %d bytes or more, past any header",
 					len(rec))
@@ -279,12 +188,10 @@ func (r *read) touched(ctx context.Context, base, head string, limit int) (touch
 		if len(w.paths) > 0 {
 			c++ // the comma before it
 		}
-		// A PATH THE FACTS' RECORD COULD NOT CARRY TOUCHES ALL, as one past
-		// the list's bounds does: bytes that are not UTF-8, which JSON cannot
-		// carry exactly, and one no read by oid could name back (gitlet.GitPath:
-		// past gitlet.MaxGitPathBytes, or not clean), which the revise that
-		// records the facts refuses — a list holding it would leave its change
-		// due to its home for ever, its every revise refused.
+		// A path the facts' record could not carry touches all too: no UTF-8,
+		// which JSON cannot carry exactly, or not nameable, which the revise
+		// recording the facts refuses, leaving the change due to its home for
+		// ever.
 		if long || !utf8.Valid(rec) || len(w.paths) == r.s.touchedPaths || cost+c > limit ||
 			!nameable(rec) {
 			w.all = true
@@ -335,10 +242,10 @@ func lexableEntry(e rawEntry, path []byte) bool {
 		bytes.HasSuffix(path, []byte(".go"))
 }
 
-// shapes sets f's trees — its head's and its base's, the empty tree's where
-// it has none — and answers each lexable path's two blobs, the base's then
-// the head's, as one check of them all finds them (read.check): one short
-// process, whatever the change touches.
+// shapes sets f's trees (its head's, and its base's or the empty tree), which
+// gitlet.ChangeClassNoCodeChange compares, and answers each lexable path's two
+// blobs, the base's then the head's, whose sizes decide whether they are read:
+// one check of them all (read.check), whatever the change touches.
 func (r *read) shapes(ctx context.Context, f *gitlet.RevisionFactsAnswer, lexed []lexable) ([]object, error) {
 	in := []string{f.Head + "^{tree}"}
 	if f.MergeBase != "" {
@@ -364,18 +271,16 @@ func (r *read) shapes(ctx context.Context, f *gitlet.RevisionFactsAnswer, lexed 
 	return objs[trees:], nil
 }
 
-// classes is the path classes of the paths the walk found a lexer classes —
-// none, incomplete PAST A BOUND, where it touches all — each pair of blobs
-// lexed (gitlet.ClassifyGo) as one `cat-file --batch` writes them: in the
-// touched list's order, a path whose version is past the classed blob bound
-// left unread with no class, and the classification cut, INCOMPLETE, at the
-// first path whose two versions would take what it lexes past the classed
-// bound in all (gitlet.OmittedPastBound), or wherever what the read's budget of
-// git left runs out (gitlet.OmittedOutOfTime). A blob the check found none of is
-// the copy's damage — its trees name it — which a node with a whole copy would
-// lex: the read is the node's failure, unready, never classes this copy alone
-// would leave out. sizes is the check's answer of each path's two blobs, in
-// the walk's order.
+// classes is the classes of the walk's lexable paths (none, incomplete past a
+// bound, where it touches all), each pair of blobs lexed (gitlet.ClassifyGo) as
+// one `cat-file --batch` writes them, in the touched list's order. A path with
+// a version past the classed blob bound gets no class; the classification is
+// cut incomplete at the first pair that would pass the classed bytes in all
+// (gitlet.OmittedPastBound) or where the read's budget runs out
+// (gitlet.OmittedOutOfTime). A blob the check did not find is this copy's
+// damage, which a whole copy would lex, so the read is unready, never classes
+// this copy alone leaves out. sizes is the check's answer for each path's two
+// blobs, in the walk's order.
 func (r *read) classes(ctx context.Context, w touchedWalk, sizes []object) (gitlet.RevisionClasses,
 	gitlet.FactsOmission, error) {
 
@@ -411,7 +316,7 @@ func (r *read) classes(ctx context.Context, w touchedWalk, sizes []object) (gitl
 	}
 	deadline, err := r.budget()
 	if err != nil {
-		// THE FACTS BEFORE THEM SPENT the read's whole budget.
+		// The facts before them spent the read's whole budget.
 		//nolint:nilerr // budget's one error is the read's git spent, which the facts answer as an omission.
 		return gitlet.RevisionClasses{}, gitlet.OmittedOutOfTime, nil
 	}
@@ -422,8 +327,7 @@ func (r *read) classes(ctx context.Context, w touchedWalk, sizes []object) (gitl
 		Config: r.s.o.Cache.ServeConfig(), Stdin: &in, Stdout: lx, Class: gitproc.ClassRead, Deadline: deadline,
 	})
 	if r.omission(ctx, res, err) != "" {
-		// OUT OF THE BUDGET: the paths lexed keep their classes, and the
-		// rest have none.
+		// Out of budget: the paths lexed keep their classes, the rest none.
 		return lx.classes(false), gitlet.OmittedOutOfTime, nil
 	}
 	if err == nil {
@@ -557,14 +461,22 @@ func nameable(rec []byte) bool {
 	return err == nil
 }
 
-// patchID is `git patch-id --verbatim` of the diff from base to head: "" for
-// a diff of nothing, and omitted past the read's bound on the diff
-// (gitlet.OmittedPastBound), or where what was left of its budget of git ran
-// out (gitlet.OmittedOutOfTime).
+// patchID is `git patch-id --verbatim` of the diff from base to head, which
+// leaves line numbers out so a rebase that moved nothing near the change keeps
+// its id: "" for a diff of nothing, and omitted past MaxPatchIDDiffBytes or out
+// of the read's budget (omission). --verbatim (git 2.39, every node's floor),
+// summing file hashes as --stable does, but never --stable, which strips all
+// whitespace: indentation, a Makefile's tab, a literal's spaces are changes a
+// reviewer approves. --full-index, because patch-id hashes a binary file by
+// its index line's blob ids, which git abbreviates by the copy's object count,
+// so two nodes would differ. Spooled, never piped: two processes at once would
+// hold two read-lane slots, and a lane full of first halves would wait on
+// itself; in memory it would be MaxPatchIDDiffBytes a read. A spool has no
+// name, so the kernel removes it however the read ends.
 func (r *read) patchID(ctx context.Context, base, head string) (string, gitlet.FactsOmission, error) {
 	deadline, err := r.budget()
 	if err != nil {
-		// THE BASE AND THE PATHS SPENT the read's whole budget.
+		// The base and the paths spent the read's whole budget.
 		return "", gitlet.OmittedOutOfTime, nil
 	}
 	release, err := r.takePatchSpool(ctx, head)
@@ -598,8 +510,8 @@ func (r *read) patchID(ctx context.Context, base, head string) (string, gitlet.F
 		return "", "", err
 	}
 	if w.wrote == 0 {
-		// A DIFF OF NOTHING has no patch and no id: a revision that changes
-		// nothing carries nothing.
+		// A diff of nothing has no id: a revision changing nothing carries
+		// nothing.
 		return "", "", nil
 	}
 	if _, err = spool.Seek(0, io.SeekStart); err != nil {
@@ -607,7 +519,7 @@ func (r *read) patchID(ctx context.Context, base, head string) (string, gitlet.F
 			"the patch of %s: %v; another Gitlet node answers", r.s.o.NodeID, head, err))
 	}
 	if deadline, err = r.budget(); err != nil {
-		// THE PATCH SPENT the read's whole budget.
+		// The patch spent the read's whole budget.
 		return "", gitlet.OmittedOutOfTime, nil
 	}
 	res, err = r.s.o.Git.Run(ctx, gitproc.Cmd{
@@ -621,8 +533,8 @@ func (r *read) patchID(ctx context.Context, base, head string) (string, gitlet.F
 	if err = r.failed(ctx, "patch-id of a change", res, err, nil); err != nil {
 		return "", "", err
 	}
-	// ONE PATCH, ONE LINE: "<patch-id> <commit id>", the commit id git's
-	// zero id, since a diff of two trees names no commit.
+	// One line, "<patch-id> <commit id>", the commit id zero: a diff of two
+	// trees names no commit.
 	fields := strings.Fields(string(res.Stdout))
 	if len(fields) != 2 || !gitref.ValidOID(fields[0]) || fields[1] != gitref.ZeroOID {
 		return "", "", fmt.Errorf("query: patch-id answered %q for a patch of %d bytes, which is no one patch's "+
@@ -632,11 +544,10 @@ func (r *read) patchID(ctx context.Context, base, head string) (string, gitlet.F
 }
 
 // takePatchSpool holds one of the node's MaxPatchSpools for the patch of
-// head, waiting for one to come free at most as long as a read waits for a
-// unit of its share (gitlet.GitShareWait): past it, or where the read's answer
-// falls due first, unready (share), so the walk asks its next node and the
-// home's next pass asks again; its caller's own end is its caller's error.
-// release gives it back.
+// head, waiting at most as a read waits for its share (gitlet.GitShareWait):
+// past it, or where the answer falls due first, it is unready (share), so the
+// walk asks its next node and the home asks again next pass; the caller's own
+// end is the caller's error. release gives it back.
 func (r *read) takePatchSpool(ctx context.Context, head string) (release func(), err error) {
 	wait := time.NewTimer(r.s.patchSpoolWait)
 	defer wait.Stop()
@@ -654,12 +565,15 @@ func (r *read) takePatchSpool(ctx context.Context, head string) (release func(),
 		r.s.o.NodeID, MaxPatchSpools, head, r.s.patchSpoolWait))
 }
 
-// omission is what a run of the patch, its id or the classes left out where
-// it ended short of its answer, charging its run: past the bound on the patch
-// (gitlet.OmittedPastBound), or at its deadline, what was left of the read's
-// budget of git (gitlet.OmittedOutOfTime) — and "" for every other end. A run
-// that reported damage, one the read's answer falling due ended, and one its
-// caller ended are none: failed judges those as it judges every run.
+// omission is what a run of the patch, its id or the classes left out,
+// charging the run: gitlet.OmittedPastBound past the patch's bound,
+// gitlet.OmittedOutOfTime at the read's budget's deadline, and "" for every
+// other end (damage, the answer falling due, the caller's end), which failed
+// judges. Out of time is answered apart, its paths and trees whole, but not
+// Final (gitlet.RevisionFactsAnswer.Final): a bound measures the two commits, alike
+// on every node, but the budget measures one node under load, and recording
+// its omission would drop the revision's approvals' carry-forward for good,
+// forcing a re-review when the fleet is busiest. Its recorder asks again.
 func (r *read) omission(ctx context.Context, res gitproc.Result, err error) gitlet.FactsOmission {
 	switch {
 	case err == nil, res.Damage != nil, gitlet.AnswerDue(ctx), ctx.Err() != nil:
@@ -674,11 +588,10 @@ func (r *read) omission(ctx context.Context, res gitproc.Result, err error) gitl
 	return ""
 }
 
-// spooled is the Stdout of a patch's run: git's patch written into its spool,
-// refused at the first byte past limit (errPatchPastBound), which stops the
-// run. failed is a write the spool itself refused — the node's disk — which
-// the read answers as the node's own failure, never as a patch past its
-// bound.
+// spooled is the Stdout of a patch's run, written into its spool and refused
+// at the first byte past limit (errPatchPastBound), which stops the run.
+// failed is a write the spool itself refused (the node's disk), answered as
+// the node's failure, never as a patch past its bound.
 type spooled struct {
 	f      *os.File
 	limit  int64

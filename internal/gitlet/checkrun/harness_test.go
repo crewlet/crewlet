@@ -27,11 +27,10 @@ import (
 )
 
 // A RUNNER OVER A REAL CHECKS WRITER: every claim, box name and ending a
-// runner or a home's sweep asks is decided by the shipped checks writer on a
-// data node over an embedded broker, as a record on the repository's checks
-// subject applied by the shipped applier — so what a case says of an attempt
-// is what its row holds. The boxes are the sandbox catalogue's own manager
-// over fake backends, whose boxes run the check's command as long as a case
+// runner or a home's sweep asks is decided by the shipped checks writer and
+// applier on a data node over an embedded broker, so what a case says of an
+// attempt is what its row holds. Boxes come from the sandbox catalogue's own
+// manager over fake backends, and run the check's command as long as a case
 // says.
 
 // gitBase is Gitlet's base every case's boxes are given.
@@ -85,7 +84,7 @@ type cell struct {
 	ended   map[string]bool
 	outputs map[string]string
 	made    chan *sandbox.FakeSandbox
-	// count answers a box's line count in place of the shell, where a case sets it.
+	// countLines answers a box's line count in place of the shell, where a case sets it.
 	countLines func(cmd string) (sandbox.ExecResult, error)
 }
 
@@ -163,7 +162,7 @@ func (c *cell) end(box *sandbox.FakeSandbox, status int, output string) {
 	c.mu.Unlock()
 }
 
-// box is the next box the cell makes, within a few seconds.
+// box is the next box the cell makes, within ten seconds.
 func (c *cell) box(t *testing.T) *sandbox.FakeSandbox {
 	t.Helper()
 	select {
@@ -175,7 +174,7 @@ func (c *cell) box(t *testing.T) *sandbox.FakeSandbox {
 	}
 }
 
-// made is how many boxes the cell has made.
+// count is how many boxes the cell has made.
 func (c *cell) count() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -201,12 +200,11 @@ type fleet struct {
 	company   *config.Company
 	faults    *gitletfault.Script
 	// leases and counter are the company's coordination store: the remote
-	// cells' slots and the fleet's counter their box-minutes are charged to.
-	// The leases keep A CLOCK THE CASE HOLDS, frozen where the fleet began and
-	// moved only by its Advance: a slot lapses only where a case lapses it, so
-	// a slot nobody gave back stays live however long a case waits, and a
-	// wait for every slot given back is met by the giving alone — never by a
-	// lease's TTL running out on the wall clock a minute later.
+	// cells' slots and the counter their box-minutes are charged to. The
+	// leases' clock is frozen at the fleet's start and moved only by Advance,
+	// so a slot lapses only where a case lapses it: a wait for every slot
+	// given back is met by the giving, never by a TTL running out on the wall
+	// clock.
 	leases  *memory.Backend
 	counter *memory.Fleet
 }

@@ -229,13 +229,11 @@ func TestAPageIsCutAgainstTheWholeAnswer(t *testing.T) {
 	}
 }
 
-// A CLASSED FACTS ANSWER IS ONE PAGE: the room a revision's touched list has
-// is what its answer leaves with every other field at its widest — its
-// classes naming every place the list may hold among them — so swept across
-// page bounds a few bytes apart around the bound at which the list of a
-// change whose every file is classed just fits, every answer encodes within
-// its page: a list its classes would take past the page touches all, and
-// classes nothing, instead.
+// A CLASSED FACTS ANSWER IS ONE PAGE: the touched list's room is what the
+// answer leaves with every other field at its widest, its classes naming every
+// path the list may hold. Swept across bounds a few bytes apart around where a
+// fully classed change's list just fits, every answer encodes within its page:
+// a list its classes would push past the page touches all and classes nothing.
 //
 // Mutation: leave the classes out of the envelope the list's room is measured
 // against — a bound where the list fits alone and not beside its classes

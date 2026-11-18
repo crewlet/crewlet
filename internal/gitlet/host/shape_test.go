@@ -13,11 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// shapeDamage is each way a cache incarnation's SHAPE is damaged that the pool
-// refuses (gitproc.ErrRepoShape) and no pack is lost by — a disk that damaged
-// its config, or something outside the engine that edited it or planted a
-// file in it: a config another, a commondir, an alternates file naming
-// another repository (what would serve that repository's objects by id).
+// shapeDamage is each damage to a cache incarnation's SHAPE that the pool
+// refuses (gitproc.ErrRepoShape) and loses no pack by: a config edited, a
+// commondir, or an alternates file naming another repository (which would
+// serve its objects by id).
 var shapeDamage = map[string]func(t *testing.T, dir string){
 	"a config edited": func(t *testing.T, dir string) {
 		writeFile(t, filepath.Join(dir, "config"), gitproc.RepoConfig+"[core]\n\tsharedRepository = group\n")
@@ -26,8 +25,8 @@ var shapeDamage = map[string]func(t *testing.T, dir string){
 		writeFile(t, filepath.Join(dir, "commondir"), "../elsewhere.git\n")
 	},
 	"an alternates file": func(t *testing.T, dir string) {
-		// Another incarnation of the same cache: a repository of the
-		// engine's own shape, which only the call may name.
+		// Another incarnation of the same cache: the engine's own shape,
+		// which only the call may name.
 		writeFile(t, filepath.Join(dir, "objects", "info", "alternates"),
 			filepath.Join(filepath.Dir(dir), "other.1.git", "objects")+"\n")
 	},
@@ -72,18 +71,12 @@ func cacheCount(c *gitlettest.Case, name string, attrs map[string]string) uint64
 }
 
 // A CACHE GIT REFUSES FOR ITS SHAPE IS REPAIRED IN PLACE UNDER THE REQUEST THAT
-// FOUND IT, and the request served — whichever request it is, since the pool
-// refuses every process the directory is asked to run: a clone (its
-// advertisement), a push (its advertisement, whose view's one alternate is the
-// cache), a push whose cache is damaged between its advertisement and its POST
-// (its scratch's one alternate is the cache), a fetch whose wants are checked
-// in the cache before upload-pack runs, and an ls-refs, which checks no wants
-// and so meets the refusal at upload-pack itself. The SAME directory serves
-// after it — a full round put its shape right and reused every pack, no
-// rebuild — counted once under shape, and nothing answered as the code log
-// failing. Before, every one of them was a 503 saying the code log could not
-// be read, until a restart; and a planted alternates file was served on every
-// fetch, refused only by a push's processes.
+// FOUND IT, and the request served, whichever it is: a clone, a push (its
+// view's alternate is the cache), a push damaged between advertisement and
+// POST (its scratch's alternate is the cache), a fetch whose wants are checked
+// first, and an ls-refs, which meets the refusal at upload-pack itself. The
+// SAME directory serves after (every pack reused, no rebuild), counted once
+// under shape, nothing answered as the code log failing.
 //
 // Mutation: read ErrRepoShape as no damage (cache.DamageReason and
 // cache.ShapeReason), and each fails with a 503; read an upload-pack run as
@@ -165,12 +158,10 @@ func TestACacheGitRefusesForItsShapeIsRepairedUnderTheRequest(t *testing.T) {
 				assertShapeRepaired(t, c, &l, dir, "code_fetch_retried")
 			})
 			t.Run("an ls-refs", func(t *testing.T) {
-				// A v2 POST with no GET first — the cache damaged between
-				// a client's advertisement and its ls-refs, or a client
-				// that skips the advertisement — checks no wants, so the
-				// pool's refusal of upload-pack itself is what has to be
-				// repaired: a refusal before git starts, never git's own
-				// words, which a request cannot write.
+				// A v2 POST with no GET first checks no wants, so the pool's
+				// refusal of upload-pack itself must be repaired: a refusal
+				// before git starts, never git's own words, which a request
+				// cannot write.
 				t.Parallel()
 				var l logs
 				c := newCase(t, gitlettest.SoloOptions{Logger: l.logger()}, gitlettest.Settings())
@@ -191,9 +182,8 @@ func TestACacheGitRefusesForItsShapeIsRepairedUnderTheRequest(t *testing.T) {
 }
 
 // assertShapeRepaired fails t unless node 0 repaired RepoName's cache at dir
-// once for its shape, IN PLACE — dir is still its directory — logged the
-// request as line with reason shape, and answered nothing as the code log
-// failing.
+// once for its shape, IN PLACE (dir still its directory), logged the request
+// as line with reason shape, and answered nothing as the code log failing.
 func assertShapeRepaired(t *testing.T, c *gitlettest.Case, l *logs, dir, line string) {
 	t.Helper()
 	if got := cacheCount(c, metrics.CodeCacheRebuilds, map[string]string{"reason": "shape"}); got != 1 {
@@ -210,10 +200,9 @@ func assertShapeRepaired(t *testing.T, c *gitlettest.Case, l *logs, dir, line st
 	}
 }
 
-// EVERY SHAPE REFUSAL IS REPAIRED IN PLACE, however soon after the last: a
-// repair in place reads the rows and fetches nothing, so none of a rebuild's
-// refusals hold it back, and something that keeps editing a cache costs a
-// full round a request rather than a 503 the request after its first repair.
+// EVERY SHAPE REFUSAL IS REPAIRED IN PLACE, however soon after the last: the
+// repair reads the rows and fetches nothing, so no rebuild refusal holds it
+// back, and a cache edited again costs a round per request, never a 503.
 // Counted under shape each time, and no rebuild refused.
 func TestEachShapeRefusalIsRepairedInPlace(t *testing.T) {
 	t.Parallel()

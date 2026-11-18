@@ -13,15 +13,12 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 )
 
-// A PUSH CARRIES THE DROP EPOCH ITS COPY WAS SYNCED AT — the one its copy's
-// objects/ holds (cache.Synced.DropEpoch), the snapshot's once nothing is
-// leaving the copy — and its committer's refusal of another reaches git
-// whole: while every snapshot the Gitlet node's cache syncs by says the
-// repository is at drop epoch 7 and its rows say 0 — a copy at an epoch the
-// repository is not at — the push's proposal carries 7, its committer refuses
-// it expunging, decided nothing and writing no push row, git prints the
-// refusal's sentence on the ref and the push is recorded refused under its
-// code; once the snapshots say what the rows hold, the same push lands.
+// A PUSH CARRIES THE DROP EPOCH ITS COPY WAS SYNCED AT (cache.Synced.DropEpoch)
+// and its committer's refusal of another reaches git whole: while the cache's
+// snapshots say drop epoch 7 and the rows 0, the proposal carries 7, the
+// committer refuses it expunging with no push row, git prints the refusal's
+// sentence on the ref and the audit records it refused under its code; once
+// the snapshots match the rows, the same push lands.
 //
 // Mutation: propose without the synced copy's drop epoch, and the first push
 // lands.

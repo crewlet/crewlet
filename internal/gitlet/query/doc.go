@@ -15,7 +15,9 @@
 // and read one at a time for the atlas in codefiles.go, the engine's alone as
 // a checks file is and one answer each)
 // — real git over a PINNED incarnation of the node's own cache
-// (internal/gitlet/cache), in the READ lane, every answer one page of at most
+// (internal/gitlet/cache), with its dropping view (gitproc.Cmd.Dropping), so
+// an object an expunge is dropping is still served by id until its commit,
+// in the READ lane, every answer one page of at most
 // gitlet.MaxGitAnswerBytes of JSON with a cursor where the next begins, but a
 // checks file's, which is the engine's alone and one answer of at most
 // gitlet.MaxChecksFileBytes of the file.
@@ -100,9 +102,11 @@
 // would answer for another commit (objects.go has the measurement). One that
 // matches more than one object is refused, asking for more of its digits.
 //
-// The one read of what refs name is the tags listing, the copy's tags at its
+// Two reads read what refs name: the tags listing, the copy's tags at its
 // position, which its asker floors at the repository's own last record
-// (gitlet.RepoDetail.Version).
+// (gitlet.RepoDetail.Version); and a code search (search.go), which names a
+// ref and resolves it to a commit (`rev-parse --verify`) before its memo is
+// asked.
 //
 // # Nothing a client wrote reaches git's command line as an option
 //
@@ -380,6 +384,14 @@
 // comparison with the history it walks; and gitlet.GitShareWait keeps its
 // two-second floor.
 //
+// A stat counts only the files its paths admit (diff.go): over a diff of
+// 5 866 changed files, one directory's 18 took 5 to 6 ms beside the 13 ms
+// walk of the two trees, where the whole stat took 0.80 to 0.97 s.
+//
+// BenchmarkCodeRead's history=1GB arm, run only under CREWLET_BENCH_LARGE, is
+// 1 421 files in thirty directories over 455 680 commits under the
+// 100 000-file tree, every tenth file of which the edit changes.
+//
 // THE MEMO, measured once over the same rig with it landed (-benchtime 5x,
 // one count, the in-process arms alone, git 2.56.0 on the same two E-cores
 // of a busier machine, whose warm arm read each kind in 4.6 to 262 ms where
@@ -396,6 +408,14 @@
 // 3 460 than the read with no memo, the wide edit's whole stat the most, every
 // kind past the ten times the memo's premise asks, since a hit is one file's
 // read and its decode where a miss is at least one git process.
+//
+// The fresh= arms, at history=32MB over mem, twenty reads an arm (-benchtime
+// 20x) on two cores of an Ultra 7 265U, each a memo hit after its own untimed
+// resolve of main: none 0.19 ms and moved 0.19 ms at p50, read 3.8 ms. A floor
+// at the resolve's read position forces a sync round costing twenty times the
+// read it delays, even here, where the data node is one call away; a floor at
+// where the ref moved costs nothing over no floor, so a code tool floors a
+// read by a ref there.
 //
 // BenchmarkLandedIn over gittest.History's same 32 MB composition (14 080
 // commits, nothing on top) with a branch moved through it 2 000 times by
@@ -436,4 +456,12 @@
 // eleven processes; src/ 593 and 501 ms and internal/a/b/c/ 717 and 694 ms,
 // in 95 and 129 processes, most of them the entries a merge changed, each
 // walked alone; derived pages 22 to 31 ms in four.
+//
+// BenchmarkReanchor's pathological pair, one anchor on the last line of a file
+// whose next version changes every other line above it (-benchtime 3x, one
+// count, under -race on two E-cores of a Core Ultra 7 265U), took 246 KB and
+// 1 205 allocations for a whole read at 10 000 hunks, and 150 KB and 1 123 at
+// 100 000: the read's own memory, flat as the hunks grow, because no hunk is
+// kept (anchor.go), where keeping them would grow the engine's heap with every
+// pushed pair's diff.
 package query

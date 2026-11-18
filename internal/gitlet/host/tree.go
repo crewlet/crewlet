@@ -17,13 +17,12 @@ import (
 )
 
 // WHAT AN ENGINE WRITE READS AS IT STREAMS: a tree's entries, a file an edit
-// rewrites, and cat-file's batch answers — each read as the bytes arrive and
-// handed on, so what a build holds in memory is the change it was asked and
-// one entry or one read buffer, never a directory or a file whole.
+// rewrites, cat-file's batch answers. Each is handed on as its bytes arrive,
+// so a build holds one entry or read buffer, never a directory or file whole.
 
 // treeEntry is one entry of a tree as git stores it: `<mode> SP <name> NUL
-// <20-byte id>`, the mode as the tree spells it — "40000" for a directory, as
-// git writes one, or whatever octal an older writer left (canon).
+// <20-byte id>`, the mode as the tree spells it ("40000" for a directory, or
+// whatever octal an older writer left: canon).
 type treeEntry struct {
 	mode string
 	name string
@@ -36,33 +35,31 @@ const (
 	modeSubmodule = "160000"
 )
 
-// maxEntryName bounds one entry's name as a tree is parsed: gitproc.MaxLine,
-// the longest line any read here takes. A filesystem takes a name of 255
-// bytes; a tree naming one past this bound was written by something that was
-// not a checkout, and is refused rather than read into memory whole.
+// maxEntryName bounds an entry's name: gitproc.MaxLine, the longest line any
+// read here takes. A filesystem name is at most 255 bytes, so one past this
+// bound was written by no checkout and is refused rather than read whole.
 const maxEntryName = gitproc.MaxLine
 
-// maxEntryMode bounds an entry's mode as a tree is parsed: git reads any run
-// of octal digits (tree-walk.c's get_mode), and a mode is six of them, seven
-// with an old writer's zero padding — eleven is past every one git can hold
-// in the 32 bits it reads one into.
+// maxEntryMode bounds an entry's mode: git reads any run of octal digits
+// (tree-walk.c's get_mode); a mode is six, seven with an old writer's zero
+// padding, and eleven is past any git can hold in the 32 bits it reads into.
 const maxEntryMode = 11
 
 // errBadTree is a tree whose bytes are not git's tree format.
 var errBadTree = errors.New("host: not a tree as git writes one")
 
 // cutTree is errBadTree for an entry its read ended inside, what naming the
-// part cut short: the read's error is told, NEVER WRAPPED — io.EOF is the
-// tree's end to parseTree, so an error wrapping it would read a tree cut
-// mid-entry as whole.
+// part cut short. The read's error is told, NEVER WRAPPED: io.EOF is the
+// tree's end to parseTree, so wrapping it would read a tree cut mid-entry as
+// whole.
 func cutTree(what string, err error) error {
 	return fmt.Errorf("%w: %s (%v)", errBadTree, what, err) //nolint:errorlint // told, never wrapped: see above
 }
 
-// parseTree reads the raw tree r — git's own format, as `cat-file --batch`
-// sends a tree's contents — handing each entry to each as it is read, in the
-// order the tree holds them. An entry that does not parse is errBadTree naming
-// what is wrong; each's error ends the read.
+// parseTree reads the raw tree r (git's format, as `cat-file --batch` sends
+// it), handing each entry to each as it is read, in tree order. An entry that
+// does not parse is errBadTree naming what is wrong; each's error ends the
+// read.
 func parseTree(r io.Reader, each func(treeEntry) error) error {
 	br := bufio.NewReader(r)
 	for {
@@ -132,14 +129,12 @@ func readName(br *bufio.Reader) (string, error) {
 	}
 }
 
-// canon is the entry's mode as git reads it (tree-walk.c's canon_mode, the one
-// every reader of a tree and every index applies): a regular file 100644 or,
-// with its owner's execute bit, 100755; a link 120000; a directory 40000;
-// anything else a submodule. A build writes a directory it passes through in
-// these modes — as a checkout and a commit of the same change would, since
-// the index holds nothing else — so the legacy group-writable 100664 an old
-// tree may carry, which `index-pack --strict` refuses in a NEW tree
-// (badFilemode), is written 100644 as git's own commit would write it.
+// canon is the entry's mode as git reads it (tree-walk.c's canon_mode, which
+// every tree reader and index applies): a regular file 100644, or 100755 with
+// its owner's execute bit; a link 120000; a directory 40000; anything else a
+// submodule. A build writes a directory it passes through in these modes, as
+// a checkout and commit would, so an old tree's legacy 100664, which
+// `index-pack --strict` refuses in a NEW tree (badFilemode), is written 100644.
 func (e treeEntry) canon() string {
 	m, err := strconv.ParseUint(e.mode, 8, 64)
 	if err != nil {
@@ -196,22 +191,21 @@ func (e treeEntry) idHex() string { return hex.EncodeToString(e.id[:]) }
 
 // editBinaryHead is how far into a file an edit looks for a NUL before it
 // calls the file binary: git's own heuristic (xdiff-interface.c's
-// buffer_is_binary, FIRST_FEW_BYTES), so a file git diffs as text an edit
-// rewrites, and one git calls binary it refuses.
+// buffer_is_binary, FIRST_FEW_BYTES), so an edit rewrites what git diffs as
+// text and refuses what git calls binary.
 const editBinaryHead = 8000
 
 // editStream applies ONE EDIT to a file's bytes as they stream through it:
-// Old must occur exactly once — an occurrence overlapping another counts, so
-// "aa" in "aaa" is two — and is replaced by New as the bytes are written on to
-// out. It holds len(Old) bytes and the chunk it is handed, never the file.
+// Old must occur exactly once (overlapping occurrences count, so "aa" in "aaa"
+// is two) and is replaced by New as the bytes go on to out. It holds len(Old)
+// bytes and the chunk it is handed, never the file.
 //
-// A second occurrence ends it (edit_ambiguous, both lines named); none by the
-// end is edit_not_found; a NUL in the first editBinaryHead bytes is
-// edit_binary; a carriage return anywhere in a file while Old or New holds a
-// line break is edit_line_endings — a multi-line edit of a CRLF file would
-// splice LF lines into CRLF ones. Each refusal is the edit's verdict, read
-// after Close, and the bytes written to out are then the caller's to throw
-// away.
+// Its verdict, read after Close: a second occurrence is edit_ambiguous (both
+// lines named); none is edit_not_found; a NUL in the first editBinaryHead
+// bytes is edit_binary; a carriage return anywhere while Old or New holds a
+// line break is edit_line_endings, since a multi-line edit of a CRLF file
+// would splice LF lines into CRLF ones. On a refusal, out's bytes are the
+// caller's to throw away.
 type editStream struct {
 	old, new []byte
 	out      io.Writer
@@ -237,9 +231,9 @@ func newEditStream(old, new string, out io.Writer) *editStream {
 		spans: strings.Contains(old, "\n") || strings.Contains(new, "\n")}
 }
 
-// Write takes the next bytes of the file. It never fails for a refusal — the
-// verdict waits for Close, so the whole file is read and cat-file's batch goes
-// on — only for out's own failure.
+// Write takes the next bytes of the file. It fails only for out's failure,
+// never a refusal: the verdict waits for Close, so the whole file is read and
+// cat-file's batch goes on.
 func (e *editStream) Write(p []byte) (int, error) {
 	n := len(p)
 	if e.refusal != "" {
@@ -293,11 +287,10 @@ func (e *editStream) step(end bool) error {
 	if end {
 		e.scan = e.base + int64(len(e.buf))
 	}
-	// Write on what is settled — every byte before scan, which no occurrence
-	// still to be found can reach — Old's bytes skipped for New at the
-	// occurrence. The occurrence's end may lie past scan, its last bytes
-	// still to be scanned for an occurrence overlapping it: emit then runs
-	// ahead of scan until scan passes it.
+	// Write on every byte before scan, which no occurrence still to be found
+	// can reach, New in place of Old at the occurrence. The occurrence may end
+	// past scan, its tail still scanned for an overlap: emit then runs ahead
+	// of scan until scan passes it.
 	for e.emit < e.scan {
 		if e.match >= e.emit && e.match < e.scan {
 			if _, err := e.out.Write(e.buf[e.emit-e.base : e.match-e.base]); err != nil {
@@ -360,10 +353,10 @@ type batchSink struct {
 }
 
 // batchReader is a Cmd.Stdout reading `cat-file --batch -Z`'s answers as they
-// stream — `<oid> SP <type> SP <size> NUL <contents> NUL` for an object,
-// `<name> SP missing NUL` for none — handing each object's contents to its
-// sink as they arrive, so no object is held whole. NUL-ended both ways (-Z),
-// so a request naming a path git holds with a line feed in it is one request.
+// stream (`<oid> SP <type> SP <size> NUL <contents> NUL` for an object,
+// `<name> SP missing NUL` for none), handing each object's contents to its
+// sink as they arrive, so no object is held whole. -Z NUL-ends both ways, so a
+// path holding a line feed is one request.
 type batchReader struct {
 	sink  batchSink
 	names []string // the requests, in order: what a missing answer echoes
@@ -416,8 +409,8 @@ func (b *batchReader) Write(p []byte) (int, error) {
 				p = p[len(p):]
 				continue
 			}
-			// THE HEADER'S BUFFER IS THE LINE'S, read before anything is
-			// appended to it again.
+			// line shares the header's buffer: answer reads it before
+			// anything is appended again.
 			b.header = append(b.header, p[:j]...)
 			line := b.header
 			b.header = b.header[:0]
@@ -476,9 +469,9 @@ func (b *batchReader) Close() error {
 	return nil
 }
 
-// records is a Cmd.Stdout handing each NUL-ended record to fn as it arrives —
-// cat-file's answers under -Z, merge-tree's under -z — each at most
-// gitproc.MaxLine; close reports output that ended inside one.
+// records is a Cmd.Stdout handing each NUL-ended record (cat-file's under -Z,
+// merge-tree's under -z), at most gitproc.MaxLine, to fn as it arrives; close
+// reports output that ended inside one.
 type records struct {
 	fn      func([]byte) error
 	pending []byte
@@ -547,8 +540,8 @@ func (w *prefixWriter) Write(p []byte) (int, error) {
 }
 
 // text is what the writer kept as a conflict answers it: "" for a file git
-// reads as binary — a NUL in what was kept — and otherwise the bytes kept,
-// less a character the cut split.
+// reads as binary (a NUL in what was kept), else the bytes kept less a
+// character the cut split.
 func (w *prefixWriter) text() string {
 	if bytes.IndexByte(w.kept, 0) >= 0 {
 		return ""

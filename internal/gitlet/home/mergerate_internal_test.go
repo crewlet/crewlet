@@ -9,12 +9,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A DRAINED QUEUE FORGETS ONLY ITS OWN REPOSITORY'S TARGETS: the merge rate
-// is held by repository, then by target, so a turn that read all of one
-// repository's queue work drops that repository's targets it did not meet
-// and no other repository's — and a repository whose last target went, by a
-// turn or by a reading a window on, is dropped with it rather than kept as an
-// empty entry for the node's life.
+// A DRAINED QUEUE FORGETS ONLY ITS OWN REPOSITORY'S TARGETS: a turn that read
+// all of one repository's queue work drops its unmet targets and no other
+// repository's, and a repository whose last target went, by a turn or by a
+// reading a window on, is dropped rather than kept empty for the node's life.
 //
 // Mutation: drop every repository's unmet targets in seen → repo-b's release
 // is forgotten by repo-a's turn, red; keep a repository whose last target a

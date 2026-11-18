@@ -18,16 +18,15 @@ import (
 )
 
 // Cluster is a topology of at least three data nodes, each also a Gitlet node,
-// routing to one another through the production estate router — the shape
-// every claim about MORE THAN ONE data node needs: a push decided by another
-// node's committer, a committer that dies, an evicted writer, a stopping one.
-// Fleet's methods hold, every node id a member's; Kill is a PROCESS death,
-// its broker member included, and Restart what that process comes back as.
+// routing to one another through the production estate router: what every
+// claim about MORE THAN ONE data node needs (a push decided by another node's
+// committer, a committer that dies, an evicted or stopping writer). Fleet's
+// methods hold, every node id a member's; Kill is a PROCESS death, its broker
+// member included, and Restart what that process comes back as.
 //
-// WHO THE ROUTERS ASK is the members whose PRESENCE is live, as the engine's
-// watched presence view lists them: a member that is killed gives nothing
-// back, so its peers keep listing it — and asking it, and hearing nothing —
-// until it is restarted, while a member that is stopped gives its presence
+// The routers ask the members whose PRESENCE is live in the engine's watched
+// presence view: a killed member gives nothing back, so its peers keep asking
+// it and hearing nothing until it restarts; a stopped one gives its presence
 // back first, as the engine's drain does.
 type Cluster interface {
 	Fleet
@@ -35,83 +34,74 @@ type Cluster interface {
 	// not. DataNodes and Nodes are the running ones.
 	Members() []string
 	// Committer is the member every member routes repoID's pushes to: the
-	// first of rendezvous.Order(repoID, the running members) — the router's
-	// own rule, computed the way it computes it. A killed member still
-	// listed is asked first and heard silent before the push reaches this
-	// one.
+	// first of rendezvous.Order(repoID, the running members), the router's
+	// own rule. A killed member still listed is asked first and heard silent
+	// before the push reaches this one.
 	Committer(repoID string) string
 	// Stop is a GRACEFUL stop in the engine's order: the member's presence
-	// given back (the engine's drain), its Gitlet node drained and stopped
-	// (the API's listener, then the teardown's first step, stopGitletHost —
-	// so it takes no push or sync once its committer refuses), then its
-	// committer refusing, then its estate subject no longer answering, then
-	// its applier, its store and its broker member. Restart brings it back.
-	// It reports through t and never ends the calling goroutine, so a case
-	// may stop a member from another one.
+	// given back (the drain), its Gitlet node drained and stopped (the API's
+	// listener, then stopGitletHost, so it takes no push or sync once its
+	// committer refuses), its committer refusing, its estate subject
+	// unanswered, then its applier, store and broker member. Restart brings
+	// it back. It reports through t and never ends the calling goroutine, so
+	// a case may stop a member from another one.
 	Stop(t testing.TB, node string)
 	// Unanswered is how many times the members' routers have told the
-	// placement that node did not answer them (estate.Placement.Unanswered)
-	// — what a router does on meeting a member that is gone.
+	// placement that node did not answer them (estate.Placement.Unanswered),
+	// as a router does on meeting a member that is gone.
 	Unanswered(node string) int
-	// WaitedOut is how many of the proposals the members' routers asked of
-	// node they waited out: asked on its proposal lane, each one's attempt
-	// reached its deadline before the router moved on — a push's whole write
-	// attempt spent on a member that said nothing. A member that refuses
-	// answers, and one whose subjects nothing serves costs no wait at all:
-	// the broker answers an ask of a subject nobody serves at once.
+	// WaitedOut is how many proposals the members' routers asked on node's
+	// proposal lane and waited out to the attempt's deadline: a push's whole
+	// write attempt spent on a silent member. A refusal answers, and an ask
+	// of a subject nobody serves is answered by the broker at once.
 	WaitedOut(node string) int
 	// Appends is how many records node's committer has appended
 	// (DataNode.Appends).
 	Appends(node string) int
-	// Closes is how many graceful stops have closed node's writers — its
-	// committer, change writer and checks writer each refusing every new
-	// write and every one queued, while what they hold in flight runs on
-	// (DataNode.Closes): what a case holding a batch at node's committer
-	// waits on before it lets the batch go, so the batch ends into a
-	// committer that refuses what is queued behind it.
+	// Closes is how many graceful stops have closed node's writers (its
+	// committer, change writer and checks writer, each refusing every new and
+	// queued write while what is in flight runs on; DataNode.Closes). A case
+	// holding a batch at node's committer waits on it before letting the
+	// batch go, so the batch ends into a committer refusing what queued behind.
 	Closes(node string) int
 	// RecordWriter is the member that published the code log's record at at,
 	// read off the log by a running member (DataNode.Writer).
 	RecordWriter(ctx context.Context, at statelog.Position) (string, error)
 	// GitReadThrough is a read of a repository by object id asked through
-	// member node's own router, as a seat's tool on that member asks it —
-	// the repository's home Gitlet node first, the member's own git half at its
+	// member node's own router, as a seat's tool on that member asks it: the
+	// repository's home Gitlet node first, the member's own git half at its
 	// place in the order (ADR-0089).
 	GitReadThrough(ctx context.Context, node string, q gitlet.GitQuery) (gitlet.GitAnswer, error)
 	// GitWriteThrough is an engine write asked through member node's own
-	// router, as a seat's or a person's tool on that member asks it — of the
+	// router, as a seat's or a person's tool on that member asks it: the
 	// repository's home Gitlet node first, the member's own git half at its
-	// place in the order, and of the next with the same write where one ran
+	// place in the order, and the next with the same write where one ran
 	// nothing or went silent (code.git_write).
 	GitWriteThrough(ctx context.Context, node string, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error)
-	// Revoke is a revision of the company that takes seat out of the chart,
-	// applied by every member but behind — which FAILED to apply it: it keeps
-	// the chart that still holds the seat, and is CONFIRMED BEHIND the
-	// company's configuration (shed), as every reader of a node's posture on
-	// it reads it — its estate service (estate.Backend.Current), its committer
-	// (gitlet.CommitterOptions.Current), its change writer
-	// (gitlet.ChangeWriterOptions.Current) and its Gitlet node's reads and engine
-	// writes. restore is the fleet back on the fixture chart with every member
-	// current, which a case runs before it returns.
+	// Revoke is a revision taking seat out of the chart, applied by every
+	// member but behind, which FAILED to apply it: behind keeps the chart that
+	// still holds the seat and is CONFIRMED BEHIND the company's configuration
+	// (shed) to every reader of its posture (estate.Backend.Current,
+	// gitlet.CommitterOptions.Current, gitlet.ChangeWriterOptions.Current, its
+	// Gitlet node's reads and engine writes). restore is the fleet back on the
+	// fixture chart with every member current, which a case runs before it
+	// returns.
 	Revoke(t testing.TB, seat, behind string) (restore func())
-	// Settle is the cluster as a case finds it: every member running —
-	// one that is not is an error naming it — each one's applier level with
-	// the code log, and every router's memory of a member that refused or
-	// went silent lapsed, as the half minute a router keeps it does.
+	// Settle is the cluster as a case finds it: every member running (one
+	// that is not is an error naming it), each one's applier level with the
+	// code log, and every router's half-minute memory of a member that
+	// refused or went silent lapsed.
 	Settle(ctx context.Context) error
-	// AwaitElection waits, for as long as ctx allows, until every running
-	// member's own broker answers a read of the code log's state
-	// (DataNode.LogStats), its applier held or not: the read its committer's
-	// admission makes before every ordinary append (statelog.Reserve), asked
-	// through that member's own client as the admission asks it. A member's
-	// death takes that answer from its survivors until the elections the
-	// death causes are over — a broker whose meta group has no leader answers
-	// it 503, err_code 10008, which the committer refuses `usage_unknown` and
-	// its asker takes to the next member (F55) — so a case asks a write of
-	// the survivors only once this has returned: asked while the elections
-	// run, the write is decided by a member after the runner-up, or by none.
-	// Never Fleet.Level for it, which waits on each member's applier too, and
-	// so on one a case holds.
+	// AwaitElection waits, while ctx allows, until every running member's own
+	// broker answers, through that member's own client, a read of the code
+	// log's state (DataNode.LogStats), its applier held or not: the read its
+	// committer's admission makes before every ordinary append
+	// (statelog.Reserve). Until the elections a death causes end, a broker
+	// with no meta leader answers it 503, err_code 10008, which the committer
+	// refuses `usage_unknown` and its asker takes to the next member (F55):
+	// so a case asks the survivors for a write only once this returns, or the
+	// write is decided past the runner-up, or by none. Never Fleet.Level for
+	// it, which also waits on each member's applier, a held one included.
 	AwaitElection(ctx context.Context) error
 	// SplitMaintainers has every member of nodes take itself for repoID's
 	// maintainer — its compactor's Maintainers answering yes — until the case
@@ -120,17 +110,16 @@ type Cluster interface {
 	// its maintainer.
 	SplitMaintainers(t testing.TB, repoID string, nodes ...string)
 	// ConfineMaintenance has every member's compactor maintain, until the
-	// case that called it ends, NONE of the repositories that exist when it
-	// is called — whatever a case split their maintainer between — so the
-	// case's passes, its compactions, publications and expunges alike, meet
-	// the repositories it made and no other. RunFleet calls it as each case
-	// begins (the cases share one cluster, and a pass maintains EVERY due
-	// repository its member maintains).
+	// calling case ends, NONE of the repositories that exist when it is
+	// called, whatever their maintainer split, so the case's passes
+	// (compactions, publications, expunges) meet only the repositories it
+	// made. RunFleet calls it as each case begins: the cases share one
+	// cluster, and a pass maintains EVERY due repository its member maintains.
 	ConfineMaintenance(t testing.TB)
 	// Advertise has member node say its git cache gives its background work
-	// budget bytes (GitletNode.Advertise) until the case ends — Gitlet nodes of
-	// different sizes, which a repository's maintainer is placed by
-	// (ADR-0091), on one machine.
+	// budget bytes (GitletNode.Advertise) until the case ends: Gitlet nodes of
+	// the different sizes a repository's maintainer is placed by (ADR-0091),
+	// on one machine.
 	Advertise(t testing.TB, node string, budget int64)
 	// ProposeCompactionAgain asks member node's router to decide, again, the
 	// last compaction a member's compactor proposed of repoID, under its own
@@ -147,29 +136,15 @@ type Cluster interface {
 	ConverseThrough(ctx context.Context, node string, w gitlet.ConversationWrite) (gitlet.ConversationResult, error)
 }
 
-// RunFleet runs every case only a fleet of data nodes can make — or, with
-// [StoreFleetCases], those of them whose claim the object store's backend can
-// change — IN ORDER ON ONE CLUSTER: a three-member start is seconds to tens of seconds on a loaded
-// runner, a fresh cluster per case and per crash point would be minutes of
-// starts, and what a case changes is a repository of its own — so each case
-// declares its own, and a member it kills or pauses it brings back before it
-// returns. Between cases every member is running, level and its cache holds
-// exactly the rows of every repository, so a case that broke the fleet fails
-// there naming itself; and once a case has left the fleet unsettled, the rest
-// are not run on it, and RunFleet says so rather than fail each of them for
-// the first one's fault.
-//
-// A CASE'S MAINTENANCE IS ITS OWN REPOSITORIES' ALONE, from the moment it
-// begins (Cluster.ConfineMaintenance): a pass maintains every due repository
-// its member maintains, and the repositories earlier cases made stay on the
-// shared cluster, so unconfined, the compaction cases' passes compacted F19's
-// repository — left at forty-nine packs, due — whenever their members
-// maintained it, and counted what they did to it as their own repository's:
-// F28's held compaction was F19's, F29's compactor applied two. And a
-// repository due for every maintenance loop, which every member takes itself
-// for the maintainer of, stands beside every case ([dueThroughout]), so a case
-// whose maintenance leaks fails on it whichever cases run before it — alone,
-// too.
+// RunFleet runs every case only a fleet of data nodes can make (or, with
+// [StoreFleetCases], those whose claim the object store's backend can change)
+// IN ORDER ON ONE CLUSTER, since a cluster per case and crash point would cost
+// minutes of starts. Each case declares its own repositories and brings back
+// any member it kills or pauses. Between cases every member is running and
+// level and every cache holds every repository's rows, so a case that broke
+// the fleet fails there naming itself and the rest are not run on it. A
+// case's maintenance is its own repositories' alone
+// (Cluster.ConfineMaintenance); [dueThroughout] fails a leak in any order.
 //
 // A cluster of fewer than three members is refused: two members have no
 // quorum without each other.
@@ -218,15 +193,13 @@ func quorum(c Cluster) error {
 	return nil
 }
 
-// dueThroughout declares, for the whole run, the repository an earlier case
-// leaves due, made deterministic: due for every maintenance loop —
-// CompactMinMerge+1 live packs, one more than any case's own compaction
-// pushes, so a pass lists it first (MOST LIVE PACKS FIRST), and none of them
-// published — and maintained, should a pass meet it, by EVERY member
-// (SplitMaintainers), so a case whose maintenance leaked past its own
-// repositories (Cluster.ConfineMaintenance) fails on it whichever members it
-// runs its passes on: F28's held compaction is this one's, F29's compactor
-// lands two. Declared before any case, it is no case's own.
+// dueThroughout declares, for the whole run, a repository due for every
+// maintenance loop: CompactMinMerge+1 live packs, none published, one more
+// than any case's own compaction pushes, so a pass lists it first (MOST LIVE
+// PACKS FIRST). EVERY member maintains it (SplitMaintainers), so a case whose
+// maintenance leaks past its own repositories (Cluster.ConfineMaintenance)
+// fails on it whichever members run its passes: F28's held compaction is this
+// one's, F29's compactor lands two. Declared before any case, it is no case's.
 func dueThroughout(t *testing.T, c Cluster) {
 	t.Helper()
 	rc := newRepoCase(t, c, "fleet-due")
@@ -254,12 +227,11 @@ type fleetCase struct {
 	name string
 	run  func(t *testing.T, c Cluster)
 	// store is whether the case's claim reads or writes the object store's
-	// bytes in a way a backend can change: a pack bundle uploaded or
-	// downloaded, a cache filled or synced from it, a part read in a range, an
-	// object the collector lists or deletes. A case whose claim is the
-	// routing, the committer, the ledger or a recovery is false: its pushes
-	// reach the store too, but what it holds the fleet to is decided before
-	// or after the bytes, the same on every backend.
+	// bytes in a way a backend can change: a bundle uploaded or downloaded, a
+	// cache filled or synced from it, a ranged part read, an object the
+	// collector lists or deletes. A claim about routing, the committer, the
+	// ledger or a recovery is false: its pushes reach the store too, but what
+	// it holds is decided before or after the bytes, alike on every backend.
 	store bool
 }
 
@@ -271,11 +243,10 @@ const (
 	// held to first.
 	EveryFleetCase FleetCases = "every"
 	// StoreFleetCases is the cases whose claim a backend can change
-	// (fleetCase.store), for the run on a second backend. The rest wait out
-	// a dead member's write attempt — 45 s for F1, F31 and F39, 82 s for F41
-	// — to prove what the backend has no part in, and ran on both: a third
-	// of internal/gitlet/gitletcluster's twelve minutes on CI, every run, for
-	// nothing the first run had not already shown.
+	// (fleetCase.store), for the run on a second backend. The rest prove what
+	// the backend has no part in, and F1, F31, F39 and F41 each wait out a
+	// dead member's write attempt to do it: run again they cost minutes and
+	// show nothing new.
 	StoreFleetCases FleetCases = "store"
 )
 
@@ -554,8 +525,7 @@ func twoPushesThroughTwoMembersLandOnce(t *testing.T, c Cluster) {
 // which batches them: the committer's first record is held until every other
 // push has uploaded — so each is queued behind it, whichever member received
 // it — and then they land in fewer records than pushes, all appended by the
-// committer alone. That is the keyed walk's whole point: three receivers, one
-// group commit.
+// committer alone: the keyed walk's point, three receivers, one group commit.
 func pushesThroughEveryNodeMeetAtOneCommitter(t *testing.T, c Cluster) {
 	const perMember = 16
 	rc := newRepoCase(t, c, "fleet-f19")
@@ -732,34 +702,18 @@ func aGateDroppedPushIsNotApplied(t *testing.T, c Cluster) {
 	rc.converged()
 }
 
-// F20: a committer stopping hands its repositories on. (a) Gracefully: its
-// committer refuses before its subject stops answering, so the pushes queued
-// at it are answered "not serving" and committed by the runner-up, and the
-// batch in flight finishes — every push ok, none waiting out a write attempt
-// — where a node that stopped answering on its subject first would fail every
-// push it was holding. (b) A committer that dies: its peers still list it —
-// a process that dies gives no presence back — so the router of the member a
-// push is received by asks it first, hears that nothing answers on its
-// subject, reports it to the placement and asks the repository's runner-up:
-// the push is ok, no attempt waited out on the dead member, whose subjects
-// nothing serves, so the broker answers an ask of them at once.
-//
-// (b)'S PUSH WAITS FOR THE KILL'S ELECTION (Cluster.AwaitElection), as F29's
-// proposal does: pushed while it runs, the runner-up's admission cannot read
-// the code log's usage — a broker the kill left with no meta leader answers
-// that read 503 — and the push is decided by the member after it, or by none,
-// so (b) would hold how soon an election ends on a loaded runner rather than
-// the walk past a dead committer.
-//
-// NO PUSH WAITS OUT A WRITE ATTEMPT, read off the routers' own asks rather
-// than the pushes' wall time (Cluster.WaitedOut): an ask of the committer's
-// proposal lane whose attempt reached its deadline is the write attempt a
-// push spent on a member that said nothing, however fast or slow the runner
-// was around it.
-//
-// Mutations: a router that waits out its attempt on a stopping committer's
-// refusal — (a) red; one that waits out its attempt on a proposal lane nothing
-// serves — (b) red.
+// F20: a stopping committer hands its repositories on. (a) Gracefully: it
+// refuses before its subject stops answering (silent first, it would fail
+// every push it held), so its queued pushes are answered "not serving" and
+// committed by the runner-up while the batch in flight finishes: every push
+// ok, none waiting out a write attempt. (b) Killed: its peers still list it,
+// so the receiving router asks it first, hears at once nothing serves it,
+// reports it to the placement and asks the runner-up: ok, no attempt waited
+// out. (b) pushes only after the kill's election (Cluster.AwaitElection), or
+// it would hold how soon an election ends rather than the walk. Waiting out
+// is read off the routers' asks (Cluster.WaitedOut), never wall time.
+// Mutations: a router waiting out its attempt on a stopping committer's
+// refusal turns (a) red; one waiting it out on a lane nothing serves, (b).
 func aStoppingCommitterHandsItsRepositoriesOn(t *testing.T, c Cluster) {
 	rc := newRepoCase(t, c, "fleet-f20")
 	committer := rc.committer()
@@ -870,11 +824,11 @@ func aStoppingCommitterHandsItsRepositoriesOn(t *testing.T, c Cluster) {
 
 // F55: a committer whose admission cannot read the code log's usage hands the
 // push on. A broker whose meta group has no leader answers that reading 503,
-// err_code 10008, as F20 met when its stopping committer's broker stepped
-// down: the committer refuses the batch `usage_unknown` with nothing appended,
-// its asker takes the push to the repository's runner-up under the same push
-// id, and the push is ok. The record that applied it is NOT the committer's:
-// one that appended before it refused would leave the push row on its record.
+// err_code 10008: the committer refuses the batch `usage_unknown` with
+// nothing appended, its asker takes the push to the repository's runner-up
+// under the same push id, and the push is ok. The record that applied it is
+// NOT the committer's: one that appended before it refused would leave the
+// push row on its record.
 func aCommitterThatCannotReadTheLogsUsageHandsThePushOn(t *testing.T, c Cluster) {
 	rc := newRepoCase(t, c, "fleet-f55")
 	committer := rc.committer()
