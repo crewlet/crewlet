@@ -62,7 +62,7 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 			int((threadPlainMax-benchSlack)/4), bound, true), benchReads, 0},
 		{"a_whole_pdf_read", benchWholePDFSession(measured), benchReads, 1},
 		{"a_line_of_the_smallest_results", benchBlocks(benchSmallest, benchFactsHeld), benchReads, 0},
-		{"a_line_of_unknown_blocks", benchBlocks(`{"type":"x"}`, benchFilling(8<<20)), benchReads, 0},
+		{"the_slowest_line_to_the_plaintexts_bound", benchSlowestLine, benchReads, 0},
 		{"legs_of_ids_at_the_value_bound", benchLongLegs, benchReads, 0},
 		{"metadata_of_ids_most_of_their_bound", benchLongMetas, benchReads, 0},
 		{"a_thread_at_its_records_bound", benchChainThread(benchAtTheBound, recordsCall), benchReadsEither, 0},
@@ -407,9 +407,33 @@ func benchBlocks(block string, count func(head, block, tail string) int) func(*t
 	}
 }
 
-// benchFilling is how many blocks fill a line of n bytes, its break included.
-func benchFilling(n int) func(head, block, tail string) int {
-	return func(head, block, tail string) int { return (n - 1 - len(head) - len(tail) - 2 + 1) / (len(block) + 1) }
+// benchSlowestLine writes a main thread of one user record of blocks of an
+// empty kind to the plaintext's bound, written as it is made: of the lines
+// measured, the slowest a reading reads for its size, every block one no
+// reader names and none charged to the line's facts. It sets
+// internal/sandbox's holdingsReadWait.
+func benchSlowestLine(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
+	const block = `,{"type":""}`
+	brief := ctBrief(ctUUID(1)) + "\n"
+	head := `{"parentUuid":"` + ctUUID(1) + `","isSidechain":false,"type":"user","message":{"role":"user",` +
+		`"content":[` + block[1:]
+	tail := `]},"uuid":"` + ctUUID(2) + `","version":"2.1.310"}` + "\n"
+	n := (int(threadPlainMax-benchSlack) - len(brief) - len(head) - len(tail)) / len(block)
+	if err := tw.WriteHeader(&tar.Header{Name: hsMain, Mode: 0o600, Typeflag: tar.TypeReg,
+		Size: int64(len(brief) + len(head) + n*len(block) + len(tail))}); err != nil {
+		b.Fatal(err)
+	}
+	w := bufio.NewWriterSize(tw, 1<<20)
+	_, _ = w.WriteString(brief + head)
+	chunk := strings.Repeat(block, 1<<16)
+	for left := n; left > 0; left -= min(left, 1<<16) {
+		_, _ = w.WriteString(chunk[:min(left, 1<<16)*len(block)])
+	}
+	_, _ = w.WriteString(tail)
+	if err := w.Flush(); err != nil {
+		b.Fatal(err)
+	}
+	return hsAsk(sandbox.LoggedCall{ID: "toolu_bench_asked", Asked: true})
 }
 
 // benchWholePDFSession writes a main thread of a whole PDF's Read, its result's

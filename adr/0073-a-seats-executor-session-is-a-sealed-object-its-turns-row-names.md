@@ -2899,10 +2899,11 @@ those calls the session holds the logged result of, and a relaunch can tell it
 exactly the calls it lacks.
 
 **The reading, and its place.** `sandbox.Coordinator.HoldingsOf` reads it:
-inside one wait taken before the run's record is read (`holdingsReadWait`, 15
-s, the keep's own patience, so a relaunch's frame spends 30 s on a kept
-session, and the one bounded step a reading may overrun its wait by); only of
-the capture that record keeps, cut off, where `ContinuityOf`
+inside one wait taken before the run's record is read (`holdingsReadWait`, 30
+s, so a reading at its bounds is one, and a relaunch's frame spends 45 s on a
+kept session with the keep's own 15 s, and the one bounded step a reading may
+overrun its wait by); only of the capture that record keeps, cut off, where
+`ContinuityOf`
 still continues the turn's row with the runner that reads it; through that
 runner (`sandbox.HoldingsReader`, the executor's `Runner.ReadHoldings`, which
 reads Claude Code's sessions alone), handed an opener that streams the row's
@@ -2979,12 +2980,12 @@ beside all the model filed, in 1.6 to 3.3 s holding 37 MiB, its heap peaking at
 about 133 MiB. A reader's own buffers hold about 146 KiB whatever a line's
 length, and what no reader reads of a line costs it nothing more
 (`BenchmarkAReaderAtALineOfAnyLength`). An id the call-id rule refuses is never
-kept, and one past `threadValueMax` ends the reading. The slowest lines for
-their size, a line of blocks of a kind no reader names, read 8 MiB in
-0.56 to 0.59 s. So a burst of 32 relaunches reads ordinary sessions in about
-1.8 s on the one slot, and an archive of the slowest lines to the plaintext's
-bound, which gzip shrinks to almost nothing, holds the seats' slot for most of
-the reading's wait on a loaded node, a reading past that wait being no reading.
+kept, and one past `threadValueMax` ends the reading. So a burst of 32
+relaunches reads ordinary sessions in about 1.8 s on the one slot; and the
+slowest line for its size measured, of blocks of an empty kind, which no reader
+names, to the plaintext's bound, which gzip shrinks to half a mebibyte, reads in
+16.5 to 18.2 s on two dedicated cores holding 1 MiB: about 21 s behind such a
+burst, inside the reading's wait, a reading past which is no reading.
 
 **The rules it reads by.** What Claude Code's resume hands its model of a
 thread, which records and in what orders, is not stated here: it is the model
