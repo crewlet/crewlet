@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -413,5 +415,36 @@ func promptNotification(reason worklet.Reason, kind worklet.ChangeKind) notify.I
 			worklet.MetaStatus:     "in_progress",
 			worklet.MetaAssignee:   "cy",
 		},
+	}
+}
+
+// A PERSON'S COMMENT RIDES THE PRIORITY LANE; A TASK THEY FILE, ASSIGN OR MOVE
+// IS THE SEAT'S WORK AND DOES NOT (ADR-0159). Mutation: answer PersonWaits true
+// for every change, and a person's assignment rides the lane.
+func TestOnlyAPersonsCommentRidesTheLane(t *testing.T) {
+	t.Parallel()
+	person := notify.FirstPartyWriter(iam.ActorHuman, "dana-founder", nil, nil)
+	agent := notify.FirstPartyWriter(iam.ActorAgent, "backend-engineer", nil, nil)
+	for _, tc := range []struct {
+		name   string
+		reason worklet.Reason
+		kind   worklet.ChangeKind
+		writer *types.NotificationWriter
+		body   string
+		want   bool
+	}{
+		{"a person's comment on the seat's task", worklet.ReasonAssignee, worklet.ChangeComment, person, "why is this stuck?", true},
+		{"a person's mention", worklet.ReasonMention, worklet.ChangeComment, person, "@cy can you look?", true},
+		{"a person's edited question", worklet.ReasonAsked, worklet.ChangeCommentEdited, person, "which build?", true},
+		{"a task a person filed for the seat", worklet.ReasonAssignee, worklet.ChangeCreated, person, "", false},
+		{"a task a person assigned to the seat", worklet.ReasonAssignee, worklet.ChangeAssignee, person, "", false},
+		{"a task of the seat's a person closed", worklet.ReasonAssignee, worklet.ChangeStatus, person, "", false},
+		{"a colleague's mention", worklet.ReasonMention, worklet.ChangeComment, agent, "@cy have a look", false},
+	} {
+		n := promptNotification(tc.reason, tc.kind)
+		n.Writer, n.Body = tc.writer, tc.body
+		if got := notify.RidesLane(worklet.Prompt{}, nil, n); got != tc.want {
+			t.Errorf("%s rides the priority lane = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
