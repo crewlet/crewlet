@@ -3,13 +3,15 @@
  * `hunks` for its `sections`. No diff is drawn anywhere else (`test/diffs.test.ts`).
  */
 
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useRef, type ReactNode } from "react";
 import {
   DiffView as KitDiffView,
   type DiffLine,
   type DiffSection,
   type DiffViewProps as KitDiffViewProps,
 } from "@crewlethq/ui";
+import { PHONE_BREAKPOINT } from "~/app/layout.ts";
+import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 
 export type { DiffLayout, DiffLine, DiffSpan } from "@crewlethq/ui";
 
@@ -26,6 +28,8 @@ export interface DiffGap {
   skipped: number | null;
   /** The header of the hunk it opens; none after the last. */
   header: string | undefined;
+  /** Whether the kit draws this diff split: asked for, and as wide as a phone or wider. */
+  split: boolean;
 }
 
 /** The kit's estimate of a row's height before it is measured, which it does not export. */
@@ -69,13 +73,20 @@ function ExpandableDiff({
   hue: _hue,
   ...rest
 }: DiffViewProps & { hunks: readonly DiffHunk[]; expand: (gap: DiffGap) => ReactNode }) {
+  // THE LAYOUT THE KIT DRAWS, decided as it does from its root's width, which this box shares.
+  const box = useRef<HTMLDivElement>(null);
+  const narrow = useNarrowerThan(box, PHONE_BREAKPOINT);
+  const keyed = hunks.some((hunk) => hunk.lines.some((line) => line.path !== undefined));
+  const split = rest.layout === "split" && !keyed && !narrow;
   const opens = (hunk: DiffHunk | undefined) =>
     hunk !== undefined && (hunk.skipped > 0 || !!hunk.header);
+  const gapAt = (hunk: number, skipped: number | null, header: string | undefined) =>
+    expand({ hunk, skipped, header, split });
   const under = new Map<DiffLine, ReactNode>();
   hunks.forEach((hunk, i) => {
     if (i === 0 || !opens(hunk)) return;
-    const anchor = lastRowLine(hunks[i - 1]!.lines, rest.layout === "split");
-    if (anchor) under.set(anchor, expand({ hunk: i, skipped: hunk.skipped, header: hunk.header }));
+    const anchor = lastRowLine(hunks[i - 1]!.lines, split);
+    if (anchor) under.set(anchor, gapAt(i, hunk.skipped, hunk.header));
   });
   const first = hunks[0];
   // THE KIT DRAWS NO SKIP ROW here: each gap is the host's row, a note on the line above it.
@@ -91,13 +102,11 @@ function ExpandableDiff({
     );
   };
   return (
-    <>
-      {opens(first) && expand({ hunk: 0, skipped: first!.skipped, header: first!.header })}
+    <div ref={box}>
+      {opens(first) && gapAt(0, first!.skipped, first!.header)}
       <KitDiffView {...rest} sections={sections} notes={withGaps} />
-      {hunks.length > 0 &&
-        trailing !== 0 &&
-        expand({ hunk: hunks.length, skipped: trailing, header: undefined })}
-    </>
+      {hunks.length > 0 && trailing !== 0 && gapAt(hunks.length, trailing, undefined)}
+    </div>
   );
 }
 

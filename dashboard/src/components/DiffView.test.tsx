@@ -5,7 +5,7 @@
  */
 
 import { cleanup, render } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { sheetRules, splitSelectors } from "~/test/sheets.ts";
 import {
   lineOf,
@@ -178,6 +178,44 @@ describe("a diff a host lets expand", () => {
       "a finding",
       "Expand 1:0@@ -16,1 +16,1 @@",
     ]);
+  });
+  // A SPLIT HUNK ENDING ON MORE REMOVALS than additions ends on the pair holding
+  // its last removal; narrow, the kit draws unified. Mutation: anchor on the last line.
+  test("hangs the row under the last row the kit draws, split or narrowed to unified", () => {
+    const ENDS_ON_REMOVALS: DiffHunk[] = [
+      {
+        skipped: 0,
+        lines: [
+          { kind: "remove", text: "r1", before: 1, after: null },
+          { kind: "remove", text: "r2", before: 2, after: null },
+          { kind: "add", text: "a1", before: null, after: 1 },
+        ],
+      },
+      { skipped: 5, header: "@@ -8,1 +7,1 @@", lines: [same(8, "a9")] },
+    ];
+    const marked = (gap: DiffGap) => (
+      <div data-gap="" data-split={gap.split || undefined}>{`G${gap.hunk}`}</div>
+    );
+    const order = (root: ParentNode) =>
+      [...root.querySelectorAll("[data-kind]:not([aria-hidden]), [data-gap]")].map((el) =>
+        el.hasAttribute("data-gap")
+          ? `${el.textContent}${el.hasAttribute("data-split") ? " split" : ""}`
+          : el.lastElementChild!.textContent,
+      );
+    const wide = render(
+      <DiffView hunks={ENDS_ON_REMOVALS} expand={marked} layout="split" trailing={0} />,
+    );
+    expect(order(wide.container)).toEqual(["r1", "a1", "r2", "G1 split", "a9"]);
+    wide.unmount();
+    const width = vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(390);
+    try {
+      const narrow = render(
+        <DiffView hunks={ENDS_ON_REMOVALS} expand={marked} layout="split" trailing={0} />,
+      );
+      expect(order(narrow.container)).toEqual(["r1", "r2", "a1", "G1", "a9"]);
+    } finally {
+      width.mockRestore();
+    }
   });
 });
 

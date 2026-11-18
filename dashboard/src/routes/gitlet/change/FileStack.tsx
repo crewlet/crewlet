@@ -779,7 +779,7 @@ const FileSection = memo(function FileSection({
         gap.hunk >= expanded.hunks.length && "code-gap--trail",
       )}
       data-gap=""
-      data-split={layout === "split" || undefined}
+      data-split={gap.split || undefined}
       style={{ "--code-gap-digits": digits } as CSSProperties}
     >
       <span className="code-gap__controls">{gapControls(gap)}</span>
