@@ -922,12 +922,13 @@ func keptFloor(static launchFloor, s *runner.SessionContinuation, model string) 
 // own estimate of its next request, at the rate of model, the model the
 // launch's member hands its harness ([sandbox.NextRequest.At]), where it holds
 // a figure; else last, its last request's input, which under-counts the next
-// request by that request's reply and everything after it, and is the figure
-// of every record that holds no estimate (an older build's, a capture settled
-// off the executor log, a thread not read whole, a session of a harness whose
-// reader estimates none). Never the larger of the two: past a compaction no
-// request has followed, the last request's input is the compacted-away
-// conversation's, and the estimate is the smaller and the right one.
+// request by its reply and all after it, the figure of every record holding no
+// estimate (an older build's, a capture settled off the executor log, a thread
+// not read whole, a harness whose reader estimates none). Never the larger:
+// past a compaction no request has followed, last is the compacted-away
+// conversation's and the estimate the nearer, though short of the request by
+// its system prompt and tools until a reply anchors it (the residual
+// internal/sandbox/executor's package doc states).
 func continuedContext(next sandbox.NextRequest, last int64, model string) int64 {
 	if n := next.At(model); n > 0 {
 		return n

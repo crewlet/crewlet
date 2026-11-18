@@ -331,7 +331,10 @@
 //     stretch the compaction kept before the boundary, which the harness
 //     relinks after its summary, beside every record after the boundary
 //     ([nextReading.preserved]). Where that stretch cannot be found in what
-//     the reading kept of the thread, there is no figure.
+//     the reading kept of the thread, there is no figure. Until a reply
+//     anchors after the boundary the figure holds no system prompt and no
+//     tool definitions, which only a reply's input counts, so it is short of
+//     the request by those: a residual the floor carries.
 //
 // AT BOTH RATES the harness counts text at ([threadEstimate]), since which
 // model the next request goes to is the launch's to pick
