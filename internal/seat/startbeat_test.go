@@ -12,26 +12,15 @@ import (
 
 // A START WHOSE FIRST PASS OUTLASTS THE LEASE KEEPS ITS SEAT, AND ITS BEAT.
 //
-// [Host.Start] makes its first placement pass synchronously, and a pass runs
-// each claimed seat's acquire hook inline — the hook spawns the seat's MCP
-// children, hydrates its memory and recovers an interrupted executor, which
-// can outlast a TTL. The seat is in the held set while it does, so that the
-// heartbeat renews its lease throughout ([heldSeat] says why). But the start
-// ran the heartbeat loop only once that pass was over, so on the one pass
-// where every seat is new, nothing renewed anything: a hook that ran past the
-// TTL let the lease lapse under a seat this node was halfway through building,
-// for a peer to claim; and the watchdog, which reads the heartbeat's beat,
-// read the whole pass as the heartbeat wedged — every gap past two seconds
-// that 126 started engines showed under load was that first pass, 5.1 s the
-// longest — and past the TTL it ends the process.
+// [Host.Start]'s first pass runs acquire hooks inline, which can outlast a
+// TTL while the heartbeat renews the held seat ([heldSeat]). Started after
+// that pass, the loop lets the lease lapse, and the watchdog takes the pass
+// for a wedged heartbeat and ends the process.
 //
-// Here the hook takes two TTLs, on a bubble's clock, and a goroutine reads the
-// beat the way the watchdog does while the start runs. The seat must come out
-// of the start still leased to this node at the epoch it was claimed at, and
-// admitting turns, and the beat must never have gone more than a beat old.
-//
-// Mutation: start the heartbeat loop after the first pass, as it was, and the
-// lease lapses under the hook and the beat goes two TTLs stale.
+// The hook takes two TTLs on a bubble's clock while a goroutine reads the beat
+// as the watchdog does: the seat stays leased at its epoch, the beat fresh.
+// Mutation: start the heartbeat loop after the first pass, and the lease
+// lapses under the hook and the beat goes two TTLs stale.
 func TestAStartWhoseFirstPassOutlastsTheLeaseKeepsItsSeatAndItsBeat(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {

@@ -205,21 +205,15 @@ func TestAnAWSSecretsSeparatorIsReadToMaxReach(t *testing.T) {
 }
 
 // A PASSWORD'S KEY IS ONE WHERE ITS SEPARATOR BEGINS WITHIN MaxReach OF IT,
-// and a key with none yet waits for one no longer than that. Whether a word is
-// a key can wait on a separator lines later, so its reads were not bounded by
-// its line.
+// and a key with none yet waits for one no longer than that, since a word can
+// be a key on a separator lines later. A line ending in `pwd` with a separator
+// MaxReach less one byte below it is published; a byte further, it is the
+// key's line and redacted. In a live view a key at the end of the text is held
+// back until MaxReach is written past it, since a separator next would make it
+// a key.
 //
-// Read beside a key's block, whose lines a password's key and separator are
-// never a line of: a key's line ending in `pwd`, a separator below it MaxReach
-// less one byte from it, is no line of the key and is published, and with the
-// separator a byte further it is the key's line and redacted with the block.
-// And as a live view shows it: a key at the end of what is written, the text a
-// byte short of MaxReach past it, is held back, since a separator written next
-// would make it a key; MaxReach past it, it is not.
-//
-// Mutation: read a key's separator however far it is, or one byte further,
-// and the line ending in `pwd` turns; let a key wait for its separator however
-// far, and the live view holds back what no separator can reach.
+// Mutation: read a separator however far, or one byte further, or let a key
+// wait however far, and the line or the live view turns.
 func TestAPasswordKeysSeparatorIsReadToMaxReach(t *testing.T) {
 	t.Parallel()
 	block := "-----BEGIN RSA PRIVATE KEY-----\n" + keyLine + "\n"
@@ -254,34 +248,15 @@ func TestAPasswordKeysSeparatorIsReadToMaxReach(t *testing.T) {
 
 // A PASSWORD'S VALUE IS READ MaxReach PAST WHERE ITS KEY BEGINS AT MOST, on
 // its line and below it: a value whose first byte is the last within it is
-// taken out, and one a byte further is not, read as though the text ended
-// before it. And a line under a wrapping's suffix is the value's only where it
-// ends within it: ending a byte further, the bound cuts it before its suffix,
-// and the key's punctuation is the value, unless a marker stands where the
-// value would begin. A pass that took the value wrote one there, longer than
-// the value, which carries the line's suffix past the bound: read as a line
-// the bound cuts like any other, a second pass took the key's quote too. A
-// line the text itself ends on is read as it always was, the key's quote its
-// value, and so is a line whose escaped break is followed by a word the bound
-// then cuts: however that goes on, the line does not end in the suffix, so the
-// bound decided nothing. A line the bound cuts just past bytes that spell the
-// suffix ends in none, since it goes on: read as ending in it, its value a
-// line long was taken, and a second pass, that value nineteen bytes and the
-// line whole within the bound, took the key's quote. And a table's row holding a marker of a value closes
-// no key's row: a value a row long that the bound cut on the first pass, which
-// took it for the key's value, is nineteen bytes on the second, the row's
-// closing inside the bound, and read as a row that closes, it gave the key
-// its own closing for its value. Read as cut, with a token's marker where the value
-// would begin, the key named no value, and once the pass had replaced the
-// value of the key after the break, which ran past the bound, the line after
-// the break ended within it and a second pass took the key's quote.
-//
-// Mutation: read the key's line or the lines below it past the bound, or a
-// byte short of it, or read a line the bound cuts as cut whatever stands
-// where its value would begin, or a line the text ends on, or a line whose
-// escaped break a word the bound cuts follows, as one the bound cuts, or a
-// line the bound cuts as ending where its bytes spell the suffix, or a row
-// holding a marker as one that closes, and a row turns.
+// taken out, one a byte further is not. A line under a wrapping's suffix is the
+// value's only where it ends within the bound; else the bound cuts it before
+// its suffix, unless a marker stands where the value begins. A first pass's
+// longer marker must not let a second pass take the key's quote too: a cut
+// line is read as cut, never as ending in the suffix, whether the text ends on
+// it, an escaped break precedes a word the bound cuts, or bytes before the
+// bound spell the suffix; a table's row holding a marker closes no key's row.
+// Mutation: read past the bound or a byte short of it, or a line above as
+// ending or closing where it does not, and a row turns.
 func TestAPasswordsValueIsReadToMaxReachPastItsKey(t *testing.T) {
 	t.Parallel()
 	m := redact.Marker + "password]"
@@ -453,27 +428,15 @@ func TestAnEndLinesRestIsReadToMaxReach(t *testing.T) {
 
 // A PASSWORD KEY'S LINE IS READ FOR ITS GUTTER ONLY WHERE IT BEGINS WITHIN
 // MaxReach OF THE KEY, AS WRITTEN AND AS THE RULE LEAVES IT, every value the
-// rule replaced on it before the key written as its marker; past that, it has
-// none, and the value under the key is read from the start of its line, past
-// the markers it opens with but a password's, the gutter's punctuation
-// redacted with it and a gutter's word taken for the value: never from where
-// the bound falls, which may be a gutter's start that the line's own is not.
-// Read from the bound, the gutter began wherever the bound fell, which a
-// marker longer or shorter than the value it replaced moved, so a second pass
-// read another gutter and took another value: a value of one byte, its marker
-// nineteen, carried a line within the bound past it, and a value a line long,
-// its marker nineteen, brought a line past the bound within it. And read from
-// a marker a line opens with, a token every line of a log carries, it named
-// no value, while a second pass, the key's line within the bound, matched the
-// marker as its gutter's and took the value after it.
+// rule replaced on it before the key written as its marker; past that it has
+// none, and the value is read from the start of its line, past the markers it
+// opens with but a password's, never from where the bound falls: a marker
+// longer or shorter than the value it replaced moves the bound, so a second
+// pass would read another gutter. A marker a line opens with names no value.
 //
-// Mutation: read the bound on the line as written alone, and the rows whose
-// markers carry the line past it turn; read the gutter from the bound where
-// the line begins past it, and the row whose bound falls at a gutter's start
-// turns; take a line beginning exactly at the bound for one that begins
-// past it, in a string or on its own line, and the row at the bound turns; or
-// read the value from the marker a line opens with where the key's line has
-// no gutter, and the row a token opens past the bound turns.
+// Mutation: read the bound on the line as written alone, the gutter from the
+// bound, a line beginning exactly at the bound as past it, or the value from
+// the opening marker where the key's line has no gutter, and a row turns.
 func TestAKeysLineIsReadForItsGutterWithinMaxReach(t *testing.T) {
 	t.Parallel()
 	m := redact.Marker + "password]"
@@ -547,12 +510,10 @@ func TestAKeysLineIsReadForItsGutterWithinMaxReach(t *testing.T) {
 // FOLLOWS IT, WHETHER OR NOT THE STRING GOES ON past it to another escaped
 // line: the punctuation that rest opens with is no value of the first key's,
 // which names none, and the second key reads its own. Read as one of the
-// string's lines where it went on, the rest gave the first key its opening
-// `|` for a value, and the second key, its line no longer opened, its own
-// closing `|`, publishing what followed; and where the bound cut the rest, no
-// escaped line followed it within the bound, so the key on it ended the first
-// key's read, until a second pass, the second key's value now its marker,
-// found the string going on within the bound and took the `|`.
+// string's lines, the rest gave the first key its opening `|` for a value and
+// the second key its own closing `|`, publishing what followed. Where the bound
+// cut the rest, a second pass, the second key's value now its marker, would
+// find the string going on within the bound and take the `|`.
 //
 // Mutation: read the rest as one of the string's lines before looking for a
 // key on it, and both rows turn.

@@ -182,17 +182,15 @@ func (s *suite) runLane(t *testing.T) {
 		// A PARK REQUEUES WHAT IT WAS HANDED AS ONE UNIT (queue.Together):
 		// the person's message and the follow-up the drain took with it
 		// both return to the lane and are delivered together again, ahead
-		// of the backlog, rather than the marked one alone to the lane and
-		// the follow-up to the topic's tail.
+		// of the backlog, not the marked one alone with the follow-up at
+		// the topic's tail.
 		//
 		// PARKED AS THE ENGINE PARKS: the inbox is held before the requeue
-		// (internal/engine's dispatcher pauses a seat's inbox before every
-		// park), and the hold lifts once the copies wait on the lane.
-		// Requeued with no hold, the drain after the handler can ask the
-		// lane before a broker that signals its consumers asynchronously has
-		// counted the copies — a no-wait pull on JetStream answers "no
-		// messages" until it has — and the backlog goes first on a race the
-		// engine never runs.
+		// (internal/engine's dispatcher), and the hold lifts once the copies
+		// wait on the lane. With no hold the drain can ask the lane before
+		// JetStream's asynchronous consumer signalling has counted the
+		// copies (a no-wait pull answers "no messages"), and the backlog
+		// goes first on a race the engine never runs.
 		q := s.start(ctx, t)
 		topic := inbox()
 		queueBacklog(ctx, t, q, topic, "g", append(append([]*events.Event{followUp()},

@@ -20,14 +20,11 @@ import (
 
 // A PERSON STEERS A LIVE EXECUTOR, END TO END.
 //
-// The run is the stand-in Claude Code in a real `direct` box, held open, its
-// hooks the settings file the runner wrote. A person sends a note through the
-// route the dashboard presses (`/operator/act/steer_turn`) while the run
-// works: it waits sealed on the run's record. Released, the run makes its one
-// call, a batch, and its PostToolBatch hook's steer_take serves it the note,
-// which the harness prints in its own line and files in its session. The run's
-// collection finds the take there and publishes the note delivered at the
-// `tool_batch` boundary under the job; its review opens with the note.
+// The run is the stand-in Claude Code in a real `direct` box, held open, with
+// the runner's settings file as hooks. A note sent through
+// `/operator/act/steer_turn` waits sealed on the run's record; released, the
+// run's one batch call has its PostToolBatch hook's steer_take serve it, and
+// the collection publishes it delivered at `tool_batch`; the review opens with it.
 //
 // Mutations: write no settings file, or file no hook records, and the review
 // reads the note, naming no job; drop the informational line from the

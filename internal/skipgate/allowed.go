@@ -418,23 +418,13 @@ var allowed = []Allowance{
 //
 // # Why this table has to exist
 //
-// [read] renders the stream back as plain `go test` output, which means a
-// passing test's own output is dropped — that is what `go test` without -v
-// does, and echoing everything would make a CI log tens of times longer and
-// get the gate taken back out.
-//
-// But a handful of tests exist to PRINT A NUMBER that somebody is meant to
-// watch: a drain rate, a throughput, a measured ratio. Dropping their output on
-// a pass means the number reaches a log only on the run where the test FAILED —
-// which is the one run where it is least useful and most likely to be blamed on
-// the change under test. internal/store's drain measurement spent its whole
-// life in exactly that state: it logged the applier's rows/s on every green
-// run, and not one of those lines survived to a CI log, so when the wall-clock
-// assertion it carried finally failed there was no history to compare against
-// and n = 1.
-//
-// An entry here is therefore a declaration that this test's output is DATA, not
-// noise, and that somebody reads it.
+// [read] renders the stream back as plain `go test` output, which drops a
+// passing test's own output; echoing everything would make a CI log tens of
+// times longer and get the gate taken back out. But a handful of tests exist to
+// PRINT A NUMBER somebody is meant to watch (a drain rate, a throughput). Dropped
+// on a pass, it reaches a log only on the run where the test FAILED, with no
+// history to compare against. An entry here declares that this test's output
+// is DATA, not noise, and that somebody reads it.
 type Measurement struct {
 	Package string
 	Test    string

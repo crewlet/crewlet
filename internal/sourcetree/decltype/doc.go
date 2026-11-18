@@ -17,7 +17,8 @@
 // in turning a path into a package was fixed in one copy only. So the walk is
 // here, once, and a gate keeps only its own judgement — what it flags, its
 // doors, its exemptions — and what each of the walk's answers means for its
-// subject.
+// subject. It is a normal package, not a test file, because the tests of
+// several gates import it.
 //
 // # Why not go/types
 //
