@@ -16,18 +16,16 @@ import (
 
 // A REPORT ASKED OF A SERVER THAT HAS EXITED IS REFUSED BEFORE ANYTHING REAPS
 // IT, by both fakes that stand in for a harness's own server, as the real
-// server's closed port refuses its client from the moment the server exits.
-// The serve lifecycle's cases hold the usage to being asked while the server
-// is up on exactly that refusal, so a fake that answered until the reap passed
-// a run that asked once its server was stopped and not yet reaped (#1080's
-// defect, read off kill(pid, 0)).
+// server's closed port refuses its client once the server exits. The serve
+// lifecycle's cases hold the usage to being asked while the server is up on
+// exactly that refusal, so a fake that answered until the reap would pass a
+// run that asked after its server stopped (#1080).
 //
-// The server here is a process this case starts, kills and holds unreaped
-// until it ends, so every report is asked of an exited, unreaped server, never
-// of one a race left running or reaped. It waits with waitid's WNOWAIT, which
-// returns once the kernel holds the child as a zombie and reaps nothing. Linux
-// alone, because golang.org/x/sys/unix wraps waitid only there, and the build
-// links no cgo to reach darwin's.
+// The server is a process this case kills and holds unreaped, so every report
+// is asked of an exited, unreaped server, never of one a race left running or
+// reaped. It waits with waitid's WNOWAIT, which returns once the child is a
+// zombie and reaps nothing. Linux alone: golang.org/x/sys/unix wraps waitid
+// only there, and the build links no cgo to reach darwin's.
 func TestAReportAskedOfAnExitedServerIsRefusedBeforeItsReap(t *testing.T) {
 	pid := exitedUnreapedServer(t)
 	for _, tc := range []struct {

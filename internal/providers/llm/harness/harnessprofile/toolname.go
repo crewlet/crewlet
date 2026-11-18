@@ -11,22 +11,16 @@ import (
 
 // THE TOOL NAMES A HARNESS CAN HAND ITS MODEL.
 //
-// Every tool a seat is offered reaches its harness as a tool of the
-// engine's one MCP server, and the harness hands it to its model under a name of
-// its own making: a prefix for the server and the tool's name after it,
-// `mcp__crewlet__search` for Claude Code. The model vendors' function-calling
-// APIs refuse a tool name longer than [ModelToolNameMax] or holding anything
-// but letters, digits, `_` and `-`, and a harness handed one either fails the run
-// or drops the tool where nobody sees it. So the engine files a tool only under
-// a name that fits beside the LONGEST prefix any harness it ships a profile for
-// puts in front of it ([ToolNameMax]), and refuses the rest with their reason
-// rather than cutting them short: a shortened name is a new name, and two of
-// them can collide.
-//
-// HERE because it is a fact about what each harness does with a name, read off the
-// profile table: a profile added with a longer prefix lowers the limit on its
-// own, and nothing else has to be told. Config holds a server's `tool_prefix`
-// to it and the MCP bridge holds every tool it files to it.
+// A harness hands its model each of the engine's MCP tools under a prefix plus
+// the tool's name: `mcp__crewlet__search` for Claude Code. The vendors' APIs
+// refuse a name longer than [ModelToolNameMax] or holding anything but
+// letters, digits, `_` and `-`, and a harness handed one fails the run or
+// silently drops the tool. So the engine files a tool only under a name that
+// fits beside the LONGEST prefix any shipped profile adds ([ToolNameMax]), and
+// refuses the rest rather than cutting them short: two shortened names can
+// collide. HERE because it is read off the profile table, so a longer prefix
+// lowers the limit on its own; config holds `tool_prefix` to it, the bridge
+// every tool it files.
 
 // ModelToolNameMax is the most characters a model vendor's API takes in a tool
 // name: 64, the bound OpenAI's and Google's function calling set, so a name

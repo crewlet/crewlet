@@ -54,17 +54,14 @@ func (p *Provider) CredentialKind(value string) CredentialKind {
 // its harness, read off the environment the child is given ([childEnv]), or ""
 // when the mode hands it none: the headless token under subscription (none
 // when the entry signs in with credential files), the key under api-key, and
-// under inherit-env whichever of the two the engine's own environment
-// forwards, the token first, as [Provider.signIn] names them.
+// under inherit-env whichever of the two the engine's environment forwards,
+// the token first, as [Provider.signIn] names them.
 //
-// NOTHING UNDER auth.mode env. That mode's sign-in is a set of variables (a
-// cloud provider's switch beside its region and keys, or a gateway's address
-// beside its token), and no one of them is the credential: a hint of
-// CLAUDE_CODE_USE_BEDROCK's "1" would describe nothing, and a hint of one
-// variable picked from the set would read as the whole sign-in.
+// NOTHING UNDER auth.mode env: its sign-in is a set of variables, none of them
+// the credential, so any one picked would read as the whole sign-in.
 //
-// Computed on the node that answers, from the value it resolved, and never
-// stored, logged or published: see [Provider.CredentialHintOf].
+// Computed on the node that answers, never stored, logged or published: see
+// [Provider.CredentialHintOf].
 func (p *Provider) CredentialHint() string {
 	var names []string
 	switch p.AuthMode() {

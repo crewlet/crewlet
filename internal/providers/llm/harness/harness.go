@@ -61,6 +61,27 @@
 // by keyword, which is how the same recognition was got wrong twice before,
 // and on such an exit only where the sentinel OPENS what the harness said, which
 // is otherwise the model's own words (see [classifyMarkers]).
+//
+// # Constraints a change must keep
+//
+// Building a provider writes nothing, so `crewlet validate` is not a write to
+// the host: the workspace is a process-wide map and a configured bundle is
+// restored by [RestoreConfiguredBundle], never by New.
+//
+// A harness that started is never fatal. run's error means only that none did;
+// everything that happened to one that ran is a result its caller classifies
+// (exec.go).
+//
+// A call handed a key runs in a key home never seeded with the login and never
+// carried back from: a harness may keep the key in its login file (see
+// [Workspace.AcquireForKey]).
+//
+// A bench is never shared with the fleet: each peer learns a spent plan from
+// its own calls once per window, and a coordination read in front of every
+// call would put the store under every turn.
+//
+// A harness that reports no usage is charged four characters a token, which
+// doctor says; cache reads and writes are summed back into the input.
 package harness
 
 import (
@@ -327,21 +348,17 @@ func (p *Provider) String() string {
 }
 
 // routeFor picks the channel one call's system prompt takes
-// ([harnessprofile.Profile.RouteFor]), and a call that carries NO system prompt
-// takes a seat's route whatever its kind: the appending channel wherever the
-// profile declares one, so the harness's own prompt stays in force.
+// ([harnessprofile.Profile.RouteFor]); a call with NO system prompt takes a
+// seat's route whatever its kind: the appending channel, so the harness's own
+// prompt stays in force.
 //
-// A side pass takes the replacing channel because its system prompt is the
-// whole instruction. With none, there is nothing to put in the vendor's place,
-// and the replacing channel would put nothing there: harmless where a channel
-// is passed only with text to carry, but a channel whose file carries policy is
-// passed on every call ([harnessprofile.SystemPromptFile]), and its replacing form
-// then renders an EMPTY system prompt. On Kimi Code that is an agent file with
-// no body, which the harness refuses outright ("Missing prompt body", exit 1,
-// measured on 0.42.0 and 2.3.1). The appending form with nothing to add is the
-// vendor's own prompt under the same policy, which is what a call with no
-// system prompt asks for. Every caller in the engine sends one today; this is
-// what holds the next that does not.
+// A side pass's system prompt is the whole instruction, hence the replacing
+// channel; with none there is nothing to put in the vendor's place. A channel
+// whose file carries policy is passed on every call
+// ([harnessprofile.SystemPromptFile]), and its replacing form would render an
+// EMPTY system prompt, which Kimi Code refuses ("Missing prompt body", exit 1,
+// on 0.42.0 and 2.3.1). Every caller sends one today; this holds the next
+// that does not.
 func (p *Provider) routeFor(req llm.Request) harnessprofile.Route {
 	if system, _ := SplitSystem(req); system == "" {
 		return p.profile.RouteFor(true)
@@ -349,23 +366,18 @@ func (p *Provider) routeFor(req llm.Request) harnessprofile.Route {
 	return p.profile.RouteFor(req.Agent)
 }
 
-// Complete runs one harness invocation and reads its answer.
-//
-// An entry its harness last reported spent is NOT called while it sits out
+// Complete runs one harness invocation and reads its answer. An entry its
+// harness last reported spent is NOT called while it sits out
 // ([Provider.SittingOut]): the call fails at once as a rate limit, naming the
-// instant, so the seat's chain moves to its next model without a process
-// launched to learn again what the last one said. Checked as the call arrives
-// and again once it holds a slot, because a call that queued for one may have
-// waited out the very call that sat the entry out.
+// instant, so the chain moves on without a process launched to relearn it.
+// Checked on arrival and once the call holds a slot, since one that queued may
+// have waited out the very call that sat the entry out. What the call met is
+// remembered for [Provider.Unready].
 //
-// What the call met is remembered for [Provider.Unready].
-//
-// A CALL ITS CALLER CANCELLED FAILED AS A CANCELLATION, however it surfaced:
-// a harness signalled with the call that exited 143 or held its output, a slot or
-// a home the call stopped waiting for. Decided here, once, from the caller's
-// context rather than from the process, which a cancellation and a crash
-// end identically, so no path below can report a person's Stop as the
-// vendor's outage ([llm.KindCancelled]).
+// A CALL ITS CALLER CANCELLED FAILED AS A CANCELLATION, however it surfaced
+// (exit 143, held output, a wait for a slot or home). Decided here once, from
+// the caller's context: a cancellation and a crash end the process alike
+// ([llm.KindCancelled]).
 func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	comp, err := p.complete(ctx, req)
 	if err != nil && errors.Is(ctx.Err(), context.Canceled) {
@@ -664,23 +676,18 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 
-	// A USAGE REPORT ASKED FOR AFTERWARDS, for a vendor that records the
-	// call's counts and does not print all of them — see
-	// [harnessprofile.Profile.UsageArgs]. Asked whatever the call's outcome,
-	// because a refused call may still have spent tokens; and like a usage
-	// file, a report that cannot be had leaves the counts to stdout rather
-	// than failing an answer the operator paid for. In the working directory
-	// the call ran in, before the checkout is released.
+	// A USAGE REPORT ASKED FOR AFTERWARDS, for a vendor that does not print all
+	// the counts ([harnessprofile.Profile.UsageArgs]). Asked whatever the
+	// outcome, since a refused call may still have spent tokens; one that
+	// cannot be had leaves the counts to stdout rather than failing an answer.
+	// Run in the call's directory, before the checkout is released.
 	//
-	// A RUN WITH TOOLS ASKS ON EVERY OUTCOME, a timeout and a run the host
-	// stopped included, and past the cancellation that may have ended it
-	// (bounded by the command's own timeout): such a run is a phase's whole
-	// loop, and its report is the one count of what the run spent before it
-	// was cut.
-	//
-	// A RUN WITH TOOLS MAY ASK THROUGH ITS HARNESS'S SERVER ([harnessprofile.MCP.UsageArgs]),
-	// which is then asked while it is still up — and not at all once a run cut
-	// short took it down.
+	// A RUN WITH TOOLS ASKS ON EVERY OUTCOME, a timeout or host stop included,
+	// past the cancellation that may have ended it (bounded by the command's
+	// own timeout): the report is the one count of what the phase spent before
+	// being cut. It may ask through its harness's server
+	// ([harnessprofile.MCP.UsageArgs]) while still up, not once a cut-short
+	// run took it down.
 	if len(p.profile.UsageArgs) > 0 && (!res.timedOut || tools != nil) {
 		args := make([]string, 0, len(p.profile.UsageArgs))
 		for _, arg := range p.profile.UsageArgs {
@@ -771,19 +778,16 @@ func (p *Provider) callEnv() map[string]string {
 }
 
 // completion turns a finished invocation into an answer or a classified
-// failure.
+// failure. Its context is only for logging: an EMPTY answer is a real outcome,
+// not an error (see the fall-through below), and this is where the token
+// counts that explain it are in hand.
 //
-// It takes a context only to log with: an answer this backend hands back
-// EMPTY is a real outcome rather than an error (see the fall-through below),
-// and the one place that can say so is here, where the token counts that
-// explain it are still in hand.
-//
-// sent is everything the engine handed the harness — the system prompt on its
-// channel and the rendered prompt — and is read only for the estimate a harness
-// that reports no usage is charged. The system prompt is in it because a
-// budget charged for the transcript alone undercounts every call by the
-// largest stable thing in it; what is NOT in it is a vendor's own system
-// prompt kept beside the engine's, which the engine never sees.
+// sent is everything the engine handed the harness (the system prompt on its
+// channel and the rendered prompt), read only for the estimate a harness that
+// reports no usage is charged. The system prompt is in it because a budget
+// charged for the transcript alone undercounts every call by the largest
+// stable thing in it; a vendor's own system prompt, which the engine never
+// sees, is not.
 func (p *Provider) completion(
 	ctx context.Context, sent string, res *rawResult, usageDoc string,
 ) (*llm.Completion, error) {
@@ -823,20 +827,17 @@ func (p *Provider) completion(
 	// at the profile's error_paths. It decides where a marker may stand, and
 	// that the call is refused below rather than answered.
 	failed := res.exitCode != 0 || out.failed
-	// The harness's own report wins over anything stdout happened to carry:
-	// a profile only names one when its vendor puts the counts nowhere
-	// else, so a hit here is the only real figure there is. A report that
-	// ARRIVED and could not be read is said out loud, because the counts
-	// then fall back to stdout's — an estimate, for a harness that reports
-	// none there — on every call until somebody notices the budget
-	// figures are made up.
+	// The harness's own report wins over stdout: a profile names one only when
+	// its vendor puts the counts nowhere else. A report that ARRIVED and could
+	// not be read is said out loud, because the counts then fall back to an
+	// estimate on every call until somebody notices the budget figures are
+	// made up.
 	//
 	// NOT FOR A RUN THE HARNESS SAID FAILED, which is refused below and charged
-	// nothing, so no count falls back to anything. A vendor's report of a
-	// failed run may hold no counts by design — Hermes writes them as null
-	// for a refused key or a spent plan (measured on 0.21.5) — and warning
-	// of drift on every such call names the profile as broken exactly when
-	// the operator is reading the log for the refusal.
+	// nothing. A vendor's report of a failed run may hold no counts by design
+	// (Hermes writes null for a refused key or a spent plan, on 0.21.5), and
+	// warning of drift then names the profile as broken exactly when the
+	// operator is reading the log for the refusal.
 	if outcome := out.applyUsageReport(p.profile, usageDoc); outcome.unreadable() && !failed {
 		fallback := "an estimate, four characters a token"
 		if out.reported {
@@ -849,29 +850,17 @@ func (p *Provider) completion(
 			"counts_from", fallback)
 	}
 
-	// A spent subscription is checked BEFORE the exit code, because it
-	// arrives on a successful one: the process exits 0 and the answer is
-	// the vendor's own sentence about the plan.
+	// A spent subscription is checked BEFORE the exit code: it arrives on a
+	// successful one. THE ANSWER IF THERE IS ONE, EVERYTHING PRINTED IF NOT: a
+	// marker is something the VENDOR said, so losing it because the text paths
+	// no longer resolve would classify a spent plan as a server fault and burn
+	// the next chain member. Not stdout unconditionally: some markers are
+	// short generic phrases that would false-positive on healthy telemetry.
 	//
-	// THE ANSWER IF THERE IS ONE, EVERYTHING PRINTED IF THERE IS NOT.
-	// A marker is something the VENDOR said, so losing it because this
-	// profile's text paths no longer resolve would classify a spent plan
-	// as a server fault and burn the chain's next member on it — and a
-	// spent plan is exactly when a drifted-looking run is most likely,
-	// since the harness answers with prose where the envelope should be.
-	//
-	// Not stdout unconditionally, though, which was the first shape of
-	// this: some shipped markers are short generic phrases rather than
-	// vendor sentences, and scanning a healthy run's whole telemetry for
-	// them adds false-positive surface for nothing. When the answer WAS
-	// located it is the only thing the vendor said that matters.
-	//
-	// The events scope reads neither as text: it decodes the whole of
-	// stdout and looks only at the harness's own failure events — see
-	// [harnessprofile.MarkerScope] — which is why stdout itself is handed over
-	// beside what was said. And whether the harness said the run FAILED is
-	// handed over too, because it decides where in what was said a
-	// sentinel may stand — see [classifyMarkers].
+	// The events scope reads neither as text: it decodes all of stdout for the
+	// harness's own failure events ([harnessprofile.MarkerScope]), so stdout
+	// is handed over too, as is whether the run FAILED, which decides where a
+	// sentinel may stand ([classifyMarkers]).
 	said := nonEmpty(out.text, res.stdout)
 	if hit, ok := classifyMarkers(p.profile, harnessOutput{
 		said: said, stdout: res.stdout, stderr: res.stderr, failed: failed, at: p.now(), zone: p.zone,
@@ -880,22 +869,16 @@ func (p *Provider) completion(
 	}
 
 	// A RUN THE HARNESS SAYS FAILED, FOR NO REASON A PROFILE RECOGNISES, IS A
-	// SERVER FAILURE — the harness or its vendor did not answer: an overload or
-	// a 5xx it relayed once its own retries ran out, a crash, a reason in
-	// words no marker knows. It used to be FATAL, on the reasoning that every
-	// member of the seat's chain would refuse the call identically, and that
-	// is true only of a call the engine cannot make at all ([llm.KindFatal]).
-	// The next member is another login, another vendor or another binary,
-	// which does not share this one's outage: trying it costs one process
-	// launch, and stopping cost the seat every turn for as long as the outage
-	// lasted, each redelivered against the same dead head. Nothing is
-	// repeated by the walk, either: the calls a run made are on its
-	// session's record, which the next member continues from rather than
-	// runs again (internal/providers/llm/chain).
+	// SERVER FAILURE (an overload or 5xx after its own retries, a crash, words
+	// no marker knows). FATAL fits only a call the engine cannot make at all
+	// ([llm.KindFatal]); the next chain member is another login, vendor or
+	// binary and does not share this outage. Nothing is repeated by the walk:
+	// the calls a run made are on its session's record, which the next member
+	// continues from (internal/providers/llm/chain).
 	//
 	// NOT BENCHED: only a spent plan sits the entry out ([Provider.bench]),
-	// because only a spent plan is known to last. A failure the next call
-	// may not meet must not hold every seat on the node off a working entry.
+	// because only it is known to last; a failure the next call may not meet
+	// must not hold every seat on the node off a working entry.
 	if failed {
 		what := fmt.Sprintf("the %s harness exited %d", p.harness, res.exitCode)
 		if res.exitCode == 0 {
@@ -904,16 +887,14 @@ func (p *Provider) completion(
 		return nil, p.fail(llm.KindServer, fmt.Errorf("%s:\n%s", what,
 			tail(nonEmpty(res.stderr, out.text, res.stdout))))
 	}
-	// A RUN NOT SEEN TO ITS END IS A SERVER FAILURE TOO, whatever it
-	// printed. A stdout that something the harness left running still held a
-	// grace after the harness was done was cut there, so no reading of it can be
-	// shown to be the whole answer: the refusal a clipped stdout gets above,
-	// for the same reason. And a wait that failed is a harness that started and
-	// did not finish as one. Neither is a call the engine could not make, so
-	// the chain may carry it to the next member, and nothing says it lasts,
-	// so nothing is sat out. Both used to come back from [run] as an error,
-	// read as fatal: the walk stopped at the head with a whole answer on
-	// stdout, the harness having exited 0.
+	// A RUN NOT SEEN TO ITS END IS A SERVER FAILURE TOO, whatever it printed.
+	// A stdout something the harness left running still held a grace after it
+	// was done was cut there, so no reading can be shown to be the whole
+	// answer (the refusal a clipped stdout gets above); a wait that failed is
+	// a harness that did not finish. Neither is a call the engine could not
+	// make, so the chain may carry it on, and nothing says it lasts, so
+	// nothing is sat out. Read as [run] errors they were fatal and stopped the
+	// walk at the head with a whole answer on stdout.
 	//
 	// After the markers, which classify on what the vendor SAID: a spent plan
 	// reported on a stdout a helper then held is still a spent plan.
@@ -934,24 +915,16 @@ func (p *Provider) completion(
 			p.harness, stderrDetail(res.stderr)))
 	}
 	if !out.located {
-		// THE PROFILE HAS DRIFTED FROM THE HARNESS. Its output parsed, and
-		// none of the paths that say where the answer lives resolved to
-		// a string — so this build cannot tell which part of what the
-		// harness printed is the model's reply, and the honest answer is
-		// that it has none.
+		// THE PROFILE HAS DRIFTED FROM THE HARNESS. The output parsed, but
+		// no text path resolved to a string, so this build cannot tell which
+		// part of it is the model's reply and has none to give. Handing stdout
+		// back as the reply would speak it as the agent: the tool loop appends
+		// it, the reviewer judges on it, the dashboard prints it as the seat's
+		// words. The shape belongs in THIS message, where the person who can
+		// fix it is the only reader.
 		//
-		// It used to hand the whole of stdout back as the reply instead,
-		// on the reasoning that an operator could then see the shape and
-		// write an override. They could — but only after it had already
-		// been spoken as an agent: the tool loop appends it to the
-		// conversation, the reviewer judges the turn on it, and the
-		// dashboard prints it as the sentence the seat said. The shape
-		// belongs in THIS message, where the person who can fix it is
-		// the only reader.
-		//
-		// Its own kind, because no vendor failed. The chain may still try another
-		// member and the credential is not benched: nothing about the prompt was
-		// refused.
+		// Its own kind, because no vendor failed: the chain may try another
+		// member and the credential is not benched.
 		return nil, p.fail(llm.KindProfileDrift, fmt.Errorf(
 			"the %s harness's output parsed, but none of the text_paths this profile "+
 				"looks in resolved (%s) — the profile no longer matches the "+
@@ -961,24 +934,15 @@ func (p *Provider) completion(
 			p.harness, harnessprofile.PathList(p.profile.TextPaths), p.key, p.key, tail(res.stdout)))
 	}
 	// LOCATED AND EMPTY IS AN ANSWER OF NOTHING, NOT A FAULT. The harness
-	// exited 0, reported no error, and the path this profile looks in
-	// resolved to an empty string — which is what a model that spent its
-	// whole output budget on hidden reasoning does. That is a MODEL
-	// outcome, and [llm.Provider] forbids a backend from deciding what a
-	// failure means beyond a coarse kind, so it must not be dressed as one:
-	// it is a Completion with empty Content, and the tool loop is the frame
-	// that corrects it.
+	// exited 0, reported no error, and the text path resolved to an empty
+	// string, as for a model that spent its whole output budget on hidden
+	// reasoning. That is a MODEL outcome, and [llm.Provider] forbids a backend
+	// deciding what a failure means beyond a coarse kind: it is a Completion
+	// with empty Content, which the tool loop corrects, rather than an outage
+	// of a harness that demonstrably answered.
 	//
-	// It used to be a KindServer error, on the reasoning that there was no
-	// reply for the tool loop to correct. That was true only because the
-	// loop tested tool calls and never read Content; closing that gap is
-	// what makes this fall-through safe, and what stops one empty round
-	// from being reported as an outage of a harness that demonstrably answered.
-	//
-	// Falls through rather than returning early so the round is charged:
-	// Content becomes "" with the vendor's real usage attached below — an
-	// empty answer costs tokens, and it was previously the one outcome that
-	// spent them without ever reaching a budget.
+	// Falls through rather than returning early so the round is charged: an
+	// empty answer costs tokens, with the vendor's real usage attached below.
 	comp := &llm.Completion{
 		Model:      p.model,
 		Content:    out.text,
@@ -1019,63 +983,17 @@ func (p *Provider) completion(
 }
 
 // classifyMarkers recognises a spent subscription or an expired login in a
-// harness's own words.
-//
-// Structure, not keywords. A marker is a sentinel the vendor emits VERBATIM,
-// and where the vendor carries the reset instant alongside it, the
-// classification yields a real Retry-After rather than a guess. Matching
-// "usage limit" case-insensitively across a reply is what made this wrong
-// before: a model asked about rate limits writes the phrase itself, and every
-// such answer was thrown away as a spent plan.
-//
-// A FUNCTION OF THE PROFILE, not a method on the provider: what a vendor's
-// spent plan looks like is a property of the profile table, and the only way
-// to check a shipped profile's sentinels against the output its harness actually
-// produces is to be able to ask without a running provider.
-//
-// # What the model said is not the vendor's report
-//
-// Verbatim is not enough on its own, because what the harness said on stdout is,
-// on every healthy run, the MODEL's words — its prose, and the arguments of
-// every tool call it makes — and a seat asked to add backoff for the GitHub
-// API writes "rate limit" as readily as a vendor reports one. Matched anywhere
-// in there, a sentence the model wrote threw its answer away as a spent plan
-// and sat the entry out for every seat on the node, and the redelivered turn
-// wrote it again a minute later. So in the default scope a sentinel in what
-// was said counts in two places only:
-//
-//   - ANYWHERE, in a run the harness itself reported failed — a non-zero exit,
-//     or its own failure flag ([harnessprofile.Profile.ErrorPaths]). The harness has
-//     said this was no answer; what it printed is its account of why.
-//   - AT THE START, in a run it did not: the sentinel begins the first
-//     non-empty line, so that what was said IS the vendor's report rather
-//     than an answer that mentions one. That is the shape of the clean-exit
-//     report this package has measured — Claude Code's spent plan, a line
-//     beginning "Usage limit reached" standing where the answer should be —
-//     and it is what makes the shipped profiles' generic, unmeasured
-//     sentinels ("rate limit", "quota") safe to keep: a model's answer that
-//     merely mentions one, or a tool call that carries one in its
-//     arguments, is not classified at all, and comes back as the answer it
-//     is.
-//
-// Stderr is matched anywhere: it is the harness's own channel, and the answer
-// does not reach it. So are the fields of a FAILED run with tools' own failure
-// events ([harnessprofile.MCP.FailureEvents]): that run's answer is its record's
-// last prose, which a failed run never wrote, and a harness whose stderr says only
-// that it failed (Muse Code: "run ended with Failed") says why there alone.
-// The events scope reads the harness's own failure events and nothing else, and
-// the stderr scope stderr alone — see [harnessprofile.MarkerScope].
-//
-// # Structured reports first, then the words, then dated
-//
-// The harness's own structured reports of a limit and of a refused sign-in are
-// read before any sentinel ([classifyEvents]), and THE RUN'S LAST WORD
-// DECIDES among them: a refused token retried and then met by a spent plan
-// ended on the plan, and reads as a limit. A refused sign-in is never read
-// from a run that answered, by event or by sentinel. A limit, once
-// recognised, is dated and named ([dateLimit]): the reset and the window from
-// the harness's own structured event where it wrote one, else from the vendor's
-// sentence.
+// harness's own words: a sentinel the vendor emits VERBATIM, dated where it
+// carries the reset. A FUNCTION OF THE PROFILE, so shipped sentinels can be
+// checked against real output without a provider. Stdout on a healthy run is
+// the MODEL's words, and a "rate limit" in them once sat the entry out for
+// every seat. So what was said counts ANYWHERE
+// only in a run the harness reported failed
+// ([harnessprofile.Profile.ErrorPaths]), else only AT THE START ([haystack]).
+// Stderr and a failed tools run's failure events match anywhere
+// ([harnessprofile.MarkerScope]). Structured reports ([classifyEvents]) come
+// first and THE RUN'S LAST WORD DECIDES; a refused sign-in is never read from
+// a run that answered. A limit is then dated ([dateLimit]).
 func classifyMarkers(p harnessprofile.Profile, out harnessOutput) (markerHit, bool) {
 	hit, ok := classifyEvents(p, out)
 	if !ok {
@@ -1168,8 +1086,11 @@ type haystack struct {
 	text   string
 	source markerSource
 	// anchored admits a sentinel only where it BEGINS the text's first
-	// non-empty line — the rule for what a run that did not fail said on
-	// stdout, which is the model's words unless it is the vendor's report.
+	// non-empty line: the rule for what a run that did not fail said on
+	// stdout, the model's words unless it is the vendor's report (Claude
+	// Code's clean-exit spent plan opens "Usage limit reached"). It keeps the
+	// generic sentinels ("rate limit", "quota") safe: an answer or tool
+	// argument that merely mentions one is not classified.
 	anchored bool
 }
 

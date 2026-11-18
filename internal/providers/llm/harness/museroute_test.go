@@ -139,25 +139,18 @@ func (m *museRecorder) end(script fakeScript, total fakeUsage, _ string) int {
 	return 0
 }
 
-// MUSE CODE'S RUN IS READ FROM ITS EXEC STREAM, AND ITS HOME STARTS NO SERVER OF
-// ITS OWN. The crewlet server is declared for the run on argv (`-c`), and the
-// run's toolset admits its tools; the home's settings file, whose servers —
-// and approved plugins' — the harness starts on every call, is the profile's own,
-// whatever was there. Each model task is a request, its prose the fragments
-// streamed after it, run together, and each call a tool task's side effect,
-// joined to the call by the key the harness sends in `_meta`. The stream carries
-// no counts per request: each is estimated as it is read, and the run's own
-// count — the prompt with its cached part in it — settles the rest. The host is
-// told the harness waits 300 seconds for a call, does not re-read the list, and
-// makes a response's calls one after another.
+// MUSE CODE'S RUN IS READ FROM ITS EXEC STREAM, AND ITS HOME STARTS NO SERVER OF ITS
+// OWN. The crewlet server is declared on argv (`-c`), the toolset admits its tools, and
+// the home's settings file (its servers start on every call) is the profile's own. Each
+// model task is a request, its prose the fragments after it; each call is a tool task's
+// side effect, joined by the key sent in `_meta`. The stream carries no per-request
+// counts: each is estimated as read and the run's count settles the rest, hence prompts
+// of a real size (an estimate is never refunded). The host is told the harness waits 300
+// seconds, does not re-read the list, and runs a response's calls in turn.
 //
-// Prompts of a real size here, because an estimate is never refunded: it is a
-// floor under what the request read, and the run's count settles what it left.
-//
-// Mutation: drop the run.toolset setting, and the harness never reaches the seat's
-// tools; drop the settings seed, and the planted server starts (the fake fails
-// the run); join by callId, and no call is joined; read the run's prompt as
-// less its cached part, and it is charged 1,000 tokens more than it spent.
+// Mutation: drop run.toolset and the seat's tools are unreachable; drop the settings seed
+// and the planted server starts; join by callId and no call joins; read the prompt as less
+// its cached part and it is charged 1,000 tokens more than it spent.
 func TestMuseCodesRunIsReadFromItsExecStream(t *testing.T) {
 	t.Parallel()
 	script := routeCase

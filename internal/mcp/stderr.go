@@ -26,23 +26,16 @@ const truncationMarker = " …[truncated]"
 
 // stderrRelay owns one stdio server's stderr.
 //
-// Two jobs, and the second is the reason it exists at all:
+// Two jobs:
+//   - ATTRIBUTION: a real OS pipe, so output from the server or its package
+//     runner (uvx, npx) is not unattributed in the engine's console.
+//   - LAST WORDS, the reason it exists: a server failing to start explains
+//     itself on stderr alone (bad token, missing binary), the handshake says
+//     only "did not connect". A bounded tail is kept and surfaced.
 //
-//   - ATTRIBUTION. The child's stderr is a real OS pipe rather than the
-//     engine's own, because anything the server (or the package runner in
-//     front of it — uvx, npx) prints would otherwise splat unattributed into
-//     the engine's console, interleaving foreign log formats with the
-//     structured stream. With a dozen per-role servers that is unreadable.
-//   - LAST WORDS. A server that fails to start usually explains itself on
-//     stderr and nowhere else: a bad token, a missing binary, an import error.
-//     The handshake failure the engine sees says only "did not connect". So a
-//     bounded tail is kept and surfaced with the failure.
-//
-// The write end is a *os.File on purpose. Handing exec.Cmd any other io.Writer
-// makes it create its own pipe AND a copying goroutine that Wait blocks on —
-// so a grandchild holding the descriptor would wedge the child's reaping
-// inside the SDK. With a file, exec hands the descriptor straight to the child
-// and this type owns both ends.
+// The write end is a *os.File on purpose: any other io.Writer makes exec.Cmd
+// create its own pipe AND a copying goroutine Wait blocks on, so a grandchild
+// holding the descriptor would wedge the child's reaping inside the SDK.
 type stderrRelay struct {
 	server string
 	log    *slog.Logger
