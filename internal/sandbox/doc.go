@@ -1798,8 +1798,8 @@
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... measuredOtherFields     2,219,343
-//	to spare, measured .............. measuredSpare             376,565
+//	every other field, measured ..... measuredOtherFields     2,219,372
+//	to spare, measured .............. measuredSpare             376,536
 //
 // Every other field is the identity, status and time fields, the run its turn's
 // leads are kept for and how many leads that part has taken
@@ -4128,6 +4128,12 @@
 // standing, claimed nothing, and left nothing kept. A lift the store does not
 // answer leaves the completion kept as it was, for its re-fire at the hold's
 // instant ([Coordinator.keepUnlessKept]), when no claim is refused for it.
+//
+// A LIFT CLEARS ONLY THE HOLD IT READ ([PendingRun.Holds]): a keep's, a
+// signal's listing's or a stop's. One read before a claim whose resume was
+// held again lifts nothing, since nothing signalled the newer hold's
+// condition since, and re-fires nothing: lifting it re-ran the job's
+// collection and review into a budget that still refused it.
 //
 // ITS LIFETIME IS THE COORDINATOR'S, for the reason [Coordinator.refire] gives.
 //
