@@ -1292,13 +1292,12 @@ func windowWidth(t *testing.T, got tokens.Rollup) time.Duration {
 
 // A SEAT'S STATUS IS EVERYBODY'S AND ITS TRANSCRIPT IS ITS TRAIL'S (ADR-0033).
 //
-// The `agent` answer and the `live_call` answer are the overview's — anybody
-// may ask them — and what a seat is SAYING reaches only an admin and whoever
-// leads it: the live call's trigger, the payload of every finished call. To
-// anybody else the call comes back as its status with `body_withheld` set, and
-// each finished call as its columns without its payload. The work item a phase
-// was charged to is the tracker's, withheld from a reader without it whatever
-// else they read — the lead holding nothing included.
+// The `agent` and `live_call` answers are the overview's, but what a seat is
+// SAYING (the live call's trigger, every finished call's payload) reaches only
+// an admin and whoever leads it. Anybody else gets the status with
+// `body_withheld` set and finished calls without payloads. The work item a
+// phase was charged to is the tracker's, withheld from a reader without it,
+// the lead holding nothing included.
 //
 // Mutation: answer the overlay or the history unmasked, or decide the body by
 // the reader's apps rather than by the seat's trail, and the stranger's rows

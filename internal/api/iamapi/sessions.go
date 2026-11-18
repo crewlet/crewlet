@@ -59,23 +59,14 @@ func (s *Service) GetSessions(w http.ResponseWriter, r *http.Request) {
 
 // DeleteSessions is `DELETE /iam/people/{id}/sessions`.
 //
-// # One record, not N deletes
+// One record, not N deletes: it bumps the person's REVOCATION EPOCH, which every
+// bearer carries as minted, so one write ends every session and token, even
+// those minted on nodes this one never spoke to. Individual deletes would race
+// a session opening mid-sweep and miss what was minted between first and last.
 //
-// It bumps the person's REVOCATION EPOCH, which every bearer they hold
-// carries the value it was minted at — so one write ends every session and
-// every token at once, including the ones minted on nodes this one has never
-// spoken to. Ending them individually would be N records, would race with a
-// session opening during the sweep, and would leave whatever was minted
-// between the first delete and the last.
-//
-// # Two arms, two proofs — decided by the table, not here
-//
-// The person themselves is asked for no recent proof, because this is the first
-// thing they do on finding an intruder in their account; an administrator
-// ending somebody else's is asked `step_up`, because it signs a colleague out
-// of everything and stops every pipeline they run. Both
-// are one verb's row (internal/authz, `selfRecency`), so the route states
-// nothing about either.
+// The proofs are the table's, not this route's (internal/authz, `selfRecency`):
+// the person themselves is asked none (the first thing they do on finding an
+// intruder), an administrator ending somebody else's is asked `step_up`.
 func (s *Service) DeleteSessions(w http.ResponseWriter, r *http.Request) {
 	writer, ok := s.writerFor(r.Context())
 	if !ok {
@@ -112,23 +103,16 @@ func (s *Service) DeleteSessions(w http.ResponseWriter, r *http.Request) {
 
 // PostInvalidateAll is `POST /iam/invalidate-all`.
 //
-// # It is the restore runbook's last step, and it is admin's
+// The restore runbook's last step, and admin's: admin, a person present and a
+// recent proof, stated on the authority table's row and again on the record
+// (internal/iamdomain), which also refuses a machine token
+// ([iamdomain.ErrTokenRefused]). A machine token never reaches it because of
+// those two stated checks (the row's `presence`, the record's lock).
 //
-// Admin, a person present and a recent proof — stated once on the authority
-// table's row and again on the record (internal/iamdomain), which also refuses
-// it through a machine token ([iamdomain.ErrTokenRefused]): a restore is run by
-// whoever runs the deployment, and ending every session and machine token at
-// once ends every person's authority. It used to need two separate grants, one
-// asked at the route and the other only at the record, so a caller the route
-// let through was refused a step later — and the argument that a machine token
-// could never reach this gesture rested on that unstated second check. It now
-// rests on two stated ones: the row's `presence` and the record's own lock.
-//
-// A backup taken before a revocation restores the session rows that revocation
-// ended, so a pre-restore bearer would work again — a cookie, or a machine
-// token revoked after the copy was taken. The fleet-wide generation is the only
-// number that can be pushed forward without reading anybody's row, and both
-// carry it.
+// A backup taken before a revocation restores the session rows it ended, so a
+// pre-restore cookie or later-revoked machine token would work again. The
+// fleet-wide generation is the only number that can be pushed forward without
+// reading anybody's row, and both carry it.
 func (s *Service) PostInvalidateAll(w http.ResponseWriter, r *http.Request) {
 	writer, ok := s.writerFor(r.Context())
 	if !ok {

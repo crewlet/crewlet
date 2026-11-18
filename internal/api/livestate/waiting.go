@@ -6,20 +6,17 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// WHAT WAITS IN A SEAT'S INBOX, folded from the reports of the nodes holding
-// the seats ([types.SeatInboxWaiting]).
+// WHAT WAITS IN A SEAT'S INBOX ([types.SeatInboxWaiting] reports).
 //
 // PER REPORTER, NOT A WHOLE-FRAME SWEEP. A report covers only the seats its
-// node holds, so a seat it does not list may be another node's: a seat a
-// reporter listed before and lists no longer is cleared only if that reporter
-// is still where its count came from. A seat that moved is taken over by its
-// new holder's first report.
+// node holds, so a seat it no longer lists is cleared only if that reporter is
+// still where its count came from; a seat that moved is taken over by its new
+// holder's first report.
 //
 // SILENCE CLEARS. A reporter publishes at least every
-// [types.SeatInboxWaitingHeartbeat]; one not heard from for [waitingExpiry]
-// has gone away, and its counts are forgotten ([LiveState.ExpireWaiting]) so
-// Live never shows a count nobody is refreshing. Heard is the projection's
-// own clock at receipt, never the reporter's, so clock skew between nodes
+// [types.SeatInboxWaitingHeartbeat]; one unheard for [waitingExpiry] has gone
+// away and its counts are forgotten ([LiveState.ExpireWaiting]). Heard is the
+// projection's own clock at receipt, never the reporter's, so clock skew
 // cannot keep a count alive or end one early.
 
 // waitingExpiry is how long a reporter's counts are held without a report:

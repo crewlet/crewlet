@@ -19,99 +19,16 @@ import (
 )
 
 // TestOnePacingImplementation fails the build when a deadline is set on a
-// client's connection anywhere a client's connection is served except in this
-// package.
-//
-// The pace a client is held to was written once, in the file routes, and
-// Gitlet needs the same two rules — a request read a mebibyte at a time
-// under what is left of its budget, a response written so. A second copy is
-// exactly the shape ADR-0008 was written against: the two agree the day they
-// are written, and diverge one commit at a time, each package's tests passing
-// against its own copy. The tell would be that one of them charged the
-// server's own time to the client, or re-armed a whole deadline at every
-// read, and nothing would notice.
-//
-// # What it flags: the CONNECTION, never the name
-//
-// A deadline is a pace only on a client's connection. The host also bounds
-// connections that are no client's — the hook relay's handshake on a unix
-// socket it accepted, a pipe to a git process — and a guard matching the
-// method's name would refuse those, leaving a third exemption or a bound
-// moved onto a timer to dodge it. So the walk judges what each deadline is SET
-// ON, and a handler reaches its client's connection through exactly three
-// doors, each judged in every non-test Go file under internal/api and
-// internal/gitlet/host:
-//
-//   - an *http.ResponseController — SetReadDeadline or SetWriteDeadline
-//     selected, called or taken as a method value, resolving to the method
-//     net/http's ResponseController declares: on the result of
-//     http.NewResponseController, a parameter, a variable, a field, a
-//     function's result, through pointers and embedded fields;
-//   - the http.ResponseWriter itself, whose own deadline methods are what a
-//     ResponseController calls — a type assertion (or a type switch case) of
-//     a value typed http.ResponseWriter to an interface carrying any of the
-//     three deadline methods is flagged where it is made;
-//   - a HIJACKED connection — the first result of a call of a method named
-//     Hijack, which is net/http's name for taking the client's connection
-//     whoever offers it — on which a deadline (SetDeadline among them) is set.
-//     It is followed through the variables it is assigned to and the
-//     assertions made on it, inside the function that took it; one that
-//     LEAVES that function — passed, stored, sent or returned — is reported,
-//     because past that point a hijacked net.Conn and one a listener accepted
-//     are the same type and the walk cannot say which a deadline is on. The
-//     one return it allows is a method named Hijack handing the connection
-//     straight back, which is a wrapper passing the door on, and its caller's
-//     own Hijack call is judged in turn.
-//
-// Any other receiver — a connection a listener accepted or the engine
-// dialled, an *os.File, a type of this module that declares the method itself
-// (whose body is judged on its own) — is passed. A receiver or an asserted
-// operand the walk CANNOT type, or whose method it cannot place, is reported
-// rather than passed, as the statelog identity guard reports one: a gate
-// asserting an absence that skipped what it could not read would certify
-// nothing about exactly the values it skipped. Spell the value's type where
-// it is declared, or teach decltype the shape.
-//
-// The exemptions are FUNCTIONS, never files: this package's three — Body's
-// Read and the Writer's Write and End, which are the pace — and
-// internal/api/httpjson's ReadBody, which sets ONE deadline over a small
-// bounded body, a bound and not a pace. A deadline on a client's connection
-// anywhere else in either file is a finding like any other, since a second
-// pacing loop written beside ReadBody is the very copy this guard refuses,
-// and a file-wide exemption would be the one place it was not looked for.
-// Each exempt function must still set one, or its exemption is stale.
-//
-// # How a value is typed
-//
-// By internal/sourcetree/decltype, the one walk every gate judging a value by
-// its type is built on: from declarations alone, on demand, with no type
-// checker — into any package of this module, and into net/http and net,
-// which it reads from the toolchain's tree, so a controller, a response
-// writer, a hijacker and a connection are each the type its own declaration
-// says, never a name this gate keeps a list of. A value only a package the
-// walk does not read could type — a function's result, a member of one of
-// its types — is passed: net/http, which hands a handler its client's
-// connection, is read, so nothing else in reach does, and that is the
-// coverage boundary. A ResponseWriter erased into an interface of another
-// kind and asserted back from there, a controller held in an interface value
-// whose deadline method is called through the interface, a hijack made
-// inside a library (coder/websocket's Accept makes one) and a value reached
-// through reflection are not seen.
-//
-// # Where it looks
-//
-// internal/api and internal/gitlet/host, the two places a client's connection
-// is served. internal/gitlet/host is named before it exists, and a walk of a
-// root that is not there reads nothing rather than failing; internal/api
-// always exists, and a walk that read nothing there fails, since a guard
-// asserting an absence passes alike on a clean tree and on a walk that saw
-// none of it.
-//
-// # Cost
-//
-// It parses every non-test file under both roots and the 16 packages their
-// values reach, net/http and net included, in 0.21–0.22 s with the `go list`
-// that locates those two, 0.9 s under the race detector (four vCPUs).
+// client's connection in internal/api or internal/gitlet/host but this
+// package: a second pacing copy is what ADR-0008 forbids. It judges what a
+// deadline is SET ON, never the method's name (the host also bounds
+// connections that are no client's). Doors: an *http.ResponseController's
+// deadline methods; a ResponseWriter asserted to an interface carrying one; a
+// Hijack result, followed within its function (one leaving it is reported).
+// Exemptions are FUNCTIONS (Body.Read, Writer.Write, Writer.End, httpjson's
+// ReadBody), each of which must still set one. A receiver decltype cannot
+// type is reported; a walk reading nothing under internal/api fails. Unseen:
+// a writer erased into another interface, a library's hijack, reflection.
 func TestOnePacingImplementation(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -686,21 +603,16 @@ func parentsOf(file *ast.File) map[ast.Node]ast.Node {
 }
 
 // THE WALK, ON A TREE WHOSE VERDICT IS KNOWN. Every door to a client's
-// connection, in each of the shapes a value reaches a deadline by, must be
-// reported: a ResponseController as a parameter, a call's result, a :=, a
-// field, a promoted method, a method value and a function of another package
-// of the module; a ResponseWriter asserted to a deadline interface; a
-// hijacked connection and an assertion made on one. A hijacked connection
-// handed to another function must be reported as escaping, and a receiver
-// the walk cannot type as untyped. And none of these may be: a deadline on a
-// connection a listener accepted (the hook relay's handshake), on a pipe's
-// file, on a connection of a package imported under a version (named as Go
-// names it, never by the path's last element) or through a type's own
-// method, an assertion to an interface carrying no deadline, a wrapper
-// passing a Hijack on, the exempt functions' own (counted instead — while a
-// second deadline in each exempt file, a closure's among them, is reported),
-// a test file, testdata and a package outside both roots. Then the same tree
-// without internal/gitlet/host, which is not an error.
+// connection must be reported in each shape a value reaches a deadline by (a
+// ResponseController as a parameter, result, :=, field, promoted method,
+// method value or function of another package; a ResponseWriter asserted to a
+// deadline interface; a hijacked connection and an assertion on one), a
+// hijacked connection handed on as escaping, an untypable receiver as untyped.
+// None of these may be: a deadline on a listener's connection, a pipe's file,
+// a versioned import's connection or a type's own method; an assertion to an
+// interface with no deadline; a wrapper passing a Hijack on; the exempt
+// functions' own (counted; a second deadline in an exempt file is reported);
+// a test file, testdata or a package outside both roots.
 func TestThePacingWalkFindsADeadline(t *testing.T) {
 	t.Parallel()
 	head := func(imports ...string) string {

@@ -16,8 +16,8 @@
 //
 // Each route is mounted through [authz.Router]: the listings and a pass's
 // record are `setup.read`, and every route that changes the company is
-// `setup.connect` — both admin's (ADR-0033). A route that SEALS a credential
-// asks `secrets.write` on top — a submission carrying a secret field, a
+// `setup.connect`, which asks a recent proof — both admin's (ADR-0033). A route
+// that SEALS a credential asks `secrets.write` on top — a submission carrying a secret field, a
 // provisioning pass (which is handed a sink that mints and seals), and a
 // GitHub App (whose private key is sealed on the return) — because this
 // surface performs no write of its own: the credential goes through the store
@@ -27,7 +27,8 @@
 //
 // TODAY THE TWO ASK THE SAME PERMISSION, and the second is kept anyway: it is
 // the surface stating that a sealed credential is a `/secrets` write, decided
-// by that verb's own row, so the day the table decides the two verbs apart
+// by that verb's own row (a step-up that row asks for cannot be skipped by
+// choosing this door), so the day the table decides the two verbs apart
 // this surface follows the table rather than a second copy of it.
 //
 // THE ROUTES USED TO DECIDE NOTHING, which was sound while the only credential
@@ -62,6 +63,51 @@
 // names the rotated `${VAR}` delivers nothing. What IS this node's is said as
 // such: whether a `${VAR}` resolves here, and what its own passes last
 // reported.
+//
+// # A refusal after a seal names what was sealed
+//
+// Every refusal after a credential is sealed, the unknown outcome and a
+// rotation's failed reload included, carries `wrote_secrets`
+// (`setup.Result` holds them on every return after the first seal): a client
+// told only "failed" would write the credential again blind. A seal the store
+// did not answer is its own answer (`setup.SealError`): the retryable 503
+// naming the credential whose write may have landed as the field
+// `unanswered_secret`, with no `outcome`, because the document was not changed
+// and a resubmission seals every credential again. It is a field, not only the
+// `reason`, because a client branches on fields and read a 503 without
+// `outcome` as one that wrote nothing. A rotation's reload is held to the
+// revision the patch landed on, to its compare-and-set: reloading whatever the
+// pointer named by then answers 201 for a rotation the running document never
+// reads. A 409 from a write that lost at its activation names the revision it
+// kept and its `node` (`configapi.KeptRevision`); a forced disconnect's
+// `If-Match` is its base, a stale one `412 revision_advanced`
+// (`configapi.ApplyRequest.Stated`), while a connect's body `if_match` is
+// `409`. A node's own condition is answered through `operator.AnswerCondition`.
+//
+// # The GitHub App return carries no credential of ours
+//
+// The state the begin route mints is sealed under the fleet keyring, not
+// signed, because it travels through GitHub, a browser history and every
+// ingress log, and it names who began the creation: the key, the webhook secret
+// and the seat's revision are written as that person, not as `setup`, which is
+// nobody. A seat write whose activation went unanswered is read back once
+// (`AppFlow.unconfirmed`) and answered as finished where the seat records the
+// app, otherwise told, under a heading of its own, that whether the app was
+// added is not known yet, with a refresh of the spent link as the answer
+// (`AppFailure`, `AppFlow.usedLink`). Told as "couldn't add the app, delete it
+// on GitHub", it sent a person to delete the app the agent was running.
+//
+// # Every access sync ends in the check
+//
+// A save, an action at the vendor and a keep each start a sync that answers
+// only for its seats, so each carries the check route's own read-only pass
+// (`AccessSync.Then`, `Service.recheck`), run through the held pass
+// (`runHeld`) and recorded through the loop's fold while the integration still
+// reads as syncing. Without it the integration's issues, notes and card stay as
+// the last pass left them until somebody presses Check now. One agent's lane
+// (`accessview.go`) is the Agents tab's answer narrowed and worded by
+// `seataccess.ViewOf`, for a reader showing one agent's access, Ask Crewlet's
+// `get_seat_access` among them.
 //
 // # It never returns a value
 //
@@ -129,28 +175,21 @@ var log = logging.Get("api.setup")
 const MaxBody = 64 << 10
 
 // THE REFUSALS THIS SURFACE ANSWERS WITH are all on internal/api/httpjson's
-// table, where each one carries the sentence a person is shown. They were
-// declared here, with none, so a screen rendering the envelope showed a code
-// and nothing a person could act on — and two of them were second spellings
-// of codes the table already held (`bad_body`, and `no_public_url`, named for
-// the retired Tier B field).
+// table, where each carries the sentence a person is shown; none is declared
+// here.
 
 // RetryBusy is the Retry-After on [httpjson.CodeSurfaceBusy].
 //
 // THE SPAN THE REQUEST ITSELF ALREADY WAITED before answering busy
-// ([disconnectRetryFor]), and that constant rather than a second spelling of
-// its value: what holds a surface is a reconcile tick — seconds — or an
-// operator's pass, so a tick that outlived one such wait is most likely a
-// moment from ending, and asking again after another is the soonest a second
-// attempt could find it released without the waiting client becoming load on
-// the surface it waits for. Written as its own `3`, it was a number justified
-// as equal to another with nothing keeping it so.
+// ([disconnectRetryFor]), as that constant and not a second spelling of its
+// value: what holds a surface is a reconcile tick (seconds) or an operator's
+// pass, so one that outlived a wait is most likely a moment from ending, and
+// another wait is the soonest a retry could find it released without the
+// waiting client becoming load on the surface.
 //
 // THE DASHBOARD'S DISCONNECT DIALOG WAITS EXACTLY THIS, read off the header,
-// and has no cadence of its own: it used to, and this hint was justified as
-// matching it — two copies of one number, each citing the other. Exported for
-// internal/api's gate that holds every fixed hint the dashboard waits out
-// under the bound it waits at most.
+// with no cadence of its own. Exported for internal/api's gate that holds
+// every fixed hint the dashboard waits out under the bound it waits at most.
 const RetryBusy = disconnectRetryFor
 
 // Options wire the service.
@@ -179,22 +218,13 @@ type Options struct {
 	// listener's `api.public.external_url` where one is configured, and
 	// `api.external_url` otherwise.
 	//
-	// THE VENDOR'S ADDRESS AND NEVER THE PERSON'S, because every address
-	// this surface builds on it is one a vendor follows: a webhook's
-	// delivery URL, a Slack app's request URL, a GitHub App's manifest and
-	// the redirect GitHub sends a browser back on, all of which `/webhooks/`
-	// serves — and once there are two listeners, the person's answers 404
-	// for every one of them.
+	// THE VENDOR'S ADDRESS AND NEVER THE PERSON'S: every address built on it
+	// is one a vendor follows under `/webhooks/`, which the person's listener
+	// answers 404 once there are two.
 	//
-	// A PLAIN STRING AND NOT A FUNCTION, because it is Tier A: it cannot
-	// change under a running process, so a surface reading it twice in one
-	// request cannot get two answers. It used to be a Tier B field read
-	// through Resolve, which is why every caller below carried the resolver
-	// and had to decide what to do with a reference that resolved to
-	// nothing.
-	//
-	// Empty is a deployment with no such address, which every gesture that
-	// would hand one to a vendor refuses by name.
+	// A PLAIN STRING, because it is Tier A and cannot change under a running
+	// process. Empty is a deployment with no such address, which every
+	// gesture that would hand one to a vendor refuses by name.
 	WebhookBase string
 
 	// WebhookBaseKey is the Tier A key WebhookBase is read from
@@ -673,17 +703,12 @@ type SeatState struct {
 	// build by hand.
 	//
 	// THE ENGINE'S OWN, byte for byte the one the reconcile loop creates
-	// apps from: the scopes, the events and this seat's request URL are what
-	// make an app the engine can actually use, and every one of them is a
-	// decision that lives in Go. Told to build the app themselves, an
-	// operator was being asked to reproduce seventeen scopes and five event
-	// subscriptions from a documentation table, and the failure mode of
-	// getting one wrong is a bot that reports success and sees an empty
-	// workspace.
+	// apps from: the scopes, events and request URL are decisions that live
+	// in Go, and one got wrong yields a bot that reports success and sees an
+	// empty workspace.
 	//
 	// Empty where the company has no public address yet (the request URL is
-	// built from it, so a manifest without one registers deliveries
-	// nowhere), and where this build has no manifest for the app.
+	// built from it) and where this build has no manifest for the app.
 	Manifest string `json:"manifest,omitempty"`
 
 	// ManifestNote is why there is no manifest, when there could have been
@@ -783,19 +808,13 @@ const (
 // the org it derives and the revision it is, from ONE read
 // ([configapi.Service.FleetCompany]).
 //
-// THE FLEET'S, NEVER WHAT THIS NODE RUNS. Every write here is built on the
-// fleet's revision and checked against it, and each requirement carries what
-// the document holds ([setup.Requirement.Stored]), which decides whether a
-// credential mints a pointer, writes through one, or is refused over a literal.
-// Read from the company this node's engine runs, the answer described one
-// revision and named another as its `if_match`: on a node that refused the
-// fleet's revision, or one mid-apply, a write decided against a slot the
-// running document left empty minted a pointer over the literal the fleet's
-// document held there — the very write `literal_in_config` exists to refuse.
+// THE FLEET'S, NEVER WHAT THIS NODE RUNS. Writes are built on the fleet's
+// revision, and [setup.Requirement.Stored] decides whether a credential
+// mints a pointer, writes through one, or is refused over a literal. Read
+// from the running company, a node mid-apply would mint a pointer over a
+// literal the fleet's document held: the write `literal_in_config` refuses.
 //
-// ONE READ FOR ALL THREE, because reads apart can straddle an activation: the
-// integrations from one revision and the roster or the revision id from the
-// next describe a company that never existed.
+// ONE READ FOR ALL THREE: reads apart can straddle an activation.
 type fleetCompany struct {
 	company  *config.Company
 	roster   *org.Organization
@@ -877,25 +896,18 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		// it guards, which made the whole stale-base path dead code that
 		// looked like protection.
 		"revision_id": fc.revision,
-		// THE ADDRESS EVERY INBOUND VENDOR IS BUILT ON, answered once
-		// rather than repeated in each tool: it is one setting, and a
-		// screen that asked for it seven times would be asking the
-		// operator to keep seven copies consistent.
+		// THE ADDRESS EVERY INBOUND VENDOR IS BUILT ON, answered once rather
+		// than per tool: it is one setting.
 		//
-		// ONE FIELD WHERE THERE WERE FOUR. While this was a Tier B
-		// pointer the screen also needed `present`, `resolved` and the
-		// variable's `reference`, because "configured and resolving to
-		// nothing" was a state a banner had to name. The address is Tier A
-		// and REQUIRED on a node serving this screen, resolved before the
-		// document is decoded — so a node serving it at all has one, and
-		// the three fields that described its absence described a state
-		// that can no longer occur. WHICH key it is read from rides beside
-		// it, because there are two once a public listener is set.
+		// ONE FIELD, NO `present` OR `resolved`: the address is Tier A and
+		// REQUIRED on a node serving this screen, so absence cannot occur.
+		// WHICH key it is read from rides beside it, because there are two
+		// once a public listener is set.
 		//
 		// AND WHETHER IT IS LOOPBACK, by the config's own rule
 		// ([config.LoopbackURL]): an address only this machine reaches is
-		// one no vendor can deliver to, and a screen showing it bare read
-		// as the address every app was set up on.
+		// one no vendor can deliver to, and shown bare it reads as the
+		// address every app was set up on.
 		"external_url": map[string]any{
 			"value": s.webhookBase, "config_path": s.webhookBaseKey,
 			"loopback": config.LoopbackURL(s.webhookBase),
@@ -990,20 +1002,13 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 	case integration.KindJira:
 		block := company.Integrations.Jira
 		reqs = jira.Requirements(block, company.Integrations.Atlassian.IsCloud(), s.resolve)
-		// THE FORGE APP ID IS NOT ASKED FOR ANY MORE.
+		// THE FORGE APP ID IS NOT ASKED FOR: webhook administration is
+		// /rest/webhooks/1.0/webhook on both deployments and takes an API
+		// token, which is what this engine registers through. Only the
+		// DYNAMIC webhook API is limited to Connect and OAuth apps.
 		//
-		// It was the only way a Cloud site's events could reach this engine,
-		// on the understanding that Atlassian serves the webhook API to
-		// Connect and OAuth apps alone. It serves the DYNAMIC one that way;
-		// webhook administration is /rest/webhooks/1.0/webhook on both
-		// deployments and takes an API token, which is what this engine
-		// registers through and what a live Cloud site was measured
-		// delivering over.
-		//
-		// The route and the config field stay: a company already relaying
-		// through Forge keeps working, and it is the fallback if Atlassian
-		// ever retires the admin API. What goes is asking every operator to
-		// install an app they do not need.
+		// The route and config field stay as the fallback if Atlassian ever
+		// retires the admin API.
 		at := atlassianAt(atlassian.ProductJira)
 		at.Identity = atlassianIdentity(s.resolve)
 		at.Configured = block != nil
@@ -1174,35 +1179,23 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 			break
 		}
 	}
-	// A TOOL IS SATISFIED WHEN EVERY SEAT THAT HAS STARTED IS. A seat nobody
-	// has set up does not make the tool unfinished, because a company
-	// running Slack for three of its ten agents chose that.
+	// A TOOL IS SATISFIED WHEN EVERY SEAT THAT HAS STARTED IS: a seat nobody
+	// set up is a company's choice (Slack for three of ten agents), but only
+	// where the seats are load-bearing (see SeatsRequired), or an
+	// informational roster would report every connected card unfinished.
 	//
-	// And only where the seats are load-bearing at all: see SeatsRequired.
-	// An informational roster must not be able to report an app unfinished,
-	// or listing a company's agents would turn every connected card into one
-	// with work outstanding.
-	// TWO APPS WHERE THE ROSTER IS THE INTEGRATION. Slack gives each agent
-	// its own app because each posts as itself, and GitHub now does the
-	// same: one GitHub App is one bot identity, so an agent without its own
-	// app acts as nobody there. A seat left unfinished on either is work
-	// outstanding rather than a company's choice, which is what stopped the
-	// GitHub card reading Connected over an agent that could do nothing.
+	// TWO APPS WHERE THE ROSTER IS THE INTEGRATION: each Slack agent posts as
+	// itself, and one GitHub App is one bot identity, so an agent without its
+	// own app acts as nobody there and its unfinished seat is outstanding work.
 	seatsRequired := kind == integration.KindSlack || kind == integration.KindGitHub
 	if seatsRequired {
-		// NOT ONE AGENT CAN ACT, which is a different question from any
-		// single seat's and the one this missed entirely.
-		//
-		// The loop below asks only about seats that have STARTED, so that a
-		// company running GitHub for three of its ten agents is finished
-		// when those three are. A company where NOBODY has started passed
-		// it vacuously: measured on a live connect, one agent seat with no
-		// app, `satisfied: true` and `seats_required: true` on the same
-		// answer, the card Connected, and the seat's own row three screens
-		// away saying "no app of its own yet, so this agent acts as nobody
-		// on GitHub". Connecting a per-seat surface for nobody is not a
-		// company's choice in the way opting nine agents out of ten is; it
-		// is the work not having been done.
+		// NOT ONE AGENT CAN ACT is a different question from any single
+		// seat's. The loop below asks only about seats that have STARTED, so
+		// a company where NOBODY has started would pass it vacuously: the
+		// card Connected (`satisfied: true`, `seats_required: true`) over a
+		// seat saying "no app of its own yet". Connecting a per-seat surface
+		// for nobody is work not done, not a company's choice in the way
+		// opting nine agents out of ten is.
 		working := false
 		for _, seat := range seats {
 			if seat.Satisfied {
@@ -1250,15 +1243,11 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 // their own credential.
 //
 // ONE BUILDER over every app, fed by the app's OWN list of where it keeps a
-// seat credential, because those spellings already exist in the package that
-// authenticates with them: writing them again here would be a second list
-// that stops matching the first, silently, since a seat whose credential was
-// not found looks exactly like a seat that has none.
+// seat credential: a second list here would silently stop matching the first,
+// since a seat whose credential was not found looks exactly like one with none.
 //
-// The roster exists because a company's agents are the point of these
-// integrations. A card that says Connected over no agents is telling an
-// operator the half that cannot be acted on: the question is which of their
-// people can work in this app, and only a per-seat answer has it.
+// The roster exists because the question is which agents can work in this
+// app; a card saying Connected over no agents cannot answer it.
 func credentialSeats(roster *org.Organization, resolve func(string) (string, bool),
 	at seatCredentialAt, app string, provisions bool,
 ) []SeatState {
@@ -1340,39 +1329,18 @@ func credentialSeats(roster *org.Organization, resolve func(string) (string, boo
 	return out
 }
 
-// seatCredentialAt is where one app keeps a seat's credential.
-//
-// PASSED IN RATHER THAN SWITCHED ON, because the apps genuinely disagree and
-// the disagreement is theirs to state: most hand a seat's token to a child
-// MCP server through mcp_env, and Mattermost keeps it on the seat's own
-// integration block because one token authenticates the websocket, the REST
-// calls and the tool server alike, with no child process to pass it to. A
-// roster that only knew the first shape listed no agents at all for the
-// second, which read as a company whose agents were not being provisioned.
 // withLoopFindings un-satisfies the seats the reconcile loop has a finding
 // about.
 //
-// # Why the roster cannot answer this on its own
+// [credentialSeats] only knows a credential is sealed where the app looks: a
+// key deleted at the third-party app leaves the pointer resolving while every
+// call is refused. Only the loop has asked the vendor, so its answer is
+// folded in here, where every reader goes through.
 //
-// [credentialSeats] reads the company document and the sealed store, so
-// `satisfied` means "a credential is sealed where this app looks for one" —
-// which is a real fact and NOT the one a green row is read as. A key deleted
-// at the third-party app leaves the pointer resolving perfectly while every
-// call the agent makes is refused, and the roster went on reporting it ready.
-//
-// The loop is the only thing that has asked the vendor, and it records what it
-// found per seat on the surface's own status row. So that answer is folded in
-// here, at the one place every reader of this surface goes through, rather
-// than left to each of them: the dashboard applies the same rule to the badge
-// it draws, and two copies of it would be two answers to one question.
-//
-// ADVISORIES ARE SKIPPED, on the finding's own verdict rather than on a list
-// of kinds kept here. Two of them are phase-ready by definition — a
-// permission wider than the role asked for, a registration this engine no
-// longer manages but which still delivers — and reporting either as a broken
-// agent would contradict the card's own tag. A kind this build cannot name is
-// NOT skipped: a peer on a newer build can write one, and treating it as an
-// advisory would let it hide a dead agent.
+// ADVISORIES ARE SKIPPED on the finding's own verdict, not a list of kinds:
+// they are phase-ready, and a broken-agent report would contradict the card.
+// A kind this build cannot name is NOT skipped: a newer peer can write one,
+// and treating it as an advisory would hide a dead agent.
 func withLoopFindings(state ToolState, found []integration.Finding) ToolState {
 	faults := make(map[string]integration.Finding, len(found))
 	for _, f := range found {
@@ -1420,6 +1388,13 @@ func (s *Service) loopFindings(ctx context.Context, kind integration.Kind) []int
 	return state.Findings
 }
 
+// seatCredentialAt is where one app keeps a seat's credential.
+//
+// PASSED IN RATHER THAN SWITCHED ON, because the apps disagree and the
+// disagreement is theirs to state: most hand a seat's token to a child MCP
+// server through mcp_env, while Mattermost keeps it on the seat's own
+// integration block, one token serving websocket, REST and tool server. A
+// roster that knew only the first shape listed no Mattermost agents at all.
 type seatCredentialAt struct {
 	// Find reports the value this seat holds for the app and the address it
 	// sits at, both empty when the seat holds none.
@@ -1441,28 +1416,22 @@ type seatCredentialAt struct {
 
 	// Configured reports whether the company declares this app at all.
 	//
-	// A ROSTER ROW IS ABOUT A CREDENTIAL AND AN INTEGRATION, and without
-	// this it was only about the credential: a seat whose `${VAR}` resolved
-	// was reported SATISFIED on a surface the company does not have, with
-	// the detail naming the config path the value sits at. Measured after a
-	// disconnect — Datadog gone from the document entirely, and every agent
-	// still shown ready on it, which is a claim about nothing.
+	// A ROSTER ROW IS ABOUT A CREDENTIAL AND AN INTEGRATION: without this, a
+	// seat whose `${VAR}` resolved was SATISFIED on a surface the company
+	// does not have (every agent ready on a disconnected Datadog).
 	//
-	// Passed per call site rather than derived here, because what "declared"
-	// means is the app's own question: the Atlassian blocks have no
-	// `enabled` field and their presence IS the switch, where every other
-	// app has both facts.
+	// Passed per call site, because "declared" is the app's own question:
+	// the Atlassian blocks have no `enabled` field and their presence IS the
+	// switch, where every other app has both facts.
 	Configured bool
 
 	// Identity is who this agent IS at the app, in the app's own words:
 	// the service account, the bot, the app registration. Empty where
 	// nothing here can say.
 	//
-	// IT ANSWERS THE QUESTION THE ROSTER IS FOR. A row said where the
-	// credential was kept, `mcp_env.datadog.DD_APP_KEY`, which is a fact
-	// about this company's YAML: true, identical for every agent bar the
-	// block name, and no help at all to somebody looking at the app's own
-	// user list trying to work out which account is which colleague.
+	// IT ANSWERS THE QUESTION THE ROSTER IS FOR: where the credential is
+	// kept (`mcp_env.datadog.DD_APP_KEY`) is identical for every agent and
+	// does not say which account in the app's user list is which colleague.
 	//
 	// ONLY OVER A WORKING SEAT, because a derived name is what the engine
 	// WOULD create rather than proof it did. Shown next to a seat with
@@ -1481,52 +1450,18 @@ func mcpEnvAt(envs, keys []string) seatCredentialAt {
 	}
 }
 
-// orphanedSecrets is every credential this company would still hold in its
-// secret store after this integration is disconnected.
-//
-// NAMED, NEVER DELETED here, and that is the documented posture: the store is
-// the company's, and a value an operator may be sharing with another
-// deployment is not something a Disconnect button gets to remove. What it owes
-// them is the list.
-//
-// IT WAS THE COMPANY-LEVEL REQUIREMENTS ONLY, and that is two omissions in
-// one. It walked `state.Requirements`, so no SEAT's own credential was ever
-// named — not the token a pass minted under the name that seat's mcp_env
-// points at, not Atlassian's address slot beside it, not Slack's per-seat bot
-// token and signing secret. And it ran only on the FORCE path, so the
-// dashboard's own disconnect returned no list at all. Measured: seven
-// credentials survived a disconnect and not one of them was named.
-//
-// WHAT IS ACTUALLY STORED, which is the rule the original had right and is
-// kept: a requirement nobody ever set names nothing, because telling an
-// operator to unset a value that does not exist is a list they cannot act on.
 // stillUsedBySibling reports the credential names this disconnect must NOT
 // call orphaned, because another surface that is staying still reads them.
 //
-// # Jira and Confluence share one credential, and one of them can go alone
+// Jira and Confluence share the `mcp_env.atlassian` token and address, so
+// disconnecting Jira alone must not list what Confluence still resolves.
 //
-// A seat opts in by naming a token, and the ordinary place is the SHARED
-// `mcp_env.atlassian` block: Atlassian issues one API token per account and
-// both products authenticate with it. So disconnecting Jira alone listed that
-// token and the address beside it as orphaned while Confluence went on
-// resolving both — measured on a live deployment, on the one list an operator
-// reads to decide what to unset. Following it breaks the product that stayed.
-//
-// # And a card that takes all three still names them
-//
-// The dashboard disconnects the card's surfaces in order — jira, confluence,
-// then the organization — and each request only ASKS: the block leaves the
-// document minutes later, when the loop finishes. So "is the sibling still in
-// the document" would be true on every one of the three and the shared
-// credential would be named by none of them.
-//
-// A sibling that is ITSELF DISCONNECTING is therefore not a user. That is the
-// fleet row's own phase, which the first request writes before the second is
-// made, so across the three requests the union the dialog shows names the
-// credential exactly once — and a single-product disconnect names it not at
-// all. A row this node cannot read is treated as a LIVE sibling, because
-// over-naming a credential costs an operator a question and under-naming it
-// costs them the product.
+// A card disconnects jira, confluence, then the organization, and each
+// request only ASKS (the block leaves the document when the loop finishes),
+// so "still in the document" is true for all three and none would name the
+// shared credential. A sibling ITSELF DISCONNECTING is therefore not a user
+// (the fleet row's own phase). A row this node cannot read is a LIVE sibling:
+// over-naming costs an operator a question, under-naming costs the product.
 func (s *Service) stillUsedBySibling(
 	ctx context.Context, kind integration.Kind, company *config.Company,
 	roster *org.Organization,
@@ -1616,6 +1551,17 @@ func atlassianSeatVars(roster *org.Organization, kind integration.Kind) []string
 	return slices.Compact(out)
 }
 
+// orphanedSecrets is every credential this company would still hold in its
+// secret store after this integration is disconnected.
+//
+// NAMED, NEVER DELETED: the store is the company's, and a value an operator
+// may share with another deployment is not for a Disconnect button to remove.
+//
+// Seats' own credentials count (a pass's minted token, Atlassian's address
+// slot, Slack's per-seat bot token and signing secret), not only the
+// company-level requirements, and the dashboard's own disconnect gets the
+// list as well as the force path. Only what is actually stored is named: a
+// requirement nobody set is a list nobody can act on.
 func orphanedSecrets(kind integration.Kind, state ToolState) []string {
 	out := []string{}
 	add := func(reqs []setup.Requirement) {
@@ -2023,20 +1969,15 @@ func repoScope(repos []string) string {
 // githubSeats is every agent seat's own GitHub App, and which of the two acts
 // that produce one is still outstanding.
 //
-// NOT [credentialSeats], which is the roster for an app whose seats each hold
-// a credential a person pasted into mcp_env. What a GitHub seat holds is an
-// APP: one bot identity, created from a manifest by somebody carrying a GitHub
-// session, installed on the organization in a second act, with the key written
-// by the engine because GitHub returns it once and only to the engine. Asked
-// the credential question, every seat answered "no GitHub credential yet, and
-// GitHub issues none on request: add one to this seat's mcp_env" no matter
-// what its app was doing, which is advice for a model this engine no longer
-// runs.
+// NOT [credentialSeats]: a GitHub seat holds an APP (one bot identity,
+// created from a manifest by somebody carrying a GitHub session, installed in
+// a second act, its key written by the engine because GitHub returns it once
+// and only to the engine), not a credential pasted into mcp_env.
 //
-// EVERY AGENT SEAT, configured or not, for the reason the Slack roster lists
-// them all: this is where an operator starts the flow, so the seat with no app
-// yet is precisely the row that has to be there. Human seats are excluded,
-// because a person's GitHub account is not something this engine creates.
+// EVERY AGENT SEAT, configured or not, as the Slack roster lists them: this
+// is where an operator starts the flow, so the seat with no app yet is the
+// row that has to be there. Human seats are excluded, because a person's
+// GitHub account is not something this engine creates.
 func githubSeats(company *config.Company, roster *org.Organization,
 	resolve func(string) (string, bool),
 ) []SeatState {
@@ -2084,19 +2025,15 @@ func githubSeats(company *config.Company, roster *org.Organization,
 			state.ManageURL = github.ManageURL(webBase, githubOrgOf(company), app.AppSlug)
 		}
 		switch {
-		// NO `configured` CASE, and that is deliberate rather than the gap
-		// every other roster here fills with one. A company whose agents
-		// each have their own app and which declares no `integrations.github`
-		// block at all is a SUPPORTED shape — the org block is the
-		// organization-wide reconcile, not the agents' identities — so
-		// leading with "waiting for GitHub to be connected" would tell such
-		// a company its working agents were waiting on nothing.
+		// NO `configured` CASE, deliberately: a company whose agents each
+		// have their own app and which declares no `integrations.github`
+		// block is a SUPPORTED shape (the org block is the organization-wide
+		// reconcile, not the agents' identities), and "waiting for GitHub to
+		// be connected" would tell it working agents wait on nothing.
 		//
-		// What a disconnect changes is the INSTALLATION, which it removes at
-		// GitHub and records as removed ([githubPass.Teardown]) — so a
-		// disconnected seat falls to the install step below, with the honest
-		// sentence and Satisfied false, rather than reporting its slug as a
-		// finished agent on a card that no longer exists.
+		// A disconnect removes the INSTALLATION and records it
+		// ([githubPass.Teardown]), so a disconnected seat falls to the
+		// install step below with Satisfied false, not a finished slug.
 		case app == nil || app.AppID == 0:
 			// NO ACTION URL, and that is the contract rather than an
 			// omission: an app is created by POSTing a manifest from a
@@ -2135,24 +2072,15 @@ func githubSeats(company *config.Company, roster *org.Organization,
 					"be minted for this seat and it reaches GitHub as nobody"
 			default:
 				state.Satisfied = true
-				// WHO IT IS, AND WHAT IT REACHES, in that order.
+				// WHO IT IS, AND WHAT IT REACHES, in that order: the login
+				// appears on every commit, comment and review the agent
+				// writes (as `<slug>[bot]`) and is what an operator matches
+				// against GitHub's pages, so the slug alone, the suffix
+				// being the same on every row.
 				//
-				// A finished seat's line said it was finished, which the
-				// tag beside it already said. It then said which
-				// repositories the agent works in, which is a real
-				// difference between two finished seats but not the
-				// question a roster of agents raises first: the login is
-				// what appears on every commit, comment and review this
-				// agent writes (as `<slug>[bot]`), and it is what an
-				// operator matches against GitHub's own pages. The slug
-				// alone, because the suffix is the same on every row and
-				// the app's own settings page is keyed on the slug.
-				//
-				// The scope follows only where the installation NARROWS
-				// it. "Every repository the installation covers" is the
-				// answer an operator already gave when they installed
-				// the app, and repeating it after the login pushes the
-				// name off a narrow row to say nothing.
+				// The scope follows only where the installation NARROWS it;
+				// "every repository" repeats what the operator chose at
+				// install and pushes the name off a narrow row.
 				state.Detail = app.AppSlug
 				if len(app.Repos) > 0 {
 					state.Detail += " in " + strings.Join(app.Repos, ", ")
@@ -2338,17 +2266,14 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	// THE ADDRESS THIS SURFACE WAS SET UP AGAINST, for the surfaces whose
 	// address only a person can move.
 	//
-	// Where a pass registers the hook, it stamps this on every tick and a
-	// changed base fixes itself. Where nothing does, the registration an
-	// operator made by hand goes on pointing at the old address, the
-	// surface reports ready because nothing it can see is wrong, and the
-	// first symptom is an agent that stopped replying. Recorded here so a
+	// Where a pass registers the hook, it stamps this every tick and a
+	// changed base fixes itself. Where nothing does, a hand-made registration
+	// keeps pointing at the old address while the surface reports ready, and
+	// the first symptom is an agent that stopped replying. Recorded here so a
 	// later read can say the address moved.
 	//
-	// ON THE INGRESS, not on whether this build runs a pass. Today that
-	// admits Slack alone: its Request URL is a field on a settings page with
-	// no write API behind it, so it holds whatever address a person last
-	// typed, however much of Slack's provisioning a pass does converge. See
+	// ON THE INGRESS, not on whether a pass runs: Slack's Request URL has no
+	// write API, so it holds whatever a person last typed. See
 	// [integration.Kind.Ingress].
 	if kind.Ingress() == integration.IngressOperator {
 		s.recordEndpoint(r.Context(), kind, s.webhookBase)
@@ -2631,22 +2556,17 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		// broke.
 	case errors.As(err, &seal) && errors.Is(seal.Err, coord.ErrUnavailable):
 		// A CREDENTIAL'S OWN WRITE UNANSWERED, ahead of the arm below, which
-		// it would otherwise reach: the fleet's secret store is a
-		// coordination write, so it fails with the error a pointer read
-		// fails with, and that arm said "the fleet's activation could not
-		// be read" about a write that may have landed. The document was not
-		// touched — nothing after a failed seal runs — so the submission sent
-		// again writes every credential again by name, this one included,
-		// and is retryable within the same election.
+		// it would otherwise reach: the secret store is a coordination write
+		// and fails with the error a pointer read fails with, so that arm
+		// would say "the fleet's activation could not be read" about a write
+		// that may have landed. The document was not touched, so sending the
+		// submission again rewrites every credential by name.
 		//
-		// NAMED AS A FIELD, `unanswered_secret`, beside `wrote_secrets`, and
-		// not only in the reason: a client branches on fields, and a 503
-		// without `outcome` otherwise reads as one that wrote nothing — a
-		// rotation recorded as dropped while the store may hold the new
-		// value, which every node then reads at its next activation. No
-		// `outcome`, because the remedy is the plain 503's, sending it again:
-		// the one write whose outcome is unknown is a credential's, which the
-		// resend overwrites by name.
+		// NAMED AS A FIELD, `unanswered_secret`, beside `wrote_secrets`: a
+		// client branches on fields, and a 503 without `outcome` reads as
+		// nothing written, a rotation recorded as dropped while the store may
+		// hold the new value. No `outcome`, because the remedy is the plain
+		// 503's: the resend overwrites the one unknown write by name.
 		log.WarnContext(r.Context(), "setup_seal_unknown", "secret", seal.Name,
 			"error", err.Error(), "secrets", strings.Join(partial.Secrets, ","))
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
@@ -2724,15 +2644,12 @@ type disconnectRequest struct {
 // claims, which is this node's own fault and which no wait clears.
 //
 // TRANSIENT SAID AS TRANSIENT: a concurrent pass holding the surface is
-// `surface_busy` under its own short wait, because only that one is a race the
-// caller should sit out and retry, and a caller cannot tell it from the rest by
-// the status alone.
+// `surface_busy` under its own short wait, the one race a caller should sit
+// out, and the status alone cannot tell it from the rest.
 //
-// IN WORDS FOR A PERSON, the error to the log: the detail was the error, so a
-// disconnect the coordination store could not take read "setupapi: this node
-// could not take slack to record the disconnect: " and the store's own
-// transport error, its hosts and ports. A condition is told in its own
-// sentence ([builtin.ConditionSentence]) under its own hint, which is none
+// IN WORDS FOR A PERSON, the error to the log: a detail that was the error
+// leaked the store's transport error, hosts and ports. A condition is told
+// in its own sentence ([builtin.ConditionSentence]) under its own hint, none
 // where no wait clears it.
 func refuseDisconnect(w http.ResponseWriter, r *http.Request, kind integration.Kind, err error) {
 	code := httpjson.CodeUnavailable

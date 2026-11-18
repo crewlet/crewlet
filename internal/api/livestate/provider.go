@@ -1,44 +1,24 @@
 package livestate
 
-// A SEAT'S MODELS AT THEIR USAGE LIMIT, as the dashboard draws it.
-//
-// One steady condition for as long as the limit lasts, and that is the whole
-// point of it: the seat's turns, its failures and its probes all move while a
-// limit holds, and a screen that drew the condition from them blinked between
-// working, failed and stopped about once a second. The condition is moved only
-// by what says the limit began or ended:
-//
-//   - `seat_provider_parked`: every model of the seat's chain refused, and the
-//     engine parked the seat until the first is tried again
-//     (internal/engine/providerpark.go). The seat reads `stopped`/`provider`.
-//     The engine's probe is a call outside any turn, and one that meets the
-//     limit publishes this again, which renews the condition and moves
-//     nothing a reader draws;
-//   - `provider_fallback` of kind `rate_limit` onto a next member: the seat's
-//     head is limited and the seat runs on its fallback, so it is NOT stopped;
-//   - a phase that completes through the limited entry, or, for a parked seat,
-//     through any entry: a call answered, so the limit is over as far as this
-//     seat knows — and a launch of the executor's run collected the same way,
-//     which is its harness's calls answered through the entry the launch picked.
-//     As is a phase answered by an entry other than the fallback it was
-//     running on, which is the seat's chain having changed;
-//   - `seat_provider_released`, a park lifted (its probe answered, its chain
-//     changed, or the node gave the seat up), and `agent_spawned`, a new
-//     instance of the seat.
-//
-// # What it says, and what it does not
-//
-// Livestate reaches EVERY reader of the dashboard, so the condition carries
-// what a person is told and nothing else: what the limit is OF (the harness's
-// product and whether it signs in on a plan), when the vendor said it lifts,
-// since when it holds, and whether the seat waits for it or runs on a fallback
-// meanwhile. Which `providers.llm` entries are limited and which one carries
-// the seat is the company's configuration, which only an admin reads (on
-// Settings, Models), so the entry keys the condition is moved by are held
-// here and never broadcast. Nor is the vendor's own sentence, which can name
-// the account's zone and plan.
+// A SEAT'S MODELS AT THEIR USAGE LIMIT, as the dashboard draws it: one steady
+// condition for as long as the limit lasts. Turns, failures and probes all move
+// meanwhile, and a screen drawing it from them blinked about once a second, so
+// only these moves it:
+//   - `seat_provider_parked`: every chain member refused and the engine parked
+//     the seat (internal/engine/providerpark.go): `stopped`/`provider`. A probe
+//     meeting the limit publishes it again, renewing without a visible move;
+//   - `provider_fallback` of kind `rate_limit`: the seat runs on, NOT stopped;
+//   - a phase (or executor launch collected) completing through the limited
+//     entry, or for a parked seat any entry, or answered by an entry other than
+//     the fallback it ran on: the limit is over as far as the seat knows;
+//   - `seat_provider_released` and `agent_spawned`, a new instance.
 
-// ProviderLimit is a seat's models at their usage limit.
+// ProviderLimit is a seat's models at their usage limit. Livestate reaches
+// EVERY dashboard reader, so it carries only what a person is told: what the
+// limit is of, when it lifts, since when, and whether the seat waits. Which
+// `providers.llm` entries are limited is an admin's configuration, so the entry
+// keys stay unexported, and so does the vendor's sentence, which can name the
+// account's zone and plan.
 type ProviderLimit struct {
 	// Parked is whether the seat waits for the limit (every member refused)
 	// rather than running on a fallback, which is not named.

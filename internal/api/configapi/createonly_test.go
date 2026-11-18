@@ -116,16 +116,12 @@ func TestAWriteOnANodeThatHasNotCaughtUpIsBuiltOnTheFleetsRevision(t *testing.T)
 // revision in the history and made it neither the company nor what this node
 // boots on — and that the refusal names the node whose history alone holds it.
 //
-// INERT IS THE WHOLE POINT, and it is a property of this node as much as of
-// the fleet: a loser this node booted on would be served after its next start,
-// and offered to the fleet over the company that won.
-//
-// AND IT IS ONE NODE'S. Only an activation naming the revision would have
-// carried it to the others, and this one lost: a client behind a shared address
-// sent to diff or revert it reached a node that answers 404 and concluded the
-// work was gone. So the body names the node, and the hint sends both requests
-// there. Mutation: leave the node out of [configapi.KeptRevision] or the hint,
-// and every caller of this goes red.
+// INERT IS THE WHOLE POINT: a loser this node booted on would be served after
+// its next start, and offered to the fleet over the company that won. AND IT
+// IS ONE NODE'S: a client behind a shared address could reach a node answering
+// 404 and conclude the work was gone, so the body names the node and the hint
+// sends both requests there. Mutation: leave the node out of
+// [configapi.KeptRevision] or the hint, and every caller of this goes red.
 func (s *surface) assertKeptInert(t *testing.T, refusal map[string]any) {
 	t.Helper()
 	stored, _ := refusal["stored_revision_id"].(string)
@@ -227,14 +223,11 @@ func TestAConfigRequestTheFleetCannotAnswerIs503(t *testing.T) {
 // A WRITE STORED AND THEN UNANSWERED IS AN UNKNOWN OUTCOME, never "nothing was
 // written".
 //
-// The revision is stored first, and the activation after it can go unanswered
-// two ways: the publish never reached the coordination store, or it landed and
-// its acknowledgement was lost. This node cannot tell the two apart, and an
-// operator told that nothing was written sends the write again — a second
-// revision and a second epoch over one that may already be the company. So the
-// answer says the outcome is unknown, names the revision it stored and the node
-// whose history alone holds it, and carries no operation id, which a config
-// write has none of.
+// The publish either never reached the coordination store or landed with its
+// acknowledgement lost; this node cannot tell which, and an operator told
+// nothing was written sends it again over what may be the company. So the
+// answer says the outcome is unknown, names the stored revision and its node,
+// and carries no operation id.
 //
 // Mutations: answer the commit's ErrUnavailable as Service.fail does, and both
 // cases lose the outcome and the stored revision; leave the node out of the

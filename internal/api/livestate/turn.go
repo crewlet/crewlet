@@ -4,22 +4,16 @@ import "github.com/crewlet/crewlet/internal/events/types"
 
 // The turn a seat is on, and the last one it ended.
 //
-// A LIVE CALL IS NOT A TURN. The in-flight call is one phase's model call, and
-// it is cleared the instant that phase completes — so between phases, during
-// the prefetch before the first one, and for the whole of a wait on a detached
-// executor, a seat that was plainly in the middle of a turn showed nothing at
-// all. A parked turn was worse than blank: its suspension publishes a turn
-// completion, and the projection read that as the end of the turn and said the
-// seat was idle while its work ran on in a box. The turn is therefore held
-// here on its own, from the event that ANNOUNCES it (`agent_turn_started`, which
-// every turn and every resumed segment publishes before its prefetch) to the one
-// that ends it, and the stage says where in it the seat is.
+// A LIVE CALL IS NOT A TURN: it is cleared when its phase completes, so a seat
+// between phases or waiting on a detached executor would show nothing, and a
+// parked turn's suspension publishes a completion that read as the turn's end.
+// The turn is held on its own, from `agent_turn_started` to the event that ends
+// it, and the stage says where in it the seat is.
 //
-// ORDERING. The start, the phases and the completion travel on different
-// subjects, so any of them can overtake another. Two guards, the same two the
-// in-flight call has: a stage moves only on an event not older than the one
-// that set it, and a turn that has ENDED is remembered by id so a straggler
-// from it cannot put it back on the seat.
+// ORDERING. Start, phases and completion travel on different subjects and can
+// overtake one another. Two guards, as for the in-flight call: a stage moves
+// only on an event not older than the one that set it, and an ENDED turn is
+// remembered by id so a straggler cannot put it back on the seat.
 
 // touchTurn records that a step of turn `turnID` happened on this seat, at
 // `stage`.
@@ -44,25 +38,16 @@ func (s *LiveState) noteTurn(agent *agentLive, env Envelope, payload map[string]
 }
 
 // phaseStage is the stage a phase record puts its turn in, and whether it
-// MOVES the stage of a turn the seat already holds.
+// MOVES the stage of a turn the seat already holds. ONLY THE TURN'S OWN PHASES MOVE IT: onboarding, execute and review. A NESTED
+// record (`host_phase` set) is a delegated worker or the round-cap judge,
+// running while its calling phase waits; that phase's events stage the turn.
 //
-// ONLY THE TURN'S OWN PHASES MOVE IT — onboarding, execute and review, each
-// published by the segment that runs it. A NESTED record (`host_phase` set)
-// names the turn and is not one of them: a delegated worker, or the round-cap
-// judge a phase consults, each run while the phase that called it waits. That
-// phase's own events stage the turn. (Nor does a collected launch of the
-// executor's run move it, which is no phase record at all — see
-// [LiveState.applyTurnEvent].)
-//
-// EVERY WORKER RUNS WHILE ITS TURN IS PARKED. `delegate` is the executor's
-// alone and every executor is its harness's run in a box, which calls it
-// over the bridge after the turn has parked. Read as one of the turn's own
-// phases, a worker's record un-parked the turn: the seat's strip stopped
-// saying its executor was working while it worked on, and the seat's
-// next spawn took the turn off it as one its old instance had died with (the
-// spawn arm of [LiveState.applyTurnEvent] spares a parked turn alone). Such a
-// record still OPENS the turn on a seat that holds none, at the stage it
-// implies: parked under the executor's run, in a phase under any other host.
+// EVERY WORKER RUNS WHILE ITS TURN IS PARKED (`delegate` is the executor's
+// alone, called after the turn parked). Read as a phase, a worker's record
+// un-parked the turn, and the next spawn took it off the seat (the spawn arm of
+// [LiveState.applyTurnEvent] spares a parked turn alone). Such a record still
+// OPENS the turn on a seat holding none: parked under the executor's run, in a
+// phase under any other host.
 func phaseStage(payload map[string]any) (stage Stage, moves bool) {
 	host := str(payload, "host_phase")
 	switch {

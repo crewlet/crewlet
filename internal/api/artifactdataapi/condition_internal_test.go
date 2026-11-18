@@ -15,16 +15,12 @@ import (
 // A CONDITION OF THE NODE IS TOLD IN A PERSON'S WORDS FOR IT, under its own
 // hint, on a datastore's write and its read alike.
 //
-// Each answered one fixed sentence — "this node could not write the
-// artifact's data" — whatever the condition was, a log at its ceiling under no
-// Retry-After included, and logged nothing at all. Now a condition is told in
-// [builtin.ConditionSentence], whose advice agrees with the hint, and anything
-// else is the node's own fault (the control): `500` with no Retry-After, where
-// it was a 503 in the fixed sentence, which asked a person to come back for a
-// fault no wait clears.
+// A condition is told in [builtin.ConditionSentence], whose advice agrees with
+// the hint; anything else is the node's own fault (the control): `500` with no
+// Retry-After, since a 503 asks a person to come back for a fault no wait clears.
 //
-// Mutation: answer a condition in the fixed sentence again and its rows go
-// red; answer the control as a 503 and its row does.
+// Mutation: answer a condition in one fixed sentence, or the control as a 503,
+// and its rows go red.
 func TestAConditionIsToldInAPersonsWords(t *testing.T) {
 	t.Parallel()
 	const detail = "raise stream.artifact_data_max_bytes on 10.0.0.7"

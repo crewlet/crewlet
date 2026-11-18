@@ -40,15 +40,12 @@ func (f *fakeBackupRegister) PutBackupPoint(_ context.Context, p coord.BackupPoi
 // which is the key space an acknowledgement is filed under, and the one
 // neither the published floors nor the positions register has.
 //
-// PER-STREAM GENERATIONS, because that is the estate a reanchor produces: the
-// verb names one stream, so a fleet that has re-anchored its tracker and not
-// its pages log stands at two different generations at once.
+// PER-STREAM GENERATIONS: a reanchor names one stream, so a fleet that
+// re-anchored its tracker and not its pages log stands at two generations.
 //
-// SAFE FOR CONCURRENT REQUESTS, because every app a fixture builds without one
-// is handed a fresh one of these and a case's parallel subtests share that app:
-// the posture matrix's rows reach the acknowledgement and the reanchor read at
-// once, and each writes what it was asked. A case reads the fields after its
-// own synchronous request has answered.
+// SAFE FOR CONCURRENT REQUESTS: parallel subtests share the app's fresh one
+// (the posture matrix's rows reach the acknowledgement and the reanchor read at
+// once). A case reads the fields after its own synchronous request answered.
 type fakeStateLog struct {
 	mu sync.Mutex
 

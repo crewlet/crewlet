@@ -436,13 +436,11 @@ func (s Sources) modelReports(ctx context.Context) ([]nodeModels, error) {
 // llmEntries answers what each configured model is doing, across the fleet.
 //
 // FROM THE STATUS RECORDS, as `mcp_servers_status` is: every node writes its
-// models on its record ([coord.NodeStatusRecord.Models]), so one listing of
-// the records, counted against the lease table, is every node's word at once,
-// and a live node with no record counted is a column of its own rather than a
-// row of zeros. What
-// only THIS node can say (how it resolves each entry's credential, the hint of
-// the value it resolved) comes from its own engine ([ModelSource]), and the
-// answer names this node.
+// models on its record ([coord.NodeStatusRecord.Models]), so one listing
+// against the lease table is every node's word, and a live node with no record
+// is a column of its own rather than a row of zeros. What only THIS node can
+// say (how it resolves each entry's credential, the hint of the value) comes
+// from its own engine ([ModelSource]), and the answer names this node.
 //
 // TWO READINGS (decision D7): an admin reads the whole answer; anybody else
 // reads each model's condition with nothing that names a credential, an

@@ -17,29 +17,16 @@ import (
 )
 
 // verify serves POST /setup/integrations/{kind}/verify: a typed credential
-// checked at its vendor, and nothing stored.
+// checked at its vendor, and nothing stored (no value, pointer, revision or
+// finding: one from a value nobody saved would describe a company that does
+// not exist).
 //
-// # It writes nothing, anywhere
+// The verb is `setup.connect`, not `secrets.write`: it spends a credential at
+// a vendor on a person's hand and seals nothing.
 //
-// Not the value, not a pointer to it, not a revision and not a reconcile
-// finding. The check is a read the vendor answers, and what it found goes
-// back to the person who asked and to no shared record: a finding written
-// from a value nobody saved would describe a company that does not exist.
-//
-// # The connect verb, and not the credential write
-//
-// It is `setup.connect` because it spends a credential at a vendor on a
-// person's hand, which is the gesture of whoever connects the integration
-// rather than of a reader. It does NOT ask `secrets.write` on top, as a
-// submission carrying a credential does: nothing is sealed.
-//
-// # Every other field of the form is read the way the write would read it
-//
-// A check needs more than the one value (the region a Datadog key belongs
-// to, the instance a token authenticates at). Those are what the person has
-// typed beside it, else what the company document holds, else the field's
-// default, so a person changing one key on a working integration tests it
-// against the address already in force.
+// Every other field is read as the write would read it: what the person typed
+// beside the value, else the document, else the default, so changing one key
+// on a working integration tests it against the address already in force.
 func (s *Service) verify(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
 	fc, ok := s.companyFor(w, r, "no company configuration is active")

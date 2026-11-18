@@ -11,22 +11,15 @@ import (
 
 // Writing ONE entity: the draft PUT /config/{kind}/{id} applies.
 //
-// What that route knows is not small — splice into a copy of the active
-// revision so everything the caller did not send stays exactly as stored,
-// refuse a rename rather than coercing it, restore the masks a redacted read
-// handed back, and validate the WHOLE document rather than the entity, because
-// an entity that is valid on its own can still break the company. So it is a
-// draft of its own, and [Service.prepare] and [Service.commit] carry it as they
-// carry the whole-document write.
+// The route splices into a copy of the active revision (what the caller did not
+// send stays as stored), refuses a rename, restores masks a redacted read
+// handed back, and validates the WHOLE document. So it is a draft of its own,
+// carried by [Service.prepare] and [Service.commit] like a whole-document write.
+// A MERGE PATCH CANNOT DO THIS: RFC 7396 replaces an array wholesale.
 //
-// A MERGE PATCH CANNOT DO THIS. RFC 7396 replaces an array wholesale, so a
-// patch addressing `mcp_servers[2]` would delete every other server.
-//
-// AND THE SAME DRAFT FROM INSIDE THIS PROCESS ([Service.ApplyEntity]): the
-// setup surface records a seat's own app, and the reconcile loop records an
-// installation it discovered or removes a disconnected seat's credentials,
-// each against ONE seat — and a second surface that reimplemented what the
-// route knows would be a second idea of how a seat is written.
+// THE SAME DRAFT RUNS IN-PROCESS ([Service.ApplyEntity]): the setup surface and
+// the reconcile loop each write ONE seat, and a reimplementation would be a
+// second idea of how a seat is written.
 
 // ApplyEntityRequest is one entity write.
 type ApplyEntityRequest struct {

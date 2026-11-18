@@ -92,12 +92,11 @@ func TestAPushedChangeIsTimedFromItsRecordWhenSomebodyIsShownIt(t *testing.T) {
 // AN INBOX MOVEMENT IS TIMED FROM ITS RECORDS' INSTANT, AND ONLY WHEN A
 // SOCKET WATCHING THE SEAT WAS HANDED IT.
 //
-// An `inbox_changed` frame is how a person at the dashboard learns they have
-// work, and it is a committed change pushed to the sockets watching it like
-// any room's — so it is a change visibility event, from the broker's instant
-// for the oldest record that moved the inbox to the push. A seat nobody
-// watches was shown to nobody, and the re-read a switch of source asks every
-// watched inbox for is no committed change at all.
+// An `inbox_changed` frame is a committed change pushed to the sockets
+// watching it like any room's: a change visibility event, from the broker's
+// instant for the oldest record that moved the inbox to the push. A seat
+// nobody watches was shown to nobody, and the re-read a switch of source asks
+// every watched inbox for is no committed change at all.
 //
 // Mutation: drop the timing from InboxChanged, and the watched movement is
 // not timed; time the push from its own clock, or time one nobody watches,

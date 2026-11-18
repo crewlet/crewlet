@@ -13,29 +13,14 @@ import (
 // The fleet view's object-store block: where the company's files are kept,
 // and what the collector last found (ADR-0026).
 //
-// # One typed value, rendered in one place
+// Two readers (the dashboard's card, `crewlet objects status`) share one shape,
+// [FleetObjects], rendered in one place, [RenderObjects]; the dashboard reads
+// the golden `internal/api/testdata/objects_answer.json`.
 //
-// The block has two readers — the dashboard's file-storage card and `crewlet
-// objects status` — so the shape is [FleetObjects] and the rendering is
-// [RenderObjects]: the fleet question answers through it, the command line's
-// tests serve what it returns, and the dashboard's suite reads the golden
-// internal/api writes from it (`internal/api/testdata/objects_answer.json`).
-//
-// # Read from the fleet's record, never this node
-//
-// The collector is one duty that moves between data nodes, and it records each
-// pass in the coordination store. Every node answers from that record, so the
-// card says the same thing whichever node a request reached — and names the
-// node that ran the pass.
-//
-// # And only as a report on the store the files are in
-//
-// The record names the store its passes ran on and outlives a move of the
-// fleet's files, so it is read through the one reader the collector's duty
-// resumes from ([engine.ObjectCollection]), which answers a report of another
-// store as none. Rendered as it stood, the card showed the OLD store as the
-// one the files are in, with that store's audit and lost files, until the new
-// store's first pass recorded.
+// Read from the fleet's record in the coordination store, never this node, so
+// every node answers alike. And only as a report on the store the files are in:
+// the record outlives a move of the files, so [engine.ObjectCollection] answers
+// another store's report as none, else the card shows the OLD store's audit.
 
 // ObjectsState is which of three things the fleet's record was when the view
 // read it.

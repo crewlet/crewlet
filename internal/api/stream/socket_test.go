@@ -247,21 +247,15 @@ func TestABadTokenFailsTheHandshakeRatherThanOpeningAndDying(t *testing.T) {
 // TestAPlainGETSeparatesARefusedCredentialFromAnAcceptedOne pins the pairing
 // the dashboard's token gate is built on.
 //
-// A browser cannot learn WHY a handshake failed. A close code needs a close
-// frame, and a handshake that never completed has none, so a refusal arrives
-// as 1006 — the same code a stopped engine produces — with the status
-// deliberately withheld. The dashboard therefore re-asks over plain HTTP,
-// where fetch reports the status, and reads exactly these two answers:
+// A browser cannot learn WHY a handshake failed: with no close frame a refusal
+// arrives as 1006, like a stopped engine. The dashboard re-asks over plain
+// HTTP and reads exactly two answers:
 //
 //	401 → the credential was refused; prompt, and offer to forget it
 //	426 → the credential was fine and only the missing Upgrade header stopped it
 //
-// Anything else it treats as the network. So a change that made this route
-// answer an unauthenticated GET 400, or 500, or that let a bad token through
-// to the upgrade attempt, would not fail any socket test — it would silently
-// strand every reader holding a stale token on a page that says "retrying"
-// for ever. That is the bug this asserts against; see probeRefusal in
-// dashboard/src/protocol/socket.ts.
+// Anything else it treats as the network, so a 400 or 500 here strands every
+// reader with a stale token (see probeRefusal in dashboard/src/protocol/socket.ts).
 func TestAPlainGETSeparatesARefusedCredentialFromAnAcceptedOne(t *testing.T) {
 	t.Parallel()
 	f := newSocket(t, nil, nil)
@@ -576,21 +570,15 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 // A REFUSAL FRAME IS THE AUTHORITY TABLE'S MAPPING, AND NEVER A CODE THE
 // SOCKET CANNOT SAY.
 //
-// Every refusal reason the table names is answered over the socket with the
-// code and the fields [authz.RefusalFields] gives it — the words the REST twin
-// and every other surface answer the same decision with — so a change to the
-// mapping reaches the socket or fails here: `unauthorized` with the reason,
-// the grants and, on an artifact refused for a role, the role it needs; and
-// `not_found` with nothing beside it for a caller with no relation to an
-// artifact, as for an id nothing holds. The two the mapping words in a code
-// this vocabulary lacks (a stale proof's `step_up_required`, a token's
-// `token_refused`) are answered as the fault they would be, carrying no
-// refusal: the socket cannot carry a step-up, and a frame code the dashboard
-// does not know reads to it as a failure of no kind.
+// Every refusal reason is answered with the code and fields
+// [authz.RefusalFields] gives it, as REST does: `unauthorized` with the
+// reason, the grants and, on an artifact refused for a role, that role;
+// `not_found` with nothing for a caller with no relation. The two the mapping
+// words in a code this vocabulary lacks (`step_up_required`, `token_refused`)
+// are answered as the fault they would be, with no refusal.
 //
 // Mutation: drop the grants or the role in RefusedFor, answer every refusal
-// `unauthorized` whatever the mapping says, or answer no relation as the
-// fault, and this goes red.
+// `unauthorized`, or answer no relation as the fault: this goes red.
 func TestARefusalFrameCarriesTheMappingsCodeAndFields(t *testing.T) {
 	t.Parallel()
 	decisions := map[string]authz.Decision{}
@@ -658,15 +646,12 @@ func TestARefusalFrameCarriesTheMappingsCodeAndFields(t *testing.T) {
 
 // A REFUSAL CARRIES ITS SENTENCE, AND NOTHING ELSE DOES.
 //
-// `bad_params` is the one failure of a question whose text is written for the
-// caller — it names the parameter to change — and it reached the debug log and
-// nothing else, so a person who asked for a window past the spend history read
-// "the engine refused this request" with no word of which field or why. An
-// `unavailable` answer carries the STATE LOG's sentence for its refusal, under
-// the same key ([statelog.ConditionSentence]), and never the error behind it
-// or the refusal's own detail, which is written for whoever runs the node.
-// Every other code stays bare: its text can carry a path, and a detail on it
-// would be the leak the loop above guards against.
+// `bad_params` is the one failure whose text is written for the caller (it
+// names the parameter to change), and it reached only the debug log. An
+// `unavailable` answer carries the STATE LOG's sentence under the same key
+// ([statelog.ConditionSentence]), never the error behind it or the refusal's
+// own detail, which is for whoever runs the node. Every other code stays bare:
+// its text can carry a path.
 //
 // Mutation: build the `unavailable` frame by setting its Unavailable alone,
 // and the state log's words never reach the frame; read the refusal's detail
@@ -773,16 +758,14 @@ func TestTheSocketsCallerReachesTheQuery(t *testing.T) {
 // TestAWatchNeedsAResolvedCaller pins that a subscription is a WRITE.
 //
 // A watch installs a row in this node's routing index on behalf of a caller
-// and leaves it there for the life of the socket, so a client nobody can name
-// that could install one would be writing server state anonymously. Any
-// principal the guard resolved may watch — a person, a token, an operator —
-// and is then decided by the authority table on the seat it names.
+// for the life of the socket, so an unnameable client that could install one
+// would write server state anonymously. Any principal the guard resolved may
+// watch and is then decided by the authority table on the seat it names.
 //
-// THE UNAUTHENTICATED ARM IS NOW THE HANDSHAKE'S, which is what this asserts:
-// there is no anonymous socket to send a watch from any more, so the refusal
-// happens before a frame is ever read. The guard inside `watch` stays for the
-// one case that would resurrect it — the socket path being declared exempt —
-// and that case cannot be reached from here.
+// The unauthenticated arm is now the handshake's, which this asserts: no
+// anonymous socket exists, so the refusal comes before a frame is read. The
+// guard inside `watch` stays for the case of the socket path being declared
+// exempt, which cannot be reached from here.
 func TestAWatchNeedsAResolvedCaller(t *testing.T) {
 	t.Parallel()
 	// ADMIN, so the counterfactual below is about the credential and not
@@ -1016,13 +999,10 @@ func TestADisconnectedClientLeavesTheHub(t *testing.T) {
 // EVERY RESOLVED PRINCIPAL OPENS THE SOCKET, a principal holding no
 // permission at all included, and receives the overview and nothing else.
 //
-// What the socket carries is the company's overview — the roster, what each
-// seat is doing, the org chart, spend, schedules — which is everybody's
-// (ADR-0033). It used to refuse a caller without the board's read grant before
-// the upgrade, which left a person invited with no app staring at a dashboard
-// that could not connect, while the questions beside it answered them. What a
-// reader may not read is withheld by the audience, kind by kind: the audit feed
-// is an admin's, so the overview reader's snapshot carries no `events` key.
+// The overview (roster, what each seat is doing, org chart, spend, schedules)
+// is everybody's (ADR-0033). What a reader may not read is withheld by the
+// audience, kind by kind: the audit feed is an admin's, so the overview
+// reader's snapshot carries no `events` key.
 //
 // Mutation: refuse a principal holding no permission at the handshake, or give
 // the overview reader the audit feed, and this fails.
@@ -1058,21 +1038,15 @@ func TestEveryResolvedPrincipalOpensTheSocket(t *testing.T) {
 // A PRINCIPAL WHOSE STAGE MAY NOT ACT IS REFUSED THE SOCKET, before the
 // upgrade and naming the stage.
 //
-// Every surface states the authority table's first check — the query
-// registry and every route the table decides — and the socket states it too
-// rather than relying on whatever the guard in front of it happens to refuse:
-// the guard's session table refuses a suspended person today, but a principal
-// reaching this handler resolved by any other path must not open a stream of
-// the company because the one check every other surface makes was left to a
-// layer above. Refused before the upgrade, where a page's HTTP re-ask can read
-// the status.
-//
+// The socket states the authority table's first check itself rather than
+// relying on the guard in front of it: a principal reaching this handler by
+// another path must not open a stream because a layer above held the check.
+// Refused before the upgrade, where a page's HTTP re-ask can read the status.
 // The principal is placed on the request as the guard's middleware places one,
-// because no credential the guard serves resolves to a stage that may not act —
-// which is the point of holding the socket to the rule itself.
+// since no credential the guard serves resolves to a stage that may not act.
 //
 // Mutation: drop the stage check, and the suspended person's request is
-// upgraded (426 to a plain GET) rather than refused.
+// upgraded (426 to a plain GET), not refused.
 func TestAPrincipalWhoseStageMayNotActIsRefusedTheSocket(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()

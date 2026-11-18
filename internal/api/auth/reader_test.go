@@ -54,15 +54,11 @@ func (s *signedIn) send(g *auth.Guard, method, path, reader string,
 
 // A REQUEST MADE FOR ANOTHER READER IS REFUSED BEFORE IT RUNS.
 //
-// The window left open beside the one somebody signed in as somebody else
-// with: its screen is the last person's, its cookie is the new person's, and
-// the sign-in's close of the session it was opened with did not land. Every
-// request it sends names the reader it was drawn for, and a guarded route
-// serves it only to that principal — on a read, a change and the act route
-// alike, and under /auth too, where a sign-out everywhere pressed on the last
-// person's Account screen would otherwise end the new person's sessions.
-// Nothing runs, so nothing is written and no operation key is scoped to the
-// person the browser now belongs to.
+// A stale window beside the one somebody signed in as somebody else with: its
+// screen is the last person's, its cookie the new person's. A guarded route
+// serves each request only to the reader it names — reads, changes, the act
+// route and /auth too, where a sign-out everywhere from the last person's
+// Account screen would otherwise end the new person's sessions. Nothing runs.
 //
 // Mutation: drop the guard's reader check and every refused row runs.
 func TestARequestMadeForAnotherReaderIsRefusedBeforeItRuns(t *testing.T) {
@@ -98,14 +94,11 @@ func TestARequestMadeForAnotherReaderIsRefusedBeforeItRuns(t *testing.T) {
 // A SOCKET'S HANDSHAKE NAMES ITS READER IN ITS URL, AND IS REFUSED BEFORE IT
 // IS SERVED.
 //
-// A browser sets no header on a WebSocket handshake, so a socket that dropped
-// and dialled again under a cookie a sign-in in another tab had moved was
-// served as the new person until the tab's next request was refused. Named in
-// the `reader` parameter, that dial is refused `409 reader_changed` before the
-// stream handler runs. The parameter is read on an upgrade ONLY, and only where
-// no header names the reader: on any other request a URL is never a second way
-// to say who it is for, and a request naming its reader in the header is
-// decided by the header.
+// A browser sets no header on a WebSocket handshake, so a redial under a moved
+// cookie would be served as the new person. Named in the `reader` parameter,
+// the dial is refused `409 reader_changed` before the stream handler runs. The
+// parameter is read on an upgrade ONLY, and only where no header names the
+// reader: the header decides otherwise.
 //
 // Mutation: read the parameter on every request, or ahead of the header, and a
 // served row below is refused; drop it and the refused rows run.
