@@ -579,18 +579,12 @@ func rowAskedOfEvery(t *testing.T, rig *waiterRig, want time.Time, why string) {
 }
 
 // A NUDGE'S ANNOUNCEMENT AND A GONE NODE'S SAY WHEN THEIR STORE WAS ASKED,
-// NEVER WHEN THEY WERE MADE. A nudge reads the run's row and then polls the
-// box, which can take a minute, and a gone launch node's job is announced once
-// its loss is recorded; each announcement says the instant its waiter asked
-// the store, the read's or the record's, as a pass's says its listing's
-// (TestAnAnnouncementSaysWhenItsRowWasRead): the seat's holder reads that
-// instant as the store answering since it found the store silent
-// ([announcedAfter]), and an instant taken after the ask, the announcement's
-// own above all, reads a silence that began after the ask as over while it
-// lasts.
+// NEVER WHEN THEY WERE MADE: the read's or the record's instant, as a pass's
+// says its listing's (TestAnAnnouncementSaysWhenItsRowWasRead), since a later
+// instant reads a silence that began after the ask as over ([announcedAfter]).
 //
-// Mutation: stamp the instant the announcement is made, or one taken after
-// the store was asked, on either road, and its announcement says a later read.
+// Mutation: stamp the instant the announcement is made, or one taken after the
+// store was asked, on either road, and its announcement says a later read.
 func TestEveryRoadsAnnouncementSaysWhenItsStoreWasAsked(t *testing.T) {
 	t.Parallel()
 	// waiterOn builds rig's waiter on clock, its store taking a second on

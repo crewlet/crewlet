@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A run's note inbox, as its bridge serves it: the steer_take tool a harness's hook
@@ -37,6 +38,8 @@ type fakeInbox struct {
 	changed chan struct{}
 	closed  bool
 	takes   []string
+	calls   []*sandbox.NoteCall
+	cancels []sandbox.NoteCall
 	reads   [][]string
 	answer  string
 	readErr error
@@ -44,11 +47,18 @@ type fakeInbox struct {
 
 func newFakeInbox() *fakeInbox { return &fakeInbox{changed: make(chan struct{})} }
 
-func (i *fakeInbox) Take(_ context.Context, event string) string {
+func (i *fakeInbox) Take(_ context.Context, event string, call *sandbox.NoteCall) string {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.takes = append(i.takes, event)
+	i.calls = append(i.calls, call)
 	return i.answer
+}
+
+func (i *fakeInbox) Cancelled(_ context.Context, call sandbox.NoteCall) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.cancels = append(i.cancels, call)
 }
 
 func (i *fakeInbox) Wait(_ context.Context, after int) ([]mcpbridge.SteerNote, <-chan struct{}) {
@@ -138,6 +148,7 @@ func newSteerFixtureWith(t *testing.T, hold time.Duration, edit func(*mcpbridge.
 	mcpbridge.HoldPollsFor(f.bridge, hold)
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
+	mux.Handle(mcpbridge.ServerPattern, f.bridge.Handler())
 	mux.Handle(mcpbridge.SteerPattern, f.bridge.SteerHandler())
 	inflight := &atomic.Int32{}
 	f.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -357,17 +368,12 @@ func wantTurnedAway(t *testing.T, got polled, code string) {
 }
 
 // A NOTES CALL THAT REACHES ITS OPENING AS IT ENDS IS TURNED AWAY TO ASK
-// AGAIN, as a poll the opening can no longer hold is: a 503 with a
-// Retry-After, which the poller pauses on before it asks again. The routing
-// found the call's opening, and the opening ended before the route served the
-// call: the run ended, the seat left this node, or a recovery opened the job
-// again. Its end took its inbox, and the route answered what it answers a
-// session that never had one, a 404, which the OpenCode plugin reads as it
-// reads a refused token: the run has no notes route, and it stops asking for
-// the rest of the run. A box that goes on, served by the seat's next holder or
-// by the recovery's opening, was then never handed a note between its steps
-// again. A poll and a read alike; the read is recorded nowhere, and after a
-// recovery the box's next call is served by the opening that serves it now.
+// AGAIN, a poll and a read alike, as a poll the opening can no longer hold
+// is: a 503 with a Retry-After, which the poller pauses on before it asks
+// again, whether the run ended, the seat left this node or a recovery opened
+// the job again; never the 404 of a session that never had an inbox (package
+// doc, "A note inbox"). The read is recorded nowhere, and after a recovery
+// the box's next call is served by the opening that serves it now.
 //
 // Mutation: answer an opening whose end took its inbox as a session that never
 // had one (the 404 for every opening without an inbox), and every case goes
@@ -502,27 +508,17 @@ func readWith(ctx context.Context, t *testing.T, client *http.Client, url string
 }
 
 // A READ ITS OPENING'S END OVERTOOK ON ITS WAY IN IS TURNED AWAY TO ASK AGAIN,
-// never answered done with nothing recorded. The route found the opening
-// serving its inbox, read the read's body, and the opening ended before the
-// read reached the inbox: the run ended, the seat left this node, or a
-// recovery opened the job again with an inbox of its own. The end closed the
-// inbox, which then took no read and said nothing of it, and the route answered
-// 204: the plugin never confirmed the note again, and the record kept it served
-// and unread, which the run's ending reports unconfirmed and a later launch
-// tells again as one the session may already show. So a closed inbox says it
-// took nothing ([mcpbridge.ErrNoteUntaken]); and a read on a run whose
-// tools are closed is turned away too: the seat leaves this node's grants,
-// which closes the fence, before its release ends the opening, so a read
-// meets the closed fence whether or not the release has come yet. Each is
-// turned away as a call reaching its opening as it ends is, a 503 with the
-// Retry-After a poll the opening cannot hold is given, never as a record that
-// could not be written. After the recovery the box's read made again is
-// recorded by the opening that serves it now.
+// never answered done with nothing recorded (package doc, "A note inbox"): a
+// closed inbox says it took nothing ([mcpbridge.ErrNoteUntaken]), and a run
+// whose tools are closed turns its read away whether or not the seat's release
+// has ended the opening yet, each with a 503 and the Retry-After a poll the
+// opening cannot hold is given, never as a record that could not be written.
+// After a recovery the box's read made again is recorded by the opening that
+// serves it now.
 //
 // Mutation: answer a read its inbox did not take done, or as a record that
 // could not be written, and the run's end and the recovery go red; answer a
-// fenced run's read done, and the seat's leaving goes red, before its release
-// and after it.
+// fenced run's read done, and the seat's leaving goes red, before and after.
 func TestAReadItsOpeningsEndOvertookIsTurnedAwayToAskAgain(t *testing.T) {
 	t.Parallel()
 	for _, end := range []struct {

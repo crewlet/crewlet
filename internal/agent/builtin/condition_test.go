@@ -294,26 +294,18 @@ func TestEverySandboxClassIsACondition(t *testing.T) {
 	}
 }
 
-// EVERY CONDITION KIND IS THE NODE'S OR THE WORK'S, AND NEVER BOTH. A seat's
-// mail that failed on a condition of the infrastructure is handed back as the
-// failing node's own, and one that failed on anything else as the mail's, by
-// [builtin.InfrastructureKind] over the kind its record carries; so the side
-// of every kind is decided once, here. The work's side is exactly the kinds
-// worksKinds names, each one a piece of work can cause (a write the state log
-// refused for what it is, a deadline, an abandoned wait), and any coding
-// sandbox class sandboxClassSides leaves with the work, which today is none.
-// Every other condition, and every other kind the package declares, is the
-// node's. A state log's refusal of
-// the write itself and its every other refusal are two kinds, one a side
-// each, held for every reason the log names; and every class the sandbox
-// names has a side decided here, so a class added there fails until one is.
+// EVERY CONDITION KIND IS THE NODE'S OR THE WORK'S, AND NEVER BOTH, decided
+// once ([builtin.InfrastructureKind]): the work's side is exactly worksKinds
+// (a write the state log refused for what it is, a deadline, an abandoned
+// wait) and any sandbox class sandboxClassSides leaves with the work, today
+// none; every other declared kind and condition is the node's. The state log's
+// two kinds hold for every reason it names, and a sandbox class added there
+// fails until it has a side here (builtin's "Whose failure a condition is").
 //
-// Mutation: take a declared kind off InfrastructureKind's list and its rows go
-// red; put a kind of the work's on it and theirs do; read every state-log
-// write refusal under one kind and the write rows of the work's reasons do;
-// move a sandbox class to the work's side, or read every class as the work's,
-// and its rows do; declare a kind no condition is recorded under and the
-// declaration's row does.
+// Mutation: take a declared kind off InfrastructureKind's list, put a work's
+// kind on it, read every state-log refusal under one kind, move a sandbox
+// class to the work's side or read every class as the work's, or declare a
+// kind no condition is recorded under, and its rows go red.
 func TestEveryConditionKindIsTheNodesOrTheWorks(t *testing.T) {
 	t.Parallel()
 	works := func(kind string) bool {
@@ -369,6 +361,47 @@ func TestEveryConditionKindIsTheNodesOrTheWorks(t *testing.T) {
 	for _, kind := range []string{"", types.ErrorKindUnclassified, "sandbox"} {
 		if builtin.InfrastructureKind(kind) {
 			t.Errorf("%q, no kind of a condition, is the node's", kind)
+		}
+	}
+}
+
+// ONLY A CONDITION AN OPERATOR MUST CLEAR IS ONE A FINISHED JOB'S RESUME WAITS
+// FOR THE OPERATOR ON: a disk full, read-only or failing, a process at its
+// limit of open files, and nodes holding different keys or running different
+// builds, each of them the node's too; and nothing a store, a log or a broker
+// answering again clears, nothing of the work's, and no kind at all. Raised as
+// executor_resume_blocked, a kind put on the wrong side either pages an
+// operator for an outage that ends by itself or leaves a run waiting on one
+// unsaid.
+//
+// Mutation: drop a kind from builtin.OperatorKind, or add one a wait clears
+// (coordination_unavailable), and its row goes red.
+func TestOnlyAConditionAnOperatorClearsWaitsForTheOperator(t *testing.T) {
+	t.Parallel()
+	operators := map[string]bool{
+		builtin.KindDiskFull: true, builtin.KindDiskReadOnly: true, builtin.KindDiskFailed: true,
+		builtin.KindOpenFilesExhausted: true, builtin.KindFleetKeysDiffer: true,
+		builtin.KindFleetBuildsDiffer: true,
+	}
+	seen := map[string]bool{}
+	for name, err := range everyCondition() {
+		kind, _ := builtin.ConditionKind(err)
+		seen[kind] = true
+		if got := builtin.OperatorKind(kind); got != operators[kind] {
+			t.Errorf("%s (kind %q): waits for an operator = %v, want %v", name, kind, got, operators[kind])
+		}
+	}
+	for kind := range operators {
+		if !seen[kind] {
+			t.Errorf("the operator's kind %q is recorded for no condition", kind)
+		}
+		if !builtin.InfrastructureKind(kind) {
+			t.Errorf("the operator's kind %q is not the node's", kind)
+		}
+	}
+	for _, kind := range []string{"", types.ErrorKindUnclassified, builtin.KindCoordinationUnavailable} {
+		if builtin.OperatorKind(kind) {
+			t.Errorf("%q waits for an operator", kind)
 		}
 	}
 }

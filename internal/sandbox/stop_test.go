@@ -367,17 +367,14 @@ func TestAStopAfterTheCompletionWasClaimedLeavesTheClaim(t *testing.T) {
 	}
 }
 
-// A JOB ITS COLLECTION ALREADY HANDED TO ITS TURN IS THE TURN'S. A completion
-// whose resume the seat's budget held, or whose resume was handed back for a
-// retry, goes back to running with its job read and charged; the turn's resume
-// has charged the work item the job's spend under its own segment, or will.
-// Ended by the stop, its turn's close charged that spend to the item again
-// under the stop's segment. So the stop leaves it — no second read of the box,
-// no reclaim, no close, no announcement — and the turn's own fence ends the
-// resume when it comes round, as it ends a claimed one.
+// A JOB ITS COLLECTION ALREADY HANDED TO ITS TURN IS THE TURN'S: back in
+// running read and charged, its spend is the turn's resume's to charge, so the
+// stop leaves it, no second read, reclaim, close or announcement, and the
+// turn's fence ends the resume. A job kept for its hold comes round at once
+// (TestAStopEndsTheWaitOfACollectedJobsResume), its re-fire being the turn's.
 //
-// Mutation: drop the store's refusal and StopSeat's skip, and the box is read
-// a second time, reclaimed, and the turn closed on the stop.
+// Mutation: drop the store's refusal and StopSeat's skip, and the box is read a
+// second time, reclaimed, and the turn closed on the stop.
 func TestAStopLeavesAJobItsCollectionHandedToItsTurn(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -406,20 +403,42 @@ func TestAStopLeavesAJobItsCollectionHandedToItsTurn(t *testing.T) {
 			// collection does before it reads ([Coordinator.drainCalls]): what
 			// the stop ends is counted from here.
 			sessions := len(spies.endedRuns())
-			var reads atomic.Int32
-			rig.runner.CollectFunc = func(context.Context) error {
-				reads.Add(1)
+			// A READ IS THE STOP'S OR THE TURN'S, told by the row it is made
+			// on: the turn's own collection reads under its claim, and a
+			// stop's read under the ending it decided. The stop ends the wait
+			// of a job this node keeps for its hold by re-firing it
+			// ([Coordinator.endCollectedWait]), and that re-fire is the turn's
+			// resume, which collects the job again under its claim, as every
+			// resume of a handed-back claim does.
+			var stopReads, turnReads atomic.Int32
+			rig.runner.CollectFunc = func(ctx context.Context) error {
+				row, found, err := rig.pending.Get(ctx, "t1")
+				if err == nil && found && row.Status == StatusResumed && row.Ending == nil && row.Stop == nil {
+					turnReads.Add(1)
+				} else {
+					stopReads.Add(1)
+				}
 				return nil
 			}
 
 			rig.stop(t)
+			// NO STOP DECIDED, read before anything is waited for: a stop's
+			// ending goes on retrying on the coordinator's own lifetime, so
+			// a wait for it would never return.
+			if decided := rig.get("t1"); decided.Ending != nil || decided.Stop != nil {
+				t.Fatalf("the stop decided an ending of the collected job's run (ending %+v, stop %+v); "+
+					"it is its turn's", decided.Ending, decided.Stop)
+			}
+			// WHATEVER ELSE THE STOP SET GOING HAS RUN, so what it did is
+			// counted whole rather than by a race against the assertions.
+			rig.coordinator.inflight.Wait()
 
 			after := rig.get("t1")
 			if after.Status != StatusRunning || after.Ending != nil || after.Stop != nil {
 				t.Fatalf("the collected job's run became %s (ending %+v, stop %+v); it is its turn's",
 					after.Status, after.Ending, after.Stop)
 			}
-			if got := reads.Load(); got != 0 {
+			if got := stopReads.Load(); got != 0 {
 				t.Fatalf("the stop read the collected job's box again, %d times", got)
 			}
 			if got := rig.accountant.asked(); got != charges {
@@ -428,9 +447,13 @@ func TestAStopLeavesAJobItsCollectionHandedToItsTurn(t *testing.T) {
 			if slices.Contains(rig.provider.KilledIDs(), running.SandboxID) {
 				t.Fatal("the stop reclaimed the box its turn's resume continues in")
 			}
-			if len(spies.closedTurns()) != 0 || len(spies.endedRuns()) != sessions || len(rig.stopAnnouncements()) != 0 {
+			// EACH OF THE TURN'S COLLECTIONS ENDS THE JOB'S SESSION ITSELF
+			// before it reads, as the first one did: any more is the stop's.
+			turns := int(turnReads.Load())
+			if len(spies.closedTurns()) != 0 || len(spies.endedRuns()) != sessions+turns ||
+				len(rig.stopAnnouncements()) != 0 {
 				t.Fatalf("the stop closed %d turns, ended %d sessions and announced %d stops of a job it "+
-					"does not end", len(spies.closedTurns()), len(spies.endedRuns())-sessions,
+					"does not end", len(spies.closedTurns()), len(spies.endedRuns())-sessions-turns,
 					len(rig.stopAnnouncements()))
 			}
 		})
@@ -573,18 +596,11 @@ func TestAStopWaitsForASilentHostAndNeverWritesItsSpendOff(t *testing.T) {
 	}
 }
 
-// A STOP WHOSE HOST ALONE HAS A SILENT STORE WAITS FOR IT AS FOR A SILENT HOST.
-// The host is up, and so is the box: only the host's read of the run's row,
-// which licenses the read, goes unanswered, while this node's own store answers
-// every step of the stop's ending, as in a partition that cuts the host off from
-// the store's leader and not this node. That is no verdict about the box, and
-// its spend is not written off for it at once: the stop is kept, its session
-// closed, nothing charged, announced or closed, and asked again, and once the
-// store answers the host, it reads the box and the stop charges what it read.
-// But only the host can read the box, and a host that cannot for the box
-// timeout, by this node's clock since it first asked it, is as good as away:
-// past it the stop is ended with nothing read, as a silent host's is. Unbounded, it held the seat's mail for as
-// long as the partition lasted, while every write of the ending's would land.
+// A STOP WHOSE HOST ALONE HAS A SILENT STORE WAITS FOR IT AS FOR A SILENT HOST:
+// kept, its session closed and nothing charged, until the host reads the box,
+// or the box timeout by this node's clock since it first asked, when it ends
+// with nothing read. Unbounded, it would hold the seat's mail for the
+// partition.
 //
 // Mutation: read the store's silence as the box's failure in readStopped, and
 // the stop finishes on its first retry with its spend lost; drop the bound, and
@@ -699,16 +715,17 @@ func (s *silentFromDecision) CollectStop(ctx context.Context, turnID string, c S
 }
 
 // A STOP WHOSE NODE SHARES ITS HOST'S STORE SILENCE IS KEPT, AND NEVER SAID
-// ENDED: nothing its ending writes would land, so no bound ends it, and no
-// attempt's log says it ended. Staged at the attempt whose own row read is the
-// first step this node's store does not answer. A silence both nodes shared
-// counts nothing toward the host's: once this node's store answers, the host
-// is waited for the box timeout from the first ask then.
+// ENDED, past the box timeout too, nor counted toward the host's silence. The
+// staged attempt's own read of the row is the first step this node's store does
+// not answer, after the retry decided the ending again.
 //
-// Mutation: bound the host's silence whatever the attempt's read met, or hand
-// readStopped an answered read whatever it met, and the stop is kept only by
-// its record's write failing; count the shared silence toward the host's, and
-// it ends unread as this node's store answers. Not parallel ([captureLogs]).
+// Mutation: bound the host's silence whatever the attempt's own row read met
+// (readStopped), or hand readStopped a read that answered (finishEnding), and
+// the stop is kept only by its record's write failing; count the shared silence
+// (readStopped), and it is given up once this node's store alone answers.
+// ([TestAStopIsSaidEndedUnreadOnlyOnceItsRecordSaysSo] holds the saying.)
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
 func TestAStopWhoseNodeSharesItsHostsStoreSilenceIsKeptAndNeverSaidEnded(t *testing.T) {
 	logs := captureLogs(t)
 	rig := newCoordRig(t)
@@ -782,17 +799,10 @@ func (s *recordUnansweredOnce) CollectStop(ctx context.Context, turnID string, c
 	return s.PendingStore.CollectStop(ctx, turnID, c)
 }
 
-// A STOP IS SAID ENDED UNREAD ONLY ONCE ITS RECORD SAYS SO. A stop whose read of
-// its box comes to nothing (the box gone, or unreadable on this node's own
-// host, or its host or its host's store silent for the box timeout since this
-// node first asked it) is ended with nothing charged by its record of that (CollectStop): a
+// A STOP IS SAID ENDED UNREAD ONLY ONCE ITS RECORD SAYS SO (CollectStop): a
 // write of this node's store, which can fall silent after the attempt's own
-// read of the run's row answered. The stop is then kept for this node's retry,
-// which reads the box again and charges whatever that read finds. Said before
-// the write, the log told an operator that a stop still kept had ended with
-// its spend written off, whatever its read had come to, and a stop kept on a
-// silence both nodes share was said ended all the same. So it is said once
-// the record lands, and only then, with what the read came to.
+// read; the stop is then kept for the retry. Here the read comes to nothing by
+// the stop's age: the box timeout and twice objstore.AssumedClockSkew.
 //
 // Mutation: say it before the record is written, and the kept stop is said
 // ended; never say it, and a stop ended unread is never said to be.
@@ -802,31 +812,27 @@ func TestAStopIsSaidEndedUnreadOnlyOnceItsRecordSaysSo(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		// arrange launches t1 where its stop's read comes to nothing, and
-		// says is how the line names what it came to. waits is a read that
-		// comes to nothing only once its host has been silent for the box
-		// timeout since this node first asked it on the stop's retry series,
-		// so the stop is asked once on that series before the time passes.
+		// says is how the line names what it came to.
 		arrange func(t *testing.T, rig *coordRig)
 		says    string
-		waits   bool
 	}{
 		{"the box gone", func(_ *testing.T, rig *coordRig) {
 			rig.launch("t1")
 			rig.runner.CollectErr = errBoxGoneMidRead
-		}, "gone=true", false},
+		}, "gone=true"},
 		{"the box unreadable on this node's host", func(_ *testing.T, rig *coordRig) {
 			rig.launch("t1")
 			rig.runner.CollectErr = errBoxBlip
-		}, errBoxBlip.Error(), false},
+		}, errBoxBlip.Error()},
 		{"its host silent for the box timeout", func(t *testing.T, rig *coordRig) {
 			rig.onNode(t, "node-b", &boxAsks{err: fmt.Errorf("asking node-a: %w", ErrBoxHostSilent)}, &nudges{})
 			rig.launchedBy("t1", "node-a")
-		}, "host_silent=true", true},
+		}, "host_silent=true"},
 		{"its host's store silent for the box timeout", func(t *testing.T, rig *coordRig) {
 			store := &silentStore{PendingStore: rig.pending, silent: []string{"Get"}}
 			rig.onNode(t, "node-b", hostAnswers{host: rig.hostOn(t, "node-a", store)}, &nudges{})
 			rig.launchedBy("t1", "node-a")
-		}, "store_silent=true", true},
+		}, "store_silent=true"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := captureLogs(t)
@@ -837,10 +843,9 @@ func TestAStopIsSaidEndedUnreadOnlyOnceItsRecordSaysSo(t *testing.T) {
 			rig.coordinator.pending = &recordUnansweredOnce{PendingStore: rig.coordinator.pending}
 
 			rig.stop(t)
-			if tc.waits {
-				rig.fireRetries()
-			}
-			rig.now = rig.now.Add(DefaultBoxTimeout)
+			// PAST THE STOP'S AGE BOUND, so a silent host is given up on the
+			// retry's first ask, whose silence has only just begun.
+			rig.now = rig.now.Add(DefaultBoxTimeout + 2*objstore.AssumedClockSkew)
 			rig.fireRetries()
 			kept := rig.get("t1")
 			if kept.Ending == nil || kept.Stop == nil || kept.Stop.Collected {

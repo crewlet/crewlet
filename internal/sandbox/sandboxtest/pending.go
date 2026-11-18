@@ -15,6 +15,20 @@
 // [sandbox.CoordStore]. The record operations it is built on are certified on
 // both coordination backends by coordtest, and this suite certifies every
 // conditional flip built on top of them.
+//
+// # A later build's keys
+//
+// The pending-run record is rewritten whole by every node that touches it, so
+// a field a newer build adds to the notes section, to one note, to where a
+// note was read, to a hook's serve of a note, to the call that serve answered
+// or to the job's own record is gone the moment this build writes the record
+// back, unless every level that can grow keeps what it does not know. The log
+// beside the record ([sandbox.BridgeLog]) is rewritten whole by every append,
+// so the same holds at its top, in each bridged call it keeps and in each
+// identity of a call it dropped: nine levels in all. One loss is meant: a
+// relaunch's reset replaces the job's record whole, so the key a later build
+// added to it goes with the job it was about. Every level is held by
+// testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite (notes.go).
 package sandboxtest
 
 import (
@@ -76,6 +90,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn", testARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn},
 		{"AHeldReleaseHoldsTheResumeUntilItsConditionLifts", testAHeldReleaseHoldsTheResumeUntilItsConditionLifts},
 		{"AHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts", testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts},
+		{"AHeldReleaseOwesItsCompletionOnTheJobsRecord", testAHeldReleaseOwesItsCompletionOnTheJobsRecord},
 		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
 		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
 		{"ALaunchNeedsATurnID", testALaunchNeedsATurnID},
@@ -84,6 +99,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AJobItsCapEndedIsRecordedOnceForItsOwnJob", testAJobItsCapEndedIsRecordedOnceForItsOwnJob},
 		{"AJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands", testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands},
 		{"AJobsHarnessEndRidesEveryWriteOfItsRecord", testAJobsHarnessEndRidesEveryWriteOfItsRecord},
+		{"AReleaseRecordsTheHarnessEndByTheRecordsRule", testAReleaseRecordsTheHarnessEndByTheRecordsRule},
 		{"AJobsMeasureIsItsOwnOrCarriedAlongItsCopy", testAJobsMeasureIsItsOwnOrCarriedAlongItsCopy},
 		{"AMeasureLandsWhereTheEndIsAlreadyRecorded", testAMeasureLandsWhereTheEndIsAlreadyRecorded},
 		{"AJobsCountIsItsOwnReadsAndNeverCarried", testAJobsCountIsItsOwnReadsAndNeverCarried},
@@ -585,6 +601,33 @@ func testAJobsHarnessEndRidesEveryWriteOfItsRecord(t *testing.T, s sandbox.Pendi
 	mustBeginLaunch(t, s, run(turn))
 	if got := mustGet(t, s, turn).Launch.HarnessEnd; got != "" {
 		t.Errorf("the next launch's job reads %q, the job before's end, want nothing said", got)
+	}
+}
+
+// A RELEASE RECORDS HOW THE JOB'S HARNESS ENDED BY THE RECORD'S OWN RULE, in the
+// write that returns the row to running ([sandbox.Release.HarnessEnd]): an end
+// over nothing is recorded, a cut-off end over an own run too, and an own run
+// over a recorded cut-off leaves the cut-off standing.
+//
+// Mutation: write the release's end over the record's whenever it carries one,
+// and the cut-off is lost.
+func testAReleaseRecordsTheHarnessEndByTheRecordsRule(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-released-end"
+	mustLaunched(t, s, run(turn))
+	for _, step := range []struct{ carries, want sandbox.HarnessEnd }{
+		{sandbox.HarnessEndOwnRun, sandbox.HarnessEndOwnRun},
+		{sandbox.HarnessEndCutOff, sandbox.HarnessEndCutOff},
+		{sandbox.HarnessEndOwnRun, sandbox.HarnessEndCutOff},
+	} {
+		release := releaseOf(mustClaim(t, s, turn))
+		release.HarnessEnd = step.carries
+		if released, err := s.ReleaseClaim(ctx, turn, release); err != nil || !released {
+			t.Fatalf("a release carrying %q = %v, %v", step.carries, released, err)
+		}
+		if got := mustGet(t, s, turn).Launch.HarnessEnd; got != step.want {
+			t.Fatalf("a release carrying %q left the record saying %q, want %q", step.carries, got, step.want)
+		}
 	}
 }
 
@@ -2672,6 +2715,70 @@ func testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts(t *testing.T, s sand
 		t.Fatalf("held release: released=%v err=%v", released, err)
 	}
 	mustClaim(t, s, "t1")
+}
+
+// A HELD RELEASE OWES ITS COMPLETION ON THE JOB'S RECORD. The hold spends the
+// completion's delivery, and a lift clears the hold, so the release that writes
+// it records the completion as owed in the same write: the hold's condition and
+// the store's instant, which a lift of the hold leaves, so a restart after the
+// lift still finds the job owed. Only where the record owes none yet, so an
+// earlier refusal's condition and instant stand; and a hold whose condition is
+// past what an owed refusal records is refused, the claim left as it was.
+func testAHeldReleaseOwesItsCompletionOnTheJobsRecord(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	until := time.Now().UTC().Add(time.Hour)
+	mustLaunched(t, s, run("t1"))
+	held := releaseOf(mustClaim(t, s, "t1"))
+	held.Hold = &sandbox.Refusal{Condition: "budget", Until: until}
+	if released, err := s.ReleaseClaim(ctx, "t1", held); err != nil || !released {
+		t.Fatalf("held release: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.RefusalOwed != "budget" || got.Launch.RefusalOwedSince.IsZero() {
+		t.Fatalf("the held job's record owes %q since %v; want the hold's condition owed, since the release",
+			got.Launch.RefusalOwed, got.Launch.RefusalOwedSince)
+	}
+	if lifted, err := s.LiftHold(ctx, "t1", "budget"); err != nil || !lifted {
+		t.Fatalf("a lift of the hold: lifted=%v err=%v", lifted, err)
+	}
+	if lifted := mustGet(t, s, "t1"); lifted.HeldFor != "" || lifted.Launch.RefusalOwed != "budget" {
+		t.Fatalf("the lifted row is held for %q and owes %q; want the hold gone and the completion still owed",
+			lifted.HeldFor, lifted.Launch.RefusalOwed)
+	}
+
+	// AN EARLIER REFUSAL STANDS.
+	first := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	launch := mustLaunched(t, s, run("t2"))
+	row := mustGet(t, s, "t2")
+	if wrote, err := s.OweRefusal(ctx, "t2", launch, sandbox.OwedRefusal{Condition: "provider", Since: first},
+		sandbox.Fence{Owner: row.Owner, Epoch: row.OwnerEpoch}); err != nil || !wrote {
+		t.Fatalf("an owed refusal on a running job = %v, %v; want it written", wrote, err)
+	}
+	again := releaseOf(mustClaim(t, s, "t2"))
+	again.Hold = &sandbox.Refusal{Condition: "budget", Until: until}
+	if released, err := s.ReleaseClaim(ctx, "t2", again); err != nil || !released {
+		t.Fatalf("held release: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t2"); got.HeldFor != "budget" || got.Launch.RefusalOwed != "provider" ||
+		!got.Launch.RefusalOwedSince.Equal(first) {
+		t.Fatalf("the held job's record, owing provider since %v before its hold, is held for %q and owes %q "+
+			"since %v; want it held and the first refusal standing", first, got.HeldFor,
+			got.Launch.RefusalOwed, got.Launch.RefusalOwedSince)
+	}
+
+	// PAST THE BOUND, refused, the claim standing.
+	mustLaunched(t, s, run("t3"))
+	long := releaseOf(mustClaim(t, s, "t3"))
+	long.Hold = &sandbox.Refusal{Condition: sandbox.Condition(strings.Repeat("c", sandbox.MaxOwedConditionBytes+1)),
+		Until: until}
+	if released, err := s.ReleaseClaim(ctx, "t3", long); err == nil || released {
+		t.Fatalf("a release holding the run for a condition past the bound = %v, %v; want it refused",
+			released, err)
+	}
+	if got := mustGet(t, s, "t3"); got.Status != sandbox.StatusResumed || got.HeldFor != "" ||
+		got.Launch.RefusalOwed != "" {
+		t.Fatalf("the refused release left the run %s, held for %q, owing %q; want the claim as it was",
+			got.Status, got.HeldFor, got.Launch.RefusalOwed)
+	}
 }
 
 func testAReleaseHandsTheClaimBackWhereItFoundIt(t *testing.T, s sandbox.PendingStore) {

@@ -183,45 +183,18 @@ func TestAnEndingWhoseNotesCouldNotBeRecordedKeepsItsRecord(t *testing.T) {
 	}
 }
 
-// EACH NOTE ENDS AS ITS RECORD KNOWS IT, in one order of precedence. The ending
-// reports what no step reported: a note a later launch's brief told again
-// after its take was marked unanswered, DELIVERED there where that job
-// started, ahead of every other end, since its harness was handed it; a note a
-// job's harness was handed and never confirmed, UNCONFIRMED, ahead of the two
-// below, since its session may hold it; one a take whose answer was lost
-// recorded read and no later launch told, MISSED; and a note still waiting, or
-// one the brief of the record's job was the first to read while that job
-// never started, EXPIRED: its record never took its command. A note that
-// brief told again is MISSED all the same, at the take whose read the brief
-// kept: the brief handed nothing over, and the take's reader never had it.
-// Each is reported at the step the record names, a missed note at its take
-// and a note told again at the brief, and an unconfirmed or expired one at
-// none the record keeps. A read by a job that started, a read by an earlier
-// job, a take inside the job, a review's round and a confirmation are reads,
-// and their steps reported them; and a job that started still started once
-// its box, and the row's command with it, is forgotten.
+// EACH NOTE ENDS AS ITS RECORD KNOWS IT, in one order of precedence
+// ([PendingRun.EndedNotes]): delivered, unconfirmed, missed, expired, each at
+// the step the record names; reads that handed a note over report nothing, and
+// a started job stays started once its box and command are forgotten. A note a
+// hook was served is reported at that serve, or missed at its last where every
+// serve was lost, one absent; an item for one job is reported as nothing. See
+// the package doc, "A turn's notes".
 //
-// A NOTE A HOOK WAS SERVED is reported at that serve: UNCONFIRMED at its live
-// serve, the step the hook answered, whether or not a read that handed nothing
-// over read it after (a brief whose job never started, or a take marked
-// unanswered, the review's, told again by such a brief or not); at the job a
-// later poll served it to, where one did, the hook's serve no longer live; and
-// MISSED at the last of its serves where every one was lost, a cancel or its
-// session proving it never took it, and no step read it since, a brief whose
-// job never started included. And an ITEM FOR ONE JOB is reported as nothing
-// at all, waiting, served or read: what becomes of a job's item is its
-// filer's to say.
-//
-// Mutation: count a brief read unread whatever the job's record, read the
-// witness off the row's command, leave the never-started job's out, report a
-// marked read as nothing or as expired, a served note as expired, a note told
-// again as nothing, as missed or as delivered where its job started, as
-// expired or as delivered where its job never started, report it at the brief
-// rather than the take it kept, or put the served or the marked ahead of a
-// note told again, and this goes red. And: report a hook's live serve at no
-// step, or at none once a take marked unanswered read the note, take a serve
-// as live once a later poll moved Served on, report a note whose serves were
-// all lost as expired, or report an item, and this goes red.
+// Mutation: misjudge a brief read, a marked read, a served note, a note told
+// again or its step; read the witness off the row's command; misorder the
+// precedence; misreport a hook serve, a later poll, all serves lost, or an
+// item. Each turns this red.
 func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 	t.Parallel()
 	read := func(launch, boundary string) *NoteRead {
@@ -260,7 +233,7 @@ func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 		{ID: "handed-retold", Served: "job-1", Read: retold("job-2", "job-1")},
 		{ID: "hook-live", Served: "job-1", Place: 7, Serves: serve("job-1", "")},
 		{ID: "hook-polled-later", Served: "job-2", Place: 7, Serves: serve("job-1", "")},
-		{ID: "hook-lost", Place: 7, Serves: serve("job-1", ServeCancelled)},
+		{ID: "hook-lost", Place: 7, Serves: serve("job-1", ServeAbsent)},
 		{ID: "hook-live-briefed", Served: "job-1", Place: 7, Serves: serve("job-1", ""),
 			Read: read("job-2", "brief")},
 		{ID: "hook-lost-briefed", Place: 7, Serves: serve("job-1", ServeAbsent), Read: read("job-2", "brief")},
@@ -366,11 +339,66 @@ func TestEachNoteEndsAsItsRecordKnowsIt(t *testing.T) {
 			missedAt := (n.Read != nil && n.Read.Unanswered) || (n.Serve != nil && n.Serve.Lost != "")
 			if !n.Outcome.Valid() || (n.Outcome == types.SteerDelivered && (n.Read == nil || n.Read.Retold == nil)) ||
 				(n.Outcome == types.SteerMissed && !missedAt) ||
-				(n.Outcome == types.SteerUnconfirmed && n.Serve != nil && n.Serve.Lost != "") || n.Note.For != "" {
+				(n.Outcome == types.SteerUnconfirmed && n.Serve != nil && !n.Serve.MayHold()) || n.Note.For != "" {
 				t.Errorf("note %s ends %q at %+v (serve %+v), which an ending never reports of it", n.Note.ID,
 					n.Outcome, n.Read, n.Serve)
 			}
 		}
+	}
+}
+
+// A NOTE WHOSE EVERY LOST SERVE ITS SESSION MAY HOLD ENDS UNCONFIRMED AT THE
+// LAST OF THEM, NEVER MISSED. A call its harness gave up may have had its
+// answer outrun the cancel ([ServeCancelled]), and a loss this build does not
+// know may hold the note too ([HookServed.MayHold]): so the note is unconfirmed
+// at that serve, whatever take marked unanswered read it since. One serve its
+// session proves absent among them ends it missed, at the last serve.
+//
+// Mutation (notes.go, endOf): drop the `lost != nil && mayHold` arm, or move it
+// below `read != nil`; or have lostServe keep mayHold true past an absent
+// serve. A row goes red.
+func TestANoteWhoseEveryLostServeItsSessionMayHoldEndsUnconfirmed(t *testing.T) {
+	t.Parallel()
+	served := func(take string, lost ServeLoss) HookServed {
+		return HookServed{Take: take, Launch: "job-1", Boundary: "tool_batch", Iteration: 3, Lost: lost}
+	}
+	note := func(read *NoteRead, serves ...HookServed) RunNote {
+		return RunNote{ID: "n-1", Place: 7, Serves: serves, Read: read}
+	}
+	marked := &NoteRead{Phase: "review", Round: 1, Boundary: "round", Unanswered: true}
+	for name, tc := range map[string]struct {
+		note RunNote
+		want string
+	}{
+		"one serve, cancelled":  {note(nil, served("t-1", ServeCancelled)), "unconfirmed@t-1"},
+		"two serves, cancelled": {note(nil, served("t-1", ServeCancelled), served("t-2", ServeCancelled)), "unconfirmed@t-2"},
+		"a cancelled serve, then a review's take marked unanswered": {note(marked, served("t-1", ServeCancelled)),
+			"unconfirmed@t-1"},
+		"a serve lost to a loss this build does not know": {note(nil, served("t-1", ServeLoss("newer"))),
+			"unconfirmed@t-1"},
+		"a cancelled serve, then one its session proves absent": {
+			note(nil, served("t-1", ServeCancelled), served("t-2", ServeAbsent)), "missed@t-2"},
+		"one serve its session proves absent": {note(nil, served("t-1", ServeAbsent)), "missed@t-1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			run := PendingRun{LaunchID: "job-1", Launch: LaunchRecord{Started: true},
+				Steer: RunSteer{Notes: []RunNote{tc.note}}}
+			ends := run.EndedNotes()
+			if len(ends) != 1 {
+				t.Fatalf("the ending reports %d notes, want the one", len(ends))
+			}
+			got := string(ends[0].Outcome) + "@"
+			switch {
+			case ends[0].Read != nil:
+				got += "read:" + ends[0].Read.Boundary
+			case ends[0].Serve != nil:
+				got += ends[0].Serve.Take
+			}
+			if got != tc.want {
+				t.Errorf("the note ends %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
 

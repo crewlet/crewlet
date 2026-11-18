@@ -2357,7 +2357,11 @@ func (s phaseSteer) Drain(round int) []toolloop.SteerNote {
 		read := steer.Read{Note: n, Reading: at}
 		s.r.carrySteer(read)
 		emit.steered(s.ctx, read)
-		out = append(out, toolloop.SteerNote{ID: n.ID, Message: prompts.SteerMessage(n.By, n.Text)})
+		message := prompts.SteerMessage(n.By, n.Text)
+		if n.SentBefore {
+			message = prompts.SteerMessageSentBefore(n.By, n.Text)
+		}
+		out = append(out, toolloop.SteerNote{ID: n.ID, Message: message})
 	}
 	return out
 }

@@ -84,7 +84,7 @@ The acquire hook (`node.Node.OnAcquire`, preparing the seat through `Engine.prep
 
 A hook that ignores its context is not shortened by a cut, but nothing waits for it either, and what it returns is discarded.
 
-**Establishing is an edge, and it is reported.** The seat admits no turn while its acquire hook runs, and something the hook starts can be refused for exactly that reason: the sandbox recovery retries the resume of an answer the seat's last holder recorded and never resumed with, and that retry is told the seat is not yet established. Nothing used to say when that lifted — an establishment is not a renew's admission edge — so the retry slept until the clock said a heartbeat had passed, 15 s at the default TTL. The host now reports the moment the hook returns and the seat starts admitting turns (`seat.Hooks.OnEstablished`), the node passes it on together with the renew that proves ownership again after a store blip (`node.Config.SeatAdmitted`), and the engine re-checks the answers waiting on ownership at once.
+**Establishing is an edge, and it is reported.** The seat admits no turn while its acquire hook runs, and something the hook starts can be refused for exactly that reason: the sandbox recovery retries the resume of an answer the seat's last holder recorded and never resumed with, and that retry is told the seat is not yet established. Nothing used to say when that lifted — an establishment is not a renew's admission edge — so the retry slept until the clock said a heartbeat had passed, 15 s at the default TTL. The host now reports the moment the hook returns and the seat starts admitting turns (`seat.Hooks.OnEstablished`), the node passes it on together with the renew that proves ownership again after a store blip (`node.Config.SeatAdmitted`), and the engine re-checks the answers waiting on ownership at once. The admission is not the only gate the sandbox recovery stands behind: a completion past its turn's deadline is claimed to be ended without asking it, and an apply that prepares a seat already established recovers its runs while the seat admits turns, so every claim of the seat's detached runs on the node also meets the sandbox's own gate, which refuses it for as long as the seat's runs are being recovered there ([Durability, completion, and observability](code-sandbox.md#durability-completion-and-observability)). That is the establishing rule carried to every claim, the apply's included.
 
 **A seat a person paused is attached already held.** A pause holds the seat's inbox under a named hold, and a release drops every hold with the attachment. Every hold is taken for one attachment of the inbox, the one the node holds as the hold is asked: one asked once a release has detached the inbox is refused, so it never gates the inbox that node attaches if it takes the seat back. So the node that acquires a paused seat (placement moved it, or its holder restarted) takes the pause hold **before** it attaches the inbox: the seat's preparation takes it (`node.Config.SeatReady`), for the attachment the acquisition hands it. A hold taken after the attach would be taken after the first delivery can arrive, and the mail the pause was holding would be the first thing the new holder ran. The hold is taken and recorded as one step, under the lock every pause and resume on the node is folded under, so a resume that lands as the seat is acquired finds either no hold or the record of one to lift, never a hold it cannot see. See [Agent Runtime § Pausing a seat](agent-runtime.md#pausing-a-seat).
 
@@ -917,13 +917,21 @@ a roll, or a seat or a company that is not the node's) while a live node reads
 the version of the run's parked state: the run is resumed once a node that
 can holds the seat. Once no live node reads it, as after a rollback, it counts
 like the run's own, so a state nobody running can read holds the seat no longer
-than the give-up does. A condition only an operator clears (this node's disk
-full, read-only or failing, its open files at their limit, the fleet's nodes
-holding different keys or running different builds) is the node's too, so the
-give-up never ends a run held by one: the run and its seat wait for the
-operator, and a turn with a wall-clock cap still ends at it. What the operator
-sees is each attempt's `sandbox_resume_failed` line, at error, its `error`
-naming the condition, and for a full volume holding the node's databases the
+than the give-up does. A reply kind is no part of that version, so one this
+build does not read waits only while a live node runs another build, and
+counts once every live node runs this one. A condition only an operator clears
+(this node's disk full, read-only or failing, its open files at their limit,
+the fleet's nodes holding different keys or running different builds) is the
+node's too, so the give-up never ends a run held by one: the run and its seat
+wait for the operator, and a turn with a wall-clock cap still ends at it. What
+the operator sees is the [`executor_resume_blocked`](../reference/alarms.md)
+alarm while such a run waits, raised by every data node from the status record
+of the node holding the seat, so a seat a satellite holds is raised too (a live
+node whose record is not counted keeping its last word), naming the seat
+waiting longest, the node holding it, the condition and for how long, and
+cleared once a resume gets past it; each attempt's `sandbox_resume_failed`
+line, at error, on the node holding the seat, its `error` naming the condition;
+and for a full volume holding the node's databases the
 [`volume_low`](../reference/alarms.md) alarm besides.
 
 Two bounds worth stating plainly. The record is **per turn, in one process**:

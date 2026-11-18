@@ -830,9 +830,12 @@ sequenceDiagram
     N->>C: the launch writes the record: the seat anchor, the brief's notes read, the box's waiting
     P->>C: steer_turn{turn_id, note} — filed sealed, by the asking node
     C-->>P: accepted → outcome "pending", reads "next_step"
-    B->>C: the executor's harness takes the note between its steps (Claude Code after a tool batch or at its finish, OpenCode at its next step)
-    C-->>B: recorded read by the launch
-    Note over R: the launch is collected, and the turn resumes
+    B->>C: the bridge serves the note to the executor's harness between its steps (Claude Code after a tool batch or at its finish, OpenCode at its next step)
+    C-->>B: recorded served to the launch, before the answer
+    B->>C: OpenCode's plugin confirms it delivered the note: recorded read by the launch
+    Note over N: the launch is collected: its box's read finds Claude Code's hook took the note in the job's session
+    N->>C: recorded read by the launch at the serve's step, and published delivered
+    Note over R: the turn resumes
     R->>C: the review takes any note still waiting, at its first round
     R->>R: every note the turn read opens the review
 ```
@@ -860,15 +863,18 @@ sequenceDiagram
   by the run that went on in it or by a review, which is never the session's —
   and then the new ones. A session whose harness was cut off, or is not known
   to have ended its own run, is told every note the turn has read before the
-  new ones, as notes it may already show: its job's last take was recorded read
-  before its harness had it, and the session is not known to hold its job's
-  brief, which told the notes the session it continued lacked. One whose
+  new ones, as notes it may already show: the session is not known to hold
+  its job's brief, which told the notes the session it continued lacked. One whose
   harness ended its own run is told, the same way, every note from the first
-  read its record marks unanswered — a take whose answer never reached the
-  harness, below — since it lacks that note and holds the answered ones after
-  it. And a note the run's bridge served its harness — OpenCode's, below, which
-  may have delivered it with its confirmation lost — is told to a continued
-  session the same way, among the new ones as much as among the read. Such a
+  read its record marks unanswered — a review's take whose answer never
+  reached it, below — or restarted, a note its session shows a hook took only
+  before its last restart, or from the first note a hook served that no step
+  has read, since it may lack that note and holds the ones after it. And a
+  note the run's bridge served its harness — OpenCode's or a hook's, below,
+  which it may hold with nothing yet saying so — is told to a continued
+  session the same way, among the new ones as much as among the read. In a
+  box running a Claude Code release whose resume the engine has not read,
+  every note from the first one a hook's step read is told so too. Such a
   session is told again, apart and before its calls, the messages its job's
   brief opened with as well, the answer, review or turn's task that carried it
   on, which the engine keeps beside the run's record for it ([A relaunch
@@ -876,17 +882,18 @@ sequenceDiagram
   a note is never among them, each note being told by the rule above.
 - **Between the executor's own steps.** The executor's [tool bridge serves its
   notes](code-sandbox.md#notes-to-a-running-run) to its harness, and a harness
-  that takes them there reads a note after its current step; the take is
-  recorded on the record by the write that hands it over, so no two takes hand
-  a model the same note (a session that may not show the notes it read is
-  told them again when it is continued, as notes it may already show: a
-  launch's brief, above). A take whose write the store recorded while its
-  answer was lost — a hook's take answered past its five seconds — hands the
-  harness nothing and is settled: its notes are marked **unanswered**, read by
-  the record's word, so the review still reads them and no later take hands
-  them over, while no saved session counts them held. Every later launch tells
-  them again in its brief, and its write records each read by the job it
-  opens, at the marked take's own place among the turn's reads. **Claude Code** takes
+  that takes them there reads a note after its current step. Each note is
+  recorded **served** to the run's job by a write before the answer, so a note
+  its harness may hold is never one the record says nothing of, and is
+  recorded read only once that
+  is known: OpenCode's plugin confirms it, and a Claude Code hook's note once
+  the job's own session shows the hook took it, which the read of the job's
+  box finds as the job is collected, stopped or lost (a session that may not
+  show the notes it was handed is told them again when it is continued, as
+  notes it may already show: a launch's brief, above). A serve the store did
+  not answer within the hook's five seconds hands the harness nothing and is
+  removed, its notes waiting for the next step; one the harness gave up is
+  served again at the job's next step, three times at most. **Claude Code** takes
   them through hooks the run is started with: once every tool call of a batch
   the main agent made has its result (`tool_batch`) — the model reads the note
   after those results, as context the harness adds of its own: a system message after them, or on some
@@ -977,8 +984,10 @@ sequenceDiagram
   `agent_turn_steered{delivered}` with the phase, iteration and round that first
   read it, the kind of step that read it (`boundary`: `round`, `brief`,
   `tool_batch`, `finish` or `step`) and, for a read by the executor in its
-  box, its launch (`launch_id`); the phase's `steers[]` and the live call's say the same. A
-  note a take recorded read while its answer was lost (above) has no
+  box, its launch (`launch_id`); the phase's `steers[]` and the live call's say the same.
+  A note a Claude Code hook served is recorded `delivered` at the hook's step
+  once the job's session shows the hook took it, by the node that read the
+  job's box. A note a review's take recorded read while its answer was lost has no
   `delivered` record of that take, and the execute phase's `steers[]` does not
   list it there: its harness was never handed it, and the review reads it
   carried, as it reads every note the turn has read, which records nothing
@@ -989,11 +998,15 @@ sequenceDiagram
   deleted, under an id derived from the ending, so a retried ending records it
   once: `delivered` with `retold` where a later launch's brief told a note a
   take had never handed over and that launch's job started, at that brief;
-  `unconfirmed` where the run's harness was handed it and never confirmed it
-  (its session may hold it); `missed` where a take whose answer was lost
-  recorded it read and no later launch whose job started told it, at that
-  take's step, a launch that told it again and failed before its job started
-  among them; and `expired` where it still waits or was read first into the
+  `unconfirmed` where the run's harness was handed it and never confirmed it,
+  OpenCode's plugin or a hook's job's session (its session may hold it);
+  `missed` where a take whose answer was lost recorded it read and no later
+  launch whose job started told it, at that take's step, a launch that told it
+  again and failed before its job started among them, or where every serve of
+  it to a job's hooks was lost and one of those serves' sessions proves it
+  absent, at the last of them; `unconfirmed` too, at the last of them, where
+  every lost serve was one its harness gave up, since the answer can outrun
+  the cancel; and `expired` where it still waits or was read first into the
   brief of a job that never started. A park is never an ending: a question can wait
   days, and the segment that resumes reads what waited. A note is not carried
   to a later turn: it is about the work in flight.

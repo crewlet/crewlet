@@ -166,12 +166,12 @@ hours of each other:
   and any other node reads it as still being kept until its life and two
   hours have passed by its own clock, about three hours and twelve minutes; a
   read standing by beside it is read as standing until its window and two
-  hours have passed, about four hours and ten and a half minutes. Neither
-  wait holds that long on that reading alone: a turn's end holds each capture
-  for its life, and each standby for its window and its takeover's life, from
-  the moment it first sees it, on its own clock. A reader whose clock runs
-  further ahead of the taker's than the two hours can read a capture still
-  being kept as abandoned, or a read still standing by as gone.
+  hours have passed, about four hours and thirty-seven and a half minutes.
+  Neither wait holds that long on that reading alone: a turn's end holds each
+  capture for its life, and each standby for its window and its takeover's
+  life, from the moment it first sees it, on its own clock. A reader whose
+  clock runs further ahead of the taker's than the two hours can read a
+  capture still being kept as abandoned, or a read still standing by as gone.
 - A capture's record still to be answered names an object whose key the
   spooling node's clock minted, and the executor log refuses it once it is
   twelve hours old by the clock of the node deciding the record, so a reader
@@ -3516,7 +3516,11 @@ deliveries, and it is delivered again when the window turns over (the one
 that ends last, where several refuse) or at once when a change to the
 ceilings applies on that node — the revision that changed them. The node logs
 `seat_budget_parked` with the window and when it resets, and
-`seat_budget_park_released` when the mail flows again. A
+`seat_budget_park_released` when it lifts the hold and the mail flows again.
+A release whose line carries `held_again=true` met a park taken while it was
+in flight (a turn on another partition that found the window still spent):
+that park holds the seat again, so its inbox stays held and its mail waits
+for that park's own release. A
 turn refused part-way through is parked the same way, unless it had already
 written outside the engine, in which case it is recorded and not run again.
 See [Agent Runtime § The budget park](../concepts/agent-runtime.md#the-budget-park).

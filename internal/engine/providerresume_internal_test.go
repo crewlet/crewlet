@@ -783,29 +783,17 @@ func TestTheWaitsAStopDecidesAreTheResumesWaits(t *testing.T) {
 }
 
 // A PARK TAKEN AFTER ITS SEAT LEFT THIS NODE IS UNDONE AT ONCE. A seat's
-// release does not wait for the turn whose refusal parks the seat: a lost
-// lease detaches the inbox under a running delivery, a turn refused mid-flight
-// parks once the turn has run, and a resume runs in no delivery at all, its
-// review minutes long, so the park can land after the release has forgotten
-// the seat's parks. It outlived the seat here: a provider park's probe went on
-// calling the models and publishing the seat parked while a peer ran it, a
-// budget park's alarm fired into a seat a peer ran, and either one's hold kept
-// the inbox shut on this node. And a budget park on a launch's refusal below
-// its floor takes with it the window it recorded for that delivery here: the
-// record is the park's, and a node that holds no park of the seat keeps nothing
-// of it, the seat's next holder recording its own.
-//
-// Each park's hold names the attachment of the seat's inbox it is for, so a
-// park asked once the release has ended that attachment is refused and records
-// nothing (the case after this one). The park this case undoes is one whose
-// hold the queue took, for an attachment still current as it was asked, before
-// the release reached its re-check: staged here by handing the drained engine
-// an attachment of the seat's inbox again, which the queue takes a hold for.
+// release does not wait for the turn whose refusal parks the seat, so the park
+// can land after the release has forgotten the seat's parks, and it outlived
+// the seat here (the package doc's "A seat parked until an instant"). A budget
+// park on a launch's refusal below its floor takes its recorded window with it.
+// A park asked once the release ended its attachment is refused (the next
+// case); the park undone here is one whose hold the queue took before the
+// release's re-check, staged by handing the drained engine an attachment again.
 //
 // Mutation: drop the seat's re-check from providerPark, or from budgetPark,
 // and that park, its probe or alarm, and its hold stay on a seat this node no
-// longer holds; keep the window the budget park recorded, and it outlives the
-// park on a seat this node no longer holds.
+// longer holds; keep the budget park's window, and it outlives the park.
 func TestAParkTakenAfterItsSeatLeftIsUndone(t *testing.T) {
 	t.Parallel()
 	// drained is a rig's engine once its drain has handed every seat back,

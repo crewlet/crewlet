@@ -463,7 +463,7 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
-	if err := coordinator.RecoverSeat(ctx, "swe", "node-a", 1, fixtureAttachment(t, q, "swe")); err != nil {
+	if err := coordinator.RecoverSeat(ctx, "swe", "node-a", 1, fixtureAttachment(t, q, "swe"), nil); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 

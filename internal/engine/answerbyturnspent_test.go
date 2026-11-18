@@ -279,7 +279,7 @@ func TestAnAnswerByTurnRevivedAndResumedIsNotAnnouncedAgain(t *testing.T) {
 
 	resumer := &takingResumer{}
 	next := w.holder(t, sandbox.Fence{Owner: "node-y", Epoch: 2}, resumer)
-	if err := next.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2, noInbox); err != nil {
+	if err := next.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2, noInbox, nil); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	next.retries.fire()
@@ -304,7 +304,7 @@ func TestAnAnswerByTurnATurnTookIsNotAnnouncedGone(t *testing.T) {
 	old.coordinator.Stop()
 
 	next := w.holder(t, sandbox.Fence{Owner: "node-y", Epoch: 2}, &takingResumer{})
-	if err := next.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2, noInbox); err != nil {
+	if err := next.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2, noInbox, nil); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	if _, found, err := w.store.Get(t.Context(), "t1"); err != nil || found {
@@ -402,7 +402,7 @@ func TestAnAnswerRefusedForTheSeatSurvivesToItsHolder(t *testing.T) {
 
 	resumer := &takingResumer{}
 	holder := w.holder(t, sandbox.Fence{Owner: "node-y", Epoch: 2}, resumer)
-	if err := holder.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2, noInbox); err != nil {
+	if err := holder.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2, noInbox, nil); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	holder.deliver(t, given)
@@ -429,7 +429,7 @@ func TestARefusalOnTheStoresWordAloneIsNotALostSeat(t *testing.T) {
 	run := w.parked(t, older)
 	resumer := &takingResumer{}
 	newer := w.holder(t, sandbox.Fence{Owner: "node-y", Epoch: 2}, resumer)
-	if err := newer.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2, noInbox); err != nil {
+	if err := newer.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2, noInbox, nil); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 
@@ -497,7 +497,7 @@ func TestACompletionRefusedForTheSeatSurvivesToItsHolder(t *testing.T) {
 
 	resumer := &takingResumer{}
 	holder := w.holder(t, sandbox.Fence{Owner: "node-y", Epoch: 2}, resumer)
-	if err := holder.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2, noInbox); err != nil {
+	if err := holder.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2, noInbox, nil); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	holder.deliver(t, completion)

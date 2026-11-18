@@ -10,73 +10,14 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// STOPPING A SEAT'S RUNNING WORK, when a person asks for it.
-//
-// A pause with `stop_running` is a person saying the seat's work in flight must
-// not go on. The turn the seat is on hears it at its next round, through the
-// turn's own fence; a run that turn launched has no rounds the engine sees — it
-// is its harness's own process in a box, minutes or hours long — so the
-// fence alone let it run to its end, and only the turn that came back to
-// collect it was stopped. [Coordinator.StopSeat] ends it instead, at once.
-//
-// # An ending like every other
-//
-// A stop is decided on the run's row through the one protocol every ending
-// takes ([Coordinator.endRecord]): DECIDED first, under the seat's lease and
-// only while the run is still launching or running the job it was read on, and
-// then finished from the row by whoever reads it next — this node, or the
-// seat's next holder after a crash. What makes it a stop rather than a loss is
-// recorded in the deciding write ([PendingRun.Stop]): who stopped it, which is
-// what its announcement ([types.ExecutorStopped]) and the stopped turn's
-// record name.
-//
-// Finishing it is the ordinary ending's steps with two added for the stop
-// (see [Coordinator.finishEnding]): before the box goes, the run's tool-bridge
-// session is closed, its job ENDED — its script asked to stop its harness and
-// pack its session as its own exit does, and what is left of the job killed
-// past the wait ([Coordinator.endJob]) — and what the run had spent read off
-// its box, charged to the token counters and published as its launch's record
-// ([Coordinator.collectStopped]) — a run stopped halfway still spent what it
-// spent, and nothing can read its box once it is reclaimed; and after the
-// announcement, the turn parked on the run is closed on the record as stopped
-// ([CoordinatorOptions.CloseStopped]).
-//
-// # Off the frame that decided it
-//
-// Ending a job is waiting for it — seconds for a harness to go and its session
-// to be packed, at most [JobEndBudget] — so the frame that decides a stop — a
-// pause watch, a seat's acquisition — closes the run's session and goes on,
-// and the ending's own retry, armed at once, makes the read: for every job that
-// started in a box, on this node's host or another's, and whatever
-// `conversation_session.enabled` says, which governs what is kept of a
-// session and not how a stop ends a job.
-//
-// # A box on another node's host
-//
-// A `direct` or `container` box is read on its own host ([BoxReader]), and that
-// node may be draining or restarting while its seat has moved here. This
-// node's retry of the kept ending asks the host, at once and then on the
-// hand-back's spacing while the host is silent, and the host ends the job and
-// reads it ([Coordinator.ReadHostedBox]), licensed by the stop the run's row
-// records and nothing else; the rest is finished here ([Coordinator.endRun]).
-// A silent host is no verdict about the box, and its spend is not written off
-// for it: only a box found gone, a host silent for as long as the fleet waits
-// before it takes a launch node for gone — the box timeout, by the retrying
-// node's own clock, since it first asked the host — or a stop that old and two
-// hours more by that clock, is ended with nothing read
-// ([Coordinator.readStopped]). A host whose coordination store did not answer
-// its read of the run's row ([ErrStoreSilent]) is waited for the same way where
-// this node's own store answers, since only that host can read the box; where
-// this node's store is silent too, nothing the ending writes would land, and
-// the stop is kept for as long as that lasts.
-//
-// # Not the seat fence
-//
-// The seat fence is about OWNERSHIP, and it deliberately leaves a running run
-// alone: a seat that moves to another node on an ordinary rebalance must not
-// kill an hour of an executor's work (see seat.Host.Fence). A stop is a
-// person's decision about the work, not about where it runs, so it is its own
-// call, made by the node that holds the seat when the pause reaches it.
+// Stopping a seat's running work when a person asks ([Coordinator.StopSeat]):
+// the turn's fence alone would let a run in a box go to its end. A stop is an
+// ending like every other ([Coordinator.endRecord]), decided under the seat's
+// lease and recorded ([PendingRun.Stop]), with the job ended and its spend read
+// and charged before the box goes ([Coordinator.collectStopped]). The read is
+// off the deciding frame, on the ending's retry; a box on another node's host
+// is asked there ([Coordinator.readStopped]). Not the seat fence, which is
+// about ownership. See the package doc, "Stopping a seat's running work".
 
 // StopSeat ENDS every run of a seat that is launching or running ([Stoppable]),
 // because a person paused the seat and asked for its running work to stop. by
@@ -206,32 +147,22 @@ func (c *Coordinator) stopRun(ctx context.Context, handle string, fence Fence, b
 	return false
 }
 
-// endCollectedWait ends whatever the resume of run's collected job waits on, for
-// a person's stop: a hold on its row ([PendingRun.HeldFor]) is lifted, so the
-// waiter announces the job again on its schedule, and a completion of it this
-// node kept for a condition, held here or refused at the gate
-// ([Coordinator.keepRefused]), is re-fired at once. Reports whether this node
-// was holding the job itself.
-//
-// WHY A STOP ENDS THE WAIT. The stop leaves a collected job to its turn, whose
-// fence closes it as stopped at its first round, before any model call or
-// launch. But that round comes only when the resume does, and a resume held for
-// a model's limit waits up to the hour the entry is sat out, one held for the
-// budget until its window turns over: the turn stayed open, its job neither
-// resumed nor ended, for as long as the condition lasted after a person had
-// asked for the work to stop. A resume of a seat a person stopped is refused
-// nothing by those conditions (the engine's gate admits it), since the turn
-// it re-enters ends before it could meet either.
-//
-// A KEEP FOR ANOTHER JOB of the same turn is dropped, as an announcement drops
-// it ([Coordinator.stillRefused]): the stop decides this job.
+// endCollectedWait ends whatever the resume of run's collected job waits on,
+// for a person's stop: a hold on its row ([PendingRun.HeldFor]) is lifted and a
+// completion this node kept for it ([Coordinator.keepRefused],
+// [Coordinator.keepHeldOnRow]) re-fired at once, so the turn's fence closes it
+// as stopped. It reports whether this node was holding the job itself. A keep
+// for another job of the turn is dropped; a hold the store did not lift keeps
+// its keep. See the package doc, "Stopping a seat's running work".
 func (c *Coordinator) endCollectedWait(ctx context.Context, run PendingRun) bool {
+	unlifted := false
 	if run.HeldFor != "" {
 		liftCtx, liftDone := c.endingCall(ctx)
 		lifted, err := c.pending.LiftHold(liftCtx, run.TurnID, run.HeldFor)
 		liftDone()
 		switch {
 		case err != nil:
+			unlifted = true
 			log.WarnContext(ctx, "sandbox_stop_hold_unlifted", "turn_id", run.TurnID,
 				"agent", run.AgentHandle, "condition", string(run.HeldFor), "error", err.Error(),
 				"detail", "the stopped seat's collected job stays held until its condition "+
@@ -244,7 +175,7 @@ func (c *Coordinator) endCollectedWait(ctx context.Context, run PendingRun) bool
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	kept, ok := c.refused[run.TurnID]
-	if !ok {
+	if !ok || (unlifted && !kept.heldOnRow.IsZero() && kept.ev.LaunchID == run.LaunchID) {
 		return false
 	}
 	c.dropKeptLocked(run.TurnID)
@@ -255,43 +186,15 @@ func (c *Coordinator) endCollectedWait(ctx context.Context, run PendingRun) bool
 	return !kept.heldUntil.IsZero()
 }
 
-// collectStopped is the stop's own step of its ending: what the run had spent
-// read off its box, charged and published as its launch's record, and all of
-// it recorded on the row in one write ([PendingStore.CollectStop]). Returns the
-// row as that step left it, or why the box could not be read YET — which keeps
-// the ending for this node's retry.
-//
-// THE SESSION IS CLOSED BEFORE IT, by the ending ([Coordinator.finishEnding]).
-// The run's harness is still working until the read ends it, and every tool
-// call it makes through the bridge acts as the seat: closed first, the stop
-// takes effect on the seat's surface at once — no call the box makes after it
-// is run, so no post, write or submission is asked for after it — rather than
-// after a read of the box that ends the job and can take as long as the box's
-// host takes to answer. A CALL ADMITTED BEFORE IT RUNS ON to its own end: the
-// close answers it that the run has ended and the call is still running, and
-// waits for none (internal/api/mcpbridge, "An opening ends without waiting for
-// its calls"), so what such a call does lands after this read, and is in no
-// collection of the stop's. Closing a closed session is nothing, which is what
-// the reclaim that follows does again.
-//
-// ONCE PER ENDING, for the reason a release records its charge: the collection
-// is recorded with the charge and the publish it made, so an attempt after a
-// crash finds it done.
-//
-// A STOP ENDED WITH NOTHING READ IS SAID SO ONCE THAT WRITE LANDS
-// (`sandbox_stop_unread`), and never before it. The write is a step of this
-// node's store, which can fall silent after the attempt's own read of the run's
-// row answered, and the stop is then kept for this node's retry, which reads
-// the box again and charges whatever that read finds. Said before the write,
-// the log had a stop still kept ended with its spend written off, whatever its
-// read had come to, and a stop kept on a silence both nodes share said ended
-// all the same. A write whose answer was lost though it landed is found
-// recorded by the next attempt, which goes on past it and says nothing of it:
-// no attempt can tell its own landed write from another's.
-//
-// rowRead is whether this attempt at the ending read the run's row off this
-// node's own store ([Coordinator.finishEnding]), which the read judges a silent
-// store by ([Coordinator.readStopped]).
+// collectStopped is the stop's own step of its ending: the run's spend read off
+// its box, charged and published, recorded in one write
+// ([PendingStore.CollectStop]), once per ending. It returns the row as left, or
+// why the box cannot be read yet, keeping the ending. The session is closed
+// before it ([Coordinator.finishEnding]). A stop ended with nothing read is
+// said (`sandbox_stop_unread`) only once that write lands. rowRead is whether
+// this attempt read the run's row off this node's store
+// ([Coordinator.readStopped]). See the package doc, "Stopping a seat's running
+// work".
 func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun, rowRead bool) (PendingRun, error) {
 	collection := StopCollection{Ending: run.Ending.ID}
 	result, read, unread, err := c.readStopped(ctx, run, rowRead)
@@ -313,8 +216,8 @@ func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun, rowRea
 			run.TurnID, err)
 	}
 	if won {
-		if unread != nil {
-			log.WarnContext(ctx, "sandbox_stop_unread", unread.attrs(run, c.now())...)
+		if unread.err != nil {
+			c.sayStopUnread(ctx, run, unread)
 		}
 		return written, nil
 	}
@@ -336,115 +239,121 @@ func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun, rowRea
 	return current, nil
 }
 
-// readStopped reads what a stopped run's job had done by now off its box (the
-// job ended first, [Coordinator.readBox]), reporting whether there was anything
-// to read, or why not yet; unread is why nothing could be read, said by
-// [Coordinator.collectStopped] once its record lands, never here. NOTHING TO
-// READ where nothing can be: no job started, a box gone, or this node's own box
-// failing, reclaimed next. NOT YET where the host gave no account
-// ([ErrBoxHostSilent]) or its store alone was silent ([ErrStoreSilent], rowRead
-// saying this node's own read answered), until the host is silent the box
-// timeout by this node's clock ([Coordinator.hostSilence]) or the stop is that
-// and twice the skew old; a silence this node shares keeps it whatever. The
-// result is the run's own, never a success or a question ([stoppedResult]). The
-// package doc's "A stopped run's read of its box" has the argument.
-func (c *Coordinator) readStopped(ctx context.Context, run PendingRun, rowRead bool) (result Result, read bool,
-	unread *stopUnread, err error) {
+// sayStopUnread logs that stopped run's spend could not be read off its box
+// and none of it is charged (`sandbox_stop_unread`), once the stop's record of
+// that has landed ([Coordinator.collectStopped]): why, and where its host was
+// given up, what gave it up by this node's clock, the silence this node
+// measured, if any, and the stop's age.
+func (c *Coordinator) sayStopUnread(ctx context.Context, run PendingRun, unread stopUnread) {
+	attrs := []any{"turn_id", run.TurnID, "sandbox_id", run.SandboxID,
+		"gone", errors.Is(unread.err, ErrBoxGone), "host_silent", errors.Is(unread.err, ErrBoxHostSilent),
+		"store_silent", errors.Is(unread.err, ErrStoreSilent), "error", unread.err.Error()}
+	if unread.givenUp {
+		now := c.now()
+		if !unread.since.IsZero() {
+			attrs = append(attrs, "silent_s", now.Sub(unread.since).Seconds())
+		}
+		if run.Ending != nil {
+			attrs = append(attrs, "stop_age_s", now.Sub(run.Ending.At).Seconds())
+		}
+	}
+	attrs = append(attrs, "detail", "what the stopped run had spent could not be read off its box, "+
+		"so none of it is charged; the run is ended all the same")
+	log.WarnContext(ctx, "sandbox_stop_unread", attrs...)
+}
+
+// readStopped reads what a stopped run's job did off its box, the job ended
+// first ([Coordinator.readBox]), reporting whether there was anything to read
+// or why not yet; [stopUnread] says why nothing was read. Nothing to read for a
+// job never started, a gone box, or a failed local read. Not yet for a silent
+// host ([ErrBoxHostSilent]) until the box timeout of silence by this node's
+// clock ([Coordinator.hostSilence]) or a stop that timeout plus twice
+// [objstore.AssumedClockSkew] old; nor for a store's silence on the row's read
+// or its served notes' verdict ([ErrStoreSilent]), bounded where the host's
+// alone (another node's box, rowRead) and kept where this node's, a box on its
+// own host above all. See the package doc, "Stopping a seat's running work".
+func (c *Coordinator) readStopped(ctx context.Context, run PendingRun, rowRead bool) (Result, bool, stopUnread,
+	error) {
 	if run.SandboxID == "" || run.CommandID == "" {
-		return Result{}, false, nil, nil
+		return Result{}, false, stopUnread{}, nil
 	}
 	// READ WHERE THE BOX IS — here, or on the node whose host it is on
 	// ([Coordinator.boxResult]) — and fitted here, under the turn it closes.
 	// Its start is what a silence it finds is counted from: the whole ask
 	// went unanswered, and a stop's ask can outlast the box timeout alone.
 	asked := c.now()
-	result, _, err = c.boxResult(ctx, run, BoxReadStop)
+	result, _, err := c.boxResult(ctx, run, BoxReadStop)
 	silent := errors.Is(err, ErrBoxHostSilent)
 	unsettled := errors.Is(err, ErrStoreSilent)
-	var since time.Time
 	switch {
 	case err == nil:
-		return stoppedResult(c.fitText(ctx, run, result)), true, nil, nil
-	case unsettled && !rowRead:
+		return stoppedResult(c.fitText(ctx, run, result)), true, stopUnread{}, nil
+	case unsettled && (!rowRead || c.hosts(run)):
 		log.InfoContext(ctx, "sandbox_stop_read_waits", "turn_id", run.TurnID,
 			"sandbox_id", run.SandboxID, "node", run.LaunchNode, "waits_for", "store", "shared", true,
-			"error", err.Error(), "detail", "the coordination store did not answer the host's read of the "+
-				"stopped run's row, nor this node's own; the stop is kept, with its session closed, and its "+
-				"box asked again until the store answers, whatever the box timeout says")
-		return Result{}, false, nil, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
+			"error", err.Error(), "detail", "the coordination store did not answer this node: its read of "+
+				"the stopped run's row, or of the verdict on the served notes of a box on its own host; "+
+				"the stop is kept, with its session closed, "+
+				"and its box asked again until the store answers, whatever the box timeout says")
+		return Result{}, false, stopUnread{}, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
 			run.TurnID, err)
-	case unsettled:
-		since = c.hostSilence(run, asked, err)
+	case unsettled || silent:
+		since := c.hostSilence(run, asked, err)
 		if !c.hostGivenUp(run, since) {
-			log.InfoContext(ctx, "sandbox_stop_read_waits", "turn_id", run.TurnID,
-				"sandbox_id", run.SandboxID, "node", run.LaunchNode, "waits_for", "store", "shared", false,
-				"error", err.Error(), "detail", "the coordination store did not answer the host's read of "+
-					"the stopped run's row, which licenses its read; the stop is kept, with its session "+
-					"closed, and its box asked again until the store answers the host, the host has been "+
-					"kept from reading it for the box timeout by this node's own clock since this node "+
-					"first asked it, or the stop is the box timeout and two hours old by this node's clock")
-			return Result{}, false, nil, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
+			waitsFor, detail := "host", "the node whose host the stopped run's box is on gave no account of it; "+
+				"the stop is kept, with its session closed, and its box asked again until that "+
+				"node answers, has been silent for the box timeout by this node's own clock "+
+				"since this node first asked it, or the stop is the box timeout and two hours "+
+				"old by this node's clock"
+			if unsettled {
+				waitsFor, detail = "store", "the coordination store did not answer the host's read of the "+
+					"stopped run's row, which licenses its read, or the verdict on its served notes; "+
+					"the stop is kept, with its session "+
+					"closed, and its box asked again until the store answers the host, the host has gone "+
+					"without it for the box timeout by this node's own clock since this node first asked "+
+					"it, or the stop is the box timeout and two hours old by this node's clock"
+			}
+			attrs := []any{"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "node", run.LaunchNode,
+				"waits_for", waitsFor}
+			if unsettled {
+				attrs = append(attrs, "shared", false)
+			} else {
+				attrs = append(attrs, "busy", errors.Is(err, ErrBoxHostBusy),
+					"not_asked", errors.Is(err, ErrBoxNotAsked))
+			}
+			log.InfoContext(ctx, "sandbox_stop_read_waits", append(attrs, "error", err.Error(), "detail", detail)...)
+			return Result{}, false, stopUnread{}, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
 				run.TurnID, err)
 		}
-	case silent:
-		since = c.hostSilence(run, asked, err)
-		if !c.hostGivenUp(run, since) {
-			log.InfoContext(ctx, "sandbox_stop_read_waits", "turn_id", run.TurnID,
-				"sandbox_id", run.SandboxID, "node", run.LaunchNode, "waits_for", "host",
-				"busy", errors.Is(err, ErrBoxHostBusy), "not_asked", errors.Is(err, ErrBoxNotAsked),
-				"detail", "the node whose host the stopped run's box is on gave no account of it; "+
-					"the stop is kept, with its session closed, and its box asked again until that "+
-					"node answers, has been silent for the box timeout by this node's own clock "+
-					"since this node first asked it, or the stop is the box timeout and two hours "+
-					"old by this node's clock")
-			return Result{}, false, nil, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
-				run.TurnID, err)
-		}
+		// NOTHING READ, the host given up: said once the stop's record of
+		// that lands ([Coordinator.collectStopped]), with what gave it up.
+		return Result{}, false, stopUnread{err: err, givenUp: true, since: since}, nil
 	}
 	// NOTHING READ, and the stop ends with nothing charged: said once the stop's
 	// record of that lands ([Coordinator.collectStopped]), never here, before
 	// the write that can fail.
-	return Result{}, false, &stopUnread{err: err, since: since}, nil
+	return Result{}, false, stopUnread{err: err}, nil
 }
 
-// stopUnread is why a stop's read of its box came to nothing
-// ([Coordinator.readStopped]): the read's error, and since when this node had
-// heard nothing from the box's host by its own clock, where it measured that
-// ([Coordinator.hostSilence]); zero where it did not.
+// stopUnread is why a stopped run's box was asked and nothing could be read
+// off it ([Coordinator.readStopped]), for [Coordinator.collectStopped] to say
+// once the stop's record of that lands: err is the read's failure, nil where
+// the box was read or not asked; and where its host was given up (givenUp),
+// since is when this node first heard nothing from it by its own clock, zero
+// where the stop's age alone gave it up.
 type stopUnread struct {
-	err   error
-	since time.Time
-}
-
-// attrs is what the log says of u once the stop's record of it lands
-// (`sandbox_stop_unread`), as of now by this node's clock: and, where the host
-// gave no account of the box or its store kept it from reading it, what gave
-// the host up: the silence this node measured, if any, and the stop's age.
-func (u *stopUnread) attrs(run PendingRun, now time.Time) []any {
-	silent, unsettled := errors.Is(u.err, ErrBoxHostSilent), errors.Is(u.err, ErrStoreSilent)
-	attrs := []any{"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "gone", errors.Is(u.err, ErrBoxGone),
-		"host_silent", silent, "store_silent", unsettled, "error", u.err.Error()}
-	if silent || unsettled {
-		if !u.since.IsZero() {
-			attrs = append(attrs, "silent_s", now.Sub(u.since).Seconds())
-		}
-		if run.Ending != nil {
-			attrs = append(attrs, "stop_age_s", now.Sub(run.Ending.At).Seconds())
-		}
-	}
-	return append(attrs, "detail", "what the stopped run had spent could not be read off its box, so none "+
-		"of it is charged; the run is ended all the same")
+	err     error
+	givenUp bool
+	since   time.Time
 }
 
 // hostSilence is since when this node has heard nothing from the host of a
-// stopped run's box, by its own clock, given the ask started at asked came back
-// with err (no account of the box, or only the host's store silent where this
-// node's answered); zero where nothing seen counts ([Coordinator.readStopped]).
-// Kept on the stop's retry series ([answerRetry.silent]) for as long as this
-// node drives the stop: a BUSY host clears it; an ask NOT MADE neither starts
-// nor advances it; an ask that reached the broker unanswered starts it at that
-// ask's start where none is held; and with no series (a retirement, or a
-// series dropped by the seat's move) the silence is that ask's alone.
+// stopped run's box, by its own clock, given that the ask started at asked came
+// back with err: zero where nothing counts as silence
+// ([Coordinator.readStopped]). Kept on the stop's retry series
+// ([answerRetry.silent]): busy clears it, an ask not made leaves it, a silent
+// host or a host-only store silence starts it; with no series, the silence is
+// that ask's alone. See the package doc, "Stopping a seat's running work".
 func (c *Coordinator) hostSilence(run PendingRun, asked time.Time, err error) time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -474,10 +383,9 @@ func (c *Coordinator) hostSilence(run PendingRun, asked time.Time, err error) ti
 }
 
 // hostGivenUp reports whether a stopped run's host, which gave no account of
-// its box, or whose store alone kept it from reading the box, is taken for gone
-// ([Coordinator.readStopped]): silent since since for the box timeout, as the
-// fleet waits on a silent launch node before it takes it for gone, both by
-// this node's clock; or the stop the box timeout and
+// its box, is taken for gone ([Coordinator.readStopped]): silent since since
+// for the box timeout, as the fleet waits on a silent launch node before it
+// takes it for gone, both by this node's clock; or the stop the box timeout and
 // twice [objstore.AssumedClockSkew] old by this node's clock, the one reading
 // of the decision's instant — another node's clock — that never comes before
 // the stop is the box timeout old in real time, on clocks within that bound.

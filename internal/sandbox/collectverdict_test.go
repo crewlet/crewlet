@@ -55,22 +55,16 @@ func (s *steppedRead) ReadBox(ctx context.Context, run PendingRun, read BoxRead)
 	return result, ended, err
 }
 
-// A LOST JOB'S READ IS JUDGED ONCE, AT ONE READING OF THE CLOCK. A lost job's
-// round is carried on without its read only once the read is past asking again:
-// its box has not answered for the give-up window, or its host has answered for
-// the box timeout that its coordination store did not answer it. Until then the
-// claim is handed back for the read to be asked again. The carry judged the
-// failed read at its reading of the clock, and the hand-back judged it again at
-// its own, so a bound crossed between the two had the hand-back give the
-// collection up and END the lost job's run as unreachable, where the carry had
-// just decided to ask again and, the attempt after, would have carried the round
-// on. Here the clock crosses the bound between the attempt's first reading after
-// its read failed and every later one: the claim is handed back, and the next
-// attempt carries the round on without the read.
+// A LOST JOB'S READ IS JUDGED ONCE, AT ONE READING OF THE CLOCK
+// ([collectVerdict]): judged twice, a bound crossed between the carry and the
+// hand-back ends the lost job's run as unreachable just after the carry chose
+// to ask again. Here the clock crosses the bound between the attempt's first
+// reading after its read failed and every later one: the claim is handed back,
+// and the next attempt carries the round on without the read.
 //
 // Mutation: have the hand-back read the clock again rather than the carry's
-// verdict, or have the carry hand a failure on for the hand-back to judge afresh;
-// each ends the lost job's run as unreachable.
+// verdict, or have the carry hand a failure on for the hand-back to judge
+// afresh; each ends the lost job's run as unreachable.
 func TestALostJobsReadIsJudgedOnceAtOneReadingOfTheClock(t *testing.T) {
 	t.Parallel()
 

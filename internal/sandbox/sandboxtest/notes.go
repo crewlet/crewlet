@@ -69,9 +69,7 @@ var noteCases = []struct {
 	{"ACancelAndAVerdictCommute", testACancelAndAVerdictCommute},
 	{"EveryReadOfAPlacedNoteTakesItsPlace", testEveryReadOfAPlacedNoteTakesItsPlace},
 	{"AFilingCountsNoHookServedNoteAsWaiting", testAFilingCountsNoHookServedNoteAsWaiting},
-	{"AnItemIsFiledOnlyWhileItsJobIsTheRecords", testAnItemIsFiledOnlyWhileItsJobIsTheRecords},
-	{"AJobsItemsAreBoundedApartFromAPersonsNotes", testAJobsItemsAreBoundedApartFromAPersonsNotes},
-	{"ALaunchRemovesEveryItemOfTheJobBeforeIt", testALaunchRemovesEveryItemOfTheJobBeforeIt},
+	{"APersonCannotFileAnItem", testAPersonCannotFileAnItem},
 	{"ACallPastItsBoundIsRecordedAsNoCall", testACallPastItsBoundIsRecordedAsNoCall},
 	{"ASessionOrAnIDOutsideTheCharsetIsRecordedAsNoCall", testASessionOrAnIDOutsideTheCharsetIsRecordedAsNoCall},
 	{"AnIntegerIDAndAQuotedIDOfTheCharsetAreKept", testAnIntegerIDAndAQuotedIDOfTheCharsetAreKept},
@@ -94,6 +92,8 @@ var noteRawCases = []struct {
 		testAnUnansweredServeIsRemovedAndFencesItsWriteInFlight},
 	{"AVerdictIsIdempotentAndAnswersEveryHookReadOfItsJob",
 		testAVerdictIsIdempotentAndAnswersEveryHookReadOfItsJob},
+	{"AJobsItemsCountTowardNoBoundOfAPersons", testAJobsItemsCountTowardNoBoundOfAPersons},
+	{"ALaunchRemovesEveryItemOfTheJobBeforeIt", testALaunchRemovesEveryItemOfTheJobBeforeIt},
 	{"EveryWriteHandsAnItemOnlyToItsJob", testEveryWriteHandsAnItemOnlyToItsJob},
 }
 
@@ -1121,22 +1121,13 @@ func testNotesSurviveEveryWriteThatIsNotTheirs(t *testing.T, s sandbox.PendingSt
 }
 
 // A KEY A LATER BUILD ADDS INSIDE A SECTION SURVIVES EVERY WRITE THIS BUILD
-// MAKES. The record is rewritten whole by every node that touches it, so a
-// field a newer build adds to the notes section, to one note, to where a note
-// was read, to a bridged call, to the identity of a call the log dropped or to
-// the job's own record is gone the moment this build writes the record back —
-// unless every level that can grow keeps what it does not know. And the log
-// beside the record ([sandbox.BridgeLog]) is rewritten whole by every append,
-// so the same holds at its top, in each of its calls and in each identity it
-// keeps. Seeded at each of those seven levels at once, as a newer build would
-// write them, and read back off the raw record and the raw log after
-// every kind of write this build makes: a status write, a lease, a bridged
-// call, a filing, a take, a pull, a claim and its release, a park, and a
-// relaunch's reset that carries the round on — which replaces the job's record
-// whole, so the key a later build added to it goes with the job it was about.
-// And at two levels more, seeded beside them: a hook's serve of a note and
-// the call that serve answered, read back after a hook's serve and a settle of
-// one as well.
+// MAKES, at each of the nine levels of the record and its log that can grow,
+// for the reason the package doc gives ("A later build's keys"). Seeded at all
+// nine at once, as a newer build would write them, and read back off the raw
+// record and the raw log after every kind of write this build makes: a status
+// write, a lease, a bridged call, a filing, a take, a pull, a claim and its
+// release, a park, a hook's serve and a settle of one, and a relaunch's reset
+// that carries the round on, which replaces the job's record whole.
 //
 // Mutation: drop any one section's Extra from its decode or its encode, and the
 // key at that level is gone after the first write; carry the job's record's

@@ -33,7 +33,8 @@ import (
 // and its cursor means what it says; filtered after the read, sixty snoozed
 // notices among the newest fifty would open an empty inbox. ONE statement
 // whatever is asked ([inboxScanSQL]); `unread` walks nothing the person has read
-// through ([inboxScan]).
+// through ([inboxScan]). A `record` read is one seek of that notice's key
+// instead, under the same filters ([inboxRecordSQL]).
 
 // HELD TO THE REPOSITORY'S GRANT: a notice is answered only where its asker may
 // read its repository ([JudgeRead]; a person reads every one, ADR-0088). The
@@ -85,6 +86,10 @@ type InboxQuery struct {
 	// REQUIRED, one of [inbox.SnoozeScopes] — a surface resolves an absent
 	// one to [inbox.SnoozeExclude] before it reads.
 	Snoozed inbox.SnoozeScope `json:"snoozed"`
+
+	// Record narrows the read to the one notice of that [NoticeID], sought by
+	// its key; every other narrowing still applies. Empty narrows nothing.
+	Record string `json:"record,omitempty"`
 
 	// Now is the instant a snooze is judged live at, the asking node's —
 	// zero takes the serving node's clock.
@@ -339,6 +344,10 @@ type inboxScan struct {
 
 	scope  string
 	asleep string
+
+	// record and change are the one notice's key a `record` read seeks
+	// ([inboxRecordSQL]), empty for a range.
+	record, change string
 }
 
 // floor is the range's exclusive lower bound: the caller's `since`, raised
@@ -359,6 +368,11 @@ func (s inboxScan) run(ctx context.Context, tx *sql.Tx, limit int) ([]InboxNotic
 			return 1
 		}
 		return 0
+	}
+	if s.record != "" {
+		return scanInbox(ctx, tx, s.handle, inboxRecordSQL, s.record, s.change, s.handle, s.before, s.after,
+			flag(s.restricted), s.reasons, flag(s.unread), s.unreadMarks, s.readMarks, s.seenStream, s.seenAt,
+			s.scope, s.asleep, s.asleep)
 	}
 	floor := s.floor()
 	out, err := scanInbox(ctx, tx, s.handle, inboxScanSQL, s.handle, s.before, floor, flag(s.restricted),
@@ -430,6 +444,12 @@ func inboxScanOf(q ReadQuery, marks inbox.Classifier, now time.Time) (inboxScan,
 	}
 	if !in.Since.IsZero() {
 		s.after = in.Since.Packed()
+	}
+	if in.Record != "" {
+		var ok bool
+		if s.record, s.change, ok = splitNoticeID(in.Record); !ok {
+			return inboxScan{}, false, nil
+		}
 	}
 	var reasons []string
 	for _, reason := range Reasons() {
@@ -664,6 +684,19 @@ const (
 		WHERE n.record_id = CAST(j.value ->> 0 AS TEXT) AND n.change_id = CAST(j.value ->> 1 AS TEXT)
 			AND n.recipient = ? AND n.log_seq < ? AND n.log_seq > ?
 			AND (NOT ? OR n.reason IN (SELECT value FROM json_each(?)))
+			AND CASE ? WHEN 'exclude' THEN n.record_id || '/' || n.change_id NOT IN (SELECT value FROM json_each(?))
+				WHEN 'only' THEN n.record_id || '/' || n.change_id IN (SELECT value FROM json_each(?)) ELSE 1 END`
+	// inboxRecordSQL is the one notice a `record` read names, one seek of its
+	// key, held to every filter [inboxScanSQL] binds; under `unread` the whole
+	// rule is stated here, so no floor is needed.
+	inboxRecordSQL = `SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation, n.created_at, n.reason,
+			n.addressed, n.fallback_only, n.repo_id, n.change_id, n.change_ref, n.excerpt
+		FROM code_notifications AS n INDEXED BY sqlite_autoindex_code_notifications_1
+		WHERE n.record_id = ? AND n.change_id = ? AND n.recipient = ? AND n.log_seq < ? AND n.log_seq > ?
+			AND (NOT ? OR n.reason IN (SELECT value FROM json_each(?)))
+			AND (NOT ? OR n.record_id || '/' || n.change_id IN (SELECT value FROM json_each(?))
+				OR (n.record_id || '/' || n.change_id NOT IN (SELECT value FROM json_each(?))
+					AND NOT (n.log_stream = ? AND n.log_seq <= ?)))
 			AND CASE ? WHEN 'exclude' THEN n.record_id || '/' || n.change_id NOT IN (SELECT value FROM json_each(?))
 				WHEN 'only' THEN n.record_id || '/' || n.change_id IN (SELECT value FROM json_each(?)) ELSE 1 END`
 	// noticeBodiesSQL reads each change's description by its key; the change's

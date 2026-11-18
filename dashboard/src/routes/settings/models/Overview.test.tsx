@@ -222,7 +222,8 @@ test("the mark is centred, and the secret's name is set and spaced as the model 
   expect(rule(".models-pair")).not.toMatch(/gap:/);
   const cells = within(row("default")).getAllByRole("cell");
   const id = within(cells[0]!).getByText("claude-sonnet-5", { exact: false });
-  const secret = within(cells[2]!).getByText("ANTHROPIC_API_KEY");
+  const signInCell = cells.find((c) => c.dataset["label"] === "Sign-in")!;
+  const secret = within(signInCell).getByText("ANTHROPIC_API_KEY");
   expect([...secret.classList].sort()).toEqual([...id.classList].sort());
   expect(secret.parentElement?.className).toBe("models-pair");
   expect(id.parentElement?.className).toBe("models-pair");

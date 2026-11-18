@@ -18,21 +18,13 @@ import (
 // another package names its type through.
 const thisPackagePath = "github.com/crewlet/crewlet/internal/sandbox"
 
-// EVERY CONDITION THE MODULE NAMES FITS WHAT AN OWED REFUSAL RECORDS. A
-// refusal the control topic acknowledges is recorded on the job's record by
-// its condition ([PendingStore.OweRefusal]), and the record takes a condition
-// no longer than [MaxOwedConditionBytes], the share of the row the field is
-// given. One past it is refused as a validation error, which the coordinator
-// hands back as the store's silence: every delivery refused on that condition
-// would be handed back, never acknowledged nor recorded, for as long as the
-// condition held, and its warning would say the store did not take the record.
-// So every constant of type [Condition], in this package and in every package
-// that names one (the engine's gate conditions above all), is held to the
-// bound here, where the constant is written, rather than found by the store at
-// the first refusal. The walk type-checks each package, so a constant whose
-// type is implied by its group, or spelled through an alias, is read too; and
-// it must find the engine's conditions as well as this package's, or it read
-// nothing of the module beyond this package.
+// EVERY CONDITION THE MODULE NAMES FITS WHAT AN OWED REFUSAL RECORDS
+// ([MaxOwedConditionBytes]): one past it would be refused by the store and
+// every delivery refused on it handed back, never acknowledged, as the store's
+// silence. So every constant of type [Condition], in every package, is held to
+// the bound where it is written. The walk type-checks each package, so an
+// implied or aliased type is read too, and it must find the engine's
+// conditions, or it read nothing beyond this package.
 //
 // Mutation: name a condition past the bound, and its constant is reported.
 func TestEveryConditionFitsWhatAnOwedRefusalRecords(t *testing.T) {

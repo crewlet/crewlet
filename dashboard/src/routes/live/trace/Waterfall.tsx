@@ -118,12 +118,15 @@ function outcomeOf(raw: unknown): SteerOutcome | "unknown" {
 
 /**
  * What the bar's badge says of each outcome that names a step: the note was
- * read there, taken there and never handed over, or handed over there and never
- * confirmed. An expired note names no step, so no bar carries it.
+ * read there, taken there and never reached its reader (a review's take whose
+ * answer was lost, or a hook's serves all lost, a serve's session proving it
+ * absent), or handed over there and never confirmed (a note whose every lost
+ * serve its harness gave up among them). An expired note names no step, so no
+ * bar carries it.
  */
 const MARKED_AT: Record<Exclude<SteerOutcome, "expired">, string> = {
   delivered: "Your note was read here",
-  missed: "Your note was taken here but never handed over",
+  missed: "Your note was taken here and never reached its reader",
   unconfirmed: "Your note was handed over here and never confirmed",
 };
 
@@ -265,7 +268,7 @@ export function Waterfall({
   const { from, to, spans, untimed } = model;
   const open = spans.find((s) => s.id === selected) ?? null;
   // EACH BAR'S BADGE SAYS WHAT BECAME OF THE NOTES AT ITS STEP: read there,
-  // taken there and never handed over, handed over there and never confirmed,
+  // taken there and never reaching its reader, handed over there and never confirmed,
   // every one said, where notes with different ends share a step.
   const marked = useMemo(() => {
     const at = new Map<string, string[]>();
@@ -541,15 +544,21 @@ function readAt(m: SteerMark): string {
 /**
  * Where a missed note was taken, in words: at a round of a phase, for the
  * executor at a step of its own, or, for a step this build cannot name, by the
- * turn in that phase; and that its reader never had it.
+ * turn in that phase; and that its reader never had it. The executor's is said
+ * as never reaching it: its hook's serves were answered and all lost, a serve's
+ * session proving it absent; a note a serve's session was not shown to hold,
+ * or whose every lost serve its harness gave up, is unconfirmed ([handedTo]).
+ * A round's, a review's take whose answer was lost, keeps "never handed over".
+ * An unknown step's says only what `missed` records, as the badge does: a
+ * newer build's step may be one that handed the note over.
  */
 function takenAt(m: SteerMark): string {
   const phase = phaseOf(m);
   if (m.boundary === "unknown" || m.boundary === "")
-    return `taken by the turn${phase ? ` in ${phase}` : ""} but never handed over`;
+    return `taken by the turn${phase ? ` in ${phase}` : ""}, but it never reached its reader`;
   if (m.boundary === "round")
     return `taken at round ${m.round}${phase ? ` of ${phase}` : ""} but never handed over`;
-  return `taken for the executor${phase ? ` in ${phase},` : ""} ${READ_AT[m.boundary].words}, but never handed to it`;
+  return `taken for the executor${phase ? ` in ${phase},` : ""} ${READ_AT[m.boundary].words}, but it never reached it`;
 }
 
 /** The job an unconfirmed note was handed to, in words: the executor, at its step. */

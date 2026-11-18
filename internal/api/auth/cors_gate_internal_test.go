@@ -127,6 +127,9 @@ var withheldRequest = map[string]string{
 	// to it, never a browser session.
 	"Mcp-Session-Id": "the tool bridge's: a box's harness sends it, and no " +
 		"page of any origin calls the bridge",
+	"Crewlet-Steer-Call": "the tool bridge's own: its front sets it on a hook's " +
+		"steer_take for its middleware and drops any a client sent, and no page " +
+		"of any origin calls the bridge",
 }
 
 // unexposedResponse are the response headers a route sets that a permitted

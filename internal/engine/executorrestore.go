@@ -566,11 +566,11 @@ func (e *Engine) relaunchCompany(turn string) *Company {
 // first launch froze it and continues only in a box of its own, with the one
 // brief for that. Either with what its briefs left out of the round the launch
 // carries on, which the launch records where it hands one ([sandbox.BriefTold]).
-// Beside a kept capture's two briefs, the two told by a reading of what it
-// holds where the runner wrote them ([runner.SessionContinuation.Exact]), with
-// the release they were read for and what they left out, which the sandbox
-// layer hands only to a box of that release; never beside a base, which no
-// reading is read of.
+// Beside a kept capture's two briefs, the two told by a reading where the
+// runner wrote them ([runner.SessionContinuation.Exact]), with their release
+// and what they left out, handed only to a box of that release, and the two
+// for a box whose release the resume was not read in, or the mark that the
+// floor dropped them ([runner.SessionContinuation.Unheld]); never beside a base.
 func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation {
 	switch {
 	case s == nil:
@@ -581,9 +581,12 @@ func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation 
 		return nil
 	}
 	out := &sandbox.SessionContinuation{LaunchSeq: s.Basis.LaunchSeq, CaptureSeq: s.Basis.CaptureSeq,
-		Brief: s.Brief, Replaced: s.Replaced, Told: s.Told}
+		Brief: s.Brief, Replaced: s.Replaced, Told: s.Told, UnheldDropped: s.UnheldDropped}
 	if x := s.Exact; x != nil {
 		out.Exact = &sandbox.ExactTelling{Resumer: x.Resumer, Brief: x.Brief, Replaced: x.Replaced, Told: x.Told}
+	}
+	if u := s.Unheld; u != nil {
+		out.Unheld = &sandbox.UnheldTelling{Brief: u.Brief, Replaced: u.Replaced, Told: u.Told}
 	}
 	return out
 }
@@ -591,10 +594,11 @@ func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation 
 // sessionDecision is how the launch decided its run takes up a session, in the
 // runner's terms ([runner.SessionDecision]): a session its conversation's last
 // turn left is always continued in a new box; and whether the brief handed is
-// the one told by a reading of what the session holds, whose own telling the
-// run's guard and its published prompt then follow.
+// the one told by a reading of what the session holds, or the one for a box
+// whose release the resume was not read in, whose own telling the run's guard
+// and its published prompt then follow.
 func sessionDecision(d sandbox.LaunchDecision) runner.SessionDecision {
 	return runner.SessionDecision{Continues: d.Brief.Continues(), Kept: d.Kept, Base: d.Base,
 		NewBox: d.Brief == sandbox.BriefContinuedNewBox || d.Brief == sandbox.BriefContinuedConversation,
-		Exact:  d.Exact}
+		Exact:  d.Exact, Unheld: d.Unheld}
 }

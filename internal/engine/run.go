@@ -463,6 +463,10 @@ type Engine struct {
 	// ([Engine.entriesReading]).
 	entryInputs entryInputs
 
+	// blockedSaid is the last word of each live node on the runs of its
+	// seats waiting for an operator ([Engine.executorReading]).
+	blockedSaid blockedSaid
+
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
 	// [Engine.Apply].

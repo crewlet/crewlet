@@ -231,6 +231,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "failed checks and Re-request, each a WriteButton held with the gate's sentence",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
+  "routes/gitlet/checks/Rerun.tsx": {
+    why: "one check run again (code_rerun_checks)",
+    suite: "routes/gitlet/Checks.test.tsx",
+  },
   "routes/gitlet/ImportRepo.tsx": {
     why:
       "the repositories' Import a repository — one code_import_repo, a new repository " +
@@ -286,6 +290,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "a change's Rebase, Take out of the queue and a merged change's Revert " +
       "(code_rebase_change, code_dequeue_change, code_revert_change)",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
+  "routes/gitlet/queue/Requeue.tsx": {
+    why: "a change taken out of its queue, added again (code_merge_change)",
+    suite: "routes/gitlet/Queue.test.tsx",
   },
   "routes/gitlet/change/FindingAnswer.tsx": {
     why: "a standing finding's Answer finding (code_resolve_finding)",

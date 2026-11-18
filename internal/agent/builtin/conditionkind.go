@@ -14,16 +14,12 @@ import (
 // [SandboxKindPrefix] and the class, a deadline `timeout` and an abandoned wait
 // `canceled`, the provider layer's own words for the two.
 //
-// THE STATE LOG HAS TWO. [KindStateLogUnavailable] is the log, the node or the
-// broker refusing a read or a write (the node evicted, behind or deferring,
-// the log full or wrong, a broker that refused it), which another node, a
-// later attempt or an operator gets past. [KindStateLogWriteRefused] is the
-// log refusing a write for what the write itself is or names
-// ([statelog.Reason.RefusesTheWrite]: a record too large for the broker, an
-// object deleted for good, an operation id that names another write, an
-// operation a later record undid), which every node and every attempt meets
-// alike. One kind for both put a write the work asked for and no node could
-// make beside an outage, on the node's side.
+// THE STATE LOG HAS TWO: [KindStateLogUnavailable] for the log, the node or the
+// broker refusing, which another node or a later attempt gets past, and
+// [KindStateLogWriteRefused] for a write refused for what it is or names
+// ([statelog.Reason.RefusesTheWrite]), which every node meets alike; one kind
+// for both put a write no node could make beside an outage (the package doc's
+// "Whose failure a condition is").
 const (
 	KindStateLogUnavailable     = "state_log_unavailable"
 	KindStateLogWriteRefused    = "state_log_write_refused"
@@ -49,31 +45,16 @@ const (
 const SandboxKindPrefix = "sandbox_"
 
 // InfrastructureKind reports whether kind ([ConditionKind]) is a condition of
-// the infrastructure the engine runs on: a store, a log, a broker, a disk, the
-// fleet's nodes and what they hold. A failure on one is counted as the failing
-// node's, never the work's: a seat's mail that failed on one is handed back as
-// the node's own (internal/engine's nakFailure), and a delivery it spends is
-// kept with its group's unhandled deliveries rather than with its poison.
-//
-// FALSE FOR THE KINDS LEFT TO THE WORK, each one what was asked can cause: a
-// write the state log refused for what the write itself is
-// ([KindStateLogWriteRefused]); and a deadline (`timeout`) and an abandoned
-// wait (`canceled`), the provider layer's words for a call that ran past its
-// own wall clock or that its caller gave up on, which the length of what was
-// asked decides as much as the node does. False for anything that is no kind
-// of a condition.
-//
-// A CODING SANDBOX'S CLASS ([SandboxKindPrefix]) IS PUT ON A SIDE BY WHETHER A
-// MAIL CAN CAUSE IT, class by class ([sandboxClassIsTheNodes]), never as a
-// block: a provider that did not answer or is at its account's limit spent a
-// seat's backlog into its poison when every class was the work's. No class
-// the sandbox names today is one a mail can cause, so each is the node's, and
-// a class added there is decided on its own.
-//
-// EVERY KIND THIS PACKAGE DECLARES, AND EVERY CLASS THE SANDBOX NAMES, IS
-// NAMED HERE, on one side, and TestEveryConditionKindIsTheNodesOrTheWorks
-// holds each to it: a new kind or class lands on the side its author chose
-// rather than on a default.
+// the infrastructure the engine runs on, counted as the failing node's and
+// never the work's: a seat's mail that failed on one is handed back as the
+// node's own (internal/engine's nakFailure). False for the kinds a piece of
+// work can cause (a write refused for what it is, `timeout`, `canceled`) and
+// for anything that is no kind. A coding sandbox's class is sided class by
+// class ([sandboxClassIsTheNodes]), never as a block. Every declared kind and
+// every sandbox class is named here on one side, so a new one lands where its
+// author chose rather than on a default, as
+// TestEveryConditionKindIsTheNodesOrTheWorks holds; the argument is the
+// package doc's "Whose failure a condition is".
 func InfrastructureKind(kind string) bool {
 	if class, ok := strings.CutPrefix(kind, SandboxKindPrefix); ok {
 		return sandboxClassIsTheNodes(sandbox.Why(class))
@@ -90,6 +71,24 @@ func InfrastructureKind(kind string) bool {
 		// lets one; a different write (a split change, a fresh operation, an
 		// object not deleted) is what gets past it.
 		return false
+	}
+	return false
+}
+
+// OperatorKind reports whether kind ([ConditionKind]) is a condition of the
+// infrastructure that only an operator clears: this node's disk full, mounted
+// read-only or failing to read or write, its limit of open files reached, or
+// the fleet's nodes holding different keys or running different builds. Each
+// is [InfrastructureKind] besides, and no wait clears one. A finished job
+// whose resume fails on one waits for the operator, and its node says so for
+// `executor_resume_blocked` (the package doc's "Whose failure a condition
+// is"). False for every other kind, one that clears when a store, a log or a
+// broker answers again included, and for anything that is no kind.
+func OperatorKind(kind string) bool {
+	switch kind {
+	case KindDiskFull, KindDiskReadOnly, KindDiskFailed, KindOpenFilesExhausted,
+		KindFleetKeysDiffer, KindFleetBuildsDiffer:
+		return true
 	}
 	return false
 }

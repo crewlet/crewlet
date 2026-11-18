@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
@@ -689,40 +690,24 @@ func newHeldTake(answer string) *heldTake {
 	return h
 }
 
-func (h *heldTake) Take(ctx context.Context, event string) string {
+func (h *heldTake) Take(ctx context.Context, event string, call *sandbox.NoteCall) string {
 	h.said.Do(func() { close(h.taking) })
 	<-h.letGo
-	return h.fakeInbox.Take(ctx, event)
+	return h.fakeInbox.Take(ctx, event, call)
 }
 
-// A HOOK'S ANSWER LEAVES BEFORE ITS OPENING CLOSES THE SESSIONS. A hook's call
-// is answered by the opening's own server in a middleware, never as a call of
-// the run's, and the SDK writes no answer on a session whose close has begun:
-// so an end holds a hook's answer as it holds a refusal's, and closes the box's
-// sessions only once that answer is out. A take of the run's notes whose write
-// landed, answered into the close, would leave its notes handed to a step that
-// never had them, with no cancel to say so; and a hook's call the close cuts
-// off fails, at a cost no probe has measured, where one answered with an error
-// costs its run the whole bridge. So, as the opening ends, the box reads the
-// hook's answer, never the close's failure:
-//   - of a take held in its store write as the end comes, which the end waits
-//     for: the box reads its notes once it is let go, and only then are the
-//     box's sessions closed and the end returns;
-//   - of a take that reaches the opening while its end waits for another
-//     answer, which takes nothing, and whose empty answer is waited for too;
-//   - of skill_loaded, reporting a load as the end comes;
-//   - of skill_loaded whose load is still on its way as the end comes, held in
-//     its call's fence short of the opening's lock: the end comes during the
-//     load more often than after it, since the load is most of the hook's
-//     work, so the hold comes before the load, where the end finds it.
+// A HOOK'S ANSWER LEAVES BEFORE ITS OPENING CLOSES THE SESSIONS (package doc,
+// "A hook's answer, held for the end"): the box reads the hook's answer, never
+// the close's failure, of a take held in its store write as the end comes (its
+// notes once let go, and only then do the sessions close), of a take reaching
+// the opening while its end waits (empty, waited for too), and of skill_loaded
+// reporting a load as the end comes or with its load on its way, held short of
+// the opening's lock (the end comes during the load more often than after it).
 //
-// Mutation: take steer_take's inbox without the hold (`o.inbox()` in place of
-// the opening's hold of the hook), and the box's take is failed by the close;
-// hold a hook's answer only while the opening serves (its end's test before
-// the hold), and the take that reached the ended opening is failed; hold none
-// for skill_loaded, and the reported load's hook is failed; take
-// skill_loaded's hold after its load, and a hook whose load the end came
-// during is failed.
+// Mutation: take steer_take's inbox without the hold (`o.inbox()`), test the
+// end before the hold, hold none for skill_loaded, or take its hold after its
+// load, and the take, the late take, the load's hook or the hook whose load
+// the end came during is failed by the close.
 func TestAHookAnswerLeavesBeforeItsOpeningClosesTheSessions(t *testing.T) {
 	t.Parallel()
 	const notes = `{"hookSpecificOutput":{"hookEventName":"PostToolBatch","additionalContext":"use staging"}}`
@@ -895,6 +880,51 @@ func TestAHookAnswerLeavesBeforeItsOpeningClosesTheSessions(t *testing.T) {
 			}
 		})
 	})
+
+	// A CANCEL WHOSE POST REACHED THE OPENING AS ITS END BEGAN is still heard:
+	// the front, reading its body as the end closes the opening's inbox,
+	// hands it to that inbox, which acts on the job it was bound to.
+	//
+	// Mutation: find no inbox once the opening has ended
+	// (binding.cancelInbox), or hand the inbox no cancel at the front, and the
+	// cancel is lost.
+	t.Run("a cancel whose POST reached the opening as its end began", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			inbox := newFakeInbox()
+			l := &ledger{}
+			b := openBubbledWith(t, l, l, func(s *mcpbridge.Session) { s.Steer = inbox })
+			mux := http.NewServeMux()
+			mux.Handle(mcpbridge.PathPrefix+"{token}", b.bridge.Handler())
+			body, feed := io.Pipe()
+			t.Cleanup(func() { _ = feed.Close() })
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, b.url, body)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+			req.Header.Set("Mcp-Session-Id", "box-session-1")
+			served := make(chan struct{})
+			go func() {
+				defer close(served)
+				mux.ServeHTTP(httptest.NewRecorder(), req)
+			}()
+			const cancel = `{"jsonrpc":"2.0","method":"notifications/cancelled",` +
+				`"params":{"requestId":5,"reason":"hook timed out"}}`
+			// THE FRONT IS READING THE BODY once its first byte is taken: the
+			// request is past its routing, on the opening, as the end comes.
+			if _, err := io.WriteString(feed, cancel[:1]); err != nil {
+				t.Fatalf("the cancel's first byte: %v", err)
+			}
+			b.bridge.Close("run-1")
+			if _, err := io.WriteString(feed, cancel[1:]); err != nil {
+				t.Fatalf("the rest of the cancel: %v", err)
+			}
+			_ = feed.Close()
+			<-served
+			if got := inbox.cancelled(); len(got) != 1 || got[0].Session != "box-session-1" || got[0].ID != "5" {
+				t.Errorf("the ended opening's inbox heard %+v, want the cancel of call 5 on box-session-1", got)
+			}
+		})
+	})
 }
 
 // A CALL REACHING AN OPENING AFTER ITS END IS TOLD WHAT THE END MEANS. Nothing
@@ -945,29 +975,16 @@ func TestACallReachingAnOpeningAfterItsEndIsToldWhatTheEndMeans(t *testing.T) {
 }
 
 // A REQUEST THAT OPENS A SESSION ON AN OPENING ITS END OVERTOOK IS TURNED AWAY
-// TO ASK AGAIN, a 503 with a Retry-After, on this node's own route and on a
-// call relayed to it alike, as a notes call is
-// (TestANotesCallReachingItsOpeningAsItEndsIsTurnedAwayToAskAgain). The routing
-// found the opening and held it to the session the job's box started, and the
-// opening ended before the MCP handler served the request: the run ended, the
-// seat left this node, or a recovery opened the job again. The handler read the
-// token a second time and found no opening, and the SDK answered 400 "no server
-// available", which Claude Code never made again at a box's startup (measured
-// on 2.1.310 and 2.1.322, where it makes an opening's 503 again three times
-// within about six seconds: Bridge.serveMCP); after a recovery it found the
-// recovery's opening instead, and served the request there, on an opening no
-// step had held to the session the box started. So the handler is handed the
-// opening the routing found and reads the token no more: a token that expires
-// while its request waits is still the credential the request was admitted
-// under. After the recovery the box's next connect is served by the opening
-// that serves it now. And a request that is truly malformed keeps its 400: one
-// that names a server the opening does not serve.
+// TO ASK AGAIN, a 503 with a Retry-After, on this node's route and relayed to
+// it alike, whether the run ended, the seat left this node or a recovery opened
+// the job again, after which the box's next connect is served by the opening
+// that serves it now. The handler serves the opening the routing found and
+// never reads the token again; a server the opening does not serve keeps its
+// 400. Why: the package doc's "A session opened as its opening ends".
 //
-// Mutation: serve a request that opens a session whatever its opening's state,
-// and every ending answers it 200, on an opening that has ended; read the token
-// again for the handler, and the request whose token expired on its way in is
-// answered 400; answer a server the opening does not serve 503, and the
-// malformed request goes red.
+// Mutation: serve the request whatever its opening's state (200 on an ended
+// opening), read the token again for the handler (400 on a token that expired
+// on its way in), or answer an unserved server 503, and a case goes red.
 func TestARequestOpeningASessionAsItsOpeningEndsIsTurnedAwayToAskAgain(t *testing.T) {
 	t.Parallel()
 	for _, route := range []struct {
@@ -1053,23 +1070,17 @@ func TestARequestOpeningASessionAsItsOpeningEndsIsTurnedAwayToAskAgain(t *testin
 }
 
 // AN OPENING'S END WAITS FOR THE ANSWER OF A REQUEST THAT OPENED A SESSION ON IT
-// BEFORE THE END, AND THEN CLOSES THAT SESSION. The request was let through
-// while the opening served, and the SDK opens its session as it serves it, so
-// the end holds its close of the box's sessions until the request is over, as
-// it does for the answer of a call it refused
-// (TestAnOpeningsEndWaitsForTheAnswerOfACallItRefusedBeforeItCloses): the
-// session is then one of those it closes, and the request's answer reaches the
-// box. A close that came first cut that answer; or, where the SDK had not yet
-// opened the session, missed it altogether, and left it live on an opening
-// that refuses every call made on it, where a box told to make a call again
-// makes it on that same session.
+// BEFORE THE END, AND THEN CLOSES THAT SESSION, as it waits for a call it
+// refused (TestAnOpeningsEndWaitsForTheAnswerOfACallItRefusedBeforeItCloses).
+// A close that came first cut that answer, or missed a session the SDK had not
+// yet opened, left live on an opening that refuses every call made on it,
+// where a box told to make a call again makes it on that same session. IN A
+// BUBBLE, on its clock: the end waits out its bound, five seconds a real clock
+// would spend on every run.
 //
-// IN A BUBBLE, on its clock: the end waits out its bound for that answer, five
-// seconds a real clock spent on every run.
-//
-// Mutation: let a request that opens a session through without holding it for
-// the end (`false &&` before the hold), and the end's close waits out the
-// request instead, whose answer is then never written.
+// Mutation: let the request through without holding it for the end (`false &&`
+// before the hold), and the end's close waits out the request instead, whose
+// answer is then never written.
 func TestAnOpeningsEndWaitsForASessionItLetOpenAndThenClosesIt(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -1142,17 +1153,13 @@ func TestAnOpeningsEndWaitsForASessionItLetOpenAndThenClosesIt(t *testing.T) {
 }
 
 // AN OPENING'S END IS HELD NO LONGER THAN ITS BOUND BY A SESSION ITS BOX GAVE UP
-// OPENING, AND STILL CLOSES THAT SESSION. A request that opens a session is held
-// for the opening's end until the MCP handler has returned it
-// (TestAnOpeningsEndWaitsForASessionItLetOpenAndThenClosesIt), never only until
-// the request's context ends: the context ends as the box gives the request up
-// or its connection fails, and the handler goes on. Held only that long, an end
-// coming after the box gave up closed the box's sessions while the SDK was
-// still answering on the one the request opened, and the SDK's close of a
-// session waits for every request in flight on it: the end waited out that
-// answer, past its bound, for a box that no longer reads. And where the SDK had
-// not yet filed the session, the close missed it, and it lived on, on an
-// opening that had ended.
+// OPENING, AND STILL CLOSES THAT SESSION: the request is held until the MCP
+// handler has returned it, never only until its context ends, which it does as
+// the box gives up or its connection fails while the handler goes on. Held only
+// that long, the end closed the sessions while the SDK still answered on the
+// request's, and waited that answer out past its bound, or missed a session not
+// yet filed, which lived on (package doc, "A session opened as its opening
+// ends").
 //
 // Mutation: hold the request only until its context ends (its Done for the
 // channel the handler's return closes), and the end is still waiting once its

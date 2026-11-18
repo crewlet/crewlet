@@ -48,16 +48,11 @@ func (s *cancelledAtTheDrain) answering() {
 }
 
 // A BOX THAT ANSWERED ENDS THE RUN OF FAILURES BEHIND IT, WHATEVER STEP FAILS
-// AFTER ITS READ. The bound on a collection's retries is on CONSECUTIVE failures
-// of the box, and a box that answered while a later step of its collection
-// failed uncounted (a store that did not answer the drain's watch or the record
-// of the sessions its job ran out of context in or whose request its provider
-// refused, or a read of what the run pushed or a drain this node cut short) is
-// a box that answered. Handed back
-// with that run left open, the failures from before were measured across every
-// read it answered, and once the store was back the first blip gave up as lost
-// a box that had answered each time: collect_unreachable, "its result is lost",
-// or for a lost job its round carried on without its read, uncharged.
+// AFTER ITS READ: the bound is on consecutive failures of the box, and a later
+// step that failed uncounted (the store's silence at the drain's watch or the
+// session retirements, the push read, a drain this node cut short) leaves a box
+// that answered. Left open, the first blip after gives the box up as lost, or
+// carries a lost job's round on uncharged.
 //
 // Mutation: drop the release's end of the run (the store's clear, or the field
 // from the release), or the mark the read sets on a collection or on a lost
@@ -166,6 +161,78 @@ func TestABoxThatAnsweredEndsTheRunOfFailuresWhateverFailsAfterItsRead(t *testin
 				if charged := rig.accountant.total(); charged != 1000 {
 					t.Fatalf("charged %d tokens; want the 1000 the lost job's box read", charged)
 				}
+			}
+		})
+	}
+}
+
+// endUnrecorded is a run store that does not answer the read's own record of
+// how a job's harness ended ([PendingStore.MarkHarnessEnd]).
+type endUnrecorded struct{ PendingStore }
+
+func (endUnrecorded) MarkHarnessEnd(_ context.Context, turnID, _ string, _ EndRead) (bool, error) {
+	return false, fmt.Errorf("sandbox: record run %s's harness end: %w", turnID, errStoreUnanswered)
+}
+
+// EVERY HAND-BACK AFTER THE BOX ANSWERED SAYS THE JOB IS OVER: whatever step
+// fails after the read, the write that returns the row to running records how
+// the job's harness ended, though the read's own record of it never landed;
+// a lost job's row says so by its loss, which no release clears.
+//
+// Mutation: drop the mark at the box's answer, and a case's row reads running
+// with nothing saying its job is over.
+func TestEveryHandBackAfterTheBoxAnsweredSaysTheJobIsOver(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		box   Result
+		lost  bool
+		repos bool
+		// arrange makes the collection read the box and then fail at a
+		// later step, and returns the context it runs under.
+		arrange func(t *testing.T, rig *coordRig) (func() context.Context, func())
+	}{
+		{name: "the drain's watch the store did not answer", box: wholeAccount(),
+			arrange: silentAfterTheRead("WatchLog")},
+		{name: "the record of the sessions its job ran out of context in",
+			box:     Result{Error: "Prompt is too long", ContextExhausted: true, SessionID: "s-1"},
+			arrange: silentAfterTheRead("RetireSessions")},
+		{name: "a drain this node stopped", box: wholeAccount(), arrange: stoppedAtTheDrain},
+		{name: "a read of what the run pushed this node stopped", box: wholeAccount(), repos: true,
+			arrange: stoppedAtThePushRead},
+		{name: "a lost job's drain the store did not answer", box: Result{Text: "half way through"}, lost: true,
+			arrange: silentAfterTheRead("WatchLog")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			next, _ := tc.arrange(t, rig)
+			rig.coordinator.pending = endUnrecorded{rig.coordinator.pending}
+			if tc.repos {
+				rig.launchWith("t1", withNative)
+			} else {
+				rig.launch("t1")
+			}
+			rig.coordinator.countRun("swe", StatusRunning)
+			if tc.lost {
+				rig.runner.Lose(tc.box)
+				if fired := rig.tick(); fired != 1 {
+					t.Fatalf("announced %d completions for a lost job, want 1", fired)
+				}
+			} else {
+				rig.runner.Finish(tc.box)
+			}
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(next(), payload, ev); err == nil {
+				t.Fatal("a collection whose later step failed was not handed back")
+			}
+			got := rig.get("t1")
+			if got.Status != StatusRunning {
+				t.Fatalf("the hand-back left the row %s, want it running", got.Status)
+			}
+			if over := got.Launch.HarnessEnd.Valid() || (tc.lost && got.Lost != nil); !over {
+				t.Errorf("the row reads running with harness end %q and loss %+v, want it saying its job "+
+					"is over", got.Launch.HarnessEnd, got.Lost)
 			}
 		})
 	}

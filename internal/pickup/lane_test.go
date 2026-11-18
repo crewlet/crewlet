@@ -31,7 +31,8 @@ func TestAnUrgentPickupIsTheBusySeatsNextTurn(t *testing.T) {
 	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
 		t.Fatalf("EnsureSubscription: %v", err)
 	}
-	// HELD while the backlog queues, so one drain takes all of it.
+	// HELD while the backlog queues, so one drain takes all of it, for the
+	// attachment the subscription below makes.
 	const hold = "backlog"
 	at, err := q.Attachment(ctx, topic, group)
 	if err != nil {

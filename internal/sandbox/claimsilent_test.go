@@ -5,19 +5,12 @@ import (
 	"testing"
 )
 
-// A CLAIM THE STORE DID NOT TAKE IS THE STORE'S SILENCE. A completion's claim is
-// the first step its collection cannot go on without, and when the
-// coordination store does not answer it, or this node refuses it while the
-// store has yet to take the release of the job's last claim, the completion is
-// handed back for the queue's backoff exactly as a collection's step the store
-// did not answer is: the failure is this node's, never the message's, and the
-// engine's control handler hands a store's silence back as the node's own, so a
-// delivery whose budget a store outage spends is not kept as poison
-// ([ErrStoreSilent], internal/engine's controlOutcome). SO IS THE RECORD OF A
-// PARK'S QUESTION the store did not answer: the park follows a read the box's
-// host answered, so no clock runs and nothing renews it, and its delivery,
-// handed back as the message's, was kept with the poison once an outage spent
-// its budget.
+// A CLAIM THE STORE DID NOT TAKE IS THE STORE'S SILENCE: a claim the store did
+// not answer, or this node refused while a release is owed, is handed back as
+// the node's failure, never the message's, so an outage does not spend it into
+// the poison ([ErrStoreSilent], internal/engine's controlOutcome). So is the
+// record of a park's question the store did not answer: no clock runs there to
+// renew it.
 //
 // Mutation: hand a claim's failure, or a park's record, back as it came, and
 // the store's silence reads as the message's own failure.

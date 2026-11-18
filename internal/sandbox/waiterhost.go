@@ -201,40 +201,14 @@ func (w *Waiter) holdsDuty() bool {
 }
 
 // goneAfter is the fleet's waiter finding the launch nodes that left for good,
-// and ending what their local runs were waiting on.
-//
-// A LOCAL BOX GOES WITH ITS NODE. A `direct` or `container` box is driven by
-// the node that launched it alone ([Drives]), so a node that leaves the fleet
-// for good takes with it every poll, keepalive and reclaim its runs would ever
-// get: a running job is never announced, and its seat stays held behind it for
-// ever. So the fleet's waiter watches the presence of every node a local run
-// names ([NodeRoster]), and once one has been without it for the box timeout
-// ([Manager.BoxTimeout]) — the bound a box in any cell gets without its
-// engine's keepalive, which on E2B is when the provider reclaims it — its
-// runs are ended for it:
-//
-//   - A RUNNING JOB has the verdict recorded on its row as lost
-//     ([PendingStore.MarkLost], [LossLaunchNodeGone]) and its completion
-//     announced, which the seat's holder claims and carries the job's round
-//     on from in a box of its own ([Coordinator.carryOnLost]) — announced
-//     again on its schedule until a claim takes it, as a finished job's is
-//     (reannounce.go).
-//   - A RUN PARKED ON A QUESTION, or answered and waiting on its resume, has
-//     its box released as an expired pause's is ([PendingStore.ExpirePause]),
-//     with nothing to kill: the run waits for its answer without a box, and
-//     its resume starts from the pushed branch.
-//
-// NEVER WHILE THE NODE IS MERELY RESTARTING. Presence is what the fleet knows
-// a node by, and a node that drains gives it up at the drain's first step, so
-// its absence at one instant is no verdict at all: the bound is the box
-// timeout, measured from when this waiter first found the node without it, and
-// a node that is back within it — its own waiter picking its runs up again —
-// is never found gone. A roster that cannot answer is no evidence either way,
-// and changes nothing.
-//
-// The clock is this waiter's own and starts again where the duty moves — every
-// absence is forgotten when the duty is lost, or cannot be confirmed
-// ([Waiter.forgetAbsences]) — which can only make a verdict later.
+// and ending what their local runs were waiting on: a local box goes with its
+// node ([Drives]). Once a node a local run names ([NodeRoster]) has been absent
+// for the box timeout ([Manager.BoxTimeout]), a running job is recorded lost
+// ([PendingStore.MarkLost], [LossLaunchNodeGone]) and announced, and a run on a
+// question has its box released ([PendingStore.ExpirePause]). Never while a
+// node merely restarts; an unanswering roster changes nothing; the clock is
+// this waiter's own ([Waiter.forgetAbsences]). See the package doc, "Lost
+// jobs".
 func (w *Waiter) goneAfter(ctx context.Context, manager *Manager, runs []PendingRun) {
 	if w.roster == nil {
 		return

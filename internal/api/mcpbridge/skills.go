@@ -14,47 +14,13 @@ import (
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
-// A RUN'S OWN SKILLS, AND WHAT LOADING ONE UNLOCKS.
-//
-// A seat's executor can be handed the company's tool skills as its harness's
-// OWN (internal/sandbox, RunRequest.Skills): listed to its model, and loaded
-// with the harness's own skill tool, which tells nobody. So a hook of the
-// harness's (Claude Code) or a plugin of its own (OpenCode) reports each load
-// here, by the name the skill is listed under, and the bridge records it as
-// THE RUN'S OWN LOAD of the Tool Skill that name stands for ([Session.Skills]):
-// a call of load_tool_skill with the skill's key, made on the opening as a
-// call of the run's is ([binding.Call]). One kind of load, then, however it was
-// made: the required-skill guard unlocks what the skill covers by its own
-// reading of the call, the skill's page records the read, the run's record
-// lists the load, and every rebuild of the run's surface replays it from that
-// record, as it replays a load the run made over the bridge.
-//
-// load_tool_skill IS NEVER LISTED to a harness that loads its skills itself:
-// its own tool is the loader its model knows, and a second beside it would
-// put the same text in front of the model a second way. It stays on the run's
-// surface — a reported load is a call of it.
-//
-// TWO WAYS IN, each behind the run's own token and nothing else, as a
-// person's notes are (steer.go):
-//
-//   - THE skill_loaded TOOL ([SkillTool]) on the engine's own server, which
-//     a hook calls. NEVER LISTED, so no model is offered it, and no model
-//     can unlock a skill it never read; answered by the server's receiving
-//     middleware, so the hook's call never reaches the run's surface itself;
-//     and its answer is ALWAYS empty text, never an error: a hook's call
-//     answered with an error makes Claude Code drop and re-initialise the
-//     whole bridge (measured, see steer.go). The opening's end waits for
-//     that answer before it closes the box's sessions, for as long as the
-//     box waits for it, as for a take's ([binding.holdHook]), since an
-//     answer the close refused fails the call all the same, at a cost no
-//     probe has measured.
-//   - THE SKILL ROUTE ([SkillPattern]), which a plugin posts each load to:
-//     POST `{"skill": "<name>"}`, answered 204 — and 404 for a session
-//     handed no skills, which has no skill route at all.
-//
-// A NAME THE RUN WAS NOT HANDED — a skill of the checkout's, or of the
-// image's — is no Tool Skill of the run's, and is answered as quietly and
-// recorded nowhere.
+// A RUN'S OWN SKILLS, AND WHAT LOADING ONE UNLOCKS: a run's harness reports
+// each load of a skill it was handed as its own, by a hook's call of
+// [SkillTool] (never listed, always answered empty) or a plugin's post to the
+// skill route ([SkillPattern]), and the bridge records it as the run's own
+// load of the Tool Skill it stands for, a call of load_tool_skill
+// ([binding.Call]), which is never listed to such a harness. The package doc's
+// section of the same name has why.
 
 // SkillTool is the tool a harness's hook calls on the bridge once its own skill
 // tool has loaded a skill.
@@ -164,19 +130,12 @@ func (b *Bridge) SkillHandler() http.Handler { return b.routed(b.serveSkill) }
 // of it ([Bridge.routed]).
 //
 // A REPORT THE OPENING CANNOT COUNT IS ANSWERED 204 ALL THE SAME, NEVER TURNED
-// AWAY: one reaching the opening as it ends, whose load the end refuses and
-// records nowhere, and one behind a fence that has closed (the seat moved, or
-// a person stopped it), whose load is recorded refused ([binding.Call]).
-// Neither unlocks anything. A notes read in the same place is turned away to
-// ask again ([readNotes]), because its plugin confirms again. The skills
-// plugin never posts a load again, whatever it is answered, and ends its
-// reports for the rest of the run on a 401 or a 404 (internal/sandbox/executor,
-// opencode_skills.js): a 503 would buy nothing, and a refusal would end the
-// reports of a run that goes on with the seat's next holder. What makes good a
-// load that did not count is the required-skill guard: the run's next call to
-// a tool the skill covers is refused, naming the skill to load, and the load
-// its model makes then is reported afresh, to the opening that serves the run
-// by then.
+// AWAY: one reaching the opening as it ends, or behind a closed fence (recorded
+// refused, [binding.Call]). The plugin never posts a load again and ends its
+// reports on a 401 or a 404, so a 503 buys nothing and a refusal would end a
+// live run's reports; the required-skill guard makes good the load, naming the
+// skill at the run's next call to a tool it covers. The package doc's "A run's
+// own skills, and what loading one unlocks" has why.
 func (b *Bridge) serveSkill(w http.ResponseWriter, r *http.Request, opened *binding) {
 	if !opened.session.nativeSkills() {
 		// A SESSION HANDED NO SKILLS has no skill route at all.

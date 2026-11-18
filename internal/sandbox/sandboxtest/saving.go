@@ -161,9 +161,10 @@ func writtenAsOlderBuild(t *testing.T, runs coord.SandboxRuns, turnID string, ed
 // A SAVE RESERVES ITS PLACE ONLY WHILE ITS JOB RUNS UNDECIDED. Each refusing
 // row breaks one conjunct of the license with every other holding, and nothing
 // is written: a run not running; a save of another launch; a job recorded over
-// or its completion announced (each arm of [PendingRun.jobOver]); a loss, an
-// ending, an end owed or recorded; a capture or save of the turn that may still
-// land; a place off by one. A stale or expired stamp licenses the next save; a
+// or its completion announced (each arm of [PendingRun.jobOver], a loss and a
+// harness's end a hand-back wrote among them); an ending, an end owed or
+// recorded; a capture or save of the turn that may still land; a place off by
+// one. A stale or expired stamp licenses the next save; a
 // malformed save is an error before any write, and a repeat is answered taken.
 //
 // Mutation: drop any conjunct or check, and its row reserves; read the license
@@ -265,6 +266,27 @@ func testASaveReservesItsPlaceOnlyWhileItsJobRunsUndecided(t *testing.T, s sandb
 					if ok, err := s.MarkHarnessEnd(t.Context(), turnID, r.LaunchID,
 						sandbox.EndRead{End: sandbox.HarnessEndCutOff}); err != nil || !ok {
 						t.Fatalf("MarkHarnessEnd = %v, %v", ok, err)
+					}
+					return saveAt(r, 1, now)
+				}},
+			{"how its harness ended, in a hand-back that cleared its failures", false,
+				func(t *testing.T, turnID string) sandbox.SessionCapture {
+					r := runningRow(t, s, turnID)
+					failed := releaseOf(mustClaim(t, s, turnID))
+					failed.CollectFailedAt = now
+					if ok, err := s.ReleaseClaim(t.Context(), turnID, failed); err != nil || !ok {
+						t.Fatalf("ReleaseClaim = %v, %v", ok, err)
+					}
+					answered := releaseOf(mustClaim(t, s, turnID))
+					answered.BoxAnswered, answered.HarnessEnd = true, sandbox.HarnessEndOwnRun
+					if ok, err := s.ReleaseClaim(t.Context(), turnID, answered); err != nil || !ok {
+						t.Fatalf("ReleaseClaim = %v, %v", ok, err)
+					}
+					if got := mustGet(t, s, turnID); got.Status != sandbox.StatusRunning ||
+						got.Launch.CollectFailures != 0 || got.Launch.Collected {
+						t.Fatalf("the hand-back left status %s, %d failures and collected %v; want a running job "+
+							"with its failures cleared and nothing collected", got.Status,
+							got.Launch.CollectFailures, got.Launch.Collected)
 					}
 					return saveAt(r, 1, now)
 				}},

@@ -23,31 +23,17 @@ import (
 )
 
 // A FAILURE OF THIS NODE'S IS NEVER THE MAIL'S OWN. A seat's mail that fails
-// is NAK'd for a retry wherever it fails: its tail's requeue when the
-// partition would not merge, its requeue behind a pause hold, and its turn.
-// Where the failure is one the queue tells as this node's (queue.NodeFault: a
-// broker that did not answer, a queue no longer live, a delivery whose context
-// this node's stop or drain ended), or a condition of the infrastructure the
-// engine runs on (builtin.InfrastructureKind: a coordination store that did
-// not answer, a busy store, a full disk, a sandbox provider that did not
-// answer or refused the company's credentials), the NAK is the node's
-// (queue.NakNode), so a delivery whose budget it spends is kept with the
-// group's unhandled deliveries and never with its poison. Any other failure
-// stays the mail's, a deadline and a write the state log refused for what it
-// is among them.
+// is NAK'd wherever it fails (its tail's requeue, its requeue behind a pause
+// hold, its turn), as the node's (queue.NakNode) where the queue tells the
+// failure as this node's (queue.NodeFault) or it is a condition of the
+// infrastructure (builtin.InfrastructureKind), the same answer the control
+// topic NAKs by (nodesFailure), the coordinator's marks included. A deadline
+// and a write the state log refused stay the mail's (the package doc's "A
+// failure of this node's is never the mail's own").
 //
-// THE SAME ANSWER THE SEAT'S CONTROL TOPIC NAKS BY (nodesFailure), so the
-// sandbox coordinator's marks for a store that did not answer it
-// (sandbox.ErrStoreSilent, sandbox.ErrUnannounced) are the node's here too.
-//
-// Mutation: NAK any one of the three as the message's (queue.Nak), and its
-// rows for a broker, a queue, an ended context and the infrastructure count
-// the failure against the mail; drop the infrastructure's conditions from
-// nodesFailure and the rows for a coordination store, a busy store and a
-// full disk do; drop the coordinator's marks and theirs do; read every
-// condition as the node's and the deadline's and the refused write's rows
-// count it against the node; put a sandbox provider refusing the key back on
-// the work's side and its rows count it against the mail.
+// Mutation: NAK any of the three as the message's, drop the infrastructure's
+// conditions or the coordinator's marks from nodesFailure, read every condition
+// as the node's, or put a refusing sandbox provider on the work's side: red.
 func TestAFailureOfThisNodesIsNeverTheMailsOwn(t *testing.T) {
 	t.Parallel()
 	live := t.Context()

@@ -1397,20 +1397,11 @@ func announcementOf(run PendingRun) (types.ExecutorFinished, *events.Event) {
 
 // publishCompletion announces the completion and routes the resume to the
 // owner; read is when this waiter asked its store for the run's row it
-// announces the job from.
-//
-// THE ANNOUNCEMENT SAYS THAT READ'S INSTANT ([rowAskedField]), so the seat's
-// holder can tell an announcement whose read the store of this node answered
-// after it found that store silent, which ends its renewal of the job's
-// completion, from one whose read came before that silence and whose poll of
-// the box ran past it ([announcedAfter]).
-//
-// TWO PUBLISHES, TWO PURPOSES. The crewlet.events.* copy is an ANNOUNCEMENT:
-// the dashboard's broadcast stream watches that subject space, and dropping it
-// would blank the running-sandboxes panel. The per-seat control copy is a
-// COMMAND, and it goes to the seat's own topic because only the node holding
-// that seat has the parked turn to resume — a single
-// fleet-wide group would hand it to a non-owner (N-1)/N of the time.
+// announces the job from, which the announcement says ([rowAskedField],
+// [announcedAfter]). Two publishes: the crewlet.events.* copy is an
+// announcement the dashboard's running-sandboxes panel watches, and the
+// per-seat control copy is a command to the one node holding the seat, which a
+// fleet-wide group would hand to a non-owner (N-1)/N of the time.
 func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun, public bool, read time.Time) error {
 	completion, announcement := announcementOf(run)
 	askedRow(announcement, read)

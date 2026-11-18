@@ -1234,9 +1234,7 @@ func (q *Queue) Attachment(_ context.Context, topic, group string) (queue.Attach
 	return at, nil
 }
 
-// PauseTopic takes one reason's hold on this client's attachment: the one at
-// names, which it refuses unless at is the pair's current attachment: a hold
-// asked for an attachment a Detach has ended would otherwise gate the next.
+// PauseTopic takes one reason's hold on attachment at, if it is still current.
 //
 // It does NOT create the subscription, and used to. A hold is process-local
 // state about one attachment; on a real broker it gates local dispatch and

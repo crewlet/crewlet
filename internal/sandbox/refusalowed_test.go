@@ -48,18 +48,10 @@ func (g *conditionGate) count() int {
 }
 
 // AN ACKNOWLEDGED REFUSAL IS AN OBLIGATION THE SEAT'S HOLDER OWES, AND IT
-// OUTLIVES THE HOLDER. A completion the node's gate refuses on a condition that
-// clears by waiting is acknowledged and kept for the condition's signal; but
-// while the coordination store does not answer the host of the job's box, that
-// host's waiter reads the run's row through it and announces nothing, and a
-// silence of the store's runs alone has no bound. Kept in the holder's memory
-// alone, the completion went with a restart, or with the seat moving to its
-// next holder, before the signal came, and nothing announced the job again for
-// as long as that silence lasted. So every refusal the holder acknowledges is
-// recorded on the job's record, and the seat's recovery, a restart's and the
-// next holder's alike, re-arms it and asks its own gate at once, as the first
-// delivery would: a refusal there is kept for that holder's own condition,
-// whose signal carries the completion.
+// OUTLIVES THE HOLDER: recorded on the job's record, it is re-armed by the
+// seat's recovery, a restart's or the next holder's, which asks its own gate at
+// once; refused there, it is kept for that holder's condition. Kept in memory
+// alone it goes with a restart while the box host's store is silent.
 //
 // Mutation: acknowledge the refusal without recording it, or recover the seat
 // without reading the record, and the completion is never carried; re-arm the
@@ -155,19 +147,14 @@ func (s *claimedFirst) OweRefusal(ctx context.Context, turnID, launch string, ow
 }
 
 // A REFUSAL ACKNOWLEDGED WHILE ANOTHER ATTEMPT HOLDS THE JOB'S CLAIM IS OWED
-// TOO. A kept completion is re-fired on a goroutine of its own the moment its
-// condition is signalled, so a re-fire's claim can land between the gate's
-// refusal of a delivery and that refusal's record. A claim settles nothing by
-// itself: one handed back, its attempt cut short by this node's stop before
-// its collection heard from the box's host, puts the completion back as it
-// was. Recorded only on a job running and unclaimed, the refusal acknowledged
-// meanwhile was owed by nothing once that claim was handed back, and after the
-// restart no recovery re-fired the job, which no waiter announces while its
-// host's store is silent.
+// TOO: a re-fire's claim can land between the gate's refusal and its record,
+// and a claim handed back, its attempt cut short by this node's stop, puts the
+// completion back as it was. Recorded only on a running unclaimed job, the
+// refusal would be owed by nothing after the restart.
 //
-// Mutation: record an owed refusal only where the job is running and
-// unclaimed, and the job's record owes nothing once the claim is handed back,
-// and the completion is never carried.
+// Mutation: record an owed refusal only where the job is running and unclaimed,
+// and the job's record owes nothing once the claim is handed back, and the
+// completion is never carried.
 func TestARefusalAcknowledgedUnderAnotherAttemptsClaimIsOwed(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -239,26 +226,15 @@ func (s *owedRefusals) OweRefusal(ctx context.Context, turnID, launch string, ow
 }
 
 // EVERY REFUSAL THE CONTROL TOPIC ACKNOWLEDGES IS RECORDED ON THE JOB'S RECORD
-// BEFORE IT IS, BY ONE WRITE, AND ONLY ONCE. The gate's refusal and a
-// completion this node holds off itself after its resume met a limit alike,
-// wherever the box is hosted: the record names the condition and when it was
-// acknowledged, a re-announcement refused again writes nothing and leaves the
-// first standing, and a record the store does not take is no acknowledgement:
-// the delivery is handed back as this node's failure, to be recorded when it
-// comes back; so is one this node's own ended context cut, which is handed back
-// as the node's, never with the refusal that would have it acknowledged. A row
-// a newer lease owns refuses the record, and the delivery is not acknowledged
-// by the node that lost the seat. Nor is it by a node whose lease went before
-// the record: nothing is written, and the refusal goes on to the seat's holder
-// as a resume another node can make (ErrResumeElsewhere), which the engine
-// hands back as the node's while its lease reads held again.
+// BEFORE IT IS, BY ONE WRITE, AND ONLY ONCE, the gate's and a held completion's
+// alike: a re-announcement writes nothing. A record the store did not take, or
+// this node's ended context cut, is handed back as the node's; a newer lease's
+// row refuses it; a lease gone first routes it on as ErrResumeElsewhere. See
+// the package doc, "Owed refusals".
 //
-// Mutation: acknowledge a refusal without recording it, and its record is
-// missing and a record the store did not take is acknowledged; carry the
-// refusal behind a record its context cut, and that refusal is acknowledged
-// unrecorded; record it under a lease gone, or route it on as one no node
-// gets past, and that row goes red; write it on every refusal, and the first
-// refusal's instant is lost.
+// Mutation: acknowledge without recording; carry the refusal behind a cut
+// record; record under a lease gone, or route it on as one no node gets past;
+// write it on every refusal, losing the first instant. Each turns a row red.
 func TestAnAcknowledgedRefusalIsRecordedOnItsJob(t *testing.T) {
 	t.Parallel()
 	// owing builds a rig whose node-b refuses t1's completion on

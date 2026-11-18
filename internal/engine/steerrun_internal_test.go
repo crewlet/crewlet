@@ -304,8 +304,9 @@ func TestANoteToARunningRunIsFiledOnItsRecord(t *testing.T) {
 
 // STEER_TAKE ANSWERS THE HOOK WITH THE NOTE: a Claude Code hook after a batch of
 // the main agent's calls is answered with the note as the hook's additional
-// context, in the shape the harness reads — and the note is read there, by this
-// job, at that kind of step.
+// context, in the shape the harness reads, under its take's token; and once the
+// job's session shows it took the note, it is read there, by this job, at that
+// kind of step.
 func TestSteerTakeAnswersTheHookWithTheNote(t *testing.T) {
 	t.Parallel()
 	var answer string
@@ -315,7 +316,9 @@ func TestSteerTakeAnswersTheHookWithTheNote(t *testing.T) {
 	})
 	parkOnARun(t, c.e, c.rig, "run-1")
 	c.file(t, "run-1", "req-1", "use staging")
-	launch := c.rig.row(t, "run-1").LaunchID
+	row := c.rig.row(t, "run-1")
+	launch := row.LaunchID
+	c.rig.runners[row.Harness].MainThread = showsEveryTake
 	if err := c.rig.collect(t, "run-1"); err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -324,7 +327,7 @@ func TestSteerTakeAnswersTheHookWithTheNote(t *testing.T) {
 	}
 	if !strings.Contains(answer, `"hookEventName":"PostToolBatch"`) ||
 		!strings.Contains(answer, `"additionalContext":"## A note from founder`) ||
-		!strings.Contains(answer, "use staging") {
+		!strings.Contains(answer, "use staging") || !takeToken.MatchString(answer) {
 		t.Fatalf("the hook was answered %q, want the note as its additional context", answer)
 	}
 	got := c.awaitSteered(t, 1)[0]
@@ -335,10 +338,16 @@ func TestSteerTakeAnswersTheHookWithTheNote(t *testing.T) {
 	}
 }
 
-// A TAKEN NOTE IS RECORDED DELIVERED ONCE: the hook that took it is the only
-// step that reads it — the run's later hooks take nothing, and the reviewer,
-// which reads every note the turn has read, records none of them again.
-func TestATakenNoteIsRecordedDeliveredOnce(t *testing.T) {
+// A COLLECTION CONFIRMS WHAT THE SESSION SHOWS, AND PUBLISHES IT ONCE. The hook
+// that took the note served it, and the run's later hook is served it no more;
+// the read that collects the job, finding the job's session shows the hook
+// took it, records it read by the job at the serve's step and publishes it
+// delivered there, once: the reviewer, which reads every note the turn has
+// read, records none of it again.
+//
+// Mutation: publish it at the take as well, or offer the live-served note at
+// the finish, and a check goes red.
+func TestACollectionConfirmsWhatTheSessionShowsAndPublishesItOnce(t *testing.T) {
 	t.Parallel()
 	var again string
 	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ string, _ func() sandbox.PendingRun) {
@@ -349,27 +358,28 @@ func TestATakenNoteIsRecordedDeliveredOnce(t *testing.T) {
 	})
 	parkOnARun(t, c.e, c.rig, "run-1")
 	c.file(t, "run-1", "req-1", "use staging")
+	row := c.rig.row(t, "run-1")
+	c.rig.runners[row.Harness].MainThread = showsEveryTake
 	if err := c.rig.collect(t, "run-1"); err != nil {
 		t.Fatalf("collect: %v", err)
 	}
 	if again != "" {
-		t.Errorf("the run's finish took the note again: %q", again)
+		t.Errorf("the run's finish was served the note again: %q", again)
 	}
-	if all := c.steeringOver(t, "run-1", 1); len(all) != 1 || all[0].Outcome != types.SteerDelivered ||
-		all[0].Boundary != types.SteerBoundaryToolBatch {
-		t.Errorf("the note was recorded %+v, want delivered once, at the batch that took it", all)
-	}
+	deliveredAtTheBatch(t, c.steeringOver(t, "run-1", 1), "req-1", row.LaunchID)
 }
 
-// THE REVIEWER OPENS WITH A NOTE THE RUN TOOK: the run's read is on its record,
-// so the segment that reviews the run carries it — the reviewer judges the
-// work against the note the work was steered by.
+// THE REVIEWER OPENS WITH A NOTE THE RUN TOOK: the run's read is on its record
+// once its collection found the job's session took it, so the segment that
+// reviews the run carries it — the reviewer judges the work against the note
+// the work was steered by.
 func TestTheReviewerOpensWithANoteTheRunTook(t *testing.T) {
 	t.Parallel()
 	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ string, _ func() sandbox.PendingRun) {
 		_, _ = batchTake(ctx, s)
 	})
 	parkOnARun(t, c.e, c.rig, "run-1")
+	c.rig.runners[c.rig.row(t, "run-1").Harness].MainThread = showsEveryTake
 	c.file(t, "run-1", "req-1", "use the staging database")
 	if err := c.rig.collect(t, "run-1"); err != nil {
 		t.Fatalf("collect: %v", err)
@@ -501,9 +511,11 @@ func TestARunIsSteerableAfterItsLaunchingNodeRestarts(t *testing.T) {
 	c.file(t, "run-1", "req-before", "use the staging database")
 	before := c.e.runSteers.inbox(identityOfRun(row), 1)
 	before.Bind(t.Context(), row.LaunchID)
-	if got := before.Take(t.Context(), mcpbridge.SteerEventFinish); !strings.Contains(got, "staging") {
-		t.Fatalf("the run did not read its first note before the restart: %q", got)
+	got := before.Take(t.Context(), mcpbridge.SteerEventFinish, hookCall())
+	if !strings.Contains(got, "staging") {
+		t.Fatalf("the run was not served its first note before the restart: %q", got)
 	}
+	servedNotRead(t, c.e.sandbox.Load().pending, "run-1", "req-before", row.LaunchID, takeOf(t, got))
 	before.Close()
 
 	// THE NODE RESTARTS: a fresh bridge holding nothing, and the seat taken
@@ -558,6 +570,14 @@ func (s failingStore) TakeNotes(ctx context.Context, turnID string, take sandbox
 	return s.PendingStore.TakeNotes(ctx, turnID, take)
 }
 
+func (s failingStore) ServeHook(ctx context.Context, turnID string, serve sandbox.HookServe) ([]sandbox.RunNote,
+	error) {
+	if s.reads {
+		return nil, context.DeadlineExceeded
+	}
+	return s.PendingStore.ServeHook(ctx, turnID, serve)
+}
+
 func (s failingStore) WatchNotes(ctx context.Context, turnID string) (<-chan sandbox.NotesView, error) {
 	if s.deafWatch {
 		never := make(chan sandbox.NotesView)
@@ -584,7 +604,7 @@ func TestAStoreFailureAnswersEmptyNeverAnError(t *testing.T) {
 	broken, _ := steersOver(t, steerRing, failingStore{PendingStore: store, reads: true})
 	inbox := boundInbox(t, broken, store, "run-1", launch)
 	for _, event := range []string{mcpbridge.SteerEventToolBatch, mcpbridge.SteerEventFinish} {
-		if got := inbox.Take(t.Context(), event); got != "" {
+		if got := inbox.Take(t.Context(), event, hookCall()); got != "" {
 			t.Errorf("a take the record could not serve at %s answered %q", event, got)
 		}
 	}
@@ -640,66 +660,6 @@ func readOn(ctx context.Context, store sandbox.PendingStore, turnID, id string) 
 		}
 	}
 	return nil
-}
-
-// A HOOK'S TAKE WHOSE ANSWER WAS LOST HANDS THE HARNESS NOTHING, AND IS NEVER LEFT
-// SAYING THE RUN READ IT. A take the store recorded after the hook's five seconds
-// ran out — its write landed, its answer an error — answers the hook with
-// nothing, as every failed take does, and is settled off the hook's path, asked
-// again while the store does not answer: the note it recorded is marked
-// unanswered, where it was read and by which job kept, so no capture of the
-// job's session counts it held and a launch that continues one tells it again.
-// Nothing publishes it delivered, since nothing was delivered, and no later take
-// hands it over, the note being read: the review reads it, carried as read and
-// said unanswered to the segment that resumes the turn, and a relaunch's brief
-// is told the mark as the record holds it then.
-//
-// Mutation: skip the settle, settle without marking, give up on the settle's
-// first failure, publish the note delivered, carry it without its mark, or
-// tell a brief no mark, and a check goes red.
-func TestAHooksTakeWhoseAnswerWasLostIsSettledUnanswered(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-	store := sandbox.NewCoordStore(coordmem.NewFleet())
-	runs, published := steersOver(t, steerRing, &lostAnswerStore{PendingStore: store, failSettles: 1})
-	runs.stopped = ctx.Done()
-	launch := workingRun(t, store, runs, "run-1")
-	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
-	inbox := boundInbox(t, runs, store, "run-1", launch)
-	viewHolds(t, inbox, 1)
-	if got := inbox.Take(ctx, mcpbridge.SteerEventToolBatch); got != "" {
-		t.Fatalf("a take whose answer was lost answered the hook %q, want nothing", got)
-	}
-	eventually(t, "the lost take's note marked unanswered", func() bool {
-		read := readOn(ctx, store, "run-1", "n-1")
-		return read != nil && read.Unanswered
-	})
-	if read := readOn(ctx, store, "run-1", "n-1"); read.Launch != launch || read.Take == "" ||
-		read.Boundary != string(types.SteerBoundaryToolBatch) || read.Order != 1 {
-		t.Errorf("the note is read %+v, want the lost take's read by job %s, kept", read, launch)
-	}
-	// CARRIED AS READ, AND SAID UNANSWERED, to the segment that resumes the turn.
-	row, _, err := store.Get(ctx, "run-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if carried := runs.carried(row); len(carried) != 1 || carried[0].ID != "n-1" || !carried[0].Unanswered {
-		t.Errorf("the turn carries %+v, want the note read and unanswered", carried)
-	}
-	// AND TO A RELAUNCH'S BRIEF AS THE RECORD MARKS IT THEN, whatever the
-	// segment's claim read: a mark can land after the claim.
-	if brief := claimedSource(t, store, runs, launch).Brief(ctx); len(brief.Notes) != 0 ||
-		!slices.Equal(brief.Unanswered, []string{"n-1"}) {
-		t.Errorf("a relaunch's brief is %+v, want no note to read and n-1 said unanswered", brief)
-	}
-	if got := inbox.Take(ctx, mcpbridge.SteerEventFinish); got != "" {
-		t.Errorf("the run's finish was handed %q, want nothing: the note is read", got)
-	}
-	for _, rec := range steered(published) {
-		if rec.NoteID == "n-1" {
-			t.Errorf("the note nobody was handed is recorded %s", rec.Outcome)
-		}
-	}
 }
 
 // claimedSource is the notes of a segment that resumes run-1 from launch, as
@@ -949,26 +909,17 @@ func TestAReviewsTakeWhoseAnswerWasLostHandsItsNotesOver(t *testing.T) {
 }
 
 // A RELAUNCH'S BRIEF TELLS A NOTE A HOOK'S SERVE PLACED AT THAT PLACE. A note
-// whose first serve to a job's hook fixed its place among the turn's reads
-// (sandbox.RunNote.Place), and which nothing has read since, its hook's answer
-// lost with no cancel heard, waits while a person's later note, correcting it,
-// is served and read at a later place. A relaunch's brief peeks it, and the
-// launch's write reads it at its own place, ahead of the correction: so the
-// brief hands that place beside the places of the reads it carries
-// (steer.Briefing.Orders), and its runner tells the note ahead of the
-// correction, as every later brief does from the record. A note no hook was
-// served takes the write's own place, after every read, and the brief places
-// none.
-//
-// EVERY PEEKED NOTE A SERVE PLACED, AT ITS PLACE AND NOT AT ITS NUMBER: the
-// hook's lost answer handed two notes, which share the one place its write
-// took while their numbers among the turn's notes (sandbox.RunNote.Seq)
-// differ, and the brief places each at the place the launch's write reads it
-// at.
+// whose first serve to a hook fixed its place (sandbox.RunNote.Place), its
+// hook's answer lost, waits while a later correction is read at a later place;
+// the relaunch's brief peeks it, the launch's write reads it at its own place,
+// and the brief hands that place (steer.Briefing.Orders) so the runner tells
+// it ahead of the correction. Every peeked note a serve placed, at its place
+// and not at its number (sandbox.RunNote.Seq); a note no hook was served is
+// placed nowhere (the package doc's "Every read is on the record, so the
+// record is the carry").
 //
 // Mutation: hand the brief without a peeked note's place, place one at its
-// number among the turn's notes, place only the first of them, or place a note
-// no hook was served, and the case goes red.
+// number, place only the first, or place an unserved note, and it goes red.
 func TestARelaunchsBriefTellsANoteAHooksServePlacedAtThatPlace(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -1104,10 +1055,31 @@ type gatedSettles struct {
 
 	mu                    sync.Mutex
 	asked, inFlight, most int
+	hooks                 []sandbox.HookSettle
 }
 
 func (s *gatedSettles) SettleTake(ctx context.Context, turnID string, settle sandbox.NoteSettle) (
 	[]sandbox.RunNote, error) {
+	if err := s.ask(ctx); err != nil {
+		return nil, err
+	}
+	return s.PendingStore.SettleTake(ctx, turnID, settle)
+}
+
+func (s *gatedSettles) SettleHook(ctx context.Context, turnID string, settle sandbox.HookSettle) (
+	[]sandbox.RunNote, error) {
+	s.mu.Lock()
+	s.hooks = append(s.hooks, settle)
+	s.mu.Unlock()
+	if err := s.ask(ctx); err != nil {
+		return nil, err
+	}
+	return s.PendingStore.SettleHook(ctx, turnID, settle)
+}
+
+// ask is one settle asked of the store: counted, held at the gate, and failed
+// where the store is unavailable.
+func (s *gatedSettles) ask(ctx context.Context) error {
 	s.mu.Lock()
 	s.asked++
 	s.inFlight++
@@ -1123,21 +1095,21 @@ func (s *gatedSettles) SettleTake(ctx context.Context, turnID string, settle san
 		select {
 		case <-gate:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ctx.Err()
 		}
 	}
 	// A CONTEXT THAT HAS ENDED IS ANSWERED ITS ERROR, as a store over a
 	// connection answers it.
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return err
 	}
 	if s.unavailable != nil && s.unavailable() {
-		return nil, coord.ErrUnavailable
+		return coord.ErrUnavailable
 	}
 	if s.answering != nil {
 		s.answering()
 	}
-	return s.PendingStore.SettleTake(ctx, turnID, settle)
+	return nil
 }
 
 // counts is how many settles were asked, and the most held at once.
@@ -1147,19 +1119,92 @@ func (s *gatedSettles) counts() (asked, most int) {
 	return s.asked, s.most
 }
 
-// lostTakes is a working run-1 whose notes takes recorded and whose answers were
-// lost, one take a note: each named after its note, for a settle to find.
-func lostTakes(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids ...string) {
+// lostTakes is a working run-1 whose notes a review's takes recorded and whose
+// answers were lost, one take a note: each named after its note, for a settle
+// to find. It answers the run's job.
+func lostTakes(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids ...string) string {
 	t.Helper()
 	launch := workingRun(t, store, runs, "run-1")
 	for _, id := range ids {
 		fileSealed(t, runs, "run-1", steer.Note{ID: id, Text: "the note " + id, By: "founder"})
 		if _, err := store.TakeNotes(t.Context(), "run-1", sandbox.NoteTake{IDs: []string{id}, Launch: launch,
-			Statuses: steerTakeStatuses, Read: sandbox.NoteRead{Phase: "execute", Round: 1,
-				Boundary: string(types.SteerBoundaryToolBatch), Launch: launch, Take: "take-" + id}}); err != nil {
+			Statuses: steerTakeStatuses, Read: sandbox.NoteRead{Phase: "review", Round: 1,
+				Boundary: string(types.SteerBoundaryRound), Take: "take-" + id}}); err != nil {
 			t.Fatal(err)
 		}
 	}
+	return launch
+}
+
+// settleKind is one kind of settle a run's loop holds, for the stop window's
+// cases to run over each: a review's take ([runSteers.settleUnanswered]), and
+// a job's hook settle of a serve answered nothing or of a cancelled call
+// ([runSteers.settleHook]), whose own last-round mark is its loop's other half.
+type settleKind struct {
+	name string
+	// lose records a loss of each of ids on run-1 and answers its job.
+	lose func(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids ...string) string
+	// settle hands run-1's loop the loss of note id.
+	settle func(ctx context.Context, runs *runSteers, launch, id string)
+	// settled reports whether the loss of note id is settled on the record.
+	settled func(t *testing.T, store sandbox.PendingStore, id string) bool
+}
+
+// settleKinds is every kind of settle a run's loop holds.
+func settleKinds() []settleKind {
+	hook := func(name string, settle func(launch, id string) sandbox.HookSettle,
+		settled func(sandbox.RunNote) bool) settleKind {
+		return settleKind{name: name, lose: servedHooks,
+			settle: func(ctx context.Context, runs *runSteers, launch, id string) {
+				runs.settleHook(ctx, "run-1", settle(launch, id))
+			},
+			settled: func(t *testing.T, store sandbox.PendingStore, id string) bool {
+				return settled(noteOn(t, store, "run-1", id))
+			}}
+	}
+	return []settleKind{
+		{name: "a review's take", lose: lostTakes,
+			settle: func(ctx context.Context, runs *runSteers, _, id string) {
+				runs.settleUnanswered(ctx, "run-1", "take-"+id)
+			},
+			settled: func(t *testing.T, store sandbox.PendingStore, id string) bool {
+				read := readOn(t.Context(), store, "run-1", id)
+				return read != nil && read.Unanswered
+			}},
+		hook("a hook's serve answered nothing", func(launch, id string) sandbox.HookSettle {
+			return sandbox.HookSettle{Launch: launch, Unanswered: []string{"take-" + id}}
+		}, func(n sandbox.RunNote) bool { return n.Waiting() && len(n.Serves) == 0 }),
+		hook("a hook's call cancelled", func(launch, id string) sandbox.HookSettle {
+			return sandbox.HookSettle{Launch: launch, Cancelled: []sandbox.NoteCall{servedCall(id)}}
+		}, func(n sandbox.RunNote) bool {
+			return slices.ContainsFunc(n.Serves, func(h sandbox.HookServed) bool {
+				return h.Lost == sandbox.ServeCancelled
+			})
+		}),
+	}
+}
+
+// servedCall is the call a hook served note id by in [servedHooks].
+func servedCall(id string) sandbox.NoteCall {
+	return sandbox.NoteCall{Session: "mcp-session-1", ID: `"` + id + `"`}
+}
+
+// servedHooks is a working run-1 whose notes a hook's takes served to its job,
+// one take a note, each named after its note and answering the note's call
+// ([servedCall]). It answers the run's job.
+func servedHooks(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids ...string) string {
+	t.Helper()
+	launch := workingRun(t, store, runs, "run-1")
+	for _, id := range ids {
+		fileSealed(t, runs, "run-1", steer.Note{ID: id, Text: "the note " + id, By: "founder"})
+		call := servedCall(id)
+		if _, err := store.ServeHook(t.Context(), "run-1", sandbox.HookServe{IDs: []string{id}, Launch: launch,
+			Statuses: steerTakeStatuses, Serve: sandbox.HookServed{Take: "take-" + id,
+				Boundary: string(types.SteerBoundaryToolBatch), Call: &call}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return launch
 }
 
 // A SETTLE ASKS UNTIL ITS STORE ANSWERS, AND NO LONGER THAN ITS NODE. A settle a
@@ -1185,10 +1230,10 @@ func lostTakes(t *testing.T, store sandbox.PendingStore, runs *runSteers, ids ..
 // Mutation: give the settle up at its patience, end it with the context of the
 // take that lost it, ask on past the node's stop, start a loop for every take,
 // say unsettled a round that met no error, sleep through the node's stop, make
-// no last attempt, leave a take joining the last round unasked, make the last
-// attempts on the stop's allowance or hold them to no window, or start a loop
-// once the teardown waited them out, and a case goes red — the panic one a
-// crash of the test binary, as it would end the node.
+// no last attempt or ask one twice (a hook settle's loop then never ends, so
+// the binary times out), leave a settle joining the last round unasked, make
+// the last attempts on the stop's allowance or hold them to no window, or start
+// a loop once the teardown waited them out, for any kind: a case goes red.
 func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 	t.Parallel()
 	t.Run("its store answering a minute after", func(t *testing.T) {
@@ -1211,90 +1256,114 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 			}
 		})
 	})
-	t.Run("its node stopping first", func(t *testing.T) {
-		t.Parallel()
-		synctest.Test(t, func(t *testing.T) {
-			store := sandbox.NewCoordStore(coordmem.NewFleet())
-			settles := &gatedSettles{PendingStore: store, unavailable: func() bool { return true }}
-			runs, _ := steersOver(t, steerRing, settles)
-			e := &Engine{}
-			runs.stopWith(e)
-			lostTakes(t, store, runs, "n-1")
-			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
-			time.Sleep(20 * time.Second)
-			synctest.Wait()
-			before, _ := settles.counts()
-			e.tearingDown()
-			runs.waitSettles()
-			if asked, _ := settles.counts(); asked != before+1 {
-				t.Errorf("the settle was asked %d times as its node stopped, want once more", asked-before)
-			}
-			time.Sleep(time.Minute)
-			synctest.Wait()
-			if asked, _ := settles.counts(); asked != before+1 {
-				t.Errorf("the settle was asked %d times after its last attempt", asked-before-1)
-			}
-			if read := readOn(t.Context(), store, "run-1", "n-1"); read == nil || read.Unanswered {
-				t.Errorf("the note is read %+v, want it read and unmarked: nothing settled it", read)
-			}
-		})
-	})
-	t.Run("its store back as its node stops, a take joining its last round", func(t *testing.T) {
-		t.Parallel()
-		synctest.Test(t, func(t *testing.T) {
-			store := sandbox.NewCoordStore(coordmem.NewFleet())
-			var back, joined atomic.Bool
-			var runs *runSteers
-			settles := &gatedSettles{PendingStore: store,
-				unavailable: func() bool { return !back.Load() },
-				// A SEGMENT THE TEARDOWN ENDED, handing off a take of its own
-				// while the loop's last round is asked.
-				answering: func() {
-					if joined.CompareAndSwap(false, true) {
-						runs.settleUnanswered(t.Context(), "run-1", "take-n-2")
-					}
-				}}
-			runs, _ = steersOver(t, steerRing, settles)
-			e := &Engine{}
-			runs.stopWith(e)
-			lostTakes(t, store, runs, "n-1", "n-2")
-			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
-			time.Sleep(10 * time.Second)
-			synctest.Wait()
-			// THE STORE IS BACK WHILE THE LOOP SLEEPS BETWEEN ROUNDS, and the
-			// node stops before the loop's next round.
-			back.Store(true)
-			e.tearingDown()
-			synctest.Wait()
-			for _, id := range []string{"n-1", "n-2"} {
-				if read := readOn(t.Context(), store, "run-1", id); read == nil || !read.Unanswered {
-					t.Errorf("note %s is read %+v as its node stops, want it marked by the settle's last attempt",
-						id, read)
+	for _, kind := range settleKinds() {
+		t.Run("its node stopping first, "+kind.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				store := sandbox.NewCoordStore(coordmem.NewFleet())
+				settles := &gatedSettles{PendingStore: store, unavailable: func() bool { return true }}
+				runs, _ := steersOver(t, steerRing, settles)
+				e := &Engine{}
+				runs.stopWith(e)
+				launch := kind.lose(t, store, runs, "n-1")
+				kind.settle(t.Context(), runs, launch, "n-1")
+				time.Sleep(20 * time.Second)
+				synctest.Wait()
+				before, _ := settles.counts()
+				e.tearingDown()
+				runs.waitSettles()
+				if asked, _ := settles.counts(); asked != before+1 {
+					t.Errorf("the settle was asked %d times as its node stopped, want once more", asked-before)
 				}
-			}
-			runs.waitSettles()
+				time.Sleep(time.Minute)
+				synctest.Wait()
+				if asked, _ := settles.counts(); asked != before+1 {
+					t.Errorf("the settle was asked %d times after its last attempt", asked-before-1)
+				}
+				if kind.settled(t, store, "n-1") {
+					t.Error("the note's loss is settled, want it as it was: nothing settled it")
+				}
+			})
 		})
-	})
-	t.Run("a take handed off once its node stopped", func(t *testing.T) {
-		t.Parallel()
-		synctest.Test(t, func(t *testing.T) {
-			store := sandbox.NewCoordStore(coordmem.NewFleet())
-			settles := &gatedSettles{PendingStore: store}
-			runs, _ := steersOver(t, steerRing, settles)
-			e := &Engine{}
-			runs.stopWith(e)
-			lostTakes(t, store, runs, "n-1")
-			e.tearingDown()
-			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
-			runs.waitSettles()
-			if asked, _ := settles.counts(); asked != 1 {
-				t.Errorf("a take handed off once its node stopped was asked %d times, want once", asked)
-			}
-			if read := readOn(t.Context(), store, "run-1", "n-1"); read == nil || !read.Unanswered {
-				t.Errorf("the note is read %+v, want it marked by the take's one attempt", read)
-			}
+		t.Run("its store back as its node stops, a settle joining its last round, "+kind.name,
+			func(t *testing.T) {
+				t.Parallel()
+				synctest.Test(t, func(t *testing.T) {
+					store := sandbox.NewCoordStore(coordmem.NewFleet())
+					var back, joined atomic.Bool
+					var runs *runSteers
+					var launch string
+					settles := &gatedSettles{PendingStore: store,
+						unavailable: func() bool { return !back.Load() },
+						// A SEGMENT OR AN INBOX THE TEARDOWN ENDED, handing off
+						// a settle of its own while the loop's last round is
+						// asked.
+						answering: func() {
+							if joined.CompareAndSwap(false, true) {
+								kind.settle(t.Context(), runs, launch, "n-2")
+							}
+						}}
+					runs, _ = steersOver(t, steerRing, settles)
+					e := &Engine{}
+					runs.stopWith(e)
+					launch = kind.lose(t, store, runs, "n-1", "n-2")
+					kind.settle(t.Context(), runs, launch, "n-1")
+					time.Sleep(10 * time.Second)
+					synctest.Wait()
+					// THE STORE IS BACK WHILE THE LOOP SLEEPS BETWEEN ROUNDS,
+					// and the node stops before the loop's next round.
+					back.Store(true)
+					e.tearingDown()
+					synctest.Wait()
+					for _, id := range []string{"n-1", "n-2"} {
+						if !kind.settled(t, store, id) {
+							t.Errorf("note %s is unsettled as its node stops, want it settled by the "+
+								"settle's last attempt", id)
+						}
+					}
+					runs.waitSettles()
+				})
+			})
+		t.Run("a settle handed off once its node stopped, "+kind.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				store := sandbox.NewCoordStore(coordmem.NewFleet())
+				settles := &gatedSettles{PendingStore: store}
+				runs, _ := steersOver(t, steerRing, settles)
+				e := &Engine{}
+				runs.stopWith(e)
+				launch := kind.lose(t, store, runs, "n-1")
+				e.tearingDown()
+				kind.settle(t.Context(), runs, launch, "n-1")
+				runs.waitSettles()
+				if asked, _ := settles.counts(); asked != 1 {
+					t.Errorf("a settle handed off once its node stopped was asked %d times, want once", asked)
+				}
+				if !kind.settled(t, store, "n-1") {
+					t.Error("the note's loss is unsettled, want it settled by the settle's one attempt")
+				}
+			})
 		})
-	})
+		t.Run("a settle asked once its node waited its settles out, "+kind.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				store := sandbox.NewCoordStore(coordmem.NewFleet())
+				settles := &gatedSettles{PendingStore: store}
+				runs, _ := steersOver(t, steerRing, settles)
+				e := &Engine{}
+				runs.stopWith(e)
+				launch := kind.lose(t, store, runs, "n-1")
+				e.tearingDown()
+				runs.waitSettles()
+				kind.settle(t.Context(), runs, launch, "n-1")
+				synctest.Wait()
+				if asked, _ := settles.counts(); asked != 0 {
+					t.Errorf("a settle asked once its node waited its settles out was asked %d times, want none",
+						asked)
+				}
+			})
+		})
+	}
 	t.Run("its last attempts in a window of their own, beside the stop's allowance", func(t *testing.T) {
 		t.Parallel()
 		synctest.Test(t, func(t *testing.T) {
@@ -1339,24 +1408,6 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 			}
 		})
 	})
-	t.Run("a take lost once its node waited its settles out", func(t *testing.T) {
-		t.Parallel()
-		synctest.Test(t, func(t *testing.T) {
-			store := sandbox.NewCoordStore(coordmem.NewFleet())
-			settles := &gatedSettles{PendingStore: store}
-			runs, _ := steersOver(t, steerRing, settles)
-			e := &Engine{}
-			runs.stopWith(e)
-			lostTakes(t, store, runs, "n-1")
-			e.tearingDown()
-			runs.waitSettles()
-			runs.settleUnanswered(t.Context(), "run-1", "take-n-1")
-			synctest.Wait()
-			if asked, _ := settles.counts(); asked != 0 {
-				t.Errorf("a take lost once its node waited its settles out was asked %d times, want none", asked)
-			}
-		})
-	})
 	t.Run("a take joining the round the store first answers, past the patience", func(t *testing.T) {
 		t.Parallel()
 		synctest.Test(t, func(t *testing.T) {
@@ -1366,7 +1417,7 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 			var joined atomic.Bool
 			settles := &gatedSettles{PendingStore: store,
 				unavailable: func() bool { return time.Now().Before(answerAt) },
-				// A HOOK'S TAKE LOST ON THE SAME OUTAGE, failing as the
+				// ANOTHER TAKE LOST ON THE SAME OUTAGE, failing as the
 				// store comes back: it joins the run's loop while the loop's
 				// first answered round is asked.
 				answering: func() {
@@ -1383,6 +1434,53 @@ func TestASettleAsksUntilItsStoreAnswersAndNoLongerThanItsNode(t *testing.T) {
 			for _, id := range []string{"n-1", "n-2"} {
 				if read := readOn(t.Context(), store, "run-1", id); read == nil || !read.Unanswered {
 					t.Errorf("note %s is read %+v, want it marked once the store answered", id, read)
+				}
+			}
+		})
+	})
+	t.Run("a job's hook settles, merged into one ask a round", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			store := sandbox.NewCoordStore(coordmem.NewFleet())
+			gate := make(chan struct{})
+			settles := &gatedSettles{PendingStore: store, gate: gate}
+			runs, _ := steersOver(t, steerRing, settles)
+			runs.stopped = t.Context().Done()
+			launch := workingRun(t, store, runs, "run-1")
+			for _, id := range []string{"n-1", "n-2", "n-3"} {
+				fileSealed(t, runs, "run-1", steer.Note{ID: id, Text: "the note " + id, By: "founder"})
+				if _, err := store.ServeHook(t.Context(), "run-1", sandbox.HookServe{IDs: []string{id},
+					Launch: launch, Statuses: steerTakeStatuses, Serve: sandbox.HookServed{Take: "take-" + id,
+						Boundary: string(types.SteerBoundaryToolBatch)}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// THE FIRST HELD IN ITS ASK, the two after it joining the loop.
+			runs.settleHook(t.Context(), "run-1", sandbox.HookSettle{Launch: launch,
+				Unanswered: []string{"take-n-1"}})
+			synctest.Wait()
+			for _, id := range []string{"n-2", "n-3"} {
+				runs.settleHook(t.Context(), "run-1", sandbox.HookSettle{Launch: launch,
+					Unanswered: []string{"take-" + id}})
+			}
+			close(gate)
+			time.Sleep(time.Minute)
+			synctest.Wait()
+			if _, most := settles.counts(); most != 1 {
+				t.Errorf("%d settles of one run were asked at once, want one loop", most)
+			}
+			settles.mu.Lock()
+			asked := slices.Clone(settles.hooks)
+			settles.mu.Unlock()
+			if len(asked) != 2 || !slices.Equal(asked[0].Unanswered, []string{"take-n-1"}) ||
+				!slices.Equal(asked[1].Unanswered, []string{"take-n-2", "take-n-3"}) {
+				t.Errorf("the store was asked %+v, want the first settle, then the two that joined it merged "+
+					"into one ask", asked)
+			}
+			run := mustRow(t, store, "run-1")
+			for _, n := range run.Steer.Notes {
+				if n.Served != "" || len(n.Serves) != 0 || !n.Waiting() {
+					t.Errorf("note %s holds %+v, want its serve removed and the note waiting", n.ID, n)
 				}
 			}
 		})
@@ -1580,18 +1678,14 @@ func TestAConfirmationWhoseAnswerWasLostReportsItsNoteOnce(t *testing.T) {
 }
 
 // A CONFIRMATION AN INBOX SERVING NO JOB CANNOT TAKE SAYS SO, AND RECORDS
-// NOTHING. The run's opening on the bridge can end as its notes route records a
-// confirmation (the run ended, the seat left the node, or a recovery opened the
-// job again with an inbox of its own), and its end closes the inbox the route
-// found serving. That inbox serves no job, and a read of it took nothing and
-// answered done: the bridge said 204, the plugin never confirmed the note
-// again, and the record kept it served and unread, so the run's ending reported
-// unconfirmed a note OpenCode had delivered, and a later launch told it again
-// as one the session may already show. So such an inbox answers
-// mcpbridge.ErrNoteUntaken, which the bridge turns away to ask again, and
-// the confirmation made again is recorded by the inbox that serves the job. An
-// inbox not yet bound serves no job either, and says so too, though no opening
-// serves one (TestAnOpeningIsFiledOnlyOnceItsInboxIsBound).
+// NOTHING. The run's opening on the bridge can end as its notes route records
+// a confirmation (the run ended, the seat left, or a recovery opened the job
+// with an inbox of its own), closing the inbox the route found serving. Such an
+// inbox answers mcpbridge.ErrNoteUntaken, which the bridge turns away to ask
+// again, and the confirmation made again is recorded by the inbox that serves
+// the job; an inbox not yet bound says so too
+// (TestAnOpeningIsFiledOnlyOnceItsInboxIsBound). The package doc's "An OpenCode
+// confirmation is recorded once, and reported" says why.
 //
 // Mutation: answer a read of an inbox that serves no job done (nil), and both
 // of its reads go red.
@@ -1640,23 +1734,17 @@ func TestAConfirmationAnInboxServingNoJobCannotTakeSaysSo(t *testing.T) {
 }
 
 // A CONFIRMATION ITS JOB'S RECORD NO LONGER TAKES SAYS SO, AND RECORDS NOTHING.
-// A job's completion claims its run, which moves the record out of the
-// statuses its harness takes notes in, while the job's session on the bridge
-// still serves, until the reclaim closes it. A read reaching the inbox then
-// found it serving, took nothing, since the record took no read of the job,
-// and answered done: the bridge said 204, the plugin never confirmed the note
-// again, and the record kept it served and unread. So the inbox answers
-// mcpbridge.ErrNoteUntaken for a note its take left waiting, which the
-// bridge turns away to ask again; and once the claim is handed back, the
-// collection not finished, and the run goes on in its box, the confirmation
-// made again is recorded. A note named that no longer waits is no such note:
-// the same confirmation made once more, through an inbox whose view still
-// shows the note waiting though its job read it, is answered done.
+// A job's completion claims its run, moving the record out of the statuses its
+// harness takes notes in while its session still serves: the inbox answers
+// mcpbridge.ErrNoteUntaken for a note its take left waiting, and once the claim
+// is handed back and the run goes on in its box, the confirmation made again
+// is recorded. A note named that no longer waits, though the inbox's view still
+// shows it, is answered done (the package doc's "An OpenCode confirmation is
+// recorded once, and reported").
 //
 // Mutation: answer a confirmation whose take left a note waiting done, and the
 // read after the claim goes red; turn away every confirmation that took fewer
-// notes than it named, or one that left a note whatever became of it, and the
-// one made once more goes red.
+// notes than it named, or any that left a note, and the last one goes red.
 func TestAConfirmationItsJobsRecordNoLongerTakesSaysSo(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -1758,15 +1846,12 @@ func TestAConfirmationIsJudgedByTheRecordReadAfterItsTake(t *testing.T) {
 }
 
 // A CONFIRMATION TURNED AWAY STILL REPORTS WHAT ITS JOB READ BEFORE. The
-// confirmation the plugin makes again after an answer it lost names a note an
-// earlier confirmation of its job read beside one it owes now, and reports
-// that earlier read, under the same id and at the same instant, whatever
-// became of the earlier report (runInbox.confirmedBefore). Where its job's
-// record takes no read any more, its completion having claimed the run, the
-// confirmation is turned away for the note still waiting; and where the claim
-// goes on to end the run, every try after it is refused. Turned away before it
-// reported the earlier read, it would leave that read reported by nobody: the
-// run's ending reports nothing of a note a step read.
+// confirmation made again after a lost answer names a note an earlier
+// confirmation of its job read beside one it owes now, and reports that earlier
+// read under the same id and instant (runInbox.confirmedBefore), even where it
+// is turned away for the note still waiting (the completion claimed the run) or
+// refused (the claim ended it): the run's ending reports nothing of a note a
+// step read, so turned away first, that read would be reported by nobody.
 //
 // Mutation: turn the confirmation away before it reports what its job read
 // before, and that report is never made.
@@ -1846,16 +1931,13 @@ func (s frozenWatch) WatchNotes(ctx context.Context, turnID string) (<-chan sand
 }
 
 // AN OPENING IS FILED ONLY ONCE ITS INBOX IS BOUND. A box reaches its job's
-// opening the moment the bridge files it: a recovery's at once, with the token
-// it already holds. And the bridge files the opening before it ends the job's
-// opening this node held until then, an end that waits for that opening's
-// answers still on their way, for up to five seconds. The inbox was bound only
-// once the bridge's Open had returned, so all that while the opening served an
-// inbox that served no job: a poll of it spun, its wait handing back a channel
-// that is always closed, and a confirmation was turned away as one no inbox
-// took. So the launch and the recovery bind the inbox before the bridge files
-// the opening (Engine.openBridge), and a confirmation reaching the opening as
-// the job's earlier one ends is recorded.
+// opening the moment the bridge files it, a recovery's at once, and the bridge
+// files it before ending the job's earlier opening, which waits up to five
+// seconds for its answers. So the launch and the recovery bind the inbox before
+// the bridge files the opening (Engine.openBridge), and a confirmation reaching
+// the opening as the earlier one ends is recorded; bound after Open returned,
+// the inbox served no job all that while (the package doc's "An OpenCode
+// confirmation is recorded once, and reported").
 //
 // Mutation: bind the inbox once the bridge's Open has returned, and the
 // confirmation is turned away.
@@ -1954,7 +2036,9 @@ type heldInbox struct {
 	free    sync.Once
 }
 
-func (h *heldInbox) Take(context.Context, string) string { return "" }
+func (h *heldInbox) Take(context.Context, string, *sandbox.NoteCall) string { return "" }
+
+func (h *heldInbox) Cancelled(context.Context, sandbox.NoteCall) {}
 
 func (h *heldInbox) Wait(context.Context, int) ([]mcpbridge.SteerNote, <-chan struct{}) {
 	return nil, h.release
@@ -2002,12 +2086,14 @@ func TestStopReadsTheStoreEvenWhenTheViewIsStale(t *testing.T) {
 	launch := workingRun(t, store, runs, "run-1")
 	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
 	inbox := boundInbox(t, runs, store, "run-1", launch)
-	if got := inbox.Take(t.Context(), mcpbridge.SteerEventToolBatch); got != "" {
+	if got := inbox.Take(t.Context(), mcpbridge.SteerEventToolBatch, hookCall()); got != "" {
 		t.Fatalf("a batch answered %q from a view that never heard the record", got)
 	}
-	if got := inbox.Take(t.Context(), mcpbridge.SteerEventFinish); !strings.Contains(got, "use staging") {
-		t.Errorf("the finish answered %q, want the note the record holds", got)
+	got := inbox.Take(t.Context(), mcpbridge.SteerEventFinish, hookCall())
+	if !strings.Contains(got, "use staging") {
+		t.Fatalf("the finish answered %q, want the note the record holds", got)
 	}
+	servedNotRead(t, store, "run-1", "n-1", launch, takeOf(t, got))
 }
 
 // A RUN PARKED ON ITS QUESTION HOLDS ITS NOTES FOR WHAT RESUMES IT: a note to it
@@ -2037,7 +2123,7 @@ func TestAParkedRunHoldsItsNotesForWhatResumesIt(t *testing.T) {
 	if err != nil || filed.Status != steer.StatusAccepted || filed.Reads != steer.ReadsAfterAnswer {
 		t.Fatalf("a note to the parked run = %+v, %v, want accepted and read after the answer", filed, err)
 	}
-	if got := inbox.Take(ctx, mcpbridge.SteerEventFinish); got != "" {
+	if got := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall()); got != "" {
 		t.Errorf("the parked run's harness took %q", got)
 	}
 
@@ -2143,35 +2229,44 @@ func TestAnEndingExpiresWaitingNotesOnceUnderStableIDs(t *testing.T) {
 }
 
 // AN ENDING REPORTS EACH NOTE NO STEP REPORTED, AS ITS RECORD KNOWS IT: a note a
-// take recorded read and whose answer was lost, marked unanswered and told by no
-// later launch, MISSED, at the step that took it; one the run's bridge handed to
-// its job's harness, which never confirmed it, UNCONFIRMED, at that job and the
-// iteration the record keeps for it; one still waiting EXPIRED, naming no step;
-// and nothing of a note a step reported reading. Each once, under the ending's
-// ids, at its instant.
+// review's take recorded read and whose answer was lost, marked unanswered and
+// told by no later launch, MISSED, at the round that took it; one a hook served
+// whose job's session proves it never took, MISSED at that serve; one the
+// run's bridge handed to its job's harness, never confirmed, UNCONFIRMED, at
+// that job and the iteration the record keeps for it; one still waiting
+// EXPIRED, naming no step; and nothing of a note a step reported reading.
 //
 // Mutation: report a missed note at no step, an unconfirmed one at no job or as
-// expired, or leave either out, and the case goes red.
+// expired, or leave any out, and the case goes red.
 func TestAnEndingReportsEachNoteAsItsRecordKnowsIt(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
 	runs, p := steersOver(t, steerRing, store)
 	launch := workingRun(t, store, runs, "run-1")
-	for _, id := range []string{"n-read", "n-missed", "n-handed", "n-waiting"} {
+	for _, id := range []string{"n-read", "n-missed", "n-absent", "n-handed", "n-waiting"} {
 		fileSealed(t, runs, "run-1", steer.Note{ID: id, Text: "the note " + id, By: "founder"})
 	}
 	take := func(id, name string) {
 		t.Helper()
 		if _, err := store.TakeNotes(ctx, "run-1", sandbox.NoteTake{IDs: []string{id}, Launch: launch,
-			Statuses: steerTakeStatuses, Read: sandbox.NoteRead{Phase: "execute", Round: 1,
-				Boundary: "tool_batch", Launch: launch, Take: name}}); err != nil {
+			Statuses: steerTakeStatuses, Read: sandbox.NoteRead{Phase: "review", Round: 1,
+				Boundary: string(types.SteerBoundaryRound), Take: name}}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	take("n-read", "answered")
 	take("n-missed", "lost")
 	if _, err := store.SettleTake(ctx, "run-1", sandbox.NoteSettle{Take: "lost", Unanswered: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ServeHook(ctx, "run-1", sandbox.HookServe{IDs: []string{"n-absent"}, Launch: launch,
+		Statuses: steerTakeStatuses, Serve: sandbox.HookServed{Take: "absent",
+			Boundary: string(types.SteerBoundaryToolBatch), Iteration: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SettleHook(ctx, "run-1", sandbox.HookSettle{Launch: launch,
+		Absent: []string{"absent"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.ServeNotes(ctx, "run-1", sandbox.NoteServe{IDs: []string{"n-handed"}, Launch: launch,
@@ -2199,9 +2294,13 @@ func TestAnEndingReportsEachNoteAsItsRecordKnowsIt(t *testing.T) {
 	if rec := got["n-waiting"]; rec.Outcome != types.SteerExpired || rec.Boundary != "" || rec.LaunchID != "" {
 		t.Errorf("the waiting note was reported %+v, want it expired at no step", rec)
 	}
-	if rec := got["n-missed"]; rec.Outcome != types.SteerMissed || rec.Phase != types.PhaseExecute ||
-		rec.Round != 1 || rec.Boundary != types.SteerBoundaryToolBatch || rec.LaunchID != launch {
-		t.Errorf("the note a lost take recorded was reported %+v, want it missed at the tool batch of job %s",
+	if rec := got["n-missed"]; rec.Outcome != types.SteerMissed || rec.Phase != types.PhaseReview ||
+		rec.Round != 1 || rec.Boundary != types.SteerBoundaryRound || rec.LaunchID != "" {
+		t.Errorf("the note a lost take recorded was reported %+v, want it missed at the review's first round", rec)
+	}
+	if rec := got["n-absent"]; rec.Outcome != types.SteerMissed || rec.Phase != types.PhaseExecute ||
+		rec.Iteration != 1 || rec.Boundary != types.SteerBoundaryToolBatch || rec.LaunchID != launch {
+		t.Errorf("the note a serve proved absent was reported %+v, want it missed at the tool batch of job %s",
 			rec, launch)
 	}
 	if rec := got["n-handed"]; rec.Outcome != types.SteerUnconfirmed || rec.Phase != types.PhaseExecute ||
@@ -2210,38 +2309,39 @@ func TestAnEndingReportsEachNoteAsItsRecordKnowsIt(t *testing.T) {
 		t.Errorf("the note handed to the job was reported %+v, want it unconfirmed at job %s, iteration %d",
 			rec, launch, run.Launch.Iteration)
 	}
-	if len(got) != 3 {
-		t.Errorf("the ending reported %d notes, want the three no step reported", len(got))
+	if len(got) != 4 {
+		t.Errorf("the ending reported %d notes, want the four no step reported", len(got))
 	}
 }
 
 // A NOTE A TAKE NEVER HANDED OVER IS DELIVERED WHERE A LATER LAUNCH TOLD IT
-// AGAIN, and missed only where none did. A take whose answer was lost is marked
-// unanswered: its harness never had the note. The brief of every later launch
-// tells it again, and its runner names it (runner.AgentRunRequest.Retold); the
-// launch's write records it read by the job it opens, told again, at the
-// take's own place among the reads, so the turn carries it as that job's
-// brief's read, unmarked, ahead of a note a later take read. The ending
-// reports it delivered at that brief, told again, where the job started; and
-// missed at the take where no launch whose job started told it — a launch that
-// failed after its write among them, whose brief handed nothing over, the
-// take's read kept beside its telling. A note an answered take read is its
-// step's to report, and the ending reports nothing of it.
+// AGAIN, and missed only where none did. A review's take whose answer was lost
+// is marked unanswered: its reader never had the note. The brief of every
+// later launch tells it again (runner.AgentRunRequest.Retold); the launch's
+// write records it read by the job it opens, told again, at the take's own
+// place among the reads, so the turn carries it unmarked, ahead of a note a
+// later take read. The ending reports it delivered at that brief, told again,
+// where the job started; and missed at the take where no launch whose job
+// started told it. The twin: a hook's serve the job's session lacks leaves the
+// note waiting at its first serve's place, and a later launch's brief reads it
+// there, its runner reporting it where its job started, and the ending missed
+// at the serve where none did.
 //
 // Mutation: leave the marked read as the launch found it, place the telling at
 // the write's place, report a note told again as nothing, as missed or as a
-// plain read where its job started, or as expired or at its brief where its
-// job never started, or one never told again as anything but missed at its
-// take, and a case goes red.
+// plain read where its job started, or one never told again as anything but
+// missed at its take or its serve, and a case goes red.
 func TestAMarkedNoteIsDeliveredWhereALaterLaunchToldItAgain(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		relaunch, start bool
-		want            types.SteerOutcome
+		hook, relaunch, start bool
+		want                  types.SteerOutcome
 	}{
 		"told again by a later job that started":             {relaunch: true, start: true, want: types.SteerDelivered},
 		"told again by a launch that failed after its write": {relaunch: true, want: types.SteerMissed},
 		"never told again": {want: types.SteerMissed},
+		"a lost serve, told by a later job that started": {hook: true, relaunch: true, start: true},
+		"a lost serve, never told again":                 {hook: true, want: types.SteerMissed},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -2254,30 +2354,50 @@ func TestAMarkedNoteIsDeliveredWhereALaterLaunchToldItAgain(t *testing.T) {
 			take := func(id, name string) {
 				t.Helper()
 				if _, err := store.TakeNotes(ctx, "run-1", sandbox.NoteTake{IDs: []string{id}, Launch: launch,
-					Statuses: steerTakeStatuses, Read: sandbox.NoteRead{Phase: "execute", Iteration: 1, Round: 1,
-						Boundary: string(types.SteerBoundaryToolBatch), Launch: launch, Take: name}}); err != nil {
+					Statuses: steerTakeStatuses, Read: sandbox.NoteRead{Phase: string(types.PhaseReview),
+						Iteration: 1, Round: 1, Boundary: string(types.SteerBoundaryRound), Take: name}}); err != nil {
 					t.Fatal(err)
 				}
 			}
-			take("n-1", "lost")
-			if _, err := store.SettleTake(ctx, "run-1", sandbox.NoteSettle{Take: "lost", Unanswered: true}); err != nil {
-				t.Fatal(err)
+			placeOf := 1
+			if tc.hook {
+				if _, err := store.ServeHook(ctx, "run-1", sandbox.HookServe{IDs: []string{"n-1"}, Launch: launch,
+					Statuses: steerTakeStatuses, Serve: sandbox.HookServed{Take: "lost",
+						Boundary: string(types.SteerBoundaryToolBatch), Iteration: 1}}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.SettleHook(ctx, "run-1", sandbox.HookSettle{Launch: launch,
+					Absent: []string{"lost"}}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				take("n-1", "lost")
+				if _, err := store.SettleTake(ctx, "run-1", sandbox.NoteSettle{Take: "lost", Unanswered: true}); err != nil {
+					t.Fatal(err)
+				}
+				placeOf = readOn(ctx, store, "run-1", "n-1").Order
 			}
 			take("n-2", "answered")
-			marked := *readOn(ctx, store, "run-1", "n-1")
 			row := mustRow(t, store, "run-1")
 			var relaunched string
 			if tc.relaunch {
-				brief := claimedSource(t, store, runs, launch).Brief(ctx)
-				if !slices.Equal(brief.Unanswered, []string{"n-1"}) {
-					t.Fatalf("the relaunch's brief says %v unanswered, want n-1", brief.Unanswered)
-				}
-				// THE LAUNCH'S WRITE, the notes its brief tells again named as its
-				// launcher names them.
+				source := claimedSource(t, store, runs, launch)
+				brief := source.Brief(ctx)
 				claimed := mustRow(t, store, "run-1")
 				fence := sandbox.Fence{Owner: claimed.Owner, Epoch: claimed.OwnerEpoch}
 				relaunch := claimed
-				relaunch.RetoldNotes = retoldNotes(2, brief.Unanswered)
+				if tc.hook {
+					sealed, err := runs.briefNotes("run-1", 2, brief.Notes, source)
+					if err != nil || len(sealed) != 1 || sealed[0].ID != "n-1" {
+						t.Fatalf("the relaunch's brief carries %+v (%v), want n-1", sealed, err)
+					}
+					relaunch.BriefNotes = sealed
+				} else {
+					if !slices.Equal(brief.Unanswered, []string{"n-1"}) {
+						t.Fatalf("the relaunch's brief says %v unanswered, want n-1", brief.Unanswered)
+					}
+					relaunch.RetoldNotes = retoldNotes(2, brief.Unanswered)
+				}
 				opened, err := store.BeginLaunch(ctx, relaunch, fence)
 				if err != nil {
 					t.Fatalf("BeginLaunch: %v", err)
@@ -2294,14 +2414,14 @@ func TestAMarkedNoteIsDeliveredWhereALaterLaunchToldItAgain(t *testing.T) {
 				for _, read := range runs.carried(row) {
 					order = append(order, read.ID)
 					if read.ID == "n-1" && (read.Unanswered || read.Launch != relaunched ||
-						read.Boundary != types.SteerBoundaryBrief || read.Iteration != 2 || read.Order != marked.Order) {
+						read.Boundary != types.SteerBoundaryBrief || read.Iteration != 2 || read.Order != placeOf) {
 						t.Errorf("the note told again is carried %+v, want job %s's brief's read, unmarked, at its "+
-							"take's place %d", read.Reading, relaunched, marked.Order)
+							"place %d", read.Reading, relaunched, placeOf)
 					}
 				}
 				if !slices.Equal(order, []string{"n-1", "n-2"}) {
 					t.Errorf("the turn carries its notes as %v, want n-1 then n-2, the note told again at its "+
-						"take's place", order)
+						"place", order)
 				}
 			}
 			row.Ending = &sandbox.RecordedEnding{ID: "end-1", At: time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)}
@@ -2320,38 +2440,76 @@ func TestAMarkedNoteIsDeliveredWhereALaterLaunchToldItAgain(t *testing.T) {
 					t.Errorf("the ending reported a note an answered take read: %+v", r)
 				}
 			}
+			// THE BRIEF'S OWN READ, its job started, is its runner's to report.
+			if tc.want == "" {
+				if rec != nil {
+					t.Errorf("the ending reported %+v, want nothing of a note a started job's brief read", *rec)
+				}
+				return
+			}
 			if rec == nil {
 				t.Fatalf("the ending reported nothing of the note, want it %s", tc.want)
 			}
-			if got := *rec; tc.want == types.SteerDelivered {
-				if got.Outcome != tc.want || !got.Retold || got.Phase != types.PhaseExecute || got.Iteration != 2 ||
-					got.Round != 1 || got.Boundary != types.SteerBoundaryBrief || got.LaunchID != relaunched {
-					t.Errorf("the note is reported %+v, want it delivered at job %s's brief, told again", got,
-						relaunched)
+			got := *rec
+			switch {
+			case tc.want == types.SteerDelivered:
+				if got.Outcome != tc.want || got.Retold == tc.hook || got.Phase != types.PhaseExecute ||
+					got.Iteration != 2 || got.Round != 1 || got.Boundary != types.SteerBoundaryBrief ||
+					got.LaunchID != relaunched {
+					t.Errorf("the note is reported %+v, want it delivered at job %s's brief, told again unless "+
+						"no read of it was marked", got, relaunched)
 				}
-			} else if got.Outcome != tc.want || got.Retold || got.Phase != types.PhaseExecute || got.Iteration != 1 ||
-				got.Boundary != types.SteerBoundaryToolBatch || got.LaunchID != launch {
-				t.Errorf("the note is reported %+v, want it missed at job %s's tool batch", got, launch)
+			case tc.hook:
+				if got.Outcome != tc.want || got.Phase != types.PhaseExecute || got.Iteration != 1 ||
+					got.Boundary != types.SteerBoundaryToolBatch || got.LaunchID != launch {
+					t.Errorf("the note is reported %+v, want it missed at job %s's serve", got, launch)
+				}
+			default:
+				if got.Outcome != tc.want || got.Retold || got.Phase != types.PhaseReview || got.Iteration != 1 ||
+					got.Boundary != types.SteerBoundaryRound || got.LaunchID != "" {
+					t.Errorf("the note is reported %+v, want it missed at the review's round", got)
+				}
 			}
 		})
 	}
 }
 
-// A NOTE A HOOK NEVER HANDED OVER IS TOLD AGAIN BY THE NEXT LAUNCH, THROUGH THE
-// REAL TURN, AND DELIVERED THERE. The run's take of a note landed and its answer
-// was lost, and its settle marked the read unanswered. The review sends the
-// round back: the relaunch's runner names the marked note told again, its
-// launcher hands that to the launch, and the launch's write records the note
-// read by the job it opens, told again, at the take's own place among the
-// reads; the run is handed its brief with the note in it. The review then
-// accepts, and the turn's ending reports the note delivered at that brief,
-// told again, once.
+// A NOTE A TAKE NEVER HANDED OVER IS TOLD AGAIN BY THE NEXT LAUNCH, THROUGH THE
+// REAL TURN, AND DELIVERED THERE. A review's take of a note landed, its answer
+// lost and its read marked unanswered; the review sends the round back, the
+// relaunch's runner names the note told again, its launcher hands that on, and
+// the launch's write records it read by the job it opens, told again, at the
+// take's place; the run's brief holds it. The review accepts, and the ending
+// reports it delivered at that brief, told again, once. Its twin, a hook's
+// serve the job's session lacks, leaves the note for the review's first round.
 //
 // Mutation: drop the notes told again from the runner's request, from the
 // launcher's hand-over or from the launch's write, or report the note as
 // anything but delivered there, told again, and the case goes red.
 func TestAMarkedNoteIsToldAgainByTheNextLaunchThroughTheRealTurn(t *testing.T) {
 	t.Parallel()
+	t.Run("a lost serve", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		c := newSteerCase(t, nil)
+		parkOnARun(t, c.e, c.rig, "run-1")
+		first := c.rig.row(t, "run-1")
+		c.file(t, "run-1", "n-1", "use the staging database")
+		pending := c.e.sandbox.Load().pending
+		servedByAHook(t, pending, first, "n-1")
+		if _, err := pending.SettleHook(ctx, "run-1", sandbox.HookSettle{Launch: first.LaunchID,
+			Absent: []string{"take-1"}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.rig.collect(t, "run-1"); err != nil {
+			t.Fatalf("collect: %v", err)
+		}
+		got := c.steeringOver(t, "run-1", 1)
+		if len(got) != 1 || got[0].Outcome != types.SteerDelivered || got[0].Phase != types.PhaseReview ||
+			got[0].Boundary != types.SteerBoundaryRound {
+			t.Errorf("the turn recorded %+v, want the note delivered once, at the review's round", got)
+		}
+	})
 	ctx := t.Context()
 	c := newSteerCaseOn(t, &reviewWatch{sendBack: 1}, nil)
 	// ROOM FOR THE ROUND THE REVIEW SENDS BACK.
@@ -2361,8 +2519,8 @@ func TestAMarkedNoteIsToldAgainByTheNextLaunchThroughTheRealTurn(t *testing.T) {
 	c.file(t, "run-1", "n-1", "use the staging database")
 	pending := c.e.sandbox.Load().pending
 	if _, err := pending.TakeNotes(ctx, "run-1", sandbox.NoteTake{IDs: []string{"n-1"}, Launch: first,
-		Statuses: steerTakeStatuses, Read: sandbox.NoteRead{Phase: string(types.PhaseExecute), Iteration: 1,
-			Round: 1, Boundary: string(types.SteerBoundaryToolBatch), Launch: first, Take: "lost"}}); err != nil {
+		Statuses: steerTakeStatuses, Read: sandbox.NoteRead{Phase: string(types.PhaseReview), Iteration: 1,
+			Round: 1, Boundary: string(types.SteerBoundaryRound), Take: "lost"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pending.SettleTake(ctx, "run-1", sandbox.NoteSettle{Take: "lost", Unanswered: true}); err != nil {
@@ -2969,23 +3127,25 @@ func (f providerFunc) Complete(ctx context.Context, req llm.Request) (*llm.Compl
 // AN ENDING REPORTS A NOTE A HOOK WAS SERVED AT THAT SERVE. A note a run's hook
 // was served and its job's session never confirmed is UNCONFIRMED at the step
 // the hook answered, of the job it served and at the iteration the serve kept,
-// never at a poll's step; one whose every serve was lost, here to its harness's
-// cancel, and that no step read since, is MISSED at the last of them; and an
-// item for the job, served as a note is, is reported as nothing.
+// never at a poll's step; so is one whose serve its harness cancelled, whose
+// session may hold it; one whose serve its session proves absent, read by no
+// step since, is MISSED there; and the job's item is reported as nothing.
 //
-// Mutation: report a hook's live serve at a poll's step or at no step, report a
-// note whose serves were all lost as expired, or report the job's item, and the
-// case goes red.
+// Mutation: report a hook's live serve at a poll's step or at no step, report
+// the cancelled serve's note missed (sandbox's endOf without its `lost != nil
+// && mayHold` arm), the absent one's as anything but missed, or report the
+// job's item, and the case goes red.
 func TestAnEndingReportsAHookServedNoteAtItsServe(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	fleet := coordmem.NewFleet()
+	store := sandbox.NewCoordStore(fleet)
 	runs, p := steersOver(t, steerRing, store)
 	launch := workingRun(t, store, runs, "run-1")
-	for _, id := range []string{"n-live", "n-lost"} {
+	for _, id := range []string{"n-live", "n-lost", "n-absent"} {
 		fileSealed(t, runs, "run-1", steer.Note{ID: id, Text: "the note " + id, By: "founder"})
 	}
-	fileItemFor(t, runs, store, "run-1", "i-1", launch)
+	placeItemFor(t, runs, fleet, "run-1", "i-1", launch)
 	serve := func(take string, call int, boundary types.SteerBoundary, iteration int, ids ...string) {
 		t.Helper()
 		if _, err := store.ServeHook(ctx, "run-1", sandbox.HookServe{IDs: ids, Launch: launch,
@@ -2996,7 +3156,8 @@ func TestAnEndingReportsAHookServedNoteAtItsServe(t *testing.T) {
 	}
 	serve("take-1", 1, types.SteerBoundaryFinish, 4, "n-live", "i-1")
 	serve("take-2", 2, types.SteerBoundaryToolBatch, 2, "n-lost")
-	if _, err := store.SettleHook(ctx, "run-1", sandbox.HookSettle{Launch: launch,
+	serve("take-3", 3, types.SteerBoundaryToolBatch, 3, "n-absent")
+	if _, err := store.SettleHook(ctx, "run-1", sandbox.HookSettle{Launch: launch, Absent: []string{"take-3"},
 		Cancelled: []sandbox.NoteCall{{Session: "mcp-session-1", ID: "2"}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -3017,12 +3178,17 @@ func TestAnEndingReportsAHookServedNoteAtItsServe(t *testing.T) {
 		t.Errorf("the note a live serve handed over was reported %+v, want it unconfirmed at the finish, "+
 			"iteration 4, of job %s", rec, launch)
 	}
-	if rec := got["n-lost"]; rec.Outcome != types.SteerMissed || rec.Boundary != types.SteerBoundaryToolBatch ||
+	if rec := got["n-lost"]; rec.Outcome != types.SteerUnconfirmed || rec.Boundary != types.SteerBoundaryToolBatch ||
 		rec.Iteration != 2 || rec.LaunchID != launch {
-		t.Errorf("the note whose serve a cancel lost was reported %+v, want it missed at the tool batch, "+
+		t.Errorf("the note whose serve a cancel lost was reported %+v, want it unconfirmed at the tool batch, "+
 			"iteration 2, of job %s", rec, launch)
 	}
-	if rec, ok := got["i-1"]; ok || len(got) != 2 {
+	if rec := got["n-absent"]; rec.Outcome != types.SteerMissed || rec.Boundary != types.SteerBoundaryToolBatch ||
+		rec.Iteration != 3 || rec.LaunchID != launch {
+		t.Errorf("the note whose serve its session proves absent was reported %+v, want it missed at the tool "+
+			"batch, iteration 3, of job %s", rec, launch)
+	}
+	if rec, ok := got["i-1"]; ok || len(got) != 3 {
 		t.Errorf("the ending reported %d notes, the job's item among them: %+v", len(got), rec)
 	}
 }
@@ -3088,83 +3254,139 @@ func TestAnEndingReportsAHookServedNoteAMarkedTakeReadAtItsServe(t *testing.T) {
 // the review takes none and ends no round for one, a relaunch's brief tells
 // none, the segment resuming the turn carries none and tells none as one its
 // session may show, the ending reports none, and the next launch's write
-// removes it. (The hook's half, on a Claude Code job, is the hook's serve's.)
+// removes it. On a Claude Code job its hook serves it, and its collection
+// reads it where the job's session shows it, with the same silence outside.
 //
 // Mutation: let any of those readers take, tell, carry, record or report the
 // item, or keep it past the next launch, and the case goes red.
 func TestAnItemForAJobNeverLeavesIt(t *testing.T) {
 	t.Parallel()
-	ctx := t.Context()
-	store := sandbox.NewCoordStore(coordmem.NewFleet())
-	runs, p := steersOver(t, steerRing, store)
-	launch := workingRun(t, store, runs, "run-1")
-	// THE ITEMS FILED FIRST, so the record of a confirmation that took one
-	// would be published ahead of the person's note's.
-	fileItemFor(t, runs, store, "run-1", "i-read", launch)
-	fileItemFor(t, runs, store, "run-1", "i-waiting", launch)
-	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
-	inbox := boundInbox(t, runs, store, "run-1", launch)
-	viewHolds(t, inbox, 3)
-	polled, _ := inbox.Wait(ctx, 0)
-	var ids []string
-	for _, n := range polled {
-		ids = append(ids, n.ID)
-	}
-	if want := []string{"i-read", "i-waiting", "n-1"}; !slices.Equal(ids, want) {
-		t.Fatalf("the job's poll was answered %v, want its own items and the person's note: %v", ids, want)
-	}
-	if err := inbox.Read(ctx, []string{"i-read", "n-1"}); err != nil {
-		t.Fatalf("Read: %v", err)
-	}
-	if read := readOn(ctx, store, "run-1", "i-read"); read == nil || read.Launch != launch ||
-		read.Boundary != string(types.SteerBoundaryStep) {
-		t.Fatalf("the job's confirmed item is read %+v, want it read at job %s's step", read, launch)
-	}
-	eventually(t, "the person's note recorded delivered", func() bool { return len(steered(p)) > 0 })
-
-	source := claimedSource(t, store, runs, launch)
-	eventually(t, "the segment's view to hold the waiting item", func() bool {
-		view, opened, _ := source.watch.snapshot()
-		return view.Found && len(opened) == 1
-	})
-	if source.Waiting() {
-		t.Error("the review reports a note waiting where only the job's item waits")
-	}
-	if taken := source.Take(ctx, reviewRound(1)); len(taken) != 0 {
-		t.Errorf("the review took %+v, want no job's item", taken)
-	}
-	if brief := source.Brief(ctx); len(brief.Notes) != 0 {
-		t.Errorf("a relaunch's brief carries %+v, want no job's item", brief.Notes)
-	}
-	row := mustRow(t, store, "run-1")
-	var carried []string
-	for _, r := range runs.carried(row) {
-		carried = append(carried, r.Note.ID)
-	}
-	if !slices.Equal(carried, []string{"n-1"}) {
-		t.Errorf("the resumed segment carries %v, want the person's note alone", carried)
-	}
-	if got := servedNotes(row); !slices.Equal(got, []string{"n-1"}) {
-		t.Errorf("a continued session is told %v as notes it may already show, want the person's note alone", got)
-	}
-	row.Ending = &sandbox.RecordedEnding{ID: "end-1", At: time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)}
-	if err := runs.ended(ctx, row); err != nil {
-		t.Fatalf("ended: %v", err)
-	}
-	for _, rec := range steered(p) {
-		if rec.NoteID != "n-1" || rec.Outcome != types.SteerDelivered {
-			t.Errorf("a record of the turn's notes says %+v, want the person's note delivered alone", rec)
+	t.Run("an OpenCode job's poll and confirmation", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		fleet := coordmem.NewFleet()
+		store := sandbox.NewCoordStore(fleet)
+		runs, p := steersOver(t, steerRing, store)
+		launch := workingRun(t, store, runs, "run-1")
+		// THE ITEMS ON THE RECORD FIRST, so the record of a confirmation that took
+		// one would be published ahead of the person's note's.
+		placeItemFor(t, runs, fleet, "run-1", "i-read", launch)
+		placeItemFor(t, runs, fleet, "run-1", "i-waiting", launch)
+		fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+		inbox := boundInbox(t, runs, store, "run-1", launch)
+		viewHolds(t, inbox, 3)
+		polled, _ := inbox.Wait(ctx, 0)
+		var ids []string
+		for _, n := range polled {
+			ids = append(ids, n.ID)
 		}
-	}
-	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "run-1", AgentID: sweAgent, AgentHandle: "swe",
-		Role: "SWE", Harness: "opencode"}, sandbox.Fence{}); err != nil {
-		t.Fatalf("relaunch: %v", err)
-	}
-	var left []string
-	for _, n := range mustRow(t, store, "run-1").Steer.Notes {
-		left = append(left, n.ID)
-	}
-	if !slices.Equal(left, []string{"n-1"}) {
-		t.Errorf("the next launch left notes %v, want the person's note alone", left)
-	}
+		if want := []string{"i-read", "i-waiting", "n-1"}; !slices.Equal(ids, want) {
+			t.Fatalf("the job's poll was answered %v, want its own items and the person's note: %v", ids, want)
+		}
+		if err := inbox.Read(ctx, []string{"i-read", "n-1"}); err != nil {
+			t.Fatalf("Read: %v", err)
+		}
+		if read := readOn(ctx, store, "run-1", "i-read"); read == nil || read.Launch != launch ||
+			read.Boundary != string(types.SteerBoundaryStep) {
+			t.Fatalf("the job's confirmed item is read %+v, want it read at job %s's step", read, launch)
+		}
+		eventually(t, "the person's note recorded delivered", func() bool { return len(steered(p)) > 0 })
+
+		source := claimedSource(t, store, runs, launch)
+		eventually(t, "the segment's view to hold the waiting item", func() bool {
+			view, opened, _ := source.watch.snapshot()
+			return view.Found && len(opened) == 1
+		})
+		if source.Waiting() {
+			t.Error("the review reports a note waiting where only the job's item waits")
+		}
+		if taken := source.Take(ctx, reviewRound(1)); len(taken) != 0 {
+			t.Errorf("the review took %+v, want no job's item", taken)
+		}
+		if brief := source.Brief(ctx); len(brief.Notes) != 0 {
+			t.Errorf("a relaunch's brief carries %+v, want no job's item", brief.Notes)
+		}
+		row := mustRow(t, store, "run-1")
+		var carried []string
+		for _, r := range runs.carried(row) {
+			carried = append(carried, r.Note.ID)
+		}
+		if !slices.Equal(carried, []string{"n-1"}) {
+			t.Errorf("the resumed segment carries %v, want the person's note alone", carried)
+		}
+		if got := servedNotes(row); !slices.Equal(got, []string{"n-1"}) {
+			t.Errorf("a continued session is told %v as notes it may already show, want the person's note alone", got)
+		}
+		row.Ending = &sandbox.RecordedEnding{ID: "end-1", At: time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)}
+		if err := runs.ended(ctx, row); err != nil {
+			t.Fatalf("ended: %v", err)
+		}
+		for _, rec := range steered(p) {
+			if rec.NoteID != "n-1" || rec.Outcome != types.SteerDelivered {
+				t.Errorf("a record of the turn's notes says %+v, want the person's note delivered alone", rec)
+			}
+		}
+		if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{TurnID: "run-1", AgentID: sweAgent, AgentHandle: "swe",
+			Role: "SWE", Harness: "opencode"}, sandbox.Fence{}); err != nil {
+			t.Fatalf("relaunch: %v", err)
+		}
+		var left []string
+		for _, n := range mustRow(t, store, "run-1").Steer.Notes {
+			left = append(left, n.ID)
+		}
+		if !slices.Equal(left, []string{"n-1"}) {
+			t.Errorf("the next launch left notes %v, want the person's note alone", left)
+		}
+	})
+	t.Run("a Claude Code job's hook and collection", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		fleet := coordmem.NewFleet()
+		store := sandbox.NewCoordStore(fleet)
+		runs, p := steersOver(t, steerRing, store)
+		launch := workingRun(t, store, runs, "run-1")
+		placeItemFor(t, runs, fleet, "run-1", "i-held", launch)
+		fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+		inbox := boundInbox(t, runs, store, "run-1", launch)
+		answer := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall())
+		if !strings.Contains(answer, "item for the job i-held") || !strings.Contains(answer, "use staging") {
+			t.Fatalf("the job's hook was answered %q, want its own item and the person's note", answer)
+		}
+		// THE COLLECTION'S VERDICT, as the job's session shows the hook took them.
+		confirmed, err := store.SettleHook(ctx, "run-1", sandbox.HookSettle{Launch: launch,
+			Held: []string{takeOf(t, answer)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		runs.confirmed(ctx, mustRow(t, store, "run-1"), confirmed)
+		eventually(t, "the person's note recorded delivered", func() bool { return len(steered(p)) > 0 })
+		source := claimedSource(t, store, runs, launch)
+		if taken := source.Take(ctx, reviewRound(1)); len(taken) != 0 {
+			t.Errorf("the review took %+v, want nothing", taken)
+		}
+		if brief := source.Brief(ctx); len(brief.Notes) != 0 {
+			t.Errorf("a relaunch's brief carries %+v, want no job's item", brief.Notes)
+		}
+		row := mustRow(t, store, "run-1")
+		var carried []string
+		for _, r := range runs.carried(row) {
+			carried = append(carried, r.Note.ID)
+		}
+		if !slices.Equal(carried, []string{"n-1"}) {
+			t.Errorf("the resumed segment carries %v, want the person's note alone", carried)
+		}
+		if got := servedNotes(row); !slices.Equal(got, []string{"n-1"}) {
+			t.Errorf("a continued session is told %v as notes it may already show, want the person's note alone",
+				got)
+		}
+		row.Ending = &sandbox.RecordedEnding{ID: "end-1", At: time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)}
+		if err := runs.ended(ctx, row); err != nil {
+			t.Fatalf("ended: %v", err)
+		}
+		for _, rec := range steered(p) {
+			if rec.NoteID != "n-1" || rec.Outcome != types.SteerDelivered {
+				t.Errorf("a record of the turn's notes says %+v, want the person's note delivered alone", rec)
+			}
+		}
+	})
 }

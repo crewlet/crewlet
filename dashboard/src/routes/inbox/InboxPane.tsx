@@ -51,6 +51,7 @@ import {
   ChevronLeftGlyph,
   CircleCheckGlyph,
   FileTextGlyph,
+  InboxGlyph,
   LayersGlyph,
   SquareKanbanGlyph,
   SquareTerminalGlyph,
@@ -155,6 +156,8 @@ import { questionWithheld } from "~/lib/access.ts";
 
 interface PaneProps {
   row: InboxRow | null;
+  /** The address names an item that every read has answered without: gone, or not the reader's. */
+  missing?: boolean | undefined;
   /**
    * The list beside the pane is empty and says so in its own empty state. The
    * pane then says no second "All clear": it holds one quiet line, the place a
@@ -194,6 +197,19 @@ interface PaneProps {
 }
 
 export function InboxPane(props: PaneProps) {
+  // AN ITEM THE ADDRESS NAMES AND NOBODY HOLDS is said calmly, never drawn as another item.
+  if (!props.row && props.missing) {
+    return (
+      <div className={`inbox-pane ${props.onBack ? "inbox-pane-missing" : "inbox-pane-empty"}`}>
+        {props.onBack && <BackToInbox onBack={props.onBack} />}
+        <EmptyState
+          icon={<InboxGlyph size={28} />}
+          title="This item is not in your inbox"
+          description="It was answered, cleared or removed, or the link is to someone else's inbox."
+        />
+      </div>
+    );
+  }
   // NO "ALL CLEAR" OVER A LIST STILL LOADING: the pane waits with the list.
   if (!props.row && props.loading) {
     return <div className="inbox-pane inbox-pane-empty" aria-busy="true" />;
@@ -227,6 +243,21 @@ export function InboxPane(props: PaneProps) {
         <OpenPane key={props.row.key} {...props} row={props.row} />
       </ReadingPane>
     </div>
+  );
+}
+
+/** The way back to the list, where the list and the pane are one column. */
+function BackToInbox({ onBack }: { onBack: () => void }) {
+  return (
+    <Button
+      size="small"
+      variant="ghost"
+      className="inbox-pane-back"
+      leadingIcon={<ChevronLeftGlyph size="sm" />}
+      onClick={onBack}
+    >
+      Back to the inbox
+    </Button>
   );
 }
 
@@ -271,17 +302,7 @@ function OpenPane({
   const accessed = row.kind === "decision" ? accessNote(row.subject) : undefined;
   // THE WAY BACK IS ITS OWN ROW at the pane's top, worded: an icon in the
   // byline's start slot floated beside a wrapped byline's middle line.
-  const back = onBack ? (
-    <Button
-      size="small"
-      variant="ghost"
-      className="inbox-pane-back"
-      leadingIcon={<ChevronLeftGlyph size="sm" />}
-      onClick={onBack}
-    >
-      Back to the inbox
-    </Button>
-  ) : undefined;
+  const back = onBack ? <BackToInbox onBack={onBack} /> : undefined;
   const frame: Frame = {
     who,
     name: rowName(row, who),
