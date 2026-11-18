@@ -2721,9 +2721,9 @@ const (
 	// and sort: 6780.7 KiB (6,943,394 bytes), 18,661 over main: 6781 KiB.
 	// A change's conversation as a timeline with finding excerpts: 6801.9 KiB (6,965,137 bytes),
 	// 21,743 over main: 6802 KiB.
-	// A Usage limits column of compact meters per model, on kit 0.156.0: 6887.9 KiB
-	// (7,053,228 bytes), 14,371 over main: 6888 KiB.
-	treeBudget = 5<<20 + 1768<<10
+	// A Usage limits column of compact meters per model, and Finish and save in the model
+	// wizard, on kit 0.156.0: 6889.8 KiB (7,055,206 bytes), 16,349 over main: 6890 KiB.
+	treeBudget = 5<<20 + 1770<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

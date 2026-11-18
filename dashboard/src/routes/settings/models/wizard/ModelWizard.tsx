@@ -8,7 +8,7 @@
  * EDITING IS THE SAME WIZARD, prefilled from the model (`editing`): every step
  * is reachable at once, the name and the harness are its identity and stay, a
  * stored credential is shown as stored and replaced only on request, and
- * Review is a footer button away from any step (design QA Minor 13).
+ * Finish and save tests, checks and saves from any step in one click.
  *
  * THE COMMIT ORDER IS SETUP'S, value then pointer (design §5.1): a pasted
  * credential is tested in a fresh home and stored first, with the draft entry
@@ -82,11 +82,19 @@ import { MODEL_DRAFT_HELP, modelDraftFields } from "./assistantDraft.ts";
 import { HarnessStep } from "./steps/HarnessStep.tsx";
 import { LimitsStep } from "./steps/LimitsStep.tsx";
 import { ModelStep } from "./steps/ModelStep.tsx";
+import { FinishStatus, type Finish } from "./FinishStatus.tsx";
 import { Review, type ReviewCheck, type SaveStage } from "./steps/Review.tsx";
 import { SignInStep, sharedSecret } from "./steps/SignInStep.tsx";
 import { TestStep, routeOf, testWords, type TestState } from "./steps/TestStep.tsx";
 import { UseItFor } from "./steps/UseItFor.tsx";
 import { WhereItRuns } from "./steps/WhereItRuns.tsx";
+
+/** A change the engine's dry run accepted, against the revision it read. */
+interface Prepared {
+  etag: string;
+  before: CompanyDocument;
+  next: NextDocument;
+}
 
 const LEADS: Record<WizardStep, string> = {
   harness:
@@ -303,11 +311,9 @@ export function ModelWizard({
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [engineProblems, setEngineProblems] = useState<ConfigProblem[]>([]);
   const [check, setCheck] = useState<ReviewCheck>({ kind: "idle" });
-  const [prepared, setPrepared] = useState<{
-    etag: string;
-    before: CompanyDocument;
-    next: NextDocument;
-  } | null>(null);
+  const [prepared, setPrepared] = useState<Prepared | null>(null);
+  const [finish, setFinish] = useState<Finish>({ kind: "idle" });
+  const finishing = useRef(false);
   const [saving, setSaving] = useState<SaveStage | false>(false);
   /** The draft whose credential is stored already, so a retried save does not store it twice. */
   const [storedFor, setStoredFor] = useState<string | null>(null);
@@ -379,6 +385,9 @@ export function ModelWizard({
       setEngineProblems([]);
       setCheck({ kind: "idle" });
       setPrepared(null);
+      // A change mid-check abandons the check, so the save never stores the draft as it was.
+      if (finishing.current) inflight.current?.abort();
+      setFinish({ kind: "idle" });
     },
     [original, variableTouched, taken],
   );
@@ -470,25 +479,28 @@ export function ModelWizard({
     return false;
   }
 
-  /** Review's check: the credential's test where one is pasted, then the whole next document's dry run. */
-  async function runCheck() {
+  /**
+   * Review's check: the test call where a credential is pasted (or `withTest`
+   * asks for one), then the whole next document's dry run. The prepared write, or null.
+   */
+  async function runCheck(withTest = false): Promise<Prepared | null> {
     inflight.current?.abort();
     const ctrl = new AbortController();
     inflight.current = ctrl;
     try {
       if (local.length > 0) {
         setCheck({ kind: "problems" });
-        return;
+        return null;
       }
       if (
-        names.length > 0 &&
+        (withTest || names.length > 0) &&
         storedFor !== signature &&
         !(test.kind === "passed" && test.for === signature)
       ) {
         setCheck({ kind: "checking", what: "credential" });
         if (!(await runTest(ctrl.signal))) {
           setCheck({ kind: "problems" });
-          return;
+          return null;
         }
       }
       setCheck({ kind: "checking", what: "document" });
@@ -501,7 +513,7 @@ export function ModelWizard({
               ? "No company is configured yet. Set one up first."
               : refusalWords(read, "check"),
         });
-        return;
+        return null;
       }
       const next = nextDocument(read.document, draft, editingArg);
       const [outcome, baseline] = await Promise.all([
@@ -509,7 +521,8 @@ export function ModelWizard({
         writeDocument(read.document, { etag: read.etag, summary: "", dryRun: true }, ctrl.signal),
       ]);
       if (outcome.kind === "valid") {
-        setPrepared({ etag: read.etag, before: read.document, next });
+        const ready = { etag: read.etag, before: read.document, next };
+        setPrepared(ready);
         setCheck({
           kind: "ready",
           warnings: introducedWarnings(
@@ -517,6 +530,7 @@ export function ModelWizard({
             outcome.warnings,
           ),
         });
+        return ready;
       } else if (outcome.kind === "problems") {
         setEngineProblems([...outcome.problems]);
         setCheck({ kind: "problems" });
@@ -526,6 +540,7 @@ export function ModelWizard({
     } catch (err) {
       if (!isAbort(err)) throw err;
     }
+    return null;
   }
 
   // REVIEW IS CHECKED whenever it is opened; a change to the draft clears the answer.
@@ -551,8 +566,10 @@ export function ModelWizard({
     return `${verb} for ${what}${seats > 0 ? ` (${seats} ${seats === 1 ? "seat" : "seats"})` : ""}`;
   }
 
-  async function save() {
-    if (!prepared || check.kind !== "ready") return;
+  /** Stores the checked change (Review's, or `ready` as Finish and save checked it); whether it saved. */
+  async function save(ready?: Prepared): Promise<boolean> {
+    const checked = ready ?? (check.kind === "ready" ? prepared : null);
+    if (!checked) return false;
     // THE SAVE RUNS TO ITS END ONCE STARTED, whatever happens to the wizard:
     // its requests take no signal, since stopped between the credential and
     // the document it would leave a sealed secret no document names. What
@@ -563,7 +580,7 @@ export function ModelWizard({
     const storing = names.length > 0 && storedFor !== signature;
     setSaving(storing ? "credential" : "document");
     try {
-      let { etag, next } = prepared;
+      let { etag, next } = checked;
       if (storing) {
         const draftEntity = entityChanged ? { entity } : {};
         const stored = await storeCredential(
@@ -572,7 +589,7 @@ export function ModelWizard({
           etag,
         );
         if (stored.kind === "refused") {
-          if (screen.aborted) return;
+          if (screen.aborted) return false;
           const refusal = credentialRefusal(stored, names);
           setEngineProblems(refusal.problems.length > 0 ? refusal.problems : []);
           setCheck(
@@ -580,7 +597,7 @@ export function ModelWizard({
               ? { kind: "problems" }
               : { kind: "blocked", message: refusal.message },
           );
-          return;
+          return false;
         }
         if (!screen.aborted) setStoredFor(signature);
         // A ROTATION RE-ACTIVATES THE REVISION that reads it, which moves the
@@ -590,16 +607,16 @@ export function ModelWizard({
           const read = await getConfig();
           if (
             read.kind !== "document" ||
-            JSON.stringify(read.document) !== JSON.stringify(prepared.before)
+            JSON.stringify(read.document) !== JSON.stringify(checked.before)
           ) {
-            if (screen.aborted) return;
+            if (screen.aborted) return false;
             setPrepared(null);
             setCheck({
               kind: "blocked",
               message:
                 "The configuration changed while this was saving. The credential is stored; go back a step and return to Review to check the change again.",
             });
-            return;
+            return false;
           }
           etag = read.etag;
           next = nextDocument(read.document, draft, editingArg);
@@ -607,13 +624,13 @@ export function ModelWizard({
       }
       if (!screen.aborted) setSaving("document");
       const outcome = await writeDocument(next.doc, { etag, summary: summary(), dryRun: false });
-      if (screen.aborted) return;
+      if (screen.aborted) return outcome.kind === "saved";
       if (outcome.kind === "saved") {
         toast.ok(original ? `Saved ${draft.key}.` : `Added ${draft.key}.`);
         data.reload();
         if (draft.method === "device" && original?.method !== "device") {
           onDevice(draft.key);
-          return;
+          return true;
         }
         if (original) {
           // AN EDIT RETURNS TO WHERE IT WAS OPENED, as Cancel does: the
@@ -623,13 +640,13 @@ export function ModelWizard({
           // away from the list they were working down. The toast confirms,
           // and focus goes back to the control that opened the wizard.
           close();
-          return;
+          return true;
         }
         // A NEW MODEL has no place it was opened from but the Add button:
         // its own page is where it is first seen, and takes focus (design QA M6).
         nav.to(["settings", "models", draft.key]);
         focusWhenShown(pageHeading);
-        return;
+        return true;
       }
       if (outcome.kind === "problems") {
         setEngineProblems([...outcome.problems]);
@@ -638,8 +655,25 @@ export function ModelWizard({
         setPrepared(null);
         setCheck({ kind: "blocked", message: refusalWords(outcome, "save") });
       }
+      return false;
     } finally {
       if (!screen.aborted) setSaving(false);
+    }
+  }
+
+  /** One click from any step of an edit: the test call, the engine's check, then the save. */
+  async function finishAndSave() {
+    if (finishing.current || saving !== false) return;
+    finishing.current = true;
+    setFinish({ kind: "running" });
+    try {
+      if (local.length > 0) setAttempted(new Set(steps));
+      const ready = await runCheck(true);
+      if (!ready && inflight.current?.signal.aborted) return;
+      const saved = ready ? await save(ready) : false;
+      if (!saved && !lifetime().aborted) setFinish({ kind: "failed" });
+    } finally {
+      finishing.current = false;
     }
   }
 
@@ -735,8 +769,13 @@ export function ModelWizard({
         Back
       </Button>
       {original && !reviewing ? (
-        <Button variant="secondary" onClick={() => go("review")}>
-          Review changes
+        <Button
+          variant="secondary"
+          onClick={() => void finishAndSave()}
+          loading={finish.kind === "running"}
+          disabled={finish.kind === "running" || saving !== false}
+        >
+          Finish and save
         </Button>
       ) : null}
     </>
@@ -767,6 +806,21 @@ export function ModelWizard({
         primaryAction={primary}
       >
         <div className="models-stack">
+          {!reviewing ? (
+            <FinishStatus
+              finish={finish}
+              test={test}
+              check={check}
+              saving={saving}
+              problems={listedProblems}
+              modelKey={draft.key}
+              secretNoun={draft.method === "token" ? "token" : "key"}
+              pasted={names.length > 0}
+              editing={!!original}
+              onTestStep={step === "test"}
+              onGo={go}
+            />
+          ) : null}
           {step === "harness" ? (
             <HarnessStep
               draft={draft}
