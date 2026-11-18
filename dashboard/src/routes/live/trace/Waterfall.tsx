@@ -546,14 +546,15 @@ function readAt(m: SteerMark): string {
  * turn in that phase; and that its reader never had it. The executor's is said
  * as never reaching it: a hook's serve was answered, and its harness gave it
  * up or its job's whole session proves it never took it; a serve its session
- * was not shown to hold is unconfirmed ([handedTo]). A round's and an unknown
- * step's keep "never handed over", a review's take whose answer was lost being
- * one.
+ * was not shown to hold is unconfirmed ([handedTo]). A round's, a review's
+ * take whose answer was lost, keeps "never handed over". An unknown step's says
+ * only what `missed` records, as the badge does: a newer build's step may be
+ * one that handed the note over.
  */
 function takenAt(m: SteerMark): string {
   const phase = phaseOf(m);
   if (m.boundary === "unknown" || m.boundary === "")
-    return `taken by the turn${phase ? ` in ${phase}` : ""} but never handed over`;
+    return `taken by the turn${phase ? ` in ${phase}` : ""}, but it never reached its reader`;
   if (m.boundary === "round")
     return `taken at round ${m.round}${phase ? ` of ${phase}` : ""} but never handed over`;
   return `taken for the executor${phase ? ` in ${phase},` : ""} ${READ_AT[m.boundary].words}, but it never reached it`;

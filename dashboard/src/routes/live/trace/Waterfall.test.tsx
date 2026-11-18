@@ -700,6 +700,40 @@ describe("a person's note", () => {
     );
   });
 
+  // A NOTE MISSED AT A STEP THIS BUILD CANNOT NAME says only what `missed`
+  // records, that its reader never had it, as the badge on the launch's bar
+  // beside it does: a newer build's step may be one that handed it over, as a
+  // hook's serve is, so "never handed over" would say more than the record.
+  test("a note missed at a step this build cannot name is said as never reaching its reader", async () => {
+    const events = [
+      ...PARKED,
+      event("agent_turn_steered", 2_000, {
+        note_id: "n",
+        outcome: "missed",
+        phase: "execute",
+        iteration: 1,
+        round: 1,
+        boundary: "prompt_submit",
+        launch_id: "L1",
+        note: "note n",
+      }),
+    ];
+    const marks = steerMarks(events, "turn-1");
+    expect(marks.map((m) => [m.noteId, m.outcome, m.boundary, m.spanId])).toEqual([
+      ["n", "missed", "unknown", "run:L1"],
+    ]);
+    mount(events, RUNNING);
+    await flush();
+    expect(
+      screen.getByText(/taken by the turn in Execute, but it never reached its reader/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/never handed/)).toBeNull();
+    const badge = within(screen.getByRole("button", { name: /^Launch/ })).getByText("note");
+    expect(badge.getAttribute("title")).toBe(
+      "Your note was taken here and never reached its reader",
+    );
+  });
+
   // NAMED BY ITS HEADING, which a screen reader announces: an `aria-label` on
   // a plain `div` is ignored, so the list had no name and no landmark.
   test("the notes are a region a screen reader can find by name", async () => {
