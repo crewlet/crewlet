@@ -72,21 +72,13 @@ func mission(t *testing.T, fx *assistApp) string {
 
 // AN APPROVED PRINCIPLES CHANGE IS THE PAGE'S OWN WRITE, AND NOTHING MORE.
 //
-// The preview reads the principles through the turn's read grant and renders
-// the mission's word diff from the STORED mission; the approval's request is
-// `PUT /config/charter`, the route Company › Principles saves through, sent
-// under the If-Match the proposal's source revision names. Carried on an exec
-// grant bound to it, the change lands and the person reads it. The read grant
-// cannot send it. A change prepared against principles that moved meanwhile is
-// refused by the route itself (412), so nothing the person did not see is
-// overwritten. A person whose sign-in is not recent is asked to confirm it is
-// them (the row's step-up), through the assistant as at their keyboard. And
-// the whole company document is the administrator's own as well: an approved
-// patch of it lands, and the read grant cannot send it.
-//
-// Mutation: send the write without the derived If-Match and the route answers
-// 428; put config.principles.write or config.org.write on the human-only list
-// and the approved change is refused.
+// The preview diffs the mission against the STORED one; the approval is `PUT
+// /config/charter` under the proposal's If-Match. On an exec grant it lands;
+// the read grant cannot send it; principles that moved meanwhile are refused
+// (412), so nothing unseen is overwritten; a stale sign-in is asked to confirm
+// (step-up) as at the keyboard; the whole company document patches the same
+// way. Mutation: send the write without the derived If-Match (428), or put
+// config.principles.write or config.org.write on the human-only list.
 func TestAnApprovedPrinciplesChangeIsThePagesOwnWrite(t *testing.T) {
 	t.Parallel()
 	fx, read := principlesApp(t)

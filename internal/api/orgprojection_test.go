@@ -310,17 +310,12 @@ func orgBody(t *testing.T, a *api.App, token string) []byte {
 // NOTHING GUARDED REACHES ANY READER, and nothing resolved reaches a reader
 // who is not an admin — whatever the company holds.
 //
-// Every guarded field of every seat and unit (and every field of the company
-// outside its charter) is filled, all the way down through pointers, slices
-// and maps, keys included: once with a distinct literal, once with a distinct
-// whole ${VAR} reference. The projection is read the three ways a browser
-// reaches it, by a reader holding no permission and by an admin, and none may
-// contain a fill value, a `${`, or any key outside the public shape. The
-// public fields are filled with distinct prose that MUST appear to both, which
-// is what stops this passing on an empty answer; the labels a seat's chain and
-// tool sources resolve to MUST appear to the admin and must not to the other —
-// a label read off a seat's runtime settings is the configuration's, which is
-// an admin's to read.
+// Every guarded field of every seat and unit (and every company field outside
+// its charter) is filled, keys included: once with a distinct literal, once
+// with a whole ${VAR} reference. The projection is read the three ways a
+// browser reaches it, each as a reader and as an admin; none may contain a fill
+// value, a `${`, or a key outside the public shape. Public prose MUST appear
+// to both (an empty answer cannot pass); resolved labels to the admin only.
 //
 // Mutation: hand every audience the whole projection, and the reader's
 // surfaces carry the resolved labels.
@@ -919,19 +914,12 @@ func TestTheOrgProjectionCarriesTheCompanysClock(t *testing.T) {
 }
 
 // EVERY READER IS TOLD WHICH TRACKER, KNOWLEDGE BASE AND CHAT THE COMPANY
-// RUNS, and whether the engine hosts its code, as the engine resolves them,
-// and only on a running company.
-//
-// The derivation is the engine's own ([config.Company.TrackerBackendFor],
-// [config.Company.KnowledgeBackendFor], [config.Company.ChatBackendFor] and
-// [config.Company.CodeBackendFor]): a named backend wins, an empty one
-// follows the vendor block that is connected, and with neither it is the
-// engine's own; the git host is Gitlet exactly where `code.backend` names
-// it, whatever vendor the company connects beside it. The answer reaches a
-// reader holding no permission exactly as it reaches an admin, on the socket
-// snapshot and on GET /org, because which surfaces exist is the overview's to
-// say. A node running no company answers `{}`, never a `services` of natives,
-// so a reader cannot mistake "not known yet" for the engine's own.
+// RUNS, and whether the engine hosts its code, only on a running company. The
+// derivation is the engine's own ([config.Company.TrackerBackendFor] and
+// its siblings): a named backend wins, an empty one follows the connected
+// vendor block, else the engine's own; the git host is Gitlet only where
+// `code.backend` names it. A node with no company answers `{}`, never a
+// `services` of natives, so "not known yet" is not the engine's own.
 //
 // Mutation: drop `services` from the overview variant, answer the authored
 // `backend` rather than the resolved one, or answer the git host `gitlet` on
@@ -1138,16 +1126,14 @@ func TestTheOrgServicesAreTheBackendsClosedSets(t *testing.T) {
 // WHAT A SEAT RUNS ON AND WHAT IT CAN REACH ARE PUBLISHED AS THE ENGINE
 // RESOLVES THEM — to an admin, and to nobody else.
 //
-// The model chain is every phase's, the way a turn resolves it: a flat
-// llm_<phase> field wins, a phase naming nothing falls to the seat's llm, and a
-// seat naming nothing lands on the company's `default` provider. The tool
-// sources are the builtins, every shared server, and a per-seat template only
-// where the seat — or its unit — declares credentials for it, which is the
-// grant the engine starts a seat's children by. Both are resolved from the
-// seat AS THE CHART HOLDS IT, the composed org. A human seat runs neither. The
-// budgets are the ceilings in force, company and seat alike, a window nobody
-// caps absent rather than zero — and those every reader is handed too, where
-// the resolved labels they are not.
+// The model chain is every phase's as a turn resolves it: a flat llm_<phase>
+// wins, a phase naming nothing falls to the seat's llm, then the company's
+// `default` provider. Tool sources are the builtins, every shared server, and a
+// per-seat template only where the seat or its unit declares credentials for
+// it (the engine's grant rule). Both come from the seat AS THE CHART HOLDS IT,
+// the composed org; a human seat runs neither. Budgets are the ceilings in
+// force, company and seat, an uncapped window absent rather than zero, and
+// every reader gets them, unlike the resolved labels.
 func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 	t.Parallel()
 	ceiling := func(n int) *int { return &n }

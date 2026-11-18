@@ -5022,10 +5022,9 @@ download `503` and finishes one it began. A download is recorded on a
 `visibility: unit` repository ([Who read it](#who-read-it)) once its first
 byte is written, with the bytes it was sent.
 
-**An older Gitlet node** answers `404 no_route` for both routes, and its
-classifier calls the request a push. `HEAD` of either route is the probe that
-tells the two apart: this build answers `405` with `Allow: GET` before it reads
-any repository or runs any git.
+**A download is a `GET`**: `HEAD` of either route is answered `405` with
+`Allow: GET` before any repository is read or any git runs. The dashboard links
+both routes once it knows the commit, and asks neither first.
 
 ---
 
@@ -8731,8 +8730,8 @@ it.
 ## Engine-built commits
 
 A change a seat or a person makes through a tool — files committed, a commit
-reverted or cherry-picked, a branch created or deleted, a review's suggestions
-applied — is built by Gitlet
+reverted or cherry-picked, a branch or a tag created or deleted, a review's
+suggestions applied — is built by Gitlet
 itself, on a Gitlet node holding the repository ([its home](#the-home-gitlet-node)
 first), and lands as a **push**: the same landing a person's `git push` takes
 from its pack on, held to the same rules, one record on the code log, and
@@ -8749,13 +8748,18 @@ code](../guides/tools-and-mcp.md#the-companys-code)).
 | `cherry_pick` | One commit's change onto a branch's head, with the commit's message and `(cherry picked from commit <id>)`, as `git cherry-pick -x` writes it, unless the write gives one. |
 | `create_branch` | A branch at a commit the repository holds. |
 | `delete_branch` | A branch, at the head its caller read. |
+| `create_tag` | A tag at a commit the repository holds: lightweight, or, with a message, an annotated tag object built as a commit is, its tagger the writer a commit of theirs would name as its author, dated at the operation's second, so a retry builds the same object. A tag that exists is refused `stale`, since a tag never moves. |
+| `delete_tag` | A tag, at the value its caller read: an annotated tag's own object, a lightweight tag's commit. |
 | `apply_suggestions` | Up to 64 findings' [suggestions](#findings) put in place of the lines they are anchored to, on a change's source branch at the head its caller read, as one commit — all of them or none ([A review's suggestions applied](#a-reviews-suggestions-applied)). |
 | `merge_change` | A change merged into its target — a merge commit, one squashed commit or a fast-forward — at the head its caller read, landed as one **merge record** rather than a push; or, on a target whose merges land through its queue, enqueued ([How a merge is built](#how-a-merge-is-built)). |
 | `rebase_change` | A change's commits its target does not hold replayed onto the target's tip — each keeping its author — and its source branch moved to them from the head its caller read by one forced push ([A change rebased](#a-change-rebased)). |
 
 Every write that moves a branch names the head its caller read, so a write
 onto a branch that moved since is refused `stale` rather than land on a
-history its caller never saw, and one that creates a branch needs it absent.
+history its caller never saw, and one that creates a branch or a tag needs it
+absent. A tag's write is judged as a pushed tag is: creating one takes write,
+deleting one maintain, and a [protection rule](#protection-rules) over
+`refs/tags/<glob>` refuses its delete.
 
 ### How a write is built
 

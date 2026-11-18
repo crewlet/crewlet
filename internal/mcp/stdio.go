@@ -160,19 +160,14 @@ func newStdioTransport(spec Spec, log *slog.Logger) (sdk.Transport, *childProces
 // stdioTransport starts a server and speaks newline-delimited JSON-RPC over
 // its stdin and stdout.
 //
-// THE ENGINE'S OWN rather than the SDK's command transport, for one reason:
-// the Wait. The SDK's transport waits for its child only inside Close, so
-// nothing reaps or notices a child that dies on its own; and since a process
-// may be waited for once, nobody else can wait for it either. This one waits
-// from the start (childProcess.reap) and walks the same shutdown ladder on
-// the result.
+// It is the engine's own, not the SDK's, because of the Wait: the SDK waits
+// for its child only inside Close, so nothing notices a child that dies alone,
+// and a process may be waited for once. This one waits from the start
+// (childProcess.reap) and walks the shutdown ladder on the result.
 //
-// BOTH PIPES ARE *os.File, made here, for the reason the stderr relay's write
-// end is: handed anything else, exec builds a pipe and a copying goroutine of
-// its own, and its Wait closes the parent's ends the moment the process exits
-// — before the reader has drained what the server wrote last, which is the
-// answer to the call it died after. With plain files, Wait closes nothing of
-// ours, and the reader reads to the end of what was written.
+// Both pipes are *os.File made here: handed anything else, exec builds its own
+// copying goroutine and its Wait closes the parent's ends at exit, before the
+// reader drains the server's last output. With plain files Wait closes nothing.
 type stdioTransport struct {
 	child *childProcess
 }
@@ -282,43 +277,15 @@ func closeFiles(files ...*os.File) {
 // mergedEnv is the child's environment: the allowlisted host environment, the
 // engine user's own locations, and the server's declared variables on top.
 //
-// AN ALLOWLIST, NOT THE ENGINE'S ENVIRONMENT. This used to be os.Environ() with
-// the declared variables layered over it, on the reasoning that servers read
-// undeclared conventional variables and narrowing the set would break them.
-// What that handed every tool server was the engine's keyring (which signs
-// every session cookie and every state-log record) and every Tier A token
-// value — to a process the company pulled
-// off a package registry, which logs its environment on a crash, forwards it
-// to its own children and reports it in telemetry. So a child gets exactly
-// what [hostbox] gives every child the engine starts — where to find binaries,
-// how to render text and talk TLS, how to reach the network — plus
-// [hostbox.HostUserEnv], because a server launched through `npx` or `uvx` runs
-// as the engine's user in no box of its own and keeps its package cache under
-// that user's HOME. Anything else a server reads is DECLARED in its `env:` (or
-// a seat's `mcp_env`), and a `${VAR}` there resolves from the secret store and
-// then the process environment, so passing one of the host's own variables
-// through is one line of configuration that says so.
-//
-// IT IS NOT ISOLATION, and nothing here pretends it is: the child runs as the
-// engine's user, and a process running as that user can read what that user
-// can — the Tier A file, and the engine's own /proc/<pid>/environ. What the
-// allowlist removes is the engine HANDING its secrets to code that never asked
-// for them; keeping a hostile server away from them is a different user or a
-// container.
-//
-// A SERVER WHOSE COMMAND IS `docker` OR `podman` IS THE RUNTIME'S CLI, and it
-// gets what the runtime's CLI gets everywhere else ([hostbox.ContainerRuntime]):
-// the DOCKER_ family, Podman's CONTAINER_/CONTAINERS_/PODMAN_ families and
-// the rest. A tool server shipped as an image (`docker run -i --rm …`) is the
-// commonest way one is published, and handed only the host user's locations
-// a rootless runtime lost DOCKER_HOST and dialled the system socket — a
-// permission error at the daemon that named nothing the operator had set.
-//
-// Note what it does NOT do either: secret-store values are not poured in.
-// spec.Env has already had its ${VAR} references resolved by the caller, so a
-// server receives exactly the stored credentials its own config declares and
-// no others. Injecting the whole store here would hand every seat's token to
-// every subprocess in the company.
+// An allowlist, not os.Environ(): that would hand every tool server (code off a
+// package registry, which logs its environment) the keyring and every Tier A
+// token. A child gets [hostbox]'s set plus [hostbox.HostUserEnv] (`npx` and
+// `uvx` keep their cache under the engine user's HOME); the rest is declared
+// in `env:` or a seat's `mcp_env`, `${VAR}` resolving from the secret store.
+// Not isolation: it can still read the Tier A file and /proc/<pid>/environ.
+// `docker` and `podman` get [hostbox.ContainerRuntime]'s set; without
+// DOCKER_HOST a rootless runtime dialled the system socket. spec.Env arrives
+// resolved, so no secret-store value is poured in beyond what it declares.
 func mergedEnv(spec Spec, log *slog.Logger) []string {
 	env := hostbox.Inherit(hostbox.HostUserEnv...)
 	if hostbox.IsContainerRuntime(spec.Command) {

@@ -64,19 +64,16 @@ type Problem struct {
 	Said string `json:"said,omitempty"`
 }
 
-// Problems flattens a validation error into its located, classified
-// problems, in the order they were reported.
+// Problems flattens a validation error into its located, classified problems,
+// in the order reported.
 //
 // A JOIN is split into its parts and nothing else is: an error built with
-// several %w verbs renders as one line and is one problem (see
-// [joinedParts]). A wrap that only adds context around failures this package
-// built, such as the file name in front of a company's problems, is seen
-// through, so a file with several problems reports all of them.
-//
-// An error this package did not build (a file that could not be read, an
-// epoch that could not be constructed) is one problem with no path, classified
-// by the sentinel it wraps and `invalid` otherwise, so a consumer rendering
-// machine-readable output never needs a second branch.
+// several %w verbs renders as one line and is one problem (see [joinedParts]).
+// A wrap that only adds context around failures this package built, such as a
+// file name, is seen through. An error this package did not build (an
+// unreadable file, an unconstructable epoch) is one problem with no path,
+// classified by the sentinel it wraps and `invalid` otherwise, so a
+// machine-readable consumer needs no second branch.
 func Problems(err error) []Problem {
 	var out []Problem
 	var walk func(error)
@@ -108,20 +105,17 @@ func Problems(err error) []Problem {
 	return out
 }
 
-// WithoutFaultsAt is err with every fault located at one of paths left out,
-// and nil when nothing else is left.
+// WithoutFaultsAt is err with every fault located at one of paths left out, and
+// nil when nothing else is left.
 //
 // FOR A CALLER THAT KNOWS WHY those places are wrong better than the rule that
-// found them, and reports them in its own words beside every OTHER fault: a
-// write replacing a revision nothing was read from knows a masked credential
-// had nothing to be restored from, while [Company.Validate] can only list the
-// causes a restore leaves behind. Dropped here, a fault at such a place is
-// reported once, in the caller's words, and the rest of the document is still
-// judged whole. It walks what [Problems] walks: a join is split into its
-// parts, a fault is matched by its own path, and an error the company located
-// is matched by the problems it is, every one of which has to be at one of
-// paths (a rule about several entities is kept whole). Anything else is kept
-// as it was.
+// found them, and says so in its own words beside every OTHER fault: a write
+// replacing a revision nothing was read from knows a masked credential had
+// nothing to be restored from, while [Company.Validate] can only list causes a
+// restore leaves behind. It walks what [Problems] walks: a join is split, a
+// fault is matched by its own path, and a located error is dropped only when
+// every problem it holds is at one of paths (a rule about several entities is
+// kept whole). Anything else is kept.
 func WithoutFaultsAt(err error, paths []Path) error {
 	at := func(p Path) bool {
 		return slices.ContainsFunc(paths, func(q Path) bool { return slices.Equal(p, q) })
@@ -239,20 +233,16 @@ var problemKinds = []struct {
 	{"shape", org.ErrProviderKeysShape},
 }
 
-// located is an error placed in the document by the company it came from:
-// the error itself, the line it renders as, and the problems it is.
+// located is an error placed in the document by the company it came from: the
+// error, the line it renders as, and the problems it is.
 //
-// A rule the org model reports about ONE seat or unit renders led by the path
-// it was placed at ("units[0].name: unit: name must not be empty"), the way
-// every rule the config layer reports already does. The org model describes
-// the entity in words because it has no document; the path is what a reader
-// searches their file for, and what a renderer looks for at the head of a
-// line. A duplicate is about several entities and names them all in its own
-// words, so it renders unchanged.
-//
-// A type of its own rather than a [Fault], because one line can be several
-// problems: a duplicate names every entity sharing the identity, and a
-// problem goes beside each of them.
+// A rule the org model reports about ONE seat or unit renders led by its path
+// ("units[0].name: unit: name must not be empty"), as every config-layer rule
+// does: the org model has no document and describes the entity in words, while
+// the path is what a reader searches their file for. A duplicate is about
+// several entities and names them all, so it renders unchanged. A type of its
+// own rather than a [Fault], because one line can be several problems: one goes
+// beside each entity sharing the identity.
 type located struct {
 	err      error
 	text     string
@@ -439,42 +429,23 @@ func (x *identityIndex) entityOf(path Path) (seat, unit string) {
 // Warning is something the engine will run but a person should know about,
 // located like a [Problem].
 //
-// # Why warnings are their own channel and not errors
-//
-// A refusal says "this cannot run". Every one of these can, and some of them
-// describe the correct configuration for somebody's deployment: a development
-// topology, a company that has decided not to back up, an organization being
-// assembled in pieces, a rename that will re-onboard a team on purpose.
-// Turning any of them into an error would make the engine refuse a decision
-// that was not its to make.
-//
-// # And why they are not just log lines
-//
-// A log line is read after the thing has already happened. These are read by
-// `crewlet validate`, which is what a person runs BEFORE applying a config and
-// what a CI step runs before a deploy, and by a configuration write, which
-// answers them to a caller that never sees a terminal. Each is a moment where
-// the consequence can still change the decision.
-//
-// They are ALSO log lines, because many deployments have neither moment: a
-// document an image, a chart or an operator renders reaches a node nobody
-// validated by hand, Tier A is never written through the API, and a company
-// seeded from a file is answered to nobody. So `crewlet run` logs every Tier A
-// advisory once per start, and every node logs a company's advisories once
-// per epoch it applies — both as `config_advisory`, beside the lines the apply
-// already writes for the other two kinds.
-//
-// # What Kind says
-//
-// "dangling_reference" is a name that resolves to nothing, with Ref naming
-// what carries it (lead, unit or manages). "admission"
-// is a rule an applied revision breaks that a new write would be refused for.
-// "advisory" is a setting that is valid and carries a consequence, and it is
-// the one kind either tier can raise. Ref is empty on the last two, because
-// neither names a reference. From and To are display text: what holds the
-// reference and what it names. Seat and Unit are always present, empty when
-// the warning is about neither.
+// Not an error: each can run, and some are the right configuration for somebody
+// (a development topology, no backup, an organization assembled in pieces, a
+// deliberate rename), so refusing would override a decision that was not the
+// engine's. Not only a log line, which is read after the fact: `crewlet
+// validate` and a configuration write answer them while the consequence can
+// still change the decision. Also logged as `config_advisory`, because many
+// deployments have neither moment (a rendered document, Tier A, a seeded
+// company): `crewlet run` logs each Tier A advisory once per start, every node
+// a company's once per applied epoch.
 type Warning struct {
+	// Kind is "dangling_reference", a name resolving to nothing (Ref names
+	// what carries it: lead, unit or manages); "admission", a rule an applied
+	// revision breaks that a new write would be refused for; or "advisory", a
+	// valid setting with a consequence, the one kind either tier raises. Ref is
+	// empty on the last two. From and To are display text: what holds the
+	// reference and what it names. Seat and Unit are empty when the warning is
+	// about neither.
 	Kind     string `json:"kind"`
 	Ref      string `json:"ref"`
 	Path     string `json:"path"`
@@ -493,20 +464,17 @@ type Warning struct {
 	// and dangling reference; empty on an admission warning.
 	Title string `json:"title,omitempty"`
 	// Person is the warning in the words of the person who owns the company,
-	// beside Message, which is the operator's: what is wrong and what it
-	// costs, then the fix, naming no document key, no field and no cell.
-	// Every advisory and dangling reference carries its rule's ([advice]); an
-	// admission warning carries the words its rule wrote for a person
-	// (Problem.Said), where it wrote some. A screen draws Person where it is
-	// set and Message where it is not.
+	// beside Message, which is the operator's: what is wrong and what it costs,
+	// then the fix, naming no document key, field or cell. Every advisory and
+	// dangling reference carries its rule's ([advice]); an admission warning
+	// carries what its rule wrote for a person (Problem.Said), where it wrote
+	// some. A screen draws Person where set, else Message.
 	//
-	// THE SAME WORDS FOR EVERY WARNING ONE RULE RAISES, whatever it is about:
-	// the subject is named apart (Seat, Unit, Item), so seven agents learning
-	// on their own model are one thing to know, and a screen that groups by
-	// Title and Person says it once and lists what it is about.
-	//
-	// TWO PHRASINGS ON ONE VALUE, written together where the warning is raised
-	// (ADR-0060): a client wording a code itself would draw an unknown class as nothing.
+	// THE SAME WORDS FOR EVERY WARNING ONE RULE RAISES: the subject is named
+	// apart (Seat, Unit, Item), so a screen grouping by Title and Person says
+	// it once and lists what it is about. TWO PHRASINGS ON ONE VALUE are
+	// written together where the warning is raised (ADR-0060): a client wording
+	// a code itself would draw an unknown class as nothing.
 	Person string `json:"person,omitempty"`
 	// Item is the one thing within the seat or unit the warning is about, as
 	// a person reads it in a list: a schedule's name and how often it runs,
@@ -706,43 +674,16 @@ var (
 )
 
 // AdvisoryWarnings is everything valid about this company that its author
-// should still know: answered by `crewlet validate` and a `/config` write, and
-// logged by every node that applies the company.
+// should still know: answered by `crewlet validate` and a `/config` write,
+// logged by every node applying it.
 //
-// A UNIT WITH NO ID USED TO BE ONE OF THESE, and it is now an ADMISSION rule
-// instead: a unit is referenced by its key, so a document leaving a team
-// keyed on prose is refused rather than advised. The warning survives where
-// a warning is what an admission violation becomes — on a STORED revision
-// ([Company.AdmissionWarnings]) — and it is located at the same
-// `units[i].id`, so nothing about what an operator sees moved except the
-// class. Reporting both would have put one mistake in front of them twice.
-//
-// A BARE `-e NAME` IN providers.sandbox.local.run_args THAT NOTHING SUPPLIES
-// is one: the runtime's CLI copies NAME from its own environment, which is a
-// fixed rule plus runtime_env and never the engine's, so the box gets nothing
-// for it — valid, since an operator may mean exactly that, and silent until
-// whatever read the variable inside the box finds it unset.
-//
-// A COMPANY WITH NO HUMAN SEAT is one ([Company.peoplelessWarnings]): nobody
-// can be invited into it or created in it, which is the right shape for a
-// company its agents run alone and a surprise for one somebody meant to sign
-// in to.
-//
-// So is a seat whose executor chain holds an entry that can never run the
-// executor beside one that can ([Company.executorWarnings]), a token budget
-// a seat's ceilings leave idle ([Company.budgetWarnings]), a code setting
-// that grants or protects less than it reads as ([Company.codeWarnings]), a
-// delegation rule's required checks on a repository the company's GitHub
-// does not cover ([Company.delegatedAdvisories]),
-// and what the unit channels say about each other
-// ([Company.channelAdvisories]): one room two units claim on a vendor chat
-// surface, and a Chatlet company that gives no team a room. And the three a
-// setup advisor fixes, each with its [AdvisoryClass]: no agent seat holding
-// health_tools ([Company.healthWarnings]), learning on the executor's own
-// model ([Company.auxiliaryWarnings]) and a schedule that fires twelve or
-// more times a day ([Company.scheduleWarnings]).
-//
-// EMPTY, NEVER NIL, for the reason [Company.ReferenceWarnings] gives.
+// It gathers [Company.peoplelessWarnings], [Company.executorWarnings],
+// [Company.budgetWarnings], [Company.codeWarnings],
+// [Company.delegatedAdvisories], [Company.channelAdvisories] and the setup
+// advisor's three ([AdvisoryClass]): [Company.healthWarnings],
+// [Company.auxiliaryWarnings], [Company.scheduleWarnings]. A unit with no id is
+// an ADMISSION rule, a warning only on a STORED revision
+// ([Company.AdmissionWarnings]). EMPTY, NEVER NIL, as [Company.ReferenceWarnings].
 func (c *Company) AdvisoryWarnings() []Warning {
 	out := []Warning{}
 	if local := c.Providers.Sandbox.localBlock(); local != nil {
@@ -807,22 +748,15 @@ func (c *Company) channelAdvisories() []Warning {
 
 	var out []Warning
 
-	// TWO UNITS IN ONE ROOM, warned about BESIDE EACH OF THEM, the same
-	// placement a duplicated name gets: fixing it means renaming one of the
-	// two, and an author who sees the warning on only one of them cannot
-	// tell which.
-	//
-	// Not a refusal ON A VENDOR SURFACE, because there it is a shape a real
-	// company writes on purpose: two teams that genuinely stand up together,
-	// or a unit split in the chart before the room it will move to exists.
-	// What it costs is worth saying once — every unit-scoped wake reaches
-	// both teams, and each team's prompt tells it that room is its own.
-	//
-	// ON CHATLET IT IS AN ADMISSION RULE INSTEAD
-	// ([Company.validateUnitRooms]), because there the engine builds the
-	// room and a room belongs to one unit — and an admission problem is
-	// already reported as a warning on an applied revision, so saying it
-	// here too would print one finding twice.
+	// TWO UNITS IN ONE ROOM are warned about BESIDE EACH, as a duplicated name
+	// is: an author seeing it on only one cannot tell which to rename. Not a
+	// refusal on a vendor surface, where two teams may stand up together on
+	// purpose or a unit be split before its room exists; the cost is said once:
+	// every unit-scoped wake reaches both teams and each prompt calls the room
+	// its own. ON CHATLET it is an ADMISSION rule
+	// ([Company.validateUnitRooms]), because the engine builds the room and a
+	// room belongs to one unit; an admission problem already shows as a warning
+	// on an applied revision, so saying it here would print it twice.
 	shared := declared
 	if c.ChatBackendFor() == ChatChatlet {
 		shared = nil
@@ -851,22 +785,15 @@ func (c *Company) channelAdvisories() []Warning {
 		out = append(out, w)
 	}
 
-	// A CHATLET COMPANY WITH NO UNIT ROOMS AT ALL. The engine opens a
-	// channel for each one a unit declares, and that is the only kind of
-	// room whose members the org chart keeps — every other room is one a
-	// person opened from the dashboard and fills by hand. With none declared,
-	// no team has a room of its own until somebody makes one and adds its
-	// seats to it, and keeps adding them as the chart changes.
-	//
-	// IT DOES NOT SAY NOTHING ELSE OPENS A ROOM. It once did, and a person
-	// can open one; an advisory that overstates is one an author learns to
-	// skip.
-	//
-	// Only where there is a unit to write it on — a company with no units is
-	// a flat one whose seats have no teams to give rooms to, and a warning
-	// pointing at no line in the document is one nobody can act on. Located
-	// at the FIRST unit's `channel`, which is the line an author adds it to;
-	// the sentence says it is about all of them, because the path cannot.
+	// A CHATLET COMPANY WITH NO UNIT ROOMS. The engine opens a channel for each
+	// unit that declares one, the only rooms whose members the chart keeps; the
+	// rest a person opens from the dashboard and fills by hand. With none
+	// declared no team has a room until somebody makes one and keeps adding
+	// seats as the chart changes. It does not say nothing else opens a room: a
+	// person can, and an overstating advisory is one authors skip. Only where
+	// there is a unit to write it on, since a warning pointing at no line
+	// cannot be acted on: located at the FIRST unit's `channel`, while the
+	// sentence says it is about all of them.
 	if c.ChatBackendFor() == ChatChatlet && first != nil && len(declared) == 0 {
 		w := noUnitRoomsAdvice.raise(at(x.units[first], "channel"), fmt.Sprintf(
 			"no unit in this company declares a `channel`. In Chatlet, "+
@@ -894,18 +821,15 @@ var (
 // peoplelessWarnings is the one warning a company declaring no human seat
 // carries: nobody can be invited into it or created in it.
 //
-// EVERY PERSON HOLDS A HUMAN SEAT for as long as they are here
-// (internal/iamdomain, ADR-0032) — an invitation and an administrator's create
-// each name the seat the person will hold, and both are refused without one —
-// so a company with none is a company nobody can join. Said HERE, before an
-// operator meets the refusal at their first invitation, because `crewlet
-// validate` and the builder's check are the moments the document can still
-// change.
+// EVERY PERSON HOLDS A HUMAN SEAT (internal/iamdomain, ADR-0032): an invitation
+// and an administrator's create each name the seat, and both are refused
+// without one. Said HERE, before an operator meets the refusal at their first
+// invitation: `crewlet validate` and the builder's check are when the document
+// can still change.
 //
-// A WARNING AND NOT A RULE, because the state is legitimate: a company its
-// agents run alone, administered through the deployment's Tier A tokens, which
-// act as themselves and need no seat, has nobody to invite. Refusing it would
-// refuse that company. AT `roles`, which is where the remedy is written.
+// A WARNING AND NOT A RULE: a company its agents run alone, administered
+// through Tier A tokens that need no seat, has nobody to invite. Located AT
+// `roles`, where the remedy is written.
 func (c *Company) peoplelessWarnings() []Warning {
 	for role := range c.EachRole() {
 		if role.Kind == org.KindHuman {
@@ -923,38 +847,17 @@ var peoplelessAdvice = says("Nobody can join this company",
 		"teammate, unless agents run it alone.")
 
 // unreachableWarnings is every human seat with no account on the vendor chat
-// surfaces this company talks on: nothing addressed to it there reaches
-// anybody.
+// surfaces this company talks on: nothing addressed there reaches them.
 //
-// ONLY ON A VENDOR SURFACE (`chat.backend: vendor`), because that is the only
-// chat the sentence is true of. On the engine's own chat a person reads the
-// rooms on the dashboard as their seat, and a mention of the seat reaches
-// them with no identity to declare; with `chat.backend: none` there is no
-// chat surface for it to be about at all. Said everywhere, it told every
-// founder of a Chatlet company that the people they had just added could
-// not be reached, which is false, and an advisory that is false on the
-// default configuration is one an author learns to skip.
+// ONLY ON A VENDOR SURFACE (`chat.backend: vendor`): on the engine's chat a
+// person reads rooms on the dashboard as their seat, and `none` has no surface.
+// Said everywhere, it falsely told every Chatlet founder their people were
+// unreachable. JUDGED AGAINST THE DECLARED SURFACES ([chatVendors]), not the
+// whole contact block: a GitHub login says nothing about a Mattermost mention.
 //
-// JUDGED AGAINST THE SURFACES THIS COMPANY DECLARES ([chatVendors]), not
-// against the contact block as a whole: a GitHub login or an Atlassian
-// account id is how a code host or a tracker attributes the person, and says
-// nothing about whether a Mattermost mention reaches them. A seat reachable
-// on ANY of the declared surfaces is reachable — a company running both
-// Mattermost and Slack has people who are in one workspace and not the
-// other.
-//
-// A WARNING AND NOT A RULE, because the state is legitimate: a person who
-// works only through the dashboard has no chat account to declare, and
-// refusing the seat refused them. So this is the one signal an operator gets
-// that nobody can be @-mentioned there — agents hand such a person work by
-// assigning it in the tracker instead.
-//
-// AT THE SEAT'S `contact`, which is where the remedy is written.
-//
-// THE HANDLE IS QUOTED, never the sentence's first word: a handle is an
-// identifier, and a reader that puts an engine sentence in sentence case (the
-// dashboard's review raises an opening word) wrote `founder` as "Founder",
-// a seat nobody declared.
+// A WARNING AND NOT A RULE: a dashboard-only person has no chat account.
+// Located AT the seat's `contact`. The HANDLE IS QUOTED: a reader that
+// sentence-cases an opening word wrote `founder` as "Founder".
 func (c *Company) unreachableWarnings() []Warning {
 	if c.ChatBackendFor() != ChatVendor {
 		return nil
@@ -1030,60 +933,18 @@ func (b *Bootstrap) Warnings() []Warning {
 			b.Stream.SyncInterval())))
 	}
 
-	// A FLEET THAT TRIMS ONLY WHAT IT HAS BEEN TOLD IS OFF-SITE does not
-	// trim until somebody tells it, and each log grows until its ceiling
-	// refuses writes. That is the configuration working as asked; it is
-	// also a state nobody discovers until the refusal.
+	// A FLEET THAT TRIMS ONLY WHAT IT IS TOLD IS OFF-SITE does not trim until
+	// told, and each log grows until its ceiling refuses writes; it is told PER
+	// LOG (`crewlet retention ack -stream`).
 	//
-	// AND IT IS TOLD PER LOG. An acknowledgement names one stream
-	// (`crewlet retention ack -stream`), and the backup term blocks any log
-	// the counted point does not cover, so an operator who acknowledged the
-	// mutation log and read "until the first acknowledgement" as the whole
-	// gate would expect the knowledge base's log to trim too, and it does
-	// not.
+	// Every ceiling the trim alone holds back is named: the ordered logs have
+	// no age bound, and one field sent an operator to the wrong ceiling. The
+	// compacted logs count too (`backup_age` covers every running log). A test
+	// holds the message to every [Stream] field.
 	//
-	// EVERY CEILING THE TRIM IS ALL THAT HOLDS BACK, rather than the
-	// mutation log's alone: the backup term is evaluated per log, and the
-	// ordered logs — the tracker's, the knowledge base's, the artifacts'
-	// and their datastore's, the identity estate's, the Dashboard
-	// Assistant's, chat's, the executor log and the code log — carry no age
-	// bound, so nothing else ever removes a record from them. Naming one
-	// field sent an operator to the wrong ceiling whenever another log filled
-	// first: a full identity log refuses every sign-in and every change to
-	// who may do what, a full assistant log every question somebody asks the
-	// assistant, since it cannot record the turn, a full chat log a message
-	// somebody typed, a full executor log every capture of a seat's session,
-	// and a full code log every push to the company's repositories.
-	//
-	// NO COUNT IN THE SENTENCE: the fields are listed by name, and a test
-	// reads them off [Stream] and holds the message to every one, so a log
-	// added with its ceiling cannot be left out of it — while a number
-	// beside the list is one more thing a new log has to remember to move.
-	//
-	// AND EVERY LOG, the two compacted ones included. They age their
-	// records out on the broker whatever the trim decides, so they never
-	// refuse a write — but the backup term and the `backup_age` alarm are
-	// evaluated on every running log alike, so a log nobody acknowledged
-	// raises that alarm for as long as nobody does. An advisory that named
-	// the ordered logs alone sent an operator to acknowledge those and leave
-	// two alarms firing for ever.
-	//
-	// ONLY WHERE THE FLOOR IS READ, which is a node holding the estate. Two
-	// readers decide which backups count under it, and both are armed with
-	// the state log, so only on a `data` node: the trim itself, a fleet
-	// singleton that only a data node with `workers` may claim, and the
-	// `backup_age` alarm, evaluated on EVERY data node whether or not it
-	// ever holds the trim — so a [data, seats] node still reads the floor
-	// for the alarm it raises. That is why the gate is
-	// [placement.NodeProfile.HoldsData] and not
-	// [placement.NodeProfile.RunsWorkers]: tightening it would drop the
-	// warning on a node whose alarm still depends on the value. Every other
-	// reader of `stream.tracker_retention` — the snapshot cadence, the
-	// retention report, the API's backup surface — is a data node's too. On
-	// a stateless node the block is read by nothing, so a warning about what
-	// it does to the trim described the members' trim from a value they
-	// never see. (`retention.backup_owner`, below, is not gated: who owns
-	// the deployment's backups is a question every node's operator answers.)
+	// Only where the floor is read: [placement.NodeProfile.HoldsData], not
+	// RunsWorkers, since the `backup_age` alarm reads it on a [data, seats]
+	// node too.
 	if b.Profile("").HoldsData() &&
 		b.Stream.TrackerRetention.Floor() == BackupFloorOperator {
 		out = append(out, advisory(field("stream.tracker_retention.backup_floor"),
@@ -1206,20 +1067,14 @@ func (b *Bootstrap) Warnings() []Warning {
 		}
 	}
 
-	// THE INGRESS ROLE WITH NO LISTENER. `api.port` is the one listener a
-	// node binds, and its roles decide what it carries: the API, the
-	// dashboard, the webhooks and the probes with `ingress`, the probes
-	// alone without it. A node told to run ingress is the one integrations,
-	// a browser and an orchestrator all look for, and a port of 0 binds
-	// nothing for any of them.
-	//
-	// DECLARED ROLES ONLY. An omitted node.roles is every role, which is also
-	// the single-process shape before anybody has chosen a port, and a fleet
-	// node that left them out is warned about that already.
-	//
-	// A WARNING RATHER THAN A REFUSAL, because `crewlet run -api-port` sets
-	// the port at run time and no file can show it: a file that leaves the
-	// port to the flag is valid, and only this file's half of the pair is
+	// THE INGRESS ROLE WITH NO LISTENER: `api.port` is the one listener a node
+	// binds, and with `ingress` it carries the API, dashboard, webhooks and
+	// probes (the probes alone without), so a port of 0 binds nothing for what
+	// integrations, a browser and an orchestrator look for. DECLARED ROLES
+	// ONLY: an omitted node.roles is every role, the single-process shape
+	// before a port is chosen, already warned about on a fleet node. A warning,
+	// not a refusal: `crewlet run -api-port` sets the port at run time, so a
+	// file leaving it to the flag is valid and only its half of the pair is
 	// visible here.
 	if b.Node.Roles != nil && b.API.Port == 0 && b.Profile("").RunsIngress() {
 		out = append(out, advisory(field("api.port"), fmt.Sprintf(
@@ -1275,18 +1130,14 @@ func (b *Bootstrap) declaresFleet() bool {
 // logsAtDebug reports whether ANY destination this document INSTALLS would
 // record a debug line.
 //
-// The most verbose destination decides, the same rule internal/logging's own
-// fan-out follows: a `debug` file behind a `warn` console is a supported
-// shape, and reading only `logging.level` would call that combination silent
-// when it is not.
-//
-// INSTALLS, not "configures", and that is the half that is easy to get wrong
-// in the other direction too: with `logging.stderr: false` the console is not
-// a destination at all, so `logging.level: debug` beside a `warn` file
-// records nothing, except where there is no file, because [logging.install]
-// keeps stderr rather than leave a process logging nowhere. This mirrors that
-// function; the two disagreeing would make the warning fire on a working
-// deployment or stay quiet on a broken one.
+// The most verbose destination decides, as in internal/logging's fan-out: a
+// `debug` file behind a `warn` console is supported, and reading only
+// `logging.level` would call it silent. INSTALLS, not "configures": with
+// `logging.stderr: false` the console is no destination, so `logging.level:
+// debug` beside a `warn` file records nothing, except with no file, because
+// [logging.install] keeps stderr rather than log nowhere. This mirrors that
+// function; disagreeing would fire the warning on a working deployment or stay
+// quiet on a broken one.
 func (b *Bootstrap) logsAtDebug() bool {
 	file := strings.TrimSpace(b.Logging.File.Path) != ""
 	if console := b.Logging.Stderr == nil || *b.Logging.Stderr || !file; console {
@@ -1307,24 +1158,17 @@ func (b *Bootstrap) logsAtDebug() bool {
 }
 
 // unrecordedDebug says why no destination this document installs records a
-// debug line, and what would — one sentence for each shape of
+// debug line, and what would: one sentence per shape of
 // [Bootstrap.logsAtDebug]'s false answer, read off the destinations the same
-// way, because the two disagreeing would name a cause the node does not have.
+// way, because disagreeing would name a cause the node lacks.
 //
-// # Only the remedies that work
-//
-// The obvious remedy, raising the level, is wrong in exactly the shape that
-// is easiest to reach: `logging.stderr: false` makes the log file the only
-// destination, and a file given a level of its own does not follow
-// `logging.level` — so telling that node to pass `-debug`, or to set
-// `logging.level`, names a change that leaves it exactly as silent, and tells
-// a node already started with `-debug` to do what it did. Each case names the
-// cause it found and the changes that would make a destination record the
-// broker, and no others.
-//
-// `logging.level` is named with the flags that override it, because the
-// level this reads is the one the document holds once `crewlet run` has
-// folded `-log-level` and `-debug` into it — not necessarily the file's.
+// Only the remedies that work: raising the level is wrong in the easiest shape
+// to reach. `logging.stderr: false` makes the file the only destination, and a
+// file with a level of its own does not follow `logging.level`, so telling the
+// node to pass `-debug` or set `logging.level` leaves it as silent.
+// `logging.level` is named with the flags that override it, because the level
+// read is the one after `crewlet run` folds `-log-level` and `-debug` in, not
+// necessarily the file's.
 func (b *Bootstrap) unrecordedDebug() string {
 	level := "`logging.level` (which `-log-level` and `-debug` override on " +
 		"`crewlet run`) is " + b.loggingLevelName()
@@ -1370,25 +1214,18 @@ func (b *Bootstrap) loggingLevelName() string {
 	return "`" + string(b.Logging.Level) + "`"
 }
 
-// TierWarnings is what is VALID across the two tiers and worth knowing before
-// a company is applied to this node — never a refusal, for [Bootstrap.Warnings]'
-// reason (a warning that can fail a build is one somebody suppresses), and no
-// rule needs both documents any more (the in-memory stream it once refused
-// with the company's help is refused by Tier A alone: [Stream.Durable]).
-// Nil-safe: either document absent is no warning, which is a node that has no
-// company yet.
+// TierWarnings is what is VALID across the two tiers and worth knowing before a
+// company is applied to this node: never a refusal, for [Bootstrap.Warnings]'
+// reason (a warning that can fail a build gets suppressed). Nil-safe: no document, no warning.
 //
-// Each is located at the field whose change answers it, and printed in three
-// places: `crewlet validate` given both files, a configuration write's answer
-// (where a person turning Gitlet on reads the consequence in the answer
-// that applied it), and the engine's own log, once per node per applied epoch
-// (config_tier_warning) — the engine's through [NodeTierWarnings], which also
-// knows the cache budget this node derived.
+// Each is located at the field whose change answers it, and printed by `crewlet
+// validate` given both files, a configuration write's answer, and the engine's
+// log once per node per applied epoch (config_tier_warning), through
+// [NodeTierWarnings], which knows the node's derived cache budget.
 //
 // THE DOCUMENTS ALONE compare only an EXPLICIT gitlet.cache_max_bytes with the
 // company's repository limit: a derived budget is a share of a volume neither
-// file describes, so `crewlet validate` and a configuration write, which run
-// where that volume is not, cannot know it.
+// file describes.
 func TierWarnings(boot *Bootstrap, company *Company) []Warning {
 	if boot == nil {
 		return nil

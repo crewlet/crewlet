@@ -27,18 +27,12 @@ import (
 //
 // # What this file states, and what it deliberately does not
 //
-// The verb, its arguments, the modes it runs in, the refusals an operator will
-// see, and what it costs. It states NO transition, NO evidence rule, NO
-// ordering and NO count of steps — those are `internal/statelog`'s
-// [statelog.PermitPhase] and the table around it, and a CLI help string that
-// restated one would be a second state machine.
-//
-// That is a rule rather than a preference: this procedure was written four
-// times in prose beside the mechanism, and each time a later change amended
-// the mechanism and left the prose. The copies then disagreed about which
-// nodes had to acknowledge, when the baseline was recorded, and whether an
-// applied operation could be confirmed without a seal — and the prose is what
-// an implementer follows.
+// The verb, its arguments, modes, the refusals an operator will see, and what
+// it costs. It states NO transition, NO evidence rule, NO ordering and NO count
+// of steps: those are `internal/statelog`'s [statelog.PermitPhase] and the table
+// around it, and a help string restating one would be a second state machine.
+// The procedure was once written four times in prose beside the mechanism, and
+// each change to the mechanism left the prose behind.
 
 // capacityUsage is the synopsis, and it is also where an operator learns the
 // shape of the thing: three fleet-wide restarts, and this verb run inside two
@@ -227,16 +221,13 @@ const (
 // printOperation renders one operation, and what an operator does next.
 //
 // THE NEXT STEP NAMES THE VERB IN FULL. The same lines follow set-capacity,
-// `maintenance status`, `exclude` and `abandon`, so "run this verb again" sent
-// a reader of the status page back to the page, and a reader of an exclusion
-// back to the exclusion, when the next step after either is set-capacity.
+// `maintenance status`, `exclude` and `abandon`, so "run this verb again" would
+// send a reader back to the page when the next step is set-capacity.
 //
-// AND THE LAST STEP IS SAID TOO. A window set-capacity confirmed and closed
-// printed its table and nothing after it, so the one gesture left, returning
-// the fleet to service, was in no answer the operator was given. That step is
-// the fleet's rather than the window's, so it is said from what the answer
-// names as still open ([returnToService]). A confirmed window any other page
-// shows is still open, so there the next step is the verb that closes it.
+// AND THE LAST STEP IS SAID TOO: a confirmed, closed window leaves one gesture,
+// returning the fleet to service. That step is the fleet's, so it is said from
+// what the answer names as still open ([returnToService]). A confirmed window
+// any other page shows is still open, so there the next step closes it.
 func printOperation(stdout io.Writer, mode string, op capacityOperation, page capacityPage,
 	left windowsLeft) {
 
@@ -733,15 +724,13 @@ func maintenanceExclude(environ config.Source, args []string, stdout, stderr io.
 // node's answer to the transition itself.
 //
 // SIX MINUTES. Once its generation record is appended, a reanchor finishes on
-// the node's own budget — the broker's bring-up budget, five minutes on a
-// clustered one — because it rebuilds this node's consumer on the log, a delete
-// and a create of a replicated object each of which is a raft round trip there;
-// the minute on top covers what it reads before the append: the stream, the
-// positions register and the log's tail. At the ten seconds every other call
-// gets, a transition on a fleet whose metadata group was slow was reported to
-// the operator as failed while the node went on to finish it — and the node
-// ran it on the request's own context, so the cancellation stopped it halfway,
-// with its generation open on the log and nothing committed.
+// the node's own budget (the broker's bring-up budget, five minutes on a
+// clustered one): it deletes and creates a replicated consumer, each a raft
+// round trip. The extra minute covers what it reads before the append. At the
+// ten seconds other calls get, a slow metadata group reported the transition
+// failed while the node went on; and the node ran it on the request's context,
+// so a cancellation stopped it halfway, generation open on the log, nothing
+// committed.
 const reanchorRequestTimeout = 6 * time.Minute
 
 // retentionReanchor is `crewlet retention reanchor`.

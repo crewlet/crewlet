@@ -370,26 +370,17 @@ type DiagnoseOptions struct {
 	HostHome string
 
 	// Values are candidate credential values, by the variable the harness is
-	// handed each under: the profile's token_env or api_key_env, or a name
-	// the entry's env sets. Each takes the place of what the entry resolved
-	// for that variable, for this diagnosis alone, so a credential can be
-	// tested before anything stores it. A name the entry does not hand its
-	// harness under its auth mode is a sign-in problem, never a value dropped
-	// in silence: a test that passed without its candidate would vouch for
-	// a credential nothing tried.
+	// handed each under: the profile's token_env or api_key_env, or a name the
+	// entry's env sets. Each replaces what the entry resolved for that variable,
+	// for this diagnosis alone. A name the entry does not hand its harness under
+	// its auth mode is a sign-in problem, never a value dropped in silence: a
+	// test that passed without its candidate would vouch for nothing tried.
 	//
-	// A diagnosis with Values runs in Home, and in a home of its own made
-	// and removed for it when Home is empty: a candidate tested beside the
-	// entry's login would be tested with that login seeded next to it, and
-	// whichever the harness preferred would be what answered.
-	//
-	// AND IT MAKES ONE CALL, the smoke run, which is what signs the harness
-	// in with the candidate. The shell and web probes read what the ENTRY
-	// lets its harness reach, which a credential changes nothing of: run for
-	// a candidate, they were two or three more real calls on a credential
-	// nothing had stored, inside one person's wait, and a probe that misread
-	// its answer refused a credential the vendor had accepted. The entry's
-	// own check probes them.
+	// It runs in Home, or in a home of its own when Home is empty: beside the
+	// entry's login, whichever the harness preferred would answer. It makes ONE
+	// call, the smoke run, which signs in with the candidate; the shell and web
+	// probes read what the ENTRY lets its harness reach, which a credential
+	// changes nothing of, and the entry's own check runs them.
 	Values map[string]string
 
 	// Home is a state directory of the diagnosis's own, in place of the
@@ -402,18 +393,15 @@ type DiagnoseOptions struct {
 
 // Diagnose measures one provider end to end.
 //
-// It never returns an error: every failure it can find is a LINE in the
-// report, because an operator running `doctor` wants the whole picture, and a
-// command that stopped at the first problem would hide the three behind it.
+// It never returns an error: every failure it finds is a LINE in the report,
+// since stopping at the first problem would hide the three behind it.
 //
 // THE ENTRY'S RECORD LEARNS FROM IT ONLY WHEN IT RAN ON THE ENTRY'S SIGN-IN.
-// Its probes are real calls, made through [Provider.Complete], so a diagnosis
-// of the entry as it stands is recorded as any call is ([Provider.Plan]): an
-// answer clears a refused sign-in, a refusal is remembered. One with Values or
-// a Home runs on a sibling built for it ([Provider.candidate]), with a record
-// of its own: what a candidate credential met says nothing about the
-// credential the entry signs in with, and recorded on the entry it would clear
-// a sign-in the vendor refuses, or sit out one that has quota left.
+// Its probes are real calls through [Provider.Complete], recorded as any call
+// is ([Provider.Plan]). One with Values or a Home runs on a sibling
+// ([Provider.candidate]) with a record of its own: what a candidate met says
+// nothing about the entry's, and recorded there it would clear a sign-in the
+// vendor refuses or sit out one that has quota left.
 func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis {
 	if opts.Values == nil && opts.Home == "" {
 		return p.diagnose(ctx, opts, nil)
@@ -452,22 +440,18 @@ func (p *Provider) unisolated(err error) Diagnosis {
 	return d
 }
 
-// candidate is a sibling of this entry for a diagnosis that must not run on
-// the entry's own sign-in: in a workspace at home, with values in place of
-// what the entry resolved for their variables ([DiagnoseOptions.Values]), and
-// with a [Plans] of its own, so nothing it meets is recorded on the entry.
-// refused is a problem for each value that would reach nothing.
+// candidate is a sibling of this entry for a diagnosis that must not run on its
+// own sign-in: in a workspace at home, with values in place of what the entry
+// resolved ([DiagnoseOptions.Values]) and a [Plans] of its own, so nothing it
+// meets is recorded on the entry. refused is a problem for each value that
+// would reach nothing.
 //
-// BUILT FIELD BY FIELD, not copied: a provider holds the mutex its plan is
-// read under, and a copy would share the entry's slots and plan. What is
-// copied is what [New] made of the entry's configuration; what is fresh is
-// what its calls change.
+// BUILT FIELD BY FIELD, not copied: a provider holds the mutex its plan is read
+// under, and a copy would share the entry's slots and plan.
 //
-// THE WORKSPACE IS NOT [Shared]'s. That registry keeps one workspace per
-// directory for the life of the process, so every entry on a directory locks
-// one set of seats; a home made for one diagnosis and removed after it would
-// stay in it for good. No other entry is on this directory, so there is no
-// one to share it with.
+// THE WORKSPACE IS NOT [Shared]'s: that registry keeps one workspace per
+// directory for the life of the process, so a home made for one diagnosis would
+// stay in it for good. No other entry is on this directory.
 func (p *Provider) candidate(home string, values map[string]string) (*Provider, []string, error) {
 	key, err := keyOf(home, p.harness)
 	if err != nil {
@@ -801,24 +785,18 @@ func (p *Provider) keyRemedy() string {
 		"as auth.api_key (the harness reads it from %s)", p.profile.APIKeyEnv)
 }
 
-// executor measures what an entry a seat's executor launches on needs beyond
-// a login.
+// executor measures what an executor entry needs beyond a login.
 //
-// BOTH HALVES FAIL AT A SEAT'S FIRST LAUNCH AND NOWHERE EARLIER, which is the
-// whole reason they are here: an engine with no reachable bridge URL refuses
-// every launch at the moment a seat finally has work, and a harness with no in-box
-// runner is skipped by every launch while validating cleanly as a provider.
-// `doctor` is what a deploy script gates on, so it is the last place either
-// can be caught before an agent is waiting.
+// BOTH HALVES FAIL AT A SEAT'S FIRST LAUNCH AND NOWHERE EARLIER: no reachable
+// bridge URL refuses every launch once a seat has work, and a harness with no
+// in-box runner is skipped while validating cleanly. `doctor` gates deploys.
 //
-// A NON-RUNNER MEMBER IS A LINE, NOT A PROBLEM. The company refuses an agent
-// seat whose executor chain holds no runner at all, so a harness without one sits
-// in a chain beside one that has it — skipped at launch, and still the seat's
-// model for every phase on this host the chain serves. Faulting it would make `doctor`
-// red on a configuration the engine runs.
+// A NON-RUNNER MEMBER IS A LINE, NOT A PROBLEM: a chain must hold some runner,
+// so a harness without one sits beside one that has it, still the seat's model
+// for every phase on this host. Faulting it would make `doctor` red on a
+// configuration the engine runs.
 //
-// AN ENTRY NO EXECUTOR CHAIN HOLDS REPORTS NOTHING HERE: it serves the phases
-// on this host, as a subprocess of this engine, and needs neither.
+// AN ENTRY NO EXECUTOR CHAIN HOLDS REPORTS NOTHING HERE: it needs neither.
 func (p *Provider) executor(opts DiagnoseOptions) (lines, problems []string) {
 	if len(opts.ExecutorSeats) == 0 {
 		return nil, nil
@@ -998,22 +976,17 @@ func (p *Provider) webStance() string {
 }
 
 // webProbe asks the harness to fetch a URL with its own browser and reports
-// whether it did. The second return is the problem line, empty when there is
-// none.
+// whether it did; problem is empty if none.
 //
 // WHICH ANSWER IS THE PROBLEM DEPENDS ON THE STANCE, and the verdict is
-// measured either way rather than inferred from the profile. On an entry that
-// keeps web on, a harness that cannot reach it is the problem: the seat has less
-// reach than the same harness at a terminal, and the cause is usually a vendor
-// sandbox flag that also cut the network, or an egress proxy the child
-// environment was not told about. On an entry that DENIES web (the one an
-// assistant runs on), a harness that fetched is the problem, and the worse one:
-// the denial is a claim the assistant is admitted on, and a vendor that
-// renamed a flag would leave the model fetching under a configuration that
-// says it cannot.
+// measured, not inferred. Where web is kept on, a harness that cannot reach it
+// is the problem (a vendor sandbox flag that cut the network, or an egress
+// proxy the child was not told about). Where it is DENIED (the assistant's
+// entry), a harness that fetched is worse: the assistant is admitted on that
+// denial, and a renamed vendor flag would leave the model fetching anyway.
 //
-// The third return is the problem's [Check.Kind]: the failed call's for a
-// probe that could not run, else [CheckKindConfig]; empty with no problem.
+// The third return is the problem's [Check.Kind]: the failed call's, else
+// [CheckKindConfig]; empty with no problem.
 func (p *Provider) webProbe(ctx context.Context) (verdict, problem, kind string) {
 	denied := p.profile.EffectiveWebTools() == harnessprofile.WebToolsDenied
 	comp, err := p.Complete(ctx, probeRequest(webProbePrompt))
@@ -1084,26 +1057,17 @@ func reportsCurrentClock(text string, now time.Time) bool {
 }
 
 // probeVersion runs the harness's own version command, and returns the first
-// line it printed — or the error that kept it from starting.
+// line it printed, or the error that kept it from starting.
 //
-// THROUGH run, like every other child this package spawns. It hand-rolled a
-// second exec.CommandContext with no procgroup, no Cancel and no WaitDelay —
-// so probeTimeout bounded nothing it claimed to. cmd.Output waits for the
-// output pipes to reach EOF, and a harness is a launcher whose forked
-// helper inherits them: the helper holding a pipe open kept Wait blocked long
-// past the ten seconds, with `doctor` looking wedged for the exact reason it
-// was run to diagnose.
+// THROUGH run, like every other child here: cmd.Output waits for the output
+// pipes to reach EOF, and a harness's forked helper inherits them, so a helper
+// holding a pipe open kept Wait blocked past probeTimeout.
 //
-// The error contract differs from Output's and that is the point: run reports
-// a non-zero exit as (res, nil), so an empty version is a probe that produced
-// nothing rather than one that failed to start. Nothing is read from a probe
-// that was not seen to its end either: a stdout a helper held was cut, and the
-// first line of a cut stream is not known to be a whole version.
-//
-// AN ERROR IS A PROBE THAT NEVER RAN, and is returned as that: output files
-// that could not be made in the workspace's captures directory, or no room
-// for them on state_dir's volume, is a fault of the host with its own remedy,
-// which "printed no version" would have hidden behind the profile.
+// run reports a non-zero exit as (res, nil), so an empty version is a probe
+// that produced nothing, not one that failed to start. Nothing is read from a
+// probe not seen to its end: a cut stream's first line may not be a version.
+// AN ERROR IS A PROBE THAT NEVER RAN (no captures directory, no room on
+// state_dir's volume): a host fault "printed no version" would hide.
 func (p *Provider) probeVersion(ctx context.Context) (string, error) {
 	if len(p.profile.VersionArgs) == 0 {
 		return "", nil
@@ -1140,25 +1104,14 @@ func (p *Provider) probeVersion(ctx context.Context) (string, error) {
 // smokeTest runs a REAL completion with a REAL tool, served the way a seat's
 // are.
 //
-// The command that matters, and the reason it is not merely a version probe:
-// a profile can look perfect — binary present, login present, flags accepted
-// — and still not hand its harness the seat's tools, because how a harness is told of
-// an MCP server, which of its tools it lets the model call, and how it records
-// its requests all move with every vendor release. That failure only shows up
-// on the first turn of a real seat otherwise.
+// Not merely a version probe: a profile can look perfect (binary, login, flags
+// accepted) and still not hand its harness the seat's tools, because how a
+// harness is told of an MCP server, which tools it lets the model call and how
+// it records its requests move with every vendor release. Otherwise that shows
+// only on a real seat's first turn.
 //
-// THE PRODUCTION ROUTE, end to end: one tool, `crewlet_smoke`, on a real
-// session server this command opens for itself ([toolsession.NewHost]); the
-// profile's tool route renders the harness's server configuration; the harness starts
-// this binary as the relay, lists the tool and — asked the way a phase asks,
-// the instruction naming the tool and nothing forcing it — calls it. It passes
-// when the server recorded the call, and it says how the call was joined to
-// the harness's record and which tools the harness offered its model, which is where a
-// confinement that stopped holding shows first.
-//
-// answered reports whether the model replied at all, however badly: a reply
-// is proof the harness reached its model signed in, which the doctor needs apart
-// from whether the reply was usable.
+// answered reports whether the model replied at all, however badly: proof the
+// harness reached its model signed in, apart from whether the reply was usable.
 func (p *Provider) smokeTest(ctx context.Context) (verdict string, answered bool) {
 	outcome := p.smoke(ctx)
 	return outcome.verdict, outcome.answered
@@ -1174,6 +1127,14 @@ type smokeOutcome struct {
 }
 
 // smoke is [Provider.smokeTest] with its failure's kind.
+//
+// THE PRODUCTION ROUTE, end to end: one tool, `crewlet_smoke`, on a real
+// session server ([toolsession.NewHost]); the profile's tool route renders the
+// harness's server configuration; the harness starts this binary as the relay,
+// lists the tool and, asked as a phase asks, calls it. It passes when the
+// server recorded the call, and says how the call was joined to the harness's
+// record and which tools it offered its model, where a confinement that stopped
+// holding shows first.
 func (p *Provider) smoke(ctx context.Context) smokeOutcome {
 	var err error
 	verdict, answered := p.smokeRun(ctx, &err)
@@ -1348,31 +1309,24 @@ func (p *Provider) SignInState(ctx context.Context) string { return p.signIn(ctx
 // each credential path RELATIVE to the box home, against the absolute path of
 // the shared file on the engine host.
 //
-// EVERY FILE THE LOGIN MAY HOLD, whether or not the shared directory holds it
-// now. The box reads the login when it is seeded, as ONE login under the shared
-// directory's lock ([hostbox.ReadCredentials]), and seeds the files that login
-// holds and no others — so a box is never handed a file that does not exist.
-// A map of only the files present when it was built named a set the login may
-// have moved past by the time the box was seeded: a box given hermes's lone
-// .env would be seeded with a newer sign-in's .env and without its auth.json,
-// which is half of that sign-in.
-//
 // A LOCAL box seeds these and writes a refreshed one back. A remote box must
-// ignore them: they carry a refresh token whose rotation is shared fleet
-// state, and pushing that onto somebody else's VM is a materially larger
-// trust step than the scoped headless token the run env already exports.
+// ignore them: they carry a refresh token whose rotation is shared fleet state,
+// a larger trust step than the scoped headless token the run env exports.
 // Empty for a profile that keeps no credential file.
-//
-// NONE FOR AN ENTRY THAT SIGNS IN WITH NO LOGIN: an api-key or env entry, and
-// an inherit-env one handed a key ([Provider.signsInWithKey]). Its calls on
-// this host run in a key home no login is seeded into, so its box is seeded
-// with none either: a plan's login beside a key, or beside a cloud provider's
-// switch, is a credential handed to a run that does not sign in with it, and a
-// harness that ranks a login over its environment would bill the plan instead.
 func (p *Provider) SandboxCredentials() map[string]string {
+	// NONE FOR AN ENTRY THAT SIGNS IN WITH NO LOGIN (api-key, env, or inherit-env
+	// handed a key: [Provider.signsInWithKey]): a plan's login beside a key would
+	// be handed to a run that does not sign in with it, and a harness that ranks
+	// a login over its environment would bill the plan instead.
 	if p.signsInWithKey() {
 		return nil
 	}
+	// EVERY FILE THE LOGIN MAY HOLD, whether or not the shared directory holds it
+	// now. The box reads the login when seeded, as ONE login under the shared
+	// directory's lock ([hostbox.ReadCredentials]), and seeds the files that
+	// login holds and no others. A map of only the files present at build time
+	// may name a set the login has moved past: a box given hermes's lone .env
+	// would get a newer sign-in's .env without its auth.json, half a sign-in.
 	out := map[string]string{}
 	for _, rel := range p.profile.CredentialPaths {
 		out[rel] = p.ws.sharedPath(filepath.Base(rel))
@@ -1402,43 +1356,25 @@ func (p *Provider) SandboxCredentialDocument() string {
 	return p.ws.documentPath()
 }
 
-// SandboxEnv is the environment a launch on this entry carries into its
-// box, in any cell: the entry's own env, and the credential its auth mode signs
-// the harness in with — the headless subscription token where one is configured,
-// an api-key entry's key, the variables inherit-env forwards.
+// SandboxEnv is the environment a launch on this entry carries into its box, in
+// any cell: the entry's own env and the credential its auth mode signs in with
+// (the headless token, an api-key entry's key, inherit-env's forwarded ones).
 //
-// THE WHOLE ENV, NOT ONLY ITS SIGN-IN. An entry's env is extra environment for
-// every invocation of its harness, and a seat's executor run is one: a gateway's
-// ANTHROPIC_BASE_URL and the bearer token it takes, a Bedrock or Vertex AI
-// switch and its region, a proxy. Cut to the credential names, a box run on
-// an entry that reached its model through a gateway called the vendor directly
-// with the gateway's key, and one on Bedrock called the Anthropic API signed
-// in to nothing, while every other phase of the same entry worked.
+// THE WHOLE ENV, NOT ONLY ITS SIGN-IN: an entry's env reaches every invocation
+// of its harness, an executor run included (a gateway's base URL and token, a
+// Bedrock or Vertex switch, a proxy). Cut to the credential names, a box run
+// through a gateway called the vendor directly while every other phase worked.
 //
-// A token or a key travels to any box, including a remote one, because it is a
-// single scoped and revocable variable rather than a rotating refresh secret.
-// A subscription entry with neither contributes no credential at all: the run
-// then needs the credential files, which is why a harness that mints no token
-// needs a local box.
-//
-// Read off [childEnv] like [Provider.signIn], so a run carries what a run on
-// this host is given of the entry: what the auth mode removes from the child
-// it removes from the box, and what the mode sets in the child — the
-// credential, and [harnessprofile.Profile.SubscriptionEnv] — it sets in the box.
-// The rest of that environment is this host's and stays on it: the host
-// allowlist (a direct box is given its own, and a remote one is another
-// machine), the isolation variables (a box points HOME and the XDG
-// directories at its own home, and an entry's env naming one is refused on
-// every write but only warned about where it is applied), and the profile's
-// fixed env and passthrough, which tune a call on this host — a run in a box
-// is configured by its runner (internal/sandbox/executor).
-//
-// TZ travels with it: the zone the engine reads the run's reset in.
-//
-// A BLANK VALUE IS LEFT OUT, by the rule the rest of a run's environment is
-// held to: a reference that resolved to nothing reaches no box as an empty
-// string, and its build already warned (harness_env_unresolved).
+// A token or key travels to any box, a remote one included: scoped and
+// revocable, not a rotating refresh secret. A subscription entry with neither
+// sends none, so a harness that mints no token needs a local box.
 func (p *Provider) SandboxEnv() map[string]string {
+	// Read off [childEnv] like [Provider.signIn]: what the auth mode removes from
+	// the child it removes from the box, and what it sets (the credential,
+	// [harnessprofile.Profile.SubscriptionEnv]) it sets there. The rest is this
+	// host's and stays on it: the host allowlist, the isolation variables (a box
+	// points HOME and XDG at its own home) and the profile's fixed env and
+	// passthrough (a box is configured by its runner, internal/sandbox/executor).
 	env := childEnv(p.profile, &Checkout{}, p.env, p.auth)
 	names := slices.Collect(maps.Keys(p.env))
 	names = append(names, p.profile.TokenEnv, p.profile.APIKeyEnv)
@@ -1454,6 +1390,9 @@ func (p *Provider) SandboxEnv() map[string]string {
 		if name == "" || slices.Contains(isolation, name) {
 			continue
 		}
+		// A BLANK VALUE IS LEFT OUT, as everywhere in a run's environment: a
+		// reference that resolved to nothing reaches no box as an empty string,
+		// and its build already warned (harness_env_unresolved).
 		if value := env[name]; strings.TrimSpace(value) != "" {
 			out[name] = value
 		}

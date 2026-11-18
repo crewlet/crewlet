@@ -20,85 +20,47 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE CHAT ARM OF THE LIVE CHANNEL, and the one rule that shapes all of it:
-// EVERY FRAME IS FILTERED BY THE RECIPIENT'S OWN VISIBILITY BEFORE IT LEAVES.
+// THE CHAT ARM OF THE LIVE CHANNEL, and the one rule that shapes it: EVERY
+// FRAME IS FILTERED BY THE RECIPIENT'S OWN VISIBILITY BEFORE IT LEAVES.
 //
-// # Why chat cannot use the hub's broadcast
+// [Hub.Broadcast] carries facts every socket may read; a transcript is not
+// one, and a private room's very existence discloses who talks to whom. So
+// every chat kind is [RouteViewer], which [Hub.Broadcast] refuses, and this
+// arm keeps its own watchers, each with the SEAT its socket acts as. The
+// decision is [chatlet.Visible], never a second idea of "is this room
+// private". What it admits leaves by the one fan-out ([fanOut]), which decides
+// need, posture and encode as for every kind; need and posture are asked
+// before the room is read ([Client.admits]).
+
+// The viewer is the socket's, fixed for its life: lifetime.go closes a socket
+// when what it acts as moves, so its seat is decided ONCE at its join by
+// [chatViewerOf] ([iam.ActorFor], where a chat write's author comes from:
+// whoever may post is whoever may be shown), never per pass, which would be an
+// identity read per socket per batch.
+
+// Three things travel here, only one a record. A COMMITTED RECORD arrives
+// through [chatlet.Observer] after a batch commits (the applier's, or a peer's
+// relayed): a courtesy, not a delivery, since wakes are derived by something
+// that outlives the writer (internal/changefeed) and a missed frame refetches
+// exactly by the per-channel sequence. A dropped batch or a gap owes every
+// screen a re-read ([ChatHub.Reread]).
+
+// PRESENCE (who looks, who types, which seat works on a message) is never
+// durable: a keystroke on the log would be a row every data node applies and
+// every backup carries. It is the presence hub's (internal/presence, ADR-0038),
+// as an artifact's room is: a `presence` frame joins the socket once the
+// room's visibility admits its viewer ([ChatHub.presenceFrame]), and sockets
+// get the hub's fan-out ([ChatHub.presenceChanged]). A seat's working
+// indicator is a member of the same room ([ChatHub.SetStatus]).
+
+// A PERSON'S OWN READ STATE is pushed from the DURABLE RECORD: every node
+// serving sockets watches the read-state records ([coord.ChatReads]) and
+// pushes a change to that seat's own sockets only ([ChatHub.watchReads]).
 //
-// [Hub.Broadcast] is the right shape for everything else here: a health tick,
-// a roster, a token rollup and an event row are facts about the company, and
-// every socket that may read the company at all may read them. A transcript is
-// not. A private room's membership is the only thing deciding who may see what
-// was said in it — and its very EXISTENCE is information, because who is
-// talking to whom is most of what a conversation discloses — so a chat frame
-// on the shared fan-out is a private room delivered to whoever happened to
-// have a tab open. Every chat kind is therefore routed [RouteViewer], which
-// [Hub.Broadcast] refuses.
-//
-// So this arm keeps its own registry of watchers, each with the SEAT its
-// socket acts as, and decides per watcher. The decision is [chatlet.Visible] —
-// the domain's own function, applied to the room and the membership a copy of
-// the estate holds — and never a second idea of it: a filter that re-derived
-// "is this room private" from a kind would be a second rule, and the two would
-// disagree the first time a kind was added. And what it admits leaves by the
-// one fan-out every push takes ([fanOut]), so the reader's `chatlet` need
-// ([NeedChatlet]), the node's posture and the one encode per posture are each
-// decided where they are for every other kind — and the first two are asked
-// before the room is read ([Client.admits]), so a socket the frame would never
-// reach costs no visibility read.
-//
-// # The viewer is the socket's, fixed for its life
-//
-// A socket is opened as one principal and keeps it: lifetime.go closes a
-// socket the moment what it acts as moves — its seat, its login, its
-// permissions, the seat leaving the company — and the reconnect is a new
-// client with a new join. So the seat a socket watches as is decided ONCE, at
-// its join, by [chatViewerOf] — [iam.ActorFor], the function a chat write's
-// author comes from, so whoever may post in a room is exactly whoever's socket
-// may be shown it — and never resolved again here: a second resolution per
-// pass would be a second answer to who the socket is, and a read of the
-// identity estate per socket per committed batch.
-//
-// # Three things travel here, and only one of them is a record
-//
-// A COMMITTED RECORD arrives through [chatlet.Observer], which the engine calls
-// after a chat batch commits — its own applier's, or a peer's relayed while its
-// own copy is out of service. That is a courtesy on top of the rows rather
-// than a delivery anybody may rely on: a wake is derived by something that
-// outlives the writer (see internal/changefeed), while a socket frame is
-// worthless to a viewer who is not looking and is wanted in milliseconds by
-// whoever is. Anything that misses a frame refetches, and the transcript's
-// contiguous per-channel sequence is what makes that refetch exact — and a
-// batch this hub could not take, or a gap in what the engine hears, owes every
-// screen a re-read, which is sent rather than hoped for ([ChatHub.Reread]).
-//
-// PRESENCE is who is looking at which room, who is typing, and which seat is
-// working on a message. None of it is durable, none of it is applied, and none
-// of it may ever become a record — a keystroke that landed on the chat log
-// would be a row every data node applies and every backup carries, for ever.
-// It is the presence hub's (internal/presence, ADR-0038), as an artifact's
-// room is: a tab's `presence` frame naming a chat room joins this socket to
-// that room's presence ([ChatHub.presenceFrame]) once the room's own
-// visibility admits its viewer, every frame between nodes is sealed under the
-// fleet keyring, and what a socket is pushed is the hub's fan-out of the room
-// ([ChatHub.presenceChanged]). A seat's working indicator is a member of the
-// same room ([ChatHub.SetStatus]).
-//
-// A PERSON'S OWN READ STATE is the third, and it is pushed from the DURABLE
-// RECORD rather than from whoever wrote it: every node serving sockets watches
-// the coordination store's read-state records ([coord.ChatReads]), and a
-// changed record is pushed to that seat's own sockets on that node and to
-// nobody else ([ChatHub.watchReads]). So a flush made through any surface on
-// any node reaches every tab, and no node carries out a delivery on another's
-// word.
-//
-// # Nothing here may block the applier
-//
-// [ChatHub.Applied] runs on the applier's goroutine (or the relay follower's),
-// between one batch's commit and the next batch's transaction, so a slow
-// observer is a node whose log applies slowly. It therefore hands the batch to
-// this hub's own buffer and returns, and a full buffer DROPS rather than
-// waits — and owes every screen the re-read that covers what it dropped.
+// Nothing here may block the applier: [ChatHub.Applied] runs on its goroutine
+// (or the relay follower's) between batches, so a slow observer is a node
+// applying slowly. It hands the batch to this hub's buffer and returns; a full
+// buffer DROPS rather than waits, owing every screen the covering re-read.
 
 // The chat push kinds.
 //
@@ -125,16 +87,14 @@ const (
 	// KindChatRoomChanged is a room's own state moving: created, patched,
 	// its horizon set, erased or pruned.
 	//
-	// ONE KIND FOR ALL OF THEM, because what a client does with them is
-	// one thing — read the room again. An erase and a prune remove
-	// messages and the record does not carry which, so a frame that tried
-	// to name them would be a frame a client could not act on anyway.
+	// ONE KIND FOR ALL OF THEM, because a client does one thing with them:
+	// read the room again. An erase and a prune remove messages without the
+	// record saying which.
 	//
-	// AND A FRAME OF IT NAMING NO ROOM (`channel_id` empty) IS A GAP: what
-	// this socket was shown has a hole in it — the engine switched the
-	// source its batches come from, or this hub dropped a batch it could
-	// not keep up with — and the screen reads its rooms again, every one
-	// it holds, rather than one. See [ChatHub.Reread].
+	// A FRAME OF IT NAMING NO ROOM (`channel_id` empty) IS A GAP: what this
+	// socket was shown has a hole (the engine switched its batch source, or
+	// this hub dropped a batch) and the screen reads every room it holds.
+	// See [ChatHub.Reread].
 	KindChatRoomChanged Kind = "chat_room_changed"
 
 	// KindChatMembershipChanged is a room's membership set being replaced,
@@ -269,18 +229,13 @@ type ChatReadWatch interface {
 // presence hub fans it out ([presence.Change]), named by the room's id as
 // every chat frame names its room.
 //
-// Roster set is the room WHOLE, as the socket joining it is handed it: replace
-// what was held. Otherwise it is a change: the members now presented that are
-// new or changed, and the sessions no longer presented. A person's member is
-// viewing or, while they type, editing, its focus the thread they are typing
-// under; a seat working on an answer is an agent's member, editing, its focus
-// the thread the answer will land in and its status the line shown beside it.
-// Past [presence.RoomTop] members the room presents the most recent and counts
-// the rest, as an artifact's does.
-//
-// A ROSTER NAMING NO MEMBER is also what a socket is sent when it is taken out
-// of a room it may no longer be in ([ChatHub.withdrawPresence]), so the room it
-// was shown empties rather than standing.
+// Roster set is the room WHOLE, as a joining socket is handed it: replace what
+// was held. Otherwise it is a change: members new or changed, and sessions no
+// longer presented. A person's member is viewing or, while typing, editing;
+// a seat working on an answer is an agent's member, editing, its status the
+// line beside it. Past [presence.RoomTop] members the room presents the most
+// recent and counts the rest. A ROSTER NAMING NO MEMBER is also what a socket
+// taken out of a room is sent ([ChatHub.withdrawPresence]), emptying it.
 type ChatPresence struct {
 	ChannelID string            `json:"channel_id"`
 	Roster    bool              `json:"roster,omitempty"`
@@ -292,29 +247,16 @@ type ChatPresence struct {
 
 // ChatChange is one committed chat record as a socket renders it.
 //
-// # It is evidence that something landed, never a copy of the message
+// It is evidence that something landed, never a copy of the message: a second
+// rendering path would disagree with the transcript. It carries the room, the
+// message and the CONTIGUOUS per-room sequence, so a client holding 41 and
+// handed 43 asks for 42. The excerpt (at most [chatlet.MaxExcerpt] bytes),
+// mentions, thread root and the room's name and kind come from the record's
+// routing snapshot, absent on records with none (a system line, a delete, a
+// reaction, a room record), and substitute for no read of the room.
 //
-// There is no body here. A frame carrying one would be a second rendering
-// path for a conversation, and the two would disagree the first time an edit
-// raced a reload — while the transcript is what a reload shows and is
-// therefore the one that has to be right. What the frame carries instead is
-// enough to decide what to do: the room, the message, and the CONTIGUOUS
-// per-room sequence, so a client holding 41 and handed 43 asks for 42 rather
-// than for the whole room.
-//
-// The excerpt and the mentions are the exception, and they are here because
-// the RECORD already carries them, in its routing snapshot, for a card and a
-// badge: an excerpt is at most [chatlet.MaxExcerpt] bytes of what a card shows,
-// and the mentions are how a tab raises its own badge without a fetch. Every
-// post and edit an author made carries a snapshot, even one that wakes
-// nobody; the records that carry none — a system line, a delete, a reaction,
-// and every room record — have neither, and neither is a substitute for
-// reading the room. The thread root and the room's name and kind come from
-// the same snapshot, and are absent on the same records.
-//
-// THE WAKE SET IS DELIBERATELY NOT HERE. Who the engine woke is a routing
-// fact about seats, and a browser frame carrying it would publish the
-// company's delivery decisions to every tab in the room.
+// THE WAKE SET IS DELIBERATELY NOT HERE: a routing fact about seats, it would
+// publish delivery decisions to every tab.
 type ChatChange struct {
 	// ChannelID is the room. EMPTY ONLY ON A GAP — a `chat_room_changed`
 	// that names no room, which asks a screen to read every room again
@@ -661,17 +603,16 @@ func (h *ChatHub) Applied(batch []chatlet.Applied) {
 
 // Reread tells every chat screen on this node that what it was shown has a
 // GAP: one `chat_room_changed` naming no room, to every watcher, which reads
-// its rooms again — the engine switched the source its batches come from (its
-// own applier, a peer's relayed), or this hub dropped a batch. Nothing between
-// is replayed, and a frame per room would need to know every room each screen
-// holds — and every socket in a room's presence is decided again, since the
-// gap may have held the record that took its viewer out of the room
-// ([ChatHub.presenceAfterGap]).
+// its rooms again. The engine switched the source its batches come from, or
+// this hub dropped a batch; nothing between is replayed, and a frame per room
+// would need every room each screen holds. Every socket in a room's presence
+// is decided again too, since the gap may have held the record that took its
+// viewer out ([ChatHub.presenceAfterGap]).
 //
 // NEVER BLOCKS AND IS NEVER LOST: it sets a flag the fan loop reads after
 // every batch and on its own wake, so a burst of gaps is one re-read and a
-// full queue cannot drop it. A screen is told after the batches already queued
-// ahead of it, which is the order that covers them.
+// full queue cannot drop it. A screen is told after the batches queued ahead
+// of it, which covers them.
 func (h *ChatHub) Reread() {
 	if h == nil {
 		return
@@ -719,20 +660,15 @@ func (h *ChatHub) reread(ctx context.Context) {
 // presenceAfterGap decides again whether every socket in a room's presence may
 // still see the room, and takes out the ones it definitely may not.
 //
-// A GAP MAY HAVE HELD THE RECORD THAT NARROWED A ROOM — a batch this hub
-// dropped, or one applied while the engine's source switched — and that
-// record is what takes a removed person out of the room's presence
-// ([ChatHub.redecidePresence]). Missed, its subject would go on seeing who is
-// typing in a room they were taken out of, and be shown there, until their
-// tab moved. So a gap re-decides every socket in a room, as the record would
-// have.
+// A GAP MAY HAVE HELD THE RECORD THAT NARROWED A ROOM, which is what takes a
+// removed person out of its presence ([ChatHub.redecidePresence]); missed,
+// they would see who is typing until their tab moved. So a gap re-decides
+// every socket in a room.
 //
-// WHAT IT CANNOT DECIDE IT KEEPS, the way an artifact's room keeps an
-// undecidable member on a reset, rather than failing closed as a narrowing
-// record's re-decision does: that record is evidence the room changed, while
-// a gap is only the possibility, and a store blip during one would otherwise
-// empty every room's presence on the node — with nothing to bring a person
-// who is only looking back until they typed or reconnected.
+// WHAT IT CANNOT DECIDE IT KEEPS, as an artifact's room does on a reset, not
+// failing closed as a narrowing record's re-decision does: that record is
+// evidence the room changed, a gap only the possibility, and a store blip
+// would empty every room's presence on the node.
 func (h *ChatHub) presenceAfterGap(ctx context.Context, watchers []chatWatcher) {
 	rooms := h.rooms()
 	if rooms == nil {
@@ -756,35 +692,16 @@ func (h *ChatHub) presenceAfterGap(ctx context.Context, watchers []chatWatcher) 
 
 // fan delivers one committed batch to every socket entitled to see it.
 //
-// THE VISIBILITY DECISION IS CACHED PER BATCH AND NEVER BEYOND IT. A batch is
-// one transaction, so every read here sees one settled state and a room's
-// membership cannot move inside it — while a cache that outlived the batch
-// would serve a private room to somebody who had just been removed from it,
-// which is the one mistake this filter exists to prevent.
+// THE VISIBILITY DECISION IS CACHED PER BATCH, NEVER BEYOND: a longer-lived
+// cache would serve a private room to somebody just removed. Need and posture
+// are asked first ([Client.admits]): a socket the frame never reaches is not
+// worth a visibility read.
 //
-// ONE ENCODE PER RECORD, for every viewer it admits: the frame is the same
-// for all of them, so the admitted sockets leave together by [fanOut].
-//
-// THE READER'S NEED AND ITS POSTURE ARE ASKED FIRST ([Client.admits]), before
-// the room's visibility is read: a socket the frame would never reach is not
-// worth a read to decide whether it may see it — and on a node whose posture
-// is degraded that is every socket on it, each decision a read through the
-// router for a frame [fanOut] then withholds. [fanOut] asks them again, so a
-// posture that moves in between is still the one the frame is sent under.
-//
-// # Read at the batch, here first
-//
-// Each decision is held to the BATCH'S OWN POSITION ([statelog.Freshness]'s
-// floor, honoured at `stale`), so whichever copy answers holds the records
-// being announced: a copy that had not applied a membership change would
-// decide it against the rows from before it. And it is asked of this node's
-// copy first even while that copy lags its log ([ChatRooms.ChannelHere]): this
-// node's applier is the one announcing the batch, so its copy holds it by
-// construction — while the estate's ordinary walk asks a peer whose copy does
-// not lag first, and a burst is what makes a copy lag, so every decision
-// during one was a network round trip on this one goroutine, past which the
-// batches queued behind it were dropped. A copy out of service is passed over
-// as ever, which is what serves a batch the engine relayed from a peer.
+// EACH DECISION IS HELD TO THE BATCH'S OWN POSITION ([statelog.Freshness]'s
+// floor, honoured at `stale`), asked of this node's copy first even while it
+// lags ([ChatRooms.ChannelHere]): this node's applier announces the batch, so
+// its copy holds it, while the ordinary walk asks a non-lagging peer first and
+// a burst made every decision a round trip here, dropping queued batches.
 func (h *ChatHub) fan(ctx context.Context, batch []chatlet.Applied) {
 	watchers := h.current()
 	if len(watchers) == 0 {
@@ -886,21 +803,14 @@ var presenceRead = statelog.Freshness{Level: statelog.ReadStale}
 // maySee answers whether one viewer may be shown one room, through the
 // domain's own rule.
 //
-// TWO NARROWINGS OF ONE DECISION, and the second is not redundant. The reader
-// refuses a room this viewer may not read as NOT FOUND, which is the answer
-// for the rooms it declines to serve; [chatlet.Visible] is then applied to the
-// room it DOES serve, because this seam is an interface and a filter that
-// trusted its implementation to have already decided would be a filter with
-// no rule of its own.
+// TWO NARROWINGS OF ONE DECISION, the second not redundant. The reader refuses
+// a room this viewer may not read as NOT FOUND; [chatlet.Visible] is then
+// applied to the room it serves, because this seam is an interface and a
+// filter trusting its implementation would have no rule of its own.
 //
-// IT FAILS CLOSED. A read that errors, times out or cannot be served drops the
-// frame: the alternative is showing a transcript to somebody on the strength
-// of a store that would not answer. The screen repairs itself on its next
-// read, which is what every dropped frame here relies on.
-//
-// THE READ AND ITS FRESHNESS ARE THE PASS'S: a committed frame's decision
-// reads this node's copy first at the batch's own position ([ChatHub.fan]), a
-// presence join whichever copy the walk prefers ([presenceRead]).
+// IT FAILS CLOSED: a read that errors drops the frame; the screen repairs
+// itself on its next read. Read and freshness are the pass's ([ChatHub.fan],
+// [presenceRead]).
 func (h *ChatHub) maySee(ctx context.Context, read roomRead, fresh statelog.Freshness,
 	decided map[seenKey]bool, viewer, channelID string) bool {
 
@@ -1204,15 +1114,12 @@ func (h *ChatHub) rooms() ChatRooms {
 // never overtakes the join it undoes.
 //
 // A FRAME NAMING ANOTHER ROOM MOVES THE SOCKET, because a tab looks at one room
-// at a time: out of the room it was in, and into the one it names once the
-// room's own visibility admits its viewer ([ChatHub.maySee], the decision a
-// committed frame takes) — and a refusal leaves it in none, with nothing said,
-// which is the answer a room that does not exist gets too. A frame naming no
-// room takes it out of the one it was in.
+// at a time: out of the old room, into the named one once its visibility
+// admits the viewer ([ChatHub.maySee]). A refusal leaves it in none, saying
+// nothing, as a nonexistent room does. A frame naming no room takes it out.
 //
-// THE FRAME IS TRUSTED ABOUT ATTENTION AND NEVER ABOUT PERMISSION: a client may
-// name any room it likes, and naming a private room its viewer is not in puts
-// it in nobody's presence and shows it nobody's.
+// THE FRAME IS TRUSTED ABOUT ATTENTION, NEVER PERMISSION: naming a private
+// room its viewer is not in puts it in nobody's presence.
 func (h *ChatHub) presenceFrame(ctx context.Context, client *Client, channelID string,
 	activity presence.Activity, focus presence.Focus) {
 
@@ -1331,21 +1238,16 @@ func (h *ChatHub) withdrawPresence(client *Client, room uuid.UUID) {
 }
 
 // presenceChanged pushes one chat room's presence fan-out to the sockets in
-// it: the presence hub's sink, called on the hub's goroutine. A room of any
-// other kind is another surface's.
+// it: the presence hub's sink, on the hub's goroutine. Another kind of room is
+// another surface's.
 //
-// TO THE SOCKETS IN THE ROOM AND NOBODY ELSE, which is the visibility filter
-// for presence: a socket is in a room's presence only once the room's own
-// visibility admitted its viewer, and is taken out by the record that narrows
-// it ([ChatHub.redecidePresence]).
-//
-// CHOSEN AND SENT UNDER THE HUB'S LOCK, which a join's hand holds while it
-// hands its socket the room's roster and a withdrawal while it hands its
-// socket a roster naming nobody: so this fan-out reaches a socket wholly
-// before either or wholly after, and a socket taken out of the room in
-// between is never sent it. Which side of a join's roster it falls on is the
-// presence hub's delivery order ([presence.Hub.Join]). Sending is a non-blocking hand-off to each socket's queue
-// ([Client.send]), so the lock is never held across a slow reader.
+// TO THE SOCKETS IN THE ROOM AND NOBODY ELSE, the visibility filter for
+// presence ([ChatHub.redecidePresence] removes a socket the room narrows).
+// CHOSEN AND SENT UNDER THE HUB'S LOCK, which a join holds while handing its
+// socket the roster and a withdrawal an empty one, so this fan-out reaches a
+// socket wholly before or after either, never one taken out in between
+// ([presence.Hub.Join] orders delivery). Sending is a non-blocking hand-off
+// ([Client.send]), so the lock never spans a slow reader.
 func (h *ChatHub) presenceChanged(c presence.Change) {
 	if c.Room.Kind != presence.RoomChat {
 		return
@@ -1370,22 +1272,15 @@ func (h *ChatHub) presenceChanged(c presence.Change) {
 
 // THE WORKING INDICATOR RIDES PRESENCE, NOT THE LOG.
 //
-// "Agent SWE is thinking…" is in-flight state about a turn that is running
-// right now: it is true for minutes, it is worthless the moment the turn ends,
-// and nothing replays it. On the log it would be two records per turn on the
-// busiest stream in the engine, applied by every node and carried in every
-// backup, to say something no reader will ever ask about again. So it is the
-// seat's member of the room's presence (internal/presence): an agent, editing,
-// focused on the thread its answer will land in, naming the turn and showing
-// the phrase as its status — raised on the node running the turn, and told to
-// whichever node holds the room's sockets as every member is.
+// "Agent SWE is thinking…" is in-flight state, worthless once the turn ends
+// and never replayed; on the log it would be two records per turn on the
+// busiest stream, applied by every node and carried in every backup. So it is
+// the seat's member of the room's presence (internal/presence): an agent,
+// editing, focused on the thread its answer lands in, the phrase as status,
+// raised on the node running the turn.
 //
-// It is driven by [notify.StatusDriver] — the same driver Slack's and
-// Mattermost's indicators use — so the lifecycle, the reference counting per
-// turn, the heartbeat and the mode decision are written once. What this
-// implements is the BACKEND half of that seam, and the two values that decide
-// when the indicator appears come from the domain rather than from here: the
-// company's `chat.chatlet.typing_status` is the driver's mode, and
+// Driven by [notify.StatusDriver], shared with Slack's and Mattermost's; this
+// is the BACKEND half. `chat.chatlet.typing_status` is the driver's mode and
 // [chatlet.AddressRule] is what `addressed` means.
 
 // StatusBackend implements [notify.StatusPoster]: the transport name the chat

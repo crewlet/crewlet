@@ -15,13 +15,10 @@ import (
 // EVERY CLASS'S OWN SENTENCE STANDS ALONE (ADR-0060).
 //
 // A refusal nobody has worded for a person is answered with no `detail`, so
-// the message its code carries is the whole of what that person reads, on the
-// act route, the work surface and every client of either. A message that
-// points at "the detail" then points at nothing: `quota_exceeded` told a
-// person past a datastore's limit to ask an operator to raise "the limit the
-// detail names", and no detail named one. This answers every class this build
-// knows through the one refusal mapping, with no person's words, and holds
-// each answer to carrying no detail and a message that leans on none.
+// the message its code carries is the whole of what that person reads. One
+// that points at "the detail" points at nothing. This answers every class
+// this build knows through the one refusal mapping, with no person's words,
+// and holds each answer to carrying no detail and a message leaning on none.
 //
 // Mutation: put "the limit the detail names" back into quota_exceeded's
 // message, and its class goes red.

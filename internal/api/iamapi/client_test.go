@@ -23,15 +23,12 @@ import (
 // THE DASHBOARD OFFERS EXACTLY THE ENGINE'S PERMISSIONS, in its order, and
 // treats as apps exactly the engine's apps.
 //
-// People, Service accounts and API tokens confer access (an invitation, an
-// edit, a service account, a token) by ticking it off `GRANTS`, and the access picker ticks and locks
-// `APPS` when Admin is ticked, because admin includes every app ([iam.Expand]).
-// An invitation and a person's create start from `DEFAULT_APPS`, so an opt-in
-// app the dashboard ticked by default would be given to every newcomer.
-// A permission the engine grew that the list lacks is one no administrator can
-// confer from the dashboard; one the list kept that the engine dropped is a box
-// every write refuses; and an app the picker does not lock under Admin is one
-// a person reads as withheld from an administrator who holds it.
+// The access picker ticks off `GRANTS` and ticks and locks `APPS` when Admin is
+// ticked, because admin includes every app ([iam.Expand]); an invitation and a
+// person's create start from `DEFAULT_APPS`, so an opt-in app ticked by default
+// would go to every newcomer. A permission the list lacks is one no
+// administrator can confer; one the engine dropped is a box every write
+// refuses; an app not locked under Admin reads as withheld from an admin.
 //
 // Mutation: drop a name from any list, reorder `GRANTS`, add admin to `APPS`,
 // or add atlas to `DEFAULT_APPS`, and this fails.
@@ -260,20 +257,12 @@ func TestTheDashboardWordsEveryFindingKindInTheEnginesOrder(t *testing.T) {
 
 // THE SEAT SURFACES READ WHAT THE SEAT LISTING SENDS.
 //
-// The org chart's card, the seat peek, a person's seat page and People
-// all read `GET /iam/seats` through four declarations — the answer, a seat, its
-// holder and its invitation — and a key renamed on the engine's side alone
-// would draw an invited seat as vacant on every one of them, with nothing
-// failing. So each is held to the answer itself, from a fixture that fills
-// every half — a seat held by somebody whose name opens and one by somebody
-// whose name does not, an invited one whose address opens, an invited one
-// whose address does not, and a vacant one — read as an ADMIN, the one reader
-// sent every member, in both directions: every member is sent by some row, a
-// REQUIRED member by every row, and every key a row sends is declared. And a
-// field the engine OMITS when empty is optional in the declaration, read off
-// the struct, because a required member the wire can leave out promises every
-// screen a value that is not there — which, since a holder's account reaches
-// only an admin and the holder, is every member of it but the kind.
+// Four dashboard declarations read `GET /iam/seats`; a key renamed on the
+// engine's side alone would draw an invited seat as vacant. Each is held to the
+// answer from a fixture filling every half, read as an ADMIN (the one reader
+// sent every member), in both directions: every member is sent by some row, a
+// REQUIRED member by every row, every sent key declared. A field the engine
+// OMITS when empty is optional in the declaration.
 //
 // Mutation: rename a JSON key on [iamapi.SeatInvitation] or
 // [iamapi.SeatHolding], drop a member from a declaration, or mark the

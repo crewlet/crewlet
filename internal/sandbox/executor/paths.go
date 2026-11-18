@@ -349,7 +349,10 @@
 // SAVE, packed to a place of that save's own, named after its taker
 // ([Runner.PackSave], [Paths.SessionSave]), for the take that names it alone —
 // neither ever where the job's final archive is read. Only Claude Code's
-// runner makes a save ([saver]). And a job that is over and left no archive is
+// runner makes a save ([saver], [Runner.Saves]), so an OpenCode run costs a
+// node's saves nothing; whether a job moved since its last save is how far
+// its harness's event stream ran ([Runner.Streamed]); and a save no take
+// will read is removed from its box ([Runner.ReleaseSave]). And a job that is over and left no archive is
 // packed on demand for its read alone too, by the run's own end's rule: the
 // capture is the job's own script's, which nothing else writes.
 //

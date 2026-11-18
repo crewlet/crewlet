@@ -139,20 +139,16 @@ func TestAPageWithNoInstallLinkHasNoCountdown(t *testing.T) {
 
 // THE INSTALL ARRIVAL WRITES NOTHING, however complete the query looks.
 //
-// This route is unauthenticated — a redirect from GitHub carries no engine
-// credential — so everything in its query is attacker-supplied. The `code`
-// arm survives that because a signed state stands in for the credential; the
-// install arm has no state to check, because an agent's app is private and
-// GitHub sends none back through the page such an app is installed from.
+// This route is unauthenticated, so everything in its query is
+// attacker-supplied. The `code` arm has a signed state standing in for the
+// credential; the install arm has none, because a private app's installation
+// page sends no state back.
 //
-// So a well-formed install arrival is still only a page. It reads as the
-// hostile case it is: `installed=` names any seat the caller likes and
-// `installation_id=` any number, and if either reached the company document
-// then anyone who can reach this port could point a seat's GitHub identity
-// wherever they wanted and mint a config revision per request while doing it.
-//
-// The reconcile loop adopts the real installation by LISTING the app's own
-// installations, which is the path that can tell a true id from a typed one.
+// So a well-formed install arrival is still only a page: `installed=` names
+// any seat and `installation_id=` any number, and if either reached the
+// company document anyone could repoint a seat's GitHub identity and mint a
+// config revision per request. The reconcile loop adopts the real
+// installation by LISTING the app's own installations.
 func TestTheInstallArrivalWritesNothing(t *testing.T) {
 	t.Parallel()
 	for _, query := range []string{
@@ -207,18 +203,13 @@ func TestTheInstallArrivalStillNamesTheSeatAndTheWait(t *testing.T) {
 
 // THE INSTALL ARRIVAL ASKS THE LOOP TO LOOK NOW.
 //
-// Writing nothing was right and waiting was not. The admin cadence is a
-// backoff from fifteen seconds to ten minutes, and what it backs off from is
-// asking a person to act at their third-party app — so the instant they do it
-// is the instant the wait is longest. Measured: an install finished in about
-// eight seconds, then minutes of a card still asking for it, reloaded by hand,
-// read as the install not having worked.
+// The admin cadence backs off from fifteen seconds to ten minutes, so the
+// instant a person finishes the install is the instant the wait is longest.
 //
-// The ask is not a write and carries nothing. No installation id travels with
-// it and nothing about the query is believed: the pass that follows is the
-// ordinary verified one, listing the app's own installations. That is exactly
-// what makes it safe from a route nobody signed — which is what the
-// still-passing TestTheInstallArrivalWritesNothing beside this pins.
+// The ask is not a write and carries nothing: no installation id travels with
+// it and nothing in the query is believed; the pass that follows is the
+// ordinary verified one. That is what makes it safe from a route nobody
+// signed, which TestTheInstallArrivalWritesNothing beside this pins.
 func TestTheInstallArrivalAsksTheLoopToLookNow(t *testing.T) {
 	t.Parallel()
 	look := &countingRechecker{}
@@ -314,24 +305,16 @@ func (e toldFlowError) Heading() string { return e.heading }
 
 // A CREATION THAT DID NOT FINISH IS TOLD IN THE COMPLETER'S WORDS, never the
 // error's: what a person can do depends on which step stopped, which only the
-// completer knows, and the error names its machinery (a link refused, a secret
-// it was sealing, a token the config refused). A failure that carries no words
-// is told this page's own, which sends them to an admin rather than round the
-// loop again.
+// completer knows, and the error names its machinery. A failure with no words
+// is told this page's own, sending them to an admin.
 //
-// AND IN ITS STATUS AND ITS HEADING. Every stop was a 400, so a key Crewlet
-// failed to save was filed under the person's mistake, and every stop was
-// headed "App not created", directly above "GitHub created the app" on the
-// steps where an app now exists. And a stop that words its own heading is
-// headed by it: a record whose activation went unanswered may already be the
-// agent's, and "App created, but not finished" above it told the person the
-// opposite.
+// AND IN ITS STATUS AND ITS HEADING: a key Crewlet failed to save is not the
+// person's 400, a stop after the app exists is not headed "App not created",
+// and a stop that words its own heading is headed by it.
 //
-// The page printed err.Error() here.
-//
-// Mutation: print the error again, drop the Told reading, answer 400 again,
-// head every stop "App not created", or head a stop by Created over the
-// heading it words, and a case goes red.
+// Mutation: print the error, drop the Told reading, answer 400 always, head
+// every stop "App not created", or head a stop by Created over the heading it
+// words, and a case goes red.
 func TestAStoppedCreationIsToldInTheCompletersWords(t *testing.T) {
 	t.Parallel()
 	const raw = "setupapi: seal the app key for sre-lead: coordination store at 10.0.0.7 refused"

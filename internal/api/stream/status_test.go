@@ -144,14 +144,11 @@ func withheld(t *testing.T, who string, i int, call map[string]any) {
 
 // A STATUS AUDIENCE GETS NO BODY, AND NO BODY VERSION THAT MOVES.
 //
-// The roster is everybody's and a seat's live call is on it: what the seat is
-// DOING — its phase, its round, its tokens — reaches every reader, and what it
-// is SAYING — the prompt it was sent, what the model answered, the tools it
-// called and with what — reaches an admin and the seat's lead, who read its
-// trail (`audit.seat.read`), and nobody else. A withheld call names no body
-// version, so the dashboard's stale check never sends the reader round for a
-// call it will not be given. And the work item the call is charged to is the
-// tracker's.
+// A seat's live call is on the roster: what it is DOING (phase, round,
+// tokens) reaches every reader, what it is SAYING (prompt, answer, tool calls)
+// only an admin and the seat's lead (`audit.seat.read`). A withheld call names
+// no body version, so the dashboard's stale check never sends the reader round
+// for a call it will not be given; the work item is the tracker's.
 //
 // Mutation: hand every audience the row unmasked, or keep the body versions
 // on a withheld call, or keep the work item for a reader without Worklet,
@@ -222,13 +219,11 @@ func TestAStatusAudienceGetsNoBodyAndNoMovingBodyVersions(t *testing.T) {
 
 // A STATUS AUDIENCE GETS NO BODY FROM A LEAN CALL EITHER.
 //
-// The second push of one call leaves out the heavy fields the first carried at
-// the same version ([livestate.LiveCall.Without]), so the row the hub masks
-// holds a lean call, not the projection's own — and a mask that recognised
-// only the projection's shape would hand that one through whole, or drop it.
-// Both pushes reach a status reader as the call's status and nothing more,
-// and the body reader on the same broadcast is sent exactly what the push
-// decided to carry: the response that moved, and not the prompt it holds.
+// The second push of one call leaves out the heavy fields the first carried
+// ([livestate.LiveCall.Without]), so the row the hub masks holds a lean call,
+// and a mask that recognised only the projection's shape would pass it whole
+// or drop it. A status reader gets the status of both pushes; the body reader
+// gets exactly what the push decided to carry.
 //
 // Mutation: make [livestate.MaskCall] handle only the projection's own call,
 // and the second push is withheld from everybody or sent whole to the status

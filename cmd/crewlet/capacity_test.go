@@ -459,13 +459,11 @@ func TestAnAbandonedWindowSaysTheCeilingItClosedAt(t *testing.T) {
 // A BLOCKED WINDOW SAYS WHY IN THE NODE'S WORDS, NEVER ITS CODE, ON A LINE OF
 // ITS OWN, AND NOTHING BESIDE IT CONTRADICTS IT.
 //
-// The BLOCKED line printed `capacity_operation_unsealed`, a code that told a
-// person nothing they could act on. The node carries a sentence beside every
-// code, and the page prints that. Put in a table cell, the sentence set the
-// width of its column for every row, so `on <log>`, `attempt N` and `by` sat
-// some 280 characters to the right; and the phase's own next step ("Run
-// set-capacity again to verify and confirm") contradicted it on a window out of
-// attempts, where set-capacity is blocked again.
+// The node carries a sentence beside every code, and the page prints that, not
+// `capacity_operation_unsealed`. In a table cell the sentence set the column's
+// width for every row, pushing `on <log>`, `attempt N` and `by` some 280
+// characters right; and the phase's own next step ("Run set-capacity again to
+// verify and confirm") contradicted it on a window out of attempts.
 //
 // Mutation: print the code, put the sentence back in the table, or print the
 // phase's line beside it, and this fails.
@@ -1135,22 +1133,15 @@ func writeArtefact(t *testing.T, dir string, at time.Time) {
 // A REANCHOR IS WAITED FOR PAST THE ORDINARY TEN SECONDS.
 //
 // Once its generation record is on the log a reanchor rebuilds the node's
-// consumer — a delete and a create of a replicated object — and on a fleet
-// whose metadata group is slow that outlasts the ten seconds every other call
-// gets. The CLI gave up there and reported a failure for a transition the node
-// went on to finish; the node had also been running it on the request's own
-// context, so the cancellation stopped it halfway.
+// consumer (a delete and a create of a replicated object), which on a slow
+// metadata group outlasts the ten seconds every other call gets. The CLI gave
+// up and reported a failure for a transition the node went on to finish.
 //
-// Against a client whose ORDINARY timeout is two seconds and a node that
-// answers the transition after four: the status read before it is answered
-// at once, so only a transition sent through [nodeClient.patiently] can be
-// waited for. Two seconds rather than half of one, because "at once" is a
-// loopback round trip under the race detector on a runner the rest of the
-// suite shares, and at half a second a starved machine timed the status read
-// out and failed the case on the call it does not test. The command's own wiring — the
-// flags, the client nodeClientFor builds at nodeRequestTimeout — is the other
-// reanchor cases' and [TestAnOperatorCallIsGivenTenSeconds]'s; this one would
-// otherwise sit out the real ten seconds to prove a relation.
+// A client whose ORDINARY timeout is two seconds, against a node that answers
+// the transition after four: the status read is answered at once, so only a
+// transition sent through [nodeClient.patiently] can be waited for. Two
+// seconds, not half of one: under the race detector on a shared runner half a
+// second timed the status read out. Wiring is [TestAnOperatorCallIsGivenTenSeconds]'s.
 func TestAReanchorIsWaitedForPastTheOrdinaryTimeout(t *testing.T) {
 	t.Parallel()
 	const ordinary = 2 * time.Second

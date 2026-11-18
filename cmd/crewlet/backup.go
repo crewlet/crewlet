@@ -18,26 +18,12 @@ import (
 
 // runBackup is `crewlet backup`.
 //
-// # Why this talks to a NODE and not to files
-//
-// The same reason `budgets` does, twice over. A node's durable state is two
-// estates and neither is reachable from outside the process that holds them:
-//
-//   - THE STORE is two files on a data node — its own and the replicated
-//     estate beside it — each locked exclusively by the engine for the life
-//     of its handle, and the driver does not support a second process on a
-//     database file. So there is no safe way for this command to open either
-//     while the engine runs — and copying one anyway is worse than useless,
-//     because committed data lives in a file and its -wal together.
-//   - THE STREAM ESTATE — the agent mailboxes and every coordination bucket,
-//     which is where the fleet's leases, ledgers, counters and sealed
-//     credentials live — runs on a broker embedded in the engine that binds
-//     NO SOCKET on the default topology. There is no address to give the
-//     `nats` CLI.
-//
-// So the copy is taken by the one process that can reach both, and this
-// command asks it to. The destination is a path on the ENGINE'S host, which
-// is the surprise worth stating plainly: this does not download anything.
+// It talks to a NODE, not to files: the store is two files locked exclusively
+// by the engine (the driver supports no second process, and copying one alone
+// loses its -wal), and the stream estate (mailboxes, leases, ledgers, sealed
+// credentials) runs on a broker embedded in the engine that binds NO SOCKET on
+// the default topology. So the process that reaches both takes the copy. The
+// destination is a path on the ENGINE'S host: nothing is downloaded.
 func runBackup(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var dir *string
 	var wait *time.Duration
@@ -156,20 +142,14 @@ func runBackup(environ config.Source, args []string, stdout, stderr io.Writer) e
 		return err
 	}
 	if len(manifest.Streams) == 0 {
-		// Said plainly rather than left to be inferred from a dash: a
-		// backup of the store alone is not restorable on its own, and an
-		// operator would otherwise file the output as a backup of their
-		// company.
+		// Said plainly: a backup of the store alone is not restorable on
+		// its own, and an operator would otherwise file the output as a
+		// backup of their company.
 		//
-		// THE ONE NODE SHAPE THAT PRODUCES IT is one that dialled an
-		// external NATS cluster: the queue owns that connection, so the
-		// engine has none to snapshot the streams over and they are
-		// backed up at the cluster instead. Every node holds its own
-		// store, whatever its roles, so the other half is never the
-		// missing one.
-		//
-		// No other node offers a way round it: a fleet shares one stream, so
-		// every node of this one dialled the same cluster.
+		// Only a node that dialled an external NATS cluster produces this:
+		// the queue owns that connection, so the engine has none to snapshot
+		// the streams over, and they are backed up at the cluster. Every node
+		// holds its own store, so the store is never the missing half.
 		fmt.Fprintln(stdout, "\nThis node holds only part of the deployment's state: "+
 			"its stream estate lives on the external NATS cluster it dialled. "+
 			"Back that up there, from the same moment as this copy "+
@@ -190,19 +170,13 @@ func runBackup(environ config.Source, args []string, stdout, stderr io.Writer) e
 	return nil
 }
 
-// backupWait is how long the CLI waits for a copy.
-//
-// TWELVE HOURS, and the number is a ceiling rather than an expectation. What
-// bounds a backup is the size of the store, the stream estate and — on `s3` —
-// the company's files, which a backup carries too: milliseconds on a company
-// that has just started, and a FIRST copy of a large one's objects is the long
-// one, since every later backup takes what its predecessor holds from disk. The
-// design's large model holds about 1.15 TB of objects, about 2.6 hours over the
-// 1 Gbit/s a modest host has before the store and the streams are counted;
-// twelve hours is more than four times that. The cost of being too short is
-// the confusing one — the engine finishes what it started whatever this
-// command does, so a wait that expires calls a perfectly good backup a failure
-// — so this is set far past any real copy rather than close to it.
+// backupWait is how long the CLI waits for a copy: a ceiling, not an
+// expectation. A backup is bounded by the store, the stream estate and, on
+// `s3`, the company's files; a FIRST copy of a large company's objects is the
+// long one (the design's large model holds ~1.15 TB, ~2.6 hours at 1 Gbit/s),
+// and twelve hours is over four times that. Too short is the confusing
+// failure: the engine finishes the copy whatever this command does, so an
+// expired wait calls a good backup a failure.
 const backupWait = 12 * time.Hour
 
 // humanBytes renders a size an operator is going to eyeball against a disk.

@@ -19,19 +19,12 @@ import (
 // before the write it guards can land — is `412` (RFC 9110 §13.1.1), and the
 // same version stated in a BODY field is the domain's own `409`.
 //
-// The rule is what every reader below follows, each held by its own surface's
-// cases (named in the table). It was not what every reader followed: `/config`
-// answered a stale If-Match `409`, the tracker and page routes folded the
-// header into a tool's argument and answered its staleness as the argument's
-// `409 stale_version`, and a disconnect answered its header as a connect
-// answers its body, while a project file and an artifact publish answered
-// `412 version_moved` — so one header meant two things by which route read it.
-// What this walk holds is that nobody adds a reader without deciding which
-// answer it gives: a call reading the header that is not in the table, or a
+// Every reader below follows the rule, each held by its own surface's cases
+// (named in the table). This walk holds that nobody adds a reader without
+// deciding its answer: a call reading the header that is not in the table, or a
 // row naming a reader the tree no longer has, fails here.
 //
-// Mutation: read If-Match in any new function under internal/api and this
-// goes red until it has a row.
+// Mutation: read If-Match in any new function under internal/api.
 func TestEveryIfMatchReaderIsAReviewedPrecondition(t *testing.T) {
 	t.Parallel()
 	// reviewed is every function that reads the header, by file and name,

@@ -221,20 +221,14 @@ func TestAGitHubSeatWithWorkOutstandingHoldsTheCardOpen(t *testing.T) {
 
 // THE DELETE LINK OPENS THE PAGE THE DELETE CONTROL IS ON.
 //
-// GitHub has no API for deleting an App at any permission, so a disconnect
-// uninstalls each agent's App — which is what revokes its access — and hands
-// the operator a link for the rest. That link is the whole of what the engine
-// can do about it, so landing on the wrong tab wastes the one gesture it
-// offers: the settings root opens on General, and the delete control lives
-// only under Advanced, at the bottom, under a heading named nothing like
-// "delete".
+// GitHub has no API for deleting an App, so a disconnect uninstalls each
+// agent's App (which revokes its access) and hands the operator a link for
+// the rest. The settings root opens on General; the delete control lives only
+// under Advanced, under a heading named nothing like "delete".
 //
-// PINNED HERE, at the seam, and not only at [github.ManageURL]. The builder
-// has had its own test since the page was corrected; what had none was this —
-// which of the builders this roster calls. Nothing would have caught
-// `InstallURL` here, or a bare settings root, and the failure is silent: the
-// link works, opens, and shows the operator a page without the control they
-// came for.
+// PINNED HERE, at the seam, and not only at [github.ManageURL]: nothing else
+// would catch this roster calling `InstallURL` or a bare settings root, and
+// the failure is silent, a working link to a page without the control.
 func TestTheAppDeleteLinkOpensTheAdvancedPage(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)

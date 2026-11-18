@@ -60,16 +60,15 @@ func (p *Provider) homeEnv(home, cache string) []string {
 // exportHostLogin runs the profile's export command against a HUMAN'S home,
 // for `crewlet llm login -from-host` and the doctor's "host login" line.
 //
-// THE HARNESS ITSELF READS THE HOME, as it would for the human: a login held in its
-// own database has no file to copy, and a copy of the database would be every
-// session they ever had. The environment is a call's with one exception —
-// TMPDIR stays this process's own, because a call's points inside the home it
-// is given, and a runtime that unpacks itself into TMPDIR would leave a
-// directory of native libraries in somebody's home directory.
+// THE HARNESS ITSELF READS THE HOME, as it would for the human: a login held in
+// its own database has no file to copy, and a copy of the database would be
+// every session they ever had. The environment is a call's except TMPDIR, which
+// stays this process's own: a call's points inside the home, and a runtime
+// unpacking native libraries into it would litter somebody's home directory.
 //
-// A person's whole login passes through its stdout, which the doctor's
-// host-login check reads and discards: captured in memory on linux, it
-// reaches no disk ([childSpec.credential]).
+// The login passes through stdout, which the doctor's host-login check reads
+// and discards: captured in memory on linux, it reaches no disk
+// ([childSpec.credential]).
 func (p *Provider) exportHostLogin(ctx context.Context, home string) ([]byte, error) {
 	env := childEnv(p.profile, &Checkout{Home: home, Cache: filepath.Join(home, ".cache")}, p.env, p.auth)
 	env["TMPDIR"] = os.TempDir()

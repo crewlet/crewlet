@@ -12,42 +12,30 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CODE SEARCH, AS A QUESTION: `code_search` (GET /gitlet/search), the lines of
-// every repository the caller may read that match a search — answered by the
-// one scatter over the fleet's Gitlet nodes (internal/codesearch, through the
-// engine's [CodeSearcher]): one repository
-// read through its keyed walk, more in one signed request every Gitlet node
-// hears, and every answer with the coverage that names what was not searched.
-// Decided per repository by the grant each answering node derives, as every
-// code question is (code.go): a listing of the caller's repositories leaves
-// out what they may not read, and a repo: naming one is refused
-// [NotPermitted] — behind the gitlet app, which it is registered [Requires],
-// as the rest.
-//
-// # One grammar, in the text or beside it
-//
-// The search is codeindex's one grammar (codeindex.ParseQuery): `q` is what a
-// person writes, its filters first — repo:, path: and ref: — then the text.
-// `mode`, `ignore_case` and one `repo`, `path` and `ref` may ride beside it as
-// parameters, a screen's controls, each held to the rule the grammar reads
-// its filter by: a repo or a path widens the search as one more filter does,
-// and a ref beside a different ref: is refused, as two ref: filters are.
-//
-// # Not read back at a session floor
-//
-// It is deliberately NOT one of the questions a screen reads its own write
-// back through (the dashboard's SESSION_QUERIES), and it takes no floor: it
-// ANSWERS AT THE TIP IT NAMES. Each repository is searched at the commit its
-// answering node's copy holds for the ref — named in the answer's `tips` —
-// and a hit's file is read at that commit by object id, the same at every
-// position. So the search reads every copy as it stands (no floor on the code
-// log) and lists the caller's repositories at the caller's level — `stale` by
-// default, `linearizable` where a repository declared a moment ago must not be
-// missed — and `read_level=session` and `min_position` are refused, naming
-// why: a floor it took would be a screen told it waited for its write where
-// the lines it was answered come from whatever each node held, and a scatter
-// to every Gitlet node asked again after every code write a screen makes is a
-// search nobody asked for.
+// A CODE SEARCH, AS A QUESTION: `code_search` (GET /gitlet/search), the lines
+// of every repository the caller may read that match, answered by one scatter
+// over the fleet's Gitlet nodes (internal/codesearch, through the engine's
+// [CodeSearcher]), every answer with the coverage naming what was not
+// searched. Decided per repository by each answering node's grant as every
+// code question is (code.go): a listing leaves out what the caller may not
+// read, a `repo:` naming one is refused [NotPermitted]; registered
+// [Requires] the gitlet app.
+
+// The search is codeindex's one grammar (codeindex.ParseQuery): `q` holds the
+// filters (repo:, path:, ref:) then the text. `mode`, `ignore_case` and one
+// `repo`, `path` and `ref` may ride beside it as a screen's controls, each
+// held to the grammar's rule: a repo or path widens the search as one more
+// filter does, and a ref beside a different ref: is refused.
+
+// Code search is deliberately NOT read back at a session floor (the
+// dashboard's SESSION_QUERIES) and takes no floor: it ANSWERS AT THE TIP IT
+// NAMES. Each repository is searched at the commit its answering node's copy
+// holds for the ref (the answer's `tips`) and a hit's file is read at that
+// commit by object id, so every copy is read as it stands and the caller's
+// repositories are listed at their level, `stale` by default. `read_level=
+// session` and `min_position` are refused: a floor would tell a screen it
+// waited for its write though the lines come from whatever each node held,
+// and a scatter after every code write is a search nobody asked for.
 
 // CodeSearcher is a code search over the fleet's Gitlet nodes, as the engine asks
 // it ([engine.Engine.CodeSearch], over codesearch.Searcher). Declared here by
@@ -61,19 +49,17 @@ const codeSearchFloorless = "code_search takes no floor: it answers at the tip o
 	"(`tips`), and a hit's file is read at that commit; read_level is linearizable, stale or " +
 	"consistent_prefix, the level the repositories it searches are listed at"
 
-// codeSearch answers `code_search`: `q`, the search in codeindex's grammar,
-// REQUIRED; `mode` (literal, regex or word; literal unset), `ignore_case`
-// (true or false), and one `repo`, `path` and `ref` beside its filters;
-// `limit`, the most lines answered (1 to gitlet.MaxSearchHits, unset or 0 the
-// most); `context`, the lines around each answered (0 to
-// gitlet.MaxSearchContext); `per_file`, the most lines of one file, each then
-// naming its file's total; and the level the caller's repositories are listed at.
+// codeSearch answers `code_search`: `q`, REQUIRED, in codeindex's grammar;
+// `mode` (literal unset), `ignore_case`, one `repo`, `path` and `ref` beside
+// its filters; `limit` (1 to gitlet.MaxSearchHits, unset or 0 the most);
+// `context` (0 to gitlet.MaxSearchContext); `per_file`, each then naming its
+// file's total; and the level the caller's repositories are listed at.
 //
 // THE SOURCE FIRST, so a node that does not serve Gitlet says why whatever the
 // request named; then the request, refused [ErrBadParams] naming what the
-// grammar refuses; then the search, asked AS THE CALLER and answered in this
-// surface's vocabulary ([codeRefusal]), a refusal over one repository naming
-// it ([codesearch.RepoRefusal]).
+// grammar refuses; then the search, asked AS THE CALLER and answered in
+// [codeRefusal]'s vocabulary, a refusal over one repository naming it
+// ([codesearch.RepoRefusal]).
 func (s Sources) codeSearch(ctx context.Context, p Params) (any, error) {
 	const what = "code_search"
 	searcher, err := s.Code.CodeSearcher()

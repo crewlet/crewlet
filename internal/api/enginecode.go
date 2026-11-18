@@ -9,22 +9,16 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 )
 
-// EngineCode is [CodeSurface] over a running engine — Gitlet, the code
-// domain's reads and who read a unit's repository, each resolved on EVERY
-// CALL, and the box tokens every node holds from boot — or nil for a nil
-// engine, which [New] refuses by name.
+// EngineCode is [CodeSurface] over a running engine (Gitlet, the code domain's
+// reads, who read a unit's repository, and the box tokens every node holds from
+// boot), or nil for a nil engine, which [New] refuses by name. It lives beside
+// the seam so `crewlet run` and any harness serving the API share one adapter.
 //
-// HERE, beside the seam it satisfies, so `crewlet run` and any harness serving
-// an engine's API reach Gitlet through the same adapter, and a case
-// that clones through the API exercises the wiring a deployment runs.
-//
-// PER CALL, never once, as the native halves are read (native.go): Gitlet
-// is built
-// with the native runtime, at boot or at the first apply whose company sets
-// code.backend: gitlet — after the API was assembled on a node that booted with no
-// company. A host captured at assembly served such a node's people no git for
-// the life of the process. Each call costs what the engine's accessors cost:
-// an atomic load, no lock and no I/O.
+// RESOLVED PER CALL, never once, as native.go reads the native halves: Gitlet
+// is built at boot or at the first apply whose company sets code.backend:
+// gitlet, after the API was assembled on a node that booted with no company,
+// and a host captured at assembly would serve that node no git for the life of
+// the process. Each call is an atomic load: no lock, no I/O.
 func EngineCode(e *engine.Engine) CodeSurface {
 	if e == nil {
 		return nil

@@ -1,6 +1,7 @@
 /** One commit's page by its whole id: its header, its provenance in sentences (`Provenance.tsx`),
  *  and every file it changed as one stack, against its first parent (a root commit's against git's
- *  empty tree). Its page bar holds Browse files, Revert and Cherry-pick (`CommitWrites.tsx`). */
+ *  empty tree). Its page bar holds Browse files, Revert and Cherry-pick (`CommitWrites.tsx`), and
+ *  Tag (`repo/TagWrites.tsx`). */
 
 import {
   ButtonLink,
@@ -26,6 +27,7 @@ import { mergeTitle, provenanceOf, subjectOf } from "../repo/History.tsx";
 import { CodeNotFound } from "../NotFound.tsx";
 import { repoHref } from "../paths.ts";
 import { Byline, useWhoName } from "../ui.tsx";
+import { TagCommitButton } from "../repo/TagWrites.tsx";
 import { CommitWrites } from "./CommitWrites.tsx";
 import { DiffFiles, type DiffAgainst } from "./DiffFiles.tsx";
 import { Provenance } from "./Provenance.tsx";
@@ -81,6 +83,7 @@ export function CommitPage({ repo, sha }: { repo: string; sha: string }) {
           Browse files
         </ButtonLink>
         <CommitWrites repo={repo} sha={c.oid} subject={subjectOf(c)} />
+        <TagCommitButton repo={repo} sha={c.oid} />
       </PageActions>
       <CommitHeader repo={repo} answer={answer} />
       <Provenance answer={answer} />

@@ -283,8 +283,8 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           splitting the company's files between two stores
 //	custody    thirty-two days, a day past the event log's retention: it must
 //	           outlive every row it can be asked about
-//	uploads    thirty hours, the longest hold a reservation keeps, so an
-//	           abandoned upload's record goes with no sweep
+//	uploads    thirty hours, the longest hold a reservation or a seat's save
+//	           ledger entry keeps, so what lapsed goes with no sweep
 //	positions  none: an expired position reads as a node that applied NOTHING,
 //	           which pins the trim or lets it delete what that node still needs
 //
@@ -636,7 +636,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			"Crewlet stateless-node event custody; the bucket TTL outlasts the event log's retention",
 			cfg.CustodyRetention},
 		{&store.uploads, uploadsSuffix,
-			"Crewlet artifact upload reservations; the bucket TTL outlasts the longest hold a reservation keeps",
+			"Crewlet artifact upload reservations and seat save ledgers; the bucket TTL outlasts the longest hold either keeps",
 			cfg.UploadRetention},
 		{&store.positions, positionsSuffix,
 			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},

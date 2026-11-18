@@ -9,24 +9,16 @@ import (
 
 // ONE ANSWER TO "WHICH VARIABLE HOLDS THIS SEAT'S CREDENTIAL".
 //
-// The chat transports, the webhook signature checks and the GitHub issuer read
-// a seat's credential off its identity in the org model, so the identity is
-// where engine-owned and external credentials are told apart, once, for every
-// reader (D4a, D4b):
-//
-//   - In ENGINE mode the identity names the seat's own sealed name
-//     ([envref.SealedName]) wherever the document names none, which it does
-//     not: the engine seals there and nothing else does.
-//   - In EXTERNAL mode the identity carries the variable the seat's role
-//     position names, exactly as written.
-//   - A seat that is off at the integration carries no identity there:
-//     `enabled` decides, never a variable's presence.
-//
+// Chat transports, webhook signature checks and the GitHub issuer read a seat's
+// credential off its identity in the org model, where engine-owned and external
+// credentials are told apart once (D4a, D4b):
+//   - ENGINE mode: the seat's own sealed name ([envref.SealedName]); only the
+//     engine seals there, so the document names none.
+//   - EXTERNAL mode: the variable the role position names, as written.
+//   - A seat off at the integration carries no identity: `enabled` decides.
 // ONLY ONCE THE INTEGRATION IS MIGRATED onto per-seat access
-// ([Company.SeatAccessMigratedFor]). Before, a stored document's blocks have
-// no `enabled` and would all read as off, which would take every transport
-// down on the upgrade the migration exists to make safe; until then the
-// identity is the document's, as written.
+// ([Company.SeatAccessMigratedFor]): stored blocks have no `enabled` and would
+// read as off, taking every transport down on upgrade.
 
 // bindSeatCredentials settles each agent seat's chat and code-host identities
 // as above. It runs where the org model is built ([Company.organization]).

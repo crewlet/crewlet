@@ -11,22 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// THE GROK PROFILE'S ARGV MUST PARSE, and only the real binary can say so —
-// on both of its system-prompt channels, with the transcript in a file, and
-// with every tool name it passes known to the harness.
+// THE GROK PROFILE'S ARGV MUST PARSE, and only the real binary can say so: on
+// both system-prompt channels, with the transcript in a file, and every tool
+// name it passes known to the harness.
 //
-// `-p` takes the prompt as its VALUE. With it in complete_args, the model flag
-// that followed became the prompt and the real prompt became a stray
-// positional, so every call exited on "a value is required for
-// '--single <PROMPT>'". Nothing in this repository could catch that: the fake
-// harness accepts any argv, and a unit test over the slice only re-states the
-// profile back to itself. The tool lists fail the same silent way: a name
-// --tools does not know makes the harness drop the whole allowlist with a warning,
-// and only the real binary knows its names.
+// `-p` takes the prompt as its VALUE; with it in complete_args the model flag
+// became the prompt and every call exited on "a value is required for
+// '--single <PROMPT>'". The fake harness accepts any argv and a unit test over
+// the slice only restates the profile, so nothing else could catch it. A name
+// --tools does not know makes the harness drop the whole allowlist with a warning.
 //
-// Skipped unless a `grok` is on PATH, and it asserts on ARGUMENT PARSING
-// alone — the harness stops for want of a credential, which is exactly far enough
-// to prove the flags were understood.
+// Skipped unless a `grok` is on PATH, and asserts on ARGUMENT PARSING alone: the
+// harness stopping for want of a credential proves the flags were understood.
 func TestTheGrokProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 	t.Parallel()
 	binary, err := exec.LookPath("grok")
@@ -37,22 +33,13 @@ func TestTheGrokProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 	if !ok {
 		t.Fatal("no built-in grok profile")
 	}
-	// IS THIS xAI'S GROK, and not the npm package of the same name — which is
-	// real, is `grok@0.0.4` ("do you grok it?"), and would otherwise be argued
-	// with about flags it has never heard of.
-	//
-	// ON THE SHAPE OF THE VERSION, never on its MAJOR. This read
-	// `HasPrefix(out, "grok 1.")`, which is a silent time bomb: the day xAI
-	// ships 2.0 the right harness is on PATH, this case goes quiet, and the skip
-	// message says the opposite of what happened — the one shape "a skip is
-	// not a pass" exists to catch. The impostor is distinguished by its
-	// OUTPUT FORM, which is what was actually meant.
-	// THE PROBE RUNS UNDER THE SAME FILTERED ENVIRONMENT as the call below.
-	// It was a bare exec.Command, which leaves cmd.Env nil — and a nil Env
-	// means os/exec hands the child THIS PROCESS'S WHOLE ENVIRONMENT. So the
-	// one step whose entire purpose is deciding whether the binary on PATH is
-	// even the right program was handing an unidentified executable every key
-	// and token the environment carried, before any identity check had run.
+	// IS THIS xAI'S GROK, and not the npm package `grok@0.0.4`, which would be
+	// argued with about flags it has never heard of. Judged on the SHAPE of the
+	// version, never its MAJOR: `HasPrefix(out, "grok 1.")` goes quiet the day
+	// xAI ships 2.0, with a skip message saying the opposite of what happened.
+	// THE PROBE RUNS UNDER THE SAME FILTERED ENVIRONMENT as the call below: a bare
+	// exec.Command leaves cmd.Env nil, which hands the child THIS PROCESS'S WHOLE
+	// ENVIRONMENT, every key and token, before any identity check had run.
 	probeDir := t.TempDir()
 	probe := exec.CommandContext(t.Context(), binary, "--version")
 	probe.Dir = probeDir
@@ -121,36 +108,16 @@ func TestTheGrokProfileArgvParsesAgainstTheRealHarness(t *testing.T) {
 
 // vendorHarnessEnv is the environment a real-harness case runs a vendor binary in.
 //
-// IT IS buildEnv — production's own, with a Checkout rooted at the case's
-// temporary directory and a ZERO Auth. Not an approximation of it, and that is
-// the whole point: an argv test running under a different environment than
-// production is testing a different call, so the only environment that cannot
-// drift from the real one is the real one.
+// IT IS buildEnv, production's own, with a Checkout rooted at the case's
+// temporary directory and a ZERO Auth: an argv test under another environment
+// tests a different call. A hand-composed one drifted: a fresh HOME isolates a
+// credential FILE but not an exported key (a billed completion), and a profile
+// declaring a variable no case remembered ran a call the engine never makes.
 //
-// This started as `append(os.Environ(), "HOME="+t.TempDir())`, which was wrong
-// twice — it resembled nothing the engine hands a harness, and a fresh HOME
-// isolates a credential FILE while doing nothing about an exported one, so on
-// any machine with a vendor key in the environment the case signed in and
-// `say hello` became a real, billed completion. Re-composing the host
-// allowlist and HOME by hand fixed that and left the SAME shape of bug one
-// layer in: each case then named the one or two profile variables it
-// remembered, so a profile declaring a third had a test running a call the
-// engine never makes. kimi-code declares KIMI_CODE_NO_AUTO_UPDATE,
-// KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE and
-// KIMI_LOOP_MAX_ATTEMPTS_PER_STEP; the case carried none of them, so it
-// could trigger the vendor's updater mid-run and wait out its default retry
-// policy in full. Deriving the whole environment is what ends that class.
-//
-// A ZERO Auth is what keeps the promise the cases make. buildEnv's default
-// branch sets no token (auth.Token is empty) and DELETES p.APIKeyEnv outright,
-// so the child reaches authentication and stops — which is exactly what
-// assertArgvReachedAuth reads as proof, and it is why these cases can be run on
-// a machine that is signed in to the vendor.
-//
-// Callers also set cmd.Dir to that same fresh directory. A vendor harness reads
-// AGENTS.md / CLAUDE.md from its working directory, and this repository has
-// both — so a probe left in the checkout is answering with whatever the tree
-// happens to contain rather than about the shipped profile.
+// A ZERO Auth sets no token and buildEnv DELETES p.APIKeyEnv, so the child stops
+// at authentication (assertArgvReachedAuth's proof) even on a signed-in machine.
+// Callers set cmd.Dir to that fresh directory: a harness reads AGENTS.md /
+// CLAUDE.md from its working directory.
 func vendorHarnessEnv(p harnessprofile.Profile, home string, extra map[string]string) []string {
 	// Cache beside the home rather than in it, as Workspace.Acquire lays it
 	// out; Work is unread by buildEnv and set for the same reason.
@@ -164,19 +131,15 @@ func vendorHarnessEnv(p harnessprofile.Profile, home string, extra map[string]st
 
 // assertArgvReachedAuth fails unless a vendor harness got past argument parsing.
 //
-// REACHING AUTHENTICATION IS THE PROOF, and it is checked FIRST. A harness that
-// asks for a credential has already parsed every flag before it, so nothing
-// else needs deciding — and testing it this way round is what makes the case
-// able to fail at all. Both real-harness cases were written as a list of argument
-// error strings that must be ABSENT, which is a test that passes when the harness
-// prints nothing, when it prints something new, and when the vendor reworded
-// its parser: the muse case's five sentinels are clap's vocabulary, and muse's
-// own `exec` parser is not clap.
+// REACHING AUTHENTICATION IS THE PROOF, checked FIRST: a harness asking for a
+// credential has parsed every flag before it. Checking for argument-error
+// strings that must be ABSENT cannot fail: it passes when the harness prints
+// nothing, something new, or a reworded parser message (muse's `exec` parser is
+// not clap, whose vocabulary the sentinels are).
 //
-// The auth markers are deliberately broad and case-folded. What is being
-// proved is "it got as far as credentials", not any vendor's wording, and a
-// narrow match would turn a reworded message into a failure that reads like an
-// argv bug.
+// The auth markers are deliberately broad and case-folded: what is proved is "it
+// got as far as credentials", not any vendor's wording, and a narrow match would
+// turn a reworded message into a failure that reads like an argv bug.
 func assertArgvReachedAuth(t *testing.T, args []string, got string) {
 	t.Helper()
 
@@ -214,21 +177,14 @@ func assertArgvReachedAuth(t *testing.T, args []string, got string) {
 		"it:\nargs: %v\n%s", args, got)
 }
 
-// EVERY BUILT-IN PROFILE'S ENVIRONMENT REACHES THE CHILD, over the whole
-// table rather than over the profiles that happen to have a real-harness case.
+// EVERY BUILT-IN PROFILE'S ENVIRONMENT REACHES THE CHILD, over the whole table,
+// not the profiles that happen to have a real-harness case. Those cases SKIP
+// wherever the vendor binary is absent (every CI runner), so the code that
+// composes their environment was never run, and a profile gaining a variable
+// nobody copied produced no failure. This case runs unconditionally, needs no
+// binary, and fails when vendorHarnessEnv stops deriving what buildEnv derives.
 //
-// This is the guard the hand-written helper did not have, and its absence is
-// why the drift lasted. The real-harness cases SKIP wherever the vendor binary is
-// not installed, which is every CI runner and nearly every workstation — so
-// the code path that composes their environment was compiled and never run,
-// and a profile gaining a variable nobody copied across produced no failure
-// anywhere. This case runs unconditionally, needs no binary, and fails the
-// moment vendorHarnessEnv stops deriving what buildEnv derives.
-//
-// Driven off BuiltinNames rather than a list, so a profile added tomorrow is
-// covered by existing code — the alternative is a list that has to be edited
-// by whoever adds the profile, which is the same shape of omission one level
-// up.
+// Driven off BuiltinNames, not a list a profile's author must remember to edit.
 func TestVendorHarnessEnvCarriesEveryProfilesOwnEnvironment(t *testing.T) {
 	t.Parallel()
 

@@ -16,16 +16,12 @@ import (
 // THE SERVER PAGE READS WHAT THE DETAIL SENDS, in both readings.
 //
 // Settings › MCP & tools draws a server's page from `GET /mcp-servers/{name}`
-// typed by `McpServerAnswer` and `McpMemberServerAnswer` and the shapes
-// composed into them (`contract/mcp.ts`). Each answer is filled whole by
-// reflection, so a field somebody adds to the engine's answer is sent here
-// too, and every object in it is held to its declaration both ways: a field
-// the page declares and the engine does not send, or one the engine sends and
-// the page has no name for, fails. The closed sets the page words are held to
-// the engine's own lists. The server's row, the removal's dependants and the
-// calls' coverage are each held by the gate that owns their declaration.
-//
-// Mutation: drop `risk_declared` from McpToolView, `wait` from
+// typed by `McpServerAnswer` and `McpMemberServerAnswer` and their composed
+// shapes (`contract/mcp.ts`). Each answer is filled whole by reflection, and
+// every object is held to its declaration both ways: a field the page declares
+// and the engine does not send, or the reverse, fails. The closed sets are held
+// to the engine's own lists; the server's row, the removal's dependants and the
+// calls' coverage to the gate that owns their declaration. Mutation: drop `risk_declared` from McpToolView, `wait` from
 // McpInstanceView or `off_by` from McpReachLimit, or add a member usage row's
 // `seats`, and this is red.
 func TestTheServerPageReadsWhatTheDetailSends(t *testing.T) {

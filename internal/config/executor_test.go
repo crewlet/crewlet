@@ -24,17 +24,15 @@ func (stubModel) Complete(context.Context, llm.Request) (*llm.Completion, error)
 // THE EXECUTOR CHAIN VALIDATION JUDGES IS THE ONE A LAUNCH WALKS.
 //
 // A launch takes the first member of the seat's chain that can run and is not
-// sitting out, so a chain validation resolved by a rule of its own would
-// refuse seats whose launch runs and place boxes for members no launch
-// reaches. The chain here is held to the phase registry's own Chain, built as
-// the engine builds it — from the company's organization and its providers in
-// declaration order — over every shape a seat can resolve through: its own
-// keys in order, a key the company lacks, the entry called "default", and the
-// first declared.
+// sitting out, so validation resolving by a rule of its own would refuse seats
+// whose launch runs and place boxes for members no launch reaches. The chain
+// here is held to the phase registry's own Chain, built as the engine builds
+// it, over every shape a seat can resolve through: its own keys in order, a key
+// the company lacks, "default", and the first declared.
 //
-// PARSED, NOT VALIDATED: a key that misses is refused on a write, and still
-// reaches a node in a revision a newer peer admitted — the registry falls
-// back for it, and so must this.
+// PARSED, NOT VALIDATED: a key that misses is refused on a write yet reaches a
+// node in a revision a newer peer admitted; the registry falls back for it, and
+// so must this.
 func TestTheExecutorChainIsTheOneALaunchWalks(t *testing.T) {
 	t.Parallel()
 	for _, providers := range []string{

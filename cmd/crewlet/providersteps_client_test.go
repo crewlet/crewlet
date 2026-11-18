@@ -34,35 +34,17 @@ roles:
 `
 
 // THE STEPS THE DASHBOARD GIVES FOR A FIRST MODEL RUN ON THE COMPANY IT MADE.
+// A PUT /config company is in the store, no file; the steps its card hands the
+// operator (PROVIDER_STEPS) are walked from that state, with no node running:
 //
-// The builder creates a company with PUT /config, so it is in the store and in
-// no file, and the card it shows next hands the operator the terminal steps
-// that add a model. Those steps are this binary's commands, and they started
-// by editing a company.yaml a dashboard-created company never had: `crewlet
-// llm` read the entry from a file that was not there, and `crewlet config
-// import` was left to store whatever file was over the company just built.
+//   - `crewlet config` RUNS, and a `> FILE` after it is written;
+//   - `crewlet llm` loads what it loads before the vendor's harness starts;
+//   - `crewlet run` publishes the revision the import marked active, which
+//     the walk's end reads off the store;
+//   - other lines are YAML for the file an earlier step wrote; anything else
+//     fails, as a step nothing here has run.
 //
-// So the steps are read out of the dashboard (PROVIDER_STEPS) and walked here,
-// in order, from the state a create leaves — crewlet.yaml in the working
-// directory, the store holding the company, no company file beside it — with
-// no node running, as the steps say to leave it:
-//
-//   - a `crewlet config` command RUNS, and a `> FILE` after it is written;
-//   - a `crewlet llm` command loads what it loads before the vendor's harness
-//     starts — the company file, and the entry it names — because the sign-in
-//     and the smoke test are the vendor's, and no test calls a vendor;
-//   - `crewlet run` publishes the revision the import marked active, which the
-//     end of the walk reads off the store instead;
-//   - the lines under a step that are neither a command nor a comment are the
-//     YAML it adds, and they go into the file an earlier step wrote.
-//
-// Anything else fails: another command, or a block with no file to go in, is
-// a step nothing here has run. And the guide that explains the steps shows
-// them as they are.
-//
-// NOT PARALLEL: the steps name their files relative to where they are typed,
-// so the walk moves into that directory, and a working directory is the
-// process's.
+// NOT PARALLEL: the walk moves the process's working directory.
 func TestTheFirstModelStepsRunOnACompanyOnlyTheStoreHolds(t *testing.T) {
 	steps, err := clientsource.Scalar(clientsource.Tree(t), "PROVIDER_STEPS")
 	if err != nil {

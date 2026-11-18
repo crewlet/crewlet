@@ -93,25 +93,14 @@ func TestAnOrdinaryStopDoesNotSignalTheGroup(t *testing.T) {
 // numbers in timeouts.go stay attached to something real.
 //
 // It asserts only the ceilings it can defend; the values it prints are the
-// evidence a future reader needs to re-tune them.
+// evidence for re-tuning them.
 //
-// # The figures are the code's own
-//
-// The helper server is this test binary re-executed, so under -race it is
-// RACE-INSTRUMENTED, and a race-built binary that exits 0 sleeps a second in
-// the race runtime's finaliser before it ends. Measured against a control on
-// the same box, `cat` exited in ~320µs and the helper in ~1.005s, with no MCP
-// machinery in the path at all — so every "clean stop" this printed under
-// -race carried a ~1s floor that belonged to the harness, and the ceiling
-// below absorbed it.
-//
-// [helperSpec] launches the helper with that sleep switched off, so the floor
-// is gone and the ceiling has its whole margin again. The race build still
-// slows everything else on both sides of the pipe: measured on one box, a
-// spawn and handshake, a tools/list and a clean stop took 23 ms, 2.3 ms and
-// 2.3 ms under -race against 7.3 ms, 0.34 ms and 0.92 ms without it. Tune
-// shutdownGrace and stderrDrainTimeout against a run without -race; the
-// figures a -race run prints are a few times too slow.
+// The helper is this test binary re-executed, so under -race a clean exit
+// sleeps ~1s in the race runtime's finaliser (`cat` exited in ~320µs, the
+// helper in ~1.005s). [helperSpec] switches that sleep off so the ceiling keeps
+// its margin. The race build still slows both sides of the pipe a few times
+// (spawn and handshake 23 ms against 7.3 ms), so tune shutdownGrace and
+// stderrDrainTimeout against a run without -race.
 func TestMeasuredStdioTimings(t *testing.T) {
 	t.Parallel()
 

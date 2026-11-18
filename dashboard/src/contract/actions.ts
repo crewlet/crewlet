@@ -723,6 +723,23 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  // A TAG MADE AND DELETED (`routes/gitlet/repo/TagWrites.tsx`): made at a
+  // revision, annotated where a message is given, and deleted at the value the
+  // listing showed (`expected_target`).
+  code_create_tag: {
+    args: ["repo", "tag", "at", "message"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  code_delete_tag: {
+    args: ["repo", "tag", "expected_target"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
   // A FILE COMMITTED FROM THE BROWSER (`routes/gitlet/repo/FileWrites.tsx`): one
   // commit on a branch, at the head the file was read at (`expected_head`),
   // that writes, adds or deletes one file with the message the person gives.

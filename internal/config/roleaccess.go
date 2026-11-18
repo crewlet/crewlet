@@ -4,23 +4,16 @@ import "slices"
 
 // PER-SEAT ACCESS, IN THE VENDOR'S OWN TERMS.
 //
-// Each agent seat carries one block per integration the engine manages an
-// account on, under `roles[].integrations.<lane>`, and each block says three
-// things: whether the seat is on there (`enabled`, a stored setting, never
-// inferred from a variable's presence), what it may do (in the identifier the
-// vendor's API takes, never a cross-vendor word), and where (a scope within
-// the company block's reach). internal/seataccess reads these as its desired
-// state and holds the vendor to them.
+// Each agent seat carries one block per managed integration under
+// `roles[].integrations.<lane>`: whether the seat is on (`enabled`, a stored setting, never
+// inferred from a variable's presence), what it may do (the vendor API's own identifier, never
+// a cross-vendor word), and where (a scope within the company block's reach).
+// internal/seataccess reads these as desired state.
 //
-// THE SEAT'S CREDENTIALS ARE NOT HERE. The engine seals each under a name it
-// derives (`<KIND>_<FIELD>_<HANDLE>`, seataccess.SinkName) and binds it to the
-// seat's tool server itself, so no writer can point a seat's credential at a
-// variable anything else reads (D4).
-//
-// The vendor vocabularies below are RESTATED rather than imported, because
-// config is the leaf every vendor package depends on, and importing one would
-// invert that; each vendor package owns the real catalogue, and a test holds
-// the two to the same set.
+// THE SEAT'S CREDENTIALS ARE NOT HERE: the engine seals each under a derived name
+// (seataccess.SinkName) and binds it to the seat's tool server, so no writer can point it at a
+// variable anything else reads (D4). The vendor vocabularies below are RESTATED, not imported,
+// because config is the leaf every vendor package depends on; a test holds the two to one set.
 
 // SeatAccessOn reports a block's stored setting: on only where it says so.
 //
@@ -179,23 +172,18 @@ func (r *Role) seatEnabledField(lane string) **bool {
 	return nil
 }
 
-// TurnOffDisconnected turns off every seat's access at a lane whose
-// connection the company held in prior and no longer holds in c, and answers
-// the handles of the seats it turned off, each once.
+// TurnOffDisconnected turns off every seat's access at a lane whose connection the company
+// held in prior and no longer holds in c, and answers the handles of the seats it turned off,
+// each once.
 //
-// WHAT A DISCONNECT OWES THE DOCUMENT. An agent on at Mattermost, Jira,
-// Confluence or SSH works through the company's connection there
-// ([Company.connected]), and the document refuses one turned on without it.
-// So a disconnect that dropped the company's block alone wrote a document its
-// own rules refuse, and never finished while any agent was still on. The
-// engine turns those agents off at the vendor as part of the same disconnect;
-// this says the same in the document, in the same revision.
+// A disconnect that dropped only the company's block would write a document its own rules
+// refuse, since an agent on at Mattermost, Jira, Confluence or SSH needs the company's
+// connection ([Company.connected]). The engine turns those agents off at the vendor; this says
+// the same in the document, in the same revision.
 //
-// OFF, NEVER REMOVED: the block keeps what the agent was given (its roles,
-// channels, projects, servers), so connecting again and turning it back on
-// restores it. ONLY THE LANES THIS CHANGE DISCONNECTED: a seat already on at
-// a lane the company had not connected before is a finding the document
-// carried, and is not this write's to settle.
+// OFF, NEVER REMOVED: the block keeps what the agent was given, so connecting again and
+// turning it on restores it. ONLY THE LANES THIS CHANGE DISCONNECTED: a seat already on at a
+// lane not connected before is the document's own finding, not this write's to settle.
 func (c *Company) TurnOffDisconnected(prior *Company) []string {
 	var off []string
 	for _, lane := range SeatAccessLanes() {

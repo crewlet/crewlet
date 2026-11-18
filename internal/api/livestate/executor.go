@@ -13,32 +13,22 @@ import (
 
 // The in-flight executors.
 //
-// TWO SOURCES, and neither is enough alone. The lifecycle EVENTS are what make
-// the panel live — a run appears the moment it starts and flips the moment it
-// asks a question — but the stream is lossy in both directions and in-memory:
-// a process that came up mid-run never saw its start, one that missed a
-// completion kept a ghost for good, and a restarted node started with an empty
-// panel while runs parked on questions waited, sometimes for days. The DURABLE
-// RUN RECORD in the coordination store is the truth about which runs exist, so
-// it is read at boot and every [ReconcileInterval] after, and what it says
-// replaces what the events built — except where an event is newer than the read.
-//
-// This replaced a twelve-hour age-out, which was wrong both ways: a lost
-// completion still showed a finished run as running for up to twelve hours, and
-// a run parked on a question past twelve hours — the case that most needs a
-// person — silently vanished from the one panel built to show it.
+// TWO SOURCES, and neither is enough alone. The lifecycle EVENTS make the
+// panel live, but the stream is lossy and in-memory: a process that came up
+// mid-run never saw its start, one that missed a completion kept a ghost for
+// good. The DURABLE RUN RECORD in the coordination store is the truth about
+// which runs exist, so it is read at boot and every [ReconcileInterval], and
+// what it says replaces what the events built — except where an event is newer
+// than the read. No age-out: a run parked on a question for days must stay.
 
 // ReconcileInterval is how often the durable run record is read back over the
 // live set.
 //
-// THIRTY SECONDS, because it bounds only the rare case: the events keep the
-// panel current to the moment, and the reconcile exists for the event that
-// never arrived. What it costs is one listing of the fleet's run records per
-// node per interval — a single coordination-store read, the same one the
-// `executors` question makes on every request. What it bounds is how long a
-// run whose completion was lost can be drawn as running, which was twelve
-// hours; half a minute is inside the time a person watching the panel would
-// take to act on it.
+// THIRTY SECONDS, because it bounds only the rare case of an event that never
+// arrived: how long a run whose completion was lost can be drawn as running.
+// It costs one coordination-store listing per node per interval, the same read
+// the `executors` question makes; half a minute is inside the time a person
+// watching the panel would take to act.
 const ReconcileInterval = 30 * time.Second
 
 // heldExecutor is one run in the live set, and when THIS PROCESS last learned
@@ -134,24 +124,16 @@ func (s *LiveState) applySandbox(env Envelope, payload map[string]any) {
 
 // ReconcileExecutors replaces the live set with what the durable run record
 // holds, read at `asOf` on this process's clock, and reports what moved.
+// THE RECORD WINS, except for events learned AFTER the read began:
+//   - a run the set holds and the record does not is dropped, unless its last
+//     event arrived after the read began;
+//   - a run the record holds is put in as the record states it, unless its
+//     entry changed after the read began or its ENDING was already seen: a
+//     completion naming the job the record still describes, or a failure after
+//     the record's last write. The record lags a run's end; re-adding it would
+//     draw a finished job as running until the next read.
 //
-// THE RECORD WINS, with two exceptions, each an event this process learned
-// AFTER the read began and the record therefore could not reflect:
-//
-//   - a run the set holds and the record does not is dropped — unless its last
-//     event arrived after the read began, which is a run started while the
-//     record was being listed;
-//   - a run the record holds is put in the set as the record states it —
-//     unless its entry changed after the read began (it keeps the newer state),
-//     or its ENDING was already seen: a completion that named the job the
-//     record still describes, or a failure published after the record's last
-//     write. A record lags its run's end by the collection the end starts, and
-//     re-adding the run there would draw a finished job as running until the
-//     next read.
-//
-// The record of runs that ended is pruned here to the runs the record still
-// lists, which is what bounds it: an ending that the record has caught up with
-// has nothing left to guard.
+// Ended runs are pruned to those the record still lists.
 func (s *LiveState) ReconcileExecutors(records []ExecutorRecord, asOf time.Time) (change Change) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

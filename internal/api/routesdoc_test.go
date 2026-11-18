@@ -15,21 +15,12 @@ import (
 // THE ARCHITECTURE PAGE NAMES EVERY ROUTE A NODE SERVES, AND ONLY THOSE.
 //
 // docs/concepts/architecture.md's table of the routes `ingress` terminates is
-// where an operator learns what a node answers, and what a reverse proxy in
-// front of one is allow-listed from. Its REST row is a hand-kept list of the
-// API's prefixes, and it fell behind the day `GET /link-hosts` was mounted: a
-// proxy built from the page refused a route the node serves, and nothing
-// failed. So the table is held to the route table the App keeps with every
-// surface mounted ([everySurfaceApp]), as the page's other gated tables are
-// held to theirs (the workers' duties in internal/engine, the node estate in
-// internal/store): every route the App mounts is named by exactly one row, and
-// every route a row names is one the App mounts.
-//
-// A NAME COVERS WHAT IS BENEATH IT, so the REST row names prefixes (`/worklet`
-// is every route under it, `/doclet/pages` every route under that) while the
-// webhook row names whole routes. A placeholder segment (`HANDLE`, `{token}`)
-// stands for any one segment, and the bare root names itself alone, since
-// every path is beneath it.
+// what a reverse proxy is allow-listed from, and its REST row is hand-kept. So
+// it is held to the route table of the App with every surface mounted
+// ([everySurfaceApp]): each mounted route is named by exactly one row, and each
+// named route is mounted. A NAME COVERS WHAT IS BENEATH IT: the REST row names
+// prefixes, the webhook row whole routes; a placeholder (`HANDLE`, `{token}`)
+// stands for one segment, and the bare root names itself alone.
 //
 // Mutation: drop `/link-hosts` from the REST row, mount a read under a prefix
 // no row names, or name a route nothing mounts, and this names it.

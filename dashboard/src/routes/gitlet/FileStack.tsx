@@ -61,6 +61,7 @@ import { statusWord } from "./FileTree.tsx";
 import { PatchPager } from "./PatchPager.tsx";
 import { repoHref } from "./paths.ts";
 import { useDiffSides, useDiffTokens, useExpandLines } from "./syntax.tsx";
+import { SlashBreaks } from "./ui.tsx";
 import { changePartParams, refusedWords, useAskAgainWhenMoved } from "./change/reads.ts";
 import "~/styles/gitlet.css";
 
@@ -603,7 +604,11 @@ function PathWords({ path }: { path: string }) {
   const slash = path.lastIndexOf("/");
   return (
     <>
-      {slash >= 0 && <span className="code-file__dir">{path.slice(0, slash + 1)}</span>}
+      {slash >= 0 && (
+        <span className="code-file__dir">
+          <SlashBreaks text={path.slice(0, slash + 1)} />
+        </span>
+      )}
       <span>{path.slice(slash + 1)}</span>
     </>
   );
@@ -1011,7 +1016,9 @@ const FileSection = memo(function FileSection({
             minBlockSize: `${Math.min(entry.added + entry.deleted + 3, FOLD_FROM_LINES) * ROW_ESTIMATE_PX}px`,
           }}
         >
-          <Skeleton variant="text" rows={3} label={`Reading the changes to ${path}`} />
+          {/* NO LIVE REGION A FILE: a long stack's every unread file announced itself. */}
+          <Skeleton variant="text" rows={3} />
+          <VisuallyHidden>{`Reading the changes to ${path}`}</VisuallyHidden>
         </div>
       );
     }

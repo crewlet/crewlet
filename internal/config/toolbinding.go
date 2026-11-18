@@ -14,28 +14,15 @@ import (
 // THE SEAT'S OWN CREDENTIAL, BOUND TO ITS TOOL BY THE ENGINE (D15).
 //
 // A seat that is on at an integration gets its own sealed credential added to
-// its environment for every per-seat server that reads that integration's
-// credential, under the key that server reads. Nothing in the document names
-// the credential, so no writer can point a seat's tool at a variable anything
-// else reads (D4), and the tool works the moment the credential is sealed.
+// its environment for every per-seat server reading that integration's
+// credential, under the key that server reads. The document names none, so no
+// writer can point a seat's tool at a variable anything else reads (D4).
 //
-// # Which key a server reads is the server's, so the server says it
-//
-// No fixed key per integration fits every server a company may run: `glab mcp
-// serve` reads GITLAB_TOKEN where another GitLab server reads
-// GITLAB_PERSONAL_ACCESS_TOKEN, and Slack's community server reads
-// SLACK_MCP_XOXB_TOKEN. So an `mcp_servers` entry declares what it reads
-// ([MCPServer.SeatCredentials]), and the MCP catalogue supplies the
-// declaration for the servers this build recognises by their command or their
-// address ([catalogue.SeatKeysFor]): ONE recognition, which also names the
-// entry and the vendor mark a server is drawn with. A per-seat server named after an integration with
-// neither is reported ([Company.UnboundSeatServers]): it would start, and act
-// as nobody.
-//
-// BOUND WHERE THE ORG MODEL IS BUILT ([Company.organization]), the one place
-// every reader of a seat's tool environment takes it from: the engine starting
-// a seat's server, an executor's box, [MCPServer.Grants], the org projection,
-// and a seat's test of an entry, saved or not ([Company.SeatToolEnv]).
+// No fixed key fits every server (`glab mcp serve` reads GITLAB_TOKEN, another
+// GitLab server GITLAB_PERSONAL_ACCESS_TOKEN): an `mcp_servers` entry declares
+// it ([MCPServer.SeatCredentials]) or the catalogue does ([catalogue.SeatKeysFor]);
+// a per-seat server with neither is reported ([Company.UnboundSeatServers]).
+// BOUND WHERE THE ORG MODEL IS BUILT ([Company.organization]), the one source.
 
 // SeatCredential is one seat credential a per-seat server reads, as an
 // `mcp_servers` entry declares it.

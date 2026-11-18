@@ -29,20 +29,16 @@ func (s *Service) workRoutes(mount mounter) {
 				Container: worklet.ProjectKey(r.PathValue("key"))}
 		}}
 	}
-	// A PERSON IS NAMED BY THE PATH AND IS NOT THE PATH. `{handle}` is a
-	// name — a seat's handle, a person's or a machine's login — and the
-	// record it addresses is only known once the identity directory has
-	// said whose a login is: a bound person's login names their SEAT's
-	// record. Decided here on the spelling, a lead naming their report by
-	// login was refused as leading nobody, and an administrator was
-	// admitted to a record under the login that nothing of that person's
-	// reads — which is where the write then landed.
+	// A PERSON IS NAMED BY THE PATH AND IS NOT THE PATH. `{handle}` is a seat's
+	// handle or a login, and whose record it addresses is known only once the
+	// identity directory resolves it (a bound person's login names their SEAT's
+	// record). Decided on the spelling, a lead naming a report by login was
+	// refused and an administrator admitted to the wrong record.
 	//
-	// So the route admits on the weakest honest precondition — the verb
-	// on the CALLER's own record, which every principal that has one and
-	// may act at all is admitted to — and the verb is decided once the
-	// name has resolved, by the same function a tool and the query surface
-	// resolve it through (builtin's person verbs, over [iam.OwnerOf]).
+	// So the route admits on the weakest honest precondition, the verb on the
+	// CALLER's own record, and the verb is decided once the name has resolved,
+	// by the function a tool and the query surface use (builtin's person verbs,
+	// over [iam.OwnerOf]).
 	person := func(a authz.Action) authz.Policy {
 		return authz.Policy{Action: a, Object: func(r *http.Request) authz.Object {
 			principal, _ := iam.From(r.Context())
@@ -271,14 +267,12 @@ func (s *served) putPriorities(w http.ResponseWriter, r *http.Request) {
 // # Through the tools' own parsing and writer, never widening the tools
 //
 // `mark_inbox` and `set_pins` write the CALLER's record and take no handle,
-// deliberately — see [builtin.MarkInboxFor]. So these routes reach the same
-// parsing and the same writer through [builtin.MarkInboxFor] and
-// [builtin.SetPinsFor], which resolve the path's name to the record it
-// addresses and decide the verb on THAT — the caller's own by either of their
-// names, somebody else's for the owner or an admin — and the tracker's
-// own rule sits on top: a SEAT never writes a colleague's record. The tools
-// are not widened: no seat, and no assistant, gains a way to name another
-// person's record.
+// deliberately ([builtin.MarkInboxFor]). These routes reach the same parsing
+// and writer through [builtin.MarkInboxFor] and [builtin.SetPinsFor], which
+// resolve the path's name to its record and decide the verb on THAT (the
+// caller's own, or somebody else's for the owner or an admin), under the
+// tracker's rule that a SEAT never writes a colleague's record. The tools are
+// not widened: no seat or assistant can name another person's record.
 func (s *served) putInbox(w http.ResponseWriter, r *http.Request) {
 	s.personRecord(w, r, worklet.MarkInboxTool, builtin.MarkInboxFor)
 }
@@ -461,29 +455,13 @@ func (s *served) deleteItemComment(w http.ResponseWriter, r *http.Request) {
 
 // postPurge destroys an item and every row it produced, on every data node.
 //
-// # The confirmation is the item's KEY, and it is CHECKED
-//
-// The path may name the item by its id, which is a uuid nobody reads; the key
-// is what a person sees on the board and in the ticket they were asked to act
-// on, so repeating it is the confirmation that they looked. It is compared
-// against the item the path resolves to — the route this replaced echoed it
-// back unread, so a confirmation naming a different item confirmed nothing.
-//
-// # The project is the row's
-//
-// The record arbitrates under the item's own project, and the stored row is
-// the one place that says which that is: the path may name the item by its
-// id, which names no project. The route this replaced took it as a
-// parameter, and a purge filed under the wrong one blocks writes to a project
-// it is not about.
-//
-// # A reason is required, and a retry reuses the operation
-//
-// The reason is the only thing that survives: the rows are gone and the
-// deletion marker's reason is the whole account of what was at that key. And
-// `unknown` is the one outcome to retry — under the SAME key, because a fresh
-// one would append a second purge of an item the first may already have
-// destroyed.
+// The confirmation is the item's KEY, CHECKED against the item the path
+// resolves to: the path may use an id nobody reads, and repeating the key a
+// person sees on the board confirms they looked. The record arbitrates under
+// the stored row's project (an id names none): a purge filed under the wrong
+// one blocks writes to a project it is not about. A reason is required, as the
+// deletion marker's is all that survives. `unknown` is the one outcome to
+// retry, under the SAME key: a fresh one would append a second purge.
 func (s *served) postPurge(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args) {

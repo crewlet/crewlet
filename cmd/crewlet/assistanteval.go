@@ -23,18 +23,13 @@ import (
 //
 // # Why it runs in this process
 //
-// A case describes the company it is asked in as the answers its requests
-// receive, and runs through the assistant's real orchestrator and curated
-// catalogue over the same harness the engine's suites use
-// (internal/assistant/evals, production code the suites drive through the
-// test-only assistanttest). So nothing is read from or written to a
-// node, a case is repeatable, and the one thing that varies is the model:
-// each case's own script by default, which calls none and is how the engine's
-// tests run the shipped suite, or a `providers.llm` entry with -model, which
-// is how an operator measures a candidate before naming it in
-// `assistant.llm`. Permissions are not measured here: that a person's
-// assistant reads and writes exactly what the person may is held by the
-// deterministic suites in internal/api on every change.
+// A case describes its company as the answers its requests receive and runs
+// through the real orchestrator and curated catalogue (internal/assistant/evals,
+// driven by the test-only assistanttest). Nothing touches a node, a case is
+// repeatable, and the one variable is the model: the case's own script by
+// default (no model call), or a `providers.llm` entry with -model, to measure a
+// candidate before naming it in `assistant.llm`. Permissions are not measured:
+// the deterministic suites in internal/api hold them.
 func runAssistant(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {

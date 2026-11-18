@@ -215,20 +215,16 @@ func TestRunBootsTheEngineOnTheRevisionItsStoreActivated(t *testing.T) {
 
 // A FILE THE BOOT WILL IMPORT IS NOT WHAT THE ENGINE BOOTS ON.
 //
-// The engine used to boot on any Tier B file it was given, and what that built
-// outlived the reconcile that replaced it: the file's credential bundles
-// restored into empty logins every later revision then keeps, and the store
-// opened at the file's embedding width. Where the file is to be imported the
-// node now boots UNCONFIGURED, and the import and the first reconcile bring the
-// company in before a seat is claimed — so the engine never runs a document
-// the store and the fleet have not activated.
+// Booting on a Tier B file built what outlived the reconcile that replaced it:
+// credential bundles restored into empty logins, and the store opened at the
+// file's embedding width. Where the file is to be imported the node boots
+// UNCONFIGURED, and import plus first reconcile bring the company in before a
+// seat is claimed.
 //
-// -import-company READS NOTHING FROM THE STORE, which is what keeps it a
-// repair: a node whose stored revision this build refuses to run still starts
-// to import the file that replaces it, where reading the store first would
-// refuse the boot the repair needs. A SCRATCH store is not read either: it is
-// discarded as the engine opens it, and opening it here would create the
-// replicated estate a node without `data` must not have.
+// -import-company READS NOTHING FROM THE STORE, which keeps it a repair when
+// the stored revision is refused. A SCRATCH store is not read either: it is
+// discarded as the engine opens it, and opening it would create the replicated
+// estate a node without `data` must not have.
 func TestAFileTheBootWillImportIsNotWhatTheEngineBootsOn(t *testing.T) {
 	t.Parallel()
 	file := parse(t, companyYAML)
@@ -298,17 +294,14 @@ func TestAFileTheBootWillImportIsNotWhatTheEngineBootsOn(t *testing.T) {
 
 // A BOOTSTRAP SEED THE STORE OUTRANKS BOOTS THE STORED REVISION, and says so.
 //
-// The import ignored such a file while the engine booted on it: a restart with
-// a month-old company.yaml built, equipped and installed that file's company
-// until the first reconcile replaced it, and for good where it moved what a
-// boot decides once. Now one decision says both: the engine boots on the stored
-// revision with its instant, nothing is imported, and the file is named at
-// warn. A file that IS the stored revision byte for byte is no news, and says
-// nothing.
+// One decision: the engine boots on the stored revision with its instant,
+// nothing is imported, and the file is named at warn. Booting on the file built
+// a month-old company until the first reconcile replaced it, for good where it
+// moved what a boot decides once. A file that IS the stored revision byte for
+// byte says nothing.
 //
-// A STORED REVISION THIS BUILD CANNOT RUN still refuses the boot, as it does
-// with no file, and with the same remedy
-// ([TestABootOnARevisionThisBuildCannotRunNamesNoOfflineActivation]).
+// A STORED REVISION THIS BUILD CANNOT RUN still refuses the boot, with the
+// same remedy ([TestABootOnARevisionThisBuildCannotRunNamesNoOfflineActivation]).
 func TestABootstrapSeedTheStoreOutranksBootsTheStoredRevision(t *testing.T) {
 	t.Parallel()
 	file := parse(t, companyYAML)
@@ -531,15 +524,12 @@ const undecodableRevisionDoc = `{"name":["not","a","name"]}`
 // BOOTING IS APPLYING, AND THE REFUSAL NAMES THE REVISION AND THE WAY OUT —
 // and no way out that is not one.
 //
-// A node's store names only a revision it applied or one an offline command of
-// this build held to the same rules, so a boot row this build cannot run was
-// written by another build or another store, and the first way out is that
-// build. The other is an offline import, which the next start publishes only
-// over the revision it is built on. The refusal used to offer `crewlet config
-// activate`, which boots on a stored revision this same check refuses, and
-// -import-company, which replaces whatever the fleet runs — a newer company
-// included — to start one node. A document that does not decode is refused the
-// same way as one that does not validate.
+// A boot row this build cannot run was written by another build or store, so
+// the first way out is that build. The other is an offline import, which the
+// next start publishes only over the revision it is built on. `crewlet config
+// activate` boots on the revision this check refuses, and -import-company
+// replaces whatever the fleet runs, so neither is offered. An undecodable
+// document is refused like an invalid one.
 //
 // Mutation: restore either old remedy, or leave the base out of the publish
 // clause, and the case fails.

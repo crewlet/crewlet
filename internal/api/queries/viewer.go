@@ -17,20 +17,14 @@ import (
 )
 
 // errNoSeat is the refusal a question about a SEAT's trail makes of a caller
-// bound to no seat who named none — a Tier A token's credential, or a service
-// account bound to none.
-// It is NOT an authorization failure — nobody was refused anything — and its
-// remedy is a row in the identity directory rather than a different
-// credential, which is why it is [ErrBadParams] and the authority refusal
-// beside it is a [Refusal] carrying the rule's own reason.
+// bound to no seat who named none (a Tier A token's credential, or a service
+// account bound to none). It is NOT an authorization failure: its remedy is a
+// row in the identity directory rather than a different credential, which is
+// why it is [ErrBadParams] and not a [Refusal].
 //
-// THE BINDING IS NAMED WHERE IT LIVES. It used to say "in the org chart", which
-// was true while a seat's contact block carried the credential it was held by;
-// the directory holds that now, and a remedy pointing at the chart sends
-// somebody to edit a document that has no field for it. And it names a HUMAN
-// seat, because that is the only kind the directory binds anybody to: a bind
-// naming an agent's seat is refused, so "bind it to one" sent a caller to try
-// the seat whose trail they were reading.
+// THE BINDING IS NAMED WHERE IT LIVES: the identity directory, not the org
+// chart, which has no field for it. And it names a HUMAN seat, the only kind
+// the directory binds anybody to; a bind naming an agent's seat is refused.
 var errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat. Bind "+
 	"its row in the identity directory to a human seat (`crewlet iam bind`), "+
 	"or name a handle", ErrBadParams)
@@ -47,18 +41,14 @@ var errNoRecord = fmt.Errorf("%w: this credential names nobody whose own "+
 
 // viewer answers who this caller is.
 //
-// THE PRINCIPAL AND NOTHING ELSE. It used to walk a chain of two — Tier A's
-// `api.auth.tokens` mapped a credential to an operator id, and a field on a
-// seat's contact block named one of those ids — which was the only binding
-// this engine had between a credential and a seat. The identity estate
-// replaced it: a person is a ROW, a session resolves to that row, and the seat
-// they hold is on the chart. Nothing here derives anything any more.
+// THE PRINCIPAL AND NOTHING ELSE: a person is a ROW in the identity estate, a
+// session resolves to that row, and the seat they hold is on the chart.
 //
-// A CREDENTIAL BOUND TO NO SEAT IS AN ORDINARY STATE — a Tier A token's
-// session, or a service account bound to none — so this answers the login with
-// no seat rather than an error: the screen then says what to bind, which is a
-// different thing from a screen that looks broken. It is never a PERSON's: a
-// person holds a human seat for as long as they exist (ADR-0032).
+// A CREDENTIAL BOUND TO NO SEAT IS AN ORDINARY STATE (a Tier A token's
+// session, or a service account bound to none), so this answers the login with
+// no seat rather than an error: the screen then says what to bind instead of
+// looking broken. It is never a PERSON's: a person holds a human seat for as
+// long as they exist (ADR-0032).
 func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 	principal, how := iam.From(ctx)
 	if how == iam.Unknown {
@@ -104,23 +94,15 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		// project, whose create is refused until one is named.
 		"project": "",
 		// WHETHER THIS CALLER'S CREDENTIAL MAY CHANGE THE COMPANY DOCUMENT,
-		// and who manages it (ADR-0030), so a screen draws every editing
-		// control disabled with the reason rather than offering a save the
-		// config surface refuses. Judged on the CREDENTIAL the request came
-		// through ([iam.ActorFor]'s operator id), by
-		// [config.APIAuth.MayWriteCompany] — the one reading the config
-		// surface refuses a write with — so this answer and that refusal
-		// cannot disagree. It says nothing about AUTHORITY: admin, or a
-		// lead's subtree, still decides whether this caller may write at
-		// all.
+		// and who manages it (ADR-0030), so a screen draws editing controls
+		// disabled with the reason. Judged on the CREDENTIAL ([iam.ActorFor]'s
+		// operator id) by [config.APIAuth.MayWriteCompany], the reading the
+		// config surface refuses with, so answer and refusal cannot disagree.
+		// It says nothing about AUTHORITY: admin, or a lead's subtree, decides
+		// whether this caller may write.
 		//
-		// THE WRITERS ARE NAMED TO EVERY CALLER, which is what the config
-		// surface already does: its refusal names them to anybody whose
-		// write it turns away, and a write anybody bound to a seat may
-		// attempt reaches that refusal. Withheld here, they would hide only
-		// the reason a screen locks an edit, from exactly the lead who
-		// would otherwise press it. They are token LABELS, never values.
-		// ALWAYS AN ARRAY; empty is not managed.
+		// THE WRITERS ARE NAMED TO EVERY CALLER, as the refusal does: token
+		// LABELS, never values. ALWAYS AN ARRAY; empty is not managed.
 		"config_writer":     s.companyWriters().MayWriteCompany(iam.ActorFor(principal)),
 		"config_managed_by": slices.Clone(s.companyWriters().CompanyWriters),
 		// WHICH VENDOR CHAT SURFACES THIS COMPANY DECLARES, on a company
@@ -215,51 +197,25 @@ func seatOf(organization *org.Organization, p iam.Principal) *org.Role {
 	return organization.SeatByHandle(p.Seat)
 }
 
-// recordHandle is the handle a question about somebody's PERSONAL RECORD —
-// their inbox, their day, their person record — answers for, and the
-// authority check when it is somebody else's.
-//
-// THE NAME IS RESOLVED BY [iam.OwnerOf], the one function every tool reads and
-// writes a person's record through, so a record an assistant wrote is the
-// record a screen reads. The caller's own — no name, or either of their own
-// ([iam.NamesSelf]) — is [iam.RecordOwner]'s; somebody else's LOGIN is their
-// holder's record, looked up in the identity directory ([Sources.Holders]); and
-// anything else is read as named. It used to be the principal's SEAT for the
-// caller, which was nothing at all for an unbound person, and the literal
-// login for somebody else, which for a person the directory binds to a seat
-// is an empty record under a name nothing of theirs is kept under.
-//
-// DECIDED ON WHAT THE NAME RESOLVED TO, because the lead relation is a fact
-// about a seat: asked about a login, a lead was refused the report they lead.
+// recordHandle is the handle a PERSONAL RECORD question answers for, and the
+// authority check when it is somebody else's. THE NAME IS RESOLVED BY
+// [iam.OwnerOf], the one function every tool reads and writes a person's record
+// through: the caller's own is [iam.RecordOwner]'s, somebody else's LOGIN is
+// their holder's record ([Sources.Holders]), anything else is read as named.
+// Authority is DECIDED ON THAT RESOLUTION: the lead relation is a fact about a
+// seat, not a login.
 //
 // BUT THE DIRECTORY IS ASKED ONLY ONCE THE AUTHORITY IS DECIDED AS FAR AS IT
-// CAN BE WITHOUT THE RECORD ([Sources.mayLook]): an admin passes, a
-// caller who could be admitted only as the lead of whoever holds the login
-// passes, and everybody else is refused exactly as they would be on a seat
-// they do not lead, before anything is looked up. The directory's answers
-// differ by login — nobody holds this one, this node cannot place that one —
-// and answered after the lookup, a login nobody holds was refused while a held
-// one this node could not resolve answered 503, so a caller with no authority
-// over anybody read which logins exist off the difference. A login that names
-// nobody is then decided on the name as typed — which nobody leads, so only
-// an admin passes — and only then answered as naming no record: "not
-// found" before "you may not" would make it a roster.
-//
-// THE SCOPE RULE IS THE AUTHORITY TABLE'S, asked with the question's OWN verb:
-// `work_inbox` asks [authz.ActionInboxRead], `work_my_work`
-// [authz.ActionMyWork], `work_person` and `decisions` [authz.ActionPersonRead]
-// — somebody's queue, which is theirs, their lead's, or an admin's, each with
-// the tracker — and a seat's trail ([Sources.trailSeat]) asks
-// [authz.ActionSeatTrailRead] — the seat's, its lead's or an admin's, with no
-// app, since a seat's trail belongs to none. It used to decide every one of
-// them as a person's record, so a reader of the whole audit trail was refused
-// one seat's trail while reading every phase record it had ever written; and
-// before that it was "any operator credential for anybody else's", which made
-// every token in Tier A a reader of every seat's inbox.
-//
-// Returns the handle to read and an error to refuse with.
+// CAN BE WITHOUT THE RECORD ([Sources.mayLook]): its answers differ by login,
+// so a caller with no authority would read which logins exist off the
+// difference ("not found" before "you may not" is a roster).
 func (s Sources) recordHandle(ctx context.Context, action authz.Action,
 	asked string) (string, error) {
+	// THE SCOPE RULE IS THE AUTHORITY TABLE'S, asked with the question's OWN
+	// verb: `work_inbox` [authz.ActionInboxRead], `work_my_work`
+	// [authz.ActionMyWork], `work_person` and `decisions`
+	// [authz.ActionPersonRead], a seat's trail [authz.ActionSeatTrailRead]
+	// (no app: it belongs to none).
 
 	principal, how := iam.From(ctx)
 	if how == iam.Unknown {

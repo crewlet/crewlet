@@ -36,21 +36,16 @@ func TestTheEvalCommandIsInUsage(t *testing.T) {
 }
 
 // THE SHIPPED SUITE PASSES ON ITS OWN SCRIPTS, through the command an operator
-// runs: a lookup, a write that stops at its proposal, an injection the script
-// declines, and the quality cases (a two-part question answered with the
-// failure's reason, a space and a seat named by their names, an open request
-// that asks rather than shares, spend compared by week, and a change made from
-// a screen that has nothing to do with it), and the brief cases (rows kept only
-// for a record read and resolved, danger only from the record's own read, an
-// all-clear answer, an injected instruction, a record gone before the brief,
-// an over-long answer whose one retry lands, an answer past three caps at
-// once whose one retry lands (the #407 replay), an answer exactly at its
-// caps accepted first time, and an ask waiting in a chat room, cited by the
-// room's name on Chatlet's mentions and by its id on the room's own page).
-// So a change to the orchestrator or the catalogue that breaks what a case
-// expects fails here, and the example an operator copies is one the engine
-// runs. Mutation: let a write tool execute instead of proposing, and
-// file-a-task ends with no proposal; let no row cite a room, and both chat
+// runs: a lookup, a write that stops at its proposal, a declined injection, the
+// quality cases (a two-part question answered with the failure's reason, names
+// for a space and seat, an open request that asks rather than shares, spend by
+// week, a change from an unrelated screen) and the brief cases (rows kept only
+// for a record read and resolved, danger only from its own read, all-clear,
+// injection, a record gone before the brief, over-long answers whose one retry
+// lands (the #407 replay), exact caps, and an ask waiting in a chat room).
+// A change breaking a case fails here, and the example an operator copies is
+// one the engine runs. Mutation: let a write tool execute instead of proposing,
+// and file-a-task ends with no proposal; let no row cite a room, and both chat
 // cases end with nothing needing the person.
 func TestTheShippedAssistantEvalSuitePasses(t *testing.T) {
 	t.Parallel()

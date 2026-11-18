@@ -12,29 +12,17 @@ import (
 const floorOffFor = "(0 turns the floor off for a launch whose session context is unknown)"
 
 // A CEILING BELOW THE EXECUTOR'S LAUNCH FLOOR IS REFUSED, on every scope a seat
-// that runs an executor is judged by, where the ceiling is written.
+// that runs an executor is judged by.
 //
-// Every executor launch is refused while a capped window of either scope —
-// the seat's own, or the company's — has less than
-// turn_engine.executor_min_budget_tokens left, and the refusal parks the seat
-// until the window turns over. A ceiling below the floor never has the floor
-// left, so the seat parks as starved before its first run, in every window it
-// will ever open. RUNNABLE for that reason, and refused at the ceiling with
-// both remedies named: raise the ceiling, or lower the floor.
-//
-// Nothing is refused where no launch reads the ceiling — a company with no
-// model to run an executor on, a floor that is off — nor at a ceiling the
-// floor fits in exactly, which a window's first launch takes.
-//
-// AND "0 TURNS THE FLOOR OFF" SAYS FOR WHICH LAUNCH: one whose session context
-// is not known. A launch continuing a session a capture measured is held to
-// that context with its brief beside it whatever the floor, so the bare remedy
-// promised an operator lowering the floor to nothing that no launch would be
-// held at all.
-//
-// Mutations: compare with <= rather than <, skip the company's ceilings, judge
-// a company whose seats run no executor, or say the floor turned off holds no
-// launch at all, and this goes red.
+// A launch is refused while a capped window (seat's or company's) has less than
+// turn_engine.executor_min_budget_tokens left, parking the seat. A ceiling below
+// the floor never has it left, so the seat parks as starved before its first run;
+// the refusal names both remedies. Nothing is refused where no launch reads the
+// ceiling (no executor model, a floor that is off) nor at a ceiling the floor
+// fits exactly. "0 turns the floor off" must say for which launch: one whose
+// session context is unknown. Mutations: compare with <= rather than <, skip the
+// company's ceilings, judge a company with no executor seats, or say a floor
+// turned off holds no launch at all, and this goes red.
 func TestACeilingBelowTheExecutorFloorIsRefused(t *testing.T) {
 	t.Parallel()
 	const person = "  - name: Founder\n    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n"

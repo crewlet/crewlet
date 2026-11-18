@@ -83,9 +83,9 @@ is read, which the node that answers judges both at, and a write's is the
 least access at which the node that decides it may admit the call — the rest
 is the relation that node judges from its own chart, which no access alone
 names (an open's push of its branch, a change's owner steering it). Their
-twenty-six writes — `code_commit_files`,
+twenty-eight writes — `code_commit_files`,
 `code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`,
-`code_create_repo`, `code_update_repo`, `code_delete_repo`,
+`code_create_tag`, `code_delete_tag`, `code_create_repo`, `code_update_repo`, `code_delete_repo`,
 `code_restore_repo`, `code_protect_branch`, a change's `code_open_change`,
 `code_update_change` and `code_close_change`, and its conversation's
 `code_request_review`, `code_review_change`, `code_comment_on_change`,

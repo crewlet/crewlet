@@ -256,20 +256,13 @@ func TestAHealthyChildIsNotRestarted(t *testing.T) {
 	}
 }
 
-// A SERVER THAT IS DOWN IS REFUSED HONESTLY, and NOTHING STARTS IT WHILE ITS
-// OWNER SAYS NO. The owner's gate is what keeps a per-role child — one seat's
-// identity at the vendor — from being restarted by a node whose lease has
-// lapsed; while it is shut, the server stays down and every call says so in
-// the engine's words, classed unavailable, rather than as a broken pipe.
-// A SUPERVISED BRIDGE STOPS ITS CHILDREN BEFORE ITS CASE'S DIRECTORY GOES
+// A supervised bridge stops its children before its case's directory goes
 // (#982): supervisedBridge takes its TempDir before it registers StopAll, so
-// the directory's removal runs last. The case's body stands in for a child the
-// supervisor restarts during teardown: for as long as the bridge serves its
-// child, it writes the start file the child counts in, and it pads that file's
-// directory so RemoveAll's last pass is long enough for a write to land in.
-// With the two registrations reversed, the removal runs while the child is
-// served, meets a file written after its unlink, and fails the body's
-// teardown every time; in order, StopAll ends the serving first.
+// the removal runs last. The body stands in for a child the supervisor
+// restarts during teardown: while the bridge serves it, it writes the start
+// file and pads that file's directory so RemoveAll's last pass is long enough
+// for a write to land in. With the registrations reversed, the removal meets a
+// file written after its unlink and fails the teardown every time.
 //
 // Mutation: drop supervisedBridge's early TempDir, so StopAll is registered
 // before the directory's removal and runs after it.
@@ -300,6 +293,10 @@ func TestASupervisedBridgeStopsItsChildrenBeforeItsCaseDirectoryGoes(t *testing.
 	}
 }
 
+// A down server is refused honestly, and nothing starts it while its owner
+// says no. The owner's gate keeps a per-role child (one seat's identity at the
+// vendor) from being restarted by a node whose lease has lapsed; while it is
+// shut every call says so, classed unavailable, not as a broken pipe.
 func TestADownServerIsRefusedHonestlyAndHeldBackByItsOwner(t *testing.T) {
 	t.Parallel()
 	var mayStart atomic.Bool

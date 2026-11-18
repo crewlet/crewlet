@@ -156,20 +156,16 @@ func printConfluenceResult(w io.Writer, res *confluence.PublishResult) {
 
 // `crewlet confluence resync`: the knowledge base's read-only diagnostic.
 //
-// It exists because a skill that does not load is INVISIBLE: the only symptom
-// is guidance that never appears in an executor prompt. This runs the engine's
-// own walk against a THROWAWAY registry and prints what it found, so an
-// operator can see what a running node's next walk will see without waiting
-// for it and without a running engine to ask.
+// A skill that does not load is INVISIBLE: the only symptom is guidance that
+// never appears in an executor prompt. This runs the engine's own walk against
+// a THROWAWAY registry and prints what it found, with no running engine to ask.
 //
-// It deliberately does NOT reach into a running engine, and a running engine
-// does not need it to: every node applies a page webhook as it arrives (and
-// tells the rest of the fleet), and walks its skills space on a timer behind
-// that, so a change reaches every registry without anything being pushed.
+// It deliberately does NOT reach into a running engine, which does not need it:
+// every node applies a page webhook as it arrives (telling the fleet) and walks
+// its skills space on a timer behind that.
 //
-// SKILLS-ONLY, and that is not an omission: knowledge docs are searched live
-// at query time and never loaded into a registry, so for them there is
-// nothing to resync.
+// SKILLS-ONLY, not an omission: knowledge docs are searched live at query time
+// and never loaded into a registry, so there is nothing to resync.
 func runConfluenceResync(inv invocation, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 

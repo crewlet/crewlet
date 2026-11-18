@@ -889,15 +889,11 @@ func TestAWriteIsAuthoredByTheCallerAndNotByTheNode(t *testing.T) {
 
 // A CREATE THAT NAMES A SEAT IS ONE RECORD, the seat inside it — the
 // directory decides the address, the login and the seat together, so a seat
-// somebody else holds refuses the create having created nobody. It was a
-// second record after the person's, and its refusal left a person created
-// without the seat they were created for. The seat is TRIMMED, as an
-// invitation's is: the domain looks a handle up as given, so ` founder ` was a
-// seat an invitation accepted and a create refused — and so are the login and
-// the address, the address sealed as given: a padded one was a person whose
-// address carried its padding for good, and one of nothing but spaces reached
-// the domain as an address rather than as none, for it to refuse as a fault
-// rather than as a person nothing can find.
+// somebody else holds refuses the create having created nobody. The seat is
+// TRIMMED, as an invitation's is (the domain looks a handle up as given), and
+// so are the login and the address: a padded address would be sealed with its
+// padding for good, and one of nothing but spaces would reach the domain as an
+// address rather than as none.
 //
 // Mutation: pass the seat, the login or the address untrimmed and the record
 // names the spaces.
@@ -942,14 +938,11 @@ func TestACreateNamingASeatIsOneRecord(t *testing.T) {
 // A PERSON'S CREATE HANDS OUT THEIR FIRST PASSWORD LINK, AND A SERVICE
 // ACCOUNT'S HANDS OUT NONE.
 //
-// An administrator's create IS the enrolment, so the one thing the person
-// lacks is a way to prove themselves: the record carries a link that sets the
-// password they then sign in with, and this answer is the one place it is
-// shown — the reset screen's address, with the credential in the fragment, an
-// invitation's week long. The login is the caller's or, left out, the one the
-// address proposes, and the answer says which was taken. The CONTROL is a
-// service account, which has no password and is handed no link and asked for
-// no expiry.
+// An administrator's create IS the enrolment: the record carries a link that
+// sets the person's password, and this answer is the one place it is shown
+// (the reset screen's address, credential in the fragment, an invitation's week
+// long). The login is the caller's or, left out, the address's proposal, and
+// the answer says which. The CONTROL is a service account: no link, no expiry.
 //
 // Mutation: build the link from the invitation screen, drop the link's
 // expiry, or propose no login, and the person's half goes red; ask a machine
@@ -1050,17 +1043,14 @@ func TestALoginTheAddressCannotProposeIsAskedFor(t *testing.T) {
 	}
 }
 
-// A PERSON IS NEVER CREATED OR INVITED WITHOUT A SEAT, AND NEVER LEFT WITHOUT
-// ONE.
+// A PERSON IS NEVER CREATED, INVITED OR LEFT WITHOUT A SEAT.
 //
-// A person holds a human seat for as long as they are here (ADR-0032). A
-// create or an invitation naming none — a seat of nothing but spaces included —
-// is `400 seat_required` naming the field BEFORE anything is minted or
-// published, because the remedy is the caller's to type; an edit clearing a
-// person's seat is the identity record's own refusal, which goes first, so it
-// answers the same code with nothing landed and nothing after it published.
-// The CONTROLS are a service account, created with no seat and unbound with
-// `seat: ""`, which is legal.
+// A person holds a human seat while they are here (ADR-0032). A create or
+// invitation naming none (spaces included) is `400 seat_required` BEFORE
+// anything is minted or published; an edit clearing the seat is the identity
+// record's own refusal, which goes first, so it answers the same code with
+// nothing landed. The CONTROLS are a service account, created with no seat and
+// unbound with `seat: ""`, which is legal.
 //
 // Mutation: drop the create's or the invitation's early check and its rows
 // publish; drop the domain refusal's arm from the answer and the edit answers
@@ -1164,16 +1154,13 @@ func TestAPersonIsNeverCreatedOrInvitedWithoutASeat(t *testing.T) {
 
 // A PERSON IS NEVER CREATED OR INVITED WITHOUT STATING WHAT THEY MAY DO.
 //
-// There is no default an omission could stand for: somebody enrolled holding
-// every app and somebody enrolled holding the overview alone are both
-// legitimate, so a body naming neither is one whose author did not decide —
-// and the record it lands decides who may use Worklet and Doclet until
-// somebody notices. So `grants` is REQUIRED on a create, a service
-// account's included, and on an invitation: absent is `400 invalid_body`
-// naming the field, decided BEFORE ANY KEY IS READ OR LINK MINTED, as a
-// missing seat is. A name this build does not know is refused the same way,
-// naming the set — never forwarded for the record to refuse as authority
-// nobody holds. The CONTROL is each body with `grants` stated.
+// No default could stand for an omission: everything and the overview alone
+// are both legitimate, so a body naming neither is one whose author did not
+// decide. So `grants` is REQUIRED on a create, a service account's included,
+// and on an invitation: absent is `400 invalid_body` naming the field, decided
+// BEFORE ANY KEY IS READ OR LINK MINTED, as a missing seat is. An unknown name
+// is refused the same way, naming the set, never forwarded for the record to
+// refuse as authority nobody holds. The CONTROL is each body with `grants`.
 //
 // Mutation: drop the requirement and the omitted bodies publish; read an
 // absent list as `[]` and they publish holding nothing.
@@ -1287,13 +1274,12 @@ func TestAnEmptyGrantListIsTheOverview(t *testing.T) {
 
 // A NAME THIS BUILD DOES NOT KNOW MAY BE REMOVED OVER HTTP, AND NEVER ADDED.
 //
-// A newer peer may write a permission this build has never heard of onto a
-// row; it is KEPT AND IGNORED (ADR-0033). So an administrator here may take it
-// off (`remove_grants`), and may restate the whole set with it left on — an
-// edit that leaves it alone must not be refused for its presence — but may
-// never add it, as `add_grants` or inside a whole set the row does not already
-// carry it in. Every addition is refused `400` naming the set before anything
-// publishes.
+// A newer peer may write a permission this build does not know onto a row; it
+// is KEPT AND IGNORED (ADR-0033). An administrator may take it off
+// (`remove_grants`) and restate the whole set with it left on (an edit leaving
+// it alone must not be refused for its presence), but never add it, as
+// `add_grants` or in a whole set whose row lacks it: refused `400` naming the
+// set before anything publishes.
 //
 // Mutation: refuse every unknown name in a whole set and the restatement goes
 // red; stop refusing unknown additions and the two additions publish; refuse
@@ -1356,17 +1342,13 @@ func TestAnUnknownGrantMayBeRemovedButNotAddedOverHTTP(t *testing.T) {
 // A TOKEN WRITING AN ADMINISTRATIVE RECORD IS `token_refused`, NOT A LACK OF
 // AUTHORITY.
 //
-// The identity estate refuses every administrative record written through a
-// machine token ([iamdomain.ErrTokenRefused], in a refusal naming no
-// permission): a token may carry admin (ADR-0033), so what keeps it off
-// inviting, granting and suspending is that nobody is present, not a
-// permission. The answer is the code the authority table's presence rows give
-// the same request at the route — 403 `token_refused`, reason
-// `token_refused`, NO permission named, since none would admit a token — and
-// never `unauthorized`, which would send the caller to ask for admin they
-// already hold. It is matched BEFORE the refusal arms, since every token
-// refusal is one. The CONTROL is a refusal a permission lifts, which is still
-// `unauthorized`.
+// The estate refuses every administrative record written through a machine
+// token ([iamdomain.ErrTokenRefused], naming no permission): what keeps a token
+// (which may carry admin, ADR-0033) off inviting, granting and suspending is
+// that nobody is present. The answer is the presence-row code, 403
+// `token_refused`, NO permission named, never `unauthorized`, which would send
+// the caller to ask for admin they hold. Matched BEFORE the refusal arms, since
+// every token refusal is one. The CONTROL is a refusal a permission lifts.
 //
 // Mutation: match the refusal arms first and every row answers `forbidden`.
 func TestATokenWritingAnAdministrativeRecordIsTokenRefused(t *testing.T) {
@@ -1521,14 +1503,13 @@ func TestASeatOnANodeRunningNoCompanyIsNoActiveRevision(t *testing.T) {
 
 // THE INVITE URL IS RETURNED EXACTLY ONCE, AND IT IS THE DASHBOARD'S SCREEN.
 //
-// The estate holds the invitation's id and a VERIFIER of the secret its link
-// carries beside it, so nothing stores the URL and no route reads one back.
-// What the answer must carry is the whole link, built from api.external_url
-// rather than from the request — and it is the dashboard's invitation screen,
-// `/dashboard#/invite/<id>.<secret>`, where it used to be the JSON route a
-// person clicking it in their mail was shown as a JSON document. The
-// credential rides in the FRAGMENT, which a browser never sends: the path
-// every access log records carries neither half.
+// The estate holds the invitation's id and a VERIFIER of the secret, so
+// nothing stores the URL and no route reads one back. The answer carries the
+// whole link, built from api.external_url rather than the request, and it is
+// the dashboard's invitation screen, `/dashboard#/invite/<id>.<secret>` (not a
+// JSON route a person clicking it in mail would see as a document). The
+// credential rides in the FRAGMENT, which a browser never sends: no access log
+// records either half.
 //
 // Mutation: build the link from the API route again and the shape fails;
 // drop the secret and the link opens nothing.
@@ -2470,21 +2451,16 @@ func TestAGesturesOwnReasonSaysWhatWasDoneAndByWhom(t *testing.T) {
 
 // A VALUE SOMEBODY ELSE HOLDS IS REFUSED IN WORDS AN ADMINISTRATOR CAN READ.
 //
-// The detail used to be the domain's error, which is written for a log: the
-// package's name, the holder's raw id and — for an address — its BLIND, a
-// digest nobody can read, all shown verbatim by the dashboard, under
-// `bad_params`, whose sentence is about a query parameter. It is `invalid`
-// now, naming the value and the holder by their login, with the ids beside the
-// sentence rather than in it. A value held by an open invitation names the
-// invitation in its field and says to cancel it, with neither the
-// invitation's id nor the route that cancels it in the sentence a person
-// reads — and WHICH value: an invitation holds its
-// seat as well as its address, and "that address" said of a seat told an
-// administrator a value they never typed was taken. Mutation: answer the
-// domain's error as the detail and every case goes red; name the holder by id
-// and the login cases do; word every invitation's value as an address and the
-// seat's case does; put the invitation's id back in its sentence and both
-// invitation cases do.
+// The domain's error is written for a log (package name, raw holder id, an
+// address's unreadable BLIND), so the answer is `invalid`, not `bad_params`
+// (about a query parameter), naming the value and the holder by login, ids
+// beside the sentence rather than in it. A value held by an open invitation
+// names the invitation in its field and says to cancel it, without its id or
+// the cancelling route, and says WHICH value: an invitation holds a seat as
+// well as an address. Mutation: answer the domain's error as the detail and
+// every case goes red; name the holder by id and the login cases do; word every
+// invitation's value as an address and the seat's case does; put the
+// invitation's id back in its sentence and both invitation cases do.
 func TestAValueSomebodyHoldsIsRefusedInWordsAPersonReads(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

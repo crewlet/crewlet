@@ -22,26 +22,18 @@ import (
 // drift, and the drift is a working credential replaced by twelve characters.
 const Redacted = redact.FieldMask
 
-// WHICH FIELDS ARE CREDENTIALS is the `secret:"true"` tag — `secret:"content"`
-// for a body read whole — read through [secrets.Field] and nothing else.
+// WHICH FIELDS ARE CREDENTIALS is the `secret:"true"` tag (`secret:"content"`
+// for a body read whole), read through [secrets.Field] and nothing else.
 //
-// A TAG rather than a list of paths, and that is the whole point: a path list
-// is maintained by whoever remembers it exists, so the day somebody adds
-// integrations.newthing.token the config surface starts publishing it and
-// nothing fails. A tag lives on the field, and [TestEveryCredentialFieldIsTagged]
-// fails the build when a field that looks like a credential does not carry one.
+// A TAG, not a path list: a list is kept by whoever remembers it, so a new
+// integrations.newthing.token would be published with nothing failing.
+// [TestEveryCredentialFieldIsTagged] fails the build when a credential-looking
+// field lacks the tag.
 //
-// It has TWO READERS and one predicate, [secrets.Field]: the redaction below,
-// which runs over the company (Tier B) because that is the tier a read
-// serves — its mask and its restore share the predicate, so they cannot come
-// to disagree about which values are secret — and the schema generator, which
-// marks every position the tag covers in BOTH tiers with [secretKeyword] —
-// Tier A's keyring and API tokens are what tooling rendering a node's file
-// most needs to know not to write in clear. Both read the tag the same way — a
-// tagged field covers every string beneath it, a list's members and a map's
-// values included — so what a read masks and what the published schema calls
-// a credential cannot disagree; TestSchemaMarksExactlyWhatRedactionMasks holds
-// the two to one set.
+// TWO READERS, one predicate: the redaction below, over the company (Tier B,
+// the tier a read serves), and the schema generator, which marks every covered
+// position in BOTH tiers with [secretKeyword]. A tagged field covers every
+// string beneath it; TestSchemaMarksExactlyWhatRedactionMasks holds the two.
 
 // Redact returns a copy of the company with every credential masked.
 //
@@ -67,20 +59,14 @@ func (c *Company) Redact() *Company {
 
 // RestoreRedacted fills masked credentials in c from the values in prior.
 //
-// This is what makes GET-edit-PUT safe. Without it a reader who fetched the
-// config, changed one line and sent it back would replace every credential in
-// the company with the mask — silently, and only discovered when each
-// integration started failing to authenticate. The cheap answer is to document
-// that the read is not round-trippable; a document that cannot be sent back is
-// a document nobody can edit.
+// This makes GET-edit-PUT safe: without it a reader who changed one line and
+// sent the config back would replace every credential with the mask,
+// discovered only when each integration failed to authenticate. Only the
+// marker is substituted: a field the caller changed keeps their value, and
+// one they cleared stays cleared.
 //
-// Only the marker is substituted. A field the caller actually changed keeps
-// their value, and a field they cleared stays cleared.
-//
-// Every member that can name itself is matched by that identity, and a seat
-// or a unit is matched ANYWHERE in the prior document (see
-// [documentIdentified]) — a seat by its handle, a unit by its key, which is
-// the same identity every other consumer resolves them by. A mask that cannot
+// Members that can name themselves are matched by identity, a seat or a unit
+// ANYWHERE in the prior document ([documentIdentified]). A mask that cannot
 // be matched to exactly one prior member is left standing, and
 // [Company.Validate] names the field.
 func (c *Company) RestoreRedacted(prior *Company) {
@@ -161,34 +147,28 @@ func copyMasking(src, dst reflect.Value, secret bool) {
 
 // identified is a collection member that knows WHO it is.
 //
-// Position is not an identity, and treating it as one is how a caller who
-// merely REORDERED the roster had every seat's credentials resolved against
-// its neighbour's: each agent then authenticated to its tools as somebody
-// else, with nothing left holding the marker for [Company.UnresolvedMasks] to
-// catch and no validation error to raise. The lengths matched, so no guard
-// fired; the masks are anonymous, so the wrong answer looked exactly like the
-// right one.
+// Position is not an identity: a caller who merely REORDERED the roster had
+// every seat's credentials resolved against its neighbour's, each agent
+// authenticating to its tools as somebody else, with no mask left for
+// [Company.UnresolvedMasks] to catch and no error raised (the lengths matched
+// and masks are anonymous).
 //
-// A member that cannot name itself genuinely has no identity — a reordered
-// list of them cannot be matched to what it hid — and stays positional, which
-// is why no anonymous list in the document may carry a credential
-// (`TestEveryCredentialCarryingCollectionCanNameItself`). What separates the
-// two is whether a member can name itself, so the member is what says.
+// A member that cannot name itself has no identity and stays positional,
+// which is why no anonymous list in the document may carry a credential
+// (`TestEveryCredentialCarryingCollectionCanNameItself`).
 type identified interface{ IdentityKey() string }
 
 // documentIdentified is a member whose identity is unique across the WHOLE
 // document rather than within its own list: a seat (its handle) and a unit
 // (its key).
 //
-// Both MOVE. A seat goes from the root into a unit, from one unit to another,
-// or back to the root; a unit goes under another unit. Its credentials move
-// with it, and a restore that matched only within the list the member sits in
-// now left every moved member's masks standing, because its old list was
-// somewhere else. So these are matched against one index over the whole
-// prior document, wherever they sat in it.
+// Both MOVE: a seat between the root and units, a unit under another. A restore
+// matching only within the list the member sits in left every moved member's
+// masks standing, so these are matched against one index over the whole prior
+// document.
 //
-// A marker method rather than a list of types in this file, so the property
-// is declared where the identity is.
+// A marker method rather than a type list here, so the property is declared
+// where the identity is.
 type documentIdentified interface {
 	identified
 	identityIsDocumentWide()
@@ -326,19 +306,14 @@ func (r *restorer) restore(target, prior reflect.Value, secret bool) {
 //
 // Three correspondences, chosen by what the member can say about itself, and
 // NEVER a fall back from one to another:
-//
 //   - A [documentIdentified] member (a seat, a unit) is matched in the index
 //     over the whole prior document, so a move keeps its credentials.
 //   - An [identified] member (an MCP server, a sandbox setup step) is matched
 //     by identity within the prior list it sits in.
-//   - Anything else is matched by position, which is the only correspondence
-//     a list of anonymous values has. A list that changed length is refused
-//     rather than guessed: every slot's mask stays standing.
+//   - Anything else is matched by position; a list that changed length is
+//     refused: every slot's mask stays standing, into [Company.Validate].
 //
-// A member whose identity has no unambiguous prior is left unrestored, and
-// its mask survives into [Company.Validate]. Positional matching used to be
-// the fallback for an identity that was duplicated or empty, which is the one
-// case where position is certain to be wrong about who is who.
+// A duplicated or empty identity has no unambiguous prior: left unrestored.
 func (r *restorer) restoreSlice(target, prior reflect.Value, secret bool) {
 	elem := target.Type().Elem()
 	var match func(i int) reflect.Value

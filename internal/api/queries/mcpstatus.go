@@ -394,20 +394,15 @@ func (s Sources) liveStatuses(ctx context.Context) ([]coord.Lease, map[string]co
 // mcpServersStatus answers what each MCP server did on each node.
 //
 // FROM THE STATUS RECORDS, NOT A FAN-OUT. Every node re-publishes its servers
-// as they are on its status record ([coord.NodeStatusRecord.MCP]) within a
-// renew period of a change — a child that died since it started counts as
-// failed until it is back — so one listing of the records, counted against the
-// lease table's presence, is every node's answer at once. There is no node
-// that did not answer in time, only a live one with no record counted, and
-// that is a column of its own rather than a row of zeros.
+// on its status record ([coord.NodeStatusRecord.MCP]) within a renew period of
+// a change (a dead child counts as failed until back), so one listing of the
+// records against the lease table's presence is every node's answer. A live
+// node with no record is counted as a column of its own, not a row of zeros.
 //
-// EVERYBODY'S, IN TWO READINGS ([MCPReading]), as each model's condition is: a
-// server's state and its tools are what tell a member why an agent lacks one.
-// The configuration's reader reads the whole answer, the launch commands, the
-// first line of each failure and the servers each agent's grants reach
-// included, which is the configuration and what became of it (`/config` shows
-// the same reader the same commands); anybody else reads
-// [MemberMCPStatusAnswer], which names none of that.
+// EVERYBODY'S, IN TWO READINGS ([MCPReading]): a server's state and tools tell
+// a member why an agent lacks one. The configuration's reader reads the whole
+// answer (launch commands, failures, the servers each agent's grants reach);
+// anybody else reads [MemberMCPStatusAnswer], which names none of that.
 func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	leases, records, err := s.liveStatuses(ctx)
 	if err != nil {
@@ -688,18 +683,16 @@ func configuredRow(m *config.MCPServer) *MCPServerRow {
 
 // mcpState is the ONE reading of a server's counts.
 //
-// A SERVER TURNED OFF IS OFF whatever the counts say ([MCPDisabled]): it is
-// the configuration's decision, and the only counts left are a node's that has
-// not applied it yet.
+// A SERVER TURNED OFF IS OFF whatever the counts say ([MCPDisabled]): the
+// configuration decides, and any counts left are a node that has not applied it.
 //
 // A SERVER NOBODY IS SIGNED IN TO NEEDS A SIGN-IN whatever its counts say
-// ([MCPNeedsSignIn]): its instances are held back for it, and a sign-in is the
-// one gesture that changes them.
+// ([MCPNeedsSignIn]): its instances are held back until a sign-in.
 //
 // A WAITING INSTANCE DECIDES THE STATE ONLY WHERE NOTHING ELSE DOES: a server
-// serving some seats while another's credential is minted is running, since
-// nothing is wrong with it, and one with a failure is partial or failing
-// whatever waits beside it, since the failure is what somebody has to act on.
+// serving some seats while another's credential is minted is running, and one
+// with a failure is partial or failing whatever waits beside it, since the
+// failure is what somebody must act on.
 func mcpState(enabled, needsSignIn, anyReported bool, started, failed, waiting int) MCPServerState {
 	switch {
 	case !enabled:

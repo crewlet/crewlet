@@ -19,18 +19,15 @@ import (
 
 // A PERSON'S SURFACES ARE HANDED EVERY WRITER SEAM A SEAT'S ARE.
 //
-// Each per-actor seam on [builtin.WorkDeps] is a family of tools, and the
-// catalogue registers a tool only where its seam is wired — so a seam this
-// constructor leaves out is not a refusal anybody sees but a verb that is
-// simply absent from the operator's assistant and the HTTP write surface.
-// That is how the cross-project move arrived: the engine wired it for every
-// seat, and a person could only move their own item by asking one.
+// Each per-actor seam on [builtin.WorkDeps] is a family of tools, registered
+// only where its seam is wired, so a seam this constructor leaves out is not a
+// refusal anybody sees but a verb absent from the operator's assistant and the
+// HTTP write surface.
 //
-// Asserted over the SOURCE because the constructor needs a running engine and
-// a concrete tracker writer, which no case here can build without a broker:
-// the question is which seams the literal names, and that is visible only in
-// the literal. The seams are read off the struct by reflection, so a new one is
-// covered the day it is declared.
+// Asserted over the SOURCE because the constructor needs a running engine and a
+// concrete tracker writer, which no case here can build without a broker. The
+// seams are read off the struct by reflection, so a new one is covered the day
+// it is declared.
 func TestAPersonsSurfacesAreHandedEveryWriterSeam(t *testing.T) {
 	t.Parallel()
 	actor := reflect.TypeFor[builtin.Actor]()
@@ -91,18 +88,15 @@ func TestAPersonsSurfacesAreHandedEveryWriterSeam(t *testing.T) {
 
 // A PERSON'S PAGE WRITES ARE HANDED EVERY SEAM A SEAT'S ARE.
 //
-// The knowledge half has no per-actor seam to read off the struct, so the
-// list is the ENGINE'S: whatever its own [builtin.PageDeps] for a seat's turn
-// names, the person's surfaces name too. The default container is the seam that
-// went missing: a seat's page that named no space landed in its team's, while
-// the same write from the dashboard's "Save as a page" was refused for every
-// person who made it, because the operator surface was handed none. The two
-// the operator surface sets itself (who a write is attributed to, and the
+// The knowledge half has no per-actor seam to read off the struct, so the list
+// is the ENGINE'S: whatever its own [builtin.PageDeps] for a seat's turn names,
+// the person's surfaces name too. The default container is the seam that went
+// missing: without it the dashboard's "Save as a page" was refused for every
+// person. The two the operator surface sets itself (attribution and the
 // authority decision) are not seams of this constructor.
 //
 // Asserted over the SOURCE, for [TestAPersonsSurfacesAreHandedEveryWriterSeam]'s
-// reason, and against the engine's own literal so a seam added there is a
-// failure here the day it lands.
+// reason, against the engine's own literal.
 func TestAPersonsPageWritesAreHandedEverySeamASeatsAre(t *testing.T) {
 	t.Parallel()
 	seat := literalKeys(t, filepath.Join(sourcetree.Root(t), "internal", "engine",
@@ -123,14 +117,10 @@ func TestAPersonsPageWritesAreHandedEverySeamASeatsAre(t *testing.T) {
 
 // A PERSON'S CHAT IS HANDED EVERY SEAM A SEAT'S IS.
 //
-// The engine builds a seat's chat deps from the rooms, the writer and the
-// search the router serves, the mentions its chart resolves and the session
-// floor its writes raise; [api.ChatletDeps] builds a person's from the same
-// router. A seam the seat's literal names and the person's leaves out is the
-// drift [TestAPersonsPageWritesAreHandedEverySeamASeatsAre] was written over —
-// a person's message whose @-mention woke nobody, or whose next read came from
-// before it — so it is held here the same way, over the SOURCE and the
-// engine's own literal.
+// A seam the seat's chat literal names and [api.ChatletDeps] leaves out is the
+// drift [TestAPersonsPageWritesAreHandedEverySeamASeatsAre] guards: a message
+// whose @-mention woke nobody, or whose next read came from before it. Held the
+// same way, over the SOURCE and the engine's own literal.
 //
 // THE PERSON'S LITERAL ALSO CARRIES THEIR READ STATE, which the seat's does
 // not (a cursor is a person's attention), so the comparison is one way.
@@ -271,29 +261,17 @@ func literalKeysOf(t *testing.T, path, fn, pkg, typ string) []string {
 	return out
 }
 
-// A PERSON'S SURFACES REACH THE ESTATE THROUGH THE ROUTER, never through this
-// node's own copy.
+// A PERSON'S SURFACES REACH THE ESTATE THROUGH THE ROUTER, never this node's
+// own copy ([engine.Engine.Tracker] and the rest): the router
+// ([engine.OperatorWork] and the rest) falls to another data node's copy when
+// this one is out of service, where the first would answer a person from rows
+// the node would not vouch for. A read after a person's write waits on the
+// router's session floor ([engine.Engine.AwaitEstate]), not this node's
+// applier ([engine.Engine.WaitReached]).
 //
-// The operator's assistant, the dashboard's act route, the human write surface
-// and the read surface's board, pages, search and file listing are all built
-// in humans.go and native.go, and the engine hands them the tracker, the
-// knowledge base and chat two ways: its own copy ([engine.Engine.Tracker] and
-// the rest), and its estate router ([engine.OperatorWork] and the rest), which
-// answers from this node's copy while it serves and from another data node's
-// while it does not. Built over the first, a data node whose copy was taken
-// out of service — wrong rather than behind, or its file shut — sent its own
-// seats to a peer's copy and went on answering a PERSON from the one it had
-// stopped serving: a board, an inbox or a purge read off rows the node itself
-// would not vouch for. And a read after a person's own write waited on this node's
-// applier ([engine.Engine.WaitReached]) rather than the router's session
-// floor ([engine.Engine.AwaitEstate]), which is the floor whichever holder
-// answers the next read honours.
-//
-// Asserted over the SOURCE, for [TestAPersonsSurfacesAreHandedEveryWriterSeam]'s
-// reason: these constructors need a running engine. An engine value is
-// spelled `e`, or `.engine` on a per-request source, in both files — the
-// controls below fail if the walk finds no routed call, which is what a
-// rename of that convention would look like.
+// Asserted over the SOURCE, as [TestAPersonsSurfacesAreHandedEveryWriterSeam].
+// An engine value is spelled `e` or `.engine`; the controls fail if the walk
+// finds no routed call, as a rename would.
 func TestAPersonsSurfacesReachTheEstateThroughTheRouter(t *testing.T) {
 	t.Parallel()
 	// Each accessor of this node's own copy, and the routed one to call.
@@ -357,18 +335,14 @@ func isEngineValue(e ast.Expr) bool {
 
 // THE READ SURFACE IS HANDED EVERY NATIVE SOURCE, and under its own name.
 //
-// [api.NativeSources] builds them and [api.NativeReads.Into] hands them over,
-// and both callers — `crewlet run` and the end-to-end suite — go through the
-// pair, so a source one of them forgets is a family of questions answered
-// `unknown_query` on every node, which reads as a company that runs no such
-// app rather than a wiring mistake. The rooms beside the board were the case:
-// the two callers each set the board's five sources field by field, and a
-// sixth would have been a field each had to remember.
+// [api.NativeSources] builds them and [api.NativeReads.Into] hands them over;
+// both callers (`crewlet run`, the end-to-end suite) use the pair, so a source
+// forgotten is a family of questions answered `unknown_query` on every node,
+// which reads as a company running no such app, not a wiring mistake.
 //
 // Asserted over the SOURCE, for [TestAPersonsSurfacesAreHandedEveryWriterSeam]'s
-// reason — a constructor over a running engine is not something a unit test
-// can build — and held to the type by reflection, so a field added to
-// [api.NativeReads] is a field both functions must name.
+// reason, and held to the type by reflection, so a field added to
+// [api.NativeReads] is one both functions must name.
 func TestTheReadSurfaceIsHandedEveryNativeSource(t *testing.T) {
 	t.Parallel()
 	built := literalKeysOf(t, "native.go", "NativeSources", "", "NativeReads")

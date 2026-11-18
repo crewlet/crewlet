@@ -83,68 +83,32 @@ const (
 	LiveSpendWindow = 24 * time.Hour
 
 	// SpendRecordLimit is a memory and latency backstop on retained spend
-	// records. The real bound is the window above; this only binds for an
-	// org emitting more than this in a day. Truncation drops the OLDEST
-	// records — any whose stamp does not parse, then the first to age out —
-	// so an org past the cap sees a rollup covering slightly less than a day
-	// rather than a wrong total.
+	// records; the window above is the real bound. Truncation drops the OLDEST
+	// (unparseable stamps first), so a rollup covers slightly less than a day
+	// rather than totalling wrong. THE WHOLE COMPANY'S, per projection: every
+	// node is fed by a fleet-wide broadcast.
 	//
-	// THE WHOLE COMPANY'S, per projection: every node's projection is fed
-	// by a fleet-wide broadcast, so this is one company's day on every node
-	// rather than one node's share of it.
-	//
-	// 24 000, sized in TURNS rather than records, which is what an operator
-	// can reason about. A turn wrote about three spend records — its
-	// executor, its reviewer, a worker or a judge now and then — so the 8
-	// 000 this was put the cap at roughly 2 600 turns a company-day. The
-	// auxiliary records (types.AuxiliarySpend) add about six per turn — one
-	// per turn-start call, per compaction kind and per reflection worker,
-	// coalesced per flush — so nine records a turn would have halved that
-	// to about 900. Three times the records keeps the same 2 600 turns. A
-	// record held here is several hundred bytes with its parsed stamp and
-	// its index entry, so the cap is under 20 MB; the fold the stream
-	// makes on its five-second tick measured 12 ms on one core at the cap
-	// (24 000 records over 2 700 turns), outside this projection's lock,
-	// and an arrival — past the cap or not — costs the records it moves
-	// rather than a pass over the window (see holdSpend).
-	//
-	// THE TRANSPORT IS NOT WHAT BOUNDS IT. A spend record crosses the
-	// history scatter as about 590 bytes of JSON, so the whole cap is about
-	// 13.5 MiB — past the 8 MiB one reply carries (queue.MaxPayloadBytes),
-	// which a single node holding more than about 14 000 of the day's
-	// records reached on its own. So the seed reads the window in pages of
-	// eventfan.PhaseTokenPage records a node, each well under the ceiling,
-	// and this cap is free to be sized by memory and the fold alone.
-	//
-	// Exported because the startup seed reads no more than this from the
-	// store: a record past the cap would be dropped on arrival, so reading
-	// it costs the seed's time budget and buys nothing.
+	// 24 000 is about 2 600 turns a company-day at nine records a turn (three
+	// spend, six auxiliary: types.AuxiliarySpend). A record is several hundred
+	// bytes, so under 20 MB; the five-second fold measured 12 ms on one core at
+	// the cap, outside the lock (see holdSpend). The seed pages the window by
+	// eventfan.PhaseTokenPage, so the transport does not bound it. Exported
+	// because the seed reads no more than this: the rest would be dropped.
 	SpendRecordLimit = 24_000
 )
 
 // stateEvents are the events the seat's state machine below reads.
 //
-// agent_turn_progress is deliberately ABSENT even though it plainly moves a
-// seat: Apply handles that type on its own branch and returns before
-// applyState is ever reached, so an entry here would be read by nothing.
+// agent_turn_progress is ABSENT: Apply returns on its own branch before
+// applyState. agent_turn_completed ENDS THE WORK; reflection_completed
+// only the learning pass after it, which the reflector skips publishing on five
+// paths, so a seat whose end was read off reflection stayed mid-phase for good.
 //
-// agent_turn_completed ENDS THE WORK, and reflection_completed only the
-// learning pass that follows it. Reflection is the pass's trailing sentinel,
-// and the reflector returns without publishing it on five paths (no workers
-// configured, an unknown role, a per-role `learning_enabled: false`, a spent
-// token budget, a redelivery it has already marked) — so a seat whose turn end
-// was read only off reflection stayed mid-phase, in a phase that had ended,
-// for the life of the process.
-//
-// auxiliary_spend is deliberately ABSENT: what the reflection's workers — and
-// every other auxiliary call — spent is a record of spend, published after the
-// turn ended, and a seat state that read it would reopen the turn it names.
-//
-// executor_collected is PRESENT although it is a record of spend too, because
-// it is also the seat's own work: one launch of its executor's run, collected
-// while the turn that launched it is parked on it, before the turn resumes. It
-// says the seat worked and, for a launch that failed, why — and it moves no
-// stage of the turn ([LiveState.applyTurnEvent]).
+// auxiliary_spend is ABSENT: a spend record published after the turn ended
+// would reopen the turn it names.
+// executor_collected is PRESENT although also a spend record: it is the seat's
+// own work, saying it worked and, for a failed launch, why. It moves no stage
+// of the turn ([LiveState.applyTurnEvent]).
 var stateEvents = map[string]struct{}{
 	"agent_spawned":         {},
 	"agent_terminated":      {},
@@ -316,32 +280,24 @@ type LiveState struct {
 	// or both, in either order.
 	//
 	// EXACT rather than bounded like finishedCalls below, because it tracks
-	// s.spend and s.undatedSpend, shrinks with them and takes no id they
-	// do not hold — the same shape feedIDs has, and for the same reason. A
-	// bounded set could not do it: its cap was the number of records the
-	// seed reads, and the ids the live stream had already put there sat at
-	// the FRONT of its eviction order, so a full seed evicted them before
-	// its own loop reached the store's copies of those very phases and
-	// counted each of them twice. See dropSpend, which is where this
-	// shrinks.
+	// s.spend and s.undatedSpend and shrinks with them (see dropSpend), as
+	// feedIDs does. A bounded set evicted the live stream's ids first, so a
+	// full seed dropped them before reaching the store's copies of those
+	// phases and counted each twice.
 	spendIDs map[string]struct{}
 
 	// finishedCalls maps a phase invocation to the instant its completion
 	// landed.
 	//
-	// A phase publishes its last progress round and its completed event
-	// back to back on DIFFERENT topics, and the API consumes those through
-	// one wildcard subscription where cross-topic order is not guaranteed.
-	// A progress round arriving after its own completion would find no
-	// live call to match and seed a fresh one — an in-flight row for a
-	// phase that finished, which nothing would ever clear.
+	// A phase publishes its last progress round and its completed event on
+	// DIFFERENT topics, and one wildcard subscription gives no cross-topic
+	// order. A round arriving after its own completion would seed a fresh
+	// live call, an in-flight row for a finished phase that nothing clears.
 	//
-	// The timestamp is what makes this safe for a phase published under the
-	// same coordinates more than once — the review of a parked turn's resume
-	// that runs again, held or retried, under the turn, phase and iteration
-	// of the attempt before it (see [CallVersions]): whatever comes later is
-	// strictly newer than that attempt's completion, so only a round at or
-	// before it is dropped.
+	// The timestamp keeps this safe for a phase published under the same
+	// coordinates more than once (a resumed review, see [CallVersions]):
+	// whatever comes later is strictly newer, so only a round at or before
+	// the completion is dropped.
 	finishedCalls *boundedSet[stamp]
 
 	// spend holds per-phase RECORDS rather than a folded rollup, so the
@@ -487,27 +443,15 @@ func (s *LiveState) merge(static []map[string]any,
 }
 
 // OverlayRows renders the live overlays for the named seats as the wire rows
-// the `agents` push carries: one object per seat, with its `agent_id` INSIDE
-// it.
+// the `agents` push carries: a LIST, each row with its `agent_id` INSIDE it,
+// because the client keys rows by it behind an `Array.isArray` guard: a map
+// keyed by seat fails the guard and the push is DISCARDED silently.
 //
-// A LIST, and the id in the row, because that is what the client reads — the
-// store keys the rows by `agent_id` behind an `Array.isArray` guard, so a map
-// keyed by seat is not merely a different spelling of the same thing: it fails
-// the guard and the push is DISCARDED, silently, every time. Measured end to
-// end (internal/e2e): a full turn ran, four agents pushes went out per phase,
-// and the seat stayed idle on the dashboard from start to finish.
-//
-// THE ID AND NOTHING ELSE THAT NAMES THE SEAT: the row is merged over a roster
-// row that already carries the seat's handle and name as they are NOW, and a
-// name or handle copied off the event that moved the seat would be the one it
-// had when the event was published — a rename's worth out of date.
-//
-// The client is the compatibility reference and wins any disagreement about a
-// frame's shape. This is that rule applied.
-//
-// A seat with no live state is SKIPPED rather than sent as an empty overlay:
-// the client merges these onto its existing rows, so a blank one would erase
-// the state of a seat that simply had not changed.
+// THE ID AND NOTHING ELSE THAT NAMES THE SEAT: the row merges over a roster row
+// holding the handle and name as they are NOW; ones copied off the event would
+// be a rename out of date. A seat with no live state is SKIPPED, not sent
+// empty: the client merges these onto its rows, so a blank one would erase a
+// seat that had not changed.
 func (s *LiveState) OverlayRows(agentIDs []string) []map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -634,16 +578,14 @@ func (s *LiveState) Apply(env *Envelope) (change Change) {
 	// Everything else carrying a category is a persisted event, mirrored into
 	// the activity buffer once by id.
 	//
-	// The push is owed whether or not the row was new. A row the startup seed
-	// already listed came out of the store without its payload, and the
-	// envelope is the only frame that carries it: a client keeps a completed
-	// phase's payload beside its feed, and dedupes the feed row itself by id.
+	// The push is owed whether or not the row was new: a row the startup seed
+	// listed came out of the store without its payload, and the envelope is the
+	// only frame carrying it. The client dedupes the feed row by id.
 	//
-	// EXCEPT A TYPE THE FEED DOES NOT CARRY ([events.KeptOutOfFeed]): persisted, and
-	// accounting rather than activity, so it neither takes a row of the
-	// company's feed nor goes out as an `event` frame. The rule is the event
-	// catalogue's, asked here and by the startup seed's read alike, so the two
-	// halves of the feed cannot disagree about what it holds.
+	// EXCEPT A TYPE THE FEED DOES NOT CARRY ([events.KeptOutOfFeed]): accounting
+	// rather than activity, so it neither takes a feed row nor goes out as an
+	// `event` frame. The catalogue decides, here and in the startup seed alike,
+	// so the two halves of the feed cannot disagree.
 	if env.Category != "" && !events.KeptOutOfFeed(env.Type) {
 		s.recordEvent(env)
 		change.Events = true
@@ -927,20 +869,15 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 
 // endTurn clears what a seat holds for the turn `turnID` when that turn ends.
 //
-// SCOPED TO THAT TURN, and it has to be: both events that end one arrive
-// asynchronously and neither is ordered against the next turn's work.
-// reflection_completed is published by a separate consumer seconds after the
-// turn returned, and the projection reads every type through one wildcard
-// subscription where cross-topic order is not guaranteed — so by the time
-// either lands the seat may already be several rounds into the NEXT turn. The
-// clear used to be unconditional, which wiped the live row a reader was
-// watching and reported a working seat as idle, until the following round
-// happened to rebuild both.
+// SCOPED TO THAT TURN, because both events that end one arrive asynchronously
+// and unordered against the next turn's work: reflection_completed comes from a
+// separate consumer seconds after the turn returned, and one wildcard
+// subscription gives no cross-topic order. An unconditional clear wiped the live
+// row and reported a working seat as idle.
 //
-// The timestamp reorder guard does not cover this on its own: applyProgress
-// deliberately never advances stateTS, so a seat whose only events since the
-// last phase boundary are progress rounds still carries the older stamp and
-// lets a late completion through.
+// The timestamp reorder guard does not cover this alone: applyProgress never
+// advances stateTS, so a seat with only progress rounds since the last phase
+// boundary still carries the older stamp and lets a late completion through.
 func (s *LiveState) endTurn(agent *agentLive, turnID string) {
 	// A live call for ANOTHER turn is the seat having moved on. Neither the
 	// row nor the state belongs to the turn ending here.
