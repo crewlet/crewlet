@@ -1063,23 +1063,17 @@ func TestAQueuesCapacityIsItsRoundsOverASpan(t *testing.T) {
 	}
 }
 
-// VALIDATE WARNS A QUEUE SLOWER THAN ITS WRITERS (M5-D28): a merge queue
-// that cannot land one change a day for every seat that may merge into its
-// branch is advised at the rule's landing, from the configured depth, batch
-// and code.checks.max_timeout_seconds — `crewlet validate` observes no rate.
-// Who may merge is counted through the chart: every human seat, and each
-// full_access agent seat that writes the repository — the owning unit's lead
-// and every seat of its subtree, a child unit's included, never a review seat
-// nor one outside it — under the stricter of the rule's merge_by and
-// code.merge_by_floor. Here five may merge, against a queue of one candidate
-// of one change at six-hour rounds, four a day: warned; a queue of two
-// candidates, the fifty-minute default rounds, merge_by maintainers or a
-// maintainers floor (two may merge) and merge_by persons (the founder alone)
-// are each silent.
+// VALIDATE WARNS A QUEUE SLOWER THAN ITS WRITERS (M5-D28): a merge queue that cannot land one change a day per
+// seat that may merge into its branch is advised at the rule's landing, from the configured depth, batch and
+// code.checks.max_timeout_seconds. Who may merge: every human seat, and each full_access agent seat that writes
+// the repository (the owning unit's lead and every seat of its subtree, a child unit's included, never a review
+// seat or one outside it), under the stricter of merge_by and code.merge_by_floor. Here five may merge against a
+// queue of one candidate of one change at six-hour rounds, four a day: warned; two candidates, the fifty-minute
+// default rounds, merge_by maintainers or a maintainers floor (two may merge) and merge_by persons (the founder
+// alone) are each silent.
 //
-// Mutation: count the unit's own seats and not its subtree's → four, silent,
-// red; count a review seat → six named, red; read the rule's merge_by and not
-// the floor → the floor's case warns, red; count the agent seats under
+// Mutation: count the unit's own seats and not its subtree's → four, silent, red; count a review seat → six named,
+// red; read the rule's merge_by and not the floor → the floor's case warns, red; count the agent seats under
 // merge_by persons → the persons case warns, red.
 func TestValidateWarnsAQueueSlowerThanItsWriters(t *testing.T) {
 	t.Parallel()
@@ -1492,19 +1486,14 @@ func TestADescriptionThatIsNotUTF8IsRefused(t *testing.T) {
 	}
 }
 
-// GITLET'S POLICY BOUNDS ARE ADMISSION RULES: a document submitted with
-// more than CodeMaxRepos repositories, or a retention past
-// CodeMaxDeletedRetentionDays, is refused at the field — and a revision being
-// APPLIED that breaks either still runs.
+// GITLET'S POLICY BOUNDS ARE ADMISSION RULES: a document submitted with more than CodeMaxRepos
+// repositories, or a retention past CodeMaxDeletedRetentionDays, is refused at the field, and an
+// APPLIED revision that breaks either still runs: nothing about running depends on either, and a
+// later build that raises one admits revisions this build must apply during a rolling upgrade,
+// or the fleet's epoch splits (config's ValidateRunnable).
 //
-// Nothing about running depends on either: the reconcile decides any number of
-// declarations, and the retention duty purges by any retention a duration can
-// hold. So a later build that raises either bound admits revisions this build
-// must apply during a rolling upgrade, or the fleet's epoch splits — which is
-// what holding them as runnable rules would do (config's ValidateRunnable).
-//
-// Mutation: put either check back in Code.validate and ValidateRunnable
-// refuses the stored revision.
+// Mutation: put either check back in Code.validate and ValidateRunnable refuses the stored
+// revision.
 func TestGitletsPolicyBoundsAreAdmissionRules(t *testing.T) {
 	t.Parallel()
 	var b strings.Builder

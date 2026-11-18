@@ -101,14 +101,12 @@ func TestARefusalOfALargeCompanyKeepsItsDetail(t *testing.T) {
 // AN IMPORT THAT LOST A RACE SAYS WHAT PUTS IT LIVE FROM WHERE THE OPERATOR
 // IS, which is talking to a running node.
 //
-// This route is taken because the engine holds its store, and `crewlet config
-// diff` and `crewlet config activate` open that store directly: the commands
-// the refusal used to suggest refused on the very node that had answered. A
-// write refused before it stored anything names no revision, and the old
-// message sent the operator to activate an empty id. And a revision that lost
-// its activation is in the history of the node that stored it alone: the
-// message names that node, because -api naming an address several nodes share
-// sends the revert to one that answers 404.
+// `crewlet config diff` and `activate` open the store directly, so they refuse
+// on the very node that answered. A write refused before it stored anything
+// names no revision, so the message must not send the operator to activate an
+// empty id. A revision that lost its activation is in the history of the node
+// that stored it alone: the message names that node, because -api naming an
+// address several nodes share sends the revert to one that answers 404.
 //
 // Mutation: hand lostRace no node, and the stored case does not name it.
 func TestAnImportThatLostARaceSaysWhatWorksAgainstARunningNode(t *testing.T) {

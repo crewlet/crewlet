@@ -16,28 +16,17 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// `crewlet feeds` — the wake feeds' dead letters: the records no node could
-// read in the hour each was handed back, and an operator's discard of one.
+// `crewlet feeds` — the wake feeds' dead letters, and an operator's discard of one.
 //
-// # Why through a running node
+// It goes through a running node: the entries live in the dead-letter stream
+// `CREWLET_DLQ`, in the engine's embedded broker on the default topology, which
+// nothing outside its process can reach. `dead-letters` is a client of
+// `GET /feeds/dead-letters` and `discard` of its POST, as `crewlet fleet broker`
+// is of `/fleet/broker`.
 //
-// The entries are kept in the broker's dead-letter stream, `CREWLET_DLQ`,
-// which on the default topology is the engine's own embedded broker, binding
-// no socket anything outside its process could reach. So `dead-letters` is a
-// client of `GET /feeds/dead-letters` and `discard` of its POST, as
-// `crewlet fleet broker` is of `/fleet/broker`; every node serving the API
-// answers alike, since the entries are the broker's.
-//
-// # What discard is FOR
-//
-// A dead letter is a wake nobody has had. The first node whose feed starts
-// able to read it derives that wake, and the retention lets it go after
-// `stream.event_retention_hours`; what neither covers is an entry no build will
-// ever read — a record sealed under a key retired fleet-wide, one no build
-// translates and none will — which keeps `feed_dead_lettered` raised for the
-// whole retention. Discarding it is the operator's decision that its wake can
-// be lost, so the command makes them repeat the id, as every destructive
-// gesture of this binary does.
+// Discard is for an entry no build will ever read (sealed under a key retired
+// fleet-wide, or untranslatable), which keeps `feed_dead_lettered` raised for
+// the whole retention. Discarding accepts the wake's loss, so the id is repeated.
 
 // feedsUsage is the group's usage.
 const feedsUsage = "usage: crewlet feeds dead-letters [-json] [<config.yaml>] [-api URL]\n" +

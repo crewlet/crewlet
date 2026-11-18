@@ -78,17 +78,13 @@ func (m MapSource) Lookup(name string) (string, bool) {
 // # The order is a security property, not a preference
 //
 // THE STORE WINS AND THE ENVIRONMENT IS THE FALLBACK. The reverse would let
-// a stale .env shadow a freshly rotated secret, which surfaces days later as
-// an auth error from a provider rather than at the point of rotation — and
-// that failure is precisely what a secret store exists to remove. When a
-// name is answered by an earlier source and a LATER one holds a different
-// value, the resolver logs secret_shadowed_env once, naming the source that
-// answered and the one it hid, with NAMES ONLY: a value never reaches a log
-// line.
+// a stale .env shadow a freshly rotated secret, surfacing days later as a
+// provider auth error instead of at rotation. When an earlier source answers
+// a name and a LATER one holds a different value, the resolver logs
+// secret_shadowed_env once, with NAMES ONLY (the answering and hidden
+// sources): a value never reaches a log line.
 //
-// A Resolver is safe for concurrent use. It is passed explicitly rather than
-// installed as a process global. A global is what call sites that cannot be
-// handed one require; every one of them is a parameter here.
+// A Resolver is safe for concurrent use, passed explicitly, never global.
 type Resolver struct {
 	sources []Source
 
@@ -166,11 +162,9 @@ func WithStore(store Source) *Resolver { return NewResolver(store, EnvSource{}) 
 // the company's chain for that seat's resolution only, so no other seat's
 // values can name it. The chain r keeps is shared, never changed.
 //
-// Its shadow warnings are r's ([shadowsTold]): a seat's chain is built for
-// every turn, and a name r's own sources disagree on is told once for r, not
-// once for every chain laid over it.
+// Shadow warnings are r's ([shadowsTold]): told once for r, not per chain.
 //
-// A nil r is the environment alone, as everywhere else here.
+// A nil r is the environment alone.
 func (r *Resolver) Ahead(first Source) *Resolver {
 	if r == nil {
 		return NewResolver(first, EnvSource{})
@@ -292,20 +286,12 @@ func (r *Resolver) Value(value string) string {
 // Missing names every variable a value references that resolves to nothing
 // NON-EMPTY, in first-seen order and each once — nil when there is none.
 //
-// This is the presence check a caller makes before it commits to something
-// that would act with a credential — spawning a seat's MCP child, offering a
-// harness a server — and it NAMES what it finds, because the one thing
-// the caller does next is tell somebody which variable to set. It
-// deliberately differs from [Resolver.Expand] in two ways.
-//
-// It tests the REFERENCES, not the resolved value: "Bearer ${TOKEN}" with
-// TOKEN unset resolves to "Bearer ", which is non-empty, so a caller
-// checking the result would miss exactly the composite shapes config allows.
-//
-// And it treats an empty answer as absent, where Expand treats it as found.
-// The two questions are different: Expand asks "did a source answer", which
-// is what substitution needs; this asks "is there a credential here", and an
-// empty credential is not one.
+// The presence check before acting with a credential; it names what it finds
+// so the caller can say which variable to set. Unlike [Resolver.Expand] it
+// tests the REFERENCES: "Bearer ${TOKEN}" with TOKEN unset resolves to
+// "Bearer ", non-empty, so checking the result would miss composite shapes.
+// And an empty answer is absent here, found in Expand: Expand asks whether a
+// source answered, this whether a credential is there.
 func (r *Resolver) Missing(value string) []string {
 	var missing []string
 	for _, name := range envref.Names(value) {
@@ -354,43 +340,17 @@ func (r *Resolver) Map(path string, in map[string]string) (map[string]string, []
 }
 
 // Document expands every string in a parsed YAML document IN PLACE, reading
-// each resolved value as the field it lands in reads one, and reports what
-// went unresolved with the path of each site. into is the Go type the document
-// will be decoded into, which is what decides that reading.
+// each resolved value as the field it lands in reads one (into is the Go type
+// the document decodes into), and reports what went unresolved by path.
+// The Tier A load path, run before decoding. Tier B is NOT: its references
+// stay verbatim until a provider or transport is built, so an export carries
+// no resolved secrets.
 //
-// This is the Tier A load path: the keyring, the broker URL and the API
-// tokens are needed the instant the process starts, so Tier A is resolved once
-// before it is decoded. Tier B is deliberately NOT run through this — its
-// references are stored verbatim and resolved at the moment a provider or
-// transport is built, which is what keeps an exported revision free of
-// resolved secrets.
-//
-// # A resolved value is read as the field reads a literal
-//
-// Into TEXT, the resolved value is the string, character for character —
-// it is data, never YAML, so a value of `null`, `~` or `8080` is that text
-// and not an absence or a number. Into a NUMBER or a SWITCH it is read
-// exactly as the same characters written in the file would be: `port:
-// ${API_PORT}` with API_PORT=8080 is `port: 8080`, and `debug: ${DEBUG}`
-// with DEBUG=true is `debug: true` — trimmed of the space around it first,
-// because what it came out of so often ends in a newline that the same
-// characters written in the file would not carry. It used to be text
-// everywhere, so no number field could take a reference at all and a switch
-// took only the YAML 1.1 words — while the documentation promised a reference
-// anywhere in Tier A.
-//
-// Two shapes are refused there rather than guessed at, each as a fault on
-// the field:
-//
-//   - A reference that is not the WHOLE value (`80${N}`). A number or a
-//     switch is one value from one variable; composing one out of text
-//     would make its type a property of how two strings concatenate.
-//   - A reference that resolves to NOTHING. The empty value is how a file
-//     says "unset", and a number that silently fell back to its default
-//     because a variable was missing would boot on a port nobody chose. A
-//     text field keeps its own reading of empty, where empty is often a
-//     real setting — the log file's is guarded where it is decided (see
-//     [refuseUnresolvedLogFile]).
+// Into TEXT the value is the string, never YAML (`null` stays text). Into a
+// NUMBER or SWITCH it is trimmed, then read as if written in the file. A
+// reference that is not the WHOLE value (`80${N}`) or that resolves to
+// NOTHING is refused as a fault: empty means "unset", so a number would fall
+// to its default and boot on a port nobody chose (text: [refuseUnresolvedLogFile]).
 func (r *Resolver) Document(node *yaml.Node, into reflect.Type) ([]Unresolved, error) {
 	var (
 		missing []Unresolved
@@ -424,22 +384,17 @@ func (r *Resolver) Document(node *yaml.Node, into reflect.Type) ([]Unresolved, e
 			return
 		}
 		if literal {
-			// TRIMMED FIRST, as every Tier A string is (see [normalize]
-			// for where the whitespace comes from): the same characters
-			// written plain in the file never carry the space around them
-			// — `port: 8080` ends at the 0 — while a value out of a mounted
-			// file, a .env line or a captured command routinely keeps a
-			// trailing newline. Kept, it made the text unwritable plain, so
-			// the encoder quoted it and the field refused it as a word: a
-			// port read from a file failed the boot where a host name read
-			// the same way did not.
+			// TRIMMED FIRST, as every Tier A string is (see [normalize]): the
+			// same characters written plain in the file never carry the space
+			// around them, while a value out of a mounted file or .env line
+			// routinely keeps a trailing newline, which would make the text
+			// unwritable plain and the field would refuse the quoted form.
 			//
-			// READ AS A LITERAL: no tag, plain style, so the decoder
-			// resolves the text as it resolves the same characters in a
-			// file. Text that still cannot be written plain (a flow
-			// indicator, a line break inside it) is quoted by the encoder
-			// and reaches the field as a string, which it refuses — so a
-			// value is never read as YAML syntax it merely contains.
+			// READ AS A LITERAL: no tag, plain style, so the decoder resolves
+			// the text as it would the same characters in a file. Text that
+			// cannot be written plain (a flow indicator, a line break) is quoted
+			// by the encoder and reaches the field as a string, which it
+			// refuses: a value is never read as YAML syntax it merely contains.
 			n.Value = strings.TrimSpace(expanded)
 			n.Tag = ""
 			n.Style = 0

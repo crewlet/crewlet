@@ -59,23 +59,16 @@ func answer(t *testing.T, method, url string) (int, string) {
 	}
 }
 
-// listening reports whether socket — the very socket a listener holds, never
-// the port it was bound to — is still open, and so still able to complete a
-// connection.
+// listening reports whether socket, the very socket a listener holds, is still
+// open and so able to complete a connection.
 //
-// NOT A DIAL OF ITS PORT, which is what this asked until a loaded run failed
-// on it. A port its socket has let go is anybody's: the kernel hands it to the
-// next bind that asks for any port and finds it, and the suite binds such
-// ports by the thousand, every package's cases in one network namespace. So a
-// dial after a stop reaches whatever holds the port by then, and says nothing
-// of the listener that stopped: in round 140 of
-// [TestAStoppedListenerAcceptsNothing], with internal/engine and
-// internal/gitlet/host binding beside it, a dial of 127.0.0.1:35409 was accepted
-// after its listener's Serve had returned, which closes that listener's socket
-// before it returns. The socket answers for itself: Go marks it closed as its
-// Close begins, and Close returns only once the descriptor is closed, which
-// takes the listening socket out of the kernel's lookups — nothing can connect
-// to it after that.
+// NOT A DIAL OF ITS PORT: a port its socket has let go is anybody's, since the
+// kernel hands it to the next bind and the suite binds such ports by the
+// thousand in one network namespace. A dial after a stop reaches whatever holds
+// the port by then and says nothing of the stopped listener (seen in
+// [TestAStoppedListenerAcceptsNothing]). The socket answers for itself: Go marks
+// it closed as Close begins, and Close returns only once the descriptor is
+// closed, which takes it out of the kernel's lookups.
 func listening(t *testing.T, socket net.Listener) bool {
 	t.Helper()
 	conn, ok := socket.(syscall.Conn)
@@ -348,15 +341,13 @@ func TestAListenerStoppedBeforeItIsServedIsClosed(t *testing.T) {
 }
 
 // A SEATS NODE SERVES ITS OWN BOXES THEIR TOOLS ON LOOPBACK, WITH NO FLEET
-// ADDRESS. A node without the ingress role binds api.port for its probes, and
-// a `direct` box is a process of its host: so the node hands that box its own
-// listener on loopback, builds its bridge from that address alone, and serves
-// the bridge's route there, beside the probes. Before, it derived no address
-// and mounted no route, so a seat pool with no CREWLET_MCP_BRIDGE_URL — a
-// satellite on a private host, a Kubernetes seat pool with no route in —
-// refused every executor launch. It still binds no public listener, whatever
-// the shared file says: the network reaches its probes alone (internal/api's
-// Probes holds the off-host half).
+// ADDRESS. A node without the ingress role binds api.port for its probes, and a
+// `direct` box is a process of its host: the node hands it its own loopback
+// listener, builds the bridge from that address alone and serves the bridge's
+// route there beside the probes. Without that, a seat pool with no
+// CREWLET_MCP_BRIDGE_URL refused every executor launch. It still binds no public
+// listener, whatever the shared file says (internal/api's Probes holds the
+// off-host half).
 //
 // Mutation: derive no address on a node without ingress and the engine builds
 // no bridge; mount no route on the probe surface and the box's connect meets a
@@ -692,33 +683,17 @@ type recordingEngine struct{ step func(string) }
 func (e *recordingEngine) Drain(context.Context) { e.step("drain") }
 func (e *recordingEngine) Stop(context.Context)  { e.step("stop") }
 
-// A STOPPED LISTENER HAS STOPPED SERVING AND ACCEPTS NOTHING, HOWEVER SOON
-// AFTER ITS START IT STOPS. [http.Server.Shutdown] closes only the listeners
-// Serve has registered and waits only for the Serve calls that registered one,
-// and listenAPI starts Serve on a goroutine, so a stop that won that race — a
-// public bind that failed tearing api.port down at once is exactly that stop —
-// returned with the goroutine still to run and the socket listening until it
-// did: the kernel completed connections a node that had reported its failed
-// start would never answer. So [shutdownListener] closes the socket itself and
-// then waits for that goroutine.
-//
-// Each round is a fresh listener stopped at once and then checked three ways.
-// Its Serve has RETURNED, because the goroutine listenAPI starts belongs to
-// the stop: a stop that does not wait for it fails this in round 0 at any
-// GOMAXPROCS, Serve having yet to return in over 96% of such stops on 2 or 4
-// cores and in every one on 1 (Go 1.27.2, measured). Its socket is CLOSED,
-// which is what refuses a person's dial — asked of the socket itself
-// ([listening]), never by dialling its address: a loaded run's dial of a
-// stopped listener's port was accepted by another socket that had taken the
-// port, after that listener's Serve had returned and closed it. The stop's
-// own close of the socket is not this case's to hold: it closes the socket in
-// every round whether or not the stop waits, and
-// [TestAListenerStoppedBeforeItIsServedIsClosed] holds it by keeping the
-// window open rather than racing for it. What the socket catches here is a
-// stop that does neither, which leaves it to a Serve still to run. And nothing
-// is logged at warn or above, read once every round's Serve has returned, so
-// no round's goroutine can log after the check. A round is a bind and a stop,
-// so the 500 take about a tenth of a second under the race detector.
+// A STOPPED LISTENER HAS STOPPED SERVING AND ACCEPTS NOTHING, HOWEVER SOON AFTER
+// ITS START IT STOPS. [http.Server.Shutdown] waits only for Serve calls that
+// registered a listener, and listenAPI starts Serve on a goroutine, so a stop
+// that won that race (a failed public bind tearing api.port down) returned with
+// the socket still listening. [shutdownListener] closes the socket itself, then
+// waits for that goroutine. Each round stops a fresh listener at once and checks three ways. Its Serve has
+// RETURNED, which a stop that does not wait fails in round 0 at any GOMAXPROCS.
+// Its socket is CLOSED, asked of the socket ([listening]), never by dialling
+// (another socket may have taken the port); the stop's own close is held by
+// [TestAListenerStoppedBeforeItIsServedIsClosed]. And nothing is logged at warn
+// or above, read once every round's Serve has returned.
 func TestAStoppedListenerAcceptsNothing(t *testing.T) {
 	t.Parallel()
 	var logged lockedBuffer
@@ -826,18 +801,14 @@ func (*quietInbox) Read(context.Context, []string) error { return nil }
 func (*quietInbox) Close() {}
 
 // A DIRECT BOX DIALS THE LISTENER ITS NODE BOUND, ON LOOPBACK, ON EVERY NODE
-// THAT RUNS SEATS. The `direct` cell's run is a process of this host, so the
-// node's own socket is an address it can always reach, and that is what lets
-// the quickstart's company — one node, one direct cell, no
-// CREWLET_MCP_BRIDGE_URL — and a seat pool with no fleet address run their
-// first turn. The listener is the one the box's routes are served on:
-// api.public where an ingress node binds one, api.port otherwise — which a
-// node without the ingress role serves its own host alone, beside its probes.
-// Only a node running seats launches a box, so an ingress node with no seat
-// derives none.
+// THAT RUNS SEATS. A `direct` run is a process of this host, so the node's own
+// socket is always reachable, which lets a one-node company with no
+// CREWLET_MCP_BRIDGE_URL run its first turn. The listener is the one the box's
+// routes are served on: api.public where an ingress node binds one, else api.port.
+// A node with no seat launches no box, so derives none.
 //
-// Mutation: derive from api.port whatever the public listener, and the public
-// row dials a port the bridge is not served on; derive none on a node without
+// Mutation: derive from api.port whatever the public listener, and the public row
+// dials a port the bridge is not served on; derive none on a node without
 // ingress, and the seat pool's row refuses every launch.
 func TestADirectBoxDialsTheListenerItsNodeBound(t *testing.T) {
 	t.Parallel()

@@ -25,46 +25,17 @@ const (
 )
 
 // SeatCredentialMode is who holds an agent seat's credential at kind for this
-// company (D4b): the engine only where it actually holds the authority that
-// creates an agent's account there. managed is a deployment whose company
-// document only named systems write (`api.auth.company_writers`, an operator
-// rendering it from its custom resources).
+// company (D4b): the engine only where it holds the authority that creates an
+// agent's account there. managed is a deployment whose company document only
+// named systems write (`api.auth.company_writers`).
 //
-//   - datadog: an enabled block with `provisioning`, whose keys create
-//     service accounts.
-//   - gitlab: an enabled block with `provisioning`, whose owner token creates
-//     them.
-//   - atlassian (Jira and Confluence): the organization block, on a Cloud
-//     site; a Data Center site has no organization to create an account in.
-//   - mattermost: an enabled block with `provisioning`, whose admin token
-//     creates bots.
-//   - github: an enabled block with `provisioning` on a document the engine
-//     writes. An
-//     agent's app is made from a manifest whose result the engine records in
-//     the document, so where only the operator writes it the apps are made
-//     outside Crewlet and handed in, however the block reads.
-//   - cloudflare: an enabled block with `provisioning`, whose provisioner
-//     token mints each agent's account API token.
-//   - expo: an enabled block with `provisioning`, whose Admin token creates
-//     each agent's robot user.
-//   - scaleway: an enabled block with `provisioning`, whose provisioner key
-//     makes each agent's IAM application, policy and API key.
-//   - aws: an enabled block with `provisioning`, whose provisioner role creates
-//     each agent's IAM role and whose broker issues its session.
-//   - google_cloud: an enabled block with `provisioning`, whose provisioner
-//     service account creates each agent's service account and issues its
-//     token.
-//   - ssh: an enabled block with `provisioning`, whose certificate authority
-//     signs each agent's certificates at use.
-//   - slack: the sealed app-configuration token
-//     (`integrations.slack.app_config_token`) the engine creates each agent's
-//     app with (D11). The block alone grants no authority: an operator renders
-//     it for apps made by hand.
-//
-// Any other kind, and a company that does not connect kind, is external: the
-// engine provisions nothing it was not given the authority for. So is a block
-// switched off (`enabled: false`), whose pass does not run: the engine holds
-// the authority there and has been told not to use it.
+// Engine mode: an enabled `provisioning` block for datadog, gitlab, mattermost,
+// cloudflare, expo, scaleway, aws, google_cloud and ssh; atlassian's
+// organization block on a Cloud site (Data Center has none); github with
+// `provisioning` on a document the engine writes (the manifest flow records its
+// result there); slack's sealed `integrations.slack.app_config_token` (D11).
+// Any other kind, an unconnected one, and a block with `enabled: false` is
+// external: the engine provisions nothing it lacks the authority for.
 func (c *Company) SeatCredentialMode(kind string, managed bool) SeatCredentialMode {
 	if c == nil {
 		return SeatCredentialExternal

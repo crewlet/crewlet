@@ -29,24 +29,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// `crewlet iam` — the company's identity directory from a terminal.
+// `crewlet iam`: the company's identity directory from a terminal.
 //
-// # Why it goes through a running node and never at the database
+// It goes through a running node, never at the database: the directory is a
+// state-log domain whose records the embedded broker, with no listener,
+// arbitrates, so a second process cannot publish one. This speaks to `/iam` as
+// `crewlet secrets` speaks to `/secrets`.
 //
-// The directory is a state-log domain: a change is a RECORD, arbitrated at
-// the broker on the subject of the thing it changes, and the broker is
-// embedded in the engine's own process with no listener. A second process
-// cannot publish one. So this speaks to `/iam` on a running node, exactly as
-// `crewlet secrets` speaks to `/secrets` and for the same reason.
-//
-// # And why every write answers three ways
-//
-// `applied` means this node has the change and the next read here sees it;
-// `pending` means the record is durable and this node has not applied it yet,
-// and carries the position to read at; `unknown` means nothing can be
-// established from here and the only safe retry is the SAME operation id.
-// Every command prints which, because a caller that read all three as success
-// would tell somebody a revocation landed when nothing can say it did.
+// Every write answers three ways: `applied` (this node has it; the next read
+// sees it), `pending` (durable, not yet applied here; carries the position to
+// read at) and `unknown` (nothing can be established; the only safe retry is
+// the SAME operation id). Every command prints which, so a caller never reads
+// all three as success.
 
 const iamUsage = `crewlet iam: manage the company's people, credentials and sessions
 
@@ -230,19 +224,15 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	if strings.TrimSpace(*key) != "" && !iamKeyed[sub] {
 		return iamUnkeyed(sub)
 	}
-	// A KEYED WRITE'S OPERATION IS MINTED HERE, BEFORE IT ASKS, as every
-	// keyed write this binary makes mints its own ([operationFor]) — or it
-	// is the op id an earlier answer named, held to the node's rule before
-	// anything is read or sent. A write whose answer never came may well
-	// have landed, and the key it was sent under is the only handle on it:
-	// left to the node to mint, it was lost with the answer, so the only
-	// retry an operator could run was a fresh operation — a second
-	// invitation, or a create the first attempt's person refuses.
+	// A KEYED WRITE'S OPERATION IS MINTED HERE, BEFORE IT ASKS ([operationFor]),
+	// or is the op id an earlier answer named, held to the node's rule before
+	// anything is read or sent. A write whose answer never came may have landed,
+	// and its key is the only handle on it: left to the node to mint, it was lost
+	// with the answer, so a retry was a fresh operation (a second invitation).
 	//
-	// ONE VALUE NAMES THE WRITE for both halves that finish it — the client,
-	// for an answer that never came ([iamClient.unanswered]), and the
-	// printer, for a 2xx whose outcome leaves it open ([iamPrinter.settled])
-	// — so the retries the two prescribe are one.
+	// ONE VALUE NAMES THE WRITE for both halves that finish it, the client for an
+	// answer that never came ([iamClient.unanswered]) and the printer for a 2xx
+	// that leaves the outcome open ([iamPrinter.settled]), so their retries are one.
 	write := keyedWrite{gesture: sub}
 	if iamKeyed[sub] {
 		var err error
@@ -515,24 +505,16 @@ var iamSubjects = subjectTable{
 }
 
 // iamNewcomer is what `invite` and `create` must be told before anything is
-// sent: the seat a person will hold, the address that finds them, and the
-// login a service account is found by.
+// sent: the seat, the address that finds a person, the login a service account
+// is found by.
 //
-// A PERSON HOLDS A HUMAN SEAT for as long as they are here (ADR-0032), so an
-// invitation and a person's create each name one; a SERVICE ACCOUNT's is
-// optional, bound only to act as it. A person's login may be left out — the
-// node proposes it from their address — and a service account's may not,
-// since it has no address to propose from.
-//
-// A SERVICE ACCOUNT IS ALSO TOLD WHAT IT CARRIES, every time: a person left
-// without -grants is given the default apps ([iamNewPerson]), the
-// colleague's default, but nobody is behind a service account to have meant
-// one. What a pipeline may do is a decision, and `-grants none` is how to
-// decide nothing.
-//
-// THE KIND IS THE FLAG'S, never guessed from the login's shape: the node reads
-// a blank kind as a person, and so does this. A kind this command does not
-// name is the node's to refuse, in its own words.
+// A PERSON HOLDS A HUMAN SEAT while here (ADR-0032), so an invitation and a
+// person's create each name one; a SERVICE ACCOUNT's is optional. A person's
+// login may be left out (the node proposes it), a service account's may not. A
+// SERVICE ACCOUNT IS TOLD WHAT IT CARRIES: a person without -grants gets the
+// default apps ([iamNewPerson]), but nobody is behind a service account to have
+// meant one; `-grants none` decides nothing. THE KIND IS THE FLAG'S, never
+// guessed from the login: a blank kind is a person, as the node reads it.
 func iamNewcomer(sub, kind, email, login, seat string, granted bool) error {
 	seatless := strings.TrimSpace(seat) == ""
 	switch sub {
@@ -693,19 +675,16 @@ func iamNewPerson(sub, kind string) bool {
 
 // iamGrants reads the -grants flag.
 //
-// THE VOCABULARY IS THE ENGINE'S OWN ([iam.AllGrants]: admin, worklet,
-// doclet, artifacts), comma-separated, or the one word `none`, and anything
-// else is refused here, naming the set, before a config file is read or a
-// request is sent. The node refuses a name it does not know too, but an
-// operator who typed `worklt` needs the sentence listing the four words rather
-// than a round trip to a 400, and `none` beside a permission is a contradiction nothing
-// should guess the meaning of.
+// THE VOCABULARY IS THE ENGINE'S OWN ([iam.AllGrants]), comma-separated, or the
+// one word `none`; anything else is refused here, naming the set, before a
+// config file is read or a request sent. An operator who typed `worklt` needs
+// the sentence listing the words, not a round trip to a 400, and `none` beside
+// a permission is a contradiction nothing should guess the meaning of.
 //
 // `admin` STORES EVERY APP BESIDE IT ([iam.Expand]), as the dashboard's picker
-// does: admin includes every app whether or not the row says so, but a row
-// that says so keeps them when admin is later taken away: an administrator
-// stepping down goes on using Worklet. The list is sent in
-// [iam.AllGrants] order with each name once, whatever order it was typed in.
+// does, so a row keeps them when admin is later taken away: an administrator
+// stepping down goes on using Worklet. The list is sent in [iam.AllGrants]
+// order with each name once, whatever order it was typed in.
 func iamGrants(flagged string) (iamGrantList, error) {
 	flagged = strings.TrimSpace(flagged)
 	switch flagged {
@@ -745,18 +724,14 @@ func iamGrants(flagged string) (iamGrantList, error) {
 }
 
 // iamGrantWords is the vocabulary the help and every refusal name, read off
-// [iam.AllGrants] so a permission a later build adds is named here without
-// anybody remembering these sentences exist. EVERY sentence this command
-// prints that lists the permissions takes it — the usage, the flag's own help
-// and each refusal — because a list typed into one of them is the copy that
-// goes on naming three permissions after there are four;
+// [iam.AllGrants] so a later permission is named without anybody remembering
+// these sentences. EVERY sentence this command prints that lists permissions
+// takes it, because a hand-typed list goes on naming three after there are four;
 // TestTheCLINeverSpellsTheGrantListByHand reads the source for one.
 //
-// THE NAMES THE FLAG TAKES, said as a sentence says a set ([words.Or]: each
-// quoted as the value beside it is, the last joined with "or"), and the
-// sentence around it says how they are joined: it read "Use admin, worklet,
-// doclet, artifacts, chatlet, comma-separated, or none", where
-// "comma-separated" was one more member of the list.
+// THE NAMES ARE SAID AS A SENTENCE SAYS A SET ([words.Or]: each quoted, the last
+// joined with "or"), and the sentence around it says how they are joined: else
+// "comma-separated" reads as one more member of the list.
 func iamGrantWords() string { return words.Or(iam.AllGrants) }
 
 // iamAppWords is the apps a person's invitation or create carries when
@@ -971,37 +946,18 @@ func (c *iamClient) personID(ctx context.Context, subject string) (string, error
 // unexpected cannot make the CLI hold a company's whole log in memory.
 const iamMaxAnswer = 8 << 20
 
-// iamRefusal turns a refusal into the sentence an operator acts on.
+// iamRefusal turns a refusal into the sentence an operator acts on: the code
+// AND the detail (it names the seat, the grant or the holder), the changes an
+// edit stopped partway had made (`landed`), and on a 503 with an op id the safe
+// retry spelled as THIS command's flag, not the node's header sentence. Where
+// the answer says this node cannot vouch (`unvouched`), the retry goes through
+// another node.
 //
-// THE CODE AND THE DETAIL, because the engine's refusals carry both and the
-// detail is the half that names the seat, the grant or the holder. A status
-// alone would make `409` indistinguishable from `409`.
-//
-// AND WHAT THE ANSWER SAYS ABOUT THE OPERATION: the changes an edit stopped
-// partway had already made (`landed`), and — on a 503 that carries an op id —
-// the retry that is safe, spelled as THIS command's flag. The node's own
-// sentence says to send the id back as a header, which is right for a client
-// holding the request and useless to an operator holding a terminal; the id
-// used to be dropped here altogether, so the retry the answer prescribed was
-// one nobody at the terminal could make. And where the answer says this node
-// cannot vouch for the operation (`unvouched`), the retry goes through another
-// node: asked here again it answers the same way until the change reaches it.
-//
-// # An unknown outcome is not a refusal
-//
-// A write the node could not account for is a 503 too, and the answer says so
-// as a field (`outcome: "unknown"`), which is what this reads — never the
-// sentence beside it. Rendered as `unavailable: …` it read as a node that did
-// nothing, of a write that may have landed.
-//
-// keyed is whether the command's route reads a key. One that does not — a
-// mint — is retried as a new write, which the node's own sentence says, so
-// the op id is named for the trail and no -op-id is prescribed.
-//
-// header is the answer's. One without the engine's mark ([ownBody]) is read
-// for none of its fields, whatever its body says, and what stood in front of
-// the node is read through [foreignAnswer], as the other three clients read
-// it, rather than printed whole.
+// An unknown outcome is not a refusal: it is read from the 503's
+// `outcome: "unknown"` field, never the sentence beside it. keyed is whether
+// the route reads a key; one that does not (a mint) is retried as a new write,
+// so no -op-id is prescribed. A header without the engine's mark ([ownBody])
+// goes through [foreignAnswer], read for none of its fields.
 func iamRefusal(status int, header http.Header, answer map[string]any, raw []byte,
 	keyed bool) error {
 
@@ -1108,28 +1064,16 @@ type iamPrinter struct {
 }
 
 // settled is nil for a write's 2xx answer whose outcome says where the write
-// stands — applied, or pending — and for any other the error that finishes it.
+// stands (applied, pending), and for any other the error that finishes it.
 //
-// A 2xx CAN LEAVE THE OUTCOME OPEN. The node answers its own `unknown` 503,
-// which [iamRefusal] reads; but a node newer than this command may answer, 2xx,
-// an outcome this build cannot read, and that was printed as `outcome "x"` and
-// exited zero — so a script read a write nobody here could vouch for as one
-// that landed. It FAILS, as every keyed write's open outcome does
-// ([keyedWrite.confirmed]), naming the retry under the operation the command
-// sent.
-//
-// A MINT OR A RESET LINK IS RUN AGAIN INSTEAD, as the node's own unknown for
-// either says: their routes read no key, so there is no operation to retry
-// under, and this command refuses -op-id on both ([iamUnkeyed] says why). The
-// op id the answer names is said for the trail.
-//
-// BEFORE ANYTHING OF THE ANSWER IS PRINTED, under -json too: the node hands
-// out no invitation, first password link, reset link or token for a write
-// nobody can confirm — a link would answer 410 the first time somebody
-// followed it — so neither does this, and the retry under -op-id hands back
-// the very link an invitation's or a create's first attempt issued. A document
-// printed beside a failure is one a script reads before it reads the exit
-// status.
+// A 2xx CAN LEAVE THE OUTCOME OPEN: a newer node may answer an outcome this
+// build cannot read, which printed and exited zero, so a script read an
+// unvouched write as landed. It FAILS, as every keyed write's open outcome does
+// ([keyedWrite.confirmed]), naming the retry under the operation sent. A MINT OR
+// RESET LINK is run again instead: its route reads no key and -op-id is refused
+// ([iamUnkeyed]). NOTHING OF THE ANSWER IS PRINTED before this, under -json too:
+// the node hands out no link for a write nobody can confirm, and a document
+// printed beside a failure is one a script reads before the exit status.
 func (p *iamPrinter) settled(answer map[string]any) error {
 	outcome := str(answer["outcome"])
 	if p.write.operation != "" {
@@ -1452,19 +1396,17 @@ func seatRows(answer map[string]any) []any {
 	return rows
 }
 
-// seats prints the human seats and what holds each — a holder, an open
-// invitation, or neither — and never a link, which the answer does not carry.
+// seats prints the human seats and what holds each (a holder, an open
+// invitation, or neither), and never a link, which the answer does not carry.
 //
 // AN EMPTY LISTING IS SAID, in the words of what makes it empty: a company
-// declaring no human seat can admit nobody until it declares one, while a
-// company whose every seat is held or invited needs a seat added or freed —
-// and a bare header would leave an operator about to invite somebody unable
-// to tell the two apart. An empty `-unheld` listing is one of either, so it is
-// told apart by `declared`, the number of human seats the whole listing held
-// (`counting` is why it could not be read). Its remedy names the commands that
-// FREE a seat — a removal for a person, an unbind for a service account, a
-// cancellation for an invitation — and not `bind`, which MOVES somebody onto
-// a vacant seat and so needs the very vacancy the listing says is not there.
+// declaring no human seat can admit nobody until it declares one, while one
+// whose every seat is held or invited needs a seat added or freed. An empty
+// `-unheld` listing is one of either, told apart by `declared`, the number of
+// human seats the whole listing held (`counting` is why it could not be read).
+// Its remedy names the commands that FREE a seat (a person's removal, a service
+// account's unbind, an invitation's cancellation), not `bind`, which MOVES
+// somebody onto a vacant seat and so needs the vacancy the listing lacks.
 func (p *iamPrinter) seats(asked url.Values, answer map[string]any,
 	declared int, counting, err error) error {
 	if err != nil {
@@ -1512,19 +1454,15 @@ func (p *iamPrinter) seats(asked url.Values, answer map[string]any,
 	return tw.Flush()
 }
 
-// seatHolder is the HOLDER column: whoever the directory binds to the seat,
-// and a service account said to be one — because the two free a seat
-// differently, a person by a move or a removal and a service account by an
-// unbind.
+// seatHolder is the HOLDER column: whoever the directory binds to the seat, a
+// service account said to be one, because the two free a seat differently (a
+// person by a move or a removal, a service account by an unbind).
 //
-// WHO IT IS DEPENDS ON WHO ASKS. An admin, and the holder themselves, are
-// answered the holder's login (their id where it has none); everybody else is
-// answered only the name the holder goes by, because the overview says who
-// holds a seat and not what they sign in with — "name unavailable" where this
-// node's keyring did not open it, and "held" for a holder enrolled with no
-// name. NEVER EMPTY for a held seat: an empty cell renders as a dash, which is
-// exactly how a vacant seat reads, and it read so for every reader without
-// admin.
+// WHO IT IS DEPENDS ON WHO ASKS. An admin and the holder themselves are
+// answered the holder's login (their id where it has none); everybody else only
+// the name the holder goes by, "name unavailable" where this node's keyring did
+// not open it, and "held" for a holder enrolled with no name. NEVER EMPTY for a
+// held seat: an empty cell renders as a dash, which is how a vacant seat reads.
 func seatHolder(holder map[string]any) string {
 	if holder == nil {
 		return ""
@@ -1652,19 +1590,17 @@ func (p *iamPrinter) outcome(answer map[string]any) {
 }
 
 // created prints a create: who was created, under which login and on which
-// seat, where the write stands — and, for a PERSON, their first password link
-// ONCE, which is the only time this command shows it.
+// seat, where the write stands, and for a PERSON their first password link
+// ONCE, the only time this command shows it.
 //
-// THE LINK IS PRINTED ON `pending` TOO: the record is durable, and the link
-// opens on every node that has applied it — this one within moments. And on
-// nothing else: a create nobody can confirm prints nothing of itself
-// ([iamPrinter.settled]).
+// THE LINK IS PRINTED ON `pending` TOO: the record is durable and the link
+// opens on every node that has applied it. On nothing else: a create nobody can
+// confirm prints nothing of itself ([iamPrinter.settled]).
 //
 // THE NODE'S SENTENCE BESIDE THE LINK IS NOT PRINTED, because it names the
-// retry as a header: the flag this command takes is -op-id, and a
-// create retried under it hands back this same link. Where the link no longer
-// opens — a retry after it was spent, revoked or aged out — the node says so
-// and this names the command that issues another.
+// retry as a header; this command's flag is -op-id, which hands back this same
+// link. Where the link no longer opens (spent, revoked or aged out) the node
+// says so and this names the command that issues another.
 func (p *iamPrinter) created(answer map[string]any, err error) error {
 	if err != nil {
 		return err

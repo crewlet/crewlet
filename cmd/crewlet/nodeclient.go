@@ -23,17 +23,15 @@ import (
 
 // Talking to a running node.
 //
-// Most of this binary's operator commands open a file. These ones cannot: the
-// state they act on is the FLEET'S, kept in the coordination store, and on the
-// default topology that store is inside the engine's own process. A command
-// that opened it from outside would either find nothing (the engine is down,
-// and an embedded broker exists only while it runs) or corrupt it (the engine
-// is up, and a second JetStream server on one store directory is accepted
-// rather than refused).
+// Most of this binary's operator commands open a file. These cannot: the state
+// they act on is the FLEET'S, in the coordination store, which on the default
+// topology is inside the engine's own process. A command opening it from
+// outside would find nothing (the engine is down, and an embedded broker
+// exists only while it runs) or corrupt it (a second JetStream server on one
+// store directory is accepted rather than refused).
 //
-// So they ask the node. Which node is a flag with a sensible default: the
-// address this node's own Tier A config says it binds, so the common case is
-// running the command beside the config file and naming nothing.
+// So they ask the node. Which node is a flag defaulting to the address this
+// node's own Tier A config binds.
 
 // nodeClient is one running node's HTTP surface.
 type nodeClient struct {
@@ -113,20 +111,16 @@ func nodeClientFor(environ config.Source, args []string, name string, stderr io.
 		bootstrapPath = *configPath
 	}
 
-	// THE CREDENTIAL IS THE ENVIRONMENT'S, AND ONLY THE ENVIRONMENT'S.
-	//
-	// There was a `-token` flag here, beside a comment on
-	// [nodeTokenOrEmpty] saying the token was never a flag: a token typed
-	// as an argument is in the shell history, in `ps` and in any CI log
-	// that echoes the command, so the flag was the one way to use this CLI
-	// that leaked the credential it carried — and it made the 401 below
-	// name two sources when an operator has one to check.
+	// THE CREDENTIAL IS THE ENVIRONMENT'S, AND ONLY THE ENVIRONMENT'S: a token
+	// typed as an argument is in the shell history, in `ps` and in any CI log
+	// that echoes the command, and a flag would give the 401 below two sources
+	// to name.
 	//
 	// THE LENIENT FORM: an absent token is not refused HERE, because a
-	// development principal resolves an unauthenticated request on a
-	// loopback bind of an unreleased binary, and that is a legitimate way
-	// to reach these routes. The 401 from a node that does not is the
-	// honest answer, and it names the variable.
+	// development principal resolves an unauthenticated request on a loopback
+	// bind of an unreleased binary, a legitimate way to reach these routes.
+	// The 401 from a node that does not is the honest answer, and it names the
+	// variable.
 	base, bearer := *addr, nodeTokenOrEmpty(environ)
 	if base == "" {
 		// The config is read for the ADDRESS only, so an operator who
@@ -366,18 +360,17 @@ func missingSurface(base, surface, code string) error {
 }
 
 // notTheNode is a non-200 that is not the node's own answer: no engine error
-// code, so something between this command and the node wrote it — most often
-// a reverse proxy's read timeout, a 504 with an HTML page, while the node went
+// code, so something between this command and the node wrote it, most often a
+// reverse proxy's read timeout (a 504 with an HTML page) while the node went
 // on to finish the request.
 //
 // # Why it is a noAnswer and not a refusal
 //
-// Because a refusal the node wrote means nothing was done, and this does not:
-// the gate route answers within fifty seconds (engine.GateAnswerBudget), a
-// proxy configured below that cuts it off, and the node finishes a gesture
-// whatever happens to the connection. Read as a refusal, the eviction printed
-// no -op-id, so the only way on was a second gesture over every log the first
-// one reached.
+// A refusal the node wrote means nothing was done, and this does not: the gate
+// route answers within fifty seconds (engine.GateAnswerBudget), a proxy
+// configured below that cuts it off, and the node finishes a gesture whatever
+// happens to the connection. Read as a refusal, no -op-id would be printed and
+// a retry would be a second gesture.
 func notTheNode(path string, status int, contentType string, body []byte) error {
 	said := foreignAnswer(contentType, body)
 	return noAnswer{fmt.Errorf("the answer to %s came back %d with no error code "+

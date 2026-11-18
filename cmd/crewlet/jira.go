@@ -17,17 +17,13 @@ import (
 //
 // # It reports far more than it changes, and that is Jira's shape
 //
-// The other vendor commands are mostly WRITES: they create accounts and mint
-// the credentials the seats authenticate with. Jira issues neither — a Cloud
-// API token is created by the person it belongs to, and a Data Center
-// personal access token can only be minted for the calling user — so a
-// command that offered to provision accounts would be printing instructions
-// dressed as actions.
-//
-// What it does instead is answer the three questions that are otherwise
-// invisible until an issue reaches nobody: which account each seat's
-// credential authenticates as, whether every project the org names exists
-// and agrees about its lead, and whether the inbound webhook is registered.
+// The other vendor commands mostly WRITE: they create accounts and mint the
+// seats' credentials. Jira issues neither (a Cloud API token is created by its
+// owner, a Data Center PAT only for the calling user), so offering to provision
+// accounts would be instructions dressed as actions. It answers the three
+// questions invisible until an issue reaches nobody: which account each seat's
+// credential authenticates as, whether every project the org names exists and
+// agrees about its lead, and whether the inbound webhook is registered.
 
 // jiraProvisionReads is every variable `crewlet jira provision` reads of the
 // company: the instance, the org account it reads it with, the key the hook

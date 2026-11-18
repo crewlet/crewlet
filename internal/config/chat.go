@@ -10,19 +10,15 @@ import (
 
 // Chat is which chat surface this company talks on.
 //
-// THE THIRD BACKEND AXIS, on exactly the terms the tracker and the knowledge
-// base run on: single-homed, derived from integration presence when it is
-// left empty, and refused when Chatlet is declared beside the vendor
-// it would duplicate. The reasoning is the same one the other two axes state —
-// two surfaces would both route and both answer "where was this decided",
-// with nothing keeping them in step — and it bites harder here, because a
-// conversation is the one artefact this engine cannot reconcile after the
-// fact: a person replied in one place and the agents read the other.
+// THE THIRD BACKEND AXIS, on the terms the tracker and the knowledge base run
+// on: single-homed, derived from integration presence when left empty, and
+// refused when Chatlet is declared beside the vendor it would duplicate. Two
+// surfaces would both route and both answer "where was this decided", and a
+// conversation is the one artefact this engine cannot reconcile afterwards.
 //
-// A company may run MATTERMOST AND SLACK TOGETHER (two workspaces with
-// different people in them, which is what an org migrating between them
-// looks like), so the vendor value here names a POSTURE rather than a
-// product. See [ChatBackend].
+// A company may run MATTERMOST AND SLACK TOGETHER (an org migrating between
+// them), so the vendor value names a POSTURE, not a product. See
+// [ChatBackend].
 type Chat struct {
 	// Backend is which chat surface this company runs.
 	//
@@ -184,44 +180,27 @@ func (b ChatBackend) Valid() bool {
 
 // ChatletConfig is the founder's policy over the engine's own chat.
 //
-// # Why these three and nothing else
+// Everything else a chat surface could be told is a fact about the OPERATOR
+// (log size, replay window: Tier A, under `stream.`) or a decision the engine
+// makes once for everybody. What is left is a company's own: how long it keeps
+// what people said, whether a room is public by default, and when a seat
+// raises its working indicator.
 //
-// Everything else a chat surface could be told is either a fact about the
-// OPERATOR (how big the log may grow, how long its replay window is kept —
-// Tier A, under `stream.`) or a decision the engine makes once for everybody
-// (every cap the record layer enforces). What is left is genuinely a
-// company's own: how long it keeps what people said, whether a room is
-// public by default, and when a seat raises its working indicator.
-//
-// How much of a thread a woken seat is shown is NOT here, and that is the
-// engine's decision rather than an omission: the turn-start prefetch reads the
-// thread for every chat surface alike and bounds it at one byte ceiling — about
-// thirty ordinary messages, and a third of the bound on how a conversation's
-// earlier turns ended, which a woken seat is handed beside it — keeping the
-// root and the newest whole messages and condensing the ones between them —
-// and that bound is deliberately not configuration (see
-// internal/agent/prefetch).
+// How much of a thread a woken seat is shown is deliberately NOT configuration:
+// the turn-start prefetch bounds it at one byte ceiling for every chat surface
+// (see internal/agent/prefetch).
 type ChatletConfig struct {
 	// MessageRetentionDays is how long a message lives before the prune
 	// covers it.
 	//
-	// A POINTER, because this field has THREE settings and a plain int can
-	// carry two: absent takes the 365-day default, 0 means keep messages
-	// FOR EVER, and 30..3650 is a horizon. Collapsing absent and 0 is not a
-	// theoretical hazard in this tree — `providers.sandbox.default_pause_ttl_seconds`
-	// was a plain float64 whose 0 means "never pause", every operator who
-	// wrote it was silently mapped onto the 1800-second default, and their
-	// paused boxes were kept and billed for exactly as long as the setting
-	// existed to refuse. The same collapse here deletes a company's whole
-	// chat history a year after somebody asked for it to be kept for ever.
-	//
-	// NOTE THE CONTRAST WITH `inbox.retention_days`, whose 0
-	// means the opposite: there 0 is "take the default", because an inbox
-	// row is DERIVED from a record that answers for ever, so "keep the
-	// mailbox for ever" is not a setting anybody needs and a plain int
-	// loses nothing. A message is not derived from anything — it is the
-	// only copy of what somebody said — so "for ever" is exactly the
-	// setting a company with a legal-hold policy comes here to write.
+	// A POINTER, because this field has THREE settings: absent takes the
+	// 365-day default, 0 keeps messages FOR EVER, and 30..3650 is a horizon.
+	// Collapsing absent and 0 would silently map every operator who wrote 0
+	// onto the default and delete a company's chat history a year after
+	// somebody asked for it to be kept. Unlike `inbox.retention_days`, whose
+	// 0 means "take the default" (an inbox row is derived from a record that
+	// answers for ever), a message is the only copy of what somebody said,
+	// so "for ever" is what a legal-hold policy needs.
 	MessageRetentionDays *int `yaml:"message_retention_days,omitempty" json:"message_retention_days,omitempty" js:"min=0;max=3650" desc:"How long a message lives (default 365, 30..3650). 0 keeps messages for ever."`
 
 	// DefaultChannelPrivate makes a channel created without an explicit
@@ -357,32 +336,15 @@ func (c *Company) chatVendorPaths() []string {
 // validateUnitRooms refuses two units that DECLARE one channel on a company
 // whose chat is the engine's own.
 //
-// # A Chatlet unit room belongs to ONE unit
+// A Chatlet unit room belongs to ONE unit: a second unit naming it gets no
+// room, is reported as not reconciled at every boot and apply, and its prompt
+// calls the room its own. A vendor surface only advises ([Company.channelAdvisories]).
 //
-// The engine opens a room for each channel a unit declares, and the room
-// records the unit it was opened for once and for good: its members are that
-// unit's subtree and its lead, and that lead is who answers a person nobody
-// else did. So a second unit naming the same channel is something the room
-// cannot hold — the engine opens it for whichever unit its walk reaches first
-// and reports every other one as not reconciled at every boot and every apply,
-// while that team's prompt calls the room its own and none of its seats are in
-// it. On a vendor surface the same shape is merely worth knowing, and
-// [Company.channelAdvisories] says so; here it is a room the engine cannot
-// build.
-//
-// AN ADMISSION RULE rather than a runnable one, for the reason every admission
-// rule is one ([Company.ValidateRunnable]): nothing about RUNNING depends on
-// it — a revision carrying the shape still runs, one unit with its room and
-// the engine reporting the other — and during a rolling upgrade this build
-// applies what a newer peer admitted, so refusing such a revision at apply
-// would split the fleet's epoch over one team's room. A document somebody
-// submits with it is refused.
-//
-// COMPARED AS WRITTEN, which is the comparison the room's address makes: the
-// channel grammar ([unitChannel]) admits only names the Chatlet address
-// normalisation leaves unchanged, and a test holds the two together. And the
-// DECLARED channel only — a child that writes none inherits its parent's room,
-// which is the remedy this rule points at rather than a collision.
+// AN ADMISSION RULE, not a runnable one ([Company.ValidateRunnable]): such a
+// revision still runs, and refusing one a newer peer admitted would split the
+// fleet's epoch. Channels compare as written ([unitChannel] admits only names
+// normalisation leaves unchanged) and only DECLARED ones: a child writing
+// none inherits its parent's room.
 func (c *Company) validateUnitRooms() error {
 	if c.ChatBackendFor() != ChatChatlet {
 		return nil

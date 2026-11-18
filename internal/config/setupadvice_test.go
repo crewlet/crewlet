@@ -191,12 +191,11 @@ func TestEveryAdvisoryClassIsValidAndRaisedSomewhere(t *testing.T) {
 // operator's sentence, classed or not; a class is only what the advisor
 // builds a fix for.
 //
-// The owner reads a warning on the org chart and in a save's review, where the
-// operator's sentence put `providers.llm.default`, `llm_auxiliary` and a Tier A
-// keyring in front of a founder. So every advisory carries a title and Person,
-// worded as every sentence a person is shown is (caveattest.Problems: no
-// field, no tool, no backtick, no em dash, a full stop), and Message stays the
-// operator's, naming the key `crewlet validate` sends them to.
+// The owner reads a warning on the org chart and in a save's review. So every
+// advisory carries a title and Person, worded as every sentence a person is
+// shown is (caveattest.Problems: no field, no tool, no backtick, no em dash, a
+// full stop), and Message stays the operator's, naming the key `crewlet
+// validate` sends them to.
 //
 // Mutation: drop the words from [config.classed], or put one back in operator
 // vocabulary, and this goes red.

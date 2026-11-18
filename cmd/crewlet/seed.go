@@ -19,52 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/version"
 )
 
-// ONE DECISION ABOUT THE TIER B FILE, taken before the engine starts.
-//
-// A Tier B file on `crewlet run`'s command line has two consumers: the epoch
-// engine.New boots on, and the import the seed makes once the broker is up.
-// They used to decide separately. The boot took the file whenever one was
-// loaded, while the import ignored a bootstrap seed the store's own company
-// outranks and dropped every seed on a managed deployment — so a restart with
-// a month-old company.yaml built, equipped and installed that file's company
-// before the first reconcile replaced it, and a managed node with an empty
-// store ran a stray file's company while logging that the file is never
-// imported.
-//
-// What building a company does is not undone by the reconcile that replaces
-// it: its shared tool servers started, its harnesses' credential bundles
-// restored into empty logins (which every later revision's restore then
-// keeps, because a login is present), its native halves started and the store
-// opened at its embedding width (both decided once per process), so a live
-// change to the width pinned every node carrying the file on the file's
-// company for good.
-//
-// So the decision is [decideSeed], made ONCE, and it produces a [seedPlan]
-// that both consumers take: [bootOptions] and [startReconciler] accept a plan
-// and nothing else, so neither can be handed the file undecided.
-//
-// # The engine never boots on a file
-//
-// It boots on the revision this node's own store BOOTS on — the last one its
-// engine applied, at the instant of the activation it applied, or one an
-// offline command chose — or on nothing. Where the file is to be
-// imported, the node boots unconfigured and the import and the reconciler's
-// first tick bring the company in before a seat is claimed — the path a node
-// without `data` takes on every boot, and the one every first revision pushed
-// over the API takes. Booting on the file there was wrong as well, and not
-// only on the cases the old rule got wrong: the import can still be refused
-// after the engine is up (a file is held to every rule where it is written),
-// and a boot that fails then has already restored the file's credential
-// bundles into the logins its successor's seats share. What booting on the
-// file did buy — a file this node cannot build refused before anything was
-// written — the import keeps by building the file before it writes it
-// ([engine.Engine.Buildable]), and only a file it is about to write: a stale
-// one the fleet's company outranks is never built, so it cannot refuse the
-// boot of a node that ignores it.
-//
-// Not booting on the file is also what keeps `-import-company` a repair: the
-// store's revision is not read, so one this build cannot run does not refuse
-// the boot that replaces it.
+// ONE DECISION ABOUT THE TIER B FILE, taken before the engine starts: [decideSeed]
+// makes it ONCE and yields a [seedPlan] both consumers take ([bootOptions] and
+// [startReconciler] accept a plan and nothing else). Deciding separately built a
+// month-old company.yaml before the first reconcile replaced it, and what a build
+// does is not undone by that reconcile: shared tool servers started, credential
+// bundles restored into empty logins, native halves started, the store opened at
+// its embedding width. So the engine never boots on a file: it boots on the
+// revision this node's store BOOTS on, or on nothing, and the import and first
+// tick bring a file's company in before a seat is claimed. The import is refused
+// after the engine is up, with the file's bundles already restored, if it boots
+// first; it keeps what booting bought by building a file it will write before
+// writing it ([engine.Engine.Buildable]). `-import-company` stays a repair.
 
 // seedAct is what the seed does once the broker is up: the half of the
 // decision that cannot run before the engine, because the fleet's activation
@@ -145,20 +111,14 @@ type seedPlan struct {
 // heldStore is a claim on the node's own database ([store.Hold]) that outlives
 // the handle it was read through.
 //
-// WHY THE BOOT KEEPS ONE. `crewlet run` reads the store, closes it, and the
-// engine opens it again only once the broker is up — seconds later, on a
-// cluster join. An offline `crewlet config import` landing in that gap wrote
-// the very row the boot had already decided on: the engine ran the revision it
-// read, the publish named that one, and the first tick then served the fleet's
-// revision and cleared the offer the operator had just made, warning that the
-// fleet had moved on from a revision the fleet was in fact running. The claim,
-// kept from the read to the open ([bootEngine]), closes the gap at its source:
-// the command meets the starting node, as it meets the engine for the whole of
-// its life — refused naming it, or sent to its API, which answers `503
-// starting` until it serves — so there is no state for the boot to reconcile
-// and none to explain.
-//
-// The zero value holds nothing, so every path can release unconditionally.
+// WHY THE BOOT KEEPS ONE. `crewlet run` reads the store, closes it, and the engine
+// opens it again only once the broker is up, seconds later on a cluster join. An
+// offline `crewlet config import` landing in that gap wrote the row the boot had
+// already decided on, so the first tick served the fleet's revision and cleared
+// the offer the operator had just made. Held from the read to the open
+// ([bootEngine]), the claim makes the command meet the starting node as it meets
+// the engine: refused naming it, or sent to its API (`503 starting` until it
+// serves). The zero value holds nothing, so every path can release unconditionally.
 type heldStore struct {
 	// given is the claim's release, nil where there is no claim.
 	// Idempotent ([store.Hold]), so releasing twice is releasing once.
@@ -217,22 +177,18 @@ type storedState struct {
 // state a caller received carries a claim to release.
 type storedReader func(ctx context.Context) (storedState, heldStore, error)
 
-// storeAt is the reader `crewlet run` decides with: the node's own store,
-// opened, read and closed again — with this process's CLAIM on the file kept
-// across the close.
+// storeAt is the reader `crewlet run` decides with: the node's own store, opened,
+// read and closed again, with this process's CLAIM on the file kept across the
+// close.
 //
-// The handle is closed rather than handed on: the engine opens its own
-// backends and owns their lifetime, and a caller-supplied set would move that
-// ownership into this function's caller for the whole run. Two sequential
-// opens at boot cost one migration pass over an already-migrated file; a split
-// lifetime costs a leaked store on every error path that does not know it now
-// has one.
-//
-// The CLAIM is handed on, which is a different thing: it is what makes the
-// facts this read answers still true when the engine opens the file
-// ([heldStore]). It is taken while the handle still holds the file, so the
-// store is never free for an instant in between, and the engine's open shares
-// it ([store.Hold]).
+// The handle is closed rather than handed on: the engine owns its backends'
+// lifetime, and a caller-supplied set would move that ownership to this
+// function's caller for the whole run. Two opens at boot cost one migration pass
+// over a migrated file; a split lifetime costs a leaked store on every error path
+// that does not know it has one. The CLAIM is handed on, keeping the facts this
+// read answers true when the engine opens the file ([heldStore]); it is taken
+// while the handle still holds the file, so the store is never free in between,
+// and the engine's open shares it ([store.Hold]).
 func storeAt(bootstrapPath string) storedReader {
 	return func(ctx context.Context) (storedState, heldStore, error) {
 		cs, closeStore, err := openConfigStore(ctx, bootstrapPath,
@@ -311,19 +267,17 @@ func (s storedState) over() store.Offer {
 	return offerOn(s.known.revision)
 }
 
-// offerOn is what a change made on known is built on, as an offline command
-// offers it ([store.Configs.Offer]):
+// offerOn is what a change made on known is built on, as an offline command offers
+// it ([store.Configs.Offer]):
 //
-//   - a revision, or an offer the fleet's row names other than one built on
-//     itself (the fleet took it, and only its record of that is missing): the
-//     revision itself.
-//   - an offer an earlier start SENT and never confirmed: its base, or itself
-//     — the change is built on it, and whether the fleet runs it is not known
-//     here, so the boot accepts either ([store.Offer.Unconfirmed]). Refusing
-//     the command instead would leave an operator whose node cannot start
-//     with no offline way to correct what it boots on.
-//   - an offer nobody sent: what that one was built on, since the fleet has
-//     never seen it.
+//   - a revision, or an offer the fleet's row names other than one built on itself
+//     (the fleet took it, only its record is missing): the revision itself.
+//   - an offer an earlier start SENT and never confirmed: its base, or itself. The
+//     change is built on it and whether the fleet runs it is unknown here, so the
+//     boot accepts either ([store.Offer.Unconfirmed]); refusing would leave an
+//     operator whose node cannot start no offline way to correct what it boots on.
+//   - an offer nobody sent: what that one was built on, since the fleet has never
+//     seen it.
 func offerOn(known store.Revision) store.Offer {
 	offer := known.Offer
 	switch {
@@ -349,30 +303,18 @@ func publishedWhile(over store.Offer) string {
 	return when
 }
 
-// decideSeed decides what the Tier B file on the command line is for, and
-// what the engine boots on — once, before engine.New, for both consumers.
+// decideSeed decides what the Tier B file on the command line is for, and what
+// the engine boots on, once, before engine.New. A nil company is the UNCONFIGURED
+// case, not a failure: the node serves its API for a first push.
 //
-//   - A managed deployment's bootstrap seed was never read ([managedSeed]):
-//     the node decides as one given no file, and the ignored file is said
-//     once that decision holds. An override was refused before anything
-//     started.
-//   - -import-company boots UNCONFIGURED and imports the file. The store is
-//     not read, so a stored revision this build cannot run does not refuse
-//     the boot that replaces it.
-//   - A scratch store is not read: what it holds is the previous run's, it is
-//     deleted as the engine opens it, and opening it here would create the
-//     replicated estate a node without `data` must not have. The node boots
-//     unconfigured, and a -company file is a bootstrap.
-//   - Otherwise the store's boot row is the boot, at the instant of the
-//     activation it was applied from — a -company file beside it is either
-//     that revision byte for byte, or one the store's company outranks, which
-//     is said. A node with no boot row that has SEEN the fleet's company —
-//     it joined and refused it — boots unconfigured, and a -company file is
-//     no bootstrap: a company exists. With neither, the node boots
-//     unconfigured, and a -company file is a bootstrap.
-//
-// A nil company is the UNCONFIGURED case, a state rather than a failure: the
-// node serves its API so an operator can push the first revision into it.
+//   - A managed deployment's seed was never read ([managedSeed]): no file, said once.
+//   - -import-company boots UNCONFIGURED and imports the file, reading no store, so
+//     a stored revision this build cannot run does not refuse that boot.
+//   - A scratch store is not read (it would create the estate a node without `data`
+//     must not have): unconfigured, -company a bootstrap.
+//   - Otherwise the store's boot row is the boot, a -company file beside it that
+//     revision or outranked (said); with no row, the file is a bootstrap unless the
+//     node SAW the fleet's company.
 func decideSeed(ctx context.Context, boot *config.Bootstrap, seed tierBSeed,
 	stored storedReader, log *slog.Logger) (seedPlan, error) {
 
@@ -557,40 +499,16 @@ func (s tierBSeed) isFleets(ctx context.Context, plane coord.Plane,
 
 // runnableRevision decodes the revision this node boots on, for the engine.
 //
-// VALIDATED HERE, naming the revision, because booting is applying and the
-// stored-form decode holds a revision to no rule. The engine checks the same
-// rules again as it builds the epoch, but only this frame knows which revision
-// it is and what the way out is: the node is not serving its API yet, and its
-// listener answers every route it will serve `503 starting`.
-//
-// The RUNNABLE rules only, like every apply: an admission rule is one an apply
-// does not enforce, because a newer peer may have admitted the revision under
-// rules this build does not share. The reconciler warns about it once it
-// applies the epoch (see [config.Company.ValidateRunnable]).
-//
-// # Online, this cannot happen
-//
-// The boot row moves online only to a revision this node's engine has just
-// applied, and offline only to one an offline command of this build held to
-// the same rules ([configplane]'s package doc). So a boot row this build
-// cannot run was written by another build or another store: a binary
-// downgraded after the node applied it, an offline command run with a newer
-// build's CLI, or a store restored, copied or edited by hand. The first way out
-// is the build that wrote it.
-//
-// THE OTHER WAY OUT HAS TO REACH THIS NODE'S OWN STORE: the boot reads nothing
-// else. What writes it directly is an offline `crewlet config import`, and the
-// next start boots on the import and publishes it only over the revision it was
-// built on (base), so it never replaces a revision the fleet has moved on to.
-// Nothing here names `crewlet config activate` or `-import-company`: the first
-// boots on a stored revision this same check refuses, and the second replaces
-// whatever the fleet runs — a newer company included — to start one node.
-//
-// On a managed deployment (`api.auth.company_writers`, ADR-0030) the offline
-// import is refused, so the way out takes the document back on this node for
-// one start: the list removed from its Tier A, the managing system's current
-// document imported, the node started — which publishes the import only over
-// its base — and the list restored.
+// VALIDATED HERE, naming the revision, because booting is applying and the stored
+// decode holds a revision to no rule; only this frame knows which revision it is
+// and what the way out is. The RUNNABLE rules only, like every apply: a newer peer
+// may have admitted it under rules this build does not share. A boot row this
+// build cannot run came from another build or store, so the way out must reach
+// THIS NODE'S OWN STORE: an offline `crewlet config import`, booted on next start
+// and published only over its base. Not `config activate` (it boots on a stored
+// revision this check refuses) nor `-import-company` (it replaces whatever the
+// fleet runs). Where the import is refused (ADR-0030) the list leaves Tier A for
+// one start.
 func runnableRevision(boot *config.Bootstrap, booted storedRevision, over store.Offer) (*config.Company, error) {
 	company, err := config.DecodeCompany(booted.document)
 	if err == nil {
@@ -644,20 +562,17 @@ func bootOptions(boot *config.Bootstrap, plan seedPlan) (engine.Options, error) 
 // is not the seed's to decide.
 type engineOpener func(ctx context.Context, opts engine.Options) (*engine.Engine, error)
 
-// bootEngine decides what the engine boots on ([decideSeed]) and opens it, as
-// ONE STEP: this node's store is claimed from the read the decision is made on
-// until the engine has opened the same file ([heldStore]), and the claim is
-// given back on every way out — after the open where it succeeds, the engine's
-// own open having shared it, and at once on every failure before that. The
-// plan it answers carries no claim.
+// bootEngine decides what the engine boots on ([decideSeed]) and opens it as ONE
+// STEP: this node's store is claimed from the read the decision is made on until
+// the engine has opened the same file ([heldStore]), and the claim is given back
+// on every way out: after the open on success, the engine's open having shared it,
+// and at once on any earlier failure. The plan it answers carries no claim.
 //
-// ONE FUNCTION, because the claim's whole life is the stretch between the
-// decision and the open. Written out across `crewlet run`'s body, a release
-// moved one line up — before the open rather than after it — would reopen the
-// gap with nothing to show it: every check inside this process shares the
-// claim it would be checking, so only a second process standing in the gap can
-// see it go. open is a parameter so that a case can put one there
-// ([TestTheBootHoldsItsStoreUntilTheEngineHasOpenedIt]).
+// ONE FUNCTION, because the claim's life is the stretch between decision and open.
+// Spread across `crewlet run`'s body, a release moved one line up would reopen the
+// gap with nothing to show it: every check in this process shares the claim it
+// checks, so only a second process in the gap sees it go. open is a parameter so a
+// case can put one there ([TestTheBootHoldsItsStoreUntilTheEngineHasOpenedIt]).
 func bootEngine(ctx context.Context, boot *config.Bootstrap, seed tierBSeed,
 	stored storedReader, open engineOpener, log *slog.Logger) (*engine.Engine, seedPlan, error) {
 

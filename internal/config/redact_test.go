@@ -1131,19 +1131,15 @@ units:
 
 // EVERY COLLECTION WHOSE MEMBERS CARRY CREDENTIALS CAN NAME ITSELF.
 //
-// The guard the interface exists for, and the same shape as
-// [TestEveryCredentialFieldIsTagged]: a slice of structs that holds a
-// credential anywhere beneath it is a collection whose members must be
-// matchable by identity, because position will otherwise hand one member's
-// credential to another. Nothing fails when a new one forgets — it just
-// silently goes back to the old, wrong correspondence.
+// Same shape as [TestEveryCredentialFieldIsTagged]: a slice of structs that
+// holds a credential beneath it must have members matchable by identity,
+// because position hands one member's credential to another. Nothing fails
+// when a new one forgets; it silently regresses to that correspondence.
 //
-// A LIST OF BARE CREDENTIALS is the same fault with nothing to give an
-// identity to: a removed or reordered entry moves every later one, so a
-// restore can only refuse, and the operator who edited one key gets every
-// key's mask back as a refusal. The document has none; a credential that
-// comes in several is a map keyed by what it is for, or a list of members
-// that name themselves.
+// A list of bare credentials has nothing to give an identity to: removing or
+// reordering one moves every later one, so a restore can only refuse. The
+// document has none; several credentials are a map keyed by what each is for,
+// or a list of members that name themselves.
 func TestEveryCredentialCarryingCollectionCanNameItself(t *testing.T) {
 	t.Parallel()
 	seen := map[reflect.Type]bool{}
