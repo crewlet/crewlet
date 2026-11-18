@@ -786,8 +786,17 @@ export const ACTIONS = {
   },
   code_comment_on_change: {
     // THE CONVERSATION'S COMPOSER: a comment of its own; a reply to a thread
-    // or a finding; one on a line (`anchor`); and Resolve on a thread.
-    args: ["repo", "change", "body", "thread", "finding", "anchor", "resolve"],
+    // or a finding; one on a line (`anchor`); Resolve on a thread; and a
+    // comment's Edit (`edit`, its id).
+    args: ["repo", "change", "body", "thread", "finding", "anchor", "resolve", "edit"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  code_delete_comment: {
+    // A COMMENT'S DELETE, from its menu: its words cleared, its place kept.
+    args: ["repo", "change", "comment"],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],

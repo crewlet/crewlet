@@ -25,13 +25,14 @@ func TestAClosedCodeRecordVersionGainsNoField(t *testing.T) {
 			"PushEntry.Routing.WorkingFor", "PushEntry.WorkingFor"},
 		gitlet.OwnedPathsVersion: {"MatchedOwner.Paths", "OwnerAsk.Paths", "OwnerAsk.PathsOmitted",
 			"Revise.MeasuredAt"},
-		gitlet.ViewedVersion:      {"RecordEnvelope.Op viewed", "RecordEnvelope.Op viewed_key"},
-		gitlet.OfferedVersion:     {"PushEntry.Offered"},
-		gitlet.CheckCountsVersion: {"CheckFinished.LogLines", "CheckFinished.TailCut", "CheckFinished.Tests"},
-		gitlet.TestedInVersion:    {"Ejection.TestedIn"},
+		gitlet.ViewedVersion:       {"RecordEnvelope.Op viewed", "RecordEnvelope.Op viewed_key"},
+		gitlet.OfferedVersion:      {"PushEntry.Offered"},
+		gitlet.CheckCountsVersion:  {"CheckFinished.LogLines", "CheckFinished.TailCut", "CheckFinished.Tests"},
+		gitlet.TestedInVersion:     {"Ejection.TestedIn"},
 		gitlet.GateChecksVersion: {"CheckFinished.Required", "CheckStarted.Required",
 			"Ejection.Reason checks_undefined"},
-		gitlet.RevertsVersion: {"ChangeOption.Reverts"},
+		gitlet.RevertsVersion:      {"ChangeOption.Reverts"},
+		gitlet.CommentEditsVersion: {"RecordEnvelope.Op comment_delete", "RecordEnvelope.Op comment_edit"},
 	}
 	got := map[int][]string{}
 	for _, field := range gitlet.VersionedFields() {

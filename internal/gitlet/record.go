@@ -24,7 +24,7 @@ import (
 // every push to main ships as main's image, so a later shape may meet a build
 // without it: what a record gains is a [versionedFields] row, and each version
 // past 1 is a constant below naming what it added.
-const RecordVersion = RevertsVersion
+const RecordVersion = CommentEditsVersion
 
 // WorkingForVersion is the version from which a record carries whom an agent's
 // write was made for (ADR-0109; concerns.go, "Whom the actor acted for"): on a
@@ -64,6 +64,10 @@ const GateChecksVersion = 8
 // RevertsVersion is the version from which a push opening a change names the change it reverts
 // (code_changes.reverts), as a revert_change's push does; a record below it names none.
 const RevertsVersion = 9
+
+// CommentEditsVersion is the version from which a change's record may edit or delete one of its comments
+// ([OpCommentEdit], [OpCommentDelete]).
+const CommentEditsVersion = 10
 
 // baseRecordVersion is version 1, the base format: what every build reads, and
 // what a record carrying no versioned field is stamped at. The barrier, the
@@ -130,6 +134,10 @@ var versionedFields = statelog.RecordFields{
 		Path: []string{"mutation", "entries", "reason"}, Equals: string(EjectChecksUndefined)},
 	{Name: "ChangeOption.Reverts", Since: RevertsVersion, Op: string(OpPush),
 		Path: []string{"mutation", "pushes", "change", "reverts"}},
+	{Name: "RecordEnvelope.Op comment_edit", Since: CommentEditsVersion, Path: []string{"op"},
+		Equals: string(OpCommentEdit)},
+	{Name: "RecordEnvelope.Op comment_delete", Since: CommentEditsVersion, Path: []string{"op"},
+		Equals: string(OpCommentDelete)},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -139,8 +147,9 @@ func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFiel
 type OpKind string
 
 // Every op is BASE FORMAT ([RecordVersion]) but [OpViewed] and [OpViewedKey]
-// ([ViewedVersion]). None installs a gate but [OpPurge], and an eviction and the
-// activation fence by their kind ([RecordEnvelope.InstallsGate]).
+// ([ViewedVersion]) and [OpCommentEdit] and [OpCommentDelete]
+// ([CommentEditsVersion]). None installs a gate but [OpPurge], and an eviction
+// and the activation fence by their kind ([RecordEnvelope.InstallsGate]).
 const (
 	// OpCreate makes a repository: its name claim, its row and its
 	// protection rules, in one record on the NAME's subject.
@@ -310,6 +319,15 @@ const (
 	// the repository's committing data node.
 	OpThreadResolve OpKind = "thread_resolve"
 
+	// OpCommentEdit replaces the words of one of a change's comments, by its
+	// author ([CommentEdit]), on the change's own subject.
+	OpCommentEdit OpKind = "comment_edit"
+
+	// OpCommentDelete deletes one of a change's comments ([CommentDelete]):
+	// its row stays in its thread with its words cleared, on the change's own
+	// subject.
+	OpCommentDelete OpKind = "comment_delete"
+
 	// OpReview is a review of one revision of a change — a verdict, a
 	// summary and the findings it raises, and the reviewer's own standing
 	// findings it carries ([Review]) — on the change's own subject, written
@@ -456,7 +474,7 @@ const (
 	OpCloseSettled OpKind = "close_settled"
 )
 
-// OpKinds are the fifty-eight, in the order they are documented.
+// OpKinds are the sixty, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
@@ -464,8 +482,8 @@ var OpKinds = []OpKind{
 	OpRename,
 	OpReleaseName, OpHold,
 	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen, OpChangeLanded,
-	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability,
-	OpMergeabilityKept, OpAsks,
+	OpReviewers, OpComment, OpThreadResolve, OpCommentEdit, OpCommentDelete, OpReview, OpFindingResolve, OpRevise,
+	OpMergeability, OpMergeabilityKept, OpAsks,
 	OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep, OpCheckDispatched, OpMerge, OpEnqueue, OpDequeue,
 	OpMarks, OpViewed, OpViewedKey, OpCandidate, OpEject, OpLand, OpGreen, OpBroken, OpQueueSweep, OpCloseSettled,
 }
@@ -493,8 +511,8 @@ func ChangeOps() []OpKind {
 // such a mergeability by where its row holds the outcome already, and its
 // settling of the change's asks with the change's lifecycle.
 func ConversationOps() []OpKind {
-	return []OpKind{OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability,
-		OpMergeabilityKept, OpAsks}
+	return []OpKind{OpReviewers, OpComment, OpThreadResolve, OpCommentEdit, OpCommentDelete, OpReview,
+		OpFindingResolve, OpRevise, OpMergeability, OpMergeabilityKept, OpAsks}
 }
 
 // Valid reports whether an op off the wire is one this build knows.

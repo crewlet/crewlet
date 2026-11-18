@@ -88,6 +88,7 @@ import {
   TimelineMark,
   type DiscTone,
 } from "./Timeline.tsx";
+import { CommentCard } from "./CommentCard.tsx";
 import { FindingCard, type ExcerptRead } from "./Finding.tsx";
 import {
   partMovedBy,
@@ -844,9 +845,10 @@ function AskedWhom({ reviewer }: { reviewer: string }) {
 
 /**
  * A thread, as a card: its first comment (where it is about a line, which
- * line), its replies under it, each with its writer's face, and for a reader
- * a reply of their own and Resolve conversation. `onRail`: its writer's face
- * is on the timeline's rail, not in its head.
+ * line), its replies under it, each with its writer's face and its menu
+ * (`CommentCard.tsx`), and for a reader a reply of their own and Resolve
+ * conversation. `onRail`: its writer's face is on the timeline's rail, not in
+ * its head.
  */
 export function Thread({
   root,
@@ -867,30 +869,36 @@ export function Thread({
     : "commented";
   return (
     <article className="code-thread" aria-label={`Thread by ${root.author}`}>
-      <div className="code-thread__head">
-        {onRail ? (
-          <Said who={root.author} verb={verb} at={root.at} now={now} />
-        ) : (
-          <Byline who={root.author} verb={verb} at={root.at} now={now} />
-        )}
-        {root.resolved && <Tag appearance="outline">Resolved</Tag>}
-      </div>
-      <div className="code-thread__body">
-        <div className="prose md">{renderMarkdown(root.body)}</div>
-      </div>
+      <CommentCard
+        comment={root}
+        change={change}
+        layout="root"
+        byline={
+          onRail ? (
+            <Said who={root.author} verb={verb} at={root.at} now={now} />
+          ) : (
+            <Byline who={root.author} verb={verb} at={root.at} now={now} />
+          )
+        }
+        marks={root.resolved && <Tag appearance="outline">Resolved</Tag>}
+      />
       {replies.length > 0 && (
         <ol className="code-thread__replies" aria-label="Replies">
           {replies.map((c) => (
             <li key={c.id} className="code-thread__reply">
-              <span className="code-thread__said">
-                <Byline who={c.author} at={c.at} now={now} />
-                {authors.has(c.author) && (
-                  <Tag size="sm" appearance="outline">
-                    Author
-                  </Tag>
-                )}
-              </span>
-              <div className="prose md">{renderMarkdown(c.body)}</div>
+              <CommentCard
+                comment={c}
+                change={change}
+                layout="reply"
+                byline={<Byline who={c.author} at={c.at} now={now} />}
+                marks={
+                  authors.has(c.author) && (
+                    <Tag size="sm" appearance="outline">
+                      Author
+                    </Tag>
+                  )
+                }
+              />
             </li>
           ))}
         </ol>

@@ -196,12 +196,13 @@ const (
 	ActionCodeUpdateChange Action = "code_update_change"
 	ActionCodeCloseChange  Action = "code_close_change"
 	// And its conversation: reviewers asked, a review with its findings, a
-	// comment and a thread's state, findings answered — each one write the
-	// change's writer decides from its own chart (D21: who may ask, review,
-	// answer or dismiss).
+	// comment, its edit and a thread's state, a comment deleted, findings
+	// answered — each one write the change's writer decides from its own
+	// chart (D21: who may ask, review, answer, delete or dismiss).
 	ActionCodeRequestReview   Action = "code_request_review"
 	ActionCodeReviewChange    Action = "code_review_change"
 	ActionCodeCommentOnChange Action = "code_comment_on_change"
+	ActionCodeDeleteComment   Action = "code_delete_comment"
 	ActionCodeResolveFinding  Action = "code_resolve_finding"
 	// And its findings' suggestions applied: an engine write onto the
 	// change's branch, judged as every engine write is — the grant's ref rule
@@ -1358,6 +1359,8 @@ var rules = map[Action]rule{
 	ActionCodeReviewChange: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	ActionCodeCommentOnChange: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeDeleteComment: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	ActionCodeResolveFinding: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
 		assist: AssistApprove},

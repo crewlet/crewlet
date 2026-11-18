@@ -46,8 +46,9 @@ const (
 // every change tool [changeToolNeeds] names an access for.
 func ChangeWrites() []string {
 	return []string{CodeOpenChangeTool, CodeUpdateChangeTool, CodeCloseChangeTool, CodeRequestReviewTool,
-		CodeReviewChangeTool, CodeCommentOnChangeTool, CodeResolveFindingTool, CodeApplySuggestionsTool,
-		CodeRebaseChangeTool, CodeMergeChangeTool, CodeDequeueChangeTool, CodeRevertChangeTool}
+		CodeReviewChangeTool, CodeCommentOnChangeTool, CodeDeleteCommentTool, CodeResolveFindingTool,
+		CodeApplySuggestionsTool, CodeRebaseChangeTool, CodeMergeChangeTool, CodeDequeueChangeTool,
+		CodeRevertChangeTool}
 }
 
 // changeWriteTools are the change writes over deps, in [ChangeWrites]' order:
@@ -59,7 +60,8 @@ func ChangeWrites() []string {
 func changeWriteTools(deps CodeDeps) []tools.Callable {
 	return []tools.Callable{&codeOpenChange{deps: deps}, &codeUpdateChange{deps: deps},
 		&codeCloseChange{deps: deps}, &codeRequestReview{deps: deps}, &codeReviewChange{deps: deps},
-		&codeCommentOnChange{deps: deps}, &codeResolveFinding{deps: deps}, &codeApplySuggestions{deps: deps},
+		&codeCommentOnChange{deps: deps}, &codeDeleteComment{deps: deps}, &codeResolveFinding{deps: deps},
+		&codeApplySuggestions{deps: deps},
 		&codeRebaseChange{deps: deps}, &codeMergeChange{deps: deps}, &codeDequeueChange{deps: deps},
 		&codeRevertChange{deps: deps}}
 }

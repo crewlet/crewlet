@@ -20,23 +20,24 @@ import (
 )
 
 // THE CONVERSATION WRITES (an ask for review, a review with its findings, a
-// comment and a thread's resolution, an answer to findings) are each ONE write
-// of the change's conversation, decided by the repository's committing data
-// node in one snapshot on the change's subject (gitlet.ConversationWrite,
-// CodeWriter.Converse), whose writer stamps authors and ids. Each is a change
-// write ([ChangeWrites], codechangewrite.go): admitted for every principal,
-// judged where decided (rule D21), named by the same operation rule. The call
-// reads the change ONCE and the write is decided at or past that read
-// (ConversationWrite.Seen), so an unreached revision is unknown_revision, not
-// nonexistent. None names a version: asks and comments are additive, and a
-// review judges the revision it names. A finding or anchored comment names the
-// commit and blob its lines were read in, for gitlet.Reanchor ([conversing.anchor]).
+// comment, its edit or delete and a thread's resolution, an answer to findings)
+// are each ONE write of the change's conversation, decided by the repository's
+// committing data node in one snapshot on the change's subject
+// (gitlet.ConversationWrite, CodeWriter.Converse), whose writer stamps authors
+// and ids. Each is a change write ([ChangeWrites]): admitted for every
+// principal, judged where decided (rule D21), named by the same operation
+// rule. The call reads the change ONCE and the write is decided at or past that
+// read (ConversationWrite.Seen), so an unreached revision is unknown_revision.
+// None names a version: asks and comments are additive, and a review judges
+// the revision it names. A finding or anchored comment names the commit and
+// blob its lines were read in, for gitlet.Reanchor ([conversing.anchor]).
 
 // The conversation write tools' names: each is its authority row's action.
 const (
 	CodeRequestReviewTool   = string(authz.ActionCodeRequestReview)
 	CodeReviewChangeTool    = string(authz.ActionCodeReviewChange)
 	CodeCommentOnChangeTool = string(authz.ActionCodeCommentOnChange)
+	CodeDeleteCommentTool   = string(authz.ActionCodeDeleteComment)
 	CodeResolveFindingTool  = string(authz.ActionCodeResolveFinding)
 )
 
@@ -190,7 +191,8 @@ func conversationClass(r gitlet.ConversationRefusal) (tools.Refusal, bool) {
 	case gitlet.ConversationRefusalChangeClosed, gitlet.ConversationRefusalChangeMerged:
 		return tools.RefusalConflict, true
 	case gitlet.ConversationRefusalRepoDeleted, gitlet.ConversationRefusalChangeNotFound,
-		gitlet.ConversationRefusalThreadGone, gitlet.ConversationRefusalFindingGone:
+		gitlet.ConversationRefusalThreadGone, gitlet.ConversationRefusalCommentGone,
+		gitlet.ConversationRefusalFindingGone:
 		return tools.RefusalNotFound, true
 	case gitlet.ConversationRefusalNoReviewer, gitlet.ConversationRefusalTooManyReviewers,
 		gitlet.ConversationRefusalTooManyFindings:
@@ -651,7 +653,7 @@ func (t *codeCommentOnChange) Name() string { return CodeCommentOnChangeTool }
 func (t *codeCommentOnChange) Description() string {
 	return "Comment on a change: a thread of its own — on a line, with `anchor` — or a reply to a `thread` or a " +
 		"`finding`. With `thread`, `resolve` marks the thread resolved (true) or open again (false), after the " +
-		"reply where there is one."
+		"reply where there is one. `edit` makes `body` the words of a comment of your own."
 }
 
 func (t *codeCommentOnChange) Parameters() map[string]any {
@@ -668,6 +670,7 @@ func (t *codeCommentOnChange) Parameters() map[string]any {
 				"side": sideParam(), "line": map[string]any{"type": "integer"}},
 				"required": []string{"path", "line"}},
 			"resolve": map[string]any{"type": "boolean"},
+			"edit":    map[string]any{"type": "string", "description": "A comment's id."},
 		},
 		"required": []string{"change"},
 	})
@@ -709,7 +712,11 @@ func (t *codeCommentOnChange) CallForTurn(ctx context.Context, turn *turnctx.Tur
 		}
 	}
 	saying := strings.TrimSpace(body) != ""
+	editing := strings.TrimSpace(argString(args, "edit"))
 	switch {
+	case editing != "" && (!saying || thread != "" || finding != "" || anchor != nil || resolving):
+		return failed(fmt.Sprintf("%s: `edit` names one comment, whose words become `body`; it takes no "+
+			"`thread`, `finding`, `anchor` or `resolve`.", tool)), nil
 	case !saying && !resolving:
 		return failed(fmt.Sprintf("%s needs `body`, or `resolve` with a `thread`.", tool)), nil
 	case resolving && thread == "":
@@ -726,6 +733,15 @@ func (t *codeCommentOnChange) CallForTurn(ctx context.Context, turn *turnctx.Tur
 	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number, false)
 	if refusal != nil {
 		return *refusal, nil
+	}
+	if editing != "" {
+		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
+		res, refusal := cv.send(ctx, gitlet.ConversationWrite{CommentEdit: &gitlet.CommentEdit{RepoID: cv.g.repo.ID,
+			ChangeID: cv.change.ID, CommentID: editing, Body: body}})
+		if refusal != nil {
+			return *refusal, nil
+		}
+		return cv.page(ctx, cv.answerOf(res))
 	}
 	if !saying {
 		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
@@ -803,6 +819,63 @@ func (cv conversing) setThread(ctx context.Context, said gitlet.ConversationResu
 		return
 	}
 	out.ThreadResolved = &resolved
+}
+
+// ---- code_delete_comment ------------------------------------------------------ //
+
+type codeDeleteComment struct{ deps CodeDeps }
+
+var _ tools.SeatCallable = (*codeDeleteComment)(nil)
+
+func (t *codeDeleteComment) Name() string { return CodeDeleteCommentTool }
+
+func (t *codeDeleteComment) Description() string {
+	return "Delete a comment on a change: its words are cleared, and its place in its thread and every reply stay."
+}
+
+func (t *codeDeleteComment) Parameters() map[string]any {
+	return t.deps.ops.param(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"repo":    changeRepoParam(),
+			"change":  changeParam(),
+			"comment": map[string]any{"type": "string", "description": "The comment's id."},
+		},
+		"required": []string{"change", "comment"},
+	})
+}
+
+func (t *codeDeleteComment) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.CallForTurn(ctx, nil, args)
+}
+
+func (t *codeDeleteComment) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.Result, error) {
+
+	tool := t.Name()
+	c, refusal := t.deps.writeCaller(ctx, turn, tool)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	name, number, refusal := changeArg(tool, args)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	comment := strings.TrimSpace(argString(args, "comment"))
+	if comment == "" {
+		return failed(fmt.Sprintf("%s needs `comment`: the id of the comment to delete, as %s answers it.", tool,
+			CodeGetChangeTool)), nil
+	}
+	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number, false)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	res, refusal := cv.send(ctx, gitlet.ConversationWrite{CommentDelete: &gitlet.CommentDelete{
+		RepoID: cv.g.repo.ID, ChangeID: cv.change.ID, CommentID: comment}})
+	if refusal != nil {
+		return *refusal, nil
+	}
+	return cv.page(ctx, cv.answerOf(res))
 }
 
 // ---- code_resolve_finding ----------------------------------------------------- //

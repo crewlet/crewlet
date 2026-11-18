@@ -1731,6 +1731,10 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[Comment](rec)
 	case kind == KindChange && op == OpThreadResolve:
 		return decodePayload[ThreadResolve](rec)
+	case kind == KindChange && op == OpCommentEdit:
+		return decodePayload[CommentEdit](rec)
+	case kind == KindChange && op == OpCommentDelete:
+		return decodePayload[CommentDelete](rec)
 	case kind == KindChange && op == OpReview:
 		return decodePayload[Review](rec)
 	case kind == KindChange && op == OpFindingResolve:

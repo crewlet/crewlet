@@ -176,6 +176,10 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
     screen: ["routes/worklet/item/edit.tsx"],
     why: "a task's title and description editors, fields of the one draft its page's edits declare",
   },
+  "routes/gitlet/change/CommentCard.tsx": {
+    screen: ["routes/gitlet/change/ChangePage.tsx"],
+    why: "a comment's words being edited, a field of the change page's one draft",
+  },
   "routes/gitlet/change/Conversation.tsx": {
     screen: ["routes/gitlet/change/ChangePage.tsx"],
     why: "the comment on a change and each thread's reply box, fields of the change page's one draft",

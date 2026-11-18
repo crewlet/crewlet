@@ -1361,6 +1361,7 @@ func holdingCall(name string) (map[string]any, bool) {
 		builtin.CodeRequestReviewTool:   {"repo": repo, "change": 7.0, "reviewers": []any{"agent-ceo"}},
 		builtin.CodeReviewChangeTool:    {"repo": repo, "change": 7.0, "verdict": "approve"},
 		builtin.CodeCommentOnChangeTool: {"repo": repo, "change": 7.0, "body": "Looks right."},
+		builtin.CodeDeleteCommentTool:   {"repo": repo, "change": 7.0, "comment": standingFinding},
 		builtin.CodeResolveFindingTool: {"repo": repo, "change": 7.0, "findings": []any{standingFinding},
 			"resolution": "dismissed"},
 		builtin.CodeApplySuggestionsTool: {"repo": repo, "change": 7.0, "findings": []any{suggestedA},

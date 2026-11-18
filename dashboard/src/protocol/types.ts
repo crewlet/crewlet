@@ -9077,9 +9077,16 @@ export interface CodeCommentRow {
   resolved_by?: string;
   resolved_by_kind?: CodePartyKind;
   turn_id?: string;
+  /** Empty on a deleted comment, whose row keeps its place in its thread. */
   body: string;
   position: LogPosition;
   at: string;
+  /** When its author last edited it. */
+  edited_at?: string;
+  /** When it was deleted, and by whom. */
+  deleted_at?: string;
+  deleted_by?: string;
+  deleted_by_kind?: CodePartyKind;
 }
 
 /** One finding on a change (`gitlet.FindingRow`). */

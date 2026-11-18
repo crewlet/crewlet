@@ -6896,8 +6896,9 @@ where Gitlet's writes are served, the code writes: `code_commit_files`,
 `code_create_tag`, `code_delete_tag`, `code_create_repo`, `code_update_repo`, `code_delete_repo`,
 `code_restore_repo`, `code_protect_branch`, a change's `code_open_change`,
 `code_update_change` and `code_close_change`, and its conversation's
-`code_request_review`, `code_review_change`, `code_comment_on_change` and
-`code_resolve_finding`, `code_apply_suggestions`, `code_rebase_change`,
+`code_request_review`, `code_review_change`, `code_comment_on_change`,
+`code_delete_comment` and `code_resolve_finding`, `code_apply_suggestions`,
+`code_rebase_change`,
 `code_merge_change`, `code_dequeue_change` and `code_revert_change`, and a commit's checks'
 `code_rerun_checks` and `code_report_check` — the last your own CI's report of a check, which no seat
 is given ([External CI](../guides/gitlet.md#external-ci)) — and a repository's `code_purge_unreachable`,
