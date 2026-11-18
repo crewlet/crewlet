@@ -124,7 +124,8 @@
 // options, and the engine enforces exactly its shape, that the choice names an
 // option of the ask it answers, and that a promised inform is kept — never an
 // approval chain, a quorum or a state machine. decision.go holds the type and
-// the rules; the ADR says why the engine stops there.
+// the rules; the ADR says why the engine stops there. ADR-0160: a url this
+// engine handed out for one of its artifacts is cited as the artifact.
 //
 // # A question and a review say whom they wait on
 //
@@ -132,6 +133,12 @@
 // covers it ([Withdrawal]), an item in review its holder submitted itself is
 // held by a question to its reviewer or comes back to it, and `holding_up`
 // counts the agent work waiting on a person through what they hold or are asked.
+//
+// # Urgent ready work comes first
+//
+// ADR-0159 is the record: in a seat's ready work ([orderReady]) an urgent item
+// comes before every item that is not, started work included; below urgent,
+// and among urgent items, started work still comes first.
 //
 // # What a day costs the log, measured
 //

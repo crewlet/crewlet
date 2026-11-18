@@ -40,12 +40,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CHANGE_PART_PAGE } from "~/contract/code.ts";
+import { latestAttempts } from "~/lib/checks.ts";
+import { changeLive } from "~/lib/code.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { CHECKS_POLL_MS } from "../checks/CheckList.tsx";
 import { usePaged, type Paged } from "~/lib/usePaged.ts";
 import {
   isAbort,
   QueryError,
   type CodeChangeAnswer,
+  type CodeCheckRow,
   type CodeChangeDetail,
   type CodeCommentRow,
   type CodeExcerpt,
@@ -152,13 +156,58 @@ export function revisionInputs(revisions: readonly CodeRevisionRow[], n: number)
  * every page the reader holds again, since a diff whose inputs moved is a
  * different diff on every page.
  */
-export function useAskAgainWhenMoved(moved: string, enabled: boolean, again: () => void) {
+export function useAskAgainWhenMoved(
+  moved: string | undefined,
+  enabled: boolean,
+  again: () => void,
+) {
+  // UNDEFINED UNTIL ITS SUBJECT IS READ: the first value met is the one asked.
   const askedAt = useRef(moved);
   useEffect(() => {
-    if (askedAt.current === moved) return;
+    if (moved === undefined || askedAt.current === moved) return;
+    const first = askedAt.current === undefined;
     askedAt.current = moved;
-    if (enabled) again();
+    if (enabled && !first) again();
   }, [moved, enabled, again]);
+}
+
+/** A change's latest checks: `rows` null until answered, `refused` the engine's sentence ("" for none). */
+export interface LatestChecks {
+  rows: CodeCheckRow[] | null;
+  refused: string | null;
+  loading: boolean;
+}
+
+/** Each check's latest attempt, the required ones first, then by name. */
+function byRequiredThenName(rows: readonly CodeCheckRow[]): CodeCheckRow[] {
+  return latestAttempts(rows).sort(
+    (a, b) =>
+      Number(b.required ?? false) - Number(a.required ?? false) || a.name.localeCompare(b.name),
+  );
+}
+
+/**
+ * The head's latest attempt of each check for its target, one page, read once
+ * a page: polled while the change is live, asked again when its head moves.
+ */
+export function useLatestChecks(change: CodeChangeDetail | undefined): LatestChecks {
+  const repo = change?.repo ?? "";
+  const number = change?.number ?? 0;
+  const params = useMemo(() => ({ repo, change: number, latest: "true" }), [repo, number]);
+  const live = change !== undefined && changeLive(change.state);
+  const read = useCodeQuery("code_checks", params, {
+    enabled: change !== undefined,
+    ...(live ? { pollMs: CHECKS_POLL_MS } : {}),
+  });
+  useAskAgainWhenMoved(change?.head, true, read.refetch);
+  const answered = read.data?.checks;
+  const said = partRefusal({ error: read.error, refusal: read.refusal, items: answered ?? [] });
+  const refused = said === "" ? (read.detail ?? "") : said;
+  const rows = useMemo(
+    () => (answered === undefined ? null : byRequiredThenName(answered)),
+    [answered],
+  );
+  return { rows, refused, loading: read.loading && rows === null };
 }
 
 /**

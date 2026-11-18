@@ -74,11 +74,11 @@ func (n *node) publishLayer(repo string, l *gitlet.LayerRef) statelog.Position {
 	return n.waiter.Committed()
 }
 
-// A PUBLICATION IS ANSWERED FROM ITS LAYER'S ROW: proposed to a committer and
-// decided, its record lands, and it is answered applied at its position from
-// the rows — its layer's among them; asked again, the ledger collapses it onto
-// that record. A publish answering applied for a record that wrote no layer is
-// answered unknown, naming the layer.
+// A PUBLICATION IS ANSWERED FROM ITS LAYER'S ROW: decided, it is answered
+// applied at its record's position from the rows, its layer's among them;
+// asked again, the ledger collapses it onto that record. A publish answering
+// applied for a record that wrote no layer is answered unknown, naming the
+// layer.
 //
 // Mutation: answer a publication from its outputs alone, and the decide-only
 // publish answers applied for a layer no row holds.
@@ -131,14 +131,12 @@ func TestAPublicationIsAnsweredFromItsLayersRow(t *testing.T) {
 }
 
 // A SNAPSHOT SERVES THE CHAIN ONLY WHEN IT MOVED: a full answer serves the
-// whole chain — an empty one included — and a delta serves it exactly when a
-// record changed it above the delta's floor, never when the floor is at or
-// past that record; and no cursor resumes the phase, which page 1 serves
-// whole.
+// whole chain, an empty one included; a delta serves it exactly when a record
+// changed it above the delta's floor; and no cursor resumes the phase, which
+// page 1 serves whole.
 //
-// Mutation: serve the chain on a delta from its own record's position — the
-// comparison at or past rather than past — and the delta from there carries
-// it.
+// Mutation: compare at or past rather than past, and the delta from the
+// chain's own record carries it.
 func TestADeltaIsServedTheChainOnlyWhenItMoved(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -191,8 +189,8 @@ func TestADeltaIsServedTheChainOnlyWhenItMoved(t *testing.T) {
 // MaxPublishedLayers layers of MaxLayerParts parts, covering MaxPacksPerRepo
 // packs between them — is served whole on a snapshot's first page with every
 // pack beside it; and it is charged to that page, so a page with room for the
-// chain and a few packs carries no more than those, the rest of the packs on
-// the pages after it and no later page carrying a layer.
+// chain and a few packs carries no more than those, the rest on later pages,
+// and no later page carries a layer.
 //
 // Mutation: leave the phase uncharged, and the tight page carries hundreds of
 // packs past its budget.
@@ -300,14 +298,11 @@ func TestTheLayersPhaseFitsPageOne(t *testing.T) {
 }
 
 // THE PUBLICATION DUE LISTING IS LEAST RECENTLY PUBLISHED FIRST: every active
-// and archived repository whose live packs are past its published ones, the
-// one never published first and then by when each was last published, then by
-// id — paged by its cursor, a page's rows in that order across the pages —
-// each with what a publication is due by; and never a deleted one, nor one
-// whose live packs are no more than its published ones (e). The counts are the
-// last recount's, so a repository whose every pack a layer covers is listed
-// after a byte-identical push, until the next recount
-// (TestAPackPushedLikeAPublishedOneIsListedUntilTheNextRecount).
+// and archived repository whose live packs are past its published ones, never
+// published first, then by when last published, then by id, in that order
+// across its cursor's pages, each with what a publication is due by; never a
+// deleted one, nor one with no more live packs than published (e). The counts
+// are the last recount's (TestAPackPushedLikeAPublishedOneIsListedUntilTheNextRecount).
 //
 // Mutation: list the most recently published first, and the repository
 // waiting longest is planned last.
@@ -399,14 +394,12 @@ func TestThePublicationDueListingIsLeastRecentlyPublishedFirst(t *testing.T) {
 // A PACK PUSHED BYTE-IDENTICAL TO A PUBLISHED ONE IS LISTED UNTIL THE NEXT
 // RECOUNT: published_packs is the live pack rows the last publication's
 // recount found covered, and a push moves only live_packs, so a pack whose git
-// checksum a layer already names — two rows, one checksum — lists its
-// repository with a tail of one and nothing a plan could publish; the next
-// publication, over a pack that is new, recounts both rows of that checksum as
-// covered and the repository leaves the listing.
+// checksum a layer already names (two rows, one checksum) lists its repository
+// with nothing a plan could publish; the next publication recounts both rows
+// as covered and the repository leaves the listing.
 //
-// Mutation: recount a publication by checksum rather than by row — each
-// covered checksum counted once — and the repository is still listed after the
-// publication that covers every row it holds.
+// Mutation: recount by checksum rather than by row, and the repository is
+// still listed after the publication that covers every row it holds.
 func TestAPackPushedLikeAPublishedOneIsListedUntilTheNextRecount(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

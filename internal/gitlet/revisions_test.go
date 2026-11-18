@@ -12,18 +12,14 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A CHANGE'S REVISIONS ARE ITS PUSHES': the push record that moves a live
-// change's source branch writes the change's next revision and makes its
-// pusher an author, one that sets its target to its head merges it, and one
-// that deletes its source closes it — decided by the shipped committer,
-// applied by the shipped applier on a real embedded broker, and read back
-// from the rows every data node derives alike.
+// A CHANGE'S REVISIONS ARE ITS PUSHES': moving a live change's source writes
+// its next revision and makes the pusher an author, setting its target to its
+// head merges it, deleting its source closes it — through the shipped
+// committer and applier on a real embedded broker.
 
-// pushedBy proposes one push of cmds to repo by who through c, and fails t
-// unless every command landed ok; it answers the push's result. A seat's push
-// git receives is its coding box's, so it names the run that made it — the
-// turn that launched the run, the run's launch and its harness — as the
-// engine stamps every one.
+// pushedBy proposes one push of cmds to repo by who through c, fails t unless
+// every command landed ok, and answers its result. A seat's push names its
+// run (turn, launch, harness), as the engine stamps a coding box's.
 func pushedBy(t *testing.T, c *gitlet.Committer, repo string, who gitlet.Principal,
 	cmds ...gitlet.Command) gitlet.ProposeResult {
 
@@ -110,7 +106,7 @@ func (n *node) authors(id string) []storedAuthor {
 }
 
 // storedMerge is how a change's row says it merged: by what, at which
-// commit, and whether it holds the instant it did.
+// commit, and whether it holds the instant.
 type storedMerge struct {
 	via, oid string
 	at       bool
@@ -131,17 +127,14 @@ func (n *node) merge(id string) storedMerge {
 	return m
 }
 
-// EVERY HEAD MOVE IS THE NEXT REVISION: a push that moves a live change's
-// source branch writes revision n + 1 — its new head, who pushed it, the push
-// that did, at the record's position — and moves the change's head, revision
-// and version with it, a forced update like any other, so a write formed
-// against the change before the push is refused stale; two pushes of one
-// record moving it are two revisions in their order and one version; and a
-// push to a branch that heads no live change — another branch, or the source
-// of a closed change — writes no revision and moves no change.
+// EVERY HEAD MOVE IS THE NEXT REVISION: moving a live change's source, forced
+// or not, writes revision n + 1 (head, pusher, push, record position) and
+// moves the change's head, revision and version, so a write formed before the
+// push is refused stale; two pushes of one record are two revisions in order
+// and one version; a push to a branch heading no live change (another branch,
+// a closed change's source) moves no change.
 //
-// Mutation: skip the revision's row, or the move of the change's head, and
-// this fails.
+// Mutation: skip the revision's row, or the head's move, and this fails.
 func TestEveryHeadMoveIsTheNextRevision(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -207,12 +200,10 @@ func TestEveryHeadMoveIsTheNextRevision(t *testing.T) {
 	}
 }
 
-// A PUSHER BECOMES AN AUTHOR: whoever pushes a revision of a live change is
-// one of its authors from the revision they first wrote — a person by the
-// human seat they hold, a seat by its handle, in the record that added them —
-// and an author already, the change's owner among them, stays as they were,
-// however many of a record's pushes are theirs: the authors are the owner and
-// every head pusher, each once.
+// A PUSHER BECOMES AN AUTHOR from the revision they first wrote — a person by
+// their human seat, a seat by its handle, in the record that added them — and
+// an existing author, the owner among them, stays as they were: the authors
+// are the owner and every head pusher, each once.
 //
 // Mutation: skip adding the pusher, and the person whose push moved the
 // change is no author of it.
@@ -251,13 +242,11 @@ func TestAPusherBecomesAnAuthor(t *testing.T) {
 	}
 }
 
-// DELETING THE SOURCE CLOSES THE CHANGE: a push that deletes a live change's
-// source branch closes it in the same record — closed, its reason
-// source_deleted, at the record's instant, one version more, its head and
-// revisions as they were — and reopening it needs the branch back, at whose
-// head it is open again. A push that sets the target to a change's head and
-// deletes its source leaves it MERGED: a record's merges come before its
-// closes.
+// DELETING THE SOURCE CLOSES THE CHANGE in the same record — reason
+// source_deleted, at the record's instant, one version more, head and
+// revisions kept — and restoring the branch reopens it at its head. A push
+// that sets the target to the head and deletes the source leaves it MERGED: a
+// record's merges come before its closes.
 //
 // Mutation: skip the close, and the change stays open on a branch that is
 // gone.
@@ -306,13 +295,11 @@ func TestDeletingTheSourceClosesTheChange(t *testing.T) {
 	}
 }
 
-// PUSHING THE TARGET TO THE HEAD MERGES IT: a push that sets a live change's
-// target to exactly its head marks it merged, by push, at that commit and the
-// record's instant, one version more, and a push that moves the target
-// anywhere else leaves it open. The head is the one the same push's own moves
-// leave, so a push of one commit to a change's source and its target merges
-// it whichever order the commands came in. A merged change is moved by no
-// later push.
+// PUSHING THE TARGET TO THE HEAD MERGES IT — by push, at that commit and the
+// record's instant, one version more; a target moved anywhere else leaves it
+// open. The head is the one the same push's moves leave, so one commit pushed
+// to source and target merges whatever the command order. No later push moves
+// a merged change.
 //
 // Mutation: skip the merge, and the change stays open with its head in its
 // target.
@@ -366,10 +353,9 @@ func TestPushingTheTargetToTheHeadMergesIt(t *testing.T) {
 	}
 }
 
-// ONE RECORD MERGES AT MOST ITS BOUND OF CHANGES (gitlet.MaxPushMerges): a push
-// that sets a target to a head that more live changes into it share merges
-// the lowest-numbered of them, and leaves the rest open with their head in
-// their target, so a record's rows stay bounded whatever one command reaches.
+// ONE RECORD MERGES AT MOST ITS BOUND OF CHANGES (gitlet.MaxPushMerges): a
+// target set to a head more live changes share merges the lowest-numbered and
+// leaves the rest open, so a record's rows stay bounded.
 func TestOneRecordMergesAtMostItsBound(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -403,25 +389,21 @@ func TestOneRecordMergesAtMostItsBound(t *testing.T) {
 }
 
 // THE CHANGES A PUSH MOVES ARE COUNTED IN ITS RECORD, AND ONE THAT DOES NOT FIT
-// LEADS THE NEXT: a batch whose second push would take its record past the
-// rows one record may write, once the rows of the live changes it moves are
-// counted beside the first's, lands the first alone and the second — with the
-// push queued behind it — in the next record, in the order they arrived; and
-// no record's apply writes past gitlet.MaxRecordRows.
+// LEADS THE NEXT: a second push whose moved changes' rows would take the
+// record past its bound lands, with the push behind it, in the next record, in
+// arrival order; no record's apply writes past gitlet.MaxRecordRows.
 //
-// Mutation: admit every push the batcher gathered without counting the rows of
-// the changes it moves, and the record formed for both is past the bound — the
-// publish refuses the batch, and every push in it is answered an error.
+// Mutation: admit pushes without counting their changes' rows → the record is
+// past the bound, the publish refuses the batch, and every push errs.
 func TestAPushWhoseChangesDoNotFitLeadsTheNextRecord(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	var widest int
 	n.applied = func(_ uint64, rows int) { widest = max(widest, rows) }
 	repo := changeRepo(t, n, "web")
-	// SIX HUNDRED BRANCHES TO DELETE, three rows each in a record, and six
-	// hundred live changes to move, three rows each beside the push's own
-	// one: the two pushes' own rows fit one record, and with the changes'
-	// they do not.
+	// SIX HUNDRED BRANCHES TO DELETE and six hundred live changes to move,
+	// three rows each: the pushes' own rows fit one record, with the
+	// changes' they do not.
 	const junk, changes = 600, 600
 	heads := seededHeads(repo, changes)
 	var cmds []gitlet.Command
@@ -484,16 +466,14 @@ func TestAPushWhoseChangesDoNotFitLeadsTheNextRecord(t *testing.T) {
 	}
 }
 
-// A PUSH MOVING MORE CHANGES THAN A RECORD HOLDS IS REFUSED WHOLE: a push whose
-// live changes' rows would take even a record of its own past the rows one
-// record may write is refused too_many_changes — every command it carries ng
-// under the code, in the one sentence that names how many changes it moves —
-// appending nothing; the same changes pushed in fewer at a time land, and no
-// record's apply writes past gitlet.MaxRecordRows.
+// A PUSH MOVING MORE CHANGES THAN A RECORD HOLDS IS REFUSED WHOLE: one whose
+// changes' rows overflow even a record of its own is refused too_many_changes
+// — every command ng, in one sentence naming how many changes it moves —
+// appending nothing; fewer at a time land, and no record's apply writes past
+// gitlet.MaxRecordRows.
 //
-// Mutation: admit a push without counting the rows of the changes it moves,
-// and its record is formed past the bound — the publish refuses the batch, and
-// the push is answered an error rather than too_many_changes.
+// Mutation: admit a push without counting its changes' rows → the publish
+// refuses the batch, and the push errs rather than too_many_changes.
 func TestAPushMovingMoreChangesThanARecordHoldsIsRefusedWhole(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -554,9 +534,8 @@ func TestAPushMovingMoreChangesThanARecordHoldsIsRefusedWhole(t *testing.T) {
 // by.
 func seededSource(i int) string { return fmt.Sprintf("refs/heads/change-%06d", i+1) }
 
-// seededHeads is the head each of the first count changes seedChanges seeds on
-// repoID at one revision holds — the commit its source branch is pushed to
-// before the change is seeded, since a live change's head is its source's.
+// seededHeads is the head of each of the first count changes seedChanges
+// seeds on repoID at one revision: its source's, pushed before the seeding.
 func seededHeads(repoID string, count int) []string {
 	heads := make([]string, count)
 	for i := range heads {
@@ -565,11 +544,9 @@ func seededHeads(repoID string, count int) []string {
 	return heads
 }
 
-// The applier's purity is the framework's claim; held here for the rows a
-// push writes about the changes it moves: the same records — revisions by a
-// person and by a seat, a forced update, a merge by push and a close by a
-// deleted source — replayed by a node that applies them from zero, leave
-// every change table byte-identical.
+// The applier's purity, held for the change rows a push writes: revisions by
+// a person and a seat, a forced update, a merge by push and a close by a
+// deleted source, replayed from zero, leave every change table byte-identical.
 func TestRevisionsReplayIdentically(t *testing.T) {
 	t.Parallel()
 	a, b := newTwoNodes(t)

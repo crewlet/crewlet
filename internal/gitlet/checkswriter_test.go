@@ -24,10 +24,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A REPOSITORY'S CHECKS THROUGH THEIR WRITER: every write handed to the checks
-// writer beside the committer, decided in one snapshot on a real embedded
-// broker as a record on the repository's checks subject, applied by the
-// shipped applier and answered from the attempt's row.
+// A repository's checks through their writer: each write decided in one
+// snapshot on a real embedded broker, recorded on the repository's checks
+// subject, applied by the shipped applier and answered from the attempt's row.
 
 // appendCounter is a code log's write authority that counts the records the
 // publishes through it appended — a refusal before the append is none.
@@ -124,10 +123,9 @@ func queueing(key gitlet.CheckKey, reason gitlet.QueueReason) gitlet.ChecksReque
 			Reason: reason, QueuedAt: harnessAt}}
 }
 
-// claiming asks for key claimed by runner — naming box where it is set — at
-// an instant with nanoseconds in it, as a runner's clock gives one and the
-// store keeps to the microsecond: a holder's records are its own claim's
-// whatever its clock carried past what the row holds.
+// claiming asks for key claimed by runner, naming box where set, at an instant
+// with nanoseconds the store truncates to microseconds: a holder's records
+// still match its own claim.
 func claiming(key gitlet.CheckKey, runner, box string) gitlet.ChecksRequest {
 	return gitlet.ChecksRequest{OpID: statelog.NewOpID(time.Now(), "code_check_claim"),
 		Started: &gitlet.CheckStarted{CheckKey: key, Runner: runner, Placement: gitlet.PlacementContainer, Box: box,
@@ -172,19 +170,16 @@ func requireCheckRefused(t *testing.T, what string, res gitlet.ChecksResult, err
 	}
 }
 
-// A SECOND CLAIM IS REFUSED BEFORE IT APPENDS: two Gitlet nodes claiming one
-// attempt through the repository's one checks writer meet in its single
-// flight — the second decides from the rows the first's record left, and is
-// refused `claimed`, naming the first as the holder, with nothing appended, so
-// it starts no box; the holder's own claim asked again is unchanged, and its
-// record naming the box it made sets the box — each judged its claim's by the
-// instant the row holds, to the microsecond, whatever nanoseconds the
-// runner's clock gave it.
+// A SECOND CLAIM IS REFUSED BEFORE IT APPENDS: two nodes claiming one attempt
+// meet in the writer's single flight; the second is refused `claimed`, naming
+// the first as holder, with nothing appended, so it starts no box. The
+// holder's own claim asked again is unchanged, and its record naming its box
+// sets the box — each matched to its claim by the row's microsecond instant,
+// whatever nanoseconds the runner's clock gave.
 //
-// Mutations: drop the decide's refusal of another runner's claim, and the
-// second claim is not refused `claimed` — red; compare a claim's instant to
-// the nanosecond, and the holder's own claim and box are refused `claimed` —
-// red.
+// Mutations: drop the decide's refusal of another runner's claim → the second
+// claim is not refused, red; compare a claim's instant to the nanosecond → the
+// holder's own claim and box are refused `claimed`, red.
 func TestASecondClaimIsRefusedBeforeItAppends(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -232,15 +227,13 @@ func TestASecondClaimIsRefusedBeforeItAppends(t *testing.T) {
 	}
 }
 
-// A BURST OF ONE REPOSITORY'S CHECK WRITES PAST ITS BOUND IS REFUSED AT ONCE —
-// the change writer's rule, one implementation (flight.go): while one write of
-// a repository publishes and another waits its turn, a third of the same
-// repository is refused busy, undecided, the moment it arrives, naming the
-// bound, and appends nothing; another repository's write is still taken; and
-// the two taken land once the held publish goes through.
+// A BURST OF ONE REPOSITORY'S CHECK WRITES PAST ITS BOUND IS REFUSED AT ONCE
+// (the change writer's rule, flight.go): while one write publishes and another
+// waits, a third of the same repository is refused busy on arrival, naming the
+// bound, and appends nothing; another repository's write is still taken, and
+// the first two land once the held publish goes through.
 //
-// Mutation: drop the per-key count, and the third write waits its turn and
-// lands.
+// Mutation: drop the per-key count → the third write waits and lands.
 func TestABurstOfOneRepositorysCheckWritesIsRefusedAtOnce(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -304,16 +297,15 @@ func TestABurstOfOneRepositorysCheckWritesIsRefusedAtOnce(t *testing.T) {
 }
 
 // AN ATTEMPT FOLLOWS THE ONE BEFORE IT, ENDED: a dispatch is a commit's first
-// attempt, answered from its row when it is queued already; the next is queued
-// only once the one before it ended, the home's requeue only after its
-// infrastructure ended it and while that attempt is below
-// AutoRequeueAttempts, and the home's dispatch only after its own dispatch
-// errored it for a checks file that did not run; and no attempt passes
-// MaxCheckAttempts.
+// attempt, answered from its row when already queued; a next attempt is queued
+// only once the one before ended — the home's requeue only after infrastructure
+// ended it and while below AutoRequeueAttempts, the home's dispatch only after
+// its own dispatch errored it for a checks file that did not run — and none
+// passes MaxCheckAttempts.
 //
-// Mutation: let a dispatch follow any ending — the dispatch after a failure
-// is queued, red; refuse a dispatch past the first attempt — the mended
-// file's is refused, red.
+// Mutations: let a dispatch follow any ending → the dispatch after a failure
+// is queued, red; refuse a dispatch past the first attempt → the mended file's
+// is refused, red.
 func TestAnAttemptFollowsTheOneBeforeIt(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -364,9 +356,9 @@ func TestAnAttemptFollowsTheOneBeforeIt(t *testing.T) {
 	res, err = w.Publish(ctx, queueing(other, gitlet.QueueDispatch))
 	requireCheckRefused(t, "a dispatch after a failure", res, err, gitlet.CheckRefusalRerunGenuine)
 
-	// A DISPATCH FOLLOWS ITS OWN ERROR: a head's required check errored at
-	// its dispatch for a checks file that did not run is queued again by the
-	// head's dispatch under a file that runs, as the next attempt.
+	// A DISPATCH FOLLOWS ITS OWN ERROR: a required check errored at dispatch for
+	// a checks file that did not run is queued again, as the next attempt, by
+	// the head's dispatch under a file that runs.
 	broken := gitlet.CheckKey{RepoID: repo, OID: oidOf("B"), Target: mainRef, Name: "lint", Attempt: 1}
 	headDispatch := func(key gitlet.CheckKey) gitlet.ChecksRequest {
 		req := queueing(key, gitlet.QueueDispatch)
@@ -387,8 +379,8 @@ func TestAnAttemptFollowsTheOneBeforeIt(t *testing.T) {
 		t.Fatalf("lint's dispatch under the mended file is %+v, want attempt 2 queued", res.Row)
 	}
 
-	// NO ATTEMPT PASSES THE LAST: one held at MaxCheckAttempts, which no
-	// writer of this build reaches but by reruns, is followed by none.
+	// NO ATTEMPT PASSES THE LAST: one at MaxCheckAttempts, reached only by
+	// reruns, is followed by none.
 	last := gitlet.CheckKey{RepoID: repo, OID: oidOf("R"), Target: mainRef, Name: "unit",
 		Attempt: gitlet.MaxCheckAttempts}
 	n.exec(`INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose, change_id,
@@ -409,18 +401,17 @@ func TestAnAttemptFollowsTheOneBeforeIt(t *testing.T) {
 	}
 }
 
-// A GIVEN-UP TRAIN'S CANCELLED ATTEMPT IS QUEUED AGAIN: an attempt a merge
-// queue's home cancelled giving its train up — `dequeued` or `abandoned` —
-// measured nothing of its commit, and a train built again from the same rows
-// is the same commits, so the home's requeue follows it, past
-// AutoRequeueAttempts (no cell failed it) and to MaxCheckAttempts alone; an
-// attempt cancelled for any other reason — a head its change moved on from —
-// is no requeue's.
+// A GIVEN-UP TRAIN'S CANCELLED ATTEMPT IS QUEUED AGAIN: an attempt cancelled
+// `dequeued` or `abandoned` when its merge queue gave its train up measured
+// nothing, and a rebuilt train is the same commits, so the home's requeue
+// follows it past AutoRequeueAttempts (no cell failed it), to MaxCheckAttempts
+// alone; one cancelled for any other reason (a superseded head) is no
+// requeue's.
 //
-// Mutation: answer GivenUp false → the requeue after a dequeue is refused,
-// red; hold a given-up requeue to AutoRequeueAttempts → the requeue past it
-// is refused, red; count a superseded cancel as given up → its requeue is
-// queued, red.
+// Mutations: answer GivenUp false → the requeue after a dequeue is refused,
+// red; hold a given-up requeue to AutoRequeueAttempts → the requeue past it is
+// refused, red; count a superseded cancel as given up → its requeue is queued,
+// red.
 func TestAGivenUpTrainsCancelledAttemptIsQueuedAgain(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -460,12 +451,10 @@ func TestAGivenUpTrainsCancelledAttemptIsQueuedAgain(t *testing.T) {
 	requireCheckRefused(t, "a requeue after a superseded head's cancel", res, err, gitlet.CheckRefusalRerunGenuine)
 }
 
-// THE ENGINE'S ARMS ARE THE ENGINE'S: a queue naming a principal's rerun and
-// a claim naming a person's CI are a principal's writes, asked only as a
-// rerun and a report (checkasks.go), so through the engine's own arms each is
-// no request the writer decides — refused invalid before anything is read —
-// and an ending of an attempt no runner claimed, which no runner forms,
-// likewise.
+// THE ENGINE'S ARMS ARE THE ENGINE'S: a queue naming a principal's rerun and a
+// claim naming a person's CI are asked only as a rerun and a report
+// (checkasks.go), so through the engine's own arms each is refused invalid
+// before anything is read — as is an ending of an attempt no runner claimed.
 func TestAChecksWriterDecidesOnlyTheEnginesOwnRecords(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -492,22 +481,17 @@ func TestAChecksWriterDecidesOnlyTheEnginesOwnRecords(t *testing.T) {
 	}
 }
 
-// AN ENDING IS ANNOUNCED ONCE, BY ITS WRITER: an ending whose record applied
-// and which its attempt's row keeps is published as one code_check_finished
-// event on the writing node's stream; one the row does not keep — an
-// infrastructure ending after a measurement — appends nothing and announces
-// nothing; and a retry under the same operation id, collapsed onto the record
-// that landed, announces nothing again — nor counts the attempt it queued or
-// the ending it set a second time. A measurement that REPLACES an
-// infrastructure ending the row kept — a slow runner's exit after its attempt
-// was errored runner_lost — is announced naming the ending it replaced, and
-// counted under it rather than as the attempt's first ending, so a day files
-// it as a correction and the attempt is one ending.
+// AN ENDING IS ANNOUNCED ONCE, BY ITS WRITER: an ending the row keeps is one
+// code_check_finished event on the writing node's stream; one it does not
+// keep (an infrastructure ending after a measurement) appends and announces
+// nothing; a retry under the same operation id, collapsed onto the landed
+// record, announces and counts nothing again. A measurement replacing an
+// infrastructure ending (a slow runner's exit after runner_lost) is announced
+// and counted naming the ending it replaced: a correction, not a second ending.
 //
-// Mutations: count a collapsed retry's record as the call's own, and the
-// dispatch asked again counts its attempt twice — red; announce a
-// replacement as the attempt's first ending, and lint's pass names nothing
-// replaced and is counted a second ending — red.
+// Mutations: count a collapsed retry's record as the call's own → the
+// dispatch asked again counts its attempt twice, red; announce a replacement
+// as a first ending → lint's pass names nothing replaced and counts twice, red.
 func TestAnEndingIsAnnouncedOnceByItsWriter(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -545,10 +529,8 @@ func TestAnEndingIsAnnouncedOnceByItsWriter(t *testing.T) {
 		t.Fatal("an ending the row does not keep, or a write asked again, appended a record")
 	}
 
-	// A MEASUREMENT AFTER AN INFRASTRUCTURE ENDING replaces it — a runner
-	// that was only slow, ending its attempt after the home's sweep errored
-	// it runner_lost — and is announced as a correction of it, naming the
-	// ending it replaced, never as the attempt's second ending.
+	// A MEASUREMENT AFTER AN INFRASTRUCTURE ENDING replaces it and is announced
+	// as a correction naming it, never as the attempt's second ending.
 	lint := gitlet.CheckKey{RepoID: repo, OID: oidOf("B"), Target: mainRef, Name: "lint", Attempt: 1}
 	for _, req := range []gitlet.ChecksRequest{queueing(lint, gitlet.QueueDispatch), claiming(lint, "git-a", "")} {
 		res, err := w.Publish(t.Context(), req)
@@ -615,12 +597,11 @@ func waitAnnounced(t *testing.T, stream *announced, n int) {
 }
 
 // THE HOME'S DUE CHECK WORK IS THE ENGINE'S OWN: a checks_due read names no
-// asker and no seat it reads for — a principal's read of the home's listing
-// would be held to nothing — and lists a live change whose head is not
-// dispatched, until its dispatch is recorded.
+// asker and no seat, since a principal's read of the listing would be held to
+// nothing, and lists a live change whose head is not dispatched until its
+// dispatch is recorded.
 //
-// Mutation: let the read take an asker, and a person's read of the listing is
-// answered — red.
+// Mutation: let the read take an asker → a person's read is answered, red.
 func TestChecksDueRefusesAnAsker(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -688,22 +669,17 @@ func dispatchingFor(repo, target, tipOID string, tip statelog.Position, defs str
 }
 
 // TWO CHANGES SHARING A HEAD ARE EACH CHECKED FOR THEIR OWN TARGET: web's
-// feature into main, and a backport branch at the same commit into release.
-// What a check of a commit measures is the definition its TARGET's checks
-// file gives it, and its target's protection is what requires it, so the head
-// is two sets of checks, one a branch:
+// feature into main and a backport at the same commit into release. A check
+// measures the definition its TARGET's checks file gives and is required by
+// its target's protection, so the head is two sets of checks:
 //
-//   - it is due its dispatch for each target apart: main's recorded leaves
-//     the backport due, release's too leaves nothing due;
-//   - release's unit queued at it after main's unit passed there is an attempt
-//     of its own — queued under release's definition, never answered from
-//     main's row — and main's keeps its pass;
-//   - each change's checks are its own target's: the feature's main's three,
-//     the backport's release's one.
+//   - it is due its dispatch per target: main's recorded leaves the backport due;
+//   - release's unit queued after main's passed is its own attempt, never
+//     answered from main's row, which keeps its pass;
+//   - each change lists its own target's checks.
 //
-// Mutation: read the attempt a write decides by its commit, check and number
-// alone (the row read ignoring its target) — release's unit is answered
-// unchanged from main's passed row, and never runs — red.
+// Mutation: read the attempt a write decides ignoring its target → release's
+// unit is answered unchanged from main's passed row and never runs, red.
 func TestTwoChangesSharingAHeadAreEachCheckedForTheirOwnTarget(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -800,18 +776,15 @@ func TestTwoChangesSharingAHeadAreEachCheckedForTheirOwnTarget(t *testing.T) {
 }
 
 // A HEAD LEAVES THE DUE LISTING ONCE ITS DISPATCH IS RECORDED, whatever its
-// target's checks file defines: web's change into main, whose tip holds no
-// checks file, is due until its home records the dispatch naming none — and
-// then not, though no attempt of any check was ever queued at its head: the
-// listing converges on what the home decided, never on attempts, which a
-// target with no checks file — every repository that has not adopted checks —
-// never has. The same dispatch asked again is answered unchanged. A checks
-// file the target's reading comes to name makes the head due again, and its
-// dispatch under that file takes it off again.
+// target's checks file defines: web's change into main, whose tip has no
+// checks file, is due until the home records a dispatch naming none, though no
+// attempt is ever queued at its head — the listing converges on what the home
+// decided, never on attempts, which a repository without checks never has.
+// The same dispatch asked again is unchanged; a checks file the target's
+// reading comes to name makes the head due until its dispatch under it.
 //
-// Mutation: list a head while its commit holds no attempt of any check, as
-// the listing once did — web's head, whose target defines nothing, is listed
-// for ever — red.
+// Mutation: list a head while its commit holds no attempt → web's head, whose
+// target defines nothing, is listed for ever, red.
 func TestAHeadLeavesTheDueListingOnceItsDispatchIsRecorded(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -856,22 +829,18 @@ func TestAHeadLeavesTheDueListingOnceItsDispatchIsRecorded(t *testing.T) {
 	none("once its dispatch under the target's checks file is recorded,")
 }
 
-// A DISPATCH QUEUES ITS ATTEMPTS IN ITS OWN RECORD: a head's dispatch
-// carrying the attempts it queues is ONE record — the head taken off the
-// due listing and its attempts' rows written by the same apply, each as a
-// check_queued would write it: unit queued to run, docs recorded skipped and
-// announced as an ending — counted and announced by the writer as the single
-// queues were. Asked again it is answered unchanged, appending nothing; and
-// a dispatch carrying an attempt the rows already hold and one they do not is
-// appended with the new one alone, the held one's row untouched. A dispatch
-// carrying an attempt it cannot — one queued twice, one for another target,
-// one under another checks file, one at a head it does not name, past its
-// rows — is no write at all.
+// A DISPATCH QUEUES ITS ATTEMPTS IN ITS OWN RECORD: a head's dispatch carrying
+// its attempts is ONE record, whose apply takes the head off the due listing
+// and writes each attempt's row as a check_queued would (unit queued, docs
+// skipped and announced as an ending), counted and announced as single queues
+// are. Asked again it is unchanged; carrying a held attempt and a new one it
+// appends the new one alone. Carrying an attempt it cannot — queued twice, for
+// another target, under another checks file, at a head it does not name, past
+// MaxDispatchRows — it is no write at all.
 //
-// Mutations: keep an attempt the rows already hold in the record — the
-// dispatch asked again appends, red; apply the dispatch without its attempts
-// — no row is queued, red; announce none of the attempts a dispatch ended —
-// docs' skip is never announced, red.
+// Mutations: keep a held attempt in the record → the repeat appends, red;
+// apply without its attempts → no row is queued, red; announce none of the
+// attempts it ended → docs' skip is never announced, red.
 func TestADispatchQueuesItsAttemptsInItsOwnRecord(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -976,15 +945,13 @@ func TestADispatchQueuesItsAttemptsInItsOwnRecord(t *testing.T) {
 	}
 }
 
-// A TARGET THAT MOVES IS READ AGAIN AT THE HOME'S PACE: once web's head is
-// dispatched at main's tip A, a push moving main to C makes no head due — the
-// head's dispatch names the file the target's reading holds — and makes main
-// due a reading only once that reading is older than the home's refresh: a
-// target pushed to on every landing is read at the home's pace, never at its
-// own. Read again at C, it is due nothing.
+// A TARGET THAT MOVES IS READ AGAIN AT THE HOME'S PACE: after web's head is
+// dispatched at main's tip A, a push moving main to C makes no head due (the
+// dispatch names the file the target's reading holds), and main is due a
+// reading only once that reading is older than the home's refresh, so a target
+// pushed on every landing is read at the home's pace. Read at C, none is due.
 //
-// Mutation: list a target due a reading as soon as its branch moves, whatever
-// its reading's age — main is due at once — red.
+// Mutation: list a moved target due at once, whatever its reading's age → red.
 func TestAMovedTargetIsDueAReadingAtTheHomesPace(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1025,17 +992,15 @@ func TestAMovedTargetIsDueAReadingAtTheHomesPace(t *testing.T) {
 }
 
 // A CHECK'S BOX'S READ OF ITS ATTEMPT IS THE ENGINE'S OWN: a check_box read
-// names no asker and no seat it reads for — a check's box is no principal,
-// and judged as one it would be refused as one nobody named — and its attempt
-// by its key whole, nothing else; it answers the attempt's row, held to no
-// grant (the attempt's repository is `visibility: unit` and the read names
-// nobody it admits), and none for an attempt the rows do not hold, which the
-// box's admission reads again through the barrier before it refuses. A
-// principal's read naming the key is refused, so one that forgot its asker is
-// never answered ungated.
+// names no asker and no seat (a box is no principal, and judged as one would
+// be refused) and its attempt by its whole key alone; it answers the row held
+// to no grant (web is `visibility: unit` and the read names nobody it admits),
+// and none for an attempt not held, which the box's admission re-reads
+// through the barrier before refusing. A principal's read naming the key is
+// refused, so one that forgot its asker is never answered ungated.
 //
-// Mutations: let the read take an asker — a person's is answered, red; answer
-// an attempt not held as an error — the admission's re-read never happens,
+// Mutations: let the read take an asker → a person's is answered, red; answer
+// an attempt not held as an error → the admission's re-read never happens,
 // red.
 func TestACheckBoxReadIsTheEnginesOwn(t *testing.T) {
 	t.Parallel()
@@ -1221,27 +1186,18 @@ func checkNames(rows []gitlet.CheckRow) []string {
 	return out
 }
 
-// A REPOSITORY'S CHECKS ARE READ BY EVERY SHAPE: a commit's attempts for
-// every target and for the one it names, a change's — its head's, checked
-// for ITS target — each also at its checks' latest attempts, the
-// repository's newest ended first and the window's, with an end or none —
-// each a keyset that resumes where its page ended, a window with an end
-// served from inside it, its first page of one row the newest ending before
-// the end — and one attempt whole, with the failures its
-// ending named and its repository's name; and a reader the repository's grant
-// shuts out reads none of them.
+// A REPOSITORY'S CHECKS ARE READ BY EVERY SHAPE: a commit's for every target
+// or the one it names, a change's (its head's, for ITS target), each also at
+// its latest, the repository's newest ended first and the window's — each a
+// keyset resuming where its page ended, a window with an end served from
+// inside it — and one attempt whole, with its failures and repository name.
+// Two changes sharing a head ([checksOfEveryShape]) each read their own
+// target's alone, and a reader the grant shuts out reads none.
 //
-// TWO CHANGES SHARE A HEAD, into two branches ([checksOfEveryShape]): each is
-// checked for its own target — main's lint, unit and vet, release's own unit
-// — as two sets of attempts at one commit, and each change reads its own
-// target's alone.
-//
-// Mutations: read a change's attempts at its head for every target — the
-// backport's change reads main's three beside its own unit — red; read a
-// commit's for the target it names by every target (the reader's Target case
-// dropped) → release's unit among main's, red; seek the window with no end
-// (checksWindowSQL's `finished_at < ?2` dropped) → its first page is unit,
-// which ended after the end, red.
+// Mutations: read a change's attempts for every target → the backport reads
+// main's three beside its unit, red; drop the reader's Target case → release's
+// unit among main's, red; drop checksWindowSQL's `finished_at < ?2` → the
+// window's first page is unit, which ended after the end, red.
 func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
 	t.Parallel()
 	n, backport, shapes := checksOfEveryShape(t)
@@ -1303,19 +1259,17 @@ func insertAttempt(n *node, repo, target, name string, attempt int, state gitlet
 		store.EncodeTime(at.Add(time.Second)))
 }
 
-// A LATEST LISTING ANSWERS WHAT EACH CHECK STANDS AT, IN ONE PAGE. Change 1's
-// head B is checked for main by sixty checks, six of them rerun — the
-// last-named among them, its first attempt failed and its second passed — so
-// main holds sixty-six attempts at B, past a listing's default page of fifty,
-// and release one check's three beside them. A change's listing at its
-// latest answers sixty rows, one a check, each at its latest attempt — the
-// last-named passed — on ONE page with no next; a commit's for main answers
-// the same; a commit's for every branch adds release's third attempt; and
-// each, read seven rows at a time, walks to the same rows.
+// A LATEST LISTING ANSWERS WHAT EACH CHECK STANDS AT, IN ONE PAGE: change 1's
+// head B is checked for main by sixty checks, six rerun (c59's first attempt
+// failed, its second passed): sixty-six attempts, past the default page of
+// fifty, beside release's three of c00. A change's latest listing answers
+// sixty rows, each check at its latest, on ONE page with no next; a commit's
+// for main the same; a commit's for every branch adds release's third; and
+// each walked seven rows a page reaches the same rows.
 //
 // Mutations: keep every attempt (latestOnly matching nothing) → sixty-six
-// rows, red; take the listing's default page (latestCheckLimit at
-// defaultCheckLimit) → fifty rows and a next, red.
+// rows, red; latestCheckLimit at defaultCheckLimit → fifty rows and a next,
+// red.
 func TestALatestListingAnswersWhatEachCheckStandsAtInOnePage(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1372,13 +1326,11 @@ func TestALatestListingAnswersWhatEachCheckStandsAtInOnePage(t *testing.T) {
 }
 
 // A CHECKS LISTING REFUSES WHAT ITS WALK CANNOT ANSWER, naming the field: a
-// latest listing of a repository's attempts or of the window, which walk the
-// endings in time and hold a check's attempts anywhere in them; a branch
-// beside no commit, beside a change — whose own target its listing reads —
-// or that is no branch; an end beside a repository, or at its window's
-// start; a cursor of the window at or past the window's end, which no page
-// of it names; and a latest `check` read and one with an end, which name
-// their attempt.
+// latest listing of a repository or of the window (which walk endings in time,
+// a check's attempts anywhere in them); a branch beside no commit, beside a
+// change (whose own target it reads) or that is no branch; an end beside a
+// repository or at its window's start; a window cursor at or past its end;
+// and a `check` read that is latest or has an end, which names its attempt.
 //
 // Mutation: drop the refusal of a latest listing beside no change and no
 // commit → the repository's latest answers every attempt, red.
@@ -1421,28 +1373,18 @@ func TestAChecksListingRefusesWhatItsWalkCannotAnswer(t *testing.T) {
 	}
 }
 
-// THE CHECKS LISTING IS HELD TO THE GRANT, NARROWED OR NOT. Of three
-// repositories — sales-private and plat-private at `visibility: unit`,
-// platform at `company` — each holding a failed `unit` and a passed `lint`,
-// a seat's window lists exactly the attempts of the repositories its grant
-// reads, newest ended first, and a narrowing by state or by a check's name
-// keeps fewer of those, never one of another repository; a person's lists
-// every repository's. A page is the rows it READ: one the grant and the
-// narrowing kept nothing of still names where the next starts, so a listing a
-// row at a time reaches every kept row. A repository's own listing narrowed
-// by state keeps that state's, and one of a repository the grant shuts out is
-// refused not_permitted, however narrow — and a state that is no check's is
-// refused before anything is read. Every row listed names its repository by
-// name, the window's as a repository's own, since a reader links an attempt
-// to its repository, change and commit by name.
+// THE CHECKS LISTING IS HELD TO THE GRANT, NARROWED OR NOT: of sales-private,
+// plat-private (`visibility: unit`) and platform, each with a failed unit and
+// a passed lint, a seat's window lists its grant's attempts, newest ended
+// first, a narrowing never another repository's; a person's lists all. A page
+// is the rows it READ: one that kept nothing still names the next, so a
+// row-a-page walk reaches every kept row. A shut-out repository is refused
+// however narrow, as is a state no check has; every row names its repository.
 //
-// Mutations: leave the window's rows unnamed (checksWindow not filling Repo)
-// → every window row names "", red; keep a window's row by the narrowing alone (checksWindow
-// dropping `listed`) → vp-sales lists plat-private's unit, red; ignore the
-// narrowing on a repository's listing (pageChecks kept everything there) →
-// sales-private's passed listing holds its failed unit, red; name the next
-// page after the last KEPT row → the one-row listing stops at its first empty
-// page, before sales-private's unit, red.
+// Mutations: checksWindow not filling Repo → rows name "", red; dropping its
+// `listed` → vp-sales lists plat-private's unit, red; pageChecks ignoring a
+// repository's narrowing → sales-private's passed holds its unit, red; next
+// page after the last KEPT row → a row-a-page walk stops early, red.
 func TestTheChecksListingIsHeldToTheGrant(t *testing.T) {
 	t.Parallel()
 	n, ids := grantedChanges(t)
@@ -1525,25 +1467,18 @@ func TestTheChecksListingIsHeldToTheGrant(t *testing.T) {
 	}
 }
 
-// A NARROWED CHECKS LISTING ANSWERS ITS ROWS WHATEVER THE HISTORY AROUND
-// THEM: a repository's listing and the window narrowed by a state, a check's
-// name or both seek what they are narrowed to, so their first page holds the
-// attempts the narrowing names — and says there are no more — however many
-// attempts of other checks and states ended after them, and the window, which
-// lists the attempts that ENDED, refuses a state that never ends in it.
+// A NARROWED CHECKS LISTING ANSWERS ITS ROWS WHATEVER THE HISTORY AROUND THEM:
+// a repository's listing and the window, narrowed by state, name or both, seek
+// what they are narrowed to, so their first page holds the named attempts and
+// no next, however many others ended after them; the window, listing attempts
+// that ENDED, refuses a state that never ends. web ([checksOfEveryShape]) gets
+// eight more passes ending after its failures, past a page of three, so an
+// unnarrowed walk reaches vet and release's unit only after ten endings.
 //
-// web ([checksOfEveryShape]) is given eight more passing attempts of eight
-// more checks, ending after main's lint and unit failed, past a page of
-// three: an unnarrowed walk in the listing's order reaches main's running vet
-// and release's queued unit only after all ten endings, and its failures
-// after the eight passes.
-//
-// Mutations: serve a repository's narrowed listing by its unnarrowed walk,
-// filtered after the read (narrowedRepoChecks' places replaced by the
-// finished_idx page kept by the narrowing), and its first pages are empty
-// with a cursor — red; the window's alike — red; admit a window narrowed to
-// `queued` (validateChecks' Ended case dropped) and it answers an empty page
-// rather than the refusal — red.
+// Mutations: narrowedRepoChecks' places replaced by the finished_idx page kept
+// by the narrowing → first pages empty with a cursor, red; the window's alike,
+// red; drop validateChecks' Ended case → a window narrowed to `queued` answers
+// an empty page, red.
 func TestANarrowedChecksListingAnswersItsRowsWhateverTheHistory(t *testing.T) {
 	t.Parallel()
 	n, _, _ := checksOfEveryShape(t)
@@ -1608,25 +1543,17 @@ func TestANarrowedChecksListingAnswersItsRowsWhateverTheHistory(t *testing.T) {
 	}
 }
 
-// A CHECKS PAGE KEPT SHORTER THAN IT WAS SERVED RESUMES AFTER ITS LAST ROW:
-// for every shape a `checks` read takes — a change's attempts, a commit's, a
-// repository's newest ended first and the window's — the cursor a caller asks
-// for after any row it was served (gitlet.ReadQuery.ChecksCursor) reads every
-// attempt after that row once, in order, as code_get_change's `checks` part
-// does when a page of wide summaries is past one tool answer; and a page's own
-// cursor is the one its last row names.
+// A CHECKS PAGE KEPT SHORTER THAN SERVED RESUMES AFTER ITS LAST ROW: for every
+// `checks` shape, the cursor gitlet.ReadQuery.ChecksCursor names for any
+// served row reads every attempt after it once, in order (as code_get_change's
+// `checks` part does when a page is past one tool answer), and a page's own
+// cursor is its last row's. Each shape is first held to the attempts
+// [checksOfEveryShape] declares, never to a list of shape names, which every
+// new one-row shape would break.
 //
-// EACH SHAPE IS FIRST HELD TO THE ATTEMPTS IT DECLARES ([checksOfEveryShape]),
-// so the case resumes between every two attempts each lists — and after a
-// one-attempt shape's only row (a window past or before an ending, a commit's
-// for the other target, the backport's) lists nothing. Never held to a name
-// list of the shapes that may list one: every shape added since that lists
-// one by design failed it, though it lists exactly what it declares.
-//
-// Mutations: ChecksCursor spelled by another walk than the reader's (a
-// change's attempts by the commit's walk) → red; the window seeking with no
-// end (checksWindowSQL's `finished_at < ?2` dropped) → the window ending
-// before the second ending lists unit too, red.
+// Mutations: ChecksCursor spelled by another walk (a change's by the
+// commit's) → red; drop checksWindowSQL's `finished_at < ?2` → the window
+// ending before the second ending lists unit too, red.
 func TestAChecksPageResumesAfterAnyRowItServed(t *testing.T) {
 	t.Parallel()
 	n, _, shapes := checksOfEveryShape(t)
@@ -1700,23 +1627,17 @@ func TestTheBacklogCountsEachCheckAtItsOwnTimeout(t *testing.T) {
 }
 
 // THE WIDEST DISPATCH NAMES EACH CHANGE IT QUEUES AT, NEVER THE DOMAIN: a home
-// packs a target's heads into a record up to MaxDispatchRows, and every live
-// change into a target is due again when its checks file changes, so a
-// routine edit of a busy target dispatches hundreds of heads at once. Its
-// record names the repository, its checks and each head's change — all
-// MaxDispatchRows of them — and applies; so a record this node holds and
-// cannot decode about ANOTHER repository refuses none of it, while one about
-// one of its changes refuses the dispatch naming that change, and appends
-// nothing. Named under the whole domain, the dispatch met every deferred
-// record of every repository, and once retained beside one was met by every
-// later record of the log (MaxScopePaths' doc).
+// packs up to MaxDispatchRows heads in a record, and a checks file edit makes
+// every live change into its target due, so a busy target dispatches hundreds
+// at once. The record names the repository, its checks and every head's
+// change: a deferred record about ANOTHER repository refuses none of it, one
+// about one of its changes refuses it, appending nothing. Scoped to the domain
+// it would meet every deferred record and, retained beside one, every later
+// record of the log (MaxScopePaths' doc).
 //
-// Mutations: name the domain past sixteen paths (the rule this replaced) —
-// the dispatch is scoped [c] and refused beside the other repository's
-// record, red; cap a scope at sixteen paths (MaxScopePaths = 16) — the
-// widest dispatch's record is refused, red; name no change (checksScope
-// keeping the repository and its checks alone) — the scope names two paths,
-// and the dispatch beside its change's record is decided, red.
+// Mutations: name the domain past sixteen paths → refused beside the other
+// repository's record, red; MaxScopePaths = 16 → the widest record is refused,
+// red; checksScope naming no change → beside its change's record, decided, red.
 func TestTheWidestDispatchNamesEachChangeItQueuesAt(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -1796,29 +1717,18 @@ func TestTheWidestDispatchNamesEachChangeItQueuesAt(t *testing.T) {
 	}
 }
 
-// A CHECK'S WRITE IS DECIDED ONLY FROM ROWS ITS NODE HOLDS CURRENT: a check's
-// record writes only its repository's checks, and its decide reads the
-// repository's row on every arm and the change a head's write is about, so a
-// node holding a record it cannot decode that covers either answers a check
-// queued at a head, a seat's rerun (its grant and the change's authors), a
-// dispatch, and a failing head's ending and a person's CI's failing report of
-// it (each routed to the change's authors) unavailable — the framework's own
-// `deferred`, ErrNotServing to the router,
-// which asks a node whose rows are current — and appends nothing. A record
-// about the repository covers every write of its checks; one about a change
-// alone covers the writes that read that change, a change found only in the
-// decide's snapshot (a rerun's, a failed head's) included, and leaves a check
-// of the repository's tip to be decided. And the records name what their
-// decides read: a head's queue names the change it was asked about, and a
-// failed head's ending the change its decide routed it to.
+// A CHECK'S WRITE IS DECIDED ONLY FROM ROWS ITS NODE HOLDS CURRENT: its decide
+// reads the repository's row and the change a head's write is about, so beside
+// an undecodable record covering either, a head's queue, a seat's rerun, a
+// dispatch, a failing head's ending and a CI's failing report answer
+// `deferred` (ErrNotServing: the router asks a current node), appending
+// nothing. A change found only in the decide's snapshot counts; a check of the
+// tip reads no change. Each record names what its decide read.
 //
-// Mutations: scope a check's record by its checks alone ({ChecksPath}) — every
-// write over the repository's record, the queue and the dispatch over the
-// change's, are decided and appended, red; probe no change a decide finds in
-// its snapshot — the seat's rerun, the failing ending and the CI's failing
-// report over the change's record are decided, red; name no such change on
-// the record — the failed
-// head's ending names its repository and checks alone, red.
+// Mutations: scope a record by ChecksPath alone → writes over either record
+// are decided, red; probe no change the decide finds in its snapshot → the
+// rerun, failing ending and CI report over the change's record are decided,
+// red; name no such change on the record → vet's failure names two paths, red.
 func TestAChecksWriteIsUnavailableWhereARecordItReadsIsDeferred(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

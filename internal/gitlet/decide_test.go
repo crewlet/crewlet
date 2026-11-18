@@ -18,10 +18,9 @@ import (
 )
 
 // THE PUSH DECIDE, RULE BY RULE, over rows an applier wrote: each case is one
-// rule of decide.go's order, and each is built so every EARLIER rule would not
-// fire — a noop whose old value is wrong, a stale command on a protected ref,
-// a protected command that is otherwise ok — so a rule out of order fails the
-// case it was moved past.
+// rule of decide.go's order, built so no EARLIER rule would fire (a noop whose
+// old value is wrong, a stale command on a protected ref), so a rule moved out
+// of order fails the case it was moved past.
 
 // decideAt is the decide's clock in this file: the applier's own instant, so
 // a pack minted now is fresh and the seeded refs are as old as the case says.
@@ -51,9 +50,8 @@ func decideEstate(t *testing.T) *estate {
 	return e
 }
 
-// proposalOf is one undecided push of cmds, with no pack, made for nobody but
-// its pusher — stated, so the seat's a case puts in its place (pushBy) states
-// it too.
+// proposalOf is one undecided push of cmds, with no pack, written for nobody
+// but its pusher — stated, as pushBy's seat push in its place states it too.
 func proposalOf(cmds ...Command) Proposal {
 	return Proposal{
 		PushID: uuid.Must(uuid.NewV7()).String(), RepoID: decideRepo,
@@ -123,12 +121,11 @@ func decideErr(e *estate, repoID string, limits Limits, retention time.Duration,
 }
 
 // A PROTECTION VERDICT OUTLIVES ITS ROUND ONLY UNDER THE RULES IT WAS FORMED
-// UNDER. The rounds of one publish ask the same commands, so a round whose
-// snapshot holds the same rules forms no verdict again — asking every rule
-// about every command is the one cost of a round a founder's rules can make
-// seconds long — and a round whose snapshot holds other rules, after a
-// settings record, forms every verdict again from them rather than answering
-// from rules the repository no longer has.
+// UNDER. A publish's rounds ask the same commands, so a round under the same
+// rules forms no verdict again (asking every rule about every command is the
+// round cost a founder's rules can make seconds long), and a round after a
+// settings record forms every verdict again rather than answer from rules the
+// repository no longer has.
 func TestAProtectionVerdictOutlivesItsRoundOnlyUnderItsRules(t *testing.T) {
 	t.Parallel()
 	e := decideEstate(t)
@@ -242,13 +239,11 @@ func TestThePushDecide(t *testing.T) {
 	}
 }
 
-// NO PUSH DELETES THE DEFAULT BRANCH (rule 5b), whoever sends it and whatever
-// rule protects it or does not: deleted, the repository's HEAD would name
-// nothing, every clone would check nothing out and every page that starts at
-// the default branch would start nowhere, while the repository still holds its
-// other branches. A protected default branch is refused by the rule that names
-// it (5 before 5b); once another branch is the default, the old one deletes as
-// any branch does.
+// NO PUSH DELETES THE DEFAULT BRANCH (rule 5b), whoever sends it, protected or
+// not: HEAD would name nothing, so no clone checks anything out and no page
+// that starts at the default branch starts anywhere. A protected default
+// branch is refused by its own rule first (5 before 5b); once another branch
+// is the default, the old one deletes as any branch does.
 //
 // Mutation: drop rule 5b from working.decide and "the default branch" lands ok.
 func TestNoPushDeletesTheDefaultBranch(t *testing.T) {
@@ -373,11 +368,9 @@ func TestABatchSeesItsEarlierPushes(t *testing.T) {
 }
 
 // DELETED REFS NEVER REFUSE A CREATE: MaxRefsPerRepo bounds a repository's
-// LIVE refs, and its tombstones — the deletions a delta still has to carry —
-// are bounded apart, by the applier ([MaxTombstonesPerRepo]), which forgets
-// the oldest rather than refuses anybody. Judged against the whole table, a
-// repository of 40 000 live refs that deleted 60 000 stale branches refused
-// every new branch for two days: a limit stated in live refs, not met.
+// LIVE refs, and its tombstones (the deletions a delta still carries) are
+// bounded apart, by the applier ([MaxTombstonesPerRepo]), which forgets the
+// oldest rather than refuses anybody.
 //
 // Mutation: count the tombstones beside the live refs against MaxRefsPerRepo
 // and the first two rows are refused repo_refs.
@@ -422,13 +415,11 @@ func TestDeletedRefsNeverRefuseACreate(t *testing.T) {
 }
 
 // A PUSH'S OWN DELETIONS MAKE ROOM FOR ITS CREATES, in whichever order git
-// sends them: MaxRefsPerRepo bounds the live refs a repository holds, and a
-// push that deletes a stale branch and adds a new one at the bound ends
-// holding no more than it began with — `git push origin :old new`, or a
-// --prune or --mirror push. Only a deletion the decide takes counts: one
-// refused stale or by a protection frees nothing, and a deletion frees room
-// for ONE create, the first. Safe because every refusal after the
-// per-command rules — upload_expired, repo_size, --atomic — refuses every ok
+// sends them: a push at the bound that deletes a branch and adds one
+// (`git push origin :old new`, --prune, --mirror) ends holding no more live
+// refs than it began with. Only a deletion the decide takes counts, and each
+// frees room for ONE create, the first. Safe because every refusal after the
+// per-command rules (upload_expired, repo_size, --atomic) refuses every ok
 // command of the push together, so no deletion is refused while a create it
 // made room for stands.
 //
@@ -481,28 +472,18 @@ func TestAPushsOwnDeletionsMakeRoomForItsCreates(t *testing.T) {
 	}
 }
 
-// A REF IS NEVER BESIDE A DIRECTORY OF ITS NAME. Every ref is a file on every
-// client's disk (refs/remotes/origin/<branch>), so refs/heads/feature and
-// refs/heads/feature/x cannot both be live: a clone that holds one cannot
-// fetch the other ("cannot lock ref"), and the receive-pack that would have
-// refused the pair runs no ref transaction here. So a create beside a live
-// ref above it or below it is refused ref_conflict, naming the ref in the
-// way — judged against what the batch has done by then, in order, as two
-// records would be: the push's own deletions free the name as git's own
-// transaction lets them, an earlier push's create takes it, and a deleted
-// ref (a tombstone) is in nobody's way.
+// A REF IS NEVER BESIDE A DIRECTORY OF ITS NAME: refs are files on clients'
+// disks, so a clone holding refs/heads/feature cannot fetch refs/heads/feature/x
+// and no receive-pack transaction here refuses the pair. A create beside a
+// live ref above or below it is refused ref_conflict, naming the ref in the
+// way, judged against the batch so far: the push's own deletions free the
+// name, an earlier push's create takes it, a tombstone is in nobody's way.
 //
-// Mutations: the ancestor walk skipped → the "below a branch" rows ok; the
-// descendant probe skipped → the "above a branch" rows ok; the probe reading
-// tombstones as live → the tombstone rows refused; the push's own deletions
-// ignored → the rename rows refused; the batch's earlier pushes ignored → the
-// batch rows decided as the snapshot alone says; a nested create's bound not
-// read → "a ref named like a nested create's bound" ok; the ranges holding a
-// gap not counted (a range's close ending every range) → "a ref past a nested
-// create's range" ok; a live name not cutting the gaps → the rows that delete
-// what is under a create ("a directory renamed to a branch", "an earlier
-// push's directory deleted") refused, and "half a directory deleted" naming
-// the deleted topic/a, the snapshot answering for refs the batch deletes.
+// Mutations: walk or probe skipped → "below"/"above" rows ok; tombstones live →
+// tombstone rows refused; own deletions or earlier pushes ignored → rename or
+// batch rows fail; a nested bound unread or a close ending every range → the
+// nested-create rows ok; gaps uncut by a live name → rows deleting what is
+// under a create refused, "half a directory deleted" naming topic/a.
 func TestARefIsNeverBesideADirectoryOfItsName(t *testing.T) {
 	t.Parallel()
 	// The repository decideEstate holds, and more: topic/a and topic/b,
@@ -682,23 +663,17 @@ func TestAPushIsJudgedWhole(t *testing.T) {
 }
 
 // A PUSH PAST THE PACK BOUND IS REFUSED compaction_behind, WHOLE AND
-// UNDECIDED: a repository whose compaction has not caught up with its pushes
-// takes no more packs. At MaxPacksPerRepo − 1 live packs a batch's first push
-// carrying a pack is the last one the repository takes, and every later push
-// carrying one is refused whole — every command the receiver did not refuse,
-// the ones the decide found ok among them, under the one sentence that names
-// the packs the repository would hold — and is no entry of the record; a push
-// carrying no pack adds none, and is decided as ever. What the bound counts is
-// the repository's packs and its batch's ENTRIES' — a push carrying a pack
-// that is no entry, refused for a reason of its own, adds nothing, and nor
-// does one the bound refused. A repository already past the bound, as a
-// later build's committer may have left it, is refused the same, its sentence
-// naming what it holds.
+// UNDECIDED, until compaction catches up. At MaxPacksPerRepo − 1 live packs a
+// batch's first push carrying a pack is the last taken; each later one is
+// refused whole (every command the receiver did not refuse, under one sentence
+// naming the packs the repository would hold) and is no entry. The bound
+// counts the repository's packs and its batch's ENTRIES': a push with no pack,
+// or refused for any reason, adds none. One already past the bound (a later
+// build's committer may leave it so) is refused the same, naming what it holds.
 //
-// Mutation: drop the bound and the third and fourth pushes are entries; count
-// the pack of a push that is no entry (the stale one) and the second is
-// refused too; count the pack of a push the bound refused and the fourth's
-// sentence names a pack more than the repository would hold.
+// Mutation: drop the bound and pushes three and four are entries; count a
+// non-entry's pack (the stale one) and the second is refused too; count a
+// refused push's pack and the fourth's sentence names one pack too many.
 func TestAPushPastThePackBoundIsRefusedCompactionBehind(t *testing.T) {
 	t.Parallel()
 	size := 32 + IndexBytesFor(1) + ReverseBytesFor(1)
@@ -808,14 +783,12 @@ func TestAPushIdIsDecidedOnce(t *testing.T) {
 	}
 }
 
-// A PUSH TO A REPOSITORY IT CANNOT REACH IS TOLD WHAT BECAME OF IT. Four
-// states answer repo_deleted, and each has its own remedy: a deleted
-// repository comes back as it was when declared again — until its purge,
-// whose earliest instant the sentence names, on the deciding epoch's
-// retention — while one being purged, or purged, never comes back and its
-// name declared again is a new, empty repository, and an id no repository
-// had is none at all. One sentence for the four told a client whose
-// repository was gone for good to declare it again to restore it.
+// A PUSH TO A REPOSITORY IT CANNOT REACH IS TOLD WHAT BECAME OF IT: four
+// states answer repo_deleted, each with its own remedy. A deleted repository
+// comes back as it was when declared again, until its purge, whose earliest
+// instant (on the deciding epoch's retention) the sentence names; one being
+// purged, or purged, never comes back, and its name declared again is a new,
+// empty repository; an id no repository had is none at all.
 //
 // Mutation: answer every state with the deleted sentence and the purging,
 // purged and unknown cases fail on "restores"; drop the marker read and the

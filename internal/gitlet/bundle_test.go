@@ -12,11 +12,10 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// written is a pack the client's git wrote into a bare repository — three
-// commits' objects, with the .idx (version 2) and the .rev a bundle carries,
-// as a push's scratch holds them — answering its .pack's path and the bundle
-// read back by gittest, which counts the objects from the PACK's header and
-// never from the index.
+// written is a pack the client's git wrote into a bare repository (three
+// commits, with the v2 .idx and the .rev a bundle carries), answering its
+// .pack's path and the bundle gittest reads back, counting objects from the
+// PACK's header, never the index.
 func written(t *testing.T) (packPath string, b gittest.Bundled) {
 	t.Helper()
 	c := gittest.NewClient(t)
@@ -58,9 +57,9 @@ func seal(t *testing.T, ref gitlet.PackRef, bytes []byte, n int) (gitlet.BundleS
 	return w.Seal()
 }
 
-// THE INDEXES' SIZES ARE PURE FUNCTIONS OF THE OBJECT COUNT, as git writes
-// them — measured on a pack git made, not restated from the format document —
-// which is the premise every size comparison the check makes rests on.
+// THE INDEXES' SIZES ARE PURE FUNCTIONS OF THE OBJECT COUNT, measured on a pack
+// git made rather than restated from the format document: every size
+// comparison the check makes rests on it.
 func TestTheIndexSizesAreWhatGitWrites(t *testing.T) {
 	t.Parallel()
 	b, _ := realBundle(t)
@@ -75,11 +74,10 @@ func TestTheIndexSizesAreWhatGitWrites(t *testing.T) {
 }
 
 // A BUNDLE IS CHECKED AGAINST THE ROW THAT NAMES IT, however its bytes arrive:
-// a sealed real pack passes in every chunking, and every disagreement — a
-// byte of a section's magic, version or hash id, a checksum, a count, a
-// length, a size past MaxPackBytes or a pack section too short to be one — is
-// ErrBadBundle, refused by the clause written for it; and so is a stream a
-// byte shorter or a byte longer than the row's size.
+// a sealed real pack passes in every chunking, and every disagreement (a
+// section's magic, version or hash id, a checksum, a count, a length, a size
+// past MaxPackBytes, a pack too short) is ErrBadBundle refused by the clause
+// written for it; so is a stream a byte shorter or longer than the row's size.
 func TestABundleIsTheOneItsRowDescribes(t *testing.T) {
 	t.Parallel()
 	b, ref := realBundle(t)
@@ -113,17 +111,12 @@ func TestABundleIsTheOneItsRowDescribes(t *testing.T) {
 		out = append(out, make([]byte, 4)...)
 		return append(out, b.Bytes[pack+index+reverse-40:]...)
 	}()
-	// Each case names the clause it must be refused BY (a substring of that
-	// clause's message): a case refused by an earlier clause would pass while
-	// the clause it was written for is gone.
-	//
-	// A case marked rowOnly checks the real bundle's OWN seal against the
-	// changed row rather than sealing bytes under it: its row describes a
-	// layout no bytes a test can afford are sealed under — a bundle past
-	// MaxPackBytes, or a pack section too short for a header — and a seal of
-	// anything else (the zero seal included) is refused by its pack's magic
-	// first. On the real seal every other clause passes, so the one the case
-	// names is the only thing that can refuse it.
+	// Each case names the clause that must refuse it (a substring of its
+	// message): one refused earlier would pass with its clause gone. A rowOnly
+	// case checks the real bundle's own seal against the changed row, since
+	// no affordable bytes seal under its layout (past MaxPackBytes, or a pack
+	// too short for a header) and any other seal fails the pack's magic first;
+	// on the real seal only the named clause can refuse.
 	for name, tc := range map[string]struct {
 		bytes   []byte
 		ref     func(gitlet.PackRef) gitlet.PackRef

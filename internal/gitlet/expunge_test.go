@@ -20,14 +20,14 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// AN EXPUNGE THROUGH THE WHOLE PATH: its records proposed to a committer,
-// decided in one snapshot, published on a real embedded broker, applied by the
-// shipped applier and answered from the rows they wrote.
+// AN EXPUNGE THROUGH THE WHOLE PATH: proposed to a committer, decided in one
+// snapshot, published on a real embedded broker, applied by the shipped applier
+// and answered from the rows it wrote.
 
 // beginFor is an expunge's begin of repo on n at epoch, rewriting retire into a
-// pack it keeps holding kept objects and a pack it leaves dropping holding
-// dropping objects — either left out at zero — its id minted now and its
-// outputs' keys at the harness's clock, planned at n's own position.
+// kept pack of kept objects and a dropping pack of dropping objects (either
+// left out at zero), its outputs' keys at the harness's clock, planned at n's
+// own position.
 func beginFor(n *node, repo string, epoch int64, retire []string, kept, dropping int64) gitlet.ExpungeBegin {
 	xid := statelog.NewOpID(time.Now(), "")
 	b := gitlet.ExpungeBegin{RepoID: repo, ExpungeID: xid, Node: n.id, Seen: n.waiter.Committed(),
@@ -74,19 +74,16 @@ func requireExpunged(t *testing.T, res gitlet.ExpungeResult, err error) {
 	}
 }
 
-// AN EXPUNGE IS DECIDED IN ITS REPOSITORY'S QUEUE, record by record: a
-// person's request applied at its position; a second request applied at its
-// own, the repository's open request widened to it; a begin applied and
-// answered from the rows of the packs it added; a second begin while it is
-// open refused stale; and its commit applied, serving the request — every
-// pack the repository held when it was asked rewritten, by a scan past it. A
-// request asked again under its own id is the same request, answered at its
-// record by the ledger.
+// AN EXPUNGE IS DECIDED IN ITS REPOSITORY'S QUEUE, record by record: a request
+// applied at its position; a second applied at its own, the open request
+// widened to it; a begin applied; a second begin while it is open refused
+// stale; and the commit applied, serving the request by rewriting every pack
+// held when it was asked. A request asked again under its own id is answered
+// at its record by the ledger.
 //
 // Mutation: answer a second request with the open one, and it appends no
-// record of its own and the repository holds the first; publish an expunge
-// record under an operation id minted for its batch, and the request asked
-// again is decided again.
+// record and the repository holds the first; publish an expunge record under
+// an id minted for its batch, and the request asked again is decided again.
 func TestAnExpungeIsDecidedInItsRepositorysQueue(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -142,18 +139,16 @@ func TestAnExpungeIsDecidedInItsRepositorysQueue(t *testing.T) {
 	}
 }
 
-// A PUSH CHECKED BEFORE A BEGIN IS REFUSED EXPUNGING: once an expunge's begin
-// has moved its repository's drop epoch, a push its receiver checked at the
-// epoch before — against a copy holding live what the begin left dropping — is
-// refused WHOLE: every command the receiver did not refuse, a deletion among
-// them, under the one sentence naming both epochs, and a command it refused
-// keeping its own refusal; nothing of it decided and nothing appended. The
-// same push checked at the begin's epoch lands. A push the repository's status
-// refuses is told that first, whatever epoch it was checked at.
+// A PUSH CHECKED BEFORE A BEGIN IS REFUSED EXPUNGING: once a begin has moved
+// the drop epoch, a push checked at the epoch before (against a copy holding
+// live what the begin left dropping) is refused WHOLE, every command the
+// receiver did not refuse, a deletion among them, under one sentence naming
+// both epochs, a command it refused keeping its own refusal, nothing appended.
+// Checked at the begin's epoch it lands. A refusal by the repository's status
+// comes first, whatever the epoch.
 //
 // Mutation: drop the decide's comparison of the epochs, and the push checked
-// before the begin lands a ref the begin's commit could leave naming an object
-// it retired.
+// before the begin lands a ref the commit could leave naming a retired object.
 func TestAPushCheckedBeforeABeginIsRefusedExpunging(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -221,11 +216,10 @@ func TestAPushCheckedBeforeABeginIsRefusedExpunging(t *testing.T) {
 }
 
 // A SNAPSHOT SERVES WHEN EACH PACK'S CONTENT IS FROM ([gitlet.PackRow.Content]),
-// the date a purge's cycle chooses its inputs by and a request is judged
-// served by: a push's pack its own position, and a compaction's output its
-// oldest input's — never the position its row was added at, which the
-// snapshot serves beside it and a rewrite moves past every request it judged
-// nothing for.
+// what a purge chooses its inputs by and a request is judged served by: a
+// push's pack its own position, a compaction's output its oldest input's —
+// never the position its row was added at, served beside it, which a rewrite
+// moves past every request it judged nothing for.
 //
 // Mutation: serve a pack's added position as its content's, and the
 // compaction's output reads as newer than what it merged.
@@ -269,10 +263,10 @@ func TestASnapshotServesWhenEachPacksContentIsFrom(t *testing.T) {
 	}
 }
 
-// AN EXPUNGE IS ANSWERED ONLY FROM THE ROWS OF THE PACKS IT ADDED: a publish
-// that answers applied for a begin that wrote no row is answered unknown,
-// never applied — which would hand its builder packs no row names — and logged
-// at ERROR, since no committer of this domain forms such a record.
+// AN EXPUNGE IS ANSWERED ONLY FROM THE ROWS OF THE PACKS IT ADDED: a begin
+// whose publish answers applied but wrote no row is answered unknown (applied
+// would hand its builder packs no row names) and logged at ERROR, since no
+// committer of this domain forms such a record.
 //
 // Mutation: answer a begin applied from the publish's word, and it is applied
 // with none of its packs in the rows.
@@ -295,10 +289,10 @@ func TestAnExpungeIsAnsweredOnlyFromTheRowsOfThePacksItAdded(t *testing.T) {
 }
 
 // THE EXPUNGE LISTING NAMES THE EXPUNGES OWED: the active and archived
-// repositories with an expunge open or a purge requested, by id, each with
-// the open expunge, the request and its position, its live packs and bytes
-// and the version its row was read at — and no repository with neither, nor
-// a deleted one, whose request waits for its restore — paged by id.
+// repositories with an expunge open or a purge requested, paged by id, each
+// with the expunge, the request and its position, its live packs and bytes and
+// its row's version — never one with neither, nor a deleted one, whose request
+// waits for its restore.
 //
 // Mutation: drop the listing's status rule, and the deleted repository's
 // request is listed; page by name, and the cursor skips a repository.
@@ -362,9 +356,9 @@ func TestTheExpungeListingNamesTheExpungesOwed(t *testing.T) {
 	}
 }
 
-// listExpunges is every page of n's `expunge_due` listing asked with q, read
-// at stale, each page of the reader's own size: the candidates in the order
-// served, and the cursor every page but the last ended at.
+// listExpunges is every page of n's `expunge_due` listing asked with q at
+// stale: the candidates in the order served, and the cursor each page but the
+// last ended at.
 func listExpunges(t *testing.T, n *node, q gitlet.ReadQuery) ([]gitlet.ExpungeCandidate, []string) {
 	t.Helper()
 	q.Kind, q.Fresh = gitlet.ReadExpungeDue, statelog.Freshness{Level: statelog.ReadStale}
@@ -386,19 +380,17 @@ func listExpunges(t *testing.T, n *node, q gitlet.ReadQuery) ([]gitlet.ExpungeCa
 	}
 }
 
-// THE EXPUNGE LISTING'S WEEKLY ARM FOLLOWS ITS OPEN ARM: asked with an
-// instant (ReadQuery.ScannedBefore), the `expunge_due` listing serves every
-// repository with an expunge open or a purge requested first, by id, and then
-// every OTHER active or archived repository last judged at or before the
-// instant — never judged here — least recently judged first and the id
-// breaking a tie, each repository once and a deleted one in neither, paged one
-// row at a time across both arms. Asked without one it serves the open arm
-// alone, as the purge's maintainer always asked it; a weekly arm's cursor
-// without the instant, and the instant on any other read, are refused.
+// THE EXPUNGE LISTING'S WEEKLY ARM FOLLOWS ITS OPEN ARM: asked with an instant
+// (ReadQuery.ScannedBefore), `expunge_due` serves the open arm (an expunge open
+// or a purge requested) by id, then every OTHER active or archived repository
+// never judged or last judged at or before the instant, least recently first,
+// the id breaking a tie: each once, a deleted one in neither, paged a row at a
+// time across both. Without one it serves the open arm alone; a weekly cursor without the
+// instant, and the instant on any other read, are refused.
 //
 // Mutation: drop the weekly arm's "nothing open" residual, and a repository
-// owing a purge is listed twice; keyset the weekly arm on expunge_scanned_at alone,
-// and a page of one row skips every repository never expunged but the first.
+// owing a purge is listed twice; keyset the weekly arm on expunge_scanned_at
+// alone, and a page of one row skips every never-expunged repository but one.
 func TestTheExpungeListingsWeeklyArmFollowsItsOpenArm(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -458,12 +450,11 @@ func TestTheExpungeListingsWeeklyArmFollowsItsOpenArm(t *testing.T) {
 	}
 }
 
-// A SCRATCH REPOSITORY IS EXPUNGED LIKE A PROJECT: a push is refused
-// repo_size on a repository's live bytes whatever its kind, so the weekly
-// arm of the `expunge_due` listing names a seat's scratch repository beside
-// a project, with its live packs; an expunge of it begins and commits as a
-// project's does; and once committed the weekly arm leaves it out until the
-// instant it was expunged at, while the project, never expunged, stays.
+// A SCRATCH REPOSITORY IS EXPUNGED LIKE A PROJECT: repo_size refuses a push on
+// live bytes whatever the kind, so the weekly arm names a seat's scratch
+// repository beside a project; its expunge begins and commits as a project's
+// does; and once committed the weekly arm leaves it out until its expunge's
+// instant, while the never-expunged project stays.
 //
 // Mutation: hold the weekly arm to projects (`AND kind = 'project'`), and the
 // scratch repository is never listed.
@@ -521,11 +512,11 @@ func TestAScratchRepositoryIsExpungedLikeAProject(t *testing.T) {
 }
 
 // A REPOSITORY MID-EXPUNGE IS LISTED FOR NO PUBLICATION: rule 6g refuses every
-// publication between an expunge's begin and its commit, so the publication
-// due listing leaves out a repository with an expunge open — however many of
-// its packs no layer covers, the kept pack its begin wrote among them — and
-// names it again once the commit lands. A publisher polling it builds no
-// layer the committer would refuse stale at every poll until the commit.
+// publication between a begin and its commit, so the publication listing
+// leaves out a repository with an expunge open, however many packs no layer
+// covers (the begin's kept pack among them), and names it again once the
+// commit lands — else a publisher would
+// build a layer refused stale at every poll until the commit.
 //
 // Mutation: drop the listing's open-expunge predicate, and the repository is
 // listed between its begin and its commit.
@@ -560,9 +551,8 @@ func TestARepositoryMidExpungeIsListedForNoPublication(t *testing.T) {
 }
 
 // seedDropsLeaving writes one ref drop of repoID for each of olds straight
-// into a node's estate, all left by one record — at the packed position on the
-// code log and its broker instant at — the n-th of them dropping
-// refs/heads/dropped-<n>.
+// into n's estate, all left by one record at the packed position and broker
+// instant at, the n-th dropping refs/heads/dropped-<n>.
 func (n *node) seedDropsLeaving(repoID string, position int64, at time.Time, olds ...string) {
 	n.t.Helper()
 	ctx := n.t.Context()
@@ -579,14 +569,12 @@ func (n *node) seedDropsLeaving(repoID string, position int64, at time.Time, old
 	}
 }
 
-// AN EXPUNGE'S TIPS ARE WHAT ITS DROPS LEFT SINCE ITS INSTANT: the
-// `expunge_tips` read answers the object of every ref drop of the repository
-// whose record's broker instant is at or after the one it names — a drop at the
-// instant itself among them, none before it and none of another repository —
-// in the order of the drops' key, each object once a page, paged by a keyset
-// that resumes after the last drop the page read, so every page's drops are
-// read once; a cursor from before the instant is refused, and a repository
-// with no row is not found.
+// AN EXPUNGE'S TIPS ARE WHAT ITS DROPS LEFT SINCE ITS INSTANT: `expunge_tips`
+// answers the object of every ref drop of the repository whose record's broker
+// instant is at or after the one named (at it included, none of another
+// repository), in the drops' key order, each object once a page, the keyset
+// resuming after the last drop read so every drop is read once; a cursor from
+// before the instant is refused, and a repository with no row is not found.
 //
 // Mutation: seek `at > ?` and the drops left at the instant go unread; resume
 // a page after the last drop's position alone, and a page that ends inside a
@@ -646,12 +634,10 @@ func TestAnExpungesTipsAreWhatItsDropsLeftSinceItsInstant(t *testing.T) {
 }
 
 // AN EXPUNGE IS CHECKED UNSTORED AS IT WILL BE STORED: ValidateUnstored
-// answers what Validate answers once every output's put has filled in its key
-// and digest — a begin and a commit both take, a commit whose rescue's sizes
-// lay out no bundle both refuse — so the maintainer that built one holds it to
-// every rule its committer will before a byte of it is uploaded
-// (internal/gitlet/compact). An output already stored is refused, and so is a
-// request, which stores nothing: Validate is the check of those.
+// answers what Validate will once each output's put fills in its key and
+// digest, so the maintainer (internal/gitlet/compact) holds it to the
+// committer's rules before uploading a byte. An output already stored is
+// refused, and so is a request, which stores nothing: Validate checks those.
 //
 // Mutation: hold the outputs to Validate as they stand — no key, no digest —
 // and the begin both take is refused unstored.
@@ -705,11 +691,10 @@ func TestAnUnstoredExpungeIsCheckedAsItWillBeStored(t *testing.T) {
 }
 
 // A REPOSITORY'S DETAIL SAYS WHERE ITS PURGE STANDS, from its own row: none
-// before anything is asked; the purge a person asked for, and where its
-// record landed, once it is; the expunge its maintainer opened to serve it
-// while that is open; and, once its commit lands, the request served, the
-// commit's instant and what it dropped — what a person who asked for a purge
-// reads to know it is done.
+// before anything is asked; the request and its record's position once asked;
+// the expunge serving it while open; and once its commit lands, the request
+// gone, the commit's instant and what it dropped — how the asker knows it is
+// done.
 //
 // Mutation: leave the detail's expunge block unread, or read the open
 // expunge into the request → red.
@@ -758,19 +743,16 @@ func TestARepositorysDetailSaysWhereItsPurgeStands(t *testing.T) {
 	}
 }
 
-// A CLEAN SCAN TAKES A REPOSITORY OUT OF THE WEEKLY LISTING: a maintainer's
-// record that its scan found no expunge due (gitlet.ExpungeScan) applies, and
-// the `expunge_due` listing's weekly arm — read by any node, from the rows —
-// leaves the repository out until the record's instant, while a repository
-// never judged stays; asked again from past that instant it names it again.
-// A scan proposed while an expunge is open on the repository is refused
-// stale, writing nothing: an open expunge is finished, never judged. And a
-// scan with no Seen, or naming no node, is no proposal at all.
+// A CLEAN SCAN TAKES A REPOSITORY OUT OF THE WEEKLY LISTING: a scan record
+// finding no expunge due (gitlet.ExpungeScan) applies, and the weekly arm
+// leaves the repository out until the record's instant, naming it again from
+// past it, while one never judged stays. A scan beside an open expunge is
+// refused stale, writing nothing: an open expunge is finished, never judged.
+// A scan with no Seen, no node or a non-uuid id is no proposal at all.
 //
-// Mutation: have the scan's apply leave expunge_scanned_at where it was, and
-// the judged repository stays listed; key the weekly arm on expunged_at, and
-// likewise; drop the decide's open-expunge rule, and the scan beside an open
-// expunge applies.
+// Mutation: have the scan's apply leave expunge_scanned_at where it was, or
+// key the weekly arm on expunged_at, and the judged repository stays listed;
+// drop the decide's open-expunge rule, and the scan beside one applies.
 func TestACleanScanTakesARepositoryOutOfTheWeeklyListing(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -828,16 +810,14 @@ func TestACleanScanTakesARepositoryOutOfTheWeeklyListing(t *testing.T) {
 	}
 }
 
-// A CLEAN SCAN COSTS THE LOG ONE SMALL RECORD — the figure the code log's day
-// bounds its maintainers' clean scans by (internal/worklet's
-// codeExpungeScanRecordBytes): at most one a repository an ExpungeInterval.
-// What it takes is measured as the day measures a push (BenchmarkPushLogBytes):
-// the log's stream grown by the one record, as the broker counts it against
-// the log's ceiling — its signed frame, its subject and the broker's
-// per-message overhead.
+// A CLEAN SCAN COSTS THE LOG ONE SMALL RECORD, within the figure the code
+// log's day bounds clean scans by (internal/worklet's
+// codeExpungeScanRecordBytes, one a repository an ExpungeInterval), measured as
+// BenchmarkPushLogBytes measures a push: the stream's growth as the broker
+// counts it against the log's ceiling, frame, subject and overhead included.
 //
-// Mutation: carry the scan twice in its record's payload — the scan takes the
-// log past its figure, red.
+// Mutation: carry the scan twice in its record's payload, and it takes the log
+// past its figure.
 func TestACleanScanCostsTheLogOneSmallRecord(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -868,11 +848,9 @@ func TestACleanScanCostsTheLogOneSmallRecord(t *testing.T) {
 }
 
 // expungeScanRecordBytes is the most one clean scan's record takes the code
-// log, the figure internal/worklet's codeExpungeScanRecordBytes bounds the
-// maintainers' scans by. 736 BYTES: a repository id, a scan id, a node id and
-// a position beside the record's envelope measure 708 here, at the harness's
-// clock and the log's first generation; a running node's instant prints up to
-// ten bytes more and a generation printed whole seventeen, as holdRecordBytes
-// allows, so 736 bounds both. A node id longer than the suite's adds a byte a
-// character, as it does to every record.
+// log (internal/worklet's codeExpungeScanRecordBytes). 736 BYTES: the record
+// measures 708 here, at the harness's clock and the log's first generation; a
+// running node's instant prints up to ten bytes more and a whole generation
+// seventeen, as holdRecordBytes allows. A longer node id adds a byte a
+// character, as to every record.
 const expungeScanRecordBytes = 736

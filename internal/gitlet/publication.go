@@ -14,90 +14,29 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A PUBLICATION, DECIDED: a compaction that carries a published layer
-// ([Compaction.Layer]). A repository's maintainer builds git's own incremental
-// multi-pack-index layer — its bitmap, and the commit-graph layer over the same
-// packs — once for the fleet, stores its bytes as [LayerPart] objects, and
-// proposes it to the repository's committer as a compaction, so the one writer
-// of a repository's packs is also the one writer of its published chain. Its
-// Retire and Add, when present, are the repack of the non-full packs the layer
-// gathers; a publication may carry neither.
-//
-// # What the decide holds a publication to
-//
-// Everything [decideCompaction] holds a compaction to — the repository, the
-// inputs, the outputs and the arithmetic — with the inputs' rule amended and
-// seven rules of the layer's own, each against the rows of the same snapshot:
-//
-//   - 6g, NO EXPUNGE OPEN, read with the repository's row before anything
-//     else: a publication decided while the repository's expunge has begun
-//     and not committed ([ExpungeBegin]) is stale, and the next pass plans
-//     again once it commits. Its live packs need not be closed then — a ref a
-//     push moved between the expunge's scan and its begin may reach an object
-//     only a dropping pack holds, until the commit's rescue makes it live —
-//     so a layer covering them may cover no history git can bitmap, and one
-//     covering a dropping pack would be over a pack the commit retires. Held
-//     off until the commit, every layer the chain holds names live packs
-//     alone, and the commit keeps every one. The publication due listing
-//     ([ReadPublicationDue]) names no repository with an expunge open, so no
-//     publisher builds a layer this rule would refuse;
-//   - THE INPUTS (rule 2, amended for every compaction): an input's pack is
-//     named by NO layer of the chain unless the record replaces that layer —
-//     else stale. A layer names its packs by checksum, and a node's chain is
-//     loadable only over every pack it names, so retiring one under a layer
-//     that stays would break the chain on every Gitlet node;
-//   - 6a, THE CHAIN IT BUILDS ON: the layers it replaces are the chain's top,
-//     in order, and the one below them is its base — else stale: another
-//     publication landed first, and the next pass plans again;
-//   - 6b, ITS LENGTH: the chain it leaves holds at most [MaxPublishedLayers]
-//     — else an error ([ErrInvalidProposal]), a planner that miscounted;
-//   - 6c, LIVE: every pack it names is a live pack once the record's own
-//     retirements and outputs are counted — else stale: a compaction moved it
-//     first;
-//   - 6d, COMPLETE: every pack live as of its plan ([Compaction.Seen]) that
-//     its base does not name, and that the record does not retire, it names —
-//     else stale. This is the closure git's bitmap needs: every push's pack is
-//     closed over the packs before it, and a compaction drops no object, so
-//     the packs live at one position are closed together — and a layer over
-//     fewer of them, the full packs of a cut alone among them, was refused by
-//     git and wrote no bitmap. A pack added after the plan was in no
-//     builder's snapshot; every pack it depends on was live before it, so it
-//     stays outside the chain, which git reads beside it;
-//   - 6e, DISJOINT: no pack it names is its base's, and its id is none of its
-//     base's layers' — else an error, a builder that named its packs twice;
-//   - 6f, ITS PARTS NAMED IN TIME: each part's key was minted within
-//     objstore.RecordWithin of the decision — else upload_expired, the push's
-//     own rule ([uploadExpired]).
-//
-// Nothing else is read: no ref, no protection, no push. The chain is at most
-// [MaxPublishedLayers] rows read whole by its key, and the live packs one read
-// of the repository's own.
-//
-// # Applied, the chain's top is replaced
-//
-// The apply (apply_compact.go) removes the layers the record replaces, with
-// their parts, adds the new one above its base, and RECOUNTS the repository's
-// published packs from the rows — never arithmetic, which a pack row
-// byte-identical to a published one (two rows, one checksum) would make drift
-// from what git reads; a push's arithmetic carries exactly that drift, in the
-// tail, until the next recount (replicated 0090 says why no push recounts).
-// Every pack a layer row of an active or archived repository names is then a
-// live pack's: rule 2 retires none a layer that stays names, an expunge's
-// begin removes every layer over a pack it retires and every layer above that
-// one (decide_expunge.go), and 6c names none that is not live.
+// A PUBLICATION is a compaction carrying a [LayerRef] ([Compaction.Layer]); the
+// package doc's "A publication puts a published layer on the chain" says why.
+// Beyond [decideCompaction]'s rules it is held, against one snapshot's rows, to
+// rule 2 as amended for every compaction, to 6g, and to 6a–6f ([decideLayer]),
+// each refusing it stale unless noted:
+//   - 2: no input is a pack named by a layer the record does not replace,
+//     since a node loads a chain only over every pack it names;
+//   - 6g, first, off the repository's row: no expunge open ([ExpungeBegin]).
+//     Until its commit a live pack may need an object only a dropping pack
+//     holds, so no layer is sound; [ReadPublicationDue] lists none mid-expunge.
 
-// Check is what every layer row must be before any byte moves — the
-// committer's decide and a Gitlet node's install alike — each refusal
-// [ErrInvalidLayer] naming the field: LayerID 40 lowercase hex digits and not
-// git's zero id; BaseID "" or such an id, and not the layer's own; Replaces
-// distinct such ids; GraphID such an id, or "" exactly when GraphBytes is 0;
-// Packs 1 to [MaxPacksPerRepo] such checksums, sorted and distinct; 1 to
-// [MaxLayerParts] parts, each a whole object, every one but the last exactly
-// [LayerPartBytes] and the last 1 to that, summing to [LayerRef.Size];
-// MidxBytes and BitmapBytes positive and GraphBytes not negative; Objects at
-// least 1, Commits not negative and 0 exactly when GraphBytes is; Git a release
-// as git's version line spells its first three numbers ("2.56.0"); TookMs not
-// negative.
+// The apply (apply_compact.go) replaces the chain's top and recounts published
+// packs from the rows, never by arithmetic, which a pack row byte-identical to
+// a published one would make drift from what git reads. Every pack a layer row names then stays live: rule 2
+// retires none, an expunge's begin drops every layer over a pack it retires and
+// all above it (decide_expunge.go), and 6c names none that is not.
+
+// Check is what every layer row must be before any byte moves, at the
+// committer's decide and a Gitlet node's install alike; each refusal is
+// [ErrInvalidLayer] naming the field. Ids and pack checksums are git's 40
+// lowercase hex digits and never its zero id, the packs sorted and distinct, and
+// the parts whole objects of exactly [LayerPartBytes] but the last, summing to
+// [LayerRef.Size].
 func (l LayerRef) Check() error {
 	bad := func(field, format string, args ...any) error {
 		return fmt.Errorf("%w: %s: %s", ErrInvalidLayer, field, fmt.Sprintf(format, args...))
@@ -187,16 +126,14 @@ func (l LayerRef) Check() error {
 	return nil
 }
 
-// layerName reports a layer's, a commit-graph layer's or a pack's checksum as
-// git names its files: 40 lowercase hex digits, and never git's zero id, which
-// names no file.
+// layerName reports a checksum as git names a layer's, a commit-graph layer's
+// or a pack's files: 40 lowercase hex digits, never the zero id.
 func layerName(s string) bool { return gitref.ValidOID(s) && s != ZeroOID }
 
-// validRelease reports a git release spelled as git's version line spells its
-// first three numbers and gitproc.Version.String writes them back: three
-// decimal numbers, each with no sign and no leading zero, joined by dots
-// ("2.56.0"). The domain reads no git, so it holds the spelling rather than
-// parsing a version line, and a Gitlet node reads the field back with gitproc.
+// validRelease reports s spelled as git's version line spells its first three
+// numbers and gitproc.Version.String writes them back ("2.56.0"): no sign, no
+// leading zero. The domain reads no git, so it checks the spelling; a Gitlet
+// node parses the field back with gitproc.
 func validRelease(s string) bool {
 	parts := strings.Split(s, ".")
 	if len(parts) != 3 {
@@ -216,10 +153,9 @@ func validRelease(s string) bool {
 }
 
 // validLayerFields is [CompactionProposal.Validate]'s half for a publication:
-// the layer a row of it must be ([LayerRef.Check]), every output one of the
-// layer's packs — a repack's outputs are packs the layer covers, or the layer
-// would name a pack it does not cover — and fewer replaced layers than a chain
-// may hold, so the chain the record leaves is never empty above its root.
+// the layer passes [LayerRef.Check], every repack output is a pack the layer
+// covers, and it replaces fewer layers than a chain holds, so the chain it
+// leaves is never empty.
 func (c Compaction) validLayerFields() error {
 	l := c.Layer
 	if err := l.Check(); err != nil {
@@ -238,9 +174,9 @@ func (c Compaction) validLayerFields() error {
 	return nil
 }
 
-// layersOf is a repository's published chain as its rows hold it, root first
-// — every column but its parts, which [Reader.Snapshot] alone reads: at most
-// [MaxPublishedLayers] rows, read whole by the table's key.
+// layersOf is a repository's published chain, root first, without its parts
+// ([Reader.Snapshot] alone reads them): at most [MaxPublishedLayers] rows, by
+// the table's key.
 func layersOf(ctx context.Context, tx *sql.Tx, repoID string) ([]LayerRow, error) {
 	rows, err := tx.QueryContext(ctx, layersOfSQL, repoID)
 	if err != nil {
@@ -271,10 +207,9 @@ func layersOf(ctx context.Context, tx *sql.Tx, repoID string) ([]LayerRow, error
 	return out, nil
 }
 
-// replacedTop reports whether replaces is chain's top, in order, and base the
-// layer directly below it ("" where it replaces the whole chain) — the one
-// reading of decide rule 6a and the apply's guard, so the committer and every
-// applier agree on whether a publication fits the chain it meets.
+// replacedTop reports whether replaces is chain's top, in order, with base the
+// layer directly below it ("" when it replaces the whole chain): rule 6a and
+// the apply's guard share it, so the committer and every applier agree.
 func replacedTop(chain []LayerRow, base string, replaces []string) bool {
 	k, j := len(chain), len(replaces)
 	if j > k {
@@ -297,11 +232,10 @@ type livePack struct {
 	objects, added int64
 }
 
-// livePacksOf is every live pack row of a repository, of the one part every
-// pack this build stores is — one read of the repository's own rows, by the
-// key's prefix: the decide's 6c and 6d read them, and the apply's recount,
-// a publication's and an expunge's begin's. LIVE: a dropping pack an expunge
-// left is no pack a layer may name or a recount count.
+// livePacksOf is a repository's live pack rows, one read by the key's prefix,
+// for 6c, 6d and the apply's recount (a publication's and an expunge begin's).
+// A dropping pack an expunge left is not live: no layer may name it and no
+// recount counts it.
 func livePacksOf(ctx context.Context, tx *sql.Tx, repoID string) ([]livePack, error) {
 	rows, err := tx.QueryContext(ctx, livePacksSQL, repoID)
 	if err != nil {
@@ -322,9 +256,9 @@ func livePacksOf(ctx context.Context, tx *sql.Tx, repoID string) ([]livePack, er
 	return out, nil
 }
 
-// publishedBy is every pack checksum the layers of chain name but the ones a
-// record replaces, each with the layer that names it: what an input may not be
-// (rule 2) and, of the base alone, what a layer may not name again (6e).
+// publishedBy maps every pack checksum chain's layers name, but those of the
+// layers replaces names, to its layer: what an input may not be (rule 2) and,
+// of the base alone, what a layer may not name again (6e).
 func publishedBy(chain []LayerRow, replaces []string) map[string]string {
 	out := map[string]string{}
 	for _, row := range chain {
@@ -338,10 +272,16 @@ func publishedBy(chain []LayerRow, replaces []string) map[string]string {
 	return out
 }
 
-// decideLayer is rules 6a–6f of a publication, over the chain the decide read,
-// its inputs' rows as rule 2 found them and the rows tx holds, at now: the
-// refusal and its sentence, nothing for a layer that fits, or an error for a
-// layer no correct planner forms ([ErrInvalidProposal]).
+// decideLayer is rules 6a–6f over the chain the decide read, the inputs rule
+// 2 retires and the rows tx holds, at now: a refusal and its sentence, nothing
+// for a layer that fits, or [ErrInvalidProposal] for one no correct planner
+// forms (6b, 6e). 6a: the replaced layers are the chain's top, the base the one
+// below. 6b: the chain left holds at most [MaxPublishedLayers]. 6c: every pack
+// named is live after the record. 6d COMPLETE: it names every pack live at
+// [Compaction.Seen] that its base does not and the record does not retire —
+// those packs are closed together, and git writes no bitmap over fewer; a later
+// push depends only on packs before it, so it may stay out. 6e: no pack or id
+// of its base's. 6f: each part's key minted within objstore.RecordWithin.
 func decideLayer(ctx context.Context, tx *sql.Tx, c Compaction, chain []LayerRow, retired map[string]bool,
 	now time.Time) (Refusal, string, error) {
 

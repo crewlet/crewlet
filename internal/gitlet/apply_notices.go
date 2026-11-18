@@ -11,94 +11,43 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// WHOM A CHANGE RECORD REACHED, PER RECIPIENT: the applier writes the answer
-// a record about a change carries ([ChangeRouting], concerns.go; none where it
-// concerns nobody, which writes no row) down as
-// ONE ROW PER (record, change, recipient) it reached — every handle each
-// change's routing precedence keeps ([Concerns]) but that routing's own actor
-// — in code_notifications (replicated 0109, keyed so by 0133), as the tracker
-// writes tracker_notifications from its records. The change is in the key
-// because one record can tell one handle about several: a batched push that
-// opens two changes mentioning them, a landing that merges two of their
-// changes ([NoticeID]). A person's code inbox is read from
-// these rows, a change's "whom did this wake" is answered from them, and each
-// committed batch announces whose inbox its rows moved ([inbox.Movement],
-// [Applier.Committed]). A SEAT is woken through the code log's feed, never
-// from here; its row is the record of the wake.
-//
-// # Every candidate, not every employee
-//
-// The applier holds no roster: a handle the company no longer employs keeps
-// its row, written before anybody asked, and loses only its wake, which the
-// feed's routing filters (internal/routing's Route). So the rows are a
-// complete record of whom a change concerned, and the wakes a subset of them.
-//
-// # Two horizons, and none past its own
-//
-// A PERSON's notice is kept the company's `inbox.retention_days`
-// ([inbox.Horizon], read off the epoch the batch is applied under), a SEAT's
-// [SeatNoticeHorizon]. The applier writes no row past its recipient's horizon
-// — a record whose broker instant is older than its batch's instant less the
-// horizon writes none for them — and each node sweeps its own rows past each
-// horizon ([NoticeJobs]): the two hold one horizon, so a replay of the whole
-// log rebuilds no notice the sweep would delete. The table is DIVERGENT for
-// that reason: whether a row is written depends on the batch's instant and the
-// epoch's horizon, which two nodes may not share.
-//
-// # A change counts its notices where every node agrees
-//
-// Beside its rows, every record that writes notices adds to each change it
-// tells anybody about how many handles hear of it ([noticesByChange]) —
-// code_changes.notices (replicated 0130), REPRODUCIBLE — whether or not the
-// recipient's horizon let this node write the row. The count is a pure
-// function of the records, so it is the same on every node, and it is never
-// below the rows any node holds of the change: a node writes at most one row
-// a handle hearing of it, and only the sweep and a purge delete one.
-//
-// # A purge takes a purged change's notices, counted
-//
-// A repository's purge removes its changes' notices with the changes — each
-// purge part those of the changes it removes whole and at most what is left
-// of its bound of the change it cuts, the final purge those of the rest — and
-// CHARGES THEM BY THAT COUNT against a part's bound: a part's count decides
-// which replicated rows go, so it must agree on every node, which this
-// table's rows do not and the count does ([Applier.purgeChanges]). So a part
-// deletes at most PurgePartRows rows of both tables together on every node,
-// MaxRecordRows' reason. Every removed notice moves its recipient's inbox
-// ([inbox.Note.Removed]).
+// WHOM A CHANGE RECORD REACHED: the applier writes ONE ROW PER (record, change,
+// recipient) a record's routing reached ([ChangeRouting], [Concerns]; never the
+// routing's own actor) into code_notifications (replicated 0109, keyed 0133).
+// The change is in the key because one record can tell one handle about
+// several ([NoticeID]). A person's code inbox and a change's "whom did this
+// wake" are read from these rows, and each committed batch announces whose
+// inbox moved ([inbox.Movement], [Applier.Committed]); a seat is woken by the
+// code log's feed, never from here. The applier holds no roster: a handle no
+// longer employed keeps its row and loses only its wake (internal/routing's
+// Route). The table is DIVERGENT, since a row depends on the batch's instant
+// and the epoch's horizon ([pastHorizon]), so the purge charges the count every
+// node agrees on instead ([countNotices], [Applier.purgeChanges]).
 
 // NoticesTable is the table a change record's notices are kept in: DIVERGENT
 // ([Domain.Tables]), neither reproducible nor the log's machinery.
 const NoticesTable = "code_notifications"
 
 // SeatNoticeHorizon is how long a seat's notice is kept: [store.EventHistory],
-// THIRTY DAYS, the turn-detail horizon (ADR-0021). Past it the turn a wake
-// started is gone from the event log, so the row would name a delivery
-// nothing can show any more — and seats are most of a change's audience, so
-// at a company's scale a year of their rows would be most of this table for
-// nothing.
+// thirty days, the turn-detail horizon (ADR-0021). Past it the woken turn is
+// gone from the event log, and seats are most of a change's audience, so a
+// year of their rows would be most of this table for nothing.
 const SeatNoticeHorizon = store.EventHistory
 
-// MaxNoticeExcerpt is how much of what a record says its notice keeps: SIX
-// HUNDRED BYTES, the tracker's card excerpt (its MaxExcerpt) — a preview a
-// list of notices shows, never the text, which the change's own page reads.
+// MaxNoticeExcerpt is how much of what a record says its notice keeps: 600
+// bytes, the tracker's card excerpt (its MaxExcerpt) — a preview, never the
+// text, which the change's own page reads.
 const MaxNoticeExcerpt = 600
 
-// writeNotices writes the notices of one applied record about a change on
-// repository repoID, its payload decoded: a row for every handle its
-// routings concern and that hears (no handle hears of a change it made),
-// within its recipient's horizon, each noted for the batch's movements
-// where this transaction wrote it — a redelivery writes nothing, and moves
-// nobody's inbox — and, horizon or not, each change's count of them
-// ([countNotices]).
+// writeNotices writes a row for every handle the record's routings concern and
+// that hears (none of a change it made), within its recipient's horizon, noting
+// each this transaction wrote for the batch's movements (a redelivery writes
+// and moves nothing), and, horizon or not, each change's count ([countNotices]).
 //
-// AS FEW STATEMENTS AS THE ENGINE'S PARAMETER LIMIT ALLOWS
-// ([store.InsertRowsReturning]), each answering the recipients it wrote, so
-// the movements still name only rows this transaction wrote: the widest
-// record the decide admits writes 3 904 notices (BenchmarkApplyAPushRecord's
-// notices arm), and one statement a row held the write lane 240 ms of
-// statelog.ApplyTxTimeBudget's 250 for them, on every data node (doc.go's
-// measured section).
+// AS FEW STATEMENTS AS THE PARAMETER LIMIT ALLOWS ([store.InsertRowsReturning]),
+// each answering the rows it wrote: the widest record writes 3 904 notices
+// (BenchmarkApplyAPushRecord), and one statement a row held the write lane
+// most of statelog.ApplyTxTimeBudget (doc.go's measured section).
 func (a *Applier) writeNotices(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
 	payload any) (int, error) {
 
@@ -128,9 +77,8 @@ func (a *Applier) writeNotices(ctx context.Context, tx *sql.Tx, at applyContext,
 		}
 		kept = append(kept, notice{Concern: c, kind: kind})
 	}
-	// ONE ROW A (change, handle): [Concerns] keeps a handle once a change, so
-	// the change and recipient a statement answers name the one concern it
-	// wrote.
+	// [Concerns] keeps a handle once a change, so an answered (change,
+	// recipient) names the one concern written.
 	type noticeKey struct{ change, handle string }
 	byKey := make(map[noticeKey]Concern, len(kept))
 	for _, k := range kept {
@@ -159,12 +107,12 @@ func (a *Applier) writeNotices(ctx context.Context, tx *sql.Tx, at applyContext,
 	return counted + written, nil
 }
 
-// countNotices adds to each change routings tell anybody about the notices
-// they may write about it ([noticesByChange]) — every hearing handle, whether
-// or not its horizon lets this node write the row, so the count is the same
-// on every node — and answers the change rows it updated. It runs only where
-// the record's apply wrote rows ([Applier.noticed]), as the notices do, so a
-// redelivery counts nothing twice.
+// countNotices adds to each change's code_changes.notices every hearing handle
+// routings tell of it ([noticesByChange]), whether or not its horizon let this
+// node write the row: a pure function of the records, so REPRODUCIBLE and never
+// below the rows any node holds (one a handle; only the sweep and a purge
+// delete). It answers the change rows it updated, and runs only where the
+// apply wrote rows ([Applier.noticed]), so a redelivery counts nothing twice.
 func countNotices(ctx context.Context, tx *sql.Tx, at applyContext, routings []*ChangeRouting) (int, error) {
 	updated := 0
 	for _, c := range noticesByChange(routings...) {
@@ -179,25 +127,23 @@ func countNotices(ctx context.Context, tx *sql.Tx, at applyContext, routings []*
 }
 
 // pastHorizon reports a record whose broker instant is older than its batch's
-// instant less horizon: a notice its sweep would delete, which the applier
-// never writes. A horizon of none keeps everything, and a batch with no
-// instant — an apply no loop drove — dates nothing.
+// instant less horizon (a person's [inbox.Horizon] of the batch's epoch, a
+// seat's [SeatNoticeHorizon]): a notice the sweep ([NoticeJobs]) would delete,
+// which the applier never writes, so a replay of the log rebuilds none. A
+// horizon of none keeps everything, and a batch with no instant (no loop drove
+// it) dates nothing.
 func pastHorizon(at applyContext, horizon time.Duration) bool {
 	return horizon > 0 && !at.now.IsZero() && at.brokerAt.Before(at.now.Add(-horizon))
 }
 
-// noticeRecordID is the notice's record ([RecordID]): the record's own
-// operation id, else its position — never an id minted here, which would
-// differ between two nodes applying one record and write two notices for one
-// change, and the one the feed derives the record's wakes from.
+// noticeRecordID is the notice's record ([RecordID]), the one the feed derives
+// the wakes from: the record's operation id, else its position — never an id
+// minted here, which would differ between nodes applying one record.
 func noticeRecordID(at applyContext) string { return RecordID(at.record.OpID, at.position) }
 
-// excerptOf is what a notice about change keeps of what its record says, at
-// most [MaxNoticeExcerpt] bytes cut at a character: an open's description, an
-// edit's new one, a close's reason, an ask's note, a comment's body, a review's
-// summary, a settle's sentence for the change it tells — and nothing for a
-// record that says nothing of its own, a push's among them, which can name
-// several changes.
+// excerptOf is what a notice about change keeps of its record's own text, at
+// most [MaxNoticeExcerpt] bytes cut at a character, and nothing for a record
+// with no text of its own, such as a push.
 func excerptOf(payload any, change *ChangeRouting) string {
 	var text string
 	switch p := payload.(type) {
@@ -216,20 +162,18 @@ func excerptOf(payload any, change *ChangeRouting) string {
 	case Review:
 		text = p.Summary
 	case CloseSettled:
-		// THE ENGINE'S OWN SENTENCE, why this merged change's work item was
-		// left open — what the person reads beside `merged`, as the direct
-		// merge's answer says it (`merged; ENG-42 not closed: …`) — which
-		// its routing carries, since one settle tells of several changes.
+		// The engine's sentence on why this change's work item was left open
+		// (`merged; ENG-42 not closed: …`), from its routing, since one settle
+		// tells of several changes.
 		text = change.NotClosed
 	}
 	return textcut.Within(text, MaxNoticeExcerpt)
 }
 
-// removeNotices deletes every notice of changeIDs — changes a purge removes
-// whole, each charged its count ([Applier.purgeChanges], [Store.PurgeStep])
-// — noting each for the batch's movements, timed at the purge's own broker
-// instant ([inbox.Movement.At]: the record that deleted it), and answers how
-// many it deleted.
+// removeNotices deletes every notice of changeIDs, changes a purge removes
+// whole, each charged its count ([Applier.purgeChanges]), noting each removal
+// for the batch's movements at the purge's broker instant
+// ([inbox.Movement.At]), and answers how many it deleted.
 func (a *Applier) removeNotices(ctx context.Context, tx *sql.Tx, at applyContext, changeIDs []string) (int, error) {
 	if len(changeIDs) == 0 {
 		return 0, nil
@@ -245,11 +189,10 @@ func (a *Applier) removeNotices(ctx context.Context, tx *sql.Tx, at applyContext
 	return n, nil
 }
 
-// removeCutNotices deletes at most limit notices of changeID — the change a
-// purge part cuts, charged limit of its count — oldest first, noting each for
-// the batch's movements as [Applier.removeNotices] does, and answers how many
-// it deleted: up to limit, and fewer where the sweep left this node fewer than
-// its count says.
+// removeCutNotices deletes at most limit notices of changeID, the change a
+// purge part cuts, oldest first, noting each as [Applier.removeNotices] does,
+// and answers how many it deleted: fewer than limit where the sweep left this
+// node fewer than the count says.
 func (a *Applier) removeCutNotices(ctx context.Context, tx *sql.Tx, at applyContext, changeID string,
 	limit int) (int, error) {
 	n, err := a.removed(ctx, tx, at, removeCutNoticesSQL, changeID, limit)
@@ -259,11 +202,10 @@ func (a *Applier) removeCutNotices(ctx context.Context, tx *sql.Tx, at applyCont
 	return n, nil
 }
 
-// removed runs one of the purge's notice deletes, whose RETURNING is the rows
-// it deleted, and notes each as removed from its recipient's inbox, by its [NoticeID]
-// and at the purge's broker instant: ONE PASS,
-// the delete answering what it took, never a read of the rows and a second
-// seek of the same index to delete them.
+// removed runs one of the purge's notice deletes and notes each row its
+// RETURNING answers as removed from its recipient's inbox, by its [NoticeID],
+// at the purge's broker instant: one pass, never a read and a second seek of
+// the same index to delete.
 func (a *Applier) removed(ctx context.Context, tx *sql.Tx, at applyContext, stmt string, args ...any) (int, error) {
 	rows, err := tx.QueryContext(ctx, stmt, args...)
 	if err != nil {
@@ -287,9 +229,8 @@ func (a *Applier) removed(ctx context.Context, tx *sql.Tx, at applyContext, stmt
 	return n, rows.Close()
 }
 
-// changesOf is every change repoID still holds, by id: what its final purge
-// finds past its parts — a remainder its parts kept small — whose notices
-// go before the rows that are the only way to them.
+// changesOf is every change repoID still holds, by id: the remainder its final
+// purge finds, whose notices go before the rows that are the only way to them.
 func changesOf(ctx context.Context, tx *sql.Tx, repoID string) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, purgedChangesSQL, repoID)
 	if err != nil {
@@ -308,13 +249,10 @@ func changesOf(ctx context.Context, tx *sql.Tx, repoID string) ([]string, error)
 }
 
 // The applier's notice statements, each with a WHERE registered in
-// plan_test.go: the write, in three parts for [store.InsertRowsReturning] —
-// a conflict on the key a skip, and the (recipient, change) pairs it wrote
-// its answer; a change's count of them, by the change's key; the notices of
-// a list of changes removed by code_notifications_change_idx, one seek an
-// element, and the oldest of one change's by a range of it, each answering
-// the rows it deleted; and the changes a repository still holds, read for its final
-// purge by code_changes_number_idx. The sweep's is noticesweep.go's.
+// plan_test.go: the write, in three parts for [store.InsertRowsReturning], a
+// conflict on the key skipped; the deletes by code_notifications_change_idx,
+// one seek a list element or a range of one change, oldest first; and the
+// final purge's read by code_changes_number_idx. The sweep's is noticesweep.go's.
 const (
 	addNoticesSQL = `INSERT INTO code_notifications (record_id, recipient, recipient_kind, repo_id, change_id,
 			change_ref, reason, addressed, fallback_only, fallback_rank, excerpt, created_at, log_seq, log_stream,

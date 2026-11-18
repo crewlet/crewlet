@@ -9,28 +9,22 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE QUEUE'S APPLIES: an enqueue's ([Applier.applyEnqueue]), a dequeue's
-// ([Applier.applyDequeue]), and the ends of a change's live entry every other
-// record of the repository's that leaves the change no longer what was
-// enqueued writes in its own apply ([endLiveEntryOf], [endEntries]) — each in
-// the one transaction the framework holds a record's apply to, PURE IN THE
-// RECORD, ITS POSITION AND ITS INSTANT. The decide held the change live at its
-// head and target and its queue holding no live entry of it; the broker's
-// arbitration on the repository's subject guarantees the record applies
-// against the rows that decide read. So every guard here is a SKIP, never a
-// refusal, which would stop the log on every node: an enqueue that finds its
-// change not as its decide held, or its entry made already, and a dequeue that
-// finds its entry ended, apply as NOTHING, whole, logged
-// (code_queue_not_applied) — no correct log carries one but a record the ledger
-// would have collapsed, met again.
+// The queue's applies: an enqueue's, a dequeue's, and the end of a change's
+// live entry that every other record leaving the change no longer what was
+// enqueued writes in its own apply ([endLiveEntryOf], [endEntries]). Each is
+// pure in the record, its position and its instant, and every guard is a skip
+// (apply.go's head, rule 3): an enqueue finding its change not as its decide
+// held or its entry made already, or a dequeue finding its entry ended,
+// applies as nothing, logged (code_queue_not_applied); only a redelivered
+// record the ledger would have collapsed does.
 //
-// EVERY RECORD MOVES THE REPOSITORY'S VERSION, so the version guard every
-// record on its subject meets skips it when it is met again.
+// Every record moves the repository's version, so the version guard on its
+// subject skips it when it is met again.
 
 // applyEnqueue puts the change e names in its target's queue: its entry's row,
 // waiting, its place the record's position, keeping whom the enqueue was made
-// for ([keptCarrier]) — which its landing's push rows take from the row, in the
-// landing's own apply ([Land.pushes]).
+// for ([keptCarrier]), which its landing's push rows read off the row
+// ([Land.pushes]).
 func (a *Applier) applyEnqueue(ctx context.Context, tx *sql.Tx, at applyContext, e Enqueue) (int, error) {
 	row, found, err := changeRowIn(ctx, tx, e.ChangeID)
 	if err != nil {
@@ -55,8 +49,8 @@ func (a *Applier) applyEnqueue(ctx context.Context, tx *sql.Tx, at applyContext,
 		return queueNotApplied(ctx, at, e.RepoID, e.EntryID, "the change holds a live entry already, "+
 			live.EntryID)
 	}
-	// THE CREDENTIAL A PERSON ENQUEUED IT WITH, as every record a write
-	// leaves names it (iam.ActorFor); a seat acts as itself with none.
+	// A person's credential, as every write's record names it
+	// (iam.ActorFor); a seat acts as itself with none.
 	var operator string
 	if kind == PartyPerson {
 		operator = e.Principal.OperatorID
@@ -98,9 +92,9 @@ func (a *Applier) applyDequeue(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, fmt.Errorf("gitlet: dequeue entry %s at %s: %w", d.EntryID, at.position, err)
 	}
 	rows := 2
-	// AN ENTRY A TRAIN TESTS TAKES THE TRAIN WITH IT: every candidate from
-	// its own on merged it, so none of them is what would land now, and a
-	// train is abandoned whole (apply_queuerecords.go).
+	// An entry a train tests takes the train with it: every candidate from
+	// its own on merged it, so none would land now, and a train is abandoned
+	// whole (apply_queuerecords.go's head).
 	if entry.State == QueueTesting {
 		abandoned, err := abandonTrainOn(ctx, tx, d.RepoID, entry.TargetRef)
 		if err != nil {
@@ -114,10 +108,9 @@ func (a *Applier) applyDequeue(ctx context.Context, tx *sql.Tx, at applyContext,
 	return rows, nil
 }
 
-// endLiveEntryOf ends changeID's live entry, if its queue holds one — state
-// and reason what ended it — at the record at's position: what a close, a
-// draft, a retarget and a landing of the change write in their own applies.
-// It answers the rows it wrote: one, or none for a change no queue holds.
+// endLiveEntryOf ends changeID's live entry, if any, with state and reason at
+// the record at's position, as a close, a draft, a retarget and a landing of
+// the change do. It answers the rows it wrote: one, or none.
 func endLiveEntryOf(ctx context.Context, tx *sql.Tx, at applyContext, changeID string, state QueueState,
 	reason QueueEndReason) (int, error) {
 
@@ -129,10 +122,9 @@ func endLiveEntryOf(ctx context.Context, tx *sql.Tx, at applyContext, changeID s
 	return int(n), nil
 }
 
-// endEntries ends the live entry of every change of changes, each a change a
-// push record moved, state and reason what moved it — one statement over the
-// list, a seek of code_queue_change_idx a change, in as many statements as its
-// JSON's chunks take ([inChunks]).
+// endEntries ends the live entry of every change a push record moved, with
+// state and reason: one statement a JSON chunk ([inChunks]), a seek of
+// code_queue_change_idx a change.
 func endEntries(ctx context.Context, tx store.Execer, packed, instant int64, changes []string,
 	state QueueState, reason QueueEndReason) error {
 
@@ -149,11 +141,10 @@ func endEntries(ctx context.Context, tx store.Execer, packed, instant int64, cha
 	})
 }
 
-// purgeQueues deletes up to budget of repoID's merge queues' rows — its
-// entries, then its candidates, its landings, its green rows and its rows of
-// tip work, each table's in its key's order, so every node deletes the same
-// rows — for a purge part
-// ([Applier.applyPurgePart]), and answers how many it deleted.
+// purgeQueues deletes up to budget of repoID's merge queues' rows for a purge
+// part ([Applier.applyPurgePart]): its entries, candidates, landings, green
+// rows and tip work, each table's in its key's order so every node deletes
+// the same rows. It answers how many it deleted.
 func purgeQueues(ctx context.Context, tx *sql.Tx, repoID string, budget int) (int, error) {
 	deleted := 0
 	for _, stmt := range []string{purgeQueueSQL, purgeCandidatesSQL, purgeLandingsSQL, purgeGreenSQL,
@@ -180,12 +171,8 @@ func queueNotApplied(ctx context.Context, at applyContext, repoID, entryID, why 
 	return 0, nil
 }
 
-// The queue's writes, each that finds the rows it writes registered in
-// plan_test.go: an entry inserted, its conflict on its key a skip; an entry
-// ended by its key; a change's live entry ended, over code_queue_change_idx;
-// and a list of changes' live entries ended, driven from the list, one seek of
-// code_queue_change_idx a change. The live states are spelled as
-// code_queue_live_idx is partial on them.
+// The queue's writes, each that finds its rows registered in plan_test.go. The
+// live states are spelled as code_queue_live_idx's partial predicate is.
 const (
 	enqueueSQL = `INSERT INTO code_queue (repo_id, entry_id, target_ref, change_id, seq, head_oid, method,
 			delete_source, close_task, enqueued_by, enqueued_kind, enqueued_operator, state, enqueued_at,
@@ -202,8 +189,7 @@ const (
 			CROSS JOIN code_queue AS q INDEXED BY code_queue_change_idx
 			WHERE q.change_id = CAST(j.value AS TEXT) AND q.state IN ('waiting', 'testing'))`
 
-	// A purge part's bounded deletes, each table's rows of the repository in
-	// its key's order; and the final purge's, whole.
+	// A purge part's bounded deletes, in key order; then the final purge's.
 	purgeQueueSQL = `DELETE FROM code_queue WHERE rowid IN (SELECT rowid FROM code_queue INDEXED BY ` + queueKey + `
 		WHERE repo_id = ? ORDER BY entry_id LIMIT ?)`
 	purgeCandidatesSQL = `DELETE FROM code_candidates WHERE rowid IN (SELECT rowid FROM code_candidates

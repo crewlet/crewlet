@@ -53,7 +53,7 @@ const (
 	// by the home, or in a state a later build records, and none running.
 	RollupPending CheckRollupState = "pending"
 	// RollupCancelled is a set whose checks all ended, one cancelled and none
-	// failing: a head its next push moved on from, which a history row does not
+	// failing: a head its next push superseded, which a history row does not
 	// draw red. Required and RequiredPassed still count it as not passed.
 	RollupCancelled CheckRollupState = "cancelled"
 	// RollupPassed is a set whose every check passed or was skipped.
@@ -116,8 +116,8 @@ type FailingCheck struct {
 const MaxRollupFailing = 8
 
 // maxRollupChecks is the most checks one rollup reads for one commit and
-// branch: twice MaxChecksPerFile, a target whose checks file changed between
-// two dispatches of one head.
+// branch: twice MaxChecksPerFile, for a checks file that changed between two
+// dispatches of one head.
 const maxRollupChecks = 2 * MaxChecksPerFile
 
 // rollupRow is one check's latest attempt as a rollup reads it.
@@ -179,8 +179,7 @@ func rollUp(rows []rollupRow, more bool) *CheckRollup {
 			}
 		case r.state == CheckStateQueued, r.requeued(), !r.state.Valid():
 			// A STATE A LATER BUILD RECORDS is pending, as the gate reads it:
-			// no ending this build can read as a pass, and no failure it can
-			// name.
+			// this build can read it as neither a pass nor a failure.
 			pending = true
 		case r.state == CheckStateCancelled:
 			cancelled = true
@@ -256,8 +255,7 @@ func scanRollupRow(s scanner, lead ...any) (rollupRow, error) {
 }
 
 // rollupOfTarget is where commit's checks for target stand in tx, or nil
-// where the rows keep no attempt of them: one walk of latestChecksOfTargetSQL,
-// read maxRollupChecks + 1 deep.
+// where the rows keep no attempt of them.
 func rollupOfTarget(ctx context.Context, tx *sql.Tx, repoID, commit, target string) (*CheckRollup, error) {
 	rows, err := tx.QueryContext(ctx, latestChecksOfTargetSQL, repoID, commit, target, maxRollupChecks+1)
 	if err != nil {

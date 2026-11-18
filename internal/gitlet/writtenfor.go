@@ -13,63 +13,17 @@ import (
 )
 
 // WHOM A CODE WRITE IS MADE FOR, AS ITS REQUEST CROSSES THE WIRE (ADR-0109).
-//
-// Six requests carry it, each composed where a seat's write is made — a
-// change's lifecycle ([ChangeProposal]) and its conversation
-// ([ConversationWrite]), an engine write ([EngineWrite]), a write of a merge
-// queue ([QueueProposal]), a merge ([MergeProposal]) and a push ([Proposal]) —
-// and every one of them decodes ITSELF, to state on arrival whom it is made for
-// whatever arrived ([types.WrittenFor.Received]), as internal/estate's Actor
-// does for a tracker write's author.
-//
-// THE NODE THAT DECIDES A REQUEST CANNOT TELL an absent carrier a current
-// node stated from one an older node, knowing no carrier, never sent: a
-// carrier of nobody is left off the wire (`omitzero`), and so is the whole
-// member on a node of a build before it. So what arrives is what the node
-// that formed the request stated: an absent carrier is nobody, the writing
-// seat's own work or, until the roll completes, an older node's write, which
-// is decided by its ceiling as before the carrier. A request that states
-// nothing is never asked of any node: the asking router refuses an agent's
-// before it asks anything, its own copy in process included
-// (internal/estate's codeWrites), and each request's own Validate refuses it
-// where it reaches a writer another way ([writtenForInvalid]).
-//
-// THROUGH THE CALLER'S OWN DECODER, and so under the caller's options: on the
-// wire (internal/estate's decodeInput) a member the serving build does not
-// declare, anywhere inside the request, refuses it, named at its path, as it
-// would in any request. An UnmarshalJSON would be handed bytes and decode them
-// again under encoding/json's own defaults, which drop such a member without a
-// word.
-//
-// A KIND OR AN APP THIS BUILD DOES NOT KNOW IS REFUSED THE SAME WAY
-// ([unknownToThisBuild]): a carrier names its kind — a seat, a credential —
-// and a credential's the apps its turn was held to, and no sender composes a
-// kind or an app its own build does not know, so one the serving build does
-// not know is a newer build's, in the roll that adds it. The serving node runs
-// nothing of it, the walk asks the next node — the committer's runner-up, the
-// next Gitlet node — and where none serves it the tool answers that the
-// fleet's builds differ, with nothing written: what an older node does with a
-// request carrying written_for at all. It is never refused as malformed, which
-// would end the walk and tell a newer build's valid request it is.
-//
-// AND THE SAME IN PROCESS, where nothing decodes the request: its Validate
-// meets the carrier's values FIRST, before any other rule of the request, as
-// its decoder refuses one on the wire before any rule runs, and answers one
-// this build does not know with the same refusal — whatever else the request
-// holds, since this build cannot judge such a request at all: a node of a
-// build that knows the value gives the answer, a refusal as malformed
-// included. No node of this build classes that refusal malformed, the rule
-// itself included wherever it meets one ([writtenForInvalid],
-// [refusedCarrier]). So the estate's walk moves on from this node's own copy
-// as from a peer that refused the request unread (internal/estate's
-// unreadHere). A carrier read from a stored row — a run's, which another build
-// may have written — is in this as one off the wire: a box's push and a run's
-// open carry it as the row holds it, and reach a node of the build that wrote
-// it where one serves.
-//
-// NO ENCODER OF ITS OWN: what crosses is the plain encoding of each request's
-// fields under the caller's options, which every gate over what an operation
-// takes reads it as (internal/estate's plainlyEncoded walks into each).
+// [ChangeProposal], [ConversationWrite], [EngineWrite], [QueueProposal],
+// [MergeProposal] and [Proposal] each decode ITSELF, with no encoder of its own
+// (internal/estate's plainlyEncoded), through the caller's decoder and options
+// (an UnmarshalJSON would re-decode under encoding/json's defaults, dropping
+// undeclared members), and state whom it is made for whatever arrived
+// ([types.WrittenFor.Received]): an absent carrier (`omitzero`) is nobody, or an
+// older node's write, decided by its ceiling. A request stating nothing is
+// refused by the router (internal/estate's codeWrites) or its Validate
+// ([writtenForInvalid]). A value this build does not know (wire, process or
+// stored row) is an undeclared name ([unknownToThisBuild]), FIRST in Validate:
+// the walk moves on as from a peer that refused it unread (estate's unreadHere).
 
 // UnmarshalJSONFrom decodes a change's lifecycle write as the node it is
 // asked of reads it, states whom it is made for whatever arrived, and refuses
@@ -78,13 +32,11 @@ import (
 func (p *ChangeProposal) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	type wire ChangeProposal
 	if err := jsonv2.UnmarshalDecode(dec, (*wire)(p)); err != nil {
-		// UNWRAPPED, against the rule that an error wraps with %w: json/v2
-		// hands its caller a *jsonv2.SemanticError a method returns as it
-		// is, and wraps any other in a second one, typed as this request and
-		// placed wherever the decoder stopped. internal/estate's decodeInput
-		// names the member it refuses from the first SemanticError it finds,
-		// so returned bare that is the decoder's own, at the member's path as
-		// the decoder recorded it, never a position json/v2 inferred.
+		// UNWRAPPED, against the %w rule: json/v2 returns a method's
+		// *jsonv2.SemanticError as is and wraps any other at wherever the
+		// decoder stopped, and internal/estate's decodeInput names the refused
+		// member from the first SemanticError: only the decoder's own holds the
+		// member's path, not a position json/v2 inferred.
 		return err
 	}
 	p.WrittenFor = p.WrittenFor.Received()
@@ -147,11 +99,11 @@ func (p *Proposal) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 }
 
 // WrittenForOn is why w's carrier may not be made under its ceiling on roster,
-// the chart of the Gitlet node that builds it ([writtenForUnder]'s half only a
-// chart decides: whether a seat's carrier names a person's seat or a
-// colleague's), wrapping [ErrInvalid] and naming written_for; nil where it may.
-// The Gitlet node asks it of a seat's write before anything of the write is
-// read or built (internal/gitlet/host), as Validate asks the rest everywhere.
+// the building Gitlet node's chart (the half of [writtenForUnder] only a chart
+// decides: whether a seat's carrier names a person's seat or a colleague's),
+// wrapping [ErrInvalid] and naming written_for; nil where it may. The Gitlet
+// node asks it before reading or building anything of a seat's write
+// (internal/gitlet/host).
 func (w EngineWrite) WrittenForOn(roster Roster) error {
 	if err := writtenForUnder(w.Principal, w.WrittenFor, w.Ceiling, roster); err != nil {
 		return refusedCarrier(ErrInvalid, err)
@@ -160,35 +112,16 @@ func (w EngineWrite) WrittenForOn(roster Roster) error {
 }
 
 // unknownToThisBuild is the refusal of the first value f's carrier names that
-// this build does not know — its kind, or an app of a credential's — at its
-// place under at, where the carrier is held (`kind`, `apps/<i>`), so
-// internal/estate's wire names it args.written_for.kind or
-// args.written_for.apps[]; nil where this build knows every value the carrier
-// names.
-//
-// THE ONE PLACE THIS BUILD DECIDES WHETHER IT KNOWS WHAT A CARRIER NAMES, its
-// kind and each app alike: every request a code write forms asks it as it
-// decodes itself, and its Validate asks it again FIRST, before any other rule
-// of the request — the request handed over in process, which nothing decoded,
-// among them — as the rule every holder holds the carrier to asks it first
-// ([writtenForInvalid]), so no request and no value is answered otherwise on
-// either path, whatever else the request holds.
-//
-// THE DECODER'S OWN REFUSAL OF A NAME ITS BUILD DOES NOT DECLARE
-// (jsonv2.ErrUnknownName), which the estate's wire makes of a member, and so the
-// answer it gives one, through the same path: refused before anything runs,
-// asked of the next node, and the fleet's builds said to differ where none
-// serves (this file's head). A kind and an app are names of this build's
-// vocabulary as a member is one of a request's (the kinds types.WorkingForKind
-// declares, the grants iam.AllGrants does), and a newer build adds one as it
-// adds a member.
-//
-// NEVER A NAME THIS BUILD KNOWS, NOR THE ZERO: the zero kind and the zero app,
-// which name none, and admin, which this build knows as no app, are what no
-// build composes into a carrier, so the rule every node holds the request to
-// refuses each as malformed ([writtenForInvalid]), as it refuses a stranger's
-// carrier, whose kind this build knows. Only a credential's carrier names
-// apps; a seat's that names one is malformed too, and refused there.
+// this build does not know — its kind, or a credential's app — at its place
+// under at (`kind`, `apps/<i>`); nil where it knows them all. The one place
+// this is decided: each request asks it as it decodes and FIRST in Validate,
+// as [writtenForInvalid] does. It is the decoder's own refusal of an
+// undeclared name (jsonv2.ErrUnknownName): a kind (types.WorkingForKind) or an
+// app (iam.AllGrants) is vocabulary a newer build adds as it adds a member, so
+// the estate asks the next node; refusing it as malformed would end that walk.
+// Never a known name, nor the zero: the zero kind and app, and admin (no app),
+// are no build's carrier, refused malformed by [writtenForInvalid], as is a
+// seat's carrier naming apps.
 func unknownToThisBuild(at jsontext.Pointer, f types.WrittenFor) error {
 	carrier := f.Carrier()
 	switch {
@@ -208,52 +141,37 @@ func unknownToThisBuild(at jsontext.Pointer, f types.WrittenFor) error {
 	return nil
 }
 
-// KindUnknownToThisBuild reports whether f names whom a write is made for by a
-// kind this build does not know — a newer build's, since no sender composes a
-// kind its own build does not know: the kind half of [unknownToThisBuild],
-// which asks it, so the one place this build decides it is that function's.
-// Never the zero kind, which names none and which no build composes: the rule
-// every holder holds a carrier to refuses it as malformed
-// ([writtenForInvalid]). Exported for the Gitlet node's box admission, which
-// bounds a run's box by the kind of whom its row says the turn works for
-// (internal/gitlet/host's runCeiling) and so tells a newer build's run from one
-// no build launched by this rule, never by a reading of its own.
+// KindUnknownToThisBuild reports whether f names a kind this build does not
+// know — a newer build's: the kind half of [unknownToThisBuild], which decides
+// it. Never the zero kind, which [writtenForInvalid] refuses as malformed.
+// Exported for the Gitlet node's box admission (internal/gitlet/host's
+// runCeiling), which bounds a run's box by its row's kind and so tells a newer
+// build's run from one no build launched by this rule alone.
 func KindUnknownToThisBuild(f *types.WorkingFor) bool {
 	return f != nil && f.Kind != "" && !f.Kind.Valid()
 }
 
-// RunCarrierInvalid is why a write a run of seat makes may not state f as whom
-// it is made for — f as the run's row keeps whom its turn works for
-// (internal/sandbox's PendingRun.CodeWorkingFor), and so as every push of its
-// box states it — or nil: [writtenForInvalid] of an agent of handle seat, the
-// rule every holder of a carrier holds it to. A value this build does not know
-// is answered as there, by [unknownToThisBuild]'s refusal, which
-// [IsUnknownToThisBuild] reports; anything else it refuses — the zero kind, a
-// handle or a login out of its grammar, a credential naming no app, a stranger
-// — is a carrier no checkout writes, refused naming written_for. Exported for
-// the Gitlet node's box admission, which judges a run's box for whom its row
-// names before any bound (internal/gitlet/host's admitRun): one rule for the
-// row's carrier and for the pushes its box makes from it.
+// RunCarrierInvalid is why a write a run of seat makes may not state f — whom
+// the run's row says its turn works for (internal/sandbox's
+// PendingRun.CodeWorkingFor), and so every push of its box — or nil:
+// [writtenForInvalid] of an agent of handle seat. A value this build does not
+// know is [unknownToThisBuild]'s refusal ([IsUnknownToThisBuild]); any other
+// refusal names written_for. Exported for the Gitlet node's box admission
+// (internal/gitlet/host's admitRun): one rule for the row and its box's pushes.
 func RunCarrierInvalid(seat string, f *types.WorkingFor) error {
 	return writtenForInvalid(Principal{Kind: PrincipalAgent, Seat: seat}, types.ForTurn(f))
 }
 
-// writtenForAt is where every request a code write forms holds whom it is
-// made for, from the request itself: its written_for member, where its own
-// decoder names a value of the carrier that this build does not know, and so
-// where its Validate names one in process ([writtenForInvalid]).
+// writtenForAt is the written_for member, where each request's Validate names
+// a carrier value this build does not know, as its decoder does on the wire.
 var writtenForAt = jsontext.Pointer("").AppendToken("written_for")
 
-// refusedCarrier is err — why a request may not state whom it is made for
-// ([writtenForInvalid], [writtenForUnder]) — as the request's own refusal
-// answers it: wrapped in invalid, naming the field, where the carrier breaks
-// the rule, which is its sender's bug or, where the deciding chart alone
-// refuses it ([ChartRefusal], kept in the chain), a chart that moved under
-// the turn; and AS IT IS where the carrier names a value this build does not
-// know ([unknownToThisBuild]), which is no sender's bug but a newer build's
-// request, so never classed malformed: whoever holds it reads the decoder's
-// own refusal of a name the build does not declare, as off the wire, and the
-// estate's walk asks a node that knows it.
+// refusedCarrier is err ([writtenForInvalid], [writtenForUnder]) as the
+// request's own refusal: wrapped in invalid where the carrier breaks the rule
+// — its sender's bug, or a chart that moved under the turn ([ChartRefusal],
+// kept in the chain) — and AS IT IS for a value this build does not know
+// ([unknownToThisBuild]): a newer build's request, never classed malformed, so
+// the estate's walk asks a node that knows it.
 func refusedCarrier(invalid, err error) error {
 	if IsUnknownToThisBuild(err) {
 		return err
@@ -261,53 +179,35 @@ func refusedCarrier(invalid, err error) error {
 	return fmt.Errorf("%w: %w", invalid, err)
 }
 
-// IsUnknownToThisBuild reports whether err is a request's refusal of a value its
-// carrier names that this build does not know ([unknownToThisBuild]) — the
-// decoder's own refusal of a name the build does not declare, by the
-// request's decoder on the wire or by its Validate in process — and so no
-// refusal of the request as malformed: a node of a build that knows the value
-// decides it. Exported for the Gitlet node's landing, whose own check of a
-// push's proposal before its upload is this build's, and which asks the
-// push's committer such a proposal rather than refuse it
-// (internal/gitlet/host's land.go).
+// IsUnknownToThisBuild reports whether err is the refusal of a carrier value
+// this build does not know ([unknownToThisBuild]), on the wire or by Validate:
+// no refusal as malformed, since a node whose build knows the value decides
+// it. Exported for the Gitlet node's landing (internal/gitlet/host's land.go),
+// which asks the push's committer such a proposal rather than refuse it.
 func IsUnknownToThisBuild(err error) bool {
 	var semantic *jsonv2.SemanticError
 	return errors.As(err, &semantic) && errors.Is(err, jsonv2.ErrUnknownName)
 }
 
-// handedOn reports whether err is a proposal this node decided nothing of for a
-// reason about itself, which the estate asks the repository's runner-up: a
-// node that does not serve it now ([ErrNotServing]), and one whose build does
-// not know a value whom it is made for names ([IsUnknownToThisBuild]) — the
-// `handed_on` its committer's and its change writer's counters say of it,
-// never `failed`.
+// handedOn reports whether this node decided nothing of err's proposal for a
+// reason about itself — not serving it ([ErrNotServing]), or a build that
+// does not know a carrier value ([IsUnknownToThisBuild]) — so the estate asks
+// the runner-up, and its committer's and change writer's counters say
+// `handed_on`, never `failed`.
 func handedOn(err error) bool { return errors.Is(err, ErrNotServing) || IsUnknownToThisBuild(err) }
 
-// WHOM A CODE WRITE WAS MADE FOR, AS A ROW KEEPS IT (ADR-0109, the replicated
-// migration a_code_row_keeps_whom_an_agents_write_was_made_for): a revision's
-// row (code_revisions.working_for), a push's
-// (code_pushes.working_for) and a queue entry's (code_queue.working_for) each
-// keep the carrier of the write that made it — an open's or a push's for a
-// revision, a push's, a merge's or a landing's for a push, an enqueue's for an
-// entry — as its JSON, and NULL for nobody, the writing seat's own work. The
-// engine's later records name an earlier actor, and read whom that actor's
-// act was made for back from its row ([storedCarrier]) in the statement that
-// reads the actor: a revision's facts and a failed check of a head the
-// revision's ([revisionPusher]), and the home's landing the push's that merged
-// the change ([landingPusher]). The merge queue's records read their entry's
-// off the entry's row its decide reads: its landing beside the enqueuer it
-// names, its ejection and a close it could not make beside no actor; and the
-// landing's own apply fills the push rows it lands from its entries' rows
-// ([Land.pushes]). The home's work on its queue answers the entry's too
-// ([QueueWorkEntry.WorkingFor]), the one read answer that does, since the
-// home's close of a landed change's item is made for them.
-//
-// FILLED FROM THE CARRIER'S FIRST BUILD ON, before most of them are read: a
-// replicated migration runs on each node when it opens, not at a log position,
-// so a column a later build began to fill would hold NULL for the records a
-// node applied before it upgraded and the carrier for the same records on a
-// node that applied them after, as internal/worklet's history row is filled
-// (replicated 0160).
+// WHOM A CODE WRITE WAS MADE FOR, AS A ROW KEEPS IT (ADR-0109, replicated
+// migration a_code_row_keeps_whom_an_agents_write_was_made_for): working_for
+// on code_revisions, code_pushes and code_queue keeps the carrier of the write
+// that made the row, as JSON, NULL for nobody. A later record naming an
+// earlier actor reads its carrier from the actor's row ([storedCarrier]) in the
+// statement reading the actor ([revisionPusher], [landingPusher]); the queue's
+// records read their entry's row, a landing's apply fills its push rows from
+// them ([Land.pushes]), and [QueueWorkEntry.WorkingFor] answers it, for the
+// home's close of a landed item. Filled from the carrier's first build on: a
+// replicated migration runs as a node opens, not at a log position, so a
+// column filled later would differ across nodes for the same records (as
+// internal/worklet's history row, replicated 0160).
 
 // keptCarrier is whom a record's write was made for as the rows its apply
 // writes keep it: f from a record at [WorkingForVersion] or above, and nobody
@@ -335,23 +235,17 @@ func carrierColumn(f *types.WorkingFor) (sql.NullString, error) {
 }
 
 // storedCarrier is whom a write was made for, as column holds it: nil for
-// NULL, and for a value this build cannot read — one that does not decode,
-// or decodes to nothing — a stranger's, who holds no app, the closed end, as
-// internal/worklet reads its history rows. No apply of this build writes such
-// a value: [carrierColumn] encodes every carrier it keeps.
+// NULL, and for a value that does not decode, or decodes to nothing, a
+// stranger's, who holds no app — the closed end, as internal/worklet reads its
+// history rows; [carrierColumn] writes no such value.
 //
-// A KIND THIS BUILD DOES NOT KNOW IS READ AS THE ROW HOLDS IT, never rewritten
-// to a stranger's: it decodes, so it is no value this build cannot read but
-// one it cannot judge, and a carrier read from a stored row is, in that, as
-// one off the wire — another build may have written it (this file's head). So
-// a record that reads it carries it as kept, a holder that must judge it asks
-// the one rule ([KindUnknownToThisBuild]), and the turn a record's wake starts
-// composes it on its own node: as it is where that node's build knows the
-// kind, and as a stranger's, the closed end, where it does not. The home's
-// close of a landed change's item, which must judge it, decides nothing of
-// one: it leaves the close owed for a home of the build that knows the kind
-// (internal/engine's queue close), as a record this build cannot read is
-// deferred, never dropped.
+// A kind this build does not know decodes, so it is read as the row holds it,
+// never rewritten to a stranger's: another build may have written it, and
+// only one that knows it can judge it. A holder that must judge asks
+// [KindUnknownToThisBuild]; a record's wake composes it on its own node (as a
+// stranger's where that build does not know the kind); and the home's close of
+// a landed item leaves the close owed for a home that knows it
+// (internal/engine's queue close): deferred, never dropped.
 func storedCarrier(column sql.NullString) *types.WorkingFor {
 	if !column.Valid {
 		return nil

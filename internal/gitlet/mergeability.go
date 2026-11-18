@@ -20,88 +20,68 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A CHANGE'S MERGEABILITY, RECORDED: whether one revision of a live change
-// merges cleanly into the tip of the branch it targets — read by the
-// repository's HOME Gitlet node, which merges the two commits in a scratch of its
-// own (internal/gitlet/home: `git merge-tree --write-tree`, whose answer is a
-// function of the two commits alone) — and recorded on the change as a
-// [Mergeability]: a record on the change's own subject ([KindChange]), which
-// the repository's committing data node decides and publishes for the home,
-// as it does a revision's facts ([Revise]). A Gitlet node never publishes it.
-// Every reader of a change's mergeability after that — its page, its
-// readiness — reads the row (code_mergeability), never git.
-//
+// A change's mergeability: whether one revision of a live change merges
+// cleanly into its target's tip. The repository's home Gitlet node merges the
+// two commits in a scratch of its own (internal/gitlet/home: `git merge-tree
+// --write-tree`, a function of the two commits alone); the committing data
+// node decides and publishes the [Mergeability] record on the change's own
+// subject ([KindChange]), as it does a revision's facts ([Revise]). A Gitlet
+// node never publishes it. Every later reader (the change's page, its
+// readiness) reads the row (code_mergeability), never git.
+
 // # What it says
 //
-// CLEAN: the merge writes a tree and leaves no path conflicted. CONFLICT: it
-// leaves paths conflicted, which the record names — the first that fit its
-// bounds, [MaxConflictPaths] of them and [MaxConflictBytes] as JSON, each a
-// path a record can carry ([ConflictPathCarried]) — and counts the rest.
-// UNKNOWN: the home's merge ran out of its deadline, so nothing was decided;
-// such a row is read again at its home's refresh (changesdue.go), as a moved
-// target is, rather than left standing for a merge nobody tried again.
+// CLEAN: no path conflicted. CONFLICT: the record names the conflicted paths
+// that fit ([ConflictsHeld]) and counts the rest. UNKNOWN: the home's merge ran
+// out of its deadline; such a row is read again at its home's refresh
+// (changesdue.go), as a moved target is, rather than left standing.
 //
-// A HISTORY THAT SHARES NO COMMIT WITH ITS TARGET'S merges from the empty tree,
-// as its facts measure it ([Revise]'s empty base): its home merges with
-// `--allow-unrelated-histories`, so every path both sides hold differently is
-// a conflict and every other path merges, rather than a refusal no later
-// record could ever move — a change is what its facts say it is.
-//
+// A history sharing no commit with its target merges from the empty tree, as
+// its facts measure it ([Revise]'s empty base): the home merges with
+// `--allow-unrelated-histories`, so paths both sides hold differently conflict
+// and the rest merge, rather than a refusal no later record could move.
+
 // # The guard: monotone in the tip
 //
-// A mergeability is of the change's HEAD revision and head against its
-// CURRENT target, or it is SUPERSEDED, recorded nowhere, as a revision's facts
-// are. And for that revision against that branch it moves only forward: a
-// read of a tip before the one the row holds — a home's pass that read before
-// the target moved, slower than the one that read after — is superseded, and
-// so is the same tip read again once the row is decided, since a merge of two
-// commits is decided once. The one read of the same tip that is taken is an
-// undecided row's: decided at last, or still undecided, when the record moves
-// the instant the row was read at — so the next try waits its home's refresh,
-// as a target's move does, rather than every pass.
-//
+// A mergeability is of the change's head revision and head against its
+// current target, or it is SUPERSEDED, as a revision's facts are. For that
+// revision and branch it only moves forward: a tip earlier than the row's (a
+// slower pass that read before the target moved) is superseded, and so is the
+// same tip once the row is decided, since a merge of two commits is decided
+// once. The same tip is taken only over an undecided row, and moves the row's
+// instant, so the next try waits its home's refresh rather than every pass.
+
 // # The readiness it stamps
 //
-// Every mergeability record carries the change's READINESS as its decide
-// judged it — its target's merge gate ([JudgeGate], gatejudge.go), for no
-// merger in particular: over the decide's own snapshot and
-// chart, with the merge the record carries in place of the row's
-// ([ReadinessRows.With]) — whatever the home read, which may be a record
-// behind — stamped by the writer as whether every precondition is met and
-// whether the first unmet one waits on persons alone, beside the versions of
-// the change's row and of its conversation's readiness inputs it was judged
-// at, and beside the position of the latest record that queued or ended an
-// attempt of the head's checks it read (checks.go): the checks a change's
-// readiness reads are an input of their own, on the repository's checks
-// subject, which moves neither version. The apply stores them, judging
-// nothing again: the answer a wake that a change became ready reads, and the
-// one the listing of the changes waiting on a person seeks.
-//
-// A REFRESH is a mergeability record that MERGES NOTHING: its home's answer to
-// readiness inputs that moved since the row's answer was judged — a review, an
-// ask for review, an answer to findings, a revision's facts, the change's own
-// row, an attempt of its head's checks queued or ended ([ChangeDue.RefreshDue])
-// — recording the readiness again over the merge the row holds, which the
-// writer stamps on it from the row. It is of the row's merge or it is
-// SUPERSEDED: one whose change holds no merge of that revision against that
-// branch — the home merges first, and the merge records the readiness — and
-// one whose row's answer is judged at the versions and the checks position
-// the snapshot holds already, since nothing it reads has moved. Its apply
-// rewrites the row's answer, its versions and its checks position alone, so
-// the merge's instant — what the home's recheck of a moved target is paced by
-// — stays the merge's.
-//
+// Every record carries the change's READINESS, stamped by the writer: its
+// target's merge gate ([JudgeGate]) judged for no merger in particular, over
+// the decide's own snapshot and chart with the record's merge in place of the
+// row's ([ReadinessRows.With]), since the home may have read a record behind.
+// Beside it, the versions of the change's row and its conversation's readiness
+// inputs, and the position of the latest record queuing or ending an attempt
+// of the head's checks (checks.go): an input of its own, on the checks
+// subject, that moves neither version. The apply stores them, judging nothing
+// again: what a wake that a change became ready reads, and what the listing of
+// the changes waiting on a person seeks.
+
+// A REFRESH merges nothing: the home's answer to readiness inputs that moved
+// since the row's answer was judged ([ChangeDue.RefreshDue]), recording the
+// readiness again over the row's merge, which the writer stamps on it. It is
+// SUPERSEDED where the change holds no merge of that revision against that
+// branch (the home merges first, and the merge records the readiness), and
+// where nothing it reads has moved. Its apply rewrites only the answer, its
+// versions and its checks position, so the merge's instant, which paces the
+// home's recheck of a moved target, stays the merge's.
+
 // # Its tables
 //
-// code_mergeability, one row a change (replicated 0105, created again by 0106
-// with the readiness it stores, by 0117 with the checks position it was
-// judged at and by 0129 with the chart), written by the applier
-// (apply_mergeability.go) from the records on the change's own subject — its
-// answer cleared by the record on the repository's subject that closes or
-// merges the change ([clearReadiness]) — and removed only with the change by
-// its repository's purge. Its conflicted
-// paths' bytes count in the change's conversation's text_bytes, as its
-// revisions' facts do, so a purge part weighs them by that one narrow row.
+// code_mergeability, one row a change (replicated 0105; reshaped by 0106, 0117
+// and 0129), written by the applier (apply_mergeability.go) from the records
+// on the change's own subject, its answer cleared by the repository record that
+// closes or merges the change ([clearReadiness]), and removed only with the
+// change by its repository's purge. Its conflicted paths' bytes count in the
+// conversation's text_bytes, as revisions' facts do, so a purge part weighs
+// them by that one narrow row.
 
 // MergeState is what a change's head revision does merged into its target's
 // tip (code_mergeability.state): a closed set ([MergeStates]).
@@ -131,36 +111,31 @@ func (s MergeState) Valid() bool { return slices.Contains(MergeStates(), s) }
 func (s MergeState) Decided() bool { return s == MergeClean || s == MergeConflict }
 
 // MaxConflictPaths is the most conflicted paths one mergeability names: a
-// HUNDRED, as many as a person resolving a merge reads down a list of; past
-// it the record counts the rest ([Mergeability.ConflictsOmitted]), since a
-// merge that conflicts in more is one nobody resolves file by file.
+// HUNDRED, as many as a person reads down a list of; past it the record counts
+// the rest ([Mergeability.ConflictsOmitted]), since a merge conflicting in
+// more is one nobody resolves file by file.
 const MaxConflictPaths = 100
 
-// MaxConflictBytes is the most the conflicted paths may take AS JSON in a
-// mergeability — the list's own encoding, as [ConflictsCost] measures it —
-// past which, as past [MaxConflictPaths], the rest are counted.
+// MaxConflictBytes bounds the conflicted paths AS JSON in a mergeability
+// ([ConflictsCost]); past it, as past [MaxConflictPaths], the rest are counted.
 //
 // 16 KiB: a hundred paths of 160 bytes, twice what a source tree's paths run
-// to, so a list of a hundred ordinary paths is never cut, and one of
-// pathological ones — up to MaxGitPathBytes each, 400 KiB a hundred — keeps
-// what fits. A third of [MaxTouchedBytes], because a change's conflicts are
-// written again at every recheck its moving target asks, a record each of its
-// home's refreshes while it conflicts, where its touched list is written once
-// a revision; and a merge preview answers the same list, inside one git
-// answer ([MaxGitAnswerBytes]).
+// to, so a hundred ordinary paths are never cut, while pathological ones (up
+// to MaxGitPathBytes each) keep what fits. A third of [MaxTouchedBytes],
+// because conflicts are written again at every recheck while the target moves,
+// where the touched list is written once a revision; and a merge preview
+// answers the same list inside one git answer ([MaxGitAnswerBytes]).
 const MaxConflictBytes = 16 << 10
 
 // ConflictsCost is what a list of conflicted paths takes as JSON, as
-// [MaxConflictBytes] bounds it: the list's own encoding, an empty list its two
-// brackets.
+// [MaxConflictBytes] bounds it: an empty list is its two brackets.
 func ConflictsCost(paths []string) int {
 	if paths == nil {
 		paths = []string{}
 	}
 	out, err := json.Marshal(paths)
 	if err != nil {
-		// A list of strings always encodes; reaching here is a broken
-		// encoder, against which no list could be measured.
+		// A list of strings always encodes; only a broken encoder lands here.
 		panic(fmt.Sprintf("gitlet: encoding a conflict list: %v", err))
 	}
 	return len(out)
@@ -174,22 +149,19 @@ func ConflictPathCarried(p string) bool {
 	return utf8.ValidString(p) && validGitPath(p, false) == ""
 }
 
-// ConflictsHeld is a merge's conflicted paths as one record holds them, read
-// as git reports them: the first that fit — at most [MaxConflictPaths], at
-// most [MaxConflictBytes] as JSON, each one a record can carry
-// ([ConflictPathCarried]) — and how many more there were. What the home's
-// merge and a merge preview both hold, so the two answer one list.
+// ConflictsHeld is a merge's conflicted paths as one record holds them, in
+// git's order: the first that fit ([MaxConflictPaths], [MaxConflictBytes],
+// [ConflictPathCarried]) and how many more there were. The home's merge and a
+// merge preview both hold it, so the two answer one list.
 type ConflictsHeld struct {
 	Paths   []string
 	Omitted int64
-	// cost is what Paths takes as JSON, as ConflictsCost measures it, kept
-	// as they are added.
+	// cost is Paths' JSON size ([ConflictsCost]), kept as paths are added.
 	cost int
 }
 
-// Add holds p where it fits, and counts it where it does not. A path past
-// the bounds is counted however it is spelled: a list is cut where it fills,
-// never sorted to fit more.
+// Add holds p where it fits, and counts it where it does not or cannot be
+// carried: a list is cut where it fills, never sorted to fit more.
 func (h *ConflictsHeld) Add(p string) {
 	if len(h.Paths) >= MaxConflictPaths || !ConflictPathCarried(p) {
 		h.Omitted++
@@ -234,110 +206,84 @@ type Mergeability struct {
 	State            MergeState `json:"state"`
 	Conflicts        []string   `json:"conflicts,omitempty"`
 	ConflictsOmitted int64      `json:"conflicts_omitted,omitempty"`
-	// Node is the Gitlet node that merged: the repository's home as it took
-	// itself to be — a refresh's, the home that asked it, whose apply leaves
-	// the row naming the node that merged.
+	// Node is the Gitlet node that merged, the home as it took itself to be;
+	// on a refresh, the home that asked, and the apply leaves the row naming
+	// the node that merged.
 	Node string `json:"node"`
-	// Refresh is a record of the change's READINESS alone, over the merge its
-	// row holds — see this file's head — which runs no merge. Its revision,
-	// head and target name the merge it refreshes, and the writer STAMPS the
-	// rest of that merge from the row — the tip, its position and the state,
-	// which the home sends none of; it names no conflicted path, which its
-	// apply leaves on the row as they are.
+	// Refresh marks a record of the change's READINESS alone over the row's
+	// merge (this file's head), running no merge. Its revision, head and
+	// target name the merge refreshed; the writer STAMPS the tip, its position
+	// and the state from the row, and the row keeps its conflicted paths.
 	//
 	// BASE FORMAT, as [OpMergeability] is.
 	Refresh bool `json:"refresh,omitempty"`
-	// ChangeVersion and ReadinessVersion are the versions of the change's
-	// row (code_changes.version) and of its conversation's readiness inputs
-	// (code_conversations.readiness_version) the decide judged the readiness
-	// at, and Ready and WaitsPerson its answer ([Readiness.Ready],
-	// [Readiness.WaitsPerson]) over its own snapshot and chart with this
-	// record's merge: each STAMPED BY THE WRITER — the home sends none — so
-	// the apply stores the answer the record was decided with and judges
-	// nothing again.
+	// ChangeVersion and ReadinessVersion are the versions of the change's row
+	// (code_changes.version) and its conversation's readiness inputs
+	// (code_conversations.readiness_version) the decide judged at, and Ready
+	// and WaitsPerson its answer ([Readiness.Ready], [Readiness.WaitsPerson])
+	// over its own snapshot and chart with this record's merge. STAMPED BY THE
+	// WRITER (the home sends none), so the apply judges nothing again.
 	//
 	// BASE FORMAT, as [OpMergeability] is.
 	ChangeVersion    int64 `json:"change_version,omitempty"`
 	ReadinessVersion int64 `json:"readiness_version,omitempty"`
 	Ready            bool  `json:"ready,omitempty"`
 	WaitsPerson      bool  `json:"waits_person,omitempty"`
-	// ChecksPosition is the position of the latest record that queued or
-	// ended an attempt of the head's checks, as the decide read the rows
-	// (code_checks: the higher of an attempt's queued_position and its
-	// finished_position, over every attempt at the head commit for the
-	// change's target, the attempts its gate judges) — zero for a head none
-	// of whose checks has been queued: the third input M4-D24's
-	// guard holds a refresh to, since a record on the repository's checks
-	// subject moves neither version. STAMPED BY THE WRITER, as the versions
-	// are; the home sends none.
+	// ChecksPosition is the latest position at which a record queued or ended
+	// an attempt of the head's checks for the change's target, as the decide
+	// read code_checks ([headChecksPositionIn]), zero where none was queued:
+	// the third input M4-D24's guard holds a refresh to, since the checks
+	// subject moves neither version. STAMPED BY THE WRITER.
 	//
 	// BASE FORMAT, as [OpMergeability] is.
 	ChecksPosition statelog.Position `json:"checks_position,omitzero"`
-	// ChartEpoch is the activation of the chart the decide judged the
-	// readiness by (configplane.ActivationStamp: [SeatRules.Epoch]), 0 for a
-	// chart of no known activation — the fourth input M4-D24's guard holds a
-	// refresh to, since the chart is an input of the readiness (who may
-	// approve, who maintains the repository and clears a blocker) that no
-	// record of the log moves: a change whose stored answer an older chart
-	// judged is due a refresh from a home holding a later one
-	// ([ChangesDueQuery.ChartEpoch]). STAMPED BY THE WRITER, as the versions
-	// are; the home sends none.
+	// ChartEpoch is the activation of the chart the decide judged by
+	// (configplane.ActivationStamp: [SeatRules.Epoch]), 0 for none known: the
+	// fourth input M4-D24's guard holds a refresh to, since the chart decides
+	// who may approve and clear a blocker and no log record moves it; a home
+	// holding a later chart refreshes the change ([ChangesDueQuery.ChartEpoch]).
+	// STAMPED BY THE WRITER.
 	//
 	// BASE FORMAT, as [OpMergeability] is.
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
-	// Routing is whom the record concerns ([ChangeRouting]) — the change's
-	// authors where it TURNED the merge into a conflict, its owner where the
-	// stored answer goes from not ready to ready — STAMPED BY THE WRITER from
-	// the row it replaces; the home sends none.
+	// Routing is whom the record concerns ([ChangeRouting]): the authors where
+	// it TURNED the merge into a conflict, the owner where the answer turned
+	// ready. STAMPED BY THE WRITER from the row it replaces.
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
-// MergeabilityKept is a re-evaluation of a change's mergeability whose OUTCOME
-// the row holds already — the same merge state, the same conflicted paths and
-// the same count of the rest, the same readiness and the same "waits on a
-// person" — recorded by what it MOVED and nothing else: the tip a recheck
-// merged into, where its home merged again into a moved target, and the
-// versions, the checks position and the chart a readiness was judged at,
-// where any of them moved. The writer forms it in place of the [Mergeability] the home
-// sent (decideMergeability): a recheck of a target that moves every few
-// minutes, or a refresh after a review that changed nothing about whether the
-// change may merge, would otherwise rewrite the whole record — its tip, its
-// state, its conflicted paths up to [MaxConflictBytes] — to say what the row
-// says already. A TRANSITION — a new revision or target, a state, a conflict
-// list or a readiness that differs — is always the full record, since it is
-// what somebody is told of.
-//
-// It concerns nobody, by construction: a mergeability tells the authors of a
-// merge it turned into a conflict, and whoever may merge a change it turned
-// ready, and a record that keeps the row's outcome turns neither. So it
-// carries no routing, and [RoutingsOf] names none for it.
+// MergeabilityKept is a re-evaluation whose OUTCOME the row holds already
+// (state, conflicted paths and their count, readiness, waits on a person),
+// recorded by what it MOVED alone: a recheck's new tip, and the versions,
+// checks position and chart a readiness was judged at. decideMergeability
+// forms it in place of the [Mergeability] the home sent, so a recheck of a
+// fast-moving target, or a refresh that changed nothing, does not rewrite the
+// whole record, conflicts up to [MaxConflictBytes] included. A TRANSITION is
+// always the full record, since it is what somebody is told of. It turns
+// nothing, so it concerns nobody: no routing, and [RoutingsOf] names none.
 //
 // BASE FORMAT, as [OpMergeability] is.
 type MergeabilityKept struct {
 	// RepoID stays on the record because the deletion gate reads a change's
-	// repository off its record once a purge has removed the change's row
+	// repository off it once a purge has removed the change's row
 	// (apply_conversation.go's conversationNotApplied).
 	RepoID   string `json:"repo_id"`
 	ChangeID string `json:"change_id"`
-	// Revision is the revision the row's merge is of, which the record
-	// re-evaluated.
+	// Revision is the revision of the row's merge that was re-evaluated.
 	Revision int64 `json:"revision"`
 	// TargetOID and TargetPosition are the tip a RECHECK merged into and the
-	// position of the record that moved the target there — both set where the
-	// home merged again, both empty where the record is a refresh's alone.
+	// position that moved the target there; both empty on a refresh's.
 	TargetOID      string            `json:"target_oid,omitempty"`
 	TargetPosition statelog.Position `json:"target_position,omitzero"`
-	// ChangeVersion, ReadinessVersion, ChecksPosition and ChartEpoch are
-	// what the readiness was judged at ([Mergeability.ChangeVersion],
-	// [Mergeability.ChartEpoch]) — all four set where any of them moved past
-	// the row's, and ChangeVersion zero where none did: a change's row is at
-	// version 1 from its open, so a zero names no judgement, where a zero
-	// readiness version, checks position or chart is one. THE CHART RIDES
-	// WITH THE VERSIONS because a configuration apply alone makes a change
-	// due a refresh (changes_due's chart term): a refresh that keeps the
-	// row's answer under a later chart must still move the row's chart, or
-	// the change stays due at every pass, and a record moving nothing else
-	// would be a judgement the apply could not tell from none.
+	// ChangeVersion, ReadinessVersion, ChecksPosition and ChartEpoch are what
+	// the readiness was judged at ([Mergeability.ChangeVersion],
+	// [Mergeability.ChartEpoch]): all four set where any moved past the row's,
+	// and ChangeVersion zero where none did (a row is at version 1 from its
+	// open, so only its zero names no judgement). THE CHART RIDES WITH THE
+	// VERSIONS because a configuration apply alone makes a change due
+	// (changes_due's chart term): a kept answer under a later chart must move
+	// the row's chart, or the change stays due at every pass; and moved alone,
+	// with ChangeVersion zero, it would read as no judgement.
 	//
 	// ChartEpoch is BASE FORMAT, as [OpMergeability] is.
 	ChangeVersion    int64             `json:"change_version,omitempty"`
@@ -347,10 +293,8 @@ type MergeabilityKept struct {
 }
 
 // keptOutcome reports whether m, stamped with its readiness, says what prior
-// says: the merge's state, its conflicted paths and how many more, and the
-// readiness and whether it waits on a person — the outcome a
-// [MergeabilityKept] keeps. A refresh's merge is the row's by construction,
-// so only its readiness is compared.
+// says: the outcome a [MergeabilityKept] keeps. A refresh's merge is the
+// row's by construction, so only its readiness is compared.
 func keptOutcome(m Mergeability, prior mergeRow) bool {
 	if m.Ready != prior.ready || m.WaitsPerson != prior.waitsPerson {
 		return false
@@ -360,14 +304,11 @@ func keptOutcome(m Mergeability, prior mergeRow) bool {
 }
 
 // validFields holds a mergeability to [ConversationWrite.Validate]'s rules: a
-// revision from 1; a whole object id for the head; the target a branch a
-// change may name; for a merge, a whole object id for the target's tip and
-// its position one on the code log, a state this build knows, with conflicts
-// only beside a conflict — each a path a record carries, named once, within
-// both bounds — and none counted beside any other state; for a refresh, none
-// of the tip, its position, the state or a conflict, which the writer stamps
-// from the change's row or the row keeps; for either, none of the readiness
-// the writer stamps; and the node a node id config admits.
+// revision from 1, a whole head id and a target branch a change may name; for
+// a merge, a whole tip id at a code-log position, a known state, and conflicts
+// only beside a conflict, each carried, named once and within both bounds; for
+// a refresh, no tip, position, state or conflict (the row stamps or keeps
+// them); never the readiness the writer stamps; and a node id config admits.
 func (m *Mergeability) validFields() error {
 	if m.Revision < 1 {
 		return badField("mergeability.revision", "%d; a change's revisions count from 1", m.Revision)
@@ -447,10 +388,9 @@ func (m *Mergeability) validFields() error {
 	return nil
 }
 
-// stampedMergeabilityBytes is what the writer stamps on m, at its widest: the
-// readiness, both versions, the checks position and the chart it was judged
-// at, at the most digits each takes, and a refresh's tip, its position and its state from the row, at the
-// widest each is. EXACT — the stamped record's encoding less m's own — so a
+// stampedMergeabilityBytes is what the writer stamps on m at its widest: the
+// readiness, versions, checks position and chart, and for a refresh the row's
+// tip, position and state. EXACT (the stamped encoding less m's own), so a
 // record is held to [MaxConversationBytes] as the writer will publish it.
 func stampedMergeabilityBytes(m Mergeability) int {
 	widest := m
@@ -479,9 +419,7 @@ func stampedMergeabilityBytes(m Mergeability) int {
 	return len(stamped) - len(sent)
 }
 
-// mergeRow is what a mergeability's decide and apply read of a change's row:
-// the revision, branch, tip and tip's position it is of, what it says, what
-// its wide column weighs, and the versions its readiness was judged at.
+// mergeRow is what a mergeability's decide and apply read of a change's row.
 type mergeRow struct {
 	revision         int64
 	targetRef        string
@@ -493,11 +431,9 @@ type mergeRow struct {
 	readinessVersion int64
 	checksPosition   int64
 	chartEpoch       int64
-	// ready is the stored answer, which the record's own is announced
-	// against: from not ready to ready is the one transition that tells
-	// anybody ([ReasonReadyToMerge]); waitsPerson, conflictsOmitted and
-	// conflicts the rest of the stored outcome, which a re-evaluation that
-	// keeps it records by what it moved alone ([MergeabilityKept]).
+	// ready is the stored answer the record's own is announced against: not
+	// ready to ready is the one transition that tells anybody
+	// ([ReasonReadyToMerge]). The rest is the outcome [MergeabilityKept] keeps.
 	ready, waitsPerson bool
 	conflictsOmitted   int64
 	conflicts          []string
@@ -525,17 +461,15 @@ func mergeabilityIn(ctx context.Context, tx *sql.Tx, changeID string) (mergeRow,
 	return m, true, nil
 }
 
-// decideMergeability is a mergeability's rules over row — see this file's
-// head: a LIVE change (change_closed, change_merged); its head revision and
-// head and its current target (superseded); for a merge, a tip no earlier
-// than the row's for that revision against that branch, and a later one or an
-// undecided row where it is the same (superseded); for a refresh, the row's
-// merge of that revision against that branch, and readiness inputs moved past
-// the versions, the checks position and the chart the row's answer was judged
-// at — a chart later than the row's (superseded). Then the readiness, judged
-// over the snapshot's rows with the record's merge and the chart roster,
-// stamped on the record with the versions, the checks position and the chart
-// epoch it was judged at. Pure over (the rows, w, roster, epoch).
+// decideMergeability is a mergeability's rules over row (this file's head): a
+// LIVE change (change_closed, change_merged); its head revision, head and
+// current target (superseded); for a merge, a tip no earlier than the row's
+// for that revision and branch, and an undecided row where it is the same
+// (superseded); for a refresh, the row's merge of that revision and branch,
+// and readiness inputs moved or a chart later than the row's (superseded).
+// Then the readiness, judged over the snapshot with the record's merge and the
+// chart roster, stamped with what it was judged at. Pure over (the rows, w,
+// roster, epoch).
 func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster Roster, epoch int64,
 	repo RepoRef, row changeRow, named string, d conversationDecision) (conversationDecision, error) {
 
@@ -561,8 +495,8 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 	if err != nil {
 		return conversationDecision{}, err
 	}
-	// THE HEAD'S CHECKS AS THIS SNAPSHOT HOLDS THEM, which the record's scope
-	// names the repository's checks for (changewriter.go): a node holding a
+	// THE HEAD'S CHECKS AS THIS SNAPSHOT HOLDS THEM, which is why the record's
+	// scope names the repository's checks (changewriter.go): a node holding a
 	// check record it could not decode decides no mergeability.
 	checksAt, err := headChecksPositionIn(ctx, tx, repo.ID, row.head, row.target)
 	if err != nil {
@@ -575,16 +509,16 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 			"refresh: its home merges it, and the merge records its readiness", named, m.Revision, m.TargetRef))
 	case m.Refresh && prior.changeVersion == row.version && prior.readinessVersion == d.readiness &&
 		prior.checksPosition == checksAt && prior.chartEpoch >= epoch:
-		// A CHART NO LATER THAN THE ROW'S moves nothing either: an older
-		// one, a node behind the activation that judged the row, would
-		// store an answer the later chart does not give.
+		// A CHART NO LATER THAN THE ROW'S moves nothing either: an older one
+		// (a node behind the activation) would store an answer the later
+		// chart does not give.
 		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("%s's readiness is judged at its row's "+
 			"version %d, its conversation's readiness version %d, its head's checks at %s and the chart of "+
 			"activation %d already, and nothing it reads has moved since", named, row.version, d.readiness,
 			unpacked(checksAt), prior.chartEpoch))
 	case m.Refresh:
-		// THE MERGE IT REFRESHES, stamped from the row: the record says what
-		// it judged the readiness over, and its apply touches no merge.
+		// THE MERGE IT REFRESHES, stamped from the row: the record names what
+		// it judged over, and its apply touches no merge.
 		m.TargetOID, m.TargetPosition, m.State = prior.targetOID, unpacked(prior.targetPosition), prior.state
 	case of && prior.targetPosition > at:
 		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("revision %d of %s is merged into %s at %s "+
@@ -595,11 +529,10 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 			"already (%s), and a merge of two commits is decided once", m.Revision, named, m.TargetRef,
 			m.TargetPosition, prior.state))
 	}
-	// THE READINESS, from THIS snapshot with the record's merge: what the
-	// home read may be a record behind, and an answer the record's own apply
-	// would not leave true is no answer to store. Its target's merge gate
-	// judged for NO MERGER: whether the change is ready, for whoever merges
-	// it — what a wake that it became ready reads.
+	// THE READINESS, from THIS snapshot with the record's merge: the home may
+	// have read a record behind, and an answer the record's own apply would
+	// not leave true is no answer to store. Judged for NO MERGER, since a wake
+	// that the change became ready reads it for whoever merges.
 	facts, err := gateFactsIn(ctx, tx, []readinessSubject{{repo: repo, row: row}})
 	if err != nil {
 		return conversationDecision{}, err
@@ -617,12 +550,9 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 	}
 	m.Ready, m.WaitsPerson = readiness.Ready(), readiness.WaitsPerson()
 	if of && keptOutcome(m, prior) {
-		// THE OUTCOME THE ROW HOLDS ALREADY: recorded by what moved — the tip
-		// a recheck merged into, and the versions, the checks position and
-		// the chart the readiness was judged at where any of them moved
-		// (a chart alone included: a configuration apply makes the change
-		// due, and only a moved chart ends that) — never the
-		// whole record again. It turns nothing, so it concerns nobody, and
+		// THE OUTCOME THE ROW HOLDS ALREADY ([MergeabilityKept]): recorded by
+		// what moved, a chart alone included, since only a moved chart ends
+		// the due a configuration apply makes. It turns nothing, so
 		// routeConversation stamps it no routing.
 		kept := MergeabilityKept{RepoID: m.RepoID, ChangeID: m.ChangeID, Revision: m.Revision}
 		if !m.Refresh {
@@ -639,14 +569,11 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 		return d, nil
 	}
 	// WHOM THE RECORD CONCERNS, by what it turns on the row it replaces: a
-	// merge that becomes a conflict tells the authors, once — not every
-	// recheck that finds it one still — and a stored answer that goes from
-	// not ready to ready tells whoever can act on it: the change's authors
-	// who may merge it into its target, else the lead of the repository's
-	// owner, who may merge or say who should. THIS RECORD AND NO OTHER
-	// announces the change ready (concerns.go's head): it is the one whose
-	// decide holds the stored answer it replaces — a check that passed
-	// reaches it through the home's readiness refresh, never on its own.
+	// merge newly in conflict tells the authors once, not at every recheck;
+	// an answer gone from not ready to ready tells the authors who may merge
+	// it, else the lead of the repository's owner. THIS RECORD ALONE announces
+	// the change ready (concerns.go's head), since its decide holds the stored
+	// answer it replaces: a passed check reaches it through the home's refresh.
 	d.concern = concerning{conflicted: m.State == MergeConflict && (!held || prior.state != MergeConflict)}
 	d.concern.authors = d.concern.conflicted
 	if m.Ready && (!held || !prior.ready) {
@@ -664,18 +591,12 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 }
 
 // MergeabilityRow is a change's mergeability as its home recorded it
-// (code_mergeability, [Mergeability]): the revision and the target's tip it
-// merged — the branch, the tip and the position that moved it there — what
-// the merge did, the conflicted paths it names and how many more there were,
-// the Gitlet node that merged, and the record that merged with its broker
-// instant; and the readiness the last record judged with it — whether it was
-// ready and whether it waited on a person, and the versions of the change's
-// row and its conversation's readiness inputs and the position of its head's
-// checks it was judged at — which a read
-// judges again rather than trusts ([ChangeSummary.Readiness]). A change whose
-// head revision's row is missing, or is of an earlier revision, is one its
-// home has not merged yet; one whose target has moved since says so by its
-// tip, which its home merges again at its refresh.
+// (code_mergeability, [Mergeability]): the merge, the node that merged and the
+// record that merged with its broker instant, and the readiness the last
+// record judged with what it was judged at, which a read judges again rather
+// than trusts ([ChangeSummary.Readiness]). A missing row, or one of an earlier
+// revision, is a head its home has not merged yet; a tip the target has moved
+// past is one its home merges again at its refresh.
 type MergeabilityRow struct {
 	Revision         int64             `json:"revision"`
 	TargetRef        string            `json:"target_ref"`
@@ -723,17 +644,14 @@ func mergeabilityRowIn(ctx context.Context, tx *sql.Tx, changeID string) (*Merge
 	return &m, nil
 }
 
-// MergePreviewQuery asks a repository's Gitlet nodes what merging one commit into
-// another would do — a comparison's merge preview — answered by the same merge
-// a change's home records its mergeability by (internal/gitlet/home), in a
-// scratch of the answering node's, never a cache. A read a principal makes:
-// held to the asker's grant on the repository, and to the grant of the seat
-// it reads for, by the node that answers, as a read by object id is
-// ([GitQuery]).
+// MergePreviewQuery asks a repository's Gitlet nodes what merging one commit
+// into another would do (a comparison's merge preview), answered by the same
+// merge a change's home records (internal/gitlet/home), in a scratch of the
+// answering node's, never a cache. A principal's read, held by the answering
+// node to the asker's grant and the seat it reads for, as [GitQuery] is.
 //
-// THE TWO COMMITS ARE WHOLE IDS, which their asker resolved from refs it was
-// shown — the comparison's two sides — so the answering node merges exactly
-// what was shown, and none of git's revision grammar reaches it.
+// THE TWO COMMITS ARE WHOLE IDS the asker resolved from the refs it was shown,
+// so the node merges exactly what was shown and no revision grammar reaches git.
 type MergePreviewQuery struct {
 	// RepoID is the repository's canonical id.
 	RepoID string `json:"repo_id"`
@@ -792,14 +710,11 @@ type MergePreviewAnswer struct {
 	Position         statelog.Position `json:"position"`
 }
 
-// headChecksPositionIn is the position of the latest record that queued or
-// ended an attempt of any check of commit oid in repository repoID FOR
-// TARGET — the higher of each attempt's queued_position and
-// finished_position, over every attempt the commit holds for the branch — and
-// 0 where it holds none: what a change's stored readiness was judged at of its
-// head's checks ([Mergeability.ChecksPosition]). The attempts for the change's
-// own target are the ones its merge gate judges (gatejudge.go): another
-// branch's attempts at a head two changes share move nothing it reads.
+// headChecksPositionIn is the latest position at which a record queued or
+// ended an attempt of a check of commit oid in repoID FOR TARGET, 0 where
+// none: what a stored readiness was judged at ([Mergeability.ChecksPosition]).
+// Only the target's attempts count, the ones its merge gate judges
+// (gatejudge.go): another branch's attempts at a shared head move nothing.
 func headChecksPositionIn(ctx context.Context, tx *sql.Tx, repoID, oid, target string) (int64, error) {
 	var at int64
 	if err := tx.QueryRowContext(ctx, headChecksPositionSQL, repoID, oid, target).Scan(&at); err != nil {
@@ -808,12 +723,11 @@ func headChecksPositionIn(ctx context.Context, tx *sql.Tx, repoID, oid, target s
 	return at, nil
 }
 
-// A mergeability's reads, each registered in plan_test.go: the row by its key,
-// a decide's and an apply's, and a read's whole; and the position of a head's
-// checks, a range of code_checks' key on the commit and the target — every
-// attempt of every check of one commit for one branch, at most
-// MaxChecksPerFile checks of MaxCheckAttempts each. Its write is the
-// applier's (apply_mergeability.go).
+// A mergeability's reads, each registered in plan_test.go: the row by its key
+// (a decide's and an apply's, and a read's whole), and a head's checks
+// position, a range of code_checks' key on the commit and target bounded by
+// MaxChecksPerFile checks of MaxCheckAttempts each. Its write is
+// apply_mergeability.go's.
 const (
 	mergeabilitySQL = `SELECT revision, target_ref, target_oid, target_position, state, bytes, change_version,
 			readiness_version, checks_position, chart_epoch, ready, waits_person, conflicts_omitted, conflicts

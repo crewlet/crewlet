@@ -14,61 +14,16 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// WHAT A SEAT'S DAY COUNTS OF ITS CHANGES AND REVIEWS: the events a change's
-// opening and a review's landing announce (`change_opened`,
-// `review_submitted`), which a node's day of usage counts — a seat's
-// `changes_opened` and `reviews_given`, and the findings its own changes
-// received (store.DB.UsageForDay).
-//
-// # Announced once, by the node that landed the record
-//
-// A count read off the replicated rows would be read on every data node; an
-// event is in ONE node's log, the publishing node's, as every event is. So the
-// node whose committer (an open) or change writer (a review) landed the record
-// announces it, after the write's answer is handed back — never an applier,
-// which every data node runs, and never a call the operation ledger collapsed
-// onto an earlier landing, whose own call announced it (statelog.Result's
-// Collapsed). A push that opened a change is announced by the committer whose
-// batch landed it: its answer from that batch's own row, never a push the
-// batch found landed before it. So a record is announced at most once, and a
-// landing whose answer was ambiguous — answered from the ledger, collapsed —
-// at worst not at all, which costs the day one count and leaves the rows on
-// the code log whole.
-//
-// # The seats are named by their agent ids, resolved when announced
-//
-// A seat's day is keyed by its AGENT ID (ADR-0013), the `agent_id` column the
-// day groups by, which only a process holding the chart can say — so the
-// engine hands the committer and the change writer its resolver
-// ([CommitterOptions.AgentIDs]), reading the live epoch at the moment of the
-// announcement, as the event log resolves a participant's handle. A person is
-// no seat and has no day: a party of kind person is named by no agent id, and
-// a handle the chart no longer holds by none either.
-//
-// # The committer's announcements wait on none of its writes
-//
-// A committer's goroutine for a repository is that repository's ONLY writer on
-// this node: every push batch, open, merge, queue write, compaction and
-// expunge record of it is decided there, one after another. An announcement
-// is a read of this node's rows and a publish the stream acknowledges — with
-// the event store's own write of it, on the node file every turn's events
-// contend for, inside that publish — and made there, each was a wait of up to
-// [checkEventBudget] in front of the repository's next push. So a committer
-// hands each landed record's announcement to ONE announcer of its own
-// ([Committer.announcer]) and goes straight on: the announcer reads and
-// publishes them in the order they landed, each under a budget of its own.
-// What it holds is bounded ([CommitterAnnouncements]); an announcement past
-// that is dropped and logged, never waited for, which costs what a publish the
-// stream refused costs — the day one count, the feed one line — and leaves the
-// rows on the code log whole. Its events carry the instant it was handed over,
-// as the inline publish's did — by the committer's clock
-// ([CommitterOptions.Now]), the one its records are authored at and a seat's
-// push is counted on — so a backlog that crosses midnight still counts each on
-// the day its record landed. One announcer, rather than one a
-// repository, keeps every event of a repository in its landing order; and an
-// announcement is a record's — an opening, a merge, a queue's ejections — not
-// a push's: a change opens and merges once, so they come at the rate changes
-// do, which one publish at a time keeps up with.
+// WHAT A SEAT'S DAY COUNTS OF ITS CHANGES AND REVIEWS: `change_opened` and
+// `review_submitted`, which a node's day of usage counts as a seat's
+// changes_opened, reviews_given and the findings its changes received
+// (store.DB.UsageForDay). An event is in one node's log, so each is announced
+// once, by the node whose committer (an open) or change writer (a review)
+// landed the record, after the write's answer is handed back: never by an
+// applier, which every data node runs, nor for a call the operation ledger
+// collapsed (statelog.Result's Collapsed) or a push its batch found already
+// landed. An ambiguous landing is thus at worst not announced, which costs the
+// day one count and leaves the rows on the code log whole.
 
 // opening is one change a write opened, to announce: its id, and whether a
 // push's options opened it.
@@ -77,8 +32,10 @@ type opening struct {
 	byPush   bool
 }
 
-// agentOf is the agent id of a party a seat's day counts, "" for a person, a
-// seat the chart does not hold, or a node that resolves none.
+// agentOf is the agent id a seat's day is keyed by (ADR-0013), "" for a
+// person, a seat the chart does not hold, or a node that resolves none. Only a
+// process holding the chart can say it, so the engine hands its resolver in
+// ([CommitterOptions.AgentIDs]), read from the live epoch when announced.
 func agentOf(agentIDs func(string) (string, bool), handle string, kind PartyKind) string {
 	if kind != PartyAgent || agentIDs == nil || handle == "" {
 		return ""
@@ -192,10 +149,9 @@ func unannounced(ctx context.Context, log *slog.Logger, kind, repoID, id string,
 }
 
 // announcement is one landed record's events, handed to the committer's
-// announcer ([Committer.announceLater]): publish reads what the record names
-// from this node's rows and publishes its events, each stamped when, under
-// ctx — one [checkEventBudget] for the read and every publish; kind, repoID
-// and id name it in the log if it is dropped.
+// announcer ([Committer.announceLater]): publish reads the record's rows and
+// publishes its events stamped when, under one [checkEventBudget] for the read
+// and every publish; kind, repoID and id name it in the log if it is dropped.
 type announcement struct {
 	kind, repoID, id string
 	when             time.Time
@@ -207,10 +163,15 @@ type announcement struct {
 var errAnnouncerFull = errors.New("the announcer holds as many records' announcements not yet published as it " +
 	"may (CommitterAnnouncements): the event stream is not keeping up with this node's landings")
 
-// announceLater hands a to the announcer and returns at once: a full queue
-// drops it, logged, rather than hold the repository's next write behind the
-// stream. Called only from a repository's goroutine, which Stop waits for
-// before it closes the queue — so no send meets a closed one.
+// announceLater hands a to the announcer and returns at once. A repository's
+// goroutine is its only writer on this node, and a read plus a publish the
+// stream acknowledges would hold its next push for up to [checkEventBudget].
+// A full queue ([CommitterAnnouncements]) drops a, logged, never waited for:
+// the cost of a refused publish, the day one count and the feed one line. a
+// is stamped now by the committer's clock ([CommitterOptions.Now]), the one
+// its records are authored at, so a backlog crossing midnight still counts on
+// the day the record landed. Called only from a repository's goroutine, which
+// Stop waits for before it closes the queue, so no send meets a closed one.
 func (c *Committer) announceLater(a announcement) {
 	if c.announcements == nil {
 		return
@@ -223,11 +184,13 @@ func (c *Committer) announceLater(a announcement) {
 	}
 }
 
-// announcer publishes every announcement handed to it, in the order they
-// landed, each under one [checkEventBudget] of life — the committer's own
-// lifetime — until Stop closes its queue and it has drained it: every
-// publish refused at once, logged, should Stop's own wait end first and the
-// lifetime with it.
+// announcer publishes every announcement handed to it, in landing order, each
+// under one [checkEventBudget] of life, the committer's lifetime, until Stop
+// closes its queue and it has drained it; should Stop's wait end first, every
+// remaining publish is refused at once, logged. One announcer serves every
+// repository and keeps each one's events in landing order: records (an
+// opening, a merge, a queue's ejections) come at the rate changes do, not
+// pushes, which one publish at a time keeps up with.
 func (c *Committer) announcer(life context.Context) {
 	defer close(c.announcerDone)
 	for a := range c.announcements {

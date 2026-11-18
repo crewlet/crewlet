@@ -7,9 +7,12 @@ import (
 	"time"
 )
 
-// A ROLLUP JUDGES A CHECK AS THE GATE DOES (gatejudge.go): requeued errors, cancelled
-// sets, skipped required checks, unknown states, the failing order and an empty set.
-// Mutation: fail a requeued error or a skipped required check, sort by name, pass nothing.
+// A ROLLUP JUDGES A CHECK AS THE GATE DOES (gatejudge.go): requeued errors,
+// cancelled sets, skipped required checks, unknown states, the failing order and
+// an empty set.
+//
+// Mutation: fail a requeued error or a skipped required check, sort by name,
+// pass nothing → red.
 func TestARollupJudgesACheckAsTheGateDoes(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)

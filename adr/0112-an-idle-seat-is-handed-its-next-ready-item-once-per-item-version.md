@@ -23,6 +23,8 @@
 
 **Amended by [ADR-0124](0124-a-question-and-a-review-say-whom-they-wait-on.md), for reviews.** An agent moving an item it keeps into review names its reviewer, and an item in review its holder submitted itself, with no question of its holder open on it, is ready for that holder again: not as a review of its own work, which it never makes, but because nobody reviews it, so it acts on the review it was given or names a reviewer.
 
+**Amended by [ADR-0159](0159-urgent-ready-work-comes-before-started-work.md), for urgent work.** An urgent ready item comes before every item that is not, started work included; among urgent items, and among the rest, the order above holds. A seat whose first ready item is urgent is handed it while a turn runs, mail waits or before its settle, on its inbox's priority lane.
+
 ## Why the obvious alternative is wrong
 
 **The obvious alternative is to wake the assignee again from the change feed**, on a timer per assignment, as [ADR-0012](0012-a-wake-is-derived-not-published.md) derives every other wake from a committed record. It is wrong because the record that should cause the wake does not exist: what went wrong was that the seat's turn did not start the work, and nothing is written when a turn decides to do something else. A timer per item wakes a busy seat as readily as an idle one, and a seat with ten ready items ten times.

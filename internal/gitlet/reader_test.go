@@ -160,29 +160,16 @@ func TestASnapshotIsFullAfterTombstonesAreSwept(t *testing.T) {
 }
 
 // A DELTA IS NEVER LARGER THAN THE FULL ANSWER IT WOULD REPLACE: a delta from
-// below a clean-up that deleted more refs than the repository keeps carries a
-// row for every deletion, where the full answer carries only what is left, so
-// that delta is answered in full — while a delta from after it, carrying one
-// push's change, is still a delta. And the comparison is of every row each
-// answer carries, PACKS INCLUDED: a delta's packs are only those added since
-// it, a full answer's every pack, so a repository with many packs keeps its
-// delta past a clean-up a repository with few would not. RETIREMENTS are
-// weighed LIKE WITH LIKE: a delta carries every pack retired above its floor,
-// and the full answer it stands in for those above its caller's RetiredSince
-// when it can serve every one, so each side is weighed with the retirements
-// it would carry — those both would carry cancel, and those only one would
-// carry weigh on its side alone.
+// below a clean-up that deleted more refs than the repository keeps is answered
+// in full, while one from after it is still a delta. Every row counts, PACKS
+// INCLUDED (a delta carries only the packs added since it), and RETIREMENTS are
+// weighed LIKE WITH LIKE: each side with those it would carry, so those both
+// carry cancel.
 //
-// Mutation: drop the count, and the delta from below the clean-up is a delta
-// of sixty tombstones beside a full answer of forty refs; compare the refs
-// alone, and the repository of many packs is answered in full — 343 rows — for
-// a delta of 63, under a fifth of its size; leave the retirements out of the
-// count, and a delta of a ref, a pack and two retirements stands in for a full
-// answer of three rows that serves none of them; count them on the delta's
-// side alone, and the delta asked from its own floor is replaced by a full
-// answer carrying them again beside its rows; leave out those the full answer
-// would serve from below the delta's floor, and a delta of 63 rows is replaced
-// by a full answer of 63.
+// Mutations: drop the count, and sixty tombstones stand in for forty refs;
+// count refs alone, and many packs answer 343 rows for a delta of 63; leave
+// retirements out, count them on the delta's side alone, or leave out those
+// the full answer serves from below the delta's floor, and a subtest fails.
 func TestADeltaLargerThanTheFullAnswerIsAnsweredInFull(t *testing.T) {
 	t.Parallel()
 	const made, deleted = 100, 60
@@ -237,15 +224,13 @@ func TestADeltaLargerThanTheFullAnswerIsAnsweredInFull(t *testing.T) {
 	})
 
 	// THE FULL ANSWER IS WEIGHED WITH EVERY RETIREMENT IT WOULD SERVE, those
-	// the delta does not carry too: asked for them from below the delta's
-	// floor, the full answer standing in for the delta of the clean-up's 63
-	// rows carries its own 43 and every retirement between the two floors, so
-	// the delta is answered in full only while those are fewer than the 20
-	// rows it carries past the full answer's own — and a tie is a delta.
+	// the delta does not carry too: asked from below the delta's floor, the
+	// full answer for the clean-up's 63-row delta carries its 43 rows plus every
+	// retirement between the two floors, so it wins only while those are fewer
+	// than 20; a tie is a delta.
 	//
-	// Mutation: leave the full answer's retirements out of the weighing when
-	// its caller asked them from another floor than the delta's, and the delta
-	// of 63 rows is replaced by a full answer of 63.
+	// Mutation: leave the full answer's retirements out when its caller asked
+	// from another floor, and the delta of 63 is replaced by a full answer of 63.
 	t.Run("retirements below the delta's floor", func(t *testing.T) {
 		t.Parallel()
 		n, id, before, _ := cleanedUp(t, 0)
@@ -302,23 +287,16 @@ func TestADeltaLargerThanTheFullAnswerIsAnsweredInFull(t *testing.T) {
 		}
 	})
 
-	// THE RETIREMENTS ARE WEIGHED LIKE WITH LIKE: where the full answer
-	// would serve the same retirements — its caller asked from the delta's
-	// own floor, the position a Gitlet node's cache holds — they sit on both
-	// sides and cancel; only those the full answer would not serve count
-	// against the delta alone.
+	// THE RETIREMENTS ARE WEIGHED LIKE WITH LIKE: asked from the delta's own
+	// floor (what a Gitlet node's cache holds), both sides carry them and they
+	// cancel; only those the full answer would not serve count against the
+	// delta. A full answer's retirements are bounded by MaxFullRetirements,
+	// never by its own rows, so a compaction retiring more than a small
+	// repository's rows is still served; past the bound, none is.
 	//
-	// WHAT A FULL ANSWER SERVES IS BOUNDED BY MaxFullRetirements, never by
-	// its own rows: a repository of few refs, whose compaction retires more
-	// packs than it has rows, still has its retirements served, and only
-	// past the bound does a full answer serve none.
-	//
-	// Mutations: count the retirements on the delta's side alone, and the
-	// delta asked from its own floor is answered in full — the full answer
-	// then carrying those retirements AND its own rows, more than the delta
-	// it replaced; bound them by the full answer's rows, and the twenty a
-	// compaction retired beside three rows are served by no full answer and
-	// make the delta full.
+	// Mutations: count them on the delta's side alone, and the delta from its
+	// own floor goes full, carrying more than it replaced; bound them by the
+	// full answer's rows, and twenty beside three rows make the delta full.
 	t.Run("many retirements", func(t *testing.T) {
 		t.Parallel()
 		// A full answer of one ref and two packs; a delta from after the
@@ -703,15 +681,12 @@ func TestAReanchorUnderASnapshotRestartsIt(t *testing.T) {
 }
 
 // AN EXPUNGE'S BEGIN UNDER A SNAPSHOT RESTARTS IT: every page of one snapshot
-// is read at one drop epoch, because pages spanning a begin would leave a
-// copy holding, live, the packs the begin rewrote — every object of them,
-// those it left dropping too — beside a row at the begin's epoch, and a push
-// checked against that copy would carry an epoch its objects were not read at.
-// So a later page read after a begin answers ErrSnapshotMoved, and the
-// snapshot asked again reads every page at the begin's epoch.
+// is read at one drop epoch, else a copy holds live the packs the begin
+// rewrote beside a row at the begin's epoch, and a push checked against it
+// carries an epoch its objects were not read at. A later page after a begin
+// answers ErrSnapshotMoved; asked again, every page is at the begin's epoch.
 //
-// Mutation: drop the later page's comparison of the epochs, and that page is
-// served.
+// Mutation: drop the later page's comparison of the epochs, and it is served.
 func TestABeginUnderASnapshotRestartsIt(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -814,11 +789,10 @@ func TestAPageEndsAtItsByteBudget(t *testing.T) {
 	}
 }
 
-// A LISTING PAGE COUNTS ITS RULES: a repository row carries its protection
-// rules, up to MaxProtectionsPerRepo of them at up to MaxRefNameBytes, so a
-// page measured before its rules are filled in — a page of 500 repositories
-// at 64 long rules each is ten megabytes — passes the reply ceiling while
-// believing itself small. The page ends at its byte budget measured with them.
+// A LISTING PAGE COUNTS ITS RULES: a repository row carries up to
+// MaxProtectionsPerRepo rules of up to MaxRefNameBytes, so a page measured
+// without them (500 repositories at 64 long rules is ten megabytes) passes the
+// reply ceiling. The page ends at its byte budget measured with them.
 func TestAListingPageCountsItsRules(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -891,8 +865,7 @@ func TestPushesPageAcrossOneRecordWithoutLosingAny(t *testing.T) {
 	var got []string
 	q := gitlet.ReadQuery{Asker: asker, Kind: gitlet.ReadPushes, Repo: "app", Limit: 10}
 	pages := 0
-	// BOUNDED: a cursor that loses its place pages for ever, and that is
-	// this case's failure rather than its timeout's.
+	// BOUNDED, so a cursor that loses its place fails here, not by timeout.
 	for pages < 50 {
 		answer, err := n.reader.Read(t.Context(), q)
 		if err != nil {
@@ -918,13 +891,12 @@ func TestPushesPageAcrossOneRecordWithoutLosingAny(t *testing.T) {
 }
 
 // A PUSH LISTING IS NEWEST IN LOG ORDER: the history pages by the position a
-// push landed at, newest first, its cursor `<position>/<push id>` — never by
-// the record's instant, which is the broker's and steps back across a stream
-// leader's change. Here every record is stamped a minute EARLIER than the one
-// before it, so an order by instant reads the history backwards.
+// push landed at, its cursor `<position>/<push id>`, never by the broker's
+// instant, which steps back across a stream leader's change. Each record here
+// is stamped a minute EARLIER than the last, so an order by instant reverses.
 //
-// Mutation: order the listing by `at` again — the pushes come oldest first
-// (and the plan gate finds it sorting every push of the repository).
+// Mutation: order the listing by `at`, and the pushes come oldest first (and
+// the plan gate finds it sorting every push of the repository).
 func TestAPushListingIsNewestInLogOrder(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -964,18 +936,14 @@ func TestAPushListingIsNewestInLogOrder(t *testing.T) {
 	}
 }
 
-// A PUSH ROW NAMES WHO MADE THE PUSH AND HOW, as its record's entry says, and
-// the history and the index of pushes read it back as the entry said it: a
-// person's push names the credential it came through as its actor, beside
-// the seat they hold, built by git and with no run; a seat's push names the
-// seat's handle as its actor and its seat — never a blank, since a seat holds
-// no credential — built by the engine, with the turn, the work item and the
-// model its run names.
+// A PUSH ROW NAMES WHO MADE THE PUSH AND HOW, and the history and the index of
+// pushes read it back as the entry said: a person's push names its credential
+// as actor beside their seat, via git, no run; a seat's names its handle as
+// actor (never blank: a seat holds no credential) and its seat, via the engine,
+// with its run's turn, work item and model.
 //
-// Mutations: write the principal's credential as every row's actor
-// (Principal.Actor answering OperatorID) — the seat's row names nobody;
-// read a seat's row back without its run (PushRow.principal dropping Run) —
-// the index of pushes names no turn.
+// Mutations: Principal.Actor answering OperatorID, and the seat's row names
+// nobody; PushRow.principal dropping Run, and the index names no turn.
 func TestAPushRowNamesWhoMadeItAndHow(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1013,8 +981,8 @@ func TestAPushRowNamesWhoMadeItAndHow(t *testing.T) {
 		}
 	}
 
-	// THE INDEX OF PUSHES IS BUILT FROM THE SAME ROWS, and its principal is
-	// the entry's, run and all — what a Gitlet node says of who pushed a commit.
+	// THE INDEX OF PUSHES IS BUILT FROM THE SAME ROWS: its principal is the
+	// entry's, run and all.
 	index, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadIntroduced,
 		Introduced: &gitlet.IntroducedQuery{RepoID: id}, Fresh: stale})
 	if err != nil {
@@ -1033,11 +1001,10 @@ func TestAPushRowNamesWhoMadeItAndHow(t *testing.T) {
 	}
 }
 
-// A PUSH ROW NAMING NO WAY IS REFUSED BY EVERY READER of it, never read as
-// one: the via column's default is no way at all (replicated 0091), so a row
-// an apply wrote without it fails the read, naming the push — the history's
-// and the index of pushes' alike — where a default naming a way would have
-// answered every push the engine built as one a client's git sent.
+// A PUSH ROW NAMING NO WAY IS REFUSED BY EVERY READER of it: the via column
+// defaults to no way (replicated 0091), so a row an apply wrote without it
+// fails the read naming the push, where a default way would pass an
+// engine-built push off as one a client's git sent.
 //
 // Mutation: scanPush taking any via — the row is read as a push built no way.
 func TestAPushRowNamingNoWayIsRefused(t *testing.T) {
@@ -1059,17 +1026,13 @@ func TestAPushRowNamingNoWayIsRefused(t *testing.T) {
 }
 
 // A HISTORY READ IN BRIEF SHOWS A PUSH'S REFUSALS FIRST AND COUNTS WHAT IT
-// LEAVES OUT. A push of more commands than a screen gives it lines is cut to
-// BriefCommands — every refused one ahead of the rest, each part in the order
-// the client sent it — and every command left out is counted by what became
-// of it, so the listed commands and the counts are the whole push; its
-// introduced ids are counted and not listed. A push that fits is listed whole
-// and omits nothing, and the same history read whole lists every command and
-// every id, as one push read by its id does.
+// LEAVES OUT: a push is cut to BriefCommands, refused ones first, each part in
+// the client's order, and every command left out is counted by outcome, so
+// listed plus counted is the whole push; its introduced ids are counted, not
+// listed. A push that fits is listed whole, and a whole read lists everything.
 //
-// Mutations: cut in the order the client sent (the second refusal is left
-// out), count every command rather than those left out, or keep the
-// introduced ids — each fails below.
+// Mutations: cut in the client's order (the second refusal is left out),
+// count every command rather than those left out, or keep the introduced ids.
 func TestAHistoryInBriefShowsRefusalsFirstAndCountsTheRest(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1151,11 +1114,10 @@ func TestAHistoryInBriefShowsRefusalsFirstAndCountsTheRest(t *testing.T) {
 	}
 }
 
-// ONE PUSH IS READ FROM ITS OWN REPOSITORY'S HISTORY ONLY. A read of one
-// repository's history narrowed to a push of another answers no row: the
-// asker was judged on the repository the read names, and a push of another
-// is that one's contents — which the asker may not read at all. A push nobody
-// made answers none either, as a listing narrowed to it holds none.
+// ONE PUSH IS READ FROM ITS OWN REPOSITORY'S HISTORY ONLY: narrowed to a push
+// of another repository it answers no row, since the asker was judged on the
+// repository the read names and may not read the other at all. A push nobody
+// made answers none either.
 //
 // Mutation: answer the push whatever repository its row names, and the read
 // of app answers lib's push.
@@ -1182,10 +1144,10 @@ func TestOnePushIsReadFromItsOwnRepositorysHistoryOnly(t *testing.T) {
 	}
 }
 
-// ONLY A PUSH HISTORY IS READ IN BRIEF OR NARROWED TO ONE PUSH, and a push is
-// named by the id its receiving node minted: either field on another kind is
-// refused naming it, as one push beside a cursor, a limit or a brief — which
-// page or cut a listing it is not — and an id that no push can carry.
+// ONLY A PUSH HISTORY IS READ IN BRIEF OR NARROWED TO ONE PUSH, by the id its
+// receiving node minted: either field on another kind is refused naming it, as
+// is one push beside a cursor, a limit or a brief (it is no listing), and an
+// id no push can carry.
 func TestOnlyAPushHistoryIsReadInBriefOrNarrowedToOnePush(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1224,8 +1186,7 @@ func TestOnlyAPushHistoryIsReadInBriefOrNarrowedToOnePush(t *testing.T) {
 		{"one push with a limit", "push", history(func(q *gitlet.ReadQuery) { q.Push, q.Limit = push, 1 })},
 		{"one push in brief", "push", history(func(q *gitlet.ReadQuery) { q.Push, q.Brief = push, true })},
 	} {
-		// REFUSED NAMING THE FIELD, so a case refused for anything else
-		// certifies nothing.
+		// REFUSED NAMING THE FIELD: a refusal for anything else certifies nothing.
 		if _, err := n.reader.Read(t.Context(), c.q); !errors.Is(err, gitlet.ErrInvalid) ||
 			!strings.Contains(err.Error(), ": "+c.field+":") {
 			t.Errorf("%s: %v, want ErrInvalid naming %s", c.name, err, c.field)
@@ -1242,15 +1203,12 @@ func TestOnlyAPushHistoryIsReadInBriefOrNarrowedToOnePush(t *testing.T) {
 	}
 }
 
-// A PAGE IN BRIEF READS WHAT A WHOLE PAGE READS. Its rows are read and
-// decoded whole to be cut and counted, so each is charged the row it read, or
-// the brief one where that is the larger: charged only what it sends, a page
-// of imports would read a few hundred bytes' worth each, and so without bound
-// — here every push the history holds, against a budget a whole page fills
-// at its third.
+// A PAGE IN BRIEF READS WHAT A WHOLE PAGE READS: its rows are decoded whole to
+// be cut, so each is charged the larger of the row read and the row sent;
+// charged only what it sends, a page reads without bound.
 //
 // Mutation: charge a row in brief what it sends, and the brief page holds
-// every push.
+// every push against a budget a whole page fills at its third.
 func TestAPageInBriefReadsWhatAWholePageReads(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1322,24 +1280,16 @@ func TestACodeReadStatesItsFreshness(t *testing.T) {
 	}
 }
 
-// A CODE ROW READ SERVES `session` AT ITS FLOOR, AND ONLY THERE.
+// A CODE ROW READ SERVES `session` AT ITS FLOOR, AND ONLY THERE, so a screen
+// reads its own write back: every kind a principal reads, floored at a code-log
+// position, is refused `behind` by a node that has not applied it, and once it
+// has, answers WITH the write, labelled `session`. A bare `session` is refused
+// as a level; a floor on another log is refused before any row is read. Every
+// other level is served (a linearizable read is refused by the LOG, never as a
+// level).
 //
-// A screen reads its own write back by asking every question of the log it
-// wrote at `session`, the position the write answered with as its floor — so
-// the list it just changed never comes back from a node that has not applied
-// the change. Every kind a principal reads serves the level beside a position
-// on the code log: a node that has not applied that position refuses `behind`
-// rather than answer from before it, and once it has, answers WITH the write,
-// labelled `session`. A bare `session` names nothing to wait for and is refused
-// as a level; a floor on another log is the request's own mistake, refused
-// before any row is read. And every other level is served as well: none of them
-// is refused as a level (this node has no read index, so a linearizable read
-// is refused by the LOG, never as a level).
-//
-// Mutation: serve a session read without its floor (ReadQuery.freshness
-// dropping the floors once they are checked) → the held node answers every
-// kind from before the push it was asked to include, and the first half goes
-// red.
+// Mutation: ReadQuery.freshness dropping the floors once checked, and the held
+// node answers every kind from before the push.
 func TestACodeRowReadServesSessionAtItsFloor(t *testing.T) {
 	t.Parallel()
 	a, b := newTwoNodes(t)
@@ -1457,20 +1407,16 @@ func TestResolveAnswersADeletedRepository(t *testing.T) {
 	}
 }
 
-// THE PROTECTED LISTING HOLDS EXACTLY THE REPOSITORIES A RULE PROTECTS, by
-// name and paged by name, as every record that writes the rules leaves them:
-// a create with rules lists it and one with none does not; a settings change
-// that drops every rule takes it out and one that adds a rule puts it in; a
-// delete keeps its rules, and the default listing leaves it out with every
-// deleted repository; and a restore carrying rules lists a repository that
-// had none when it was deleted. Asked of any other kind, the filter is
-// refused, naming it.
+// THE PROTECTED LISTING HOLDS EXACTLY THE REPOSITORIES A RULE PROTECTS, paged
+// by name, as every record that writes the rules leaves them: create, a
+// settings change dropping or adding rules, a delete (which keeps its rules,
+// listed only among the deleted), and a restore carrying rules. The filter on
+// any other kind is refused, naming it.
 //
-// Mutations: leave `protected` out of settingsSQL — the repository whose rules
-// a change dropped stays listed, red; out of restoreRepoSQL or the create's
-// insert, likewise; read the protected listing with reposSQL — the
-// unprotected repository is listed, red; let the filter pass on a read of one
-// repository, red.
+// Mutations: leave `protected` out of settingsSQL, restoreRepoSQL or the
+// create's insert, and a repository whose rules were dropped stays listed;
+// read with reposSQL, and an unprotected one is listed; let the filter pass on
+// a read of one repository.
 func TestTheProtectedListingHoldsExactlyTheRepositoriesARuleProtects(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1519,8 +1465,8 @@ func TestTheProtectedListingHoldsExactlyTheRepositoriesARuleProtects(t *testing.
 		t.Errorf("the deleted protected listing = %+v, %v, want docs, whose rules its delete kept", deleted.Repos,
 			err)
 	}
-	// WEB, UNPROTECTED SINCE ITS RULES WERE DROPPED, deleted so and restored
-	// with a rule: only the restore's own write lists it.
+	// WEB, deleted unprotected and restored with a rule: only the restore's
+	// own write lists it.
 	n.deleteAt(web, harnessAt.Add(-3*time.Hour))
 	n.ensure("web", suiteSettings(), t3)
 	listed("after web was restored with a rule", "[api app web]")
@@ -1532,22 +1478,16 @@ func TestTheProtectedListingHoldsExactlyTheRepositoriesARuleProtects(t *testing.
 	}
 }
 
-// A LISTING BY PREFIX REACHES THE NAMES IT BEGINS, WHEREVER THEY SORT: a
-// prefix answers exactly the repositories whose names begin with it — the one
-// named by the prefix whole among them, and neither the shorter name before it
-// nor the next name past its end — in name order, paged by name, its first
-// page already past every name before it, where the bare listing's first page
-// stops short of it; with the protected filter beside it, the protected ones
-// among them. A prefix no name could begin is refused, naming it, as is one on
-// a read of one repository, and a cursor that is no name the prefix begins.
+// A LISTING BY PREFIX REACHES THE NAMES IT BEGINS, WHEREVER THEY SORT: exactly
+// the names beginning with it (the prefix itself included), paged by name, its
+// first page already past every earlier name; with the protected filter, the
+// protected ones among them. Refused, naming it: a prefix no name could begin,
+// a prefix on a read of one repository, a cursor outside the prefix.
 //
-// Mutations: read the first page PAST the prefix (`r.name > ?`) — api, named
-// by the prefix whole, is left out, red; drop the upper bound — apx is listed
-// under api, red; hold a prefix to ValidName alone — api- and a. are refused,
-// red; skip the cursor's check — a cursor outside the prefix answers a page,
-// red; let a second page start from the prefix — api repeats, red; read a
-// protected listing's first page or a later one by the plain index — api-gw,
-// unprotected, is listed among the protected, red.
+// Mutations: first page PAST the prefix (`r.name > ?`) drops api; no upper
+// bound lists apx under api; ValidName alone refuses api- and a.; skipping the
+// cursor's check answers a page; a second page from the prefix repeats api;
+// the plain index for a protected listing lists api-gw.
 func TestAListingByPrefixReachesTheNamesItBegins(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1599,8 +1539,8 @@ func TestAListingByPrefixReachesTheNamesItBegins(t *testing.T) {
 		}
 	}
 
-	// PAST THE FIRST PAGE: a page of two by name stops at api, and the
-	// listing under apiary answers it on its own first page.
+	// PAST THE FIRST PAGE: a bare page of two stops at api; under apiary,
+	// apiary is on the first page.
 	first, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Asker: asker, Kind: gitlet.ReadRepos, Limit: 2})
 	if err != nil || len(first.Repos) != 2 || first.Repos[1].Name != "api" {
 		t.Fatalf("the bare listing's first page of two = %+v, %v, want ap and api", first.Repos, err)
@@ -1674,8 +1614,7 @@ func TestTheListingFollowsTheName(t *testing.T) {
 	if _, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Asker: asker, Kind: gitlet.ReadRepos, Limit: 501}); !errors.Is(err, gitlet.ErrInvalid) {
 		t.Fatalf("a limit of 501 = %v, want ErrInvalid", err)
 	}
-	// ONE BRANCH, TWO TAGS AND THREE TOMBSTONES, so no count can stand in
-	// for another.
+	// ONE BRANCH, TWO TAGS AND THREE TOMBSTONES: no count stands in for another.
 	made := []gitlet.Command{set("refs/tags/v1", gitlet.ZeroOID, oidOf("v1")),
 		set("refs/tags/v2", gitlet.ZeroOID, oidOf("v2"))}
 	var gone []gitlet.Command
@@ -1745,22 +1684,20 @@ func unitRepos(t *testing.T) (*node, string) {
 }
 
 // A `VISIBILITY: UNIT` REPOSITORY IS READ ONLY BY ITS READERS: a seat lists,
-// details and pages the history of exactly the repositories its grant reads,
-// each listed with its access; a person, bound or not, reads every repository
-// whatever its visibility; and a listing page of repositories the asker may
-// not read is an empty page with a cursor, never the listing's end. (An
-// outsider's read of one is TestAReadOfAUnitRepositoryByAnOutsiderIsNotPermitted.)
+// details and pages exactly what its grant reads, each at its access; a
+// person, bound or not, reads everything; a page of repositories the asker may
+// not read is empty with a cursor, never the end. (An outsider's read of one
+// is TestAReadOfAUnitRepositoryByAnOutsiderIsNotPermitted.)
 //
-// Mutations: the listing not filtering → vp-sales lists plat-private; the
-// cursor taken from the kept rows → vp-sales's one-row listing ends at its
-// first, empty, page; the visibility read for a person → the bound person
-// and the unbound token list two.
+// Mutations: no filter, and vp-sales lists plat-private; the cursor from the
+// kept rows, and vp-sales's one-row listing ends at its empty first page;
+// visibility applied to a person, and the person and the token list two.
 func TestAUnitRepositoryIsReadOnlyByItsReaders(t *testing.T) {
 	t.Parallel()
 	n, _ := unitRepos(t)
 
-	// listing is every repository who lists, by name, at its access, paged
-	// limit rows at a time; and how many pages that took.
+	// listing maps every repository who lists to its access, paged limit rows at
+	// a time, and counts the pages.
 	listing := func(who gitlet.Principal, limit int) (map[string]string, int) {
 		t.Helper()
 		got := map[string]string{}
@@ -1839,11 +1776,10 @@ func TestAUnitRepositoryIsReadOnlyByItsReaders(t *testing.T) {
 	}
 }
 
-// A READ OF A UNIT REPOSITORY BY AN OUTSIDER IS NOT PERMITTED: its detail, its
-// history, its refs and any one ref resolved are refused a seat the
-// visibility shuts out — after the row is read, by a sentence naming why and
-// who does read it — while a repository nobody declared is still not found,
-// and a person resolves the same ref.
+// A READ OF A UNIT REPOSITORY BY AN OUTSIDER IS NOT PERMITTED: its detail,
+// history, refs and a resolved ref are refused a seat the visibility shuts
+// out, after the row is read, naming why and who reads it; an undeclared
+// repository is still not found, and a person resolves the same ref.
 //
 // Mutation: any of the four not judging the grant → vp-sales reads it.
 func TestAReadOfAUnitRepositoryByAnOutsiderIsNotPermitted(t *testing.T) {
@@ -1879,20 +1815,16 @@ func TestAReadOfAUnitRepositoryByAnOutsiderIsNotPermitted(t *testing.T) {
 	}
 }
 
-// A SEAT'S READ MADE FOR A COLLEAGUE IS HELD TO THE COLLEAGUE'S GRANT TOO, on
-// the node that answers it, from the one chart and the one row it judges the
-// asker by: inside a turn vp-sales woke, dev — who writes plat-private — lists
-// only what vp-sales reads as well, each repository at DEV's access, and its
-// detail, its history, its refs (a first page and a later one) and any ref
-// resolved are refused ErrAboveCeiling, naming the visibility that shuts
-// vp-sales out — never ErrNotPermitted, which is false of dev. Read for cto,
-// who reads it, dev is served as it is for nobody; and an asker that reads
-// nothing is told so about itself, whoever it reads for.
+// A SEAT'S READ MADE FOR A COLLEAGUE IS HELD TO THE COLLEAGUE'S GRANT TOO, from
+// the same chart and row the asker is judged by: dev reading for vp-sales lists
+// only what vp-sales reads, at DEV's access, and every read of plat-private is
+// refused ErrAboveCeiling naming the visibility, never ErrNotPermitted (false
+// of dev). For cto, who reads it, dev is served; an asker that reads nothing
+// is told so about itself.
 //
-// Mutations: any of the six reads judging the asker alone (the listing, the
-// detail, the history, the first refs page, a later refs page, the resolve)
-// → dev reads plat-private for vp-sales; the ceiling judged before the
-// asker → vp-sales's read for root-bot is refused about root-bot.
+// Mutations: any of the six reads judging the asker alone, and dev reads
+// plat-private for vp-sales; the ceiling judged before the asker, and
+// vp-sales's read for root-bot is refused about root-bot.
 func TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant(t *testing.T) {
 	t.Parallel()
 	n, private := unitRepos(t)
@@ -1931,8 +1863,8 @@ func TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant(t *testing.T) {
 		}
 	}
 
-	// A LATER PAGE OF REFS is judged on its own read of the row, never on the
-	// first page's: its cursor, from dev's own listing, is no admission.
+	// A LATER PAGE OF REFS is judged on its own read of the row: a cursor from
+	// dev's own listing is no admission.
 	first, firstErr := n.reader.Read(t.Context(), gitlet.ReadQuery{Asker: agent("dev"), Kind: gitlet.ReadRefs,
 		Repo: "plat-private", Limit: 1})
 	if firstErr != nil || first.Next == "" {
@@ -1986,17 +1918,14 @@ func TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant(t *testing.T) {
 	}
 }
 
-// ONLY A SEAT'S READ IS MADE FOR ANOTHER SEAT, and only for a seat named by
-// its handle: a person's read and a token's are their own, which no ceiling
-// bounds, so a query naming one beside them is refused naming the field rather
-// than served as the person alone — a caller that sent it meant something no
-// reader does — and the engine's own reads, which name no principal, name no
-// seat they read for either.
+// ONLY A SEAT'S READ IS MADE FOR ANOTHER SEAT, named by its handle: a person's
+// or a token's read is its own, so a ceiling beside one is refused naming the
+// field rather than served as the person alone, and the engine's own reads,
+// which name no principal, take none either.
 //
-// Mutations: ceilingInvalid accepting a ceiling beside an operator → the
-// person's listing is served; an engine's own read accepting one (the
-// `expunge_due` listing's validation naming no ceiling) → that listing is
-// served as though a seat had asked it for another.
+// Mutations: ceilingInvalid accepting a ceiling beside an operator, and the
+// person's listing is served; the `expunge_due` validation naming no ceiling,
+// and that listing is served as though a seat asked it for another.
 func TestOnlyASeatsReadIsMadeForAnotherSeat(t *testing.T) {
 	t.Parallel()
 	n, _ := unitRepos(t)
@@ -2031,21 +1960,16 @@ func TestOnlyASeatsReadIsMadeForAnotherSeat(t *testing.T) {
 	}
 }
 
-// A READER WITH NO CHART REFUSES ABOUT ITSELF (M3-O82). Between the start of a
-// node's code reader and the install of its first epoch — every boot, and a
-// first apply that reconciles code.repos before it installs the epoch — the
-// node holds no chart, and a seat's read there is refused ErrNotServing: a
-// refusal about the READER, which the estate reads as a node that ran
-// nothing and asks a peer, never a definite "not permitted" or a listing with
-// every repository left out, which every peer holding a chart contradicts. A
-// roster that answers nil and no roster at all are the same; a person's read
-// asks no chart and is answered — but for a read of changes, whose readiness
-// the chart judges for every asker, refused about the reader as a seat's is;
-// and once the chart is there, the seat is judged by it — a chart that denies
-// is the answer again.
+// A READER WITH NO CHART REFUSES ABOUT ITSELF (M3-O82): until its first epoch
+// is installed a node holds no chart, and a seat's read is refused
+// ErrNotServing, which the estate takes as "ask a peer", never a definite "not
+// permitted" or an empty listing every peer with a chart contradicts. A nil
+// roster and none are the same. A person's read asks no chart, except a read
+// of changes, whose readiness the chart judges for everyone. With the chart,
+// the seat is judged by it again.
 //
-// Mutation: answer AccessNone again with no chart → the seat's listing is
-// served empty and every other read refused not_permitted.
+// Mutation: answer AccessNone with no chart, and the seat's listing is served
+// empty and every other read refused not_permitted.
 func TestAReaderWithNoChartRefusesAboutItself(t *testing.T) {
 	t.Parallel()
 	n, private := unitRepos(t)
@@ -2088,10 +2012,9 @@ func TestAReaderWithNoChartRefusesAboutItself(t *testing.T) {
 				t.Errorf("%s: a person's %s = %v, want it answered: no chart decides a person", reader, name, err)
 			}
 		}
-		// A READ OF CHANGES judges their readiness by the chart whoever asks
-		// — an approver's eligibility is the chart's — so a person's is
-		// refused about the reader too; a page of a change's part, which
-		// carries no readiness, asks none.
+		// A READ OF CHANGES judges readiness (an approver's eligibility) by the
+		// chart, so a person's is refused too; a page of a change's part
+		// carries no readiness and asks none.
 		for name, q := range map[string]gitlet.ReadQuery{
 			"a listing of changes": {Kind: gitlet.ReadChanges, Repo: "platform"},
 			"a change":             {Kind: gitlet.ReadChange, Repo: "platform", Change: 1},

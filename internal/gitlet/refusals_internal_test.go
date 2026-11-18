@@ -10,11 +10,8 @@ import (
 // about THIS NODE, so a write is handed to the repository's next committer
 // under the same id ([nodeRefusals]), and whether every publish this node makes
 // meets it, so a reconcile ends rather than reporting it once a repository
-// ([sharedFailure]).
-//
-// The walk is over [statelog.Reasons], so a reason added there fails here until
-// somebody decides both. `usage_unknown` was such a reason, made without a
-// type: a push nothing had appended was answered unknown and never handed on.
+// ([sharedFailure]). The walk is over [statelog.Reasons], so a reason added
+// there fails here until somebody decides both.
 //
 // Mutation: drop any reason from nodeRefusals or sharedFailure and its row
 // goes red.

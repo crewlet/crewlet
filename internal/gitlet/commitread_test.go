@@ -8,22 +8,18 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A COMMIT NAMES THE CHANGE IT BELONGS TO. A commit's page reads, beside the
-// repository's detail and in its snapshot, every revision the commit heads
-// ("revision 2 of web!1") and every change whose merge it is, each by the
-// repository's name, its reference, its title and its state, and how it
-// landed: here a change opened at feature's B, moved to C by a push to its
-// source and merged by a push setting main to C. B heads the first revision,
-// C the second and is the change's merge, each naming the change merged at C
-// by a push at the instant its row holds, with no one who merged it through
-// a gate and no gate; and a commit no change names (or one another
-// repository's change heads) belongs to none of this repository's. A commit
-// is named by its whole id, and the read is not paged.
+// A COMMIT NAMES THE CHANGE IT BELONGS TO: in the repository's snapshot, every
+// revision it heads and every change whose merge it is, each by repository,
+// reference, title, state and how it landed. A change opened at feature's B,
+// moved to C by a push and merged by a push setting main to C: B heads revision
+// 1, C revision 2 and is its merge, each naming it merged by a push at its row's
+// instant, with no merger and no gate. A commit no change of this repository
+// names (another repository's may) belongs to none. A commit is named by its
+// whole id, and the read is not paged.
 //
-// Mutation: drop the repository from commitHeadsSQL's join: api's change at
-// B is named in web's answer; read Merged by the head index rather than the
-// merge's: C's merge is never named; drop merged_at from landingColumns'
-// scan: the landing carries no instant.
+// Mutation: drop the repository from commitHeadsSQL's join (api's change at B
+// is named in web's); read Merged by the head index (C's merge is never named);
+// drop merged_at from landingColumns' scan (the landing carries no instant).
 func TestACommitNamesTheChangeItBelongsTo(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

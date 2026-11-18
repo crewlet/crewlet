@@ -12,36 +12,29 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A COMMIT'S CHANGES, the `commit` read: what a commit's page names beside
-// the commit itself. The repository in detail, as a read of one repository
-// answers it, and in the same snapshot every change the commit belongs to:
-// each whose merge it is (code_changes_merge_idx) and each revision it heads
-// (code_revisions_head_idx), "revision 2 of web!42", each with how it landed
-// and the gate it passed ([ChangeLanding], [LandingGate]). Held to the asker's
-// grant on the repository as that read is. The commit itself, and the push
-// that introduced it, are the repository's content and its Gitlet node's index,
-// never these rows: a question asks them by object id beside this read.
+// A COMMIT'S CHANGES, the `commit` read: the repository in detail, held to the
+// asker's grant as a read of one repository is, and in the same snapshot every
+// change the commit belongs to: each whose merge it is (code_changes_merge_idx)
+// and each revision it heads (code_revisions_head_idx), each with how it landed
+// and its gate ([ChangeLanding], [LandingGate]). The commit and the push that
+// introduced it are the repository's content and its Gitlet node's index, never
+// these rows: a question asks them by object id beside this read.
 //
-// A commit belongs to a handful of changes in practice (two branches at one
-// head, a change reopened from the same commit) and to any number in the
-// worst case, every one a branch somebody opened a change from, so each list
-// is read to [MaxCommitChanges] and says when it holds more (More): a commit's
-// page names the changes it belongs to, never a listing of them, which
-// `changes` pages.
+// A commit belongs to a handful of changes in practice but to any number in the
+// worst case, so each list is read to [MaxCommitChanges] and says when it holds
+// more (More): a commit's page names what it belongs to; `changes` lists them.
 
 // MaxCommitChanges is the most changes a `commit` read names a commit merged
-// and the most revisions it names the commit heading, each list read one row
-// further to say it holds more: the page size every listing of a change's
-// conversation defaults to (defaultReviewLimit), past which a commit's page
-// is no longer naming what the commit belongs to but listing it.
+// and the most revisions it names it heading, each list read one row further to
+// say it holds more: a change conversation's default page (defaultReviewLimit),
+// past which a commit's page would be listing rather than naming.
 const MaxCommitChanges = 50
 
 // CommitChanges is a `commit` read's answer beside the repository's detail
 // (ReadAnswer.Commit): the changes one commit of the repository belongs to.
 //
-// A READ'S ANSWER, NOT A RECORD'S, so it takes no versionedFields row; the
-// `commit` kind is new to a build that predates it, which refuses it whole
-// ([ReadKinds]).
+// A read's answer, so it takes no versionedFields row; a build predating the
+// `commit` kind refuses it whole ([ReadKinds]).
 type CommitChanges struct {
 	// Commit is the commit, its whole id.
 	Commit string `json:"commit"`

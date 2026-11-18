@@ -11,13 +11,12 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE REF DROPS ON THE WHOLE PATH: a real broker, store and applier, and the
-// purge's decide over them. The drops are SEEDED, at the position and broker
-// instant each case is about, since what a purge decides of them is a count.
+// THE REF DROPS ON THE WHOLE PATH: a real broker, store and applier under the
+// purge's decide. The drops are SEEDED at the position and instant each case
+// is about, since the purge decides on their count.
 
-// seedDrops writes count ref drops of repoID straight into a node's estate, all
-// left by one record — at the packed position on the code log and its broker
-// instant at.
+// seedDrops writes count ref drops of repoID straight into a node's estate,
+// all left by one record at the packed position and broker instant at.
 func (n *node) seedDrops(repoID string, position int64, at time.Time, count int) {
 	n.t.Helper()
 	ctx := n.t.Context()
@@ -34,15 +33,14 @@ func (n *node) seedDrops(repoID string, position int64, at time.Time, count int)
 	}
 }
 
-// A PURGE REMOVES A REPOSITORY'S REF DROPS, whatever their grace — they keep
-// objects of the repository's own packs reachable, and those go with it — and
-// counts them toward its parts: a deleted repository holding nothing but ref
-// drops, one past a part's rows, is purged in a part and then the purge, never
-// by one unbounded statement, and no drop of it is left.
+// A PURGE REMOVES A REPOSITORY'S REF DROPS, whatever their grace (they keep
+// its own packs' objects reachable, which go with it), and counts them toward its parts: a
+// repository holding only ref drops, one past a part's rows, is purged in a
+// part and then the purge, never one unbounded statement, leaving no drop.
 //
-// Mutation: leave the drops out of the bounded count, and the purge is one
-// record deleting all of them at once; drop the part's delete, and the parts
-// remove nothing; drop the final purge's, and a drop outlives its repository.
+// Mutation: leave drops out of the bounded count, and one record deletes them
+// all; drop the part's delete, and the parts remove nothing; drop the purge's,
+// and a drop outlives its repository.
 func TestAPurgeRemovesARepositorysRefDrops(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

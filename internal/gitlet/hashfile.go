@@ -9,71 +9,48 @@ import (
 	"io"
 )
 
-// GIT'S HASHFILE TRAILER, HELD BY ONE IMPLEMENTATION (ADR-0008). Every file
-// git writes through its hashfile (csum-file.c) — a pack, its .idx and its
-// .rev, a multi-pack-index and its bitmap, a commit-graph and each layer of
-// one — ends in a TRAILER, the hash of every byte before it
-// (finalize_hashfile, CSUM_HASH_IN_STREAM), and git reads none of them when it
-// opens the file. Two packages of a Gitlet node hold such files to it: its cache
-// (internal/gitlet/cache: its round's check, its scrub, Verify) and a published
-// layer's check here ([CheckLayer], [LayLayer]). The same files reach both —
-// the installer holds a layer it fetched to its trailers through CheckLayer,
-// the cache's check and scrub hold the layer it keeps — so the rule, and how a
-// hash of the largest file a node holds reads it, is this one function,
-// [HashTrailer], over the one piece loop, [HashPieces]: two copies would judge
-// one file two ways, and the one that took no context or slot would be the
-// one a node could not stop. The operator's export (cmd/crewlet's `gitlet
-// export`) holds the bundle it writes to it too — a pack's trailer, SHA-1 or
-// SHA-256 as the bundle's object format says — so a bundle is judged as the
-// node that served it judges its packs, and stops when the export is
-// interrupted.
+// GIT'S HASHFILE TRAILER, HELD BY ONE IMPLEMENTATION (ADR-0008). Every file git
+// writes through csum-file.c (a pack, .idx, .rev, multi-pack-index, its bitmap,
+// each commit-graph layer) ends in a trailer hashing every byte before it,
+// which git never checks on open. The cache (check, scrub, Verify), the layer
+// check ([CheckLayer], [LayLayer]) and `gitlet export`'s bundle all judge it by
+// [HashTrailer] over [HashPieces]: two copies would judge one file two ways,
+// and one taking no context or slot could not be stopped.
 //
-// A PIECE AT A TIME, STOPPED WITH ITS CALLER. A layer's root alone is some
-// 2.6 GB for the largest repository the defaults admit and 16 GiB at
-// [MaxLayerParts] — four to five seconds of one core from the page cache,
-// about 21 s and 2 min 17 s read cold at a gp3 volume's 125 MB/s — and a
-// pack is up to [MaxPackBytes]. So ctx is checked before every read, and a
-// hold is taken for one piece and given back once it is read: a Gitlet node's
-// read lane (gitproc.Pool.HoldRead, internal/gitlet/cache's CheckPieceBytes),
-// whose slot a hash of a large file holding whole would keep from every read
-// queued behind it for the whole read.
+// A PIECE AT A TIME, STOPPED WITH ITS CALLER: a layer's root reaches 16 GiB
+// ([MaxLayerParts], over 2 min cold), so ctx is checked before every read and a
+// read-lane slot (gitproc.Pool.HoldRead; the cache's CheckPieceBytes) is held
+// per piece, never a whole file, stalling the lane.
 
-// hashBuffer is the buffer a hash reads a file through when its caller hands
-// none ([Pieces.Buf]): a quarter mebibyte, the piece a Gitlet node's download
-// copies a stored object through (internal/gitlet/cache's copyBuffer), so a
-// hash reads a file in the pieces its download wrote it — 4 096 reads a
-// gibibyte, whose system calls are a small fraction of the hash itself.
-// Never more than the file holds.
+// hashBuffer is the buffer a hash allocates when its caller hands none
+// ([Pieces.Buf]), never more than the file holds: a quarter mebibyte, the
+// piece the cache's download copies through (copyBuffer), so system calls
+// stay a small fraction of the hash.
 const hashBuffer = 256 << 10
 
 // Pieces is how a hash reads a file ([HashPieces], [HashTrailer]). The zero
-// value reads the file in one pass, holding nothing, through a buffer of its
-// own.
+// value reads it in one pass, holding nothing, through a buffer of its own.
 type Pieces struct {
-	// Buf is the buffer the reads are made through, each read at most its
-	// length: a caller hashing many files hands one buffer to all. Empty, a
-	// hash allocates one of hashBuffer bytes, never more than it reads.
+	// Buf is the buffer reads go through, each at most its length; a caller
+	// hashing many files shares one. Empty, the hash allocates hashBuffer
+	// bytes, never more than it reads.
 	Buf []byte
-	// Hold, when not nil, takes a slot before each piece is read and
-	// answers the function that gives it back, which the hash calls once
-	// the piece is read: a Gitlet node's read lane (gitproc.Pool.HoldRead).
-	// Nil for a caller that holds what it needs across the whole hash — a
-	// maintenance slot it reserved — or needs nothing.
+	// Hold, when not nil, takes a slot before each piece and answers its
+	// release, called once the piece is read (gitproc.Pool.HoldRead). Nil
+	// when the caller holds what it needs across the hash (a reserved
+	// maintenance slot) or needs nothing.
 	Hold func(context.Context) (release func(), err error)
-	// Size is the most of a file one piece reads, in one hold: what a read
-	// the lane queues behind the hash waits at most. Read only beside a
-	// Hold, which it must then be at least one byte for.
+	// Size is the most one piece reads under one hold, so the most a read
+	// queued behind the hash waits. Read only with Hold, and then at least 1.
 	Size int64
 }
 
 // HashPieces adds the n bytes r holds from where it stands to w, a piece at a
-// time as p says — ctx checked before every read, each piece in a slot p.Hold
-// takes and gives back once the piece is read — and answers how many it
-// added: n, or fewer and no error where r ended sooner, which the caller
-// judges (a file shorter than it was is a file rewritten while it was read,
-// or not the file a row describes). A hold that failed — a lane with no slot
-// in time is its own refusal, gitproc.ErrBusy — is answered as it came, as
-// is a failed read, and an ended ctx as its cause.
+// time as p says, checking ctx before every read, and answers how many it
+// added: fewer than n with no error means r ended sooner, for the caller to
+// judge (a file rewritten mid-read, or not the file its row describes). A
+// failed hold (gitproc.ErrBusy for a lane with no slot in time) or read is
+// answered as it came, an ended ctx as its cause.
 func HashPieces(ctx context.Context, w io.Writer, r io.Reader, n int64, p Pieces) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, context.Cause(ctx)
@@ -110,8 +87,7 @@ func HashPieces(ctx context.Context, w io.Writer, r io.Reader, n int64, p Pieces
 }
 
 // copyChecked copies r to w through buf, checking ctx before every read, and
-// answers what it copied: r's every byte, or what it had copied when a read,
-// a write or ctx failed.
+// answers what it copied before r ended or a read, a write or ctx failed.
 func copyChecked(ctx context.Context, w io.Writer, r io.Reader, buf []byte) (int64, error) {
 	var copied int64
 	for {
@@ -149,19 +125,17 @@ type Trailer struct {
 // failed hash answers — is never sound.
 func (t Trailer) Sound() bool { return len(t.Held) > 0 && bytes.Equal(t.Held, t.Sum) }
 
-// HashTrailer holds the hashfile r holds, size bytes, to git's trailer rule:
-// its last sum.Size() bytes are sum over every byte before them — a SHA-1 for
-// git's files in a SHA-1 repository, Gitlet's object format, and the
-// SHA-256 of a provenance run, which the cache writes the same way. It hashes
-// those bytes from the file's start a piece at a time as p says
-// ([HashPieces]), into sum, which is fresh; then reads the trailer, and answers
-// both, the verdict [Trailer.Sound]'s — a definite answer about the bytes.
+// HashTrailer holds the size-byte hashfile r holds to git's trailer rule: its
+// last sum.Size() bytes are sum (fresh) over every byte before them — SHA-1
+// for git's files in Gitlet's SHA-1 repositories, SHA-256 for a provenance
+// run the cache writes the same way. It hashes the body as p says
+// ([HashPieces]), reads the trailer and answers both; [Trailer.Sound] is the
+// verdict, a definite answer about the bytes.
 //
-// An r that ends before its size answers io.ErrUnexpectedEOF: it is not the
-// file it was handed as, which its caller judges — a file rewritten while it
-// was read, or one shorter than its row's section. A read, a hold or a ctx
-// that failed is answered as it came, with what had been read: a disk that
-// failed a read says nothing of the bytes, nor does a lane with no slot.
+// An r that ends before size answers io.ErrUnexpectedEOF for the caller to
+// judge (rewritten mid-read, or shorter than its row's section). A failed
+// read, hold or ctx is answered as it came with what was read: it says
+// nothing of the bytes.
 func HashTrailer(ctx context.Context, r io.ReaderAt, size int64, sum hash.Hash, p Pieces) (Trailer, error) {
 	trailer := int64(sum.Size())
 	if size < trailer {

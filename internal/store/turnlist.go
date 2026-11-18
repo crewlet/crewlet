@@ -305,7 +305,9 @@ type Turn struct {
 	// extension judge, the seat's own for the work.
 	Models string `json:"models,omitempty"`
 
-	// Summary is what the turn set out to do, in the agent's own words.
+	// Summary is what the turn did, as its NEWEST completion says it: its last
+	// review's account of what landed, or its final answer. A parked turn
+	// completes once per segment, and an earlier one describes rounds since redone.
 	Summary string `json:"summary,omitempty"`
 
 	// Trigger is what woke it, from the first phase record.
@@ -643,10 +645,9 @@ type TurnPartial struct {
 	// DurationMS is the SUM of the completions' own measurements.
 	DurationMS int `json:"duration_ms"`
 
-	// Summary, WorkItem and Trigger are the MAXIMUM of their values, as
-	// the SQL takes them; WorkItem is the completion's work item AS
-	// STORED — JSON text — and is decoded only when the turn is finished,
-	// because the maximum is a maximum of that text.
+	// Summary and WorkItem are RANKED TEXT, the newest completion's value behind its
+	// instant ([newestKey]), so a maximum across logs is the turn's end as within one;
+	// WorkItem's value is JSON, decoded in [TurnPartial.Turn]. Trigger is the maximum.
 	Summary  string `json:"summary,omitempty"`
 	WorkItem string `json:"work_item,omitempty"`
 	Trigger  string `json:"trigger,omitempty"`
@@ -667,6 +668,20 @@ const originSep = "\x1f"
 const originKey = "CASE WHEN COALESCE(json_extract(tags, '$.trigger_origin'), '') <> '' " +
 	"THEN printf('%020d', event_time) || char(31) || json_extract(tags, '$.trigger_origin') " +
 	"|| char(31) || COALESCE(json_extract(tags, '$.trigger_reason'), '') END"
+
+// newestKey is the SQL that ranks a completion's value by when it was recorded,
+// as [originKey] does, or NULL on any other row or where the value is NULL. Its
+// one placeholder is the completion's type.
+func newestKey(value string) string {
+	return "CASE WHEN event_type = ? AND (" + value + ") IS NOT NULL " +
+		"THEN printf('%020d', event_time) || char(31) || (" + value + ") END"
+}
+
+// newestOf is a partial's ranked newest text without its rank.
+func newestOf(ranked string) string {
+	_, value, _ := strings.Cut(ranked, originSep)
+	return value
+}
 
 // originOf decodes a partial's ranked origin text, or nil: the tags it was
 // ranked from, read by the one rule a record's tags are ([OriginOfTags]).
@@ -693,16 +708,16 @@ func (p TurnPartial) Turn() Turn {
 		TotalTokens: p.TotalTokens,
 		CacheRead:   p.CacheRead, CacheWrite: p.CacheWrite,
 		Models:  strings.Join(p.Models, ","),
-		Summary: p.Summary, Trigger: p.Trigger,
+		Summary: newestOf(p.Summary), Trigger: p.Trigger,
 		Origin: originOf(p.Origin),
 	}
 	t.Complete, t.Parked = segmentState(p.LastEnded, p.LastParked)
-	if p.WorkItem != "" {
+	if item := newestOf(p.WorkItem); item != "" {
 		// A record whose item does not decode is a row with no item,
 		// not a failed listing: the item is a label on the row, and
 		// one unreadable completion must not cost the page.
 		var named types.WorkItem
-		if json.Unmarshal([]byte(p.WorkItem), &named) == nil && named.ID != "" {
+		if json.Unmarshal([]byte(item), &named) == nil && named.ID != "" {
 			t.WorkItem = &named
 		}
 	}
@@ -1241,10 +1256,8 @@ func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int, from time
 		                THEN event_time END),
 		       SUM(CASE WHEN event_type = ?
 		                THEN COALESCE(json_extract(payload, '$.duration_ms'), 0) END),
-		       MAX(CASE WHEN event_type = ?
-		                THEN COALESCE(json_extract(payload, '$.plan_summary'), '') END),
-		       MAX(CASE WHEN event_type = ?
-		                THEN json_extract(payload, '$.work_item') END),
+		       MAX(` + newestKey("COALESCE(json_extract(payload, '$.plan_summary'), '')") + `),
+		       MAX(` + newestKey("json_extract(payload, '$.work_item')") + `),
 		       MAX(COALESCE(json_extract(tags, '$.trigger'), '')),
 		       MIN(` + originKey + `),
 		       ` + failureText(failedExpr, errorText) + `,

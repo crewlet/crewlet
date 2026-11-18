@@ -9,13 +9,13 @@ import (
 	"slices"
 )
 
-// THE REPOSITORY TALLIES count every repository by who may read it (visibility and owner), its
-// kind and its status, so a count of repositories by kind and status is one scan of a few rows
-// judged a key at a time. Kept through retally by every record that writes a repository's row,
-// status, owner or visibility, and re-derived from code_repos by [Applier.Rederive].
+// The repository tallies count every repository by who may read it (visibility and owner), its
+// kind and its status, so a count by kind and status scans a few rows judged a key at a time.
+// Every record writing a repository's row, status, owner or visibility keeps them through
+// retally; [Applier.Rederive] re-derives them from code_repos.
 
-// repoTallyRows is the tally row a record moving a repository's status within its key writes,
-// and repoTallyMoveRows the two a record moving it between owners, visibilities or out of a row writes.
+// repoTallyRows is the row a record moving a repository's status within its key writes, and
+// repoTallyMoveRows the two one moving it between owners, visibilities or out of a row writes.
 const (
 	repoTallyRows     = 1
 	repoTallyMoveRows = 2

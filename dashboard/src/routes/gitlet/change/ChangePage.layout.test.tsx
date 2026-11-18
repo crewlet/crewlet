@@ -29,6 +29,28 @@ const ORG = {
 };
 
 const CHANGE = {
+  readiness: {
+    met: 1,
+    total: 3,
+    first: "",
+    preconditions: [
+      {
+        kind: "approval",
+        state: "unmet",
+        waits_on: [{ handle: "reviewer", kind: "agent" }],
+        detail: "",
+      },
+      { kind: "check", state: "computing", detail: "" },
+      { kind: "mergeable", state: "met", detail: "" },
+    ],
+  },
+  participants: {
+    rows: [
+      { handle: "frontend", kind: "agent" },
+      { handle: "reviewer", kind: "agent", verdict: "request_changes", verdict_revision: 1 },
+      { handle: "jane", kind: "person" },
+    ],
+  },
   id: "change-42",
   repo_id: "repo-web",
   repo: "web",
@@ -187,7 +209,22 @@ STACK[4] = {
 const added = (n: number) =>
   `@@ -0,0 +1,${n} @@\n${Array.from({ length: n }, (_, i) => `+line ${i + 1}`).join("\n")}\n`;
 
+/** The head's latest checks: unit passed, e2e running, both required. */
+const LATEST = [
+  { name: "unit", state: "passed", duration_ms: 95_000 },
+  { name: "e2e", state: "running", started_at: "2026-11-17T11:00:00Z" },
+].map((c) => ({
+  repo_id: "repo-web",
+  repo: "web",
+  oid: HEAD,
+  target: "refs/heads/main",
+  attempt: 1,
+  purpose: "head",
+  required: true,
+  ...c,
+}));
 function answer(url: URL): Response {
+  if (url.pathname === "/query/code_checks") return json({ ...PAGE, checks: LATEST });
   if (url.pathname !== "/query/code_change") return json(PAGE);
   const part = url.searchParams.get("part") ?? "";
   if (part === "files" && location.hash.includes("tab=files")) {
@@ -228,7 +265,15 @@ afterEach(() => {
   location.hash = "";
 });
 
-function mount(width: number, hash = "#/gitlet/repos/web/changes/42", height = 0) {
+/** The reader, bound to Jane: the composer's face is theirs. */
+const JANE = { login: "jane", handle: "jane", owner: "jane", name: "Jane Founder", kind: "human" };
+
+function mount(
+  width: number,
+  hash = "#/gitlet/repos/web/changes/42",
+  height = 0,
+  answers: Record<string, unknown> = {},
+) {
   location.hash = hash;
   host = document.createElement("div");
   host.className = "app";
@@ -241,7 +286,7 @@ function mount(width: number, hash = "#/gitlet/repos/web/changes/42", height = 0
   root = createRoot(host.querySelector(".crewlet-app-shell__content")!);
   flushSync(() =>
     root!.render(
-      <LayoutClient answers={{}} org={ORG}>
+      <LayoutClient answers={answers} org={ORG}>
         <ChangePage repo="web" number={42} />
       </LayoutClient>,
     ),
@@ -456,4 +501,102 @@ test("a renamed file's head keeps its fold and copy beside its path, at 390 px",
     b.getAttribute("aria-label")?.startsWith("Copy"),
   )!;
   expect(Math.abs(middle(copy) - path.last)).toBeLessThan(6);
+});
+
+// THE BOX'S DISC AND THE COMPOSER'S FACE sit on the spine after the break.
+// Mutation: drop the tail list's face column, and their centres drift.
+test("the merge box's disc and the composer's face sit on the timeline's spine at 1440 px", async () => {
+  mount(1440, undefined, 0, { viewer: { ...JANE, grants: [], acts: [] } });
+  await drawn();
+  const tail = await eventually(() => {
+    const list = host!.querySelector<HTMLElement>(".code-timeline--tail");
+    expect(list?.querySelector(".code-disc[data-size='large']")).not.toBeNull();
+    return list!;
+  });
+  const col = parseFloat(getComputedStyle(tail).getPropertyValue("--tl-col"));
+  const spine = tail.getBoundingClientRect().left + col / 2;
+  const marks = await eventually(() => {
+    const found = [...tail.querySelectorAll(":scope > li > .code-tl-face")];
+    expect(found).toHaveLength(2);
+    return found;
+  });
+  for (const mark of marks) expect(Math.abs(centre(mark) - spine), mark.className).toBeLessThan(1);
+});
+
+// THE BOX AND THE RAIL HOLD THEIR WIDTH ON A PHONE, every section's controls
+// inside the box. Mutation: give a section's end a fixed width, and this fails.
+test("the merge box and the rail hold their width at 390 px", async () => {
+  mount(390);
+  const page = await drawn();
+  const box = await eventually(() => {
+    const found = page.querySelector<HTMLElement>(".code-merge-box");
+    expect(found?.querySelector(".code-merge-check")).not.toBeNull();
+    return found!;
+  });
+  const panel = page.querySelector('[role="tabpanel"]')!;
+  expect(overflowing(panel)).toEqual([]);
+  expect(sidewaysScrollers(panel)).toEqual([]);
+  const edge = box.getBoundingClientRect();
+  for (const el of box.querySelectorAll(".code-merge-box__end, .code-merge-check__end, button")) {
+    const r = el.getBoundingClientRect();
+    expect(r.right, el.className).toBeLessThanOrEqual(edge.right + 0.5);
+    expect(r.left, el.className).toBeGreaterThanOrEqual(edge.left - 0.5);
+  }
+});
+
+// THE RAIL STANDS BESIDE THE CONVERSATION when there is room and under it when not.
+test("the rail's sections stand beside the conversation at 1440 px and under it at 820 px", async () => {
+  for (const [width, beside] of [
+    [1440, true],
+    [820, false],
+  ] as const) {
+    mount(width);
+    const page = await drawn();
+    const rail = await eventually(() => {
+      const found = page.querySelector<HTMLElement>(".code-rail");
+      expect(found?.querySelector('[aria-label="Readiness"]')).not.toBeNull();
+      return found!;
+    });
+    const column = page.querySelector<HTMLElement>(".code-activity")!.getBoundingClientRect();
+    const r = rail.getBoundingClientRect();
+    if (beside) expect(r.left).toBeGreaterThanOrEqual(column.right);
+    else expect(r.top).toBeGreaterThanOrEqual(column.bottom);
+    flushSync(() => root?.unmount());
+    host?.remove();
+  }
+});
+
+// A MERGED BOX SAYS INTO WHAT ON ONE LINE, its words in the column beside its disc.
+// Mutation: drop the merged section's disc and the words' column, and it reads a word a line.
+test("a merged change's box says into what on one line at 1440 px", async () => {
+  const was = PARTS[""] as Record<string, unknown>;
+  PARTS[""] = {
+    ...was,
+    change: {
+      ...CHANGE,
+      state: "merged",
+      readiness: undefined,
+      merged_by: "reviewer",
+      merged_by_kind: "agent",
+      merged_at: "2026-11-17T12:00:00Z",
+      merge_oid: HEAD,
+    },
+  };
+  try {
+    mount(1440);
+    await drawn();
+    const title = await eventually(() => {
+      const found = host!.querySelector<HTMLElement>(".code-merge-box__title");
+      expect(found?.textContent).toBe("Merged into main");
+      return found!;
+    });
+    const range = document.createRange();
+    range.selectNodeContents(title);
+    const lines = new Set([...range.getClientRects()].map((r) => Math.round(r.top)));
+    expect(lines.size).toBe(1);
+    const words = title.closest(".code-merge-box__words")!.getBoundingClientRect();
+    expect(words.width).toBeGreaterThan(200);
+  } finally {
+    PARTS[""] = was;
+  }
 });

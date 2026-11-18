@@ -9,34 +9,16 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// THE PACK BUNDLE: the ONE object a push stores, and the ONE rule every node
-// holds it to.
+// THE PACK BUNDLE: the ONE object a push stores — its pack, then the .idx (v2)
+// and .rev (v1) the receiving receive-pack wrote, back to back under one key —
+// and the ONE rule every node holds it to. Why one object, no re-indexing and
+// no pack past 2 GiB: the package doc's "The bundle is the permanent format".
 //
-// A push stores its pack, then the .idx (version 2) and the .rev (version 1)
-// the receiving node's receive-pack wrote for it, back to back, under one key.
-// One PUT a push, one GET a push on every Gitlet node, and NO index-pack anywhere
-// but inside the receiving receive-pack: re-indexing a downloaded pack costs a
-// core 0.13–0.18 s a MiB, against verified object-store reads at about
-// 250 MB/s, so a cache that re-indexed every pack it fetched would make every
-// cold sync CPU-bound on every Gitlet node — while the receiver already HOLDS the
-// two indexes. One object rather than three because a cold sync on S3 is
-// bound by how many GETs it makes, not by bytes.
-//
-// THE FORMAT IS PERMANENT, and so is the rule that keeps it exact: no stored
-// pack reaches 2 GiB, the size past which an index grows a table of 64-bit
-// offsets. Every writer of a stored pack caps it below that — a push at
-// [MaxPackBytes], and a later compaction with pack-objects --max-pack-size —
-// so both indexes' sizes are pure functions of the object count, and
-// [CheckBundle] compares sizes exactly rather than parsing an index to find
-// out how large it is.
-//
-// PURE OVER BYTES IT IS HANDED: no I/O and no git. The files a git wrote are
-// laid out and stored by bundlestore.go, which tees the upload through a
-// [SealWriter] and checks the seal before its caller may name the object
-// ([StoreBundle]) — so the receiver checks before it proposes the push; the
-// cache tees its download and checks before it installs. SHA-256 says the
-// bytes are the bytes the receiver stored; this says they are the bytes the
-// ROW describes — a disagreement no retry fixes.
+// PURE OVER BYTES IT IS HANDED: no I/O and no git. bundlestore.go tees the
+// upload through a [SealWriter] and checks the seal before the receiver may
+// propose the push ([StoreBundle]); the cache tees its download and checks
+// before it installs. SHA-256 says the bytes are the ones stored; this says
+// they are the ones the ROW describes, a disagreement no retry fixes.
 
 // BundleContentType is the content type a pack bundle is stored under: not a
 // packfile — a console that hands the object back hands back three sections.
@@ -60,18 +42,16 @@ const (
 	reverseHeaderBytes = 12
 )
 
-// IndexBytesFor is the size of a version-2 .idx for n objects, exactly: the
-// header, the fan-out, per object a 20-byte id, a CRC-32 and a 4-byte offset,
-// then the pack's checksum and the index's own — with NO 64-bit offset table,
-// which [MaxPackBytes] keeps every stored pack from needing. 1 156 bytes for
-// three objects, as git 2.43 writes it.
+// IndexBytesFor is the exact size of a version-2 .idx for n objects: header,
+// fan-out, per object a 20-byte id, a CRC-32 and a 4-byte offset, then two
+// checksums. No 64-bit offset table: [MaxPackBytes] keeps every stored pack
+// from needing one. 1 156 bytes for three objects, as git 2.43 writes it.
 func IndexBytesFor(n int64) int64 {
 	return indexHeaderBytes + fanoutBytes + n*(hashBytes+4+4) + 2*hashBytes
 }
 
-// ReverseBytesFor is the size of a version-1 .rev for n objects, exactly: the
-// header, a uint32 per object, then the pack's checksum and the reverse
-// index's own. 64 bytes for three objects.
+// ReverseBytesFor is the exact size of a version-1 .rev for n objects: header,
+// a uint32 per object, then two checksums. 64 bytes for three objects.
 func ReverseBytesFor(n int64) int64 {
 	return reverseHeaderBytes + n*4 + 2*hashBytes
 }
@@ -172,22 +152,18 @@ var (
 	reverseMagic = []byte("RIDX")
 )
 
-// Check holds a [PackRef] to a bundle its row can describe — the ROW-LEVEL
-// half of [CheckBundle], decided from the row alone, before any byte: an
-// object the store can name; at least one object, since a stored pack carries
-// what some ref needs; both indexes exactly the size their formats give that
-// count; a pack section at least a header and a trailer long; the whole
-// within [MaxPackBytes]; and a git checksum that is a pack's trailer.
+// Check holds a [PackRef] to a bundle its row can describe, from the row alone
+// before any byte (the row-level half of [CheckBundle]): a nameable object, at
+// least one object, both indexes exactly their formats' size for that count, a
+// pack at least a header and trailer long, the whole within [MaxPackBytes],
+// and a git checksum that can be a pack's trailer.
 //
-// ONE RULE FOR EVERY HOLDER OF A ROW (ADR-0008): the receiver's proposal is
-// held to it before it is published, [CheckBundle] before a seal is compared,
-// and a Gitlet node's cache before it downloads anything. A copy the domain
-// admitted a row past and a cache refused would leave a repository no Gitlet
-// node can sync, fleet-wide, for good — the rows say it, and asking again
-// reads the same rows.
+// ONE RULE FOR EVERY HOLDER OF A ROW (ADR-0008): the receiver's proposal, the
+// cache before it downloads, and [CheckBundle]. A row the domain admitted and a
+// cache refused would leave a repository no Gitlet node can sync, for good.
 //
-// The answer names the row's field first ("size: …"), as its JSON spells it,
-// for each holder to wrap with its own sentinel.
+// The answer names the row's JSON field first ("size: …"); each holder wraps
+// it with its own sentinel.
 func (p PackRef) Check() error {
 	if err := p.Content().Validate(); err != nil {
 		return fmt.Errorf("object: %w", err)
@@ -216,11 +192,10 @@ func (p PackRef) Check() error {
 	return nil
 }
 
-// CheckBundle holds a bundle's seal to the [PackRef] that names it — the ONE
-// rule (ADR-0008) the receiver applies before it proposes a push and every Gitlet
-// node applies before it installs one. Every disagreement is [ErrBadBundle],
-// naming the first one found and both of its values: the row's own fields
-// first ([PackRef.Check]), then the seal against them.
+// CheckBundle holds a bundle's seal to the [PackRef] that names it (ADR-0008):
+// the receiver before it proposes a push, every Gitlet node before it installs
+// one. The first disagreement is [ErrBadBundle] with both values: the row's
+// own fields first ([PackRef.Check]), then the seal against them.
 func CheckBundle(ref PackRef, s BundleSeal) error {
 	bad := func(format string, args ...any) error {
 		return fmt.Errorf("%w: "+format, append([]any{ErrBadBundle}, args...)...)

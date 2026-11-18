@@ -55,26 +55,18 @@ func heardSorted(concerns []gitlet.Concern) []string {
 	return out
 }
 
-// A FAILED CHECK WAKES ITS AUTHORS AND ITS ACTOR (M5-D26): ada moves dev's
-// change's head to B2, its revision 2, and a check of B2 that fails tells the
-// change's authors — dev, its owner, and ada, who pushed its head — that it
-// failed, ada AS THE RECORD'S ACTOR: the one code reason that is news to who
-// made the record (Reason.WakesActor), since nothing else tells a pusher that
-// their commit fails its checks. An attempt that errored on its
-// infrastructure, which the home queues again, tells nobody until the attempt
-// the home's own requeue stops at; a passing check tells nobody — readiness is
-// the home's next mergeability record's to announce; and a failed check of
-// the head the change has moved past measures code nobody is asked to fix. A
-// failure a person's CI reports (M5-D24) is the same failure of the same head
-// — the gate leaves the merge unmet on it alike — so it tells the same
-// authors, the reporting person as its actor.
+// A FAILED CHECK WAKES ITS AUTHORS AND ITS ACTOR (M5-D26): a failed check of
+// B2, the head ada pushed to dev's change, tells dev and ada, ada as the
+// record's actor (Reason.WakesActor: nothing else tells a pusher their commit
+// fails). A pass tells nobody (the home's next mergeability record announces
+// readiness), nor does an errored attempt the home requeues, until the attempt
+// its requeue stops at, nor a failure of a head the change moved past. A
+// failure a person's CI reports (M5-D24) tells them too, its reporter as actor.
 //
-// Mutations: Reason.WakesActor false for checks_failed — ada, the actor, is
-// not told, red; route every ending of a head check, whatever its state — the
-// passing one tells the authors, red; drop the attempt bound from
-// failsItsHead — the third errored attempt tells nobody, red; route no
-// reported ending (decideChecks returns decideReport's decision as it is) —
-// the CI's failure tells nobody, red.
+// Mutations, each red: Reason.WakesActor false for checks_failed (ada untold);
+// route every head-check ending (the pass tells); no attempt bound in
+// failsItsHead (the third errored attempt tells nobody); decideChecks returning
+// decideReport's decision as is (the CI's failure tells nobody).
 func TestAFailedCheckWakesItsAuthorsAndItsActor(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -121,12 +113,10 @@ func TestAFailedCheckWakesItsAuthorsAndItsActor(t *testing.T) {
 		t.Fatalf("the attempt the home's requeue stops at tells %v, want the authors and ada", got)
 	}
 
-	// A PERSON'S CI's FAILURE OF THE HEAD tells the same authors: its row
-	// names no change, and the gate reads it as the engine's own, so the
-	// change is the live one into main at B2 — and its actor is the person
-	// whose CI reported it, founder, told as the head's pusher is. Their CI's
-	// pass tells nobody, and its failure of the head the change moved past
-	// measures code nobody is asked to fix.
+	// A PERSON'S CI's FAILURE OF THE HEAD: its row names no change, so the gate
+	// reads it as the engine's own and finds the live change into main at B2;
+	// it tells the same authors, and founder, whose CI reported it, as its
+	// actor. A pass, or a failure of a head the change moved past, tells nobody.
 	report := func(name, oid string, state gitlet.CheckState) statelog.Position {
 		res, err := w.Publish(t.Context(), reporting(key(name, oid, 1), state, "https://ci.example.com/1"))
 		requireChecked(t, name+" reported "+string(state), res, err)
@@ -152,21 +142,17 @@ func TestAFailedCheckWakesItsAuthorsAndItsActor(t *testing.T) {
 	}
 }
 
-// A FAILED CHECK WAKES FOR WHOM ITS HEAD WAS PUSHED (ADR-0109): a failed check
-// of a change's head is news about the push that made the head, whose pusher
-// the routing names (TestAFailedCheckWakesItsAuthorsAndItsActor), so where a
-// seat pushed that head in a turn it worked for somebody, the failure is that
-// somebody's errand. The seat cto moves dev's change's head to B2, its
-// revision 2, in a turn founder woke: a check of B2 that fails tells the
-// change's authors — dev, and cto, who pushed the head and hears of it as its
-// actor — through a routing carrying founder beside cto, at version 2, and
-// both wakes are written by cto for founder, cto's own included. The same
-// failure reported by founder's CI is the person's own act, made for nobody
-// but themselves: its routing carries nobody, at version 1, whatever the head
-// was pushed for.
+// A FAILED CHECK WAKES FOR WHOM ITS HEAD WAS PUSHED (ADR-0109): the failure is
+// news about the push that made the head, so where a seat pushed it in a turn
+// worked for somebody, it is that somebody's errand. cto moves dev's change's
+// head to B2 in a turn founder woke: a failed check of B2 tells dev and cto
+// (its actor) through a routing carrying founder, at version 2, and both wakes,
+// cto's own included, are written by cto for founder. The same failure
+// reported by founder's CI is the person's own act: its routing carries
+// nobody, at version 1, whatever the head was pushed for.
 //
-// Mutation: revisionPusher reading no carrier — the failure's routing carries
-// nobody and its wakes are written for nobody, red.
+// Mutation: revisionPusher reading no carrier — the routing carries nobody and
+// its wakes are written for nobody, red.
 func TestAFailedCheckWakesForWhomItsHeadWasPushed(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -223,19 +209,16 @@ func TestAFailedCheckWakesForWhomItsHeadWasPushed(t *testing.T) {
 	}
 }
 
-// A BROKEN LANDING WAKES ITS AUTHORS AND LEAD (D-QUEUE): dev's change, queued
-// by ada, lands ahead of its checks by her override merge past main's queue,
-// and its required check then fails on the landed tip: the broken record
-// marking that landing tells dev, its author, and cto, the effective lead of
-// Engineering, which owns the repository — whoever can put the branch right —
-// that the landing broke it. The broken record is the home's own, so none of
-// them made it and both hear. Ada's seat founder, who queued the change, is
-// told nothing: her override landed it, not the queue, whose own landings
-// land green and so are never broken.
+// A BROKEN LANDING WAKES ITS AUTHORS AND LEAD (D-QUEUE): ada's override merge
+// lands dev's queued change ahead of its checks, and its required check then
+// fails on the landed tip: the broken record tells dev, its author, and cto,
+// effective lead of Engineering, which owns the repository — whoever can put
+// the branch right. The record is the home's own, so neither made it and both
+// hear. Ada's seat founder, who queued the change, is told nothing: the
+// override landed it, not the queue, whose landings land green.
 //
-// Mutations: stamp no lead on a broken record's routing — cto is not told,
-// red; route the broken record's reason as conflicted — the reason is wrong,
-// red.
+// Mutations: no lead stamped on a broken record's routing — cto untold, red;
+// the broken record routed as conflicted — the reason is wrong, red.
 func TestABrokenLandingWakesItsAuthorsAndLead(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -271,19 +254,17 @@ func TestABrokenLandingWakesItsAuthorsAndLead(t *testing.T) {
 	}
 }
 
-// A PASSING CHECK CAN MAKE A CHANGE READY (M5-D26), and it is never the
-// check's record that says so: dev's change into a queue target is approved
-// and merges cleanly but waits on its required check, so it is stored not
-// ready. The check passes at its head — a record that tells nobody — and the
-// home's readiness refresh that follows, its head's checks having moved,
-// stores the change ready and announces it to whoever may merge it: under a
-// gate any writer merges by, dev, its author; under one only maintainers
-// merge by, Engineering's lead cto, since no author may.
+// A PASSING CHECK CAN MAKE A CHANGE READY (M5-D26), never by its own record:
+// dev's approved, cleanly merging change into a queue target waits on its
+// required check, so is stored not ready. The check passes (a record that
+// tells nobody), and the home's readiness refresh that follows stores it ready
+// and announces it to whoever may merge it: dev, its author, under a gate any
+// writer merges by; Engineering's lead cto under a maintainers-only gate.
 //
-// Mutations: announce ready from the check record (route a passed head
-// check's ending to the change's authors as ready_to_merge) — the check's
-// record tells somebody, red; announce to the owner whatever the gate — the
-// maintainers' case tells dev, red.
+// Mutations: announce ready from the check record (a passed head check's
+// ending routed to the authors as ready_to_merge) — the record tells somebody,
+// red; announce to the owner whatever the gate — the maintainers' case tells
+// dev, red.
 func TestAPassingCheckCanMakeAChangeReady(t *testing.T) {
 	t.Parallel()
 	for mergeBy, want := range map[gitlet.MergeBy]string{
@@ -332,17 +313,15 @@ func TestAPassingCheckCanMakeAChangeReady(t *testing.T) {
 }
 
 // EVERY M5 WAKE NAMES ITS WORK ITEM (D-WAKES): a change carrying a work item
-// is checked, queued, put out of its queue twice — a dequeue its enqueuer
-// asked, an ejection for a conflicting merge — queued again and landed by its
-// queue; a second change lands ahead of its checks by a person's override
-// and that landing is then broken; and a third is merged by its record:
-// every one of those records wakes the seats it concerns under its own reason, each wake
-// naming the change's work item, so the turn it starts is charged to it
+// fails a check, is dequeued by its enqueuer, ejected for a conflict, then
+// queued and landed; a second lands by a person's override and is broken; a
+// third is merged by its record. Each record wakes the seats it concerns under
+// its own reason, naming the work item, so the woken turn is charged to it
 // (ADR-0022). A person is told in their inbox, never woken: ada's seat
-// founder, who queued the change, has no wake of their own.
+// founder, who queued the change, has no wake.
 //
-// Mutations: stamp no work item on the gate's routings (routingFor) — every
-// wake names none, red; route a conflicting ejection as dequeued alone — dev
+// Mutations: no work item stamped on the gate's routings (routingFor) — every
+// wake names none, red; a conflicting ejection routed as dequeued alone — dev
 // is woken under dequeued, red.
 func TestEveryM5WakeNamesItsWorkItem(t *testing.T) {
 	t.Parallel()
