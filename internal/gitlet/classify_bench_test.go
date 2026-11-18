@@ -7,17 +7,13 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// BenchmarkClassifyGo is what ONE PATH COSTS a classification at the bound:
-// two versions of a file MaxClassedBlobBytes long, classed against each other
-// to the end — the versions are alike, so nothing cuts the walk short — in
-// the shapes that set what a byte costs:
+// BenchmarkClassifyGo is what ONE PATH COSTS at the bound: two alike versions
+// MaxClassedBlobBytes long, so the walk runs to the end, in the shapes that
+// set what a byte costs:
 //
-//   - code: ordinary Go, one function after another, a comment beside a
-//     statement now and then;
-//   - comments: nothing but comments, one to a line — the most lexemes a file
-//     of the bound holds, every one of them a comment;
-//   - governed: the same comments below a //go:noinline, so that every one is
-//     what the directive governs and is compared whole.
+//   - code: ordinary Go, a comment beside a statement now and then;
+//   - comments: one comment a line, the most lexemes the bound holds;
+//   - governed: those comments under a //go:noinline, every one compared whole.
 //
 // MaxClassedBlobBytes' doc records the figures.
 func BenchmarkClassifyGo(b *testing.B) {

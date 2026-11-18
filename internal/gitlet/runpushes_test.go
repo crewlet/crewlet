@@ -32,14 +32,11 @@ func boxPush(id, handle, run string, cmds ...gitlet.Command) gitlet.PushEntry {
 	return e
 }
 
-// A PUSH ROW NAMES THE RUN THAT MADE IT: a coding box's push writes the run
-// that pushed — its launch's id — and its harness into its row, beside the
-// turn, the work item and the model, as its record's entry carries them; a
-// person's push writes neither; and the history reads both back as the entry
-// said them.
+// A PUSH ROW NAMES THE RUN THAT MADE IT: a coding box's push writes its
+// launch's id and harness beside the turn, work item and model, as its entry
+// carries them; a person's push writes neither; the history reads both back.
 //
-// Mutation: drop the run_id write from the push apply — the box's row names no
-// run, red.
+// Mutation: drop the run_id write from the push apply, red.
 func TestAPushRowNamesTheRunThatMadeIt(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -77,24 +74,17 @@ func TestAPushRowNamesTheRunThatMadeIt(t *testing.T) {
 }
 
 // A RUN'S PUSHES ARE READ IN LOG ORDER: a run_pushes read answers exactly the
-// pushes that name its run, of the repositories its query names — each
-// repository's in log order, its position and then its push id, and the
-// repositories in the query's order — never another run's, a person's, a
-// repository's it was not given, or one from at or below the run's launch;
-// across pages of three pushes READ — the run's and everybody else's its
-// repositories took — none repeated and none skipped: pages spanning two
-// repositories, a page ending on a push that is not the run's, and a page
-// boundary inside a record of two of the run's pushes; every later page at
-// session at the first's position. Log order is the broker's instant's
-// reverse here — each record stamped a second BEFORE the one ahead of it, as
-// a stream leader's change can stamp — so an order by the instant answers
-// every repository's pushes backwards.
+// run's pushes in the named repositories, each repository's by position then
+// push id, the repositories in the query's order; never another run's, a
+// person's, an unnamed repository's, or one at or below the run's launch.
+// Across pages of three pushes READ, none repeats or is skipped: pages span
+// two repositories, one ends on another's push, one splits a record of two of
+// the run's pushes; later pages at session at the first's position. The
+// broker's instant runs backwards here (as a stream leader's change can stamp
+// it), so ordering by it reverses each repository.
 //
-// Mutations: order runWindowFirstSQL and runWindowAfterSQL by `at, push_id`
-// rather than `position, push_id` — the pushes of each repository come back
-// newest first, red; key a later page by its position alone (runWindowAfterSQL
-// testing `position > ?`) — the second push of the record the boundary cuts
-// is skipped.
+// Mutations: order the window statements by `at, push_id`, red; key a later
+// page by `position > ?` alone, the split record's second push is skipped.
 func TestARunsPushesAreReadInLogOrder(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -153,11 +143,9 @@ func TestARunsPushesAreReadInLogOrder(t *testing.T) {
 		q.Cursor = answer.Next
 		q.Fresh = statelog.FloorAt(statelog.ReadSession, answer.Position)
 	}
-	// Within one record a repository's pushes are in push id order. Pages of
-	// three read, the run's kept: [web-1 person-web web-2] [web-3 | api-1
-	// b-api-1] [b-api-2 api-2 | docs-1] [docs-2] — the second page ending on
-	// the other run's push of the api record, the third page's boundary
-	// inside the docs record.
+	// Within one record, push id order. Pages of three read, the run's kept:
+	// [web-1 person-web web-2] [web-3 | api-1 b-api-1] [b-api-2 api-2 |
+	// docs-1] [docs-2].
 	want := []string{"a-web-1", "a-web-2", "a-web-3", "a-api-1", "a-api-2", "a-docs-1", "a-docs-2"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("the run's pushes read %v, want %v: its repositories in the query's order, each one's "+
@@ -171,20 +159,15 @@ func TestARunsPushesAreReadInLogOrder(t *testing.T) {
 }
 
 // A PAGE OF A RUN'S PUSHES IS HELD TO WHAT IT READS, NOT TO WHAT IT ANSWERS:
-// between the run's launch and its one push, its repository took six pushes of
-// other people's, and a page reads no more of them than its row limit — and
-// no more than its bytes, each push weighed by what its row holds — answering
-// none of the run's and a cursor after the last push it read, from which the
-// next page reads on, until the run's push is answered once. Read whole, a
-// page that held only to what it kept would read every other push to find the
-// run's, however many and however wide.
+// six other pushes sit between the run's launch and its one push, and a page
+// reads no more than its row limit or its bytes (each push weighed by its
+// row), answering a cursor after the last push it read, until the run's push
+// is answered once. A page held only to what it kept would read every other
+// push to find the run's.
 //
-// Mutations: leave the pushes a page reads uncounted (runPushesOf adding a
-// span's pushes and weight to nothing) — the first page ends with no cursor,
-// short of the run's push, red; set the cursor of a page whose reads are full
-// only where it kept a push — the same, red. That the span behind a page looks
-// up no row past its bytes is held by
-// TestARunsWindowReachesNoRowPastItsPagesBytes, which the answer cannot show.
+// Mutations, each red (the first page ends with no cursor): runPushesOf not
+// counting a span's pushes and weight; a full page's cursor set only where it
+// kept a push. The span's own bound is TestARunsWindowReachesNoRowPastItsPagesBytes.
 func TestAPageOfARunsPushesIsHeldToWhatItReads(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -199,8 +182,8 @@ func TestAPageOfARunsPushesIsHeldToWhatItReads(t *testing.T) {
 	}
 	n.push(id, boxPush("a-run", "swe", runA, set("refs/heads/seats/swe/eng-42", gitlet.ZeroOID, oidOf("run"))))
 	last := n.push(id, entry("p-after", set("refs/heads/later", gitlet.ZeroOID, oidOf("after")))).Position
-	// THE WEIGHT a page counts a push it reads by: its row's row_bytes, the
-	// same for every other push here, each one command on a ref named alike.
+	// THE WEIGHT a page counts a push by: its row_bytes, the same for every
+	// other push here.
 	var weight int
 	if err := n.db.Reader().Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), `SELECT row_bytes FROM code_pushes WHERE push_id = ?`,
@@ -237,14 +220,13 @@ func TestAPageOfARunsPushesIsHeldToWhatItReads(t *testing.T) {
 	}
 	for name, tc := range map[string]struct {
 		limit, bytes int
-		// first is the push the first page's cursor must name: the last
-		// it read.
+		// first is the last push the first page read, which its cursor names.
 		first string
 	}{
 		// TWO PUSHES A PAGE by its row limit, its bytes far off.
 		"the rows a page reads": {limit: 2, bytes: gitlet.MaxPageBytes, first: others[1]},
 		// THREE PUSHES' WEIGHT A PAGE, its row limit far off: the third
-		// push takes it to its bytes, and no fourth is read.
+		// reaches its bytes, and no fourth is read.
 		"what the rows weigh": {bytes: 3 * weight, first: others[2]},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -267,16 +249,14 @@ func TestAPageOfARunsPushesIsHeldToWhatItReads(t *testing.T) {
 }
 
 // A RUN'S PUSHES ARE THE ENGINE'S OWN READ: a run_pushes read names no asker
-// and no seat it reads for — one there would be judged by nothing — and names
-// its run by its launch's UUID, one to MaxRunRepos of the run's repositories
-// by id, each once, and the position the run was launched at on the code log;
-// nothing else a listing names, a limit of the pushes a page reads, at most
-// MaxSnapshotItems, and a level of its own. A read naming a run is refused on every other kind. A cursor it
-// never issued is refused, and a repository holding no rows — purged since —
-// answers none of the run's pushes.
+// or seat (nothing would judge one), and names its run by launch UUID, one to
+// MaxRunRepos distinct repositories by id, and the launch position on the code
+// log; nothing else a listing names, a page limit of at most MaxSnapshotItems,
+// and a level of its own. A read naming a run is refused on every other kind,
+// as is a cursor it never issued; a purged repository answers no pushes.
 //
-// Mutation: accept an asker on a run_pushes read (validateRunPushes dropping
-// its first case) — a person's read of the run's pushes is served, red.
+// Mutation: validateRunPushes dropping its first case, a person's read is
+// served, red.
 func TestOnlyTheEngineReadsARunsPushes(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

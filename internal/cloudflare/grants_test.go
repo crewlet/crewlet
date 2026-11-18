@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/seataccess/seataccesstest"
 )
 
 // grantOf is a stored grant of group on zones, lapsing at expires (zero for
@@ -248,5 +249,26 @@ func TestTheGrantCatalogueIsWhatTheProvisionerCanMint(t *testing.T) {
 	if err := seataccess.CheckGrant(opts, config.CloudflareLevelOperate,
 		grantOf("gffffffffff", "Cache Purge", time.Time{})); err == nil {
 		t.Error("a grant the seat's level already holds was accepted")
+	}
+}
+
+// EVERY GRANT THE CATALOGUE OFFERS CAN BE ASKED FOR, each at its longest
+// ([seataccesstest.AskFaults]).
+func TestEveryGrantTheCatalogueOffersCanBeAsked(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, config.CloudflareLevelRead)
+	w.f.without("DNS Write")
+	sess, err := w.vendor.Open(t.Context(), seataccess.OpenInput{
+		Config: w.company, Env: config.NewResolver(config.MapSource{"CF_TOKEN": provisioner}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := seataccess.ReadOptions(t.Context(), sess, seataccess.LaneCloudflare)
+	if err != nil || len(opts.Grants) == 0 {
+		t.Fatalf("the catalogue offers %d grants (%v)", len(opts.Grants), err)
+	}
+	for _, fault := range seataccesstest.AskFaults(opts) {
+		t.Error(fault)
 	}
 }

@@ -51,10 +51,12 @@ import {
   ChevronLeftGlyph,
   CircleCheckGlyph,
   FileTextGlyph,
+  LayersGlyph,
   SquareKanbanGlyph,
   SquareTerminalGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
+import { artifactPath } from "~/app/routes.ts";
 import { describeLink } from "~/lib/inlineTokens.ts";
 import { askStateWords } from "~/lib/askState.ts";
 import { useLinkHosts } from "~/lib/linkHosts.ts";
@@ -1048,6 +1050,16 @@ function EvidenceLink({ evidence }: { evidence: WorkDecisionEvidence }) {
           leadingIcon={<SquareTerminalGlyph size="sm" />}
         >
           {evidence.label || "Executor"}
+        </ButtonLink>
+      );
+    case "artifact":
+      return (
+        <ButtonLink
+          {...look}
+          href={href(artifactPath(evidence.ref))}
+          leadingIcon={<LayersGlyph size="sm" />}
+        >
+          {evidence.label || "Artifact"}
         </ButtonLink>
       );
     case "url":

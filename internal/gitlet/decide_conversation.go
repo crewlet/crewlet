@@ -17,171 +17,39 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A CHANGE'S CONVERSATION, DECIDED: an ask for review, a comment, a thread's
-// resolution, a review and an answer to findings are each a
-// [ConversationWrite] its asker hands the repository's committing data node
-// ([ChangeWriter.Converse]), which decides it in ONE snapshot as a record of
-// its own op ([ConversationOps]) on the CHANGE's subject.
-//
-// # What the decide holds a write to
-//
-// Against the rows of one snapshot, in this order; the first rule that fails
-// is the answer, and none of them writes anything.
-//
-// Every write first meets its repository — absent, deleted or being purged is
-// repo_deleted, in the sentence of the state it is in ([RepoGone]); archived is
-// repo_archived, since an archived repository's changes are read and written
-// nothing — then its change, on this repository (change_not_found), then its
-// asker: a principal bound to no seat writes nothing (not_permitted), since
-// every row of a conversation names who wrote it by the seat they act as; and
-// a seat the deciding chart does not let READ the repository writes nothing
-// either (not_permitted, in the grant's own sentence, [Grant.ReadRefusal]) —
-// BEFORE any rule below that admits a writer by its relation to the change.
-// Being an author, a finding's raiser or a thread's starter is a fact about
-// the change that outlives the seat's standing on its repository: a seat that
-// left the chart, or whose unit a `visibility: unit` repository no longer
-// reaches, reads none of the change it would answer, resolve or ask for, so
-// it answers, resolves and asks nothing. A person maintains every repository.
-//
-// AN ASK FOR REVIEW (rule D21) takes a LIVE change (change_closed,
-// change_merged), and an asker who is an author of the change or reviews the
-// repository ([AccessReview]; a person maintains every repository) — else
-// not_permitted. Each reviewer it asks is judged on the deciding node's chart
-// whoever asks: a handle no seat holds is no_reviewer; a person — a human seat —
-// is asked only where the identity directory says its holder uses Gitlet
-// (ADR-0110): reading a change is reading its repository's code, so a seat
-// nobody holds, a person who may not act and one not given the gitlet app are
-// not_permitted, read before the decide ([People]) and handed to it; a seat
-// must review the repository and must not be an author of the change, whose
-// review of their own change would count for nothing — else not_permitted,
-// naming what the seat holds. An ask that would leave more than
-// [MaxReviewersPerChange] reviewers asked at once is too_many_reviewers.
-//
-// A COMMENT takes a change in any state — a change is discussed after it
-// merges — and an asker who reads the repository (not_permitted, in the
-// grant's own sentence). A reply names the ROOT of a thread on this change, or
-// a finding on it, whose thread the finding names (thread_gone otherwise): a
-// thread is answered at its root, so a thread is one level deep and its
-// replies are read in order. An anchored comment's revision is one the change
-// has reached (unknown_revision past its head).
-//
-// A THREAD'S RESOLUTION names the root of a thread on this change
-// (thread_gone) — a finding's thread is answered by the finding's own answer —
-// and is made by the comment's own author, an author of the change, a
-// principal that maintains the repository or a person (not_permitted).
-//
-// A REVIEW (rules D21 and D22) takes a LIVE change (change_closed,
-// change_merged) and a reviewer who reviews the repository ([AccessReview]; a
-// person maintains every repository) and did NOT write the change — an
-// author's review of their own change, its approval above all, counts for
-// nothing, so none is taken (not_permitted) — of a revision the change has
-// reached (unknown_revision). What it CARRIES are its reviewer's own findings
-// (not_raiser) still standing on the change (finding_gone); every other
-// standing finding of its reviewer's raised on an EARLIER revision than the
-// one it judges it SUPERSEDES, and a review of the same revision supersedes
-// nothing — one reviewer's two passes over one revision. A reviewer keeps at
-// most [MaxStandingFindings] standing on a change once its review is taken
-// (too_many_findings), so what one review's record rewrites is bounded.
-//
-// AN ANSWER TO FINDINGS names findings STANDING on the change (finding_gone —
-// none by that id, or one dismissed or superseded, which nothing moves again):
-// resolved, won't fix and disputed are an author's to give (not_author), and a
-// dismissal its raiser's, a maintainer's or a person's (not_raiser). Only a
-// dismissal or its raiser's later review clears a blocker (S40): an author's
-// answer leaves it standing, for its raiser to judge.
-//
-// EACH OF THOSE FIVE, made by a seat whose turn works for somebody
-// ([ConversationWrite.Ceiling]), is then held to them too, once the seat
-// itself may make it ([WriteCeiling.changeRefusal]): a colleague seat must
-// hold the write's least access on the repository — review for a review,
-// read for every other ([ConversationWrite.CeilingNeeds]) — and nobody may
-// have the seat write anything but its own work, a change it owns or one in a
-// repository it owns — else not_permitted, an answer unchanged included.
-//
-// A REVISION'S FACTS ([Revise], revise.go) are the repository's home Gitlet
-// node's, which no principal asks: they take a LIVE change (change_closed,
-// change_merged), and are decided only while they are of the change's head
-// revision against its current target, later than the facts it holds of that
-// revision against that branch, and matched against the path owners the
-// snapshot holds — else SUPERSEDED, recorded nowhere, for the home's next pass.
-// The chart then judges whom they ask, skip and wake (revise.go's head).
-//
-// A CHANGE'S MERGEABILITY ([Mergeability], mergeability.go) is the home's too,
-// asked by no principal: it takes a LIVE change (change_closed,
-// change_merged), and is decided only while it is of the change's head
-// revision against its current target, and of a tip no earlier than the one
-// the change's row holds for that revision against that branch — the same tip
-// only where that row is undecided — or, a REFRESH, of the merge the row holds,
-// whose readiness inputs moved since its answer was judged; else SUPERSEDED,
-// recorded nowhere. The chart then judges the change's READINESS over the
-// snapshot with the record's merge ([ReadinessOf]), stamped on the record.
-//
-// THE SETTLING OF A CHANGE'S ASKS WITH ITS LIFECYCLE ([AskSettle]) is the
-// home's too, asked by no principal and judged by no chart: an end takes a
-// change that closed or merged, and an ask again one that is live, and each
-// moves the asks the other direction left — waiting to ended, ended to
-// requested — or is SUPERSEDED, recorded nowhere, for the home's next pass,
-// where the change moved after its home read it or holds no such ask.
-//
-// A write that asks for what the conversation already says — every reviewer
-// it asks already asked and nobody it withdraws still asked, a thread's state
-// it is in, every finding in the state an answer gives it — is ANSWERED
-// UNCHANGED from the rows, with no record. A comment and a review are never
-// unchanged: two saying the same are two, and one asked again under its own
-// operation id is collapsed by the ledger.
-//
-// # A seat's write, and every ask for review, is decided only by a node that can judge it
-//
-// A rule that judges a SEAT reads the chart of the deciding node's epoch
-// ([SeatRules]), as a seat's push does, and so does every ask for review,
-// whoever asks, since a reviewer is judged by it ([ConversationWrite.JudgesChart]):
-// a node with no chart yet, or one confirmed behind the company's
-// configuration, decides none of those and says so about itself
-// ([ErrNotServing]), so the router asks the repository's runner-up under the
-// same operation id. A person's comment or resolution is decided as ever.
+// A CHANGE'S CONVERSATION, DECIDED: each [ConversationWrite] — an ask for
+// review, a comment, a thread's resolution, a review, an answer to findings,
+// and the home Gitlet node's own revise, mergeability and settling of asks —
+// is decided by the repository's committing data node ([ChangeWriter.Converse])
+// in ONE snapshot, as a record of its own op ([ConversationOps]) on the change's
+// subject. [decideConversation] holds the rules in order, the first that fails
+// being the answer and none writing anything: the repository, the change, the
+// asker's grant to READ the repository (before any rule admitting a writer by
+// its relation to the change), each write's own decideX, and then whoever a
+// seat's turn works for ([WriteCeiling.changeRefusal]). A write asking what the
+// rows already say is answered unchanged, with no record — never a comment or
+// a review: two saying the same are two, and the ledger collapses a retry.
 
-// Validate refuses a write no change's writer could decide
-// ([ErrInvalidProposal], naming the field), before anything is read: anything
-// but exactly one of the eight records; an operation id this engine does not
-// accept (statelog.CheckCallerOpID); an asker that is no principal, or that
-// names a run — and a revise, a mergeability or a settling of asks that names
-// any asker, each being the home's own; whom the write is made for, where its
-// asker may not state it so or its ceiling does not bound it
-// ([writtenForUnder]: the chart's half is the decide's); a Seen that is no
-// position on the code log; a repository id that is no UUID in its canonical
-// spelling; a change id that is no bare UUIDv7; a field the writer stamps —
-// who wrote it, a reviewer's kind, a comment's id or thread, a review's id or
-// a finding's — set by the asker; an ask that names nobody, a handle twice or
-// one that is no seat's handle, past [MaxReviewersPerChange] in either list, or
-// a note its bound refuses; a comment its bound refuses, one replying to a root
-// and a finding both, an anchor on a reply or one [anchorProblem] refuses, or a
-// turn its bound refuses; a thread named by no comment id; a review of no
-// revision, of a verdict this build does not know, that comments and says
-// nothing, past [MaxFindingsPerReview] findings or [MaxStandingFindings]
-// carried, a finding [findingProblem] refuses, a carried id twice or no
-// finding's id, or a turn or a model its bound refuses; an answer naming no
-// finding, past [MaxFindingsPerReview], one twice, an answer no write gives, a
-// commit that is no whole object id or a note its bound refuses; a revise or a
-// mergeability its own rules refuse ([Revise], revise.go; [Mergeability],
-// mergeability.go); a settling of asks moving them to no state it may, or
-// naming the asks the writer stamps; and a record past what one write of a
-// conversation may carry ([MaxConversationBytes]). What the repository and the
-// change hold is the decide's to judge, from the rows.
-//
-// Before any of it, a value whom the write is made for names that this build
-// does not know is answered as its decoder answers it on the wire, never as
-// ErrInvalidProposal, whatever else the write holds ([unknownToThisBuild]):
-// this build cannot judge the write at all, and a writer of a build that knows
-// the value does.
+// Validate refuses, before anything is read, a write no change's writer could
+// decide ([ErrInvalidProposal], naming the field): not exactly one of the eight
+// records; an operation id statelog.CheckCallerOpID refuses; an asker that is
+// no principal or names a run, or any asker on the home's own revise,
+// mergeability or settling of asks; a WrittenFor [writtenForUnder] refuses; a
+// Seen off the code log; a malformed repository or change id; a field the
+// writer stamps set by the asker; and each record's own validFields, up to
+// [MaxConversationBytes]. What the rows hold is the decide's to judge. A
+// WrittenFor value this build does not know is answered first, as its wire
+// decoder answers it, never as ErrInvalidProposal ([unknownToThisBuild]): only
+// a build that knows the value can judge the write.
 func (w ConversationWrite) Validate() error {
 	_, err := w.measure()
 	return err
 }
 
-// measure validates w and answers its record's payload's bytes as the writer
-// stamps it, held under [MaxConversationBytes]: a review past it is refused,
-// split into two reviews of the same revision — which supersede nothing of
-// each other — since its findings are its own to raise in either.
+// measure validates w and answers its record's bytes as the writer will stamp
+// it, held under [MaxConversationBytes]: a review past it is refused, for its
+// asker to split into two of the same revision, which supersede nothing of
+// each other.
 func (w ConversationWrite) measure() (int, error) {
 	if err := w.validFields(); err != nil {
 		return 0, err
@@ -191,9 +59,8 @@ func (w ConversationWrite) measure() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%w: %s: encode it: %w", ErrInvalidProposal, op, err)
 	}
-	// THE STAMPED FIELDS AT THEIR WIDEST: the asker as who wrote it, a kind
-	// on every reviewer, a comment's id and thread, and a review's id and
-	// its findings' at a UUID's length.
+	// THE STAMPED FIELDS AT THEIR WIDEST: who wrote it, each reviewer's kind,
+	// and every stamped id at a UUID's length.
 	const stampedID = len(`,"comment_id":"00000000-0000-7000-8000-000000000000"`)
 	stamped := len(encoded) + principalBytes(w.Asker)
 	switch {
@@ -204,18 +71,16 @@ func (w ConversationWrite) measure() (int, error) {
 	case w.Review != nil:
 		stamped += (1 + len(w.Review.Findings)) * stampedID
 	case w.Revise != nil:
-		// THE HOME'S OWN WRITE NAMES NO ASKER, so nothing is stamped as who
-		// wrote it: what the writer stamps is whom the facts ask, skip and
-		// wake.
+		// THE HOME'S OWN WRITE NAMES NO ASKER: the writer stamps whom the
+		// facts ask, skip and wake instead.
 		stamped += stampedReviseBytes(*w.Revise) - principalBytes(w.Asker)
 	case w.Mergeability != nil:
-		// THE HOME'S OWN WRITE, which names no asker: what the writer stamps
-		// is the readiness it judges, and a refresh's merge from the row.
+		// THE HOME'S OWN WRITE: the writer stamps the readiness it judges,
+		// and a refresh's merge from the row.
 		stamped += stampedMergeabilityBytes(*w.Mergeability) - principalBytes(w.Asker)
 	case w.Asks != nil:
-		// THE HOME'S OWN WRITE too: what the writer stamps is the asks it
-		// moves, at most MaxAsksSettled at the widest handle a seat may
-		// have.
+		// THE HOME'S OWN WRITE: the writer stamps the asks it moves, at most
+		// MaxAsksSettled at a seat's widest handle.
 		stamped += len(`,"reviewers":[]`) + MaxAsksSettled*(len(`"",`)+iam.MaxLogin) - principalBytes(w.Asker)
 	}
 	if stamped > MaxConversationBytes {
@@ -239,9 +104,8 @@ func principalBytes(p Principal) int {
 	return len(encoded) + len(`,"by":`)
 }
 
-// record is the op and the payload w carries, as its asker sent it — "" and
-// nil for a write that carries none, which [ConversationWrite.validFields]
-// refuses before anything reads this.
+// record is the op and the payload w carries, as its asker sent it; "" and nil
+// for none, which [ConversationWrite.validFields] refuses first.
 func (w ConversationWrite) record() (OpKind, any) {
 	switch {
 	case w.Reviewers != nil:
@@ -264,11 +128,10 @@ func (w ConversationWrite) record() (OpKind, any) {
 	return "", nil
 }
 
-// RepoID is the repository w's change is on, by whichever record it carries —
-// "" for one that carries none, which the estate's router refuses as it
-// refuses a push naming no repository. It is the ONE answer the router keys w
-// by and the estate's seam raises the repository's floor for, so the two never
-// name different repositories.
+// RepoID is the repository w's change is on, by whichever record it carries;
+// "" for none, which the estate's router refuses as it does a push naming no
+// repository. It is the ONE answer the router keys w by and the estate's seam
+// raises the repository's floor for, so the two never disagree.
 func (w ConversationWrite) RepoID() string {
 	switch {
 	case w.Reviewers != nil:
@@ -316,16 +179,14 @@ func (w ConversationWrite) ChangeID() string {
 }
 
 // JudgesChart reports a write whose decide reads the deciding node's chart: a
-// SEAT's — its grant on the repository — every ask of reviewers, whoever
-// asks, since each reviewer is judged by the chart; every revision's facts,
-// whose path owners the chart resolves to the seats they are asked of and
-// judges; every change's mergeability, whose readiness the chart judges —
-// who may approve it, who maintains its repository ([ReadinessOf]); and every
-// comment and review that MENTIONS somebody, whose mentions the chart holds
-// the handles of and says which are persons (concerns.go). ONE ANSWER, which
-// the estate declares the operation's grant by and the writer refuses a node
-// that cannot judge one by, so the two never disagree about which writes a
-// node behind the company's configuration may decide.
+// SEAT's (its grant), every ask of reviewers whoever asks, every revision's
+// facts (their path owners), every mergeability (its readiness,
+// [ReadinessOf]), and every comment and review that mentions somebody
+// (concerns.go). A node with no chart, or one confirmed behind the company's
+// configuration, decides none of these and says so ([ErrNotServing]), so the
+// router asks the runner-up under the same operation id. ONE ANSWER, which
+// the estate declares the operation's grant by and the writer refuses by, so
+// the two never disagree about which writes such a node may decide.
 func (w ConversationWrite) JudgesChart() bool {
 	return w.Revise != nil || w.Mergeability != nil || w.Asker.Kind.readsChart() ||
 		(w.Reviewers != nil && len(w.Reviewers.Request) > 0) ||
@@ -357,10 +218,8 @@ func (w ConversationWrite) validFields() error {
 	}
 	switch why := w.Asker.invalid(); {
 	case w.Revise != nil || w.Mergeability != nil || w.Asks != nil:
-		// THE HOME'S OWN WRITE: a revision's facts, a change's mergeability
-		// and the settling of its asks with its lifecycle are the
-		// repository's home Gitlet node's, asked by no principal, so one naming
-		// a principal would be judged as somebody nobody named.
+		// THE HOME'S OWN WRITE is asked by no principal: one naming a
+		// principal would be judged as somebody nobody named.
 		if w.Asker != (Principal{}) {
 			return badField("asker", "a revision's facts, a change's mergeability and the settling of its asks "+
 				"are the repository's home Gitlet node's own, which no principal asks")
@@ -419,12 +278,8 @@ func (w ConversationWrite) validFields() error {
 	return stampedBy("thread_resolve", w.ThreadResolve.By)
 }
 
-// validFields holds a review to [ConversationWrite.Validate]'s rules: a
-// revision from 1, a verdict this build knows, a summary and every finding
-// within their bounds — and a comment says something, its summary or a
-// finding — at most [MaxFindingsPerReview] findings, and its carried
-// findings named once each, as bare UUIDv7s, at most [MaxStandingFindings];
-// its id and its reviewer the writer's to stamp.
+// validFields holds a review to [ConversationWrite.Validate]'s rules; its id
+// and its reviewer are the writer's to stamp.
 func (r *Review) validFields() error {
 	switch {
 	case r.ReviewID != "":
@@ -478,8 +333,8 @@ func (r *Review) validFields() error {
 }
 
 // validFields holds a settling of a change's asks to
-// [ConversationWrite.Validate]'s rules: the state its asks move to, ended or
-// requested, and none of the asks it moves, which the writer stamps.
+// [ConversationWrite.Validate]'s rules; the asks it moves are the writer's to
+// stamp.
 func (a *AskSettle) validFields() error {
 	switch {
 	case a.State != ReviewerEnded && a.State != ReviewerRequested:
@@ -493,9 +348,7 @@ func (a *AskSettle) validFields() error {
 }
 
 // validFields holds an answer to findings to [ConversationWrite.Validate]'s
-// rules: 1 to [MaxFindingsPerReview] findings, each named once as a bare
-// UUIDv7, its resolution one a write may make, its note and its commit within
-// their bounds; who answers the writer's to stamp.
+// rules; who answers is the writer's to stamp.
 func (r *FindingResolve) validFields() error {
 	switch {
 	case len(r.Findings) == 0:
@@ -623,12 +476,10 @@ func (c *Comment) validFields() error {
 	return stampedBy("comment", c.By)
 }
 
-// conversationDecision is one round's decision of a write of a change's
-// conversation: its refusal and sentence where it is refused; unchanged where
-// the rows already say what it asks; the record's payload, stamped, where it
-// forms one, and the rows its apply will touch; and the conversation's
-// version, position and readiness inputs' version as the snapshot read them
-// either way.
+// conversationDecision is one round's decision of a conversation write: a
+// refusal and its sentence, unchanged, or the stamped payload and the rows its
+// apply will touch; and either way the conversation's version, position and
+// readiness inputs' version as the snapshot read them.
 type conversationDecision struct {
 	refusal   ConversationRefusal
 	detail    string
@@ -638,9 +489,8 @@ type conversationDecision struct {
 	version   int64
 	position  int64
 	readiness int64
-	// op is the op of the record the decide forms where it is not the one
-	// the write carries — a mergeability whose outcome its row holds
-	// already, recorded as [OpMergeabilityKept] — and "" where it is.
+	// op is the record's op where it is not the write's — a mergeability
+	// whose outcome its row holds already, as [OpMergeabilityKept] — else "".
 	op OpKind
 	// concern is what the record's own op says of whom it concerns, which
 	// [routeConversation] completes and stamps ([routingFor]).
@@ -648,10 +498,9 @@ type conversationDecision struct {
 }
 
 // routeConversation stamps the routing of the record d forms ([routingFor]):
-// what its op's decide said of whom it concerns, completed with the change as
-// the snapshot holds it, who wrote it and the deciding chart. A decision that
-// forms no record routes nothing; a comment's or a review's mentions join the
-// change's participants with it, a row each ([ChangeRouting.Mentions]).
+// whom its decide said it concerns, completed with the change, who wrote it
+// and the deciding chart. A comment's or a review's mentions join the
+// change's participants, a row each ([ChangeRouting.Mentions]).
 func routeConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster Roster, repoName string,
 	row changeRow, d conversationDecision) (conversationDecision, error) {
 
@@ -660,13 +509,10 @@ func routeConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, ros
 	}
 	c := d.concern
 	c.repoName, c.change, c.roster = repoName, row, roster
-	// WHO WROTE IT: the asker of a write somebody asked; for the home's own
-	// records, which name no asker, the principal the decide found the record
-	// answers — a revision's facts their pusher ([decideRevise]) — and nobody
-	// for a mergeability, which nobody's act made. AND FOR WHOM: the asker's
-	// write was made for whom its request states, and a revision's facts for
-	// whom the decide found the revision's push was made, as its row keeps it
-	// (concerns.go's head, "Whom the actor acted for").
+	// WHO WROTE IT: the asker; for the home's own records, whom the decide
+	// found — a revision's pusher ([decideRevise]) — and nobody for a
+	// mergeability. FOR WHOM: the asker's WrittenFor, or whom a revision's
+	// push was made for (concerns.go's head, "Whom the actor acted for").
 	if c.actor == "" {
 		c.actor, c.actorKind = w.Asker.party()
 		c.workingFor = w.WrittenFor.Carrier()
@@ -676,10 +522,8 @@ func routeConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, ros
 		return conversationDecision{}, err
 	}
 	if r == nil {
-		// A RECORD WITH NO AUDIENCE carries no routing (routingFor): it
-		// writes no notice and wakes nobody, so it adds no row either — and
-		// none of the mentions its asker named, which the chart holds none
-		// of (withRouting).
+		// A RECORD WITH NO AUDIENCE carries no routing: no notice, no wake,
+		// no row, and none of its asker's mentions ([withRouting]).
 		switch d.payload.(type) {
 		case Comment, Review:
 			d.payload = withRouting(d.payload, nil)
@@ -690,8 +534,7 @@ func routeConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, ros
 	case w.Comment != nil, w.Review != nil:
 		d.rows += len(r.Mentions)
 	}
-	// AND A NOTICE EACH HANDLE IT TELLS, and the change's count of them, the
-	// rows its apply writes beside the conversation's (apply_notices.go).
+	// AND A NOTICE EACH HANDLE IT TELLS, and their count (apply_notices.go).
 	d.rows += noticeWrites(r)
 	d.payload = withRouting(d.payload, r)
 	return d, nil
@@ -703,22 +546,20 @@ func (d conversationDecision) refuse(code ConversationRefusal, detail string) (c
 	return d, nil
 }
 
-// decideConversation is one round's decision of w over the rows tx holds — see
-// this file's head for the rules, in their order. Pure over (the rows, w,
-// seats, retention, noGitlet): seats is the deciding epoch's chart, which a
-// write that [ConversationWrite.JudgesChart] is judged by and any other may
-// leave unset; retention is code.deleted_retention_days on the deciding epoch,
-// which a repo_deleted refusal names the purge's earliest instant by; noGitlet
-// is the persons an ask for review names whose holder the identity directory
-// says cannot use Gitlet, read before the publish ([ChangeWriter.withoutGitlet])
-// so that no round of the decide reads anything but its snapshot.
+// decideConversation is one round's decision of w over tx's rows, its rules in
+// order (this file's head). Pure over the rows, w, seats, retention and
+// noGitlet: seats is the deciding epoch's chart, which a write that
+// [ConversationWrite.JudgesChart] needs and any other may leave unset;
+// retention is code.deleted_retention_days, by which a repo_deleted refusal
+// names the purge's earliest instant; noGitlet is the persons an ask names who
+// cannot use Gitlet, read before the publish ([ChangeWriter.withoutGitlet]) so
+// no round reads anything but its snapshot.
 func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, seats SeatRules,
 	retention time.Duration, noGitlet map[string]bool) (conversationDecision, error) {
 
-	// WHOM IT IS MADE FOR, ON THE DECIDING CHART, before anything is read
-	// ([writtenForUnder]), whatever the change holds: a carrier its ceiling
-	// does not bound is its sender's bug, and one this chart alone refuses a
-	// chart that moved under the turn ([ChartRefusal]).
+	// WHOM IT IS MADE FOR, ON THE DECIDING CHART, first ([writtenForUnder]):
+	// a carrier its ceiling does not bound is its sender's bug, and one only
+	// this chart refuses means the chart moved under the turn ([ChartRefusal]).
 	if err := writtenForUnder(w.Asker, w.WrittenFor, w.Ceiling, seats.Roster); err != nil {
 		return conversationDecision{}, refusedCarrier(ErrInvalidProposal, err)
 	}
@@ -741,8 +582,8 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 			"read-only (code.repos archived: true): its changes are read, and written nothing", repo.name))
 	}
 	if w.JudgesChart() && seats.Roster == nil {
-		// THE CALLER'S BUG: the writer hands such a write to the
-		// repository's next writer before deciding it with no chart.
+		// THE CALLER'S BUG: the writer hands such a write to the next
+		// writer rather than decide it with no chart (JudgesChart).
 		return conversationDecision{}, fmt.Errorf("gitlet: a write of %s's conversation that the chart judges "+
 			"reached the decide with no chart — the writer hands such a write to the repository's next "+
 			"committing node", changeID)
@@ -761,41 +602,36 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 	}
 	switch {
 	case w.Revise != nil:
-		// THE HOME'S OWN, which names no asker: its rules are the facts'
-		// guard and the chart's judgment of the path owners.
+		// THE HOME'S OWN, naming no asker: its rules are revise.go's.
 		if d, err = decideRevise(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, d); err != nil {
 			return d, err
 		}
 		return routeConversation(ctx, tx, w, seats.Roster, repo.name, row, d)
 	case w.Mergeability != nil:
-		// THE HOME'S OWN too: its rules are the merge's guard, and the
-		// chart judges the readiness it stamps.
+		// THE HOME'S OWN too: its rules are mergeability.go's.
 		if d, err = decideMergeability(ctx, tx, w, seats.Roster, seats.Epoch, repo.grantRef(repoID), row, named,
 			d); err != nil {
 			return d, err
 		}
 		return routeConversation(ctx, tx, w, seats.Roster, repo.name, row, d)
 	case w.Asks != nil:
-		// THE HOME'S OWN as well, and the chart judges nothing of it: its
-		// rule is the change's state against its asks', and it tells
-		// nobody — an ask ended or asked again is the change's close, merge
-		// or reopen, whose own record told its concerned.
+		// THE HOME'S OWN as well, judged by no chart and routed to nobody:
+		// the close, merge or reopen it follows told its concerned already.
 		return decideAsks(ctx, tx, w, row, named, d)
 	}
 	asker, kind := w.Asker.party()
+	// EVERY ROW NAMES ITS WRITER BY SEAT, so a credential bound to none writes
+	// nothing.
 	if kind == "" {
 		return d.refuse(ConversationRefusalNotPermitted, "this credential is bound to no seat: a change is "+
 			"discussed by a person, through a credential bound to their human seat, or by a seat; a credential "+
 			"bound to nobody reads only")
 	}
-	// THE GRANT BEFORE EVERY RELATION: an author's answer to a finding, a
-	// raiser's dismissal, a thread's starter's resolution and an author's ask
-	// for review are relations to the CHANGE, which outlive a seat's standing
-	// on its repository — and a seat the deciding chart no longer lets read
-	// the repository (it left the chart, or the repository's visibility no
-	// longer reaches its unit) reads nothing of the change it would write, so
-	// it writes nothing of it either, in the grant's own sentence. A person
-	// maintains every repository and always passes.
+	// THE GRANT BEFORE EVERY RELATION: authoring, raising a finding and
+	// starting a thread are relations to the CHANGE that outlive a seat's
+	// standing on its repository; a seat the chart no longer lets read it
+	// (it left the chart, or a `visibility: unit` no longer reaches it) reads
+	// nothing of the change, so writes nothing of it. A person always passes.
 	grant := GrantOf(w.Asker, repo.grantRef(repoID), seats.Roster)
 	if !grant.MayRead() {
 		return d.refuse(ConversationRefusalNotPermitted, grant.ReadRefusal())
@@ -816,7 +652,9 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 		return d, err
 	}
 	// AND THEN FOR WHOEVER THE SEAT'S TURN WORKS FOR, once the seat itself
-	// may: a refusal here forms nothing, an answer unchanged included.
+	// may: a colleague held to [ConversationWrite.CeilingNeeds], nobody else
+	// to anything but the seat's own work; a refusal here forms nothing, an
+	// answer unchanged included.
 	what := "write " + named + "'s conversation"
 	if w.Review != nil {
 		what = "review " + named
@@ -842,14 +680,14 @@ func (w ConversationWrite) CeilingNeeds() Access {
 }
 
 // decideReview is a review's rules over row (rules D21 and D22): a LIVE change
-// (change_closed, change_merged); a reviewer who may review the repository and
-// did not write the change — an author's review of their own change, its
-// approval above all, counts for nothing, so none is taken (own_change); a
-// revision the change has reached (unknown_revision); every finding it carries
-// one of its reviewer's own (not_raiser) still standing on the change
-// (finding_gone); and its reviewer left with at most [MaxStandingFindings]
-// standing findings once the review supersedes those of earlier revisions it
-// does not carry (too_many_findings).
+// (change_closed, change_merged); a reviewer who did not write the change,
+// since an author's review, its approval above all, counts for nothing
+// (own_change), and who reviews the repository (not_permitted); a revision the
+// change has reached (unknown_revision); every carried finding its reviewer's
+// own (not_raiser) and still standing (finding_gone); and at most
+// [MaxStandingFindings] of its reviewer's left standing once it supersedes the
+// earlier revisions' it does not carry (too_many_findings), which bounds what
+// one review's record rewrites.
 func decideReview(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker string, kind PartyKind,
 	row changeRow, named string, grant Grant, d conversationDecision) (conversationDecision, error) {
 
@@ -877,10 +715,9 @@ func decideReview(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker st
 		return d.refuse(ConversationRefusalUnknownRevision, fmt.Sprintf("%s is at revision %d, and the review "+
 			"judges revision %d: read the change again", named, row.revision, r.Revision))
 	}
-	// THE REVIEWER'S STANDING FINDINGS FIRST, in one walk, which is every
-	// finding a review may carry: a carried id among them is its own and
-	// standing, and only one that is not is read by its key, to word its
-	// refusal — never MaxStandingFindings point reads every round.
+	// THE REVIEWER'S STANDING FINDINGS, in one walk, are all a review may
+	// carry: only a carried id outside them is read by its key, to word its
+	// refusal — never MaxStandingFindings point reads a round.
 	all, err := standingFindings(ctx, tx, row.id, asker, kind)
 	if err != nil {
 		return conversationDecision{}, err
@@ -933,10 +770,12 @@ func decideReview(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker st
 }
 
 // decideFindingResolve is an answer to findings' rules over row (rule D21):
-// every finding it names standing on the change (finding_gone); resolved,
-// won't fix and disputed an author's to give (not_author); a dismissal its
-// raiser's, a maintainer's or a person's (not_raiser); and answered unchanged
-// where every finding is already in the state it asks for.
+// every finding it names standing on the change (finding_gone), since nothing
+// moves a dismissed or superseded one again; resolved, won't fix and disputed
+// an author's to give (not_author), and a dismissal its raiser's, a
+// maintainer's or a person's (not_raiser) — an author's answer leaves a
+// blocker standing for its raiser to judge (S40); unchanged where every
+// finding is already in the state asked.
 func decideFindingResolve(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker string, kind PartyKind,
 	row changeRow, named string, grant Grant, d conversationDecision) (conversationDecision, error) {
 
@@ -995,10 +834,9 @@ func decideFindingResolve(ctx context.Context, tx *sql.Tx, w ConversationWrite, 
 }
 
 // supersededBy is how many findings raiser keeps standing on changeID, and
-// which of them review supersedes: those raised on a revision before the one
-// it judges that it does not carry — a review of the same revision supersedes
-// nothing, since two reviews of one revision are one reviewer's two passes over
-// it. The decide and the apply read the same rows by the same rule.
+// which of them review supersedes: those of an earlier revision it does not
+// carry — two reviews of one revision are one reviewer's two passes, so
+// supersede nothing. The decide and the apply both read by this rule.
 func supersededBy(ctx context.Context, tx queryer, changeID, raiser string, kind PartyKind, r Review) (int,
 	[]standingFinding, error) {
 
@@ -1012,9 +850,8 @@ func supersededBy(ctx context.Context, tx queryer, changeID, raiser string, kind
 // supersededAmong is which of a raiser's standing findings all review
 // supersedes ([supersededBy]).
 func supersededAmong(all []standingFinding, r Review) []standingFinding {
-	// A SET OF WHAT IT CARRIES: up to MaxStandingFindings against as many
-	// standing, which a scan of the list for each would make a million
-	// comparisons of a decide and an apply.
+	// A SET: up to MaxStandingFindings carried against as many standing
+	// would be a million comparisons scanned as a list.
 	carried := make(map[string]bool, len(r.Carries))
 	for _, id := range r.Carries {
 		carried[id] = true
@@ -1037,10 +874,9 @@ type standingFinding struct {
 	state    FindingState
 }
 
-// standingFindings is every finding raiser keeps standing on changeID, in one
+// standingFindings is every finding raiser keeps standing on changeID, one
 // seek of code_findings_raiser_idx a standing state: at most
-// [MaxStandingFindings] rows, which every review that would add past it is
-// refused.
+// [MaxStandingFindings] rows, since a review adding past it is refused.
 func standingFindings(ctx context.Context, tx queryer, changeID, raiser string, kind PartyKind) (
 	[]standingFinding, error) {
 
@@ -1072,9 +908,8 @@ type findingRow struct {
 	state        FindingState
 }
 
-// findingsAmong reads the findings ids names, by id — one statement driven from
-// their list, a seek of the findings' key an id; an id no finding has is not
-// among them.
+// findingsAmong reads the findings ids names, in one statement driven from
+// the list; an id no finding has is absent.
 func findingsAmong(ctx context.Context, tx queryer, ids []string) (map[string]findingRow, error) {
 	list, err := jsonList(ids)
 	if err != nil {
@@ -1114,7 +949,15 @@ func findingIn(ctx context.Context, tx *sql.Tx, id string) (findingRow, bool, er
 	return f, true, nil
 }
 
-// decideReviewers is an ask for review's rules over row — see this file's head.
+// decideReviewers is an ask for review's rules over row (rule D21): a LIVE
+// change (change_closed, change_merged), asked by an author, a principal that
+// reviews the repository or a person (not_permitted). Each reviewer is judged
+// on the deciding chart whoever asks: a handle no seat holds is no_reviewer; a
+// person is asked only if noGitlet does not name them, since an ask discloses
+// the change's code (ADR-0110); a seat must review the repository and not be
+// an author, whose review counts for nothing (not_permitted). Unchanged where
+// every reviewer is asked already and none withdrawn still is; past
+// [MaxReviewersPerChange] asked at once is too_many_reviewers.
 func decideReviewers(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster Roster, repo RepoRef,
 	row changeRow, named string, grant Grant, noGitlet map[string]bool,
 	d conversationDecision) (conversationDecision, error) {
@@ -1150,10 +993,9 @@ func decideReviewers(ctx context.Context, tx *sql.Tx, w ConversationWrite, roste
 				"is a seat by its handle, or a person by the human seat they hold", rv.Handle))
 		}
 		if seat.Human {
-			// A PERSON READS A CHANGE ONLY THROUGH GITLET, so one without
-			// it is asked to review none: an ask is how a change discloses
-			// its whole diff to somebody, and the company withheld code
-			// from them (ADR-0110).
+			// A PERSON READS A CHANGE ONLY THROUGH GITLET, and an ask
+			// discloses its whole diff, so one without it is asked nothing
+			// (ADR-0110).
 			if noGitlet[rv.Handle] {
 				return d.refuse(ConversationRefusalNotPermitted, fmt.Sprintf("%q has no Gitlet permission, so "+
 					"they cannot read %s and are asked to review none of it: an administrator gives them Gitlet "+
@@ -1187,8 +1029,8 @@ func decideReviewers(ctx context.Context, tx *sql.Tx, w ConversationWrite, roste
 		if states[rv.Handle] != ReviewerRequested {
 			after++
 			moved++
-			// ASKED BY THIS RECORD, and so told: a reviewer the change asks
-			// already was told when it was asked.
+			// ASKED BY THIS RECORD, and so told; one asked already was
+			// told then.
 			d.concern.requested = append(d.concern.requested, rv)
 		}
 	}
@@ -1216,12 +1058,11 @@ func decideReviewers(ctx context.Context, tx *sql.Tx, w ConversationWrite, roste
 }
 
 // decideAsks is a settling of a change's asks with its lifecycle over row: an
-// end takes a change that closed or merged, and an ask again a live one —
-// else SUPERSEDED, recorded nowhere: the change moved after its home read it,
-// and the home's next pass reads the rows again — and either moves the
-// change's asks in the state the other direction leaves them — a waiting ask
-// to ended, an ended one to requested — at most [MaxAsksSettled] of them, by
-// handle, stamped on the record; a change holding none is superseded too.
+// end takes a closed or merged change and an ask again a live one, each moving
+// the asks the other left (requested to ended, ended to requested), at most
+// [MaxAsksSettled] by handle, stamped on the record. A change that moved after
+// its home read it, or holds no such ask, is SUPERSEDED, recorded nowhere, for
+// the home's next pass.
 func decideAsks(ctx context.Context, tx *sql.Tx, w ConversationWrite, row changeRow, named string,
 	d conversationDecision) (conversationDecision, error) {
 
@@ -1272,10 +1113,9 @@ func asksIn(ctx context.Context, tx *sql.Tx, changeID string, state ReviewerStat
 }
 
 // reviewRemedy is how a seat below review on a repository comes to review it:
-// its tier, where the chart already relates it to the repository by more than
-// a read and the tier alone caps it; else whoever leads the repository's
-// owner, whose chart the relation is — a seat related by a read alone reviews
-// nothing whatever its tier.
+// its tier, where its relation already passes a read and the tier alone caps
+// it; else ask whoever leads the repository's owner, since a seat related by a
+// read alone reviews nothing whatever its tier.
 func reviewRemedy(g Grant) string {
 	if g.Relation >= AccessReview {
 		return "a person can set its role.code.access to review or full_access"
@@ -1283,7 +1123,11 @@ func reviewRemedy(g Grant) string {
 	return "ask " + g.lead()
 }
 
-// decideComment is a comment's rules over row — see this file's head.
+// decideComment is a comment's rules over row: a change in any state, since a
+// change is discussed after it merges; a reply names a thread's ROOT on this
+// change, keeping threads one level deep and read in order, or a finding on
+// it, whose thread the finding names (thread_gone); an anchor is on a revision
+// the change has reached (unknown_revision).
 func decideComment(ctx context.Context, tx *sql.Tx, w ConversationWrite, row changeRow, named string,
 	d conversationDecision) (conversationDecision, error) {
 
@@ -1306,9 +1150,8 @@ func decideComment(ctx context.Context, tx *sql.Tx, w ConversationWrite, row cha
 		}
 		c.ThreadID = parent.id
 	case c.FindingID != "":
-		// A FINDING'S THREAD IS NAMED BY THE FINDING, whatever state it is
-		// in: what a dismissed or superseded finding said is still talked
-		// about.
+		// A FINDING'S THREAD IS NAMED BY THE FINDING, whatever its state: a
+		// dismissed or superseded one is still talked about.
 		finding, found, err := findingIn(ctx, tx, c.FindingID)
 		if err != nil {
 			return conversationDecision{}, err
@@ -1332,8 +1175,10 @@ func decideComment(ctx context.Context, tx *sql.Tx, w ConversationWrite, row cha
 	return d, nil
 }
 
-// decideThreadResolve is a thread's resolution's rules over row — see this
-// file's head.
+// decideThreadResolve is a thread's resolution's rules over row: the root of a
+// thread on this change (thread_gone; a finding's thread is answered by the
+// finding's own answer), resolved by its starter, an author of the change, a
+// maintainer or a person (not_permitted); unchanged where it already is.
 func decideThreadResolve(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker string, kind PartyKind,
 	row changeRow, named string, grant Grant, d conversationDecision) (conversationDecision, error) {
 
@@ -1372,8 +1217,8 @@ func decideThreadResolve(ctx context.Context, tx *sql.Tx, w ConversationWrite, a
 }
 
 // withinConversation refuses a decision past a record's bytes or rows, which
-// [ConversationWrite.Validate]'s bounds keep from ever forming — the check
-// makes the invariant the record's own, as [withinChange] does a change's.
+// [ConversationWrite.Validate]'s bounds keep from forming: it makes the
+// invariant the record's own, as [withinChange] does a change's.
 func withinConversation(dec statelog.Decision, d conversationDecision) error {
 	switch {
 	case len(dec.Payload) > MaxRecordBytes:
@@ -1408,9 +1253,8 @@ type commentRow struct {
 	resolved                         bool
 }
 
-// root reports the first comment of a thread of its own: its thread is named
-// by its own id. A reply's thread is its root's, and a reply to a finding's the
-// finding's.
+// root reports a thread's first comment, whose thread is named by its own id;
+// a reply's is its root's, and a reply to a finding's the finding's.
 func (c commentRow) root() bool { return c.threadID == c.id }
 
 // commentIn reads the comment id names, and false where no comment has it.
@@ -1490,12 +1334,11 @@ func reviewerStates(ctx context.Context, tx *sql.Tx, changeID string, handles []
 	return out, requested, nil
 }
 
-// The conversation's decide reads, each registered in plan_test.go: the
-// conversation and a comment by their keys; the authors and the reviewers a
-// write names, driven from the list of their handles, one seek of the key a
-// handle — the reviewers' key NAMED ([reviewersKey] says why); and how many reviewers a change asks, counted at most
-// MaxReviewersPerChange + 1 deep over the reviewers' key — a change's withdrawn
-// asks are rows too, and the count need only say whether one more fits.
+// The conversation's decide reads, each registered in plan_test.go. Authors
+// and reviewers are driven from the list of handles, one seek a handle, the
+// reviewers' key NAMED ([reviewersKey] says why); the asks are counted at most
+// MaxReviewersPerChange + 1 deep, since withdrawn asks are rows too and the
+// count need only say whether one more fits.
 const (
 	conversationSQL = `SELECT version, position, readiness_version FROM code_conversations WHERE change_id = ?`
 	commentSQL      = `SELECT id, change_id, thread_id, parent_id, author, author_kind, resolved
@@ -1511,24 +1354,19 @@ const (
 	// reviewers' key NAMED, for reviewersNamedSQL's reason.
 	asksInStateSQL = `SELECT reviewer FROM code_reviewers INDEXED BY ` + reviewersKey + `
 		WHERE change_id = ? AND state = ? ORDER BY reviewer LIMIT ?`
-	// findingSQL is a finding by its key; standingFindingsSQL a raiser's
-	// standing findings on a change, driven from the list of the standing
-	// states ([standingStates]), one seek of code_findings_raiser_idx a state —
+	// standingFindingsSQL is driven from the list of standing states
+	// ([standingStates]), one seek of code_findings_raiser_idx a state —
 	// never `state IN (…)`, which the pinned driver seeks no deeper than the
-	// raiser, reading every finding they raised on the change, superseded and
-	// dismissed ones of every earlier revision among them.
+	// raiser, reading every finding they ever raised on the change.
 	findingSQL = `SELECT id, change_id, raiser, raiser_kind, revision, severity, state
 		FROM code_findings WHERE id = ?`
-	// findingsAmongSQL is the findings a list names, driven from the list,
-	// one seek of the findings' key an id.
 	findingsAmongSQL = `SELECT f.id, f.change_id, f.raiser, f.raiser_kind, f.revision, f.severity, f.state
 		FROM json_each(?) AS j CROSS JOIN code_findings AS f WHERE f.id = CAST(j.value AS TEXT)`
 	standingFindingsSQL = `SELECT f.id, f.revision, f.severity, f.state
 		FROM json_each(?4) AS j CROSS JOIN code_findings AS f
 		WHERE f.change_id = ?1 AND f.raiser = ?2 AND f.state = CAST(j.value AS TEXT) AND f.raiser_kind = ?3`
-	// standingStates is the states [FindingState.Stands] names, as the JSON
-	// list standingFindingsSQL is driven from; a test holds the two to each
-	// other.
+	// standingStates is [FindingState.Stands]'s states as a JSON list; a test
+	// holds the two to each other.
 	standingStates = `["open","resolved","wont_fix","disputed"]`
 )
 

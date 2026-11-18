@@ -98,7 +98,7 @@ func readQueue(t *testing.T, n *node, asker gitlet.Principal, q gitlet.ReadQuery
 // minutes ago. A read naming no repository that asks for trains answers every live entry with
 // its change's title and source branch, the candidates of both repositories' trains, api's
 // ejection with how it was to land, and their total; the same read without trains answers the
-// live entries alone, as before.
+// live entries alone.
 //
 // Mutations: read the trains of the first row's repository for every target (as a named
 // repository's read did): api's candidate is missing, red; keep the early return of the read of

@@ -13,21 +13,17 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// BenchmarkExpiryListing times ONE PASS'S LISTING of the ref expiry — every
-// page of code_refs_expiry_idx past the cutoff, each with its repositories and
-// its position — over 100 000 idle seat branches of archived repositories
-// (a hundred repositories of a thousand each: listed every pass and proposed
-// nothing, until a purge or a restore) beside 1 000 due ones of an active
-// repository, all stamped at the epoch.
+// BenchmarkExpiryListing times ONE PASS'S LISTING of the ref expiry (every
+// page of code_refs_expiry_idx past the cutoff) over 100 000 idle seat
+// branches of archived repositories, which every pass lists and proposes
+// nothing for, beside 1 000 due ones of an active repository.
 //
-// THE DECISION RULE (M3-boxes §10.4): the listing is a scan of the partial
-// index from its oldest row, so the archived rows are read again every pass.
-// Past a tenth of gitlet.RetentionPassBudget (6 s) at this size, the listing
-// moves to a per-active-repository seek — an index (repo_id, at, ref) partial
-// on a set seat, walked repository by repository from the active ones — in a
-// migration of its own; under it, the one index serves. Measured with
-// -benchtime 3x -count 1 on the runner's two E-cores; the figure and the
-// decision are the commit's.
+// THE DECISION RULE (M3-boxes §10.4): the listing scans the partial index from
+// its oldest row, rereading the archived rows each pass. Past a tenth of
+// gitlet.RetentionPassBudget (6 s) at this size, it moves to a
+// per-active-repository seek on an index (repo_id, at, ref) partial on a set
+// seat, in its own migration; under it, the one index serves. Measured with
+// -benchtime 3x -count 1 on two E-cores; the figure is the commit's.
 func BenchmarkExpiryListing(b *testing.B) {
 	n := newNode(b)
 	ctx := context.Background()

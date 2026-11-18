@@ -17,85 +17,25 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE CHANGE WRITER: a change's conversation, published on the change's own
-// subject by the repository's committing data node.
-//
-// A record of a change's conversation ([ConversationOps]) arbitrates on the
-// CHANGE ([KindChange]), never on its repository: a comment shares nothing with
-// the pushes that move the change's branches, and decided in the committer's
-// queue it would wait behind their batches. So the writer is the committer's
-// sibling on the same node — the estate asks a conversation write of the
-// repository's committing data node, keyed by the repository as a push is
-// (internal/estate's code.conversation) — and it shares none of the committer's
-// queue, budget or batches: each write is a record of its own, under the
-// asker's operation id, decided in one snapshot and published under
-// [statelog.PatternArbitrated] with the asker's Seen as its session floor.
-//
-// # One write of a change in flight at a time
-//
-// Two writes of one change published at once from one node read one anchor,
-// and one of them loses a compare-and-set round to the other and decides
-// again — a review lost to a comment beside it, sixteen rounds of losing for a
-// thread a burst of comments lands in. So the writer takes ONE CHANGE'S WRITES
-// ONE AT A TIME — a SINGLE FLIGHT a change, held from the decide's first round
-// to its answer — and writes of different changes side by side (flight.go). A
-// write waits for its turn while its asker's attempt leaves room for a publish
-// and its answer ([CommitBudget], [ReplyMargin]), and is refused busy,
-// undecided, the moment it does not — the committer's rule for a push's wait in
-// its queue, and for its reason: past it the asker hands the same operation id
-// to the repository's runner-up, which then contends with this node on the
-// change's subject. Two nodes writing one change — a runner-up asked while the
-// committing node answered slowly — still meet at the broker, where exactly one
-// record lands a round.
-//
-// # Bounded as the committer is
-//
-// A write holding or waiting for its change's turn holds the estate's answer
-// slot on the node's proposal lane, which pushes are answered on too, and its
-// decoded request — a review up to [MaxConversationBytes]. So it is refused
-// busy AT ONCE, undecided, past any of three bounds, the committer's rule for a
-// proposal: [MaxChangeWritesWaiting] writes of its own change, a burst written
-// faster than the change's single flight lands them or queued behind a publish
-// an election holds; [ChangeWriterNodeWrites] writes across every change, the
-// writer's share of the proposal lane; and [ChangeWriterNodeBytes] of them,
-// weighed by what each record carries.
-//
-// # The publish is the writer's
-//
-// A write's publish runs under the writer's own lifetime and one CommitBudget,
-// never its asker's context: an asker that hangs up mid-publish stops waiting,
-// and the record may land — its answer is then the rows, which the asker's
-// retry under the same operation id collapses onto. [ChangeWriter.Stop] refuses
-// every new write and every one still waiting for its turn [ErrNotServing], so
-// the router asks the runner-up, and waits for the publishes in flight.
-//
-// # A seat's write is decided only by a node that can judge it
-//
-// A write the chart judges ([ConversationWrite.JudgesChart]) — a seat's, and an
-// ask of reviewers by anybody — is refused [ErrNotServing] by a node confirmed
-// behind the company's configuration ([ChangeWriterOptions.Current]) and by one
-// holding no chart yet ([ChangeWriterOptions.SeatRules]), as the committer
-// refuses a seat's push there: the router asks the repository's runner-up under
-// the same operation id. A person's comment or resolution is decided as ever.
-//
-// # A person is asked to review only where they use Gitlet
-//
-// Reading a change is reading its repository's code, so an ask for review
-// names a person only where the identity directory says the seat's holder
-// uses Gitlet (ADR-0110). The decide is pure over its snapshot, so the writer
-// asks the directory first — once for each person the ask names, through
-// [People], on the asker's deadline — and hands the decide who cannot be
-// asked; a directory that cannot say answers the write busy, undecided, to be
-// sent again, and never as a refusal of somebody who may well use the app.
+// THE CHANGE WRITER decides a change's conversation ([ConversationOps]) on the
+// change's own subject, beside the repository's committer on its committing
+// data node but sharing none of its queue, budget or batches: a comment shares
+// nothing with the pushes that move the change's branches, and would wait
+// behind their batches (package doc, "A change's conversation is rows on its
+// own subject"). One change's writes run ONE AT A TIME, a single flight from
+// the decide's first round to its answer, different changes' side by side
+// (flight.go): two published at once from one node read one anchor and lose
+// compare-and-set rounds to each other. A write waits its turn only while its
+// asker's deadline leaves a publish and its answer ([CommitBudget],
+// [ReplyMargin]) — the committer's rule: past it the asker hands the operation
+// id to the runner-up, which contends with this node; the broker lands one.
 
-// People answers who holds a human seat, as the authority table decides for
-// them: the person the identity directory binds to it, at their stage, holding
-// the apps their grants name — none for a seat nobody holds, nor for a person
-// who may not act — or the error that kept the directory from answering.
-//
-// THE ENGINE'S IS THE REQUESTER CEILING'S OWN COMPOSITION (internal/engine's
-// turnRequesters, ADR-0109), so a person is one principal whether an agent is
-// working for them or a change is asking them to review it.
+// People answers who holds a human seat: the person the identity directory
+// binds to it, holding the apps their grants name — none for a seat nobody
+// holds or a person who may not act — or the error that kept the directory
+// from answering. The engine's is the requester ceiling's own composition
+// (internal/engine's turnRequesters, ADR-0109), so a person is one principal
+// whether an agent works for them or a change asks them to review it.
 type People interface {
 	Requester(ctx context.Context, seat string) (iam.Principal, error)
 }
@@ -108,39 +48,35 @@ type ChangeWriterOptions struct {
 	DB store.ReplicatedReader
 	// NodeID is the deciding node, which every record names as its actor.
 	NodeID string
-	// Retention is the deciding node's epoch's code.deleted_retention_days:
-	// when a deleted repository's purge may begin, which a write refused
-	// repo_deleted is told ([RepoGone]). REQUIRED, as the committer's is.
+	// Retention is the epoch's code.deleted_retention_days: when a deleted
+	// repository's purge may begin, which a write refused repo_deleted is
+	// told ([RepoGone]). REQUIRED.
 	Retention func() time.Duration
-	// SeatRules is the deciding node's epoch's chart, which a write that
-	// [ConversationWrite.JudgesChart] is judged by — a seat's grant on the
-	// repository, and every reviewer an ask names — read once a write. False
-	// where this node has installed no epoch yet: such a write is then
-	// answered [ErrNotServing], so the router hands it to the repository's
-	// runner-up under the same operation id. REQUIRED: a reviewer is never
-	// judged by a default.
+	// SeatRules is the epoch's chart, read once a write, which judges a write
+	// that [ConversationWrite.JudgesChart] — a seat's grant on the repository
+	// and every reviewer an ask names. False while this node has installed no
+	// epoch: such a write is answered [ErrNotServing], so the router asks the
+	// runner-up. REQUIRED: a reviewer is never judged by a default.
 	SeatRules func() (SeatRules, bool)
 	// Current is whether this node serves the company's configuration (the
-	// engine's posture gate), false exactly while it is CONFIRMED behind it,
-	// and nil is current. While it answers false every write the chart judges
-	// is answered [ErrNotServing], as it is queued and again once its turn
-	// comes; a person's comment or resolution is decided as ever.
+	// engine's posture gate): false only while CONFIRMED behind it; nil is
+	// current. While false, a write the chart judges is answered
+	// [ErrNotServing] when queued and again at its turn, so the router asks
+	// the runner-up; a person's comment or resolution is decided as ever.
 	Current func() bool
 	// Now is the decide's clock — a record's authored instant; nil takes the
 	// wall clock in UTC.
 	Now func() time.Time
-	// Events is this node's event stream, which a review whose record this
-	// writer landed is announced on (`review_submitted`, announce.go); nil
-	// announces none — a node with no queue records no event of any kind.
+	// Events is where a review this writer landed is announced
+	// (`review_submitted`, announce.go); nil announces none.
 	Events EventPublisher
 	// AgentIDs resolves a seat's handle to the agent id its day is counted
-	// under, as the committer's does ([CommitterOptions.AgentIDs]).
-	// REQUIRED with Events: a review announced without its reviewer's and
-	// its change owner's ids is counted on no seat's day.
+	// under ([CommitterOptions.AgentIDs]). REQUIRED with Events: a review
+	// announced without its reviewer's and change owner's ids is counted on
+	// no seat's day.
 	AgentIDs func(handle string) (string, bool)
-	// People answers who holds each human seat an ask for review names, and
-	// whether they use Gitlet ([People]). REQUIRED: a person is never asked
-	// to review a change on a default.
+	// People answers whether each person an ask for review names uses Gitlet
+	// ([People]). REQUIRED: a person is never asked to review on a default.
 	People People
 	// Metrics records every write's outcome; nil records nothing.
 	Metrics *metrics.Recorder
@@ -169,7 +105,13 @@ type ChangeWriter struct {
 	flights *flights
 }
 
-// changeFlights is what a change writer's single flights admit.
+// changeFlights is what a change writer's single flights admit, the
+// committer's rule for a proposal. A waiting write holds the estate's answer
+// slot on the proposal lane pushes share, and its decoded request (a review up
+// to [MaxConversationBytes]), so past any bound it is refused busy at once,
+// undecided: [MaxChangeWritesWaiting] of its change (a burst, or writes queued
+// behind a publish an election holds), [ChangeWriterNodeWrites] across every
+// change (the writer's share of the lane), and [ChangeWriterNodeBytes].
 var changeFlights = flightBounds{
 	key: MaxChangeWritesWaiting, node: ChangeWriterNodeWrites, bytes: ChangeWriterNodeBytes,
 	keyBound: "MaxChangeWritesWaiting", nodeBound: "ChangeWriterNodeWrites", bytesBound: "ChangeWriterNodeBytes",
@@ -217,23 +159,17 @@ func NewChangeWriter(o ChangeWriterOptions) (*ChangeWriter, error) {
 }
 
 // Converse decides one write of a change's conversation and answers what
-// became of it: a write past one of the writer's three bounds — its change's
-// writes ([MaxChangeWritesWaiting]), every change's
-// ([ChangeWriterNodeWrites]) and their bytes ([ChangeWriterNodeBytes]) — is
-// answered busy undecided at once; one whose asker's DEADLINE leaves too
-// little for a publish and its answer ([CommitBudget] and [ReplyMargin]) is
-// answered busy undecided — at once, or the moment that is so while it waits
-// for its change's turn — and one whose asker has none waits at most a
-// CommitBudget; a stopping writer answers [ErrNotServing], and so does one
-// that cannot judge a write the chart judges — behind the company's
-// configuration, or holding no chart yet; a write that is not one answers
-// [ErrInvalidProposal]. ctx bounds only this caller's wait.
-//
-// ITS OPERATION ID IS THE WRITE'S OWN, so a write its asker hands the
-// repository's runner-up after this node went silent is the same write there,
-// collapsed by the ledger onto the record that landed — a comment onto the
-// comment it said, never a second. Applied is answered FROM THE ROWS the
-// record wrote, never from the decision.
+// became of it. It is answered busy, undecided, past one of the writer's
+// bounds ([MaxChangeWritesWaiting], [ChangeWriterNodeWrites],
+// [ChangeWriterNodeBytes]) or the moment its asker's deadline leaves too
+// little for a publish and its answer ([CommitBudget], [ReplyMargin]), and
+// waits at most a CommitBudget where there is none; [ErrNotServing] by a
+// stopping writer, and for a write the chart judges by one behind the
+// company's configuration or holding no chart; [ErrInvalidProposal] if it is
+// no write. ctx bounds only this caller's wait. ITS OPERATION ID IS THE WRITE'S
+// OWN, so the same write asked of the runner-up collapses in the ledger onto
+// the record that landed, never a second comment. Applied is answered FROM THE
+// ROWS, never from the decision.
 func (w *ChangeWriter) Converse(ctx context.Context, cw ConversationWrite) (ConversationResult, error) {
 	weight, err := cw.measure()
 	if err != nil {
@@ -302,10 +238,9 @@ func (w *ChangeWriter) converse(ctx context.Context, cw ConversationWrite, weigh
 	go func() {
 		defer w.flights.done()
 		res, err, fresh := w.write(cw, seats, noGitlet)
-		// THE CHANGE'S NEXT WRITE WAITS ON NONE OF THE ANNOUNCEMENT: its
-		// turn is released with the answer, and the announcement — a read
-		// and a publish, bounded by checkEventBudget — runs after both,
-		// still inside this publish's flight so Stop waits for it.
+		// THE CHANGE'S NEXT WRITE WAITS ON NONE OF THE ANNOUNCEMENT
+		// (bounded by checkEventBudget), which runs after the answer but
+		// inside this publish's flight, so Stop waits for it.
 		hold.release()
 		w.count(cw, res, err)
 		done <- answer{res, err}
@@ -328,17 +263,15 @@ func (w *ChangeWriter) converse(ctx context.Context, cw ConversationWrite, weigh
 	}
 }
 
-// withoutGitlet is the persons an ask for review names who may not be asked —
-// each human seat of the chart it asks whose holder the identity directory
-// says cannot use Gitlet: a seat nobody holds, a person who may not act, or
-// one not given the app (ADR-0110) — or, where the directory could not say,
-// the sentence the write is answered busy with. Nil for any other write, and
-// for an ask naming no person.
-//
-// ONE POINT READ A PERSON, never the directory, on the asker's deadline: an
-// ask names at most [MaxReviewersPerChange] reviewers. A handle the chart holds
-// no seat for, and an agent's seat, are left to the decide, which refuses the
-// first and judges the second by its grant on the repository.
+// withoutGitlet is the persons an ask for review names who may not be asked,
+// since reading a change is reading its code: each human seat whose holder
+// the identity directory says cannot use Gitlet (ADR-0110: unheld, may not
+// act, or not given the app). Where the directory cannot say, it is instead
+// the sentence the write is answered busy with — never a refusal of somebody
+// who may use the app. Nil for any other write or an ask naming no person.
+// Read before the decide, which is pure over its snapshot: ONE POINT READ A
+// PERSON on the asker's deadline (at most [MaxReviewersPerChange]); a handle
+// with no seat, and an agent's seat, are left to the decide.
 func (w *ChangeWriter) withoutGitlet(ctx context.Context, cw ConversationWrite, roster Roster) (map[string]bool,
 	string) {
 
@@ -383,26 +316,25 @@ func busyConversation(detail string) ConversationResult {
 	return ConversationResult{Refusal: ConversationRefusalBusy, Detail: detail}
 }
 
-// Close refuses every new write [ErrNotServing], and every one waiting for its
-// change's turn, leaving the publishes in flight to run — the first half of
-// [ChangeWriter.Stop], which a teardown stopping several writers under one bound
-// takes for all of them before it drains any (internal/engine's
-// stopTogether). Safe to call more than once.
+// Close is the first half of [ChangeWriter.Stop], refusing without draining,
+// so a teardown stopping several writers under one bound closes all of them
+// before it drains any (internal/engine's stopTogether). Safe to call more
+// than once.
 func (w *ChangeWriter) Close() { w.flights.close() }
 
 // Stop refuses every new write [ErrNotServing], and every one waiting for its
-// change's turn — a node that decided nothing, so the router asks the
-// runner-up — and waits for the publishes in flight, which are FINISHED rather
-// than abandoned so their askers get their outcome. If ctx ends first, they
-// are cancelled and answered from what their publish returned. Safe to call
-// more than once.
+// change's turn, so the router asks the runner-up, and waits for the
+// publishes in flight, FINISHED rather than abandoned so their askers get
+// their outcome. If ctx ends first, they are cancelled and answered from what
+// their publish returned. Safe to call more than once.
 func (w *ChangeWriter) Stop(ctx context.Context) { w.flights.stop(ctx) }
 
-// write publishes one write of a change's conversation and answers it — under
-// the writer's own lifetime and one CommitBudget — and whether it is a review
-// this call landed, which is announced once its answer is handed back
-// (announce.go): never one answered unchanged, from no record, nor a retry the
-// ledger collapsed onto an earlier landing, whose call announced it.
+// write publishes cw under the writer's own lifetime and one CommitBudget,
+// never its asker's context: an asker that hangs up stops waiting, and its
+// retry under the same operation id collapses onto a record that landed. It
+// answers cw and whether it is a review this call landed, to announce
+// (announce.go) — never one answered unchanged, nor a collapsed retry, whose
+// first call announced it.
 func (w *ChangeWriter) write(cw ConversationWrite, seats SeatRules, noGitlet map[string]bool) (ConversationResult,
 	error, bool) {
 
@@ -414,11 +346,10 @@ func (w *ChangeWriter) write(cw ConversationWrite, seats SeatRules, noGitlet map
 	subject := ChangeSubject(changeID)
 	scope := []string{RepoPath(repoID), ChangePath(changeID)}
 	if cw.Mergeability != nil {
-		// A MERGEABILITY'S READINESS JUDGES ITS TARGET'S MERGE GATE, which
-		// reads the repository's checks (gatejudge.go), and stamps the
-		// position of its head's checks it read (Mergeability.ChecksPosition):
-		// its scope names them beside the repository and the change, so a
-		// node holding a deferred record of them decides none (M5-D33).
+		// A MERGEABILITY'S READINESS READS THE REPOSITORY'S CHECKS
+		// (gatejudge.go, Mergeability.ChecksPosition), so its scope names
+		// them too: a node holding a deferred record of them decides none
+		// (M5-D33).
 		scope = []string{RepoPath(repoID), ChecksPath(repoID), ChangePath(changeID)}
 	}
 	var (
@@ -477,10 +408,8 @@ func (w *ChangeWriter) answer(ctx context.Context, cw ConversationWrite, last co
 		if !res.Position.IsZero() {
 			return w.applied(ctx, cw, res.Position)
 		}
-		// NOTHING WAS APPENDED: the decide refused the write or found it
-		// unchanged, and its last round says which. A publish that answered
-		// with no record and no decision broke the publisher's contract,
-		// and says so rather than answering from nothing.
+		// NOTHING WAS APPENDED: the decide's last round refused the write or
+		// found it unchanged; anything else broke the publisher's contract.
 		switch {
 		case decided && last.refusal != "":
 			return ConversationResult{Refusal: last.refusal, Detail: last.detail}, nil
@@ -512,13 +441,11 @@ func (w ConversationWrite) made(res ConversationResult) ConversationResult {
 	return res
 }
 
-// applied answers a write whose record applied at at, FROM THE ROWS: the
-// change's conversation, whose position every record of it moves to its own,
-// holds at or past at only once the record — or one after it — applied. A
-// conversation that does not is a record that applied and wrote nothing this
-// node holds: a change gone under it, which no writer of this domain forms
-// while its repository lives, so it is logged at ERROR and answered unknown —
-// never applied, which would hand its asker a comment nobody can read.
+// applied answers a write whose record applied at at, FROM THE ROWS: every
+// record moves the change's conversation to its own position. One short of at
+// means a change gone under the record, which no writer forms while its
+// repository lives, so it is logged at ERROR and answered unknown — never
+// applied, which would hand its asker a comment nobody can read.
 func (w *ChangeWriter) applied(ctx context.Context, cw ConversationWrite, at statelog.Position) (ConversationResult,
 	error) {
 
@@ -556,10 +483,9 @@ func (w *ChangeWriter) refused(ctx context.Context, cw ConversationWrite, err er
 		return ConversationResult{Refusal: ConversationRefusalBusy, Detail: "the change kept moving for every " +
 			"round the write may take; " + conversationAgain}, nil
 	case errors.As(err, &refusal) && refusal.Reason == statelog.ReasonDeleted:
-		// A FACT ABOUT THE REPOSITORY: its deletion marker drops every
-		// record about it — on a change's subject by the repository its
-		// payload names — and the position is named only where the marker
-		// dropped THIS record.
+		// A FACT ABOUT THE REPOSITORY, whose deletion marker drops every
+		// record about it; the position is named only where it dropped THIS
+		// record.
 		var at statelog.Position
 		if refusal.Landed() {
 			at = refusal.Position
@@ -592,12 +518,10 @@ func (w *ChangeWriter) count(cw ConversationWrite, res ConversationResult, err e
 		"outcome": conversationOutcome(res, err)})
 }
 
-// conversationOutcome is what became of a write of a change's conversation, as
-// crewlet.code.conversation.writes names it: `handed_on` for one this node
-// decided nothing of about itself, which the router asks the repository's
-// runner-up ([handedOn]); `failed` for any other error; the refusal's own
-// code; `unchanged` for one answered from the rows with no record; and
-// otherwise its outcome — applied, pending or unknown.
+// conversationOutcome is what became of a write, as
+// crewlet.code.conversation.writes names it: `handed_on` for one the router
+// asks the runner-up of ([handedOn]); `failed` for any other error; the
+// refusal's own code; `unchanged`; otherwise applied, pending or unknown.
 func conversationOutcome(res ConversationResult, err error) string {
 	switch {
 	case handedOn(err):

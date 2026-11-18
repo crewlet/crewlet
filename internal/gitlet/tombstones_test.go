@@ -78,17 +78,15 @@ func (n *node) through(id string) int64 {
 }
 
 // TOMBSTONES PAST THEIR BOUND ARE SWEPT OLDEST FIRST, before the horizon: a
-// repository holding k more fresh tombstones than MaxTombstonesPerRepo loses
+// repository holding k fresh tombstones past MaxTombstonesPerRepo loses
 // exactly its k oldest to the next record that touches it, and the mark rises
 // to the highest position among them, so a cache synced below it is answered
-// in full rather than told a delta missing their deletions.
+// in full rather than a delta missing their deletions. The cache is synced at
+// the creation, where all tombstones but one were written: its delta is a
+// handful of rows beside a full answer of the live refs, so a full answer is
+// the MARK's doing, never the size rule's (deltaOutweighs).
 //
-// The cache asked about is synced at the creation, where every tombstone but
-// one was written: its delta is a handful of rows beside a full answer of the
-// repository's live refs, so a full answer to it is the MARK's doing, never
-// the size rule's (deltaOutweighs).
-//
-// Mutation: sweep by age only, and nothing is swept — the count stays k past
+// Mutation: sweep by age only, and nothing is swept: the count stays k past
 // its bound and the delta from below the mark is still a delta.
 func TestTombstonesPastTheirBoundAreSweptOldestFirst(t *testing.T) {
 	t.Parallel()
@@ -143,17 +141,15 @@ func TestTombstonesPastTheirBoundAreSweptOldestFirst(t *testing.T) {
 	}
 }
 
-// THE TOMBSTONE COUNT NEVER PASSES ITS BOUND, after any record — one no
-// committer of this build forms included, since the applier applies whatever
-// the log holds, a newer build's records among it: records of three pushes
-// inside the horizon, each push deleting the 500 refs the previous record's
-// push made and making 500 more, make 1 500 tombstones a record against a
-// sweep of no rows at all (three such pushes write 4 507 rows, the objects
-// their deletions left among them, past MaxRecordRows — their deletions this
-// build's committer counts three times, so it never puts two such pushes in
-// one record). So every such record that would leave the count past its
-// bound writes its deletions as REMOVALS — no row left — and raises the mark
-// to its own position, which answers a cache synced below it in full.
+// THE TOMBSTONE COUNT NEVER PASSES ITS BOUND after any record, one no
+// committer of this build forms included (the applier applies whatever the log
+// holds, a newer build's records among it): records of three pushes inside the
+// horizon, each deleting the 500 refs the previous record's push made and
+// making 500 more, make 1 500 tombstones a record against a sweep of no rows
+// (three such pushes are 4 507 rows, past MaxRecordRows: this build's
+// committer, counting each deletion three times, never puts two in a record).
+// Each such record writes its deletions as REMOVALS and raises the mark to its
+// own position, answering a cache synced below it in full.
 //
 // Mutation: drop the removal, and the count passes the bound at the first
 // record by what the sweep could not take.
@@ -223,27 +219,18 @@ func TestTheTombstoneCountNeverPassesItsBound(t *testing.T) {
 	}
 }
 
-// A RECORD THE COMMITTER FORMS NEVER REMOVES ITS OWN DELETIONS: the committer
-// counts every deletion a push carries three times in the record's rows — its
-// ref row, the old tombstone its new one may need swept, and the object it
-// left (gitlet.RowBound) — so whatever the tombstones hold, a record's sweep has
-// room for every tombstone it makes, and the removal is left to records no
-// committer of this build forms. Removing is what raises the mark to the
-// record's own position, which sends every cache synced before the record —
-// every Gitlet node holding the repository — to read it whole.
+// A RECORD THE COMMITTER FORMS NEVER REMOVES ITS OWN DELETIONS: it counts each
+// deletion three times in a record's rows (its ref row, the old tombstone its
+// new one may need swept, the object it left: gitlet.RowBound), so a record's
+// sweep has room for every tombstone it makes. Removal, which raises the mark
+// and sends every Gitlet node's cache synced before the record to read it
+// whole, is left to records no committer of this build forms.
 //
-// Three pushes of MaxCommandsPerPush deletions and two of 900 creations,
-// queued behind one in flight at a repository holding MaxTombstonesPerRepo
-// fresh tombstones: the last deletion push shares a record with the first
-// creation push, whose sweep has 1 096 rows for its 1 000 new tombstones.
-// Counted without the sweep's row, a deletion shares one with both creation
-// pushes, whose sweep has 195; counted without its drop's, the same; and
-// counted as its ref alone, the three deletion pushes and a creation push
-// share one record of 6 905 rows whose sweep has none.
-//
-// Mutation: count a deletion without the sweep's row, without its drop's, or
-// as its ref alone in rowBound, and a record's deletions are removals — no
-// tombstone left for them, the mark at the record's own position.
+// Three pushes of MaxCommandsPerPush deletions and two of 900 creations queue
+// behind one in flight at MaxTombstonesPerRepo fresh tombstones: the last
+// deletion push shares a record with the first creation push, a sweep of 1 096
+// rows for 1 000 new tombstones. Mutation: count a deletion in rowBound without
+// the sweep's row, without its drop's, or as its ref alone: removals, red.
 func TestACommittedRecordNeverRemovesItsOwnDeletions(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

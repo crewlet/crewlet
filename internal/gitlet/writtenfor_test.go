@@ -51,24 +51,17 @@ func told[T any](to audience, seat, person T) T {
 }
 
 // A CODE RECORD CARRIES WHOM ITS AGENT WROTE IT FOR WHERE IT WAKES A SEAT
-// (ADR-0109): a comment, a review, an ask to review, a close told to the
-// change's watchers, a dequeue, a merge and a push that merges a change, each
-// written by the seat dev in a turn founder woke, carry founder on the routing
-// beside dev — and are stamped version 2, where a build that cannot read the
-// carrier retains them — when the routing tells an agent's seat: cto named,
-// cto's change reviewed, plat-lead asked or watching, cto's enqueue taken
-// out, cto's change merged. The same writes telling persons alone — founder
-// named, asked, watching, founder's change reviewed, founder's enqueue taken
-// out, founder's change merged — carry nobody on the routing: a person reads
-// a notice, and no turn they would start carries it. And the writes of a turn
-// nobody woke carry nobody, at version 1. A merge's and a push's own payload
+// (ADR-0109): each write below, by dev in a turn founder woke, carries founder
+// on its routing beside dev, stamped version 2 (retained by a build that
+// cannot read it), when the routing tells an agent's seat; telling persons
+// alone it carries nobody, since a person starts no turn to carry it. A turn
+// nobody woke carries nobody, at version 1. A merge's and a push's own payload
 // carries founder whatever its routing tells
 // (TestAnOpenAPushAMergeAndAnEnqueueCarryWhomTheyWereMadeForWhateverTheyWake),
-// so their records are at version 2 while they tell persons alone.
+// so they are version 2 even telling persons alone.
 //
-// Mutations: stamp every routing, whatever it wakes — the writes telling
-// persons alone carry founder, red; never stamp — the writes waking a seat
-// carry nobody, red.
+// Mutations: stamp every routing — the writes telling persons alone carry
+// founder, red; never stamp — the writes waking a seat carry nobody, red.
 func TestACodeRecordCarriesWhomItsAgentWroteItForWhereItWakesASeat(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -192,15 +185,12 @@ func TestACodeRecordCarriesWhomItsAgentWroteItForWhereItWakesASeat(t *testing.T)
 }
 
 // AN OPEN, A REOPEN, A PUSH, A MERGE AND AN ENQUEUE CARRY WHOM THEY WERE MADE
-// FOR WHATEVER THEY WAKE (ADR-0109): the engine's later records read each one
-// back — a revision's facts its open or its push, the home's landing the push
-// that merged a change, a queue's landing and its close the entry's enqueue —
-// so each of dev's, written for founder, carries founder on its own payload
-// and is stamped version 2, even where it has no routing — an open naming
-// nobody, a reopen nobody watches, a push moving dev's change's head, and an
-// enqueue, which routes nobody — or one that tells nobody: dev's merge of
-// dev's own change, whose one author merged it. Each made for nobody — the
-// seat's own work — carries nothing, at version 1.
+// FOR WHATEVER THEY WAKE (ADR-0109): later records read each back (a
+// revision's facts its open or push, the home's landing the merging push, a
+// queue's landing and close the enqueue), so each of dev's made for founder
+// carries founder on its own payload at version 2, with no routing or one
+// telling nobody (dev merging dev's own change). Made for nobody, the seat's
+// own work, each carries nothing at version 1.
 //
 // Mutation: an open's payload left without its carrier — the open made for
 // founder carries nobody, at version 1, red.

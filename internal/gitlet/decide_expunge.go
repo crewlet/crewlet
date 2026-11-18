@@ -17,126 +17,40 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// AN EXPUNGE, DECIDED: the one rewrite that drops objects, in two records of
-// their own on a repository's subject — its BEGIN ([ExpungeBegin]) and its
-// COMMIT ([ExpungeCommit]) — beside a third that only asks for one, a person's
-// REQUEST ([ExpungeRequest]), and a fourth that says none is due, its
-// maintainer's clean SCAN ([ExpungeScan]). Each is proposed to the repository's committer
-// ([Committer.ProposeExpunge]) and decided by it in ONE snapshot, alone, as a
-// compaction is: everything that moves a repository's packs has one writer,
-// and contends on one subject.
-//
-// # Two records, so nothing starves the drop
-//
-// The BEGIN rewrites some of the repository's live packs — its inputs, chosen
-// by the repository's maintainer, a full pack among them — into packs holding
-// what a ref reached at the maintainer's scan, which stay live, and packs
-// holding the rest, which are DROPPING ([PackDropping]); and it moves the
-// repository's DROP EPOCH. Its outputs hold every object of its inputs, so as
-// far as any reader is concerned it is a merge: a cache serves a dropping pack
-// beside the live ones. What changes is what a NEW push may rely on: a
-// receiver's view of the repository leaves the dropping packs out, and a push
-// whose receiver read the repository at an earlier epoch is refused
-// `expunging` by its committer, since its objects were checked against packs
-// the begin may since have made dropping. The COMMIT then retires the dropping
-// packs, keeping as a live RESCUE whatever of them a push landed between the
-// scan and the begin made reachable again; its one precondition is that its
-// expunge is still open, which no push falsifies, so a repository pushed to
-// all day still commits. One record with a precondition on the refs would be
-// refused again by every push that landed while it was built. A purged
-// object leaves the store a [RetireGrace] after the commit, once the sweep of
-// the retired rows and the collector's next pass take it.
-//
-// # What the decide holds each to
-//
-// Against the rows of one snapshot, in this order; the first rule that fails
-// is the answer, and none of them writes anything. Every record's first rule
-// is the repository: absent, deleted or being purged is repo_deleted, in the
-// sentence of the state it is in ([RepoGone]); being imported is
-// repo_importing, since what of an import no ref reaches yet a later chunk's
-// refs will ([ImportingDetail]); archived is decided, since an archived
-// repository still holds what was pushed to it.
-//
-// A REQUEST then meets no rule of its own: it forms its record whatever the
-// repository holds open, and its apply WIDENS a request already open to its
-// own id and position ([Applier.applyExpungeRequest]). The open request cannot
-// stand in for it: it is served once nothing that dates from before ITS
-// position is left ([PackRow.Content]), and a later request asks about more —
-// a pack pushed between the two, such as the push that leaked what the later
-// person is purging, and whatever a ref dropped between them left, which a
-// cycle whose scan read the refs before the later request kept as reachable.
-// A request asked again under its own id is the same request, collapsed by
-// the operation ledger.
-//
-// A SCAN meets one rule: no expunge open — else stale: an open expunge is
-// finished from its rows, and its commit records the repository judged.
-//
-// A BEGIN:
-//
-//  1. no expunge open — else stale: a repository expunges once at a time;
-//  2. its epoch the row's plus one — else stale: another expunge began since
-//     the plan;
-//  3. every input exactly one row, of part `pack`, live ([liveInput]) — full
-//     or not — else stale, naming the first that is not: a compaction, an
-//     expunge or a purge moved it first;
-//  4. the layers it drops ([ExpungeBegin.DropLayers]) the chain's top from the
-//     lowest layer naming an input, in chain order — else stale: a
-//     publication moved the chain since the plan;
-//  5. every output a bundle [PackRef.Check] admits — else pack_too_large —
-//     whose key was minted within objstore.RecordWithin of the decision —
-//     else upload_expired ([uploadExpired], the push's own rule);
-//  6. the arithmetic: its outputs hold no more objects than its inputs' rows
-//     count — else the decision is an error ([ErrInvalidProposal]): a builder
-//     that invented objects is a bug, refused before any record and logged.
-//
-// A COMMIT:
-//
-//  1. its expunge the open one — else stale: it committed already;
-//  2. its epoch the repository's — else stale;
-//  3. the packs it retires exactly the repository's dropping packs, every one
-//     — else stale;
-//  4. every rescue pack held to the begin's rule 5;
-//  5. the arithmetic: its rescue holds no more objects than the dropping
-//     packs' rows count — else [ErrInvalidProposal].
-//
-// NO REF IS READ, and no protection and no push: a request and a scan cost
-// the repository's row; a begin the row, a seek of the key an input and the
-// published chain; a commit the row and the repository's own pack rows. The
-// rows of two snapshots are never paired.
+// AN EXPUNGE, DECIDED: a person's REQUEST ([ExpungeRequest]), a BEGIN
+// ([ExpungeBegin]), a COMMIT ([ExpungeCommit]) and a maintainer's clean SCAN
+// ([ExpungeScan]), each proposed to the repository's committer
+// ([Committer.ProposeExpunge]) and decided alone in one snapshot, as a
+// compaction is: everything that moves a repository's packs has one writer.
+// Why the drop takes two records and what each writes is the package doc's
+// "An expunge drops what no ref reaches, in two records" (ADR-0099): one
+// record with a precondition on the refs would be refused by every push that
+// landed while it was built, and the commit's one precondition, its open
+// expunge, no push falsifies. The rules are decideExpunge's, then
+// decideBegin's or decideCommit's, in order.
 
-// Validate refuses a proposal no committer could decide ([ErrInvalidProposal],
-// naming the field), before it is queued: anything but exactly one of a
-// request, a begin, a commit and a scan; a repository id that is no repository's in
-// its canonical spelling; a request whose id is no operation id this engine
-// accepts (statelog.CheckCallerOpID), or whose asker is no person bound to a
-// seat; a begin or a commit whose own id is no bare UUIDv7, whose node config
-// does not admit, whose Seen is no position on the code log or whose epoch is
-// below one, and whose request is "" or an operation id; a begin whose grace
-// is not PruneGrace on its own schedule and 0 serving a request, whose inputs
-// are not sorted and distinct or number none or past MaxExpungeInputs, whose
-// outputs number none or past MaxExpungeOutputs, or whose layers to drop are
-// not distinct layer ids or number past a chain; a commit whose expunge id is
-// no bare UUIDv7, or whose retirements are not sorted and distinct or number,
-// as its rescue may, past MaxExpungeOutputs; an output whose pack id is not
-// its derivation ([DeriveOutputPackID]) or whose bundle [PackRef.Check]
-// refuses; a scan whose own id is no bare UUIDv7, whose node config does not
-// admit or whose Seen is no position on the code log; and a proposal past
-// what one record may carry. What the inputs, the
-// chain and the dropping packs hold is the decide's to judge, from the rows.
+// Validate refuses, before it is queued, a proposal no committer could
+// decide, with [ErrInvalidProposal] naming the field: not exactly one of a
+// request, a begin, a commit and a scan; a repository id not a canonical
+// UUID; a request whose id fails statelog.CheckCallerOpID or whose asker is
+// no person bound to a seat; a begin, commit or scan whose id is no bare
+// UUIDv7, whose node config does not admit or whose Seen is off the code
+// log; a begin or commit whose epoch is below one or whose request is
+// neither "" nor an operation id; a begin's grace, inputs, outputs or layers,
+// or a commit's retirements and rescue, outside their bounds; an output not
+// its derivation ([DeriveOutputPackID]) or one [PackRef.Check] refuses; and
+// a record past [EntryRoom]. What the rows hold is the decide's to judge.
 func (p ExpungeProposal) Validate() error {
 	_, err := p.measure()
 	return err
 }
 
 // ValidateUnstored is [ExpungeProposal.Validate] for a begin or a commit whose
-// outputs are laid out and not yet stored: each with no key and no digest, as
-// a build lays them out, and judged as it will be once its put has filled them
-// in — every rule Validate holds a stored proposal to, the record's bytes
-// among them, with each output standing at the widest key and digest a store
-// mints. What the maintainer that built one holds it to before a byte of it is
-// uploaded (internal/gitlet/compact), so a builder's own bug is refused before
-// it costs the store anything. An output already stored, and a request, which
-// stores nothing, are refused: Validate is the check of those.
+// outputs are laid out but not yet stored (no key, no digest): each stands at
+// the widest key and digest a store mints, the record's bytes judged too, so
+// the maintainer that built it (internal/gitlet/compact) refuses its own bug
+// before uploading a byte. An output already stored, and a request or a scan,
+// which store nothing, are refused: Validate checks those.
 func (p ExpungeProposal) ValidateUnstored() error {
 	stand := largestEntry().Pack
 	unstored := func(field string, outs []PackRef) ([]PackRef, error) {
@@ -212,11 +126,10 @@ func (p ExpungeProposal) record() (OpKind, string, statelog.Position, any) {
 	return "", "", statelog.Position{}, nil
 }
 
-// RepoID is the repository p is about, by whichever of its four records it
-// carries — "" for one that carries none, which the estate's router refuses
-// as it refuses a push naming no repository. It is the ONE answer the router
-// keys p by, the committer queues it under and the estate's seam raises the
-// repository's floor for, so the three never name different repositories.
+// RepoID is the repository p is about, "" for a proposal carrying no record,
+// which the estate's router refuses as a push naming no repository. The
+// router keys p by it, the committer queues under it and the estate's seam
+// raises its floor, so the three never name different repositories.
 func (p ExpungeProposal) RepoID() string {
 	switch {
 	case p.Begin != nil:
@@ -488,24 +401,18 @@ func derivedOutputs(field, rewriteID string, from int, outputs []PackRef) error 
 	return nil
 }
 
-// ProposeExpunge decides one expunge record — a request, a begin or a commit —
-// as a batch of its own in the repository's queue and answers what became of
-// it: the push's queue and bounds ([Committer.Propose]), as a compaction's are
-// ([Committer.ProposeCompaction]) — a full queue or a node holding its bytes
-// busy at once, a proposal whose caller's deadline leaves too little for a
-// batch and its answer busy undecided, a stopping committer [ErrNotServing],
-// and a proposal that is not one [ErrInvalidProposal]. ctx bounds only this
-// caller's wait.
-//
-// ITS OPERATION ID IS THE RECORD'S OWN — a request's RequestID, a begin's
-// ExpungeID, a commit's CommitID — never one minted for the batch, so a
-// proposal its asker hands the repository's runner-up after this node went
-// silent is the same record, collapsed by the ledger. A BEGIN'S AND A
-// COMMIT'S SESSION IS THEIR SEEN: decided from a snapshot that holds the rows
-// their builder read, or refused behind, about this node, so the runner-up
-// decides them. A begin's and a commit's applied is answered from the rows of
-// the packs the record added, never from the decision; a request's with its
-// own id at its own record, whatever request the repository held open.
+// ProposeExpunge decides one expunge record as a batch of its own in the
+// repository's queue, under the push's queue and bounds ([Committer.Propose])
+// as a compaction is: busy for a full queue, a node holding its bytes or a
+// deadline too short for a batch; [ErrNotServing] from a stopping committer;
+// [ErrInvalidProposal] for a proposal that is not one. ctx bounds only this
+// caller's wait. Its operation id is the record's own, never one minted for
+// the batch, so the proposal handed to the runner-up after this node went
+// silent is the same record, collapsed by the ledger. A begin's and a
+// commit's session is their Seen: a snapshot behind the rows their builder
+// read refuses them here, and the runner-up decides. Their applied is
+// answered from the rows of the packs they added ([Committer.appliedExpunge]),
+// never from the decision; a request's with its own id.
 func (c *Committer) ProposeExpunge(ctx context.Context, p ExpungeProposal) (ExpungeResult, error) {
 	bytes, err := p.measure()
 	if err != nil {
@@ -526,12 +433,18 @@ type expungeDecision struct {
 	version int64
 }
 
-// decideExpunge is one round's decision of p over the rows tx holds — see
-// this file's head for the rules, in their order. Pure over (the rows, p,
-// retention, now): retention is the deciding epoch's
-// code.deleted_retention_days, which a repo_deleted refusal names the purge's
-// earliest instant by, and now the decide's clock, which an output's key is
-// judged by.
+// decideExpunge is one round's decision of p over the rows tx holds: the
+// first rule that fails is the answer, and none writes. First the
+// repository: absent, deleted or purging is repo_deleted ([RepoGone]);
+// importing is repo_importing ([ImportingDetail]); archived is decided, since
+// it still holds what was pushed to it. A REQUEST then forms its record
+// whatever is open (its apply widens an open request to itself,
+// [Applier.applyExpungeRequest]); a SCAN is stale while an expunge is open; a
+// begin and a commit go on to decideBegin and decideCommit. No ref,
+// protection or push is read, and rows of two snapshots are never paired.
+// Pure over (the rows, p, retention, now): retention, the deciding epoch's
+// code.deleted_retention_days, dates a purge's earliest instant in a
+// repo_deleted refusal, and now judges an output's key.
 func decideExpunge(ctx context.Context, tx *sql.Tx, p ExpungeProposal, retention time.Duration,
 	now time.Time) (expungeDecision, error) {
 
@@ -549,11 +462,8 @@ func decideExpunge(ctx context.Context, tx *sql.Tx, p ExpungeProposal, retention
 		return d, nil
 	}
 	if repo.status == RepoStatusImporting {
-		// AN IMPORTING REPOSITORY IS NOT EXPUNGED: its import's packs land
-		// as it goes, and what of them no ref reaches yet is what a later
-		// chunk's refs will — so neither a request, a begin nor a commit is
-		// decided until the import is done, and the weekly pass's listing
-		// passes it by.
+		// What of an import's packs no ref reaches yet, a later chunk's refs
+		// will; the weekly pass's listing passes it by too.
 		d.refusal, d.detail = RefusalRepoImporting, ImportingDetail(repo.name)
 		return d, nil
 	}
@@ -563,20 +473,27 @@ func decideExpunge(ctx context.Context, tx *sql.Tx, p ExpungeProposal, retention
 	case p.Commit != nil:
 		return decideCommit(ctx, tx, *p.Commit, repo, d, now)
 	case p.Scan != nil && repo.expungeID != "":
-		// AN OPEN EXPUNGE IS FINISHED, NEVER JUDGED: its maintainer's next
-		// pass finishes it from the rows, and its commit records the
-		// repository judged.
+		// An open expunge is finished from its rows, never judged: its commit
+		// records the repository judged.
 		d.refusal, d.detail = RefusalStale, fmt.Sprintf("expunge %s is open on %s and has not committed; "+
 			"the next pass finishes it rather than scanning", repo.expungeID, repo.name)
 		return d, nil
 	}
-	// A REQUEST forms its record, whatever request is open: its apply widens
-	// that one to itself. A SCAN with no expunge open forms its record.
 	return d, nil
 }
 
-// decideBegin is a begin's rules 1–6 over the repository's row as repo holds
-// it and the rows tx holds.
+// decideBegin is a begin's rules, in order; 1–4 refuse stale, since a
+// compaction, an expunge, a purge or a publication moved the rows since the
+// plan:
+//
+//  1. no expunge open: a repository expunges once at a time;
+//  2. its DropEpoch the row's plus one;
+//  3. every input exactly one live pack row ([liveInput]), full or not;
+//  4. its DropLayers what [LayersOver] reads of the chain;
+//  5. every output admitted by [decideOutputs];
+//  6. its outputs hold no more objects than its inputs' rows count, else
+//     [ErrInvalidProposal]: a builder that invented objects is a bug,
+//     refused before any record.
 func decideBegin(ctx context.Context, tx *sql.Tx, b ExpungeBegin, repo pushRepo, d expungeDecision,
 	now time.Time) (expungeDecision, error) {
 
@@ -633,8 +550,17 @@ func decideBegin(ctx context.Context, tx *sql.Tx, b ExpungeBegin, repo pushRepo,
 	return d, nil
 }
 
-// decideCommit is a commit's rules 1–5 over the repository's row as repo holds
-// it and the rows tx holds.
+// decideCommit is a commit's rules, in order; 1–3 refuse stale:
+//
+//  1. its expunge the open one (else it committed already);
+//  2. its DropEpoch the repository's;
+//  3. its Retire exactly the repository's dropping packs, every one;
+//  4. its rescue admitted by [decideOutputs];
+//  5. the rescue holds no more objects than the dropping packs' rows count,
+//     else [ErrInvalidProposal].
+//
+// It reads the repository's row and its own pack rows, never a ref, so no
+// push falsifies it.
 func decideCommit(ctx context.Context, tx *sql.Tx, c ExpungeCommit, repo pushRepo, d expungeDecision,
 	now time.Time) (expungeDecision, error) {
 
@@ -681,9 +607,11 @@ func decideCommit(ctx context.Context, tx *sql.Tx, c ExpungeCommit, repo pushRep
 	return d, nil
 }
 
-// decideOutputs is the begin's rule 5 over outputs, which a commit's rescue
-// meets too: the objects they hold, and the refusal and its sentence of the
-// first a bundle check refuses or whose key was minted too long before now.
+// decideOutputs is the rule a begin's outputs and a commit's rescue meet:
+// each a bundle [PackRef.Check] admits (else pack_too_large), its key minted
+// within objstore.RecordWithin of now (else upload_expired, [uploadExpired],
+// the push's own rule). It answers the objects they hold, or the first
+// refusal and its sentence.
 func decideOutputs(outputs []PackRef, now time.Time) (int64, Refusal, string) {
 	var made int64
 	for i, out := range outputs {
@@ -699,11 +627,10 @@ func decideOutputs(outputs []PackRef, now time.Time) (int64, Refusal, string) {
 }
 
 // LayersOver is the layers of chain a begin retiring the packs whose
-// checksums retiring names must drop, in chain order: the chain's top from the
-// lowest layer naming one of them, and none where no layer does. The one
-// reading of a begin's rule 4 — exported for the maintainer that plans the
-// begin (internal/gitlet/compact), so a plan and the decide that judges it never
-// disagree about the chain — and of what its apply drops.
+// checksums retiring names must drop, in chain order: the chain's top from
+// the lowest layer naming one, none where no layer does. The one reading of
+// a begin's rule 4 and of what its apply drops, exported so the maintainer's
+// plan (internal/gitlet/compact) and the decide never disagree.
 func LayersOver(chain []LayerRow, retiring map[string]bool) []string {
 	for k, row := range chain {
 		if slices.ContainsFunc(row.Layer.Packs, func(p string) bool { return retiring[p] }) {
@@ -835,10 +762,9 @@ func (c *Committer) expungeAnswer(ctx context.Context, p ExpungeProposal, opID s
 		if !res.Position.IsZero() {
 			return c.appliedExpunge(ctx, p, opID, res.Position)
 		}
-		// NOTHING WAS APPENDED: the decide refused it, and its last round
-		// says why. A publish that answered with no record and no decision
-		// broke the publisher's contract, and says so rather than answering
-		// from nothing.
+		// Nothing was appended: the decide refused, and its last round says
+		// why. Applied with neither a record nor a refusal breaks the
+		// publisher's contract, and says so.
 		if !decided || last.refusal == "" {
 			return ExpungeResult{}, fmt.Errorf("gitlet: the publish of operation %s answered applied with no "+
 				"record and decided no refusal", opID)
@@ -854,16 +780,14 @@ func (c *Committer) expungeAnswer(ctx context.Context, p ExpungeProposal, opID s
 	return ExpungeResult{Outcome: statelog.OutcomeUnknown}, nil
 }
 
-// appliedExpunge answers an expunge record that applied at at. A REQUEST is
-// answered with its own id at its record's position: its payload is the same
-// whichever round decided it, and what it wrote — the open request — a
-// commit may already have served. A BEGIN AND A COMMIT are answered FROM THE
-// ROWS: every pack the record added — a begin's kept and dropping packs, a
-// commit's rescue — a row added at at, in code_packs or, retired since, in
-// code_packs_retired. A pack in neither is a record that applied and wrote
-// rows this node does not hold: no committer of this domain forms that, so it
-// is logged at ERROR and answered unknown — never applied, which would hand
-// its builder packs no row names.
+// appliedExpunge answers an expunge record that applied at at. A request is
+// answered with its own id there, its payload the same whichever round
+// decided it: what it wrote, the open request, a commit may already have
+// served. A begin and a commit are answered from the rows: every pack added
+// is a row added at at, in code_packs or, retired since, code_packs_retired.
+// A pack in neither means rows the record wrote that this node lacks, which
+// no committer forms: logged at ERROR and answered unknown, never applied,
+// which would hand its builder packs no row names.
 func (c *Committer) appliedExpunge(ctx context.Context, p ExpungeProposal, opID string,
 	at statelog.Position) (ExpungeResult, error) {
 

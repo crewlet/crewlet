@@ -12,12 +12,11 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE CODE DOMAIN DECLARES WHAT THE FRAMEWORK ASKS OF IT, and every answer is
-// one whose wrong value is silent: a stream the trim names under another
-// prefix, a non-strict replay that skips a lost push, an identity claim
-// dropped from the census, an admission gate that sheds a company's seats for
-// a subsystem none of them uses, a feed group no consumer reads that holds the
-// trim for ever.
+// THE CODE DOMAIN DECLARES WHAT THE FRAMEWORK ASKS OF IT, each answer one
+// whose wrong value is silent: a stream trimmed under another prefix, a
+// non-strict replay skipping a lost push, an identity claim dropped from the
+// census, an admission gate shedding seats for a subsystem none uses, a feed
+// group no consumer reads holding the trim for ever.
 func TestTheCodeDomainsDeclaration(t *testing.T) {
 	t.Parallel()
 	d := gitlet.Domain{}
@@ -57,10 +56,9 @@ func TestTheCodeDomainsDeclaration(t *testing.T) {
 	}
 	// EIGHT MAXIMAL RECORDS ARE OUT AT ONCE ON ONE NODE: the log's reserve
 	// admits one append of its declared largest record in flight
-	// (statelog.StreamSpec.MaxAppendBytes), counting each append at its payload
-	// and what a stored record carries beside it — so the committer's own
-	// bound is an eighth of that, less the overhead, or a committer serving
-	// many repositories waits behind another's large record.
+	// (statelog.StreamSpec.MaxAppendBytes), payload plus stored overhead, so
+	// the committer's bound is an eighth of that less the overhead, or a
+	// committer serving many repositories waits behind another's large record.
 	overhead := spec.MaxAppendBytes() - spec.MaxRecordBytes
 	if inFlight := 8 * (gitlet.MaxRecordBytes + overhead); inFlight > spec.MaxAppendBytes() {
 		t.Errorf("eight records of MaxRecordBytes (%d) count %d bytes against the node's "+
@@ -84,12 +82,9 @@ func TestTheCodeDomainsDeclaration(t *testing.T) {
 }
 
 // THE CEILING THE DOMAIN DECLARES IS TIER A'S RULE BESIDE THE TRACKER'S: what
-// an unset stream.code_log_max_bytes derives next to a mutation log at the
-// tracker's own declared ceiling (config.Stream.CodeMaxBytes). One rule sizes
-// the log the suites provision and the log a node creates, so the two can never
-// disagree about how fast the code log grows beside the tracker's — the
-// knowledge base's declared ceiling is a quarter of the tracker's for the same
-// reason.
+// an unset stream.code_log_max_bytes derives next to the tracker's declared
+// ceiling (config.Stream.CodeMaxBytes). One rule sizes the log the suites
+// provision and the log a node creates, so the two never disagree.
 func TestTheCodeLogIsDeclaredAtTierAsRatioToTheTrackers(t *testing.T) {
 	t.Parallel()
 	want, derived := config.Stream{TrackerLogMaxBytes: worklet.TrackerLogMaxBytes}.CodeMaxBytes(0)
@@ -106,12 +101,11 @@ func covers(path, other string) bool {
 	return other == path || strings.HasPrefix(other, path+statelog.ScopeSeparator)
 }
 
-// A SCOPE PATH NESTS SO A DEFERRAL COVERS WHAT IT CONTAINS: a record deferred
-// on the domain blocks every repository, one deferred on a repository blocks
-// that repository and no other, and a name's claim and the activation fence
-// are beside the repositories rather than over them. A person's viewed marks
-// are beside their inbox's marks, so a build holding back a viewed record
-// holds back none of their inbox.
+// A SCOPE PATH NESTS SO A DEFERRAL COVERS WHAT IT CONTAINS: deferred on the
+// domain blocks every repository, on a repository that one only; a name's
+// claim and the activation fence sit beside the repositories, not over them.
+// A person's viewed marks sit beside their inbox's, so holding back a viewed
+// record holds back none of their inbox.
 //
 // Mutation: put ViewedPath under PersonPath, red.
 func TestAScopePathNestsSoADeferralCoversWhatItContains(t *testing.T) {
@@ -168,9 +162,8 @@ func TestAnUnreadableScopeIsTheWholeDomainRatherThanNothing(t *testing.T) {
 	}
 }
 
-// A BARRIER AND A TRIMMED RECORD INTERSECT NOTHING: neither writes a row of
-// this domain's anywhere, so a scope that intersected a repository would make
-// every read of it wait behind a record that changed none of its rows.
+// A BARRIER AND A TRIMMED RECORD INTERSECT NOTHING: neither writes a row
+// here, so a scope over a repository would make its reads wait for nothing.
 func TestABarrierIntersectsNothing(t *testing.T) {
 	t.Parallel()
 	for name, encode := range map[string]func() ([]byte, error){
@@ -244,10 +237,9 @@ func TestTheTrimmedRecordIsItsLiteral(t *testing.T) {
 }
 
 // A GATE IS ABOUT THE WHOLE DOMAIN: an eviction and a generation license or
-// drop records on every subject, so anything narrower is a claim the record
-// does not make — and the activation fence is about every config-managed
-// repository, which only its own path names, every one of them under it being
-// held to it by the applier rather than by containment.
+// drop records on every subject, so anything narrower is a false claim. The
+// activation fence's path names only itself, yet it is about every
+// config-managed repository, the applier (not containment) holding each to it.
 func TestAGateIsAboutTheWholeDomain(t *testing.T) {
 	t.Parallel()
 	for _, kind := range []gitlet.ObjectKind{gitlet.KindEviction, gitlet.KindGeneration} {
@@ -290,10 +282,9 @@ func TestEveryKindIsClassifiedAndEveryArbitratedKindIsDeclared(t *testing.T) {
 	}
 }
 
-// ONLY THE GATE KINDS STOP THE APPLIER: a deferred gate silently licenses every
-// record above it, so the answer comes from the ENVELOPE — an eviction and the
-// activation fence by their kind, a purge by its op on an ordinary repository
-// subject — and nothing else stops it.
+// ONLY THE GATE KINDS STOP THE APPLIER: a deferred gate silently licenses
+// every record above it, so the ENVELOPE answers: an eviction and the
+// activation fence by kind, a purge by its op on a repository subject.
 func TestOnlyTheGateKindsStopTheApplier(t *testing.T) {
 	t.Parallel()
 	d := gitlet.Domain{}
@@ -334,9 +325,8 @@ func TestOnlyTheGateKindsStopTheApplier(t *testing.T) {
 		}
 	}
 
-	// AND FROM AN ENVELOPE ALONE: a node that cannot read the payload — a
-	// newer build's record, whose mutation is noise to this one — still
-	// answers both questions, because that is the only node that ever asks.
+	// AND FROM AN ENVELOPE ALONE: a node that cannot read a newer build's
+	// payload still answers both, since that is the only node that asks.
 	for name, tc := range map[string]struct {
 		subject  gitlet.Subject
 		op       gitlet.OpKind
@@ -369,12 +359,10 @@ func TestOnlyTheGateKindsStopTheApplier(t *testing.T) {
 	}
 }
 
-// EVERY TABLE THE APPLIER WRITES IS CLASSIFIED, with exactly TWO divergent
-// tables — the operation ledger, whose applied_at is each node's own clock, and
-// a change record's notices, whose rows depend on the batch's instant and the
-// epoch's inbox horizon — because nothing this domain writes is a build's
-// opinion: every other table is inside the identity claim or the claim means
-// nothing.
+// EVERY TABLE THE APPLIER WRITES IS CLASSIFIED, exactly TWO divergent: the
+// operation ledger (applied_at is each node's clock) and a change record's
+// notices (they depend on the batch's instant and the inbox horizon). Every
+// other table is inside the identity claim, or the claim means nothing.
 func TestEveryTableTheApplierWritesIsClassified(t *testing.T) {
 	t.Parallel()
 	d := gitlet.Domain{}
@@ -405,10 +393,9 @@ func TestEveryTableTheApplierWritesIsClassified(t *testing.T) {
 	}
 }
 
-// A NAME IS ONE SUBJECT HOWEVER IT IS ASKED FOR, and its subject is a broker
-// token whatever the name: the name's subject arbitrates two creates of one
-// repository, so the token is the name's own digest — never the name, which
-// a later grammar could widen past what a subject may carry.
+// A NAME IS ONE SUBJECT HOWEVER IT IS ASKED FOR, and a broker token whatever
+// the name: it arbitrates two creates of one repository, so the token is the
+// name's digest, never the name a later grammar could widen past a subject.
 func TestANameIsOneSubject(t *testing.T) {
 	t.Parallel()
 	a, b := gitlet.NameSubject("app"), gitlet.NameSubject("app")

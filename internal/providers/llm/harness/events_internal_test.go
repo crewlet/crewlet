@@ -25,6 +25,11 @@ const (
 	keyRefusedResult = `{"type":"result","subtype":"success","is_error":true,"api_error_status":401,` +
 		`"api_error_origin":"first_party","result":"Invalid API key · Fix external API key",` +
 		`"terminal_reason":"api_error"}`
+	// unentitledResult is the result a login its organization does not entitle
+	// ends a run on, as a live run's log quoted it.
+	unentitledResult = `{"type":"result","subtype":"success","is_error":true,"api_error_status":403,` +
+		`"result":"Your organization has disabled Claude subscription access for Claude Code",` +
+		`"terminal_reason":"api_error"}`
 	// tokenRetry is what a refused OAuth token writes before it gives up.
 	tokenRetry = `{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,` +
 		`"retry_delay_ms":588,"error_status":401,"error":"authentication_failed"}`
@@ -90,18 +95,22 @@ func TestALimitIsDatedAndNamedByTheHarnessEvent(t *testing.T) {
 // A REFUSED SIGN-IN IS READ FROM THE HARNESS'S OWN FIELDS, FIRST. The 401 is a
 // status, which survives the rewording that retires a sentence, and the
 // `api_retry` event names `authentication_failed` before the harness gives up; both
-// were measured on 2.1.312. Only in a run the harness reported failed: a harness that
-// retries a 401 and then answers was signed in.
+// were measured on 2.1.312. A 403 is a login its account does not entitle: a
+// server failure would be retried into the same refusal and never pause its seat.
+// Only in a run the harness reported failed: a harness that retries a 401 and then
+// answers was signed in.
 //
 // Mutation: drop auth_events, and the refused token's run is read by its
-// sentence alone, which "Failed to authenticate" must then carry; read them in
-// a run that answered, and the answer is thrown away.
+// sentence alone, which "Failed to authenticate" must then carry; drop the 403
+// event, and the unentitled login reads as a server failure; read them in a run
+// that answered, and the answer is thrown away.
 func TestARefusedSignInIsReadFromTheHarnessFields(t *testing.T) {
 	t.Parallel()
 	p := claudeCode(t)
 	for name, stdout := range map[string]string{
-		"a refused key":   keyRefusedResult,
-		"a refused token": strings.Join([]string{tokenRetry, tokenRetry, tokenRefusedAnswer}, "\n"),
+		"a refused key":       keyRefusedResult,
+		"a refused token":     strings.Join([]string{tokenRetry, tokenRetry, tokenRefusedAnswer}, "\n"),
+		"an unentitled login": unentitledResult,
 	} {
 		hit, ok := classifyMarkers(p, harnessOutput{stdout: stdout, failed: true, at: reportedAt})
 		if !ok || hit.Kind != llm.KindAuth || hit.Source != sourceEvent {

@@ -55,6 +55,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -189,6 +191,9 @@ const (
 	EvidenceTurn EvidenceKind = "turn"
 	// EvidenceRun is an executor's run, by id.
 	EvidenceRun EvidenceKind = "run"
+	// EvidenceArtifact is an artifact, by its id: what the address this engine
+	// hands out for one is stored as (ADR-0160).
+	EvidenceArtifact EvidenceKind = "artifact"
 	// EvidenceURL is anything else, as an https URL.
 	EvidenceURL EvidenceKind = "url"
 )
@@ -196,7 +201,7 @@ const (
 // Valid reports whether k is a kind this build knows.
 func (k EvidenceKind) Valid() bool {
 	switch k {
-	case EvidenceTask, EvidencePage, EvidenceTurn, EvidenceRun, EvidenceURL:
+	case EvidenceTask, EvidencePage, EvidenceTurn, EvidenceRun, EvidenceArtifact, EvidenceURL:
 		return true
 	}
 	return false
@@ -449,7 +454,7 @@ func (e Evidence) validate(field string) error {
 	}
 	if !e.Kind.Valid() {
 		note(invalid("%s.kind is %q and must be one of task, page, "+
-			"turn, run or url", field, e.Kind))
+			"turn, run, artifact or url", field, e.Kind))
 	}
 	note(CheckText(field+".ref", e.Ref, MaxEvidenceRef, true))
 	note(CheckText(field+".label", e.Label, MaxEvidenceLabel, false))
@@ -461,10 +466,29 @@ func (e Evidence) validate(field string) error {
 		parsed, err := url.Parse(e.Ref)
 		if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 			note(invalid("%s.ref is %q and a url must be an absolute "+
-				"https:// address", field, e.Ref))
+				"https:// address; an artifact is cited as kind artifact with "+
+				"its id", field, e.Ref))
+		}
+	}
+	if e.Kind == EvidenceArtifact {
+		if id, err := uuid.Parse(e.Ref); err != nil || id.String() != e.Ref {
+			note(invalid("%s.ref is %q and an artifact is cited by its id, "+
+				"a lowercase uuid", field, e.Ref))
 		}
 	}
 	return Join(found)
+}
+
+// FittingQuestion is the first phrasing within [MaxQuestion], else the last: a
+// writer composing a question from names it does not bound lists phrasings
+// most specific first, ending with one of bounded words.
+func FittingQuestion(phrasings ...string) string {
+	for _, q := range phrasings {
+		if len(q) <= MaxQuestion {
+			return q
+		}
+	}
+	return phrasings[len(phrasings)-1]
 }
 
 // CheckText refuses an empty required value and one over its cap, in bytes,

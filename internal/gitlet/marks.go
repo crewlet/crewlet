@@ -19,45 +19,22 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A PERSON'S MARKS OVER THEIR CODE NOTICES: how far they have read on the code
-// log, the notices they marked read out of order or unread again, the ones
-// they put off, and which reasons are theirs to act on — the code domain's
-// half of a person's inbox, kept by internal/inbox's one set of rules on this
-// log, beside the notices it marks (apply_notices.go).
-//
-// # Decided on the person's own record, one gesture at a time
-//
-// A screen says what a person did — "this one is done", "put this one off",
-// "I have read everything up to here" — never the lists ([inbox.Gesture]). The
-// [Marks] writer resolves the gesture inside ONE snapshot under
-// [statelog.PatternArbitrated] on the person's subject ([KindPerson]): the
-// marks row the person's last record left, and where each notice the gesture
-// names sits, read from the notice's own row for this person — a mark carries
-// its notice's position, because the lists are pruned against the
-// seen-through position, and a caller that supplied it could get it wrong in
-// the one way that loses the mark silently. Two screens marking two notices at
-// once both land: each round the broker refuses re-reads the record that won.
-//
-// # The record carries the gesture and the positions, the apply the rules
-//
-// The notice rows are DIVERGENT (each node writes them within its own horizon,
-// apply_notices.go) and the marks row is not, so the apply never reads a
-// notice: the record carries the positions its decide found, and every node
-// applies the same gesture with them to the same prior row at the record's
-// broker instant — pure over the record, its instant and the row before it.
-// A gesture the rules refuse at the apply — possible only where a snooze the
-// decide saw as live had come due by the broker's instant, which only shortens
-// a list — writes nothing on every node alike, rather than stopping the
-// applier.
-//
-// # Only the person's own
-//
-// A gesture is a PERSON'S, on their own record (authz's `code_mark_inbox`
-// row): their assistant's tool and their screen act as the human seat they
-// hold, and the writer refuses a mark asked by anybody else — a seat, an
-// unbound credential, a person naming another's handle — whatever admitted it.
-// A lead reads a report's inbox; marking it is a gesture nobody asked a lead to
-// make (the tracker's own rule).
+// A person's marks over their code notices: the code domain's half of their
+// inbox under internal/inbox's rules, beside the notices it marks
+// (apply_notices.go). A screen sends what the person did ([inbox.Gesture]),
+// never the lists, and the writer refuses a mark asked by anyone but the person
+// (a seat, an unbound credential, another's handle), whatever admitted it
+// (authz's `code_mark_inbox`).
+
+// [Marks] decides a gesture in one snapshot under [statelog.PatternArbitrated]
+// on the person's subject ([KindPerson]), so two concurrent marks both land,
+// each refused round re-reading the winner. It reads each named notice's
+// position from its own row: the lists are pruned against the seen-through
+// position, so a caller-supplied one could lose the mark silently. The record
+// carries those positions, so the apply never reads the DIVERGENT notice rows
+// and is pure over the record, its instant and the prior row; a gesture refused
+// there (a snooze due by the broker's instant) writes nothing on every node
+// rather than stop the applier.
 
 // MarkGesture is one gesture over a person's code notices, as a marks record
 // and an estate request carry it: [inbox.Gesture] over [Reason], spelled with
@@ -98,11 +75,9 @@ func MarkGestureOf(g inbox.Gesture[Reason]) MarkGesture {
 }
 
 // PersonMarks is a marks record's payload: whose record, the gesture, and the
-// PACKED position of every notice the gesture names as the decide read it
-// from the notice's own row — what the apply resolves the gesture with, since
-// it reads no notice ([OpMarks], this file's head).
-//
-// BASE FORMAT, as [KindPerson] is.
+// PACKED position the decide read for each notice it names, which the apply
+// resolves the gesture with since it reads no notice ([OpMarks], this file's
+// head). BASE FORMAT, as [KindPerson] is.
 type PersonMarks struct {
 	Handle    string            `json:"handle"`
 	Gesture   MarkGesture       `json:"gesture"`
@@ -110,22 +85,16 @@ type PersonMarks struct {
 }
 
 // MarkWrite is one gesture a person makes over their own code notices: the
-// operation it is named by, who asks — the person, by the credential they act
-// through and the human seat they hold — whose record it is, the gesture, and
-// Seen, the position on the code log the asker last read; or, in place of the
-// gesture, one over the files of a change they read ([MarkWrite.Files]).
+// operation id, the asker (the credential they act through and the human seat
+// they hold), whose record, the gesture or, in its place, one over a change's
+// files ([MarkWrite.Files]), and Seen, the code-log position the asker last read.
 //
-// SEEN IS THE ASKER'S FLOOR, and the decide waits for it ([statelog.Request]'s
-// Session) before it opens its snapshot. A mark is unkeyed and asked of
-// whichever data node the router reaches (estate's code.mark), and the inbox
-// page that showed the notice may have been read from a peer ahead of it: a
-// decide below the notice's record finds no row for it and refuses the mark
-// as naming none of the person's notices — a refusal that is false the moment
-// the node catches up. With the floor, a node that cannot reach it within the
-// write budget answers [ErrNotServing] and the router asks the next one; a
-// notice it then still cannot find is truly none of theirs. The zero position
-// waits for nothing: a gesture naming no notice (`read_through`, the primary
-// reasons) reads no notice row.
+// SEEN IS THE ASKER'S FLOOR, which the decide waits for ([statelog.Request]'s
+// Session): a mark goes to whichever data node the router reaches (estate's
+// code.mark), and one behind the notice's record would falsely refuse it as
+// naming none of the person's notices. A node that cannot reach the floor within
+// the write budget answers [ErrNotServing] and the router asks the next. The zero
+// position waits for nothing: a gesture naming no notice reads no notice row.
 type MarkWrite struct {
 	OpID    string            `json:"op_id"`
 	Asker   Principal         `json:"asker"`
@@ -239,10 +208,9 @@ type MarksOptions struct {
 }
 
 // Marks is this node's writer of persons' own marks on the code log: their
-// inbox's and the files they viewed. Every data node
-// that publishes holds one, and a mark is asked of any of them: a person's
-// marks contend with nothing but their own other marks, which the broker
-// arbitrates on the person's subject.
+// inbox's and the files they viewed. Every publishing data node holds one, and
+// a mark may go to any: a person's marks contend only with their own, which the
+// broker arbitrates on the person's subject.
 type Marks struct {
 	pub    Publisher
 	db     store.ReplicatedReader
@@ -278,10 +246,10 @@ type markDecision struct {
 }
 
 // Mark decides one gesture over a person's code notices, or over the files of
-// one change they read, and answers what became of it. A write no node could decide is [ErrInvalid]; one this node
-// ran nothing of — the code log refusing this node — is [ErrNotServing], which
-// the router asks of the next data node under the same operation id. A
-// refusal is an answer, never an error.
+// one change they read, and answers what became of it. A write no node could
+// decide is [ErrInvalid]; one this node ran nothing of (the code log refused
+// it) is [ErrNotServing], which the router asks of the next data node under
+// the same operation id. A refusal is an answer, never an error.
 func (m *Marks) Mark(ctx context.Context, w MarkWrite) (MarkResult, error) {
 	if err := w.Validate(); err != nil {
 		return MarkResult{}, err
@@ -462,14 +430,13 @@ func marksIn(ctx context.Context, tx *sql.Tx, handle string) (inbox.Marks[Reason
 	return normalMarks(m), position, nil
 }
 
-// noticePositionsIn is the packed position of every notice ids names among
-// handle's own code notices — each by its [NoticeID], the record and the
-// change, as an inbox notice carries it — and the first id that is none of
-// them, "" when every one is.
+// noticePositionsIn is the packed position of every notice ids names (by
+// [NoticeID]) among handle's own code notices, and the first id that is none
+// of them, "" when every one is.
 //
-// ONE STATEMENT FOR THE GESTURE, whatever it names: a gesture names up to
-// [inbox.MaxEntries] notices, and the decide runs again on every round the
-// broker refuses, so a lookup a notice would be that many statements a round.
+// ONE STATEMENT FOR THE GESTURE: it names up to [inbox.MaxEntries] notices and
+// the decide reruns on every round the broker refuses, so a lookup a notice
+// would be that many statements a round.
 func noticePositionsIn(ctx context.Context, tx *sql.Tx, handle string, ids []string) (map[string]uint64, string,
 	error) {
 
@@ -514,11 +481,10 @@ func noticePositionsIn(ctx context.Context, tx *sql.Tx, handle string, ids []str
 }
 
 // The marks' reads, each registered in plan_test.go: a person's row by its
-// key, and the notices of theirs a gesture names by the notice table's key,
-// one seek a [record, change] pair of the JSON array bound — the key named,
-// since the planner would otherwise take the person's inbox range
-// (code_notifications_inbox_idx) and read every notice they hold to find
-// them. The row's one write is the applier's (apply_marks.go).
+// key, and the notices a gesture names by the notice table's key, one seek a
+// [record, change] pair of the bound JSON array — the key named, or the
+// planner takes the person's inbox range (code_notifications_inbox_idx) and
+// reads every notice they hold. The row's one write is apply_marks.go's.
 const (
 	personMarksSQL = `SELECT generation, seen_stream, seen_through, read, unread, snoozed, primary_reasons,
 		position FROM code_person_marks WHERE handle = ?`

@@ -517,11 +517,32 @@ func readyWaits(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time
 }
 
 // orderReady is the pickup order over the blocks and the priority list:
-// started work in queue order, then the reviews the seat holds, then its own
-// items in review nobody reviews, then the waits on a person nobody asked,
-// then the dead waits, then the waiting items the list names in its order,
-// then the rest in queue order.
+// urgent items first, then the rest (ADR-0159), each in the order of started
+// work in queue order, the reviews the seat holds, its own items in review
+// nobody reviews, the waits on a person nobody asked, the dead waits, the
+// waiting items the list names in its order, then the rest in queue order.
 func orderReady(started []TaskRow, reviews, own []reviewRow, onPerson []waitRow, dead []TaskRow,
+	waiting []TaskRow, priorities []string) []ReadyItem {
+
+	out := orderBlocks(started, reviews, own, onPerson, dead, waiting, priorities)
+	urgent := make([]ReadyItem, 0, len(out))
+	rest := make([]ReadyItem, 0, len(out))
+	for _, item := range out {
+		if item.Priority != PriorityUrgent {
+			rest = append(rest, item)
+			continue
+		}
+		// Not started: only its urgency puts it ahead of started work.
+		if item.Why == types.PickupPriorityList || item.Why == types.PickupQueue {
+			item.Why = types.PickupUrgent
+		}
+		urgent = append(urgent, item)
+	}
+	return append(urgent, rest...)
+}
+
+// orderBlocks is [orderReady]'s order of the blocks, urgency aside.
+func orderBlocks(started []TaskRow, reviews, own []reviewRow, onPerson []waitRow, dead []TaskRow,
 	waiting []TaskRow, priorities []string) []ReadyItem {
 
 	out := make([]ReadyItem, 0, len(started)+len(reviews)+len(own)+len(onPerson)+len(dead)+len(waiting))

@@ -9,17 +9,12 @@ import (
 )
 
 // EVERY PRINCIPAL KIND THAT ASKS IS A READER THE AUDIT RECORDS, by one
-// spelling.
-//
-// A read of a `visibility: unit` repository is recorded as the principal kind
-// that read it (types.CodeFetched), and the usage domain that keeps the
-// records refuses a kind it does not know — so a principal kind added here
-// without its reader there would have every read by it refused at the writer
-// and counted as a reader the day elided. The two sets are spelled apart only
-// because the usage domain sits beneath this package in the import graph.
-// Every kind asks but the engine's own account, which only the ref expiry's
-// push carries — held here too: one that Validate admitted as an asker would
-// be a reader the audit cannot record.
+// spelling. A `visibility: unit` read is recorded as its principal kind
+// (types.CodeFetched), and the usage domain refuses a kind it does not know,
+// so a kind added here alone would have its reads refused at the writer. The
+// sets are spelled apart only because the usage domain sits beneath this
+// package. PrincipalSystem, carried only by the ref expiry's push, must not
+// pass Validate as an asker: the audit cannot record it.
 //
 // Mutations: add a principal kind to gitlet.PrincipalKinds alone, and this names
 // it; admit gitlet.PrincipalSystem in Principal.Validate, and this names it.

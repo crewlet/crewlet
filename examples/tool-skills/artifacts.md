@@ -295,9 +295,11 @@ as any page, framed on its own.
 - **Scripts come from the allowlist, pinned.** A page may load scripts and
   stylesheets only from cdnjs.cloudflare.com, cdn.jsdelivr.net/npm, unpkg.com,
   code.jquery.com and cdn.tailwindcss.com, and fonts from Google Fonts, each at
-  an exact version. The engine copies them into the version at publish, so
-  nothing is fetched when the page is viewed. Prefer the kit. Anything else is
-  refused at publish, so do not try to work around it.
+  an exact version. The engine copies them, and the fonts a stylesheet names,
+  into the version at publish, so nothing is fetched when the page is viewed. A
+  font must be woff, woff2, ttf or otf: a stylesheet naming `.eot` is refused.
+  Prefer the kit. Anything else is refused at publish, so do not try to work
+  around it.
 - **Declare what the page uses.** `capabilities` lists the runtime features the
   page calls: `db`, `state`, `assets`, `identity`, `presence`. An undeclared
   feature is refused at runtime.

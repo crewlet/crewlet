@@ -25,7 +25,7 @@ import (
 type RefOrder string
 
 const (
-	// RefOrderName is by name, today's order; the zero order reads as it.
+	// RefOrderName is by name; the zero order reads as it.
 	RefOrderName RefOrder = "name"
 	// RefOrderMoved is the branches by when each last moved, newest first, two
 	// moved by one record by name, highest first (code_refs_moved_idx).

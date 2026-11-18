@@ -13,9 +13,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// ddl opens a store and returns every code object's own CREATE statement, as
-// the driver created it — a clause the migration carries and the driver
-// silently ignored would pass a text scan and fail in production.
+// ddl opens a store and returns every code object's CREATE statement as the
+// driver created it: a clause the driver silently ignored would pass a scan of
+// the migration's text.
 func ddl(t *testing.T) map[string]string {
 	t.Helper()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -71,9 +71,9 @@ func TestNoCollateInCode(t *testing.T) {
 	}
 }
 
-// NO `UNIQUE` OUTSIDE A PRIMARY KEY: a constraint violation inside the apply
-// transaction aborts it on every node at once — a fleet-wide stalled log over
-// what the applier's own guard should have answered.
+// NO `UNIQUE` OUTSIDE A PRIMARY KEY: a violation inside the apply transaction
+// aborts it on every node at once, stalling the log fleet-wide over what the
+// applier's own guard should have answered.
 func TestNoUniqueOutsideAPrimaryKeyInCode(t *testing.T) {
 	t.Parallel()
 	unique := regexp.MustCompile(`\bUNIQUE\b`)

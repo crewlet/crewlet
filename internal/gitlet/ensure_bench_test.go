@@ -13,12 +13,10 @@ import (
 
 // BenchmarkAnUnchangedActivation is the reconcile of an activation that
 // changes nothing, on the round-trip harness's real log and estate: ten
-// thousand declared repositories — the most a configuration may declare — as
-// an earlier activation left them, reconciled again by EnsureRepos, the
-// reconcile's form; and EnsureRepo a repository at a time over a thousand of
-// them, the per-repository cost the batch replaced (two publishes each, the
-// claim and the settle, every one its own eviction read, session wait and
-// snapshot). doc.go's measured section records both.
+// thousand declared repositories (a configuration's most) reconciled again by
+// EnsureRepos, and EnsureRepo one at a time over a thousand, the per-repository
+// cost of two publishes (claim and settle), each its own eviction read, session
+// wait and snapshot. doc.go's "Measured" section records both.
 func BenchmarkAnUnchangedActivation(b *testing.B) {
 	gitlet.Quiet(b)
 	const repos = 10_000
@@ -57,9 +55,9 @@ func BenchmarkAnUnchangedActivation(b *testing.B) {
 }
 
 // seedDeclared writes count repositories straight into n's estate as the
-// activation epoch left them — each its name claim, its row and the suite's
-// one rule — and answers their declarations: ten thousand creates through the
-// log would take minutes and measure nothing the benchmark is about.
+// activation epoch left them (name claim, row, the suite's one rule) and
+// answers their declarations: ten thousand creates through the log would take
+// minutes and measure nothing the benchmark is about.
 func seedDeclared(b *testing.B, n *node, count int, epoch int64) []gitlet.Declared {
 	b.Helper()
 	declared := make([]gitlet.Declared, count)

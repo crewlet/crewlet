@@ -14,50 +14,40 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A CHANGE'S CONVERSATION: what is said ABOUT a change, as records on the
-// change's own subject ([KindChange]) — who is asked to review it, what is said
-// on it and the threads it forms, its reviews and the findings they raise, and
-// the answers to those. Each is a [ConversationWrite] its asker hands the
-// repository's committing data node, whose [ChangeWriter] decides it in ONE
-// snapshot and publishes it as a record of its own op ([ConversationOps]); the
-// change's lifecycle stays on the repository's subject, decided by the
-// committer ([ChangeProposal]).
-//
-// # Split by subject
-//
-// A table is written by the records of ONE subject, so two writers deciding
-// from two snapshots never contend on one row: the repository's records keep a
-// change's row, its body, its authors and its revisions; the change's keep its
-// reviewers (code_reviewers), its comments (code_comments), who takes part in
-// it and each reviewer's standing verdict (code_participants), its reviews
-// (code_reviews), their findings (code_findings, code_finding_texts), its
-// counters (code_conversations), the facts the repository's home Gitlet node
-// recorded of its revisions (code_revision_facts, [Revise]) and whether its
-// head revision merges into its target (code_mergeability, [Mergeability]).
-// Only a repository's purge removes them,
-// behind the deletion gate that drops every record about a purged repository
-// ([Applier.Gated] reads a change record's repository off its scope).
-//
-// # Who clears a blocker (S40)
-//
-// A finding STANDS while it is open, or an author answered it resolved, won't
-// fix or disputed: an author's answer is theirs to give and the raiser's to
-// judge, so a standing BLOCKER holds its change back whatever its authors
-// said. Exactly two things clear one: its DISMISSAL — by its raiser, a
-// principal that maintains the repository, or a person — and its raiser's
-// REVIEW OF A LATER REVISION that does not carry it, which supersedes it with
-// every other standing finding of theirs it leaves out. A review of the same
-// revision supersedes nothing: one reviewer's second pass over one revision
-// adds to the first. Who may clear a blocker is said by the rows alone, as a
-// precondition read in one snapshot, never as a workflow somebody has to
-// remember.
+// A CHANGE'S CONVERSATION: what is said ABOUT a change — its asks for review,
+// comments and threads, reviews, findings and their answers — as records on the
+// change's own subject ([KindChange]). Each is a [ConversationWrite] the
+// repository's committing data node's [ChangeWriter] decides in ONE snapshot and
+// publishes as a record of its own op ([ConversationOps]); the change's
+// lifecycle stays on the repository's subject, decided by the committer
+// ([ChangeProposal]).
 
-// ConversationRefusal is why a change's writer decided nothing of a write of
-// its conversation ([ConversationWrite]) — a code its asker reads as "<code>:
-// <sentence>", the sentence the decide's ([ConversationResult.Detail]). A named
-// string, so a code this build does not know is a value rather than a panic.
-// NONE IS EVER RECORDED: a refused write appends nothing, so no record of the
-// code log carries one and none takes a versionedFields row.
+// SPLIT BY SUBJECT: a table is written by ONE subject's records, so two writers
+// deciding from two snapshots never contend on a row. The repository's records
+// keep a change's row, body, authors and revisions; the change's keep its asks
+// (code_reviewers), comments (code_comments), participants and their standing
+// verdicts (code_participants), reviews (code_reviews), findings (code_findings,
+// code_finding_texts), counters (code_conversations), the home's facts of its
+// revisions (code_revision_facts, [Revise]) and whether its head merges into its
+// target (code_mergeability, [Mergeability]). Only a repository's purge removes
+// them, behind the deletion gate ([Applier.Gated] reads a change record's
+// repository off its scope).
+
+// WHO CLEARS A BLOCKER (S40): a finding STANDS while open or answered resolved,
+// won't fix or disputed — an author's answer is the raiser's to judge, so a
+// standing BLOCKER holds its change back whatever its authors said. Exactly two
+// things clear one: its DISMISSAL (by its raiser, a maintainer of the
+// repository, or a person) and its raiser's REVIEW OF A LATER REVISION that does
+// not carry it, which supersedes every standing finding of theirs it leaves out.
+// A second review of the same revision adds to the first and supersedes nothing.
+// The rows alone say who may clear one: a precondition read in one snapshot,
+// never a workflow somebody has to remember.
+
+// ConversationRefusal is why a change's writer decided nothing of a
+// [ConversationWrite]: a code its asker reads as "<code>: <sentence>", the
+// sentence the decide's ([ConversationResult.Detail]). NONE IS EVER RECORDED: a
+// refused write appends nothing, so no code-log record carries one and none
+// takes a versionedFields row.
 type ConversationRefusal string
 
 // The codes, in the order the decide's rules reach them (decide_conversation.go)
@@ -75,21 +65,17 @@ const (
 	// repository does not hold.
 	ConversationRefusalChangeNotFound ConversationRefusal = "change_not_found"
 	// ConversationRefusalNotPermitted is a write its asker may not make: any
-	// write by a seat that reads nothing of the repository — whatever it
-	// wrote, raised or started on the change while it did — an ask for
-	// review by one who neither wrote the change nor reviews the repository,
-	// a thread resolved by one who neither started it nor wrote the change
-	// nor maintains the repository, nor is a person — and an ask of a
-	// reviewer who may not review it: a seat below review on the repository,
-	// or an author of the change, whose review counts for nothing.
+	// write by a seat that reads nothing of the repository (whatever it wrote
+	// on the change while it did); an ask for review by one who neither wrote
+	// the change nor reviews the repository; a thread resolved by one who
+	// neither started it, wrote the change, maintains the repository nor is a
+	// person; and an ask of a reviewer who may not review it (a seat below
+	// review on the repository, or an author of the change).
 	ConversationRefusalNotPermitted ConversationRefusal = "not_permitted"
-	// ConversationRefusalOwnChange is a review by an author of the change:
-	// an author's review of their own change, its approval above all, counts
-	// for nothing, so none is taken, whatever the author's access. Its own
-	// code rather than not_permitted, which it shares a rule with no other
-	// refusal of, so the person who meets it is told what it is (the change
-	// is theirs, and somebody else reviews it) rather than that the change is
-	// not theirs to make.
+	// ConversationRefusalOwnChange is a review by an author of the change,
+	// which counts for nothing whatever the author's access. Its own code
+	// rather than not_permitted, so its asker is told the change is theirs
+	// and somebody else reviews it, not that the write is not theirs to make.
 	ConversationRefusalOwnChange ConversationRefusal = "own_change"
 	// ConversationRefusalNoReviewer is an ask of a reviewer the chart does
 	// not hold: no seat by that handle.
@@ -130,20 +116,17 @@ const (
 	ConversationRefusalTooManyFindings ConversationRefusal = "too_many_findings"
 	// ConversationRefusalSuperseded is a revision's facts ([Revise]) or a
 	// change's mergeability ([Mergeability]) the change no longer takes: of a
-	// revision or a head it has moved from, against a branch it no longer
-	// merges into, no later than the facts it holds of that revision against
-	// that branch, or matched against path owners the repository has changed
-	// since; a merge into a tip before the one the change's mergeability is
-	// of, or into the same tip once that one is decided; a refresh of a merge
-	// the change does not hold, or of a readiness judged at the inputs the
-	// snapshot holds already. The home's own refusal, which no principal is
-	// ever answered: its next pass reads the rows again.
+	// revision or head it has moved from, a branch it no longer merges into,
+	// no later than the facts it holds, or matched against path owners since
+	// changed; a merge into an older tip than its mergeability's, or into the
+	// same tip once decided; a refresh of a merge it does not hold, or of a
+	// readiness judged at inputs the snapshot already holds. The home's own
+	// refusal, answered to no principal: its next pass reads the rows again.
 	ConversationRefusalSuperseded ConversationRefusal = "superseded"
 
 	// ConversationRefusalBusy is a write the change's writer did not reach in
-	// time — its asker's attempt run short behind the change's other writes,
-	// or the change moving under every round the write may take — and
-	// decided nothing: it is sent again.
+	// time (its attempt ran short behind the change's other writes, or the
+	// change moved under every round) and decided nothing: it is sent again.
 	ConversationRefusalBusy ConversationRefusal = "busy"
 	// ConversationRefusalNotApplied is a write whose record was durable on
 	// the code log and applied nowhere: a gate drops it on every node.
@@ -231,15 +214,13 @@ func ReviewerReasons() []ReviewerReason { return []ReviewerReason{ReviewerAsked,
 // Valid reports a reason this build knows.
 func (r ReviewerReason) Valid() bool { return slices.Contains(ReviewerReasons(), r) }
 
-// THE RECORDS OF A CHANGE'S CONVERSATION, one payload an op ([ConversationOps]),
-// each on the change's own subject and written by the repository's committing
-// data node ([ChangeWriter]). Each carries its repository and its change and
-// the fields its asker chose; the writer STAMPS what no asker sends — who wrote
-// it, from the write's asker; a reviewer's kind, from the chart; a comment's
-// id and the thread it is in — so a record says what it did with no lookup.
-//
-// Every field is in the base format, as [KindChange] is: Mentions and Routing
-// among them, as concerns.go's head says of a routing.
+// THE RECORDS OF A CHANGE'S CONVERSATION, one payload per op ([ConversationOps]).
+// Each carries its repository, its change and the fields its asker chose; the
+// writer STAMPS what no asker sends (who wrote it, from the write's asker; a
+// reviewer's kind, from the chart; a comment's id and thread; a routing, from
+// its snapshot and chart), so a record says what it did with no lookup. Every
+// field is in the base format, as [KindChange] is, Mentions and Routing among
+// them (concerns.go's head).
 
 // Reviewer is one reviewer a request names: a seat by its handle, or a person
 // by the human seat they hold. Its Kind is STAMPED BY THE WRITER from the
@@ -254,8 +235,7 @@ type Reviewer struct {
 type ReviewerRequest struct {
 	RepoID   string `json:"repo_id"`
 	ChangeID string `json:"change_id"`
-	// By is who asked. STAMPED BY THE WRITER from the write's asker; an
-	// asker sends none.
+	// By is who asked. STAMPED BY THE WRITER.
 	By Principal `json:"by,omitzero"`
 	// Request is the reviewers asked, at most [MaxReviewersPerChange].
 	Request []Reviewer `json:"request,omitempty"`
@@ -265,7 +245,7 @@ type ReviewerRequest struct {
 	// Note is what the ask says, at most [MaxReviewNoteBytes]; "" for none.
 	Note string `json:"note,omitempty"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
-	// WRITER from its snapshot and chart; an asker sends none.
+	// WRITER.
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
@@ -290,9 +270,9 @@ type CommentAnchor struct {
 type Comment struct {
 	RepoID   string `json:"repo_id"`
 	ChangeID string `json:"change_id"`
-	// CommentID is [CommentID] of the write's operation id, and ThreadID the
-	// thread it is in — its own id for a thread it starts, the thread's root
-	// for a reply. BOTH STAMPED BY THE WRITER; an asker sends neither.
+	// CommentID is [CommentID] of the write's operation id, and ThreadID its
+	// own id for a thread it starts, the root's for a reply. BOTH STAMPED BY
+	// THE WRITER.
 	CommentID string `json:"comment_id,omitempty"`
 	ThreadID  string `json:"thread_id,omitempty"`
 	// ParentID is the root of the thread this replies to; "" for a comment
@@ -305,8 +285,7 @@ type Comment struct {
 	//
 	// BASE FORMAT, as [KindChange] is.
 	FindingID string `json:"finding_id,omitempty"`
-	// By is who said it. STAMPED BY THE WRITER from the write's asker; an
-	// asker sends none.
+	// By is who said it. STAMPED BY THE WRITER.
 	By Principal `json:"by,omitzero"`
 	// Body is what it says, 1 to [MaxCommentBytes] bytes.
 	Body string `json:"body" untrusted:"fence"`
@@ -316,15 +295,14 @@ type Comment struct {
 	// TurnID is the turn that said it; "" for none — a person's comment has
 	// none.
 	TurnID string `json:"turn_id,omitempty"`
-	// Mentions is the handles its body names, as its asker resolved them
-	// against the chart it acts in, at most [MaxMentions]; the writer holds
-	// them to its own chart, and each is told ([ReasonMention]) and joins
-	// the change's participants. THE ASKER'S, never the record's: the
-	// writer holds them into the routing's mentions, their one copy, and
-	// takes them off the record it appends (withRouting).
+	// Mentions is the handles its body names as its asker resolved them, at
+	// most [MaxMentions]; the writer holds them to its own chart, and each is
+	// told ([ReasonMention]) and joins the participants. THE ASKER'S, never
+	// the record's: the writer moves them into the routing, their one copy
+	// (withRouting).
 	Mentions []string `json:"mentions,omitempty"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
-	// WRITER from its snapshot and chart; an asker sends none.
+	// WRITER.
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
@@ -337,11 +315,10 @@ type ThreadResolve struct {
 	ThreadID string `json:"thread_id"`
 	// Resolved is the state it leaves the thread in.
 	Resolved bool `json:"resolved"`
-	// By is who resolved it. STAMPED BY THE WRITER from the write's asker;
-	// an asker sends none.
+	// By is who resolved it. STAMPED BY THE WRITER.
 	By Principal `json:"by,omitzero"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
-	// WRITER from its snapshot and chart; an asker sends none.
+	// WRITER.
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
@@ -364,15 +341,12 @@ func Verdicts() []Verdict { return []Verdict{VerdictApprove, VerdictRequestChang
 // Valid reports a verdict this build knows.
 func (v Verdict) Valid() bool { return slices.Contains(Verdicts(), v) }
 
-// Severity is how much a finding weighs. A BLOCKER is the one that holds a
-// change back until it is cleared (S40): only its dismissal — by its raiser, a
-// maintainer or a person — or its raiser's review of a later revision that does
-// not carry it clears one; resolved, won't fix and disputed keep it standing.
+// Severity is how much a finding weighs. A BLOCKER alone holds a change back
+// until cleared, as this file's head says (S40).
 type Severity string
 
-// The severities, heaviest first ([Severities]): a blocker alone holds a
-// change back; the three below it are weight a reviewer gives, and gate
-// nothing.
+// The severities, heaviest first ([Severities]): the three below a blocker
+// are weight a reviewer gives, and gate nothing.
 const (
 	SeverityBlocker Severity = "blocker"
 	SeverityMajor   Severity = "major"
@@ -443,10 +417,8 @@ func FindingStates() []FindingState {
 func (s FindingState) Valid() bool { return slices.Contains(FindingStates(), s) }
 
 // Stands reports a state in which a finding is still what its raiser said:
-// open, resolved, won't fix or disputed. A standing BLOCKER holds its change
-// back; resolved, won't fix and disputed are an author's answers, which the
-// raiser judges — by dismissing it, or by not carrying it into a review of a
-// later revision.
+// open, or an author's answer the raiser has yet to judge (S40, this file's
+// head).
 func (s FindingState) Stands() bool {
 	return s == FindingOpen || s == FindingResolved || s == FindingWontFix || s == FindingDisputed
 }
@@ -487,11 +459,10 @@ type Finding struct {
 type Review struct {
 	RepoID   string `json:"repo_id"`
 	ChangeID string `json:"change_id"`
-	// ReviewID is [ReviewID] of the write's operation id. STAMPED BY THE
-	// WRITER; an asker sends none.
+	// ReviewID is [ReviewID] of the write's operation id, STAMPED BY THE
+	// WRITER.
 	ReviewID string `json:"review_id,omitempty"`
-	// By is the reviewer. STAMPED BY THE WRITER from the write's asker; an
-	// asker sends none.
+	// By is the reviewer. STAMPED BY THE WRITER.
 	By Principal `json:"by,omitzero"`
 	// Revision is the change's revision judged, 1 or above, and at most its
 	// head as the asker read it.
@@ -511,7 +482,7 @@ type Review struct {
 	// [Comment.Mentions] is.
 	Mentions []string `json:"mentions,omitempty"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
-	// WRITER from its snapshot and chart; an asker sends none.
+	// WRITER.
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
@@ -532,25 +503,22 @@ type FindingResolution struct {
 type FindingResolve struct {
 	RepoID   string `json:"repo_id"`
 	ChangeID string `json:"change_id"`
-	// By is who answers. STAMPED BY THE WRITER from the write's asker; an
-	// asker sends none.
+	// By is who answers. STAMPED BY THE WRITER.
 	By       Principal           `json:"by,omitzero"`
 	Findings []FindingResolution `json:"findings"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
-	// WRITER from its snapshot and chart; an asker sends none.
+	// WRITER.
 	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // AskSettle settles a change's asks for review with its LIFECYCLE ([OpAsks]):
-// every ask still waiting on a change that closed or merged is ENDED — nobody
-// owes the review of a change that will not merge — and every ask its end left
-// waiting is ASKED AGAIN once the change is reopened. The change's lifecycle is
-// its repository's records, which write nothing of its conversation (a table
-// is written by the records of one subject), so its home Gitlet node finds a
-// change whose asks no longer match its state from the rows (the
-// `changes_due` read's [ReadAnswer.AskSettles]) and asks the change's writer
-// for this record on the change's own subject. The home's own write, which no
-// principal asks.
+// a closed or merged change's waiting asks are ENDED — nobody owes the review
+// of a change that will not merge — and ASKED AGAIN once it is reopened. The
+// lifecycle is the repository's records, which write nothing of the
+// conversation (SPLIT BY SUBJECT above), so the change's home Gitlet node
+// finds a change whose asks lag its state (the `changes_due` read's
+// [ReadAnswer.AskSettles]) and asks the change's writer for this record. The
+// home's own write, which no principal asks.
 //
 // Every field is in the base format, as [OpAsks] is.
 type AskSettle struct {
@@ -562,17 +530,15 @@ type AskSettle struct {
 	// the change's state in its own snapshot.
 	State ReviewerState `json:"state"`
 	// Reviewers is the asks the record moves, by handle, at most
-	// [MaxAsksSettled]. STAMPED BY THE WRITER from its snapshot; the home
-	// sends none.
+	// [MaxAsksSettled]. STAMPED BY THE WRITER from its snapshot.
 	Reviewers []string `json:"reviewers,omitempty"`
 }
 
 // MaxAsksSettled is the most asks one [AskSettle] moves: every ask a change can
-// hold waiting at once — those asked by name or as path owners
-// ([MaxReviewersPerChange]) and those a revision's facts ask to look again
-// ([MaxReReviewers]). A change holding more — only a reopened change asked
-// again beside the asks its end left, can — is settled over more than one
-// record, each its home's next, since the change stays due until none is left.
+// hold waiting at once, by name or as path owners ([MaxReviewersPerChange]) and
+// to look again ([MaxReReviewers]). A change holding more (only a reopened one
+// asked again beside the asks its end left) settles over several records: it
+// stays due until none is left.
 const MaxAsksSettled = MaxReviewersPerChange + MaxReReviewers
 
 // ReviewID is the id of the review a write under opID gives, DERIVED from the
@@ -591,12 +557,11 @@ func FindingID(opID string, i int) string {
 	return statelog.DeriveOpID(at, "", ReviewID(opID), strconv.Itoa(i))
 }
 
-// CommentID is the id of the comment a write under opID says: DERIVED from the
-// write's operation id, a bare UUIDv7, as [OpenChangeID] derives an open's
-// change — so the comment asked again under its own id, of the repository's
-// runner-up after its writer went silent or by an asker whose answer was lost,
-// is the same comment, which the operation ledger collapses onto the record
-// that landed, and no retry says it twice.
+// CommentID is the id of the comment a write under opID says, DERIVED from the
+// operation id (a bare UUIDv7) as [OpenChangeID] derives an open's change: a
+// write asked again under its own id — of the runner-up after its writer went
+// silent, or by an asker whose answer was lost — is the same comment, which the
+// operation ledger collapses onto the record that landed.
 func CommentID(opID string) string {
 	at, _ := statelog.OpMintedAt(opID)
 	return statelog.DeriveOpID(at, "", "code.comment", opID)
@@ -611,9 +576,8 @@ func commentProblem(s string) string {
 	return textProblem(s, MaxCommentBytes, "comment")
 }
 
-// anchorProblem is why a is no anchor a comment may carry, or "": a revision
-// from 1, a clean relative path, a side of a diff, a line from 1 and a whole
-// object id for the blob read there.
+// anchorProblem is why a is no anchor a comment may carry, or "", naming the
+// field.
 func anchorProblem(a CommentAnchor) string {
 	switch {
 	case a.Revision < 1:
@@ -634,12 +598,7 @@ func anchorProblem(a CommentAnchor) string {
 }
 
 // findingProblem is why f is no finding a review may raise, or "", naming the
-// field: a clean relative path, a side of a diff, its lines from 1 with the
-// last at or past the first, whole object ids for the commit and the blob
-// they were read in, a severity and a category this build knows, a title of
-// one line up to [MaxFindingTitleBytes], a body up to [MaxFindingBodyBytes]
-// and a suggestion up to [MaxSuggestionBytes] — and no id, which the writer
-// stamps.
+// field.
 func findingProblem(f Finding) string {
 	switch {
 	case f.ID != "":

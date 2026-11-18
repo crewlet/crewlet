@@ -14,43 +14,28 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The applier, and the rules that make it a PURE FUNCTION of the log.
+// The applier is a PURE FUNCTION of the log: N nodes keep byte-identical
+// tables from one stream only while these hold.
 //
-// N nodes derive one SQL state from one ordered stream, and the claim that
-// their tables are byte-identical survives exactly as long as these hold —
-// the tracker's rules, because they are the framework's:
-//
-//  1. IT READS NO CONFIG AND NO CLOCK. Every instant it writes is the broker's
-//     ([statelog.ApplyOptions.StoredAt]); every limit it keeps is a constant.
-//  2. IT WRITES ONLY WHAT THE RECORD SAYS. A push's commands carry their
-//     results, so the applier writes them rather than deciding them again:
-//     the broker's arbitration on the repository's subject guarantees the
-//     decide saw these rows, and a second decide here would be a second
-//     opinion the fleet could disagree about.
-//  3. EVERY GUARD IS A SKIP, NEVER AN ERROR, for ordinary traffic: a
-//     redelivered record applies as nothing, because a constraint violation
-//     inside this transaction would abort it identically on every node and
-//     stall the fleet's log. What IS an error is a record no correct writer
-//     forms — one that arbitrated one object and claims another — because
-//     applying it would be the corruption the subject exists to prevent.
-//  4. EVERY HORIZON IS A FUNCTION OF THE RECORD: the push history and the ref
-//     tombstones a push record removes are chosen by its broker instant and
-//     its own repository's rows — the tombstones also by their count against
-//     MaxTombstonesPerRepo — never by a sweep that would be a second writer
-//     of the replicated estate.
+//  1. NO CONFIG, NO CLOCK: every instant is the broker's
+//     ([statelog.ApplyOptions.StoredAt]); every limit is a constant.
+//  2. IT WRITES WHAT THE RECORD SAYS: the subject's arbitration guarantees the
+//     decide saw these rows, and a second decide here could disagree.
+//  3. A GUARD IS A SKIP, NEVER AN ERROR: a redelivery applies as nothing, as
+//     a violation would stall the log on every node. Only a record no correct
+//     writer forms (arbitrated one object, claims another) is an error.
+//  4. EVERY HORIZON IS A FUNCTION OF THE RECORD (its broker instant, its
+//     repository's rows, MaxTombstonesPerRepo), never a second-writer sweep.
 
 // Applier writes this node's copy of Gitlet.
 //
-// It carries NO NODE IDENTITY, and that is the purity rule rather than an
-// omission ([statelog.Applier]): an applier that could read which node it runs
-// on could write rows its peers do not. The eviction gate needs none — it
-// compares the record's own [statelog.Record.Writer] with the eviction rows.
-// What it does hold of its node is a LISTENER, told after a commit whose
-// notices moved somebody's inbox on this node (internal/inbox's movement.go),
-// and a listener writes no row.
+// It carries NO NODE IDENTITY ([statelog.Applier]): one that knew its node
+// could write rows its peers do not; the eviction gate compares
+// [statelog.Record.Writer] with the eviction rows instead. Its one tie to its
+// node is a listener (internal/inbox's movement.go), which writes no row.
 type Applier struct {
 	// moved is told, after a committed batch, whose inbox moved on this
-	// node. Nil is legal and means nobody is listening.
+	// node. Nil means nobody is listening.
 	moved func([]inbox.Movement)
 
 	// inboxed is the notices the batch wrote or removed, filled inside Apply
@@ -58,49 +43,36 @@ type Applier struct {
 	inboxed inbox.Batch
 }
 
-// NewApplier builds Gitlet's applier for one node.
-//
-// moved is called after a COMMITTED batch with every inbox that batch's
-// notices moved (apply_notices.go), each movement naming this domain as its
-// source. After the commit and never inside the transaction: the store re-runs
-// the body of an attempt that failed transiently, and a movement announced
-// from inside it would announce a notice no row holds.
+// NewApplier builds Gitlet's applier for one node. moved is called after a
+// COMMITTED batch with every inbox its notices moved (apply_notices.go), never
+// inside the transaction: the store re-runs a transiently failed attempt, and
+// a movement announced from it would name a notice no row holds.
 func NewApplier(moved func([]inbox.Movement)) *Applier { return &Applier{moved: moved} }
 
-// Committed is the post-commit half: telling THIS node's open dashboards whose
-// inbox the batch's notices moved — the one consequence of a code record no
-// other node needs. Every data node applies every record, and only a data node
-// serves dashboards, so each tells its own. A seat's wake is derived from the
-// code log's feed, never from here, and no cache is told to sync — a Gitlet
-// node's cache converges by reading the rows when it is asked for them.
+// Committed tells THIS node's open dashboards whose inbox the batch's notices
+// moved: every data node applies every record and serves its own dashboards.
+// Nothing else is told: a seat's wake comes from the code log's feed, and a
+// Gitlet node's cache reads the rows when asked.
 func (a *Applier) Committed(context.Context) {
-	// RESET BEFORE THE CALL, not after: the listener may take long enough
-	// for the next batch to be waiting behind it.
+	// RESET BEFORE THE CALL: the next batch may be waiting behind a slow listener.
 	moved := a.inboxed.Drain(Domain{}.Name())
 	if len(moved) > 0 && a.moved != nil {
 		a.moved(moved)
 	}
 }
 
-// Gated reports a record that must produce no rows at all — read from this
-// same transaction, because the answer has to come from the state the record
-// would have applied against:
+// Gated reports a record that must produce no rows, read from this
+// transaction: the state the record would apply against.
 //
-//  1. THE EVICTION GATE. A record written by a node the fleet evicted before
-//     the record's own position is dropped everywhere.
-//  2. THE DELETION GATE. A record about a repository a purge destroyed applies
-//     nowhere, for ever — otherwise a redelivery months later would resurrect
-//     rows an operator's configuration removed. Its hit is counted on the
-//     marker, an operator surface: a repository still catching records
-//     months after its purge is a writer nobody stopped. A record on a
-//     CHANGE's subject is about the repository its scope names — read off
-//     the envelope the framework decoded, never the payload, which the
-//     apply then holds to it — and one on a repository's CHECKS subject
-//     about the repository its subject names ([gatedRepo]) — so a check that
-//     ends after its repository's purge writes nothing.
+//  1. THE EVICTION GATE: a record by a node evicted before its position.
+//  2. THE DELETION GATE: a record about a purged repository, for ever, or a
+//     late redelivery would resurrect removed rows. Each hit is counted on the
+//     marker, so an operator sees a writer nobody stopped. A CHANGE's record
+//     is gated by its envelope's scope, never the payload (the apply holds the
+//     payload to it), a CHECKS record by its subject ([gatedRepo]).
 //
-// The eviction window first, the knowledge base's order: a record both gates
-// drop is dropped either way, so the order decides only which gate COUNTS it.
+// Eviction first, the knowledge base's order: a record both gates drop is
+// dropped either way, so the order decides only which gate COUNTS it.
 func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (statelog.Reason, bool, error) {
 	if rec.Writer != "" {
 		var from, readmitted sql.NullInt64
@@ -127,9 +99,8 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 	case err != nil:
 		return "", false, fmt.Errorf("gitlet: read the deletion gate for repository %s: %w", repoID, err)
 	}
-	// THE ONE EXCEPTION IS THE RECORD THAT WROTE THE MARKER, by its own id —
-	// not by its op: "any purge" would let a second purge of a repository id
-	// through, and a purge destroys rows.
+	// THE ONE EXCEPTION IS THE RECORD THAT WROTE THE MARKER, by its id, not
+	// its op: "any purge" would let a second, row-destroying purge through.
 	if author.Valid && author.String == rec.OpID {
 		return "", false, nil
 	}
@@ -145,9 +116,9 @@ const countRejectSQL = `UPDATE code_deletions SET rejects = rejects + 1, last_re
 
 // Apply writes one record's rows and answers how many it wrote or deleted.
 //
-// The dispatch is on the SUBJECT KIND, and every kind has a case — including
-// the two that write nothing — so a kind added later without one is an error
-// rather than a silently ignored record.
+// The dispatch is on the SUBJECT KIND, every kind with a case (even the two
+// that write nothing), so a kind added without one is an error rather than a
+// silently ignored record.
 func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	opts statelog.ApplyOptions) (int, error) {
 
@@ -169,9 +140,8 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		// THE READ INDEX'S OWN APPEND: no row on any node, by design.
 		return 0, nil
 	case KindTrimmed:
-		// THE TRIM'S OWN RECORD: the framework removes this log's anchors
-		// below its floor in this same transaction (ADR-0080); this domain
-		// writes nothing for it.
+		// THE TRIM'S OWN RECORD: the framework removes the anchors below its
+		// floor in this transaction (ADR-0080).
 		return 0, nil
 	case KindEviction:
 		return a.applyEviction(ctx, tx, at)
@@ -180,9 +150,8 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	case KindCompany:
 		return a.applyActivation(ctx, tx, at)
 	case KindName:
-		// A NAME'S SUBJECT carries the records that claim, move or free a
-		// name: a create, a rename onto it, and the release of an old name
-		// whose redirect ended.
+		// A NAME'S SUBJECT carries a create, a rename onto it, and the
+		// release of an old name whose redirect ended.
 		switch record.Op {
 		case OpRename:
 			return a.applyRename(ctx, tx, at)
@@ -202,9 +171,8 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		}
 		return a.applyMarks(ctx, tx, at)
 	}
-	// A KIND THIS BUILD DOES NOT KNOW REACHES HERE ONLY BY WAY OF A RECORD AT
-	// A VERSION IT CAN READ, which is a writer publishing a kind it never
-	// declared; failing is what makes the writer's mistake visible.
+	// AN UNKNOWN KIND at a version this build reads is a writer publishing a
+	// kind it never declared; failing makes that mistake visible.
 	return 0, fmt.Errorf("gitlet: %s is not a kind this build applies, and the "+
 		"record at %s claims version %d — a kind is declared before it is published",
 		rec.Subject.Kind, rec.Position, record.V)
@@ -219,14 +187,13 @@ type applyContext struct {
 	// compares against, and the position every row records.
 	packed int64
 
-	// brokerAt is the broker's own instant for this record, and the ONLY
-	// instant this domain writes from a record's own apply.
+	// brokerAt is the broker's instant for this record, the ONLY instant a
+	// record's own apply writes.
 	brokerAt time.Time
 
-	// now is the batch's instant and epoch the company's settings the batch
-	// is applied under: what a notice's horizon is judged by — the one
-	// DIVERGENT table this domain's records write (apply_notices.go), and
-	// nothing else this applier writes reads either.
+	// now is the batch's instant and epoch the company's settings it applies
+	// under: only a notice's horizon reads them, the one DIVERGENT table
+	// these records write (apply_notices.go).
 	now   time.Time
 	epoch map[string]any
 
@@ -238,9 +205,8 @@ type applyContext struct {
 // at is the broker's instant as the store encodes it.
 func (c applyContext) at() int64 { return store.EncodeTime(c.brokerAt) }
 
-// applyEviction records a node's removal from this log, or its readmission —
-// an INVERSE COMMIT rather than a delete, so an eviction's whole history
-// survives a replay.
+// applyEviction records a node's removal from this log, or its readmission as
+// an INVERSE COMMIT rather than a delete, so the history survives a replay.
 func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	payload, err := DecodeMutation(at.record)
 	if err != nil {
@@ -315,21 +281,15 @@ const generationSQL = `INSERT INTO code_log_generations
 	VALUES (?, ?, ?, ?, ?, ?)
 	ON CONFLICT (generation) DO NOTHING`
 
-// applyActivation raises the activation fence to the record's activation,
-// never lowers it: an older activation's record applied after a newer one's
-// leaves the fence where the newer one put it, on every node alike.
+// applyActivation raises the activation fence to the record's activation and
+// never lowers it, so an older activation applied late leaves it alone.
 //
-// # Why the fence is safe — the argument the reconcile rests on
-//
-// A reconcile publishes its activation's fence record FIRST and decides every
-// repository from a snapshot taken after that record applied (the session
-// floor of its own append). So every config-managed record decided at an
-// OLDER activation is either EARLIER in log order than this fence — and then
-// already in the rows the newer reconcile decides from, so any difference it
-// made is written back — or LATER, and then refused by the fence on every node
-// ([Applier.fenced]). No node applying an older activation late can walk a
-// newer one back, and an activation that changes nothing writes this one
-// record rather than one per declared repository.
+// Why it is safe: a reconcile publishes its fence record FIRST and decides
+// from a snapshot taken after it applied (its append's session floor). A
+// config-managed record of an OLDER activation is either earlier in the log,
+// so in the rows the reconcile decides from and written back, or later, so
+// refused on every node ([fenced]). An activation that changes nothing writes
+// only this record, not one per declared repository.
 func (a *Applier) applyActivation(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	if at.record.Subject.ID != activationID {
 		return 0, fmt.Errorf("gitlet: the activation record at %s arbitrated %s, and "+
@@ -363,14 +323,11 @@ const (
 	fenceSQL = `SELECT fence FROM code_activation WHERE id = ?`
 )
 
-// fenced reports a config-managed record decided at an activation below the
-// fence this transaction holds: it applies as nothing, on every node, because
-// the fence is derived from the log. Only a CONFIG-MANAGED record is held to
-// it — the fence orders configuration activations, and nothing else carries
-// one — so a TOOL'S record ([ManagedTools], its activation 0) applies at any
-// fence: the configuration has nothing to say about it. What keeps a tool's
-// record off a repository the configuration manages is its manager
-// ([managerRefuses]), not the fence.
+// fenced reports a config-managed record decided below the fence this
+// transaction holds, which applies as nothing on every node. Only a
+// CONFIG-MANAGED record carries an activation, so a tool's ([ManagedTools],
+// activation 0) applies at any fence; [managerRefuses] keeps it off a
+// repository the configuration manages.
 func fenced(ctx context.Context, tx *sql.Tx, managedBy ManagedBy, epoch int64) (bool, error) {
 	if managedBy != ManagedConfig {
 		return false, nil
@@ -407,9 +364,8 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 		return 0, fmt.Errorf("gitlet: the create at %s names repository %q as %q, "+
 			"which no writer forms", at.position, p.RepoID, p.Name)
 	}
-	// A PURGED ID IS NEVER REUSED, so a create of one is a redelivery of the
-	// create of a repository since purged. The name subject is not under the
-	// repository's marker, so the create checks the marker itself.
+	// A PURGED ID IS NEVER REUSED, so its create is a redelivery. The name
+	// subject is not under the repository's marker, so the create checks it.
 	var purged int
 	if err = tx.QueryRowContext(ctx, purgedSQL, p.RepoID).Scan(&purged); err != nil {
 		return 0, fmt.Errorf("gitlet: read the deletion marker of %s: %w", p.RepoID, err)
@@ -417,9 +373,8 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 	if purged > 0 {
 		return 0, nil
 	}
-	// A HELD NAME stays held, whatever repository it names: the broker
-	// arbitrated the name, so a second create lands only as a redelivery,
-	// and refusing would stall every node.
+	// A HELD NAME stays held: the broker arbitrated it, so a second create is
+	// a redelivery, and refusing it would stall every node.
 	var held int
 	if err = tx.QueryRowContext(ctx, guardNameSQL, at.record.Subject.ID).Scan(&held); err != nil {
 		return 0, fmt.Errorf("gitlet: read the claim on %q: %w", p.Name, err)
@@ -435,17 +390,14 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 		return 0, fmt.Errorf("gitlet: claim %q at %s: %w", p.Name, at.position, err)
 	}
 	s := p.Settings
-	// WHO MADE IT, as the record names its decider: a seat's handle or a
-	// person's seat (the credential is on the record), and nobody for a
-	// declaration, which the configuration made. Its idle clock starts at
-	// its creation.
+	// WHO MADE IT: the record's decider, nobody for a declaration (the
+	// configuration made it). Its idle clock starts at its creation.
 	createdBy, createdKind := at.record.Actor, string(at.record.ActorKind)
 	if at.record.ActorKind == ActorConfig {
 		createdBy = ""
 	}
-	// ITS MIRRORS AND WHAT ITS IMPORT FETCHES, each as its column holds it:
-	// a create that imports — its own import, or a pull mirror's first fetch
-	// from its source — makes the repository importing ([CreateRepo.status]).
+	// A create that imports (its own, or a pull mirror's first fetch) makes
+	// the repository importing ([CreateRepo.status]).
 	from, to, imports, err := remoteColumns(s, p.importSource())
 	if err != nil {
 		return 0, fmt.Errorf("gitlet: the create at %s: %w", at.position, err)
@@ -465,10 +417,9 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 		return 0, fmt.Errorf("gitlet: create repository %s at %s: %w", p.RepoID, at.position, err)
 	}
 	created, _ := res.RowsAffected()
-	// AND COUNTED IN WITH ITS KIND, only where this record made the row: the
-	// count a tool's create of a project is held to (repo_limit), which the
-	// purge that removes the row counts out again; and in the repository
-	// tallies, where a new repository holds no change to tally.
+	// COUNTED IN BY KIND only where this record made the row: repo_limit
+	// holds a tool's create of a project to it, and the purge counts it out.
+	// Its repository tallies start empty: a new repository holds no change.
 	tallied := 0
 	if created > 0 {
 		if _, err = tx.ExecContext(ctx, countKindSQL, string(s.Kind)); err != nil {
@@ -478,8 +429,7 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 			return 0, err
 		}
 	}
-	// EVERY RULE A CREATE WRITES IS ITS OWN: there is no row before it to
-	// carry a source from.
+	// EVERY RULE A CREATE WRITES IS ITS OWN: no earlier row carries a source.
 	protections, err := insertProtections(ctx, tx, at.maxVariables, p.RepoID, s.Protections,
 		at.sourcesOf(len(s.Protections)))
 	if err != nil {
@@ -492,32 +442,23 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 	return 1 + 2*int(created) + tallied + protections + owners, nil
 }
 
-// rowDigests is what a repository's row carries of the settings s writes
-// beside it: the digest of its path owners ([OwnersDigest];
-// code_repos.owners_digest) and of its rules' human paths ([HumanPathsDigest];
-// code_repos.human_paths_digest). The merge gate and a revise's decide read
-// the columns rather than hash the rows they digest, and the home's due
-// listing compares them with the digests a revision's facts were matched
-// against, which no statement could hash.
+// rowDigests is the digests a repository's row carries of the settings s
+// writes beside it: its path owners' ([OwnersDigest]) and its rules' human
+// paths' ([HumanPathsDigest]). The merge gate and a revise's decide read the
+// columns rather than hash rows, and the home's due listing compares them
+// with the digests a revision's facts were matched against.
 //
-// THEY RIDE THE STATEMENT THAT WRITES THE ROW — a create's insert, a settings
-// change's update and a restore's — never one of their own. Every record that
-// writes a repository's rules and path owners writes its row beside them, in
-// the one transaction, so no reader holds the digests without the rows they
-// digest; a statement of their own would rewrite the row its record had just
-// written, twice, and count two rows more against the apply transaction's row
-// budget for nothing ([reconcileRecordRows]).
+// THEY RIDE THE STATEMENT THAT WRITES THE ROW (create, settings, restore):
+// the rules and the row land in one transaction, so no reader holds digests
+// without their rows, and a statement of their own would rewrite the row and
+// cost two rows more of the apply budget ([reconcileRecordRows]).
 func rowDigests(s RepoSettings) (owners, humanPaths string) {
 	return OwnersDigest(s.PathOwners), HumanPathsDigest(ruleGatesOf(s.Protections))
 }
 
-// rowProtected is whether a rule protects the repository whose settings s
-// are — code_repos.protected, 1 or 0 — which the listing of the protected
-// repositories walks the index of ([ReadQuery.Protected],
-// [protectedReposKey]). It rides the statement that writes the row, as the
-// digests do and for their reason ([rowDigests]): the rules and the column
-// are written by one record in one transaction, so no reader holds one
-// without the other.
+// rowProtected is code_repos.protected (1 or 0): whether a rule protects the
+// repository, whose index the protected listing walks ([ReadQuery.Protected],
+// [protectedReposKey]). It rides the row's statement, for [rowDigests]' reason.
 func rowProtected(s RepoSettings) int {
 	if len(s.Protections) > 0 {
 		return 1
@@ -525,12 +466,10 @@ func rowProtected(s RepoSettings) int {
 	return 0
 }
 
-// insertPathOwners writes a repository's path owners, one row an owner with its
-// globs packed one a line ([packPaths]); their digest is the repository's row's,
-// written by the statement that writes the row beside them ([rowDigests]). An
-// owner the record names twice — which no writer forms, the settings holding
-// each owner once — keeps its first row rather than aborting the transaction
-// on every node, as a protection's pattern does.
+// insertPathOwners writes a repository's path owners, one row an owner, its
+// globs packed ([packPaths]); their digest rides the row ([rowDigests]). An
+// owner named twice, which no writer forms, keeps its first row rather than
+// aborting the transaction on every node.
 func insertPathOwners(ctx context.Context, tx *sql.Tx, maxVariables int, repoID string,
 	owners []PathOwner) (int, error) {
 
@@ -543,22 +482,18 @@ func insertPathOwners(ctx context.Context, tx *sql.Tx, maxVariables int, repoID 
 		})
 }
 
-// packPaths and unpackPaths are a path owner's globs as its row holds them:
-// one a line, in the record's order. A glob holds no control character
-// (gitref.ParsePathGlob), so no newline is a glob's and the packing is
-// exact both ways.
+// packPaths and unpackPaths are a path owner's globs as its row holds them,
+// one a line in order: a glob holds no control character
+// (gitref.ParsePathGlob), so the packing is exact both ways.
 func packPaths(paths []string) string { return strings.Join(paths, "\n") }
 
 func unpackPaths(packed string) []string { return strings.Split(packed, "\n") }
 
 // insertProtections writes a repository's rules in the record's order, each
-// with its merge gate as the record encodes it ([gateColumn]) and the source
-// at its index — who set it and when ([ruleSource]); the digest of their
-// human paths is the repository's row's, written by the statement that writes
-// the row beside them ([rowDigests]; humanpaths.go says who reads it). A
-// pattern the record names twice — which no writer forms, the settings being
-// sorted and unique — keeps its first rule rather than aborting the
-// transaction on every node.
+// with its gate ([gateColumn]) and the source at its index ([ruleSource]);
+// their human paths' digest rides the row ([rowDigests]; humanpaths.go says
+// who reads it). A pattern named twice, which no writer forms, keeps its
+// first rule rather than aborting the transaction on every node.
 func insertProtections(ctx context.Context, tx *sql.Tx, maxVariables int, repoID string,
 	rules []Protection, sources []ruleSource) (int, error) {
 
@@ -585,21 +520,18 @@ func insertProtections(ctx context.Context, tx *sql.Tx, maxVariables int, repoID
 		})
 }
 
-// ruleSource is who set one rule and when, as code_protections holds it
-// (set_by, set_by_kind, set_at; replicated 0148): the decider of the record
-// that last CHANGED the rule, as its envelope names it — a seat's handle, a
-// person's human seat or an unbound credential's login, and nobody for the
-// reconcile of code.repos — and that record's broker instant, encoded as the
-// store encodes every instant.
+// ruleSource is who set one rule and when (code_protections' set_by,
+// set_by_kind, set_at; replicated 0148): the envelope's decider of the record
+// that last CHANGED it, nobody for code.repos' reconcile, and that record's
+// broker instant as the store encodes it.
 type ruleSource struct {
 	by   string
 	kind ActorKind
 	at   int64
 }
 
-// source is the record's own source for a rule it sets: its decider, nobody
-// for a declaration — which the configuration made, as a create's created_by
-// says — and its broker instant.
+// source is the record's own source for a rule it sets: its decider (nobody
+// for a declaration, as created_by) and its broker instant.
 func (c applyContext) source() ruleSource {
 	by := c.record.Actor
 	if c.record.ActorKind == ActorConfig {
@@ -618,19 +550,13 @@ func (c applyContext) sourcesOf(n int) []ruleSource {
 }
 
 // rulesSourced is the source of each rule a record writes over a
-// repository's rules (a settings change, a restore): the source of the row it
-// replaces where that row holds the SAME rule ([Protection.Equal]: its push
-// controls, and its gate by value), and the record's own otherwise.
+// repository's rules (a settings change, a restore): the replaced row's where
+// it holds the SAME rule ([Protection.Equal]), the record's own otherwise.
 //
-// WHY THE ROW IS CARRIED, NOT RESTAMPED: every record that carries a
-// repository's settings carries its rules whole, so a description edited, the
-// repository archived and brought back, another pattern protected or a
-// declaration re-activated with one rule changed rewrites every rule, and a
-// source stamped from that record would name, for every rule it did not
-// touch, somebody who never set it. The comparison reads the rows the record
-// replaces in its own transaction, so the source is a pure function of the
-// record and the rows before it, as every column the applier writes is, and
-// a replay from zero forms it again.
+// CARRIED, NOT RESTAMPED: a record carries every rule whole, so restamping
+// would name, for each rule it did not touch, somebody who never set it. The
+// rows are read in the record's own transaction, so the source stays a pure
+// function of the record and the rows before it, and a replay forms it again.
 func rulesSourced(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
 	rules []Protection) ([]ruleSource, error) {
 
@@ -655,9 +581,8 @@ type sourcedRule struct {
 	source ruleSource
 }
 
-// sourcedRulesIn reads a repository's rules whole — each with its gate and
-// its source — by pattern: what a record that replaces them compares the
-// rules it writes with ([rulesSourced]).
+// sourcedRulesIn reads a repository's rules whole, with gate and source, by
+// pattern, for [rulesSourced].
 func sourcedRulesIn(ctx context.Context, tx *sql.Tx, repoID string) (map[string]sourcedRule, error) {
 	rows, err := tx.QueryContext(ctx, sourcedRulesSQL, repoID)
 	if err != nil {
@@ -686,14 +611,12 @@ func sourcedRulesIn(ctx context.Context, tx *sql.Tx, repoID string) (map[string]
 
 // applyRepo is every record on a repository's own subject.
 //
-// THE SUBJECT GUARD: a record on one repository's subject may change only that
-// repository — the payload's id must be the subject's — which is what makes
-// the subject the arbitration unit rather than a label.
+// THE SUBJECT GUARD: the payload's id must be the subject's, which makes the
+// subject the arbitration unit rather than a label.
 //
-// THE VERSION GUARD (every record but the purge, which is the marker's own):
-// under a strict replay the create is below this position, so a missing row
-// is an error; a row at or past this position is a redelivery, applied as
-// nothing.
+// THE VERSION GUARD (all but the purge, the marker's own): under a strict
+// replay the create is below this position, so a missing row is an error; a
+// row at or past it marks a redelivery, applied as nothing.
 func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	payload, err := DecodeMutation(at.record)
 	if err != nil {
@@ -858,10 +781,9 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	return 0, fmt.Errorf("gitlet: the record at %s carries a %T", at.position, payload)
 }
 
-// noticed is a record about changes applied, n rows, with its notices written
-// beside them ([Applier.writeNotices]) — none where its apply wrote nothing: a
-// redelivery, or a guard's skip, whose notices the record's first apply wrote
-// or no change holds.
+// noticed writes a record's notices beside its n applied rows
+// ([Applier.writeNotices]), none where the apply wrote nothing: a redelivery,
+// whose first apply wrote them, or a guard's skip.
 func (a *Applier) noticed(ctx context.Context, tx *sql.Tx, at applyContext, repoID string, payload any, n int,
 	err error) (int, error) {
 
@@ -881,9 +803,9 @@ type versionRow struct {
 	managedBy ManagedBy
 }
 
-// repoVersion reads a repository's guard, refusing one that has no row: under
-// a strict replay its create is below every record about it, and every record
-// about a PURGED repository was already dropped by its marker.
+// repoVersion reads a repository's guard, refusing a missing row: under a
+// strict replay its create precedes every record about it, and a PURGED one's
+// records were already dropped by its marker.
 func repoVersion(ctx context.Context, tx *sql.Tx, id string) (versionRow, error) {
 	var row versionRow
 	var managed string
@@ -900,17 +822,13 @@ func repoVersion(ctx context.Context, tx *sql.Tx, id string) (versionRow, error)
 	return row, nil
 }
 
-// applySettings replaces a repository's settings whole, and moves its idle
-// clock. A repository that is deleted or purging keeps its status: settings
-// never resurrect one, a restore does. An ACTIVE repository the record makes a
-// pull mirror of a source it does not follow yet becomes IMPORTING from that
-// source, its import begun afresh (mirrorImportSQL) — a function of the row the
-// record found and the record, as every apply is.
+// applySettings replaces a repository's settings whole and moves its idle
+// clock. A deleted or purging repository keeps its status: only a restore
+// resurrects one. An ACTIVE repository made a pull mirror of a source it does
+// not follow yet becomes IMPORTING, its import begun afresh (mirrorImportSQL).
 //
-// A RECORD OF ANOTHER MANAGER THAN THE REPOSITORY'S APPLIES AS NOTHING
-// ([managerRefuses]), as a record below the activation fence does: a tool's
-// settings never reach a repository code.repos declares, nor a
-// configuration's one a tool made.
+// A record of another manager than the repository's applies as nothing
+// ([managerRefuses]), as one below the activation fence does.
 func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext, p SettingsRecord,
 	row versionRow) (int, error) {
 
@@ -921,14 +839,14 @@ func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext
 	if refused, err := fenced(ctx, tx, s.ManagedBy, s.ConfigEpoch); err != nil || refused {
 		return 0, err
 	}
-	// WHAT IT PUTS IN THE CHANGE TALLIES before, which its owner and visibility move.
+	// ITS CHANGE TALLIES before, which its owner and visibility move.
 	before, err := tallyStandingIn(ctx, tx, p.RepoID)
 	if err != nil {
 		return 0, err
 	}
-	// THE IMPORT A PULL MIRROR STARTS, read off the mirrors the row holds
-	// BEFORE the record: a source the repository does not follow yet is
-	// imported first (M6-D16, [repoRemotes.startsImport]).
+	// THE IMPORT A PULL MIRROR STARTS, read off the mirrors held BEFORE the
+	// record: a source not followed yet is imported first (M6-D16,
+	// [repoRemotes.startsImport]).
 	prior, err := remotesIn(ctx, tx, p.RepoID)
 	if err != nil {
 		return 0, err
@@ -1011,9 +929,8 @@ func replaceProtections(ctx context.Context, tx *sql.Tx, at applyContext, repoID
 func (a *Applier) applyDelete(ctx context.Context, tx *sql.Tx, at applyContext, p LifecycleRecord,
 	row versionRow) (int, error) {
 
-	// A DELETE CARRIES NO SETTINGS, so whether the fence governs it is the
-	// repository's own: the configuration's decision to retire a repository
-	// it manages.
+	// A DELETE CARRIES NO SETTINGS, so the repository's own manager decides
+	// whether the fence governs it.
 	if refused, err := fenced(ctx, tx, row.managedBy, p.ConfigEpoch); err != nil || refused {
 		return 0, err
 	}
@@ -1036,9 +953,9 @@ func (a *Applier) applyDelete(ctx context.Context, tx *sql.Tx, at applyContext, 
 }
 
 // applyRestore brings a deleted repository back with the settings the restore
-// carries, and moves its idle clock. Its refs and packs were never touched, so
-// they come back as they were. A restore of another manager than the
-// repository's applies as nothing ([managerRefuses]).
+// carries, and moves its idle clock; its refs and packs were never touched. A
+// restore of another manager than the repository's applies as nothing
+// ([managerRefuses]).
 func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext, p LifecycleRecord,
 	row versionRow) (int, error) {
 
@@ -1089,22 +1006,18 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext,
 	return int(n) + replaced + owners + moved, nil
 }
 
-// managerRefuses reports a settings or restore record whose manager is not the
-// repository's: it applies as nothing, on every node alike.
+// managerRefuses reports a settings or restore record whose manager is not
+// the repository's, which applies as nothing on every node.
 //
-// A REPOSITORY'S MANAGER NEVER CHANGES — a create writes it, and neither a
-// tool's decide nor a reconcile's reaches a repository the other manages (the
-// tool's is refused config_managed, the reconcile's [ErrNotConfigManaged]) —
-// so a record naming the other is one only a race with an activation could
-// land, and applied it would hand the repository from one manager to the
-// other. The activation fence ignores a tool's record ([fenced]: it orders
-// configuration activations, and nothing else carries one), so this, not the
-// fence, is what keeps a tool's settings off a declared repository.
+// A REPOSITORY'S MANAGER NEVER CHANGES: neither decide reaches a repository
+// the other manages (config_managed, [ErrNotConfigManaged]), so such a record
+// lands only by racing an activation, and applying it would hand the
+// repository over. The fence ignores a tool's record ([fenced]), so this is
+// what keeps a tool's settings off a declared repository.
 func managerRefuses(row versionRow, record ManagedBy) bool { return row.managedBy != record }
 
 // jsonList is a list of keys as the ONE argument an `IN (SELECT value FROM
-// json_each(?))` takes — the tracker's idiom for a set of keys, which binds
-// one parameter however many keys it names.
+// json_each(?))` takes: one bind parameter however many keys.
 func jsonList(keys []string) (string, error) {
 	if keys == nil {
 		keys = []string{}
@@ -1122,25 +1035,20 @@ func jsonList(keys []string) (string, error) {
 const (
 	purgedSQL      = `SELECT COUNT(*) FROM code_deletions WHERE repo_id = ?`
 	repoVersionSQL = `SELECT version, managed_by FROM code_repos WHERE id = ?`
-	// settingsSQL settles a repository's settings, its status only where it
-	// is active or archived: an importing repository stays importing until
-	// its import is done, and a deleted or purging one stays as it is. It
-	// writes the digests of the rules and the path owners the record replaces
-	// beside it ([rowDigests]), and whether a rule protects it
-	// ([rowProtected]).
+	// settingsSQL settles a repository's settings, its status only where
+	// active or archived (an importing one stays so until done, a deleted or
+	// purging one as it is), with [rowDigests] and [rowProtected].
 	settingsSQL = `UPDATE code_repos SET
 			managed_by = ?, owner_kind = ?, owner = ?, visibility = ?, search = ?, default_branch = ?,
 			description = ?, mirror_from = ?, mirror_to = ?, owners_digest = ?, human_paths_digest = ?,
 			protected = ?, status = CASE WHEN status IN ('active', 'archived') THEN ? ELSE status END,
 			config_epoch = ?, last_activity_at = ?, version = ?
 		WHERE id = ?`
-	// mirrorImportSQL starts the import a settings record's pull mirror owes
-	// ([repoRemotes.startsImport]) on a repository settingsSQL left ACTIVE:
-	// importing from the mirror's source, from its first chunk, with no end
-	// and no error — the row as a create that imports leaves it. An archived
-	// repository is never a pull mirror (the settings refuse one), a deleted
-	// or purging one stays as it is, and one being imported keeps the source
-	// its import fetches: what moved meanwhile is its first sync's.
+	// mirrorImportSQL starts the import a pull mirror owes
+	// ([repoRemotes.startsImport]) on a repository settingsSQL left ACTIVE,
+	// as a create that imports leaves the row. An archived one is never a
+	// pull mirror, a deleted or purging one stays, and one already importing
+	// keeps its source: what moved meanwhile is its first sync's.
 	mirrorImportSQL = `UPDATE code_repos SET
 			status = 'importing', import_source = ?, import_seq = 0, imported_at = 0, import_error = ''
 		WHERE id = ? AND status = 'active'`
@@ -1154,10 +1062,8 @@ const (
 			status = 'deleted', deleted_at = ?, config_epoch = ?, version = ?
 		WHERE id = ? AND status IN ('importing', 'active', 'archived')`
 	// restoreRepoSQL brings a deleted repository back: IMPORTING where its
-	// create imported and the import is not done — it resumes from what of
-	// it landed — and otherwise in the status its settings say; with the
-	// digests of the rules and the path owners it carries back ([rowDigests])
-	// and whether a rule protects it ([rowProtected]).
+	// create's import is not done (it resumes from what landed), otherwise in
+	// the status its settings say, with [rowDigests] and [rowProtected].
 	restoreRepoSQL = `UPDATE code_repos SET
 			managed_by = ?, owner_kind = ?, owner = ?, visibility = ?, search = ?, default_branch = ?,
 			description = ?, mirror_from = ?, mirror_to = ?, owners_digest = ?, human_paths_digest = ?,
