@@ -428,7 +428,7 @@ type SessionCapture struct {
 	At time.Time `json:"at"`
 
 	// Taker and TakerEpoch name the TAKER LEASE the capture was taken under
-	// (see the file comment): its holder, the process incarnation that took
+	// (see the package doc): its holder, the process incarnation that took
 	// it — `<node>:<uuid>`, the taking coordinator's own
 	// ([CoordinatorOptions.Incarnation]) — and the fencing token it held
 	// then, both on every stamp of the take. A wait for the capture settles it
@@ -1298,12 +1298,12 @@ type spooledCapture struct {
 // again ([Coordinator.sweepSpools]).
 const spoolPrefix = "crewlet-session-"
 
-// takeCapture takes the session of run's job out of box — see the file comment
-// — and stamps where it stands on the run's row, reporting what came of it for
-// the read's result, and the spool its keep uploads; nil spool where nothing is
-// left to keep: no executor log wired to this coordinator, a runner whose
-// harness carries no session, the switch off, a box holding no session, a job
-// of this launch taken once it had ended already, or a take refused.
+// takeCapture takes the session of run's job out of box (the package doc's "Two
+// halves") and stamps where it stands on the run's row, reporting what came of
+// it for the read's result, and the spool its keep uploads; nil spool where
+// nothing is left to keep: no executor log wired to this coordinator, a runner
+// whose harness carries no session, the switch off, a box holding no session, a
+// job of this launch taken once it had ended already, or a take refused.
 //
 // A READ THAT FINDS ITS PLACE ANOTHER READ'S STANDS BY, NEVER DOWN: a stop's
 // read and a collection's of one job may take its session at once, and the
@@ -1866,9 +1866,9 @@ func (c *Coordinator) awaitStood(ctx context.Context, run PendingRun, standby Se
 // capture still BEGUN or REFUSED and naming it, it takes the place after it;
 // LANDED, it keeps nothing; anything else, unresolved included, since its
 // record may still land, it keeps nothing, saying why. A capture begun past its
-// whole life on this clock can send nothing more that lands; its stamped
-// instant and its lease are not read. Both reads and the settle are counted in
-// [standbyWindow].
+// whole life on this clock can send nothing more that lands, so what this
+// decides turns on neither its stamped instant nor its lease (which the log's
+// settle reads). Both reads and the settle are counted in [standbyWindow].
 func (c *Coordinator) waitedOut(ctx context.Context, run PendingRun, standby SessionCapture) (SessionCapture,
 	bool, string) {
 

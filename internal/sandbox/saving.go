@@ -13,7 +13,8 @@ import (
 // ([SessionCapture.sameTake]), in any state, since every reader then sees the
 // save through [PendingRun.Capture], and nil where the row keeps a capture at
 // or past its place ([PendingRun.Kept]), since its landing can then change
-// nothing. THE ONE RAW READ OF THE FIELD by a reader (see the file comment).
+// nothing. THE ONE RAW READ OF THE FIELD by a reader (the package doc's "A
+// save under way").
 func (r PendingRun) savingTake() *SessionCapture {
 	save := r.Saving
 	switch {
@@ -70,8 +71,9 @@ func (r PendingRun) jobOver() bool {
 }
 
 // licensesSave is why run's row refuses save's reservation as of now, empty
-// where it licenses it ([PendingStore.ReserveSave], the file comment): each
-// conjunct a fact the row states, decided on the row as the store finds it.
+// where it licenses it ([PendingStore.ReserveSave]; the package doc's "A
+// save's license"): each conjunct a fact the row states, decided on the row
+// as the store finds it.
 func licensesSave(run PendingRun, save SessionCapture, now time.Time) string {
 	switch {
 	case run.Status != StatusRunning:

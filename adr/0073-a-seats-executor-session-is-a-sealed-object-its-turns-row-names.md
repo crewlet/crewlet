@@ -3954,9 +3954,10 @@ store cannot say of, as well, and settles it landed where the row names its
 place: the turn's end at most once every record's budget, thirty seconds on
 its wait's own clock, never at its two-second tick (`heldRowPace`,
 `beganUnderTaker`), about a hundred and forty-four linearizable reads for
-one capture held its whole life from first sight, and about five hundred over
-a standby's chain; a relaunch once, after its wait has run out, for a stamp of the job it
-follows however long ago it began (`ContinuedCapture`,
+one capture held its whole life from first sight, and about four hundred and
+sixty over a standby's chain, the end's rounds alone reading the log; a
+relaunch once, after its wait has run out, for a stamp of the job it follows
+however long ago it began (`ContinuedCapture`,
 `followedBegunUnderTaker`), since such a host holds its lease for as long as
 its silence lasts and its job is found lost only once that silence has lasted
 the box's timeout, which can put a keep under way when it began past a

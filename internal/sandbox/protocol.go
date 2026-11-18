@@ -405,10 +405,10 @@
 // (internal/executordomain's Session.WentOn).
 //
 // THAT RELAUNCH STARTS WITHOUT IT, AS ONE WHOSE JOB KEPT NOTHING BEFORE A SLOW
-// KEEP DOES ([relaunchCaptureWait], [Coordinator.continuedWithout]): in the base the
-// turn's first launch froze, where the turn has kept nothing and its row still
-// held that base when the relaunch read it — the late record landing only
-// after — and otherwise in a session of its own, or the one its job's box
+// KEEP DOES ([relaunchCaptureWait], [Coordinator.continuedWithout]): in the
+// base the turn's first launch froze, where the turn has kept nothing and its
+// row still held that base when the relaunch read it — the late record landing
+// only after — and otherwise in a session of its own, or the one its job's box
 // holds where it carries the run on in that box. Beside an older capture its
 // job kept, which a relaunch past a slow keep continues, it starts without that
 // one too: the turn's row names the newer, and a relaunch restores only the
@@ -538,18 +538,19 @@
 //
 // # A save under way
 //
-// Kept by saving.go. A SAVE is a capture of a job STILL WORKING, taken while its harness runs on
-// ([SessionCapture.Final] false, [SessionCapture.Interrupted] true): its place
-// is reserved on the run's row like every capture's, after the row's newest, and
-// stamped there as it comes out. What makes it more than a take is that the job
-// goes on, and so do the reads of it: the job's collection, a stop's read or a
-// loss's take the job's FINAL capture in the place after the save while the
-// save may still be uploading, and every stamp of that final take replaces the
-// row's newest capture ([PendingRun.Capture]). Read off that section alone, a
-// save the final overtook is out of sight while it may still become the
-// turn's kept capture: where the final is refused, the save is the newest
-// session of the job anybody kept, and an end that recorded over it, waiting
-// on the final alone, would leave its record to meet the end's tombstone.
+// Kept by saving.go. A SAVE is a capture of a job STILL WORKING, taken while
+// its harness runs on ([SessionCapture.Final] false,
+// [SessionCapture.Interrupted] true): its place is reserved on the run's row
+// like every capture's, after the row's newest, and stamped there as it comes
+// out. What makes it more than a take is that the job goes on, and so do the
+// reads of it: the job's collection, a stop's read or a loss's take the job's
+// FINAL capture in the place after the save while the save may still be
+// uploading, and every stamp of that final take replaces the row's newest
+// capture ([PendingRun.Capture]). Read off that section alone, a save the final
+// overtook is out of sight while it may still become the turn's kept capture:
+// where the final is refused, the save is the newest session of the job anybody
+// kept, and an end that recorded over it, waiting on the final alone, would
+// leave its record to meet the end's tombstone.
 //
 // SO A SAVE KEEPS A SECOND PLACE ON THE ROW, [PendingRun.Saving], from its
 // reservation ([PendingStore.ReserveSave]) until it can no longer become the
@@ -720,10 +721,10 @@
 // capture does: what that job did is lost to the relaunch whichever session
 // it starts in.
 //
-// A SAVE UNDER WAY IS WAITED FOR THE SAME WAY ([PendingRun.Saving], "A
-// save under way" below): a capture of the job taken while it still worked, which a final
-// take of the job can overtake while it still uploads. Where that final take
-// is refused, the save is the job's newest session anybody kept, so the
+// A SAVE UNDER WAY IS WAITED FOR THE SAME WAY ([PendingRun.Saving], "A save
+// under way" above): a capture of the job taken while it still worked, which a
+// final take of the job can overtake while it still uploads. Where that final
+// take is refused, the save is the job's newest session anybody kept, so the
 // relaunch waits for it as for the newest capture ([relaunchWaitsOn]), settles
 // and asks it as the newest, and names it by its own place.
 //
@@ -768,10 +769,11 @@
 //
 // # Never a session that ran out of context
 //
-// Another launch of it fails the same way, so its collection records it on the run's
-// record ([PendingRun.ExhaustedSessions]) and refuses its capture, and each way a
-// later launch could take it up refuses it: [ContinuityOf], [BaseContinuityOf] and
-// [Coordinator.continueSession]. The turn's end retires it for later turns.
+// Another launch of it fails the same way, so its collection records it on the
+// run's record ([PendingRun.ExhaustedSessions]) and refuses its capture, and
+// each way a later launch could take it up refuses it: [ContinuityOf],
+// [BaseContinuityOf] and [Coordinator.continueSession]. The turn's end retires
+// it for later turns.
 //
 // # Never a failed launch
 //
@@ -840,9 +842,9 @@
 // cannot go on without ([ErrStoreSilent]): the host's read of the run's row,
 // which licenses the read. The box and its host are up, so the ending is kept
 // and asked again on the same spacing: ended uncharged at once for it, the stop
-// would write off a spend the box still held. For how long turns on whose silence it
-// is, which rowRead says: whether this attempt's own read of the row, off this
-// node's store, was answered ([Coordinator.finishEnding]).
+// would write off a spend the box still held. For how long turns on whose
+// silence it is, which rowRead says: whether this attempt's own read of the
+// row, off this node's store, was answered ([Coordinator.finishEnding]).
 //   - Answered, the silence is the host's alone (a partition that cuts the host
 //     off from the store's leader and not this node), and only the host can
 //     read the box: a host that cannot is as good as away, so the stop waits
