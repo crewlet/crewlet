@@ -569,7 +569,10 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	}
 	c.spooledWhole(take, by, row, spooled, taken, 0)
 	if !c.joinKeeps() {
-		c.dropSpool(take, spooled, "the node stopped before the session could be uploaded")
+		// A SAVE NEVER STANDS BY, so its spool is refused, never withdrawn.
+		c.finishCapture(take, time.Time{}, spooled.run, spooled.stamp, CaptureRefused,
+			"the node stopped before the session could be uploaded")
+		_ = os.Remove(spooled.file)
 		return end(saveStoodDown, "the node stopped before the save could be kept")
 	}
 	inflight()
