@@ -393,7 +393,9 @@ func TestAKeyABlockHoldsCutsNoOtherBlock(t *testing.T) {
 // that block ([claims.take]), so the opening of the line a later block begins
 // on, which the value runs into, reads as the gutter, and the later block is
 // written whole. The keys' stage's first read boundary falls past the last
-// END, so the step after it writes that block and reads no armour.
+// END, and plain lines follow it, so at every placement the text is longer
+// than a stream redacts whole ([wholeBytes]) and the step after it writes
+// that block and reads no armour.
 //
 // Mutation: take no forward block into such a step ([keyStage.step]), and the
 // stream cuts a block the whole text writes whole.
@@ -403,7 +405,7 @@ func TestAStepThatOnlyWritesReadsTheClaimsAsTheWholeTextDoes(t *testing.T) {
 	tested := false
 	for _, g := range []string{"KL20 ", "Ab3x "} {
 		shape := `{"log": "` + testBegin + `\n` + testKeyLine + ` password: \nu1SU1Lf9x.Ab3x\n` + g + testBegin + `\n` +
-			g + testKeyLine + `\n` + g + testEnd + `|passwd:\n` + g + gutterValue + `\n"}` + "\n"
+			g + testKeyLine + `\n` + g + testEnd + `|passwd:\n` + g + gutterValue + `\n"}` + "\n" + strings.Repeat("ok\n", 60<<10)
 		spans, _, c := readKeys(shape)
 		bare := &claims{text: shape}
 		tested = tested || c != nil && !slices.Equal(bare.apart(spans), c.apart(spans))
