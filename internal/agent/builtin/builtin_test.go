@@ -338,6 +338,8 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.CodeCherryPickTool:    true,
 		builtin.CodeCreateBranchTool:  true,
 		builtin.CodeDeleteBranchTool:  true,
+		builtin.CodeCreateTagTool:     true,
+		builtin.CodeDeleteTagTool:     true,
 		builtin.CodeCreateRepoTool:    true,
 		builtin.CodeUpdateRepoTool:    true,
 		builtin.CodeDeleteRepoTool:    true,

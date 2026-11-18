@@ -317,17 +317,18 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
       return sectionPage("search");
     case "code-repo":
       // A REPOSITORY IS ONE OF GITLET'S REPOSITORIES: the trail leads back to
-      // the listing, and names the repository as git does, in the code face.
-      return inside("repos", { label: where.repo, mono: true });
+      // the listing, and names the repository as git does, in the code face:
+      // by the name its page resolved, an old name's redirect followed.
+      return inside("repos", { label: labels[where.repo] ?? where.repo, mono: true });
     case "code-commit":
     case "code-compare":
       // A COMMIT AND A COMPARISON ARE A REPOSITORY'S: the trail leads back to
       // it, and names a commit by its short id, as git abbreviates one.
       return [
         ...inside("repos", {
-          label: where.repo,
+          label: labels[where.repo] ?? where.repo,
           mono: true,
-          path: ["gitlet", "repos", where.repo],
+          path: ["gitlet", "repos", labels[where.repo] ?? where.repo],
         }),
         where.screen === "code-commit"
           ? { label: where.sha.slice(0, 7), mono: true }

@@ -99,7 +99,8 @@ func (c *writeCase) write(w gitlet.EngineWrite) (gitlet.EngineWriteResult, error
 func (c *writeCase) land(w gitlet.EngineWrite) gitlet.EngineWriteResult {
 	c.T.Helper()
 	res, err := c.write(w)
-	if err != nil || res.Outcome != statelog.OutcomeApplied || (res.Commit == "") != (w.Kind == gitlet.WriteDeleteBranch) {
+	deletes := w.Kind == gitlet.WriteDeleteBranch || w.Kind == gitlet.WriteDeleteTag
+	if err != nil || res.Outcome != statelog.OutcomeApplied || (res.Commit == "") != deletes {
 		c.T.Fatalf("the write (%s %s) did not apply: %+v %v", w.Kind, w.Ref, res, err)
 	}
 	return res
@@ -536,6 +537,62 @@ func TestCreateAndDeleteBranchBuildNothing(t *testing.T) {
 		Commit: strings.Repeat("ab", 20)})
 	if !errors.Is(err, gitlet.ErrObjectNotFound) {
 		t.Errorf("a create at a commit the repository lacks = %v, want ErrObjectNotFound", err)
+	}
+}
+
+// A TAG IS WRITTEN AS A PUSHED TAG IS: lightweight, or annotated by a message with the write's
+// author as tagger; never moved, deleted only at the value read, protected where a rule says.
+// Mutations: build no object for a message, tag as the committer, or read it as a commit: red.
+func TestATagIsWrittenAsAPushedTagIs(t *testing.T) {
+	t.Parallel()
+	settings := gitlettest.Settings()
+	settings.Protections = append(settings.Protections, gitlet.Protection{PushRule: gitlet.PushRule{
+		Pattern: "refs/tags/release/*", DirectPush: gitlet.DirectPersons}})
+	c := seedWriteCase(newCase(t, gitlettest.SoloOptions{}, settings), map[string]string{"README.md": "one\n"})
+	tag := func(name, message string) gitlet.EngineWrite {
+		return gitlet.EngineWrite{Kind: gitlet.WriteCreateTag, RepoID: c.repo, Principal: pat(),
+			WrittenFor: types.ForNobody(), OpID: opNow(), Fresh: linear, Ref: "refs/tags/" + name, Commit: c.head,
+			Message: message}
+	}
+	drop := func(name, value string) gitlet.EngineWrite {
+		return gitlet.EngineWrite{Kind: gitlet.WriteDeleteTag, RepoID: c.repo, Principal: pat(),
+			WrittenFor: types.ForNobody(), OpID: opNow(), Fresh: linear, Ref: "refs/tags/" + name, ExpectedHead: value}
+	}
+	if light := c.land(tag("v1", "")); light.Commit != c.head || c.Rows().Refs["refs/tags/v1"] != c.head {
+		t.Fatalf("the lightweight tag answered %+v, its row %q, want %s", light, c.Rows().Refs["refs/tags/v1"], c.head)
+	}
+	annotated := tag("v2", "The second release")
+	made := c.land(annotated)
+	if again, err := c.write(annotated); err != nil || again.Commit != made.Commit {
+		t.Errorf("the same annotated tag asked again answered %+v %v, want %s", again, err, made.Commit)
+	}
+	authored := c.land(files(c.repo, pat(), "refs/heads/pat-side", "", c.head, text("side.md", "side\n")))
+	clone := c.clone()
+	got := strings.TrimSpace(c.p.Git().Run(c.T, clone, "for-each-ref",
+		"--format=%(objectname) %(objecttype) %(*objectname)|%(taggername) %(taggeremail)|%(contents)",
+		"refs/tags/v2"))
+	want := fmt.Sprintf("%s tag %s|%s|The second release", made.Commit, c.head,
+		c.show(clone, "%an <%ae>", authored.Commit))
+	if got != want {
+		t.Errorf("the annotated tag reads %q, want %q", got, want)
+	}
+	if res, err := c.write(tag("v1", "")); err != nil || res.Command.Reason != gitlet.RefusalStale ||
+		!strings.Contains(res.Command.Detail, "a tag never moves") {
+		t.Errorf("creating v1 again answered %+v %v, want stale: a tag never moves", res, err)
+	}
+	if res, err := c.write(drop("v2", c.head)); err != nil || res.Command.Reason != gitlet.RefusalStale {
+		t.Errorf("deleting v2 at its commit, not its tag object, answered %+v %v, want stale", res, err)
+	}
+	if deleted := c.land(drop("v2", made.Commit)); deleted.Command.New != gitlet.ZeroOID {
+		t.Errorf("the delete's command is %+v, want its new the zero id", deleted.Command)
+	}
+	if _, ok := c.Rows().Refs["refs/tags/v2"]; ok {
+		t.Error("the deleted tag is still a row")
+	}
+	c.land(tag("release/1", ""))
+	if res, err := c.write(drop("release/1", c.head)); err != nil ||
+		res.Command.Reason != gitlet.RefusalProtectedDelete {
+		t.Errorf("deleting a protected tag answered %+v %v, want protected_delete", res, err)
 	}
 }
 

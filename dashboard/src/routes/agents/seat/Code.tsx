@@ -1,9 +1,9 @@
 /**
  * What a seat does on Gitlet — an agent's or a person's: the
- * changes it owns that are still open, the reviews it gave, and, for an agent,
- * what its days counted.
+ * changes it owns that are still open, the reviews asked of it, the reviews it
+ * gave, and, for an agent, what its days counted.
  *
- * THREE READS, EACH THE ENGINE'S OWN QUESTION, held to the reader's grant on
+ * FOUR READS, EACH THE ENGINE'S OWN QUESTION, held to the reader's grant on
  * every repository it names, so a repository the reader may not read is
  * simply not in its rows:
  *
@@ -12,6 +12,8 @@
  *   engine lists an owner's changes in a state, never in every one), so the
  *   tab lists the open ones and Gitlet › Changes, narrowed to the owner, is
  *   where the other states are;
+ * - the reviews ASKED of it, `code_changes?needs=review&reviewer=`: the live
+ *   changes whose ask of it stands;
  * - the reviews it GAVE, `code_reviews?reviewer=`, newest first;
  * - and, for an agent seat, the counters its replicated usage days carry over
  *   the Overview's week (`seat_activity`: `changes_opened`, `reviews_given`,
@@ -60,6 +62,28 @@ export function SeatCode({ seat, human }: { seat: Seat; human: boolean }) {
             hint: human
               ? "A change they open, from a push or from their assistant, is listed here until it merges or closes."
               : "A change this seat opens with code_open_change, or from its executor, is listed here until it merges or closes.",
+          }}
+        />
+      </Card>
+      <Card padding="none">
+        <Card.Header
+          actions={
+            <a className="t-link" href={changesHref({ needs: "review", reviewer: handle })}>
+              Open in Gitlet
+            </a>
+          }
+        >
+          <Card.Title as="h3">Reviews asked</Card.Title>
+        </Card.Header>
+        <ChangeList
+          params={{ needs: "review", reviewer: handle }}
+          enabled={handle !== ""}
+          name="Reviews asked"
+          empty={{
+            title: "No review asked",
+            hint: human
+              ? "A change asking their review is listed here until they give it, or it merges or closes."
+              : "A change asking this seat's review is listed here until it gives it, or the change merges or closes.",
           }}
         />
       </Card>

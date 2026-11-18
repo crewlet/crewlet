@@ -7,10 +7,11 @@
  * A DELETE NAMES THE HEAD THE LISTING SHOWED (`expected_head`), so a branch
  * somebody pushed to since is refused rather than deleted unseen, and is
  * confirmed in the page: its commits stay in the history, and a change that
- * proposes it loses its source. Both are drawn for every reader and held with
- * the reason (`lib/repoWrites.ts`): a repository that is archived, deleted,
- * importing or a pull mirror takes no push, a new branch takes write, and a
- * delete takes maintain.
+ * proposes it loses its source. Its toast's Undo makes it again at that
+ * head. Both are drawn for every reader and held with the reason
+ * (`lib/repoWrites.ts`): a repository that is archived, deleted, importing or
+ * a pull mirror takes no push, a new branch takes write, and a delete takes
+ * maintain.
  *
  * THE DEFAULT BRANCH HAS NO DELETE. The engine refuses its deletion whoever
  * asks (`default_branch`): every clone checks it out, and a repository whose
@@ -168,6 +169,7 @@ function DeleteBranch({
   name: string;
 }) {
   const write = useAct("code_delete_branch");
+  const restore = useAct("code_create_branch");
   const viewer = useViewer();
   const [confirming, setConfirming] = useState(false);
   return (
@@ -195,7 +197,15 @@ function DeleteBranch({
         onConfirm={async () => {
           await write.run(
             { repo: repo.name, branch: name, expected_head: row.oid },
-            { done: `Deleted ${name}` },
+            {
+              done: `Deleted ${name}`,
+              // ITS UNDO MAKES IT AGAIN AT THE HEAD IT WAS DELETED AT.
+              undo: () =>
+                void restore.run(
+                  { repo: repo.name, branch: name, at: row.oid },
+                  { done: `Restored ${name} at ${shortOID(row.oid)}` },
+                ),
+            },
           );
           setConfirming(false);
         }}

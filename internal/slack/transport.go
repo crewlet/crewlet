@@ -18,21 +18,12 @@ import (
 // The transport: everything this backend needs that is not the parser or the
 // prompt.
 //
-// # Nothing to connect, and that is the difference from the self-hosted one
-//
-// The chat backend the engine already served holds one WEBSOCKET per seat,
-// because Mattermost has no usable inbound webhook — so its transport has a
-// lifecycle, a reconnect policy and a backfill window. Slack pushes: each
-// seat's app posts to its own request URL, the API edge verifies it, and the
-// parser reads it. So this transport holds no connection at all. What it
-// owns is one authenticated client per seat and the identity that client
-// resolves — and those clients send no message: an agent speaks through the
-// Slack MCP server on this same token, so the only calls made here are
-// `auth.test` at start and the working indicator.
-//
-// That makes Start cheap and failure local: a seat whose token is refused
-// costs that seat's identity and nothing else, where the self-hosted
-// backend's equivalent is a socket that will not open.
+// Unlike Mattermost's WEBSOCKET per seat, Slack pushes to each seat's own
+// request URL, so this transport holds no connection. It owns one
+// authenticated client per seat and the identity it resolves, and sends no
+// message (an agent speaks through the Slack MCP server on the same token):
+// the only calls are `auth.test` at start and the working indicator. Start is
+// cheap and failure local: a refused token costs that seat's identity only.
 
 // Config is what the engine hands this transport.
 type Config struct {
@@ -180,20 +171,15 @@ func (t *Transport) Apps() map[string]string {
 // running is the ONE per-seat lookup: the identity this node resolved at
 // start and the authenticated client that resolved it, together.
 //
-// TOGETHER RATHER THAN SEPARATELY, because every caller here needs both and
-// the map is REPLACED WHOLE on an apply and on [Transport.Stop] — so two
-// lookups around one operation can straddle that swap and pair one epoch's
-// client with another's identity, or with no identity at all. That is not
-// cosmetic: [Transport.ReadThread] marks the seat's own replies from
-// [Seat.Owns], and an identity lost between the two lookups turns every one
-// of the agent's own posts into a colleague's, which is the confusion this
-// whole read exists to prevent.
+// TOGETHER, because every caller needs both and the map is REPLACED WHOLE on
+// an apply and on [Transport.Stop]: two lookups around one operation can
+// straddle the swap and pair one epoch's client with another's identity, or
+// none. [Transport.ReadThread] marks the seat's own replies from [Seat.Owns],
+// so a lost identity turns every one of the agent's posts into a colleague's.
 //
-// ONE CLIENT PER SEAT and never shared: a Slack app has one bot user and one
-// token, so every call made through it is made AS that agent and the
-// workspace attributes it to them. A seat whose token was refused at boot is
-// not in the map at all; see [Transport.Start] for why it is dropped rather
-// than run half-configured.
+// ONE CLIENT PER SEAT, never shared: a Slack app has one bot user and token,
+// so every call is made AS that agent. A seat refused at boot is not in the
+// map; see [Transport.Start].
 func (t *Transport) running(handle string) (runningSeat, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -377,20 +363,15 @@ func (t *Transport) ReadThread(ctx context.Context, handle, channel, root string
 	}
 	var rootSeen bool
 	for _, reply := range read.Messages {
-		// THE ROOT IS KEPT WHATEVER IT SAYS, and it is recognised by its
-		// own ts rather than by its position: [notify.ThreadReader]
-		// promises the root FIRST, and dropping it for want of a body
-		// hands the renderer a transcript whose first line is the oldest
-		// surviving REPLY — which every bound then protects and the
-		// prompt then calls the thread's opening. An alert bot posting
-		// its payload in attachments or blocks alone carries no `text`
-		// and no `files`, so a thread rooted on one is not an edge case,
-		// it is the shape of an alert channel.
+		// THE ROOT IS KEPT WHATEVER IT SAYS, recognised by its ts, not its
+		// position: [notify.ThreadReader] promises the root FIRST, and
+		// dropping it for want of a body leaves a transcript opening on
+		// the oldest surviving REPLY. An alert bot posting only in
+		// attachments or blocks carries no `text` or `files`, so this is
+		// the shape of an alert channel.
 		//
-		// It travels with an EMPTY body rather than an invented one: what
-		// to say in its place is the renderer's decision, and this
-		// transport rendering prose would put one backend's wording in
-		// front of a seat and the other's beside it.
+		// It travels with an EMPTY body: what to say in its place is the
+		// renderer's decision, not one backend's wording.
 		isRoot := reply.TS != "" && reply.TS == root
 		body := ""
 		if reply.Skip() == "" {

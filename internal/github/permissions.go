@@ -12,23 +12,16 @@ import (
 
 // What one agent's GitHub App may do, in GitHub's own terms.
 //
-// # No Crewlet words
+// GitHub has no roles for an app, only PERMISSIONS held at No access,
+// Read-only or Read and write, over some or all of an organization's
+// repositories. A seat stores and the dashboard shows exactly that: GitHub's
+// permission keys, level spellings and settings-page names. The retired tiers
+// ([Tier]) survive only as the migration's source ([TierPermissions]).
 //
-// GitHub has no roles for an app. It has PERMISSIONS, each held at No access,
-// Read-only or Read and write, and an installation that covers some or all of
-// an organization's repositories. So that is what a seat stores and what the
-// dashboard shows: the permission keys GitHub's API takes, at the levels its
-// API spells, under the names its settings page uses. The three tiers this
-// package used to offer ([Tier]) survive only as the source the migration
-// reads ([TierPermissions]).
-//
-// # A closed catalogue
-//
-// A seat may hold only the permissions in [SeatPermissions]. Every other
-// GitHub App permission is either one an agent has no use for or one that
-// lets it escape its own limits ([Denied]), and a catalogue that grew by
-// accident would be the second kind. Metadata is not in it because GitHub
-// grants it to every app and every token needs it ([Permissions.Token]).
+// A CLOSED CATALOGUE: a seat holds only [SeatPermissions]. Every other
+// permission is useless to an agent or lets it escape its limits ([Denied]),
+// and an accidental catalogue would be the second kind. Metadata is absent
+// because GitHub grants it to every token ([Permissions.Token]).
 
 // Level is how much of one permission an app holds, as GitHub's API spells
 // it. The zero value is No access. It is the company document's own type, so
@@ -328,20 +321,14 @@ func Names(keys []string) string {
 // GitHub's terms: the migration source, and nothing else reads it.
 //
 // Every permission the tier carried, in the catalogue's keys, so a migrated
-// seat's tokens carry exactly what they did: Contents, Issues, Pull requests,
-// Checks, Actions and Deployments at the tier's levels, and Workflows where the
-// seat opted in at full access. Metadata is granted to every token anyway. A
-// tier permission the catalogue did not offer would be dropped silently, which
-// a test holds never to happen.
+// seat's tokens carry exactly what they did; a test holds that none is dropped.
 //
-// WORKFLOWS ONLY AT FULL ACCESS. The opt-in was a seat's own and never a
-// tier's, and the earlier engine granted it to a full-access seat alone, so a
-// document a validator never saw that opted a review seat in migrates without
-// it: a seat that could not push code had nothing to push a workflow with.
+// WORKFLOWS ONLY AT FULL ACCESS: the opt-in was a seat's own and the earlier
+// engine granted it to a full-access seat alone, so an unvalidated document
+// that opted a review seat in migrates without it.
 //
-// The second result reports a tier this package knew, exactly as
-// [ParseTier]'s does, so the migration can report a typo rather than
-// silently migrate the default.
+// The second result reports a tier this package knew, as [ParseTier]'s does,
+// so the migration reports a typo rather than silently migrating the default.
 func TierPermissions(tier string, workflows bool) (Permissions, bool) {
 	parsed, ok := ParseTier(tier)
 	held := parsed.Permissions()

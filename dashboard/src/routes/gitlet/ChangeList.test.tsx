@@ -406,9 +406,9 @@ const ACTIVITY = {
 // company's), draw the counters for a person, or read them from anything but `seat_activity`.
 test("an agent seat's Code tab lists its open changes as Gitlet's rows, its reviews and its code counters", async () => {
   const asked = stubFetch((url) =>
-    url.pathname === "/query/code_changes"
+    url.pathname === "/query/code_changes" && url.searchParams.has("owner")
       ? { changes: [change("web", 42)], position: POSITION, level: "session" }
-      : url.pathname === "/query/code_reviews"
+      : url.pathname.startsWith("/query/code_")
         ? { position: POSITION, level: "session" }
         : undefined,
   );
@@ -428,6 +428,33 @@ test("an agent seat's Code tab lists its open changes as Gitlet's rows, its revi
   expect(screen.getByRole("list", { name: "Changes" })).toBeTruthy();
   expect(codeAsks(asked, "code_reviews")[0]!.searchParams.get("reviewer")).toBe("dev");
   expect(onSocket.some((q) => q.what === "seat_activity")).toBe(true);
+});
+
+// THE REVIEWS ASKED OF A SEAT ARE ITS CODE WORK TOO: the live changes whose ask
+// of it stands, Gitlet's rows, and the way to Changes waiting on it. Mutation:
+// drop the list, or ask it without needs=review, and this fails.
+test("a seat's Code tab lists the changes asking its review", async () => {
+  const asked = stubFetch((url) =>
+    url.pathname === "/query/code_changes" && url.searchParams.get("needs") === "review"
+      ? { changes: [change("web", 7)], position: POSITION, level: "session" }
+      : url.pathname.startsWith("/query/code_")
+        ? { position: POSITION, level: "session" }
+        : undefined,
+  );
+  mount(<SeatCode seat={seat("dev")} human={false} />, ADMIN_VIEWER, { seat_activity: ACTIVITY });
+
+  const list = await screen.findByRole("list", { name: "Reviews asked" });
+  expect(within(list).getByRole("link", { name: "Change 7 of web" })).toBeTruthy();
+  const ask = codeAsks(asked, "code_changes").find((u) => u.searchParams.has("needs"))!;
+  expect(ask.searchParams.get("reviewer")).toBe("dev");
+  expect(ask.searchParams.has("state")).toBe(false);
+  const card = screen.getByRole("heading", { name: "Reviews asked" }).closest(".crewlet-card");
+  expect(
+    within(card as HTMLElement)
+      .getByRole("link", { name: "Open in Gitlet" })
+      .getAttribute("href"),
+  ).toBe("#/gitlet?needs=review&reviewer=dev");
+  expect(screen.getByText("No open change")).toBeTruthy();
 });
 
 // A SEAT'S LISTING IS FILLED PAST A PAGE THAT KEPT NOTHING before it says none.

@@ -457,19 +457,19 @@ terms the node's `/gitlet/` reads are: a node whose runtime was already running
 when Gitlet was turned on offers them once it restarts into it, and one
 that turned it off keeps them until that restart ([Turn it
 on](gitlet.md#turn-it-on)). A company that hosts no code is given none of them,
-and the operator catalogue serves the same thirty-nine, so an operator's own
+and the operator catalogue serves the same forty-one, so an operator's own
 assistant reads and changes the company's code exactly as a seat does — the
 person as the human seat they hold, while they hold the Gitlet permission —
 and reports their own CI's checks,
 purges a repository's unreachable objects and imports a repository from
 another host, which no seat does. The thirteen reads are reads: none counts as
 a delivery, a [worker](../concepts/turn-engine.md#workers) may be handed any of
-them, and the operator catalogue records no call to one. The twenty-six
+them, and the operator catalogue records no call to one. The twenty-eight
 writes each deliver to Gitlet, so a turn woken about work on a repository that
 answered by moving a branch, opening a change or reviewing one delivered; no
 worker is ever handed one, since it
 would write with its parent's grant; and every call to one on the operator
-catalogue is recorded as any write is. A seat is offered twenty-three of them —
+catalogue is recorded as any write is. A seat is offered twenty-five of them —
 every write but `code_report_check`, `code_purge_unreachable` and
 `code_import_repo`, each a person's alone — where
 its `role.code.access` is `full_access`. Below it, no repository's grant lets
@@ -503,6 +503,8 @@ findings it raised (`code_resolve_finding`).
 | `code_cherry_pick` | One `commit`'s change onto a branch's head (`expected_head`), its message naming the commit it came from unless a `message` replaces it, held to `code_revert`'s bound; a conflict is answered as `code_revert`'s |
 | `code_create_branch` | A branch created `at` a commit the repository holds |
 | `code_delete_branch` | A branch deleted at the head the caller read (`expected_head`); its commits stay in the history, and the push history names its last head |
+| `code_create_tag` | A tag created `at` a commit the repository holds: annotated, its tagger the caller, where a `message` is given, else lightweight. A tag that exists is refused, since a tag never moves |
+| `code_delete_tag` | A tag deleted at the value the caller read (`expected_target`, an annotated tag's own object as `code_resolve` answers it); the push history names its last value |
 | `code_create_repo` | A repository: a project owned by a unit (`owner`), or the caller's own scratch repository, `<handle>.<name>`, which `code.scratch` caps and expires once it sits idle. Either starts at `search: grep` |
 | `code_update_repo` | One change a call: the settings (`description`, `default_branch`, `visibility`, `search` — `indexed` or `grep`, never `indexed` on a scratch repository — a project's `owner`, a project's `path_owners` — globs added to and taken from one owner at a time — and, a person's alone, a project's `mirror_from` and `mirror_to`, each set whole or removed by `{}`), `archived` (read-only, and back), or `rename_to` (the old name redirects to the new one for 30 days) |
 | `code_delete_repo` | A repository deleted, restorable until its purge |

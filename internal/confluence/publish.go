@@ -15,26 +15,16 @@ import (
 
 // Publishing a directory of authored markdown into spaces.
 //
-// # One walk, two destinations, decided by the file
+// A file whose frontmatter declares a `trigger:` is a TOOL SKILL, published to
+// the skills space with the leading code block the engine parses back out;
+// everything else is a KNOWLEDGE DOC, published to the space named by its
+// parent directory. The FILE routes, not the directory: a skill filed under
+// `ENG/` and published as prose would put an instruction for one phase into
+// every executor's context.
 //
-// A file whose frontmatter declares a `trigger:` is a TOOL SKILL and goes to
-// the skills space with the leading code block the engine parses back out.
-// Everything else is a KNOWLEDGE DOC and goes to the space named by its
-// parent directory, as prose the query-time search returns.
-//
-// The routing is the FILE'S, not the directory's, because a skill is
-// identified by what it declares — an operator who files one under `ENG/`
-// still means a skill, and publishing it there as prose would put an
-// instruction meant for one phase of one turn into every executor's context.
-//
-// # Identity is the TITLE, and that is Confluence's limitation not a choice
-//
-// The other knowledge backend stamps an external id on every page it
-// publishes and matches on that, so retitling a page in the UI never orphans
-// it. Confluence has no such field: a page is identified by its title within
-// its space, so a re-import after somebody renamed a page publishes a second
-// one. Reported rather than worked around — a hidden marker page or a label
-// convention would be this tool inventing state the instance does not have.
+// Identity is the TITLE, Confluence's limitation: with no external id, a
+// re-import after a UI rename publishes a second page. That is reported, not
+// worked around; a marker page or label would invent state the instance lacks.
 
 // Item is one file, routed.
 type Item struct {
@@ -130,15 +120,12 @@ func Walk(root, skillsSpace string) (*Plan, error) {
 //
 // # Why an order rather than a second pass
 //
-// A parent is resolved by TITLE, and the title of a page created moments ago
-// in this same run is only findable if it exists — so a run that published
-// children first would nest half a tree at the space root and the other half
-// correctly, depending on directory walk order. Ordering is deterministic;
-// a second pass that re-parented afterwards would double every write.
+// A parent is resolved by TITLE, findable only once it exists, so children
+// first would nest half a tree at the space root depending on directory walk
+// order. A second pass re-parenting afterwards would double every write.
 //
-// A CYCLE STOPS THE WALK naming the files. It is an authoring mistake with a
-// one-line fix, and the alternative — silently publishing the cycle flat —
-// produces a space that looks right until somebody looks for the tree.
+// A CYCLE STOPS THE WALK naming the files: publishing it flat would give a
+// space that looks right until somebody looks for the tree.
 func parentsFirst(items []Item) ([]Item, error) {
 	byTitle := make(map[string]int, len(items))
 	for i, item := range items {
@@ -301,16 +288,11 @@ func Publish(ctx context.Context, opts PublishOptions) (*PublishResult, error) {
 	// published is the set of skill keys a local file publishes, which is
 	// what prune subtracts from the space.
 	//
-	// FROM THE PLAN, not from the writes that succeeded. The question
-	// prune asks is "does a source file still publish this skill?", and
-	// that is answered by the tree — a page whose update happened to 403
-	// on this run has not stopped having a source file, and deleting it
-	// would destroy the live copy of a skill that this run could not even
-	// rewrite.
+	// FROM THE PLAN, not from the writes that succeeded: prune asks "does a
+	// source file still publish this skill?", and a page whose update 403ed
+	// this run still has one; deleting it would destroy the live copy.
 	// written maps a page's key to the id it got, so a `parent:` naming a
-	// page published earlier in this same run resolves without a round
-	// trip — and resolves at all, which it could not before the page
-	// existed.
+	// page published earlier in this run resolves without a round trip.
 	written := make(map[string]string, len(opts.Plan.Items))
 	published := make(map[string]bool, len(opts.Plan.Items))
 	for _, item := range opts.Plan.Items {
@@ -386,22 +368,15 @@ func Publish(ctx context.Context, opts PublishOptions) (*PublishResult, error) {
 // pruneSkills deletes the skill pages this tool published that no local file
 // publishes any more.
 //
-// # A prune that cannot enumerate deletes NOTHING
-//
-// The orphan set is "every labelled skill page in the space, minus the ones
-// this run wrote", so it is derived by subtraction — and a truncated or
-// failed walk makes the first half smaller, which makes the orphan set
-// larger and deletes live pages. The walk is therefore all-or-nothing and
-// its failure stops the prune rather than shrinking it.
-//
-// # Three conditions, all of them required
+// A prune that cannot enumerate deletes NOTHING: the orphan set is the skill
+// pages in the space minus those this run wrote, so a truncated walk enlarges
+// it and deletes live pages.
 //
 // A page is deleted only when it is in the skills space, carries
 // [ImportedSkillLabel], and parses as a skill whose key this run did not
-// publish. The label is what protects a lead's hand-authored page; the parse
-// is what protects an ordinary page somebody filed in the skills space; the
-// key comparison is what makes a rename a delete-and-create rather than a
-// silent duplicate.
+// publish. The label protects a lead's hand-authored page, the parse an
+// ordinary page in the skills space, and the key comparison makes a rename a
+// delete-and-create rather than a silent duplicate.
 func pruneSkills(ctx context.Context, opts PublishOptions,
 	published map[string]bool,
 ) ([]string, []string, error) {
