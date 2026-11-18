@@ -180,6 +180,7 @@ export function Conversation({
   checks: LatestChecks;
 }) {
   const now = useNow();
+  const viewer = useViewer();
   const [quoted, setQuoted] = useState<Quote | null>(null);
   const reviews = usePagedReviews(change);
   const comments = usePagedComments(change);
@@ -222,7 +223,7 @@ export function Conversation({
     revisions,
     checks,
     standings,
-    again: reRequestable(change, standings, asked.items),
+    again: reRequestable(change, standings, asked.items, viewer.handle),
     severities: openSeverities(change, findings),
   };
   const more = parts.some((p) => p.more);

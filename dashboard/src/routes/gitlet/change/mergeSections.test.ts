@@ -115,8 +115,10 @@ describe("the merge box's sections", () => {
       { handle: "dev", kind: "agent", verdict: "comment", revision: 2 },
     ];
     const asked = [{ reviewer: "sre", state: "requested" }] as never[];
-    expect(
-      reRequestable({ revision: 2, authors: [{ author: "dev" }] as never[] }, standings, asked),
-    ).toEqual(["cto"]);
+    const head = { revision: 2, authors: [{ author: "dev" }] as never[] };
+    expect(reRequestable(head, standings, asked, "jane")).toEqual(["cto"]);
+    // NEVER THE READER: a reviewer is not offered to ask their own review again.
+    // Mutation: drop the reader's filter, and cto re-requests cto.
+    expect(reRequestable(head, standings, asked, "cto")).toEqual([]);
   });
 });

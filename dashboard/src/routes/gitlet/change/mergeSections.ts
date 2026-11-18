@@ -130,16 +130,20 @@ export function reviewerStandings(
   return out;
 }
 
-/** Whom a re-request asks: each standing verdict not an approval of the head, not asked now, no author. */
+/**
+ * Whom a re-request asks: each standing verdict not an approval of the head, not asked now, no
+ * author, and never the reader, whose own review is theirs to give again, not to ask of themselves.
+ */
 export function reRequestable(
   change: Pick<CodeChangeDetail, "revision" | "authors">,
   standings: readonly Standing[],
   asked: readonly CodeReviewerRow[],
+  me: string,
 ): string[] {
   const authors = new Set(change.authors.map((a) => a.author));
   const askedNow = new Set(asked.filter((a) => a.state === "requested").map((a) => a.reviewer));
   return standings
     .filter((s) => s.verdict !== "approve" || s.revision !== change.revision)
     .map((s) => s.handle)
-    .filter((h) => !askedNow.has(h) && !authors.has(h));
+    .filter((h) => !askedNow.has(h) && !authors.has(h) && h !== me);
 }

@@ -236,6 +236,10 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
     "modal: a search for a task, page or artifact to link, in its dialog",
   "routes/gitlet/commit/ComparePage.tsx": "modal: opening a change of a branch, in its dialog",
   "routes/gitlet/change/AskDialog.tsx": "modal: the note asking reviewers, in its dialog",
+  "routes/gitlet/change/ChangeEdits.tsx":
+    "modal: a change's target branch or work item, in its dialog",
+  "routes/gitlet/change/Finding.tsx":
+    "modal: an applied suggestion's commit message, in its dialog",
   "routes/gitlet/change/Merge.tsx": "modal: an override's reason, in its dialog",
   "routes/gitlet/change/ReviewDialog.tsx": "modal: a review's summary, in its dialog",
   "routes/gitlet/ImportRepo.tsx": "modal: a repository to import, in its dialog",
