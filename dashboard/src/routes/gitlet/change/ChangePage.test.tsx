@@ -1071,11 +1071,11 @@ test("More holds where the change came from and whom it notified, and an old key
   expect(selected.textContent).toMatch(/^Conversation/);
 });
 
-// WHERE IT CAME FROM SAYS A CREDENTIAL BY ITS KIND AND AN INSTANT IN WORDS: a token's id
-// names nothing a reader knows, so it sits behind the copy control, and the exact instant is
-// the time's title, as the header's is. Mutation: draw owner_operator_id as written, or the
-// instant by fmtDateTime, and this fails.
-test("More says the credential a change was opened through by its kind, and when in words", async () => {
+// WHERE IT CAME FROM SAYS A CREDENTIAL BY ITS KIND AND AN INSTANT AS A RELATIVE TIME: a token's
+// id names nothing a reader knows, so it sits behind the copy control; a time standing alone in a
+// property row is the short form, its exact instant the title. Mutation: draw owner_operator_id as
+// written, or the instant by fmtDateTime, and this fails.
+test("More says the credential a change was opened through by its kind, and when as a relative time", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
   const id = "01a1ef63-0000-7000-8000-000000000001";
@@ -1093,7 +1093,7 @@ test("More says the credential a change was opened through by its kind, and when
     within(card).getByRole("button", { name: `Copy the personal access token's id, ${id}` }),
   ).toBeDefined();
   const opened = card.querySelector("time");
-  expect(opened?.textContent).toBe("yesterday at 11:00");
+  expect(opened?.textContent).toBe("1d ago");
   expect(opened?.getAttribute("title")).toBe(fmtDateTime("2026-10-27T10:00:00Z"));
 });
 
@@ -2262,10 +2262,10 @@ test("More names each recipient with why they heard, in the third person", async
   const list = await screen.findByRole("list", { name: "Whom it notified" });
   expect(within(list).getByText(/asked to review/)).toBeTruthy();
   expect(within(list).queryByText(/your review/)).toBeNull();
-  // WHEN IN WORDS, as the rest of Gitlet says it, the instant in its title: never a
-  // clock to the second. Mutation: print the instant, and this fails.
+  // WHEN AS A RELATIVE TIME, as the rest of Gitlet says it, the instant in its title:
+  // never a clock to the second. Mutation: print the instant, and this fails.
   const when = list.querySelector("time");
-  expect(when?.textContent).toMatch(/ago|just now/);
+  expect(when?.textContent).toMatch(/ago|now/);
   expect(when?.getAttribute("title")).toMatch(/\d{4}/);
 });
 

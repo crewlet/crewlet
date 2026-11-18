@@ -11,7 +11,7 @@
  */
 
 import { Fragment, type ReactNode } from "react";
-import { Card, Copyable, EmptyValue, Stack, Tag } from "@crewlethq/ui";
+import { Card, Copyable, EmptyValue, RelativeTime, Stack, Tag } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { href } from "~/app/router.tsx";
 import { AgoTime } from "~/components/AgoTime.tsx";
@@ -100,6 +100,7 @@ export function Revisions({
 
 /** Where the change came from: who opened it, from which turn and run, for which work, and how it ended. */
 export function Provenance({ change }: { change: CodeChangeDetail }) {
+  const now = useNow();
   const seatBadge = useSeatBadgeOf();
   const work = change.work_item;
   const rows: { label: string; value: ReactNode }[] = [
@@ -117,7 +118,12 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
         </>
       ),
     },
-    { label: "Opened", value: <AgoTime value={change.opened_at} clock /> },
+    {
+      label: "Opened",
+      value: (
+        <RelativeTime value={change.opened_at} now={now} title={fmtDateTime(change.opened_at)} />
+      ),
+    },
     {
       label: "Turn",
       value: change.created_turn ? (
@@ -192,7 +198,13 @@ export function Provenance({ change }: { change: CodeChangeDetail }) {
             label: "Closed",
             value: (
               <>
-                {change.closed_at && <AgoTime value={change.closed_at} clock />}
+                {change.closed_at && (
+                  <RelativeTime
+                    value={change.closed_at}
+                    now={now}
+                    title={fmtDateTime(change.closed_at)}
+                  />
+                )}
                 {change.close_reason && ` · ${change.close_reason}`}
               </>
             ),
@@ -236,6 +248,7 @@ function Through({ credential }: { credential: string }) {
 /** Whom the change's records notified, newest first, each recipient with why. */
 export function Notified({ change }: { change: CodeChangeDetail }) {
   const seatBadge = useSeatBadgeOf();
+  const now = useNow();
   const read = useCodeQuery(
     "code_change_routing",
     { name: change.repo, change: change.number },
@@ -269,7 +282,7 @@ export function Notified({ change }: { change: CodeChangeDetail }) {
               label={`Notified ${fmtDateTime(r.at)}`}
               head={
                 <span className="code-byline__when">
-                  <AgoTime value={r.at} clock />
+                  <RelativeTime value={r.at} now={now} title={fmtDateTime(r.at)} />
                 </span>
               }
             >
