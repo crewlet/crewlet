@@ -310,9 +310,11 @@ type SessionDecision struct {
 	// of what the kept session holds ([SessionContinuation.Exact]): its
 	// box's harness answered the release the reading was read for, so the
 	// run reads that telling's brief and holds what that telling held.
-	// False where the launch handed the brief told by the save point, or
-	// continues no kept session.
-	Exact bool
+	// Unheld says it is the one for a box whose release the resume was not
+	// read in ([SessionContinuation.Unheld]), whose telling the run reads
+	// in turn. Both false where the launch handed the brief told by the
+	// save point, or continues no kept session.
+	Exact, Unheld bool
 }
 
 // SessionContinuation is how a launch continues a session in whatever box it
@@ -360,9 +362,13 @@ type SessionContinuation struct {
 // box holds none of them. Told as [SessionContinuation]'s briefs are, but the
 // notes from the first read at a hook's step on, as notes the session may
 // already show ([Runner.firstUnheld]). Built only where the capture's cursor
-// counts such a read; the calls they tell are Brief's, so Told is its.
+// counts such a read.
 type UnheldTelling struct {
 	Brief, Replaced string
+
+	// Told is what Brief and Replaced told of the round, as
+	// [SessionContinuation.Told] is theirs.
+	Told sandbox.BriefTold
 }
 
 // ExactTelling is a relaunch's briefs told by a reading of what the kept

@@ -215,3 +215,53 @@ func TestAHookNoteIsToldAgainInABoxWhoseReleaseTheResumeWasNotReadIn(t *testing.
 		}
 	})
 }
+
+// THE RUN'S OPENING FRAME IS THE UNHELD BRIEF WHERE IT WAS HANDED: the phase's
+// record states the prompt the run read, the brief for a box whose release the
+// resume was not read in where the launch decided it handed that one, for a
+// new box or for the box the session was last worked in, and the one told by
+// the save point where it did not.
+//
+// Mutation: publish the default brief whatever the launch handed, or the
+// unheld brief for the wrong box, and a case goes red.
+func TestTheRunsOpeningFrameIsTheUnheldBriefWhereItWasHanded(t *testing.T) {
+	t.Parallel()
+	steered := []steer.Read{noteRead("brief", 1, types.SteerBoundaryBrief, false),
+		noteRead("hook", 2, types.SteerBoundaryToolBatch, false)}
+	kept := keptBasis
+	kept.NoteCursor = 2
+	unheld := func(newBox bool) func(runner.AgentRunRequest) runner.SessionDecision {
+		return func(runner.AgentRunRequest) runner.SessionDecision {
+			return runner.SessionDecision{Continues: true, Kept: true, NewBox: newBox, Unheld: true}
+		}
+	}
+	for name, tc := range map[string]struct {
+		decides func(runner.AgentRunRequest) runner.SessionDecision
+		want    func(*runner.SessionContinuation) string
+	}{
+		"handed, a new box": {decides: unheld(true),
+			want: func(s *runner.SessionContinuation) string { return s.Unheld.Replaced }},
+		"handed, its own box": {decides: unheld(false),
+			want: func(s *runner.SessionContinuation) string { return s.Unheld.Brief }},
+		"not handed": {want: func(s *runner.SessionContinuation) string { return s.Replaced }},
+	} {
+		pub := newCapture()
+		req := guarded{basis: kept, pub: pub, decides: tc.decides, carry: func(r *runner.Resume) {
+			answered("use main")(r)
+			r.Steered = steered
+		}}.relaunch(t)
+		if req.Session == nil || req.Session.Unheld == nil {
+			t.Fatalf("%s: the relaunch carries no brief for a box whose release the resume was not read in", name)
+		}
+		s, published := req.Session, pub.promptsFor("execute")
+		want := tc.want(s)
+		if len(published) == 0 || !strings.Contains(published[len(published)-1], want) {
+			t.Fatalf("%s: the opening frame does not state the brief the run was handed", name)
+		}
+		for _, other := range []string{s.Brief, s.Replaced, s.Unheld.Brief, s.Unheld.Replaced} {
+			if !strings.Contains(want, other) && strings.Contains(published[len(published)-1], other) {
+				t.Errorf("%s: the opening frame states a brief the run was not handed:\n%s", name, other)
+			}
+		}
+	}
+}

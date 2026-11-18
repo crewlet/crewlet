@@ -586,7 +586,7 @@ func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation 
 		out.Exact = &sandbox.ExactTelling{Resumer: x.Resumer, Brief: x.Brief, Replaced: x.Replaced, Told: x.Told}
 	}
 	if u := s.Unheld; u != nil {
-		out.Unheld = &sandbox.UnheldTelling{Brief: u.Brief, Replaced: u.Replaced}
+		out.Unheld = &sandbox.UnheldTelling{Brief: u.Brief, Replaced: u.Replaced, Told: u.Told}
 	}
 	return out
 }
@@ -594,10 +594,11 @@ func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation 
 // sessionDecision is how the launch decided its run takes up a session, in the
 // runner's terms ([runner.SessionDecision]): a session its conversation's last
 // turn left is always continued in a new box; and whether the brief handed is
-// the one told by a reading of what the session holds, whose own telling the
-// run's guard and its published prompt then follow.
+// the one told by a reading of what the session holds, or the one for a box
+// whose release the resume was not read in, whose own telling the run's guard
+// and its published prompt then follow.
 func sessionDecision(d sandbox.LaunchDecision) runner.SessionDecision {
 	return runner.SessionDecision{Continues: d.Brief.Continues(), Kept: d.Kept, Base: d.Base,
 		NewBox: d.Brief == sandbox.BriefContinuedNewBox || d.Brief == sandbox.BriefContinuedConversation,
-		Exact:  d.Exact}
+		Exact:  d.Exact, Unheld: d.Unheld}
 }

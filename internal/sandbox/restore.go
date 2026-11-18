@@ -1384,10 +1384,15 @@ type SessionContinuation struct {
 // not read the resume of: a read at a hook's step is held only as the job's
 // session showed it, which such a box's resume may not rebuild, so these tell
 // the notes from the first such read on again, as notes the session may
-// already show. They tell the calls Brief and Replaced tell, so their Told is
-// [SessionContinuation.Told].
+// already show; or, where its harness may compact the session before it reads
+// them, they are the briefs told as a session that may be a summary.
 type UnheldTelling struct {
 	Brief, Replaced string
+
+	// Told is what Brief and Replaced told of the round ([BriefTold]):
+	// recorded on the job the launch opens in place of
+	// [SessionContinuation.Told] where it hands either.
+	Told BriefTold
 }
 
 // ExactTelling is a relaunch's briefs told by a reading of what the session it
@@ -1474,9 +1479,11 @@ type LaunchDecision struct {
 
 	// Exact says the brief the launch hands is one told by a reading of what
 	// the session holds ([SessionContinuation.Exact]): its box's harness
-	// answered the release the reading was read for. False where it hands
-	// the brief told by the save point, or continues no kept session.
-	Exact bool
+	// answered the release the reading was read for. Unheld says it is one
+	// for a box whose release the resume was not read in
+	// ([SessionContinuation.Unheld]). Both false where it hands the brief
+	// told by the save point, or continues no kept session.
+	Exact, Unheld bool
 }
 
 // continuedLaunch is how one launch continues the turn's session, if it does:
@@ -1494,8 +1501,9 @@ type continuedLaunch struct {
 	kept bool
 	// exact says brief is the one told by a reading of what the kept
 	// capture holds ([SessionContinuation.Exact], [LaunchDecision.Exact]),
-	// so told is that telling's own.
-	exact bool
+	// and unheld that it is one for a box whose release the resume was not
+	// read in ([SessionContinuation.Unheld]), so told is that telling's own.
+	exact, unheld bool
 	// measure is what the session carried at its newest request the engine
 	// measured, along its lineage, saying where it came from: the job
 	// before's record of its own copy, where the launch continues that copy
@@ -1533,7 +1541,8 @@ func carriedMeasure(tokens int64, source MeasureSource, launch string) *SessionM
 
 // decision is how the launch decided, for its caller ([LaunchRequest.Decided]).
 func (l continuedLaunch) decision() LaunchDecision {
-	return LaunchDecision{Brief: l.kind, Kept: l.kept, Base: l.kind == BriefContinuedConversation, Exact: l.exact}
+	return LaunchDecision{Brief: l.kind, Kept: l.kept, Base: l.kind == BriefContinuedConversation, Exact: l.exact,
+		Unheld: l.unheld}
 }
 
 // omitted is what the launch req records on the job it opens of the calls of
@@ -1606,13 +1615,18 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 			// WHAT ITS BRIEFS TOLD, what they left out of the round and what
 			// they opened with, the same for the brief for either box
 			// ([SessionContinuation.Told]); and where the brief handed is
-			// one told by a reading, that telling's own
-			// ([ExactTelling.Told]). Chosen here, the one assignment, so
+			// one told by a reading, or one for a box whose release the
+			// resume was not read in, that telling's own ([ExactTelling.Told],
+			// [UnheldTelling.Told]). Chosen here, the one assignment, so
 			// every continuation records what the brief it handed left
 			// out, the box's own copy among them.
-			launch.told = want.Told
-			if launch.exact {
+			switch {
+			case launch.exact:
 				launch.told = want.Exact.Told
+			case launch.unheld:
+				launch.told = want.Unheld.Told
+			default:
+				launch.told = want.Told
 			}
 			return launch
 		}
@@ -1707,10 +1721,11 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 		return continuedLaunch{}, check.Why
 	}
 	exact, unused := exactFor(want.Exact, check, reused)
+	unheld := exact == "" && want.Unheld != nil && !check.ResumeRead
 	switch {
 	case exact != "":
 		brief = exact
-	case want.Unheld != nil && !check.ResumeRead:
+	case unheld:
 		// A BOX WHOSE RELEASE THE RESUME WAS NOT READ IN holds no read at a
 		// hook's step as the job's session showed it ([UnheldTelling]).
 		brief = want.Unheld.Replaced
@@ -1737,7 +1752,7 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	// the run — which replaces the box's copy where its harness was cut off.
 	carried := &CarriedSession{Archive: archive, Body: body, Replace: kept.Interrupted}
 	return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
-		kept: true, exact: exact != "", carried: carried, measure: measure, restart: restart,
+		kept: true, exact: exact != "", unheld: unheld, carried: carried, measure: measure, restart: restart,
 		release: func() {
 			_ = body.Close()
 			fetched.remove()

@@ -6,24 +6,29 @@ import (
 )
 
 // The briefs for a box whose release the resume was not read in, told apart
-// from [savePointSameBox] and [savePointNewBox].
+// from [savePointSameBox] and [savePointNewBox], and what they told of the
+// round, told apart from [toldBySavePoint].
 const (
 	unheldSameBox = "carry on in the box you left, told again the notes your hooks were served"
 	unheldNewBox  = "carry on in a box that replaced yours, told again the notes your hooks were served"
 )
+
+var toldUnheld = BriefTold{Omitted: []int{4}, Own: []Lead{answerLead("told again for an unread release")}}
 
 // A HOOK NOTE IS TOLD AGAIN IN A BOX WHOSE RELEASE THE RESUME WAS NOT READ IN.
 // A read at a hook's step is held as the job's session showed it, which only a
 // release whose resume this build read rebuilds (CarryCheck.ResumeRead). So a
 // box whose harness answers such a release is handed the brief told by the
 // save point, and any other the one that tells those notes again
-// ([UnheldTelling]), for the box it is, its told set the save point's: the
-// calls they tell are the same. The job's own box, its copy taken whole there,
-// is asked nothing and holds what its own release wrote, so it is handed the
-// save point's.
+// ([UnheldTelling]), for the box it is, its own told set recorded and the
+// launch's decision saying it handed that telling, so the runner publishes and
+// guards by it. The job's own box, its copy taken whole there, is asked
+// nothing and holds what its own release wrote, so it is handed the save
+// point's.
 //
-// Mutation: hand the unheld brief whatever the box answers, never hand it, or
-// hand it to the job's own whole copy, and a case goes red.
+// Mutation: hand the unheld brief whatever the box answers, never hand it,
+// hand it to the job's own whole copy, record the save point's told set beside
+// it, or leave it out of the decision, and a case goes red.
 func TestAHookNoteIsToldAgainInABoxWhoseReleaseTheResumeWasNotReadIn(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -45,7 +50,7 @@ func TestAHookNoteIsToldAgainInABoxWhoseReleaseTheResumeWasNotReadIn(t *testing.
 			rig, opened, req := exactRelaunch(t, tc.interrupted, "2.1.999")
 			rig.runner.CarryResumeUnread = tc.unread
 			req.Session.Exact = nil
-			req.Session.Unheld = &UnheldTelling{Brief: unheldSameBox, Replaced: unheldNewBox}
+			req.Session.Unheld = &UnheldTelling{Brief: unheldSameBox, Replaced: unheldNewBox, Told: toldUnheld}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 				rig.runner, tc.reused, false)
 			t.Cleanup(got.release)
@@ -53,8 +58,16 @@ func TestAHookNoteIsToldAgainInABoxWhoseReleaseTheResumeWasNotReadIn(t *testing.
 				t.Fatalf("the launch hands brief %q continuing session %q, want %q continuing the kept session",
 					got.brief, got.session, tc.brief)
 			}
-			if !slices.Equal(got.told.Omitted, toldBySavePoint.Omitted) || got.exact {
-				t.Errorf("the launch records %+v told (exact %v), want the save point's", got.told, got.exact)
+			unheld := tc.brief == unheldSameBox || tc.brief == unheldNewBox
+			told := toldBySavePoint
+			if unheld {
+				told = toldUnheld
+			}
+			if !slices.Equal(got.told.Omitted, told.Omitted) || got.exact {
+				t.Errorf("the launch records %+v told (exact %v), want %+v", got.told, got.exact, told)
+			}
+			if d := got.decision(); d.Unheld != unheld || d.Exact {
+				t.Errorf("the launch's decision is %+v, want it to say it handed the unheld telling: %v", d, unheld)
 			}
 		})
 	}

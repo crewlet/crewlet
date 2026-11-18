@@ -544,7 +544,7 @@ func (k *keptBrief) led(lead string, own []sandbox.Lead) *SessionContinuation {
 		Told: sandbox.BriefTold{Omitted: k.omitted, Own: own, Told: k.told, ToldUnread: k.toldUnread}}
 	if k.unheld != nil {
 		unheld := joined(k.unheld)
-		out.Unheld = &UnheldTelling{Brief: unheld, Replaced: unheld + "\n\n" + k.newBox}
+		out.Unheld = &UnheldTelling{Brief: unheld, Replaced: unheld + "\n\n" + k.newBox, Told: out.Told}
 	}
 	return out
 }
@@ -2063,9 +2063,11 @@ type launchBriefs struct {
 //
 // AND IT PUBLISHES THE PROMPT THE RUN WAS HANDED as the phase's opening frame
 // ([emitter.prompted]) — the continuation in the form its box takes, the one
-// told by a reading where the launch handed it, or the fresh brief — where the
-// phase's record does not carry it already: the started record carries the
-// fresh brief, which a run that continues its session never reads.
+// told by a reading or the one for a box whose release the resume was not read
+// in where the launch handed it ([SessionDecision.Unheld]), or the fresh
+// brief — where the phase's record does not carry it already: the started
+// record carries the fresh brief, which a run that continues its session never
+// reads.
 //
 // What it decided is kept in decided, which the box's word on the session it
 // started is read against ([Runner.sessionStarted]), BESIDE THE SKILLS IT ARMED,
@@ -2085,9 +2087,12 @@ func (r *Runner) sessionDecided(ctx context.Context, emit emitter, round int, sy
 			handed = prompts.Prompt{Text: b.kept.Replaced}
 		case d.Continues && d.Kept && b.kept != nil:
 			holds, readHeld, brief, replaced := b.keptHolds, []BridgedCall(nil), b.kept.Brief, b.kept.Replaced
-			if d.Exact && b.kept.Exact != nil {
+			switch {
+			case d.Exact && b.kept.Exact != nil:
 				holds, readHeld = b.exact.holds, b.exact.held
 				brief, replaced = b.kept.Exact.Brief, b.kept.Exact.Replaced
+			case d.Unheld && b.kept.Unheld != nil:
+				brief, replaced = b.kept.Unheld.Brief, b.kept.Unheld.Replaced
 			}
 			// NONE WHERE THE SESSION MAY BE A SUMMARY: a summary holds a skill's
 			// body in its own words alone, and a skill loaded again before a call
