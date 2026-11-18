@@ -1,98 +1,15 @@
-// How this package WRITES a coordination bucket: how long a write waits for
-// its acknowledgement, and why no conditional write here is ever answered
-// "lost" while the leader is still deciding it.
-//
-// # The leader answers a compare-and-set three ways
-//
-// A conditional publish — the client's Update, and a Delete or Purge carrying
-// a last revision — names the revision its subject must be at. The stream
-// leader either lands it, or refuses it on a COMPARISON (10071, which names the
-// revision the subject is actually at), or refuses it WITHOUT one (10164,
-// "wrong last sequence" and no number): the leader marks a subject in flight
-// when it proposes a conditional write and clears the mark only once it has
-// applied it AND acknowledged it, so while the mark stands it compares nothing.
-// The write ahead may be this caller's own, already confirmed. The client maps
-// both refusals to one revision mismatch (nats.go jetstream/kv.go,
-// mapRevisionMismatch), and a caller that believed it read the third answer as
-// the second: measured on three members under load, a removal at the very
-// revision its caller had just read back was refused, which left the create
-// race after it with no winner, and a charge spent all sixteen of its
-// compare-and-set rounds on refusals no other writer had caused. The package
-// doc of internal/jsinflight has the server source it rests on.
-//
-// # What this file does instead
-//
-// Every bucket handle this package holds is [settled]: its conditional writes
-// go through [jsinflight.Decide], which retries the IDENTICAL publish while the
-// answer is in flight, within the write's budget (below). A write still
-// undecided at the end comes back as [jsinflight.Undecided], which wraps the
-// context error and never the mismatch, so it reaches every caller as UNKNOWN
-// rather than as a race somebody else won. That is also why
-// [isWrongLastSequence] matches 10071 alone: by the time a caller asks it, the
-// in-flight answer has been waited out.
-//
-// # A write across a link is given the time its bytes take to cross
-//
-// A write is acknowledged once its last byte is in, and a node that reaches
-// the buckets across a LINK — a leaf's link to its members, a dial to an
-// external cluster — sends its bytes at the link's pace, which the engine
-// allows to be as slow as the object store's floor (internal/objstore's
-// MiBPace, thirty seconds a mebibyte). Held to the client's request term
-// alone, five seconds, a value larger than about a sixth of a mebibyte could
-// not be acknowledged on a link at the floor, and failed as an outage while
-// its bytes were still crossing: an MCP listing of up to 896 KiB, which every
-// node with seats writes, leaves among them, needs about 26 s
-// (crewlet/crewlet#1005's defect, in the coordination store). So every write
-// of a settled bucket whose caller set no deadline waits the request term and,
-// across a link, the crossing of what it carries — its key, its value and its
-// headers — for every time it may be sent, up to internal/jsapi's WriteSends:
-// the client re-sends a write nobody heard inside the one context it was
-// handed, which no option of a KV write turns off, so each call of the client
-// is given the budget's WHOLE bound, the request term and WriteSends
-// crossings, fixed when the write starts ([settledBucket.budget]); and an
-// attempt after an in-flight answer sends it whole again within that same
-// bound, so a write met by in-flight answers for ever ends undecided by it.
-// Whether the connection crosses a link is the caller's to state where a
-// bucket is opened ([Reach]), because nothing here can see how the
-// connection it was handed was made. A caller's own deadline is kept, but on
-// an external broker — whose connection the buckets share with the queue — the
-// client does not check it while a write waits for the connection's lock,
-// which a large write holds for its whole socket Write, nor while the write is
-// in the socket: a write here, a lease renewal among them, is held behind every
-// large write ahead of it on the connection, each up to the dial's write
-// deadline (internal/queue/jetstream's externalWriteDeadline, about eight
-// minutes), and then for its own; bounding that needs the write windowed
-// (crewlet/crewlet#1035).
-//
-// # A value is held to what its leader's read carries back
-//
-// Every read of a key is the stream LEADER's message read (kv.go's "Every
-// single-key read is the leader's"), whose reply is JSON with the value
-// base64-encoded inside it, a third larger than the value — and the server on
-// a leaf's side of its link closes the WHOLE link on any message past its
-// max_payload (nats-server v2.15.2, leafnode.go, processLeafMsgArgs →
-// maxPayloadViolation), every lease and mailbox the node holds across it cut
-// off with it (crewlet/crewlet#1031). A value of more than about six
-// mebibytes, which the transport carries whole on its way in, would be one no
-// node without `data` could ever read. So every value a settled bucket writes
-// is held to the coordination store's own bound, [coord.MaxValueBytes] — the
-// largest whose message, with the most header a write carries
-// ([kvHeaderBytes]), that reply carries back (internal/jsapi's MaxReadable)
-// — refused before it is sent ([settledBucket.carriedBack]), on every node
-// alike, since a value a member wrote is one a leaf reads, and as
-// [coord.ErrValueTooLarge]: a definite answer, which no caller may read as an
-// outage. The values that come near it are the ones whose bound is that bound
-// itself — a sandbox run's row and its parts, budgeted field by field to it
-// (internal/sandbox's RowBytes), and the activation pointer, which carries the
-// company's sealed document (internal/api/configapi holds a document to it
-// before storing the revision).
-//
-// THE HANDLE IS WRAPPED ONCE, where a bucket is opened ([Open], [OpenFleet],
-// [OpenEpochs]), rather than at each call site, because how a write is decided
-// and how long it waits are properties of every write to a bucket, and a call
-// site that forgot either is one nobody would see fail on a single in-process
-// server: 10164 is a replicated stream's answer, and a link is a leaf's or an
-// external cluster's.
+// How this package WRITES a coordination bucket, under the package doc's
+// "Every conditional write is DECIDED by the leader" and "A write across a
+// link waits as long as its bytes take to cross". The leader refuses a
+// compare-and-set on a comparison (10071) or, while an earlier write to the
+// subject is in flight, without one (10164); the client maps both to one
+// mismatch (internal/jsinflight's package doc has the server source). So every
+// handle is [settled] once, where it is opened ([Open], [OpenFleet],
+// [OpenEpochs]), never per call site, which no single in-process server would
+// show forgotten: its conditional writes go through [jsinflight.Decide], one
+// still undecided ends as [jsinflight.Undecided] (UNKNOWN, never a lost race),
+// and so [isWrongLastSequence] matches 10071 alone. Values are held to
+// [coord.MaxValueBytes] ([settledBucket.carriedBack]).
 
 package kv
 
@@ -127,23 +44,18 @@ type settledBucket struct {
 	// process ([Reach]).
 	pace time.Duration
 
-	// carries is how large a value of the bucket may be where its values are
-	// budgeted to what one key holds ([holdingLarge]), so that every read of
-	// one is given the time a leader's reply that large takes to cross the
-	// connection ([newLeaderReader]); none for every other bucket, whose
-	// values are a few kibibytes and whose replies are in far inside the
-	// read term.
+	// carries is how large a value may be in a bucket [holdingLarge] marks, so
+	// each leader read is given that reply's crossing ([newLeaderReader]);
+	// none elsewhere, whose replies of a few KiB arrive inside the read term.
 	carries int
 }
 
 // Reach is how a node's connection reaches the coordination buckets' streams,
-// which decides how long a write's bytes are given to cross to them
-// ([settledBucket]). It is STATED by whoever opens a store, where it knows how
-// the connection was made — the engine, by its broker's kind — and REQUIRED:
-// the zero value is refused rather than read as either, because a node
-// reaching the buckets across a link that was taken to cross nothing holds a
-// write of a large value to the request term alone, and fails it as an
-// outage while its bytes are still crossing.
+// which decides how long a write's bytes are given to cross ([settledBucket]).
+// The opener STATES it (the engine, by its broker's kind), since nothing here
+// can see how a connection was made, and the zero value is refused: a link
+// taken to cross nothing holds a large write to the request term alone and
+// fails it as an outage mid-crossing.
 type Reach string
 
 const (
@@ -160,9 +72,8 @@ const (
 // Valid reports whether r is a reach this package knows.
 func (r Reach) Valid() bool { return r == InProcess || r == AcrossLink }
 
-// pace is the slowest a connection that reaches the buckets as r may carry a
-// mebibyte: the object store's floor across a link, the one pace the engine
-// allows a link to be as slow as, and none in process.
+// pace is the slowest a connection reaching the buckets as r may carry a
+// mebibyte: the object store's floor across a link, none in process.
 func (r Reach) pace() time.Duration {
 	if r == AcrossLink {
 		return objstore.MiBPace
@@ -170,49 +81,36 @@ func (r Reach) pace() time.Duration {
 	return 0
 }
 
-// valueCrossing is how long a CHANGE of a run's value at what one key holds
-// ([coord.MaxValueBytes]) takes to cross a connection that reaches the buckets
-// as r: the leader's read its decision is taken on, whose reply carries the
-// value back ([Reach.readCrossing]), and the write, for every send the client
-// may make of it — what the store's own rule gives such a write beyond the
-// request term ([settledBucket.budget]), one [sendCrossing] of the value and
-// the longest key a run's write is sent under ([longestRunKey]) for each of
-// [jsapi.WriteSends] sends, at r's pace. None in process. coord.MaxValueCrossing
-// is this across a link, and a test holds it to what the bucket's own read and
-// budget give such a change.
+// valueCrossing is how long a CHANGE of a run's value at [coord.MaxValueBytes]
+// takes to cross as r: the leader read its decision is taken on
+// ([Reach.readCrossing]) plus [jsapi.WriteSends] [sendCrossing]s of the value
+// under [longestRunKey], what [settledBucket.budget] gives such a write beyond
+// the request term. None in process; coord.MaxValueCrossing is this across a
+// link, and a test holds the two equal.
 //
-// THE READ TOO, because every change of a run's value is a read-decide-write
-// ([FleetStore.MutateSandboxRun]), and the read's reply crosses the link the
-// write does, a third larger than the value: counted without it, a caller's
-// budget gave the write its sends and left the read nothing, which a value at
-// its bound spends four minutes of at the slowest pace allowed.
-//
-// THE STORE'S RULES, NEVER A COPY OF THEM: counted apart, the figure dropped
-// the key the budget counts, and a change to either — a send more, a byte of
-// header — would have parted them with nothing to say so.
+// THE READ TOO: a change is a read-decide-write ([FleetStore.MutateSandboxRun])
+// whose reply crosses the same link, a third larger than the value. Built from
+// the store's own rules, never a copy, so a send more or a byte of header
+// cannot part them silently.
 func (r Reach) valueCrossing() time.Duration {
 	return r.readCrossing() + jsapi.WriteSends*sendCrossing(longestRunKey, coord.MaxValueBytes, r.pace())
 }
 
-// readCrossing is how long a stream leader's reply to a read of a value at
-// what one key holds takes to cross a connection that reaches the buckets as
-// r: the value and the most header a write leaves on it ([kvHeaderBytes]),
-// base64-encoded in the reply (internal/jsapi's Crossing), at r's pace — none
-// in process. Exactly what a read of such a value is given beyond the read term
-// ([newLeaderReader]): its crossing, and none of the reply's handling in the
-// engine's own processes, which is CPU that the read term covers on any node
-// not running under the race detector (internal/jsapi's Leader.Deciding).
+// readCrossing is how long a leader's reply to a read of a value at
+// [coord.MaxValueBytes] takes to cross as r: the value and [kvHeaderBytes],
+// base64-encoded (internal/jsapi's Crossing), at r's pace, none in process.
+// It is exactly what such a read gets beyond the read term ([newLeaderReader]):
+// the reply's handling is CPU the read term covers off the race detector
+// (internal/jsapi's Leader.Deciding).
 func (r Reach) readCrossing() time.Duration {
 	return jsapi.Crossing(coord.MaxValueBytes+kvHeaderBytes, r.pace())
 }
 
-// sendCrossing is how long ONE send of a write of a key of keyBytes and a
-// value of valueBytes takes to cross a connection carrying a mebibyte in as
-// long as pace: both, beside the most header a write of the client's carries
-// ([kvHeaderBytes]), behind the request's protocol line, which [jsapi.Sending]
-// counts — none at no pace. The one rule of a write's crossing here: a
-// settled write's budget gives it for each send ([settledBucket.budget]), and
-// a run's value is counted at it ([Reach.valueCrossing]).
+// sendCrossing is how long ONE send of a write of a keyBytes key and a
+// valueBytes value takes at pace: both plus [kvHeaderBytes], behind the
+// protocol line [jsapi.Sending] counts; none at no pace. The one rule of a
+// write's crossing, which [settledBucket.budget] and [Reach.valueCrossing]
+// both apply.
 func sendCrossing(keyBytes, valueBytes int, pace time.Duration) time.Duration {
 	return jsapi.Sending(keyBytes+valueBytes+kvHeaderBytes, pace)
 }
@@ -229,13 +127,11 @@ func checkReach(config string, r Reach) error {
 }
 
 // kvHeaderBytes is the most header a write of the client's KV handle carries
-// beside its key and value, as the client encodes it: the operation a removal
-// names, the rollup a purge asks for, the revision a conditional write is
-// held to and the age a purge's marker keeps, each at its longest. The client
-// writes them from options this package cannot read back, so a write is
-// counted at the most any write carries — under two hundred bytes, a few
-// milliseconds at the floor. "KV-Operation" and "PURGE" are the client's own
-// words for the first, which it does not export.
+// beside key and value: a removal's operation, a purge's rollup, a conditional
+// write's revision and a purge marker's age, each at its longest. The client
+// sets them from options this package cannot read back, so every write is
+// counted at the most (under 200 bytes, milliseconds at the floor).
+// "KV-Operation" and "PURGE" are the client's words, which it does not export.
 var kvHeaderBytes = (&nats.Msg{Header: nats.Header{
 	"KV-Operation":                      {"PURGE"},
 	jetstream.MsgRollup:                 {jetstream.MsgRollupSubject},
@@ -253,27 +149,18 @@ func settled(js jetstream.JetStream, kv jetstream.KeyValue, reach Reach) jetstre
 	return settledBucket{KeyValue: kv, js: js, pace: reach.pace()}
 }
 
-// holdingLarge is kv, a bucket this node has opened ([settled]), as one whose
-// values are budgeted to what one key holds ([coord.MaxValueBytes]): a
-// sandbox run's record and the parts beside it (internal/sandbox's RowBytes).
-// Every leader read of its keys — a key's own, a listing's certifying read, a
-// create's read of what holds the key — is given the time the leader's reply
-// of a value that large takes to cross this node's connection
-// ([newLeaderReader]): across a link, at the slowest pace a link is allowed;
-// on a member's own connection, which crosses nothing, none, so it is read at
-// the read term as a bucket of small values is.
+// holdingLarge marks kv, a bucket opened through [settled], as one whose values
+// are budgeted to [coord.MaxValueBytes] (a sandbox run's record and parts,
+// internal/sandbox's RowBytes): every leader read of its keys (a key's own, a
+// listing's certifying read, a create's read) is given the reply's crossing
+// ([newLeaderReader]) at the slowest pace a link is allowed, none in process.
 //
-// THE CROSSING ALONE, never the reply's handling: every read of a run's value
-// is one a caller waits on within a budget of its own — a change's
-// read-decide-write, a waiter's verdict, a read of the run before a write to
-// it — and a request a member dropped across an election is asked again two
-// seconds later, inside the shortest such budget, five seconds in the store's
-// own process, where the handling of a reply at the bound would ask it again
-// only once that budget had ended (internal/jsapi's Leader.Deciding).
-//
-// ONLY SUCH A BUCKET, since a reply of a few kibibytes crosses any link inside
-// the read term. A bucket's values are sized by its writers, so the bound is
-// declared where the bucket is opened ([OpenFleet]), as its reach is.
+// THE CROSSING ALONE, never the reply's handling: a request a member dropped
+// across an election is asked again two seconds later, inside the shortest
+// caller budget (five seconds in process), which counting the handling would
+// push past (internal/jsapi's Leader.Deciding). ONLY SUCH A BUCKET: a reply of
+// a few KiB crosses any link inside the read term. Declared where the bucket
+// is opened ([OpenFleet]), since its writers size its values.
 func holdingLarge(kv jetstream.KeyValue) jetstream.KeyValue {
 	b, ok := kv.(settledBucket)
 	if !ok {
@@ -285,33 +172,26 @@ func holdingLarge(kv jetstream.KeyValue) jetstream.KeyValue {
 	return b
 }
 
-// budget is the budget of a write of key and value — none for a removal —
-// made by calls of the client's, each of which may send its message as many
-// as internal/jsapi's WriteSends times inside the ONE context it is handed: a
-// KV write takes no publish options, so its re-sends of a write nobody heard
-// cannot be turned off and made one at a time as the queue's are, and across
-// a link to an external cluster the answer that nobody heard it comes after
-// it crossed whole, so each re-send crosses again. So each call waits in the
-// budget's whole bound ([jsapi.Sends.Whole]), the request term and, across a
-// link, a crossing of what it carries for every one of those sends: room a
-// write heard the first time never uses, and no longer than a write nobody
-// heard can take — and the same bound for every call, so a write sent again
-// after an in-flight answer is given nothing more.
-//
-// NO CREATE IS BUDGETED HERE because none is made through a handle: the
-// client's Create conditions on a marker the sweep may remove and asks a
-// replica whether the key is one, so [createKey], through the settled
-// Update, is this package's one create, and
-// TestNothingCreatesThroughTheBucketHandleOrSweepsThroughTheClient holds the
-// package to it.
+// budget is the budget of a write of key and value (none for a removal). A KV
+// write takes no publish options, so the client re-sends one nobody heard up to
+// [jsapi.WriteSends] times in the ONE context it is handed, each crossing the
+// link whole; every call waits the same whole bound ([jsapi.Sends.Whole]), the
+// request term plus a crossing per send, so a resend after an in-flight answer
+// gets nothing more. On an external broker the client checks no caller's
+// deadline behind the connection's lock or in the socket, so a write (a lease
+// renewal too) waits behind each large one ahead, up to
+// internal/queue/jetstream's externalWriteDeadline each (crewlet/crewlet#1035).
+// No create is budgeted: [createKey], via the settled Update, is the one create;
+// the client's Create conditions on a marker the sweep may remove and asks a
+// replica (TestNothingCreatesThroughTheBucketHandleOrSweepsThroughTheClient).
 func (b settledBucket) budget(key string, value []byte) *jsapi.Sends {
 	return jsapi.Budget(b.js, sendCrossing(len(key), len(value), b.pace))
 }
 
-// carriedBack refuses value for key past what one key holds
-// ([coord.MaxValueBytes]): the largest whose stream leader's read carries it
-// back across a leaf's link — see this file's doc. Only a refusal names the
-// bucket, which a value that fits never asks the handle for.
+// carriedBack refuses a value past [coord.MaxValueBytes], whose doc has why,
+// as [coord.ErrValueTooLarge]: a definite answer, never an outage, on every
+// node alike since a value a member wrote is one a leaf reads. Only a refusal
+// names the bucket, which a value that fits never asks the handle for.
 func (b settledBucket) carriedBack(key string, value []byte) error {
 	if len(value) <= coord.MaxValueBytes {
 		return nil
@@ -368,12 +248,10 @@ func (b settledBucket) Purge(ctx context.Context, key string, opts ...jetstream.
 }
 
 // settle runs one write of key and value (none for a removal) until the
-// stream leader DECIDES it, every attempt waiting in the one whole bound its
-// budget fixed at the start ([settledBucket.budget], [jsapi.Sends.Whole]): the
-// first attempt's call is given every crossing the write's sends may take, and
-// a later one nothing more — see the file doc. A write that names no
-// revision is never answered in flight, so it runs once. The op and key name
-// an undecided write in its error.
+// stream leader DECIDES it, every attempt within the one whole bound
+// [settledBucket.budget] fixed at the start. A write naming no revision is
+// never answered in flight, so it runs once. op and key name an undecided
+// write in its error.
 func (b settledBucket) settle(ctx context.Context, op, key string, value []byte,
 	write func(context.Context) error) error {
 

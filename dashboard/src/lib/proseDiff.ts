@@ -1,15 +1,22 @@
 /**
  * Two versions of a markdown document compared by block, then by word inside an
- * edited block, with links and code compared whole (`lib/lineDiff.ts`, bounds
- * included). Pure: `components/ProseDiff.tsx` draws it.
+ * edited block, with links and code compared whole (the design system's
+ * `compareSequences`, bounds included). Pure: `components/ProseDiff.tsx` draws it.
  */
 
-import { markdownInline, parseMarkdown, type MarkdownBlock } from "@crewlethq/ui";
-import { compareSequences, MAX_COMPARE_LINES, MAX_EDITS, type Uncompared } from "./lineDiff.ts";
+import {
+  compareSequences,
+  lineTokens,
+  markdownInline,
+  MAX_COMPARE_LINES,
+  MAX_EDITS,
+  parseMarkdown,
+  type MarkdownBlock,
+  type Uncompared,
+} from "@crewlethq/ui";
 import { inlineTokens } from "./inlineTokens.ts";
 import { inlineRuns } from "./markdown.ts";
 import { inlineText } from "./markdownText.ts";
-import { tokens } from "./wordDiff.ts";
 
 /** One run of a block's inline markdown: kept (`=`), added (`+`) or removed (`-`). */
 export interface WordPart {
@@ -126,7 +133,7 @@ export function wordsOf(block: MarkdownBlock): number {
 }
 
 function countWords(text: string): number {
-  return tokens(text).filter((t) => t.word).length;
+  return lineTokens(text).filter((t) => t.word).length;
 }
 
 /**
@@ -281,7 +288,7 @@ function counted(runs: WordPart[][]): { added: number; removed: number } {
 }
 
 function wordList(block: MarkdownBlock): string[] {
-  return tokens(inlineRuns(block).map(inlineText).join(" "))
+  return lineTokens(inlineRuns(block).map(inlineText).join(" "))
     .filter((t) => t.word)
     .map((t) => t.text.toLowerCase());
 }
@@ -331,11 +338,11 @@ export function atomsOf(text: string): string[] {
     const stretch = text.slice(from, to);
     let at = 0;
     for (const token of inlineTokens(stretch)) {
-      for (const t of tokens(stretch.slice(at, token.at))) out.push(t.text);
+      for (const t of lineTokens(stretch.slice(at, token.at))) out.push(t.text);
       out.push(stretch.slice(token.at, token.end));
       at = token.end;
     }
-    for (const t of tokens(stretch.slice(at))) out.push(t.text);
+    for (const t of lineTokens(stretch.slice(at))) out.push(t.text);
   };
   let at = 0;
   for (const { index, end } of markdownInline(text)) {

@@ -18,30 +18,28 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// Fetcher is the rows' side of a cache: one page of a repository's snapshot,
-// its refs and packs at a position (RepoState) — a delta's with the pushes it
-// covers, which a round folds into its index of pushes before it answers —
-// and one page of a repository's pushes in log order (Read, of
-// gitlet.ReadIntroduced), by which the backfill reads what a full round passed
-// over (backfill.go). estate.CodeSeam satisfies it on every node; a
-// single-node harness wires the in-process reader.
+// Fetcher is the rows' side of a cache. RepoState pages a repository's refs
+// and packs at a position, a delta's with the pushes it covers, which a round
+// folds into its index of pushes before it answers. Read pages its pushes in
+// log order (gitlet.ReadIntroduced), for the backfill (backfill.go).
+// estate.CodeSeam satisfies it; a single-node harness wires the in-process
+// reader.
 type Fetcher interface {
 	RepoState(ctx context.Context, q gitlet.StateQuery) (gitlet.RepoSnapshot, error)
 	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
 }
 
-// Fleet is how many live nodes serve git and how many hold the estate, as
-// this node's placements see them now — or why it cannot say: what the
-// backfill paces its reads of the estate by (BackfillIdle). A node with no
-// fleet — no coordination, nobody else to ask — answers none of either,
-// which the pace reads as one of each.
+// Fleet is how many live nodes serve git and hold the estate, as this node's
+// placements see them now, or why it cannot say: the backfill paces its reads
+// by it (BackfillIdle). A node with no fleet answers zero of each, which the
+// pace reads as one.
 type Fleet func() (gitletNodes, dataNodes int, err error)
 
 // Placement is where a `search: indexed` repository's code index is kept
-// (M6-D12): the first gitlet.IndexHolders of Order — its rendezvous order over
-// the live Gitlet nodes, estate.Router.GitOrder — keep one, and Node is this
-// node's id as that order names it. An Order that fails decides nothing: the
-// indexer keeps what it holds and asks again at its next look.
+// (M6-D12): the first gitlet.IndexHolders of Order, its rendezvous order over
+// the live Gitlet nodes (estate.Router.GitOrder), keep one; Node is this
+// node's id in that order. An Order that fails decides nothing: the indexer
+// keeps what it holds and asks again next look.
 type Placement struct {
 	Node  string
 	Order func(repoID string) ([]string, error)
@@ -57,16 +55,15 @@ type Objects interface {
 // Metrics is required, and [Open] refuses a missing one by name
 // ([ErrOptions]) before it touches the directory.
 type Options struct {
-	// Layout is what [Prepare] returned, as it returned it: Open takes over
-	// its claim on the directory and its reading of repos/, so a Layout
-	// opens once.
+	// Layout is what [Prepare] returned, unchanged: Open takes over its claim
+	// on the directory and its reading of repos/, so a Layout opens once.
 	Layout Layout
 
 	// MaxBytes is the budget the cache is held to: Tier A
 	// gitlet.cache_max_bytes, resolved by the engine. Above zero.
 	MaxBytes int64
 
-	// Git runs every git process in a cache. Built over Layout.Home.
+	// Git runs every git process in a cache, built over Layout.Home.
 	Git *gitproc.Pool
 
 	// Objects reads pack bundles from the object store.
@@ -75,253 +72,209 @@ type Options struct {
 	// Fetch reads a repository's rows.
 	Fetch Fetcher
 
-	// Fleet counts the live Gitlet nodes and data nodes the backfill paces its
-	// reads by: the engine's placements, read again after every page.
+	// Fleet paces the backfill's reads, read again after every page.
 	Fleet Fleet
 
-	// Placement is where this node keeps code indexes: nil keeps none — a
-	// harness with no fleet, which never searches by index — and the engine
-	// sets it on every Gitlet node over its estate router.
+	// Placement is where this node keeps code indexes: nil (a harness with no
+	// fleet) keeps none; the engine sets it on every Gitlet node.
 	Placement *Placement
 
 	// Limits is the current epoch's code.limits.
 	Limits func() gitlet.Limits
 
-	// HookCommand is the argv hooks/proc-receive execs for every push's
-	// receive-pack: arg0 absolute, no argument holding a NUL (a shell word
-	// cannot carry one). The engine passes [<crewlet>, code, hook,
-	// proc-receive].
+	// HookCommand is the argv hooks/proc-receive execs for every push: arg0
+	// absolute, no argument holding a NUL (no shell word can). The engine
+	// passes [<crewlet>, code, hook, proc-receive].
 	HookCommand []string
 
 	// Faults is nil in production (internal/gitlet/gitletfault).
 	Faults gitletfault.Injector
 
-	// Logger nil is the package's own (component gitlet.cache) — never a
-	// discarding one, because a missing warning reads as a quiet node.
+	// Logger nil is the package's own (component gitlet.cache), never a
+	// discarding one: a missing warning reads as a quiet node.
 	Logger *slog.Logger
 
-	// Metrics nil records nothing: engine.Options.Metrics may be nil, and a
-	// deployment without a recorder is a legal one.
+	// Metrics nil records nothing: a deployment without a recorder is legal.
 	Metrics *metrics.Recorder
 
 	// Now is the cache's clock: when a repository was last used.
 	Now func() time.Time
 
 	// knobs is the suite's reach into steps no option exposes
-	// (export_test.go). Unexported, so nil everywhere but a test.
+	// (export_test.go); nil outside a test.
 	knobs *knobs
 }
 
-// knobs are the test suite's hooks into the cache's own steps, each a
-// moment a case must hold still to be deterministic rather than lucky.
+// knobs are the test suite's hooks into the cache's own steps, each a moment
+// a case must hold still to be deterministic rather than lucky. A knob that
+// replaces a value or a clock does so only when set.
 type knobs struct {
-	// hookStaged runs while the hook's staged file is still open for
-	// writing — the window in which a fork makes it unexecutable.
+	// hookStaged runs while the hook's staged file is open for writing, the
+	// window in which a fork makes it unexecutable.
 	hookStaged func(f *os.File)
 	// removing runs before the janitor removes each entry of trash/.
 	removing func(path string)
-	// measuring runs as one of the janitor's measures is about to list the
-	// directory at dir — scratch/ itself, then each directory a listing under
-	// it named; and each cohort a copy's memo listing measures (one no state
-	// records): a case removes or replaces it there, or retires the copy that
-	// holds it, as the host moves a view out, or a purge a copy, from under a
-	// measure that has listed it.
+	// measuring runs as a janitor's measure is about to list dir (scratch/,
+	// each directory under it, and each memo cohort of a copy no state
+	// records): a case removes or replaces it, or retires its copy, as the
+	// host or a purge would from under a measure that listed it.
 	measuring func(dir string)
-	// statingMemo is told each entry of a cohort a copy's memo listing
-	// measures as the measure is about to stat it, once the cohort's listing
-	// has named it: a case removes the entry there, or replaces the cohort
-	// with a file so the stat fails, as something outside the engine would,
-	// or answers an error, which is then the stat's, as a disk failing under
-	// the measure would. What a case does to the disk here reaches that stat
-	// only where the listing reports each entry's type, as every filesystem
-	// the suite runs on does: on one that reports none, ReadDir stats each
-	// entry as it lists it.
+	// statingMemo is told each memo-cohort entry a measure is about to stat,
+	// after the listing named it: a case removes it, replaces the cohort with a
+	// file, or answers an error (a failing disk), which is the stat's. A change
+	// to the disk reaches the stat only where ReadDir reports entry types
+	// rather than stating as it lists, as every filesystem the suite uses does.
 	statingMemo func(path string) error
 	// trimming runs as the memo's trim is about to move the cohort at dir out
-	// of a copy it found holding it: a case retires the copy there, as a purge
-	// does from under a trim that has picked it.
+	// of a copy: a case retires the copy there, as a purge would.
 	trimming func(dir string)
-	// ticks, when set, is where the janitor takes its ticks from, in place
-	// of a ticker of EvictInterval: a case delivers a tick when it chooses
-	// — or never, so that no tick can pass for a kick — rather than waiting
-	// a minute for one.
+	// ticks replaces the janitor's EvictInterval ticker: a case ticks when it
+	// chooses, or never, so no tick passes for a kick.
 	ticks <-chan time.Time
 	// peeling runs as a round's peel is about to read the incarnation at
 	// dir.
 	peeling func(dir string)
-	// tagging runs as a round's tag step is about to read the facts of reading
-	// objects through git in the incarnation at dir; its error fails the step.
+	// tagging runs as a round's tag step is about to read objects through git
+	// in the incarnation at dir; its error fails the step.
 	tagging func(ctx context.Context, dir string, reading int) error
-	// roundEnding runs as a round over repo has converged and before it
-	// lets the repository go: a case holds a round there, its write lock
-	// given back and the round still the repository's.
+	// roundEnding runs once a round over repo has converged, its write lock
+	// given back but the round still the repository's: a case holds it there.
 	roundEnding func(repo string)
-	// swept runs as the sweep's first half has made the incarnation at dir
-	// its image, before what it left is held to the pool's shape check: a
-	// case writes into it there, as something outside the engine would.
+	// swept runs once the sweep's first half has made the incarnation at dir
+	// its image, before the pool's shape check: a case writes into it there,
+	// as something outside the engine would.
 	swept func(dir string)
 	// maintaining runs before each step of a maintenance run, with the run's
 	// own context: a case holds a run in flight by blocking here.
 	maintaining func(ctx context.Context, step string)
-	// maintTicks, when set, is where the maintainer takes its ticks from, in
-	// place of a ticker of MidxDebounce.
+	// maintTicks replaces the maintainer's MidxDebounce ticker.
 	maintTicks <-chan time.Time
 	indexTicks <-chan time.Time
-	// indexReading is told how many blobs a build of a code index reads
-	// through its cat-file, before it starts it.
+	// indexReading is told how many blobs a code-index build reads through
+	// its cat-file, before it starts it.
 	indexReading func(blobs int)
-	// indexSegmentBytes, when above zero, is the source a build of a code
-	// index writes a segment at, in place of codeindex.SegmentSourceBytes:
-	// a case builds an index of many segments from a few small files.
+	// indexSegmentBytes, above zero, replaces codeindex.SegmentSourceBytes, so
+	// a case builds many segments from a few small files.
 	indexSegmentBytes int64
-	// indexMapped is told the path of each segment a build of a code index
-	// writes and the bytes it reads it back through, as it opens it: a case
-	// holds them to a mapping of that file.
+	// indexMapped is told each segment a code-index build writes and the
+	// bytes it reads it back through: a case holds them to a mapping of it.
 	indexMapped func(path string, data []byte)
-	// indexTipReading is told the directory of each copy the indexer reads a
-	// default branch's tip in, with git, before it starts the process.
+	// indexTipReading is told each copy's directory the indexer reads a
+	// default branch's tip in, before it starts git.
 	indexTipReading func(dir string)
-	// indexPlaced is told, each time a build of a code index has placed a
-	// segment and merged what it asked, how many mappings the node then
-	// holds: a case holds a build to the segments it still reads.
+	// indexPlaced is told the node's mappings each time a build has placed a
+	// segment and merged: a case holds a build to the segments it still reads.
 	indexPlaced func(mapped int)
-	// installWake, when set, is what the installer waits on for the earliest
-	// of its repositories' waits to end — told when, on Options.Now's clock —
-	// in place of a timer, and firing as one: once that clock reaches the
-	// end, and at once where it has, since a pass that read the clock before
-	// a case moved it arms its wake after. A case moves its clock and so
-	// wakes it.
+	// installWake replaces the installer's timer for its earliest wait's end,
+	// at on Options.Now's clock. It fires once that clock reaches at, and at
+	// once if it already has, since a pass may arm after a case moved the
+	// clock. A case wakes it by moving its clock.
 	installWake func(at time.Time) <-chan time.Time
-	// installSettling, when set, runs as an installer's task has ended its
-	// try of the repository id and is about to settle it: a case holds the
-	// task there to land a kick of the repository while it runs.
+	// installSettling runs as an installer's task has tried repository id and
+	// is about to settle it: a case lands a kick of the repository there.
 	installSettling func(id string)
-	// installReading, when set, is told each time the installer takes a
-	// share of the node's read lane for work of its own (held true) and gives
-	// it back (held false) — its canaries' share where canary says so, else
-	// its checks' — the share held across the call: a case counts how many
-	// of each it holds at once.
+	// installReading is told each time the installer takes (held) or gives
+	// back a share of the node's read lane, its canaries' where canary says
+	// so, else its checks': a case counts how many of each it holds at once.
 	installReading func(canary, held bool)
-	// chainLines, when set, is what a written multi-pack-index chain file
-	// lists in place of the ids installed: a case writes one in another
-	// order, a chain over the wrong base, for the canary to meet (M16).
+	// chainLines replaces the ids a written multi-pack-index chain file
+	// lists: a case writes a chain over the wrong base for the canary (M16).
 	chainLines func(ids []string) []string
-	// canaryRunning, when set, runs as a placement's canary is about to read
-	// the chain at dir — a swap's staged directory, or the incarnation's own
-	// for a placement in place — and the function it answers once the
-	// canary's git has ended: a case holds every slot of the read lane
+	// canaryRunning runs as a placement's canary is about to read the chain at
+	// dir (a swap's staged directory, or the incarnation's own), and the func
+	// it returns once the canary's git ends: a case holds every read-lane slot
 	// between the two, as requests filling it past SlotWait do.
 	canaryRunning func(dir string) func()
 	// verifyWaits runs as Verify is about to wait for the repository's
 	// rounds before listing the incarnation at dir.
 	verifyWaits func(dir string)
-	// verifyListing runs while Verify lists the incarnation at dir — the
-	// repository's rounds held off and no maintenance run let start on it.
+	// verifyListing runs while Verify lists the incarnation at dir, rounds
+	// held off and no maintenance run let start.
 	verifyListing func(dir string)
 	// verifyFsck runs as Verify's fsck is about to ask for its maintenance
 	// slot in the incarnation at dir.
 	verifyFsck func(dir string)
-	// checkBudget, when set, is the bound of a check pass over a copy holding
-	// the bytes it is given, in place of CheckBudget's.
+	// checkBudget replaces CheckBudget's bound of a check pass over a copy of
+	// bytes.
 	checkBudget func(bytes int64) time.Duration
 	// adopting runs while an adoption holds its share of the repository's
 	// directory, before it links: a case holds adoptions there together.
 	adopting func(repo string)
-	// adoptSync, when set, is the directory sync an adoption's links are
-	// made durable by, in place of the real one: a case makes it fail.
+	// adoptSync replaces the directory sync that makes an adoption's links
+	// durable: a case makes it fail.
 	adoptSync func(dir string) error
-	// roundPacks, when above zero, is how many packs a full round leaves
-	// before it writes its own index, in place of MidxRoundPacks: a case
-	// exercises the round's index with a handful of pushes.
+	// roundPacks, above zero, replaces MidxRoundPacks (the packs a full round
+	// leaves before it writes its own index), so a handful of pushes reach it.
 	roundPacks int
-	// midxPacks, when above zero, is how many packs gathered beside the
-	// maintainer's index make a repository due again, in place of
-	// MidxPacks: an interleaving reaches a run over the maintainer's own
-	// index with a handful of pushes.
+	// midxPacks, above zero, replaces MidxPacks (the packs beside the
+	// maintainer's index that make a repository due again), so a handful of
+	// pushes reach a run over the maintainer's own index.
 	midxPacks int
-	// fileSync, when set, makes a downloaded file durable in place of
-	// (*os.File).Sync: a case watches which syncs are in flight together,
-	// and what is already in objects/pack while they are.
+	// fileSync replaces (*os.File).Sync for a downloaded file: a case watches
+	// which syncs overlap, and what is in objects/pack meanwhile.
 	fileSync func(f *os.File) error
 	// staged runs once a round has made a bundle's three files, as it hands
 	// the pack to its worker: a case reads the order the round made them in.
 	staged func(object objstore.Key)
-	// stagedWrite, when set, is what every write into a bundle's staged
-	// files answers while it is downloaded — nil to write: a case makes this
-	// node's own disk fail under a download.
+	// stagedWrite answers every write into a bundle's staged files during
+	// its download (nil writes): a case fails this node's disk under one.
 	stagedWrite func(object objstore.Key) error
 	// asking runs as a round's worker is about to ask for its GET, its
-	// bundle's files made: a case holds one pack there while the round's
-	// others are free to ask before it.
+	// bundle's files made: a case holds one pack there while others ask.
 	asking func(object objstore.Key)
-	// roundIndexed, when set, is told the incarnation's directory every
-	// time a full round writes its own multi-pack-index there: the
-	// interleavings are held to reaching it.
+	// roundIndexed is told the incarnation's directory each time a full round
+	// writes its own multi-pack-index there: interleavings must reach it.
 	roundIndexed func(dir string)
 	// hashing runs before a check hashes the file at path: a case counts
 	// what a round hashes, or swaps the file under the hash.
 	hashing func(path string)
-	// checkPiece, when set, is the piece a hash reads in one slot in place
-	// of CheckPieceBytes, so a case's small file is several pieces; and
-	// pieceRead is told each piece's path once it is read, its slot still
-	// held, and again once the slot is given back.
+	// checkPiece replaces CheckPieceBytes, so a small file is several pieces;
+	// pieceRead is told each piece's path once read, its slot still held, and
+	// again once the slot is given back.
 	checkPiece int64
 	pieceRead  func(path string, held bool)
-	// readFault, when set, is asked before each piece a hash reads, and an
-	// error it answers is that read's: a case's disk failing under a file.
+	// readFault is asked before each piece a hash reads, its error that
+	// read's: a disk failing under a file.
 	readFault func(path string) error
-	// scrubWake, when set, is the scrubber's wake for the next interval's
-	// end, next on the cache's clock, in place of a timer, and firing as one:
-	// once that clock reaches next, and at once where it has, since a pass
-	// that read the clock before a case moved it arms its wake after. A case
-	// on a clock of its own sees when the scrubber means to wake, and wakes
-	// it by moving the clock there.
+	// scrubWake replaces the scrubber's timer for the next interval's end,
+	// next on the cache's clock, firing as installWake does: a case sees when
+	// the scrubber means to wake, and wakes it by moving the clock there.
 	scrubWake func(next time.Time) <-chan time.Time
-	// derived, when set, is the cache's declarations of its derived files in
-	// place of DerivedFiles(): a case proves the code reads the
-	// declarations by opening a cache over a changed one.
+	// derived replaces DerivedFiles(): a case proves the code reads the
+	// declarations by opening a cache over changed ones.
 	derived []Derived
-	// stating, when set, is told the path, relative to its incarnation, of
-	// every directory entry the cache stats to count its bytes (image.sizes):
-	// a case counts what the end of a maintenance run reads.
+	// stating is told the incarnation-relative path of every entry the cache
+	// stats to count its bytes (image.sizes): a case counts what the end of a
+	// maintenance run reads.
 	stating func(rel string)
-	// decodes, when set, counts every move a view of the index of pushes
-	// decodes (MoveView.At): a case holds a landed-in search to the few
-	// moves it probes.
+	// decodes counts every move a view of the index of pushes decodes
+	// (MoveView.At): a case holds a landed-in search to the moves it probes.
 	decodes *atomic.Int64
-	// backfillWake, when set, is the backfill's wait — after a page, after a
-	// failure, or until the next horizon falls due — in place of a timer of
-	// d: a case sees how long the backfill means to wait, and wakes it.
+	// backfillWake replaces the backfill's timer of d (after a page, a
+	// failure, or until the next horizon): a case sees the wait and wakes it.
 	backfillWake func(d time.Duration) <-chan time.Time
-	// folded, when set, is told what each round's fold of its delta's pushes
-	// into the index took (foldPushes): a benchmark weighs the fold against
-	// the round it is part of.
+	// folded is told what each round's fold of its delta's pushes took
+	// (foldPushes): a benchmark weighs the fold against its round.
 	folded func(took time.Duration)
-	// mappedRuns, when above zero, is the node's bound on mapped runs in
-	// place of the process's map count's share (runmaps.go): a case reaches
-	// the bound with a handful of copies.
+	// mappedRuns, above zero, replaces the node's bound on mapped runs (the
+	// process map count's share, runmaps.go), so a handful of copies reach it.
 	mappedRuns int
-	// stateWrite, when set, is asked before every write of a repository's
-	// state — round says whether a round writes it — and an error it answers
-	// is that write's: a case fails the backfill's or the maintainer's write,
-	// which reach no fault point.
+	// stateWrite is asked before every write of a repository's state (round:
+	// a round writes it), its error that write's: a case fails the backfill's
+	// or the maintainer's write, which reach no fault point.
 	stateWrite func(repo string, round bool) error
-	// merged, when set, is told how many runs each merge of an index of
-	// pushes that stored merged (mergeSpan): a benchmark counts the merges a
-	// push costs.
+	// merged is told how many runs each stored merge of an index of pushes
+	// merged (mergeSpan): a benchmark counts the merges a push costs.
 	merged func(runs int)
-	// link, when set, makes every hard link a swap makes (Cache.link) in
-	// place of os.Link: a case makes a link fail, as a filesystem out of
-	// links or room would.
+	// link replaces os.Link for every hard link a swap makes (Cache.link): a
+	// case fails one, as a filesystem out of links or room would.
 	link func(oldname, newname string) error
-	// syncing, when set, is told every directory a swap or a state's write
-	// is about to sync (Cache.durableDir): a case counts what a swap's
-	// durability costs.
+	// syncing is told every directory a swap or a state's write is about to
+	// sync (Cache.durableDir): a case counts what a swap's durability costs.
 	syncing func(dir string)
-	// dropping and dropped, when set, are told each derived file a drop
-	// moves into trash/ (dropFor), by its path relative to the incarnation:
-	// dropping once it is moved and before the incarnation's record of it
-	// changes, dropped once that change is made, its entry's lock let go
+	// dropping and dropped are told each derived file a drop moves into
+	// trash/ (dropFor), incarnation-relative: dropping once moved and before
+	// the incarnation's record changes, dropped after, the entry's lock let go
 	// between them. A case holds a drop on either side of the change.
 	dropping, dropped func(rel string)
 }

@@ -82,6 +82,7 @@ import type { PageSummary } from "~/protocol/index.ts";
 import { usePagedPages } from "./usePagedPages.ts";
 import { newPagePath, useSpaces } from "./parts.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /** The tool-skill pages: published, and only skills. */
 const SKILL_PAGES = { skills: true, status: "published" } as const;
@@ -366,7 +367,11 @@ function LearnedSkills({ order, onSort }: { order: LearnedOrder; onSort: (sort: 
           ariaLabel="Whose skills"
           value={seat}
           onChange={(v) => setPicked(String(v))}
-          options={agents.map((a) => ({ value: a.handle, label: a.name }))}
+          options={agents.map((a) => ({
+            value: a.handle,
+            label: a.name,
+            leading: <ChoiceFace seat={a} />,
+          }))}
         />
       </Card.Header>
       {locked ? (

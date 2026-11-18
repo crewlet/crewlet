@@ -48,6 +48,26 @@
 // server counts it, so one rule serves every reader that pulls a consumer
 // itself (internal/queue/jetstream's copy reads and dead-letter listings; its
 // domain consumers' standing pull reads its statuses with [PullStatus]).
+//
+// # A window across a link
+//
+// [WindowCrossing] sizes what a node's bulk transfers hold out across a link
+// at once, because what waits behind them is any request sent after them on
+// the link, or whose answer crosses back after them: a read, a small write or
+// a lease renewal on the same connection, the coordination store's, which
+// every lease renewal of the node rides, or on another connection crossing
+// the same link or a bottleneck on it that queues first in first out. Every
+// one of them is held to [RequestTerm], whatever lease the node holds, and one
+// not answered inside it is unknown. One read term is the least the request's
+// own round trip is given anywhere ([jsprovision.ReadTerm]).
+//
+// THE SUM OF BOTH DIRECTIONS is what such a request waits behind: its bytes
+// queue behind what the node sent, and its answer behind what the link is
+// bringing back. So a link has ONE window ([Window], [LinkWindow]), owned by
+// its queue's connection and shared first come first served by the object
+// store's puts, its downloads' and walks' pulls, and a memory replay's pulls;
+// one window each way held such a request 7.75 seconds at the floor
+// (ADR-0161).
 package jsapi
 
 import (
@@ -58,6 +78,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
 // Domain is the JetStream domain every broker of the engine's own embedded
@@ -153,6 +175,15 @@ func (a API) String() string {
 // every time it is sent, up to [WriteSends] sends ([WriteBound], [Budget]); a
 // request on a member's own connection crosses nothing.
 const RequestTerm = 5 * time.Second
+
+// WindowCrossing is the longest the bytes a link's window holds out, both
+// directions together, may take to cross the link and still leave a request
+// sent behind them answered inside its [RequestTerm]: the term less one
+// [jsprovision.ReadTerm], the request's own round trip, four seconds. The
+// window holds no more than the slowest link the engine allows
+// (objstore.MiBPace) carries in that ([LinkWindow]). Sized by the request's
+// term, never a lease's heartbeat (the package doc, "A window across a link").
+const WindowCrossing = RequestTerm - jsprovision.ReadTerm
 
 // Client is a JetStream client over nc that speaks this API, its every
 // request held to [RequestTerm] where its caller set no deadline.

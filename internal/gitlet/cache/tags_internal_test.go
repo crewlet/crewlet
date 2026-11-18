@@ -92,7 +92,7 @@ func tagFileOf(t testing.TB, tags []tagInsert) []byte {
 	return b.Bytes()
 }
 
-// writeTags writes raw at a new path in dir, answering it.
+// writeTags writes raw to a new temporary file, answering its path.
 func writeTags(t testing.TB, raw []byte) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "tags")
@@ -145,8 +145,7 @@ func TestATagFileReadsBackWhatItHolds(t *testing.T) {
 	for _, n := range []int{0, 1, 1000} {
 		t.Run(fmt.Sprintf("tags=%d", n), func(t *testing.T) {
 			t.Parallel()
-			// Each subtest draws from its own source: a rand.Rand is not
-			// safe for concurrent use, and these subtests run in parallel.
+			// A source per subtest: rand.Rand is not safe for concurrent use.
 			r := rand.New(rand.NewPCG(7, uint64(n)))
 			tags := randomTags(r, n)
 			raw := tagFileOf(t, tags)

@@ -8,11 +8,9 @@ import (
 // refuse to apply it: the payload decoded and held to the subject that
 // arbitrated it and to the object rule ([fileMatches]).
 //
-// ONE READING OF A FILE RECORD. The applier writes the row from it, and
-// [FileObjectReferences]' Records reads the object the row will name from it —
-// so what a backup carries past its store copy is what the applier writes
-// (ADR-0082), and a record the applier would refuse is one the backup refuses
-// too rather than reads its own way.
+// ONE READING OF A FILE RECORD, for the applier and for
+// [FileObjectReferences]' Records alike, so a backup carries what the applier
+// writes and refuses what it refuses (ADR-0082).
 func decodeFile(mutation []byte, id string) (File, error) {
 	var file File
 	if err := decodePayload(mutation, &file); err != nil {
@@ -27,21 +25,15 @@ func decodeFile(mutation []byte, id string) (File, error) {
 // fileMatches refuses a file record whose payload is not the file its subject
 // arbitrated, or whose object could not be read back.
 //
-// THE SUBJECT IS THE ADDRESS, for the page title's reason: a writer that took
-// one path at the broker and wrote another into every node's row would leave
-// the arbitrated path held by nothing and the written one held by two.
+// THE SUBJECT IS THE ADDRESS: a payload path other than the arbitrated one
+// would leave that path held by nothing and the written one by two.
 //
-// AND AN OBJECT IS NAMED WITH A DIGEST AND A SIZE IT CAN BE CHECKED AGAINST:
-// the backup verifies every object it copies against the row's digest and
-// size, reading the digest back through [objstore.ParseHash], so a row naming
-// an object beside something that is not a digest would stop every backup for
-// good, on every node. The key needs no check of its own here — it decodes
-// only in its one canonical spelling ([objstore.Key]). A LIVE FILE MUST NAME
-// ONE, and only a removal names none: a live row naming nothing would be a
-// file listed with content no reader can get.
+// THE OBJECT'S DIGEST MUST PARSE ([objstore.ParseHash]): the backup verifies
+// every object against it, so a bad one stops every backup on every node
+// (the key decodes only canonically, [objstore.Key]). A LIVE FILE MUST NAME
+// AN OBJECT, or it is listed with content no reader can get.
 //
-// Every refusal here is one the writer makes first ([checkFilePut]), so a
-// record that reaches it was written by something else.
+// The writer refuses all of this first ([checkFilePut]).
 func fileMatches(id string, file File) error {
 	path, err := NormalizeFilePath(file.Path)
 	switch {

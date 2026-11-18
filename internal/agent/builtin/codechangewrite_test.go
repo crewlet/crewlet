@@ -52,9 +52,8 @@ func (b taskBook) Task(_ context.Context, idOrKey string, _ worklet.DetailWants,
 	return worklet.TaskDetail{}, fmt.Errorf("%w: %s", worklet.ErrNoTask, idOrKey)
 }
 
-// countedTasks is the engine's tracker as a key is resolved, counting the
-// reads it is asked — for a call that must judge its arguments before it
-// reads anything.
+// countedTasks is a taskBook counting its reads, for a call that must judge
+// its arguments before it reads anything.
 type countedTasks struct {
 	book taskBook
 	n    atomic.Int32
@@ -82,10 +81,10 @@ func decoded(t *testing.T, got tools.Result) map[string]any {
 
 // ---- the list and the surfaces ---------------------------------------------- //
 
-// A CHANGE WRITE DELIVERS TO CODE: a turn woken about a change that answered
-// by opening, editing or closing one delivered, on Gitlet's own surface
-// — the surface the code feed's wakes come from — and each is a write to a
-// shared surface, so no worker acting under its parent's name is given one.
+// A CHANGE WRITE DELIVERS TO CODE: a turn woken about a change that opened,
+// edited or closed one delivered, on Gitlet's surface (where the code feed's
+// wakes come from), and each is a write to a shared surface, so no worker
+// acting under its parent's name is given one.
 //
 // Mutation: the delivery switch leaving the change writes out of CodeWrites →
 // they deliver nowhere, red.
@@ -116,12 +115,11 @@ func TestAChangeWriteDeliversToCode(t *testing.T) {
 // ---- code_open_change ----------------------------------------------------- //
 
 // AN OPEN REQUESTS ITS REVIEWERS AS A STEP: the change is opened under the
-// call's operation — its id derived from it — and the reviewers it names are
-// asked by a SECOND write, a step of that operation, of the change the open
-// answered, decided at or past the open's own record; the same call made again
-// is the same two operations, so the ledger collapses both. An open the
-// committer refuses asks nobody, and an ask refused leaves the change open and
-// says so on the answer, never as the open's failure.
+// call's operation, its id derived from it, and its reviewers are asked by a
+// SECOND write, a step of that operation, of the opened change, decided at or
+// past the open's own record; the same call again is the same two operations, so the ledger
+// collapses both. An open the committer refuses asks nobody, and a refused ask
+// leaves the change open and says so on the answer, never as the open's failure.
 //
 // Mutations: the ask minted an operation of its own → the repeat is a second
 // ask, red; the ask sent after a refused open → red; the ask decided below the
@@ -356,11 +354,11 @@ func TestAChangeWriteIsHeldToTheVersionItsCallerRead(t *testing.T) {
 }
 
 // AN UPDATE ASKING TWO THINGS READS NO ITEM: code_update_change counts what a
-// call asks from its arguments' presence before it resolves the work item one
-// names, so a call naming a Worklet key beside `draft` or a `target` is
-// refused as changing more than ONE thing without a read of the tracker — and
-// a key naming no task does not hide that refusal behind its own. The same key
-// asked alone is read once and carried by the edit.
+// call asks from its arguments' presence before resolving a named work item,
+// so a Worklet key beside `draft` or `target` is refused as changing more than
+// ONE thing without a tracker read, and a key naming no task does not hide
+// that refusal behind its own. The key asked alone is read once and carried by
+// the edit.
 //
 // Mutation: the item resolved before the ask is counted → the tracker is read
 // and a key naming no task answers as one, red.
@@ -402,18 +400,17 @@ func TestAnUpdateAskingTwoThingsReadsNoItem(t *testing.T) {
 	}
 }
 
-// EVERY CHANGE REFUSAL IS IN AN EXISTING CLASS, by the rule a push's are: a
-// rule of the repository or the change refusing the caller forbidden, a
-// change that moved stale, a branch already heading a live change exists,
-// branches no change can be about invalid, the change or its repository in a
-// state that refuses the write until somebody changes it (closed, merged,
-// archived, a pull mirror) conflict, what is gone not found, and what waiting
-// clears unavailable — never the engine's own fault — each answered with the
-// decide's own sentence.
+// EVERY CHANGE REFUSAL IS IN AN EXISTING CLASS, by a push's rule: a rule
+// refusing the caller forbidden, a change that moved stale, a branch already
+// heading a live change exists, branches no change can be about invalid, a
+// change or repository in a state refusing the write until somebody acts
+// (closed, merged, archived, a pull mirror) conflict, what is gone not found, and what
+// waiting clears unavailable — never the engine's own fault — each answered
+// with the decide's own sentence.
 //
 // Mutation: drop change_exists from changeClass → red; answer repo_mirrored
-// unavailable, as an import's wait is → red; answer repo_archived forbidden
-// again, as a rule → red.
+// unavailable, as an import's wait is → red; answer repo_archived forbidden,
+// as a rule → red.
 func TestEveryChangeRefusalIsInAnExistingClass(t *testing.T) {
 	t.Parallel()
 	want := map[gitlet.ChangeRefusal]tools.Refusal{
@@ -445,12 +442,11 @@ func TestEveryChangeRefusalIsInAnExistingClass(t *testing.T) {
 
 // ---- the act route and the bound --------------------------------------------- //
 
-// AN UNBOUND TOKEN CANNOT OPEN A CHANGE: on the act route — a request carrying
-// its own operation key, a person's dashboard pressing the tool — a credential
-// bound to nobody is refused every change write in Gitlet's sentence
-// before anything is read or routed, and reads a change all the same; a person
-// bound to their human seat opens one as that seat, under the operation the
-// request's key derives.
+// AN UNBOUND TOKEN CANNOT OPEN A CHANGE: on the act route (a request carrying
+// its own operation key, as a person's dashboard sends) a credential bound to nobody is refused every change
+// write in Gitlet's sentence before anything is read or routed, yet reads a
+// change; a person bound to their human seat opens one as that seat, under the
+// operation the request's key derives.
 //
 // Mutation: drop writeCaller's unbound check → the token's open reaches the
 // committer, red.
@@ -510,10 +506,10 @@ func mustMinted(t *testing.T, op string) (at time.Time) {
 }
 
 // EVERY CHANGE WRITE STAYS INSIDE THE OP ID BOUND: on the operator's surface,
-// whose operations are the longest — a minted id naming the tool and a digest
-// of its call, then the step naming the verb and the repository — every write
-// every change tool makes, its second write included, carries an id every
-// party to it accepts (statelog.CheckCallerOpID).
+// whose operation ids are the longest (a minted id naming the tool and its
+// call's digest, then a step naming the verb and repository), every write of
+// every change tool, second writes included, carries an id every party accepts
+// (statelog.CheckCallerOpID).
 //
 // Mutation: name the second write's step `reviewers` → the open's ask is past
 // the bound, red.

@@ -12,18 +12,12 @@ import (
 
 // WHERE ONE TASK SITS IS ASKED OF THAT TASK, BY ITS KEY.
 //
-// The around read first asks which run of an answer holds the task
-// ([segmentHolds]), and that probe names the task, so its read of the task
-// table is one row by the table's own key whatever index the answer's
-// listings are read through. Measured when the trash's set began naming its
-// index ([taskSource]): the probe was read through it too, and the trash's
-// index leads with the removal rather than the id, so asking where one
-// removed task sat walked every removal in scope once per run of the answer.
-//
-// So the probe's own read of the task is a seek of the key, and so is the
-// subtree rollup's probe of that task's root, which reads the root under an
-// alias of its own ([anchorProbe]) and which [tasksReadOtherwise], reading only
-// the rows' own alias, does not count.
+// The around read's probe of which run holds the task ([segmentHolds]) names
+// the task, so it reads one row by the table's key whatever index the
+// answer's listings use: through the trash's index ([taskSource]), which
+// leads with the removal, it walked every removal in scope once per run. The
+// subtree rollup's probe of the task's root seeks its key too, under an alias
+// of its own ([anchorProbe]) that [tasksReadOtherwise] does not count.
 func TestWhereATaskSitsIsAskedByItsKey(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
@@ -74,22 +68,13 @@ func TestWhereATaskSitsIsAskedByItsKey(t *testing.T) {
 
 // A TASK'S NEIGHBOURS ARE SOUGHT FROM THE TASK, IN THE ORDER THE RUN IS WALKED.
 //
-// A task page steps to the task before and after it, and says how many are
-// ahead ([readAround]). Each of the three was a read of the run filtered by
-// "after the task" or by its negation, which the planner cannot seek: the next
-// task was found by walking the run from its first row to the task, the
-// previous by walking it from its last row back to the task, and the count by
-// walking it from the start — so stepping through a board read the board
-// once per step. The gate planned them and found no heap scan, which none of
-// them is.
-//
-// So for every registered query, when the run's own first row — the read a
-// neighbour in the next run is — walks an index without sorting, every arm of
-// the task's next neighbour and every arm of the count ahead of it must SEEK
-// that index on the order's leading column, and the neighbour's must not sort;
-// and when the run's last row walks one backwards unsorted, so must every arm
-// of the previous neighbour. An order no index serves sorts its first row too,
-// and is exempt.
+// A filter by "after the task" or its negation cannot be sought, so each step
+// through a board ([readAround]) would read the run again, and a heap-scan
+// check misses it. So for every registered query, when the run's first row
+// walks an index unsorted, every arm of the next neighbour and of the count
+// ahead must SEEK it on the order's leading column, the neighbour unsorted;
+// and when its last row walks one backwards unsorted, so must every arm of
+// the previous neighbour. An order no index serves is exempt.
 //
 // NOT VACUOUS: the indexes the checked first and last rows walk must include
 // every one named below, in each direction.

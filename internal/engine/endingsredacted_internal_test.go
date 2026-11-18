@@ -11,13 +11,12 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ENDINGS BLOCK TELLS A ROW THROUGH ITS ONE REDACTION. How a conversation's
-// earlier turns ended is read off their rows and handed to the next turn's
-// model, a reader like any other: what each turn was asked and every account
-// of its ending are shown as Session.Redacted shows them — a credential a
-// person pasted into the ask, or one a box printed into a failure or an unkept
-// capture's reason, is its marker there — the head's and another ended
-// turn's alike.
+// THE ENDINGS BLOCK TELLS A ROW THROUGH ITS ONE REDACTION. How a
+// conversation's earlier turns ended reaches the next turn's model, a reader
+// like any other, so each turn's ask and every account of its ending are shown
+// as Session.Redacted shows them, the head's and another ended turn's alike: a
+// credential pasted into the ask or printed into a failure or an unkept
+// capture's reason is its marker there.
 //
 // Mutation: hand the block the row's words as the row holds them, and a
 // credential reaches the next turn's brief.

@@ -36,28 +36,22 @@ roles:
 `
 
 // THE DUTY'S TICK IS BOUNDED BY ITS PROGRESS — through the tick the engine
-// runs, not a bound a test assembled.
-//
-// The bound is only as good as its wiring: an embedder handed no budget is
-// refused, and every tick then embeds nothing while logging it; a tick derived
-// with a deadline instead cuts off a slow node's work mid-stride; and a tick
-// cut off for its silence must say so, or a wedged provider looks like a quiet
-// company. So a tick whose provider takes most of the budget per batch, and
-// more than the budget in all, makes every call; a tick whose provider answers
-// publishes every source; and one whose provider never answers is cut off at
-// the budget for that reason, and reports it.
+// runs, not a bound a test assembled. Handed no budget, an embedder is refused
+// and every tick embeds nothing; a deadline instead cuts a slow node off
+// mid-stride; and a tick cut off unreported makes a wedged provider look like
+// a quiet company. So a provider taking most of the budget a batch, and more
+// in all, gets every call; one that answers has every source published; and
+// one that never answers is cut off at the budget for that reason, and the
+// tick reports it.
 func TestTheEmbeddingTickIsBoundedByItsProgress(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNodeOf(t, embeddingDutyCompany)
 	// The node's own duty would race this test's ticks for the same sources.
 	e.stopEmbedding()
 	provider := &pacedEmbedder{Fake: embeddings.NewFake(64)}
-	// ONE INPUT A REQUEST, so three sources are three requests through the
-	// same packing a real model's limits drive. The packing itself — a
-	// batch of up to 128 split by count and by bytes — is the search
-	// package's to certify; what is under test here is the tick around
-	// it, and three requests are what make "longer than the budget in
-	// all" true without filing three hundred tasks to get there.
+	// ONE INPUT A REQUEST, so three sources are three requests: enough to
+	// run longer than the budget in all without filing hundreds of tasks.
+	// The packing itself is the search package's to certify.
 	limits := provider.Limits()
 	limits.BatchInputs = 1
 	provider.SetLimits(limits)
@@ -74,13 +68,11 @@ func TestTheEmbeddingTickIsBoundedByItsProgress(t *testing.T) {
 	const budget = 5 * time.Second
 	duty.budget = budget
 
-	// PROGRESS KEEPS IT RUNNING: each provider request takes two seconds of a
-	// five-second budget, and the three take longer than the budget in all.
-	// They answer with NO VECTORS — sources with nothing to embed — which is
-	// progress like any answer and publishes nothing, so what each stretch
-	// costs is the request alone and no machine's publish rate can move the
-	// case across the budget. Not with an error: a failure that is not about
-	// an input ends the tick's requests at the first.
+	// PROGRESS KEEPS IT RUNNING: each request takes two seconds of a
+	// five-second budget, three of them more than the budget. They answer
+	// with NO VECTORS, progress that publishes nothing, so no machine's
+	// publish rate moves the case across the budget; not an error, which
+	// would end the tick's requests at the first.
 	var mu sync.Mutex
 	answered := 0
 	provider.set(func(ctx context.Context) error {
@@ -138,17 +130,10 @@ func TestTheEmbeddingTickIsBoundedByItsProgress(t *testing.T) {
 }
 
 // THE DUTY'S REFUSALS OUTLIVE ITS TICKS, AND ITS PROVIDER — NOT ITS
-// CONFIGURATION.
-//
-// The search package's duty is rebuilt every tick, so what the provider refused
-// alone is held here, across them — or a refused input would be isolated again
-// at the front of every tick. A refusal is a fact about the provider as it was
-// CONFIGURED: an apply builds the provider again, and one built the same — an
-// apply that changed nothing about the embeddings, or a re-activation that
-// rotated the key — keeps the memory, because starting it again re-isolated
-// every refused input, fifteen requests apiece, on every apply. One configured
-// otherwise — a lowered `max_input_tokens`, another gateway — starts with
-// none, so the fix is tried at once rather than an hour later.
+// CONFIGURATION. Held across ticks, or every refused input is isolated again
+// (fifteen requests apiece) at the front of each; kept by a provider an apply
+// rebuilt the same (a rotated key, say); dropped for one configured otherwise
+// (a lowered `max_input_tokens`, another gateway), so the fix is tried at once.
 func TestTheDutysRefusalsFollowTheProvidersConfiguration(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNodeOf(t, embeddingDutyCompany)
@@ -177,8 +162,7 @@ func TestTheDutysRefusalsFollowTheProvidersConfiguration(t *testing.T) {
 			"holding the refusal", duty.refusals, duty.refusals.Len(), first)
 	}
 
-	// AN APPLY BUILDS THE PROVIDER AGAIN, configured the same: a new slot,
-	// and the same memory — the source stays held, and nothing is sent.
+	// REBUILT THE SAME: a new slot, the same memory, nothing sent.
 	same := embeddings.NewFake(64)
 	var rebuilt embeddings.Embedder = same
 	e.embeddings.Store(&rebuilt)
@@ -193,8 +177,8 @@ func TestTheDutysRefusalsFollowTheProvidersConfiguration(t *testing.T) {
 			"again on every apply")
 	}
 
-	// CONFIGURED OTHERWISE — a narrower request, here — and the memory starts
-	// again: the source the old configuration refused is tried at once.
+	// CONFIGURED OTHERWISE (a narrower request): the refused source is
+	// tried at once.
 	narrower := embeddings.NewFake(64)
 	narrower.SetLimits(embeddings.Limits{InputBytes: 8192, BatchInputs: 64, BatchBytes: 300_000})
 	var reconfigured embeddings.Embedder = narrower
@@ -211,10 +195,9 @@ func TestTheDutysRefusalsFollowTheProvidersConfiguration(t *testing.T) {
 
 // AN EMBEDDING TICK STOPS WHEN A RENEWAL SAYS ANOTHER NODE HOLDS THE DUTY —
 // mid-request, for that reason, publishing nothing. The kept duty's own cases
-// certify the renewal; what only this one can see is the tick's WIRING to it:
-// that the provider is asked on the kept duty's context and not on the turn's,
-// a context derived without its cancellation, or one bounded before the duty
-// was kept.
+// certify the renewal; this one holds the tick's WIRING: the provider is asked
+// on the kept duty's context, not the turn's, one derived without its
+// cancellation, or one bounded before the duty was kept.
 func TestAnEmbeddingTickStopsWhenARenewalSaysAnotherNodeHoldsTheDuty(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNodeOf(t, embeddingDutyCompany)
@@ -250,9 +233,8 @@ func TestAnEmbeddingTickStopsWhenARenewalSaysAnotherNodeHoldsTheDuty(t *testing.
 	if a := claim.await(t); !a.held {
 		t.Fatalf("the turn's claim answered %+v, want held", a)
 	}
-	// THE PROVIDER IS MID-REQUEST before the renewal is asked: a renewal
-	// landing before the request would prove only that the tick's reads were
-	// cut off, not its call to the provider.
+	// THE PROVIDER IS MID-REQUEST before the renewal: one landing earlier
+	// proves only the tick's reads were cut off, not the provider call.
 	select {
 	case <-called:
 	case r := <-done:
@@ -316,9 +298,8 @@ func (p *pacedEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]flo
 }
 
 // seededProjects numbers the projects seedTasks files, so every call names a
-// new one. The key was read off the clock once, and a clock that counts in
-// microseconds (macOS) left it a hundred values: a test seeding twice reused
-// its own key about once in a hundred runs, and the second create was refused.
+// new one: a key read off a microsecond clock (macOS) repeats, and the second
+// create is refused.
 var seededProjects atomic.Int64
 
 // seedTasks files n tasks in a project of their own through the node's writer,

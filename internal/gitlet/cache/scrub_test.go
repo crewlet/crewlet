@@ -26,17 +26,15 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE SCRUB: every byte a used copy holds held to its checksum behind the
-// serving — each .pack against its own trailer, every index file by the
-// check's rule, vouched or not — once after a copy a previous process left
-// first answers, every ScrubInterval while it is used, and at once at a
-// report's word; what fails is installed again in place with one GET a pack,
-// or dropped to be written again.
+// THE SCRUB holds every byte of a used copy to its checksum behind the
+// serving, vouched or not: once after a copy a previous process left first
+// answers, every ScrubInterval while it is used, and at once on a report.
+// What fails is installed again in place (one GET a pack) or dropped to be
+// written again.
 
-// scrubbedCopy is the measured history a previous process SERVED — the
-// maintainer's bitmapped multi-pack-index and commit-graph over its two packs
-// — opened by this one on the case's clock: its first round has checked its
-// indexes, and its first scrub has found every file whole.
+// scrubbedCopy is the measured history a previous process SERVED (bitmapped
+// multi-pack-index and commit-graph over two packs), opened by this one on the
+// case's clock, its first round and first scrub done and sound.
 type scrubbedCopy struct {
 	w   *syncWorld
 	clk *clock
@@ -71,15 +69,15 @@ func newScrubbedCopy(t *testing.T, opts ...func(*cache.Options)) *scrubbedCopy {
 }
 
 // used moves the clock past the scrub's interval and has a reader use the
-// copy: what makes a used copy's scrub due again.
+// copy, making its scrub due again.
 func (sc *scrubbedCopy) used(t *testing.T) {
 	t.Helper()
 	sc.clk.Add(cache.ScrubInterval)
 	sc.w.sync(t, sc.c, sc.h.repo)
 }
 
-// repaired waits until the repair round a scrub asked has run and taken its
-// findings off the copy's repair mark, and answers a sync after it.
+// repaired waits until the scrub's repair round has cleared its findings off
+// the repair mark, and answers a sync after it.
 func (sc *scrubbedCopy) repaired(t *testing.T) cache.Synced {
 	t.Helper()
 	eventually(t, "the scrub's findings repaired", func() bool {
@@ -88,27 +86,19 @@ func (sc *scrubbedCopy) repaired(t *testing.T) cache.Synced {
 	return sc.w.sync(t, sc.c, sc.h.repo)
 }
 
-// reportsTotal is every report the cache's observer counted, whatever its
-// part and outcome.
+// reportsTotal is every report the cache's observer counted.
 func reportsTotal(w *syncWorld) uint64 {
 	return counterOf(w.rec, metrics.CodeCacheReports, nil)
 }
 
-// A PACK BODY NO GIT NAMES IS FOUND BY THE SCRUB. On a copy the maintainer has
-// served from, upload-pack's pack reuse sends a damaged entry of the bitmap's
-// preferred pack — the newer pack here (served) — to the client byte for byte
-// and exits 0 saying nothing — S1, an entry's stated size one too large, and
-// C, eight bytes of the pack's middle — so every clone fails at the client
-// while no report reaches the cache. (Which pack the bitmap prefers matters
-// to S1 alone: the newer pack's entry under a bitmap preferring the older pack
-// has its stated size read and its pack named by git, while C's bytes are
-// copied as they are stored either way — measured on the node pin and the
-// floor.) Damage written IN PLACE after this process vouched for the pack
-// keeps the file's identity, so nothing but the scrub can see it: once the
-// copy has been used past its interval, the scrub holds the pack to its
-// trailer, and the repair round installs it again over its files — one GET,
-// the same incarnation — and the next clone completes. On every git the suite
-// runs.
+// A PACK BODY NO GIT NAMES IS FOUND BY THE SCRUB. upload-pack's pack reuse
+// sends a damaged entry of the bitmap's preferred pack (the newer, here) byte
+// for byte and exits 0: S1 (a stated size one too large; it must be the
+// preferred pack, or git names it) and C (eight bytes of the middle). Every
+// clone fails at the client, no report comes, and damage IN PLACE after the
+// vouch keeps the file's identity: only the scrub, once the copy is used past
+// its interval, finds it, and the repair reinstalls it (one GET, same
+// incarnation) so the next clone completes.
 //
 // Mutations: the scrub skips .pack files, or honours vouches — it finds
 // nothing and the clone keeps failing; no interval (a first scrub only) —
@@ -163,9 +153,9 @@ func TestTheScrubFindsAPackBodyNoGitNames(t *testing.T) {
 			if len(lines) != 1 || lines[0]["found"] != "trailer" || lines[0]["trigger"] != "scrub" {
 				t.Errorf("code_cache_pack_reinstalled = %v, want the pack found by the scrub's trailer", lines)
 			}
-			// The derived files over the pack stay — it is the same pack byte
-			// for byte (TestAPackInstalledAgainForItsBodyKeepsItsIndexes) —
-			// and a maintainer's pass writes whatever else is due.
+			// The derived files stay over the byte-identical pack
+			// (TestAPackInstalledAgainForItsBodyKeepsItsIndexes); the
+			// maintainer's pass writes whatever else is due.
 			cache.MaintainerPass(sc.c)
 			if lacks := cloneLacks(t, w, sc.c, s.Dir, h.commits[3]); lacks != "" {
 				t.Errorf("after the repair a clone %s", lacks)
@@ -178,14 +168,11 @@ func TestTheScrubFindsAPackBodyNoGitNames(t *testing.T) {
 }
 
 // AN INDEX FILE DAMAGED AFTER IT WAS VOUCHED FOR IS FOUND BY THE SCRUB. A
-// bitmap whose commit bitmaps are damaged in place (K5) — its identity kept,
-// so the vouch this process gave it stands — names an object less for the
-// branch a clone asks for: the clone is sent a pack without it and fails at
-// the client (`did not receive expected object`), upload-pack exiting 0 with
-// no report. The scrub hashes every file vouched or not: it finds the
-// bitmap failing its trailer, the repair round drops it, and the maintainer
-// writes the index and bitmap again AT ONCE, with the clock never moved past
-// the maintainer's own interval; the next clone completes.
+// bitmap damaged in place (K5) keeps its identity and so its vouch, and
+// omits an object a clone needs: the clone fails at the client (`did not
+// receive expected object`), upload-pack exits 0, nothing is reported. The scrub hashes vouched files too, the
+// repair drops the bitmap, and the maintainer writes it again AT ONCE (the
+// clock never past its own interval); the next clone completes.
 //
 // Mutation: the scrub honours vouches — the bitmap is skipped and every clone
 // keeps failing.
@@ -233,9 +220,8 @@ func TestTheScrubFindsAnIndexDamagedAfterItWasVouched(t *testing.T) {
 	}
 }
 
-// heldHash holds the scrub's hash of the first file whose path holds a
-// substring, once armed, until released — and counts every hash begun
-// meanwhile.
+// heldHash, once armed, holds the scrub's hash of the first file whose path
+// holds a substring until released, counting every hash begun meanwhile.
 type heldHash struct {
 	armed   atomic.Value // the substring, or ""
 	reached chan string
@@ -264,53 +250,18 @@ func (h *heldHash) at(path string) {
 	}
 }
 
-// THE SCRUB HOLDS NO LOCK AND IS NO USE. Held part way through one copy's
-// hashes, it keeps nothing from that copy: a push's delta sync, an adoption
-// and a reader answered at once each complete beside it. Only one scrub runs
-// on the node: a second pass started meanwhile hashes nothing until the first
-// is let go. The copy made due AT ONCE goes before one only its interval made
-// due, whatever their order otherwise. And the scrub is no use, neither its pin
-// nor its release: each copy's last use stays where it was, so a copy nobody
-// uses after its scrub is not scrubbed again at the next interval. The second
-// pass is read in a synctest bubble, twice, never after a pause: once every
-// goroutine of the case is durably blocked (synctest.Wait) — a pass that did
-// not wait for the node's one scrub has begun hashing by then, however late it
-// ran — and again once the clock has moved past every timer the cache arms
-// (pastEveryTimer) and every goroutine has blocked again — one that waited for
-// it only as long as a grace of its own has begun by then too. The cache's
-// clock is the case's own (clk), which the span does not move, the steps
-// beside the held scrub are over and their bound let go, and on a healthy
-// build the held scrub and the pass behind it wait on no clock: nothing runs
-// in the span.
+// THE SCRUB HOLDS NO LOCK AND IS NO USE. Held mid-copy, it blocks no sync,
+// adoption or reader of that copy. A second pass hashes nothing until the
+// first is let go: read after synctest.Wait, then past every timer
+// (pastEveryTimer) to catch one waiting a grace (nothing else runs then). A
+// copy due AT ONCE goes before one due by interval. The scrub's pin and
+// release are no use, so a copy unused since is not scrubbed at the next
+// interval; the clock moves a second before each could stamp one.
 //
-// The last uses are read against the case's clock moved between them, never
-// on one unmoved: there a scrub that counted as a use stamped the very instant
-// of the last use beside it, and read equal. The clock moves on a second
-// after each copy's last use is read and before the first pass takes its pin,
-// and the copy made due at once is read again as the scrub reaches it, before
-// the steps beside the scrub stamp their own uses over whatever its pin
-// stamped. It moves on again once the last use beside the scrub
-// has been read, before the second pass starts, so a use the scrub stamps from
-// there on — while it is held, at its release, or a timer's while later —
-// reads past it; the copy whose interval made it due is used by nothing after
-// the first move, so any use its pin or its release stamps reads past its own.
-// Both copies are read once both passes have ended and again once the
-// bubble's clock has moved past every timer the cache arms and every goroutine
-// has blocked again, so a use a timer stamped late is in by then. The cache is
-// never started and both passes have ended, so on a healthy build nothing runs
-// in that span either: only the passes' hang detectors fire, into channels
-// nobody reads.
-//
-// Mutations: the scrub takes the entry's write lock (the sync waits for it);
-// two scrubs at once (the second pass hashes while the first is held), or once
-// a minute's wait for the node's one scrub has passed (the second pass hashes
-// once the clock has moved); the interval's taken first; the scrub's pin
-// counted as a use, as it takes the copy (the copy made due at once reads used
-// as the scrub reaches it), on the interval's copy alone (its last use reads
-// past its own), or a minute on the bubble's clock after (the held copy's last
-// use is past the reader's); and the scrub's release counted as a use, as it
-// lets the copy go (its last use is the scrub's end) or a minute on the
-// bubble's clock after (the same, at the second read).
+// Mutations: the scrub takes the write lock; two scrubs at once, or after a
+// minute's grace; the interval's copy first; the pin or the release counted
+// as a use, at once or a minute on the bubble's clock after (last uses read
+// past where they were).
 func TestTheScrubHoldsNoLockAndIsNoUse(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -335,8 +286,8 @@ func TestTheScrubHoldsNoLockAndIsNoUse(t *testing.T) {
 		for _, repo := range repos {
 			w.sync(t, c, repo)
 		}
-		// The copy whose id sorts LAST is made due at once by a report of a
-		// crash: it goes first all the same.
+		// The copy whose id sorts LAST is made due at once by a crash: it
+		// goes first all the same.
 		first := slices.Max(repos)
 		then := slices.Min(repos)
 		cache.Report(c, gitproc.Ran{Dir: w.dir(t, c, first), Result: gitproc.Result{Crashed: true}})
@@ -344,8 +295,7 @@ func TestTheScrubHoldsNoLockAndIsNoUse(t *testing.T) {
 			t.Fatalf("after a crash report the copy's scrub is due for %q, want report", why)
 		}
 
-		// Each copy's last use, read before the clock moves on a second and
-		// the first pass takes its pin.
+		// Last uses, read before the clock moves and the first pass pins.
 		firstUsed, thenUsed := cache.LastUsed(c, first), cache.LastUsed(c, then)
 		clk.Add(time.Second)
 
@@ -364,8 +314,6 @@ func TestTheScrubHoldsNoLockAndIsNoUse(t *testing.T) {
 		if got := cache.LastUsed(c, first); !got.Equal(firstUsed) {
 			t.Errorf("the scrub's pin moved the copy's last use from %v to %v: its pin is no use", firstUsed, got)
 		}
-		// Beside the held scrub: a push's delta sync, an adoption and a
-		// reader answered at once.
 		ctx, cancel := context.WithTimeout(t.Context(), hangDetector)
 		defer cancel()
 		w.push(t, first, "refs/heads/main", nil)
@@ -392,14 +340,10 @@ func TestTheScrubHoldsNoLockAndIsNoUse(t *testing.T) {
 		}
 		at.Release()
 		used := cache.LastUsed(c, first)
-		// Any use the scrub stamps from here on reads past the last use
-		// beside it.
+		// Any use the scrub stamps from here on reads past this one.
 		clk.Add(time.Second)
-		cancel() // the steps beside the scrub are over
+		cancel() // the steps beside the scrub are done
 
-		// One scrub on the node: a second pass hashes nothing while the
-		// first is held — read once the pass is parked, and again once the
-		// clock has moved past every timer the cache arms.
 		second := make(chan []string, 1)
 		go func() { second <- cache.ScrubPass(c) }()
 		oneScrub := func(when string) {
@@ -454,14 +398,11 @@ func TestTheScrubHoldsNoLockAndIsNoUse(t *testing.T) {
 }
 
 // A STORED REPORT MAKES THE SCRUB DUE AT ONCE, AND IT REINSTALLS ONLY WHAT
-// FAILED. On a copy before its first maintenance — packs, their indexes and
-// reverse indexes, no multi-pack-index — every pack's reverse index with its
-// signature overwritten is read around by a clone: upload-pack exits 0 and
-// reports the reverse indexes damaged. That report makes the copy's scrub due
-// at once; the scrub finds each .rev failing its trailer, and the repair round
-// installs each pack again over its files — one GET a damaged pack, the same
-// incarnation, never a whole rebuild — while the copy kept answering; the
-// next clone reports nothing.
+// FAILED. Before the first maintenance (no multi-pack-index), a clone reads
+// around reverse indexes with overwritten signatures, exits 0 and reports
+// them. The report makes the scrub due at once; the repair installs each
+// failing pack again in place (one GET each, same incarnation, no whole
+// rebuild) while the copy answers, and the next clone reports nothing.
 //
 // Mutation: a whole rebuild in place of the reinstall (a new incarnation).
 func TestAStoredReportReinstallsThePackWithOneGet(t *testing.T) {
@@ -553,13 +494,11 @@ func TestAReportDrivenScrubWaitsItsCooldown(t *testing.T) {
 	}
 }
 
-// A CRASH MAKES THE SCRUB DUE. A reverse index whose every position is
-// overwritten past its pack's objects, damaged in place on a copy before its
-// first maintenance, kills every clone's pack-objects with SIGSEGV on every
-// git — upload-pack saying only that its child died, a crash that names no
-// file. The pool reads it as a crash (gitproc.Result.Crashed), the cache makes
-// the copy's scrub due, the scrub finds the reverse index failing its trailer
-// and the repair round installs the pack again: the next clone completes.
+// A CRASH MAKES THE SCRUB DUE. A reverse index overwritten past its pack's
+// objects (before the first maintenance) kills every clone's pack-objects with
+// SIGSEGV, naming no file. The pool reads it as gitproc.Result.Crashed, the
+// cache makes the scrub due, the scrub finds the .rev failing its trailer and
+// the repair reinstalls the pack: the next clone completes.
 //
 // Mutation: the observer ignores Crashed — nothing is due, and every clone
 // keeps failing.
@@ -619,32 +558,17 @@ func TestTheScrubberRunsWhatFallsDue(t *testing.T) {
 	})
 }
 
-// BenchmarkScrub is what one scrub of a copy costs: BenchmarkCheck's
-// repository (64 packs of a source repository's history, its maintainer's
-// index, bitmap and graph written), the cache restarted — so the copy is one
-// a previous process left — its first round run, and then its first scrub,
-// which hashes every pack, index and derived file it holds, timed alone.
+// BenchmarkScrub times the first scrub of a copy a previous process left:
+// BenchmarkCheck's 64-pack repository, maintained, the cache restarted.
+// Modes: cache=page (files in the page cache); cache=cold (dropped first, via
+// posix_fadvise); beside=read (two read slots, one held, a probe asking every
+// millisecond, so it shares ONE slot with the scrub as on a busy node); and
+// beside=read,cache=cold (the usual later scrub, of a copy nobody read lately).
 //
-//   - cache=page: the files in the page cache, as on a node that served the
-//     copy moments before;
-//   - cache=cold: every file of the incarnation dropped from the page cache
-//     first (posix_fadvise), so the scrub reads at the volume's throughput;
-//   - beside=read: cache=page on a pool of two read slots, one held by the
-//     arm throughout, while a probe asks the lane for a slot every
-//     millisecond — so the probe and the scrub share ONE slot, the most a
-//     request can find on a node whose every other read slot is busy, and
-//     its waits are what the scrub costs the requests beside it;
-//   - beside=read,cache=cold: the same with the files dropped from the page
-//     cache first — a scrub of a copy no request has read lately, which is
-//     every scrub but the first, so a piece is read at the volume's
-//     throughput while the probe waits behind it.
-//
-// Each reports scrub-ms, the scrub's own time; scrubbed-MB, what it read;
-// s/GB, its seconds per gigabyte of the copy's packs — the figure the
-// package doc and the deployment guide carry; and piece-ms, the time one
-// whole CheckPieceBytes piece takes at that rate, which is the longest a
-// request waits behind it for a slot. beside=read reports the probe's
-// wait-p50-ms, wait-p99-ms and wait-max-ms beside them.
+// Reports scrub-ms; scrubbed-MB; s/GB of packs, the figure the package doc
+// and the deployment guide carry; piece-ms, one CheckPieceBytes piece at that
+// rate, the longest a request waits behind it; and, beside=read, the probe's
+// wait-p50-ms, wait-p99-ms and wait-max-ms.
 func BenchmarkScrub(b *testing.B) {
 	quiet(b)
 	for _, arm := range []struct {
@@ -735,9 +659,8 @@ func BenchmarkScrub(b *testing.B) {
 	}
 }
 
-// probeReads holds one of pool's read slots and asks the lane for another
-// every millisecond until stopped, answering how long each ask waited — a
-// request on a node whose every other read slot is busy.
+// probeReads holds one of pool's read slots and asks for another every
+// millisecond until stopped, answering how long each ask waited.
 func probeReads(b *testing.B, pool *gitproc.Pool) (stop func() []time.Duration) {
 	b.Helper()
 	hold, err := pool.HoldRead(b.Context())
@@ -776,10 +699,9 @@ func probeReads(b *testing.B, pool *gitproc.Pool) (stop func() []time.Duration) 
 	}
 }
 
-// wakes is the scrubber's wakes as a case's clock sees them: every interval's
-// end it asked to be woken at, each a timer on the case's clock (clock.At)
-// that the case fires by moving the clock there; and the next arming a case
-// holds (holdNext).
+// wakes records every time the scrubber asked to be woken at, each a timer on
+// the case's clock (clock.At) the case fires by moving the clock, and holds
+// the next arming when asked (holdNext).
 type wakes struct {
 	clk   *clock
 	mu    sync.Mutex
@@ -787,8 +709,8 @@ type wakes struct {
 	hold  *wakeHold
 }
 
-// wakeHold is an arming held at its start: closed once it is, and what lets
-// it go on.
+// wakeHold is an arming held at its start: held closes once it is, release
+// lets it go on.
 type wakeHold struct{ held, release chan struct{} }
 
 // at is the ScrubWakesWith knob.
@@ -807,10 +729,9 @@ func (w *wakes) at(next time.Time) <-chan time.Time {
 	return w.clk.At(next)
 }
 
-// holdNext holds the scrubber's next arming at its start — its pass has read
-// the clock and decided when to wake — and answers a channel closed once it is
-// held there, and the release that lets it arm, which the case's cleanup calls
-// too, so a case that fails first leaves no scrubber waiting on it.
+// holdNext holds the scrubber's next arming after its pass has read the
+// clock, answering a channel closed once held and the release; cleanup
+// releases too, so a failing case leaves no scrubber waiting.
 func (w *wakes) holdNext(t *testing.T) (held <-chan struct{}, release func()) {
 	hold := &wakeHold{held: make(chan struct{}), release: make(chan struct{})}
 	w.mu.Lock()
@@ -829,41 +750,21 @@ func (w *wakes) has(at time.Time) bool {
 }
 
 // A USED COPY'S SCRUB COMES ROUND AGAIN, HOWEVER ITS USES FALL. The interval
-// counts only for a copy somebody uses, so it is a use that tells the
-// scrubber a copy's interval has begun to count — the FIRST use since its
-// bytes were last held to their checksums, wherever in the interval it falls
-// and whichever kind of use it is: a reader taking the copy, a reader letting
-// it go, or a push's scratch made over it. The scrubber's next pass arms its
-// wake for the interval's end, and the scrub runs then with nobody using the
-// copy again. Woken only by a use made once the interval had passed, a busy
-// repository — used an hour after each scrub, and through the day — was never
-// scrubbed again: its later uses were not first ones, and at the scrubber's
-// last pass it had not been used since its scrub, so no wake was armed for
-// it. Woken only by a reader taking it, a repository read by one long request
-// at a time — a clone of a large repository running past the scrub's end, a
-// CI loop of them — was never scrubbed again either: the release of the
-// reader held across the scrub was its first use after it, so the reader
-// taken next was no first use, and nothing woke the scrubber. Both a copy a
-// previous process left (its first scrub this process's) and one this
-// process built (whose first round begins its interval with no scrub) go
-// round three times under each kind of first use, each round taking a reader
-// after it that is held across the scrub at the interval's end and is the one
-// the next round lets go of or makes its scratch over. In the second round a
-// kick the scrubber takes while it waits — another copy's use, a report — has
-// it pass again and arm its wake anew from a clock it read before the case
-// moved it to the interval's end: armed for a time come already, that wake
-// fires at once, as the timer it stands in for does, and the scrub comes then
-// all the same.
+// counts only for a used copy: the FIRST use since its last scrub, anywhere
+// in the interval and of any kind (reader taken, reader released, push's
+// scratch), wakes the scrubber to arm a wake at the interval's end, and the
+// scrub runs then with no further use. Inherited and built copies each go
+// three rounds per kind. In round two a kick re-arms from a clock read before
+// it moved: a wake armed for a time already come fires at once, as a timer
+// does.
 //
-// Mutations: wake the scrubber only on a first use past the interval (pin's
-// old condition) — no wake is armed after a reader taken inside it; drop the
-// release's wake — none after the release; drop the scratch's — none after
-// the scratch; let a wake armed for a time come already wait for the clock to
-// move again (clock.At's firing at once) — the second round's never fires.
+// Mutations: wake only on a first use past the interval, or drop the
+// release's or the scratch's wake — no wake armed after that use; a wake for
+// a time already come waits for the clock to move — round two never fires.
 func TestAUsedCopysScrubComesRoundAgain(t *testing.T) {
 	t.Parallel()
-	// uses is each kind of first use since the copy's last scrub: held is a
-	// reader taken before that scrub ended, and held across it.
+	// uses is each kind of first use since the copy's last scrub; held is a
+	// reader held across that scrub.
 	uses := []struct {
 		name string
 		use  func(t *testing.T, w *syncWorld, c *cache.Cache, repo string, held cache.Synced)
@@ -917,8 +818,7 @@ func TestAUsedCopysScrubComesRoundAgain(t *testing.T) {
 				wk := &wakes{clk: clk}
 				c, repo := tc.copy(t, w, clk, func(o *cache.Options) { cache.ScrubWakesWith(o, wk.at) })
 				c.Start(t.Context())
-				// A reader taken as the interval begins, at the instant the
-				// copy's bytes were held to their checksums: no use since.
+				// A reader taken at the interval's very beginning: no use since.
 				held := w.sync(t, c, repo)
 				for round := range 3 {
 					at, _, base := cache.Scrubbed(c, repo)
@@ -928,26 +828,19 @@ func TestAUsedCopysScrubComesRoundAgain(t *testing.T) {
 					if !clk.Now().Equal(base) {
 						t.Fatalf("round %d: the clock reads %v, not the interval's beginning %v", round, clk.Now(), base)
 					}
-					// The round's first use, an hour into the interval; then a
-					// reader taken — no first use, the one before it was — and
-					// held across the scrub at the interval's end, for the next
-					// round's use.
+					// The round's first use an hour in; then a reader (no first
+					// use) held across the scrub for the next round's use.
 					clk.Set(base.Add(time.Hour))
 					u.use(t, w, c, repo, held)
 					clk.Set(base.Add(2 * time.Hour))
 					held = w.sync(t, c, repo)
 					end := base.Add(cache.ScrubInterval)
 					eventually(t, "the scrubber's wake armed for the interval's end", func() bool { return wk.has(end) })
-					// The clock reaching the interval's end is what wakes the
-					// scrubber, as its timer would: whichever wake it waits on
-					// — a use landing between a pass's taking its kicks and its
-					// reading the copy leaves its kick pending, so the pass
-					// that armed a wake is followed by one arming another —
-					// and at once one armed by a pass that read the clock
-					// before it moved. The second round makes sure of that
-					// one: a kick taken while the scrubber waits, its pass
-					// held where it arms the wake anew, once it has read the
-					// clock, until the clock is at the interval's end.
+					// Moving the clock to the interval's end fires whichever
+					// wake the scrubber waits on (a pending kick may have
+					// re-armed it), and at once one armed from a clock read
+					// before the move. Round two forces that: a kick whose
+					// pass is held after reading the clock until it moves.
 					var release func()
 					if round == 1 {
 						var held <-chan struct{}
@@ -985,8 +878,8 @@ func repoOfPath(path string) string {
 	return ""
 }
 
-// packOrder records the repository of every .pack a scrub begins to hash, in
-// order — one entry a pack — and holds the first such hash once armed.
+// packOrder records, in order, the repository of every .pack a scrub begins to
+// hash, and holds the first such hash once armed.
 type packOrder struct {
 	mu    sync.Mutex
 	order []string
@@ -1009,23 +902,13 @@ func (p *packOrder) seen() []string {
 	return slices.Clone(p.order)
 }
 
-// THE NODE'S ONE SCRUB IS GIVEN BY EVIDENCE. Three copies a previous process
-// left have had their first rounds, so each has its first scrub due — routine
-// work a restart queues for every copy it inherited. The first of them is
-// being scrubbed when evidence of damage arrives for the LAST:
-//
-//   - a REQUEST whose in-place round found nothing (its scrub, Cache.escalate)
-//     ends the routine scrub in flight and runs at once, before either copy
-//     still queued — that copy's own scrub then due again as it was, so it
-//     runs after the request's, and before the copy queued behind it;
-//   - a REPORT (a crash) does the same, and its scrub is taken ahead of every
-//     first scrub due, however much later it was asked.
-//
-// A mutex released and taken again by the scrubber's next scrub handed itself
-// to a waiting request only a scrub later, since Go wakes a waiter without
-// handing it the lock; and the due-at-once scrubs were taken by when each was
-// asked, so a failing copy's report waited behind every first scrub a restart
-// had queued — hours of them on a node holding a terabyte.
+// THE NODE'S ONE SCRUB IS GIVEN BY EVIDENCE. Three inherited copies have
+// their first scrub due; the first is being scrubbed when evidence arrives
+// for the LAST. A REQUEST's scrub (Cache.escalate, its in-place round having
+// found nothing) preempts the routine one in flight and runs at once, the
+// preempted copy due again before the one queued behind it; a REPORT's scrub
+// goes ahead of every first scrub due, however late it was asked. A plain mutex would not do: Go wakes a waiter without
+// handing it the lock, so the scrubber's next scrub would take it first.
 //
 // Mutations: a request's scrub that waits for the scrub in flight (no
 // preemption) — the held copy's pack is hashed to its end first; due-at-once
@@ -1100,8 +983,7 @@ func TestTheNodesScrubIsGivenByEvidence(t *testing.T) {
 				t.Fatal("the scrub pass never ended")
 			}
 			if evidence == "request" {
-				// The request's scrub ran beside the pass; the pass ended
-				// with its first copy's scrub due again, run now.
+				// The pass ended with its preempted copy due again.
 				cache.ScrubPass(c)
 			}
 			want := []string{first, last, first, middle}
@@ -1118,18 +1000,13 @@ func TestTheNodesScrubIsGivenByEvidence(t *testing.T) {
 	}
 }
 
-// A REPAIR THE STORE CANNOT SERVE LEAVES THE COPY SERVING. A scrub finds one
-// pack's reverse index damaged in place, and its repair round asks the object
-// store for the pack — which it cannot hand over (down, or no longer holding
-// the bundle). A reinstall over files the copy holds is a REPAIR, never the
-// round's precondition: the round leaves that pack as it stands and goes on —
-// it converges, a push landing meanwhile is installed and served — and the
-// finding waits on the repair mark under a backoff from RebuildCooldown,
-// during which no round asks the store for that pack again and every round
-// stays a delta. Every crash of a clone over the damage meanwhile is answered
-// by the finding waiting (`covered`), not by another scrub of the whole copy.
-// Once the backoff has passed and the store answers, the next round installs
-// the pack and the finding goes.
+// A REPAIR THE STORE CANNOT SERVE LEAVES THE COPY SERVING. A scrub finds a
+// damaged reverse index and the store cannot hand over its pack. A reinstall
+// is a REPAIR, never the round's precondition: the round converges and serves
+// a push meanwhile, and the finding waits on the repair mark under a backoff
+// from RebuildCooldown, with no round asking the store again. A crash over the
+// damage meanwhile is `covered` by the waiting finding, not scrubbed again.
+// Past the backoff, with the store back, the next round installs the pack.
 //
 // Mutations: fail the round with its reinstall (the push is never served,
 // every later round failing); hold off nothing (every round asks the store
@@ -1176,8 +1053,7 @@ func TestARepairTheStoreCannotServeLeavesTheCopyServing(t *testing.T) {
 		t.Error("the copy is not converged: the refused reinstall failed its round")
 	}
 
-	// Served meanwhile: a push lands and is installed; the held-off pack is
-	// not asked for again, and no report scrubs the copy again.
+	// Served meanwhile; the held-off pack is not asked for, no report scrubs.
 	tip, _ := w.push(t, h.repo, "refs/heads/main", map[string]string{"after.txt": "landed\n"})
 	after := w.sync(t, c, h.repo)
 	if got, exit := serveGit(t, w, c, after.Dir, "rev-parse", "refs/heads/main"); exit != 0 ||
@@ -1200,7 +1076,7 @@ func TestARepairTheStoreCannotServeLeavesTheCopyServing(t *testing.T) {
 		t.Errorf("the store was asked for the held-off pack %d times, want once", got)
 	}
 
-	// The backoff passed and the store back: the next round installs it.
+	// The backoff passed and the store back.
 	w.objects.mu.Lock()
 	w.objects.fail = nil
 	w.objects.mu.Unlock()
@@ -1220,13 +1096,11 @@ func TestARepairTheStoreCannotServeLeavesTheCopyServing(t *testing.T) {
 }
 
 // A SCRUB ANSWERED FROM ITS FINDINGS NAMES THE PACKS IT FOUND WHOLE. A
-// repair's step 3 asks the copy's scrub (Cache.escalate), and a scrub whose
-// findings still wait for their repair — here one pack's reverse index, whose
-// reinstall the store refused — answers with those findings rather than read
-// the copy again. What it found WHOLE answers beside them, less the packs the
-// findings name: the rebuild a round's caller asks past the findings' repair
-// (step 4) links those rather than downloads them (seedRebuild), so one
-// damaged pack among thousands is one GET there too.
+// repair's step 3 (Cache.escalate) asks a scrub whose findings still wait
+// (here a reinstall the store refused); it answers from them unread, plus
+// the packs it found WHOLE less those the findings name, which the step-4
+// rebuild links rather than downloads (seedRebuild): one damaged pack among
+// thousands stays one GET.
 //
 // Mutation: answer the pending findings with no packs whole (scrubFor's
 // repair.found case) — the rebuild past them downloads every pack the
@@ -1274,16 +1148,12 @@ func TestAScrubAnsweredFromItsFindingsNamesThePacksItFoundWhole(t *testing.T) {
 	}
 }
 
-// A PACK A CHECK FOUND DAMAGED IS LINKED BY NO REBUILD. A repair's step 3 asks
-// the copy's scrub, and a scrub whose verdict stands — here one that found
-// nothing within the hour, nothing written since — answers unread, with the
-// packs it found whole for the rebuild past it to link (seedRebuild). But a
-// round's check may have found a pack's index damaged since — damage that
-// landed in place after the scrub read it — and left it on the repair mark,
-// its round having failed at its install before it could put the pack in
-// again (refusePush). That finding answers beside the verdict, its repair the
-// answer, and its pack is no pack the rebuild links: linked, the rebuild
-// carried the damaged index into the copy that replaced the damaged one.
+// A PACK A CHECK FOUND DAMAGED IS LINKED BY NO REBUILD. A scrub verdict that
+// stands answers a repair's step 3 unread, with its whole packs for the
+// rebuild to link (seedRebuild). A round's check may since have found a pack's
+// index damaged in place and left it on the repair mark, its round failing at
+// install (refusePush). That finding answers beside the verdict, and its pack
+// is not linked: linked, the rebuild would carry the damaged index over.
 //
 // Mutations: answer the verdict's packs whole as it found them (the damaged
 // pack among them); answer the verdict without the check's finding.
@@ -1327,33 +1197,18 @@ func TestAPackACheckFoundDamagedIsLinkedByNoRebuild(t *testing.T) {
 	}
 }
 
-// A FINDING FOUND AGAIN STAYS AS IT WAS FOUND. A scrub finds one pack's
-// reverse index damaged in place, and the object store will not hand that
-// pack over, so the finding waits on the repair mark under its backoff
-// (TestARepairTheStoreCannotServeLeavesTheCopyServing). A request failing on
-// the damage meanwhile takes its forced round, whose check holds every index
-// file to its trailer and finds that reverse index failing again at the same
-// identity: the same damage, which the mark already names. It stays the
-// SCRUB's finding — and a scrub's finding still waiting is what answers a
-// request's scrub in that scrub's place and covers a report within its
-// cooldown (scrubWaits). Taken for the check's, it answered neither: every
-// crash of a clone over the damage within the hour asked for another scrub of
-// the whole copy, and every request's step 3 read the whole copy again —
-// about 1.13 times its pack bytes, some 24 GB for the largest repository the
-// defaults admit — once an hour for as long as the store refused the pack.
+// A FINDING FOUND AGAIN STAYS AS IT WAS FOUND. While a scrub's finding waits
+// on a refused pack, a request's forced round finds the same .rev failing at
+// the same identity; it stays the SCRUB's finding, which answers a request's
+// scrub and covers a report (scrubWaits). Taken for the check's, each crash
+// and request would rescan the whole copy (about 1.13x its pack bytes). Here
+// a crash after the forced round is `covered`, the next request within the
+// hour takes no forced round (forcedLately) and hashes nothing at step 3, and
+// past the backoff the pack is reinstalled as the scrub found it.
 //
-// The forced round fails at its install, on a push whose bundle the store
-// refuses as well, so no scrub of the request's runs after it: a crash after
-// it is `covered`, and the next request — within the hour of that forced
-// round, so it takes no forced round of its own (forcedLately) — is answered
-// at its step 3 by the scrub's finding, hashing nothing. Once the store
-// answers and the backoff has passed, a sync installs the pack again as the
-// scrub found it.
-//
-// Mutation: a check's finding replaces whatever the mark holds for its file
-// (recordCheck) — the crash makes a scrub due, the next request's step 3
-// scrubs the whole copy, and the reinstall is logged as that scrub found it
-// (trigger=request).
+// Mutation: a check's finding replaces the mark's for its file (recordCheck)
+// — the crash makes a scrub due, the next request scrubs the whole copy, and
+// the reinstall logs trigger=request.
 func TestAFindingFoundAgainStaysAsItWasFound(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1452,8 +1307,8 @@ func TestAFindingFoundAgainStaysAsItWasFound(t *testing.T) {
 	}
 }
 
-// derivedIdentities is the identity of the copy's multi-pack-index, its
-// bitmap and its commit-graph, by name.
+// derivedIdentities is the identity of the copy's multi-pack-index, bitmap
+// and commit-graph, by name.
 func derivedIdentities(t *testing.T, dir string) map[string][4]int64 {
 	t.Helper()
 	out := map[string][4]int64{}
@@ -1467,17 +1322,14 @@ func derivedIdentities(t *testing.T, dir string) map[string][4]int64 {
 	return out
 }
 
-// A PACK INSTALLED AGAIN FOR ITS BODY KEEPS THE INDEXES BUILT OVER IT. The
-// multi-pack-index and its bitmap record each object's offset as the pack's
-// index placed it, and the commit-graph was written reading commits through
-// that index; a pack fetched again whose .pack alone failed is the same pack
-// byte for byte — its name is its checksum, its bundle held to its row — so
-// every offset and every commit they record holds over the new files, and they
-// stay: no index repair, no rewrite of the bitmap over the whole history (12
-// to 14 s a gigabyte up to a gigabyte, more past it), and no clone without a
-// bitmap meanwhile — or for good, where the node's memory no longer holds the
-// bitmap's charge. A pack whose .idx failed is another matter: what was built
-// from that index may be wrong, so they go and are written again at once.
+// A PACK INSTALLED AGAIN FOR ITS BODY KEEPS THE INDEXES BUILT OVER IT. A pack
+// fetched again because its .pack alone failed is byte-identical (named by
+// its checksum, its bundle held to its row), so the multi-pack-index, bitmap
+// and commit-graph built through its .idx still hold and stay: no bitmap
+// rewrite (12-14 s a GB), no clone without a bitmap meanwhile, or for good
+// once the node's memory cannot hold its charge. A pack whose .idx
+// failed may have misled what was built from it, so those go and are written
+// again at once.
 //
 // Mutation: drop the derived files before any placement over a present pack
 // (the .pack arm's bitmap is replaced and an index repair made due).
@@ -1530,12 +1382,10 @@ func TestAPackInstalledAgainForItsBodyKeepsItsIndexes(t *testing.T) {
 }
 
 // A COPY'S FIRST SCRUB READS NO INDEX FILE ITS FIRST ROUND JUST CHECKED. The
-// first scrub of a copy a previous process left is for its PACKS — bytes no
-// process of this run has held to anything — since the round before it held
-// every index file to its trailer minutes earlier; read again, those are about
-// a fifth of what the first scrub reads, for a verdict minutes old, on every
-// copy a restart inherited. A later scrub reads every file, vouched or not:
-// damage that lands after a vouch is what it is for.
+// first scrub of an inherited copy is for its PACKS: the round before it held
+// every index file to its trailer minutes earlier, and rereading them adds
+// about a fifth for nothing. A later scrub reads every file, vouched or not:
+// damage landing after a vouch is what it is for.
 //
 // Mutation: the first scrub hashes vouched index files too — their `first`
 // counts grow with the scrub.

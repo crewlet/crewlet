@@ -11,54 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// THE DEFINITION EACH MCP TOOL'S LEVEL WAS DECIDED ON (ADR-0078).
+// THE DEFINITION EACH MCP TOOL'S LEVEL WAS DECIDED ON (ADR-0078): a level
+// holds only for the definition a person decided it on, named by its digest
+// (internal/mcp's digest.go); any other asks a person until somebody accepts it.
 //
-// A tool's level (Always allow, Needs approval, Blocked) is a person's
-// decision about a tool as its server defined it then. A server controls its
-// own definitions and can change one at any moment, a description reworded or
-// a hint dropped, so a level that silently carried over would let a server
-// turn a tool somebody allowed into one nobody looked at. Each tool's level
-// therefore holds only for the definition it was decided on, named by its
-// digest (internal/mcp's digest.go), and a tool the server lists under any
-// other definition asks a person first until somebody accepts the change.
-//
-// # Who has to agree on it
-//
-// The whole company, now: every node holding a seat that may call the tool
-// enforces the same answer, and a person accepting a change on any node's
-// screen releases the tool on every node. It is machine state, decided by
-// people, not operator configuration: it names digests no operator writes and
-// changes whenever a server does, so it is not a field of the company
-// document.
-//
-// # One record per tool, compare-and-set
-//
-// A record per (server, the server's own name for the tool), [MCPAcceptedKey],
-// in the positions register, the bucket with no age: an accepted definition
-// that aged out would put every tool of a quiet server back in front of a
-// person. Three writers race for it (the node that lists a server first, and
-// people accepting or blocking changes on any node), so every write is a
-// compare-and-set on the version the writer read ([MCPAccepted.PutMCPAccepted]).
-//
-// # A server's first listing, and a removal, both keep a record
-//
-// A server's first listing is accepted as it is, by the node that lists it
-// first: the operator who added the server chose it with that listing in front
-// of them. A server is BASELINED once any record names it, and from then on a
-// tool no record names is one it added, which waits like a changed one. So a
-// removal a person accepts keeps its record, marked removed, rather than
-// deleting it: a server that dropped every tool must not become a server
-// listing for the first time again, whose next listing would be accepted
-// unseen.
-//
-// # Bounded, and somebody else's words
-//
-// The record keeps the words of the definition it accepts (title,
-// description, the hints the server declared), bounded as a listing bounds
-// them, so a list can name what was accepted. A change is shown beside the
-// definition whole, which the record's digest names in [MCPToolDefinition] and
-// the sweep keeps while the record stands, months after the server stopped
-// listing it. They are the server's words, and a reader treats them as such.
+// One coordination-store record per tool ([MCPAcceptedKey]) in the positions
+// register, which has no age, or a quiet server's tools would go back in front
+// of a person. Three writers race (the node listing a server first, people on
+// any node), so every write is a compare-and-set ([MCPAccepted.PutMCPAccepted]).
+// A server's first listing is accepted as its operator chose it; once a record
+// names the server, an unnamed tool waits like a changed one. So an accepted
+// removal keeps its record, or a server that dropped every tool would list
+// "first" again and be accepted unseen.
 
 // MCPAcceptedClass is the key class accepted definitions are filed under in the
 // positions register.
@@ -117,8 +81,10 @@ type MCPAcceptedTool struct {
 	Server string `json:"server"`
 	Tool   string `json:"tool"`
 
-	// Digest names the definition accepted (internal/mcp's digest.go). ""
-	// for a removal accepted ([MCPAcceptedTool.Removed]).
+	// Digest names the definition accepted (internal/mcp's digest.go),
+	// which the sweep keeps whole ([MCPToolDefinition]) while this record
+	// stands, so a change is shown beside it. "" for a removal accepted
+	// ([MCPAcceptedTool.Removed]).
 	Digest string `json:"digest,omitempty"`
 
 	// Removed is a removal accepted: the server stopped listing the tool,
@@ -136,8 +102,9 @@ type MCPAcceptedTool struct {
 
 	// Title, Description and Hints are the definition's words as a listing
 	// names them, Hints the server's own declared hints, before any
-	// override: what a change is shown beside. Parts names each part of
-	// the definition ([MCPToolParts]). All empty for a removal.
+	// override: the server's words, bounded as a listing bounds them. Parts
+	// names each part of the definition ([MCPToolParts]). All empty for a
+	// removal.
 	Title       string       `json:"title,omitempty"`
 	Description string       `json:"description,omitempty"`
 	Hints       MCPToolHints `json:"hints"`

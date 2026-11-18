@@ -12,10 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE CHECKS SUBJECT'S APPLIES, CASE BY CASE: records built here and applied
-// at positions each case chooses — the position a record HAS, whatever order a
-// case applies it in, since an order other than the log's is what a join must
-// survive — and the rows read back.
+// THE CHECKS SUBJECT'S APPLIES, CASE BY CASE: each record keeps the position
+// it HAS whatever order a case applies it in, since an order other than the
+// log's is what a join must survive.
 
 // checkRepo is the repository the checks cases are about.
 const checkRepo = "0190f3c4-0000-7000-8000-0000000000c1"
@@ -134,15 +133,12 @@ func openChecksEstate(t *testing.T) *estate {
 }
 
 // TWO STARTS OF ONE ATTEMPT CONVERGE IN EITHER ORDER (M5-D18): a check's
-// records carry no expectation, so two runners' claims of one attempt — a
-// duplicate across a writer's failover — both land, and every node must keep
-// the same one whichever it applies first. The join keeps the claim with the
-// lower (StartedAt, Runner), each record at its own position, so the two
-// orders leave one row byte for byte — and the box the kept claim's holder
-// names, never the other's.
+// records carry no expectation, so two runners' claims of one attempt (a
+// duplicate across a writer's failover) both land. The join keeps the lower
+// (StartedAt, Runner), so both orders leave one row byte for byte, with the
+// kept claim's box, never the other's.
 //
-// Mutation: keep whichever claim the row holds first (first in log order
-// wins) — the two orders keep two runners, red.
+// Mutation: first in log order wins, and the two orders keep two runners, red.
 func TestTwoStartsOfOneAttemptConvergeInEitherOrder(t *testing.T) {
 	t.Parallel()
 	key := checkKeyOf("unit", 1)
@@ -192,16 +188,14 @@ func TestTwoStartsOfOneAttemptConvergeInEitherOrder(t *testing.T) {
 	}
 }
 
-// A CHECK ROW ONLY MOVES FORWARD: queued, then running, then an ending — and
-// never back, whatever arrives after it. A claim that lands after the ending
-// it raced — its runner read the row before the ending applied — does not make
-// an ended attempt running again, nor does a queuing record a failover sent
-// twice make it queued; the state is derived from what the row holds, and an
-// ending once held is held for good. The same records in the opposite order
-// leave the same row.
+// A CHECK ROW ONLY MOVES FORWARD: queued, running, ended, never back. A claim
+// landing after the ending it raced does not reopen the attempt, nor does a
+// queuing record a failover sent twice requeue it: the state is derived from
+// what the row holds, and an ending is held for good. The opposite order
+// leaves the same row.
 //
-// Mutation: derive the state from the claim before the ending (running where
-// a runner is named) and the late claim reopens the ended attempt — red.
+// Mutation: derive the state from the claim before the ending, and the late
+// claim reopens the attempt, red.
 func TestACheckRowOnlyMovesForward(t *testing.T) {
 	t.Parallel()
 	key := checkKeyOf("unit", 1)
@@ -236,17 +230,16 @@ func TestACheckRowOnlyMovesForward(t *testing.T) {
 	}
 }
 
-// A TERMINAL TIE KEEPS THE MEASUREMENT (M5-D18): two endings of one attempt —
-// a dead runner's sweep that errored it and the runner's own report that it
-// failed, say — keep the one that measured the commit, whichever came first
-// and whichever landed first: a failed or passed run says more of the commit
-// than one that never ran to a result. Between two measurements, or two of
-// infrastructure's, the earlier ending is kept. The log follows the ending
-// kept, so a failed run's log survives an infrastructure ending after it, and
-// an ending kept with no log leaves none.
+// A TERMINAL TIE KEEPS THE MEASUREMENT (M5-D18): of two endings of one attempt
+// (a dead runner's sweep that errored it, the runner's own failure), the one
+// that measured the commit is kept, whichever is earlier and whichever lands
+// first: a failed or passed run says more than one that never ran to a result. Between two measurements, or
+// two of infrastructure's, the earlier is kept. The log follows the kept
+// ending: a failed run's log survives a later infrastructure ending, and a
+// kept ending with no log leaves none.
 //
-// Mutation: drop the measurement's precedence and the earlier errored ending
-// is kept over the failed run — red.
+// Mutation: drop the measurement's precedence, and the earlier errored ending
+// is kept, red.
 func TestATerminalTieKeepsTheMeasurement(t *testing.T) {
 	t.Parallel()
 	key := checkKeyOf("unit", 1)
@@ -295,14 +288,13 @@ func TestATerminalTieKeepsTheMeasurement(t *testing.T) {
 	}
 }
 
-// A BOX HANDLE IS SET ONCE, by the holder of the kept claim: empty on the
-// claim, named by the holder's later record — which repeats its claim's
-// StartedAt and Runner, so it is the same claim — and moved by nothing after:
-// not a record of a losing claim naming its own box, and not the holder's
-// record again, which changes no row.
+// A BOX HANDLE IS SET ONCE, by the kept claim's holder: empty on the claim,
+// named by the holder's later record (same StartedAt and Runner, so the same
+// claim), and moved by nothing after: not a losing claim's box, and not the
+// holder's record again, which changes no row.
 //
-// Mutation: take the box of any record about the attempt — the losing
-// claim's box replaces the holder's, red.
+// Mutation: take the box of any record about the attempt, and the losing
+// claim's replaces the holder's, red.
 func TestABoxHandleIsSetOnce(t *testing.T) {
 	t.Parallel()
 	key := checkKeyOf("unit", 1)
@@ -323,13 +315,12 @@ func TestABoxHandleIsSetOnce(t *testing.T) {
 }
 
 // THE CHECKS' HORIZON IS PER REPOSITORY: an ending removes its OWN
-// repository's rows that ended before its broker instant less CheckHistory —
-// with their logs — and no other repository's, nor an attempt of its own that
-// has not ended, however long ago it was queued.
+// repository's rows, with their logs, that ended before its broker instant
+// less CheckHistory: no other repository's, and no attempt of its own that has
+// not ended, however long ago it was queued.
 //
-// Mutation: delete the horizon's rows across every repository (the delete's
-// repository term made one every row meets) and the other repository's older
-// row goes in its own repository's row's place — red.
+// Mutation: drop the delete's repository term, and the other repository's
+// older row goes in its own repository's row's place, red.
 func TestTheChecksHorizonIsPerRepo(t *testing.T) {
 	t.Parallel()
 	const other = "0190f3c4-0000-7000-8000-0000000000c2"
@@ -338,10 +329,9 @@ func TestTheChecksHorizonIsPerRepo(t *testing.T) {
 	old := applyClock.Add(-CheckHistory - 24*time.Hour)
 	stale, waiting := checkKeyOf("unit", 1), checkKeyOf("lint", 1)
 	othersKey := CheckKey{RepoID: other, OID: oid("checked"), Target: "refs/heads/main", Name: "unit", Attempt: 1}
-	// ENDED A MONTH AND A DAY AGO, each applied at its own old instant so
-	// its own horizon spares it — the other repository's an hour earlier
-	// still, so it is the oldest of all, and a horizon read across
-	// repositories would take it first.
+	// ENDED A MONTH AND A DAY AGO, each applied at its own old instant so its
+	// own horizon spares it; the other repository's an hour earlier still, the
+	// oldest of all, which a horizon read across repositories takes first.
 	older := old.Add(-time.Hour)
 	e.apply(queuedRec(t, stale, old).at(old), queuedRec(t, waiting, old).at(old),
 		endedRec(t, stale, CheckStateFailed, CheckReasonExit, old, logOf("stale-log")).at(old),
@@ -373,10 +363,10 @@ func TestTheChecksHorizonIsPerRepo(t *testing.T) {
 	}
 }
 
-// A SWEEP NAMES AN INSTANT BEFORE ITS OWN: a checks_sweep whose Through is at
-// or past the record's broker instant would remove checks that ended after it
-// landed, and is a record no writer forms — an error, as a retire sweep's
-// position past its own is, never a skip.
+// A SWEEP NAMES AN INSTANT BEFORE ITS OWN: a checks_sweep through its broker
+// instant or later would remove checks ended after it landed, and no writer
+// forms one: an error, as a retire sweep's position past its own is, never a
+// skip.
 func TestASweepPastItsOwnInstantIsRefused(t *testing.T) {
 	t.Parallel()
 	e := openChecksEstate(t)
@@ -403,13 +393,12 @@ func TestAChecksRecordNamesItsOwnRepository(t *testing.T) {
 	}
 }
 
-// A REPOSITORY'S DISPATCHES GO WITH ITS PURGE: a purge part with room takes
-// a deleted repository's heads' dispatches and its targets' readings of their
-// checks files (code_check_dispatches, code_check_targets) once its checks
-// are gone, as it takes every other row the repository's records wrote.
+// A REPOSITORY'S DISPATCHES GO WITH ITS PURGE: a purge part with room takes a
+// deleted repository's code_check_dispatches and code_check_targets rows once
+// its checks are gone, as it takes every row the repository's records wrote.
 //
-// Mutation: leave the dispatches out of a purge part — the part leaves them
-// for the final purge, red.
+// Mutation: leave the dispatches out of a purge part, and they wait for the
+// final purge, red.
 func TestAPurgePartTakesARepositorysDispatches(t *testing.T) {
 	t.Parallel()
 	e := openChecksEstate(t)
@@ -441,14 +430,12 @@ func TestAPurgePartTakesARepositorysDispatches(t *testing.T) {
 }
 
 // A PURGE PART IS BOUNDED BY WHAT ITS CHECKS WEIGH, in the budget its pushes
-// and its changes share: check rows go in the horizon's order, each with its
-// log, until their row_bytes reach PurgePartBytes — at most one row past it —
-// and the next part takes the rest. A check row carries a failed run's
-// definition, summary, tail and failures, and deleting it frees their overflow
-// pages, which a count of rows does not see.
+// and changes share: check rows go in the horizon's order, each with its log,
+// until their row_bytes reach PurgePartBytes (at most one row past it), and
+// the next part takes the rest. A failed run's row carries its definition,
+// summary, tail and failures, whose overflow pages a row count does not see.
 //
-// Mutation: take a part's checks by their rows alone, and the fifteen go in one
-// part — red.
+// Mutation: bound a part by rows alone, and the fifteen go in one part, red.
 func TestAPurgePartIsBoundedByWhatItsChecksWeigh(t *testing.T) {
 	t.Parallel()
 	e := openChecksEstate(t)
@@ -482,11 +469,11 @@ func TestAPurgePartIsBoundedByWhatItsChecksWeigh(t *testing.T) {
 	}
 }
 
-// EVERY ORDER OF A CHECK'S RECORDS JOINS TO ONE ROW — the join itself, over
-// every order of one attempt's parts: a queue sent twice, three claims (two of
-// them one claim, its box named by the second), and three endings. Each part
-// carries the position its record has, so the orders differ only in what the
-// join meets first.
+// EVERY ORDER OF A CHECK'S RECORDS JOINS TO ONE ROW: the join itself over all
+// 8! orders of one attempt's parts (a queue sent twice, three claims of which
+// two are one claim naming its box second, three endings). Each part carries
+// its record's position, so the orders differ only in what the join meets
+// first.
 func TestEveryOrderOfACheckRecordsJoinsToOne(t *testing.T) {
 	t.Parallel()
 	parts := []checkPart{
@@ -557,8 +544,8 @@ func countedRec(t testing.TB, key CheckKey, at time.Time, tests *CheckTests, lin
 }
 
 // AN ENDING'S COUNTS MOVE WITH THE ENDING THE JOIN KEEPS: an errored runner_lost ending without
-// counts and a failed exit ending with them, applied in both orders, leave the failed ending's
-// counts; a second failed ending with an earlier instant and counts of its own replaces them.
+// counts and a failed exit with them leave the failed ending's counts in both orders; an earlier
+// failed ending with counts of its own replaces them.
 //
 // Mutation: write the counts outside checkEnding (the backward order keeps the runner_lost
 // ending's NULL, red).

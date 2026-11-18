@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// The records a harness writes, as the readers that are no thread layer's
-// read them: a run's event stream ([claudeEvents]), its result
+// The records a harness writes, as the readers outside the thread layer read
+// them: a run's event stream ([claudeEvents]), its result
 // ([ClaudeCode.Parse]) and a person's transcript of a Claude Code or an
 // OpenCode session ([transcriptBuilder]). The lists the records hold are
 // lists_internal_test.go's.
@@ -36,7 +36,7 @@ func recordsEntries(b *transcriptBuilder) string {
 // [recordsOpening], as text: its transcript, every token its model calls
 // reported, and the run's own spend its results stated.
 func readClaudeStream(_ *testing.T, line string) string {
-	d := &claudeEvents{tools: map[string]string{}}
+	d := &claudeEvents{}
 	d.Line([]byte(recordsOpening))
 	d.Line([]byte(line))
 	own, stated := d.runSpend()
@@ -111,30 +111,17 @@ const (
 		`"time":{"created":1793361600000,"ran":1793361601000,"completed":1793361602000}}]}`
 )
 
-// A HARNESS'S RECORD IS READ BY ITS KEYS EXACTLY AS WRITTEN, the record's own
-// as much as its lists', as Claude Code and OpenCode read their records with
-// JSON.parse: a key that differs from one a reader reads only in case is
-// another key, after that one, before it or alone, and a key written twice
-// holds its last value. So one record is read by one rule, and the run's
-// event stream and a person's transcript read one record alike: a message
-// written twice is the last one written, to both. Every key these readers
-// read is held so: a Claude Code record's type, subtype, timestamp, isMeta,
-// isCompactSummary, message and content; a message's content, id and usage,
-// and each count of a usage; a call's input as the stream names it; a
-// result's type, subtype, is_error, result, errors, session_id,
-// total_cost_usd, num_turns, terminal_reason, usage and per-run spend, and
-// each figure of a model's spend; an OpenCode message's type, time, text,
-// content, status and summary, and a failed call's failure. Each record reads
-// through every reader as it reads without the other key, but for a call's
-// input, which a person's transcript shows whole, as written, and which is
-// held to the stream's reading of it.
+// A HARNESS'S RECORD IS READ BY ITS KEYS EXACTLY AS WRITTEN, as Claude Code and
+// OpenCode read it with JSON.parse: a key differing from a read one only in
+// case is another key, and a key written twice holds its last value. So the
+// run's event stream and a person's transcript read one record alike (a
+// message written twice is the last one, to both), for every key the cases
+// below name. Each record reads as it would without the other key, except a
+// call's input, which a transcript shows whole and is held to the stream's.
 //
-// Mutation: decode the stream's line, a message, a usage, a call's input, the
-// result, a model's spend, a transcript's record or message, an OpenCode
-// message, its time or a failure by encoding/json, which takes a key that
-// differs only in case for the one it names, and the record holding that key
-// reads as the other key says; decode the stream's message into a struct, and
-// a message written twice reads as the two merged.
+// Mutation: decode any of these records by encoding/json, which takes a key
+// differing only in case for the one it names; or decode the stream's message
+// into a struct, and a message written twice reads as the two merged.
 func TestAHarnesssRecordIsReadByItsKeysExactlyAsWritten(t *testing.T) {
 	t.Parallel()
 	without := func(record, key string) string { return ctReplace(t, record, key, "") }
@@ -265,15 +252,13 @@ func TestAHarnesssRecordIsReadByItsKeysExactlyAsWritten(t *testing.T) {
 	}
 }
 
-// A KEY OF ANOTHER KIND THAN ITS READER READS COSTS THAT KEY ALONE: a harness
-// that reshapes a key costs the reader what that key said, and never the
-// record around it, which reads as it reads without the key. A result's
-// turns, its usage or a model's figure, a message's count, a record's isMeta
-// and an OpenCode message's time, each of another kind, read as absent.
+// A KEY OF ANOTHER KIND THAN ITS READER READS COSTS THAT KEY ALONE, never the
+// record around it: a result's turns, its usage or a model's figure, a
+// message's count, a record's isMeta and an OpenCode message's time, each of
+// another kind, read as absent.
 //
 // Mutation: decode a result's num_turns or a record's isMeta into a field of
-// its type, held strictly, and the result or the record that reshapes it is
-// no record at all.
+// its type, held strictly, and the record that reshapes it is no record at all.
 func TestAKeyOfAnotherKindCostsItsReaderThatKeyAlone(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -328,22 +313,17 @@ func recordsModels(n int, twice bool) string {
 	return "{" + strings.Join(models, ",") + "}"
 }
 
-// A RUN'S SPEND IS UNREAD WHERE ONE RESULT NAMES MORE MODELS THAN A RESULT IS
-// READ FOR: a result's spend model by model is read for at most
-// claudeResultModelsMax models, and one naming more is read for none of them,
-// so the run's own spend reads as stated by no result, whatever the results
-// before or after it stated: never the sum of the ones it could read, nor of
-// the models before the bound, either of which would charge the run for some
-// of its calls and not the rest. A result naming exactly that many reads as it
-// always did, every model's spend summed, and one of them named twice counts
-// once toward the bound, by its last spend. The line costs its reader nothing
-// else: the result's failure still reaches the run's transcript.
+// A RUN'S SPEND IS UNREAD WHERE ONE RESULT NAMES MORE MODELS THAN
+// claudeResultModelsMax: that result is read for none of them, so the run's
+// spend reads as stated by no result, whatever the others stated. Summing the
+// results it could read, or the models before the bound, would charge the run
+// for some calls and not the rest. A result naming exactly that many is summed,
+// a model named twice counting once, by its last spend; and the result's
+// failure still reaches the run's transcript.
 //
-// Mutation: drop the bound, and the result naming one model more is summed;
-// sum the models before the bound, and the run is charged for part of that
-// result's calls; read the result past it as one that states nothing, or let
-// a later result's spend read again, and the run is charged the other
-// result's sum.
+// Mutation: drop the bound, sum the models before it, read the result past it
+// as one that states nothing, or let a later result's spend read again, and
+// the run is charged part of a sum or another result's.
 func TestARunsSpendIsUnreadWhereAResultNamesMoreModelsThanAResultIsReadFor(t *testing.T) {
 	t.Parallel()
 	ending := func(models string) string { return ctReplace(t, recordsEnding, "{"+recordsSpent+"}", models) }
@@ -370,7 +350,7 @@ func TestARunsSpendIsUnreadWhereAResultNamesMoreModelsThanAResultIsReadFor(t *te
 		"a result naming one model more, then one that states its spend": {lines: []string{past, recordsEnding},
 			want: fmt.Sprintf("%q, %s", failed+"\n"+failed, unread)},
 	} {
-		d := &claudeEvents{tools: map[string]string{}}
+		d := &claudeEvents{}
 		for _, line := range tc.lines {
 			d.Line([]byte(line))
 		}
@@ -381,14 +361,11 @@ func TestARunsSpendIsUnreadWhereAResultNamesMoreModelsThanAResultIsReadFor(t *te
 	}
 }
 
-// A RUN'S SPEND IS UNREAD WHERE A RESULT STATES IT AS NO OBJECT: a result whose
-// spend model by model is there and is null, a list, a string, a number or a
-// list holding a spend is read for none of it, so the run's own spend reads as
-// stated by no result, whatever the result before or after it stated, never as
-// that other result's alone, which would leave this one's calls out of the
-// run's sum. A result whose spend is an empty object states a spend of
-// nothing, and one that carries no spend at all states nothing, so beside a
-// result that states its spend, either leaves the run's spend that result's.
+// A RUN'S SPEND IS UNREAD WHERE A RESULT STATES IT AS NO OBJECT (null, a list,
+// a string, a number, a list holding a spend): taking the other results' spend
+// alone would leave this one's calls out. An empty object states a spend of
+// nothing and a missing one states nothing, so beside a result that states its
+// spend either leaves the run's spend that result's.
 //
 // Mutation: read a spend that is there and no object as one that states
 // nothing, and the run's spend reads as the other result's alone.
@@ -413,7 +390,7 @@ func TestARunsSpendIsUnreadWhereAResultStatesItAsNoObject(t *testing.T) {
 			"after a result that states its spend":  {recordsEnding, other},
 			"before a result that states its spend": {other, recordsEnding},
 		} {
-			d := &claudeEvents{tools: map[string]string{}}
+			d := &claudeEvents{}
 			for _, line := range lines {
 				d.Line([]byte(line))
 			}
@@ -424,7 +401,7 @@ func TestARunsSpendIsUnreadWhereAResultStatesItAsNoObject(t *testing.T) {
 			}
 		}
 	}
-	d := &claudeEvents{tools: map[string]string{}}
+	d := &claudeEvents{}
 	d.Line([]byte(recordsEnding))
 	d.Line([]byte(ctReplace(t, recordsEnding, ","+spent, "")))
 	own, stated := d.runSpend()
@@ -433,15 +410,12 @@ func TestARunsSpendIsUnreadWhereAResultStatesItAsNoObject(t *testing.T) {
 	}
 }
 
-// A RESULT'S SPEND MODEL BY MODEL READS AS ITS WHOLE DECODE READ IT, up to the
-// bound on the models it is read for: read a model at a time, every result
-// reads as the decode of the whole object into a map read it, so a model
-// whose name is escaped is the one written plainly, a name holding a lone
-// surrogate or a byte that is no UTF-8 is the one holding U+FFFD in its place,
-// a model named twice reads by its last spend, names that differ only in case
-// are two models, a spend that is no object reads as none and a figure of
-// another kind as absent; an empty object states a spend of nothing, and a
-// result naming the most models it is read for reads every one of them.
+// A RESULT'S SPEND MODEL BY MODEL READS AS ITS WHOLE DECODE READ IT, though
+// read a model at a time, up to the bound: an escaped name is the plain one, a
+// lone surrogate or invalid UTF-8 becomes U+FFFD, a model named twice reads by
+// its last spend, names differing only in case are two models, a spend that is
+// no object reads as none and a figure of another kind as absent; an empty
+// object states a spend of nothing, and a result at the bound reads every model.
 //
 // Mutation: compare names as written, and a model escaped and written plainly
 // reads as two; keep a model's first spend, and the model named twice reads
@@ -486,30 +460,24 @@ func TestAResultsSpendModelByModelReadsAsItsWholeDecodeReadIt(t *testing.T) {
 	}
 }
 
-// A RESULT'S SPEND MODEL BY MODEL COSTS ITS READER A MODEL AT A TIME: the
-// run's event stream reads a result's per-run spend a model at a time, for at
-// most claudeResultModelsMax models, each model's spend once, so a result line
-// of listBytes naming a model in every key it holds costs its reader no more
-// allocations than a line naming that many models, and a line naming one
-// model over and over no more than a line naming it once, each beside no more
-// bytes than a few copies of itself. Decoded whole into a map, a line naming
-// a model in every key cost an allocation or more for each of its tens of
-// thousands of models.
+// A RESULT'S SPEND MODEL BY MODEL COSTS ITS READER A MODEL AT A TIME, for at
+// most claudeResultModelsMax models, each spend once: a listBytes line naming a
+// model in every key costs no more allocations than one naming that many, a
+// line naming one model over and over no more than naming it once, and neither
+// more bytes than listCopies copies of itself.
 //
-// Not parallel: the counts are the process's, and a parallel test's
-// allocations would be counted with this one's.
+// Not parallel: allocation counts are the process's.
 //
-// Mutation: decode the spend whole into a map, or drop the bound on the models
-// it is read for, and the line naming a model in every key costs an
-// allocation or more for every model; read a model's spend each time the walk
-// meets it, or copy it anew each time, and the line naming one model over and
-// over costs one for every time.
+// Mutation: decode the spend whole into a map, or drop the bound, and the line
+// naming a model in every key costs an allocation per model; read or copy a
+// model's spend each time the walk meets it, and the repeated line costs one
+// per repeat.
 func TestAResultsSpendModelByModelCostsItsReaderAModelAtATime(t *testing.T) {
 	// Each read is handed bytes made once, outside what is measured, as a
 	// reader is handed a line it did not copy.
 	stream := func(line string) func() {
 		raw := []byte(line)
-		return func() { (&claudeEvents{tools: map[string]string{}}).Line(raw) }
+		return func() { (&claudeEvents{}).Line(raw) }
 	}
 	const (
 		head = `{"type":"result","subtype":"success","is_error":false,"result":"done",` +

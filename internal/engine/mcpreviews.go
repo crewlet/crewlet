@@ -17,21 +17,15 @@ import (
 // WHAT EACH MCP TOOL'S LEVEL WAS DECIDED ON, WATCHED; AND A SERVER'S FIRST
 // LISTING, ACCEPTED (ADR-0078, internal/coord's mcpaccepted.go).
 //
-// A tool's level holds only for the definition it was decided on. This node
-// keeps a watched copy of every accepted definition, which every call to an
-// MCP tool it files is decided against ([Engine.toolUnreviewed]), which a box
-// is given a server by ([Engine.boxServers]) and which the alarm counts by; and
-// at each beat of its listings' publisher it accepts the first listing of each
-// server it lists that nobody has accepted a listing of yet.
+// A tool's level holds only for the definition it was decided on. This node's
+// watched copy of every accepted definition decides each MCP call it files
+// ([Engine.toolUnreviewed]), which servers a box gets ([Engine.boxServers]) and
+// what the alarm counts; each beat of its listings' publisher accepts the first
+// listing of every server it lists that nobody has accepted a listing of yet.
 //
-// # Unanswered is unreviewed
-//
-// Once this node watches the copy, and until the watch's first answer is in,
-// it cannot tell a changed tool from an accepted one, and it answers every
-// allowed tool as unreviewed: a call asks a person, and a box is given no
-// server. A node reads the copy within a moment of starting, and a node that
-// cannot read its coordination store is not running its seats' work anyway. A
-// node that never watches (one with no coordination store) decides nothing.
+// UNANSWERED IS UNREVIEWED: until the watch's first answer (a moment after
+// start) a changed tool cannot be told from an accepted one, so every allowed
+// tool asks a person and a box gets no server. No coordination store, no say.
 
 // mcpReviews is this node's watched copy of the fleet's accepted definitions.
 type mcpReviews struct {
@@ -61,9 +55,8 @@ func (e *Engine) watchReviews() {
 // watchMCPAccepted keeps the watched copy until ctx ends.
 func (e *Engine) watchMCPAccepted(ctx context.Context) {
 	e.watchReviews()
-	// EVERY WATCH'S FIRST ANSWER REPLACES THE COPY, as the listings'
-	// does: a record removed while a lost watch was opened again is in no
-	// answer, and goes at the marker.
+	// EVERY WATCH'S FIRST ANSWER REPLACES THE COPY: a record removed while a
+	// lost watch reopened is in no answer, so it goes at the marker.
 	watch := func(ctx context.Context) (<-chan coord.MCPAcceptedUpdate, error) {
 		updates, err := e.backends.Fleet.WatchMCPAccepted(ctx)
 		if err == nil {
@@ -117,10 +110,9 @@ func (e *Engine) mcpAcceptedAnswered() {
 	r.index = mcpreview.IndexOf(slices.Collect(maps.Values(r.records)))
 }
 
-// toolUnreviewed is [mcpreview.Index.Unreviewed] by this node's copy: true for
-// every tool until the copy's first answer is in (the file comment's
-// "unanswered is unreviewed"). What every bridge this node runs decides a
-// call by ([mcp.Supervision.Unreviewed]).
+// toolUnreviewed is [mcpreview.Index.Unreviewed] by this node's copy, true for
+// every tool until its first answer is in ("unanswered is unreviewed"): what
+// this node's bridges decide a call by ([mcp.Supervision.Unreviewed]).
 func (e *Engine) toolUnreviewed(server, tool, digest string) bool {
 	r := &e.reviews
 	r.mu.RLock()
@@ -190,11 +182,10 @@ func (e *Engine) reviewsWatched() bool {
 // no record names yet, as this node lists it (mcpreview's "a server's first
 // listing is accepted as it is").
 //
-// READ FROM THE STORE BEFORE IT IS WRITTEN, not from the watched copy alone: a
-// copy a moment behind a peer that baselined the server would take a tool the
-// server added since for part of its first listing. Each record is created
-// only where none is held, so two nodes listing a server first at once accept
-// the union of their listings, and neither replaces the other's.
+// READ FROM THE STORE BEFORE WRITING, not the watched copy alone: a copy a
+// moment behind a peer that baselined the server would accept a tool added
+// since as part of its first listing. A record is created only where none is
+// held, so two nodes listing a server first at once accept the union.
 func (e *Engine) baselineMCPTools(ctx context.Context, desired map[string]nodeListing, now time.Time) {
 	index, answered := e.reviewIndex()
 	if !answered {
@@ -220,10 +211,9 @@ func (e *Engine) baselineMCPTools(ctx context.Context, desired map[string]nodeLi
 		if stored.Baselined(server) {
 			continue
 		}
-		// KEPT counts the records now in the store, written here or by a node
-		// listing the server first at the same moment: one is enough to
-		// baseline the server, so a write refused after it leaves the rest of
-		// the listing to be read as added.
+		// KEPT counts records now in the store, written here or by a peer at
+		// the same moment: one baselines the server, so a write refused after
+		// it leaves the rest of the listing read as added.
 		written, kept := 0, 0
 		var putErr error
 		for _, a := range mcpreview.Baseline(desired[server].listing, now) {
@@ -266,13 +256,12 @@ func acceptedDigests(accepted []coord.MCPAcceptedTool) map[string]struct{} {
 
 // sweepMCPAccepted removes every accepted definition of a server the applied
 // revision does not declare and no live listing names, reporting how many
-// went: a server removed from the company takes what was accepted of it, so a
-// server added later under its name lists for the first time.
+// went, so a server added later under a removed one's name lists afresh.
 //
-// DECLARED OR LISTED KEEPS IT: a node on an older revision than the one that
-// added a server would otherwise remove the server's baseline while its
-// listings are live, and the next beat would accept whatever it lists then.
-// Nothing is removed on a node with no applied revision to judge by.
+// DECLARED OR LISTED KEEPS IT: else a node on a revision older than the one
+// adding a server would remove its baseline while its listings are live, and
+// the next beat would accept whatever it lists then. A node with no applied
+// revision removes nothing.
 func (e *Engine) sweepMCPAccepted(ctx context.Context, accepted []coord.MCPAcceptedTool,
 	live []coord.MCPListing) (int64, error) {
 
@@ -305,15 +294,13 @@ func (e *Engine) sweepMCPAccepted(ctx context.Context, accepted []coord.MCPAccep
 
 // changedConditions lays each server's tool changes over its condition
 // (ADR-0078): how many changes hold a tool at Needs approval, how many of
-// those claim less risk than before, the change seen first and when. By the
-// live listings and this node's watched copy of what was accepted; a server
-// whose listings or copy this node has not read, or that no live node lists, is
-// marked unread ([statelog.MCPServerCondition.ChangesUnread]): it raises
-// nothing, rather than every allowed tool at once, and clears nothing either.
+// those claim less risk than before, the change seen first and when. A server
+// whose listings or accepted copy this node has not read, or that no live node
+// lists, is marked unread ([statelog.MCPServerCondition.ChangesUnread]): it
+// raises nothing, rather than every allowed tool at once, and clears nothing.
 //
 // A REMOVAL OR A CHANGE THAT HOLDS NOTHING (a tool that already asks, or is
-// blocked) is not counted: it waits on a person's review on the server's
-// page, and nothing waits on it.
+// blocked) is not counted: nothing waits on its review.
 func (e *Engine) changedConditions(ctx context.Context, c *Company, conds []statelog.MCPServerCondition) {
 	live, ok := e.LiveMCPListings()
 	index, answered := e.reviewIndex()
@@ -397,8 +384,7 @@ func (e *Engine) seenAt(ctx context.Context, digests []string) map[string]time.T
 // boxHoldsChange reports whether a box may not be given server because a tool
 // of it is listed under a definition nobody accepted, and which: a box reaches
 // a server whole, so no call it makes could be held for a person. True while
-// this node has not read the fleet's listings or what was accepted, since it
-// cannot tell then.
+// this node has not read the fleet's listings or what was accepted.
 func (e *Engine) boxHoldsChange(server string) (bool, string) {
 	live, ok := e.LiveMCPListings()
 	index, answered := e.reviewIndex()

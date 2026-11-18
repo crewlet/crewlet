@@ -16,27 +16,18 @@ import (
 // suites do not import.
 const benchRechecks = 64
 
-// BenchmarkChangesDue times the `changes_due` listing a Gitlet node's home loop
-// reads, over the scale this file's figures are stated at
-// (internal/gitlet/changesdue.go's head): 1 000 repositories of 10 live changes
-// each, every one's facts and merge held and nothing due — the steady state a
-// backstop pass walks whole — beside ONE repository of 10 000 live changes
-// behind a moved target, every one due a recheck. Three reads, each the one a
-// home makes:
+// BenchmarkChangesDue times the `changes_due` reads a home makes, at the scale
+// changesdue.go's head states its figures at: 1 000 repositories of 10 live
+// changes, nothing due (the steady state a backstop pass walks whole), beside
+// ONE of 10 000 live changes behind a moved target, every one due a recheck:
 //
-//   - repos: a backstop pass's listing of the repositories holding a due
-//     change, every page — every live change of the company walked, each
-//     checked against its facts' key, its mergeability's and its
-//     conversation's — answering the one busy repository;
-//   - changes: that repository's turn's due changes, every page, asking no
-//     rechecks — its 10 000 live changes walked, none due;
-//   - rechecks: the same turn's first page asking benchRechecks rechecks, the
-//     oldest merge first — the walk above with the one sort the listing
-//     makes, of every change behind the moved target.
+//   - repos: a backstop pass, every page: every live change checked against its
+//     facts', mergeability's and conversation's keys, answering the busy one;
+//   - changes: the busy repository's turn, every page, no rechecks asked: none due;
+//   - rechecks: that turn's first page asking benchRechecks, oldest merge first.
 //
-// What a node pays a pass is repos once and, for each repository it is home
-// to with work, changes or rechecks; the fleet pays repos once a Gitlet node a
-// Backstop (internal/gitlet/home), since every Gitlet node lists every repository.
+// A node pays repos once a pass plus changes or rechecks per repository it homes
+// with work; the fleet pays repos once a Gitlet node a Backstop (internal/gitlet/home).
 func BenchmarkChangesDue(b *testing.B) {
 	n := newNode(b)
 	ctx := context.Background()

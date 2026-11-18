@@ -24,10 +24,9 @@ import (
 // WithdrawAskTool is the tool's wire name.
 const WithdrawAskTool = toolname.WithdrawAsk
 
-// MaxWithdrawReasonBytes bounds why a question is withdrawn: a run's
-// withdrawal travels as its answer by turn, which the coordinator holds to
-// [sandbox.MaxAnswerTextBytes] on the same string, the reason trimmed and
-// before any secret in it is redacted.
+// MaxWithdrawReasonBytes bounds a withdrawal's reason: a run's withdrawal
+// travels as its answer, which the coordinator holds to
+// [sandbox.MaxAnswerTextBytes] on the same trimmed, not yet redacted string.
 const MaxWithdrawReasonBytes = sandbox.MaxAnswerTextBytes
 
 // AskResolver resolves a comment as its author: a question its asker
@@ -42,8 +41,7 @@ type AskResolver interface {
 type WithdrawDeps struct {
 	// Work reads the item and posts the reason in the question's thread.
 	Work WorkDeps
-	// Resolver resolves the question as its author, one per actor as the
-	// tracker's writers are.
+	// Resolver resolves the question as its author, one per actor.
 	Resolver func(actor Actor) AskResolver
 	// Desk reads a run and delivers the withdrawal as its answer.
 	Desk RunDesk

@@ -16,37 +16,23 @@ import (
 )
 
 // readSlack is what a read across the link may carry towards the leaf beside
-// the message it reads: the leader's answers about the stream, the consumers'
-// creations, infos and deletions, a probe's header block and the protocol
-// lines around them — a few kibibytes, held here at sixty-four so a case
-// fails only on a message that crossed twice, or crossed where only its
-// headers should have.
+// the message it reads (stream and consumer answers, a probe's headers,
+// protocol lines): a few kibibytes, held at sixty-four so a case fails only on
+// a message that crossed twice, or where only its headers should have.
 const readSlack = 64 << 10
 
 // A DEAD LETTER AT THE KEEP'S CEILING IS READ WHOLE AND DROPPED THROUGH A
-// LEAF, AND THE LEAF'S LINK STAYS UP.
+// LEAF, crossing once and moving none of its body to drop, AND THE LINK STAYS
+// UP: the leaf closes it WHOLE on any message past max_payload, the
+// transport's 8 MiB (nats-server leafnode.go, maxPayloadViolation; #1031),
+// cutting off every lease and mailbox a node without the `data` role holds
+// across it, and the leader's base64 JSON read is a third larger than the
+// entry. So the frame crosses RAW, delivered by a consumer, and the drop's
+// check reads headers alone.
 //
-// A node without the `data` role reaches the dead letters across its leaf
-// link, and the server on the leaf's side closes that WHOLE link on any
-// message larger than its max_payload (nats-server v2.15.2, leafnode.go,
-// processLeafMsgArgs → maxPayloadViolation) — the transport's eight
-// mebibytes. The stream leader's message read answers in JSON, the entry
-// base64-encoded inside it, a third larger than the entry: an entry at the
-// keep's ceiling came back as about eleven megabytes, the leaf closed its
-// link, and the read was asked again over a link redialled only to be closed
-// again, every lease and mailbox the node holds cut off with it
-// (crewlet/crewlet#1031). So across a link the frame crosses RAW, delivered by
-// a consumer, and the drop's check reads the entry's headers alone.
-//
-// Held here: the frame reads back as it was kept, having crossed the link
-// once; the drop removes it, moving none of its body; and the member's
-// connection to the leaf is the same one throughout.
-//
-// Mutation: read the frame, or check the drop, with the leader's message
-// read across a link, and the leaf closes its link on the reply — the read
-// fails, and the member's link to the leaf is another connection; or check
-// the drop with a consumer that delivers the payload, and the drop carries
-// the entry's body across the link.
+// Mutation: read the frame, or check the drop, with the leader's message read
+// across a link → the read fails and the link is another connection; check the
+// drop with a consumer that delivers the payload → the body crosses.
 func TestADeadLetterAtTheKeepCeilingIsReadAndDroppedThroughALeafItsLinkUp(t *testing.T) {
 	t.Parallel()
 	member, q := leafReading(t)
@@ -57,8 +43,7 @@ func TestADeadLetterAtTheKeepCeilingIsReadAndDroppedThroughALeafItsLinkUp(t *tes
 	if _, err := q.KeepDeadLetter(ctx, subject, "at the ceiling", header, body); err != nil {
 		t.Fatalf("keep a dead letter at the ceiling through the leaf: %v", err)
 	}
-	// ONE MEMBER, so the copy a listing reads is the stream itself, and the
-	// listing is current.
+	// ONE MEMBER, so the listing reads the stream itself and is current.
 	kept, err := q.DeadLettersOn(ctx, subject)
 	if err != nil || len(kept) != 1 {
 		t.Fatalf("the subject lists %d entries (%v), want the one kept", len(kept), err)
@@ -107,20 +92,12 @@ func TestADeadLetterAtTheKeepCeilingIsReadAndDroppedThroughALeafItsLinkUp(t *tes
 }
 
 // A RECORD AT THE TRANSPORT'S CEILING IS READ BACK THROUGH A LEAF, AND THE
-// LEAF'S LINK STAYS UP.
-//
-// A state log's record may be as large as statelog.MaxTransportRecordBytes,
-// and a log allows no direct get, so the stream leader's message read is how
-// a record is read by its position (DomainLog.At) and how a subject's newest
-// is found (DomainLog.LastSeq) — a JSON reply a third larger than the record,
-// past what a leaf's link carries, and the leaf closes the whole link on it
-// (crewlet/crewlet#1031). So across a link the record crosses RAW, delivered by
-// a consumer, and the newest on a subject is found from its headers alone.
-//
-// Held here: the subject's newest is the record appended, having moved none
-// of it; the record reads back whole by its position, having crossed once; a
-// subject never written and a position past the log's end are absent; and
-// the member's connection to the leaf is the same one throughout.
+// LEAF'S LINK STAYS UP. A record may reach statelog.MaxTransportRecordBytes,
+// and with no direct get the leader's message read (JSON, a third larger) is
+// past what a leaf's link carries, so DomainLog.At takes the record RAW from a
+// consumer and DomainLog.LastSeq reads headers alone: LastSeq moves none of
+// it, At crosses it once, an unwritten subject and a position past the end
+// are absent, and the link stays the same connection throughout.
 //
 // Mutation: read either with the leader's message read across a link, and the
 // leaf closes its link on the reply.
@@ -194,8 +171,8 @@ func leafReading(t *testing.T) (*server.Server, *Queue) {
 	memberCfg := cfg
 	memberCfg.ServerName = "member"
 	memberCfg.LeafHost, memberCfg.LeafPort = "127.0.0.1", AnyPort
-	// A MEMBER THAT SERVES LEAVES PERSISTS, and the leaf creates what it
-	// is first to use in the file store to match.
+	// A MEMBER THAT SERVES LEAVES PERSISTS; the leaf creates what it first
+	// uses in the file store to match.
 	memberCfg.StoreDir, memberCfg.StoreMaxBytes = brokertest.TempDir(t), brokertest.StoreMaxBytes
 	member := startTestServer(t, memberCfg)
 

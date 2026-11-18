@@ -22,33 +22,23 @@ func candidate(live, publishedPacks, liveObjects, publishedObjects int64, pushed
 		PublishedAt: publishedAt, PublishTook: took}
 }
 
-// A PUBLICATION IS DUE BY ITS ROW, and every clause of the rule is one of its
-// own: the tail must hold a pack; it must be worth a layer — the repository
-// never published, or its tail at compact.PublishPacks packs, or at a
-// compact.PublishShare-th of its objects, or at compact.PublishTailObjects
-// objects, whichever of the last two is fewer; it must have settled — stood
-// still compact.PublishDebounce, or waited compact.PublishMaxWait since the
-// tail began (its first sighting by the pass, or the last publication where
-// that is later); and the duty cycle must allow it —
-// compact.PublishMinInterval, or compact.PublishDutyCycle times the last
-// build, whichever is longer, since the last publication. Each row turns one
-// clause, against a candidate due by every other.
+// A PUBLICATION IS DUE BY ITS ROW: each row turns one clause of compact.Due's
+// rule (the tail holds a pack, is worth a layer, has settled, and the duty
+// cycle allows it) against a candidate due by every other.
 //
-// Mutations: drop the duty cycle's build term (pace by PublishMinInterval
-// alone), and the long-build row is due; read the tail's packs alone, and the
-// share row is not due; count the ceiling from the last publication alone,
-// and a burst into a repository idle since then is due at its first pack;
-// drop the ceiling, and the repository pushed to without a pause is never
-// due; hold a repository never published to the worth rule, and its first
-// layer waits for PublishPacks packs.
+// Mutations: drop the duty cycle's build term, and the long-build row is due;
+// read the tail's packs alone, and the share row is not due; count the
+// ceiling from the last publication alone, and a burst into a repository idle
+// since then is due at its first pack; drop the ceiling, and the repository
+// pushed to without a pause is never due; hold a repository never published
+// to the worth rule, and its first layer waits for PublishPacks packs.
 func TestAPublicationIsDueByItsRow(t *testing.T) {
 	t.Parallel()
 	settled := dueAt.Add(-time.Hour)
 	long := dueAt.Add(-24 * time.Hour)
 	never := time.Time{}
-	// A repository of a million objects in 100 packs: its share is 15 625
-	// objects (a sixty-fourth), under compact.PublishTailObjects, so the share
-	// is the objects' bound here.
+	// A million objects in 100 packs: the share (15 625) is under
+	// compact.PublishTailObjects, so it is the objects' bound here.
 	const live, objects = int64(100), int64(1_000_000)
 	share := objects / compact.PublishShare
 	for _, c := range []struct {
@@ -109,14 +99,11 @@ func TestAPublicationIsDueByItsRow(t *testing.T) {
 	}
 }
 
-// A LARGE REPOSITORY'S TAIL IS BOUNDED IN OBJECTS, never by its share alone: a
-// tail's cost is its objects — every clone and the installer's canary walk
-// each one outside the chain — so the largest repository the defaults admit,
-// some 60 million objects, is due once its tail holds
-// compact.PublishTailObjects objects (a second of walk at
-// gitproc.WalkPerObject) in a few packs, where its share, a sixty-fourth,
-// would wait for 937 500 (some ten seconds of walk added to every clone);
-// while a small one, whose share is fewer, is due at that share first.
+// A LARGE REPOSITORY'S TAIL IS BOUNDED IN OBJECTS, never by its share alone
+// (compact.PublishTailObjects has why): the largest repository the defaults
+// admit, some 60 million objects, is due at PublishTailObjects tail objects in
+// a few packs, not at its share's 937 500; a small one, whose share is fewer,
+// is due at that share first.
 //
 // Mutation: hold the tail's objects to the share alone, and the 60 million
 // arm is not due.

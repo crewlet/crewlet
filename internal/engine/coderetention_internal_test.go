@@ -48,15 +48,12 @@ func activateRevision(t *testing.T, e *Engine, doc string) int64 {
 	return activateRevisionAt(t, e, doc).Epoch
 }
 
-// activateRevisionAt is [activateRevision] answering the whole activation: its
-// epoch, and the instant a node booted on its revision is stamped with
-// ([Options.ActivatedAt]), which is how that node knows it serves the
-// pointer's revision ([Engine.servedFleetRevision]).
-//
-// SEALED under e's own keyring in both places, as every writer stores and
-// publishes it: a node holding a keyring applies only a sealed document, since
-// a plaintext one is one anything reaching the store or the coordination
-// bucket could have authored.
+// activateRevisionAt is [activateRevision] answering the whole activation,
+// whose instant a node booted on it is stamped with ([Options.ActivatedAt],
+// read by [Engine.servedFleetRevision]). The document is SEALED under e's
+// keyring in the store and the coordination bucket alike, as every writer does:
+// a node holding a keyring applies only a sealed document, since anything
+// reaching either could author a plaintext one.
 func activateRevisionAt(t *testing.T, e *Engine, doc string) coord.Activation {
 	t.Helper()
 	document, err := json.Marshal(parseCompany(t, doc))
@@ -106,12 +103,11 @@ func retainedFor(days int, repos string) string {
 		fmt.Sprintf("code:\n  backend: gitlet\n  deleted_retention_days: %d\n", days), 1)
 }
 
-// purgeProbe is the code-retention duty as e builds it, watched: its claims
-// counted, its give-backs counted and answered, its decline lines and its
-// passes' lines captured at every level, and its pass run as though a day less a nanosecond had passed since every deletion — the retention the duty reads
-// off the epoch, less that, is what both the listing and every purge step
-// judge a deletion's age by, so a day's retention is past at once and a longer
-// one is not. The engine's own loop is stopped, so every turn is the test's.
+// purgeProbe is the code-retention duty as e builds it, watched: claims and
+// give-backs counted (give-backs answered), every line captured at every
+// level, and the retention both the listing and every purge step read cut by a
+// day less a nanosecond, so a day's retention is past at once and a longer one
+// is not. The engine's own loop is stopped, so every turn is the test's.
 type purgeProbe struct {
 	duty              *codeRetentionDuty
 	claims, gaveBacks atomic.Int64
@@ -229,32 +225,18 @@ func noPurge(t *testing.T, e *Engine, end uint64, why string) {
 	}
 }
 
-// A CODE-RETENTION HOLDER BEHIND THE FLEET'S REVISION STARTS NO PURGE.
+// A CODE-RETENTION HOLDER BEHIND THE FLEET'S REVISION STARTS NO PURGE: a purge
+// has no undo, and a node behind the pointer's revision would purge by the
+// retention the company replaced. Behind, the turn declines BEFORE its claim,
+// gives the duty back and purges nothing; nothing activated is not current.
+// Still propagating is DEBUG, asked again at the reconcile cadence; a lag the
+// posture confirms is a WARN naming both epochs, asked again a tick later; the
+// episode's resume is logged at INFO, its loudest line's level.
 //
-// The duty purges by the code.deleted_retention_days of the revision its node
-// serves, and a purge has no undo. A company that lengthens the retention to
-// save a deleted repository activates a revision that says so; a holder that
-// has not applied it — propagation, a refused apply, a node stuck on an older
-// revision — would purge the repository by the retention the company replaced.
-// So the duty is taken only on a node serving the revision the fleet's
-// activation pointer names, the rule the mailbox retirement already followed:
-// behind, the turn declines BEFORE its claim, gives the duty back, and purges
-// nothing; once the node applies the revision, the longer retention holds the
-// repository. And NOTHING ACTIVATED IS NOT CURRENT for this rule: a node booted
-// on a company file purges nothing before the fleet has activated a revision.
-//
-// WHAT IT SAYS depends on whether being behind is a fault. Applying the
-// revision, which every node does at every activation, is DEBUG and asked again
-// at the reconcile cadence; a lag the posture's rule confirms is a WARN naming
-// both epochs, asked again a tick later; and the decline it ends on is closed
-// at INFO, the level of the loudest line the episode logged.
-//
-// Mutations: drop the decline and the behind node purges web by the day the
-// company replaced; answer the company on an unset pointer
-// ([Engine.servedFleetRevision]) and the unactivated node purges it; read every
-// lag as confirmed and the activation still being applied warns; read none as
-// confirmed and the lag the reconciler confirmed never warns; drop the episode's
-// loudest level and the WARN is closed at DEBUG.
+// Mutations: drop the decline and web is purged by the replaced day; answer the
+// company on an unset pointer ([Engine.servedFleetRevision]) and the unactivated
+// node purges it; read every lag as confirmed and propagation warns, or none and
+// the confirmed lag never does; drop the loudest level and the WARN closes at DEBUG.
 func TestACodeRetentionHolderBehindTheFleetsRevisionStartsNoPurge(t *testing.T) {
 	t.Parallel()
 	t.Run("behind the fleet's revision", func(t *testing.T) {
@@ -279,8 +261,7 @@ func TestACodeRetentionHolderBehindTheFleetsRevisionStartsNoPurge(t *testing.T) 
 
 		p := newPurgeProbe(e)
 		end := codeLogEnd(t, e)
-		// STILL PROPAGATING: this node's tick has not met the activation
-		// yet, which every node is for a moment at every activation.
+		// STILL PROPAGATING: this node's tick has not met the activation yet.
 		p.declined(t, configplane.ReconcileInterval, "a turn meeting an activation not yet applied")
 		p.noWarning(t, "a turn meeting an activation not yet applied")
 		// CONFIRMED: an attempt of this node's at the revision concluded in
@@ -377,24 +358,15 @@ func TestACodeRetentionHolderBehindTheFleetsRevisionStartsNoPurge(t *testing.T) 
 // A NODE STILL REACHING THE FLEET'S REVISION DECLINES THE PURGE QUIETLY, AND
 // ASKS AGAIN SOON — AND A NODE BOOTED ON THE FLEET'S REVISION PURGES AT ONCE.
 //
-// The duty's loop is armed inside [New] and its first turn runs at once —
-// before `crewlet run` has built the reconciler, which it does only once New
-// has returned, and long before that reconciler's first tick. A node booted on
-// the revision the pointer names serves it already: the company it boots on
-// carries that activation's instant, and that is what says a node serves the
-// fleet's revision ([Engine.servedFleetRevision]), reconciler or none. A node
-// booted on a revision the fleet has since moved past — another node activated
-// a newer one while this one was down — does not, and neither does an apply
-// that builds the native runtime, which arms the duty inside its own tick. None
-// of that is a fault: the turn declines at DEBUG, gives nothing to warn about,
-// and asks again at the reconcile cadence, so the restart costs the purge a
-// reconcile interval rather than a tick. A node with no reconciler yet reads as
-// one whose reconciler has not ticked, which the posture reads as waiting too.
+// The duty's first turn runs inside [New], before `crewlet run` builds the
+// reconciler. A node booted on the pointer's revision serves it already, by its
+// activation's instant ([Engine.servedFleetRevision]); one booted on a revision
+// the fleet moved past does not, and with no reconciler yet reads as waiting. No
+// fault: the turn declines at DEBUG and asks again at the reconcile cadence.
 //
-// Mutations: log the boot's decline as unknown (the base) and the restart
-// behind the fleet warns; drop [dutyDecline.again] and it waits a whole tick;
-// judge a node with no reconciler behind whatever company it holds, and the
-// restart on the fleet's own revision declines.
+// Mutations: log the boot's decline as unknown and the restart behind warns;
+// drop [dutyDecline.again] and it waits a tick; judge a node with no reconciler
+// behind and the restart on the fleet's revision declines.
 func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T) {
 	t.Parallel()
 	removed := retainedFor(1, "")
@@ -504,24 +476,17 @@ func TestANodeStillReachingTheFleetsRevisionDeclinesThePurgeQuietly(t *testing.T
 }
 
 // A RETIREMENT IS SWEPT BY A RECORD THE ENGINE RUNS. A retired reference keeps
-// its object from the collector only until its domain deletes the row
-// (ADR-0081), and Gitlet's retired packs are deleted by a retire_sweep
-// record of the code-retention duty — every applier at one position — never
-// by a job of the maintenance worker, whose list
-// (TestTheEngineSweepsEveryShortHorizonTable) holds per-node deletes alone and
-// could not name this one. So the duty the engine builds is held here to it: a
-// pass on a node serving the fleet's revision removes a repository's retired
-// row past gitlet.RetireGrace by one record on the repository's subject, keeps a
-// row still inside the grace, and says what it swept at INFO.
+// its object from the collector until its domain deletes the row (ADR-0081);
+// Gitlet's retired packs go by the code-retention duty's retire_sweep record,
+// every applier at one position, never by a maintenance job, whose list
+// (TestTheEngineSweepsEveryShortHorizonTable) holds per-node deletes alone. A
+// pass removes a row past gitlet.RetireGrace by one record on the repository's
+// subject, keeps one inside it, and logs the sweep at INFO. The rows are
+// seeded by the wall clock: the duty judges the grace by its own clock, which
+// the case does not set, and the broker's instants cannot be moved.
 //
-// THE ROWS ARE SEEDED into the node's estate, a day and an hour old and an
-// hour old by the wall clock, because the duty the engine builds judges the
-// grace by its own clock, which the case does not set, and the broker's
-// instants cannot be moved.
-//
-// Mutation: drop the sweep step from the pass, and the row stays with nothing
-// on the log; drop the sweep's counts from the pass's INFO rule, and the line
-// is DEBUG.
+// Mutation: drop the sweep step and the row stays with nothing on the log;
+// drop the sweep's counts from the pass's INFO rule and the line is DEBUG.
 func TestARetirementIsSweptByARecordTheEngineRuns(t *testing.T) {
 	t.Parallel()
 	doc := retainedFor(7, webRepo(""))

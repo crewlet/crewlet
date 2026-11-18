@@ -8,18 +8,14 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// A NODE WITHOUT DATA BUILDS NO HISTORY READER.
+// A NODE WITHOUT DATA BUILDS NO HISTORY READER: it holds no history (its store
+// is scratch; custody puts every event it publishes in one data node's log) and
+// nothing on it asks, so a reader there would read its scratch store as a part
+// and name the node in every coverage. A data node's reader reads its own
+// store.
 //
-// It holds no history — its store is scratch, and custody puts every event it
-// publishes in one data node's event log — and nothing on it asks: the reader's
-// callers are the API's history answers and the live projection's boot seed,
-// and serving the API takes `data`. A reader built there anyway read its own
-// scratch store as a part and named the node in every coverage as one the
-// answer was assembled from, beside a comment claiming its dashboard read the
-// fleet. A data node's reader reads its own store.
-//
-// Mutation: build the reader before the role check, as armHistory did, and the
-// node without data has one.
+// Mutation: build the reader before armHistory's role check, and the node
+// without data has one.
 func TestANodeWithoutDataBuildsNoHistoryReader(t *testing.T) {
 	t.Parallel()
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "node.db"), store.Options{})

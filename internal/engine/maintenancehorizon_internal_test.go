@@ -33,15 +33,9 @@ func jobNamed(t *testing.T, jobs []maintenance.Job, name string) maintenance.Job
 }
 
 // A REVISION THAT MOVES A SWEEP HORIZON IS HONOURED BY THE SWEEP ALREADY
-// RUNNING, with no restart.
-//
-// The inbox's horizon is the company's, and it was read ONCE, when the sweep
-// was built at boot: a revision shortening it was honoured everywhere else at
-// once and by the sweep only after the process restarted, so rows the company
-// had asked to forget were kept for as long as the node stayed up — and a
-// lengthened one kept deleting rows the company had just asked to keep. The
-// jobs built at boot are asked here after the apply, which is what the running
-// worker does at its next sweep.
+// RUNNING, with no restart: a horizon read once at boot keeps rows the company
+// asked to forget, or deletes rows it asked to keep. The jobs built at boot are
+// asked after the apply, as the running worker does at its next sweep.
 //
 // Mutation: have [Engine.maintenanceJobs] hand the inbox job a horizon read
 // once ([maintenance.Fixed] of the boot value) and the second half goes red.

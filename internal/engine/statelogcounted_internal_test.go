@@ -13,25 +13,16 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE SNAPSHOT LOOP COUNTS WHAT THE TRIM COUNTS.
-//
-// Whether there is anybody to donate an artefact to is the trim's own counted
-// set: every node whose row names a log, every live data node — one that has
-// published no row yet is exactly a joiner waiting for the copy this count
-// decides whether anybody takes — less the tombstones past their window. So a
+// THE SNAPSHOT LOOP COUNTS WHAT THE TRIM COUNTS: every node whose row names a
+// log, every live data node (one with no row yet is the joiner this count
+// decides whether anybody donates to), less tombstones past their window. So a
 // joiner with no row counts, a live node holding no data does not, and an
-// evicted node's row stops counting once its eviction is past the window, as
-// it does in the trim.
+// evicted node's row stops counting once its eviction is past the window.
 //
-// JUDGED BY NAME, AND WITHOUT THIS NODE. Whether the running node counts
-// itself yet rests on two loops that run on their own clocks after it admits
-// seats — its first positions row, and its presence view's next listing (the
-// view starts listing before the node claims its presence, so its first
-// listing can name nobody) — and neither is what this test is about. Taken as
-// a baseline SIZE that later counts add to, it failed under load: the node
-// was not yet counted when the baseline was read, its own row then satisfied
-// the wait for the joiner, and the joiner arriving later read as an evicted
-// row still counted past its window.
+// Judged by name and without this node: whether the running node counts
+// itself yet rests on its first positions row and its presence view's next
+// listing, two loops on their own clocks, so a baseline size read before it is
+// counted lets its own row satisfy the wait for the joiner.
 func TestTheSnapshotLoopCountsWhatTheTrimCounts(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -48,10 +39,8 @@ func TestTheSnapshotLoopCountsWhatTheTrimCounts(t *testing.T) {
 		return slices.DeleteFunc(n, func(id string) bool { return id == s.nodeID })
 	}
 
-	// The stateless node is claimed FIRST, so any listing that names the
-	// joiner began after both claims and names the stateless node too: the
-	// moment the joiner is counted is a moment the stateless node could have
-	// been, and the check below it is not vacuous.
+	// The stateless node is claimed FIRST, so any listing naming the joiner
+	// names it too, and the check that it is not counted is not vacuous.
 	for _, n := range []struct {
 		id    string
 		roles []string

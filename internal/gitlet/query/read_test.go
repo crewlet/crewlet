@@ -30,36 +30,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// A PATH REACHES GIT ONLY AS DATA. Every kind is read over paths built to be
-// read as options — a directory `--output=x`, files `-r` and `a:b`, a name
-// with a newline — by abbreviated ids, and every argument list a read ran is
-// held to its template: the kind's fixed options, whole ids at their places,
-// `--disambiguate=` validated hex, a history's window as numbers the server
-// formats and a blame's range as two, and — for a history, a blame and a
-// directory's walks, which read no path on a standard input — the path as the
-// ONE argument after `--` (a directory walk's as one or more literal
-// pathspecs), where git reads it as a path whatever it spells: a history's as a
-// literal pathspec, a blame's as itself. Every other path was fed to
-// cat-file's batch, `<id>:<path>`, where it is a name like any other, and a
-// filtered stat's, a patch's and every file's patches' files to diff-pairs as
-// the raw records diff-tree wrote. This is what keeps diff-tree's,
-// diff-pairs', rev-list's, log's and blame's `--output` out — the writers gate
-// argues their run-time arguments in its allowance — so an argument a read
-// adds is red here, and so is a path moved before `--`. And every path `--output=x` spells is read
-// as the path it is: its history lists its commit, its blame its line. A
-// landed-in read's ancestry checks are held too: whole ids, both sides. And a
-// change's revisions: their facts walk and diff the paths by ids alone, and
-// lex a Go file's two versions — `--output=y.go`'s — from blobs a batch is
-// fed by id, anchors on them are found by the batch and diffed by pairs
-// numbered rather than named, and an interdiff kept to them looks its touched
-// paths up as `<id>:<path>` lines of a lookup's batch, no pathspec. An excerpt
-// of each is found the same way, its rename by a walk of two ids. A
-// history's until reaches git as a formatted number, its seat not at all.
+// A PATH REACHES GIT ONLY AS DATA (package doc, "Nothing a client wrote
+// reaches git's command line as an option"). Every kind is read, by
+// abbreviated ids, over paths built to read as options (`--output=x`, `-r`,
+// `a:b`, a name with a newline), and every argument list a read ran is held to
+// its template: an added argument is red, and so is a path moved before `--`.
+// Each such path is still read as itself: its history lists its commit, its
+// blame its line. A history's until reaches git as a number, its seat not at all.
 //
-// Mutations: the log's path before `--`, or `--output=x` added to the log's
-// or the blame's arguments → red; an interdiff kept to its touched paths that
-// walks the heads rather than look them up → red; the seat handed to git as
-// an argument → red.
+// Mutations: the log's path before `--`, or `--output=x` added to the log's or
+// the blame's arguments; an interdiff kept to its touched paths walking the
+// heads rather than looking them up; the seat handed to git as an argument →
+// each red.
 func TestAPathReachesGitOnlyAsData(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
@@ -95,9 +77,8 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 	tip, at := x.tip("refs/heads/main")
 	mustRead(t, s, landedQ(repo, base[:7], "refs/heads/main", tip, at, true))
 
-	// A CHANGE'S REVISIONS: its facts, which walk and diff these paths; its
-	// anchors on them, placed by a batch and by one diff-pairs fed numbers;
-	// and an interdiff kept to them, whose filter is judged here.
+	// A CHANGE'S REVISIONS: its facts, its anchors (placed by a batch and by a
+	// diff-pairs fed numbers) and an interdiff kept to these paths.
 	facts := mustRead(t, s, factsQ(repo, head, base)).RevisionFacts
 	if len(facts.Touched) != len(paths)+1 || facts.PatchID == "" {
 		t.Fatalf("the facts of the head = %+v, want every path touched and an id", facts)
@@ -114,8 +95,9 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 	mustRead(t, s, interdiffQ(repo, gitlet.InterdiffQuery{FromBase: head, FromHead: base, ToBase: base, ToHead: head,
 		ToTouched: []string{"-r"}, File: "-r"}))
 
-	// EXCERPTS of the paths on both sides, and of a file renamed to an odd path: the other
-	// side found by the batch, the rename by a walk of two ids, the pairs diffed by number.
+	// EXCERPTS of both sides, and of a file renamed to an odd path: the other
+	// side found by the batch, the rename by a walk of two ids, the pairs
+	// diffed by number.
 	x.branch("moved", head)
 	x.git("mv", "--", "a:b", "--output=w")
 	moved := x.p.Commit(x.work, nil, "move a:b")
@@ -152,9 +134,8 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 		}
 	}
 
-	// A HISTORY AND A BLAME, each path the one argument after `--`: every
-	// path's history is its two commits, and its blame its one line of the
-	// head's, whatever the path spells.
+	// A HISTORY AND A BLAME, each path the one argument after `--`: its history
+	// is its two commits, its blame the head's one line.
 	for _, p := range paths {
 		got := commits(pages(t, s, logQ(repo, gitlet.LogQuery{Rev: head[:8], Path: p, Since: historyDay}),
 			gitlet.MaxGitAnswerBytes))
@@ -170,10 +151,9 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 	// A WINDOW AND A SEAT: formatted numbers, and no seat, reach git.
 	mustRead(t, s, logQ(repo, gitlet.LogQuery{Rev: head, Path: "--output=x/f", Since: historyDay,
 		Until: time.Now(), PushedBy: "ceo"}))
-	// A SEARCH: its text is the argument of -e, where git reads a pattern
-	// whatever it spells — an option's name, `-O` (--open-files-in-pager)
-	// folded — its paths filtered here, over git's answer, and a clause git
-	// cannot read exactly, every line (`-e ^`).
+	// A SEARCH: its text, even an option's name or `-O` (--open-files-in-pager)
+	// folded, is the argument of -e; its paths are filtered over git's answer;
+	// a clause git cannot read exactly is every line (`-e ^`).
 	for _, sq := range []gitlet.SearchQuery{
 		{Text: "--open-files-in-pager=x", Mode: codeindex.ModeLiteral, Paths: []string{"--output=x/f", "-r"}},
 		{Text: "-Ofile", Mode: codeindex.ModeRegex, IgnoreCase: true, Ref: "main"},
@@ -185,9 +165,8 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 		q.Cursor = mustRead(t, s, q).Next
 		mustRead(t, s, q)
 	}
-	// A FIND: its query is matched in Go over the tree's listing, which is
-	// listed by the root tree's id, and reaches git as nothing at all: the
-	// check is fed ids, and the listing names the tree.
+	// A FIND: its query is matched in Go over the root tree's listing and
+	// reaches git as nothing at all.
 	root := strings.TrimSpace(x.git("rev-parse", head+"^{tree}"))
 	for _, fq := range []string{"--output=x", "-r"} {
 		from := rec.count()
@@ -203,10 +182,9 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 		}
 	}
 
-	// A DIRECTORY'S LAST COMMITS: the listing names the tree, and every walk
-	// names the directory, or its entries once the walk narrows, as literal
-	// pathspecs after `--`, whatever they spell; `-r`, last changed on a merged
-	// side branch, is walked alone from the merge.
+	// A DIRECTORY'S LAST COMMITS: every walk names the directory, or its
+	// entries once it narrows, as literal pathspecs after `--`; `-r`, last
+	// changed on a merged side branch, is walked alone from the merge.
 	x.branch("odd", head)
 	side := x.p.Commit(x.work, map[string]string{"-r": "side\n"}, "side")
 	x.git("checkout", "-q", "main")
@@ -320,13 +298,12 @@ var templates = [][]string{
 // logLiteralTemplate is the magic a history's path follows `--` with.
 const logLiteralTemplate = ":(literal)"
 
-// historyTemplates are a history's argument lists (its fixed options, its
-// format with or without the message, its window: every combination, in
-// order, of a since, an until and a skip, the commit, and its path as a
-// literal pathspec, the one argument after `--`, or none) and a blame's: its
-// range, the commit, and its path, the one argument after `--`. "<since>",
-// "<until>" and "<skip>" are the numbers the server formats, "<literal>" the
-// literal magic and any path, "<path>" any path, "<lines>" two line numbers.
+// historyTemplates are a history's argument lists (its format with or without
+// the message, every ordered combination of a since, an until and a skip, and
+// its path as a literal pathspec after `--`, or none), a blame's, and a
+// directory walk's. "<since>", "<until>" and "<skip>" are numbers the server
+// formats, "<literal>" the literal magic and any path, "<path>" any path,
+// "<lines>" two line numbers.
 func historyTemplates() [][]string {
 	var out [][]string
 	for _, format := range []string{"--format=%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%at%x00%ct%x00%s%x00",
@@ -348,8 +325,7 @@ func historyTemplates() [][]string {
 		[]string{"log", "-1", "-z", "--no-color", "--no-notes", "--format=%H", "<oid>", "--", "<literal>"})
 }
 
-// fitsTemplate reports whether args is one of templates, or a history's or a
-// blame's.
+// fitsTemplate reports whether args fits any template.
 func fitsTemplate(args []string) bool {
 	for _, tmpl := range slices.Concat(templates, historyTemplates()) {
 		if fits(args, tmpl) {
@@ -359,8 +335,7 @@ func fitsTemplate(args []string) bool {
 	return false
 }
 
-// digits reports whether s is a number the server formats: decimal digits
-// alone.
+// digits reports whether s is decimal digits alone, as the server formats.
 func digits(s string) bool {
 	return s != "" && strings.Trim(s, "0123456789") == ""
 }
@@ -438,10 +413,9 @@ func fits(args, tmpl []string) bool {
 				return false
 			}
 		case "<path>":
-			// A blame's path, after `--`: whatever it spells, a path.
+			// After `--`: a path, whatever it spells.
 		case "<pattern>":
-			// A search's pattern, the argument of -e: whatever it spells,
-			// a pattern.
+			// The argument of -e: a pattern, whatever it spells.
 		case "<commitish>":
 			// A search's commit: a whole id or a whole ref, peeled.
 			at, ok := strings.CutSuffix(args[i], "^{commit}")
@@ -457,11 +431,10 @@ func fits(args, tmpl []string) bool {
 	return true
 }
 
-// AN ABBREVIATION IS NEVER A REF. A tag and a branch named by commit A's
-// seven-digit abbreviation, both pointing at B: a listing at that abbreviation
-// is A's — cat-file's own reading of the name would have answered B's, a ref
-// before an object — and an abbreviation two objects share is refused asking
-// for more of its digits, never answered for either.
+// AN ABBREVIATION IS NEVER A REF. With a tag and a branch named by commit A's
+// seven-digit abbreviation pointing at B, a listing at that abbreviation is
+// A's (cat-file's own reading would answer B's, a ref before an object); an
+// abbreviation two objects share is refused asking for more digits.
 //
 // Mutation: expand an abbreviation by cat-file — the listing is B's, red.
 func TestAnAbbreviationIsNeverARef(t *testing.T) {
@@ -498,8 +471,8 @@ func TestAnAbbreviationIsNeverARef(t *testing.T) {
 }
 
 // collidingBlobs is two file contents whose blob ids share their first seven
-// hex digits: drawn until two do — about twenty thousand draws at 28 bits,
-// the birthday bound.
+// hex digits, drawn until two do: about twenty thousand draws, the birthday
+// bound at 28 bits.
 func collidingBlobs(t *testing.T) (string, string) {
 	t.Helper()
 	seen := map[string]string{}
@@ -547,12 +520,12 @@ func (h *holdingCache) Sync(ctx context.Context, repoID string, fresh statelog.F
 	return h.Cache.Sync(ctx, repoID, fresh)
 }
 
-// A READ WAITING ON ITS SYNC HOLDS NO SHARE. On a node whose share is ONE
-// unit, a read of a repository whose copy is filling waits on its sync while
-// a read of a warm repository is served — in less time than the share's wait,
-// so it never waited for the unit — because a unit is held around a read's
-// own git and nothing else: held across a fill, one read would refuse every
-// other seat read on such a node. The filling read is served once its copy is.
+// A READ WAITING ON ITS SYNC HOLDS NO SHARE (package doc, "The share: half
+// the read lane, around a read's long git only"). On a node whose share is ONE
+// unit, a read waiting on its copy's fill does not keep a warm repository's
+// read from being served in less than the share's wait: held across a fill,
+// one read would refuse every other seat read on such a node. The filling
+// read is served once its copy is.
 //
 // Mutation: take the unit before the sync — the warm read waits for the unit
 // past its second and fails, red.
@@ -579,9 +552,8 @@ func TestAReadWaitingOnItsSyncHoldsNoShare(t *testing.T) {
 		filled <- err
 	}()
 	<-held.entered
-	// SHORTER THAN THE SHARE'S WAIT, beyond the reply's margin a read
-	// leaves its asker: a read that waited for the unit would not be
-	// answered in it.
+	// Shorter than the share's wait plus the reply's margin: a read that
+	// waited for the unit would not be answered in it.
 	ctx, cancel := context.WithTimeout(t.Context(), gitlet.ReplyMargin+gitlet.GitShareWait/2)
 	defer cancel()
 	if _, err := s.Read(ctx, treeQ(warm, gitlet.TreeQuery{Rev: head})); err != nil {
@@ -616,12 +588,11 @@ func (c *countingCache) take() []statelog.ReadLevel {
 	return out
 }
 
-// AN ID THE COPY LACKS IS LOOKED FOR ONCE AT THE LOG'S HEAD. A Gitlet node whose
-// copy predates a push is asked, at the asker's floor (which it has reached),
-// for the push's commit: it syncs ONCE at the log's head — the asker may know
-// of a push this node has not synced — and answers. An id nobody pushed, whole
-// or abbreviated, is looked for the same once and then answered
-// ErrObjectNotFound naming it, never synced for again.
+// AN ID THE COPY LACKS IS LOOKED FOR ONCE AT THE LOG'S HEAD. A Gitlet node at
+// the asker's floor whose copy predates a push syncs ONCE at the log's head
+// for the push's commit (the asker may know of a push this node has not
+// synced) and answers. An id nobody pushed, whole or abbreviated, is looked
+// for the same once, then answered ErrObjectNotFound naming it.
 func TestAnOidTheCacheLacksIsLookedForOnceAtTheHead(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{Shape: gitlettest.Shape{GitletNodes: 2}}, gitlettest.Settings())
@@ -656,12 +627,11 @@ func TestAnOidTheCacheLacksIsLookedForOnceAtTheHead(t *testing.T) {
 }
 
 // A SEAT'S SECOND LOOK IS ITS TURN'S TO PAY: a seat's read of an id nobody
-// pushed looks once at the log's head, until its turn's sixteen on the node
-// are spent; then it is answered from the copy at its floor, with no sync at
-// the head, saying it was not judged again and when the turn's re-syncs come
-// back. Another turn of the seat finds the SEAT's bucket spent (the scope,
-// M3-decisions U36); a person's read is charged to nobody; and once the refill
-// has earned one, the turn looks at the head once more.
+// pushed looks once at the log's head until its turn's sixteen on the node are
+// spent, then is answered at its floor with no sync, saying it was not judged
+// again and when the re-syncs come back. Another turn of the seat finds the
+// SEAT's bucket spent (the scope, M3-decisions U36); a person's read is charged
+// to nobody; once the refill has earned one, the turn looks at the head again.
 //
 // Mutation: no bucket (resync answering nil) — the seventeenth read syncs at
 // the log's head — red.
@@ -726,10 +696,9 @@ func TestASeatPastItsResyncsIsAnsweredAtItsFloor(t *testing.T) {
 }
 
 // A READ MADE FOR A CHECK IS ITS ATTEMPT'S TO PAY: a check's box reading, at
-// /box/gitlet/, a commit the Gitlet node's copy does not hold looks once at the
-// log's head a read until its attempt's sixteen on the node are spent; then
-// it is answered at the check's session, with no sync at the head, naming
-// the check's re-syncs.
+// /box/gitlet/, a commit the node's copy lacks looks once at the log's head
+// per read until its attempt's sixteen on the node are spent, then is answered
+// at the check's session with no sync, naming the check's re-syncs.
 //
 // Mutation: a read made for a check charged to nobody (resync answering nil
 // for one) — the seventeenth read syncs at the log's head — red.
@@ -804,13 +773,12 @@ func (g *gatedObjects) open() {
 	g.gate = nil
 }
 
-// A COLD REPOSITORY ANSWERS UNREADY AND KEEPS SYNCING. A Gitlet node that has
-// never held a repository is asked for it while its download waits on the
-// object store: past the read's sync wait (50 ms here) it answers
-// ErrGitUnready{syncing} — about itself, so the asker may ask another node —
-// and the round it began goes on under the cache's own lifetime: once the store
-// answers, the next read is served from that round's download, the repository
-// downloaded once.
+// A COLD REPOSITORY ANSWERS UNREADY AND KEEPS SYNCING. A node asked for a
+// repository it never held, its download waiting on the object store, answers
+// ErrGitUnready{syncing} past the read's sync wait (50 ms here), about itself
+// so the asker may ask another node, and the round goes on under the cache's
+// own lifetime: once the store answers, the next read is served from that
+// round's download, the repository downloaded once.
 func TestAColdRepositoryAnswersUnreadyAndKeepsSyncing(t *testing.T) {
 	t.Parallel()
 	objects := &gatedObjects{Backend: memobj.New()}
@@ -877,17 +845,14 @@ func (p wedgedPool) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, err
 }
 
 // ONLY A FAILURE OF THE NODE'S OWN LETS ANOTHER NODE FILL. A sync that failed
-// on what every Gitlet node's copy is filled from — the code log, the object
-// store, a pack the store lacks or holds damaged, a bundle that is not its
-// row's, rows this build cannot install, a repair the cache refuses to repeat
-// because a whole read of them did not end the damage — is answered
-// `syncing`, which keeps the walk's one fill where it is: another node's fill
-// would meet the same failure, a download for nothing, and every Gitlet node's at
-// once against a store that throttles. A sync that failed for a reason of the
-// node's own — its cache stopping, its disk refusing a write — and a short
-// check over its copy that ran its whole bound are answered `node_failed`,
-// which lets the walk have the next node fill: kept, the walk's filler stayed
-// on a node that would serve the read no sooner for being asked.
+// on what every node fills from (the code log, the object store, a pack the
+// store lacks or holds damaged, a bundle that is not its row's, rows this
+// build cannot install, a repair the cache refuses to repeat) is `syncing`,
+// keeping the walk's one fill where it is: another node would meet the same
+// failure, and every node at once would download against a throttling store.
+// A failure of the node's own (its cache stopping, its disk refusing a write,
+// an object check that ran its whole bound) is `node_failed`, so the walk has
+// the next node fill rather than wait on one no sooner served.
 //
 // Mutations: answer every failed sync `syncing` — the node's own rows red;
 // let a refused repair pass the fill — its row red.
@@ -922,16 +887,14 @@ func TestOnlyAFailureOfTheNodesOwnLetsAnotherNodeFill(t *testing.T) {
 	}
 }
 
-// A NODE THAT HOLDS NO COPY FILLS ONLY AS HOME (ADR-0089). A Gitlet node that has
-// never held a repository, asked a read that is NOT its walk's effective
-// home's, answers ErrGitUnready{not_held} at once and starts nothing — no
-// round, no GET of the object store — because a round, once begun, runs on
-// under the cache's own lifetime after its read stops waiting: with every node
-// free to fill, one read of a repository nobody held downloaded it on every
-// Gitlet node the walk reached. Asked as the home, the same node fills: the cold
-// round starts, the read is answered syncing while the download waits, and
-// once it lands the copy serves. And a copy the node HOLDS answers whatever
-// the stamp says — behind the asker's floor, brought there by a delta.
+// A NODE THAT HOLDS NO COPY FILLS ONLY AS HOME (ADR-0089). A node that never
+// held a repository, asked a read NOT stamped as its walk's effective home,
+// answers ErrGitUnready{not_held} at once and starts no round and no GET: a
+// round runs on under the cache's lifetime after its read stops waiting, so
+// with every node free to fill, one read would download the repository on
+// every node the walk reached. Asked as home, the node fills: answered syncing
+// while the download waits, then served. A copy the node HOLDS answers
+// whatever the stamp, brought to the asker's floor by a delta.
 //
 // Mutation: drop the check — the unstamped read starts the download, a GET
 // counted and the copy held, red.
@@ -949,12 +912,10 @@ func TestANodeThatHoldsNoCopyFillsOnlyAsHome(t *testing.T) {
 		q.Home = false
 		return q
 	}
-	// served asks q again for as long as the node answers it syncing, as an
-	// asker told a node is syncing asks again, and returns the first other
-	// answer. Each read waits the server's 50 ms on the round it joins, and on
-	// a loaded runner a round (a download and git's own work) takes longer,
-	// so a step that wants the copy served awaits it rather than racing that
-	// wait. The 30 s is a hang detector, which no passing run comes near.
+	// served asks q again while the node answers it syncing, as an asker would,
+	// and returns the first other answer: on a loaded runner a round outlasts
+	// the server's 50 ms wait, so a step wanting the copy served awaits it
+	// rather than racing that wait. The 30 s is only a hang detector.
 	served := func(q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 		deadline := time.Now().Add(30 * time.Second)
 		for {
@@ -1044,16 +1005,14 @@ func TestAUnitRepositoryRefusesASeatOutsideIt(t *testing.T) {
 	}
 }
 
-// A READ MADE FOR A SEAT IS HELD TO THAT SEAT'S GRANT, on the Gitlet node that
-// answers it, from the chart and the row it judges the asker by
-// (gitlet.JudgeRead, the data node's judgment too): eng-dev reads a
-// `visibility: unit` repository of its own unit, and read for sales-rep — the
-// colleague whose ask woke its turn, who reads none of it — it is refused
-// ErrAboveCeiling naming the visibility, never ErrNotPermitted, which would be
-// false of eng-dev; and nothing of the repository is read for it, the page
-// eng-dev's own read memoized just before included. Read for eng-lead, who
-// reads it, the same read is answered from that memo; and sales-rep reading
-// for eng-dev is refused about itself.
+// A READ MADE FOR A SEAT IS HELD TO THAT SEAT'S GRANT on the node that answers
+// it (gitlet.JudgeRead, the data node's judgment too): eng-dev reads a
+// `visibility: unit` repository of its unit, but read for sales-rep (whose ask
+// woke its turn, and who reads none of it) it is refused ErrAboveCeiling
+// naming the visibility, never ErrNotPermitted, which would be false of
+// eng-dev, and nothing is read for it, not even the page eng-dev's own read
+// memoized. Read for eng-lead, who reads it, it is answered from that memo;
+// sales-rep reading for eng-dev is refused about itself.
 //
 // Mutation: the grant step judging the asker alone → eng-dev is served the
 // page for sales-rep, from the memo.
@@ -1096,12 +1055,11 @@ func TestAReadMadeForASeatIsHeldToThatSeatsGrant(t *testing.T) {
 	}
 }
 
-// A REFUSAL IS JUDGED AT THE LOG'S HEAD. A Gitlet node whose copy of a
-// repository predates the activation that made it `visibility: company` would
-// refuse a seat outside the owning unit from the row it holds; it syncs once at
-// the log's head instead — Gitlet never refuses on a stale read — and
-// serves the seat from the row that says company. A read the head refuses too
-// is refused after that one look, never a second.
+// A REFUSAL IS JUDGED AT THE LOG'S HEAD. A node whose copy predates the
+// activation that made a repository `visibility: company` syncs once at the
+// log's head before refusing a seat outside the owning unit (Gitlet never
+// refuses on a stale read), and serves it from the row that says company. A
+// read the head refuses too is refused after that one look.
 //
 // Mutation: refuse from the copy as it stands — the seat is refused, red.
 func TestARefusalIsJudgedAtTheLogsHead(t *testing.T) {
@@ -1136,11 +1094,11 @@ func TestARefusalIsJudgedAtTheLogsHead(t *testing.T) {
 	}
 }
 
-// A READ WITH NO CHART IS UNREADY HERE, NEVER REFUSED. A Gitlet node holding no
-// chart yet — no epoch installed, at boot or before a first apply — cannot
-// judge a seat, which is not "this seat may not read it": the seat's read is
-// ErrGitUnready{no_chart}, about this node, so the asker asks another, and no
-// sync is started for it. A person's read reads no chart and is served.
+// A READ WITH NO CHART IS UNREADY HERE, NEVER REFUSED. A node with no chart
+// installed yet cannot judge a seat, which is not "this seat may not read it":
+// the seat's read is ErrGitUnready{no_chart}, about this node, so the asker
+// asks another; no sync is started for it. A person's read reads no chart and
+// is served.
 //
 // Mutation: judge the seat with no chart — GrantOf's none — ErrNotPermitted,
 // red.
@@ -1165,11 +1123,10 @@ func TestAReadWithNoChartIsUnreadyHere(t *testing.T) {
 	}
 }
 
-// A GITLET NODE BEHIND ITS CONFIGURATION SERVES NO SEAT. Confirmed behind the
-// company's configuration (shed or stuck), a node judges no seat's grant from
-// the chart the fleet replaced — the revision it failed may be the one that
-// revoked it — so a seat's read is ErrGitUnready{behind_config} and starts no
-// sync, while a person's, which reads no chart, is served.
+// A GITLET NODE BEHIND ITS CONFIGURATION SERVES NO SEAT. Confirmed behind
+// (shed or stuck), a node judges no seat from the chart the fleet replaced,
+// since the revision it failed may have revoked the grant: a seat's read is
+// ErrGitUnready{behind_config} and starts no sync; a person's is served.
 //
 // Mutation: drop the arm — the seat is served, red.
 func TestAGitletNodeBehindItsConfigurationServesNoSeat(t *testing.T) {
@@ -1193,13 +1150,12 @@ func TestAGitletNodeBehindItsConfigurationServesNoSeat(t *testing.T) {
 	}
 }
 
-// A DAMAGED RUN GIVES NO ANSWER. Over a copy whose multi-pack-index is
-// truncated, git reads around the damage, answers from the packs' own indexes
-// and exits 0 — and says what it read around in its trace. Such a run is no
+// A DAMAGED RUN GIVES NO ANSWER. Over a truncated multi-pack-index, git reads
+// around the damage, exits 0 and says so only in its trace. Such a run is no
 // answer: the read is ErrGitUnready{syncing}, about this node, while the
-// cache repairs. No process a read runs names a Repairer, so what it reported
-// went to the cache's observer at once, which counted it and queued the
-// repair; once that round has dropped the index, the next read is served.
+// cache repairs. No process a read runs names a Repairer, so its report goes
+// to the cache's observer at once, which counts it and queues the repair; once
+// that round drops the index, the next read is served.
 //
 // Mutation: answer from the damaged run — served while damaged, red.
 func TestADamagedRunGivesNoAnswer(t *testing.T) {

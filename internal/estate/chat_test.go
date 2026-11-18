@@ -19,8 +19,8 @@ import (
 )
 
 // THE SERVING HALF IS THE DOMAIN'S OWN SHAPE: the engine hands a data node's
-// chat reader, writer and index to a [Backend] as they are, so an interface
-// here that drifted from them would otherwise be found only by the wiring.
+// chat reader, writer and index to a [Backend] as they are, so drift fails here
+// rather than in the wiring.
 var (
 	_ ChatReader   = (*chatlet.Reader)(nil)
 	_ ChatWriter   = (*chatlet.Store)(nil)
@@ -30,10 +30,9 @@ var (
 // chatStream is the chat log's stream, as a floor names it.
 var chatStream = floorStreams[chatDomain]
 
-// chatDesk is one data node's chat as the router reaches it: every read names
-// the viewer and the level it was asked at, every write the key it was keyed
-// under and the authority it crossed with, and the search what it handed the
-// index.
+// chatDesk is one data node's chat as the router reaches it, recording each
+// read's viewer and level, each write's key and authority, and what the search
+// handed the index.
 type chatDesk struct {
 	mu sync.Mutex
 
@@ -45,9 +44,8 @@ type chatDesk struct {
 	seeds []string
 	opIDs []string
 
-	// moderated, archived and retained are what the authority-bearing
-	// writes arrived with: each delete's authority, each patch's, and each
-	// retention's days as a person would read them.
+	// moderated, archived and retained are what each delete's and patch's
+	// authority, and each retention's days (as a person reads them), arrived as.
 	moderated []chatlet.MessageAuthority
 	archived  []chatlet.ChannelAuthority
 	retained  []string
@@ -57,15 +55,14 @@ type chatDesk struct {
 	readable map[string][]chatlet.ReadableRoom
 	searched [][]string
 
-	// building is an index whose walk has not caught up; flips turns it
-	// over while a search runs, as a rebuild asked for or a walk catching
-	// up would; readyErr is a readiness the node could not read.
+	// building is an index whose walk has not caught up; flips toggles it
+	// during a search, as a rebuild or a walk catching up would; readyErr is a
+	// readiness the node could not read.
 	building, flips bool
 	readyErr        error
 
 	// at is the copy's applied position, written the position every write
-	// reports, and unvouched answers every write `unknown`, unvouched by
-	// this node's ledger.
+	// reports; unvouched answers every write `unknown`, unvouched by the ledger.
 	at        statelog.Position
 	written   statelog.Position
 	unvouched bool
@@ -121,8 +118,7 @@ func (d *chatDesk) Thread(_ context.Context, viewer string, q chatlet.ThreadQuer
 		Root: chatlet.MessageView{Message: chatlet.Message{ID: q.RootID}}}, nil
 }
 
-// TurnThread answers the thread Thread does, carrying whom its root was
-// written for, as the serving reader does.
+// TurnThread answers Thread's thread plus whom its root was written for.
 func (d *chatDesk) TurnThread(_ context.Context, viewer string, q chatlet.ThreadQuery,
 	fresh statelog.Freshness) (chatlet.TurnThread, error) {
 	served := d.read("turn_thread", viewer, fresh)
@@ -361,22 +357,20 @@ var (
 	linear   = statelog.Freshness{Level: statelog.ReadLinearizable}
 	chatSeen = statelog.Position{Stream: "CREWLET_CHAT_LOG", Generation: 1, Seq: 41}
 
-	// chatKey is an operation key the engine minted, as [chatlet.Actor.OpKey]
-	// holds one.
+	// chatKey is an engine-minted operation key, as [chatlet.Actor.OpKey] holds.
 	chatKey = statelog.NewOpID(time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC), "chat")
 )
 
-// keyedAs is actor carrying the caller's operation key, as a seat's turn and a
-// person's retried request both hand one.
+// keyedAs is actor carrying the caller's operation key, as a seat's turn or a
+// person's retried request hands one.
 func keyedAs(actor chatlet.Actor, key string) chatlet.Actor {
 	actor.OpKey = key
 	return actor
 }
 
-// EVERY CHAT READ IS ANSWERED FOR ITS VIEWER, at the level it asked for, by a
-// data node that serves chat — so a seat on a node holding no data reads its
-// rooms exactly as one on a data node does, and the room rules (what a viewer
-// may see) are the serving reader's own, applied to the viewer that crossed.
+// EVERY CHAT READ IS ANSWERED FOR ITS VIEWER, at its level, by a data node
+// serving chat: a seat on a node holding no data reads as one on a data node
+// does, and the serving reader applies the room rules to the viewer that crossed.
 func TestEveryChatReadIsAnsweredForItsViewerAtItsLevel(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -471,13 +465,12 @@ func TestEveryChatReadIsAnsweredForItsViewerAtItsLevel(t *testing.T) {
 // A KEYED CHAT WRITE NOBODY ANSWERED IS ASKED AGAIN, UNDER ITS KEY — and an
 // unkeyed one never is.
 //
-// The key is the actor's ([chatlet.Actor.OpKey]) for EVERY gesture: the chat
-// store derives the operation id — and a message's or a new room's — from it
-// and what the gesture asks, so the next holder's ledger collapses a write the
-// silent one may have made. Without one the store mints a fresh id per call,
-// and a second holder would say the message twice, open a second room or take
-// a reaction off again. A predicate that read anything else either repeats an
-// unkeyed write or strands a keyed one.
+// The key is [chatlet.Actor.OpKey] for EVERY gesture: the store derives the
+// operation id (and a message's or new room's) from it and the gesture, so the
+// next holder's ledger collapses a write the silent one may have made.
+// Unkeyed, each call mints a fresh id, and a repeat would post twice, open a
+// second room or undo a reaction again. A predicate reading anything else
+// repeats an unkeyed write or strands a keyed one.
 func TestAKeyedChatWriteNobodyAnsweredIsAskedAgainUnderItsKey(t *testing.T) {
 	t.Parallel()
 	forever := chatlet.RetentionForever
@@ -547,8 +540,7 @@ func TestAKeyedChatWriteNobodyAnsweredIsAskedAgainUnderItsKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			// A FLEET PER HALF: the holder that answered last is asked
-			// first, so the second half on the first's fleet would never
-			// meet the silent holder at all.
+			// first, so a shared fleet would never meet the silent holder.
 			silentFirst := func(t *testing.T) (*fleet, *chatDesk) {
 				f := newFleet(t, "data-a", "data-b")
 				desks := withRooms(f)
@@ -583,12 +575,11 @@ func TestAKeyedChatWriteNobodyAnsweredIsAskedAgainUnderItsKey(t *testing.T) {
 }
 
 // AN ERASE AND A PRUNE CARRY THE CALLER'S OWN OPERATION ID, as a purge does, so
-// one nobody answered is asked again under it — and the ledger of the node that
-// runs it answers a repeat with the first outcome.
+// one nobody answered is asked again under it and the running node's ledger
+// answers a repeat with the first outcome.
 //
-// A FLEET PER GESTURE: a node that went silent is asked LAST for a while, so a
-// second gesture through the same router would never reach it and would prove
-// nothing about its own class.
+// A FLEET PER GESTURE: a silent node is asked LAST for a while, so a second
+// gesture through the same router would never reach it.
 func TestAnUnansweredEraseOrPruneRepeatsUnderTheSameOperation(t *testing.T) {
 	t.Parallel()
 	for name, gesture := range map[string]func(c Chat) error{
@@ -623,9 +614,8 @@ func TestAnUnansweredEraseOrPruneRepeatsUnderTheSameOperation(t *testing.T) {
 }
 
 // A REPEATABLE CHAT WRITE NO NODE ANSWERED IS UNKNOWN, NAMING THEM — never
-// "nothing ran": a node that took the request and said nothing may have run
-// it, and a caller told nothing ran writes again. A read no node answered is
-// still unserved, which is the claim a read can make.
+// "nothing ran": a silent node may have run it, and a caller told nothing ran
+// writes again. A read no node answered is still unserved.
 func TestAChatWriteNoNodeAnsweredIsUnknownNamingThem(t *testing.T) {
 	t.Parallel()
 	for name, write := range map[string]func(c Chat) error{
@@ -664,8 +654,8 @@ func TestAChatWriteNoNodeAnsweredIsUnknownNamingThem(t *testing.T) {
 }
 
 // A WRITE ONE NODE'S LEDGER CANNOT VOUCH FOR IS ASKED OF THE NEXT, under the
-// same key: the outcome a chat write carries is found where a tracker write's
-// is, and another node's ledger may hold the row this one lost.
+// same key, as a tracker write is: another node's ledger may hold the row this
+// one lost.
 func TestAnUnvouchedChatWriteIsAskedOfTheNextNode(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
@@ -688,13 +678,12 @@ func TestAnUnvouchedChatWriteIsAskedOfTheNextNode(t *testing.T) {
 }
 
 // WHAT A CALLER WAS ADMITTED TO DO ARRIVES AS IT WAS DECIDED. The asking node
-// holds the grants and the chart, so it decides a moderator's take-down and an
-// archive — and the unit the archive was decided on — and the serving node
-// judges each value against its own snapshot; a value lost on the way is a
-// moderator refused, or worse, an author's own delete read as a moderator's. A
-// retention's three meanings must arrive apart too: the company's horizon, for
-// ever, and a number of days — the second is a zero, and a wire that made it
-// absent would hand the room the company's horizon and the duty a year of it.
+// decides a moderator's take-down and an archive (and its unit) from the grants
+// and chart; the serving node judges each against its snapshot. A value lost on
+// the way refuses a moderator, or reads an author's delete as a moderator's. A
+// retention's three meanings arrive apart too: the company's horizon, for ever
+// (a zero, which a wire making it absent would turn into the company's
+// horizon), and a number of days.
 func TestWhatAChatCallerWasAdmittedToDoArrivesAsItWasDecided(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -734,9 +723,8 @@ func TestWhatAChatCallerWasAdmittedToDoArrivesAsItWasDecided(t *testing.T) {
 	}
 }
 
-// A CHAT WRITE RAISES THE CHAT LOG'S FLOOR AND NO OTHER, so the seat's next
-// chat read — on whichever node answers it — includes the write, and its next
-// tracker read waits for nothing chat wrote.
+// A CHAT WRITE RAISES THE CHAT LOG'S FLOOR AND NO OTHER: the seat's next chat
+// read, on any node, includes the write; its next tracker read waits for none.
 func TestAChatWritesPositionIsTheNextChatReadsFloor(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -770,10 +758,10 @@ func TestAChatWritesPositionIsTheNextChatReadsFloor(t *testing.T) {
 	}
 }
 
-// A CHAT READ CARRIES THE CHAT LOG'S FLOOR AND NO OTHER: a position this node
-// was told of on the chat log — its own seat's post, the record that woke a
-// turn — holds the next chat read on whichever node answers it, the search
-// included, and a tracker read waits for nothing chat wrote.
+// A CHAT READ CARRIES THE CHAT LOG'S FLOOR AND NO OTHER: a chat-log position
+// this node was told of (its seat's post, the record that woke a turn) holds
+// the next chat read on any node, the search included; a tracker read waits for
+// nothing chat wrote.
 func TestAChatReadCarriesTheChatLogsFloorAndNoOther(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -813,13 +801,12 @@ func TestAChatReadCarriesTheChatLogsFloorAndNoOther(t *testing.T) {
 }
 
 // THE SEARCH RESOLVES WHAT THE VIEWER MAY READ WHERE IT READS THE INDEX, and the
-// index is handed that set and nothing a caller supplied: a named room is
-// intersected with it, a room the viewer may not read answers nothing — exactly
-// as a room nobody holds would — and a viewer who may read nothing is answered
-// with no hits rather than handed to an index that refuses an empty set. Each
-// hit is shown under its room's name and kind from that same set. And an index
-// still catching up says so on the answer it gave, rather than leaving its
-// short list to be read as everything anybody said.
+// index is handed that set, never a caller's: a named room is intersected with
+// it, a room the viewer may not read answers nothing (as a room nobody holds
+// would), and a viewer who may read nothing gets no hits rather than an index
+// that refuses an empty set. Each hit shows its room's name and kind from that
+// set, and an index still catching up says so rather than pass its short list
+// off as everything said.
 func TestAChatSearchReadsTheViewersRoomsBesideTheIndex(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -837,8 +824,8 @@ func TestAChatSearchReadsTheViewersRoomsBesideTheIndex(t *testing.T) {
 		t.Errorf("jane's search answered %+v, want both her rooms searched at the copy's "+
 			"position, over a caught-up index", all)
 	}
-	// EACH HIT IS SHOWN UNDER ITS ROOM as the visible set read it: a named
-	// room by its name, a direct conversation, which has none, by its kind.
+	// EACH HIT IS SHOWN UNDER ITS ROOM from the visible set: a named room by its
+	// name, a direct conversation, which has none, by its kind.
 	shown := map[string]chatlet.ReadableRoom{
 		"room-1": {ID: "room-1", Kind: chatlet.KindPublic, Name: "launch"},
 		"room-2": {ID: "room-2", Kind: chatlet.KindDM},
@@ -890,11 +877,9 @@ func TestAChatSearchReadsTheViewersRoomsBesideTheIndex(t *testing.T) {
 }
 
 // AN INDEX THAT WAS NOT READY THROUGHOUT THE SEARCH IS STILL BUILDING, whichever
-// way its readiness moved while the search ran: a rebuild asked for meanwhile
-// leaves hits drawn from the index of the copy an adoption replaced, and a walk
-// that caught up meanwhile leaves hits drawn from the part it had reached — and
-// readiness asked only before the search misses the first, only after it the
-// second.
+// way its readiness moved: a rebuild meanwhile leaves hits from the replaced
+// copy's index, a walk catching up meanwhile hits from the part it had reached.
+// Readiness asked only before misses the first, only after the second.
 func TestAChatSearchIsBuildingUnlessItsIndexWasReadyThroughout(t *testing.T) {
 	t.Parallel()
 	for name, before := range map[string]bool{
@@ -926,8 +911,8 @@ func TestAChatSearchIsBuildingUnlessItsIndexWasReadyThroughout(t *testing.T) {
 // failed search.
 //
 // The flag promises "these hits may not cover every message", and a node that
-// could not tell cannot promise the opposite — while failing the search over it
-// would answer a seat with a broken tool where there are hits it can show.
+// could not tell cannot promise the opposite; failing the search would hand a
+// seat a broken tool where there are hits to show.
 func TestAChatSearchWhoseReadinessIsUnreadIsBuilding(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -947,8 +932,7 @@ func TestAChatSearchWhoseReadinessIsUnreadIsBuilding(t *testing.T) {
 }
 
 // A NODE WHOSE COMPANY'S CHAT IS NOT THE ENGINE'S OWN RUNS NO CHAT OPERATION,
-// and says so rather than answering empty: a seat told "you are in no rooms"
-// by a node that simply holds none would act on it.
+// and says so rather than answering empty, which a seat would act on.
 func TestANodeWithoutChatServesNoChatOperation(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -988,10 +972,9 @@ func TestAdmissionSaysWhetherTheCopyServesChat(t *testing.T) {
 		t.Fatalf("a remote copy running chat is served as %+v (%v), want chat", served, err)
 	}
 
-	// AND THE ANSWER IT KEEPS IS THE WHOLE ONE: admission asks again on
-	// every sweep and is answered from the last ping for [admissionTrust],
-	// so a kept answer that dropped a half would admit a chat seat once and
-	// then never again.
+	// AND THE ANSWER IT KEEPS IS THE WHOLE ONE: each sweep is answered from the
+	// last ping for [admissionTrust], so a kept answer dropping a half would
+	// admit a chat seat once and never again.
 	served, err = other.client.Serves(t.Context())
 	if err != nil || !served.Chat {
 		t.Fatalf("the remote copy's kept answer is %+v (%v), want chat", served, err)
@@ -1012,15 +995,12 @@ func TestAdmissionSaysWhetherTheCopyServesChat(t *testing.T) {
 
 // A ROOM ASKED "HERE" IS ANSWERED BY THIS NODE'S OWN COPY, EVEN LAGGING.
 //
-// The live channel decides who may see a record this node's applier has just
-// committed: that copy holds it by construction, and a peer may not yet. The
-// ordinary walk passes a lagging copy over for a peer's — and a burst is what
-// makes a copy lag — so every decision during one became a round trip to a
-// node that might not have applied the record at all. ChannelHere asks this
-// copy first and the peer not at all; Channel, beside it, still asks the peer
-// whose copy does not lag first, which is what every other read wants. And a
-// copy that is out of service is passed over either way: lagging is distance,
-// out of service is wrong.
+// The live channel decides who may see a record this node's applier just
+// committed, which this copy holds by construction and a peer may not yet. The
+// ordinary walk passes a lagging copy over, and a burst makes a copy lag, so
+// ChannelHere asks this copy and never the peer; Channel still prefers the
+// non-lagging peer, as every other read wants. A copy out of service is passed
+// over either way: lagging is distance, out of service is wrong.
 func TestARoomAskedHereIsAnsweredByThisNodesOwnCopyEvenLagging(t *testing.T) {
 	t.Parallel()
 	peered := newFleet(t, "data-a")

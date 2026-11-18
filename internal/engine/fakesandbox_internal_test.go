@@ -11,15 +11,9 @@ import (
 )
 
 // A DEMONSTRATION COMPANY'S RUNS FINISH, ON EVERY HARNESS. `providers.sandbox.fake`
-// stands in for the box and not for the choice of harness, so a fake company's
-// chains pick their member as a real one's do — and whichever harness that member
-// drives has to be the double, with a run that completes. A real runner in a
-// fake box starts nothing that ever ends, and every turn of the company parks
-// on its first launch for good.
-//
-// BOTH PLAYS: the double's own, whose run did nothing and says so in its
-// report, and a scripted one, which is what a run DOES wherever a case scripts
-// it.
+// replaces the box, not the harness choice, so every harness must run the
+// double: a real runner in a fake box never ends, and every turn parks on its
+// first launch for good. Both plays: the double's own and a scripted one.
 func TestAFakeCatalogueCompletesEveryHarnessRuns(t *testing.T) {
 	t.Parallel()
 	cfg := parseCompany(t, sandboxDoc(""))
@@ -44,10 +38,9 @@ func TestAFakeCatalogueCompletesEveryHarnessRuns(t *testing.T) {
 	}
 }
 
-// A BOOTED NODE'S FAKE CATALOGUE PLAYS ITS RUNS AS ITS OPTIONS SAY — the seam
-// a case uses to drive a whole turn through the engine it boots — and pins
-// that catalogue on its epoch, which is what every launch of the epoch's turns
-// places its box by ([Company.catalogue]).
+// A BOOTED NODE'S FAKE CATALOGUE PLAYS ITS RUNS AS ITS OPTIONS SAY, the seam a
+// case drives a whole turn through, and pins it on the epoch, which every
+// launch places its box by ([Company.catalogue]).
 func TestABootedFakeCatalogueRunsTheConfiguredPlay(t *testing.T) {
 	t.Parallel()
 	played := make(chan string, len(executor.Names()))

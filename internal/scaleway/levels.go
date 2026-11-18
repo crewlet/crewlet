@@ -79,10 +79,11 @@ var levels = []level{
 //nolint:gochecknoglobals // an immutable list, not state
 var orgSets = []string{"AuditTrailReadOnly", "OrganizationReadOnly", "ProjectReadOnly"}
 
-// neverGranted is what no level may hold, the reason beside each in the
-// package docs: IAM and organization writes, billing, secrets and keys, SSH
-// keys, Cockpit token minting, object contents and their public exposure,
-// domain registrar writes, Kubernetes' system:masters and the opaque bundles.
+// neverGranted is what no level holds and no grant offers, the reason beside
+// each in the package docs: IAM and organization writes, billing, secrets and
+// keys, SSH keys, Cockpit token minting, object contents and the bucket
+// policies that hand them out, domain registrar writes, Kubernetes'
+// system:masters and the opaque bundles.
 //
 //nolint:gochecknoglobals // an immutable list, not state
 var neverGranted = []string{
@@ -92,7 +93,7 @@ var neverGranted = []string{
 	"SecretManagerSecretWrite", "SecretManagerSecretDelete", "KeyManagerFullAccess",
 	"KeyManagerKeyDecrypt", "KeyManagerKeyCreate", "SSHKeysFullAccess", "ObservabilityFullAccess",
 	"ObjectStorageFullAccess", "ObjectStorageReadOnly", "ObjectStorageObjectsRead",
-	"ObjectStorageObjectsWrite", "ObjectStorageBucketsWrite", "ObjectStorageBucketPolicyFullAccess",
+	"ObjectStorageObjectsWrite", "ObjectStorageBucketPolicyFullAccess",
 	"DomainsDNSFullAccess", "KubernetesSystemMastersGroupAccess", "AllProductsFullAccess",
 	"AllProductsReadOnly",
 }

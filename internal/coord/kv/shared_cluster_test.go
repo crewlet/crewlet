@@ -18,21 +18,13 @@ import (
 )
 
 // THE SHARED CASES WITH THEIR HANDLES WHERE MOST OF A FLEET'S NODES ARE: on
-// no copy of the bucket at all.
-//
-// A handle's reads were the bucket handle's own Get, a DIRECT get, which the
-// broker answers from a replica — the copy on the handle's own member when
-// there is one, and otherwise whichever replica it picks. A replica
-// acknowledges nothing, so it can be a write behind the quorum that
-// acknowledged the claim; read back through it, the claim's own write read as
-// never made, and the claim answered (nil, nil) for a lease it held. A node
-// without the `data` role is a leaf with no copy of anything, so every one of
-// its reads went to a picked replica — which is where the fleet measured it.
-//
-// FIVE MEMBERS AND THREE-REPLICA BUCKETS put two members on no copy of the
-// lease bucket, which is that position without a leaf: the handles are on
-// them, so no read can be answered locally, and the case asks which copy
-// answers. Every read a caller acts on is now the stream LEADER's.
+// no copy of the bucket at all. A direct get is answered by a replica, which
+// acknowledges nothing and can be a write behind the quorum, so a claim read
+// back through one reads as never made; a leaf node without `data` has no
+// copy, so every read it makes goes to a picked replica. FIVE MEMBERS AND
+// THREE-REPLICA BUCKETS put two members, with the handles on them, on no copy
+// of the lease bucket, so no read is local and the case asks which copy
+// answers: every read a caller acts on must be the stream LEADER's.
 func TestSharedContractOnACluster(t *testing.T) {
 	t.Parallel()
 	c := jetstreamtest.StartCluster(t, 5, js.Config{})
@@ -87,26 +79,16 @@ func TestSharedContractOnACluster(t *testing.T) {
 
 // A READ A CALLER ACTS ON IS NEVER ANSWERED BY A COPY THAT IS BEHIND — a lease
 // or a fleet record the quorum holds is unknown through a member cut off from
-// it, never absent.
+// it, never absent. Its own direct get answers "not found" for the majority's
+// write (proved first, or the case passes against the read it rules out),
+// which a lease read would pass on as "definitively not held" and a seat host
+// as "shed this seat now"; through the leader the same reads FAIL, and the
+// node keeps what it holds and waits.
 //
-// The deterministic form of what the shared case above catches as a rate. A
-// member cut off from its peers is "behind" for certain: the majority commits
-// a write, and the cut member never receives it. Its own direct get then
-// answers "not found" for that write — this case proves that premise first,
-// or it would pass against the very read it rules out — and a lease read that
-// took that answer told its caller "definitively not held" about a lease the
-// store held: Get answered nil, and Renew answered false, which a seat host
-// reads as "shed this seat now". Through the leader the same reads FAIL, which
-// the contract's third answer is for: a node that cannot reach its store
-// keeps what it holds and waits.
-//
-// THE CUT MEMBER LEADS NEITHER STREAM THE CASE READS. One that is a stream's
-// leader when it is cut goes on answering that stream's leader reads from its
-// own copy until it notices it has lost its peers — the bound the package doc
-// states under "Every single-key read is the leader's", measured at about ten
-// seconds. A case that let the placement decide which member it cut asserted,
-// on the runs where that member led the mailbox bucket, a guarantee the broker
-// does not give, and failed whenever its reads landed inside the window.
+// THE CUT MEMBER LEADS NEITHER STREAM THE CASE READS: a cut leader answers
+// leader reads from its own copy until it notices (package doc, "Every
+// single-key read is the leader's", about ten seconds), a window the broker
+// gives no guarantee inside.
 func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 	t.Parallel()
 	c := jetstreamtest.StartPartitionableCluster(t, 3, js.Config{})
@@ -187,12 +169,10 @@ func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 
 	c.Partition(t, cut)
 	const owner = "node-a/1"
-	// The majority's writes, straight after the cut. A group the cut member
-	// led has to elect again among the two that remain, so the writes are
-	// retried through that — each on a FRESH resource, because a claim that
-	// failed part way while the lease bucket itself had no leader could not
-	// give its claiming record back either, and that record holds the
-	// resource under this owner until its TTL.
+	// The majority's writes, straight after the cut, retried through the
+	// election a group the cut member led needs, each on a FRESH resource: a
+	// claim that failed part way while the lease bucket had no leader cannot
+	// give its claiming record back, which holds the resource until its TTL.
 	var (
 		lease    *coord.Lease
 		resource string

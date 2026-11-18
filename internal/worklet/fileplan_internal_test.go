@@ -26,28 +26,17 @@ func declared(t *testing.T, build func() (string, error)) string {
 }
 
 // THE FILE INDEXES SERVE THE QUERIES THEY NAME, read off the planner for
-// [TestEveryIndexServesARegisteredQuery]'s reason: a comment naming a reader is
-// a claim, and the plan is what checks it. The object reads are the ones that
-// matter most — the collector asks which of a batch of keys any file names
-// once per batch of the store's listing, the audit and the backup page
-// through every named key, and the backup asks which of the keys written
-// while it ran the copy names — and without the key's index each is every
-// file in the company.
+// [TestEveryIndexServesARegisteredQuery]'s reason. Without the object key's
+// index the collector's per-batch question, the audit's and backup's walk of
+// every named key, and the backup's question of keys written during its copy
+// would each read every file in the company.
 //
-// AT EVERY WIDTH THEIR CALLERS BUILD THEM AT, from the callers' own
-// constants: each width is a statement text of its own — n placeholders, a
-// LIMIT of n — which the driver plans on its own, so a question planned at
-// three keys certifies nothing about the five hundred the collector asks, and
-// a driver that traded five hundred seeks for a scan of the table would pass
-// it. A question of a list of keys is planned at its widest, where a planner
-// would first make that trade, and at the one key a short last batch narrows
-// it to, the form a planner may read as a plain equality. The declaration's
-// fourth statement, a backup's page of the records its copy deferred, reads
-// the log's deferred records by their position rather than a file index, so
-// it is not this test's.
-//
-// PLANNED OVER A COMPANY'S FILES ([filePlanStore]) and with no statistics, as
-// a deployment plans them ([seededPlanStore]).
+// Planned AT EVERY WIDTH THEIR CALLERS BUILD, from the callers' constants:
+// each width is its own statement, so three keys certify nothing about the
+// collector's five hundred. A list question is planned at its widest (where a
+// scan would first win) and at one key (a plain equality). The declaration's
+// fourth statement reads deferred log records, not a file index. Planned over
+// a company's files ([filePlanStore]) with no statistics ([seededPlanStore]).
 func TestTheFileIndexesServeTheirQueries(t *testing.T) {
 	t.Parallel()
 	db := filePlanStore(t)
@@ -93,10 +82,8 @@ func TestTheFileIndexesServeTheirQueries(t *testing.T) {
 			[]any{key(4)},
 		},
 	}
-	// THE DECLARATION'S OWN QUESTIONS OF A LIST OF KEYS, built exactly as
-	// their callers build them: the collector's of a batch of its listing,
-	// and the backup's of the keys written while it ran, a walk's page of
-	// them at a time.
+	// The declaration's questions of a list of keys, built as the collector
+	// (a batch of its listing) and the backup (a walk's page) build them.
 	for _, n := range []int{1, collect.JudgeBatch} {
 		reads = append(reads, fileRead{
 			fmt.Sprintf("the collector's batch of %d", n), "tracker_files_object_idx",
@@ -121,15 +108,11 @@ func TestTheFileIndexesServeTheirQueries(t *testing.T) {
 	}
 }
 
-// The files the file reads are planned against.
-//
-// TWO HUNDRED A PROJECT across the task corpus's thirty, in four folders, so a
-// project's listing is a thirtieth of the table and a folder a quarter of that.
-// One in [fileRemovedEvery] is removed — stamped, and naming no object, as a
-// removal leaves a row — so the listings' `removed_at IS NULL` and the object
-// reads' `object IS NOT NULL` each keep most of the table but not all of it.
-// The live rows name objects minted a minute apart, across the hours the
-// object reads above ask about.
+// The files the file reads are planned against: two hundred a project across
+// the corpus's thirty, in four folders. One in [fileRemovedEvery] is removed
+// (stamped, naming no object), so `removed_at IS NULL` and `object IS NOT
+// NULL` each keep most of the table but not all. Live rows name objects
+// minted a minute apart, across the hours the object reads ask about.
 const (
 	fileRows         = 200 * projects
 	fileRemovedEvery = 8

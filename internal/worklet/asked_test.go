@@ -29,20 +29,15 @@ func (f *fakeThreads) Thread(_ context.Context, q worklet.ThreadQuery,
 
 // ASKED-ON SEES ONLY AN OPEN ASK NAMING THEM.
 //
-// The probe is the one read behind the authority table's `asked` arm, which
-// admits somebody without Worklet to an item and to answering on it. Over
-// the real reader: nobody is asked on an item with no ask; the person an open
-// ask names is; the asker and a bystander are not; a second open ask to the
-// same person keeps them asked (the inference's ambiguity is MORE asked, not
-// less); and once both are answered nobody is — open asks only — except the
-// answer that landed, made again under its own id, which is answered from its
-// row and admitted for the ask it closed. Over a fake, the shape of the read:
-// the task, the author and the caller's own remark and nothing else, at the
-// freshness the caller asked, and an error that is neither an answer nor an
-// ambiguity is returned with false rather than read as "not asked". Mutation:
-// answer true whenever the read succeeds and the bystander and answered cases
-// go red; read ErrAmbiguousAnswer as false and the second ask case does; drop
-// self from the read and the landed answer made again is refused.
+// Over the real reader: nobody is asked on an item with no ask; the person an
+// open ask names is, the asker and a bystander are not; a second open ask
+// keeps them asked (ambiguity is MORE asked); once both are answered nobody
+// is, except the landed answer made again under its own id. Over a fake: the
+// read names the task, the author and the caller's remark at the caller's
+// freshness, and any other error is returned with false. Mutation: answer
+// true on any successful read and the bystander and answered cases go red;
+// read ErrAmbiguousAnswer as false and the second ask case does; drop self
+// from the read and the landed answer made again is refused.
 func TestAskedOnSeesOnlyAnOpenAskNamingThem(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

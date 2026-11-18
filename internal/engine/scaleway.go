@@ -15,14 +15,12 @@ import (
 )
 
 // scalewayPass adapts scaleway.Reconcile to the pass contract: the provisioner
-// key and the organization it provisions in, then each agent's own
-// application, policy and key.
+// key and its organization, then each agent's own application, policy and key.
 //
-// ONE THING IS COMPANY-WIDE AT SCALEWAY: the atlas application, made where
-// the company switched `integrations.scaleway.atlas` on (ADR-0144). The pass
-// keeps it and its teardown deletes it. Every agent's application is deleted
-// by the disconnect's access sync ([Engine.tearDownSeatAccess]), from the
-// ledger.
+// Only the atlas application (`integrations.scaleway.atlas`, ADR-0144) is
+// company-wide: the pass keeps it and its teardown deletes it. Agents'
+// applications are deleted from the ledger by the disconnect's access sync
+// ([Engine.tearDownSeatAccess]).
 type scalewayPass struct{ engine *Engine }
 
 func (*scalewayPass) Kind() integration.Kind { return integration.KindScaleway }
@@ -69,7 +67,7 @@ func (p *scalewayPass) run(ctx context.Context, in setup.PassInput) ([]integrati
 		OrganizationID: env.Value(cfg.Provisioning.OrganizationID), SecretKey: secret,
 	})
 	if err != nil {
-		// THE ORGANIZATION ID, the one input left that NewClient refuses:
+		// The organization ID is the one input left that NewClient refuses:
 		// a fact about the document, not a pass that failed to look.
 		//nolint:nilerr // Deliberate: reported as a finding on the document.
 		return []integration.Finding{{
@@ -77,8 +75,8 @@ func (p *scalewayPass) run(ctx context.Context, in setup.PassInput) ([]integrati
 			Detail: subject + ".organization_id does not resolve to a Scaleway Organization ID",
 		}}, nil
 	}
-	// THE AGENTS' APPLICATIONS, which the orphan advisory spares and whose
-	// policies and keys are told from strangers': the ledger's.
+	// The agents' applications, from the ledger: the orphan advisory spares
+	// them, and tells their policies and keys from strangers'.
 	held, err := p.engine.seatAccessHeld(ctx, integration.KindScaleway)
 	if err != nil {
 		return nil, fmt.Errorf("engine: scaleway pass: %w", err)
@@ -113,10 +111,9 @@ func sealedValue(env *config.Resolver, name string) string {
 
 // atlas brings the atlas application to the company's setting.
 //
-// A FAILURE HERE IS A FINDING, NEVER THE PASS'S: the atlas is optional
-// reading, and a pass that failed over it would report the whole connection
-// broken while every agent's application works. Only a pass that was
-// cancelled answers an error.
+// A failure here is a finding, never the pass's: the atlas is optional
+// reading, and failing the pass would report the whole connection broken
+// while every agent's application works. Only cancellation is an error.
 func (p *scalewayPass) atlas(
 	ctx context.Context, in setup.PassInput, client *scaleway.Client, company string, want bool,
 ) ([]integration.Finding, error) {
@@ -175,7 +172,7 @@ func (p *scalewayPass) Teardown(ctx context.Context, in setup.TeardownInput) (pr
 			return provision.Removed{}, fmt.Errorf("engine: scaleway teardown: %w", err)
 		}
 	}
-	// FORGOTTEN HERE, not through the seats' removal list: these names are no
+	// Forgotten here, not through the seats' removal list: these names are no
 	// seat's, and the key they held died with the application.
 	sink, err := p.engine.SetupSink(in.By)
 	if err != nil {

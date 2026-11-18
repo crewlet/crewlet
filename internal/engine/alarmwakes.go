@@ -18,52 +18,34 @@ import (
 
 // THE ALARMS' OUTBOX: every transition this node's alarm tracker makes,
 // published as an inbound delivery of source `alarms` for the notify spine to
-// route to the seats whose role carries the health grant (internal/alarmwake),
-// and retried until the broker takes it.
+// route to the seats whose role holds the health grant (internal/alarmwake),
+// retried until the broker takes it.
 //
-// ADR-0095: the publish IS the write. The delivery on the inbound stream is
-// the durable record the wakes are derived from, so nothing commits beside it
-// and no publish trails a commit; what this outbox owes is that a transition
-// the tracker handed on is published, in the order it was made, however long
-// the broker takes to come back — and that a broker gone for long enough
-// costs the OLDEST transitions, counted, never the node's memory. A
-// transition still queued when the node stops is not recovered: the current
-// state is every node's heartbeat's (`fleet_health`), which a wake only
-// prompts a seat to read. A raise is kept across a restart only once the
-// broker took it (taken), so one still queued is raised again by the next start.
+// ADR-0095: the publish IS the write, so nothing commits beside it. The outbox
+// owes publishing each transition in order however long the broker is gone,
+// and a long outage costs the OLDEST transitions, counted, never the node's
+// memory. One still queued at stop is lost: the current state is the
+// heartbeat's (`fleet_health`), which a wake only prompts a seat to read, and
+// a raise is kept across a restart only once taken, so the next start raises
+// it again.
 
 // alarmOutboxCap is how many transitions a node holds unpublished before it
-// drops the oldest.
+// drops the oldest (the newest are nearest the state a woken seat reads).
 //
-// 2048: the table raises at most one instance of each node-wide kind and one
-// a log of each per-log kind ([statelog.PerLogKinds]), and a data node runs
-// every registered log ([registeredDomains]), so a fire and a clear of EVERY
-// instance on one fits in the bound at least six times over — six flaps of
-// the whole table across a broker outage, which
-// TestTheAlarmOutboxHoldsSixFlapsOfTheWholeTable computes from the table and
-// the register rather than restating a count here, so a kind or a log added
-// past what the bound holds fails there instead of leaving this figure untrue
-// — while a transition is a few hundred bytes, so the outbox stays under a
-// megabyte. It was 1024 until the code log made a data node's register ten
-// logs, whose 100 instances flap six times in 1200 transitions; the next
-// power of two keeps the six flaps with room for a log or a kind more.
-// Past it the oldest go first: the newest are nearest the state a woken seat
-// reads anyway. The figure IS restated where an operator reads a drop against
-// it — crewlet.alarm.transitions.dropped's description, so the metrics
-// reference, and the event-system page's paragraph on the outbox — and
-// TestEveryTextNamingTheAlarmOutboxBoundNamesTheConstant holds each of them to
-// this constant, so moving it fails there until they say the new bound.
+// 2048: a fire and a clear of every instance the table can raise on a data
+// node (each node-wide kind once, each [statelog.PerLogKinds] kind once per
+// [registeredDomains] log) fit six times over, which
+// TestTheAlarmOutboxHoldsSixFlapsOfTheWholeTable computes; at a few hundred
+// bytes a transition, under a megabyte. crewlet.alarm.transitions.dropped's
+// description and the event-system page restate the figure, held to this
+// constant by TestEveryTextNamingTheAlarmOutboxBoundNamesTheConstant.
 const alarmOutboxCap = 2048
 
-// alarmRetryBase and alarmRetryCeiling pace a publish the broker refused.
-//
-// TWO SECONDS FIRST, the change feed's nak delay, for the change feed's
-// reason: a broker reconnect or a leader election completes inside one delay
-// rather than being retried through. DOUBLING TO THE ALARM INTERVAL, never
-// past it: the evaluation that makes a transition beats at that cadence, so
-// the queue starts draining within one beat of the broker's return, where a
-// slower retry would leave the seats told later than the node's own heartbeat
-// already says.
+// alarmRetryBase and alarmRetryCeiling pace a publish the broker refused:
+// two seconds first, the change feed's nak delay, so a reconnect or leader
+// election completes inside one delay; doubling to the alarm interval and no
+// further, since transitions are made at that cadence and a slower retry would
+// tell the seats later than the node's own heartbeat already says.
 const (
 	alarmRetryBase    = 2 * time.Second
 	alarmRetryCeiling = statelog.AlarmInterval

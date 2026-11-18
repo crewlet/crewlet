@@ -18,21 +18,13 @@ import (
 
 // SIXTY-FOUR FLUSHES FOR ONE PERSON ON A REPLICATED BUCKET ALL LAND.
 //
-// Two tabs flushing one person's record at once is what draws a replicated
-// stream's in-flight answer — the leader declining to compare a write while
-// another to the same subject is still in flight — and the conformance suite
-// cannot see it: it runs against one server and through a leaf link, both
-// solo streams, and a solo stream never gives that answer. So the burst is
-// run here, on three members: sixty-four flushes at once, four times the
-// sixteen rounds a lost race was once allowed, each naming a room of its own
-// so a flush that was dropped is a cursor missing from the record.
-//
-// Every round one of them loses is a write another of them won, the loop races
-// within the bound every fleet key shares ([casRetry], [fleetCASAttempts]) —
-// four times the flushes here, each lost round followed by a window of round
-// trips — and the bucket handle waits out the in-flight answer inside the
-// write (settle.go) — so all of them land, and every refusal a flush's own
-// code met was one the leader DECIDED. race_test.go holds the bound
+// Concurrent flushes of one record draw a replicated stream's in-flight answer
+// (the leader declining to compare a write while another to the subject is in
+// flight), which no solo stream gives, so the conformance suite cannot see it.
+// Sixty-four flushes run here on three members, each naming its own room, so a
+// dropped flush is a missing cursor. All land, within the shared bound
+// ([casRetry], [fleetCASAttempts]), and every refusal a flush's own code met
+// was one the leader DECIDED (settle.go). race_test.go holds the bound
 // deterministically, since a cluster stages its race only sometimes.
 func TestSixtyFourFlushesForOnePersonOnAReplicatedBucketAllLand(t *testing.T) {
 	t.Parallel()
@@ -101,9 +93,8 @@ func TestSixtyFourFlushesForOnePersonOnAReplicatedBucketAllLand(t *testing.T) {
 	}
 }
 
-// refusalsSeen is a bucket handle that counts the refusals its conditional
-// writes are answered with, as the code above the handle receives them: every
-// lost race, and how many refusals were the leader's in-flight answer.
+// refusalsSeen counts the refusals its conditional writes are answered with,
+// as the code above the handle receives them: lost races, and in-flight answers.
 type refusalsSeen struct {
 	jetstream.KeyValue
 

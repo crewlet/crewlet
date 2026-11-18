@@ -470,17 +470,14 @@ func founderPrincipal(grants ...iam.Grant) iam.Principal {
 
 // fakeBox is an executor's box: files by workspace path.
 type fakeBox struct {
-	files  map[string]string
-	listed []string // overrides the listing, for a box that lies
-	err    error    // every read's answer, for a box that cannot be read
-	// listErr is the listing's answer alone, for a directory the box does
-	// not hold as one.
-	listErr error
+	files   map[string]string
+	listed  []string // overrides the listing, for a box that lies
+	err     error    // every read's answer, for a box that cannot be read
+	listErr error    // the listing's answer alone, for a path that is no directory
 
-	// midErr fails a read part way through a file its open found: a
-	// stream that stopped after its first bytes. laterErr fails every open
-	// after the first, which is the transfer's second read of a file whose
-	// digest the first took.
+	// midErr cuts a read part way through a file its open found. laterErr
+	// fails every open after the first: the transfer's second read of a file
+	// whose digest the first took.
 	midErr, laterErr error
 	mu               sync.Mutex
 	opens            int
@@ -529,8 +526,8 @@ func (b *fakeBox) Open(_ context.Context, p string) (io.ReadCloser, error) {
 	return io.NopCloser(b.stream(data)), nil
 }
 
-// stream is what an open of data reads: the whole of it, or its first half
-// and then midErr, a stream cut part way as a provider's can be.
+// stream is what an open of data reads: all of it, or its first half and then
+// midErr, as a provider's stream can be cut.
 func (b *fakeBox) stream(data string) io.Reader {
 	if b.midErr == nil {
 		return strings.NewReader(data)

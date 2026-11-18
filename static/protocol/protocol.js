@@ -4656,7 +4656,9 @@ var ACTIONS = {
 			"repo",
 			"change",
 			"expected_version",
-			"draft"
+			"draft",
+			"title",
+			"body"
 		],
 		domain: "code",
 		apps: ["gitlet"],
@@ -4767,6 +4769,19 @@ var ACTIONS = {
 			"findings",
 			"resolution",
 			"note"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_mark_viewed: {
+		args: [
+			"repo",
+			"change",
+			"viewed",
+			"unviewed",
+			"seen"
 		],
 		domain: "code",
 		apps: ["gitlet"],

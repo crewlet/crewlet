@@ -11,44 +11,30 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The paced walks: the work a duty finishes that a gesture could not.
-//
-// # One property they all have, and it is what makes them safe to interrupt
-//
-// A walk is many records, published in batches, over minutes. It will be
-// interrupted — a node restarts, a lease flaps, a process is killed — so
-// EVERY INTERMEDIATE STATE MUST BE CORRECT rather than merely repairable.
-// That is a stronger requirement than idempotence, and it is what decides the
-// shape of each one below: a re-spread rewrites keys in an order that
-// preserves the board at every batch boundary, and a move's completion is a
-// selection that skips what already carries its destination.
+// The paced walks: the work a duty finishes that a gesture could not. A walk
+// is many batches over minutes and will be interrupted, so EVERY INTERMEDIATE
+// STATE MUST BE CORRECT, not merely repairable (stronger than idempotence): a
+// re-spread keeps the board ordered at every batch boundary, and a move's
+// completion skips what already carries its destination.
 
 const (
-	// WritePaceBytes is how fast a walk may publish.
-	//
-	// A walk competes with the company's own writes for the SAME serial
-	// applier on every data node, so its cost is not its own latency — it is
-	// how long every other write on the fleet waits behind it. 1.4 MiB/s
-	// is a tenth of the log's own steady rate at the design corpus, which
-	// keeps a full re-spread of a large project inside a minute while
-	// leaving nine tenths of the applier for work somebody is waiting on.
+	// WritePaceBytes is how fast a walk may publish, in bytes per second.
+	// A walk shares the SAME serial applier on every data node with the
+	// company's writes, so its cost is how long they wait behind it.
+	// 1.4 MiB/s is a tenth of the log's steady rate at the design corpus:
+	// a large project's re-spread fits in a minute and leaves nine tenths
+	// of the applier for real work.
 	WritePaceBytes = 1_468_006
 
-	// WalkPace is the floor under that rate: a batch never goes out more
-	// often than this however small it is.
-	//
-	// It is the applier's own linger, so a walk publishing at the floor
-	// produces at most one batch per apply transaction rather than
-	// several that must each be committed separately.
+	// WalkPace is the floor under that rate: the shortest gap between
+	// batches. It is the applier's own linger, so a walk at the floor costs
+	// at most one batch per apply transaction.
 	WalkPace = 250 * time.Millisecond
 )
 
-// pace is how long to wait before the next batch of a walk.
-//
-// DERIVED FROM THE BYTES JUST PUBLISHED, not from a fixed sleep: a batch of 64
-// maximal records and a batch of 64 rank placements differ by three orders of
-// magnitude in what they cost every peer's applier, and a fixed interval
-// prices them alike.
+// pace is how long to wait before the next batch of a walk, derived from the
+// bytes just published: a fixed sleep would price 64 maximal records and 64
+// rank placements alike, three orders of magnitude apart in applier cost.
 func pace(bytes int) time.Duration {
 	if bytes <= 0 {
 		return WalkPace
@@ -62,26 +48,13 @@ func pace(bytes int) time.Duration {
 
 // RespreadPlan is a project's whole re-spread, minted ONCE at its start.
 //
-// # Why the keys are all minted up front
-//
-// A walk has to leave a correct board after EVERY batch, and that is what
-// decides this shape. Rewriting the lowest rows into the space below the
-// project's minimum works for the first batch — the moved rows are the lowest
-// originals and everything left is above them — and then fails for the second,
-// which must land ABOVE the first batch and BELOW the untouched rows, in a gap
-// that halves every time. Minting the whole run at once instead partitions the
-// reserve in advance: batch k takes the k-th slice of it, in ascending order,
-// so at every boundary the moved rows hold the lowest keys in their original
-// order and the untouched ones hold everything above.
-//
-// # And the direction is load-bearing
-//
-// The reserve is one whole integer position BELOW the project's frozen
-// minimum. Written upward instead, the walk's ceiling is the frozen maximum's
-// own integer part, so two walks with no create between them subdivide the
-// SAME position twice and the keys grow rather than shrink — the exact
-// condition the walk exists to remove. Downward, the floor moves with the
-// minimum and every walk takes an integer of its own.
+// Minted up front so the board is correct after every batch: batch k takes the
+// k-th ascending slice of the reserve, so moved rows always hold the lowest
+// keys in their original order. Minting per batch would squeeze each batch
+// between the last and the untouched rows, in a gap that halves every time.
+// The reserve is one integer position BELOW the frozen minimum: upward, two
+// walks with no create between them subdivide the same position and keys grow,
+// the condition the walk exists to remove.
 type RespreadPlan struct {
 	// Project is whose order this rewrites.
 	Project string
@@ -107,7 +80,7 @@ func (p RespreadPlan) Batch(k int) []Placement {
 
 // respreadRowsStatement is [PlanRespread]'s read of a project's long keys, in
 // key order, through the index built for them ([longRank] says why it is
-// named). Named for the plan test, and a variable because [longRank] spells its
+// named). Named for the plan test; a variable because [longRank] spells its
 // threshold.
 var respreadRowsStatement = `
 		SELECT id, rank FROM tracker_tasks INDEXED BY tracker_tasks_respread_idx
@@ -120,19 +93,15 @@ const lowestRankStatement = `
 		SELECT MIN(rank) FROM tracker_tasks
 		WHERE project_key = ? AND removed_at IS NULL`
 
-// PlanRespread mints a project's whole re-spread.
-//
-// It reads ONE snapshot: the rows whose keys are past the threshold, in
-// ascending order, and the project's current minimum. Everything after that is
-// arithmetic — which is what makes the assignment a pure function of the plan
-// and therefore identical on whichever node completes the walk.
+// PlanRespread mints a project's whole re-spread from ONE snapshot (the long
+// keys in order, and the project's minimum); the rest is arithmetic, so the
+// assignment is identical on whichever node completes the walk.
 func PlanRespread(ctx context.Context, db store.ReplicatedReader, project string) (RespreadPlan, error) {
 	var rows []Placement
 	var lowest Rank
 	err := db.Read(ctx, func(tx *sql.Tx) error {
-		// ONLY THE LONG ONES: a key already under the threshold costs
-		// nothing to leave where it is, and rewriting it would spend a
-		// record to change nothing.
+		// Only the long keys: rewriting a short one spends a record for
+		// nothing.
 		found, err := tx.QueryContext(ctx, respreadRowsStatement, project)
 		if err != nil {
 			return fmt.Errorf("worklet: read %s's re-spread rows: %w", project, err)
@@ -171,10 +140,9 @@ func PlanRespread(ctx context.Context, db store.ReplicatedReader, project string
 	if err != nil {
 		return RespreadPlan{}, err
 	}
-	// INSIDE THE RESERVE, not between the reserve and the minimum: a
-	// bisected interval crowds half its keys against the upper bound and
-	// inherits its length, so the walk that exists to shorten keys would
-	// lengthen them. See [RespreadKeys].
+	// Inside the reserve, not between it and the minimum: bisecting up to
+	// the bound inherits its length and would lengthen keys. See
+	// [RespreadKeys].
 	keys, err := RespreadKeys(reserve, len(rows))
 	if err != nil {
 		return RespreadPlan{}, fmt.Errorf("worklet: mint %d keys inside %q for "+
@@ -187,12 +155,10 @@ func PlanRespread(ctx context.Context, db store.ReplicatedReader, project string
 	return RespreadPlan{Project: project, Placements: placements}, nil
 }
 
-// reserveBelow is the integer position the whole walk subdivides.
-//
-// It is the integer part of the project's minimum decremented once — a
-// POSITION NO CREATE CAN EVER TAKE, because a create's key is the n-th of the
-// create lattice counting up from the origin and this walks down from wherever
-// the project's order already begins.
+// reserveBelow is the integer position the whole walk subdivides: the
+// minimum's integer part decremented once, a position no create can take,
+// since creates count up from the origin and this walks down from the order's
+// start.
 func reserveBelow(floor Rank) (Rank, error) {
 	if floor == "" {
 		below, err := decrementInteger(RankOrigin)
@@ -212,12 +178,10 @@ func reserveBelow(floor Rank) (Rank, error) {
 	return Rank(below), nil
 }
 
-// Respread runs a project's whole re-spread walk, paced.
-//
-// ONE RECORD PER BATCH on the project's own rank order subject, so every batch
-// is arbitrated against the last — two nodes running this walk contend at the
-// broker and exactly one proceeds, which is what stops them interleaving
-// batches into an order neither intended.
+// Respread runs a project's whole re-spread walk, paced. One record per batch
+// on the project's rank order subject, so each batch is arbitrated against the
+// last: two nodes running the walk contend at the broker and exactly one
+// proceeds, rather than interleaving batches.
 func (w *Writer) Respread(ctx context.Context, opID, project string) (int, error) {
 	if w.db.IsZero() {
 		return 0, fmt.Errorf("worklet: this writer has no store, so it cannot " +
@@ -234,10 +198,7 @@ func (w *Writer) Respread(ctx context.Context, opID, project string) (int, error
 			return batch, fmt.Errorf("worklet: re-spread %s, batch %d of %d: %w",
 				project, batch, plan.Batches(), err)
 		}
-		// PACED BY WHAT IT JUST COST EVERY PEER: a walk competes with
-		// the company's own writes for the same serial applier on every
-		// node, so its cost is not its own latency but how long every
-		// other write waits behind it.
+		// Paced by what it just cost every peer ([WritePaceBytes]).
 		select {
 		case <-ctx.Done():
 			return batch, ctx.Err()
@@ -248,13 +209,10 @@ func (w *Writer) Respread(ctx context.Context, opID, project string) (int, error
 }
 
 // publishBatch publishes one batch, waiting out this node's own lag rather
-// than failing on it.
-//
-// A WALK IS THE ONE WRITER THAT MUST NOT GIVE UP ON `behind`. Every batch
-// arbitrates against the last, so the second one cannot be decided until this
-// node has applied the first — which is ORDINARY during a walk rather than a
-// fault, and a caller told "behind" here would abandon a half-finished order
-// that a duty then has to be asked to complete.
+// than failing on it. A walk is the one writer that must not give up on
+// `behind`: each batch arbitrates against the last, so being behind the
+// previous batch is ordinary here, and giving up would abandon a half-finished
+// order.
 func (w *Writer) publishBatch(ctx context.Context, opID, project string,
 	placements []Placement) error {
 
@@ -279,14 +237,11 @@ func (w *Writer) publishBatch(ctx context.Context, opID, project string,
 		"order half rewritten by a node that cannot see it", project, walkRetries)
 }
 
-// walkRetries is how many times a batch waits for this node's own applier.
-//
-// Sixteen at a linearly growing wait from the applier's own linger is ≈ 34 s,
-// which is longer than any drain the design prices and shorter than the stall
-// grace that would move the seat elsewhere.
+// walkRetries is how many times a batch waits for this node's own applier:
+// sixteen linearly growing waits from [WalkPace] total ≈ 34 s, longer than any
+// drain the design prices and shorter than the stall grace that moves the seat.
 const walkRetries = 16
 
-// respreadRecordBytes is what one placement costs on the wire, measured on the
-// record format rather than guessed: a uuid, a rank key and the JSON around
-// them.
+// respreadRecordBytes is one placement's measured cost on the wire: a uuid, a
+// rank key and the JSON around them.
 const respreadRecordBytes = 96

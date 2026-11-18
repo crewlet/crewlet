@@ -32,15 +32,13 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// pinnedNow is the clock the reconcile tests run on. Pinned because the
-// freshness window that decides whether a peer's status is evidence is
-// measured against it, and a suite on the real clock would assert about that
-// window by sleeping through it.
+// pinnedNow is the clock the reconcile tests run on, pinned because a peer
+// status's freshness window is measured against it: on the real clock a case
+// would assert about that window by sleeping through it.
 var pinnedNow = time.Date(2026, 8, 23, 14, 0, 0, 0, time.UTC)
 
-// anOrigin is the record every activation a case publishes carries, written
-// an hour before pinnedNow: the backends refuse an activation without one, and
-// a case about something else has no author to say.
+// anOrigin is the origin every activation a case publishes carries: the
+// backends refuse an activation without one.
 var anOrigin = coord.RevisionOrigin{
 	Author: "maya", AuthorKind: iam.ActorHuman, Source: "api",
 	CreatedAt: pinnedNow.Add(-time.Hour),
@@ -48,18 +46,16 @@ var anOrigin = coord.RevisionOrigin{
 
 // brokenRevision is well-formed JSON that cannot be built: a delegate template
 // naming a provider the document does not configure. The provider block is
-// non-empty deliberately: a company with no models at all is a supported
-// authoring state, and an empty one would not be refused at all (see
-// nomodels_test.go).
+// non-empty because a company with no models is a supported state and would
+// apply (nomodels_test.go).
 var brokenRevision = json.RawMessage(`{"name":"Acme",
   "providers":{"sandbox":{"fake":true},"llm":{"zulu":{"model":"m"}}},
   "workers":{"researcher":{"description":"reads sources and reports findings",
     "system_prompt":"You research.","model":"nonexistent"}}}`)
 
 // unbuildableCompanyDoc meets every runnable rule and is refused by the
-// engine's own build: its one seat's executor runs in an E2B box, whose key is
-// a ${VAR} nothing on the node answers, and the E2B backend refuses an empty
-// key.
+// engine's own build: its seat's executor runs in E2B, keyed by a ${VAR}
+// nothing on the node answers, and the E2B backend refuses an empty key.
 const unbuildableCompanyDoc = `
 name: Acme
 providers:
@@ -74,10 +70,9 @@ roles:
     llm: coder
 `
 
-// A second company, differing from companyDoc in the ways a reconcile has to
-// be visible through: one more seat, and a token budget — a day ceiling above
-// the executor's launch floor, which a company with seats that run an
-// executor may not go below.
+// grownCompanyDoc differs from companyDoc where a reconcile must be visible:
+// one more seat, and a day ceiling (above the executor's launch floor, which a
+// company whose seats run an executor may not go below).
 const grownCompanyDoc = `
 name: Acme
 token_budget:
@@ -149,11 +144,10 @@ func planeFor(t *testing.T, e *engine.Engine, opts ...func(*engine.ReconcilerOpt
 	return p
 }
 
-// fleetPeers is two nodes of ONE fleet: each its own engine and database, the
-// author's coordination store for both, and ONE keyring between them — the
-// shape a deployment has, where every node's Tier A names the same keys. Two
-// engines built apart hold two random keyrings, and a peer could open nothing
-// its author sealed.
+// fleetPeers is two nodes of ONE fleet: each its own engine and database,
+// sharing the author's coordination store and ONE keyring, as every node's
+// Tier A names the same keys. Engines built apart hold random keyrings, and a
+// peer could open nothing its author sealed.
 func fleetPeers(t *testing.T, peerOpts ...func(*engine.ReconcilerOptions)) (author, peer *plane) {
 	t.Helper()
 	material := testKeyMaterial(t)
@@ -182,17 +176,12 @@ func (p *plane) seal(t *testing.T, document json.RawMessage) json.RawMessage {
 }
 
 // activate stores a revision and points the fleet at it, returning its epoch.
+// The payload goes in the node's database as history and the pointer in the
+// coordination store, SEALED in both as every writer stores it; only the
+// reconciler's apply makes it what the node boots on.
 //
-// TWO STORES, which is the shape the engine itself now has: the payload goes
-// in the node's database as history, the pointer in the coordination store —
-// SEALED in both, as every writer stores it. Nothing here makes it what the
-// node boots on: only the reconciler's apply does.
-//
-// TAKES THE CALLER'S CONTEXT rather than reaching for t.Context(). Most cases
-// pass t.Context() and nothing changes, but the concurrency case below drives
-// this from a goroutine under a cancellable context it also owns — and a
-// writer that kept activating revisions after its own cancel would be writing
-// past the window the readers are watching.
+// It takes the caller's context because the concurrency case drives it from a
+// goroutine under a context it cancels, and must not activate past it.
 func (p *plane) activate(ctx context.Context, t *testing.T, doc string) int64 {
 	t.Helper()
 	document := p.seal(t, yamlToJSON(t, doc))
@@ -204,8 +193,8 @@ func (p *plane) activate(ctx context.Context, t *testing.T, doc string) int64 {
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)
 	}
-	// THE AUTHOR RIDES THE POINTER, as the config surface publishes it —
-	// the whole origin, which the backends refuse an activation without.
+	// The pointer carries the whole origin, as the config surface publishes
+	// it: the backends refuse an activation without one.
 	published, err := p.fleet.Activate(ctx, coord.ActivationRequest{
 		RevisionID: id, Summary: "revision", Payload: document, At: pinnedNow,
 		Origin: coord.RevisionOrigin{
@@ -226,9 +215,9 @@ const (
 	revisionCredential = "pat:0192f00d-0000-7000-8000-00000000000a"
 )
 
-// activatePayload is activate for a document that is not a company — a broken
-// one, sealed like any other. Same two writes, because a payload the fleet
-// does not point at is a payload no reconciler will ever read.
+// activatePayload is activate for a payload that is not a company document,
+// sealed and written to both stores like any other: a reconciler reads only a
+// payload the fleet points at.
 func (p *plane) activatePayload(t *testing.T, summary string, payload json.RawMessage) int64 {
 	t.Helper()
 	payload = p.seal(t, payload)
@@ -247,9 +236,8 @@ func (p *plane) activatePayload(t *testing.T, summary string, payload json.RawMe
 	return published.Epoch
 }
 
-// yamlToJSON stores a company the way an import does: parse the authored
-// document once, and store its JSON form, which is what the payload column
-// holds and what every node reads from then on.
+// yamlToJSON parses a company as an import does and returns its JSON form,
+// which is what the payload column holds.
 func yamlToJSON(t *testing.T, doc string) json.RawMessage {
 	t.Helper()
 	cfg, err := config.ParseCompany([]byte(doc))
@@ -286,10 +274,8 @@ func (p *plane) fleetRow(t *testing.T) coord.NodeApply {
 
 func TestANodeWithNoActivationAppliesNothing(t *testing.T) {
 	t.Parallel()
-	// A fresh deployment sits here until the first import. Not an error and
-	// not a state to report: a node that recorded "error" for a company
-	// nobody has configured would look broken on the operator's first look
-	// at the fleet view.
+	// A fresh deployment before its first import: recording "error" for a
+	// company nobody configured would show the node broken in the fleet view.
 	p := newPlane(t)
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("tick: %v", err)
@@ -341,10 +327,8 @@ func TestANewRevisionReplacesTheEpoch(t *testing.T) {
 
 func TestTheOutcomeIsRecordedWhereEveryPeerReadsIt(t *testing.T) {
 	t.Parallel()
-	// Reading the pointer says where the fleet should be; this row says
-	// where THIS node actually is. Only the two together tell "behind
-	// because propagation takes a moment" from "behind because I cannot
-	// apply this".
+	// The pointer says where the fleet should be, this row where THIS node
+	// is: only both tell propagation lag from a node that cannot apply.
 	p := newPlane(t)
 	epoch := p.activate(t.Context(), t, grownCompanyDoc)
 	if err := p.recon.Tick(t.Context()); err != nil {
@@ -365,13 +349,10 @@ func TestTheOutcomeIsRecordedWhereEveryPeerReadsIt(t *testing.T) {
 	}
 }
 
-// A CONVERGED NODE KEEPS SAYING SO.
-//
-// The apply-status row ages out after four reconcile intervals by design, so
-// a node that stops reporting vanishes from the fleet view. It was written on
-// an apply alone, so a node that converged stopped reporting a minute later:
-// the fleet view drew it as having applied nothing while its own /health
-// served the current epoch, and every peer dropped it as stale evidence.
+// A CONVERGED NODE KEEPS SAYING SO. The apply-status row ages out
+// (coord.StatusFreshness), so a converged node writing it only on an apply
+// would vanish from the fleet view and every peer's evidence while serving
+// the current epoch.
 func TestAConvergedNodeKeepsItsApplyStatusFresh(t *testing.T) {
 	t.Parallel()
 	now := pinnedNow
@@ -433,10 +414,9 @@ func TestANodeOutOfRetriesKeepsItsFailureFresh(t *testing.T) {
 
 func TestReactivatingAnUnchangedRevisionAppliesAgain(t *testing.T) {
 	t.Parallel()
-	// THE credential-rotation gesture. The payload is identical and the
-	// point is that its ${VAR} references now resolve differently, so a
-	// no-op check on the payload would rebuild nothing on exactly the
-	// operation an operator performs to make it rebuild.
+	// The credential-rotation gesture: the payload is identical but its
+	// ${VAR} references now resolve differently, so a no-op check on the
+	// payload would defeat it.
 	p := newPlane(t)
 	first := p.activate(t.Context(), t, grownCompanyDoc)
 	if err := p.recon.Tick(t.Context()); err != nil {
@@ -452,9 +432,8 @@ func TestReactivatingAnUnchangedRevisionAppliesAgain(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("Payload: found=%v err=%v", found, err)
 	}
-	// RE-ACTIVATING the SAME revision, which is the case that matters: the
-	// pointer is append-only, so it mints a new epoch every node is
-	// watching — that is how a rotated secret reaches a running fleet.
+	// The pointer is append-only, so re-activating the SAME revision mints a
+	// new epoch every node watches: how a rotated secret reaches the fleet.
 	republished, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: target.RevisionID, Summary: target.Summary, Payload: payload,
 		At: pinnedNow, Expect: target.RevisionID, Origin: anOrigin})
@@ -478,9 +457,8 @@ func TestReactivatingAnUnchangedRevisionAppliesAgain(t *testing.T) {
 
 func TestAnAlreadyAppliedEpochIsNotReapplied(t *testing.T) {
 	t.Parallel()
-	// The tick runs every 15 seconds for the life of the node. Rebuilding
-	// the epoch on each one would restart every subsystem an apply touches,
-	// four times a minute, forever.
+	// The tick runs every 15 s for the node's life; rebuilding the epoch on
+	// each would restart every subsystem an apply touches.
 	p := newPlane(t)
 	p.activate(t.Context(), t, grownCompanyDoc)
 	for range 4 {
@@ -493,13 +471,9 @@ func TestAnAlreadyAppliedEpochIsNotReapplied(t *testing.T) {
 	}
 }
 
-// RE-ACTIVATING THE REVISION THIS NODE BOOTS ON MOVES BOTH ITS INSTANTS.
-//
-// Re-activation is the credential-rotation gesture. The boot row's served
-// instant is the one this node boots its chart with, and its activation
-// instant the one its config history shows and the sweep dates it by. The
-// early return for "already the fleet's revision" used to leave them at the
-// first activation's.
+// RE-ACTIVATING THE REVISION THIS NODE BOOTS ON MOVES BOTH ITS INSTANTS (the
+// credential-rotation gesture): the served one the node boots its chart with,
+// and the activation one its config history shows and the sweep dates it by.
 //
 // Mutation: compare the boot row with what the engine serves by id alone in
 // Reconciler.serve, and the instant stays the first activation's.
@@ -535,10 +509,9 @@ func TestReactivatingTheHeldRevisionMovesItsLocalInstant(t *testing.T) {
 	}
 }
 
-// rotatedKeyDoc is a company whose one seat's executor runs in an E2B box keyed
-// by a ${VAR}: it builds while the node's environment answers it, and the E2B
-// backend refuses it once it does not — the shape of a rotated credential one
-// node never received.
+// rotatedKeyDoc's one seat's executor runs in E2B keyed by a ${VAR}: it builds
+// while the node's environment answers it and is refused once it does not, as
+// a rotated credential one node never received.
 const rotatedKeyDoc = `
 name: Acme
 providers:
@@ -554,20 +527,12 @@ roles:
 `
 
 // A RE-ACTIVATION OF THE REVISION A NODE RUNS, WHICH THE NODE THEN REFUSES, IS
-// STILL THE FLEET'S.
-//
-// The rotation gesture re-activates the revision every node runs, and a node
-// whose environment lost the credential refuses it — so it keeps running that
-// revision, applied at the earlier instant, and its boot row and its fleet's row
-// are one row. With one instant per row, the boot row kept the one it applied
-// and the fleet's newer one was lost: a lost pointer was restored at the old
-// instant, and every tick out of retries found the fleet's row behind the
-// pointer and wrote it again, decrypting the revision each time.
-//
-// The re-activation is recorded by the apply, and where that write failed, by
-// the tick out of retries: the row names the pointer's revision either way, so
-// a repair that compared the revision alone would leave its instant behind.
-//
+// STILL THE FLEET'S. The node keeps running that revision at its earlier
+// instant, so its boot row is its fleet's row, carrying both instants; were
+// the fleet's not the re-activation's, a lost pointer would be restored at the
+// old instant and every tick out of retries would rewrite the row, decrypting
+// the revision each time. The apply records it or, where that write failed,
+// the tick out of retries, comparing the instant: the revision already matches.
 // Not parallel: the credential is the process environment.
 //
 // Mutations: put `is_active = 0` back on the store's raise, and the fleet's
@@ -639,8 +604,7 @@ func TestARefusedReactivationOfTheRunningRevisionIsStillTheFleets(t *testing.T) 
 }
 
 // refuseInstants makes this node's store refuse every write that moves a
-// revision's activation instant, which is the store failing a write it was asked
-// for and nothing else; allowInstants takes the refusal away.
+// revision's activation instant, and nothing else; allowInstants lifts it.
 func (p *plane) refuseInstants(t *testing.T) {
 	t.Helper()
 	if _, err := p.store.SQL().ExecContext(t.Context(), `CREATE TRIGGER refuse_the_instant
@@ -658,14 +622,10 @@ func (p *plane) allowInstants(t *testing.T) {
 	}
 }
 
-// refuseBootRow makes this node's store refuse every write that moves what the
-// node boots on — the store failing a local write it was asked for, a full
-// disk or a file somebody took away — and allowBootRow takes the refusal away.
-//
-// ON THE SERVED INSTANT, which [store.Configs.Serve] moves on both rows it
-// touches: it clears the previous boot row's and stamps the new one's, so
-// either half of the transaction trips this and the whole of it is rolled back,
-// leaving the node booting on what it booted on before.
+// refuseBootRow makes this node's store refuse every write that moves what
+// the node boots on, as a full disk would; allowBootRow lifts it. It trips on
+// the served instant, which [store.Configs.Serve] moves on both rows it
+// touches, so either half rolls the whole transaction back.
 func (p *plane) refuseBootRow(t *testing.T) {
 	t.Helper()
 	if _, err := p.store.SQL().ExecContext(t.Context(), `CREATE TRIGGER refuse_the_boot_row
@@ -683,13 +643,11 @@ func (p *plane) allowBootRow(t *testing.T) {
 	}
 }
 
-// THE FLEET'S ROW IS REPAIRED BY THE TICKS THAT FOLLOW AN APPLY.
-//
-// The row is recorded during the apply, best effort, and it is what the node
-// restores when the pointer is gone; a write the apply could not make is left
-// for the next tick to repair — the converged one, or one out of retries on a
-// revision this node refuses, which is still the fleet's. A row left behind
-// restores a company the fleet has moved past.
+// THE FLEET'S ROW IS REPAIRED BY THE TICKS THAT FOLLOW AN APPLY. The apply
+// records it best effort, and the node restores it when the pointer is gone,
+// so a write the apply could not make is repaired by the next tick: the
+// converged one, or one out of retries on a revision this node refuses. A row
+// left behind restores a company the fleet has moved past.
 //
 // Mutation: drop Reconciler.note from either branch of Tick, or break its
 // comparison with the pointer, and that branch's case keeps the stale row.
@@ -750,14 +708,11 @@ func TestTheFleetsRowIsRepairedAfterAnApply(t *testing.T) {
 	})
 }
 
-// WHAT A NODE BOOTS ON IS WHAT ITS ENGINE APPLIED.
-//
-// The boot row is the revision this node starts on, and the reconciler is its
-// only online writer: once the engine has applied the fleet's revision, the
-// boot row names it, and a converged tick puts it back there if anything moved
-// it — a write the apply could not make, or an offline choice the fleet never
-// took. A boot row left elsewhere is a node that starts, one restart later, on
-// a company the fleet is not running.
+// WHAT A NODE BOOTS ON IS WHAT ITS ENGINE APPLIED. The reconciler is the boot
+// row's only online writer, and a converged tick puts the row back on the
+// applied revision if anything moved it (a failed write, an offline choice the
+// fleet never took): a row left elsewhere starts the node, one restart later,
+// on a company the fleet is not running.
 //
 // Mutation: drop Reconciler.serve from the converged branch of Tick and the
 // first case keeps the offer.
@@ -772,11 +727,10 @@ func TestTheBootRowFollowsWhatTheEngineApplied(t *testing.T) {
 		return boot
 	}
 
-	// An offline choice made the boot row under the running node, which
-	// the boot publish withheld because the fleet had moved on: the
-	// engine runs the fleet's revision, so that is what it boots on — and
-	// it says the offline change was not published, which the operator who
-	// made it would otherwise find out by accident.
+	// An offline choice moved the boot row under the running node, and the
+	// boot publish withheld it because the fleet had moved on: the node boots
+	// on the fleet's revision it runs, and logs that the offline change was
+	// not published so its operator learns of it.
 	t.Run("a boot row moved under the running node is put back", func(t *testing.T) {
 		t.Parallel()
 		logged := &logBuffer{}
@@ -822,9 +776,8 @@ func TestTheBootRowFollowsWhatTheEngineApplied(t *testing.T) {
 	})
 
 	// The boot published this node's offer and died before recording that
-	// the fleet took it: the boot row is still an offer, of the very revision
-	// the engine runs. Serving it clears the offer, and nothing was withheld,
-	// so nothing is said.
+	// the fleet took it: serving the revision the engine runs clears the
+	// offer, and nothing was withheld, so nothing is logged.
 	t.Run("an offer the fleet took is served without a warning", func(t *testing.T) {
 		t.Parallel()
 		logged := &logBuffer{}
@@ -857,9 +810,8 @@ func TestTheBootRowFollowsWhatTheEngineApplied(t *testing.T) {
 		}
 	})
 
-	// A revision the fleet took that this node holds only as history: an
-	// API write, which stores its revision and moves the pointer and
-	// nothing else.
+	// A revision the fleet took that this node holds only as history, as an
+	// API write leaves it: stored, and the pointer moved.
 	t.Run("a held revision the fleet took becomes the boot row once applied", func(t *testing.T) {
 		t.Parallel()
 		p := newPlane(t)
@@ -899,24 +851,17 @@ func TestTheBootRowFollowsWhatTheEngineApplied(t *testing.T) {
 }
 
 // THE FLEET ROW SAYS WHAT THIS NODE WOULD COME BACK ON, which is not what it
-// is running.
+// is running. The boot row moves only after a successful apply, by a local
+// best-effort write, so a refused write leaves the node running one revision
+// and booting on another. A reader that keeps what a node needs to start (the
+// Kubernetes operator keeps a revision's sealed credentials while a node names
+// it) must read the boot revision, or the node's next restart crash-loops on a
+// revision it can no longer build. A node refusing the fleet's next revision
+// never converges, so the tick out of retries is what repairs the row.
 //
-// The boot row moves only once an apply has succeeded, and that write is local
-// and best effort: a store that refuses it leaves the node running a revision
-// it would not start on, for as long as the repair takes. With only the revision
-// it serves on the row, a reader that keeps what a node needs in order to start
-// — the Kubernetes operator keeps a revision's sealed credentials while a node
-// still names it — dropped exactly what the node would have booted on, and the
-// node's next restart crash-looped on a revision it could no longer build.
-//
-// And the repair cannot wait for convergence: this node refuses the fleet's
-// next revision, so it never takes a converged tick again, and the tick out of
-// retries is the one that has to move the row.
-//
-// Mutations: publish the served revision as what the node boots on (take
-// Reconciler.Boots off the boot row and read it off served) and the first
-// assertion fails; drop Reconciler.serve from the out-of-retries branch of Tick
-// and the repair never lands.
+// Mutations: read Reconciler.Boots off served rather than the boot row and the
+// first assertion fails; drop Reconciler.serve from the out-of-retries branch
+// of Tick and the repair never lands.
 func TestTheFleetRowSaysWhatThisNodeBootsOn(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
@@ -926,9 +871,8 @@ func TestTheFleetRowSaysWhatThisNodeBootsOn(t *testing.T) {
 	}
 	boots := p.recon.Serving()
 
-	// From here the store takes no write that moves the boot row, so the
-	// apply below leaves this node running one revision and booting on
-	// another.
+	// From here the store refuses boot-row writes, so the apply below leaves
+	// this node running one revision and booting on another.
 	p.refuseBootRow(t)
 	p.activate(t.Context(), t, grownCompanyDoc)
 	if err := p.recon.Tick(t.Context()); err != nil {
@@ -939,9 +883,8 @@ func TestTheFleetRowSaysWhatThisNodeBootsOn(t *testing.T) {
 		t.Fatalf("this node runs and boots on %q; the case needs two revisions", runs)
 	}
 
-	// And then the pointer moves to a revision this node cannot build: it
-	// never converges again, and every tick from here is a retry or a tick
-	// out of retries.
+	// Then the pointer moves to a revision this node cannot build: every
+	// tick from here is a retry or one out of retries.
 	refused := p.activatePayload(t, "broken", brokenRevision)
 	for range configplane.MaxApplyAttempts {
 		_ = p.recon.Tick(t.Context())
@@ -961,9 +904,8 @@ func TestTheFleetRowSaysWhatThisNodeBootsOn(t *testing.T) {
 			row.Serving, row.Boots, runs, boots)
 	}
 
-	// The store takes the write again. The next tick is out of retries on a
-	// revision this node still refuses, and it is the one that repairs the
-	// boot row and says so.
+	// The store takes the write again: the next tick, out of retries on a
+	// revision this node still refuses, repairs the boot row and says so.
 	p.allowBootRow(t)
 	_ = p.recon.Tick(t.Context())
 	if boot, _, err = p.store.Configs().Boot(t.Context()); err != nil || boot.ID != runs {
@@ -977,17 +919,13 @@ func TestTheFleetRowSaysWhatThisNodeBootsOn(t *testing.T) {
 }
 
 // A TICK THAT APPLIED NOTHING WRITES NOTHING TO THE BOOT ROW, repair ticks
-// included.
-//
-// The row is only ever moved to a revision this engine APPLIED, and until the
-// first apply succeeds what the node serves is what it BOOTED on — which the
-// row already names, at the instant this node applied it. The two instants on
-// that row differ exactly on the node this matters for: one that refused a
-// re-activation of the revision it runs carries the fleet's later activation
-// beside its own earlier one, and a tick that wrote the row would stamp the
-// later instant as the one this node applied, which is what the next boot
-// stamps the chart with. (The same guard is what leaves an offline change in
-// the row offered until an apply replaces it.)
+// included. The row only moves to a revision this engine APPLIED; before the
+// first apply the node serves what it BOOTED on, which the row already names
+// at the instant this node applied it. On a node that refused a re-activation
+// of the revision it runs, the row also carries the fleet's later instant, and
+// a tick that wrote the row would stamp that as this node's applied instant,
+// which the next boot stamps the chart with. (The same guard leaves an
+// offline change offered until an apply replaces it.)
 //
 // Mutation: drop the applied-epoch guard from Reconciler.serve and the tick
 // that refuses the fleet's revision restamps the boot row.
@@ -1004,9 +942,8 @@ func TestATickThatAppliedNothingWritesNoBootRow(t *testing.T) {
 	if err := configs.Serve(t.Context(), applied); err != nil {
 		t.Fatalf("serve the revision this node booted on: %v", err)
 	}
-	// THE RE-ACTIVATION THIS NODE REFUSED before it was restarted: the row
-	// carries the fleet's later activation of the same revision, and the
-	// instant this node applied it stays where it was.
+	// The re-activation this node refused before it restarted: the row
+	// carries the fleet's later instant beside the one this node applied.
 	reactivated := applied
 	reactivated.ActivatedAt = pinnedNow
 	if err := configs.SawFleet(t.Context(), reactivated); err != nil {
@@ -1049,18 +986,12 @@ func sealed(t *testing.T, e *engine.Engine, doc string) json.RawMessage {
 }
 
 // A NODE WHOSE DATABASE IS DISCARDED AT EVERY START BOOTS ON NOTHING, however
-// many revisions it applies.
-//
-// Its boot row is written while it runs — its own readers use it, a config
-// write built on what this node knows and an offer's base among them — and
-// read by nobody afterwards: the engine deletes the file as the next start
-// opens it. Naming that revision in the fleet view would have a reader keep
-// what this node has no use for, and say nothing about what it will run.
-//
-// ON A STORE OPENED SCRATCH, which is how the reconciler learns it: from the
-// handle the node runs on, the one reading that cannot disagree with what the
-// open did. An option saying it again was left out by every harness that
-// built a reconciler on a scratch node, which then published a boot revision.
+// many revisions it applies. Its boot row serves its own readers while it
+// runs (a config write's base, an offer's) and nobody after, since the next
+// start deletes the file: naming it in the fleet view would have a reader keep
+// what this node will never use. The reconciler learns scratch from the store
+// handle, the one reading that cannot disagree with the open; an option
+// restating it is what a harness forgets.
 //
 // Mutations: drop the scratch branch of Reconciler.Boots, or build the
 // reconciler's scratch from anything but the handle (false), and the row
@@ -1073,9 +1004,8 @@ func TestAScratchNodeBootsOnNothing(t *testing.T) {
 	if !scratch.Scratch() {
 		t.Fatal("a store opened scratch says it keeps what it writes")
 	}
-	// The ENGINE's store holds the history this case writes; the scratch
-	// one is the node's own, as on a node without `data`, and meets every
-	// revision through the pointer, as such a node does.
+	// The ENGINE's store holds this case's history; the scratch one is the
+	// node's own, as without `data`, meeting every revision via the pointer.
 	p := newPlane(t, func(o *engine.ReconcilerOptions) { o.Store = scratch })
 	p.activate(t.Context(), t, grownCompanyDoc)
 	if err := p.recon.Tick(t.Context()); err != nil {
@@ -1094,17 +1024,13 @@ func TestAScratchNodeBootsOnNothing(t *testing.T) {
 	}
 }
 
-// THE FLEET ROW NAMES THE BOOT REVISION ON THE TICK THAT MOVES IT.
-//
-// What the row says this node boots on can never be AHEAD of the store — it
-// moves only on a read of the boot row or a write to it that succeeded — so
-// the order of the boot-row write and the fleet's record decides only how
-// soon the row says it. Both orders are the right one here: a clean apply's
-// record names the new boot revision beside the one it runs, rather than the
-// previous one until the next tick; and the converged tick that repairs a
-// write that failed says so on that tick, rather than one interval later. A
-// reader watching the row through a rollout reads a node whose two names
-// differ as one whose boot row failed to move, which these two are not.
+// THE FLEET ROW NAMES THE BOOT REVISION ON THE TICK THAT MOVES IT. Its boot
+// name never runs AHEAD of the store (it moves only on a successful read or
+// write of the boot row), so writing the boot row before the fleet's record
+// only makes the row say it sooner: a clean apply's record names the new boot
+// revision, and a converged tick that repairs a failed write says so on that
+// tick. Otherwise a reader watching a rollout sees two names differ for a
+// tick, which reads as a boot row that failed to move.
 //
 // Mutations: record before serve in Reconciler.apply and the first half reads
 // the previous boot revision; serve after refresh in Tick's converged branch
@@ -1154,18 +1080,14 @@ func TestTheFleetRowNamesTheBootRevisionOnTheTickThatMovesIt(t *testing.T) {
 	}
 }
 
-// A BOOT ROW THIS NODE COULD NOT READ IS NEVER PUBLISHED AS NONE.
-//
-// What a node boots on reaches the fleet view as a name, and an empty one says
-// it boots on nothing. That is a claim a reader acts on — the Kubernetes
-// operator keeps a revision's sealed credentials while a node still names it —
-// so it is made only from a read that found the row empty, never from one that
-// failed. A reconciler that learned the row on its first tick published, for a
-// node whose reads failed on that tick while its apply succeeded, the revision
-// it runs and an empty boot revision: the operator kept the one, deleted what
-// only the revision in the row needed, and the node's next start could not
-// build what it booted on. The row is read as the reconciler is built, and a
-// read that fails later leaves the last answer standing.
+// A BOOT ROW THIS NODE COULD NOT READ IS NEVER PUBLISHED AS NONE. An empty
+// boot name says the node boots on nothing, a claim a reader acts on (the
+// Kubernetes operator keeps a revision's sealed credentials while a node names
+// it), so it comes only from a read that found the row empty, never one that
+// failed. The row is read as the reconciler is built and a later failed read
+// leaves the last answer standing; learned on the first tick instead, a read
+// failing there published an empty boot revision, and the node's next start
+// could not build what it booted on.
 //
 // Mutations: drop the read from Engine.NewReconciler and the record names no
 // boot revision; record an empty one when Reconciler.serve's read fails and so
@@ -1229,14 +1151,11 @@ func TestAReconcilerThatCannotReadWhatItsNodeBootsOnIsNotBuilt(t *testing.T) {
 }
 
 // THE FLEET ROW SAYS WHICH EPOCH THIS NODE LAST APPLIED, beside the one it last
-// attempted.
-//
-// A refusal says the node did not reach the epoch it attempted, never which one
-// it did reach — so a writer that saved epoch 6 could not tell from the row
-// whether a node that refused it runs 5, or nothing at all. That is the
-// comparison a node's own health push makes with its live epoch, and the fleet
-// view makes it per node from this. 0 before the first apply succeeds, which
-// the view leaves out rather than offer as an epoch.
+// attempted. A refusal says only that the node did not reach the attempted
+// epoch, so without this a writer that saved epoch 6 could not tell whether a
+// refusing node runs 5 or nothing; the fleet view compares it per node, as the
+// health push does with its live epoch. 0 before the first apply succeeds,
+// which the view leaves out.
 //
 // Mutation: record the attempted epoch as the applied one and the refusal
 // reads as epoch 6 applied.
@@ -1296,14 +1215,11 @@ func bootOn(t *testing.T, e *engine.Engine, doc string) store.Revision {
 	return booted
 }
 
-// unreadableBootRow makes every read of db's boot row fail while the row stays
-// where it is, and returns what puts it back. The other rows read as they did,
-// so an apply that reads only those succeeds.
-//
-// A VALUE THE COLUMN CANNOT HOLD, the row's served instant written as text: the
-// read fails as it scans the row, which is a read of THIS row failing — a
-// corrupt page, a column a newer build wrote differently — rather than the
-// whole file going away, which the apply would trip over too.
+// unreadableBootRow makes every read of db's boot row fail, leaving the row in
+// place and every other row readable, and returns what puts it back. It writes
+// the served instant as text, so the read fails scanning THIS row (a corrupt
+// page, a column a newer build wrote differently) rather than losing the whole
+// file, which the apply would trip over too.
 func unreadableBootRow(t *testing.T, db *store.DB) (restore func()) {
 	t.Helper()
 	var served int64
@@ -1337,17 +1253,11 @@ func bootRowID(t *testing.T, db *store.DB) string {
 	return id
 }
 
-// A REVISION THIS NODE REFUSES NEVER BECOMES WHAT IT BOOTS ON.
-//
-// The fleet's revision used to be marked as this node's own the moment the
-// tick fetched it, before it was validated: a node that refused it kept
-// running the previous company, and booted on the refused one at its next
-// start — where the boot refused it again, before the engine ran. So a
-// revision one node's build could not run took that node down on its next
-// restart, however healthy it had been. What the node RECORDS of the refused
-// revision is that the fleet is on it: that is the company it restores if the
-// pointer is lost, and what its row in the fleet view names beside the one it
-// serves.
+// A REVISION THIS NODE REFUSES NEVER BECOMES WHAT IT BOOTS ON, or a revision
+// one node's build cannot run takes that node down at its next restart,
+// however healthy it was. What the node RECORDS of it is that the fleet is on
+// it: the company it restores if the pointer is lost, and what its fleet-view
+// row names beside the one it serves.
 //
 // Mutation: make Reconciler.keep serve the revision (the old adopt), or call
 // Reconciler.serve on a refused apply, and the boot row is the refused one.
@@ -1411,13 +1321,11 @@ func TestARevisionThisNodeRefusesNeverBecomesWhatItBootsOn(t *testing.T) {
 }
 
 // THIS NODE'S OWN READERS ARE TOLD WHAT ITS LAST ATTEMPT MADE OF A REVISION.
-//
-// A refusal leaves the applied epoch where it was, so read alone it is a node
-// still applying. The health push carries [engine.Reconciler.Attempt] beside
-// it, so a reader who may not read the fleet — a unit lead following their
-// save — is told this node refused the revision rather than that it is
-// applying it for good. Nothing before the first concluded attempt, which a
-// zero epoch would misstate.
+// A refusal leaves the applied epoch where it was, which read alone looks like
+// a node still applying; the health push carries [engine.Reconciler.Attempt]
+// beside it, so a reader who may not read the fleet (a unit lead following
+// their save) learns of the refusal. Nothing before the first concluded
+// attempt, which a zero epoch would misstate.
 //
 // Mutation: report the attempt only once one succeeded, and the refusal reads
 // as the earlier success.
@@ -1450,12 +1358,10 @@ func TestTheLastAttemptSaysARefusalTheAppliedEpochCannot(t *testing.T) {
 	}
 }
 
-// A NODE SAYS WHAT IT BOOTED ON UNTIL IT APPLIES SOMETHING ELSE.
-//
-// A node that starts on its boot row and then refuses the fleet's revision is
-// still running the boot row's company, and its row in the fleet view is where
-// an operator sees that. Before its first successful apply, the reconciler
-// knows that only because it was told what the engine started on.
+// A NODE SAYS WHAT IT BOOTED ON UNTIL IT APPLIES SOMETHING ELSE: one that
+// refuses the fleet's revision still runs its boot row's company, which its
+// fleet-view row must show, and before its first apply the reconciler knows
+// that only from what it was told the engine started on.
 //
 // Mutation: ignore ReconcilerOptions.Booted and the row serves nothing.
 func TestANodeServesWhatItBootedOnUntilAnApplySucceeds(t *testing.T) {
@@ -1486,13 +1392,10 @@ func TestANodeServesWhatItBootedOnUntilAnApplySucceeds(t *testing.T) {
 }
 
 // AN EPOCH IS NOT A REVISION: a pointer recreated under a running node can
-// name another revision at the epoch this node already applied.
-//
-// The node does not apply it — convergence is by epoch, and that is the
-// pointer's own contract — but nothing may then treat it as what the node
-// runs. A boot row moved to "the pointer's revision at the applied epoch" would
-// name a revision the engine never applied, and the next boot would start on
-// it unvalidated.
+// name another revision at the epoch this node already applied. Convergence is
+// by epoch (the pointer's contract), so the node does not apply it, and the
+// boot row must not name it either: the next boot would start on a revision
+// the engine never validated.
 //
 // Mutation: serve the converged tick's target rather than what the engine
 // applied and the boot row is the recreated pointer's revision.
@@ -1573,14 +1476,11 @@ func (s *swappablePlane) Fleet(ctx context.Context) ([]coord.NodeApply, error) {
 	return s.plane().Fleet(ctx)
 }
 
-// TWO TICKS ON ONE ENGINE FOLLOW THE POINTER IN ITS ORDER.
-//
-// The boot row moves only to what the engine applied, so an engine that let
-// two ticks interleave — each reading the pointer, then applying — could let
-// the one that read the OLDER epoch apply last, and walk the boot row back to
-// it. The first tick here is held inside its read of the older revision's
-// body until the pointer has moved on and, unless something stops it, a
-// second tick has read the newer one and applied it.
+// TWO TICKS ON ONE ENGINE FOLLOW THE POINTER IN ITS ORDER: interleaved, the
+// tick that read the OLDER epoch could apply last and walk the boot row back
+// to it. The first tick here is held inside its read of the older revision's
+// body until the pointer has moved on and, unless something orders them, a
+// second tick has read and applied the newer one.
 //
 // Mutation: drop Engine.following from Tick and the second tick runs inside
 // the first, which then applies the older revision last.
@@ -1676,16 +1576,10 @@ func (r *readSignal) Target(ctx context.Context) (coord.Activation, bool, error)
 func TestARevisionThatCannotBeBuiltLeavesTheNodeServing(t *testing.T) {
 	t.Parallel()
 	// error, not degraded: the build touches nothing, so this node still
-	// serves the PRIOR epoch correctly. That is a legitimate
-	// degraded-but-correct state and safe to route work to, which is
-	// exactly what the distinction is for.
+	// serves the PRIOR epoch correctly and is safe to route work to.
 	p := newPlane(t)
 	before := p.engine.Company()
-	// A seat naming a provider the document does not configure:
-	// well-formed JSON, and refused at build. The provider block is
-	// non-empty on purpose: a company with NO models is a documented
-	// authoring state, which applies cleanly and so could not stand for
-	// a revision that cannot be built.
+	// Refused at build, not by the runnable rules: see brokenRevision.
 	p.activatePayload(t, "broken", brokenRevision)
 	err := p.recon.Tick(t.Context())
 	if err == nil {
@@ -1706,13 +1600,10 @@ func TestARevisionThatCannotBeBuiltLeavesTheNodeServing(t *testing.T) {
 	}
 }
 
-// bodiless is a plane whose pointer names a revision it holds no body for.
-//
-// The store cannot be made to produce one — the body is written inside the
-// pointer's own record — so the case needs a plane that says so: it is what a
-// node sees when the pointer moved between its read of the target and its read
-// of the body, and what a pointer an older build wrote beside a body a racing
-// writer had replaced looks like.
+// bodiless is a plane whose pointer names a revision it holds no body for,
+// which the store cannot produce (the body is written in the pointer's own
+// record): what a node sees when the pointer moved between its reads of the
+// target and the body.
 type bodiless struct{ coord.Plane }
 
 func (bodiless) Payload(context.Context, string) (json.RawMessage, bool, error) {
@@ -1744,10 +1635,9 @@ func TestAPointerNamingAMissingRevisionIsReported(t *testing.T) {
 
 func TestOneEpochIsRetriedABoundedNumberOfTimes(t *testing.T) {
 	t.Parallel()
-	// Per epoch, not per node lifetime — so re-activating a FIXED revision
-	// resets the budget and the runbook's fix actually works. Without the
-	// bound a bad revision has this node rebuilding its subsystems every
-	// fifteen seconds until somebody notices.
+	// Per epoch, not per node lifetime, so activating a FIXED revision resets
+	// the budget; unbounded, a bad revision rebuilds this node's subsystems
+	// every tick.
 	p := newPlane(t)
 	p.activatePayload(t, "broken", brokenRevision)
 	for range 10 {
@@ -1774,14 +1664,10 @@ func TestOneEpochIsRetriedABoundedNumberOfTimes(t *testing.T) {
 }
 
 // A REVISION SEALED UNDER A KEY THIS NODE DOES NOT HOLD IS AN ERROR, NEVER AN
-// EMPTY COMPANY.
-//
-// Booting onto nothing would read on every surface as an operator who
-// configured nothing, where the actual fault is a keyring that does not name
-// the key the revision was sealed under — a node deployed with another fleet's
-// Tier A, or a key dropped before every revision was re-sealed off it.
-//
-// The control is the same document sealed under this node's own keyring.
+// EMPTY COMPANY, which would read on every surface as an operator who
+// configured nothing, where the fault is the keyring: another fleet's Tier A,
+// or a key dropped before every revision was re-sealed off it. The control is
+// the same document sealed under this node's own keyring.
 func TestASealedRevisionNeedsTheKeyItWasSealedUnder(t *testing.T) {
 	t.Parallel()
 	foreign, err := secrets.NewCipher(secrets.Keyring{
@@ -1819,24 +1705,14 @@ func TestASealedRevisionNeedsTheKeyItWasSealedUnder(t *testing.T) {
 	}
 }
 
-// A PEER'S REVISION THAT IS NOT SEALED IS NEITHER APPLIED NOR KEPT.
-//
-// The payload a peer converges on is read off the coordination store, and
-// anything the broker admits can write that bucket — so the seal under
-// the fleet's keyring is what says a node of this fleet wrote it. A plaintext
-// body used to be applied by a node holding a keyring exactly as its own
-// would have been: a forged company document, running on every node, with
-// nothing in the log saying where it came from. Now the apply is recorded as
-// an error, the epoch is not reached, and the body never lands in this node's
-// own config history — where it would have been shown, diffed and offered as a
-// revert target.
-//
-// THE FORGERY IS PUBLISHED STRAIGHT ONTO THE PLANE, as anything reaching the
-// broker could, rather than through a writer: every writer this build has
-// seals under the node's keyring, and none can be built without it.
-//
-// The control is the same document sealed by a node of the fleet: applied and
-// kept.
+// A PEER'S REVISION THAT IS NOT SEALED IS NEITHER APPLIED NOR KEPT. A peer
+// reads the payload off the coordination store, which anything the broker
+// admits can write, so the seal under the fleet's keyring is what says a node
+// of this fleet wrote it. An unsealed body is recorded as an error, its epoch
+// is not reached, and it never lands in this node's config history, where it
+// would be shown, diffed and offered as a revert target. The forgery goes
+// straight onto the plane, since every writer this build has seals. The
+// control, the same document sealed by a node of the fleet, is applied and kept.
 //
 // Mutation: let secrets.Open hand back a plaintext payload with a keyring in
 // hand, and the forged revision applies; keep it before the open in
@@ -1856,9 +1732,9 @@ func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
 	if !errors.Is(err, secrets.ErrUnsealedWithKey) {
 		t.Fatalf("Tick = %v, want the unsealed-with-a-keyring refusal", err)
 	}
-	// AND IT SAYS WHERE THE BODY CAME FROM: the coordination store, where
-	// anything that reaches the broker could have written it; and what
-	// replaces it, an admin's whole document.
+	// It says where the body came from (the coordination store, which
+	// anything reaching the broker can write) and what replaces it: an
+	// admin's whole document.
 	for _, says := range []string{"coordination store", "without a seal",
 		"anything that reaches the broker", "An admin", "whole document", "PUT /config"} {
 		if !strings.Contains(err.Error(), says) {
@@ -1871,9 +1747,8 @@ func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
 	if got := dayCeiling(node.engine.Company()); got == grownDayCeiling {
 		t.Error("the node runs the forged document's settings")
 	}
-	// THE FLEET VIEW the node reports into is the one it reads, the
-	// author's: the author itself never ticked, so the one row is the
-	// node's.
+	// The node reports into the fleet view it reads, the author's; the
+	// author never ticked, so the one row is the node's.
 	if row := author.fleetRow(t); configplane.ApplyStatus(row.Status) != configplane.StatusError ||
 		row.Epoch != forged.Epoch {
 		t.Errorf("the node recorded %+v, want an error against epoch %d", row, forged.Epoch)
@@ -1899,11 +1774,9 @@ func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
 	}
 }
 
-// THIS NODE'S OWN UNSEALED COPY IS NAMED AS ITS OWN.
-//
-// The fleet can point at a revision this node already holds in the clear. That
-// is not a body somebody else published: the remedy is an import HERE, which
-// stores the document sealed, so the refusal says it is this node's own copy.
+// THIS NODE'S OWN UNSEALED COPY IS NAMED AS ITS OWN: the fleet can point at a
+// revision this node holds in the clear, which nobody else published, so the
+// refusal names the remedy, an import HERE, which stores it sealed.
 //
 // Mutation: answer the local copy with the peer's wording and the case fails.
 func TestThisNodesOwnUnsealedCopyIsNamedAsItsOwn(t *testing.T) {
@@ -1939,14 +1812,11 @@ func TestThisNodesOwnUnsealedCopyIsNamedAsItsOwn(t *testing.T) {
 }
 
 // A PEER'S REVISION SEALED IN A FORM THIS BUILD DOES NOT READ IS NOT UNSEALED.
-//
-// A newer build's seal (here a successor's `enc:v2:`) is wrapped exactly as
-// this build's is, and the reader took every seal it could not parse for no
-// seal at all: the recorded error told the operator the body came from
-// outside the fleet and that a whole document replaces it, which would
-// discard what the newer peer wrote. It is refused, neither applied nor kept,
-// as every body that does not open is, and the error names the remedy, the
-// build that sealed it.
+// A newer build's seal (here `enc:v2:`) is wrapped as this build's is; read as
+// no seal, the error would say the body came from outside the fleet and send
+// the operator to replace a whole document, discarding what the newer peer
+// wrote. It is refused, neither applied nor kept, as every body that does not
+// open is, and the error names the remedy: the build that sealed it.
 //
 // Mutation: answer every seal secrets cannot parse as ErrUnsealedWithKey, or
 // drop openRefusal's arm for it, and the refusal speaks of a missing seal.
@@ -1997,9 +1867,8 @@ func testKey(t *testing.T) []byte {
 
 func TestAReconcilerNeedsAStoreAndAnIdentity(t *testing.T) {
 	t.Parallel()
-	// The apply-status table upserts on node id, so an empty one makes
-	// every node that forgot it share a row — and the fleet view shows one
-	// anonymous entry where a dozen nodes should be.
+	// The apply-status table upserts on node id, so nodes with an empty one
+	// would share one anonymous row in the fleet view.
 	e := newEngine(t, engine.Options{})
 	if _, err := e.NewReconciler(t.Context(), engine.ReconcilerOptions{NodeID: "n"}); !errors.Is(err, engine.ErrNoStore) {
 		t.Errorf("err = %v, want ErrNoStore", err)
@@ -2032,9 +1901,8 @@ func TestACurrentNodeServes(t *testing.T) {
 
 func TestAnUnconfiguredNodeIsNotDiverged(t *testing.T) {
 	t.Parallel()
-	// No activation at all means nothing to converge on. Reporting a
-	// posture other than serve would take every node of a brand-new
-	// deployment out of rotation before its first import.
+	// Nothing to converge on: any posture but serve would take every node of
+	// a brand-new deployment out of rotation before its first import.
 	p := newPlane(t)
 	if got := p.recon.Posture(t.Context()); got != configplane.PostureServe {
 		t.Errorf("posture = %q, want serve", got)
@@ -2043,10 +1911,8 @@ func TestAnUnconfiguredNodeIsNotDiverged(t *testing.T) {
 
 func TestOrdinaryPropagationLagIsNotDivergence(t *testing.T) {
 	t.Parallel()
-	// EVERY successful rollout produces lag: the first node to apply
-	// advances the pointer and every peer is behind until it polls.
-	// Shedding on that makes the fastest node the cause of a fleet-wide
-	// outage, and the faster it is the longer the outage.
+	// EVERY successful rollout leaves peers behind until they poll; shedding
+	// on that makes the fastest node the cause of a fleet-wide outage.
 	p := newPlane(t)
 	p.activate(t.Context(), t, grownCompanyDoc)
 	// The pointer has moved and this node has not ticked.
@@ -2057,13 +1923,11 @@ func TestOrdinaryPropagationLagIsNotDivergence(t *testing.T) {
 
 func TestAConfirmedLaggardShedsOnlyWhenAPeerHasTheEpoch(t *testing.T) {
 	t.Parallel()
-	// Shedding exists to move work to a healthy peer. With no healthy peer
-	// it is not shedding, it is stopping — so the same lag reads as
-	// isolated, and the node keeps serving what it has.
+	// Shedding moves work to a healthy peer; with none it would be stopping,
+	// so the same lag reads isolated and the node keeps serving what it has.
 	p := newPlane(t)
-	// The node tries and fails, which is what makes its lag CONFIRMED
-	// rather than ordinary propagation — a distinction the posture rule
-	// rests on, because every successful rollout produces lag.
+	// The node tries and fails: that makes its lag CONFIRMED rather than
+	// ordinary propagation.
 	p.activatePayload(t, "broken", brokenRevision)
 	_ = p.recon.Tick(t.Context())
 
@@ -2089,10 +1953,9 @@ func TestAConfirmedLaggardShedsOnlyWhenAPeerHasTheEpoch(t *testing.T) {
 
 func TestAStalePeerIsNotEvidence(t *testing.T) {
 	t.Parallel()
-	// A node that was scaled in, redeployed or crashed leaves its `ok`
-	// behind forever. Counting that ghost makes a diverged survivor shed
-	// its seats to a node that no longer exists — the company goes dark
-	// exactly where it should have gone degraded and raised an alarm.
+	// A node scaled in, redeployed or crashed leaves its `ok` behind;
+	// counting it would have a diverged survivor shed its seats to a node
+	// that no longer exists, taking the company dark instead of degraded.
 	p := newPlane(t)
 	p.activatePayload(t, "broken", brokenRevision)
 	_ = p.recon.Tick(t.Context())
@@ -2113,9 +1976,8 @@ func TestAStalePeerIsNotEvidence(t *testing.T) {
 
 func TestAnUnreadableControlPlaneKeepsTheNodeServing(t *testing.T) {
 	t.Parallel()
-	// The safe answer to "am I behind?" is the one that keeps a working
-	// company working: the alternative takes every node out of rotation on
-	// a database blip.
+	// Fail open: answering "behind" would take every node out of rotation
+	// on a database blip.
 	p := newPlane(t)
 	p.activate(t.Context(), t, grownCompanyDoc)
 	if err := p.recon.Tick(t.Context()); err != nil {
@@ -2145,11 +2007,9 @@ func TestTheLoopStopsWithItsContext(t *testing.T) {
 
 func TestTheNodeSeesTheNewEpochsSeats(t *testing.T) {
 	t.Parallel()
-	// The seat set the HOST reads must follow the epoch, not the company
-	// this engine booted on. A method value captured at construction keeps
-	// claiming seats a deleted role no longer has and never claims a new
-	// one — and the failure is invisible, because a node reading a stale
-	// seat set looks exactly like a node losing every race.
+	// The HOST's seat set must follow the epoch, not the boot company: a
+	// method value captured at construction keeps a stale set, which looks
+	// exactly like a node losing every race.
 	p := newPlane(t)
 	host := p.engine.Node().Host()
 	if got := len(host.CompanySeats()); got != 2 {
@@ -2171,12 +2031,10 @@ func TestTheNodeSeesTheNewEpochsSeats(t *testing.T) {
 	}
 }
 
-// The post-mortem trail. The coordination record this accompanies is one key
-// per node in a bucket whose age is sixty seconds, by design — so the epoch,
-// status and error text of a node that crashed or was scaled in during a bad
-// rollout are gone a minute later, which is exactly the node an incident
-// review is looking for. The event is what outlives it, and until this it was
-// a registered type with a topic and NO PUBLISHER anywhere in the tree.
+// The post-mortem trail. The coordination record is one key per node in a
+// bucket aged at sixty seconds, so a node that crashed or was scaled in during
+// a bad rollout, the one an incident review looks for, is gone a minute
+// later; this event is what outlives it.
 func TestAnApplyLeavesADurableTrail(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
@@ -2201,24 +2059,19 @@ func TestAnApplyLeavesADurableTrail(t *testing.T) {
 	if got.Error != "" {
 		t.Errorf("error = %q on a successful apply", got.Error)
 	}
-	// The subsystems this apply got through, in the order it went through
-	// them. On a failure it is what was already mutated when the refusal
-	// happened, which is the whole of what makes a degraded apply
-	// diagnosable after the fact.
+	// The subsystems this apply got through, in order: on a failure, what
+	// was already mutated, which makes a degraded apply diagnosable.
 	if len(got.AppliedSubsystems) == 0 {
 		t.Fatal("applied_subsystems is empty on a successful apply")
 	}
-	// `published` is last because it is what tells every open socket the
-	// company changed, and it must not say so until everything a socket
-	// reads has been rebuilt.
+	// `published` is last: it tells every open socket the company changed,
+	// so it follows everything a socket reads.
 	if got.AppliedSubsystems[0] != "secrets" ||
 		got.AppliedSubsystems[len(got.AppliedSubsystems)-1] != "published" {
 		t.Errorf("subsystems = %v, want the apply's own order from secrets to published",
 			got.AppliedSubsystems)
 	}
-	// AND EACH IS NAMED ONCE. The trail is what a degraded apply is read
-	// back from, and a stage appearing twice reads as a retry that
-	// happened rather than as one list stated in two places.
+	// Each is named once: a stage appearing twice reads as a retry.
 	seen := map[string]bool{}
 	for _, name := range got.AppliedSubsystems {
 		if seen[name] {
@@ -2246,10 +2099,9 @@ func TestARefusedApplySaysHowFarItGot(t *testing.T) {
 	p := newPlane(t)
 	applies := subscribeApplied(t, p)
 
-	// A payload that DECODES as a company — the stored-form reader is
-	// lenient, so a rolling upgrade can boot on a newer peer's revision —
-	// and is refused when the company is BUILT, because the seat's model
-	// names a provider the revision does not configure.
+	// A payload that DECODES as a company (the stored-form reader is
+	// lenient, so a rolling upgrade can boot on a newer peer's revision)
+	// and is refused when BUILT.
 	p.activatePayload(t, "broken", brokenRevision)
 	if err := p.recon.Tick(t.Context()); err == nil {
 		t.Fatal("a revision naming an unconfigured provider was applied")
@@ -2262,19 +2114,17 @@ func TestARefusedApplySaysHowFarItGot(t *testing.T) {
 	if got.Error == "" {
 		t.Error("a failed apply published no error text — there is nothing to review")
 	}
-	// Refused before the engine was asked to apply anything, so NOTHING on
-	// this node was mutated — which is the difference between a node that
-	// is serving its previous epoch correctly and one that is degraded.
+	// Refused before Apply, so NOTHING was mutated: the node serves its
+	// previous epoch correctly rather than degraded.
 	if len(got.AppliedSubsystems) != 0 {
 		t.Errorf("subsystems = %v, want none — the revision never reached Apply",
 			got.AppliedSubsystems)
 	}
 }
 
-// And the partial list, at its own seam. An apply that fails PART WAY has
-// already mutated everything before the failure, and the list is the only
-// record of how much — the coordination status carries a status and an error
-// string and nothing else.
+// And the partial list, at its own seam: an apply failing PART WAY has
+// mutated everything before the failure, and the list is the only record of
+// how much (the coordination status carries just a status and error text).
 func TestApplyReportsHowFarItGotBeforeARefusal(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
@@ -2285,9 +2135,8 @@ func TestApplyReportsHowFarItGotBeforeARefusal(t *testing.T) {
 	if status != configplane.StatusError {
 		t.Errorf("status = %q, want %q", status, configplane.StatusError)
 	}
-	// The secret snapshot is taken FIRST — it is what makes re-activating
-	// an unchanged revision pick up a rotated credential — so it is the one
-	// step that ran before the company itself was refused.
+	// The secret snapshot runs FIRST (it lets re-activating an unchanged
+	// revision pick up a rotated credential), so it ran before the refusal.
 	if !slices.Equal(applied, []string{"secrets"}) {
 		t.Errorf("applied = %v, want just the step that ran before the refusal", applied)
 	}
@@ -2333,17 +2182,13 @@ func waitForApplied(t *testing.T, ch <-chan *events.Event) *events.Event {
 }
 
 // THE PAYLOAD HAS TO TRAVEL WITH THE POINTER. A revision is written to the
-// database of whichever node served the write, and every other node meets it
-// for the first time when the pointer names it. While the body lived only in
-// that one node's file, a peer read nothing and reported "no such revision"
-// once per reconcile tick — for the life of the deployment. A live config
-// change reached exactly the node it was posted to, which on a fleet is the
-// whole feature.
+// database of the node that served the write, and every other node first
+// meets it when the pointer names it: with the body in that one file, a live
+// config change would reach only the node it was posted to.
 func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
 	t.Parallel()
-	// A second node: its own database, the same coordination store and
-	// the same keyring. That is the shape of a fleet, and the only things
-	// the two share.
+	// A second node: its own database, sharing only the coordination store
+	// and the keyring, as a fleet does.
 	author, peer := fleetPeers(t)
 
 	epoch := author.activate(t.Context(), t, grownCompanyDoc)
@@ -2361,10 +2206,8 @@ func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
 	if got := peer.recon.Applied(); got != epoch {
 		t.Errorf("the peer applied epoch %d, want %d", got, epoch)
 	}
-	// And it KEPT the revision. company_config is where this node's own
-	// history, diffs and revert targets are read from, so a node that
-	// applied without adopting would serve an epoch its operator surface
-	// cannot show.
+	// And it KEPT the revision: company_config is where this node's history,
+	// diffs and revert targets are read from.
 	adopted, held, err := peer.store.Configs().Get(t.Context(), target.RevisionID)
 	if err != nil || !held {
 		t.Fatalf("the peer did not keep its own copy (held=%v err=%v)", held, err)
@@ -2373,12 +2216,10 @@ func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
 		t.Errorf("the applied revision boots=%v fleets=%v on the peer, want both",
 			adopted.Boots, adopted.Fleets)
 	}
-	// AND IT NAMES WHO WROTE IT, AND HOW. The copy said `peer` from `fleet`,
-	// so the author was on the one node the write reached and nobody on every
-	// other — the history an operator reads depended on which node answered.
-	// The source is the writer's too: every pointer carries a complete origin
-	// ([coord.RevisionOrigin.Check]), so there is no `fleet` stand-in left to
-	// fall back to. Mutation: adopt as `peer` from `fleet` and this fails.
+	// AND IT NAMES WHO WROTE IT, AND HOW, from the pointer's complete origin
+	// ([coord.RevisionOrigin.Check]): the history an operator reads must not
+	// depend on which node answered. Mutation: adopt as `peer` from `fleet`
+	// and this fails.
 	if adopted.CreatedBy != revisionAuthor || adopted.CreatedByKind != iam.ActorHuman ||
 		adopted.OperatorID != revisionCredential || adopted.Source != "test" {
 		t.Errorf("the peer's copy records %q/%q/%q from %q, want the writer's "+
@@ -2396,11 +2237,9 @@ func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
 	}
 }
 
-// The nudge, end to end. The reconcile interval is fifteen seconds; an
-// operator's config change has to land in milliseconds, and the only thing
-// that makes that true is a node hearing the activation and running its tick
-// early. Until this the event type was registered with a topic and NOTHING
-// anywhere published or consumed it, so every node waited out its poll.
+// The nudge, end to end. The reconcile interval is fifteen seconds and a
+// config change must land in milliseconds: only a node hearing the activation
+// and ticking early makes that true.
 func TestAnActivationNudgeWakesTheLoop(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
@@ -2413,14 +2252,12 @@ func TestAnActivationNudgeWakesTheLoop(t *testing.T) {
 	done := make(chan struct{})
 	go func() { defer close(done); p.recon.Run(ctx) }()
 
-	// Activated AFTER the loop is running, so the only thing that can make
-	// it converge inside the window below is the nudge — a poll is a full
-	// interval away.
+	// Activated AFTER the loop runs, so only the nudge can make it converge
+	// in the window below; a poll is a full interval away.
 	epoch := p.activate(t.Context(), t, grownCompanyDoc)
 	ev := events.New(types.ConfigRevisionActivated{RevisionID: "any", RevisionSummary: "x"},
 		events.NewTrace())
-	// Bounded well under the reconcile interval: only the nudge can get the
-	// node there in this window.
+	// Half the reconcile interval: no poll lands inside it.
 	deadline := time.Now().Add(configplane.ReconcileInterval / 2)
 	for p.recon.Applied() != epoch {
 		if time.Now().After(deadline) {
@@ -2439,13 +2276,10 @@ func TestAnActivationNudgeWakesTheLoop(t *testing.T) {
 
 // --- the admission gate ---------------------------------------------------
 
-// A NODE THAT HAS DECIDED NOTHING ADMITS WORK.
-//
-// The gate is consulted from the first delivery a node could take, which is
-// before its first reconcile pass has necessarily run. Refusing on "I have not
-// looked yet" would make every node deaf for its first interval — a cold start
-// that answers no webhooks is strictly worse than one that answers them
-// against the config it booted with.
+// A NODE THAT HAS DECIDED NOTHING ADMITS WORK. The gate is consulted from a
+// node's first delivery, possibly before its first reconcile pass; refusing
+// then would leave every cold start deaf for an interval, which is worse than
+// answering against the config it booted with.
 func TestANodeThatHasDecidedNothingAdmitsWork(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
@@ -2471,11 +2305,9 @@ func TestACurrentNodeAdmitsWork(t *testing.T) {
 	}
 }
 
-// LAG ALONE DOES NOT CLOSE THE GATE.
-//
-// Every successful rollout produces lag, so a `wait` that refused work would
-// make the first node to apply the cause of a fleet-wide outage — the same
-// reason wait stays ready at /ready.
+// LAG ALONE DOES NOT CLOSE THE GATE: refusing on `wait` would make the first
+// node to apply the cause of a fleet-wide outage, the reason wait stays ready
+// at /ready.
 func TestOrdinaryLagStillAdmitsWork(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
@@ -2488,15 +2320,10 @@ func TestOrdinaryLagStillAdmitsWork(t *testing.T) {
 	}
 }
 
-// A SHEDDING NODE ACTUALLY REFUSES.
-//
-// The regression this exists for: the posture was computed, published on the
-// presence heartbeat and reported by /ready, and NOTHING acted on it. The gate
-// was an engine option no production call site could fill, so a node that had
-// concluded it was shedding kept taking every delivery, firing every schedule
-// and running every turn against a company it had already decided it did not
-// have. configplane.Posture.ServesTraffic was written for this and had no
-// caller at all.
+// A SHEDDING NODE ACTUALLY REFUSES (configplane.Posture.ServesTraffic): a
+// posture computed, heartbeated and reported at /ready but acted on by nothing
+// leaves a node taking deliveries, schedules and turns against a company it
+// has decided it does not have.
 func TestASheddingNodeRefusesNewWork(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
@@ -2522,12 +2349,10 @@ func TestASheddingNodeRefusesNewWork(t *testing.T) {
 	}
 }
 
-// AN UNREADABLE CONTROL PLANE REOPENS THE GATE.
-//
-// Posture fails OPEN — a plane it cannot read reports serve — and admission
-// has to follow it there. Recording only the reads that succeeded would leave
-// a node that shed once and then lost the plane refusing work for the whole
-// outage, on evidence it could no longer check.
+// AN UNREADABLE CONTROL PLANE REOPENS THE GATE. Posture fails OPEN (an
+// unreadable plane reports serve) and admission follows: recording only
+// successful reads would leave a node that shed once refusing work for the
+// whole outage, on evidence it can no longer check.
 func TestAnUnreadableControlPlaneReopensTheGate(t *testing.T) {
 	t.Parallel()
 	var blind atomic.Bool
@@ -2604,12 +2429,10 @@ func TestReadPostureReportsAnUnreadablePlaneAndStillReopensTheGate(t *testing.T)
 	}
 }
 
-// blindPlane is a control plane that stops answering on command — a broker
-// that was reachable and is not any more, which is the state the fail-open
-// rule exists for.
-//
-// EMBEDDED THROUGH AN ALIAS, because coord.Plane declares a Fleet() method of
-// its own and embedding the interface directly names the field "Fleet".
+// blindPlane is a control plane that stops answering on command, as a broker
+// that became unreachable: the state the fail-open rule exists for. Embedded
+// through an alias, because coord.Plane declares a Fleet() method of its own
+// and embedding the interface directly names the field "Fleet".
 type planeBackend = coord.Plane
 
 type blindPlane struct {
@@ -2624,15 +2447,11 @@ func (b *blindPlane) Target(ctx context.Context) (coord.Activation, bool, error)
 	return b.planeBackend.Target(ctx)
 }
 
-// THE PROGRESS TRIPLE IS READ FROM OTHER GOROUTINES THAN THE ONE THAT
-// WRITES IT, and nothing in this suite used to do both at once.
-//
-// The tick writes applied, target and attempts. Posture reads all three —
-// from the seat heartbeat via SetPosture, from the readiness probe, and from
-// every runtime-state HTTP handler. Only `applied` was atomic, with a comment
-// naming this exact hazard; the other two sat bare beside it and were a plain
-// data race that -race could not see because no test drove the two paths
-// together.
+// THE PROGRESS TRIPLE IS READ FROM OTHER GOROUTINES THAN THE ONE THAT WRITES
+// IT: the tick writes applied, target and attempts, and Posture reads all
+// three from the seat heartbeat (SetPosture), the readiness probe and every
+// runtime-state HTTP handler. Only a test driving both paths at once lets
+// -race see a field left unsynchronised.
 func TestPostureIsSafeToReadWhileTheReconcilerTicks(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
@@ -2654,14 +2473,11 @@ func TestPostureIsSafeToReadWhileTheReconcilerTicks(t *testing.T) {
 		})
 	}
 	// And the writer, ticking against a moving target so the attempt
-	// counter and the target epoch both change under the readers.
-	//
-	// TEN CYCLES: the detector reports the first unordered pair it sees,
-	// and four readers spinning without a yield hit every field of the
-	// triple thousands of times between two ticks, so each cycle — every
-	// field moved — is already a full chance to see it. Forty bought
-	// nothing ten does not, and held four cores spinning for ten seconds
-	// of a shared race job.
+	// counter and the target epoch both change under the readers. TEN
+	// CYCLES: the detector reports the first unordered pair, and four
+	// spinning readers hit every field thousands of times between two
+	// ticks, so each cycle is a full chance; more only hold four cores of a
+	// shared race job.
 	wg.Go(func() {
 		defer cancel()
 		for range 10 {
@@ -2711,16 +2527,13 @@ func dayCeiling(c *engine.Company) int {
 // --- posture during an apply ------------------------------------------------
 
 // midApplyPlane is the control plane with a window INTO an attempt: the
-// reconciler reads a revision's payload from it only while an attempt is
-// fetching a revision this node does not hold, so [midApplyPlane.during] runs
-// on the tick's own goroutine after the attempt has started and before the
-// epoch is swapped — exactly where the probes and the heartbeat, on their own
-// goroutines, used to read the attempt in flight as a failed one.
-//
-// A payload it is told to WITHHOLD it answers as absent — a pointer naming a
-// revision whose body is nowhere — so every attempt at that revision fails
-// and none of them keeps a local copy that would let the next one skip the
-// window.
+// reconciler reads a payload from it only while an attempt fetches a revision
+// this node does not hold, so [midApplyPlane.during] runs on the tick's own
+// goroutine after the attempt starts and before the epoch is swapped, where
+// the probes and the heartbeat, on their own goroutines, must not read the
+// attempt in flight as failed. A WITHHELD payload it answers as absent, so
+// every attempt at that revision fails and none keeps a local copy that would
+// skip the window.
 type midApplyPlane struct {
 	planeBackend
 	during   atomic.Pointer[func()]
@@ -2749,11 +2562,10 @@ type sighting struct {
 	configured bool
 }
 
-// activateRemotely points the fleet at a revision this node's own store does
-// not hold, which is how every peer but the writer meets a revision — and
-// what makes the attempt fetch it through the window above. It is SEALED, as
-// every writer of the fleet seals what it publishes: a peer refuses a body
-// that arrives through the coordination store in the clear.
+// activateRemotely points the fleet at a revision this node's store does not
+// hold, as every peer but the writer meets one, so the attempt fetches it
+// through the window above. SEALED, as every writer seals: a peer refuses a
+// body that arrives through the coordination store in the clear.
 func activateRemotely(t *testing.T, p *plane, doc string) int64 {
 	t.Helper()
 	document := p.seal(t, yamlToJSON(t, doc))
@@ -2777,21 +2589,16 @@ func newRevisionID(t *testing.T) string {
 	return id.String()
 }
 
-// A SUCCESSFUL APPLY IS NEVER REPORTED AS A DIVERGENCE — the first one, on a
-// node with no company at all, and a later one alike.
+// A SUCCESSFUL APPLY IS NEVER REPORTED AS A DIVERGENCE, the first one on a
+// node with no company and a later one alike: an attempt in flight is not a
+// failed one, or a lone node's /health would say `isolated` (or
+// `unconfigured`) through every apply, like a revision that does not apply.
 //
-// The attempt counter used to be raised BEFORE the attempt was made, and the
-// posture read any counted attempt at an epoch not yet reached as a failed
-// one. So for the whole of every successful apply a lone node reported
-// isolated, and its /health said `isolated` (or `unconfigured`, the first
-// time), indistinguishable from a revision that genuinely does not apply.
-//
-// Observed three ways: inside the attempt before the epoch is swapped (the
-// payload fetch), inside it after (the engine's applied hook, which runs
-// before the outcome is recorded), and by a reader polling the posture from
-// another goroutine for the whole run, as the probes and the heartbeat do.
-// The two windows are what make the case able to fail: the poller alone could
-// miss a hundred-millisecond apply entirely.
+// Observed three ways: inside the attempt before the swap (the payload fetch),
+// inside it after (the engine's applied hook, before the outcome is recorded),
+// and by a reader polling from another goroutine as the probes and heartbeat
+// do. The two windows let the case fail: the poller alone could miss a
+// hundred-millisecond apply.
 func TestASuccessfulApplyIsNeverReportedAsADivergence(t *testing.T) {
 	t.Parallel()
 	e := unconfiguredEngine(t)
@@ -2851,10 +2658,9 @@ func TestASuccessfulApplyIsNeverReportedAsADivergence(t *testing.T) {
 					"propagating it, not diverged from it", s.where, s.posture)
 			}
 		}
-		// What /health's status is derived from beside the posture: no
-		// company until the swap on a node that had none, so the first
-		// apply reads `unconfigured` before it and `ok` after — each true
-		// at its instant — and never a divergence.
+		// /health derives its status from this beside the posture: the
+		// first apply reads `unconfigured` before the swap and `ok` after,
+		// never a divergence.
 		if got[0].configured != step.configured || !got[1].configured {
 			t.Errorf("%s: configured = %v before the swap and %v after, want %v and true",
 				step.name, got[0].configured, got[1].configured, step.configured)
@@ -2875,11 +2681,10 @@ func TestASuccessfulApplyIsNeverReportedAsADivergence(t *testing.T) {
 	}
 }
 
-// AND A FAILED APPLY STILL SAYS SO — from the moment its attempt concludes,
-// never before. The fix must not have bought the transient's silence with the
-// divergence's: an attempt at a revision this node cannot reach reads wait only
-// while it is running, then isolated on its own, shed once a peer has the
-// epoch, and stuck only when the LAST attempt has failed — not while it runs.
+// AND A FAILED APPLY STILL SAYS SO, from the moment its attempt concludes and
+// never before: an attempt at a revision this node cannot reach reads wait
+// while it runs, then isolated alone, shed once a peer has the epoch, and
+// stuck only once the LAST attempt has failed.
 func TestAFailedApplyIsReportedOnceItConcludes(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
@@ -2941,11 +2746,9 @@ func TestAFailedApplyIsReportedOnceItConcludes(t *testing.T) {
 	attempt(configplane.PostureShed, configplane.PostureStuck)
 }
 
-// AN APPLY THAT OUTLASTS PROPAGATION IS CONFIRMED LAG, while it is still
-// running. With attempts counted only when they conclude, a hung apply would
-// otherwise read as ordinary propagation for as long as it hung — a tick
-// blocked in it never comes round to count anything — so the lag is measured
-// in time, from the moment this node first saw the epoch.
+// AN APPLY THAT OUTLASTS PROPAGATION IS CONFIRMED LAG, while still running.
+// Attempts count only when they conclude, and a tick hung in one never does,
+// so the lag is measured in time, from when this node first saw the epoch.
 func TestAnApplyThatOutlastsTheGraceIsConfirmedLag(t *testing.T) {
 	t.Parallel()
 	var clock atomic.Int64
@@ -2988,9 +2791,8 @@ func TestAnApplyThatOutlastsTheGraceIsConfirmedLag(t *testing.T) {
 		t.Errorf("posture past the grace beside a peer that has the epoch = %s, want shed",
 			healthyPeer)
 	}
-	// And the apply that did finish takes the node back to serving, with
-	// the lag clock stopped: nothing it waited out counts against the next
-	// epoch.
+	// The finished apply returns the node to serving and stops the lag
+	// clock: nothing it waited out counts against the next epoch.
 	if got := p.recon.Posture(t.Context()); got != configplane.PostureServe {
 		t.Errorf("posture after the apply = %s, want serve", got)
 	}
@@ -3039,13 +2841,11 @@ func peerApplied(t *testing.T, p *plane, epoch int64, at time.Time) {
 	}
 }
 
-// THE RECOVERY GESTURE IS AN ORDINARY APPLY. A revision failed everywhere, the
-// node has been isolated on it for ten minutes, and the operator activates the
-// corrected one: a faster peer records it first, and this node — mid-apply of
-// a fix it will apply — is propagating, not late. The lag clock used to carry
-// across the new target, so the ten minutes waited out on the bad revision
-// read as confirmed lag on the fix and the node shed for the whole of an apply
-// that succeeded, on every node but the fastest.
+// THE RECOVERY GESTURE IS AN ORDINARY APPLY. After a revision failed
+// everywhere and the node sat isolated on it for ten minutes, the operator
+// activates the corrected one and a faster peer records it first: this node,
+// mid-apply of the fix, is propagating, not late. The lag clock restarts with
+// the target, or every node but the fastest sheds through a successful apply.
 func TestTheRecoveryApplyIsJudgedOnTheCorrectedEpochAlone(t *testing.T) {
 	t.Parallel()
 	var clock atomic.Int64
@@ -3088,13 +2888,11 @@ func TestTheRecoveryApplyIsJudgedOnTheCorrectedEpochAlone(t *testing.T) {
 	}
 }
 
-// AN EPOCH THE TICK HAS NOT MET YET HAS NO ATTEMPTS AND NO LAG. Between an
-// activation and the tick that first sees it — a nudge's latency, or a whole
-// poll interval when the nudge is lost — the posture reads the fresh pointer
-// beside progress that describes the previous target. Paired that way, a node
-// that exhausted its retries on a bad revision long ago read as STUCK on the
-// corrected one the moment a peer applied it, out of rotation before it had
-// made any attempt at it.
+// AN EPOCH THE TICK HAS NOT MET YET HAS NO ATTEMPTS AND NO LAG. Until the tick
+// first sees an activation (a nudge's latency, or a poll interval when the
+// nudge is lost), the posture reads the fresh pointer beside progress about
+// the previous target; paired that way, a node long out of retries on a bad
+// revision would read STUCK on the corrected one as soon as a peer applied it.
 func TestAnEpochNotYetMetCarriesNothingFromTheLastOne(t *testing.T) {
 	t.Parallel()
 	var clock atomic.Int64
@@ -3128,12 +2926,11 @@ func TestAnEpochNotYetMetCarriesNothingFromTheLastOne(t *testing.T) {
 	}
 }
 
-// AND A HUNG APPLY STAYS LATE ACROSS A NEW ACTIVATION. Restarting the lag
-// clock with each epoch must not hand a wedged node a fresh 45 s every time
-// the operator activates something: its tick is held in the attempt at the
+// AND A HUNG APPLY STAYS LATE ACROSS A NEW ACTIVATION, rather than getting a
+// fresh configplane.LagGrace with each: its tick is held in the attempt at the
 // older epoch and cannot begin on the new one, so it is late on the new epoch
-// by as long as that attempt has held it — wait while that is short, shed
-// once it outlasts propagation beside a peer that has the new epoch.
+// by as long as that attempt has held it (wait while short, shed once it
+// outlasts propagation beside a peer that has the new epoch).
 func TestAHungApplyStaysLateAcrossANewActivation(t *testing.T) {
 	t.Parallel()
 	var clock atomic.Int64

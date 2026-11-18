@@ -59,25 +59,17 @@ func (l *hashLog) bound(pack string) time.Duration {
 }
 
 // A HINT IS CONFIRMED AGAINST THE PACK'S ROW, and its verdict is kept FOR THE
-// FILES IT WAS REACHED ON. git 2.56 names a corrupt packed object only
-// through a bare "%s", which the pool records as a hint naming a pack
-// (gitproc.Hint); ConfirmHint hashes that pack's three files, as the push
-// stored them, against the row naming it — bounded by HashBudget of their
-// bytes, never CheckBudget, whose fsck term a hint runs none of: a pack one
-// byte of which was flipped is RebuildCorrupt (confirmed), a sound pack is no
-// repair (sound), and a pack no row names, asked of the log's head, is no
-// repair (unknown). A second hint about any of them hashes nothing. An
-// adoption of another pack and a sync that installs another pack — writes
-// into the copy that leave these packs' files alone — leave every verdict
-// standing, so a copy whose rebuild a cooldown refuses is not hashed again at
-// every push; and only a pack's own files replaced make the next hint about
-// it hash again.
+// FILES IT WAS REACHED ON. ConfirmHint hashes the hinted pack's files against
+// its row, bounded by HashBudget (never CheckBudget: a hint runs no fsck): a
+// flipped byte is RebuildCorrupt, a sound pack and a pack no row names (at the
+// log's head) no repair. A second hint hashes nothing, nor does one after an
+// adoption or a sync that leaves these packs' files alone; only a pack's own
+// files replaced make the next hint hash it again.
 //
 // Mutations: answer RebuildCorrupt for every hint (the sound arm repairs);
-// forget a verdict (a second hint hashes again); drop every verdict at a
-// write into the copy (the hints after the adoption hash again); keep a
-// verdict over files replaced (the hint after the reinstall hashes nothing);
-// bound the hash by CheckBudget (the bound it is given is not HashBudget's).
+// forget a verdict, or drop every verdict at a write into the copy (a later
+// hint hashes again); keep a verdict over files replaced (the hint after the
+// reinstall hashes nothing); bound the hash by CheckBudget.
 func TestAHintIsConfirmedAgainstThePacksRow(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -175,27 +167,18 @@ func TestAHintIsConfirmedAgainstThePacksRow(t *testing.T) {
 	}
 }
 
-// ONE HASH A PACK HOWEVER MANY HINTS ASK, AND IT OUTLIVES THEM. Damage that
-// fails a hot repository fails every request in flight on it together, each
-// with the same hint: confirmations asked while a hash of the pack runs wait
-// for it, and the pack is hashed once, every one answered its verdict. The
-// hash is the CACHE'S, never its first asker's: a confirmation whose caller
-// leaves mid-hash is answered no repair (gone), the hash goes on, and the
-// confirmations asked after it left are answered from that same hash — a
-// request a balancer cuts no longer takes the work of a slow disk's hash with
-// it for the next to start again from byte zero.
+// ONE HASH A PACK HOWEVER MANY HINTS ASK, AND IT OUTLIVES THEM. Confirmations
+// asked while a hash of the pack runs wait for it and are answered its
+// verdict; the pack is hashed once. The hash is the cache's, not its first
+// asker's: a caller that leaves mid-hash is answered gone, and the hash goes
+// on to answer those asked after.
 //
-// ASKED WHILE THE HASH RUNS is a state the case brings about, never one it
-// waits out: the case runs in a synctest bubble, and the hash is let go only
-// once synctest.Wait has returned — every other goroutine of the case durably
-// blocked, so each of the eight is parked on a verdict it asked for while the
-// hash was held. A confirmation still on its way to the pack's check when the
-// hash ended would find its verdict decided and hash nothing, whatever joining
-// does.
+// The case runs in a synctest bubble and lets the hash go only after
+// synctest.Wait, so all eight askers are parked on the verdict while the hash
+// is held; one arriving after the hash ended would hash nothing anyway.
 //
-// Mutations: hash in every confirmation (no hash in flight is joined) — the
-// pack is hashed nine times; hash on the first asker's context — its leaving
-// ends the hash, and the confirmations after it are answered no verdict.
+// Mutations: hash in every confirmation (the pack is hashed nine times); hash
+// on the first asker's context (the askers after it get no verdict).
 func TestOneHashAPackHowManyHintsAskAtOnce(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -274,15 +257,12 @@ func TestOneHashAPackHowManyHintsAskAtOnce(t *testing.T) {
 	})
 }
 
-// A HINT'S HASH RUNS IN A READ SLOT. Hashing is a core's work requests wait
-// on, so it takes a slot of the pool's read lane a piece at a time
-// (gitproc.Pool.HoldRead) — as many hashes at once as the lane has slots, and
-// none beside them, so a disk's incident that damages many repositories at
-// once is hashed on the cores the read lane counts. Inside the hash, the lane
-// has a slot fewer free.
+// A HINT'S HASH RUNS IN A READ SLOT, a piece at a time (gitproc.Pool.HoldRead):
+// hashing is core work requests wait on, so many repositories damaged at once
+// hash on the read lane's cores, not beside them. Inside the hash the lane has
+// a slot fewer free.
 //
-// Mutation: hash in no slot (hashBundle given no hold) — the hash is never
-// told it holds one, and the lane reads all free.
+// Mutation: hash in no slot (hashBundle given no hold): the lane reads all free.
 func TestAHintsHashRunsInAReadSlot(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -302,16 +282,13 @@ func TestAHintsHashRunsInAReadSlot(t *testing.T) {
 	}
 }
 
-// A HINT READS ONLY THE PACKS OF ITS ROWS. A confirmation that holds no full
-// read of the rows looks its pack up in a full snapshot's PACKS — the pages
-// up to the first that serves a ref, since a full snapshot serves every pack
-// before any ref — never every ref of a repository that may hold a hundred
-// thousand. A pack those pages do not name is asked once of the log's head,
-// linearizable, and no row naming it there is a verdict kept: the next hint
-// about it reads nothing.
+// A HINT READS ONLY THE PACKS OF ITS ROWS. Without a full read of the rows, a
+// confirmation looks its pack up in a full snapshot's pack pages (a full
+// snapshot serves every pack before any ref), never every ref. A pack those
+// pages do not name is asked once of the log's head, linearizable, and that
+// verdict is kept: the next hint about it reads nothing.
 //
-// Mutation: read the whole snapshot — the confirmation reads the refs' pages
-// too.
+// Mutation: read the whole snapshot (the refs' pages are read too).
 func TestAHintReadsOnlyThePacksOfItsRows(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -355,24 +332,18 @@ func TestAHintReadsOnlyThePacksOfItsRows(t *testing.T) {
 	}
 }
 
-// A ROUND HASHES ITS HINT WITHOUT THE WRITE LOCK. A round's own git — the
-// peel's cat-file of the tags it sets — can name a damage only in words,
-// and the round holds the pack it nominates to its row before it answers;
-// that hash is minutes of a slow disk for the largest pack, so it is made
-// once the round has let the entry's write lock go, which an adoption takes
-// meanwhile (that nothing else of the repository waits on it either is
-// TestARoundEndsBeforeItsHintIsHashed's). A sound pack answers the round's
-// callers git's own failure, and keeps that verdict once git freshens it; a
-// pack that is not its row's answers them with the repair a request's
-// confirmed hint gets: THAT pack fetched again over its files in the same
-// incarnation, one GET, counted `stored`.
+// A ROUND HASHES ITS HINT WITHOUT THE WRITE LOCK. A round's own git (the
+// peel's cat-file) can name damage only in words; the hash of the pack it
+// nominates is made once the round has let the entry's write lock go
+// (TestARoundEndsBeforeItsHintIsHashed covers the rest of the repository). A
+// sound pack answers the round's callers git's own failure and keeps that
+// verdict when git freshens it; a pack not its row's answers them with a
+// request's repair: THAT pack fetched again in place, one GET, `stored`.
 //
-// Mutations: confirm the hint inside the round, under its lock — the hash
-// finds the lock held; answer every round's hint with git's failure — the
-// damaged pack is never repaired; ask the whole rebuild for a round's
-// confirmed hint (damagedRound's askRebuild with nothing seeded) — a new
-// incarnation, every pack downloaded; read a .pack's modification time into
-// its identity (check.go's fileID) — the freshened pack is hashed again.
+// Mutations: confirm the hint under the round's lock; answer every round's
+// hint with git's failure; ask the whole rebuild (damagedRound's askRebuild
+// with nothing seeded: a new incarnation); read a .pack's modification time
+// into its identity (check.go's fileID: the freshened pack is hashed again).
 func TestARoundHashesItsHintWithoutTheWriteLock(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -422,11 +393,8 @@ func TestARoundHashesItsHintWithoutTheWriteLock(t *testing.T) {
 		t.Errorf("%s{outcome=sound} = %d, want the round's one hash", metrics.CodeCacheHintHashes, got)
 	}
 
-	// The same pack FRESHENED keeps its verdict: git moves a .pack's
-	// modification time, and no byte of it, whenever a process writes an
-	// object the pack holds — an engine write's build in a scratch leaning on
-	// the copy does — so the next round's naming of it takes the verdict and
-	// hashes nothing.
+	// A FRESHENED pack (git moves its time, not its bytes, when a process
+	// writes an object it holds) keeps its verdict: the next hint hashes nothing.
 	pack := filepath.Join(first.Dir, "objects", "pack", "pack-"+row.GitChecksum+".pack")
 	later := time.Now().Add(time.Hour)
 	if err := os.Chtimes(pack, later, later); err != nil {
@@ -448,12 +416,10 @@ func TestARoundHashesItsHintWithoutTheWriteLock(t *testing.T) {
 	unflag = true
 	mu.Unlock()
 
-	// The same pack's NAME, now another file whose bytes are not its row's —
-	// written beside it and renamed in, as every writer of a copy places a
-	// file, so it is another identity (a write through the pack's own inode
-	// keeps its identity, and is the scrub's to find, as media damage is):
-	// the next round's hint is confirmed, and the round's callers are
-	// answered by the repair of THAT pack, in place.
+	// The pack's name now holds another file whose bytes are not its row's,
+	// renamed in as every writer of a copy places one (a write through the
+	// inode keeps its identity and is the scrub's to find): the next hint is
+	// confirmed, and the round's callers answered by THAT pack's repair in place.
 	b, err := os.ReadFile(pack)
 	if err != nil {
 		t.Fatal(err)
@@ -494,32 +460,18 @@ func TestARoundHashesItsHintWithoutTheWriteLock(t *testing.T) {
 	}
 }
 
-// A ROUND'S OWN PACK DAMAGE IS REPAIRED IN PLACE, as a request's is: ONE GET
-// for the damaged pack, never a whole rebuild that downloads every pack the
-// repository holds. A new process's first round is full and peels every tag
-// it sets, so an annotated tag whose packed object is damaged on disk — its
-// compressed bytes (G) or its header's stated size (S1), each in place — is
-// met by the round's own cat-file, on a copy before its first maintenance (no
-// bitmap and no graph: git inflates the object, and names the pack holding
-// it). Real git, on the node pin and on the node floor's own build, in both
-// of the ways git names it: through a bare "%s" alone (the pin's S1), and as a
-// row of git's format table — a pack's damage — with the pack recorded as a
-// hint beside it (the pin's G, and both on the floor). Both readings reach
-// the one repair: the hint confirmed against the pack's row, the pack named
-// to a forced round of the same incarnation, THAT pack fetched again over its
-// files — one GET of a repository holding seven packs, counted `stored`, with
-// no scrub of the copy made due beside it (what the round's git reported is
-// the round's repair's, reports{outcome=request}) and none run for the
-// repair.
+// A ROUND'S OWN PACK DAMAGE IS REPAIRED IN PLACE, as a request's is: one GET,
+// never a whole rebuild. A new process's first round peels every tag, so a tag
+// object damaged on disk (G: compressed bytes; S1: header size) before any
+// maintenance (no bitmap or graph: git inflates it and names its pack) meets
+// its own cat-file, on the node pin and floor, named by a bare "%s" (the pin's
+// S1) or a format-table row with a hint (the pin's G; both on the floor). The
+// hint, confirmed, names the pack to a forced round of the same incarnation:
+// one GET of seven packs, `stored`, no scrub (reports{request}).
 //
-// Mutations: send a round's pack damage to the whole rebuild (damagedRound's
-// askRebuild with nothing seeded) — a new incarnation, all seven packs
-// downloaded; read a row and its hint as the row alone (converge's hinted only
-// for an unclassified failure) — the arms git classifies have their forced
-// round told no pack, which finds nothing in the index files and goes on to
-// the scrub (checks{trigger=request}, found=trailer); name no reader on the
-// round's peel (refs.go), or never consume what it holds (settleReader) — its
-// report makes the copy's scrub due beside the repair (reports{queued}).
+// Mutations: damagedRound's askRebuild unseeded (all seven downloaded);
+// converge's hinted only for unclassified failures (checks{trigger=request});
+// no reader on the peel (refs.go), or settleReader skipped (reports{queued}).
 func TestARoundsOwnPackDamageIsRepairedInPlace(t *testing.T) {
 	t.Parallel()
 	const pushes = 6
@@ -603,28 +555,17 @@ func TestARoundsOwnPackDamageIsRepairedInPlace(t *testing.T) {
 }
 
 // A DAMAGED PACK THE STORE WILL NOT HAND OVER IS ASKED FOR ONCE A WINDOW, and
-// nothing else is downloaded. A new process's first round peels an annotated
-// tag whose packed object is damaged on disk (G), in a repository of seven
-// packs, and the object store refuses that pack's bundle — an outage on its
-// key, or a bundle it lost. The round's repair asks its one GET (the in-place
-// round's reinstall of the pack the hint named), which fails and holds the
-// pack off (repairMark.fetchFailed); the scrub that follows finds the pack and
-// leaves it on the repair mark; and the whole rebuild past it would need that
-// same pack from the same store, so none is asked while it is held off: the
-// sync is answered with the store's refusal. Within the window no round asks
-// the store again and none is FORCED to hold every index file to its trailer
-// again (checks{trigger=forced}) — a forced round could fetch nothing and
-// learn nothing new. Each window that passes asks the store once more, and the
-// one after the store answers again installs the pack in place: the same
-// incarnation, one GET, counted `stored`, and no rebuild of the repository at
-// all.
+// nothing else is downloaded. A round's repair of a hinted pack (G, seven
+// packs) asks its one GET, which the store refuses, holding the pack off
+// (repairMark.fetchFailed); the whole rebuild would need the same pack, so
+// none is asked and the sync answers the refusal. Within a window no round
+// asks the store again or is forced to recheck index trailers
+// (checks{trigger=forced}); once the store answers, the next window installs
+// the pack in place: same incarnation, one GET, `stored`.
 //
-// Mutations: ask the step-4 rebuild while a pack it needs is held off — the
-// store is asked twice a window; ask it unseeded, as a scrub answered from its
-// pending findings left it — every pack of the repository downloaded each
-// window; count a held-off named pack as a pack for step 2's skip, or leave a
-// forced round's forces unsettled once it fails at the peel — forced checks
-// within the window.
+// Mutations: ask the step-4 rebuild while a needed pack is held off (two asks
+// a window), or unseeded (every pack each window); count a held-off pack for
+// step 2's skip, or leave a failed forced round unsettled (forced checks).
 func TestADamagedPackTheStoreRefusesIsAskedForOnceAWindow(t *testing.T) {
 	t.Parallel()
 	const pushes = 6
@@ -769,11 +710,9 @@ func TestADamagedPackTheStoreRefusesIsAskedForOnceAWindow(t *testing.T) {
 	}
 }
 
-// heldHint is a round whose own git — the peel of the tag it sets — named a
-// SOUND pack in words, the hash of that pack held in the hash hook until
-// letGo: the start of the cases about what a round's hint does to the
-// repository's other callers. The stand-in fails no peel once the hash has
-// begun, so every round after the hinted one answers.
+// heldHint is a round whose own peel named a SOUND pack in words, its hash
+// held in the hash hook until letGo. The stand-in fails no peel once the hash
+// has begun, so every later round answers.
 type heldHint struct {
 	w     *syncWorld
 	c     *cache.Cache
@@ -802,8 +741,8 @@ func holdAHint(t *testing.T) *heldHint {
 	_, h.row = w.push(t, h.repo, "refs/heads/main", nil)
 	w.tag(t, h.repo, "v1", true)
 	h.c = w.open(t)
-	// Let go on every path, and before the cache's Stop — a cleanup
-	// registered after it runs first — which waits for the hash.
+	// Let go on every path. Registered after the cache's cleanup, this runs
+	// before Stop, which waits for the hash.
 	hashing, release := make(chan struct{}), make(chan struct{})
 	var began, let sync.Once
 	h.letGo = func() { let.Do(func() { close(release) }) }
@@ -851,18 +790,15 @@ func (h *heldHint) unanswered(t *testing.T) {
 	}
 }
 
-// A ROUND ENDS BEFORE ITS HINT IS HASHED. A linearizable caller never rides
-// a round that began before it asked — every answer that names a ref is one,
-// so every fetch's and every push's advertisement on the node is — and waits
-// for the round queued behind the running one. A round whose own git named
-// a pack only in words therefore stops being the repository's running round,
-// its incarnation pinned, before it hashes that pack: the round queued
-// behind it runs at once and answers its callers while the hash goes on, and
-// only the hinted round's own callers wait for the verdict, which answers
-// them — here git's own failure, the pack being sound.
+// A ROUND ENDS BEFORE ITS HINT IS HASHED. A linearizable caller (every answer
+// naming a ref) never rides a round that began before it asked, so a round
+// whose git named a pack in words stops being the running round, its
+// incarnation pinned, before it hashes: the round queued behind it answers
+// during the hash, and only the hinted round's callers wait for the verdict,
+// here git's own failure (the pack is sound).
 //
-// Mutation: confirm the hint while the round is still the running one — the
-// linearizable sync asked during the hash waits for it.
+// Mutation: confirm the hint while the round still runs (the linearizable
+// sync waits for the hash).
 func TestARoundEndsBeforeItsHintIsHashed(t *testing.T) {
 	t.Parallel()
 	h := holdAHint(t)
@@ -895,17 +831,13 @@ func TestARoundEndsBeforeItsHintIsHashed(t *testing.T) {
 	}
 }
 
-// A HINTED ROUND'S CALLERS FOLLOW THE COPY THAT REPLACED ITS OWN. While a
-// round's hint is hashed the repository has no running round, so a rebuild
-// asked meanwhile runs, and may replace the incarnation the hinted round's
-// git met the hint in before its verdict is reached. That copy serves nobody
-// any more, whatever the verdict: the round's callers are queued again for a
-// round on the current one — as a Rebuild of a copy already replaced is
-// answered by a sync — and never told git's failure in a directory they would
-// no longer be handed.
+// A HINTED ROUND'S CALLERS FOLLOW THE COPY THAT REPLACED ITS OWN. A rebuild
+// may run during the hash and replace the hinted round's incarnation; the
+// round's callers are then queued again for a round on the current copy (as a
+// Rebuild of a replaced copy is answered by a sync), never told git's failure
+// in a directory they would no longer be handed.
 //
-// Mutation: answer the callers of a round whose copy was replaced with the
-// round's own answer — the hinted caller is told git's failure.
+// Mutation: answer them with the round's own answer (git's failure).
 func TestAHintedRoundsCallersFollowTheCopyThatReplacedItsOwn(t *testing.T) {
 	t.Parallel()
 	h := holdAHint(t)
@@ -933,18 +865,13 @@ func TestAHintedRoundsCallersFollowTheCopyThatReplacedItsOwn(t *testing.T) {
 	}
 }
 
-// A HINTED ROUND'S CALLERS ARE SYNCED AGAIN PAST A REPAIR. While a round's
-// hint is hashed the repository has no running round, so a request's repair
-// of the same copy runs meanwhile — here it fetches the hinted pack again
-// over its files — and the hash, its files moved under it, decides nothing.
-// The round's git failed on what that repair may since have replaced: its
-// callers are synced again by a round of the copy as it now stands, as a
-// request whose failure predates a repair is run again, and never told a
-// failure the copy no longer has.
+// A HINTED ROUND'S CALLERS ARE SYNCED AGAIN PAST A REPAIR. A request's repair
+// may refetch the hinted pack during the hash, which then decides nothing; the
+// round's git failed on what the repair may have replaced, so its callers are
+// synced again on the copy as it stands, never told a failure it no longer has.
 //
-// Mutation: answer a hinted round's callers git's failure whenever its hints
-// confirm nothing (no predates clause in Cache.run's replaced) — the caller
-// is told git's failure over a repaired copy.
+// Mutation: answer them git's failure whenever the hints confirm nothing (no
+// predates clause in Cache.run's replaced).
 func TestAHintedRoundsCallersAreSyncedAgainPastARepair(t *testing.T) {
 	t.Parallel()
 	h := holdAHint(t)

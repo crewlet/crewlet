@@ -19,13 +19,11 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
-	"github.com/crewlet/crewlet/internal/seat"
 )
 
 // suiteStall is the stall bound the suite's stalling backends are given: two
@@ -35,9 +33,11 @@ import (
 const suiteStall = 2 * time.Second
 
 // acrossLink is how the engine opens the bucket on a node whose connection
-// crosses a link to the stream — a leaf, an external cluster's client — at
-// the shipped lease, renewed every [seat.HeartbeatInterval].
-var acrossLink = natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true, LeaseHeartbeat: seat.HeartbeatInterval}
+// crosses a link to the stream — a leaf, an external cluster's client — with
+// a link window of its own for each backend a case opens, unmetered.
+func acrossLink() natsobj.Config {
+	return natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true, Window: jsapi.NewLinkWindow()}
+}
 
 // stallingMember is the suite's stalling backend on a member reached over TCP:
 // a client dialing the member through a [link], which the freeze stops in both
@@ -50,7 +50,7 @@ var acrossLink = natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: 
 func stallingMember(t *testing.T) (objstore.Backend, time.Duration, time.Duration, func() func()) {
 	ns := tcpMember(t)
 	l := relay(t, ns.Addr().String())
-	b := openWith(t, dialThrough(t, l), acrossLink)
+	b := openWith(t, dialThrough(t, l), acrossLink())
 	natsobj.SetStall(b, suiteStall)
 	return b, suiteStall, 2 * natsobj.PurgeWait, func() func() { l.freeze(); return l.thaw }
 }
@@ -68,7 +68,7 @@ func stallingLeaf(t *testing.T) (objstore.Backend, time.Duration, time.Duration,
 	l := relay(t, fmt.Sprintf("127.0.0.1:%d", member.LeafPort()))
 	c := client(t, startLeaf(t, l.port()))
 	awaitLink(t, c)
-	b := openWith(t, c, acrossLink)
+	b := openWith(t, c, acrossLink())
 	natsobj.SetStall(b, suiteStall)
 	return b, suiteStall, 2 * natsobj.PurgeWait, func() func() { l.freeze(); return l.thaw }
 }
@@ -394,45 +394,51 @@ func TestAPutLeavesNoSubscriptionBehind(t *testing.T) {
 }
 
 // PUTS ON ONE CONNECTION SHARE ONE WINDOW: with the broker's answers stopped,
-// three puts at once publish the connection's window of pieces BETWEEN them —
-// counted where the broker takes them — and no more before they stall. What
-// the window protects is the connection the node's leases and events ride, so a
-// link that freezes holds one window of the node's uploads however many are
-// under way, never one a put. Across a link it is [natsobj.LinkWindow] at the
-// node's lease heartbeat — the shipped one, and one of a 15-second lease; on a
-// member's own client, [natsobj.MemberWindow].
+// puts at once publish the connection's window of pieces BETWEEN them, counted
+// where the broker takes them up to the first purge, so a frozen link holds one
+// window of the node's uploads however many are under way. Across a link it is
+// the link's window: one whole piece, or as many small ones as its bytes hold;
+// on a member's own client, [natsobj.MemberWindow] messages whatever their size.
+//
+// Mutation: give each put a window of its own, and three windows of pieces
+// are out before the first purge; take a whole piece for a small one across a
+// link, and the small puts go out one at a time; count a member's window in
+// bytes, and its small puts all go out.
 func TestPutsOnOneConnectionShareOneWindow(t *testing.T) {
 	t.Parallel()
-	shortLease := acrossLink
-	shortLease.LeaseHeartbeat = 15 * time.Second / seat.HeartbeatRatio
+	member := natsobj.Config{MaxBytes: testCeiling, Replicas: 1}
 	for _, c := range []struct {
-		name string
-		cfg  natsobj.Config
-		want int
+		name       string
+		cfg        natsobj.Config
+		puts, size int
+		want       int
 	}{
-		{"on a member's own client", natsobj.Config{MaxBytes: testCeiling, Replicas: 1}, natsobj.MemberWindow},
-		{"across a link", acrossLink, natsobj.LinkWindow(acrossLink.LeaseHeartbeat)},
-		{"across a link on a short lease", shortLease, natsobj.LinkWindow(shortLease.LeaseHeartbeat)},
+		{"on a member's own client", member, 3, 4 << 20, natsobj.MemberWindow},
+		{"small puts on a member's own client", member, 2 * natsobj.MemberWindow, 1 << 10, natsobj.MemberWindow},
+		{"across a link", acrossLink(), 3, 4 << 20, 1},
+		{"small puts across a link", acrossLink(), 3, 1 << 10, 3},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			ns := tcpMember(t)
-			pieces := watchPieces(t, directClient(t, ns))
+			seen := watchInOrder(t, directClient(t, ns), "$O."+natsobj.Bucket+".C.>",
+				"$JS.API.STREAM.PURGE.>", "$JS.*.API.STREAM.PURGE.>")
 			l := relay(t, ns.Addr().String())
 			b := openWith(t, dialThrough(t, l), c.cfg)
-			if got := b.Window(); got != c.want {
-				t.Fatalf("a backend opened with %+v has a window of %d, want %d", c.cfg, got, c.want)
+			if c.size == 4<<20 {
+				if got := b.Window().Size() / natsobj.PieceTake(b, natsobj.MessageBytes); got != c.want {
+					t.Fatalf("a backend opened with %+v has a window of %d pieces, want %d", c.cfg, got, c.want)
+				}
 			}
 			natsobj.SetStall(b, time.Second)
 			l.freezeDown()
 			ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 			defer cancel()
-			const puts = 3
-			errs := make([]error, puts)
+			errs := make([]error, c.puts)
 			var wg sync.WaitGroup
-			for i := range puts {
+			for i := range c.puts {
 				wg.Go(func() {
-					errs[i] = b.Put(ctx, fmt.Sprintf("windowed-%d", i), bytes.NewReader(patterned(4<<20)),
+					errs[i] = b.Put(ctx, fmt.Sprintf("windowed-%d", i), bytes.NewReader(patterned(c.size)),
 						objstore.PutMeta{})
 				})
 			}
@@ -440,119 +446,36 @@ func TestPutsOnOneConnectionShareOneWindow(t *testing.T) {
 			for i, err := range errs {
 				if !errors.Is(err, objstore.ErrStalled) {
 					t.Fatalf("put %d of %d whose acknowledgements never came = %v; want objstore.ErrStalled",
-						i, puts, err)
+						i, c.puts, err)
 				}
 			}
-			if got := len(pieces.all()); got != c.want {
-				t.Fatalf("%d puts at once with no acknowledgement published %d pieces between them, "+
-					"want the connection's window of %d", puts, got, c.want)
+			// ONE WINDOW OUT BETWEEN THEM until the first put stalled and
+			// cleaned up, in the order the broker took them.
+			out := 0
+			for _, m := range seen.all() {
+				if strings.Contains(m.Subject, "PURGE") {
+					break
+				}
+				out++
+			}
+			if out != c.want {
+				t.Fatalf("%d puts with no acknowledgement published %d pieces between them before the "+
+					"first of them stalled, want the connection's window of %d", c.puts, out, c.want)
 			}
 			l.thaw()
 		})
 	}
 }
 
-// THE LINK'S WINDOW CROSSES THE FLOOR WITHIN THE NODE'S OWN HEARTBEAT. A lease
-// renewal queued behind a full window on a link at the floor every leg is
-// promised ([objstore.MiBPace]) crosses within one heartbeat interval of the
-// lease the node holds — the TTL over [seat.HeartbeatRatio], whatever
-// `coordination.lease_ttl_seconds` made it — so a renewal sent an interval
-// after the last still lands with a whole interval of the lease to spare, the
-// margin the lease keeps for a missed beat. And the window is the WIDEST that
-// does, up to the member's own: narrower is throughput thrown away on a lease
-// that did not need it. Held over the shipped TTL and others, against the
-// lease's and the store's own constants, so a window sized for one lease — the
-// shipped one, as it was — fails the rows of every other.
+// A PUT WAITING FOR A PLACE TAKES NO STALL OF ITS OWN: behind a window another
+// put filled, with the broker's answers stopped, it waits while the put ahead
+// of it holds the window — which that put's own stall bounds — and is ended
+// by its OWN stall once it has pieces out, saying how many, never for having
+// waited. So it ends after the put ahead of it.
 //
-// A lease whose heartbeat is shorter than one message's crossing keeps that
-// margin behind no window at all; the window is one there, and the TTL is
-// under [config.LinkLeaseFloor], which config's lease floor refuses.
-func TestTheLinkWindowCrossesTheFloorWithinAHeartbeat(t *testing.T) {
-	t.Parallel()
-	crossing := func(messages int) time.Duration {
-		return time.Duration(int64(messages)*natsobj.MessageBytes) * objstore.MiBPace / objstore.MiB
-	}
-	if natsobj.MessageCrossing != crossing(1) {
-		t.Fatalf("one message crosses a link at the floor in %v by natsobj's figure and %v by the "+
-			"floor's own", natsobj.MessageCrossing, crossing(1))
-	}
-	for _, ttl := range []time.Duration{
-		seat.SeatLeaseTTL, 15 * time.Second, 22500 * time.Millisecond, 30 * time.Second,
-		90 * time.Second, 180 * time.Second, 10 * time.Minute,
-		config.LinkLeaseFloor, 8 * time.Second, time.Second,
-	} {
-		t.Run(ttl.String(), func(t *testing.T) {
-			t.Parallel()
-			heartbeat := ttl / seat.HeartbeatRatio
-			window := natsobj.LinkWindow(heartbeat)
-			if window < 1 || window > natsobj.MemberWindow {
-				t.Fatalf("a %v lease's link window is %d messages, outside 1..%d", ttl, window,
-					natsobj.MemberWindow)
-			}
-			if heartbeat < natsobj.MessageCrossing {
-				if window != 1 {
-					t.Errorf("a %v lease, renewed every %v, under one message's %v crossing, has a "+
-						"window of %d; want the one a put needs to move at all", ttl, heartbeat,
-						natsobj.MessageCrossing, window)
-				}
-				if ttl >= config.LinkLeaseFloor {
-					t.Errorf("a %v lease cannot keep its margin behind one message, and is not under "+
-						"the %v floor an upload across a link needs", ttl, config.LinkLeaseFloor)
-				}
-				return
-			}
-			if c := crossing(window); c > heartbeat {
-				t.Errorf("a %v lease's window of %d messages crosses a link at the floor in %v, past its "+
-					"heartbeat of %v: a renewal queued behind it misses its beat", ttl, window, c, heartbeat)
-			}
-			if spare := ttl - heartbeat - crossing(window); spare < heartbeat {
-				t.Errorf("on a %v lease a renewal sent a heartbeat after the last and queued behind a full "+
-					"window lands with %v of the lease to spare, under its heartbeat of %v", ttl, spare,
-					heartbeat)
-			}
-			if window < natsobj.MemberWindow && crossing(window+1) <= heartbeat {
-				t.Errorf("a %v lease's link window is %d messages, and %d still cross within its %v "+
-					"heartbeat: throughput thrown away", ttl, window, window+1, heartbeat)
-			}
-			if c := crossing(window); c > objstore.Stall {
-				t.Errorf("a message waits up to %v behind a full window at the floor, past the %v stall",
-					c, objstore.Stall)
-			}
-		})
-	}
-}
-
-// THE FLOOR AN UPLOAD ACROSS A LINK NEEDS IS THE WINDOW'S OWN ARITHMETIC: three heartbeats
-// of one message crossing a link at the floor. config states it as a figure,
-// importing none of the packages that make it, so this holds the two together.
-func TestTheLinkLeaseFloorIsOneMessageAHeartbeat(t *testing.T) {
-	t.Parallel()
-	if want := seat.HeartbeatRatio * natsobj.MessageCrossing; config.LinkLeaseFloor != want {
-		t.Fatalf("config.LinkLeaseFloor is %v; one message's crossing at the floor (%v) a heartbeat "+
-			"is a lease of %v", config.LinkLeaseFloor, natsobj.MessageCrossing, want)
-	}
-}
-
-// A BUCKET REACHED ACROSS A LINK NEEDS THE NODE'S HEARTBEAT, which sizes the
-// window its uploads share: a zero is refused rather than read as some lease,
-// since a window sized for a lease the node does not hold is the one that
-// loses its seats.
-func TestABucketAcrossALinkNeedsTheNodesHeartbeat(t *testing.T) {
-	t.Parallel()
-	_, err := natsobj.Open(t.Context(), memberClient(t), natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true})
-	if err == nil || !strings.Contains(err.Error(), "LeaseHeartbeat") {
-		t.Fatalf("a bucket opened across a link with no lease heartbeat = %v; want a refusal naming "+
-			"Config.LeaseHeartbeat", err)
-	}
-}
-
-// A PUT WAITING FOR A PLACE ENDS WHEN THE CONNECTION TAKES NOTHING: behind a
-// window another put filled, and with the broker's answers stopped, it is
-// ended as stalled a stall after the connection's last acknowledgement — not
-// after the puts ahead of it have stalled, cleaned up and given their places
-// back, which is a stall and two purges later, and then its own stall again.
-// It publishes nothing: it never had a place.
-func TestAPutWaitingForAPlaceEndsWhenTheConnectionTakesNothing(t *testing.T) {
+// Mutation: stall a waiter on the window's own acknowledgements, and it ends
+// first, out of turn, having published nothing.
+func TestAPutWaitingForAPlaceTakesNoStallOfItsOwn(t *testing.T) {
 	t.Parallel()
 	ns := tcpMember(t)
 	pieces := watchPieces(t, directClient(t, ns))
@@ -568,25 +491,29 @@ func TestAPutWaitingForAPlaceEndsWhenTheConnectionTakesNothing(t *testing.T) {
 		first <- b.Put(ctx, "first", bytes.NewReader(patterned(4<<20)), objstore.PutMeta{})
 	}()
 	pieces.await(t, natsobj.MemberWindow)
-	began := time.Now()
-	err := b.Put(ctx, "behind", bytes.NewReader(patterned(1<<20)), objstore.PutMeta{})
-	took := time.Since(began)
-	if !errors.Is(err, objstore.ErrStalled) {
-		t.Fatalf("a put waiting behind a window the broker never answered = %v after %v; want objstore.ErrStalled",
-			err, took)
+	behind := make(chan error, 1)
+	go func() {
+		behind <- b.Put(ctx, "behind", bytes.NewReader(patterned(1<<20)), objstore.PutMeta{})
+	}()
+	// ORDER, NEVER THE CLOCK: the put ahead ends first, and only then has
+	// the one behind it pieces out to stall on.
+	var firstErr error
+	select {
+	case firstErr = <-first:
+	case err := <-behind:
+		t.Fatalf("a put waiting behind a window ended before the put holding it: %v", err)
 	}
-	if !strings.Contains(err.Error(), "waiting for a place") {
-		t.Fatalf("the stall = %q; want it to say the put was waiting for a place", err)
+	if !errors.Is(firstErr, objstore.ErrStalled) {
+		t.Fatalf("the put that filled the window = %v; want objstore.ErrStalled", firstErr)
 	}
-	if most := stall + time.Second; took > most {
-		t.Fatalf("a put waiting for a place on a connection that took nothing ended after %v, past %v", took, most)
+	err := <-behind
+	if !errors.Is(err, objstore.ErrStalled) || !strings.Contains(err.Error(), "of its messages out") {
+		t.Fatalf("a put waiting behind a window the broker never answered = %v; want its own stall, "+
+			"with its messages out", err)
 	}
-	if err := <-first; !errors.Is(err, objstore.ErrStalled) {
-		t.Fatalf("the put that filled the window = %v; want objstore.ErrStalled", err)
-	}
-	if got := len(pieces.all()); got != natsobj.MemberWindow {
-		t.Fatalf("the broker took %d pieces, want the first put's window of %d and none of the put "+
-			"that waited", got, natsobj.MemberWindow)
+	if got := len(pieces.all()); got != natsobj.MemberWindow+1<<20/natsobj.MessageBytes {
+		t.Fatalf("the broker took %d pieces, want the first put's window of %d and then the %d of the "+
+			"put that waited its turn", got, natsobj.MemberWindow, 1<<20/natsobj.MessageBytes)
 	}
 	l.thaw()
 }
@@ -595,14 +522,18 @@ func TestAPutWaitingForAPlaceEndsWhenTheConnectionTakesNothing(t *testing.T) {
 // share a window of one message across a link that takes a message a second,
 // so a put waits up to three seconds for its turn — longer than its stall —
 // while the connection is acknowledging one message every second. Each lands:
-// the waiter's clock is the connection's last acknowledgement, never how long
-// it has waited.
+// a waiter takes no stall of its own, and a put's stall runs only while it has
+// pieces out, never for how long it waited its turn.
 func TestAPutWaitingForAPlaceIsNoStallWhileTheConnectionMoves(t *testing.T) {
 	t.Parallel()
 	ns := tcpMember(t)
 	l := relay(t, ns.Addr().String())
 	b := open(t, dialThrough(t, l))
-	natsobj.SetWindow(b, 1)
+	one, err := jsapi.NewWindow(natsobj.PieceTake(b, natsobj.MessageBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	natsobj.SetWindow(b, one)
 	natsobj.SetStall(b, 2*time.Second)
 	l.slow(natsobj.MessageBytes)
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)

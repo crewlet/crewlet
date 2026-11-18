@@ -7,7 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 )
 
-// AN UPDATE SETS AN ITEM ASIDE UNTIL A DATE ONLY WITH WHY: `wait_until` is the
+// An update sets an item aside until a date only with why: `wait_until` is the
 // item's start and needs a one-line `wait_reason`; a reason alone, a wait and
 // a start together, or a date that has passed are refused with nothing
 // written, and null ends the wait.

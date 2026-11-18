@@ -15,35 +15,25 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// The knowledge base, wired.
-//
-// # Two halves with different failure postures, from one credential
-//
-// The PARSER routes page events, and a broken one costs notifications. The
-// SEARCHER answers a turn's "what do we already know about this",
-// and a broken one costs every seat its company's written knowledge on every
-// turn — silently, because an empty knowledge block is indistinguishable
-// from a company that has written nothing down.
-//
-// So the org credential is optional for routing (a page's mentions are in
-// the payload) and REQUIRED for search, and the two are reported separately.
+// The knowledge base, wired: a PARSER that routes page events (broken, it costs
+// notifications) and a SEARCHER behind every turn's knowledge block (broken, it
+// costs every seat its company's knowledge, silently: an empty block looks like
+// a company that wrote nothing). So the org credential is optional for routing
+// (a page's mentions are in the payload), REQUIRED for search, and the two are
+// reported separately.
 
 // confluenceParts is what the knowledge base contributes to a company.
 type confluenceParts struct {
 	parser   *confluence.Parser
 	searcher *confluence.Searcher
 
-	// pages reads the skills space. Nil with no org credential, which is
-	// the same degradation the searcher takes: a company whose read token
-	// lapsed keeps routing and stops learning.
+	// pages reads the skills space; nil with no org credential, as the
+	// searcher is.
 	pages *confluence.Client
 
-	// base and skillsSpace are the instance and the skills space this
-	// wiring was built for: the identity of the skills source, read by
-	// [Engine.skillSource]. Held with the parts rather than re-derived from
-	// the epoch because a revision whose Confluence block is broken keeps
-	// the PREVIOUS wiring running, and the skills have to follow the wiring
-	// that is actually running rather than the one that failed to build.
+	// base and skillsSpace identify the skills source ([Engine.skillSource]).
+	// Held here, not re-derived from the epoch: a broken revision keeps the
+	// PREVIOUS wiring running, and the skills follow the running wiring.
 	base, skillsSpace string
 }
 
@@ -61,9 +51,8 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 	base := resolved.BaseURL()
 	declared := c.Config.Integrations.Atlassian.Declared()
 	if base == "" {
-		// A reference that did not resolve: the validator already refused
-		// a block with neither literal, and starting anyway would point
-		// every read at "" and fail with a much less useful message.
+		// A reference that did not resolve (the validator refused a block
+		// with neither literal); starting anyway points every read at "".
 		return confluenceParts{}, fmt.Errorf(
 			"engine: confluence: neither url (%q) nor cloud_id (%q) resolved "+
 				"to anything", cfg.URL, cfg.CloudID)
@@ -71,10 +60,8 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 	site := resolved.ShareableBaseURL()
 	skillsSpace := c.Config.SkillsContainerKey()
 
-	// THE ORG CREDENTIAL IS WHAT SEARCH RESTS ON. Without it a seat with
-	// its own credential still searches — as itself, which is the better
-	// path anyway — and a seat without one gets nothing. Routing is
-	// unaffected either way, which is why this warns rather than refusing.
+	// Without the org credential only a seat with its own searches, and
+	// routing is unaffected, so this warns rather than refuses.
 	var orgClient *confluence.Client
 	if token := strings.TrimSpace(env.Value(cfg.Token)); token != "" {
 		client, err := confluence.NewClient(confluence.ClientOptions{
@@ -94,16 +81,12 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 	parts := confluenceParts{
 		parser: confluence.NewParser(confluence.ParserOptions{
 			SiteURL: site, Leads: leads, SkillsSpace: skillsSpace,
-			// THE INDEXER RUNS BEFORE EVERY ROUTING FILTER, which is the
-			// point: the skills space's own events are excluded from
-			// routing, so an indexer that only saw routable events would
-			// never see a skill change at all.
+			// RUNS BEFORE EVERY ROUTING FILTER: routing excludes the skills
+			// space's own events, so after it no skill change would be seen.
 			OnPage: e.noteConfluencePage,
-			// A TYPED NIL WOULD NOT BE NIL. confluenceWatchers returns a
-			// *pageWatchers, and assigning one straight into an interface
-			// field makes a non-nil interface holding a nil pointer — so
-			// the parser's `watchers == nil` check would pass and every
-			// call would go through a nil receiver.
+			// watchersFor, never the *pageWatchers itself: a nil pointer in
+			// the interface field slips past the parser's `watchers == nil`
+			// check and is called through a nil receiver.
 			Watchers: watchersFor(e.confluenceWatchers()),
 		}),
 		pages: orgClient, base: base, skillsSpace: skillsSpace,
@@ -122,52 +105,26 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 
 // reconcileConfluence rebuilds the knowledge base for a newly applied epoch.
 //
-// EVERYTHING THE PARSER AND SEARCHER HOLD IS DERIVED FROM THE COMPANY, and
-// two halves of it move on an apply. The SPACE-LEAD MAP is the org chart, so
-// a node that kept its boot-time parser routes the new revision's page
-// activity to the seat that led that space under the old one — silently,
-// because a lead-fallback notification looks identical whoever it reached.
-// The CREDENTIAL is the other half: after a rotation the old client 401s on
-// every read, and a turn's knowledge block goes empty with nothing saying
-// why.
-//
-// The tracker beside this one is reconciled for the first reason, and this
-// package needed the same edge from the moment it had a lead map.
+// Both parts derive from the company, and two inputs move on an apply: the
+// SPACE-LEAD MAP (a kept parser routes page activity to the old chart's lead,
+// silently) and the CREDENTIAL (after a rotation the old client 401s and the
+// knowledge block goes empty with nothing saying why).
 func (e *Engine) reconcileConfluence(c *Company) {
 	cfg := c.Config.Integrations.Confluence
 	e.notify.mu.Lock()
 	svc := e.notify.service
 	e.notify.mu.Unlock()
 	if svc == nil {
-		// Nothing to register a parser with. An apply reconciles only a
-		// running edge and starts one for a node's first company instead
-		// (see [Engine.startInbound]).
+		// No edge running: a node's first company starts one instead
+		// ([Engine.startInbound]).
 		return
 	}
-	// IT REVIVES AS WELL AS RETIRES, and it did not.
-	//
-	// This returned early unless a parser was ALREADY running, on the
-	// reasoning that boot owns the first build. Boot owns the first one and
-	// nothing owned the second: the parser set is assembled once, in New,
-	// so a revision that ADDS Confluence after boot found no parser
-	// running, took this branch, and registered nothing. Disconnecting and
-	// reconnecting is exactly that sequence, and it left the route
-	// verifying and storing every delivery while nothing turned one into
-	// work for a seat, until the process was restarted.
-	//
-	// A reconciler that converges in one direction is not a reconciler.
-	// The other three here have always had this shape; this one is the odd
-	// case because it also owns a searcher, which is what the guard was
-	// really protecting and which [startConfluence] rebuilds anyway.
-	// RETIRED when the revision no longer declares it, like the other
-	// three reconcilers — each converged only toward "configured", so
-	// removing the block applied cleanly and left the boot-time parser
-	// routing page activity under the credential being revoked.
-	//
-	// Confluence needs one step the others do not: the SEARCHER goes as
-	// well. It is what the turn-start knowledge prefetch reads through, so
-	// leaving it would have every seat go on searching a wiki the company
-	// has removed, using the same credential.
+	// CONVERGES BOTH WAYS: it builds a parser even when none runs (a
+	// revision that adds Confluence after boot, or reconnects it, must not
+	// leave deliveries stored and routed to nobody), and retires it when the
+	// revision drops the block, so nothing keeps routing under a credential
+	// being revoked. Unlike the other reconcilers the SEARCHER goes too: the
+	// turn-start prefetch would otherwise keep searching a removed wiki.
 	if cfg == nil {
 		e.notify.mu.Lock()
 		e.notify.confluence = confluenceParts{}
@@ -182,10 +139,8 @@ func (e *Engine) reconcileConfluence(c *Company) {
 
 	parts, err := e.startConfluence(c, cfg)
 	if err != nil || parts.parser == nil {
-		// THE PREVIOUS WIRING KEEPS RUNNING. A revision whose Confluence
-		// block is broken must not leave the company with no knowledge
-		// base at all — the old one reads by a stale credential, which is
-		// worse than the new one and much better than nothing.
+		// THE PREVIOUS WIRING KEEPS RUNNING: a stale credential beats no
+		// knowledge base at all.
 		log.Error("confluence_reconcile_failed", "error", errorText(err),
 			"detail", "the previous knowledge-base wiring is still current")
 		return
@@ -212,12 +167,9 @@ func seatConfluenceClient(env *config.Resolver, base string, declared atlassianh
 		if seat == nil || seat.IsHuman() {
 			return nil, false
 		}
-		// THROUGH THE ONE READER BOTH PRODUCTS SHARE. This walked a
-		// confluence-only list of servers and key spellings, which is how a
-		// seat holding `mcp_env.atlassian.JIRA_API_TOKEN` — the spelling
-		// atlassian.PlanFor's own note tells operators to write — searched
-		// Confluence as the ORG account while Jira reported it ready. See
-		// [atlassian.CredentialAt].
+		// THROUGH THE ONE READER BOTH PRODUCTS SHARE
+		// ([atlassian.CredentialAt]), so Confluence and Jira never disagree
+		// on whether a seat holds a credential.
 		cred := atlassian.CredentialOf(atlassian.ProductConfluence, seat, env.Value)
 		if !cred.Held() {
 			return nil, false
@@ -236,11 +188,9 @@ func seatConfluenceClient(env *config.Resolver, base string, declared atlassianh
 
 // noteConfluencePage hands a page change the parser heard to the skill sync.
 //
-// CALLED FOR EVERY PAGE CHANGE IN EVERY SPACE, and the sync decides whether it
-// concerns the registry: a page that left the skills space is announced from
-// the space it moved to, and only the registry knows it held a skill. The
-// read, when there is one, happens on the sync's own loop rather than on the
-// delivery's goroutine, so a slow wiki never holds the inbound consumer.
+// Called for every page in EVERY space: a page that left the skills space is
+// announced from its new one, and only the registry knows it held a skill. Any
+// read runs on the sync's own loop, so a slow wiki never holds the consumer.
 func (e *Engine) noteConfluencePage(ctx context.Context, change confluence.PageChange) error {
 	return e.skillSync.PageChanged(ctx, skillsync.Change{
 		Backend: confluence.Backend, Container: change.Space, PageID: change.PageID,
@@ -252,28 +202,17 @@ func confluencePrompt() notify.Prompt { return confluence.Prompt{} }
 
 // Knowledge is the company's knowledge-base searcher, or nil.
 //
-// EXACTLY ONE per company, which is the seam's own rule and not a limitation
-// of this function: "what do we already know about this" must not depend on
-// which searcher was asked, so `knowledge.backend` picks one and config
-// refuses a company that configures two. DOCLET is answered first because
-// it is the default; a company on `backend: confluence` builds no Doclet
-// searcher at all, so the branch is a nil check rather than a
-// preference.
-//
-// Nil means no backend is wired, and every consumer treats that as "search
-// nothing" rather than as an error — a turn must not die because a company
-// has no wiki.
+// EXACTLY ONE per company (`knowledge.backend` picks it, and config refuses
+// two: an answer must not depend on
+// which searcher was asked), so trying Doclet first is a nil check, not a
+// preference. Nil means none is wired, which consumers treat as "search
+// nothing", never an error.
 func (e *Engine) Knowledge() knowledge.Searcher {
-	// A NIL INTERFACE, never a typed nil wrapping a nil pointer: the
-	// consumers check `searcher == nil`, and a typed nil passes that check
-	// and then answers as though a search had run and found nothing —
-	// indistinguishable from a real empty result, and it hides the fact
-	// that nothing is configured.
-	// THE ROUTER'S, ON EVERY NODE RUNNING DOCLET: a
-	// node holding the index answers from it, and one holding none
-	// searches through one that does.
-	// A data node's runtime builds its searcher with the knowledge base's
-	// reader, so running the half is having the searcher there too.
+	// A NIL INTERFACE, never a typed nil: consumers check `searcher == nil`,
+	// and a typed nil would answer like a search that found nothing.
+	// Doclet is the router's on every node running it: a node with the
+	// index answers from it, one without searches through one that has it.
+	// A data node's runtime builds its searcher, so run.wiki implies one.
 	if run := e.nativeHalves(); run.wiki && e.router != nil {
 		return e.router.Knowledge()
 	}

@@ -25,18 +25,14 @@ import (
 
 // ONE STOP IS ONE LINE, AND THE ENGINE DOES NOT ADD ITS OWN.
 //
-// The runner's `statelog_applier_stopped` went to a discarding logger, so the
-// engine wrote one of its own when the apply loop returned. Once the runner's
-// reached the log, every stop read as two — the second under
-// `component=engine`, which is not where the replication guide sends anybody,
-// and carrying the one sentence saying what resumes the applier. The runner's
-// line carries that sentence now, and its own test pins it; this is the
-// engine's half, and it has to boot one, because only a booted engine can
-// show what the engine adds around the loop.
+// The runner writes `statelog_applier_stopped`, saying what resumes the
+// applier (its own test pins that); a second line from the engine, under
+// `component=engine`, would count every stop twice. This is the engine's
+// half, so it boots one: only a booted engine shows what it adds around the
+// loop.
 //
-// NOT PARALLEL: it swaps the process-wide logger, which this package
-// otherwise leaves at its boot default, and a parallel case stopping an
-// applier of its own would be counted here.
+// NOT PARALLEL: it swaps the process-wide logger, and a parallel case's
+// stopping applier would be counted here.
 func TestAnApplierThatStopsIsWrittenOnceAndByTheStateLog(t *testing.T) {
 	logs := &stopLineBuffer{}
 	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)

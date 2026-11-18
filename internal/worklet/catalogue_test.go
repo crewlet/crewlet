@@ -33,11 +33,10 @@ func typeSlugs(in []worklet.TaskType) []string {
 
 // A COMPANY HAS A TYPE CATALOGUE BEFORE IT DECLARES ONE.
 //
-// Every create names a type and is refused if the company does not declare it,
-// so a catalogue that started empty would refuse the first task a fresh
-// company ever filed. The builtins are what stop that, and they are unioned at
-// READ time rather than seeded, because a seed is a write a fresh company has
-// to succeed at before it can do anything.
+// A create naming an undeclared type is refused, so an empty catalogue would
+// refuse a fresh company's first task. The builtins are unioned at READ time
+// rather than seeded, because a seed is a write a fresh company would have to
+// succeed at before it could do anything.
 func TestAFreshCompanyAlreadyHasItsTypes(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -48,9 +47,8 @@ func TestAFreshCompanyAlreadyHasItsTypes(t *testing.T) {
 			t.Fatalf("a fresh company's types are %v, want %s among them", got, slug)
 		}
 	}
-	// AND `task` IS FIRST, because it is what every create that names no
-	// type defaults to and a screen that buried it under six bespoke types
-	// would hide the one everybody uses.
+	// AND `task` IS FIRST: every create naming no type defaults to it, and
+	// a screen must not bury it under bespoke types.
 	if got[0] != "task" {
 		t.Fatalf("the types start %v, want task first", got)
 	}
@@ -87,20 +85,17 @@ func TestACompanysTypesAddToTheBuiltins(t *testing.T) {
 		if entry.Name != "Defect" {
 			t.Fatalf("bug is named %q, want the company's own word", entry.Name)
 		}
-		// THE BUILTIN FLAG SURVIVES THE OVERRIDE: it says "this build
-		// ships this slug", which is a fact about the engine rather
-		// than about the company's wording.
+		// THE BUILTIN FLAG SURVIVES THE OVERRIDE: "this build ships this
+		// slug" is a fact about the engine, not the company's wording.
 		if !entry.Builtin {
 			t.Fatal("a renamed builtin stopped saying it is one")
 		}
 	}
 }
 
-// A TASK NAMES A TYPE THE COMPANY DECLARES, and the tool has always said so.
-//
-// Nothing checked it, so any string a model invented became a type — `Bug`,
-// `bugfix` and `BUG` filed three different types beside `bug`, and every board
-// grouped and filtered on them as if they were real.
+// A TASK NAMES A TYPE THE COMPANY DECLARES: unchecked, `Bug`, `bugfix` and
+// `BUG` would be three more types beside `bug`, every board grouping and
+// filtering on them as if they were real.
 func TestATaskCannotInventItsOwnType(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -114,8 +109,8 @@ func TestATaskCannotInventItsOwnType(t *testing.T) {
 	if !strings.Contains(err.Error(), "not a task type this company declares") {
 		t.Fatalf("the refusal %q does not say what is wrong", err)
 	}
-	// AND IT NAMES THE SET, because a refusal a model cannot act on is a
-	// refusal it retries verbatim.
+	// AND IT NAMES THE SET: a refusal a model cannot act on is one it
+	// retries verbatim.
 	if !strings.Contains(err.Error(), "task") || !strings.Contains(err.Error(), "bug") {
 		t.Fatalf("the refusal %q does not name the types that exist", err)
 	}
@@ -126,9 +121,8 @@ func TestATaskCannotInventItsOwnType(t *testing.T) {
 	}
 	r.drain()
 
-	// AND SO DOES NAMING NONE. `create_work_item` has always told a model
-	// "`task` if you are unsure", so a create that names no type files
-	// under it rather than being refused for a type it did not choose.
+	// AND SO DOES NAMING NONE: `create_work_item` tells a model "`task` if
+	// you are unsure", so a create naming no type files under it.
 	bare := newTask("t-bare")
 	bare.Type = ""
 	result, err := r.writer.CreateTask(t.Context(), "op-bare", bare, nil)
@@ -147,8 +141,7 @@ func TestATaskCannotInventItsOwnType(t *testing.T) {
 			detail.Task.Type, worklet.DefaultTaskType)
 	}
 
-	// AND AN ARCHIVED TYPE TAKES NO NEW WORK, which is what archiving one
-	// is for — the tasks already under it keep it.
+	// AND AN ARCHIVED TYPE TAKES NO NEW WORK; tasks already under it keep it.
 	if _, err := r.writer.WriteTypes(t.Context(), "op-archive", []worklet.TaskType{
 		{Slug: "spike", Name: "Spike", Archived: true},
 	}); err != nil {
@@ -163,10 +156,9 @@ func TestATaskCannotInventItsOwnType(t *testing.T) {
 	}
 }
 
-// A FIELD'S ARCHIVE IS ONE-WAY, and the declaration is where that is enforced.
-//
-// A field that came back with its old id would silently re-admit values
-// validated against a definition nobody has seen for a year.
+// A FIELD'S ARCHIVE IS ONE-WAY, enforced at the declaration: a field back
+// under its old id would silently re-admit values validated against a
+// definition nobody has seen for a year.
 func TestAFieldsArchiveCannotBeUndone(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -208,10 +200,9 @@ func TestAFieldsArchiveCannotBeUndone(t *testing.T) {
 	}
 }
 
-// THE POLICY VERSION MOVES ON EVERY FIELDS EDIT, derived rather than sent.
-//
-// It is what a task's policy stamp records having validated against, so a
-// version a writer chose is one two writers can choose alike.
+// THE POLICY VERSION MOVES ON EVERY FIELDS EDIT, derived rather than sent: a
+// task's policy stamp records it, and a version writers chose is one two
+// writers can choose alike.
 func TestAFieldsEditMovesThePolicyVersion(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -232,9 +223,8 @@ func TestAFieldsEditMovesThePolicyVersion(t *testing.T) {
 		}
 		last = got
 	}
-	// AND A TYPES EDIT DOES NOT MOVE IT: the two are separate subjects
-	// precisely so an unrelated edit does not invalidate every task's
-	// policy stamp.
+	// AND A TYPES EDIT DOES NOT MOVE IT: separate subjects, so an unrelated
+	// edit does not invalidate every task's policy stamp.
 	if _, err := r.writer.WriteTypes(t.Context(), "op-types",
 		[]worklet.TaskType{{Slug: "incident", Name: "Incident"}}); err != nil {
 		t.Fatalf("WriteTypes: %v", err)
@@ -306,8 +296,8 @@ func TestACatalogueThatCouldNotValidateIsRefused(t *testing.T) {
 		})
 	}
 
-	// THE CONTROLS, without which every case above would pass against
-	// verbs that refused everything.
+	// THE CONTROLS, or every case above would pass against verbs that
+	// refused everything.
 	if _, err := r.writer.WriteTypes(t.Context(), "op-control-types",
 		[]worklet.TaskType{{Slug: "incident", Name: "Incident"}}); err != nil {
 		t.Fatalf("the control type catalogue was refused: %v", err)
@@ -327,15 +317,9 @@ func TestACatalogueThatCouldNotValidateIsRefused(t *testing.T) {
 }
 
 // A FIELD RECORDS WHO DECLARED IT, and the WRITE decides that, not the
-// document.
-//
-// The catalogue served `created_by` and `created_at` on every field and
-// nothing ever wrote them, so both were empty on every field of every company
-// — while a TAG, the one other vocabulary a company declares, has recorded who
-// added it since it existed. And because these writes are WHOLE POST-STATES, a
-// document that could carry its own provenance would let the next edit
-// re-attribute a field somebody else declared, with nothing downstream able to
-// tell.
+// document: these writes are WHOLE POST-STATES, so a document carrying its own
+// provenance would let the next edit re-attribute a field somebody else
+// declared, with nothing downstream able to tell.
 func TestAFieldRecordsWhoDeclaredIt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -357,9 +341,8 @@ func TestAFieldRecordsWhoDeclaredIt(t *testing.T) {
 			declared.CreatedAt, wednesday)
 	}
 
-	// A LATER EDIT KEEPS THEM, whatever the document says. The second
-	// write below carries somebody else's name on the SAME field id, which
-	// is exactly the re-attribution a whole-post-state write invites.
+	// A LATER EDIT KEEPS THEM, whatever the document says: this write
+	// carries somebody else's name on the SAME field id.
 	r.at = wednesday.Add(24 * time.Hour)
 	if _, err := r.writer.WriteFields(t.Context(), "op-edit",
 		[]worklet.FieldDef{
@@ -380,8 +363,8 @@ func TestAFieldRecordsWhoDeclaredIt(t *testing.T) {
 			"re-attributed a declaration somebody else made",
 			got.CreatedBy, got.CreatedAt)
 	}
-	// AND A FIELD THE SNAPSHOT DID NOT HOLD IS NEW, so it takes this
-	// write's own actor and clock rather than the first write's.
+	// AND A FIELD THE SNAPSHOT DID NOT HOLD IS NEW: this write's own actor
+	// and clock.
 	if got := after["f2"]; got.CreatedBy != "ana" || !got.CreatedAt.Equal(r.at) {
 		t.Errorf("the new field was stamped %q at %v, want the second write's "+
 			"own clock %v", got.CreatedBy, got.CreatedAt, r.at)
@@ -390,11 +373,9 @@ func TestAFieldRecordsWhoDeclaredIt(t *testing.T) {
 
 // AND A RESUBMITTED DECLARATION IS STILL A NO-OP.
 //
-// A form submits every control, so a project's field list arrives unchanged
-// far more often than it arrives edited — and a stamp applied AFTER the
-// comparison would make every one of those differ from the stored list by
-// exactly the two facts a caller never sends, and publish a record saying
-// nothing.
+// A form submits every control, so a field list mostly arrives unchanged; a
+// provenance stamp applied AFTER the comparison would make each differ by the
+// two facts a caller never sends, and publish a record saying nothing.
 func TestResubmittingAProjectsFieldsWritesNothing(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -409,9 +390,8 @@ func TestResubmittingAProjectsFieldsWritesNothing(t *testing.T) {
 	r.drain()
 	first := r.project(worklet.ProjectDetailQuery{Project: "ENG"}).Version
 
-	// THE SAME LIST AS THE CALLER FIRST SENT IT, carrying neither of the
-	// facts the write stamped — which is what a second form submission
-	// actually looks like.
+	// THE SAME LIST AS FIRST SENT, without the facts the write stamped, as
+	// a second form submission looks.
 	again := []worklet.FieldDef{{ID: "f1", Slug: "impact", Name: "Impact",
 		Type: worklet.FieldText}}
 	if _, err := r.writer.WriteProject(t.Context(), "op-fields-again", "ENG",
@@ -425,10 +405,8 @@ func TestResubmittingAProjectsFieldsWritesNothing(t *testing.T) {
 	}
 }
 
-// ARCHIVED ENTRIES ARE OUT OF A CATALOGUE READ UNLESS ASKED FOR.
-//
-// A form offering choices must not offer a type nobody may file under, and a
-// screen auditing the catalogue must be able to see what was retired.
+// ARCHIVED ENTRIES ARE OUT OF A CATALOGUE READ UNLESS ASKED FOR: a form must
+// not offer a type nobody may file under, and an audit must see what retired.
 func TestAnArchivedEntryIsOutOfTheDefaultCatalogue(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -484,13 +462,10 @@ func TestACatalogueReadCarriesTheDeclarationsAWriteReplaces(t *testing.T) {
 	}
 }
 
-// A MILESTONE IS A TASK, and that is the whole of the decision.
-//
-// A date the company committed to is an item on a board with an owner, a due
-// date and things blocking it — so everything the tracker already does to a
-// task is exactly what a milestone needs. A separate object would have been a
-// second thing to file, route, notify about and report on, for a shape that
-// differs from a task in nothing but what people call it.
+// A MILESTONE IS A TASK: a committed date is an item with an owner, a due date
+// and blockers, so everything the tracker does to a task is what it needs. A
+// separate object would be a second thing to file, route, notify about and
+// report on, differing from a task only in its name.
 func TestAMilestoneIsABuiltinType(t *testing.T) {
 	t.Parallel()
 	slugs := map[string]worklet.TaskType{}

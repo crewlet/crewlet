@@ -17,12 +17,10 @@ import (
 )
 
 // THE COUNT'S FIXTURES: whole lines of a Claude Code main thread as 2.1.310 and
-// 2.1.322 write them, abridged to the keys the count and the restart rule read,
-// every user and assistant record carrying its parentUuid (null for a root, a
-// uuid otherwise), so no case turns on how a reader takes an absent one.
-// Prefixed cnt to keep them apart from the rc fixtures of the model of what a
-// resume hands its model (claudechain_test.go), which build such records by
-// number, each with a time of its own.
+// 2.1.322 write them, abridged to the keys the count and the restart rule read.
+// Every user and assistant record carries its parentUuid (null for a root), so no
+// case turns on how an absent one reads. Prefixed cnt apart from
+// claudechain_test.go's rc fixtures.
 
 // cntParent is a parentUuid as written: null for "", else the quoted uuid.
 func cntParent(parent string) string {
@@ -32,8 +30,7 @@ func cntParent(parent string) string {
 	return `"` + parent + `"`
 }
 
-// cntUser is a user record chained to parent, its message's content content (a
-// JSON value).
+// cntUser is a user record chained to parent, its message's content a JSON value.
 func cntUser(parent, uuid, content string) string {
 	return `{"parentUuid":` + cntParent(parent) + `,"isSidechain":false,"type":"user","message":{"role":"user",` +
 		`"content":` + content + `},"uuid":"` + uuid + `"}`
@@ -105,11 +102,10 @@ func wantBound(t *testing.T, got *sandbox.ResumedCount, want int64) {
 	}
 }
 
-// wantMark fails t unless got is marked want; and, where want says the thread
-// was not read whole or not by rules this build read (unread, release), unless
-// got names no restart: a restart seen before the read stopped, or read by rules
-// not read, is no identity, and a relaunch reading it as one could take a job
-// that restarted after the cut for one that did not.
+// wantMark fails t unless got is marked want and, for unread or release, names no
+// restart: one seen before the read stopped, or read by rules not read, is no
+// identity, and a relaunch reading it as one could take a job that restarted
+// after the cut for one that did not.
 func wantMark(t *testing.T, got *sandbox.ResumedCount, want sandbox.CountMark) {
 	t.Helper()
 	if got == nil || got.Mark != want || got.Tokens != 0 {
@@ -122,8 +118,8 @@ func wantMark(t *testing.T, got *sandbox.ResumedCount, want sandbox.CountMark) {
 }
 
 // THE COUNT IS THE ANCHOR WITH ITS OUTPUT AND EVERYTHING AFTER IT: the last
-// counted reply's input, cache writes, cache reads and output, and every chained
-// line after its place at two bytes a token, its break included.
+// counted reply's input, cache writes, cache reads and output, plus every chained
+// line after it at two bytes a token, break included.
 //
 // Mutation: leave the anchor's output out, and this goes red.
 func TestTheCountIsTheAnchorWithItsOutputAndEverythingAfterIt(t *testing.T) {
@@ -134,13 +130,11 @@ func TestTheCountIsTheAnchorWithItsOutputAndEverythingAfterIt(t *testing.T) {
 	wantBound(t, got, 100+10+1000+50+cntCharge(result)+cntCharge(note))
 }
 
-// THE ANCHOR SITS AT THE FIRST RECORD OF ITS MESSAGE: a reply written a record a
-// block repeats its usage on each, and the harness places its anchor at the first,
-// so a call's result between two records of one message is after the anchor's
-// place and is charged.
+// THE ANCHOR SITS AT THE FIRST RECORD OF ITS MESSAGE: a reply written one record
+// per block repeats its usage on each, and the harness anchors at the first, so a
+// call's result between two records of one message is charged.
 //
-// Mutation: place the anchor at the last record of its message, and this goes
-// red.
+// Mutation: anchor at the last record of the message, and this goes red.
 func TestTheAnchorSitsAtTheFirstRecordOfItsMessage(t *testing.T) {
 	t.Parallel()
 	call := cntReply("u1", "u2", "m1", "claude-sonnet-4-5", cntUsage(100, 0, 0, 50),
@@ -152,8 +146,8 @@ func TestTheAnchorSitsAtTheFirstRecordOfItsMessage(t *testing.T) {
 }
 
 // A RUN STARTS AT THE FIRST RECORD OF ITS ID, WITH OR WITHOUT USAGE: the harness
-// takes a message's id off a record that carries no usage too, so a result after
-// such a record and before the counted record of the same id is charged.
+// reads a message's id off a record with no usage too, so a result between such a
+// record and the counted record of that id is charged.
 //
 // Mutation: start a run only at a record that carries a usage, and this goes red.
 func TestARunStartsAtTheFirstRecordOfItsIdWithOrWithoutUsage(t *testing.T) {
@@ -167,8 +161,7 @@ func TestARunStartsAtTheFirstRecordOfItsIdWithOrWithoutUsage(t *testing.T) {
 }
 
 // A COMPACT BOUNDARY RESTARTS THE COUNT: nothing before a main compact boundary
-// counts, so a reply after it is placed by what follows the boundary alone,
-// whatever message ids the thread held before it.
+// counts, whatever message ids preceded it.
 //
 // Mutation: ignore the boundary, and this goes red.
 func TestACompactBoundaryRestartsTheCount(t *testing.T) {
@@ -179,11 +172,10 @@ func TestACompactBoundaryRestartsTheCount(t *testing.T) {
 	wantBound(t, got, 1040)
 }
 
-// A BOUNDARY WITH NO COUNTED REPLY AFTER IT MARKS THE COUNT: the segment a
-// compaction preserved sits before its boundary in the file, off the chain the
-// count reads, while the harness carries it, so until a counted reply follows,
-// the count is the mark `compacted`. A reply the harness wrote itself, an API
-// error's, counts nothing and clears nothing.
+// A BOUNDARY WITH NO COUNTED REPLY AFTER IT MARKS THE COUNT `compacted`: the
+// segment a compaction preserved sits before its boundary, off the chain the count
+// reads, yet the harness carries it. A reply the harness wrote itself (an API
+// error's) neither counts nor clears.
 //
 // Mutation: let the boundary set nothing, or let a `<synthetic>` reply clear it,
 // and a case goes red.
@@ -197,9 +189,9 @@ func TestABoundaryWithNoCountedReplyAfterItMarksTheCount(t *testing.T) {
 	wantBound(t, cntCount(append(before, cntAnchor("u4", "u5", "m2", 1000, 0, 0, 40))...), 1040)
 }
 
-// ONLY A MAIN SYSTEM BOUNDARY RESTARTS THE COUNT, as the harness's own test of a
-// boundary reads it: a sidechain's boundary, and a record of that subtype that
-// is no system record, are lines like any other, charged and restarting nothing.
+// ONLY A MAIN SYSTEM BOUNDARY RESTARTS THE COUNT, as the harness reads one: a
+// sidechain's boundary, or a non-system record of that subtype, is a line like any
+// other, charged and restarting nothing.
 //
 // Mutation: test the subtype alone, and a case goes red.
 func TestOnlyAMainSystemBoundaryRestartsTheCount(t *testing.T) {
@@ -218,8 +210,7 @@ func TestOnlyAMainSystemBoundaryRestartsTheCount(t *testing.T) {
 }
 
 // A SYNTHETIC OR UNCOUNTED REPLY IS NO ANCHOR: a reply the harness wrote itself,
-// whatever its usage says, and one whose input side is zero, are charged after
-// the anchor and anchor nothing.
+// whatever its usage, or one of zero input side, is charged and anchors nothing.
 //
 // Mutation: let a `<synthetic>` reply anchor, or one of no input, and a case goes
 // red.
@@ -237,7 +228,7 @@ func TestASyntheticOrUncountedReplyIsNoAnchor(t *testing.T) {
 }
 
 // AN UNMETERED REPLY IS NO ANCHOR: the harness never anchors on a provisional
-// record, so one that says so is charged as a record of its id.
+// record, so one is charged as a record of its id.
 //
 // Mutation: leave the key unread, and this goes red.
 func TestAnUnmeteredReplyIsNoAnchor(t *testing.T) {
@@ -247,10 +238,9 @@ func TestAnUnmeteredReplyIsNoAnchor(t *testing.T) {
 	wantBound(t, got, 1050+cntCharge(provisional))
 }
 
-// THE TAIL IS CHARGED AT THE HARNESS'S LOWEST RATE: a JSON-titled text document
-// the harness counts at two characters a token, so a line holding one of 3,000
-// characters is charged at least 1,500 tokens, two bytes a token of the line and
-// its break.
+// THE TAIL IS CHARGED AT THE HARNESS'S LOWEST RATE: it counts a JSON-titled text
+// document at two characters a token, so a line holding one of 3,000 characters is
+// charged at least 1,500 tokens.
 //
 // Mutation: charge at three bytes a token, or four, and this goes red.
 func TestTheTailIsChargedAtTheHarnessesLowestRate(t *testing.T) {
@@ -265,11 +255,10 @@ func TestTheTailIsChargedAtTheHarnessesLowestRate(t *testing.T) {
 	}
 }
 
-// EVERY CHAINED LINE AFTER THE ANCHOR IS CHARGED, an attachment, a system record
-// and a prompt snapshot among them, though the harness counts the last as
-// nothing; a record outside the chain, the harness's bookkeeping, is not. A
-// user record that carries no `parentUuid` is in a chain as Claude Code's
-// resume reads one, rooting it, and is charged too.
+// EVERY CHAINED LINE AFTER THE ANCHOR IS CHARGED, attachments, system records and
+// prompt snapshots included (the harness counts the last as nothing); bookkeeping,
+// outside the chain, is not. A user record with no `parentUuid` roots a chain as
+// Claude Code's resume reads one, and is charged too.
 //
 // Mutation: pass attachments over, charge bookkeeping, or charge only a record
 // that carries a `parentUuid`, and this goes red.
@@ -288,8 +277,8 @@ func TestEveryChainedLineAfterTheAnchorIsCharged(t *testing.T) {
 }
 
 // AN IMAGE OR A DOCUMENT AFTER THE ANCHOR MARKS THE COUNT: the harness counts each
-// at a flat 2,000 tokens, which no line's bytes bound. One before the anchor's
-// place is inside the anchor's own input, measured, and marks nothing.
+// at a flat 2,000 tokens, which no line's bytes bound. One before the anchor is in
+// its measured input and marks nothing.
 //
 // Mutation: keep a line's mark where the anchor moves past it, and a case goes
 // red.
@@ -303,8 +292,7 @@ func TestAnImageOrDocumentAfterTheAnchorMarksTheCount(t *testing.T) {
 		1050)
 }
 
-// A MEDIA MARK NEEDS A BLOCK'S TYPE: a call's input naming a key `image` is no
-// image the harness counts.
+// A MEDIA MARK NEEDS A BLOCK'S TYPE: a call input's key `image` is no image.
 //
 // Mutation: match a bare "image", and this goes red.
 func TestAMediaMarkNeedsABlocksType(t *testing.T) {
@@ -315,16 +303,14 @@ func TestAMediaMarkNeedsABlocksType(t *testing.T) {
 	wantBound(t, got, 1050+cntCharge(call))
 }
 
-// A MEDIA MARK IS READ OFF A LINE'S BYTES: a call's input holding a key whose
-// name ends, through an escaped quote, in a block's type and whose value is
-// image, `"x\"type":"image"` as JSON.stringify writes it, holds the mark's
-// bytes exactly, and marks the count as an image does. The mark errs that way
-// by design: a line's bytes are what the count reads, and a name a decode
-// reads otherwise is no reason to read less of them.
+// A MEDIA MARK IS READ OFF A LINE'S BYTES: a call input key ending, through an
+// escaped quote, in a block's type with the value image (`"x\"type":"image"`, as
+// JSON.stringify writes it) holds the mark's bytes and marks the count. It errs
+// that way on purpose: the count reads bytes, and a decode reading the name
+// otherwise is no reason to read less.
 //
-// Mutation: read the mark off a decode's names and values rather than the
-// line's bytes (a mark's bytes after a backslash passed over), and the count
-// reads as a bound.
+// Mutation: read the mark off a decode rather than the line's bytes, and the
+// count reads as a bound.
 func TestAMediaMarkIsReadOffALinesBytes(t *testing.T) {
 	t.Parallel()
 	call := cntReply("u2", "u3", "m2", "claude-sonnet-4-5", "",
@@ -344,11 +330,10 @@ func TestAPDFReadAfterTheAnchorMarksTheCount(t *testing.T) {
 		sandbox.CountPDF)
 }
 
-// A CLEARING SINCE THE LAST BOUNDARY MARKS THE COUNT: a reply that says the server
-// cleared old tool results, one whose report the layer cannot read, and one
-// holding the clearing edit whatever its count of cleared uses (the harness
-// counts its cleared tokens back) mark the count `cleared`; one before the last
-// boundary does not.
+// A CLEARING SINCE THE LAST BOUNDARY MARKS THE COUNT `cleared`: a reply saying
+// the server cleared old tool results, one whose report does not read, or one
+// holding the clearing edit whatever its cleared uses (the harness counts its
+// cleared tokens back); one before the last boundary does not.
 //
 // Mutation: keep the mark across a boundary, or read the accessor alone, and a
 // case goes red.
@@ -374,9 +359,8 @@ func TestAClearingSinceTheLastBoundaryMarksTheCount(t *testing.T) {
 		cntUser("b1", "u4", `"the summary"`), cntAnchor("u4", "u5", "m2", 1000, 0, 0, 40)), 1040)
 }
 
-// A USAGE THAT DOES NOT READ MARKS THE COUNT: a null usage, a negative count, a
-// fractional one and one written as a string are no counts the harness's own
-// reading takes for the reply's, so the count is the mark `usage`.
+// A USAGE THAT DOES NOT READ MARKS THE COUNT `usage`: the harness takes no null
+// usage, negative, fractional or string count for the reply's.
 //
 // Mutation: read such a usage tolerantly, as the run's spend does, and a case
 // goes red.
@@ -396,9 +380,8 @@ func TestAUsageThatDoesNotReadMarksTheCount(t *testing.T) {
 }
 
 // A LINE THAT IS NO RECORD LEAVES NO COUNT: the thread is not read whole, so the
-// count is unread, naming no restart, not even the one seen before the line; and
-// the floor's figure, which reads every whole line it can, is still read past
-// it.
+// count is unread and names no restart, not even one seen before the line; the
+// floor's figure, which reads every whole line it can, reads past it.
 //
 // Mutation: stop the walk at the refused line, and the floor's figure is the
 // line before's; name the restart seen before it, and the count does.
@@ -418,8 +401,8 @@ func TestALineThatIsNoRecordLeavesNoCount(t *testing.T) {
 	}
 }
 
-// A TORN LAST PIECE IS NO LINE: a write its harness never finished, which the box
-// cuts away before a resume, counts in neither the count nor the floor's figure.
+// A TORN LAST PIECE IS NO LINE: an unfinished write, which the box cuts away
+// before a resume, counts in neither the count nor the floor's figure.
 //
 // Mutation: read the piece as a line, and both move.
 func TestATornLastPieceIsNoLine(t *testing.T) {
@@ -437,9 +420,9 @@ func TestATornLastPieceIsNoLine(t *testing.T) {
 	}
 }
 
-// A THREAD PAST ITS BOUND LEAVES NO COUNT: the reading is over at the bound, with
-// nothing skipped, so the count is unread, and names no restart, not even the one
-// seen before the bound: a later one may lie past it.
+// A THREAD PAST ITS BOUND LEAVES NO COUNT: the read stops at the bound, so the
+// count is unread and names no restart, not even one seen before the bound: a
+// later one may lie past it.
 //
 // Mutation: read past the walk's error, or name the restart seen before the
 // bound, and this goes red.
@@ -452,8 +435,8 @@ func TestAThreadPastItsBoundLeavesNoCount(t *testing.T) {
 	wantMark(t, r.count(0), sandbox.CountUnread)
 }
 
-// THE MARK SAID IS THE FIRST OF THEIR ORDER: a count with several marks keeps the
-// first in precedence, one word.
+// THE MARK SAID IS THE FIRST OF THEIR ORDER: a count with several marks says the
+// first in precedence.
 //
 // Mutation: keep the last mark set, and this goes red.
 func TestTheMarkSaidIsTheFirstOfTheirOrder(t *testing.T) {
@@ -489,9 +472,8 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// ONE WALK HANDS EVERY READING EVERY LINE: two readings composed into the walk see
-// the same lines in the same order, a refused one among them, and one end each,
-// and the thread is read once.
+// ONE WALK HANDS EVERY READING EVERY LINE: two readings see the same lines in
+// order, a refused one included, and one end each, from one read of the thread.
 //
 // Mutation: hand a line to the first reading alone, and this goes red.
 func TestOneWalkHandsEveryReadingEveryLine(t *testing.T) {
@@ -517,24 +499,18 @@ func cntArchive(t *testing.T, body string, members ...tarMember) []byte {
 		Typeflag: tar.TypeReg}, body: body}}, members...))
 }
 
-// THE METER'S FLOOR FIGURE IS WHAT THE LAYER READS OF A REPLY: the input side
-// of the last main-thread reply whose usage the layer reads, the figure before a
-// compaction with no request since among it, while the count beside it reads the
-// same thread by the harness's rule. A reply the layer reads otherwise than
-// encoding/json read its whole line gives no figure, the reply before it
-// standing: its counts' keys in another case, a usage written twice whose last
-// names no input, a null count, a negative one, iterations Claude Code counts in
-// the usage's place with other counts, a record that does not say it is a
-// sidechain and one that names an agent; and a sidechain's reply, as ever. And a
-// reply whose line encoding/json refused whole for a key of another kind that
-// the layer reads by its last value, or not at all, gives its figure: a `Type`
-// that is no string, an earlier `isSidechain` that is no boolean, an earlier
-// `message` that is no object.
+// THE METER'S FLOOR FIGURE IS WHAT THE LAYER READS OF A REPLY: the input side of
+// the last main-thread reply whose usage the layer reads, a pre-compaction one
+// with no request since included. A reply the layer reads otherwise than
+// encoding/json gives none, the one before standing: keys in another case, a
+// usage written twice whose last names no input, a null or negative count,
+// iterations Claude Code counts in the usage's place, a record not saying it is a
+// sidechain or naming an agent, a sidechain's. A line encoding/json refuses for a
+// key the layer reads by its last value or not at all gives its figure (a
+// non-string `Type`, an earlier non-boolean `isSidechain` or non-object `message`).
 //
-// Mutation: read the figure by encoding/json where the layer reads none, the
-// whole rule or its case-folding or its merge alone, or take a reply for the main
-// thread's by its `isSidechain` alone, and a case goes red; read it by
-// encoding/json alone, and a line it refused gives no figure.
+// Mutation: read by encoding/json (rule, case-folding or merge) where the layer
+// reads none or by it alone, or tell the main thread by `isSidechain` alone: red.
 func TestTheMetersFloorFigureIsWhatTheLayerReadsOfAReply(t *testing.T) {
 	t.Parallel()
 	meter := func(t *testing.T, body string) (int64, *sandbox.ResumedCount) {
@@ -553,8 +529,8 @@ func TestTheMetersFloorFigureIsWhatTheLayerReadsOfAReply(t *testing.T) {
 	}
 	wantMark(t, count, sandbox.CountCompacted)
 
-	// reply is a later main-thread reply whose input side is 4,300; as is reply
-	// with from, which it holds once, written as to.
+	// reply is a later main-thread reply of input side 4,300; as is reply with its
+	// one from written as to.
 	reply := cntAnchor("u2", "u3", "m2", 300, 0, 4000, 60)
 	as := func(from, to string) string {
 		t.Helper()
@@ -593,8 +569,8 @@ func TestTheMetersFloorFigureIsWhatTheLayerReadsOfAReply(t *testing.T) {
 	}
 }
 
-// THE CAPTURE COUNTS THE SESSION IT KEEPS: the take's meter counts the archive's
-// main thread as it is kept, and hands the count to the capture's stamp.
+// THE CAPTURE COUNTS THE SESSION IT KEEPS: the take's meter counts the kept
+// archive's main thread and hands the count to the capture's stamp.
 //
 // Mutation: hand the take no count, and this goes red.
 func TestTheCaptureCountsTheSessionItKeeps(t *testing.T) {
@@ -609,8 +585,8 @@ func TestTheCaptureCountsTheSessionItKeeps(t *testing.T) {
 }
 
 // A PRECOMPACT MEMBER MARKS THE CAPTURE'S COUNT: a session holding a saved
-// compaction, under either of its names, may be handed a summary at its first
-// request; nothing of the member is read.
+// compaction, under either name, may be handed a summary at its first request;
+// the member itself is not read.
 //
 // Mutation: pass the member over, and this goes red.
 func TestAPrecompactMemberMarksTheCapturesCount(t *testing.T) {
@@ -629,11 +605,10 @@ func TestAPrecompactMemberMarksTheCapturesCount(t *testing.T) {
 	}
 }
 
-// AN ARCHIVE THE LAYER GIVES NO READING LEAVES NO COUNT: a member named
-// absolutely, one with a `..` element, and a main thread held twice each make the
-// member read need not be the file a resumed session holds. The thread held
-// twice is held under its own name both times, as a tar can hold two members of
-// one name, so no other rule marks it.
+// AN ARCHIVE THE LAYER GIVES NO READING LEAVES NO COUNT: with a member named
+// absolutely, one with a `..` element, or the main thread held twice under its own
+// name (a tar may, and no other rule marks it), the member read need not be the
+// file a resumed session holds.
 //
 // Mutation: compare names after path.Clean alone, or read a main thread held
 // twice, and a case goes red.
@@ -658,10 +633,9 @@ func TestAnArchiveTheLayerGivesNoReadingLeavesNoCount(t *testing.T) {
 	}
 }
 
-// A WRITER BELOW THE COUNT'S FLOOR LEAVES NO COUNT: a thread written by a release
-// the count's rules were not read in, or one that names none, is no count of a
-// session, and names no restart, though the walk read the whole thread: where it
-// restarts is read by those rules too.
+// A WRITER BELOW THE COUNT'S FLOOR LEAVES NO COUNT: a thread from a release the
+// count's rules were not read in, or naming none, counts nothing and names no
+// restart though read whole: where it restarts is read by those rules too.
 //
 // Mutation: leave the floor unchecked, or name the restart of a thread read by
 // rules not read, and a case goes red.
@@ -678,10 +652,10 @@ func TestAWriterBelowTheCountFloorLeavesNoCount(t *testing.T) {
 	}
 }
 
-// THE COUNT IS READ ONLY WHERE THE SETTINGS PIN IS IN FORCE: the threshold a count
-// is judged against is the one the run's settings pin over a repository's own,
-// which a release before the pin's floor is never handed, so the count's floor is
-// never below the pin's.
+// THE COUNT IS READ ONLY WHERE THE SETTINGS PIN IS IN FORCE: a count is judged
+// against the threshold the run's settings pin over a repository's own, which a
+// release below the pin's floor is never handed: the count's floor is never
+// below the pin's.
 //
 // Mutation: set the count's floor below the pin's, and this goes red.
 func TestTheCountIsReadOnlyWhereThePinIsInForce(t *testing.T) {
@@ -703,8 +677,8 @@ func cntBox(body string, files map[string]string) (*sandbox.FakeSandbox, Paths) 
 	return box, paths
 }
 
-// THE MAIN THREAD IS READ ONCE THROUGH THE BOX: one open of the thread, its bytes
-// streamed once, and of each saved compaction's name a look at its size alone.
+// THE MAIN THREAD IS READ ONCE THROUGH THE BOX: one open, its bytes streamed
+// once, and only a size look at each saved compaction's name.
 //
 // Mutation: open the thread a second time, and this goes red.
 func TestTheMainThreadIsReadOnceThroughTheBox(t *testing.T) {
@@ -720,12 +694,11 @@ func TestTheMainThreadIsReadOnceThroughTheBox(t *testing.T) {
 }
 
 // A PRECOMPACT IN THE BOX MARKS THE COUNT, AND NAMES NO RESTART: a saved
-// compaction under either name Claude Code reads one by, of any bytes, marks it;
-// an empty one, which the harness cannot read, and a missing one do not. The
-// look at its size comes before the thread is opened, so a marked read streams
-// none of the thread and names no restart of it: that identity is not read,
-// which is not "restarts nowhere" (the take's precompact, beside a thread the
-// take walks whole, names its restart).
+// compaction of any bytes under either name Claude Code reads marks it; an empty
+// one (the harness cannot read it) or a missing one does not. Its size is looked
+// at before the thread is opened, so a marked read streams none of the thread and
+// names no restart: unread is not "restarts nowhere" (the take's precompact,
+// beside a thread it walks whole, names its restart).
 //
 // Mutation: look at one name alone, walk the thread before the look, or name a
 // restart of the thread the read never opened, and a case goes red.
@@ -762,8 +735,8 @@ func TestAPrecompactInTheBoxMarksTheCount(t *testing.T) {
 	}
 }
 
-// A RELEASE BELOW THE FLOOR IS MARKED BEFORE ANYTHING IS READ: the release is
-// checked before any look or read of the box.
+// A RELEASE BELOW THE FLOOR IS MARKED BEFORE ANYTHING IS READ: before any look
+// at or read of the box.
 //
 // Mutation: check the release after the walk, and the thread is read.
 func TestAReleaseBelowTheFloorIsMarkedBeforeAnythingIsRead(t *testing.T) {
@@ -791,9 +764,9 @@ func (c cancelling) line(threadLine)          { c.cancel() }
 func (c cancelling) refused(*threadLineError) {}
 func (c cancelling) end(bool, error)          {}
 
-// A READ CUT SHORT BETWEEN LINES LEAVES NO COUNT: a read whose context ends between
-// two lines its body handed at once ends there, and the thread is not read whole,
-// so its count names no restart, not even the one its first line is.
+// A READ CUT SHORT BETWEEN LINES LEAVES NO COUNT: a context ending between two
+// lines handed in one read ends the read there, so the count names no restart,
+// not even its first line's.
 //
 // Mutation: leave the context unchecked between lines (the line reader's Next
 // asking none), or name the restart read before the cut, and this goes red.
@@ -807,10 +780,9 @@ func TestAReadCutShortBetweenLinesLeavesNoCount(t *testing.T) {
 	wantMark(t, r.count(0), sandbox.CountUnread)
 }
 
-// A THREAD WITH NO CHAINED LINE LEAVES NO COUNT: an empty thread, or one of
-// bookkeeping alone, holds no chain a resume continues, so its count is unread
-// and names no restart, never a thread that restarts nowhere, which a relaunch
-// would read as a job that kept its brief.
+// A THREAD WITH NO CHAINED LINE LEAVES NO COUNT: an empty thread, or bookkeeping
+// alone, holds no chain to resume, so its count is unread, never "restarts
+// nowhere", which a relaunch would read as a job that kept its brief.
 //
 // Mutation: read a thread with no chained line as one read whole, and a case
 // goes red.
@@ -844,9 +816,8 @@ func TestEachRunnerReadsItsOwnHarnesssSession(t *testing.T) {
 	wantBound(t, New(ClaudeCode{}).ReadMainThread(t.Context(), box, ask).Count, 150)
 }
 
-// THE REPORTED WINDOW IS THE LEAST ITS RUN REPORTED, over every result line's
-// per-run figures, every model of each: a result naming none reports nothing, and
-// a run that printed no result reports nothing.
+// THE REPORTED WINDOW IS THE LEAST ITS RUN REPORTED, over every model of every
+// result line; a result naming none, or no result, reports nothing.
 //
 // Mutation: keep the newest result's alone, or the largest, and a case goes red.
 func TestTheReportedWindowIsTheLeastItsRunReported(t *testing.T) {
@@ -878,13 +849,10 @@ func TestTheReportedWindowIsTheLeastItsRunReported(t *testing.T) {
 }
 
 // THE COUNT NAMES ITS THREAD'S NEWEST RESTART: the uuid of the newest line the
-// layer's restart rule flags, a compaction's boundary, a microcompaction's, a span
-// replaced or a later root, and "" where it flags none; and a microcompaction's
-// boundary restarts the identity alone, never the count, which restarts at a main
-// compact boundary alone.
-//
-// A canonical uuid, the one every chained record Claude Code writes carries, is
-// exactly [sandbox.RestartIDMaxBytes] long, and is named.
+// restart rule flags (a compaction's or microcompaction's boundary, a span
+// replaced, a later root), "" where none. A microcompaction restarts the identity
+// alone; the count restarts only at a main compact boundary. A canonical uuid, as
+// Claude Code writes, is exactly [sandbox.RestartIDMaxBytes] long and is named.
 //
 // Mutation: read the identity off compact boundaries alone, keep the first
 // restart, restart the count at every restart, or hold a uuid of exactly
@@ -925,13 +893,11 @@ func TestTheCountNamesItsThreadsNewestRestart(t *testing.T) {
 	}
 }
 
-// A NEWEST RESTART WHOSE UUID DOES NOT READ LEAVES NO COUNT: one with no uuid, an
-// empty one, or one past a uuid's thirty-six bytes is no identity, and a count
-// that cannot name its newest restart is unread, the side a relaunch tells more
-// on. That holds after an older restart whose uuid does read too: the newer one
-// replaces what the older left, so the count never names the older as its newest,
-// which would read a job launched on the older restart as not restarted, and its
-// count as a bound.
+// A NEWEST RESTART WHOSE UUID DOES NOT READ LEAVES NO COUNT: an absent, empty or
+// over-36-byte uuid is no identity, and a count that cannot name its newest
+// restart is unread, the side a relaunch tells more on. That holds after an older
+// readable restart too: naming the older as newest would read a job launched on
+// it as not restarted, and its count as a bound.
 //
 // Mutation: read such a restart as none, or keep what an older restart left
 // where a newer one does not read, and a case goes red.
@@ -966,10 +932,9 @@ func cntRestartOf(c *sandbox.ResumedCount) string {
 
 // THE COUNT KEEPS NO RESTART'S UUID PAST AN IDENTITY'S BYTES: a uuid longer than
 // [sandbox.RestartIDMaxBytes] is no identity, so the reading keeps none of it
-// from line to line, whatever its length, and still answers the count unread.
-// Kept, a box's restart whose uuid fills a line held up to three times the line,
-// decoded (a byte no UTF-8 holds reads as U+FFFD), beside everything the one
-// walk of the thread holds after it.
+// between lines and answers unread. Kept, a line-long uuid would hold up to three
+// times the line once decoded (a non-UTF-8 byte reads as U+FFFD) for the rest of
+// the walk.
 //
 // Mutation: keep the uuid whatever its length, reading it as no identity, and
 // this goes red.
@@ -990,10 +955,9 @@ func TestTheCountKeepsNoRestartsUUIDPastAnIdentitysBytes(t *testing.T) {
 	}
 }
 
-// A RUN'S ID IS READ WHOLE, HOWEVER LONG: the count keeps a digest of its run's
-// message id rather than the id, and the digest tells two ids apart as the ids
-// do, so a counted reply whose id differs from the run's only in its last byte
-// starts a run of its own, and one of the same id, however long, continues it.
+// A RUN'S ID IS READ WHOLE, HOWEVER LONG: the count keeps a digest of the run's
+// message id, which must tell ids apart as the ids do: one differing only in its
+// last byte starts a new run, and the same id, however long, continues it.
 //
 // Mutation: digest a prefix of the id, or read every id as a new run, and a case
 // goes red.
@@ -1018,14 +982,12 @@ func TestARunsIDIsReadWholeHoweverLong(t *testing.T) {
 	}
 }
 
-// A COUNT MARKED FOR WHAT ITS BYTES CANNOT BOUND NAMES ITS RESTART. The restart
-// rule runs over every line a walk reads, so a thread read whole by its
-// release's rules holds its newest restart exactly; a count marked `compacted`,
-// `usage`, `cleared`, `pdf` or `media`, or the take's `precompact` (a saved
-// compaction beside a thread the take still walks whole), says what the
-// thread's bytes cannot bound, never where it restarts, and names that restart
-// as a bound does. Only a thread not read whole, or not by its release's rules,
-// names none.
+// A COUNT MARKED FOR WHAT ITS BYTES CANNOT BOUND NAMES ITS RESTART: the restart
+// rule runs over every line a walk reads, so a thread read whole by its release's
+// rules holds its newest restart exactly. A mark `compacted`, `usage`, `cleared`,
+// `pdf`, `media` or the take's `precompact` (beside a thread still walked whole)
+// says what the bytes cannot bound, not where the thread restarts. Only a thread
+// not read whole, or not by its release's rules, names none.
 //
 // Mutation: read any one of those marks as naming no restart, and its case goes
 // red.
@@ -1068,16 +1030,13 @@ func TestACountMarkedForWhatItsBytesCannotBoundNamesItsRestart(t *testing.T) {
 	}
 }
 
-// A MARKED CAPTURE STILL SAYS WHETHER A JOB RESTARTED ITS SESSION. A kept capture
-// counted `media`, an image after its anchor, names its newest restart: the job
-// it was taken of reads as restarted only where that restart is not the one its
-// launch handed it, and a relaunch that continues the capture records that
-// restart as its job's basis, so that job reads as restarted only where its own
-// copy's newest restart, read at its collection, is another. A marked capture
-// read as no basis would make that job read as restarted for the restart its
-// thread already held (sandbox.RestartedSince reads any restart against no
-// basis as one), so every continuation after one image read in a thread that
-// ever restarted would be told as a summary.
+// A MARKED CAPTURE STILL SAYS WHETHER A JOB RESTARTED ITS SESSION: a kept capture
+// marked `media` names its newest restart, so its job reads as restarted only
+// where that is not the restart its launch handed it, and a relaunch continuing
+// it records that restart as its basis. Read as no basis, a marked capture would
+// make that job read as restarted for a restart its thread already held
+// (sandbox.RestartedSince reads any restart against no basis as one), telling
+// every continuation after an image in a once-restarted thread as a summary.
 //
 // Mutation: read every mark, or `media`, as naming no restart, and a job whose
 // newest restart is unchanged reads as restarted.
@@ -1093,8 +1052,8 @@ func TestAMarkedCaptureStillSaysWhetherAJobRestartedItsSession(t *testing.T) {
 	restarting := []string{cntUser("u5", "u6", `"the job's brief"`), cntAnchor("u6", "u7", "m3", 1200, 0, 0, 40),
 		cntBoundary("b2"), cntUser("b2", "u9", `"the summary"`), cntAnchor("u9", "u10", "m4", 900, 0, 0, 40),
 		cntUser("u10", "u11", cntImage)}
-	// captured is what the take's meter counts a kept archive of lines at;
-	// collected what the read that collects a job counts its box's copy at.
+	// captured is the take's meter's count of a kept archive of lines; collected
+	// the collection read's count of the box's copy.
 	captured := func(lines ...string) *sandbox.ResumedCount {
 		t.Helper()
 		_, count, _, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(lines...))), ctSession,
@@ -1111,9 +1070,8 @@ func TestAMarkedCaptureStillSaysWhetherAJobRestartedItsSession(t *testing.T) {
 			Release: "2.1.322", Count: true}).Count
 	}
 	kept := captured(slices.Concat(handed, work)...)
-	// basis is the restart the relaunch continuing the kept capture records,
-	// as a launch reads a count's (sandbox.LaunchRecord.BasisRestart): nil
-	// where the count names none.
+	// basis is the restart a relaunch continuing the kept capture records
+	// (sandbox.LaunchRecord.BasisRestart), nil where the count names none.
 	var basis *string
 	if newest, read := kept.Restarted(); read {
 		basis = &newest
@@ -1142,10 +1100,9 @@ func TestAMarkedCaptureStillSaysWhetherAJobRestartedItsSession(t *testing.T) {
 	}
 }
 
-// benchLines is a session's main thread of about plain bytes, as a day's work
-// writes one: a call, its result of some kilobytes of text from a small
-// vocabulary (so the archive compresses as kept sessions measured do, about
-// three and a half to one), and a reply, over and over.
+// benchLines is a main thread of about plain bytes, as a day's work writes one:
+// a call and its result of some kilobytes from a small vocabulary, over and over,
+// so the archive compresses as measured kept sessions do, about 3.5 to one.
 func benchLines(plain int) []byte {
 	words := strings.Fields("the a of to in is that for it with as was on be at by this had not are but from " +
 		"or have an they which one you were all we her she there would their will when who him been has more " +
@@ -1169,11 +1126,10 @@ func benchLines(plain int) []byte {
 	return b.Bytes()
 }
 
-// BenchmarkTheMeterAtItsBounds measures the take's meter, its one walk of a kept
-// archive's main thread by the floor's figure and the count, against the take's
-// own scrub of the same archive, at the plaintext a 32 MiB archive of a day's
-// work holds (about 118 MiB): the meter is fed by the pipe the take writes into,
-// so it holds to no more than the scrub's own time.
+// BenchmarkTheMeterAtItsBounds measures the take's meter (one walk of a kept
+// main thread for the floor's figure and the count) against the take's scrub of
+// the same archive, at a 32 MiB archive's plaintext (about 118 MiB): fed by the
+// take's pipe, the meter must take no longer than the scrub.
 func BenchmarkTheMeterAtItsBounds(b *testing.B) {
 	thread, _ := claudeMainThread(ctSession)
 	body := benchLines(118 << 20)
@@ -1214,8 +1170,7 @@ func BenchmarkTheMeterAtItsBounds(b *testing.B) {
 	})
 }
 
-// repeating is a reader of lines over and over, within total bytes, which ends
-// on a line's break.
+// repeating reads lines over and over, left bytes in all, ending on a line break.
 type repeating struct {
 	lines []byte
 	left  int64
@@ -1232,11 +1187,10 @@ func (r *repeating) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// BenchmarkTheMainThreadReadAtItsBound measures the collection's read of a main
-// thread at its bound ([threadPlainMax], a quarter of a gibibyte) through the
-// walk with the count's reading, on the engine host: the ground the read's wait
-// (internal/sandbox's MainThreadReadWait) is held to, twice its figure on a
-// loaded host within the fifteen seconds.
+// BenchmarkTheMainThreadReadAtItsBound measures the collection's walk, with the
+// count's reading, of a main thread at [threadPlainMax] (a quarter gibibyte) on
+// the engine host: the ground for internal/sandbox's MainThreadReadWait, which
+// holds twice this figure on a loaded host within its fifteen seconds.
 func BenchmarkTheMainThreadReadAtItsBound(b *testing.B) {
 	lines := benchLines(1 << 20)
 	lines = lines[bytes.IndexByte(lines, '\n')+1:]

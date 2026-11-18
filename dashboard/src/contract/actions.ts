@@ -785,10 +785,9 @@ export const ACTIONS = {
     scope: "person",
   },
   code_update_change: {
-    // READY FOR REVIEW on a draft (`draft: false`), against the version on
-    // screen, so a mark that raced a push or an edit is refused rather than
-    // readying what the reader did not see.
-    args: ["repo", "change", "expected_version", "draft"],
+    // READY FOR REVIEW on a draft (`draft: false`), or a new title and
+    // description, against the version on screen.
+    args: ["repo", "change", "expected_version", "draft", "title", "body"],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],
@@ -887,6 +886,15 @@ export const ACTIONS = {
   // author's resolved, won't fix or disputed, or a dismissal, with a note.
   code_resolve_finding: {
     args: ["repo", "change", "findings", "resolution", "note"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  // A FILE MARKED VIEWED (`routes/gitlet/change/Viewed.tsx`): the person's own
+  // mark of one file at the state shown, or its take-back.
+  code_mark_viewed: {
+    args: ["repo", "change", "viewed", "unviewed", "seen"],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],

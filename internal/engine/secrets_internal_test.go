@@ -35,10 +35,9 @@ func engineWithSecrets(t *testing.T) (*Engine, *fleetsecrets.Store) {
 	return e, fleetsecrets.New(fleet, cipher)
 }
 
-// THE STORE WINS OVER THE ENVIRONMENT, which is the whole reason it exists:
-// rotation is an UPDATE of one row, and if a stale `.env` exported into this
-// process months ago could shadow it, the rotation would appear to work and
-// change nothing.
+// THE STORE WINS OVER THE ENVIRONMENT: rotation is an UPDATE of one row, and a
+// stale `.env` shadowing it would make the rotation appear to work and change
+// nothing.
 func TestARotatedSecretBeatsAStaleEnvironment(t *testing.T) {
 	e, sv := engineWithSecrets(t)
 	t.Setenv("SOME_TOKEN", "the-stale-one-from-dot-env")
@@ -57,9 +56,8 @@ func TestARotatedSecretBeatsAStaleEnvironment(t *testing.T) {
 	}
 }
 
-// A NAME THE STORE DOES NOT HOLD still resolves from the environment. The
-// store is a front, not a replacement: most deployments keep most of their
-// configuration in the environment and put only credentials here.
+// A NAME THE STORE DOES NOT HOLD still resolves from the environment: the
+// store is a front for credentials, not a replacement for configuration.
 func TestTheEnvironmentStillAnswersWhatTheStoreDoesNot(t *testing.T) {
 	e, sv := engineWithSecrets(t)
 	t.Setenv("PLAIN_URL", "https://tracker.example.com")
@@ -75,10 +73,8 @@ func TestTheEnvironmentStillAnswersWhatTheStoreDoesNot(t *testing.T) {
 }
 
 // AN UNREADABLE STORE LEAVES THE PREVIOUS SNAPSHOT STANDING rather than
-// falling back to the environment. Falling back is the stale-.env shadowing
-// the whole mechanism exists to prevent, and it would happen at the worst
-// moment: a store blip during an apply, silently swapping every rotated
-// credential for whatever the process booted with.
+// falling back to the environment, which on a store blip during an apply would
+// silently swap every rotated credential for whatever the process booted with.
 func TestAnUnreadableStoreKeepsThePreviousSnapshot(t *testing.T) {
 	e, sv := engineWithSecrets(t)
 	t.Setenv("SOME_TOKEN", "the-stale-one")
@@ -88,8 +84,8 @@ func TestAnUnreadableStoreKeepsThePreviousSnapshot(t *testing.T) {
 	}
 	e.refreshSecrets(t.Context())
 
-	// The keyring is lost — the operator dropped a key, or the row was
-	// written by a peer this node cannot open.
+	// The keyring is lost: a dropped key, or a row from a peer this node
+	// cannot open.
 	_, stranger := testKeyring(t)
 	e.cipher = stranger
 	e.refreshSecrets(t.Context())
@@ -100,9 +96,8 @@ func TestAnUnreadableStoreKeepsThePreviousSnapshot(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO STORE AT ALL is the env-only case, and must not be reported
-// as a missing keyring — the two are different situations with different
-// fixes.
+// A NODE WITH NO STORE AT ALL is the env-only case, never reported as a
+// missing keyring: the two have different fixes.
 func TestANodeWithNoStoreResolvesFromTheEnvironment(t *testing.T) {
 	e := &Engine{}
 	t.Setenv("SOME_TOKEN", "from-the-environment")
@@ -112,9 +107,9 @@ func TestANodeWithNoStoreResolvesFromTheEnvironment(t *testing.T) {
 	}
 }
 
-// A KEYRING THAT IS CONFIGURED BUT BROKEN FAILS THE BOOT. An operator asked
-// for encryption; degrading quietly to environment resolution would give
-// them a node that looks healthy and reads none of their rotated secrets.
+// A KEYRING THAT IS CONFIGURED BUT BROKEN FAILS THE BOOT: degrading quietly to
+// environment resolution would give a node that looks healthy and reads none
+// of the rotated secrets.
 func TestABrokenKeyringFailsRatherThanDegrading(t *testing.T) {
 	t.Parallel()
 	boot := &config.Bootstrap{}
@@ -127,14 +122,10 @@ func TestABrokenKeyringFailsRatherThanDegrading(t *testing.T) {
 	}
 }
 
-// NO KEYRING CONFIGURED FAILS THE BOOT, naming the field.
-//
-// It was a supported posture — secrets from the environment, the company
-// document read in plaintext — and it was the one a node that booted with no
-// company still reached, because it started no state log until it had one and
-// so met no signer. Every node needs the keyring now, so the engine refuses to
-// build without one rather than handing every seam beneath it a nil to
-// interpret.
+// NO KEYRING CONFIGURED FAILS THE BOOT, naming the field, even on a node that
+// booted with no company and so meets no signer yet: every node needs the
+// keyring, and the engine refuses to build rather than hand every seam beneath
+// it a nil to interpret.
 func TestNoKeyringConfiguredFailsTheBoot(t *testing.T) {
 	t.Parallel()
 	cipher, err := openCipher(&config.Bootstrap{})
@@ -149,10 +140,8 @@ func TestNoKeyringConfiguredFailsTheBoot(t *testing.T) {
 	}
 }
 
-// "THIS NODE HAS NO SECRET STORE" AND "THE STORE IS EMPTY" render
-// identically through the resolver and are different facts — one is a
-// deployment without a database, the other a company that has stored
-// nothing yet. Only the second has a snapshot.
+// "THIS NODE HAS NO SECRET STORE" AND "THE STORE IS EMPTY" resolve identically
+// but are different facts; only the second has a snapshot.
 func TestOnlyARealStoreProducesASnapshot(t *testing.T) {
 	t.Parallel()
 	if (&Engine{}).refreshSecrets(t.Context()) {
@@ -171,14 +160,11 @@ func TestOnlyARealStoreProducesASnapshot(t *testing.T) {
 	}
 }
 
-// NO ${VAR} REACHES THE ENGINE'S OWN KEYS.
-//
-// The blind-index key shares the fleet's bucket with the operator's
-// credentials. While it carried an operator name, every apply decrypted it into
-// this node's resolver, and `${…}` in an `mcp_env` handed it to a child
-// process. The snapshot now holds the operator's rows alone, and an engine name
-// is not one any reference can spell — so neither the snapshot, a lookup nor an
-// expansion answers with one.
+// NO ${VAR} REACHES THE ENGINE'S OWN KEYS: the blind-index key shares the
+// fleet's bucket with the operator's credentials, and `${…}` in an `mcp_env`
+// would hand it to a child process. So the snapshot holds the operator's rows
+// alone and no reference can spell an engine name: neither the snapshot, a
+// lookup nor an expansion answers with one.
 func TestNoReferenceReachesTheEnginesOwnKeys(t *testing.T) {
 	e, fleet := engineWithSecrets(t)
 	const key = "iam/blind-index-key"

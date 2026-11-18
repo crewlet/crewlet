@@ -485,7 +485,7 @@ func (b orgBuilder) seats(roles []*org.Role) []OrgSeat {
 		if r.IsAgent() {
 			seat.LLM = b.llm(r)
 			seat.ToolSources = b.toolSources(r)
-			look := b.avatars[r.Handle()].Resolved()
+			look := b.avatars[r.Handle()].Resolved(r.Handle())
 			seat.Avatar = &OrgAvatar{Character: string(look.Character), Color: string(look.Color)}
 		}
 		out = append(out, seat)

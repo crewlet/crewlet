@@ -92,14 +92,14 @@ test("the handle follows the name until typed, avoids a removed seat's, and a he
 });
 
 test("an agent is added wearing the look it was suggested: a character no agent wears yet", () => {
-  // Every agent in the fixture chose nothing, so each is drawn as the Crewlet,
-  // and six of them have moved the colour once round the six.
+  // Every agent in the fixture chose nothing and none is running here, so no
+  // character is worn yet; six of them have moved the colour once round the six.
   const view = open(keyedState(fixtureCompany()), "unit:sales");
-  expect(screen.getByRole("radio", { name: "Hexlet", checked: true })).toBeDefined();
+  expect(screen.getByRole("radio", { name: "Crewlet", checked: true })).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Add agent seat" }));
   const op = view.state().log.ops[0];
   expect(op?.type === "addSeat" && op.data.avatar).toEqual({
-    character: "hexlet",
+    character: "crewlet",
     color: "purple",
   });
 });

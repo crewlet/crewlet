@@ -12,18 +12,17 @@ import (
 )
 
 // A CHECKOUT ANOTHER USER OWNS IS READ ONLY WHERE A TEST TRUSTS IT. Git refuses
-// a repository whose owner is not the process's unless safe.directory names
-// it, and honours that key only from protected configuration — the system's,
-// the global and the command line's — of which a client reads only the last:
-// its global file is one in its own HOME, so the developer's own trust never
-// reaches it. ModuleCheckout trusts the module's own checkout, and that path
-// alone, on the command line.
+// a repository another user owns unless safe.directory names it, read only from
+// protected configuration (system, global, command line), of which a client
+// has only the command line: its global file is in its own HOME, so the
+// developer's trust never reaches it. ModuleCheckout trusts the module's own
+// checkout, and that path alone, on the command line.
 //
-// Two ways to make the owner differ, because only one runs everywhere: git's
-// own switch, GIT_TEST_ASSUME_DIFFERENT_OWNER, which drives the same refusal
-// and the same safe.directory comparison on any machine, the module's
-// checkout included; and a real chown, which only a process allowed to chown
-// can make, and which is what says the switch stands in for the thing itself.
+// Two ways to make the owner differ, because only one runs everywhere:
+// GIT_TEST_ASSUME_DIFFERENT_OWNER drives the same refusal and safe.directory
+// comparison on any machine, the module's checkout included; a real chown,
+// possible only where this process may chown, shows the switch stands in for
+// the real thing.
 func TestACheckoutAnotherUserOwnsIsReadOnlyWhereTrusted(t *testing.T) {
 	t.Parallel()
 	refused := func(t *testing.T, c *Client, dir string) {

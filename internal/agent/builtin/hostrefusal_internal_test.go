@@ -11,14 +11,11 @@ import (
 )
 
 // THE MERGE REFUSALS THE CHANGE PAGE LEAVES TO THE ENGINE ARE WORDED FOR A
-// PERSON (ADR-0060). The page's merge controls answer most of Gitlet's
-// refusals in words of their own, keyed on the host's word, and draw the
-// engine's words for the rest: a gate the change does not meet yet, a merge
-// that would delete a branch it may not, a repository at its size, and a
-// merge or a dequeue asked by or for somebody who may not make it. Each of
-// those carries a person's words beside the sentence for a model, which stays
-// the tool's answer: the gate's naming what the change still waits for and
-// whoever can move it forward, as @handle, and never the host's sentence.
+// PERSON (ADR-0060): an unmet gate, a branch deletion it may not make, a
+// repository at its size, and a merge or dequeue by or for somebody who may
+// not. Each carries a person's words beside the model's sentence, which stays
+// the tool's answer; the gate's words name what the change waits for and who
+// can move it, as @handle, never the host's sentence.
 //
 // Mutation: answer the gate's refusal without toPerson, or drop
 // source_refused from mergeRefusalWords, and this fails.
@@ -68,11 +65,10 @@ func TestTheMergeRefusalsThePageLeavesToTheEngineAreWordedForAPerson(t *testing.
 }
 
 // EVERY CONDITION A MERGE GATE JUDGES HAS A PERSON'S WORDS OF ITS OWN in the
-// refusal catalog, held to Gitlet's closed set: the catalog keys its
-// words on the host's names for them without importing the host, so a kind
-// the host adds, or one spelled differently there, would be said as another
-// condition of the target's gate, which tells a person nothing they can act
-// on, and two kinds said alike tell them less than the page does.
+// refusal catalog, held to Gitlet's closed set: the catalog keys on the host's
+// names without importing the host, so a kind added or spelled differently
+// there would be said as a generic condition, and two kinds said alike tell a
+// person less than the page does.
 //
 // Mutation: drop a kind from caveat's gateWaitsFor, or give two kinds one
 // phrase, and this fails.
@@ -95,12 +91,11 @@ func TestEveryGateConditionHasAPersonsWords(t *testing.T) {
 	}
 }
 
-// A MERGE REFUSAL CARRIES GITLET'S OWN WORD beneath its class, as a
-// value. Several of the host's refusals share one class — a head that moved
-// and a train whose base moved are both stale_version — and a person's
-// surface answers each in its own words by reading the word (the act route's
-// `refusal`, operator.Fail), never by parsing the sentence written for a
-// model; a gate refusal, answered not_ready, carries it as much as any.
+// A MERGE REFUSAL CARRIES GITLET'S OWN WORD beneath its class, as a value:
+// several refusals share a class (a moved head and a moved train base are both
+// stale_version), and a person's surface words each by reading the word (the
+// act route's `refusal`, operator.Fail), never by parsing the model's
+// sentence. A gate refusal, answered not_ready, carries it too.
 //
 // Mutation: have writeRefusalError return a plain error again, and this
 // fails.
@@ -119,18 +114,14 @@ func TestAMergeRefusalCarriesTheHostsOwnWord(t *testing.T) {
 	}
 }
 
-// EVERY MERGE REFUSAL IS CLASSED BY WHAT CLEARS IT, by internal/mcp's one rule
-// for every domain: the change or its repository in a state that refuses the
-// merge until somebody changes it (closed, merged, a draft, archived, a pull
-// mirror) conflict, as a race lost is, and never invalid or forbidden, which
-// would tell a caller who asked nothing wrong to send something else or that
-// they may not; a repository past the most it may keep quota_exceeded; a
-// committer busy or a compaction behind unavailable, as a push's are, since a
-// wait clears them and nobody the sentence could name changes anything; an
-// entry no queue holds, which never becomes live again by itself, not_found.
-// The table names EVERY value of gitlet.MergeRefusals(), so a refusal the
-// domain adds fails here until somebody decides its class, rather than
-// falling into one unexamined; and each is answered in that class.
+// EVERY MERGE REFUSAL IS CLASSED BY WHAT CLEARS IT, by internal/mcp's rule:
+// a change or repository state somebody must change (closed, merged, draft,
+// archived, a pull mirror) is conflict, as a lost race is, never invalid or
+// forbidden, since the caller asked nothing wrong; a repository past its
+// limit quota_exceeded; a busy committer or a lagging compaction unavailable,
+// as a push's are, since a wait clears them; an entry no queue holds
+// not_found. The table names EVERY gitlet.MergeRefusals() value, so a new
+// refusal fails here until its class is decided, and each is answered in it.
 //
 // Mutation: class change_not_open as invalid again → red; class busy as
 // conflict again → red.

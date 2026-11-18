@@ -179,12 +179,13 @@ func TestAWorkerItsRunDelegatedToLeavesItsTurnParked(t *testing.T) {
 		t.Fatalf("turn = %+v, want tn-1 to outlive the spawn, parked", turn)
 	}
 
-	// The failed worker is still the turn's failure when the turn ends.
+	// THE WORKER'S FAILURE IS ITS OWN: the run read it as an answer, and the
+	// turn that goes on to complete did not fail.
 	s.Apply(env("agent_turn_started", turnPayload("tn-1", map[string]any{"resumed": true}),
 		at("2026-06-14T13:00:00Z")))
 	s.Apply(env("agent_turn_completed", turnPayload("tn-1", nil), at("2026-06-14T13:00:09Z")))
-	if last := overlayOf(t, s, "Lead").LastTurn; last == nil || last.Outcome != livestate.OutcomeFailed {
-		t.Errorf("last turn = %+v, want tn-1 failed for its failed worker", last)
+	if last := overlayOf(t, s, "Lead").LastTurn; last == nil || last.Outcome != livestate.OutcomeCompleted {
+		t.Errorf("last turn = %+v, want tn-1 completed despite its failed worker", last)
 	}
 }
 

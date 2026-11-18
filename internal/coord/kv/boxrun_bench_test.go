@@ -21,57 +21,17 @@ import (
 )
 
 // BenchmarkABoxRequestOnItsRun measures what one request of a coding box costs
-// the coordination store, on an embedded three-member broker whose buckets are
-// replicated three times, from a member that does NOT lead the runs bucket —
-// where two of a fleet's three members stand for any one bucket:
-//
-//   - read: the read of the box's run every /box/git/ request makes before
-//     anything else (internal/gitlet/host's admission, through the engine's
-//     host.Runs over sandbox.PendingStore.Get);
-//   - raise: the raise of the run's code floor every ref answer past it and
-//     every applied push makes before it answers (host.Runs.RaiseFloor, through
-//     sandbox.PendingStore.RaiseCodeFloor), each operation a higher floor, so
-//     every one writes;
-//   - append: one bridged call the box makes, appended to the run's log with
-//     no entry of it there, as a call answered without running is
-//     (sandbox.PendingStore.AppendBridgeCall) — where the log's size is paid
-//     now that the record does not carry it — that cost the engine nothing
-//     (a call answered by a builtin), so the record is not written;
-//   - append-paid: the same call where it moved what the job's bridged calls
-//     cost (a delegated worker's model call, say), so the append also reads
-//     and writes the run's record with the new total — the path every call
-//     that costs the engine anything takes;
-//   - begin: the write of a call's entry on the run's log AHEAD OF IT, before
-//     its tool runs (sandbox.AppendBegin: the write every bridged call waits
-//     on before it runs, internal/api/mcpbridge's "A call is on its run's
-//     record before it runs"), each one withdrawn after it is timed so the log
-//     stands as it did;
-//   - record: the update that completes a call's entry as it finishes
-//     (sandbox.AppendRecord): its entry taken out and the call listed in its
-//     place, in one write — the append, on a log holding the entry, each
-//     entry written before it is timed.
-//
-// THE RUN IS A REALISTIC ONE, mid-job: launched with one repository, its turn
-// parked (its bookkeeping and a 32 KiB frozen context), and the bridge's log
-// full at sandbox.MaxBridgeCalls calls of 256 bytes of arguments and 2 KiB of
-// output each, kept beside the record ([sandbox.BridgeLog]). Reported beside
-// the time are its spread (ms-p50, ms-p99), the bytes of the run's own record
-// (row-bytes) — what each read moves, and what each raise reads and writes
-// back — and of its log (log-bytes), what each append reads and writes back.
-// A request that fails fails the benchmark.
-//
-// Measured on 2026-11-03, thirty operations an arm and one count, on two
-// E-cores of an Intel Core Ultra 7 265U, with the log beside the record: see
-// docs/concepts/gitlet.md ("What a box's request costs its run's record")
-// for the figures, both layouts', and for the size of the sealed set of
-// secrets kept beside the record, which no arm moves. With the log on the
-// record, as main's run record kept it (measured 2026-11-01 on the same
-// machine), the record was 516 173 bytes, nearly all of it the log, a read
-// took 5.8 ms at the median (7.9 at the 99th percentile) and a raise 11.1 ms
-// (26.0): every request of a box moved the run's whole tool log, not the
-// request. The begin and record arms, and append beside them, were measured on
-// 2026-11-11, a thousand writes an arm and one count, on two E-cores of the
-// same machine: see the same section for their figures.
+// the coordination store: three members at three replicas, from a member NOT
+// leading the runs bucket, as two of three are for any bucket. Its arms: read,
+// host.Runs' admission read of every /box/git/ request (PendingStore.Get);
+// raise, a higher code floor each time, so every one writes (RaiseCodeFloor);
+// append, a call that cost the engine nothing, so only the log is written
+// (AppendBridgeCall); append-paid, one that moved the job's spend, so the record
+// is read and written too; begin, the entry every bridged call waits on before
+// it runs (sandbox.AppendBegin; mcpbridge's "A call is on its run's record
+// before it runs"), withdrawn after timing; record, an entry completed in one
+// write (sandbox.AppendRecord). Reports ms-p50, ms-p99, row-bytes, log-bytes;
+// figures: docs/concepts/gitlet.md, "What a box's request costs its run's record".
 func BenchmarkABoxRequestOnItsRun(b *testing.B) {
 	ctx := context.Background()
 	fleet := boxRunFleet(b)
@@ -266,7 +226,10 @@ func boxRunFleet(b *testing.B) *FleetStore {
 }
 
 // seedBoxRun launches the benchmark's run, parks its turn and fills its bridge
-// log, answering its turn and its launch.
+// log, answering its turn and its launch. THE RUN IS A REALISTIC ONE, mid-job:
+// one repository, a 32 KiB frozen context, and the log, kept beside the record
+// ([sandbox.BridgeLog]), full at sandbox.MaxBridgeCalls calls of 256 bytes of
+// arguments and 2 KiB of output each.
 func seedBoxRun(b *testing.B, store *sandbox.CoordStore) (turn, launch string) {
 	b.Helper()
 	ctx := b.Context()

@@ -21,12 +21,10 @@ import (
 )
 
 // AN EPOCH RESOLVES ITS ROSTER'S CONTACTS THROUGH THE RESOLVER IT WAS BUILT
-// WITH — on a running node its own chain, the secret store and then the
-// environment it was handed — and never the process environment behind it, so
-// a teammate's id reads in a seat's prompt as notification routing reads it.
-// Read off the prompt a runner the epoch builds sends, because the resolver is
-// held by the epoch and handed to the prompt's roster by [Company.RunnerFor],
-// and either half alone could drop it.
+// WITH, never the process environment, so a teammate's id reads in a prompt as
+// notification routing reads it. Read off the prompt a runner sends, because
+// the epoch holds the resolver and [Company.RunnerFor] hands it to the roster:
+// either half could drop it.
 func TestAnEpochResolvesItsRosterThroughTheResolverItWasBuiltWith(t *testing.T) {
 	t.Parallel()
 	const variable = "CREWLET_ENGINE_TEST_EPOCH_CONTACT"
@@ -56,8 +54,8 @@ roles:
 		t.Errorf("the CEO's prompt does not name its report by the id the epoch's "+
 			"resolver gives them:\n%s", prompt)
 	}
-	// THE CONTROL: an epoch built from the environment alone — `crewlet
-	// validate`'s — reads the process's, which has no such variable.
+	// The control: an environment-only epoch (`crewlet validate`'s) reads
+	// the process's, which has no such variable.
 	plain, err := NewCompany(cfg)
 	if err != nil {
 		t.Fatalf("NewCompany: %v", err)
@@ -69,9 +67,8 @@ roles:
 	}
 }
 
-// leadPrompt is everything the CEO's executor is launched with on the first
-// iteration of a turn c builds: the standing instructions and the brief its
-// run is handed.
+// leadPrompt is the standing instructions and brief the CEO's executor is
+// launched with on the first iteration of a turn c builds.
 func leadPrompt(t *testing.T, c *Company) string {
 	t.Helper()
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: refusingProvider{}}})
@@ -116,13 +113,10 @@ func (s *promptRecorder) first() string {
 	return s.text
 }
 
-// THE ENGINE'S OWN CHART SEAMS FIND A PERSON THROUGH THIS NODE'S CHAIN. A
-// person's contact ids may each be a `${VAR}`, and the one here is set in no
-// process — only in the environment the engine was handed — so a seam that
-// read the process environment instead finds nobody, while notification
-// routing, which resolves through the chain, goes on mentioning the person it
-// could not find. One engine, because what each subtest holds is a different
-// seam over the same chart.
+// THE ENGINE'S OWN CHART SEAMS FIND A PERSON THROUGH THIS NODE'S CHAIN. The
+// contact `${VAR}` here is set only in the environment the engine was handed,
+// so a seam reading the process environment finds nobody while notification
+// routing still mentions them. Each subtest is a different seam over one chart.
 func TestTheEnginesChartSeamsResolveThroughItsOwnChain(t *testing.T) {
 	t.Parallel()
 	const slack = "CREWLET_ENGINE_TEST_FOUNDER_SLACK"
@@ -161,8 +155,7 @@ roles:
 	t.Cleanup(func() { e.Stop(context.Background()) })
 	deps := e.workDeps(e.Company())
 
-	// THE WORK TOOLS' ROSTER, which a handle a seat typed is checked against,
-	// holds the person by the id the handed environment gives them.
+	// The work tools' roster, which a typed handle is checked against.
 	t.Run("the_work_tools_roster_knows_them_by_that_id", func(t *testing.T) {
 		t.Parallel()
 		found := colleague.Resolve("U0HANDED", deps.Seats())
@@ -171,8 +164,7 @@ roles:
 		}
 	})
 
-	// A MENTION BY THAT ID REACHES THEIR SEAT: what a comment's @-mention is
-	// turned into a wake through.
+	// The seam a comment's @-mention becomes a wake through.
 	t.Run("a_mention_by_that_id_reaches_their_seat", func(t *testing.T) {
 		t.Parallel()
 		if handle, ok := (liveSeats{engine: e}).ResolveSeat("U0HANDED"); !ok || handle != "founder" {
@@ -180,8 +172,8 @@ roles:
 		}
 	})
 
-	// AN EXECUTOR'S QUESTION PUT TO THAT ID IS PUT TO THEM, rather than
-	// falling back to the asking seat's lead chain as a name nobody has.
+	// An executor's question to that id reaches them, not the asking
+	// seat's lead chain as a name nobody has.
 	t.Run("an_executors_question_by_that_id_is_put_to_them", func(t *testing.T) {
 		t.Parallel()
 		got := audienceResolver{engine: e}.ResolveAudience(
@@ -192,12 +184,10 @@ roles:
 	})
 }
 
-// A RUNNER'S ROSTER KNOWS WHICH CHAT THE COMPANY RUNS. On the engine's own a
-// person answers to their seat's handle, so a lead's roster gives it and is
-// told to mention them by it; on a company whose chat is nobody's they have
-// no account to be mentioned on. Read off the prompt a runner the epoch builds sends, because
-// the backend is decided by the epoch's configuration and handed to the roster
-// by [Company.RunnerFor], and the roster alone cannot see it.
+// A RUNNER'S ROSTER KNOWS WHICH CHAT THE COMPANY RUNS: on Chatlet a person is
+// mentioned by their seat's handle, on `none` they have no account to mention.
+// Read off the prompt, because [Company.RunnerFor] hands the epoch's backend
+// to the roster, which cannot see it alone.
 func TestARunnersRosterKnowsWhichChatTheCompanyRuns(t *testing.T) {
 	t.Parallel()
 	for backend, want := range map[string]string{

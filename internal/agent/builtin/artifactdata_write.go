@@ -104,9 +104,8 @@ func (t *writeArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	if a.head.Status == artifactsdomain.StatusTrashed {
-		// THE ARTIFACT'S STATE, under its own sentinel: never the
-		// datastore's ErrGone, which is a purge's and says the data will
-		// not come back.
+		// The artifact's own sentinel, never the datastore's ErrGone: that
+		// is a purge's, saying the data will not come back.
 		return refusedBy(tools.RefusalConflict, artifactsdomain.ErrTrashed, fmt.Sprintf("%s: the "+
 			"artifact is in the trash, and its data is not written until a person restores "+
 			"it. Nothing was written.", t.Name())), nil
@@ -128,10 +127,9 @@ func (t *writeArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // conflictRows is the part of a conflict's current rows this call may hand
-// back, and whether any was withheld: every row where the turn acts for
-// nobody, and otherwise only the rows the requester's reading admits by their
-// collection's own rule, exactly as a read is filtered. The store read them at
-// the agent's record, so without this an agent's own rows in an `own_rows` or
+// back, and whether any was withheld. The store read them at the agent's
+// record, so where the turn acts for somebody they are filtered as a read is
+// ([dataAdmission.shows]); without that, an agent's own rows in an `own_rows` or
 // `private` collection would reach a requester the read path keeps them from.
 // A schema this node could not read withholds every row: the closed end.
 func (d dataTools) conflictRows(ctx context.Context, a dataAdmission,
@@ -173,8 +171,8 @@ func (d dataTools) verdict(ctx context.Context, turn *turnctx.Turn, tool string,
 	case artifacts.DataApplied:
 		return jsonResult(withArtifactOperation(out, a.c))
 	case "":
-		// ON THE LOG AND NOT YET APPLIED HERE: the verdict is decided, and
-		// this node has not caught up to read it.
+		// On the log, not yet applied here: the verdict is decided, and this
+		// node has not caught up to read it.
 		out["verdict"] = "pending"
 		said := partial(out, NoteKey, caveat.DatastorePending("The write is on the "+
 			"datastore's log and this node has not applied it yet, so its verdict is "+
@@ -210,9 +208,8 @@ func (d dataTools) verdict(ctx context.Context, turn *turnctx.Turn, tool string,
 				"as it is now; the others are not shown. Merge onto what is shown and write " +
 				"again with its `version`."
 		}
-		// A REFUSAL, answered as one below: its note is the model's alone,
-		// and a person's surface answers the conflict's own sentence — and
-		// no receipt, so the rows rendered for one are not kept either.
+		// A refusal: the note is the model's alone, a person's surface answers
+		// the conflict's own sentence, and no receipt keeps the rows rendered.
 		out[NoteKey] = note
 		r, err := read.answer(ctx, tool, withArtifactOperation(out, a.c),
 			"Write fewer rows at once.")
@@ -228,11 +225,10 @@ func (d dataTools) verdict(ctx context.Context, turn *turnctx.Turn, tool string,
 		fmt.Sprintf("%s did not write anything: the datastore refused the batch (%s: %s). "+
 			"No op of it landed.", tool, res.Verdict, res.Reason))
 	if res.Verdict == artifacts.DataQuota {
-		// A LIMIT ON WHAT THE DATA MAY HOLD, its own class, in a person's
-		// words beside the model's sentence (ADR-0060): the sentence names
-		// the applier's reason, a collection, a count or a Tier A key, and a
-		// person's surface answers the catalog's phrasing in its place, as a
-		// publish past the company's storage is answered.
+		// Its own class, in a person's words beside the model's sentence
+		// (ADR-0060): the sentence names the applier's reason (a collection,
+		// a count, a Tier A key), which a person's surface replaces with the
+		// catalog's phrasing.
 		return toPerson(refusal, caveat.DatastoreQuotaReached()), nil
 	}
 	return refusal, nil

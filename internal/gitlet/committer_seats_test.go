@@ -11,16 +11,13 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A SEAT'S PUSH THROUGH THE COMMITTER: decided on a node that judges it from
-// the chart of its own epoch, and on no other — never on a node confirmed
-// behind the company's configuration, nor on one that holds no chart yet,
-// each of which hands it to the repository's next committer — and counted on
-// its company day by the apply of the record that lands it.
+// A SEAT'S PUSH THROUGH THE COMMITTER: decided only on a node judging it from
+// its own epoch's chart (a node confirmed behind the configuration, or holding
+// no chart, hands it to the repository's next committer), and counted on its
+// company day by the apply of the record that lands it.
 
-// seatProposal is one push to repo by seat handle of undecided commands, as
-// the engine stamps a push its seat's coding box made: the run behind it —
-// the turn that launched the run, its work item, the run's launch and its
-// harness — received by git.
+// seatProposal is a push to repo by seat handle, stamped with the run
+// provenance the engine gives a push from that seat's coding box.
 func seatProposal(repo, handle string, cmds ...gitlet.Command) gitlet.Proposal {
 	p := proposal(repo, cmds...)
 	p.Principal = gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: handle,
@@ -30,15 +27,13 @@ func seatProposal(repo, handle string, cmds ...gitlet.Command) gitlet.Proposal {
 }
 
 // A COMMITTER BEHIND THE COMPANY'S CONFIGURATION DECIDES NO SEAT'S PUSH
-// (M3-O8's hard arm): while its gate answers that the node is confirmed behind
-// — shed or stuck — a seat's push is refused gitlet.ErrNotServing, decided by
-// nobody and appending nothing, whether it was proposed while the gate was
-// shut or queued before and its batch formed after; a person's push is
-// decided as ever; and with the gate open again, the seat's push under the
-// same push id lands once.
+// (M3-O8's hard arm): while its gate confirms the node behind, a seat's push
+// is refused gitlet.ErrNotServing, appending nothing, whether proposed while
+// the gate was shut or queued before and batched after; a person's push is
+// decided as ever; with the gate open again the same push id lands once.
 //
-// Mutation: drop the gate (behindFor answering "") — the seat's push is
-// decided and lands on the node behind, red.
+// Mutation: drop the gate (behindFor answering "") — the seat's push lands
+// on the node behind, red.
 func TestACommitterBehindTheConfigurationDecidesNoSeatsPush(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -67,9 +62,8 @@ func TestACommitterBehindTheConfigurationDecidesNoSeatsPush(t *testing.T) {
 		t.Fatalf("the seat's push, the gate open again, left its ref at %q", got)
 	}
 
-	// QUEUED BEFORE THE GATE SHUT, its batch formed after: a person's batch
-	// holds the repository's queue at its publish while the seat's push
-	// waits behind it, and the gate shuts in between.
+	// Queued before the gate shut, batched after: a person's batch holds the
+	// queue at its publish while the seat's push waits behind it.
 	gate := newGate(n.pub)
 	held, _ := committerOn(t, n, gate, current)
 	first := proposeAsync(ctx, held, proposal(repo, update("refs/heads/held", gitlet.ZeroOID, oidOf("H"))))
@@ -91,15 +85,14 @@ func TestACommitterBehindTheConfigurationDecidesNoSeatsPush(t *testing.T) {
 	requireOK(t, await(t, proposeAsync(ctx, held, queued)))
 }
 
-// A COMMITTER WITH NO CHART HANDS A SEAT'S PUSH ON: a node that has installed
-// no epoch yet holds no chart to judge a seat's grant by, so in a batch of a
-// person's push and a seat's, the seat's is refused gitlet.ErrNotServing — a
-// refusal about the node, which the router hands to the repository's next
-// committer — and decided by nobody, while the person's lands. Never the
-// seat's refused not_permitted by a chart nobody read, which would record it.
+// A COMMITTER WITH NO CHART HANDS A SEAT'S PUSH ON: with no epoch installed,
+// in a batch of a person's push and a seat's, the seat's is refused
+// gitlet.ErrNotServing (about the node, so the router hands it to the next
+// committer) and decided by nobody, while the person's lands. Refusing it
+// not_permitted from a chart nobody read would record it.
 //
 // Mutation: decide the batch whole with the empty rules — the decide refuses
-// its caller's bug, and the person's push fails with it, red.
+// its caller's bug and the person's push fails with it, red.
 func TestAChartlessCommitterHandsASeatsPushOn(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -127,14 +120,14 @@ func TestAChartlessCommitterHandsASeatsPushOn(t *testing.T) {
 	}
 }
 
-// A SEAT'S PUSH LANDS, COUNTED ON ITS COMPANY DAY: a full_access seat of the
-// owning unit's push is decided by its grant on the committer's chart and
-// lands — its row naming the seat as its actor — and its record's apply counts
-// it on the day the committer stamped; past code.limits.pushes_per_seat_day,
-// the seat's next push is refused push_quota whole, appending nothing, while a
-// person's push beside it lands, counted nowhere.
+// A SEAT'S PUSH LANDS, COUNTED ON ITS COMPANY DAY: an owning-unit full_access
+// seat's push is decided by its grant on the committer's chart and lands, its
+// row naming the seat as actor, and its record's apply counts it on the day
+// the committer stamped; past code.limits.pushes_per_seat_day its next push is
+// refused push_quota whole, appending nothing, while a person's push lands,
+// counted nowhere.
 //
-// Mutation: stamp no day on a seat's entry — the apply counts nothing, and the
+// Mutation: stamp no day on a seat's entry — the apply counts nothing and the
 // second push lands past the quota, red.
 func TestASeatsPushLandsCountedOnItsDay(t *testing.T) {
 	t.Parallel()

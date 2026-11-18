@@ -37,143 +37,127 @@ type Cache struct {
 	now      func() time.Time
 	knobs    *knobs
 
-	// image is the grammar of an incarnation, built at Open from the
-	// declarations of the derived files (derived.go), and mw the
-	// maintainer's view of their writes: read-only once built, and read by
-	// every goroutine of the cache.
+	// image is the grammar of an incarnation, built at Open from the derived
+	// files' declarations (derived.go), and mw the maintainer's view of their
+	// writes: read-only once built, so every goroutine reads them unlocked.
 	image *image
 	mw    maintWrites
 
 	// fetchConcurrency is how many downloads one round runs at once
-	// (FetchConcurrency), and fetches the node's slots every round's
-	// downloads share (NodeFetches), each with its copy buffer: fields, so
-	// the suite can narrow both before a sync (export_test.go).
+	// (FetchConcurrency), and fetches the node's slots, each with its copy
+	// buffer, that every round's downloads share (NodeFetches): fields, so the
+	// suite can narrow both before a sync (export_test.go).
 	fetchConcurrency int
 	fetches          *fetchSlots
-	// full is the node's slots for full reads of a repository's rows
-	// against the estate, every round's on the node sharing them
-	// (MaxFullRounds): a field, so the suite can narrow it before a sync.
+	// full is the node's slots for full reads of a repository's rows against the
+	// estate, shared by every round (MaxFullRounds): a field, so the suite can
+	// narrow it before a sync.
 	full *fullRounds
 	// unobserve gives the pool's observer back (Open, Stop).
 	unobserve func()
-	// roundPacks is how many packs a full round leaves before it writes its
-	// own multi-pack-index (MidxRoundPacks), and midxPacks how many beside
-	// the maintainer's make a repository due again (MidxPacks): fields, so
-	// the suite can lower them rather than push dozens of packs a case
-	// (knobs.roundPacks, knobs.midxPacks).
+	// roundPacks is how many packs a full round leaves before it writes its own
+	// multi-pack-index (MidxRoundPacks), and midxPacks how many beside the
+	// maintainer's make a repository due again (MidxPacks): fields, so the suite
+	// can lower them (knobs.roundPacks, knobs.midxPacks).
 	roundPacks, midxPacks int
-	// noLookupTable is BenchmarkMidx's arm WITHOUT the bitmap's lookup
-	// table (ServeConfig), the figure the table is weighed against — set
-	// only by the suite (export_test.go), so its zero value, the table
-	// written, is every node's. An atomic, since the maintainer reads the
-	// serve configuration on its own goroutine.
+	// noLookupTable is BenchmarkMidx's arm WITHOUT the bitmap's lookup table
+	// (ServeConfig), set only by the suite (export_test.go), so every node writes
+	// the table. Atomic: the maintainer reads the serve configuration on its own
+	// goroutine.
 	noLookupTable atomic.Bool
-	// tmpBytes is what tmp/ holds for the cache's own work: downloads in
-	// flight, until each file is renamed into place or removed, and the
-	// pushed packs adoptions staged for a round or a listing to install
-	// (adopt.go), until each is installed or dropped.
+	// tmpBytes is what tmp/ holds for the cache's own work: downloads in flight
+	// and pushed packs staged by adoptions (adopt.go), until each is placed or
+	// dropped.
 	tmpBytes atomic.Int64
-	// heldBytes is what every incarnation holds — current and retiring, from
-	// the moment it is made or indexed until it is discarded — and
-	// heldRepos the repositories with a current incarnation: RUNNING TOTALS,
-	// moved where what they count moves (setSize, newIncarnation, retire,
-	// discard), so the gauges a round sets cost two loads, never a walk of
-	// every repository on the node under the lock every sync takes.
+	// heldBytes is what every incarnation, current or retiring, holds from being
+	// made or indexed until discarded, and heldRepos the repositories with a
+	// current incarnation: RUNNING TOTALS moved with what they count (setSize,
+	// newIncarnation, retire, discard), so a round's gauges cost two loads, never
+	// a walk of every repository under the lock every sync takes.
 	heldBytes, heldRepos atomic.Int64
-	// chainedRepos is how many repositories' current incarnation serves from
-	// an installed published chain (crewlet.code.cache.chained): a running
-	// total moved by noteChained, the rest serving in own mode.
+	// chainedRepos is how many repositories' current incarnation serves from an
+	// installed published chain (crewlet.code.cache.chained), the rest in own
+	// mode: a running total moved by noteChained.
 	chainedRepos atomic.Int64
-	// installer is the installed chain's background installer (layers.go):
-	// its queue, its share of the node's fetches and the layers maintainers
-	// adopted on this node, run by Start.
+	// installer is the installed chain's background installer (layers.go): its
+	// queue, its share of the node's fetches and the layers maintainers adopted
+	// here, run by Start.
 	installer *layerInstaller
-	// memoBytes is what every incarnation's memo holds, of heldBytes — a
-	// RUNNING TOTAL moved where an incarnation's memo record moves
-	// (setDerived, discard), which the janitor holds to the memo's share of
-	// the budget (MemoShare, memo.go) with no walk of the node's copies.
-	// memoStaged is what every read's run has staged for the memo in tmp/
-	// and not yet placed or given back (MemoBatch), of tmpBytes: the memo's
-	// too, so the share is held to both together (memoExcess) and a
-	// repository is never evicted for a page in flight.
+	// memoBytes is the memos' part of heldBytes, a RUNNING TOTAL moved with an
+	// incarnation's memo record (setDerived, discard), which the janitor holds to
+	// MemoShare (memo.go) with no walk. memoStaged is what reads have staged for
+	// the memo in tmp/ and not yet placed or given back (MemoBatch), of tmpBytes:
+	// the share holds both together (memoExcess), so a repository is never
+	// evicted for a page in flight.
 	memoBytes, memoStaged atomic.Int64
-	// codeIndexBytes is what every incarnation's code index holds, of
-	// heldBytes: a running total moved as memoBytes is, which the janitor
-	// holds to the indexes' share of the budget (CodeIndexShare, codeindex.go).
+	// codeIndexBytes is the code indexes' part of heldBytes, a running total like
+	// memoBytes, which the janitor holds to CodeIndexShare (codeindex.go).
 	codeIndexBytes atomic.Int64
-	// placement is where this node keeps code indexes (Options.Placement),
-	// nil for nowhere; indexWanted is the repositories a round moved the refs
-	// of since the indexer last looked, under indexMu, and indexKicks its
-	// wake. indexBack, under indexMu too, is what the budget took of the
-	// repositories this node keeps an index of — the copy it evicted, the
-	// index it trimmed — by the bytes each held: what the indexer waits for
-	// room for before it fills or builds that one again (codeindex.go); and
-	// indexSeen, under indexMu too, the place among each repository's index
-	// holders the indexer last saw this node in, and since when (indexPlace).
+	// placement is where this node keeps code indexes (Options.Placement), nil
+	// for nowhere. Under indexMu: indexWanted, the repositories a round moved the
+	// refs of since the indexer last looked (indexKicks wakes it); indexBack,
+	// what the budget took of the repositories this node indexes (the evicted
+	// copy, the trimmed index) by bytes, which the indexer waits for room for
+	// before filling or building it again (codeindex.go); indexSeen, this node's
+	// place among each repository's index holders as last seen, and since when
+	// (indexPlace).
 	placement   *Placement
 	indexMu     sync.Mutex
 	indexWanted map[string]bool
 	indexBack   map[string]indexTaken
 	indexSeen   map[string]indexPlace
 	indexKicks  chan struct{}
-	// droppingBytes is what every incarnation's dropping view holds, of
-	// heldBytes — the pack files an expunge's begin left dropping, which
-	// leave with its commit — a RUNNING TOTAL moved where an incarnation's
-	// dropping files move (setDropping, discard), and reported as it stands
-	// (crewlet.code.cache.dropping.bytes): what an open expunge keeps on the
-	// node's disk beside the live packs, with no walk of the node's copies.
+	// droppingBytes is the dropping views' part of heldBytes (the packs an
+	// expunge's begin left dropping until its commit): a RUNNING TOTAL moved with
+	// an incarnation's dropping files (setDropping, discard), reported as
+	// crewlet.code.cache.dropping.bytes with no walk of the node's copies.
 	droppingBytes atomic.Int64
-	// memoNewest is the node's NEWEST COHORT of the memo (memo.go) — where
-	// every answer is placed and every entry a read finds in an older one is
-	// moved — read without a lock; memoFill is what has been placed in it
-	// since it was opened, past a sixteenth of the share of which
-	// (memoCohortsPerShare) the next placement opens another; memoReserved is
-	// the newest cohort the cache's root says a process may have placed in
-	// (cohortsName), which memoNewest never passes (reserveCohort). cohortMu
-	// guards memoFill, memoReserved and every move of memoNewest, and is held
-	// across a reservation's write — two syncs — so it is taken after every
-	// other lock and never with an entry's mu, which every memo lookup takes.
+	// memoNewest is the memo's NEWEST COHORT (memo.go), where every answer is
+	// placed and every entry a read finds in an older one is moved; read without
+	// a lock. memoFill is what was placed in it since it opened: past a sixteenth
+	// of the share (memoCohortsPerShare) the next placement opens another.
+	// memoReserved is the newest cohort the root says a process may have placed
+	// in (cohortsName), which memoNewest never passes (reserveCohort). cohortMu
+	// guards memoFill, memoReserved and every move of memoNewest; held across a
+	// reservation's write (two syncs), it is taken after every other lock and
+	// never with an entry's mu, which every memo lookup takes.
 	cohortMu     sync.Mutex
 	memoNewest   atomic.Uint64
 	memoFill     int64
 	memoReserved uint64
-	// scratchBytes is what scratch/ held when the janitor last measured it:
-	// a push's scratch is written by its client's receive-pack, so only the
-	// disk knows.
+	// scratchBytes is what scratch/ held when the janitor last measured it: a
+	// push's scratch is written by its client's receive-pack, so only the disk
+	// knows.
 	scratchBytes atomic.Int64
-	// clock is where the heat's windows and the cache's own are counted
-	// from, the instant Open made it (heat.go), each structure reading it
-	// under its own lock and never behind the latest slot it acted at
-	// (heatNow); heat is what the node served of each repository, which the
-	// host counts into; and churn is what the cache spent on its own account
-	// — evictions and repairs — over the same windows, for its status.
+	// clock counts the heat's windows and the cache's own from Open (heat.go),
+	// each structure reading it under its own lock and never behind the latest
+	// slot it acted at (heatNow); heat is what the node served of each
+	// repository, counted by the host; churn is the cache's own spending
+	// (evictions, repairs) over the same windows, for its status.
 	clock heatClock
 	heat  *Heat
 	churn cacheChurn
-	// maint is the whole-repository work in flight against the node's
-	// memory — the maintenance runs, the round's indexes, Verify's checks —
-	// and the budget it is held to, and maintMemory what the runs beside the
-	// largest may be charged at together (MaintenanceMemoryPerCore for each
-	// core the node's memory backs): a pass admits a run against both
-	// (maintain.go). maintMemory a field, so the suite can narrow it
-	// (export_test.go).
+	// maint is the whole-repository work in flight against the node's memory
+	// (maintenance runs, a round's indexes, Verify's checks) and its budget;
+	// maintMemory is what the runs beside the largest may be charged together
+	// (MaintenanceMemoryPerCore per core the memory backs), a field so the suite
+	// can narrow it. A pass admits a run against both (maintain.go).
 	maint       maintFlight
 	maintMemory int64
-	// memReserve is what the node keeps of its memory for everything but its
-	// background work, fixed at Open from the pool's lanes (memory.go).
-	// Under memMu: memory, the node's memory as last read; memSource, where
-	// each maintainer pass reads it again (the pool's ReadMemory, or the
-	// suite's figure); memFailing, that the last read failed and said so.
-	// refusals is what the maintainer's latest walk found refused for it.
+	// memReserve is the memory the node keeps for everything but its background
+	// work, fixed at Open from the pool's lanes (memory.go). Under memMu: memory,
+	// as last read; memSource, where each maintainer pass rereads it (the pool's
+	// ReadMemory, or the suite's figure); memFailing, that the last read failed
+	// and said so. refusals is what the maintainer's latest walk found refused.
 	memReserve int64
 	memMu      sync.Mutex
 	memory     gitproc.Memory
 	memSource  func() (gitproc.Memory, error)
 	memFailing bool
 	refusals   memoryRefusals
-	// mark is the code log as this process has seen it answered, and
-	// rereads counts the marks made for whole reads (Cache.reread): one log
-	// under every repository, so what one round learns of it reaches all.
+	// mark is the code log as this process has seen it answered, and rereads
+	// counts the marks made for whole reads (Cache.reread): one log under every
+	// repository, so what one round learns of it reaches all.
 	mark    logMark
 	rereads atomic.Uint64
 	// installHook, when set, is called at each stage of a pack's install
@@ -183,9 +167,9 @@ type Cache struct {
 	// (ConfirmHint; the suite's, export_test.go).
 	hashHook func(pack string, bound time.Duration)
 
-	// releaseClaim gives back this process's hold on the directory, taken
-	// over from Prepare: once, by Stop when nothing of the cache's is
-	// running in the directory, else by the last of that work to end.
+	// releaseClaim gives back this process's hold on the directory, taken over
+	// from Prepare: once, by Stop when nothing of the cache's runs there, else by
+	// the last of that work to end.
 	releaseClaim func()
 
 	// life is the cache's own lifetime, never a caller's: what the cache
@@ -215,14 +199,12 @@ type Cache struct {
 	mu      sync.Mutex
 	entries map[string]*entry
 
-	// lifeMu guards the lifecycle: started, stopped, and running — the
-	// cache's work in flight in its directory (a janitor pass, a move into
-	// trash/), each registered by enter and ended by leave. Once Stop has
-	// begun, enter refuses, because the directory is the next Open's from
-	// the moment running is zero; and that is decided under this lock, not
-	// raced against the caller's context, so a Stop with nothing running
-	// gives the claim back before it returns whatever its context says. A
-	// leaf: taken under entry.mu, and nothing is taken under it.
+	// lifeMu guards started, stopped and running, the cache's work in flight in
+	// its directory (a janitor pass, a move into trash/), each between enter and
+	// leave. Once Stop begins enter refuses, since the directory is the next
+	// Open's once running is zero; decided under this lock, not raced against a
+	// context, so a Stop with nothing running gives the claim back before it
+	// returns. A leaf: taken under entry.mu, and nothing is taken under it.
 	lifeMu  sync.Mutex
 	started bool
 	stopped bool
@@ -235,43 +217,18 @@ type Cache struct {
 // git runs proc-receive with no arguments, so the probe never fires for git.
 const hookProbe = "--crewlet-probe"
 
-// Open opens a prepared cache: takes over the claim [Prepare] took, derives its
-// memory budget, clears what the previous process left in flight, rewrites
-// the hook (and waits until it can be exec'd) and indexes every repository
-// Prepare found. It runs no git, reads no rows, and reads nothing of repos/
-// that Prepare already read.
-//
-//  1. o is validated ([ErrOptions]); o.Layout must be one Prepare returned
-//     ([ErrNotACache] otherwise), and is opened once.
-//  2. The claim passes from the Layout to the cache, which holds it until
-//     [Cache.Stop]: two engines pointed at one gitlet.cache_dir would empty
-//     each other's tmp/ and scratch/ at boot and race on every repository's
-//     files, so the second is refused at its Prepare ([ErrCacheInUse]).
-//     Any failure from here gives the claim back. What its background work
-//     may hold of the node's memory is derived from the memory its git pool
-//     read (memory.go): the pool refuses a node whose memory cannot be read,
-//     so a cache is never opened on a guessed budget.
-//  3. scratch/ and tmp/ are each renamed into trash/ and made again empty —
-//     an instant at any size. What they held belonged to requests of the
-//     process that made it, so every one of them is an orphan now; trash/
-//     is the janitor's, so a boot never waits on a large removal.
-//  4. hooks/proc-receive is written again — the binary's path changes
-//     across an upgrade — and SETTLED (hostbox.Settle): a script just
-//     written is refused by the kernel while any process holds it open for
-//     writing, which every fork during the write does until it execs, and
-//     the first push's receive-pack execs it, so the wait is this call's
-//     rather than a push's.
-//  5. Prepare's reading of repos/ is acted on: every entry it found that is
-//     not a repository's kept incarnation is moved into trash/ and logged —
-//     a lower incarnation an interrupted rebuild left (the HIGHEST holds the
-//     newest downloads), a stray, an incarnation whose state is another
-//     build's format — and every kept incarnation is indexed from its state,
-//     or with none when its state was missing or undecodable.
-//  6. The memo's newest cohort is opened past every one a previous process
-//     may have placed an answer in — the newest the cache's root says it
-//     reserved, and every one a state records — and reserved, durably,
-//     before anything is placed in it (memo.go's openMemo): a cache whose
-//     root takes no write opens no cache.
+// Open opens a prepared cache (package doc, "A boot starts from the disk,
+// once"), running no git and reading no rows, in steps:
+//  1. o is validated ([ErrOptions]); o.Layout must be one [Prepare] returned
+//     ([ErrNotACache]) and opens once.
+//  2. The cache holds Prepare's claim until [Cache.Stop], any failure giving
+//     it back ([ErrCacheInUse] keeps a second engine off one gitlet.cache_dir),
+//     and derives its memory budget from what the git pool read (memory.go).
+//  3. clearBoot empties scratch/ and tmp/ into trash/.
+//  4. writeHook rewrites and settles the hook.
+//  5. index acts on Prepare's reading of repos/.
+//  6. openMemo opens and reserves the memo's newest cohort: a root that takes
+//     no write opens no cache.
 func Open(ctx context.Context, o Options) (*Cache, error) {
 	if err := o.validate(); err != nil {
 		return nil, err
@@ -303,11 +260,10 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 	if c.log == nil {
 		c.log = log
 	}
-	// THE BOUND ON MAPPED RUNS, from the count of mappings the kernel lets
-	// this process hold (runmaps.go). A count that cannot be read is
-	// Linux's default, the least a distribution ships, and said so: guessed
-	// high, the bound would let the runs take the mappings the runtime's own
-	// heap needs.
+	// THE BOUND ON MAPPED RUNS, from the kernel's mapping limit for this process
+	// (runmaps.go). An unreadable count is taken as Linux's default, the least a
+	// distribution ships, and logged: guessed high, the runs could take the
+	// mappings the runtime's heap needs.
 	mapCount, err := readMapCount()
 	if err != nil {
 		c.log.Warn("code_cache_map_count_unread", "error", err, "assumed", DefaultMapCount)
@@ -368,9 +324,9 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 		"budget", o.MaxBytes, "trashed", trashed, "memory", c.memory.Bytes, "memory_from", c.memory.From,
 		"memory_reserved", c.memReserve, "maintenance_budget", c.maint.budgetNow(), "mapped_runs", c.maps.most)
 	c.setGauges()
-	// THE OBSERVER, last: every run of the pool's from now on reports what
-	// it named to this cache (report.go). One cache a pool, and given back
-	// by Stop, so a cache opened again over the same pool installs its own.
+	// THE OBSERVER, last: every pool run from now on reports what it named to
+	// this cache (report.go). One cache a pool, given back by Stop, so a cache
+	// opened again over the same pool installs its own.
 	unobserve, err := o.Git.Observe(c.observe)
 	if err != nil {
 		return nil, fmt.Errorf("%w: a git pool reports its runs to one cache, and this one already reports to "+
@@ -381,8 +337,11 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 	return c, nil
 }
 
-// clearBoot is Open's step 3, after the fixed directories are made sure of
-// (an operator's rm of one is not a reason to refuse a boot).
+// clearBoot makes sure of the fixed directories (an operator's rm of one is no
+// reason to refuse a boot), then renames scratch/ and tmp/ into trash/ and
+// makes them anew: what they held was the previous process's requests', all
+// orphans now, and the rename is instant at any size, trash/ being the
+// janitor's to empty.
 func (c *Cache) clearBoot() error {
 	for _, name := range []string{reposDir, trashDir, hooksDir} {
 		if err := os.MkdirAll(filepath.Join(c.dir, name), hostbox.DirMode); err != nil {
@@ -402,7 +361,10 @@ func (c *Cache) clearBoot() error {
 	return nil
 }
 
-// writeHook is Open's step 4.
+// writeHook writes hooks/proc-receive again, since the binary's path changes
+// across an upgrade, and SETTLES it (hostbox.Settle): the kernel refuses to
+// exec a script any process holds open for writing, as every fork during the
+// write does until it execs, so the wait is Open's, not the first push's.
 func (c *Cache) writeHook(ctx context.Context, argv []string) error {
 	path := filepath.Join(c.Hooks(), hookName)
 	staged, err := c.stage(0o500, func(f *os.File) error {
@@ -446,12 +408,13 @@ func hookScript(argv []string) string {
 // (gitproc.Cmd.Hooks).
 func (c *Cache) Hooks() string { return filepath.Join(c.dir, hooksDir) }
 
-// index is Open's step 5: it acts on Prepare's reading and answers how many
-// entries of repos/ it moved into trash/, and the newest cohort of the memo
-// any kept state records (0 for none), which step 6 opens the node's newest
-// past. A move that fails fails the boot: a cache directory the engine cannot
-// rename within is broken, and a node that serves from it half-cleared is
-// worse than one that says so.
+// index acts on Prepare's reading of repos/: every entry that is not a kept
+// incarnation moves into trash/ and is logged, and every kept one is indexed
+// from its state, or without one when it was missing or undecodable. It
+// answers how many entries it trashed and the newest memo cohort any kept
+// state records (0 for none), which openMemo opens past. A failed move fails
+// the boot: a node serving from a half-cleared directory it cannot rename
+// within is worse than one that says so.
 func (c *Cache) index(b *boot) (int, uint64, error) {
 	repos := filepath.Join(c.dir, reposDir)
 	trashed := 0
@@ -480,10 +443,8 @@ func (c *Cache) index(b *boot) (int, uint64, error) {
 		}
 		c.heldBytes.Add(inc.diskBytes + inc.metaBytes)
 		c.droppingBytes.Add(inc.droppingBytes)
-		// The memo's record as the state holds it — what the janitor writes
-		// again once it moves (Cache.stateMemos) — and its bytes in the
-		// memo's running total; step 6 opens the newest cohort past every
-		// one recorded, and past every one a previous process reserved.
+		// The memo's record as the state holds it, which the janitor writes again
+		// once it moves (Cache.stateMemos), and its bytes in the running total.
 		memo := inc.derived[DerivedMemo]
 		c.memoBytes.Add(memo.Bytes)
 		c.codeIndexBytes.Add(inc.derived[DerivedCodeIndex].Bytes)
@@ -525,16 +486,14 @@ func (c *Cache) leave() {
 	}
 }
 
-// Start starts the cache's background work — the janitor, the maintainer, the
-// scrubber, the backfill of its indexes of pushes, the installer of
-// published layers (layers.go) and the indexer of code indexes (codeindex.go)
-// — under ctx: each ends with ctx or with
-// [Cache.Stop], whichever comes first. A second call, or a call after Stop,
-// does nothing. A cache that is never started still opens, syncs, pins,
+// Start starts the cache's background work under ctx: the janitor, the
+// maintainer, the scrubber, the backfill of its indexes of pushes, the
+// installer of published layers (layers.go) and the code indexer
+// (codeindex.go), each ending with ctx or [Cache.Stop]. A second call, or one
+// after Stop, does nothing. An unstarted cache still opens, syncs, pins,
 // folds every delta's pushes into its indexes and installs a full round's
-// published chain as it answers; nothing is removed from trash/, evicted,
-// maintained, scrubbed, backfilled or installed behind the serving until it
-// is.
+// published chain; only nothing is emptied from trash/, evicted, maintained,
+// scrubbed, backfilled or installed in the background.
 func (c *Cache) Start(ctx context.Context) {
 	c.lifeMu.Lock()
 	defer c.lifeMu.Unlock()
@@ -557,20 +516,16 @@ func (c *Cache) isStopped() bool {
 	return c.stopped
 }
 
-// Stop ends the cache: it marks it stopped — nothing of the cache's starts
-// in the directory again — and ends its lifetime, so what runs under it
-// ends with it: a round's downloads, a maintenance run's git. The claim on
-// the directory goes back the moment nothing of the cache's is running in
-// it: at once, before Stop returns, when nothing is (whatever ctx says —
-// that is decided under the cache's own lock, never raced against a context
-// that may already have ended); otherwise Stop waits for it, bounded by
-// ctx, and a wait ctx cuts short leaves the claim held until the last of
-// that work has ended (logged code_cache_stop_unfinished), so no other
-// process can open the directory while something of this one is still
-// writing in it. Pins still held keep their directories until the next
-// Open, which needs nothing from them: a release after Stop moves nothing.
-// Safe to call more than once; a second call waits again, bounded by its
-// own ctx.
+// Stop marks the cache stopped, so nothing of it starts in the directory
+// again, and ends its lifetime, ending what runs under it. The claim on the
+// directory goes back once nothing of the cache's runs there: before Stop
+// returns when nothing does, whatever ctx says (decided under lifeMu, never
+// raced against a context); otherwise Stop waits, bounded by ctx, and a wait
+// cut short leaves the claim held until that work ends (logged
+// code_cache_stop_unfinished), so no other process opens a directory this one
+// still writes in. Pins still held keep their directories for the next Open
+// to clear: a release after Stop moves nothing. Safe to call more than once;
+// each call waits bounded by its own ctx.
 func (c *Cache) Stop(ctx context.Context) {
 	// The pool goes back last, whatever the wait: a run in flight past the
 	// stop reports to nobody (observe), and another cache over the same pool

@@ -17,66 +17,28 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// WHAT A LAUNCH OF A SEAT'S TURN WOULD BE LAUNCHED ON — a relaunch of a live
-// turn, or the next turn of a conversation whose last turn left a session —
-// answered by the node holding the seat ([sandbox.RelaunchTarget]).
-//
-// # Asked of the holder, never decided where the question lands
-//
-// Whether a launch would continue a turn's session turns on the member of the
-// seat's executor chain it is launched on, and which member that is turns on the
-// plans the node holding the seat has met spent — its own bench, which no node
-// shares (internal/providers/llm/harness) — and on the company revision that
-// node runs, which says whether sessions are kept. A launch is decided on that
-// node. So a reader of a seat's sessions, on whichever node serves the API, asks
-// it: this node where it holds the seat, and otherwise the incarnation the
-// seat's lease names, over an ephemeral scatter only that incarnation answers
-// ([topics.HeldRelaunch]) — as a seat's memory is read
-// (internal/learning/memread).
-//
-// # Per turn, and for the next turn by none
-//
-// The chain a launch picks its member from is the one of the company revision
-// it is launched under, and for a relaunch that is the turn's: a resumed
-// segment of the turn running on the holder — a review, whose send-back
-// relaunches the round, or a round carried on — relaunches on the revision it
-// was admitted under, pinned for the whole segment ([resumeInput.Company]),
-// which an apply since does not move; any other turn's next segment is
-// admitted under the revision the holder runs when it comes
-// ([Engine.relaunchCompany]). So the question names, for each session it asks
-// about, the turn it is of, and the holder answers each with the pick of the
-// revision that turn's relaunch would run on. A CONVERSATION'S NEXT TURN is
-// admitted under the revision the holder runs when it comes, too, so the
-// session a reader asks about for it — the head of its conversation — is
-// asked by NO turn: by the ended turn's own id, a segment of it still pinned
-// in the moments before it returns would answer for a revision the next turn
-// never runs on.
-//
-// # What crosses
-//
-// For each session asked about: the holder's pick — its member's harness, the
-// cell that member's run lands in, the holder itself, since a box on an engine
-// host is continued in only by the node it was launched on — why there is no
-// member or why none can be said now, whether the company keeps sessions, and
-// whether that member's runner restores the session's archive. The runner is
-// the holder's, of the holder's build, which a rolling upgrade can make another
-// than the asker's.
-//
-// AN UNKNOWN IS NEVER A NO: a lease that cannot be read, a seat no node holds,
-// and a holder that does not answer within the fleet read budget — one that
-// stopped, or a build that does not serve the question — are each a target that
-// cannot be said now ([sandbox.RelaunchTarget.Undecided]), which a reader shows
-// as undecided rather than as a session no relaunch continues.
+// What a launch of a seat's turn would be launched on (a relaunch of a live
+// turn, or a conversation's next turn) is the holder's decision
+// ([sandbox.RelaunchTarget]): the member turns on that node's own bench of spent
+// plans and the revision it runs. So a reader asks it: itself where it holds the
+// seat, else the incarnation the seat's lease names, over a scatter only that
+// incarnation answers ([topics.HeldRelaunch]), as internal/learning/memread
+// reads a seat's memory. Each session asked names its turn, answered for the
+// revision that turn's relaunch runs on (a resumed segment's pinned
+// [resumeInput.Company], else [Engine.relaunchCompany]); a conversation's next
+// turn names NO turn, as the ended turn's id could answer for a still-pinned
+// revision it never runs on. AN UNKNOWN IS NEVER A NO: an unreadable lease, an
+// unheld seat and a silent holder (stopped, or too old) are each undecided.
 
-// relaunchTargetBudget bounds how long a reader waits for the holder's answer:
-// the fleet read budget every scatter in this engine answers inside
-// ([eventfan.FleetReadBudget]) — a round trip on the broker and a pick from the
-// holder's own memory, which a healthy node answers in milliseconds.
+// relaunchTargetBudget bounds a reader's wait for the holder's answer: the
+// fleet read budget every scatter here answers inside
+// ([eventfan.FleetReadBudget]); a healthy node answers from memory in
+// milliseconds.
 const relaunchTargetBudget = eventfan.FleetReadBudget
 
 // relaunchWireVersion is the request and reply shape this build speaks.
-// Evolution is ADDITIVE within a version: a key this build does not know is
-// dropped on decode, which a rolling upgrade needs and nothing more.
+// Evolution is ADDITIVE within a version: an unknown key is dropped on decode,
+// which is all a rolling upgrade needs.
 const relaunchWireVersion = 1
 
 // relaunchArchive is a session's archive as a request names it: what a runner's
@@ -115,8 +77,10 @@ type relaunchAsk struct {
 }
 
 // relaunchTargetReply is the holder's answer for one session asked about: its
-// pick for that session's turn, and whether the picked member's runner
-// restores that session's archive.
+// pick for that session's turn (Node the holder itself, since only the node a
+// box on an engine host was launched on continues in it), and whether the
+// picked member's runner, of the holder's build, which a rolling upgrade can
+// make another than the asker's, restores that session's archive.
 type relaunchTargetReply struct {
 	Harness    string `json:"harness,omitempty"`
 	Placement  string `json:"placement,omitempty"`
@@ -141,16 +105,15 @@ type relaunchReply struct {
 // nothing, since its asker waits on the one it named.
 var errRelaunchNotAddressed = errors.New("engine: the relaunch target request is addressed to another incarnation")
 
-// RelaunchTargets is what a launch of each session asked about would be
-// launched on now — a relaunch of the turn an ask names, or a conversation's
-// next turn for an ask that names none — one target per ask in the order
-// asked, as the node holding the seat picks it — this node's own pick where it
-// holds the seat ([Engine.localRelaunchTarget]), and otherwise the holder's
-// answer, asked over the broker once for every ask — with whether that
-// member's runner restores the ask's archive: what the read surface decides
-// each row of a seat's sessions by (internal/api/queries' `continuable`,
-// [sandbox.ReadContinuityOf]). Never an error: what cannot be said now is a
-// target that says so.
+// RelaunchTargets is what a launch of each asked session would be launched on
+// now (a relaunch of the ask's turn, or a conversation's next turn for an ask
+// naming none), one target per ask in order, as the seat's holder picks it:
+// this node's own pick where it holds the seat ([Engine.localRelaunchTarget]),
+// else the holder's answer, asked once over the broker for every ask, with
+// whether that member's runner restores the ask's archive. The read surface
+// decides each row of a seat's sessions by it (internal/api/queries'
+// `continuable`, [sandbox.ReadContinuityOf]). Never an error: what cannot be
+// said now is a target that says so.
 func (e *Engine) RelaunchTargets(ctx context.Context, seat uuid.UUID, handle string,
 	asks []sandbox.RelaunchAsk) []sandbox.RelaunchTarget {
 
@@ -165,31 +128,31 @@ func (e *Engine) relaunchTargets() relaunchTargets {
 		return r
 	}
 	r.owner = e.node.Owner()
-	// A NODE WITH NO BROKER IS THE FLEET, and holds every seat there is: it
-	// answers every question itself.
+	// A NODE WITH NO BROKER IS THE FLEET, holding every seat: it answers
+	// every question itself.
 	if e.backends != nil && e.backends.Queue != nil && e.backends.Coord != nil {
 		r.queue, r.leases = e.backends.Queue, e.backends.Coord
 	}
 	return r
 }
 
-// holderAsker scatters one question for the node holding a seat — the half of
-// the broker a reader needs: of what a relaunch is launched on, here, and of
+// holderAsker scatters one question for the node holding a seat: the half of
+// the broker a reader needs for what a relaunch is launched on, here, and for
 // whether a park holds the seat's inbox (parkheld.go).
 type holderAsker interface {
 	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
 }
 
-// holderLeases reads which incarnation holds a seat — the half of the
+// holderLeases reads which incarnation holds a seat: the half of the
 // coordination store a reader needs, for the same two questions.
 type holderLeases interface {
 	Get(ctx context.Context, resource string) (*coord.Lease, error)
 }
 
 // relaunchTargets answers what a relaunch of a seat's turn would be launched
-// on, from the node holding the seat: owner is this process's incarnation, which
-// a seat's lease names; local this node's own pick for a turn; queue nil, or
-// leases nil, a node that answers every question itself.
+// on, from the node holding the seat: owner is this process's incarnation, as
+// a seat's lease names it; local this node's own pick for a turn; a nil queue
+// or leases is a node that answers every question itself.
 type relaunchTargets struct {
 	owner  string
 	queue  holderAsker
@@ -212,8 +175,8 @@ func (r relaunchTargets) targets(ctx context.Context, seat uuid.UUID, handle str
 	lease, err := r.leases.Get(ctx, coord.SeatResource(seat))
 	switch {
 	case err != nil:
-		// UNKNOWN, never "held by nobody": an unreadable lease table says
-		// nothing about where the seat is.
+		// UNKNOWN, never "held by nobody": an unreadable lease says nothing
+		// about where the seat is.
 		return undecidedRelaunches(len(asks), fmt.Sprintf("which node holds the seat could not be read: %v", err))
 	case lease == nil || !lease.Live(r.now()):
 		return undecidedRelaunches(len(asks), "no node holds the seat now, and the node that takes it decides "+
@@ -276,10 +239,9 @@ func (r relaunchTargets) ask(ctx context.Context, owner, handle string,
 		"what a launch of its turns is launched on", node, r.budget))
 }
 
-// targets is the reply as the targets it names, one per session asked, each
-// one's runner the holder's answer for that session's archive. A session the
-// reply holds no answer for — a holder whose answer was cut short — cannot be
-// said.
+// targets is the reply as one target per session asked, each one's runner the
+// holder's answer for that session's archive. A session the reply has no answer
+// for (a holder's answer cut short) cannot be said.
 func (r relaunchReply) targets(node string, asked []relaunchSession) []sandbox.RelaunchTarget {
 	out := make([]sandbox.RelaunchTarget, len(asked))
 	for i, session := range asked {
@@ -325,8 +287,8 @@ func (a *answeredRestore) Restores(archive sandbox.SessionArchive) (bool, string
 // it holds would be launched on.
 //
 // EVERY NODE SERVES, in every mode and whether or not it serves the API, and
-// only the addressed incarnation answers: a seat can be held by a node that
-// serves no API, and answering is not publishing. After the node, whose
+// only the addressed incarnation answers: a node serving no API can hold a
+// seat, and answering is not publishing. Armed after the node, whose
 // incarnation a seat's lease names.
 func (e *Engine) armRelaunchTargets(ctx context.Context) error {
 	if e.backends == nil || e.backends.Queue == nil || e.node == nil {
@@ -334,8 +296,8 @@ func (e *Engine) armRelaunchTargets(ctx context.Context) error {
 	}
 	answerer := e.relaunchTargets()
 	// AT THE BOUND OF WORK DONE NOW ([queue.ConcurrentAnswers]): an answer
-	// reads this node's own chain and bench and waits on nothing a later push
-	// brings, so no slot is held through a wait.
+	// reads this node's own chain and bench and waits on nothing, so no slot
+	// is held through a wait.
 	stop, err := e.backends.Queue.Serve(ctx, topics.HeldRelaunch, queue.ConcurrentAnswers,
 		func(_ context.Context, raw []byte) ([]byte, error) {
 			return answerer.answer(raw)
@@ -348,8 +310,8 @@ func (e *Engine) armRelaunchTargets(ctx context.Context) error {
 }
 
 // answer is one question, answered from this node's own pick for each turn
-// asked about where it is addressed to this process's incarnation, and with
-// nothing where it is not.
+// where it is addressed to this process's incarnation, and with nothing where
+// it is not.
 func (r relaunchTargets) answer(raw []byte) ([]byte, error) {
 	var question relaunchAsk
 	if err := json.Unmarshal(raw, &question); err != nil {

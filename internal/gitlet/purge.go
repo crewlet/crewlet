@@ -36,42 +36,33 @@ type PurgeResult struct {
 // anything this node decides about that name still finds it purging.
 func (r PurgeResult) Held() bool { return r.Outcome != statelog.OutcomePending }
 
-// PurgeStep takes ONE step of purging a deleted repository past its retention,
-// and reports what it did. Each step is one record bounded by [PurgePartRows]
-// and, for its wide rows — the push rows, the changes' bodies and
-// conversations, and the checks — by [PurgePartBytes]: a part while more
-// remains than one record may delete,
-// then the purge itself — the gate that writes the deletion marker and
-// releases the name — once what remains fits both. A caller steps until
-// [PurgeResult.Done].
+// PurgeStep takes ONE step of purging a deleted repository past its retention:
+// a part while more remains than one record may delete ([PurgePartRows], and
+// [PurgePartBytes] for the wide rows), then the purge, which writes the
+// deletion marker and releases the name. A caller steps until [PurgeResult.Done].
 //
-// Inside retention it is [ErrNotYet]; on a repository that is not deleted,
-// [ErrNotDeleted]; on one already purged, done with nothing written; on an id
-// nobody has, [ErrRepoNotFound]. A PURGING repository is stepped whatever its
-// age: a purge once begun is always finished, because its rows are already
-// partly gone and nothing restores it. retention is the caller's epoch's
-// value, never defaulted here.
+// Inside retention it is [ErrNotYet]; on a repository not deleted,
+// [ErrNotDeleted]; on one already purged, done with nothing written; on an
+// unknown id, [ErrRepoNotFound]. A PURGING repository is stepped whatever its
+// age: its rows are partly gone and nothing restores it. retention is the
+// caller's epoch's value, never defaulted here.
 func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Duration) (PurgeResult, error) {
 	if retention <= 0 {
 		return PurgeResult{}, fmt.Errorf("%w: retention: %v is not a retention", ErrInvalid, retention)
 	}
-	// THE NAME IS READ BEFORE THE DECIDE, because the request's scope is
-	// stated before the decide runs and the purge releases the name's
-	// claim; the decide holds the row to it. A purge steps only a deleted or
-	// purging repository, which no rename reaches (a tool's rename refuses
-	// one), so the two reads agree. An OLD name a rename left redirecting is
-	// not the purge's: its redirect keeps the name reserved until its window
-	// ends, as it would for a live repository, and the retention pass's
-	// release frees it then (Store.ReleaseName).
+	// THE NAME IS READ BEFORE THE DECIDE: the scope, which holds the claim
+	// the purge releases, is stated before it runs, and the decide holds the
+	// row to it. No rename reaches a deleted or purging repository, so the
+	// reads agree. An old name a rename left redirecting stays reserved until
+	// its window ends, and the retention pass frees it (Store.ReleaseName).
 	name, found, err := s.repoName(ctx, repoID)
 	if err != nil {
 		return PurgeResult{}, err
 	}
 	subject := RepoSubject(repoID)
-	// THE REPOSITORY'S CHECKS ARE IN EVERY STEP'S SCOPE: a part and the purge
-	// delete its check rows, which records on its checks subject write, so a
-	// node holding a check record it cannot decode holds a step back behind
-	// it, and a step's decide reads them (remainingSQL).
+	// THE CHECKS ARE IN EVERY STEP'S SCOPE: a step deletes check rows its
+	// checks subject's records write, so a check record this node cannot
+	// decode holds the step back, and the decide reads them (remainingSQL).
 	parts := []string{RepoPath(repoID), ChecksPath(repoID)}
 	scope := parts
 	if found {
@@ -156,10 +147,10 @@ func (s *Store) repoName(ctx context.Context, id string) (string, bool, error) {
 	return name, true, nil
 }
 
-// NameOf is the name repository id is reported by, as an operator reads it:
-// the name this node's rows hold for it, or the id where they hold none or
-// could not be read — for a report keyed by name that has only an id in hand,
-// the retention pass's failures and the busy alarm's repository among them.
+// NameOf is the name an operator reads repository id by: this node's rows'
+// name for it, or the id where they hold none or could not be read. It serves
+// a report keyed by name with only an id in hand (the retention pass's
+// failures, the busy alarm's repository).
 func (s *Store) NameOf(ctx context.Context, id string) string {
 	if name, found, err := s.repoName(ctx, id); err == nil && found {
 		return name
@@ -167,48 +158,17 @@ func (s *Store) NameOf(ctx context.Context, id string) string {
 	return id
 }
 
-// The purge's decide statements. remainingSQL is the tracker's BOUNDED COUNT:
-// the decide needs "more than PurgePartRows", never the total, so each table
-// a part deletes from — the pushes, the refs, the packs, the retired packs, the
-// ref drops, the days and pusher days the pushes are counted in, the
-// changes' revisions, authors, bodies and rows, and their
-// conversations' reviewers, participants, findings, comments, finding texts,
-// reviews, revisions' facts, mergeability and rows, the checks and their
-// logs, the home's dispatches and its targets' readings, and the merge queues'
-// entries, candidates, landings and green rows — is counted at most
-// PurgePartRows + 1 deep (?2, against the repository
-// ?1), and so are the changes' NOTICES, by the count each change keeps of
-// them over the same first ?2 changes (code_changes.notices, read off the
-// narrow rows the bodies' term reads anyway): code_notifications is
-// divergent, so a decide every node must agree on counts the count, which
-// no node holds fewer rows than (apply_notices.go). Beside them is what the
-// wide rows among them weigh, summed over the
-// same depth: the push rows' row_bytes from code_pushes_repo_idx, which
-// carries every row's width, the changes' body_bytes from their own narrow
-// rows, never from the bodies, whose overflow pages a read would walk, their
-// conversations' text_bytes from the conversations' narrow rows, never from
-// the comments, the findings' texts, the reviews' summaries, the facts'
-// touched paths or the mergeability's conflicted paths it counts, and the
-// checks' row_bytes from code_checks_finished_idx, which carries every row's
-// width as the pushes' index does. Past PurgePartRows pushes or changes the
-// count alone already forms a part, and short of it each sum is the whole. A
-// table left out of the count — or a wide row left out of the sum — is one the
-// final purge's unbounded statements would delete whatever it held.
-//
-// A CHANGE'S REVISIONS, AUTHORS, BODY AND CONVERSATION ARE COUNTED THROUGH
-// THEIR CHANGE, the changes in number order ([changesNumberKey]) and each
-// one's rows by its key — the dependents carry no repo_id — which is also how
-// the final purge reaches them, so the count is of exactly the rows it would
-// delete. And each such term is DRIVEN FROM THE REPOSITORY'S FIRST ?2 CHANGES
-// ALONE (firstChanges), never from all of them: the LIMIT of a term bounds the
-// rows it FINDS, not the changes it WALKS, so a table most changes hold no row
-// of — a body, a review, a finding, a comment; a busy repository's undiscussed
-// changes are most of its changes — walked every remaining change of the
-// repository before ending short, seven index seeks a change, and purging a
-// repository of N changes cost O(N²/PurgePartRows) in all. Driven from the
-// first ?2 it answers the decide's question exactly: past PurgePartRows
-// changes the changes' own term forms a part whatever the rest count, and at
-// or below it the first ?2 are every change.
+// The purge's decide statements. remainingSQL is a BOUNDED COUNT, since the
+// decide asks only "more than PurgePartRows": every table a part deletes from
+// is counted at most ?2 (PurgePartRows+1) deep for repository ?1, and the
+// changes' notices by code_changes.notices — code_notifications is divergent,
+// so the decide counts what no node holds fewer rows than (apply_notices.go).
+// Its second column weighs the wide rows over the same depth, off narrow rows
+// or indexes that carry the width (code_pushes_repo_idx,
+// code_checks_finished_idx), never off the wide rows, whose overflow pages a
+// read would walk. Past PurgePartRows pushes or changes the count alone forms
+// a part, and short of it each sum is the whole. A table or wide row left out is one the final purge's
+// unbounded statements delete whatever it holds.
 const (
 	repoNameSQL  = `SELECT name FROM code_repos WHERE id = ?`
 	remainingSQL = `SELECT
@@ -271,8 +231,13 @@ const (
 		+ (SELECT COALESCE(SUM(row_bytes), 0) FROM
 			(SELECT row_bytes FROM code_checks INDEXED BY ` + checksEndedKey + `
 				WHERE repo_id = ?1 LIMIT ?2))`
-	// firstChanges is the repository ?1's first ?2 changes in number order,
-	// as c: what every term counting a change's dependents is driven from.
+	// firstChanges is repository ?1's first ?2 changes in number order, as c.
+	// A change's dependents carry no repo_id, so they are counted through it,
+	// as the final purge reaches them ([changesNumberKey]). A LIMIT bounds the
+	// rows a term finds, not the changes it walks: driven from every change, a
+	// table most changes hold no row of would walk them all, O(N²/PurgePartRows)
+	// a purge. Past PurgePartRows changes the changes' own term forms a part
+	// anyway, and at or below it these are every change.
 	firstChanges = `(SELECT id FROM code_changes INDEXED BY ` + changesNumberKey + `
 			WHERE repo_id = ?1 ORDER BY number LIMIT ?2) AS c`
 )

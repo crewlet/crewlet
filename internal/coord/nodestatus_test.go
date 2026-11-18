@@ -69,18 +69,11 @@ func TestAStatusKeyFromANewerBuildDecodesHarmlessly(t *testing.T) {
 }
 
 // A STATUS CARRIES THE ALARMS FIRING ON ITS NODE, and "nothing is firing" is a
-// different claim from "this node cannot say".
-//
-// The heartbeat is where every peer reads what is wrong on a node, so each
-// mark has to arrive as it was published — its kind, its start and its place
-// in the longest-standing-first order — on both sides of the JSON round trip
-// the lease store does. And the three states have to stay three: a node that
-// evaluated its table and found nothing publishes an EMPTY list (as `[]`,
-// never the `null` a nil slice marshals to, which would read back as not
-// saying), and a node with no table it has evaluated publishes no key at all,
-// so it is never drawn as a quiet node. A mark naming no kind names nothing a
-// reader could show and is dropped; a since that does not parse keeps the mark,
-// because the alarm firing is the fact.
+// different claim from "this node cannot say". Each mark arrives as published
+// (kind, since, longest-standing-first order) across the lease store's JSON
+// round trip; an evaluated table with nothing firing publishes `[]`, never a
+// nil slice's `null`; no evaluated table publishes no key. A mark naming no
+// kind is dropped; an unparsable since keeps the mark.
 //
 // Mutation: publish `alarms` without an evaluation, publish a nil list for an
 // evaluated table, read an absent key as evaluated, or drop the since, and
@@ -175,14 +168,12 @@ func TestAStatusSurvivesTheJSONRoundTripTheLeaseStoreDoes(t *testing.T) {
 	}
 }
 
-// A GITLET NODE'S BUDGET IS READ ONLY WHERE ITS ROW SAYS ONE, and saying zero is
-// a claim: a Gitlet node with nothing to give its background work writes 0, and a
-// row with no figure — or one no build writes — is a node NOT SAYING, which a
-// reader placing maintenance must never take for either a zero or a figure. It
-// sits beside the status and never in it, so a beat whose status was dropped
-// still says it, and a key of that name inside a status says nothing; and it
-// arrives exact across the JSON round trip the lease store makes, at a size no
-// int32 and no float32 would carry.
+// A GITLET NODE'S BUDGET IS READ ONLY WHERE ITS ROW SAYS ONE: zero is a claim
+// of nothing to give, and a row with no figure, or one no build writes, is a
+// node NOT SAYING, never a zero or a figure. It sits beside the status, so a
+// beat whose status was dropped still says it and a key of that name inside a
+// status says nothing; and it arrives exact across the lease store's JSON
+// round trip, at a size no int32 or float32 would carry.
 //
 // Mutations: read an absent key as zero — the quiet rows are said, red; read
 // the budget out of the status — the dropped status's row says nothing and the
@@ -252,17 +243,12 @@ func TestAnUnsetPostureIsNotPublished(t *testing.T) {
 	}
 }
 
-// THE ADMIN POSTURE IS ABSENT RATHER THAN EMPTY on a node that declares none.
-//
-// It is the same rule as the posture above and it matters more here, because
-// what an empty cell would mean is the opposite of the truth: a worker node
-// binds no API and therefore has no admin posture to state, while an empty
-// string on the wire reads as a peer whose posture differs from every other
-// node's — a disagreement drawn across a fleet that has none, on exactly the
-// signal an operator is meant to trust. And each posture survives the JSON
-// round trip the lease store does, under the key `/query/fleet` reads.
-// Mutation: publish the field whatever its value and the first assertion
-// goes red.
+// THE ADMIN POSTURE IS ABSENT RATHER THAN EMPTY on a node that declares none:
+// a worker binds no API and has no posture, and an empty string would read as
+// a peer that disagrees with every other node, on the signal an operator is
+// meant to trust. Each posture survives the lease store's JSON round trip,
+// under the key `/query/fleet` reads. Mutation: publish the field whatever its
+// value and the first assertion goes red.
 func TestANodeWithNoAdminPosturePublishesNone(t *testing.T) {
 	t.Parallel()
 	meta := coord.NodeStatus{InFlight: 1}.Meta()

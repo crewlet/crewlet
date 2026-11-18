@@ -54,11 +54,11 @@ func strandBehindAMove(t *testing.T, r *roundTrip, id string) {
 // A TASK FILED BEHIND A MOVE THAT HAS FINISHED IS CARRIED BY THE DUTY.
 //
 // A create decided on a node that had not applied the root's move, and
-// accepted by the broker after the move's last append took the mark down,
-// lands in the old project under a root in the new one. The applier flags it
-// `inconsistent_project` and applies it — a committed record is never refused
-// there — and with the mark down the abandoned-move job never looked at that
-// root again: the task stayed in ENG for good, on neither project's board.
+// accepted after the move's last append took the mark down, lands in the old
+// project under a root in the new one. The applier flags it
+// `inconsistent_project` and applies it (a committed record is never refused
+// there), and with the mark down the abandoned-move job never looks at that
+// root again: the task would stay in ENG, on neither board, for good.
 //
 // Mutation: drop tracker_move_stragglers from Jobs and the tick carries
 // nothing (and the gate helper finds no such job).
@@ -107,9 +107,9 @@ func TestATaskFiledBehindAFinishedMoveIsCarried(t *testing.T) {
 
 // A STRAGGLER IN THE TRASH IS LEFT UNTIL ITS RESTORE, and costs no tick.
 //
-// It takes no write, so the repair could not carry it; and with the move's
-// mark down there is no walk to hold open for it — so it is neither waited
-// for nor reported on every tick, and its restore is what brings it back.
+// It takes no write, so the repair cannot carry it, and with the mark down
+// there is no walk to hold open for it: it is neither waited for nor reported
+// on every tick, and its restore brings it back.
 func TestAStragglerInTheTrashIsCarriedAfterItsRestore(t *testing.T) {
 	t.Parallel()
 	r := lateTagFixture(t)
@@ -186,15 +186,12 @@ func TestTheStragglerRepairLeavesARootWhoseMoveHoldsItsClaim(t *testing.T) {
 // ONE TICK CARRIES A STRAGGLER AND CLEARS A DUPLICATE RANK, AND THE STRAGGLER
 // LANDS ON A KEY ITS NEW PROJECT MINTED.
 //
-// The two jobs both put cards on a board, by two different mints. The carry
-// re-homes a task under a key and a rank its TARGET's counter mints
-// ([worklet.KeyMint]); the duplicate repair re-mints the losers of one shared
-// rank with [worklet.MoveKeys], between that rank and the next. A task write
-// otherwise KEEPS ITS PLACE — the rank
-// its row holds — so a carry that did not state the target's mint would bring
-// the straggler's ENG rank onto the OPS board, a key OPS's own lattice may
-// already hold, and hand the duplicate repair a collision of the carry's own
-// making. Run in one tick, neither job may undo the other.
+// The carry re-homes a task under a key and rank its TARGET's counter mints
+// ([worklet.KeyMint]); the duplicate repair re-mints the losers of a shared
+// rank with [worklet.MoveKeys]. A task write otherwise KEEPS ITS RANK, so a
+// carry that did not state the target's mint would bring the ENG rank onto
+// the OPS board, maybe onto a key OPS already holds, handing the duplicate
+// repair a collision of the carry's own making. Neither job may undo the other.
 //
 // Mutation: drop the mint from the carry's patch and the straggler keeps its
 // ENG rank; drop either job from Jobs and its half reports nothing.

@@ -20,22 +20,20 @@ import (
 
 // brokerAuth decides every connection to one embedded broker: nats-server's
 // CustomClientAuthentication for its clients and its leaf links, and its
-// CustomRouterAuthentication for a clustered member's routes. The package
-// doc's "Every connection presents a key" is the decision; this is the one
-// place it is made.
+// CustomRouterAuthentication for a clustered member's routes — the one place
+// the package doc's decision "Every connection presents a key" is applied.
 //
-// SAFE FOR CONCURRENT USE: the server calls Check from its own goroutines, one
-// per connection, and nothing here changes after the server starts but the
-// refusal tally, which holds its own lock.
+// SAFE FOR CONCURRENT USE: the server calls Check from its own goroutines, and
+// nothing here changes after the server starts but the refusal tally, which
+// holds its own lock.
 type brokerAuth struct {
 	// ns is the server this decides for, for the accounts an admitted
-	// connection is bound to. Set once the server is built and before it
-	// starts, and read only from the connections Start lets in — the go
-	// statement that starts it orders the two.
+	// connection is bound to. Set before the server starts and read only
+	// from connections it lets in; the go statement that starts it orders
+	// the two.
 	ns *server.Server
-	// name is the server's name, which every line this writes carries: a
-	// process can run several brokers (a fleet test does), and a refusal
-	// that names no member names nothing.
+	// name is the server's name, on every line this writes: a process can
+	// run several brokers (a fleet test does).
 	name string
 	// fleet is what this node presents and accepts on its fleet listeners:
 	// every key of its ring.
@@ -55,9 +53,8 @@ type brokerAuth struct {
 // own key, minted fresh — and the system account's, on a clustered member —
 // beside the fleet's credentials cfg carries.
 //
-// A KEY PER START, whose private half never leaves this process: nothing
-// outside it ever holds anything that authenticates as the engine or as the
-// membership code, so no file, log line or peer can be the way in.
+// A KEY PER START, whose private half never leaves this process, so no file,
+// log line or peer can authenticate as the engine or the membership code.
 func newBrokerAuth(cfg Config) (*brokerAuth, error) {
 	engine, err := newProcessUser("engine")
 	if err != nil {
@@ -156,12 +153,11 @@ func (a *brokerAuth) Check(c server.ClientAuthentication) bool {
 		return false
 	}
 	if v.account != nil {
-		// THE ONE BINDING CALL ClientAuthentication offers. Its error is
-		// not returned, and needs no reading here: only an account
-		// connection limit closes the connection, and none is configured;
-		// a nil account is never handed in (both are the server's own,
-		// built before it starts); and a leaf loop is keyed on what the
-		// leaf's CONNECT records after this returns.
+		// THE ONE BINDING CALL ClientAuthentication offers. It swallows its
+		// error, and none matters: only an account connection limit would
+		// close the connection and none is configured, a nil account is
+		// never handed in, and a leaf loop is keyed on what the leaf's
+		// CONNECT records after this returns.
 		c.RegisterUser(&server.User{Username: v.user, Account: v.account})
 	}
 	if v.operator != "" {
@@ -187,9 +183,8 @@ func (a *brokerAuth) judge(c server.ClientAuthentication) verdict {
 		}
 		return a.judgeOperator(opts, c.GetNonce())
 	default:
-		// NO OTHER KIND IS CONFIGURED — no gateway, websocket or MQTT
-		// listener — so one arriving here is refused unrecognised rather
-		// than waved through on a kind nobody decided about.
+		// NO OTHER KIND IS CONFIGURED (gateway, websocket, MQTT), so one
+		// arriving here is refused rather than waved through undecided.
 		return verdict{refused: PeerRefusal{ListenerClient, PresentedUnknown}}
 	}
 }
@@ -197,11 +192,10 @@ func (a *brokerAuth) judge(c server.ClientAuthentication) verdict {
 // judgeRoute admits a route presenting a route credential of this node's
 // ring: the username a key's tag, the password the one that key derives.
 //
-// A PASSWORD, because a NATS route carries a username and password or a
-// certificate and nothing else — its CONNECT has no signature. So it crosses
-// the fleet network in clear once per connection (the package doc's residual).
-// Compared in constant time: a route port is reachable by whatever the network
-// lets reach it.
+// A PASSWORD, because a NATS route's CONNECT carries no signature, so it
+// crosses the fleet network in clear once per connection (the package doc's
+// residual). Compared in constant time: a route port is reachable by whatever
+// the network lets reach it.
 func (a *brokerAuth) judgeRoute(opts *server.ClientOpts) verdict {
 	refused := func(p Presented, key string) verdict {
 		return verdict{refused: PeerRefusal{ListenerRoute, p}, key: key}
@@ -385,12 +379,10 @@ func refusalDetail(p Presented, key string) string {
 
 // refusalLogEvery is how often one class of refusal is logged again.
 //
-// A MINUTE, because a refused peer does not go away: a route re-dials every
-// one to thirty seconds and a leaf every second (nats-server's
-// DEFAULT_ROUTE_CONNECT, _MAX and DEFAULT_LEAF_NODE_RECONNECT), so a line per
-// attempt is the same cause repeated until nobody reads it. One a minute a
-// class keeps the cause readable — the first at once, then the next carrying
-// every refusal since — and the counter has every one.
+// A MINUTE, because a refused peer re-dials: a route every one to thirty
+// seconds and a leaf every second (nats-server's DEFAULT_ROUTE_CONNECT, _MAX
+// and DEFAULT_LEAF_NODE_RECONNECT). One line a minute a class keeps the cause
+// readable; the counter has every refusal.
 const refusalLogEvery = time.Minute
 
 // refusalTally counts one broker's refusals, hands them to whoever counts them
@@ -474,9 +466,8 @@ func (t *refusalTally) install(sink func(PeerRefusal, uint64)) {
 // the server's own goroutines. Called once; a later call replaces the sink,
 // and the backlog it hands is empty by then.
 //
-// A BACKLOG AT ALL, because the caller can only install once [StartServer] has
-// returned, and a refusal can land while it is still waiting for the server's
-// listeners: a peer dialling a member that has just bound its route port.
+// A BACKLOG, because the caller installs only once [StartServer] has returned,
+// and a peer can dial a member that has just bound its route port before then.
 func (s *Server) OnPeerRefused(sink func(PeerRefusal, uint64)) {
 	if s.embedded == nil || s.embedded.auth == nil {
 		return

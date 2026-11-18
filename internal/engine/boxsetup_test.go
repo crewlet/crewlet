@@ -7,18 +7,13 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A SEAT'S SETUP FILE REACHES ITS BOX AS THE BODY SOMEBODY WROTE.
-//
-// A file is CONTENT: nothing on the way to a box expands a body, so a seat's
-// `.npmrc` reaches the box with its own `${NPM_TOKEN}` and `${HOME}` left for
-// the box's npm and shell. A body that is exactly one `${VAR}` is the one shape
-// read through this node's resolver, and one nothing answers for is not
-// written at all — neither as the reference's own text nor empty, which is no
-// credential either: the run's gap says it is missing, and the run starts
-// without it (internal/engine runenv tests). A
-// provider-wide file is read by the same rule, after the provider's steps and
-// before the seat's own, and the manager's own steps are never written
-// through.
+// A SEAT'S SETUP FILE REACHES ITS BOX AS THE BODY SOMEBODY WROTE: nothing
+// expands a body, so a `.npmrc`'s `${NPM_TOKEN}` and `${HOME}` are left for the
+// box's npm and shell. Only a body that is exactly one `${VAR}` is read through
+// this node's resolver, and one nothing answers for is not written at all,
+// neither as its text nor empty (the run's gap reports it; the runenv tests).
+// A provider-wide file follows the same rule, its step before the seat's own,
+// and reading it never writes through to the manager's own steps.
 func TestASeatsSetupFileReachesTheBoxAsWritten(t *testing.T) {
 	t.Parallel()
 	const (

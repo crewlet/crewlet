@@ -21,12 +21,12 @@ import (
 )
 
 // WHAT CARRIED A SESSION ON, TOLD AGAIN TO ONE THAT MAY LACK IT. A session not
-// known to hold its job's brief (the copy a job's box holds whose harness may
-// have been cut off, a capture cut off) may lack the lead that brief opened
-// with: an answer, a review, the turn's task. The run keeps the turn's leads
-// beside its record and the job's record marks the ones its brief told, and a
-// continuation of that session is told them again, under a header of its own,
-// in words true of any session of the work.
+// known to hold its job's brief (a copy whose harness may have been cut off, a
+// capture cut off) may lack the lead that brief opened with: an answer, a
+// review, the turn's task. The run keeps the turn's leads beside its record,
+// the job's record marks those its brief told, and a continuation of that
+// session is told them again, under a header of its own, in words true of any
+// session.
 
 // leadsHeading opens the leads a session is told again.
 const leadsHeading = "## Messages that carried this work on that the session above may not show"
@@ -87,12 +87,12 @@ func leadsSection(brief string) string {
 }
 
 // A CUT-OFF COPY IS TOLD THE LEADS ITS JOB'S BRIEF TOLD. A round carried on in
-// its job's own box, whose harness was cut off, continues a copy not known to
-// hold the brief its job was handed, and so not known to hold the answer that
-// brief opened with: after what carries the copy on now and the section that
-// says it was cut off, it is told that answer again, under a header of its own,
-// and then every call of the round and every note the turn has read. NEVER
-// ahead of what carries it on now: the brief is the session's next message.
+// its job's own box after its harness was cut off continues a copy not known to
+// hold its job's brief, nor the answer that brief opened with: it is told that
+// answer again, under a header of its own, after what carries it on now and the
+// cut-off section, and before the round's calls and the notes the turn read.
+// Never ahead of what carries it on now: the brief is the session's next
+// message.
 //
 // Mutation: leave the section out, put it ahead of the cut-off section, or
 // after the calls, and a case goes red.
@@ -124,9 +124,9 @@ func TestACutOffCopyIsToldTheLeadsItsJobsBriefTold(t *testing.T) {
 }
 
 // AN OWN-RUN COPY IS TOLD NO LEAD AGAIN. A job whose harness ended its own run
-// left a copy that holds the brief it was handed, the lead it opened with
-// among it: a round carried on in that copy is told what carries it on now and
-// what it lacks, never a lead its job's brief told.
+// left a copy that holds its brief and the lead it opened with: a round carried
+// on in it is told what carries it on now and what it lacks, never a lead its
+// job's brief told.
 //
 // Mutation: tell the leads whatever the harness's end, and this goes red.
 func TestAnOwnRunCopyIsToldNoLeadAgain(t *testing.T) {
@@ -142,12 +142,12 @@ func TestAnOwnRunCopyIsToldNoLeadAgain(t *testing.T) {
 	}
 }
 
-// A CUT-OFF KEPT SESSION IS TOLD THE LEADS ITS JOB'S BRIEF TOLD. A capture its
-// harness was cut off in is no more known to hold its job's brief than a copy
-// cut off in its box: a send-back that continues it, and a round an answer
-// carries on in it, each tell it the leads that brief told, after the section
-// that says it was cut off and before the calls after its save; a capture
-// whose harness ended its own run holds its brief, and is told none.
+// A CUT-OFF KEPT SESSION IS TOLD THE LEADS ITS JOB'S BRIEF TOLD. A capture cut
+// off is no more known to hold its job's brief than a copy cut off in its box:
+// a send-back continuing it, and a round an answer carries on in it, each tell
+// it those leads, after the cut-off section and before the calls after its
+// save. A capture whose harness ended its own run holds its brief and is told
+// none.
 //
 // Mutation: tell a kept session the leads whatever its end, or never, and a
 // case goes red.
@@ -209,10 +209,9 @@ func TestACutOffKeptSessionIsToldTheLeadsItsJobsBriefTold(t *testing.T) {
 }
 
 // ONLY THE LEADS THE JOB'S BRIEF TOLD ARE TOLD AGAIN. The run keeps the turn's
-// leads, oldest first, and the job's record marks the ones its brief told: an
-// earlier lead a later job's session already held is in the copy, or in a
-// capture of it, so a copy cut off is told again the leads its job's brief
-// told, and no other lead of the turn.
+// leads, oldest first, and the job's record marks those its brief told: an
+// earlier lead a later job's session already held is in the copy, so a copy cut
+// off is told again its job's brief's leads and no other lead of the turn.
 //
 // Mutation: tell every lead the run keeps, and this goes red.
 func TestOnlyTheLeadsTheJobsBriefToldAreToldAgain(t *testing.T) {
@@ -232,11 +231,11 @@ func TestOnlyTheLeadsTheJobsBriefToldAreToldAgain(t *testing.T) {
 }
 
 // A CONTINUATION OF A JOB CUT OFF AFTER TELLING A LEAD AGAIN IS STILL TOLD IT.
-// The brief that tells a lead again is itself a brief its session may lack, if
-// that session is cut off in turn: so the launch hands the attach the leads it
-// told again, by name, beside its own, and the job's record marks them told by
-// its job, for the next continuation to tell again. A replaced sign-in's
-// own words are every brief's cut-off section, and keep no lead.
+// The brief that tells a lead again may itself be lacking if its session is
+// cut off in turn: so the launch hands the attach the leads it told again, by
+// name, beside its own, and the job's record marks them told by its job for
+// the next continuation to tell. A replaced sign-in's own words are every brief's
+// cut-off section, and keep no lead.
 //
 // Mutation: hand on only the brief's own lead, and the told-again one is lost
 // the second time its session is cut off.
@@ -265,17 +264,16 @@ func TestAContinuationOfAJobCutOffAfterTellingALeadAgainIsStillToldIt(t *testing
 	}
 }
 
-// A CARRY IN THE ENGINE'S OWN WORDS KEEPS NO LEAD. What carries a round on after
-// a loss or a replaced sign-in is the engine's account of how its run was cut
-// off, which the cut-off section of every later brief says again; after its
-// provider refused the session its job continued, the account of a run that did
-// nothing, which no later session lacks. Of the carries, only a person's answer
-// is a lead. So such a relaunch hands its launch no lead of its carry, with the
-// fresh brief or with its copy's, for the run to keep and a later brief to tell
-// again: its fresh brief opens with the turn's task alone.
+// A CARRY IN THE ENGINE'S OWN WORDS KEEPS NO LEAD. A loss's or a replaced
+// sign-in's carry is the engine's account of how its run was cut off, which
+// every later brief's cut-off section says again; a provider refusal's is the
+// account of a run that did nothing, which no later session lacks. Only a
+// person's answer is a lead, so such a relaunch hands its launch no lead of its
+// carry, with the fresh brief or with its copy's: its fresh brief opens with
+// the turn's task alone.
 //
-// Mutation: give a loss's, a replaced sign-in's or a refusal's carry a lead, and
-// its row goes red.
+// Mutation: give a loss's, a replaced sign-in's or a refusal's carry a lead,
+// and its row goes red.
 func TestACarryInTheEnginesOwnWordsKeepsNoLead(t *testing.T) {
 	t.Parallel()
 	for name, resume := range map[string]runner.Resume{
@@ -295,18 +293,17 @@ func TestACarryInTheEnginesOwnWordsKeepsNoLead(t *testing.T) {
 	}
 }
 
-// A LEAD A COPY COULD NOT READ IS HANDED ON BY ITS NUMBER. Where the resume could
-// not read the run's leads at all, it knows the ones the job's brief told by
-// their numbers alone, off the job's record: a continuation of a session that
-// may lack that brief says them among the leads not kept, and hands them on by
-// number beside the ones it told again, for the job its launch opens to mark,
-// so a continuation of THAT session, which may lack them as well, tells them
-// once a read answers. A copy whose harness ended its own run holds its brief,
-// tells no lead again and hands none on; nor does the fresh brief its box
-// falls back to.
+// A LEAD A COPY COULD NOT READ IS HANDED ON BY ITS NUMBER. Where the resume
+// could not read the run's leads at all, it knows those the job's brief told by
+// number alone, off the job's record: a continuation of a session that may lack
+// that brief says them among the leads not kept and hands them on by number
+// beside those it told again, so the job its launch opens marks them and its
+// own continuation tells them once a read answers. A copy whose harness ended
+// its own run holds its brief and hands none on; nor does the fresh brief its
+// box falls back to.
 //
-// Mutation: hand the numbers on from no brief, or from every brief whatever
-// its session holds, and a case goes red.
+// Mutation: hand the numbers on from no brief, or from every brief whatever its
+// session holds, and a case goes red.
 func TestALeadACopyCouldNotReadIsHandedOnByItsNumber(t *testing.T) {
 	t.Parallel()
 	unread := func(r *runner.Resume) { r.LeadsUnread, r.LeadsCut = []int{1, 3}, 3 }
@@ -343,13 +340,12 @@ func TestALeadACopyCouldNotReadIsHandedOnByItsNumber(t *testing.T) {
 	}
 }
 
-// A TOLD-AGAIN ANSWER IS IN NEUTRAL WORDS. The session a lead is told again to
-// may be the copy of another job of the lineage, or the session its
-// conversation's last turn left that was handed the answer as a fresh run's
-// reseed: so an answer is told as one a run of this work asked and its answerer
-// answered, never "you stopped to ask", which a session that never asked would
-// be told, nor where a fresh run finds the work, which the brief's own lead and
-// cut-off section say of the box it is in.
+// A TOLD-AGAIN ANSWER IS IN NEUTRAL WORDS. The session told a lead again may be
+// another job's copy, or the session the conversation's last turn left, handed
+// the answer as a fresh run's reseed: so an answer is told as one a run of this
+// work asked and its answerer answered, never "you stopped to ask" (it may
+// never have asked), nor where a fresh run finds the work, which the brief's
+// own lead and cut-off section say of its box.
 //
 // Mutation: tell the lead again in the asking run's continuation's words, or a
 // fresh run's, and this goes red.
@@ -379,14 +375,13 @@ func TestAToldAgainAnswerIsInNeutralWords(t *testing.T) {
 var baseTurn = &runner.BaseBasis{Turn: "t-before", Home: "/boxes/base-home",
 	EndedAt: time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)}
 
-// A BASE CONTINUATION'S LEAD IS TOLD AGAIN WITH THE ROUNDS ITS BRIEF RENDERED. A
-// turn's first launch continued the session its conversation's last turn left,
-// its brief the turn's task with no closed round, and its harness was cut off;
-// the review sent the round back, continuing that capture. Its session may lack
-// the task, so it is told again, with the closed rounds that brief rendered,
-// none: round 1's calls are the calls after the capture's save, listed once,
-// below it. Told with every closed round, the task's own ledger would list
-// round 1's calls too, the same calls told twice in one brief.
+// A BASE CONTINUATION'S LEAD IS TOLD AGAIN WITH THE ROUNDS ITS BRIEF RENDERED.
+// A turn's first launch continued the session its conversation's last turn
+// left, its brief the turn's task with no closed round, and was cut off; the
+// review's send-back continued that capture, which may lack the task, so the
+// task is told again with the closed rounds that brief rendered: none. Round
+// 1's calls are listed once, as the calls after the capture's save; told with
+// every closed round, the task's ledger would list them twice.
 //
 // Mutation: tell the task again over the whole history, and round 1's call is
 // told twice.
@@ -425,11 +420,10 @@ func TestABaseContinuationsLeadIsToldAgainWithTheRoundsItsBriefRendered(t *testi
 	}
 }
 
-// A TASK TOLD AGAIN SAYS NOTHING OF A NEW BOX. The lead a base continuation
-// opened with told its run it was in a new box, on a fresh checkout, with the
-// earlier box's paths: told again to a later session of the work, which may be
-// in that very box after its job worked there, those would be false. So the
-// task is told again with its boundary and none of its box's claims.
+// A TASK TOLD AGAIN SAYS NOTHING OF A NEW BOX. A base continuation's lead told
+// its run it was in a new box, on a fresh checkout, with the earlier box's
+// paths: false for a later session of the work, which may be in that very box.
+// So the task is told again with its boundary and none of its box's claims.
 //
 // Mutation: tell the task again as its brief first told it, and this goes red.
 func TestATaskToldAgainSaysNothingOfANewBox(t *testing.T) {
@@ -451,9 +445,9 @@ func TestATaskToldAgainSaysNothingOfANewBox(t *testing.T) {
 }
 
 // A SEND-BACK'S LEAD IS TOLD AGAIN FROM ITS ROUND. A review's lead keeps the
-// round it closed, and is told again with that round's review, whichever later
-// round the session is carried on in: never the newest round's, which another
-// review wrote.
+// round it closed and is told again with that round's review, whichever later
+// round carries the session on: never the newest round's, which another review
+// wrote.
 //
 // Mutation: recompose a review lead from the newest closed round, and this goes
 // red.
@@ -472,26 +466,17 @@ func TestASendBacksLeadIsToldAgainFromItsRound(t *testing.T) {
 }
 
 // A LEAD OF ANOTHER SESSION IS TOLD IN WORDS TRUE OF ANY SESSION. A copy that
-// may be a summary is told every lead the run keeps, those its job's record
-// never marked among them: the task of a base continuation whose box started a
-// session of its own in its place, or of one a later launch of the turn gave up
-// for a fresh run, and a review whose send-back continued another session. And
-// it marks them told in turn, so a later brief's record says no more of which
-// session a lead's brief went to. Told in the words their briefs were told in,
-// a session that began with a fresh brief read that it began as the
-// conversation's last turn left it, its own opening as another turn's, and
-// that it was the session the review sent back, its earlier rounds' calls in
-// it. So the task says what it says of that session only of a session that
-// began as that one, and the review never says the session above is the same
-// session, nor that the earlier rounds' calls are in it. That session was cut
-// off when it was kept, here, and that is said under the same condition alone:
-// of this session, whose record says its harness ended its own run, nothing
-// says it was cut off.
+// may be a summary is told every lead the run keeps, unmarked ones too (the
+// task of a base continuation replaced or given up, a review whose send-back
+// continued another session), and marks them told, so no later record says
+// which session a lead's brief went to. So the task describes its turn's base
+// only for a session that began as it; the review never calls the session above
+// the same one, nor says the earlier rounds' calls are in it; and the base cut
+// off when kept is said only under that condition: this one ended its run.
 //
-// Mutation: tell the task again in the words that the session above began as
-// the conversation's last turn left it, or the review in the send-back's own
-// words, or say the base was cut off ahead of the condition, and a check goes
-// red.
+// Mutation: say the session above began as the last turn left it, tell the
+// review in the send-back's words, or say the base was cut off outside the
+// condition, and a check goes red.
 func TestALeadOfAnotherSessionIsToldInWordsTrueOfAnySession(t *testing.T) {
 	t.Parallel()
 	task := sandbox.Lead{Kind: sandbox.LeadKindTask, Job: "job-1", Seq: 1, Round: 1, Task: &sandbox.LeadTask{}}
@@ -539,13 +524,12 @@ func TestALeadOfAnotherSessionIsToldInWordsTrueOfAnySession(t *testing.T) {
 	}
 }
 
-// AN ANSWER BEFORE A TASK THAT DOES NOT OPEN IS TOLD ON ITS OWN. Where every lead
-// the run keeps is told, an answer a task carries is told inside that task
-// alone; but a task whose seal does not open on this node is said as a message
-// that cannot be read here, which carries nothing. So the answer before it is
-// told at its own level, once, and the task is said after it: counted as
-// carrying it, the answer was told nowhere, and the held call one such answer
-// approved was left in no telling and out of every list.
+// AN ANSWER BEFORE A TASK THAT DOES NOT OPEN IS TOLD ON ITS OWN. Where every
+// lead the run keeps is told, an answer a task carries is told inside that task
+// alone; but a task whose seal does not open on this node is said as unreadable
+// and carries nothing. So the answer before it is told at its own level, once,
+// then the task: counted as carried, the answer is told nowhere, and a held
+// call it approved is left out of every list.
 //
 // Mutation: count a task that did not open as one that carries the answers
 // before it, and a check goes red.
@@ -578,13 +562,11 @@ func TestAnAnswerBeforeATaskThatDoesNotOpenIsToldOnItsOwn(t *testing.T) {
 	}
 }
 
-// AN ANSWER TOLD INSIDE A TASK IS HANDED ON TOLD. A copy that may be a summary is
-// told every lead the run keeps, and an answer a task carries is told inside
-// that task alone; its brief hands the answer's ref on all the same, so a later
-// brief whose task does not open on its node, and which tells the leads its
-// job's record marks, tells that answer on its own. Its ref left out, that
-// later brief told the answer nowhere: unmarked, and carried only by a task it
-// cannot read.
+// AN ANSWER TOLD INSIDE A TASK IS HANDED ON TOLD. A brief telling an answer
+// inside a task still hands the answer's ref on, so a later brief whose task
+// does not open on its node, telling the leads its job's record marks, tells
+// that answer on its own. Its ref left out, that brief tells the answer
+// nowhere.
 //
 // Mutation: hand on no ref of an answer told inside a task, and a check goes
 // red.
@@ -621,11 +603,10 @@ func heldAnswer() sandbox.Lead {
 				Result: &sandbox.HeldKept{Result: "sealed", ID: "held-1"}}}}
 }
 
-// A HELD LEAD IS TOLD AGAIN WITH WHAT ITS CALL RETURNED. A held call's lead tells
-// what became of the call a person approved, and it is the call's only telling:
-// told again, it says what the call returned, opened from the seal its row put
-// on it and defused under the relaunch's token, never that the result cannot be
-// read where it opened.
+// A HELD LEAD IS TOLD AGAIN WITH WHAT ITS CALL RETURNED. A held call's lead is
+// the only telling of what became of the call a person approved: told again, it
+// says what the call returned, opened from its row's seal and defused under the
+// relaunch's token, never that the result cannot be read where it opened.
 //
 // Mutation: tell the lead again without its result, and this goes red.
 func TestAHeldLeadIsToldAgainWithWhatItsCallReturned(t *testing.T) {
@@ -648,10 +629,10 @@ func TestAHeldLeadIsToldAgainWithWhatItsCallReturned(t *testing.T) {
 	}
 }
 
-// AN APPROVED CALL ITS LEAD TELLS AGAIN IS LISTED NOWHERE ELSE. The call a
-// person approved is in the round's log, and a lead told again tells what it
-// returned: the brief lists it in none of its lists of the round's calls, as it
-// lists none a lead of its own tells, or one call is told twice.
+// AN APPROVED CALL ITS LEAD TELLS AGAIN IS LISTED NOWHERE ELSE. The approved
+// call is in the round's log, and its lead told again says what it returned:
+// the brief lists it in none of its lists of the round's calls, as with a call
+// its own lead tells, or it is told twice.
 //
 // Mutation: list every call but the one the brief's own lead tells, and the
 // approved call is told twice.
@@ -720,10 +701,9 @@ func TestAToldAgainAnswerIsFencedUnderTheRelaunchsToken(t *testing.T) {
 
 // AN ANSWER PAST A PAGE IS CUT AND SAID WHEN TOLD AGAIN. A chat reply can reach
 // the row's whole answer share, which the run's leads would otherwise keep
-// whole beside its record: so its lead keeps its words to a page
-// ([sandbox.MaxLeadWordsBytes]) and counts the rest, and a later brief that
-// tells it again says how much is not kept and that the run may ask again for
-// it.
+// whole beside its record: so its lead keeps a page
+// ([sandbox.MaxLeadWordsBytes]) and counts the rest, and a brief telling it
+// again says how much is not kept and that the run may ask for it again.
 //
 // Mutation: keep the words whole, or tell the cut lead again without saying it
 // is cut, and a check goes red.
@@ -751,11 +731,10 @@ func TestAnAnswerPastAPageIsCutAndSaidWhenToldAgain(t *testing.T) {
 	}
 }
 
-// A LEAD THAT DOES NOT OPEN IS SAID. A lead under a key the node building the
-// brief does not hold, of a kind its build does not know, or whose seal does
-// not open, is told as a message that cannot be read here, in its place: left
-// out, the run would take the leads it is told for every message that carried
-// its work on.
+// A LEAD THAT DOES NOT OPEN IS SAID. A lead under a key this node does not
+// hold, of a kind its build does not know, or whose seal does not open, is told
+// in its place as a message that cannot be read here: left out, the run would
+// take the leads it is told for every message that carried its work on.
 //
 // Mutation: skip a lead that did not open, and this goes red.
 func TestALeadThatDoesNotOpenIsSaid(t *testing.T) {
@@ -777,12 +756,11 @@ func TestALeadThatDoesNotOpenIsSaid(t *testing.T) {
 	}
 }
 
-// A HELD CALL'S LEAD KEEPS WHAT IT RETURNED AS ITS ROW SEALED IT. The answer to a
-// held call carries the round on with what became of the call, and no record
-// holds what it returned once the next job opens: so the lead every brief of
-// the relaunch hands its launch keeps the call, the person's choice, its
+// A HELD CALL'S LEAD KEEPS WHAT IT RETURNED AS ITS ROW SEALED IT. No record
+// holds a held call's result once the next job opens, so the lead every brief
+// of the relaunch hands its launch keeps the call, the person's choice, its
 // outcome and the result as the row sealed it, whichever attempt at the answer
-// made the call, the first that recorded it or a later one that read it off
+// made the call: the first, which recorded it, or a later one that read it off
 // the row.
 //
 // Mutation: keep no result where the attempt made the call, or where it read
@@ -816,15 +794,14 @@ func TestAHeldCallsLeadKeepsWhatItReturnedAsItsRowSealedIt(t *testing.T) {
 }
 
 // A LEAD TOLD AGAIN KEEPS EVERY WORD IT RECOMPOSES. A review and the turn's
-// task are recomposed when told again, under a heading of their own, the
-// headings their builder wrote a level down: the review's notes, the task and
-// what the prior-work ledger quotes are somebody else's words, which a line
-// that begins with a '#' (a heading of their own, a code block's "#include")
-// does not make the engine's. They are told again byte for byte, as the brief
-// that first told them told them.
+// task are recomposed under a heading of their own, their builder's headings a
+// level down; but the review's notes, the task and the ledger's quotes are
+// somebody else's words, which a line beginning with '#' (a heading, a code
+// block's "#include") does not make the engine's. They are told again byte for
+// byte.
 //
-// Mutation: nest what a lead recomposes by moving every line that begins with
-// a '#', and the words told again are not the words that were written.
+// Mutation: nest what a lead recomposes by moving every line that begins with a
+// '#', and the words told again are not the words that were written.
 func TestALeadToldAgainKeepsEveryWordItRecomposes(t *testing.T) {
 	t.Parallel()
 	const notes = "# install the deps first\n```c\n#include <stdio.h>\n```\n## Steps to reproduce\n- run make"
@@ -866,11 +843,10 @@ func TestALeadToldAgainKeepsEveryWordItRecomposes(t *testing.T) {
 }
 
 // A TASK TOLD AGAIN CARRIES THE REVIEW ITS BRIEF CARRIED. A send-back that
-// continued the session its conversation's last turn left, the turn having
-// kept none of its own, opened with the turn's task carrying the review that
-// sent the round back, and its ledger rendering the closed rounds before it:
-// told again, the task carries that review, the round's its lead names and
-// never a later round's, which is told by its own rule.
+// continued the base, the turn having kept no session of its own, opened with
+// the turn's task carrying the review that sent the round back: told again, the
+// task carries that review, of the round its lead names, never a later round's,
+// which is told by its own rule.
 //
 // Mutation: tell the task again without the review its lead names, and this
 // goes red.
@@ -890,18 +866,15 @@ func TestATaskToldAgainCarriesTheReviewItsBriefCarried(t *testing.T) {
 }
 
 // A TASK TOLD AGAIN RENDERS THE ROUNDS ITS BRIEF RENDERED, BY THEIR NUMBERS. A
-// park past its share folds whole closed rounds into one span of them
-// (ledger.Iteration.Through), so by the time a task is told again the turn's
-// record can hold fewer entries than its brief rendered, beside rounds closed
-// after it: the task renders every entry up to the last round its brief
-// rendered, a span among them as the record keeps it, and never a round closed
-// after that brief, which is told by its own rule. A span that runs on past
-// that round is told too: it holds rounds the brief rendered, whose calls a
-// session that may lack the brief is told no other way.
+// park past its share folds closed rounds into one span
+// (ledger.Iteration.Through), so the record can hold fewer entries than the
+// brief rendered, beside rounds closed after it: the task renders every entry
+// up to the brief's last round, spans included, never a later round, told by
+// its own rule. A span running past that round is told too: it holds rounds the
+// brief rendered, whose calls a session lacking the brief learns no other way.
 //
 // Mutation: render as many entries as the brief rendered rounds, stop short of
-// its last round, or leave out a span that runs on past it, and a case goes
-// red.
+// its last round, or leave out a span that runs past it, and a case goes red.
 func TestATaskToldAgainRendersTheRoundsItsBriefRenderedByTheirNumbers(t *testing.T) {
 	t.Parallel()
 	task := sandbox.Lead{Kind: sandbox.LeadKindTask, Job: "job-6", Seq: 6, Round: 7,
@@ -947,22 +920,17 @@ func TestATaskToldAgainRendersTheRoundsItsBriefRenderedByTheirNumbers(t *testing
 }
 
 // A REVIEW WHOSE ROUND A PARK DROPPED IS SAID AS NOT KEPT, IN ITS PLACE. A
-// review's lead keeps only the round it closed, and is told again from that
-// round's notes; a park past its share folds whole closed rounds into one span
-// of them (ledger.Iteration.Through), which keeps none of their reviews. Told
-// again once its round is in one, the review is said in its place among the
-// messages told again, as a review that is not kept (prompts.ReviewNotKept):
-// never as a send-back that said nothing, which its round heading a span would
-// make it, nor as one that cannot be read here, which says the engine holds a
-// copy of it, nor among the earlier messages not kept, said before every
-// message the section tells, since it can follow one, as it follows the turn's
-// task a base continuation kept, and the later of two that differ stands. And
-// it is handed on as a lead this brief told, so a continuation of a session
-// that may lack this brief says it again rather than drop it silently.
+// review's lead keeps only its round and is told from that round's notes, but a
+// span (ledger.Iteration.Through) keeps no reviews. Once its round is in one,
+// the review is said in its place as not kept (prompts.ReviewNotKept): not as a
+// send-back that said nothing, nor as unreadable (which says the engine holds a
+// copy), nor among the earlier messages not kept, said first, since it can
+// follow a lead such as a base continuation's task and the later of two that
+// differ stands. Handed on as told, a later continuation says it again.
 //
-// Mutation: read a span's first round as the review's, tell the review as one
-// that cannot be read here, count it among the earlier messages not kept, or
-// hand it on to no later brief, and a case goes red.
+// Mutation: read a span's first round as the review's, tell the review as
+// unreadable, count it among the earlier messages not kept, or hand it on to no
+// later brief, and a case goes red.
 func TestAReviewWhoseRoundAParkDroppedIsSaidAsNotKept(t *testing.T) {
 	t.Parallel()
 	review := sandbox.Lead{Kind: sandbox.LeadKindReview, Job: "job-3", Seq: 3, Round: 2}
@@ -1097,13 +1065,12 @@ func theConfig() *runner.Asked {
 		BoxKept: true}
 }
 
-// A BRIEF CONTINUING A KEPT CAPTURE HANDS ON THE LEADS IT TOLD. The run keeps
-// what a brief continuing a capture opened with, for a later brief to a
-// session that may lack it to tell again: an answer carried on keeps the answer,
-// a send-back the review of the round it closed (the newest closed round, never
-// the first). And a capture cut off was told again the leads its job's brief
-// told, which the job's record marks told by this job in turn, so the next
-// continuation of its session, cut off in turn, tells them too.
+// A BRIEF CONTINUING A KEPT CAPTURE HANDS ON THE LEADS IT TOLD. The run keeps a
+// brief's own lead for a later brief to tell again: an answer carried on keeps
+// the answer, a send-back the review of the round it closed (the newest, never
+// the first). A capture cut off was told again its job's brief's leads, which
+// the job's record marks told by this job too, so its next continuation, cut
+// off in turn, tells them.
 //
 // Mutation: hand on no lead of the brief's own, none it told again, or a
 // send-back's review as the first round's, and a case goes red.
@@ -1149,13 +1116,12 @@ func TestABriefContinuingAKeptCaptureHandsOnTheLeadsItTold(t *testing.T) {
 	}
 }
 
-// A BRIEF CONTINUING THE BASE HANDS ON THE TURN'S TASK AS IT RENDERED IT. A turn
-// that has kept no session of its own continues the one its conversation's last
-// turn left, its brief where the turn began and the turn's task: the run keeps
-// that task beside its record, with the last closed round the brief's ledger
-// rendered and the review its task carried, and the answer that carries a round
-// on beside it. Told again with other rounds, or without its review, the task
-// would not be the message the session may lack.
+// A BRIEF CONTINUING THE BASE HANDS ON THE TURN'S TASK AS IT RENDERED IT. A
+// turn with no session of its own continues the one its conversation's last
+// turn left, its brief the turn's task: the run keeps that task with the last
+// closed round its ledger rendered and the review it carried, beside the answer
+// that carries a round on. Told with other rounds or without its review, the
+// task is not the message the session may lack.
 //
 // Mutation: keep no task for a relaunch continuing the base, keep it with no
 // rounds, or without its review, and a case goes red.

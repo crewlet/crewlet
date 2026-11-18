@@ -12,8 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
-// A SEAT IS TOLD THE GRANTS ITS CREDENTIAL HOLDS, each with where it applies and
-// when it lapses, and how to ask for one more instead of asking a person to
+// A SEAT IS TOLD THE GRANTS ITS CREDENTIAL HOLDS, each with where it applies,
+// when it lapses and the one change it was asked for, and how to ask for one
+// more instead of asking a person to
 // edit the token by hand; a grant stored and not held yet is not said. The
 // grant arriving and leaving is told once each, and a baseline from before
 // grants were told takes none of them as a change. Mutation: build the lines
@@ -23,7 +24,8 @@ func TestASeatIsToldTheGrantsItsCredentialHolds(t *testing.T) {
 	lapse := time.Date(2026, 11, 15, 18, 0, 0, 0, time.UTC)
 	c := company()
 	c.Roles[0].Integrations.Cloudflare.Grants = []config.SeatGrant{
-		{ID: "gaaaaaaaaaa", Permission: "Origin Write", Scope: []string{"example.com"}, ExpiresAt: lapse},
+		{ID: "gaaaaaaaaaa", Permission: "Origin Write", Scope: []string{"example.com"}, ExpiresAt: lapse,
+			Target: "api.example.com"},
 		{ID: "gbbbbbbbbbb", Permission: "DNS Write"},
 	}
 	in := input(c)
@@ -33,7 +35,7 @@ func TestASeatIsToldTheGrantsItsCredentialHolds(t *testing.T) {
 	now := capability.Take(in)
 	text := capability.YourAccess(now)
 	for _, want := range []string{
-		"Beside it: Origin Write on example.com until 2026-11-15 18:00 UTC.",
+		"Beside it: Origin Write on example.com until 2026-11-15 18:00 UTC, for one change to api.example.com.",
 		"When Cloudflare refuses a call for a permission you lack (403 \"request is not authorized\"), ask for " +
 			"that one permission with request_access",
 	} {

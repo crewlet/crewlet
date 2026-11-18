@@ -1677,7 +1677,7 @@ var claudeCompactionOff = []string{"DISABLE_AUTO_COMPACT", "DISABLE_COMPACT", "C
 var claudeResumeSwitches = []string{"CLAUDE_CODE_RESUME_INTERRUPTED_TURN", "CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP"}
 
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
-func (ClaudeCode) Events() Decoder { return &claudeEvents{tools: map[string]string{}} }
+func (ClaudeCode) Events() Decoder { return &claudeEvents{} }
 
 // Parse maps the harness's result — the stream's last line — onto a result.
 //
@@ -1753,6 +1753,7 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 		res.Error = msg.failure()
 		res.ContextExhausted = msg.contextExhausted()
 		res.RequestRefused = msg.requestRefused()
+		res.RoundCapped = msg.Subtype == claudeMaxTurns
 		// THE LINE ITSELF, for the reader that classifies how the run
 		// ended by the vendor's status rather than its words: a spent plan
 		// is `is_error` with `api_error_status` 429, whatever the sentence
@@ -1761,6 +1762,9 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 	}
 	return res
 }
+
+// claudeMaxTurns is the result subtype of a run that reached its --max-turns.
+const claudeMaxTurns = "error_max_turns"
 
 // claudeResult is the harness's result message — the stream's last line, and the
 // one object `--output-format json` printed — as the vendor's Agent SDK

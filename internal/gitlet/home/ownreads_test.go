@@ -49,24 +49,18 @@ func (h *heldReads) peak() int {
 	return h.most
 }
 
-// A HOME LEAVES ITS SEATS A UNIT: its own git reads — a revision's facts —
-// run at most all but one of the node's seat git-work share at once, at least
-// one, because each holds a unit of the share a seat's read waits for at most
-// two seconds before it is sent to a Gitlet node that holds no copy. On a node
-// whose share is one unit, two repositories' turns at once — Concurrency is
-// two — read ONE AT A TIME, the second turn waiting in the home rather than
-// ahead of the seats in the share's own queue; and OwnReads is all but one of
-// a wider share.
+// A HOME LEAVES ITS SEATS A UNIT: its own git reads (a revision's facts) hold
+// at most all but one of the node's seat git-work share, at least one (package
+// doc, "Its bounds"), so on a one-unit share two turns at once read ONE AT A
+// TIME, the second waiting in the home, not ahead of the seats in the share's
+// queue. In the bubble, synctest.Wait returns with both turns parked (the
+// first in its held read, the second waiting for a read or, unbounded, beside
+// it in the estate) and the clock, which holds the loop's passes and bounds,
+// unmoved.
 //
-// In a bubble, where synctest.Wait returns once every goroutine but the
-// case's is durably blocked: by then both turns have gone as far as they can
-// — the first parked in its held read, the second parked waiting for a read
-// of its own, or, unbounded, beside it in the estate — and the bubble's clock,
-// which holds the loop's passes and its turns' bounds, has not moved.
-//
-// Mutations: build the loop's workers over the estate as given, its reads
-// unbounded — two in flight on a one-unit share, red; OwnReads answering the
-// whole share — the table, red.
+// Mutations: build the workers over the estate as given, reads unbounded →
+// two in flight on a one-unit share, red; OwnReads answering the whole share →
+// the table, red.
 func TestAHomeLeavesItsSeatsAUnit(t *testing.T) {
 	t.Parallel()
 	for u, want := range map[int]int{1: 1, 2: 1, 3: 2, 4: 3, 32: 31} {

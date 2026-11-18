@@ -11,18 +11,15 @@ import (
 	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
-// THE CODE SEARCH SCATTER, wired (internal/codesearch): every Gitlet node answers
-// topics.CodeSearch for the repositories a request assigns it, searching them
-// through its own git reads (internal/gitlet/query) as the request's asker, and
-// any node asks it ([Engine.CodeSearch]).
-//
-// REGISTERED WITH THE HOST AND WITHDRAWN BEFORE IT STOPS ([Engine.buildGitletHost],
-// [native.stopGitletHost]), as the status answerer is: a node that builds no
-// host answers nothing, which an asker reads as a node that did not
-// answer and names in its coverage. SIGNED, unlike the status answerer: a
-// node carries the request out as the asker it names, so the envelopes are
-// the scatter's own signedask channel, built once from the fleet keyring
-// beside the steer desk's ([Engine.codeSearchWire]).
+// THE CODE SEARCH SCATTER, wired (internal/codesearch): every Gitlet node
+// answers topics.CodeSearch for the repositories a request assigns it, through
+// its own git reads (internal/gitlet/query) as the request's asker; any node
+// asks ([Engine.CodeSearch]). Registered with the host and withdrawn before it
+// stops ([Engine.buildGitletHost], [native.stopGitletHost]): a node with no
+// host answers nothing, which the asker names in its coverage. SIGNED, unlike
+// the status answerer, because a node acts as the asker it names: the
+// envelopes are a signedask channel built once from the fleet keyring
+// ([Engine.codeSearchWire]).
 
 // serveCodeSearch makes this node an answerer of topics.CodeSearch over its
 // git reads, bounded by its seat git-work share of units units, and answers
@@ -79,9 +76,8 @@ func (e *Engine) askCodeSearch(ctx context.Context, request []byte, each func([]
 	}
 	reply, err := srv.Answer(ctx, request)
 	if err != nil {
-		// AN ERROR ANSWERS NOTHING, the same fact to the asker as a server
-		// that was down ([queue.AnswerFunc]), and is said here, in the
-		// server's own log, as the queue's answerers say it.
+		// AN ERROR ANSWERS NOTHING, as a server that was down does
+		// ([queue.AnswerFunc]), logged as the queue's answerers log it.
 		log.Debug("scatter_answer_failed", "subject", topics.CodeSearch, "error", err.Error())
 		return nil //nolint:nilerr // an answer not given is no reply, never the ask's failure (queue.AnswerFunc)
 	}

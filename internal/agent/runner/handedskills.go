@@ -12,34 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// THE EXECUTOR'S TOOL SKILLS ARE ITS HARNESS'S OWN.
+// THE EXECUTOR'S TOOL SKILLS ARE ITS HARNESS'S OWN. Claude Code's Skill tool
+// and OpenCode's skill tool list a skill's name and description and hand its
+// text only on load, the two tiers the catalogue and load_tool_skill make, so
+// the executor's skills go to its harness (internal/sandbox, RunRequest.Skills)
+// and its prompt lists none, under names from [nativeNames].
 //
-// Every other phase lists the Tool Skills its surface matches in its prompt and
-// loads one with load_tool_skill. The executor is its harness's own run, and
-// both executor harnesses load skills of their own: Claude Code's Skill tool,
-// OpenCode's skill tool, each listing a skill's name and description to its
-// model and handing it the skill's text only when the model loads it — the
-// same two tiers the catalogue and load_tool_skill make. So the executor's
-// skills are handed to its harness as its own (internal/sandbox,
-// RunRequest.Skills), and its prompt lists none.
-//
-// ONE KIND OF LOAD, whichever loader made it. The harness reports each load
-// to the run's bridge, which records it as the run's own load_tool_skill call
-// with the skill's key (internal/api/mcpbridge, skills.go) — so the
-// required-skill guard unlocks by its own reading of that call, the skill's
-// page records the read, and every rebuild of the run replays the load from
-// its record, as it replays one made over the bridge. load_tool_skill stays
-// on the executor's surface for that call to be made on, and the bridge never
-// lists it to the harness: its own tool is the loader its model knows.
-//
-// A SKILL IS NAMED FOR THE HARNESS ([nativeNames]): a key such as `mcp:github`
-// is no name either harness reads a skill by, so it is listed as
-// `crewlet:mcp-github` (internal/sandbox, SkillNamespace) — on both harnesses
-// alike, so the guard's refusal names the skill the run's model can load
-// without knowing which harness runs it ([skills.Guard.HandedAs]). The names a
-// launch handed are on the parked state ([execstate.State.NativeSkills]), so
-// every later opening of the run's bridge reads a reported name the way the
-// launch's did.
+// ONE KIND OF LOAD, whichever loader made it: the bridge records each load the
+// harness reports as the run's own load_tool_skill call with the skill's key
+// (internal/api/mcpbridge, skills.go), so the required-skill guard, the
+// skill's page and every rebuild's replay read it as a load over the bridge.
+// load_tool_skill stays on the executor's surface for that call, and is never
+// listed to the harness, whose own tool is the loader its model knows.
 
 // HandedSkill is one Tool Skill a run's harness is handed as its own: the
 // skill's key, and the skill as the harness is given it.
@@ -77,19 +61,16 @@ func (h HandedSkills) Listed() map[string]string {
 	return out
 }
 
-// requiredNote is what a required skill's description ends with, beside its
-// summary: the harness lists only a name and a description, and a model told a
-// skill holds tools back loads it before it calls them rather than after a
-// refusal.
+// requiredNote ends a required skill's description: the harness lists only a
+// name and a description, and a model told a skill holds tools back loads it
+// before calling them rather than after a refusal.
 const requiredNote = " Required: load this skill before you call the tools it covers."
 
 // handSkills is the Tool Skills the executor's harness is handed as its own,
-// matched against the surface the run is launched with as the executor's
-// catalogue was, and recorded as what the run was offered
-// (`knowledge_read` with `via: skill_injected`, [emitter.skillsInjected]): the
-// harness lists every one to its model, which is the summary a catalogue line
-// carried. The run's guard refuses a required one's tools by the name it is
-// handed under.
+// matched against the launch surface as the executor's catalogue was, and
+// recorded as offered (`knowledge_read` with `via: skill_injected`,
+// [emitter.skillsInjected]), since the harness lists every one to its model.
+// The run's guard refuses a required one's tools by the name it is handed under.
 func (r *Runner) handSkills(ctx context.Context, surface *tools.Surface) HandedSkills {
 	offer := r.cfg.Skills.Offer()
 	matched := offer.Hand(prompts.PhaseExecute, catalogueSurface(surface))
@@ -135,13 +116,17 @@ func (r *Runner) handedAs(listed map[string]string) {
 // ([sandbox.ValidSkillName]).
 const maxNativeName = 64
 
-// nativeNames is the name each of keys is handed under: the key in lowercase,
+// nativeNames is the name each of keys is handed under, a key such as
+// `mcp:github` being no name a harness reads a skill by: the key in lowercase,
 // every run of anything but an ASCII letter or digit one hyphen, trimmed of
-// hyphens at either end and to [maxNativeName] — `mcp:github` is
-// `mcp-github`, `skill:platform_mentions` `skill-platform-mentions`. Two keys
-// that come to one name are told apart in key order: the first keeps it, the
-// next is `-2`, then `-3`, so one set of keys is named alike on every node and
-// at every launch of it. A key with nothing to keep is `skill`.
+// hyphens at either end and to [maxNativeName] (`mcp:github` is `mcp-github`,
+// listed as `crewlet:mcp-github`, internal/sandbox SkillNamespace). Both
+// harnesses get the same name, so the guard's refusal names a skill the model
+// can load whichever harness runs it ([skills.Guard.HandedAs]). Keys that
+// collide are told apart in key order (the first keeps it, then `-2`, `-3`),
+// so one set of keys is named alike on every node and launch; a launch's names
+// are parked ([execstate.State.NativeSkills]) for its bridge's later openings.
+// A key with nothing to keep is `skill`.
 func nativeNames(keys []string) map[string]string {
 	out := make(map[string]string, len(keys))
 	taken := make(map[string]bool, len(keys))

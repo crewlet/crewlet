@@ -18,29 +18,24 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A GITLET NODE'S CHECKS (internal/gitlet/checkrun): its runner, which claims and
-// runs the company's queued checks in boxes of this node's sandbox catalogue
-// — on every Gitlet node, ranked per repository by its git order — and its share
-// of the HOMES' sweep of the checks whose runner is gone, a worker of the
-// home's loop on every Gitlet node, working the repositories it is home to.
+// A GITLET NODE'S CHECKS (internal/gitlet/checkrun): its runner, claiming and
+// running the company's queued checks in boxes of this node's sandbox
+// catalogue, on every Gitlet node ranked per repository by its git order, and
+// its home loop's sweep of the checks whose runner is gone, over the
+// repositories it is home to.
 
 // buildChecks builds this node's check runner and registers the home's sweep
-// with its home loop, beside Gitlet, which they serve — over the router's code
-// seam, the router's git orders, the current sandbox catalogue and epoch read
-// at every walk and attempt, Gitlet's check tokens and this node's
-// CREWLET_BOX_GIT_URL, its container cells gitlet.max_checks of this machine's
-// cores, its remote cells held to the company's caps on the coordination
-// store (code.checks.remote), nudged by a watch on this node's own code log.
-// The runner is BUILT here and STARTED with the native half's duties beside
-// the home's loop ([Engine.startNativeDuties]), for that loop's reasons; it is
-// stopped FIRST in Gitlet's one bounded stop, before the home's loop
-// and the host its boxes clone from ([native.stopGitletHost]).
+// with its home loop: over the router's code seam and git orders, the sandbox
+// catalogue and epoch read at every walk and attempt, Gitlet's check tokens,
+// container cells of gitlet.max_checks of this machine's cores, remote cells
+// held to the company's caps on the coordination store (code.checks.remote),
+// nudged by a watch on this node's code log. BUILT here, STARTED beside the
+// home's loop ([Engine.startNativeDuties]), stopped FIRST in Gitlet's bounded
+// stop, before that loop and the host its boxes clone from
+// ([native.stopGitletHost]).
 //
-// A NODE WITHOUT CREWLET_BOX_GIT_URL RUNS NO CHECK: a check's box clones its
-// commit from Gitlet at that address and has no other way to reach
-// it. Said once, at build; its sweep is registered all the same, since the
-// home's sweep needs no box of its own. An error is the build's, which fails
-// Gitlet's.
+// A NODE WITHOUT CREWLET_BOX_GIT_URL RUNS NO CHECK, its boxes' only way to
+// Gitlet; the sweep needs no box. An error fails Gitlet's build.
 func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *gitlethome.Loop,
 	codeLog *runningLog) (*checkrun.Runner, error) {
 
@@ -79,16 +74,13 @@ func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *gitlet
 }
 
 // checkCodeBase is where a check's box reads its commit without a clone
-// (checkrun.Options.CodeBase, its CREWLET_CHECK_API): gitBase — this node's
-// CREWLET_BOX_GIT_URL, Gitlet's public listener and the box git route
-// — with that route traded for the one the API serves a check's reads under.
-// "" for a gitBase that does not end in the box git route, which
-// checkrun.New refuses by its own name.
+// (checkrun.Options.CodeBase, its CREWLET_CHECK_API): gitBase, this node's
+// CREWLET_BOX_GIT_URL (Gitlet's public listener and the box git route), with
+// that route traded for the one the API serves a check's reads under; "" for a
+// gitBase not ending in the box git route, which checkrun.New refuses.
 //
 // BOTH ROUTES ARE auth's OWN SPELLINGS (BoxGitPrefix, BoxGitletPrefix), never a
-// copy: the runner spelled its own "/box/gitlet" before, which nothing held to
-// the route the API mounts, so renaming either would have answered every
-// check's read 404 with only a live run to show it.
+// copy, so renaming either cannot leave every check's read answered 404.
 func checkCodeBase(gitBase string) string {
 	listener, ok := strings.CutSuffix(gitBase, strings.TrimSuffix(auth.BoxGitPrefix, "/"))
 	if !ok || listener == "" {

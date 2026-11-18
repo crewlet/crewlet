@@ -88,9 +88,9 @@ naming the variable. ci.yml's `git recipe (macOS)` job runs `make
 test-gitproc` — gitproc's own suite on the three pins — on macOS for every pull
 request, so the recipe's macOS branch is built where a Mac contributor builds
 it; on Linux `make test` runs the same packages. Its `harness capture (macOS)`
-job runs `make test-capture` there the same way: internal/flock's pin cases and
-the cases of a harness's output capture, which rest on darwin calls no Linux job
-makes.
+job runs `make test-capture` there the same way: internal/flock's pin cases,
+the cases of a harness's output capture and internal/sockcount's suite, which
+rest on darwin calls no Linux job makes.
 
 **What fetching Chromium takes** — `curl`, `unzip` and the same SHA-256 tool,
 `zip` for `make chromium-test` (the recipe's own suite, in `make check`), and on
@@ -263,8 +263,8 @@ creates and removes; `src/test/ownedTmpdir.test.ts` fails a run that was
 started without it.
 
 No gate runs a benchmark, since a time is the machine's it was taken on. A
-benchmark is the measurement a bound's comment quotes (`src/lib/lineDiff.bench.ts`
-for the line diff's two bounds), kept so a change to the code under the bound
+benchmark is the measurement a bound's comment quotes (`src/lib/syntax/syntax.bench.ts`
+for the syntax colouring's size bound), kept so a change to the code under the bound
 is timed against the cases that set it: rerun it, and update the figures the
 comment quotes, with the machine they came from.
 
@@ -1120,8 +1120,19 @@ deletes nothing itself.
   goes in key/value pairs, and a message is a name rather than a sentence.
 - **Errors say what to do about it.** An error a person will read names the
   field, the file or the variable they have to change — not just what failed.
-- **Comments explain WHY**, and especially why an obvious alternative is
-  wrong. The diff shows what the code does.
+- **Write concisely** — docs, code comments, this guide and the agent
+  instructions (`CLAUDE.md`, `.claude/`) alike: say each thing once, where it
+  is decided, in the fewest plain words that keep it exact. No padding; no
+  restating, except a rule the agent instructions mirror from a root-level
+  file (both change in the same commit); no history, which the commit, the
+  pull request and the issue keep. Every reader pays for every word, and
+  most readers here are agents that pay again on every later request.
+- **Comments explain WHY, briefly**: the decision, and why an obvious
+  alternative is wrong, within 12 lines outside a package doc. The argument
+  behind it is written once, in the package doc (or an ADR when it binds
+  more than one package), and the comment points there.
+  `internal/commentgate` holds the bound, with an inventory of older code
+  that only shrinks.
 - **A field holding words somebody else wrote is declared on the field**, as a
   credential's `secret:"true"` is: a read type tags it `untrusted:"fence"`
   (words at length: a body, a comment, a message, an excerpt) or
@@ -1889,6 +1900,16 @@ site does not build — a root-shaped path, or a page, schema or skill under
 page spelled without its trailing slash, which the site answers with a
 redirect. A link to a page that moved is fixed by pointing it at where the
 subject lives now, never by deleting the gate's view of it.
+
+A page says each thing once, linking to where a subject is explained rather
+than explaining it again, and an enumeration is a table or a list, not prose.
+A repeat a test reads stays: grep `_test.go` for the page's path before
+cutting one. Shortening a page keeps every heading's text, because code,
+`examples/`, absolute docs.crewlet.ai links and `crewlet-operator` link to
+its anchors and `internal/docsgate` checks only relative markdown links:
+grep the tree for a heading and its slug before changing it.
+`docs/reference/metrics.md` and `alarms.md` are generated (`make
+metrics-doc`, `make alarms-doc`): edit their source, never the page.
 
 `docs/` is written for people *running* Crewlet. Reasoning aimed at people
 *changing* it goes in a package doc, where `go doc` surfaces it beside the

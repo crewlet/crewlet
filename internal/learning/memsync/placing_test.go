@@ -14,19 +14,17 @@ import (
 
 // WHAT PLACES A REPLAY AGAIN, AND WHAT BOUNDS IT.
 //
-// The cases here run on a bubble's clock over the model changelog
-// (copyfake_test.go), but one, which runs on the embedded broker.
+// All but one case run on a bubble's clock over the model changelog
+// (copyfake_test.go); one runs on the embedded broker.
 
 // A PULL WHOSE ROWS THE STORE REFUSES FAILS THE HYDRATION, THOUGH ITS REPLAY
 // WOULD BE PLACED AGAIN.
 //
-// The diary's first copy holds the changelog through a note the store
-// refuses (one carrying nothing but its id, which breaks the table's NOT NULL
-// columns) and never applies the barrier, so the replay is placed again past
-// it once its copy has held nothing for a second. The pull's rows are written
-// first, and the transaction fails. A replay that went on to its new
-// placement had moved past rows that never committed, and the hydration
-// completed with none of them.
+// The diary's first copy holds the changelog through a note the store refuses
+// (only an id, breaking the table's NOT NULL columns) and never applies the
+// barrier, so its replay would be placed again after a second of nothing. The
+// pull's transaction fails first; placing the replay again past rows that
+// never committed would complete the hydration with none of them.
 //
 // Mutation: place the replay again whatever the pull's transaction answered,
 // and this goes red.
@@ -63,13 +61,11 @@ func TestAPullWhoseRowsTheStoreRefusesFailsTheHydrationThoughItsReplayWouldBePla
 // A REPLAY EVERY PULL OF WHICH IS REFUSED IS REFUSED AFTER A MINUTE, ASKING
 // FOR A CONSUMER A SECOND.
 //
-// Every consumer the diary's replay is made on refuses its pulls, as a
-// consumer the broker deletes under them or a request limit does, and none
-// delivers anything. Each refusal places the replay again, which nothing
-// bounded: the replay asked for a consumer, and its deletion, as fast as the
-// broker answered, for ever. Nothing delivered for a minute refuses the seat,
-// naming the status the last placement ended with, and a placement that
-// delivered nothing is followed by the next a second after it.
+// Every consumer the replay is made on refuses its pulls (deleted under it, or
+// a request limit) and delivers nothing. Unbounded, each refusal would place
+// the replay again as fast as the broker answers, for ever. A placement that
+// delivered nothing is followed by the next a second later, and a minute with
+// nothing delivered refuses the seat, naming the last placement's status.
 //
 // Mutation: start the behind clock only where a copy says it holds nothing,
 // and this goes red: the replay is placed again for ever.
@@ -108,11 +104,10 @@ func TestAReplayEveryPullOfWhichIsRefusedIsRefusedAfterAMinuteAskingForAConsumer
 
 // A DELIVERY THE LINK LOST PLACES THE REPLAY AGAIN PAST THE LAST IT RECEIVED.
 //
-// The link loses the second note's delivery: the consumer counts it, and the
-// third arrives counted after it. The third is discarded, never written, and
-// the replay is placed again one past the first note, the last it received
-// with no gap before it, where the lost note is delivered: every note is
-// carried, once.
+// The link loses the second note: the consumer counts it and the third
+// arrives counted after it. The third is discarded, never written, and the
+// replay is placed again one past the first, the last received with no gap
+// before it: every note is carried, once.
 //
 // Mutation: place the replay again past the third, or write it, and this goes
 // red.
@@ -143,10 +138,9 @@ func TestADeliveryTheLinkLostPlacesTheReplayAgainPastTheLastItReceived(t *testin
 // A PULL ASKS NO MORE MESSAGES THAN ITS CONSUMER TAKES.
 //
 // A broker whose JetStream limits set max_request_batch gives every consumer
-// made without one that limit, and refuses a pull asking more. A replay
-// asking its own 1024 was refused at every pull, on every consumer, and the
-// seat with it. It asks what the consumer it was given takes, as the reply
-// that made it says: here a hundred, so 250 notes take three pulls.
+// made without one that limit and refuses a pull asking more, which would
+// refuse the seat at every pull. A pull asks what the reply that made its
+// consumer says it takes: here a hundred, so 250 notes take three pulls.
 //
 // Mutation: ask fetchBatch whatever the consumer takes, and this goes red.
 func TestAPullAsksNoMoreMessagesThanItsConsumerTakes(t *testing.T) {
@@ -203,15 +197,13 @@ func TestABrokerThatLimitsAPullsBatchHydratesTheSeat(t *testing.T) {
 
 // AN END BARRIER ACKNOWLEDGED PAST THE PULL'S STALL IS NO SILENCE OF THE COPY'S.
 //
-// Every end barrier's acknowledgement takes five seconds more than a pull's
-// stall to come, as one across an election does, asked again meanwhile. The
-// replay publishes it between two words of its pull and hears nothing while
-// it waits, so a silence counted from the word before the publish was past
-// its stall as the publish returned, and the seat was refused for a copy that
-// had stayed silent only while the replay was not reading it. Each delivery
-// takes a tenth of a second to cross, so the end barrier is still on its way
-// as the publish returns, and nothing is on the inbox yet. The silence counts
-// from the publish's return: the hydration completes.
+// Every end barrier's acknowledgement comes five seconds past a pull's stall,
+// as one across an election does. The replay publishes it between two words of
+// its pull and reads nothing meanwhile, so silence counted from the word
+// before the publish would refuse the seat for a copy silent only while
+// unread. Each delivery takes a tenth of a second, so nothing is on the inbox
+// as the publish returns. The silence counts from the publish's return: the
+// hydration completes.
 //
 // Mutation: count the silence from the barrier's delivery rather than from the
 // end barrier's return, and this goes red.
@@ -244,11 +236,10 @@ func TestAnEndBarrierAcknowledgedPastThePullsStallIsNoSilenceOfTheCopys(t *testi
 // WHAT ARRIVES WHILE A PROBE GOES UNANSWERED IS HEARD BEFORE THE PULL IS
 // CALLED SILENT.
 //
-// Each note takes five seconds to arrive, and nobody answers the consumer's
-// info, so each probe the replay sends once it has heard nothing for a second
-// runs to the end of the pull's stall, and the note arrives during it. A
-// replay that refused the seat as the probe ran out refused it with the note
-// on its inbox. The inbox is read first: every note is carried.
+// Each note takes five seconds to arrive and nobody answers the consumer's
+// info, so each probe (sent after a second of nothing) runs to the end of the
+// pull's stall, and the note arrives during it. The inbox is read before the
+// seat is refused for silence: every note is carried.
 //
 // Mutation: refuse the seat for its silence without reading what the inbox
 // holds, and this goes red.
@@ -271,13 +262,11 @@ func TestWhatArrivesWhileAProbeGoesUnansweredIsHeardBeforeThePullIsCalledSilent(
 // A CONSUMER STILL WITHOUT ITS PULL AFTER THE REMAKES IS WAITED FOR, NEVER
 // ASKED A SECOND PULL.
 //
-// Every consumer's first pull takes five seconds to reach it, as one held
-// back by a slow link. The replay makes the consumer again each second it
-// says it never got its pull, as many times as a cluster's dropped first pulls
-// call for, and then waits for that consumer's pull, which arrives and
-// delivers every note. A replay that asked a second pull of it on the same
-// inbox had two out once the first arrived, and read every pull after them
-// against the other's end.
+// Every consumer's first pull takes five seconds to reach it (a slow link).
+// The replay remakes the consumer each second it says it never got its pull,
+// jsapi.FirstPullRemakes times, then waits for that consumer's pull, which
+// delivers every note. A second pull on the same inbox would leave two out,
+// and every later pull would be read against the other's end.
 //
 // Mutation: ask the pull again once the remakes are spent, and this goes red.
 func TestAConsumerStillWithoutItsPullAfterTheRemakesIsWaitedForNeverAskedASecondPull(t *testing.T) {
@@ -312,13 +301,12 @@ func TestAConsumerStillWithoutItsPullAfterTheRemakesIsWaitedForNeverAskedASecond
 
 // EVERY REQUEST A HYDRATION MAKES KEEPS ITS OWN BOUND.
 //
-// A hydration has no deadline of its own, so each of its requests is held to
-// its own: the changelog's identity and the hydration's barrier are asked for
-// no longer than the longest silence the server keeps and their crossing, a
-// count's consumer is asked to be made for its create's budget, and a
-// consumer's deletion is given its cleanup bound and its crossing. Each
-// request here is never answered (the deletion, at once), and the hydration
-// is still running a nanosecond before its bound and done past it.
+// A hydration has no deadline of its own, so each request keeps its own: the
+// changelog's identity and the hydration's barrier the server's longest kept
+// silence plus their crossing, a count's consumer create its create budget, a
+// consumer's deletion its cleanup bound plus its crossing. Each request here
+// is never answered (the deletion, at once), and the hydration is still
+// running a nanosecond before its bound and done past it.
 //
 // Mutation: hold the barrier or the identity read to the client's five
 // seconds, or to nothing, or ask the count's create without its budget, or

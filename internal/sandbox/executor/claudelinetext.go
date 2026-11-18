@@ -8,47 +8,36 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// THE TEXTS A THREAD'S READERS READ, READ AS THEY STREAM.
-//
 // A text a thread line holds (a prompt, a tool's result, a task notification,
-// a skill's name) is as long as whatever wrote it made it: Claude Code keeps no
-// bound on a line. What a reader asks of one is a property of it, never the
-// text itself: whether it says anything, the subagent and the leg a task
-// notification names, whether it names the handback tool, its length and
-// digests, its length in UTF-16 code units. Each of those is read here by an
-// automaton that takes the text's DECODED characters in pieces, in order, and
-// answers exactly as the whole-text rule it replaces answers, at any length,
-// holding a bounded state: [textSays], [textNotice], [textHandback],
-// [textResult] and [textUnits].
+// a skill's name) has no bound: Claude Code keeps none on a line. Readers ask
+// only properties of one, so each property is read by an automaton that takes
+// the text's DECODED characters in pieces, in order, holds a bounded state, and
+// answers exactly as its whole-text rule at any length ([textSays],
+// [textNotice], [textHandback], [textResult], [textUnits]; held to those rules
+// by TestATextsFactsAreReadAsItsWholeTextReadsThem).
 //
-// IN PIECES OF WHOLE CHARACTERS: a piece never ends inside a UTF-8 sequence,
-// as jsonscan's Scanner.Read never ends one, and as [textCut] cuts a whole
-// text. Two automata read characters ([textSays], [textUnits]); the others read
-// bytes, which any cut leaves in order.
-//
-// A whole text a reader already holds is handed to them through [textCut],
-// one fixed buffer, so reading one costs no copy of it.
+// A piece never ends inside a UTF-8 sequence, as jsonscan's Scanner.Read never
+// does: [textSays] and [textUnits] read characters, the others bytes. A whole
+// text already held is handed over through [textCut], one fixed buffer, never a
+// copy of it.
 
-// textPieceBytes is the most of a text one piece holds ([textCut]): 4 KiB, a
-// page, so a cut costs its caller one fixed buffer however long the text, and
-// at least [utf8.UTFMax], so every piece holds a character.
+// textPieceBytes is the most one piece of [textCut] holds: 4 KiB, a page, so a
+// cut costs one fixed buffer however long the text; at least [utf8.UTFMax], so
+// every piece holds a character.
 const textPieceBytes = 4 << 10
 
 // textCut hands a whole text out in pieces of whole characters, each copied
-// into its one buffer: next is the next piece, valid until the next call, and
-// nil once the text is out.
+// into its one buffer.
 type textCut struct {
 	text string
 	buf  [textPieceBytes]byte
 }
 
-// next is the text's next piece, nil at its end. NEVER INSIDE A CHARACTER: a
-// piece that would end inside one ends before its first byte instead, a byte
-// that is no UTF-8 continuation byte, so every character a reader decodes from
-// the pieces is one it decodes from the whole text. Where the byte at the cut
-// and the three before it are all continuation bytes, which no valid text
-// holds, no character spans the cut (none is longer than [utf8.UTFMax] bytes),
-// and the piece ends there.
+// next is the text's next piece, valid until the next call; nil at its end. A
+// piece that would end inside a character ends before that character's first
+// byte instead. Where the byte at the cut and the three before it are all
+// continuation bytes, which no valid text holds, no character spans the cut
+// (none is longer than [utf8.UTFMax]), so the piece ends there.
 func (c *textCut) next() []byte {
 	if len(c.text) == 0 {
 		return nil
@@ -67,8 +56,8 @@ func (c *textCut) next() []byte {
 }
 
 // textSays reads whether a text SAYS ANYTHING, as Claude Code reads it with
-// JavaScript's trim(): whether it holds a character [jsTrimKeeps] keeps,
-// anywhere ([threadMessage.Says]). Once one is met the rest is passed over.
+// JavaScript's trim(): whether it holds a character [jsTrimKeeps] keeps
+// ([threadMessage.Says]).
 type textSays struct{ any bool }
 
 // write reads the text's next piece.
@@ -89,30 +78,26 @@ const (
 	noticeFileOpen   = "<output-file>"
 	noticeFileClose  = "</output-file>"
 
-	// noticeLineMax is the longest line of a notification that is compared
-	// whole: the header, the agent's line at [claudeAgentMaxBytes], the leg's
-	// at [sandbox.MaxBridgeCallIDBytes], and the status. A longer line is none
-	// of them; an output file's line is read by its ends and its length.
+	// noticeLineMax is the longest notification line compared whole: the
+	// header, the agent's at [claudeAgentMaxBytes], the leg's at
+	// [sandbox.MaxBridgeCallIDBytes], and the status. A longer line is none of
+	// them; an output file's line is read by its ends and its length.
 	noticeLineMax = max(len(noticeHeader), len(noticeAgentOpen)+claudeAgentMaxBytes+len(noticeAgentClose),
 		len(noticeLegOpen)+sandbox.MaxBridgeCallIDBytes+len(noticeLegClose), len(claudeNotificationCompleted))
 )
 
 // textNotice reads the subagent and the leg a TASK NOTIFICATION's text names:
 // its lines, split at a line feed alone (a carriage return stays its line's),
-// in order, `<task-notification>`, `<task-id>A</task-id>`,
+// are `<task-notification>`, `<task-id>A</task-id>`,
 // `<tool-use-id>L</tool-use-id>`, any number of `<output-file>…</output-file>`
-// (an opening and a closing that do not overlap), and
-// `<status>completed</status>`, nothing after the status read. None for any
-// other text, an agent outside [validClaudeAgent]'s rule, or a leg outside the
-// call-id rule ([sandbox.ValidCallID]); and none for a text that ends before
-// its status, whose next line, past its end, is empty.
+// (opening and closing not overlapping), then `<status>completed</status>`,
+// nothing after it read. None for any other text (one ending before its
+// status), or an agent or leg [validClaudeAgent] or [sandbox.ValidCallID] refuses.
 //
-// IT HOLDS NO LINE BUT ONE IT COMPARES WHOLE: the first [noticeLineMax] bytes
-// of the line it is in, the last bytes of it as long as an output file's
-// closing, and its length, so an output file's line of any length, and any
-// number of them, cost it nothing more. The agent and the leg it names it
-// keeps as strings of its own, at most 64 bytes each, never a piece of the
-// text.
+// It holds only the first [noticeLineMax] bytes of the current line, its last
+// len(noticeFileClose) bytes and its length, so output files cost nothing more
+// at any length or number; the agent and leg are strings of its own (64 bytes
+// at most each), never a piece of the text.
 type textNotice struct {
 	line int   // the line it is in: 0 the header, 1 the agent's, 2 the leg's, and on
 	n    int64 // the bytes of it so far
@@ -137,8 +122,7 @@ func (a *textNotice) write(p []byte) {
 	}
 }
 
-// take reads seg, the next bytes of the line it is in, no line feed among
-// them.
+// take reads seg, the current line's next bytes, which hold no line feed.
 func (a *textNotice) take(seg []byte) {
 	if a.n < int64(len(a.head)) {
 		copy(a.head[a.n:], seg)
@@ -152,8 +136,7 @@ func (a *textNotice) take(seg []byte) {
 	copy(a.tail[len(a.tail)-len(seg):], seg)
 }
 
-// endLine decides the line it is in, which a line feed or the text's end
-// ended.
+// endLine decides the current line, ended by a line feed or the text's end.
 func (a *textNotice) endLine() {
 	var whole []byte // the line, where it is short enough to be compared whole
 	held := a.n <= int64(len(a.head))
@@ -179,8 +162,7 @@ func (a *textNotice) endLine() {
 			ok = false
 		}
 	default:
-		// An output file's line, of any length, by its ends: an opening and a
-		// closing that do not overlap.
+		// An output file's line, read by its ends, which may not overlap.
 		if a.n >= int64(len(noticeFileOpen)+len(noticeFileClose)) &&
 			string(a.head[:len(noticeFileOpen)]) == noticeFileOpen && string(a.tail[:]) == noticeFileClose {
 			ok = true
@@ -199,8 +181,8 @@ func (a *textNotice) endLine() {
 	a.line, a.n = a.line+1, 0
 }
 
-// end reads the text's end: its last line, and where that leaves the answer
-// open, the empty line past it, which no line it waits for is.
+// end reads the text's end: its last line, then, where the answer is still
+// open, the empty line past it, which no awaited line is.
 func (a *textNotice) end() {
 	if !a.done {
 		a.endLine()
@@ -219,8 +201,8 @@ func (a *textNotice) notice() (agent, leg string, ok bool) {
 	return a.agent, a.leg, true
 }
 
-// noticeEnclosed is what line, where whole says it is held whole, holds
-// between opening and closing, where line is exactly that.
+// noticeEnclosed is what line holds between opening and closing, where it is
+// held whole and is exactly that.
 func noticeEnclosed(line []byte, whole bool, opening, closing string) ([]byte, bool) {
 	if !whole {
 		return nil, false
@@ -232,21 +214,18 @@ func noticeEnclosed(line []byte, whole bool, opening, closing string) ([]byte, b
 	return bytes.CutSuffix(inner, []byte(closing))
 }
 
-// textHandback reads whether a task notification's text, whose leading lines
-// name a subagent's leg ([textNotice]), carries a handback
-// ([carriesHandback]): where it names [claudeToolHandback] anywhere, read
-// through the last bytes of the piece before, one fewer than the name, so a
-// name a cut splits is met.
+// textHandback reads whether a task notification's text ([textNotice]) carries
+// a handback ([carriesHandback]): whether it names [claudeToolHandback]
+// anywhere. It carries the piece before's last len(name)-1 bytes, so a name a
+// cut splits is still met.
 //
-// THE NOTIFICATION MARKS A HANDBACK BY ITS WORDS ALONE. Both releases build a
-// completion's notification (2.1.322's MXt @298314707 through Pi @292640802,
-// 2.1.310's W0t @251577375 through Di) with the subagent's answer, joined, as
-// its `<result>`, and no tag of a handback's own: so under a handback its
-// result is the harness's words in the report's place, and each of their
-// three forms names the tool (2.1.322's H3i, tOr and iOr @288119298 and
-// @287819913, 2.1.310's Eqs, kqs and jQn @245869660 and @242470305, the tool
-// SubagentHandback in each). A report of the subagent's own that names it
-// costs only its leg, the safe direction.
+// THE WORDS ALONE MARK A HANDBACK: both releases build a completion's
+// notification with the subagent's answer as its `<result>` and no handback tag
+// (2.1.322's MXt @298314707 through Pi @292640802, 2.1.310's W0t @251577375
+// through Di), and a handback's result is the harness's words, all three forms
+// naming the tool (2.1.322's H3i, tOr, iOr @288119298, @287819913; 2.1.310's
+// Eqs, kqs, jQn @245869660, @242470305). A report of the subagent's own naming
+// it costs only its leg, the safe direction.
 type textHandback struct {
 	carry [len(claudeToolHandback) - 1]byte
 	held  int // how much of carry the text has filled
@@ -275,22 +254,21 @@ func (h *textHandback) write(p []byte) {
 	h.held = copy(h.carry[:], keep)
 }
 
-// A log's whole output is at least as long as its opening, so the bytes
-// [textResult] keeps for the one hold the other: this does not compile where
-// [sandbox.MaxBridgeOutputBytes] is shorter than [sandbox.HoldingsOpeningBytes].
+// [textResult] hashes its opening out of the bytes it keeps: this fails to
+// compile where [sandbox.MaxBridgeOutputBytes] is shorter than
+// [sandbox.HoldingsOpeningBytes].
 var _ [sandbox.MaxBridgeOutputBytes - sandbox.HoldingsOpeningBytes]struct{}
 
-// threadResultText is a tool_result's text as the reading compares it with a
-// log's output ([threadCall.Text]): its decoded length
-// ([threadResultText.Bytes]); Opening the SHA-256 of its first
-// [sandbox.HoldingsOpeningBytes]; Whole the SHA-256 of all of it, where it is
-// at most [sandbox.MaxBridgeOutputBytes] long, else zero, as a log keeps no
-// longer output whole to compare. A call holds it by value: a text of any
-// length costs a call these 72 bytes.
+// threadResultText is a tool_result's text as compared with a log's output
+// ([threadCall.Text]): its decoded length ([threadResultText.Bytes]), Opening
+// the SHA-256 of its first [sandbox.HoldingsOpeningBytes], and Whole the
+// SHA-256 of all of it where it is at most [sandbox.MaxBridgeOutputBytes], else
+// zero, since a log keeps no longer output whole. A call holds these 72 bytes
+// by value, whatever the text's length.
 //
-// THE ZERO VALUE IS NO TEXT, what a result whose content holds none reads as
-// ([resultText]) and what a tool_use's call holds: never a text of no bytes,
-// whose digests are the empty text's, which no zero digest is.
+// THE ZERO VALUE IS NO TEXT (a result whose content holds none, [resultText],
+// and every tool_use's call), never a text of no bytes, whose digests are the
+// empty text's.
 type threadResultText struct {
 	// size is the text's decoded length plus one; 0 where there is no text.
 	size           int64
@@ -300,13 +278,16 @@ type threadResultText struct {
 // Bytes is the text's decoded length; -1 where there is no text.
 func (t threadResultText) Bytes() int64 { return t.size - 1 }
 
-// textResult reads a tool_result's text into its length and its two digests
-// ([threadResultText]), keeping its first [sandbox.MaxBridgeOutputBytes] bytes
-// and no more, so a text of any length costs it that.
+// textResult reads a tool_result's text into a [threadResultText], keeping its
+// first [sandbox.MaxBridgeOutputBytes] bytes and no more.
 type textResult struct {
 	n    int64
 	kept [sandbox.MaxBridgeOutputBytes]byte
 }
+
+// reset makes r read a text from its start, its buffer kept: [textResult.sum]
+// reads only what of the buffer the text since wrote.
+func (r *textResult) reset() { r.n = 0 }
 
 // write reads the text's next piece.
 func (r *textResult) write(p []byte) {
@@ -316,12 +297,10 @@ func (r *textResult) write(p []byte) {
 	r.n += int64(len(p))
 }
 
-// sum is the text read so far, as the reading compares it.
+// sum is the text read so far, as a [threadResultText].
 func (r *textResult) sum() threadResultText {
 	held := r.kept[:min(r.n, int64(len(r.kept)))]
 	t := threadResultText{size: r.n + 1, Opening: sha256.Sum256(held[:min(len(held), sandbox.HoldingsOpeningBytes)])}
-	// WHOLE ONLY WHERE A LOG COULD HAVE KEPT IT WHOLE: a longer text is
-	// compared by its opening alone, so its whole is never hashed.
 	if r.n <= int64(len(r.kept)) {
 		t.Whole = sha256.Sum256(held)
 	}
@@ -330,8 +309,8 @@ func (r *textResult) sum() threadResultText {
 
 // textUnits counts a text's UTF-16 code units, as JavaScript counts a string's
 // length: two for a character past the basic plane, one for every other. It
-// stops counting once the count passes [skillListingMaxNameUnits], the one
-// bound its reader holds a count to ([skillNamesKept]).
+// stops once past [skillListingMaxNameUnits], the only bound its reader
+// ([skillNamesKept]) checks.
 type textUnits struct{ n int }
 
 // write reads the text's next piece.

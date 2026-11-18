@@ -19,8 +19,8 @@ const RepoName = "acme"
 const ExternalBase = "https://crewlet.example.com"
 
 // Settings are what every case declares RepoName with: main, protected
-// `direct_push: persons`, owned by the unit ENG, and indexed for search — what
-// a declaration leaving search unset is recorded with.
+// `direct_push: persons`, owned by the unit ENG, and indexed for search (the
+// recorded default when a declaration leaves search unset).
 func Settings() gitlet.RepoSettings {
 	return gitlet.RepoSettings{
 		ManagedBy: gitlet.ManagedConfig, Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "ENG"},
@@ -36,7 +36,7 @@ type Case struct {
 	Ctx   context.Context
 }
 
-// URL is RepoName's URL through the i-th Gitlet node — read again at every call,
+// URL is RepoName's URL through the i-th Gitlet node, read again at every call
 // because a restarted node listens on a new one.
 func (c *Case) URL(i int) string { return c.Fleet.Nodes()[i].URL() + "/git/" + RepoName }
 
@@ -74,12 +74,11 @@ type suiteCase struct {
 	run  func(t *testing.T, newFleet NewFleet)
 }
 
-// Run runs every case any topology passes — the one-data-node topology
-// included — each on a fleet of its own, R1 FIRST: the cache's own tests run
-// against a fake of the snapshot contract, so the first case through the real
-// reader is the one that rebuilds a cache from rows alone, and a drift between
-// that fake and the reader fails there, named, before any push case muddies
-// it. After every case every cache must hold exactly the rows
+// Run runs every case any topology passes, each on a fleet of its own, R1
+// FIRST: the cache's own tests run against a fake of the snapshot contract,
+// so a drift between that fake and the real reader fails in the case that
+// rebuilds a cache from rows alone, before any push case muddies it. After
+// every case every cache must hold exactly the rows
 // (NothingButSyncWritesACache's check).
 func Run(t *testing.T, newFleet NewFleet) {
 	t.Helper()
@@ -218,12 +217,9 @@ func equalRefs(a, b map[string]string) bool {
 // within polls ok until it holds or d passes, and answers whether it held.
 //
 // EVERY CALLER'S d BOUNDS A WAIT FOR SOMETHING THAT MUST COME, and its firing
-// only fails the case: a condition a broken build never meets, or meets past a
-// claim another suite decides with no clock — the cache janitor running at
-// its start and at a kick rather than at its next tick, which cache's own
-// TestAStartedCacheEmptiesTrashWhenKicked holds with no tick ever delivered.
-// So no caller's bound is a claim, and none is shorter than what it waits for
-// may take on a loaded runner (cleanupWait).
+// only fails the case. No bound is a claim: promptness is decided with no
+// clock elsewhere (the janitor's by TestAStartedCacheEmptiesTrashWhenKicked),
+// and none is shorter than the wait may take on a loaded runner (cleanupWait).
 func within(d time.Duration, ok func() bool) bool {
 	deadline := time.Now().Add(d)
 	for {
@@ -243,12 +239,10 @@ func within(d time.Duration, ok func() bool) bool {
 // once its client is done.
 //
 // A LIVENESS BOUND THAT ONLY A HUNG JANITOR OR HANDLER REACHES, never a
-// claim. The janitor runs at its start and at a kick, in milliseconds, and
-// whether it does so rather than at its next tick (cache.EvictInterval on) is
-// cache's own claim, decided there with no tick ever delivered
-// (TestAStartedCacheEmptiesTrashWhenKicked). So no case here turns on how soon
-// it comes. A MINUTE, the suite's bound on every wait that must end (homeWait,
-// layerSettle): far past what a loaded runner adds to the milliseconds the
-// work takes, and short enough that a janitor that never runs fails its case
-// rather than the whole binary's timeout.
+// claim: that the janitor runs at its start and at a kick rather than a tick
+// (cache.EvictInterval on) is TestAStartedCacheEmptiesTrashWhenKicked's. A
+// MINUTE, the suite's bound on every wait that must end (homeWait,
+// layerSettle): far past what a loaded runner adds to milliseconds of work,
+// and short enough that a janitor that never runs fails its case, not the
+// binary's timeout.
 const cleanupWait = time.Minute

@@ -49,12 +49,10 @@ func (f *fakeAssistant) PurgeInactive(_ context.Context, _ iam.Actor, _ string, 
 	return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
 }
 
-// THE ASSISTANT'S REAPER SOURCE NOMINATES AN ERASURE BEFORE ANY RETENTION PURGE,
-// and only for a person the identity estate removed: a removed person's
-// conversations are erased in one record, a conversation past its retention is
-// purged, and one used since it was listed is skipped rather than failed.
-// Mutation: nominate every owner rather than the removed ones and a person
-// still here is erased.
+// The assistant's reaper source nominates an erasure before any retention
+// purge, and only for a removed person; a conversation used since it was
+// listed is skipped rather than failed. Mutation: nominate every owner and a
+// person still here is erased.
 func TestTheAssistantsReaperSourceErasesTheRemovedFirst(t *testing.T) {
 	t.Parallel()
 	here, gone := uuid.New(), uuid.New()
@@ -100,12 +98,10 @@ func TestTheAssistantsReaperSourceErasesTheRemovedFirst(t *testing.T) {
 	}
 }
 
-// THE RETENTION IS THE DOCUMENT'S, as its block states it: unset (or no
-// document at all) is the block's thirty days, a set value is kept, and a
-// value past the bounds is clamped into them by the same accessor validation
-// reads. Which document that is, is the fleet's pointer's
-// (TestTheAssistantsRetentionIsKnownOnlyOnANodeServingTheFleetsRevision).
-// Mutation: answer a constant and the set and clamped cases go red.
+// The retention is the document's: unset (or no document) is thirty days, a
+// set value is kept, and one past the bounds is clamped by the accessor
+// validation reads. Mutation: answer a constant and the set and clamped cases
+// go red.
 func TestTheAssistantsRetentionIsTheDocumentsOwn(t *testing.T) {
 	t.Parallel()
 	day := 24 * time.Hour
@@ -128,20 +124,12 @@ func TestTheAssistantsRetentionIsTheDocumentsOwn(t *testing.T) {
 	}
 }
 
-// THE RETENTION IS THE FLEET REVISION'S, KNOWN ONLY ON A NODE THAT RUNS IT, and
-// a pass that cannot know it purges no conversation.
-//
-// The reaper's purge is a record every data node applies, and a purged
-// conversation is gone for the person who owned it, so the term is the
-// `assistant.retention_days` of the revision the fleet's activation pointer
-// names, read on a node whose company was applied from that very activation
-// ([Engine.fleetCompany]). A node still serving an activation the fleet has
-// replaced (one that refused the fleet's revision), a node booted on an
-// offline offer no activation named, a pointer that cannot be read and a fleet
-// that has activated nothing each leave it unknown, and the pass over the
-// source purges nothing; a node serving the fleet's activation purges at its
-// document's week. Mutation: read the term off the node's own company again
-// and every case but the first reads a term it cannot know, and purges by it.
+// The retention is the fleet revision's, known only on a node that runs it,
+// and a pass that cannot know it purges no conversation
+// ([Engine.assistantRetention]): a replaced activation, an offline offer, an
+// unreadable pointer and a fleet that activated nothing each leave it unknown.
+// Mutation: read the term off the node's own company and every case but the
+// first purges by a term it cannot know.
 func TestTheAssistantsRetentionIsKnownOnlyOnANodeServingTheFleetsRevision(t *testing.T) {
 	t.Parallel()
 	week := 7 * 24 * time.Hour
@@ -149,8 +137,7 @@ func TestTheAssistantsRetentionIsKnownOnlyOnANodeServingTheFleetsRevision(t *tes
 	for _, tc := range []struct {
 		name string
 		// stamp is the activation the node's company was applied from,
-		// given the fleet's earlier and current ones; nil activates
-		// nothing at all.
+		// given the fleet's earlier and current ones; nil activates none.
 		stamp func(earlier, current coord.Activation) time.Time
 		// down makes the pointer unreadable.
 		down bool
@@ -184,7 +171,7 @@ func TestTheAssistantsRetentionIsKnownOnlyOnANodeServingTheFleetsRevision(t *tes
 					"on a node serving the fleet's activation", term, err, tc.known)
 			}
 
-			// AND THE PASS over the source the engine builds with it.
+			// And the reaper's pass over a source built with it.
 			idle := uuid.New()
 			fake := &fakeAssistant{inactive: []uuid.UUID{idle}}
 			src := assistantTrash{reader: fake, writer: fake, term: e.assistantRetention,

@@ -12,21 +12,13 @@ import (
 // AN ISSUE REPORT is the company's record that one engine defect was reported,
 // or is being (ADR-0101): one record per fingerprint, the current value only.
 //
-// # Who has to agree on it
-//
-// The whole company, now. "At most once per fingerprint per seven days" is a
-// promise about the company, and every node detects on its own, so a record on
-// any one node's file lets each of them send. A claim here is a compare-and-set
-// the broker arbitrates: of the nodes that detect one defect, one sends.
-//
-// # Bounded, and holding nothing of the company's
-//
-// A record is the typed report that was sent and what the relay answered:
-// [IssueReport.Validate] holds its strings to shapes that carry no words and
-// its payload to [MaxIssueReportPayloadBytes], the relay's own limit. There is
-// one record per fingerprint, each a catalogue class at one engine function,
-// and it is replaced rather than aged, so it lives in the positions register,
-// the bucket with no retention.
+// Fleet-wide, because "at most once per fingerprint per seven days" is a
+// promise about the company and every node detects on its own: a claim is a
+// compare-and-set the broker arbitrates, so of the nodes that detect one
+// defect, one sends. [IssueReport.Validate] holds its strings to shapes that
+// carry no words and its payload to [MaxIssueReportPayloadBytes], so it holds
+// nothing of the company's. Replaced rather than aged, it lives in the
+// positions register ([PositionKey]).
 
 // IssueReportStatus is how far a report got.
 type IssueReportStatus string

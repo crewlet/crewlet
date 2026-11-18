@@ -41,13 +41,12 @@ func (c *countingThread) asks() []MainThreadAsk {
 	return append([]MainThreadAsk(nil), c.asked...)
 }
 
-// A COLLECTION RECORDS THE COUNT OF THE COPY ITS BOX HOLDS. The read that collects
-// a Claude Code job reads the job's main thread once and writes on the job's own
-// record, with how its harness ended and in the same write, what Claude Code
-// counts the copy at, beside the least window the run reported: of a job whose
-// harness ended its own run and of one cut off alike, since the count decides
-// the copy's guard too. A stop's read and a loss's ask nothing: no relaunch
-// carries their round on in place.
+// A COLLECTION RECORDS THE COUNT OF THE COPY ITS BOX HOLDS: a Claude Code job's
+// collection reads the main thread once and writes the count, beside the least
+// window the run reported, in the same write as how its harness ended, whether
+// the harness ended its own run or was cut off, since the count decides the
+// copy's guard too. A stop's read and a loss's ask nothing: no relaunch carries
+// their round on in place.
 //
 // Mutation: leave the count out of the record's write (markHarnessEnd handed no
 // count), or ask the thread on every read, and a case goes red.
@@ -159,12 +158,9 @@ func TestACountOfAJobNotOverIsUnread(t *testing.T) {
 	}
 }
 
-// AN UNBOUNDED COUNT IS LOGGED WITH WHY, BY ITS MARK: the log of a collection's
-// read that could not bound the copy says the thread was read whole only where
-// it was. A thread not read whole is logged with what may have stopped the
-// read, and a release the count's rules were not read in and a saved compaction
-// with the thread not read at all, each found before it is opened; a mark the
-// whole thread's bytes cannot bound is logged as one read whole.
+// AN UNBOUNDED COUNT IS LOGGED WITH WHY, BY ITS MARK ([unboundedBecause]): the
+// log says the thread was read whole only for a mark its whole bytes cannot
+// bound, and otherwise that it was not read whole, or not read at all.
 //
 // Mutation: log every mark as a thread read whole, and a case goes red.
 func TestAnUnboundedCountIsLoggedWithWhyByItsMark(t *testing.T) {
@@ -204,12 +200,10 @@ func TestAnUnboundedCountIsLoggedWithWhyByItsMark(t *testing.T) {
 	}
 }
 
-// THE MAIN THREAD IS READ BEFORE THE TAKE, WITHIN ITS WAIT. The read of a job's
-// main thread is made on the box's host before the take, whose own budget it
-// leaves whole, and within the wait the coordinator is built with
-// ([MainThreadReadWait]), armed as the read starts: in a synctest bubble, the
-// deadline the runner sees is the bubble's instant plus that wait, and no
-// session has been taken when it reads.
+// THE MAIN THREAD IS READ BEFORE THE TAKE, WITHIN ITS WAIT: before the take,
+// leaving the take's budget whole, and within [MainThreadReadWait] armed as the
+// read starts, so in a synctest bubble the runner's deadline is the bubble's
+// instant plus that wait and no session has been taken when it reads.
 //
 // Mutation: read the thread after the take, arm no wait, or build the
 // coordinator with another wait, and a check goes red.
@@ -246,26 +240,17 @@ func TestTheMainThreadIsReadBeforeTheTakeWithinItsWait(t *testing.T) {
 }
 
 // THE BOX READ'S BUDGET HOLDS THE MAIN THREAD'S READ: a Claude Code or an
-// OpenCode collection's asker waits the read's wait more, at the host's share,
-// whether or not its turn has a cap, and a stop's and a loss's wait as they
-// did. A collection of a turn with a cap is the one read whose host may make
-// both the record that the cap ended a job it saw working and the thread's
-// read, so it is held with each. Every read is held against the same read of a
-// run that names no harness, which asks the thread nothing: a basis that asked
-// it would leave a collection no more than it, and its case goes red. The
-// figures the docs state are held too: twenty seconds more than a collection
-// that reads no thread, and in all the budget's own terms with the read's
-// wait among them, about 4,720 s for a turn with no cap and about 5,994 s for
-// one with a cap at today's bounds, composed rather than pinned because one of
-// their terms, the slowest node's crossing of a change of the run's row
-// (coord.MaxValueCrossing), is a figure of the store's.
+// OpenCode collection, capped or not, waits the read's wait more at the host's
+// share; a stop and a loss do not. A capped one's host may also record the cap
+// ending a job it saw working, so it is held with both. Each is held against
+// the same read of a run naming no harness, which asks the thread nothing. The
+// docs' figures are held too: twenty seconds more than another harness's
+// collection, about 4,720 s uncapped and 5,994 s capped, composed since
+// coord.MaxValueCrossing is a figure of the store's.
 //
-// Mutation: add the wait to every read, or to none, or to a Claude Code
-// collection alone, or ask the thread for a run that names no harness, and a
-// case goes red; drop the wait, or the cap's record, from a collection of a
-// capped turn alone, and its case goes red; change the wait, and the twenty
-// seconds go red; drop the cap's record from every read, and the capped turn's
-// figure goes red.
+// Mutation: add the wait to every read, none, or a Claude Code collection alone,
+// ask the thread for a run naming no harness, drop the wait or the cap's record
+// from a capped collection or every read, or change it, and a case goes red.
 func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 	t.Parallel()
 	share := time.Duration(float64(MainThreadReadWait) / BoxReadAnswerShare)
@@ -317,11 +302,10 @@ func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 	}
 }
 
-// A CLAIM IS TOLD THE COUNT THE READ MADE. The claim the collection is made for
-// was read before the read wrote the job's record, and the resume that follows on
-// it judges a round carried on in the job's box by the count the claim carries:
-// so the collection merges the read's count onto the claim by the rule the record
-// follows.
+// A CLAIM IS TOLD THE COUNT THE READ MADE: the claim was read before the read
+// wrote the job's record, and the resume on it judges a round carried on in the
+// box by the claim's count, so the collection merges the read's count onto the
+// claim by the record's rule.
 //
 // Mutation: leave the claim's count as it was read, and the resume reads none.
 func TestAClaimIsToldTheCountTheReadMade(t *testing.T) {
@@ -436,17 +420,14 @@ func TestAnOlderBuildsWriteCarriesTheCount(t *testing.T) {
 		})
 }
 
-// A LAUNCH RECORDS THE RESTART OF THE SESSION IT HANDS ITS RUN: the newest place
-// that session's thread restarts at, as the launch knows it, so a later relaunch
-// knows whether the job restarted the session after its brief. A relaunch that
-// continues the copy the job before left in its box records that job's
-// collection's read of it, read by the reset in the write that replaced that
-// record, a read marked for what its bytes cannot bound as much as a bound, and
-// nothing known where that read did not see the thread whole; one that
-// continues a kept capture records the capture's own read of its archive, which
-// is marked here; and one that starts a session of its own records a thread
-// that restarts nowhere. A mark of what a whole thread's bytes cannot bound
-// says nothing of where it restarts, so such a read is a known basis.
+// A LAUNCH RECORDS THE RESTART OF THE SESSION IT HANDS ITS RUN, the newest
+// place its thread restarts at, so a relaunch knows whether the job restarted
+// it after its brief. Continuing the copy in its box: the previous job's
+// collection read (by the reset that replaced its record), marked or a bound,
+// or nothing known where it did not see the thread whole. Continuing a kept
+// capture: the capture's own read (marked here). A fresh session: a thread
+// that restarts nowhere. A mark of what whole bytes cannot bound says nothing
+// of where the thread restarts, so such a read is a known basis.
 //
 // Mutation: record nothing, the copy's count where it did not read the thread
 // whole, a marked count's as not known at either place, or a fresh session's as

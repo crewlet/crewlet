@@ -27,18 +27,10 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
-// AN EXTERNAL SERVER THAT AUTHENTICATES NOBODY IS REFUSED.
-//
-// Whatever this node presents: a server that does not ask for a token admits
-// it and everybody else, so the dial judges what the SERVER announces in its
-// INFO — admitted on auth_required, or on tls_required with tls_verify (every
-// client must present a certificate the server verifies), and on nothing
-// else. Not on tls_verify alone, which is the mixed mode allow_non_tls where
-// a plaintext client presents nothing; and not on a certificate this node
-// presents, which a `tls { }` server without verify never asks for. An INFO
-// the dial did not read is a refusal, never a pass, and says it read none.
-// The refusal names the server by host and port only, so a token in the URL
-// never reaches it.
+// AN EXTERNAL SERVER THAT AUTHENTICATES NOBODY IS REFUSED, whatever this node
+// presents, on what the server announces (see requiresAuthentication). An
+// INFO the dial did not read is a refusal that says so, and the refusal names
+// the server by host and port only, so a token in the URL never reaches it.
 //
 // Mutations: skip the check in dial and the anonymous rows dial; exempt a
 // presented client certificate and the tls-without-verify row dials; read
@@ -172,25 +164,11 @@ func TestAnExternalServerThatAuthenticatesNobodyIsRefused(t *testing.T) {
 }
 
 // ONE ATTEMPT AT A MEMBER TAKES ONE HANDSHAKE BUDGET, HOWEVER MANY ADDRESSES
-// ITS NAME HAS.
+// ITS NAME HAS (see memberDialer): the lookup bounded by the budget, each
+// address dialled with an equal share, a literal IP with all of it.
 //
-// The common Kubernetes shape is one stream.url name resolving to every pod
-// of the NATS cluster. Without a custom dialer the client shares its budget
-// among a name's addresses; handed one, it would hand each address the whole
-// budget, and a partitioned cluster of three would hold every attempt for
-// 6 s against the lease TTL the coordination store renews over this
-// connection. So the client skips its lookup and the dialer resolves the name
-// — that lookup bounded by the budget too — and dials each address with an
-// equal share of it. A literal IP is one address, dialled with all of it.
-//
-// IN A SYNCTEST BUBBLE ([inBubble]), where the dialer's clock moves only while
-// every goroutine of the case waits, so what each wait was armed with is read
-// off the instant it was armed and its deadline, exactly: the lookup's whole
-// budget, each address's third of it, and the attempt ending on the sum of
-// those thirds. On the machine's clock each was a reading taken after the
-// arming, short by whatever a loaded runner lost in between — a dial the
-// runner held for half a second read as under half its share, and an attempt
-// it held for a second past the budget as one that took too long.
+// In a synctest bubble ([inBubble]), so each wait's budget is read exactly off
+// the instant it was armed and its deadline, never off a loaded runner's clock.
 //
 // Mutations: drop nats.SkipHostLookup and the client goes back to resolving
 // the name itself; give each address the whole budget and the attempt takes
@@ -199,7 +177,7 @@ func TestAnExternalServerThatAuthenticatesNobodyIsRefused(t *testing.T) {
 // dial, the literal IP's too, is handed less than its share.
 func TestOneAttemptAtAMemberTakesOneHandshakeBudgetHoweverManyAddressesItsNameHas(t *testing.T) {
 	t.Parallel()
-	opts, recorded, err := dialOptions(Config{})
+	opts, recorded, err := dialOptions(Config{}, nil)
 	if err != nil {
 		t.Fatalf("dialOptions: %v", err)
 	}
@@ -219,7 +197,7 @@ func TestOneAttemptAtAMemberTakesOneHandshakeBudgetHoweverManyAddressesItsNameHa
 	t.Run("a name resolving to three silent addresses", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			d := newInfoDialer(recorded.budget)
+			d := newInfoDialer(recorded.budget, nil)
 			var looked, dials armedWaits
 			d.lookup = func(ctx context.Context, host string) ([]string, error) {
 				if !looked.note(ctx, host) {
@@ -270,7 +248,7 @@ func TestOneAttemptAtAMemberTakesOneHandshakeBudgetHoweverManyAddressesItsNameHa
 	t.Run("a literal IP", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
-			d := newInfoDialer(recorded.budget)
+			d := newInfoDialer(recorded.budget, nil)
 			d.lookup = func(context.Context, string) ([]string, error) {
 				return nil, errors.New("a literal IP was looked up")
 			}
@@ -290,19 +268,16 @@ func TestOneAttemptAtAMemberTakesOneHandshakeBudgetHoweverManyAddressesItsNameHa
 	})
 }
 
-// THE ADDRESSES BEHIND ONE NAME ARE DIALLED IN RANDOM ORDER.
-//
-// The client shuffled a name's addresses before it dialled them, which is
-// what spreads a fleet's connections across the members behind one service
-// name; the dialer that took the lookup over keeps it, where Go's own serial
-// dial takes them in DNS order and would put every node on one member.
+// THE ADDRESSES BEHIND ONE NAME ARE DIALLED IN RANDOM ORDER, which spreads a
+// fleet's connections across the members behind one service name; Go's own
+// serial dial takes DNS order and would put every node on one member.
 //
 // Mutation: dial the addresses in the order the lookup gave them and the
 // first is the one dialled every time. Sixty-four dials see both first with
 // a probability of one less 2⁻⁶³.
 func TestTheAddressesBehindOneNameAreDialledInRandomOrder(t *testing.T) {
 	t.Parallel()
-	d := newInfoDialer(externalHandshake)
+	d := newInfoDialer(externalHandshake, nil)
 	d.lookup = func(context.Context, string) ([]string, error) {
 		return []string{"192.0.2.1", "192.0.2.2"}, nil
 	}
@@ -325,17 +300,10 @@ func TestTheAddressesBehindOneNameAreDialledInRandomOrder(t *testing.T) {
 	}
 }
 
-// THE INFO JUDGED IS THE ONE OF THE SERVER THE CLIENT IS ON.
-//
-// Not the newest connection the dialer opened: nats.go dials the next member
-// at once when a server drops a connection, so a member restarting between
-// the connect and the check leaves the newest connection on a member whose
-// INFO is not read yet, while the client still names the server it completed
-// on — or, its reconnect not done, none. The line judged is the one carrying
-// the server_id the client names; a client on no server is refused as having
-// lost its connection, not as a server that sent no INFO; and once the dial
-// has asked, the dialer records nothing more, so a connection that
-// reconnects for its whole life keeps no line of each.
+// THE INFO JUDGED IS THE ONE OF THE SERVER THE CLIENT IS ON, by the server_id
+// it names, not the dialer's newest connection (see heldToAuthentication). A
+// client on no server is refused as having lost its connection, and once the
+// dial has asked, the dialer records nothing more.
 //
 // Mutations: answer for the newest connection and the restarted member's
 // unread one is judged, refusing a server that authenticates; leave the
@@ -348,7 +316,7 @@ func TestTheINFOJudgedIsTheOneOfTheServerTheClientIsOn(t *testing.T) {
 	// newest that has read nothing yet.
 	opened := func(t *testing.T) *infoDialer {
 		t.Helper()
-		d := newInfoDialer(externalHandshake)
+		d := newInfoDialer(externalHandshake, nil)
 		var servers []net.Conn
 		d.connect = func(context.Context, string, string) (net.Conn, error) {
 			client, server := net.Pipe()
@@ -423,7 +391,7 @@ func TestTheINFOJudgedIsTheOneOfTheServerTheClientIsOn(t *testing.T) {
 	t.Run("a live client on no server", func(t *testing.T) {
 		t.Parallel()
 		srv := externaltest.Start(t, queue.MaxPayloadBytes)
-		opts, recorded, err := dialOptions(Config{Token: externaltest.Token})
+		opts, recorded, err := dialOptions(Config{Token: externaltest.Token}, nil)
 		if err != nil {
 			t.Fatalf("dialOptions: %v", err)
 		}
@@ -445,14 +413,10 @@ func TestTheINFOJudgedIsTheOneOfTheServerTheClientIsOn(t *testing.T) {
 	})
 }
 
-// AN INFO LINE IS KEPT WHOLE, AND NOTHING AFTER IT OR PAST ITS BOUND.
-//
-// A large cluster's INFO behind a small first TCP segment arrives in several
-// reads, its CRLF among them split; the line is assembled across them, and
-// what follows it — a TLS upgrade's ciphertext — is never kept. A line that
-// runs past infoLineMax, its CRLF arrived in the same read or not at all, is
-// kept as none, so the dial refuses it as unread rather than judging a
-// prefix; one at the bound exactly is kept.
+// AN INFO LINE IS KEPT WHOLE, AND NOTHING AFTER IT OR PAST ITS BOUND: a line
+// split across reads (its CRLF too) is assembled, what follows it (a TLS
+// upgrade's ciphertext) is never kept, and a line past infoLineMax is kept as
+// none, so the dial refuses it as unread; one at the bound exactly is kept.
 //
 // Mutations: keep only the latest read and the line split across reads is
 // never assembled; keep what follows the CRLF and the tail is held; drop the

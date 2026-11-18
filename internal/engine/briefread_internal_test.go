@@ -17,13 +17,11 @@ import (
 )
 
 // AN OPENING MARKS LATE WHAT THE LOG TOOK AFTER ITS BRIEFS' READ, THROUGH THE
-// LAUNCH. A relaunch that carries the round on builds its briefs from one read
-// of the round's log and hands its launch how many calls that read saw
-// (runner.Continuation.BriefRead); the launch hands it on to the store, whose
-// opening of the job's log marks late every call of the round taken after it.
-// So a call of the asking job that lands while the relaunch is readied — after
-// the read, before the opening, as that job's own — is listed late, and the
-// call the read saw is not.
+// LAUNCH. A relaunch builds its briefs from one read of the round's log and
+// hands its launch that read's call count (runner.Continuation.BriefRead); the
+// store's opening of the job's log marks late every call taken after it. So a
+// call of the asking job landing after the read and before the opening is
+// listed late, and the call the read saw is not.
 //
 // Mutation: drop the read from the continuation the launch hands the store, and
 // the call no brief told is listed as the asking job's own.
@@ -47,14 +45,11 @@ func TestAnOpeningMarksLateWhatTheLogTookAfterItsBriefsRead(t *testing.T) {
 	}
 }
 
-// A RESUME HANDS THE RUNNER THE COUNT ITS READ SAW. The coordinator counts the
-// calls the round's log had taken at the read a resume is built from, before it
-// adds the call a person approved that the row alone holds
-// (sandbox.ResumeRequest.BridgedRead): every call a brief built from that read
-// can tell. A relaunch that carries the round on hands that count to its
-// launch, whose opening marks late every call of the round the log took after
-// it. So the runner is handed the read's own count, never how many calls the
-// resume lists.
+// A RESUME HANDS THE RUNNER THE COUNT ITS READ SAW: the calls the round's log
+// had taken at the read, before the coordinator adds the call a person approved
+// that the row alone holds (sandbox.ResumeRequest.BridgedRead), never how many
+// calls the resume lists, since a relaunch's opening marks late every call
+// after that count.
 //
 // Mutation: hand the runner no count, and a relaunch's opening marks late every
 // call the round's log took before it.
@@ -75,27 +70,17 @@ func TestAResumeHandsTheRunnerTheCountItsReadSaw(t *testing.T) {
 }
 
 // A CALL LANDING WHILE A RELAUNCH IS READIED IS TOLD TO THE NEXT CONTINUATION,
-// AND THE CALL A PERSON APPROVED NEVER AS LATE: end to end, through the real
-// launcher and the coordination store. The asking job's worker is still running
-// as a person's answer is claimed and the resume reads the round's log, so no
-// brief of the relaunch is built from it; it lands, as that job's own, while the
-// relaunch is readied, and the call the person approved is made after it, both
-// before the relaunch's opening moves the log on. The resume hands the runner
-// the count its read saw, which the relaunch hands its launch, so the opening
-// marks the worker's call late and leaves the approved call, which the
-// relaunch's lead tells, as it was. The next relaunch, carrying the round on in
-// the carried-on job's own box, is then told the worker's call once, under the
-// late calls' words, whatever that job's harness's end; and the approved call
-// never under them, and at most once: not at all where the harness ended its
-// own run, its copy holding the brief that told it, and once among the round's
-// calls where it was cut off. Both arms' records carry the count the job's
-// collection writes of a copy far below its threshold, so the copy is judged
-// by its harness's end alone ([collectedFarBelow]).
+// AND THE CALL A PERSON APPROVED NEVER AS LATE, through the real launcher and
+// coordination store. The worker's call and then the approved call land after
+// the resume's read and before the relaunch's opening, which marks only the
+// first late. The next relaunch, in the carried-on job's box, is told the
+// worker's call once under the late calls' words and the approved call never
+// there: once where its harness was cut off, not at all where it ended its own
+// run (the copy holds the brief that told it; [collectedFarBelow]).
 //
-// Mutation: drop the read from the resume the runner is handed or from the
-// launch, mark the approved call at the opening with the rest, drop the mark
-// from the calls a resume hands the runner, read a late call as one a copy
-// holds, or tell an own run's copy nothing in place, and a case goes red.
+// Mutation: drop the read from the resume or the launch, mark the approved call
+// late, drop the late mark a resume hands the runner, read a late call as one a
+// copy holds, or tell an own run's copy nothing, and a case goes red.
 func TestACallLandingWhileARelaunchIsReadiedIsToldToTheNextContinuation(t *testing.T) {
 	t.Parallel()
 	for name, end := range map[string]sandbox.HarnessEnd{
@@ -215,15 +200,12 @@ func parkedOnAHeldCall(t *testing.T, store sandbox.PendingStore, turnID, launch 
 	}
 }
 
-// relaunchedInPlace is the brief a relaunch built from resume hands the copy of
-// the session its job's box holds ([runner.Continuation.Brief]): the runner b's
-// company builds for its seat, as a resumed segment's is, relaunching through a
-// launcher that keeps what it is handed and launches nothing, and that answers
-// the probe as the engine's own launcher does on every basis, with the window
-// its chain's Claude Code members are held to: here a claude-sonnet-4-5
-// member's, a window this build knows, where the rig's own model is one it
-// does not, so a copy whose job's record counts it far below its threshold is
-// judged by its harness's end alone ([collectedFarBelow]).
+// relaunchedInPlace is the brief a relaunch built from resume hands the session
+// copy its job's box holds ([runner.Continuation.Brief]), through the runner b's
+// company builds and a launcher that launches nothing. Its probe answers with a
+// claude-sonnet-4-5 member's window, one this build knows (the rig's model is
+// not), so a copy recorded far below its threshold is judged by its harness's
+// end alone ([collectedFarBelow]).
 func relaunchedInPlace(t *testing.T, b bridgedRun, resume *runner.Resume) string {
 	t.Helper()
 	recorder := &probingRecorder{basis: runner.SessionBasis{Why: "the turn keeps no session",
@@ -246,15 +228,12 @@ func relaunchedInPlace(t *testing.T, b bridgedRun, resume *runner.Resume) string
 	return handed.Continue.Brief
 }
 
-// collectedFarBelow records on l the count the read that collected its job
-// writes of a Claude Code copy far below its threshold under the window
-// [relaunchedInPlace] judges it by, its thread restarting nowhere, as the
-// launch that handed it a session of its own records its basis
-// (sandbox.LaunchRecord.ResumedCount, BasisRestart). A copy with no count
-// reads as one its harness may compact, or one its job restarted, and is told
-// as a cut-off one whatever its harness's end (internal/agent/runner's
-// sessionHolds), so a case about what a copy whose harness ended its own run
-// holds records the count its collection would.
+// collectedFarBelow records on l the count a collection writes of a Claude Code
+// copy far below its threshold under [relaunchedInPlace]'s window, its thread
+// restarting nowhere (sandbox.LaunchRecord.ResumedCount, BasisRestart). Without
+// a count a copy is told as a cut-off one whatever its harness's end
+// (internal/agent/runner's sessionHolds), so a case about an own run's copy
+// records it.
 func collectedFarBelow(l *sandbox.LaunchRecord) {
 	l.BasisRestart = new("")
 	l.ResumedCount = &sandbox.ResumedCount{Tokens: 10_000, Restart: new("")}

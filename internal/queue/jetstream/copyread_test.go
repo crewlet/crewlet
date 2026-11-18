@@ -56,15 +56,13 @@ func copyPublish(t *testing.T, q *Queue, subject string, seq uint64) {
 
 // A READ KEEPS ONLY A CONSUMER THE STREAM'S LEADER RUNS.
 //
-// A consumer reads the copy of the replica the broker placed it on, and only
-// the leader's copy answers what the leader's read answers: one behind it
-// calls an entry that exists gone, and one that has not applied a drop calls
-// the dropped entry held. A consumer's create answer names the server it runs
-// on — or no server, on one that is not clustered, which holds the stream's
-// one copy — so a read keeps the consumer only where that is the leader's.
+// Only the leader's copy answers what the leader's read answers: a follower's
+// may call an existing entry gone or a dropped one held. A consumer's create
+// answer names its server, or none on an unclustered server (which holds the
+// stream's one copy), so a read keeps it only where that is the leader's.
 //
-// Mutation: keep a consumer whatever server it names, and the row of a
-// follower's consumer is kept.
+// Mutation: keep a consumer whatever server it names, and the follower's row
+// is kept.
 func TestAReadKeepsOnlyAConsumerTheStreamsLeaderRuns(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -86,13 +84,11 @@ func TestAReadKeepsOnlyAConsumerTheStreamsLeaderRuns(t *testing.T) {
 // A READ MAKES CONSUMERS UNTIL ONE IS ON THE LEADER, FOR AS MANY AS LEAVE ONE
 // MISS IN A MILLION IN A HEALTHY CLUSTER.
 //
-// A healthy cluster's broker places each consumer uniformly among the
-// stream's replicas — every live one counts as caught up there, which is the
-// order it prefers (copyread.go's head) — so a read that made a consumer fewer
-// times gave up on the leader's copy more often than once in a million reads,
-// and one that made it more times spent a broker's consumers on a read that a
-// broker which never places one there has already failed. A stream of one
-// replica is led by it, and one consumer is enough.
+// A healthy cluster places each consumer uniformly among the stream's replicas
+// (every live one counts as caught up: package doc, "A message too large for a
+// leader's reply is read raw"): fewer placements miss the leader more than
+// once in a million reads, and more spend consumers on a broker that has
+// already failed. A one-replica stream needs one.
 //
 // Mutation: make any other number of consumers, and its row goes red.
 func TestAReadMakesConsumersUntilOneIsOnTheLeaderForAsManyAsLeaveOneMissInAMillion(t *testing.T) {
@@ -119,18 +115,14 @@ func TestAReadMakesConsumersUntilOneIsOnTheLeaderForAsManyAsLeaveOneMissInAMilli
 // A CONSUMER COUNTS WHAT IT HAS TO DELIVER AS IT IS MADE.
 //
 // A copy read answers "nothing there" from the count a consumer on the
-// leader's copy states as it is made, with no pull at all: a consumer begun at
-// a sequence counts what the copy holds there and past it, matching its
-// filter, and one made for the newest on a subject counts it, or nothing. This
-// holds the broker to it, as the pinned server answers it (nats-server
-// v2.15.2, consumer.go's streamNumPending, read into the create answer's
-// NumPending): a sequence past the stream's end counts nothing, one removed
-// with messages past it counts them, one removed at the stream's end counts
-// nothing, a subject holding nothing counts nothing, and a subject's newest
-// counts one.
+// leader's copy states as it is made, with no pull (nats-server v2.15.2,
+// consumer.go's streamNumPending, read into the create answer's NumPending).
+// This holds the broker to it: past the stream's end, nothing; at a removed
+// message, those past it; on a subject holding nothing, nothing; a subject's
+// newest, one.
 //
-// Mutation: the broker's — a server that counted otherwise would fail a row
-// here before any copy read could misread it.
+// Mutation: the broker's — a server that counted otherwise fails a row here
+// before any copy read could misread it.
 func TestAConsumerCountsWhatItHasToDeliverAsItIsMade(t *testing.T) {
 	t.Parallel()
 	q := copyReadQueue(t)
@@ -258,21 +250,15 @@ func TestACopyReadAnswersWhatTheLeaderHoldsAndNothingElse(t *testing.T) {
 // A CONNECTION NO LEAF'S LINK STANDS ON READS FROM THE LEADER, AND MAKES NO
 // CONSUMER.
 //
-// On a member's own connection the leader's read crosses no link — at most a
-// cluster route, which carries any size. A client of a broker somebody else
-// runs crosses that broker's routes and its delivery to its own client, and
-// no server holds either to a max_payload: only a leaf's server checks what
-// its link carries (nats-server v2.15.2, leafnode.go). So on both, a dead
-// letter's frame and its drop's check, and a state log's record and a
-// subject's newest, each at the transport's ceiling, are read whole from the
-// leader in one request, with no consumer made for any of them — where a
-// read through consumers is the stream's info and a consumer or more the
-// metadata leader makes and deletes, on the write path of every create on an
-// external fleet's large logs.
+// Only a leaf's server holds its link to a max_payload (nats-server v2.15.2,
+// leafnode.go), so on a member's own connection and an external broker's
+// client a dead letter's frame and drop check and a state log's record and
+// newest, at the transport's ceiling, are each one leader request: never a
+// consumer read's stream info and metadata-leader creates and deletes.
 //
-// Mutation: decide the copy reads by the connection's pace rather than by the
-// leaf's link, and the external client's reads make consumers; or read from
-// a copy on a member's own connection, and the member's do.
+// Mutation: decide copy reads by the connection's pace, not the leaf's link,
+// and the external client makes consumers; or read from a copy on a member's
+// own connection, and the member does.
 func TestAConnectionNoLeafsLinkStandsOnReadsFromTheLeaderAndMakesNoConsumer(t *testing.T) {
 	t.Parallel()
 	_, external := accountQueue(t, probeDomain())
@@ -347,25 +333,15 @@ func readWholeFromTheLeader(t *testing.T, q *Queue) {
 // ACROSS A LEAF'S LINK, A DEAD LETTER WHOSE LEADER'S REPLY CROSSES IT IS THE
 // LEADER'S READ, AND ONE WHOSE REPLY DOES NOT CROSSES RAW.
 //
-// The leader's read is one request, where a read through a consumer is the
-// stream's info, a consumer or more the metadata leader makes and deletes and
-// a pull — so a frame is read through a consumer only where the leader's
-// reply could not cross the leaf's link: past the transport, which the leaf's
-// server closes its whole link on. A reply the leaf's server carries is the
-// leader's however long it takes to cross, since the read is given its reply's
-// arrival beyond the read term and the lookup ceiling. Here a queue across a
-// leaf's link at the floor reads a small entry and one of two mebibytes —
-// whose reply fits the transport and takes over a minute to cross at the
-// floor, past the thirty seconds a leader's read was asked for before it was
-// given its reply's arrival — and one at the keep's ceiling, the leader's
-// message reads held by the case: the first two reads reach the leader's read
-// and are answered there, and the ceiling's reaches no leader's read at all.
-// The queue is [leafLinkedQueue]'s, so the case can hold the leader's reads.
+// The leader's read is one request, a consumer read several, so a frame takes
+// a consumer only where the leader's reply would pass the transport, on which
+// a leaf's server closes its whole link; a reply that fits is given its
+// arrival. At the floor's pace a small entry and a 2 MiB one (over a minute to
+// cross) reach the leader's held read, and one at the keep's ceiling never does.
 //
-// Mutation: read every frame across a leaf's link from a copy, and the small
-// entry's read never reaches the leader; from the leader, and the ceiling's
-// does; or route by how long a reply takes to cross at the floor, and the two
-// mebibytes' never reaches it.
+// Mutation: read every frame from a copy, or route by crossing time, and the
+// small or the 2 MiB one (respectively) misses the leader; read all from it,
+// and the ceiling's reaches it.
 func TestAFrameAcrossALeafsLinkIsTheLeadersWhereItsReplyCrossesAndRawWhereItDoesNot(t *testing.T) {
 	t.Parallel()
 	ns, q := leafLinkedQueue(t, probeDomain())
@@ -447,11 +423,9 @@ func TestAFrameAcrossALeafsLinkIsTheLeadersWhereItsReplyCrossesAndRawWhereItDoes
 	}
 }
 
-// leafLinkedQueue is [accountQueue]'s — a queue dialled to a broker of its
-// own, read through the account's API, so [jsapitest] can stand between its
-// reads and the broker — whose connection is taken to cross a leaf's link:
-// the fact the copy reads decide by ([link.leaf]). A leaf's own connection
-// speaks the fleet's domain, whose API jsapitest cannot hold; a real leaf's
+// leafLinkedQueue is [accountQueue]'s queue, whose reads [jsapitest] can hold,
+// taken to cross a leaf's link ([link.leaf], what copy reads decide by). A
+// real leaf speaks the fleet's domain, whose API jsapitest cannot hold; its
 // reads are held by largereads_test.go.
 func leafLinkedQueue(t *testing.T, spec DomainStream) (*server.Server, *Queue) {
 	t.Helper()
@@ -501,15 +475,12 @@ func copiedOn(t *testing.T, q *Queue, body []byte) *copyRead {
 
 // A COPY READ WHOSE FIRST PULL THE CLUSTER DROPS MAKES ITS CONSUMER AGAIN.
 //
-// A cluster drops a new consumer's first pull routinely, and a read whose
-// consumer never got it waits for a delivery the broker was never asked for.
-// One that waited out its pull's whole wait for it — a raw read across a link
-// at the floor waits minutes — failed then as a heartbeat missed, and never
-// asked again. So a pull that hears nothing for a quiet second asks its
-// consumer, and one that holds no pull and has delivered nothing is made
-// again at once. Here the first pull of a probe and of a raw read is each
-// dropped, on a link paced so slow that the raw read waits hours for its
-// message: each answers what the stream holds within a minute.
+// A cluster routinely drops a new consumer's first pull, and a read that waits
+// out its pull (minutes, raw at the floor) waits for a delivery never asked
+// for. So a pull quiet for a second asks its consumer, and one holding no pull
+// and having delivered nothing is made again at once. Here a probe's and a raw
+// read's first pulls are dropped, on a link so slow the raw read's message
+// takes hours: each answers within a minute.
 //
 // Mutation: wait out a quiet pull on the consumer it was asked of, rather
 // than ask the consumer and make it again, and the raw read waits for hours.
@@ -566,13 +537,11 @@ func TestACopyReadWhoseFirstPullTheClusterDropsMakesItsConsumerAgain(t *testing.
 
 // A COPY READ ENDS WITH ITS CALLER.
 //
-// Every request a copy read makes runs under its caller's context, so a
-// caller that goes — a node's shutdown, which waits for the replays it
-// cancelled — ends the read at once, where a pull bounded by its own wait held
-// its caller for the rest of it: minutes, for a raw read at the floor. Here
-// every pull is held by the case, on a link paced so slow that the raw read
-// waits hours for its message, and the caller is cancelled once the read's
-// first pull is held: the read ends with its caller's cancellation within a
+// Every request a copy read makes runs under its caller's context, so a caller
+// that goes (a node's shutdown waits for the replays it cancelled) ends the
+// read at once, not after its pull's own wait, minutes raw at the floor. Here
+// every pull is held on a link so slow the message takes hours, and the
+// caller is cancelled once the first pull is held: the read ends within a
 // minute.
 //
 // Mutation: pull under a context of the read's own rather than its caller's,
@@ -613,15 +582,12 @@ func TestACopyReadEndsWithItsCaller(t *testing.T) {
 
 // A PROBE TAKES A DELIVERY THAT REACHES IT LATE.
 //
-// A probe's delivery is a few hundred bytes of headers, and on a slow link
-// they wait behind whatever the broker sent the node first — a whole frame a
-// replay is reading, an applier's batch. A pull whose inbox was dropped when
-// the client stopped waiting for it, two seconds in, threw the delivery away
-// as it arrived, and the read failed on the consumer's count of a delivery
-// that never arrived. The read's inbox is held for the whole read, so a
-// delivery is taken however late: here the broker's bytes are held back on
-// the link for three seconds from the moment the probe's pull reaches it, and
-// the probe answers what the sequence holds.
+// A probe's few hundred bytes of headers can wait on a slow link behind what
+// the broker sent first (a frame a replay reads, an applier's batch); an inbox
+// closed when the client stopped waiting would drop them and fail the read on
+// the consumer's count. The read's inbox is held for the whole read, so a
+// delivery is taken however late: here the broker's bytes are held back three
+// seconds once the probe's pull reaches it, and the probe answers.
 //
 // Mutation: fail a quiet pull whose consumer delivered what has not arrived,
 // rather than wait for it on the same inbox, and the probe fails.
@@ -667,18 +633,12 @@ func TestAProbeTakesADeliveryThatReachesItLate(t *testing.T) {
 // A COPY READ ACROSS A SLOW LINK WAITS OUT ITS MESSAGE BEFORE ITS PROBE GIVES
 // UP.
 //
-// A raw read's pull that hears nothing for a quiet second asks its consumer
-// what it says of itself, and the consumer's answer crosses the link BEHIND
-// what the broker sent first: the message the read is pulling, which arrives
-// whole only once its last byte is in. Asked at the read term under the lookup
-// ceiling alone, every answer of the probe reached the node after the ceiling
-// on a link that carries the message in longer than that, and the read failed
-// at every attempt while its message was still crossing. So the probe is given
-// the message's crossing beside the term and the ceiling, as a leader's read
-// of a large message is given its reply's arrival. Here the ceiling is two
-// seconds, the link's pace makes the message's crossing minutes, and the
-// broker's bytes are held back on the link for five seconds from the moment
-// the read's pull reaches it: the read answers the message.
+// A raw read's quiet pull asks its consumer about itself, and the answer
+// crosses the link behind the message being pulled; held to the read term and
+// lookup ceiling alone it arrives too late, so the probe is also given the
+// message's crossing, as a leader's read is given its reply's arrival. Here
+// the ceiling is 2 s, the crossing minutes, and the broker's bytes are held
+// back 5 s once the pull reaches it: the read answers the message.
 //
 // Mutation: ask the probe at the queue's timing alone, and the read fails at
 // the ceiling.
@@ -740,15 +700,12 @@ func TestACopyReadAcrossASlowLinkWaitsOutItsMessageBeforeItsProbeGivesUp(t *test
 
 // A PAYLOAD READ OF A MESSAGE REMOVED SINCE ITS PROBE CARRIES NO LARGER ONE.
 //
-// A payload read's consumer is filtered to the probed message's subject, so
-// where a peer removed the message after its probe, the next message on that
-// subject is the consumer's first — and a raw read carried it across the link
-// whole, up to eight mebibytes, only to discard it. Its pull is bounded by the
-// probed message's size, so the broker answers with the bound instead of the
-// larger message, and the read asks the leader's copy again what the sequence
-// holds: nothing. Here a 64 KiB message is probed, removed, and followed on
-// its subject by one of a mebibyte: the read answers it gone, and the
-// mebibyte never reaches the reader.
+// A payload read's consumer is filtered to the probed subject, so once the
+// probed message is removed the next on that subject comes first, up to 8 MiB
+// carried across the link to be discarded. The pull is bounded by the probed
+// size, so the broker answers with the bound and the read asks the leader's
+// copy again: nothing. Here a 64 KiB message is probed, removed and followed by
+// a 1 MiB one: the read answers it gone, and the mebibyte never crosses.
 //
 // Mutation: pull the payload with no byte bound, and the mebibyte crosses.
 func TestAPayloadReadOfAMessageRemovedSinceItsProbeCarriesNoLargerOne(t *testing.T) {
@@ -792,13 +749,11 @@ func TestAPayloadReadOfAMessageRemovedSinceItsProbeCarriesNoLargerOne(t *testing
 
 // A PAYLOAD READ NEVER ANSWERS A MESSAGE GONE ON ITS BYTE BOUND'S WORD ALONE.
 //
-// A payload's pull is bounded by the probed message's size, and the broker
-// answers a pull whose next message is past the bound with the bound instead —
-// which says the probed message is gone only where its size was counted right.
-// So a read the bound held back asks the leader's copy again what the
-// sequence holds, and answers gone only where that says so: here a message's
-// size is counted far short, the bound holds it back, and the read refuses to
-// answer rather than call a message that is there gone.
+// The broker answers a pull whose next message is past the probed size's
+// bound with the bound, which means gone only if the size was counted right.
+// So the read asks the leader's copy again and answers gone only where it says
+// so: here the size is counted far short, and the read refuses rather than
+// call a present message gone.
 //
 // Mutation: take the bound's word for the message's going, and the message
 // still there reads as gone.
@@ -825,17 +780,15 @@ func TestAPayloadReadNeverAnswersAMessageGoneOnItsByteBoundsWordAlone(t *testing
 // ACROSS A LEAF'S LINK, A RECORD WHOSE LEADER'S REPLY CROSSES IT IS THE
 // LEADER'S READ, AND ONE WHOSE REPLY DOES NOT CROSSES RAW.
 //
-// The state log's twin of the frame's case above: on a log whose records may
-// be as large as the transport, a record whose own reply the leaf's server
-// carries is read with the leader's one request, at a term of its own reply's
-// arrival (TestAConnectionsReadsAndWritesArePacedByOneDecision holds the
-// term), and one whose reply does not is read raw. Here a small
-// record's read reaches the leader's read the case holds, and is answered
-// there; a record at the transport's ceiling reaches no leader's read at all.
+// The state log's twin of the frame's case above, on a log whose records may
+// be as large as the transport: a record whose reply the leaf's server carries
+// is one leader request at its reply's arrival
+// (TestAConnectionsReadsAndWritesArePacedByOneDecision holds the term), and
+// one whose reply does not is read raw. A small record reaches the held
+// leader's read; one at the ceiling never does.
 //
-// Mutation: read every record across a leaf's link raw, and the small
-// record's read never reaches the leader; or every one from the leader, and
-// the ceiling's does.
+// Mutation: read every record raw, and the small one misses the leader; or
+// every one from it, and the ceiling's reaches it.
 func TestARecordAcrossALeafsLinkIsTheLeadersWhereItsReplyCrossesAndRawWhereItDoesNot(t *testing.T) {
 	t.Parallel()
 	ns, q := leafLinkedQueue(t, probeDomain())
@@ -947,19 +900,15 @@ func (c placedConsumer) CachedInfo() *jetstream.ConsumerInfo { return c.info }
 // A READ KEEPS THE CONSUMER ITS BROKER PLACED ON THE LEADER, MAKING THE FIRST
 // DRAW BACK TO BACK AND EVERY ONE AFTER A HEARTBEAT APART.
 //
-// Only the leader's copy answers what the leader's read answers, so a read
-// deletes every consumer the broker placed elsewhere and keeps the one it
-// placed on the server the stream's leader is named as — a follower of the
-// broker's here, member-c, which the broker reaches on its fifth placement.
-// The first three, a draw as large as the stream keeps replicas, are made back
-// to back; the broker prefers replicas its metadata leader counts as caught
-// up, so past them a read that keeps missing is made a metadata heartbeat
-// apart, which is what it takes a leader passed over for that to be counted
-// again. Exact, in a bubble.
+// A read deletes every consumer placed off the stream's leader and keeps the
+// one on it: here member-c, reached on the fifth placement. The first draw, as
+// many as the stream's replicas, is made back to back; the broker prefers
+// replicas its metadata leader counts as caught up, and a passed-over leader
+// takes a metadata heartbeat to count again, so later ones are a heartbeat
+// apart. Exact, in a bubble.
 //
 // Mutation: keep any consumer, and the first is kept; or make every one back
-// to back, or pause before the first draw's too, and the time it took is
-// another.
+// to back, or pause before the first draw's too, and the time differs.
 func TestAReadKeepsTheConsumerItsBrokerPlacedOnTheLeader(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -992,17 +941,13 @@ func TestAReadKeepsTheConsumerItsBrokerPlacedOnTheLeader(t *testing.T) {
 // A READ NO CONSUMER OF WHICH IS PLACED ON THE LEADER FAILS AFTER ITS
 // PLACEMENTS, AS AN OUTAGE.
 //
-// A broker that never places a consumer on the leader the read was told of —
-// one whose leader has moved, or one that never counts it as caught up — is
-// given [placements] of them, the first draw back to back and the rest a
-// heartbeat apart, every one deleted; and then the read fails rather than
-// read a copy that is not the leader's, as queue.ErrUnavailable: a broker the
-// caller may ask again later, never the answer that the entry is gone. Exact,
-// in a bubble.
+// A broker that never places a consumer on the named leader (it moved, or is
+// never counted caught up) is given [placements] of them, paced as above and
+// every one deleted; then the read fails as queue.ErrUnavailable, to be asked
+// again later, never the answer that the entry is gone. Exact, in a bubble.
 //
-// Mutation: keep any consumer, and the read answers from a copy that is not
-// the leader's; or make a placement more or fewer, or none of them paced, and
-// the count or the time is another.
+// Mutation: keep any consumer, and the read answers from a non-leader copy; or
+// make a placement more or fewer, or none paced, and the count or time differs.
 func TestAReadNoConsumerOfWhichIsPlacedOnTheLeaderFailsAfterItsPlacements(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {

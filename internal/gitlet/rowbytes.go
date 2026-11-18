@@ -11,37 +11,25 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// HOW MANY BYTES A ROW ENCODES TO, computed rather than encoded.
-//
-// A page is held to MaxPageBytes of encoded rows, and the first way of knowing
-// a row's size was to json.Marshal it and throw the encoding away: 0.78–0.83
-// µs and three allocations a ref, on every row of every snapshot page on the
-// serving node — about an eighth of the 5.7–6.4 µs a page spends a ref — and
-// then the answer is encoded again on the estate wire, or not at all when it
-// is served in process. Computed, it is 0.08–0.09 µs and none
-// (BenchmarkServeASnapshotPage, doc.go's measured section). A push row was
-// worse: its commands are read as their stored JSON, decoded, and were
-// encoded again only to be measured.
-//
-// So each row type sums its own encoding: a fixed overhead for its keys and
-// punctuation, and each value's encoded length by encoding/json's rules — a
+// HOW MANY BYTES A ROW ENCODES TO, computed rather than encoded: a page is held
+// to MaxPageBytes of encoded rows, and marshalling every row of every page only
+// to measure it costs about an eighth of a page's time a ref
+// (BenchmarkServeASnapshotPage, doc.go's measured section). Each row type sums
+// its own encoding by encoding/json's rules: its keys and punctuation, a
 // string's escapes, a number's digits, a time's RFC 3339 spelling, an omitted
-// field omitted. EXACT rather than a bound, because a bound that is too high
-// cuts pages short and one too low lets a page past its budget; the
-// equality with json.Marshal is what rowbytes_test.go holds, over every field
-// of every type filled at random, so a field added to a row without its term
-// here fails that test rather than a reply ceiling.
+// field omitted. EXACT rather than a bound: too high cuts pages short, too low
+// lets a page past its budget. rowbytes_test.go holds the equality with
+// json.Marshal over every field of every type filled at random, so a row field
+// added without its term here fails that test rather than a reply ceiling.
 
 // stringBytes is the length of s encoded as a JSON string by the
-// encoding/json this module builds with, quotes included: `"` and `\` and the
+// encoding/json this module builds with, quotes included: `"`, `\` and the
 // five control characters with short escapes take two bytes; every other
-// control character and `<`, `>` and `&` (escaped for HTML) take six, as do
-// U+2028 and U+2029 (escaped for JavaScript); each byte that is not UTF-8 is
-// written as U+FFFD itself, three; everything else is itself. Which of those
-// an encoder escapes, and how, is ITS choice — the encoder behind
-// json.Marshal writes a byte of invalid UTF-8 as three bytes where the one
-// before it wrote six — so FuzzStringBytes holds this to the encoder rather
-// than to a reading of it.
+// control character, `<`, `>`, `&` (escaped for HTML) and U+2028, U+2029
+// (escaped for JavaScript) take six; each byte that is not UTF-8 is written as
+// U+FFFD itself, three; everything else is itself. What an encoder escapes,
+// and how, is ITS choice and changes between releases, so FuzzStringBytes
+// holds this to the encoder rather than to a reading of it.
 func stringBytes(s string) int {
 	n := 2
 	for i := 0; i < len(s); {
@@ -101,7 +89,7 @@ func timeBytes(t time.Time) int {
 }
 
 // trueBytes is the length of a JSON true: every boolean a row carries is
-// omitempty, so the one value one is ever written with.
+// omitempty, so true is the only value one is ever written with.
 const trueBytes = len("true")
 
 // field is the length of one member `"key":` plus its value of length v,
@@ -444,12 +432,11 @@ func (c ChangeDue) encodedBytes() int {
 	return n
 }
 
-// encodedLen is v's encoding's length, ENCODED: the one value counted this
-// way, a `checks_due` change's [CheckWork] — lists of names and keys and the
-// definitions of the checks a requeue repeats, a count of which would only
-// restate the encoder's — on the home's own listing, a page of the changes
-// owing their checks work in one repository, never a principal's page of
-// every row.
+// encodedLen is v's encoding's length, ENCODED. The one value counted this way
+// is a `checks_due` change's [CheckWork], whose lists and check definitions a
+// count would only restate the encoder for; it rides only the home's own
+// listing of one repository's changes owing checks work, never a principal's
+// page of every row.
 func encodedLen(v any) int {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -957,7 +944,16 @@ func (e CardEjection) encodedBytes() int {
 	if e.ChecksMore != 0 {
 		n += field("checks_more", intBytes(int64(e.ChecksMore)), false)
 	}
+	if e.TestedIn != nil {
+		n += field("tested_in", e.TestedIn.encodedBytes(), false)
+	}
 	return n
+}
+
+// encodedBytes is the length of the train's JSON encoding.
+func (t EjectionTrain) encodedBytes() int {
+	return 2 + field("candidate_id", stringBytes(t.CandidateID), true) +
+		field("base_oid", stringBytes(t.BaseOID), false) + field("commit_oid", stringBytes(t.CommitOID), false)
 }
 
 // encodedBytes is the length of the readiness's JSON encoding: its list null
@@ -1409,11 +1405,9 @@ func (row PushRow) changeBytes() int {
 	return n
 }
 
-// encodedBytes is the length of the push row's JSON encoding, given the
-// length of its commands' encoding — which a row read from the store has
-// already, as the column it was decoded from: the stored commands ARE
-// encoding/json's encoding of the same list, so it is never encoded again
-// to be measured.
+// encodedBytes is the length of the push row's JSON encoding, given its
+// commands' encoded length: a row read from the store has it already, since
+// the stored column IS encoding/json's encoding of the same list.
 func (row PushRow) encodedBytes(commands int) int {
 	n := 2 + field("push_id", stringBytes(row.PushID), true) +
 		field("repo_id", stringBytes(row.RepoID), false) +

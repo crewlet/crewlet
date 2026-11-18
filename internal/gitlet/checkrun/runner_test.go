@@ -20,10 +20,10 @@ import (
 )
 
 // A CHECK ENDS BY ITS COMMAND'S EXIT: the runner claims the queued attempt,
-// makes its box in the company's cell, names the box on the row, runs the
-// command in its checkout and records it passed for status 0 — its summary
-// alone — and failed for any other, with the last of its output; and closes
-// the box either way.
+// makes its box in the company's cell, names it on the row, runs the command
+// in its checkout, records it passed for status 0 (its summary alone) and
+// failed for any other (with the last of its output), and closes the box
+// either way.
 //
 // Mutation: record every exit passed — the failing command's row says
 // passed, red.
@@ -136,16 +136,14 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 	}
 }
 
-// A CHECK SPENDS NO TOKENS: nothing it runs is a model's, so the runner holds
-// no seam an LLM's spend or a budget is charged through — it imports none of
-// the packages that charge one — and what an ended attempt records of its cost
-// is its duration alone.
+// A CHECK SPENDS NO TOKENS: the runner imports none of the packages an LLM's
+// spend or a budget is charged through, and an ended attempt records its cost
+// as its duration alone.
 //
 // THE RUNNER'S CLOCK IS THE CASE'S, frozen an hour into tomorrow (past the
-// attempt's queuing, so it falls due at once) and moved only by the case, a
-// second and a half while the command runs: the duration is the span between
-// the runner's own two readings, claim and ending, so it is exactly what the
-// case moved, and no wall time has to pass for it.
+// attempt's queuing, so it falls due at once) and moved 1.5 s by the case
+// while the command runs: the duration spans the runner's own readings at
+// claim and ending, so it is exactly what the case moved.
 //
 // Mutation: import the LLM provider layer or the spend ledger into the runner,
 // red; record no duration, or read it off the wall clock rather than the
@@ -223,9 +221,9 @@ func TestALosingClaimStartsNoBox(t *testing.T) {
 // A DEAD RUNNER'S CHECK RUNS AT MOST THREE ATTEMPTS: a runner that dies
 // holding its claim — a crash at CheckAfterClaim, no box made and no ending
 // recorded — and leaves the repository's git order has its attempt ended
-// `errored runner_lost` by the repository's home; the home queues it again
-// (what its checks worker does, m5-k5, stood in for here), a runner dies on it
-// again, and past the third attempt a requeue is refused attempts_exhausted.
+// `errored runner_lost` by the repository's home; the case queues it again,
+// standing in for the home's checks worker, a runner dies on it again, and
+// past the third attempt a requeue is refused attempts_exhausted.
 //
 // Mutation: sweep only rows past their timeout — the lost runner's attempt is
 // never ended, red.
@@ -283,13 +281,12 @@ func TestADeadRunnersCheckRunsAtMostThreeAttempts(t *testing.T) {
 //
 // The runner's clock is the case's, frozen an hour into tomorrow: past the
 // attempt's queuing, so it falls due at once, and never past its one-minute
-// timeout, so its run ends by its row's cancellation or not at all. And the
-// run has returned once its slot is free (Runner.run gives it back last), so
-// whatever it records is recorded by then.
+// timeout, so its run ends by the cancellation or not at all. The run has
+// returned once its slot is free (Runner.run gives it back last), so whatever
+// it records is recorded by then.
 //
 // Mutation: poll the box alone, never the row — the box runs on, red; record
-// the run's own ending over the row's — a measurement, which replaces the
-// cancellation — red.
+// the run's own ending, a measurement, over the cancellation — red.
 func TestACancelledRowStopsItsBox(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -415,8 +412,6 @@ func TestACheckInACellNotAllowedEndsUnrun(t *testing.T) {
 
 // A CHECK WHOSE BOX'S CREDENTIAL CANNOT BE MINTED RUNS NOWHERE: the node ends
 // it `errored box_failed`, saying why the minter refused, and makes no box.
-// The minter answered an empty token once, and the ending could say only that
-// none was minted.
 //
 // Mutation: end the attempt without the minter's reason, and its summary
 // names none.
@@ -449,11 +444,10 @@ func (refusing) Mint(gitlet.CheckKey, string, time.Duration) (string, error) {
 // zero — claims first wherever it can; and a home with no free cell leaves
 // the attempt to the runner-up a stagger later.
 //
-// THE RUNNERS' CLOCK IS THE CASE'S: a rank falls due by the clock alone, so
-// the home's turn is never cut short by a runner too loaded to walk within a
-// stagger of the wall clock — which handed the first attempt to the
-// runner-up, rightly, while the home had not walked yet — and the
-// runner-up's comes only when the case moves the clock a stagger on.
+// THE RUNNERS' CLOCK IS THE CASE'S: a rank falls due by that clock alone, so
+// a home too loaded to walk within a stagger of the wall clock never loses
+// its turn to the runner-up, whose turn comes only when the case moves the
+// clock a stagger on.
 //
 // Mutation: claim at every rank at once — the runner-up takes the attempt
 // short of its stagger, red.
@@ -486,11 +480,11 @@ func TestTheHomeClaimsFirstAndItsRunnerUpAStaggerLater(t *testing.T) {
 		"git-home" {
 		t.Fatalf("the first attempt was claimed by %s, want its home", row.Runner)
 	}
-	// THE HOME'S ONE SLOT IS HELD: the next attempt is its runner-up's, once
-	// it has waited a stagger — and not at any walk before. A third walk
-	// ranking it begins only once the second has ended, so by then two
-	// walks have ranked it a millisecond short, the second wholly after the
-	// clock moved, and a claim either made is on the row.
+	// THE HOME'S ONE SLOT IS HELD: the next attempt is its runner-up's once
+	// it has waited a stagger, and not at any walk before. A third walk
+	// begins only once the second has ended, so by then two walks have
+	// ranked it a millisecond short, the second wholly after the clock
+	// moved, and a claim either made is on the row.
 	second := f.queue(oidOf("b"), def("unit", time.Minute))
 	queued := f.queuedAt(second)
 	clk.set(queued.Add(fast.Stagger - time.Millisecond))

@@ -461,19 +461,37 @@ the dependency surface before choosing a host for it:
   to. A seat's hydration takes what its bytes take: its 29 round trips cost
   about 2.9 seconds across a 100 ms leaf link before its rows' own bytes
   (145 ms at 5 ms a round trip, 29 ms at 1 ms), and a year of episodes about
-  a minute across a 100 ms, 100 Mbit/s link. Time refuses it only when
-  nothing arrives for its stall (20.5 seconds for a pull across a link) or
-  when nothing is delivered to a table's replay for a minute, whichever
-  copies of the changelog it is placed on, and it says once a minute that it
-  is still running (`memory_hydration_slow`); the answers that refuse a seat
-  whatever the time, such as a row larger than the node's connection
-  carries, still refuse it. It windows its pulls to what the link carries
-  within one lease heartbeat at the floor, so the node's lease renewals cross
-  behind them in time; below about 0.84 Mbit/s a renewal sent behind a full
-  window can still miss its own five-second term, as one behind an upload
-  can, and with an upload and a hydration both in flight a renewal can wait
-  behind both windows, which misses its term below about 1.68 Mbit/s
-  ([#1035](https://github.com/crewlet/crewlet/issues/1035)). Meanwhile the
+  two and a half minutes across a 100 ms, 100 Mbit/s link. Time refuses it
+  only when nothing arrives for its stall (9.1 seconds for a pull across a
+  link) while the leaf link carries nothing, or when nothing is delivered to
+  a table's replay for a minute, whichever copies of the changelog it is
+  placed on, and it says once a minute that it is still running
+  (`memory_hydration_slow`); the answers that refuse a seat whatever the
+  time, such as a row larger than the node's connection carries, still
+  refuse it. Behind a download or an event of megabytes on the same link it
+  waits for as long as the link keeps moving: the node reads its link's own
+  socket (below), and counts it moving while it carries, in either
+  direction, at least seven tenths of the floor of thirty seconds a
+  mebibyte, about 24 KB a second. What a quiet link carries on its own —
+  the fleet's presence reads, pings and heartbeats — has to stay under that
+  line, as the presence reads of the fleets these pages document do, at
+  under two fifths of the floor. A replay that hears nothing on a moving link
+  is placed again once the link has read 8.5 MB since its last word, and
+  refused once it has heard nothing for about 253 seconds; its other requests
+  are held up to 248 seconds past their own bounds the same way
+  ([across a link, silence is the link's](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
+  Its pulls share the link's **one window** with the object store's
+  uploads, downloads and listings, both ways: what the link carries in four
+  seconds at the floor, one 128 KiB piece of a file either way, so whatever
+  the node has in flight, a request sent behind it on the link — a lease
+  renewal among them — is still answered inside its five-second term at any
+  rate the engine allows
+  ([one window per link](../concepts/object-store.md#the-fleets-own-bucket--nats-the-default)).
+  What the window does not hold is an event delivered to one of the node's
+  seats, which crosses whole, so a request whose reply crosses behind one
+  waits for it, as one sent behind what the node sends whole does (next
+  item). A hydration's next row waiting there is waited for while the link
+  moves, as above, but a lease renewal is not. Meanwhile the
   node's placement pass waits for it (see
   [a seat's memory follows it](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
   A restart costs that
@@ -489,6 +507,67 @@ the dependency surface before choosing a host for it:
   every lap of the seats
   ([#1040](https://github.com/crewlet/crewlet/issues/1040); see
   [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
+- **A fair queue at the link's bottleneck, each way.** The satellite holds
+  its uploads, downloads, walks and memory replays to one window across its
+  link, both ways together, four seconds at the floor, so a small request
+  sent behind them is answered inside its five-second term even at thirty
+  seconds a mebibyte. The floor is the rate the link gives the node's broker
+  traffic beside its own background reads: a link at exactly thirty seconds
+  a mebibyte whose presence reads take two fifths of it carries a full window
+  in 6.7 seconds. Whatever else a first-in-first-out queue at a bottleneck
+  holds is added to that wait: another flow's bulk, such as a harness's own
+  upload or download, keeps the queue full for as long as it takes to drain,
+  and a request on the leaf link waits as long — a 256 KiB buffer is 7.5
+  seconds at the floor, a cellular modem's buffer of megabytes minutes
+  ([#1035](https://github.com/crewlet/crewlet/issues/1035)). So:
+  - The queue at each direction's bottleneck is fair (`fq_codel` or CAKE),
+    which sends a sparse flow's packets ahead of a bulk flow's. The host's
+    own queue discipline counts only where the host is the bottleneck: a
+    host whose interface is faster than its link queues at the modem or the
+    router instead, and keeps the queue its own only by shaping its egress
+    just below the uplink's rate and its ingress just below the downlink's
+    (CAKE in `ingress` mode on an IFB device).
+  - A first-in-first-out queue protects only the lease link, and only where
+    the two directions' queues together hold no more than four seconds of
+    the link's rate, 140 KB at the floor: a renewal then waits at the
+    bottleneck and never in the data link's sockets. The data link's own
+    requests are held to their term only behind fair queues, since at a
+    first-in-first-out queue the other flows' bytes add to the node's window.
+  - The node's broker traffic gets at least the floor beside its background
+    reads.
+
+  Whatever the queues do, no hold, hydration or transfer is refused while the
+  link is moving. Neither queue discipline reorders the bytes of one flow, and a
+  satellite's broker traffic is one flow, its leaf link, so what it sends
+  whole — an event or a dead letter of up to 8 MiB, a fleet record of up to
+  6 MiB — still holds every request sent after it on that link for the whole
+  of its crossing, about four minutes at the floor for 8 MiB, a lease
+  renewal among them
+  ([#1035](https://github.com/crewlet/crewlet/issues/1035)).
+- **A leaf link that reaches the members' own sockets.** A message on
+  the link can be megabytes, and at the slowest pace the engine allows
+  one takes minutes to cross; the node tells a link that is carrying such
+  a message from one that carries nothing by reading its own socket — the
+  bytes it read, and the bytes the member's kernel acknowledged — never
+  by a timeout. A proxy that terminates TCP on the way acknowledges what
+  it has buffered rather than what the member took, so behind one the
+  node cannot tell a member that stopped reading from a buffer still
+  draining. Send the leaf link to the members' leaf port (7422 by
+  default) directly: exclude that port from a service mesh's capture
+  (Istio's `traffic.sidecar.istio.io/excludeOutboundPorts`, Linkerd's
+  `config.linkerd.io/skip-outbound-ports`), and put no load balancer that
+  buffers in front of it. NAT, a firewall and a VPN that forwards packets
+  are not such proxies. The same holds for every node's dial to an
+  [external NATS server](deployment.md#an-external-nats-server). Inside the node
+  the link passes through a tunnel the engine runs on loopback for itself,
+  which needs nothing from you: its port serves the node's own leaf alone,
+  refuses every other caller on the host, and closes a connection that
+  sends it nothing, so nothing on the host that holds connections open to
+  it can keep the leaf from linking. A leaf whose link dropped links again
+  behind a queue on the link of up to two seconds round trip: past that,
+  nats-server's own fixed two-second wait for a member's answer to the
+  leaf's handshake ends every attempt, and the leaf links once the queue has
+  drained.
 - **The harness of every model its seats name, installed and signed in
   on that host.** Each [`providers.llm` entry](../concepts/llm-backends.md)
   is a harness the node runs, and it calls its own vendor over outbound HTTPS. A

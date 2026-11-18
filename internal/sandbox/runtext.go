@@ -9,90 +9,33 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/activityline"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// MaxRunTextBytes bounds each piece of a collected run's own account of
-// itself that the engine carries: the report it wrote, the detail of its
-// failure, and its activity transcript.
-//
-// BYTES, because what it bounds is an EVENT. Every one of these rides the
-// launch's own `executor_collected` record (and the report and the failure
-// detail ride the collected executor's record too, as the run's report its
-// reviewer judges, [runReport]), and an event over the queue's 8 MiB
-// [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes] is refused — so
-// an unbounded report does not arrive long, it does not arrive at all, and it
-// takes the run's only spend record with it. It was 100 000 RUNES, which is
-// anything from 100 KB to 400 KB on the wire depending on the script the
-// output was written in: a bound on the wrong unit for the only limit that
-// matters.
-//
-// THE WHOLE RECORD FITS, and this is its arithmetic. The record's variable
-// text is the report, the failure detail and the transcript (each at most
-// this, measured redacted, as the record carries it: [Coordinator.fitText],
-// [boundTranscript]), the question in its notes (one sentence,
-// [decision.MaxQuestion] bytes), the delivered refs and the refs the run's
-// push record names, together ([MaxDeliveredRefBytes], a pushed ref counted
-// by the line it renders to), the reason that record could not be read where
-// it could not ([github.com/crewlet/crewlet/internal/events.MaxDiagnosticBytes])
-// and two reasons of a KiB each, why the run started a session of its own
-// ([MaxFellBackBytes]) and why its session was not kept ([boundReason]).
-// Everything else on it is identifiers and counts, a few KiB: the two a box
-// names among them held to the shapes a harness gives them
-// ([ValidSessionID], [ValidRelease]) where its runner reads them and again as
-// the record is published — the session it ran, at most 128 bytes, and its
-// harness's release, at most 64 — and, beside each pushed ref's names, its
-// two whole object ids and its keys, about 140 bytes for each of at most
-// [MaxPushedRefs], which a record carries only where the push record's reason
-// is absent and which come to less than that reason's own worst. JSON can
-// grow text six-fold (a control byte becomes \u00XX, `<`, `>` and `&` become
-// \u003c and its kin, an invalid byte becomes \ufffd), so the worst case is
-// (3 × 256 + 16 + 1 + 64 + 2) KiB × 6, 5106 KiB, about 5 MiB, with the
-// ceiling's other 3 MiB to spare. A field added to the record that carries
-// text a box wrote needs its own bound and a line here, or this promise is no
-// longer one.
-//
-// WHAT HAPPENS PAST IT DEPENDS ON WHO READS THE PIECE. The report and the
-// failure detail are what the run's reviewer judges the round on — what it
-// did, what blocked it — so one past the bound is CONDENSED by the seat's
-// auxiliary model ([Condenser]) rather than cut. A cut used to keep the
-// report's head, which a reader takes for the whole report: a run that seems
-// to have said less than it did. The transcript is read by a PERSON — no model
-// and no prompt reads it — so it is not condensed: it keeps whole lines from
-// its start and from its end, and says how much of its middle it left out
-// ([transcriptHeadBytes], [transcriptTailBytes]).
-//
-// ONE BOUND, NOT ONE PER PIECE: every one of them is the same run's account of
-// itself, and a per-field cap would let them disagree about how much of one
-// run survives.
+// MaxRunTextBytes bounds each of a collected run's report, failure detail and
+// transcript (one bound, so they agree on how much of a run survives), in
+// bytes: all ride the `executor_collected` event, refused whole past
+// [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes] with the run's
+// only spend record. Worst case, measured redacted ([Coordinator.fitText],
+// [boundTranscript]): (3 × 256 KiB + 16 of refs [MaxDeliveredRefBytes] + 1 of
+// question [decision.MaxQuestion] + 64 of diagnostic [events.MaxDiagnosticBytes] +
+// 2 of reasons [MaxFellBackBytes], [boundReason]) × 6 for JSON ≈ 5 MiB, plus
+// a few KiB of identifiers; a new field of box-written text needs a term here.
+// Past it the report and failure are condensed ([Condenser]), since a cut head
+// reads as the whole; the transcript, read only by a person, keeps whole lines
+// from both ends ([transcriptHeadBytes]).
 const MaxRunTextBytes = 256 << 10
 
-// MaxFileBytes is the most one [Sandbox.ReadFile] reads back out of a box, and
-// a file past it is REFUSED ([ErrFileTooLarge]) rather than read in part.
-//
-// It bounds what a box can cost the engine's memory: every file read back is
-// one the harness wrote, inside a box it can run any command in, and the
-// host's own process is what holds it. 32 MiB is far past any report or
-// question a run writes honestly, and is what one compaction can still be
-// asked about many times over.
-//
-// THE REFUSAL IS THE POINT, FOR A FILE MEANT TO BE READ WHOLE. A reader that
-// stops at its cap reports a clean end of file, so a file of exactly the cap
-// cannot be told from one that was clipped there — and what ReadFile reads is
-// a run's report, its question, its result line and its markers, precisely
-// the content nothing downstream can sanity-check. A silently halved report
-// reads as a finished one.
-//
-// IT DOES NOT GOVERN A RUN'S MACHINE STREAMS. Its stdout event log and its
-// stderr grow with the run, and the engine keeps a bounded share of each in
-// the end (a transcript of [MaxRunTextBytes], a failure from the end of the
-// error stream), so refusing them whole refused a run for the size of its own
-// log: a poll that could not read stdout never reached its liveness probe, and
-// a collection that could not read it lost a result the report file held.
-// Those are read as streams ([Sandbox.OpenFile]) or from their end
-// ([Sandbox.ReadTail]), and nothing there is refused for its size.
+// MaxFileBytes is the most one [Sandbox.ReadFile] reads out of a box, bounding
+// the engine's memory against a harness that can write anything; 32 MiB is far
+// past any honest report. A file past it is REFUSED ([ErrFileTooLarge]), never
+// read in part: a clipped report, question or marker reads as a finished one,
+// and nothing downstream can tell. It does not govern a run's stdout and
+// stderr, which grow with the run and are read as streams ([Sandbox.OpenFile])
+// or from their end ([Sandbox.ReadTail]), never refused for size.
 const MaxFileBytes = 32 << 20
 
 // ErrFileTooLarge is [Sandbox.ReadFile]'s answer for a file past
@@ -100,9 +43,8 @@ const MaxFileBytes = 32 << 20
 // that refused it.
 var ErrFileTooLarge = errors.New("sandbox: the file is larger than the engine reads back from a box")
 
-// FileTooLargeError is [ErrFileTooLarge] with the path refused and the cap it
-// was refused at, so a caller describing the refusal says what the box said
-// rather than restating a constant of its own.
+// FileTooLargeError is [ErrFileTooLarge] with the path and the cap that refused
+// it, so a caller states the box's cap rather than a constant of its own.
 type FileTooLargeError struct {
 	// Path is the file that was not read.
 	Path string
@@ -129,14 +71,9 @@ func capSize(n int) string {
 	return kib(n)
 }
 
-// readLimit is the whole-read cap a box holds its reads to: [MaxFileBytes], or
-// a smaller one the suite gave the box ([FakeSandbox.CapReads], and the local
-// boxes' through export_test.go).
-//
-// ZERO IS MAXFILEBYTES, and that is the reading a box's field is meant to
-// have: no box in production is given a cap, so every constructor builds the
-// engine's own without a value to forget, and a cap of zero bytes is no
-// setting anybody could mean.
+// readLimit is the whole-read cap a box holds its reads to: the one the suite
+// set ([FakeSandbox.CapReads], export_test.go), else [MaxFileBytes]. Zero means
+// MaxFileBytes, so no production constructor has a value to forget.
 func readLimit(capped int) int {
 	if capped > 0 {
 		return capped
@@ -144,24 +81,16 @@ func readLimit(capped int) int {
 	return MaxFileBytes
 }
 
-// ErrNotRegularFile is a read a box refused because its path names something
-// other than a regular file where it lies — a named pipe, a device, a socket,
-// a directory or a symbolic link. A backend that reads a box's files from the
-// engine host refuses one, because opening it there could block the reader or
-// never end ([NotRegularFileError] says which it was). It refuses a WRITE over
-// one too ([NotRegularFileError.Write]): a write replaces a regular file whole
-// ([Sandbox.WriteFile]), and anything else at the path is the box's own doing
-// — a link it points somewhere, a pipe or a socket something uses — which a
-// replacement would destroy, so it is left as the box made it. A write refused
-// is the launch's failure, since what it was writing is something the run
-// needs.
+// ErrNotRegularFile is a read a box refused because its path is not a regular
+// file (a named pipe, device, socket, directory or symbolic link): opened from
+// the engine host it could block or never end ([NotRegularFileError] says
+// which). A write over one is refused too ([NotRegularFileError.Write]): a
+// write replaces a regular file whole, and anything else there is the box's
+// own doing, left as it made it; a refused write fails the launch.
 //
-// A REFUSAL OF THAT PIECE, NOT A BOX THAT COULD NOT BE READ. What the path
-// names is fixed by what the box holds, so a collection that retried it would
-// be refused again on every attempt until the run was settled as lost — its
-// spend uncharged and its record unpublished, which is what a harness
-// that made a pipe at its own report path would buy. A collection describes
-// the piece, as it does one past [MaxFileBytes], and collects the rest.
+// It refuses that piece, not the box: what the path names is fixed, so a retry
+// would be refused until the run was settled as lost, its spend uncharged. A
+// collection describes the piece, as for [MaxFileBytes], and collects the rest.
 var ErrNotRegularFile = errors.New("sandbox: the path is not a regular file")
 
 // NotRegularFileError is [ErrNotRegularFile] with what the path was found to
@@ -174,9 +103,8 @@ type NotRegularFileError struct {
 	Kind string
 	// Write is whether it was refused as a write rather than a read.
 	Write bool
-	// OnTheWay is whether Path is a component on the way to the file — one
-	// the file would be beneath — refused for not being a directory, rather
-	// than the file itself.
+	// OnTheWay is whether Path is a component on the way to the file, refused
+	// for not being a directory, rather than the file itself.
 	OnTheWay bool
 }
 
@@ -213,12 +141,9 @@ func (e *NotRegularFileError) Is(target error) bool { return target == ErrNotReg
 // kindSymlink is the [NotRegularFileError.Kind] of a symbolic link.
 const kindSymlink = "a symbolic link"
 
-// readCapped reads a file's content out of r, REFUSING one past limit — the
-// box's [readLimit], [MaxFileBytes] in production — rather than returning its
-// first part: the one rule every backend's [Sandbox.ReadFile] follows.
-//
-// +1 so an overrun is visible: a reader stopped at exactly the cap cannot
-// tell a file of that size from a longer one.
+// readCapped reads r whole, REFUSING more than limit ([readLimit]) rather than
+// returning its first part: the rule every backend's [Sandbox.ReadFile]
+// follows. It reads limit+1 so an overrun is visible.
 func readCapped(r io.Reader, path string, limit int) ([]byte, error) {
 	raw, err := io.ReadAll(io.LimitReader(r, int64(limit)+1))
 	if err != nil {
@@ -251,164 +176,93 @@ var RunParts = []RunPart{PartReport, PartFailure}
 func (p RunPart) Valid() bool { return slices.Contains(RunParts, p) }
 
 // MaxDeliveredRefBytes bounds the branches and pull requests a run's record
-// lists as delivered.
-//
-// THEY ARE READ FROM THE WHOLE REPORT WITH NO COUNT TO THEM — every
-// `Delivered:` line it writes, or every pull-request URL its prose holds where
-// it names none — so a report that pasted a list of pull requests, or a run
-// that wrote one ref on every line of a 30 MiB file, handed the record one
-// entry per line. A pull-request URL is typically under a hundred bytes, so
-// 16 KiB lists more than a hundred and sixty of them, past what any one run
-// delivers; the refs are deduplicated first, and what does not fit is COUNTED
-// on the record and in the run's report its reviewer reads ([runReport])
-// rather than dropped unsaid.
+// lists as delivered. They are read from the whole report with no count (every
+// `Delivered:` line, or every pull-request URL), so a report can name one per
+// line. 16 KiB holds over 160 URLs, past what one run delivers; refs are
+// deduplicated first, and what does not fit is counted on the record and in
+// [runReport], not dropped unsaid.
 const MaxDeliveredRefBytes = 16 << 10
 
-// MaxFellBackBytes bounds why a run asked to continue a session started one of
-// its own ([Result.FellBack]), as its runner reads it and as the launch's
-// record carries it.
-//
-// A REASON IS ONE SENTENCE, written by the run's script on one line of its
-// session record: one of the engine's own — the session was not in the box,
-// the box's harness is older than the release that continues a carried one,
-// the archive would not unpack — at most a couple of hundred bytes, the
-// longest naming the box's release; or, for OpenCode, a few words of the
-// engine's and then whatever OpenCode answered the import or the delete with,
-// put on one line, as long as OpenCode made it. A KiB holds each of the
-// engine's sentences whole and the opening of what OpenCode said, where it
-// names its error; the whole of it is on the run's error stream, where the
-// script prints it too. It is the bound the executor log holds a sentence of
-// the same kind to (executorkeep.FailureMaxBytes, UnkeptReasonMaxBytes), and
-// on the record, escaped at JSON's worst, it is 6 KiB of the ceiling's 8 MiB.
-//
-// HELD, BECAUSE THE RECORD IS A FILE IN THE BOX: the run's own agent can
-// write it, so the one line was as long as the file the engine reads whole
-// ([MaxFileBytes]) and the launch's record carried all of it — and a record
-// past the queue's ceiling is refused whole, the launch's spend, report and
-// refs with it.
+// MaxFellBackBytes bounds why a run asked to continue a session started its
+// own ([Result.FellBack]), as its runner reads it and the record carries it.
+// The reason is one line: an engine sentence of a few hundred bytes, or for
+// OpenCode a few words and then whatever OpenCode answered. A KiB holds the
+// engine's sentences and the opening of OpenCode's error (the whole is on the
+// error stream), as executorkeep.FailureMaxBytes and UnkeptReasonMaxBytes do.
+// It must be held: the session record is a file the run's agent can write, and
+// a record past the queue's ceiling is refused whole.
 const MaxFellBackBytes = 1 << 10
 
-// BoundFellBack is why a run started a session of its own ([Result.FellBack])
-// as everything past its box carries it: redacted whole, then cut to
-// [MaxFellBackBytes] ([boundReason]). Applied where the runner reads the
-// reason out of its box, so the result it hands back — to a node that asked
-// for the read too — carries no more, and again as the launch's record is
-// published ([collectedRecord]), which trusts no runner, nor a host of another
-// build, to have bounded what it hands back.
+// BoundFellBack is [Result.FellBack] as everything past its box carries it:
+// redacted, then cut to [MaxFellBackBytes] ([boundReason]). Applied where the
+// runner reads it, and again as the record is published ([collectedRecord]),
+// which trusts no runner, nor a host of another build, to have bounded it.
 func BoundFellBack(why string) string { return boundReason(why, MaxFellBackBytes) }
 
-// boundReason is a reason the launch's record carries in a sentence, REDACTED
-// WHOLE AND THEN CUT to bound bytes on a character, marked where it was cut,
-// the mark inside the bound ([textcut.Within]) — the opening kept, which is
-// where a sentence says what happened. The record's two reasons are held by
-// it: why the run started a session of its own ([MaxFellBackBytes]) and why
-// its session was not kept, at the bound the executor log holds that same
-// reason to (executorkeep.UnkeptReasonMaxBytes, a KiB).
-//
-// REDACTED BEFORE THE CUT, because a reason quotes what a process in the box
-// answered, and the box's environment holds the seat's credentials: a token
-// whose start fell just before the cut would survive as a fragment no pattern
-// recognises. AND CUT AFTER EVERY REDACTION, never before one, because a
-// redaction's marker can be longer than what it replaces, and a cut text
-// redacted again can read a partial marker as a value: so a reader that
-// redacts a reason again holds it to its bound by this whole rule, as the
-// record's publish does.
+// boundReason is a reason as the launch's record carries it: REDACTED WHOLE,
+// THEN CUT to bound bytes on a character and marked within it
+// ([textcut.Within]), keeping the opening, where a sentence says what
+// happened. It holds [MaxFellBackBytes] and why a session was not kept (a KiB,
+// as executorkeep.UnkeptReasonMaxBytes). Redacted first, because a token
+// straddling the cut would survive as an unrecognisable fragment; cut after
+// every redaction, because a marker can be longer than what it replaces and a
+// cut text redacted again can read a partial marker as a value. A reader that
+// redacts again re-applies this whole rule, as the publish does.
 func boundReason(why string, bound int) string { return textcut.Within(redact.Secrets(why), bound) }
 
-// MaxCondenseBytes is the most text one [Condenser] call reads: what the
-// engine's compactor takes in one condensation, its compact.MaxChunks first-
-// pass pieces of compact.ChunkBytes each — two MiB. Past it the compactor
-// refuses before any model is asked, rather than spend what nobody priced.
-//
-// DECLARED HERE, because this package composes the text a condensation is
-// handed and cannot import the compactor (it sits on the model providers),
-// and PINNED to those constants by the engine's own test, where the two are
-// joined — a bound written down twice is a bound that drifts.
+// MaxCondenseBytes is the most text one [Condenser] call reads: the engine
+// compactor's compact.MaxChunks pieces of compact.ChunkBytes, 2 MiB; past it
+// the compactor refuses before asking a model. Declared here because this
+// package cannot import the compactor (it sits on the model providers), and
+// pinned to those constants by the engine's test.
 const MaxCondenseBytes = 2 << 20
 
-// failureReserve is what the coordinator may itself put in front of a
-// runner's failure detail before condensing it, held back from what a runner
-// may compose: the sentence saying the run was ended at its turn's wall-clock
-// cap and its separator ([endedAtDeadline]). A KiB is several times that (a
-// test holds the sentence to half of it), and out of two MiB it
-// costs the error stream's share nothing a reader would miss, while leaving
-// the sentence room to be reworded.
-//
-// NOTHING OF A RUNNER'S OWN IS ABSORBED HERE. A runner holds its failure to
-// [MaxFailureBytes] exactly, as it leaves — redacted whole, so a credential's
-// name closing one of its pieces and a value opening the next, one match
-// across the `:\n` between them, is measured with the marker it became, and
-// with room for the mark [KeepEnd] puts on a single line it keeps only the end
-// of. The coordinator's sentence ends on no credential's name, so its own join
-// adds nothing a redaction could grow.
+// failureReserve is held back from a runner's failure detail for what the
+// coordinator may put in front of it before condensing: the wall-clock-cap
+// sentence and its separator ([endedAtDeadline]). A KiB is several times that
+// (a test holds the sentence to half), leaving room to reword it. A runner
+// holds its own failure to [MaxFailureBytes] exactly, measured redacted whole
+// and with room for [KeepEndMark]; the coordinator's sentence ends on no
+// credential's name, so its join adds nothing a redaction could grow.
 const failureReserve = 1 << 10
 
 // MaxFailureBytes is the most a runner's failure detail ([Result.Error]) may
-// be: what one condensation reads ([MaxCondenseBytes]) less what the
-// coordinator may put in front of it ([failureReserve]). A runner composes
-// its own sentences — a piece it could not read, the exit status, the harness's
-// error — and gives the error stream only what is left, so a failure built
-// around a long stderr is one a model can still be shown whole. Composed past
-// it, every such failure was a few hundred bytes over the compactor's input,
-// refused before a model was asked, and the run's record carried the
-// uncondensed fallback although a model was configured.
+// be: [MaxCondenseBytes] less [failureReserve], so a failure built around a
+// long stderr can still be shown to a model whole. A runner composes its own
+// sentences and gives the error stream only what is left.
 const MaxFailureBytes = MaxCondenseBytes - failureReserve
 
-// Condenser rewrites a piece of a collected run's account that is past
-// [MaxRunTextBytes] into at most budget bytes, on the seat's own auxiliary
-// model — the engine's compactor, behind the interface this package needs,
-// because the chain it runs on and the budget it is charged to are the
-// engine's.
-//
-// The answer carries its own label saying it was condensed. An error means no
-// rewrite could be had, and the caller's fallback stands. It is handed the
-// RUN, not just its seat, because a rewrite is a model call the engine files
-// under the turn the run belongs to.
-//
-// THE SPEND IS ANSWERED WHATEVER THE ERROR SAYS: a rewrite that came back too
-// long was still paid for. It rides the collected result to the segment that
-// resumes from it ([Result.Condensed]), which is the one that pays it to the
-// turn's work item — no segment is running while a run is collected, so no
-// segment's own tally could.
-//
-// It reads at most [MaxCondenseBytes] of text in one call.
+// Condenser rewrites a piece of a collected run's account past
+// [MaxRunTextBytes] into at most budget bytes on the seat's auxiliary model:
+// the engine's compactor, whose chain and budget are the engine's. It is handed
+// the run because the call is filed under the run's turn, and reads at most
+// [MaxCondenseBytes] per call. The answer carries its own condensed label; an
+// error means the caller's fallback stands. The spend is answered whatever the
+// error (a too-long rewrite was still paid for), and rides [Result.Condensed]
+// to the segment that resumes from it, since no segment runs during collection.
 type Condenser interface {
 	Condense(ctx context.Context, run PendingRun, part RunPart, text string,
 		budget int) (string, AuxTokens, error)
 }
 
-// fitResult holds the report and the failure detail of a collected run to
-// [MaxRunTextBytes], condensing whichever is past it.
-//
-// Applied ONCE, where every collected result enters the coordinator, and
-// before anything is published or resumed — so the launch's own record, the
-// run's report its resumed turn files for the reviewer ([runReport]) and the
-// record's retries all carry the same text.
-//
-// THE TRANSCRIPT TOO, and here rather than in the runner: this is the one
-// home of the rule that the run's record fits its event, and the coordinator
-// already trusts no runner to have redacted what it hands back (see
-// [collectedRecord]). Bounded in a runner, a runner that forgot the bound would
-// publish an unbounded transcript, and the record carrying the run's only
-// spend would be refused whole. And THE REFS, the run's own and those its
-// push record names, to one budget ([boundPushed]).
-//
-// TWO HALVES, because a run's box and the seat its result is fitted for need
-// not be on one node ([BoxReader]). [boundBox] is the half that reads no model
-// — the transcript and the refs, held by rule — and is made where the box is
-// read; [Coordinator.fitText] is the half a model may write — the question,
-// the report and the failure, condensed on the seat's own auxiliary model —
-// and is made where the result is used, under the turn that pays for it, which
-// is also where the push record is read and so where its refs take what the
-// run's own left of the budget.
+// fitResult holds a collected run's account to its record: the report and the
+// failure to [MaxRunTextBytes], condensed past it, plus the transcript and the
+// refs (the run's own and its push record's, one budget, [boundPushed]).
+// Applied ONCE, where every collected result enters the coordinator, before
+// anything is published or resumed, so the record, its retries and the
+// reviewer's [runReport] carry the same text; here rather than in a runner
+// because the coordinator trusts no runner ([collectedRecord]) and an
+// unbounded record is refused with the run's only spend. Two halves, because a
+// box and its seat may be on different nodes ([BoxReader]): [boundBox], no
+// model, where the box is read; [Coordinator.fitText], where the result is
+// used, under the turn that pays, and where the push record is read.
 func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Result) Result {
 	return c.fitText(ctx, run, boundBox(result))
 }
 
 // boundBox is the half of [Coordinator.fitResult] that reads no model: the
-// transcript and the delivered refs, each held to its bound by rule, with
-// what was left out counted. Applied ONCE, where the box is read, since a
-// second application would find nothing to leave out and count nothing.
+// transcript and the delivered refs held to their bounds, what was left out
+// counted. Applied ONCE, where the box is read: a second pass counts nothing.
 func boundBox(result Result) Result {
 	result.Transcript, result.TranscriptElidedLines, result.TranscriptElidedBytes =
 		boundTranscript(result.Transcript)
@@ -421,28 +275,20 @@ func boundBox(result Result) Result {
 	return result
 }
 
-// MaxRunEventBytes bounds a result's terminal event ([Result.Event]), which a
-// box's host sends back to the node that asked whole or not at all.
-//
-// SIXTEEN KIB, the bound a question a person reads is held to: a harness's result
-// line carries its usage and cost beside its last text, and the line a spent
-// plan ends a run on carries one sentence there. A line past this is a run
-// that ended on a long text, which is no limit report, so dropping it costs
-// the field's one reader nothing.
+// MaxRunEventBytes bounds a result's terminal event ([Result.Event]), sent back
+// to the asking node whole or not at all. 16 KiB, the bound of a question a
+// person reads: a result line holds usage, cost and its last text, a spent
+// plan's line one sentence there, so a longer line ended on long text, is no
+// limit report, and dropping it costs the field's one reader nothing.
 const MaxRunEventBytes = 16 << 10
 
 // BoxReadCarries are the bounds, tried in turn, a box's host holds each piece
-// of a result's own text to before sending it back to the node that asked
-// ([CarriedResult]): the first whose sealed reply fits the broker's ceiling.
-//
-// [MaxCondenseBytes] FIRST, the most one condensation reads, so the asker
-// condenses a report or a failure exactly as it would have condensed one it
-// read itself — past it the compactor refuses before any model is asked, and
-// the asker's fallback keeps whole lines of the same text. Three such pieces
-// and a transcript fit the broker's 8 MiB ([queue.MaxPayloadBytes]) unless
-// JSON grows them several-fold, which only text written to do that makes it
-// do; then [MaxRunTextBytes], what the run's record carries of each, whose
-// arithmetic is the record's own and fits whatever the text.
+// of a result's text to before replying to the asking node ([CarriedResult]):
+// the first whose sealed reply fits the broker's ceiling. [MaxCondenseBytes]
+// first, so the asker condenses exactly as it would a text it read itself;
+// that fits [queue.MaxPayloadBytes] unless the text is written to grow
+// several-fold under JSON, and then [MaxRunTextBytes], whose arithmetic fits
+// whatever the text.
 var BoxReadCarries = []int{MaxCondenseBytes, MaxRunTextBytes}
 
 // CarriedResult is result with its report and failure each held to budget by
@@ -466,43 +312,32 @@ func carriedPart(part RunPart, text string, budget int, why string) string {
 	return keepLines(part, text, budget-room, why)
 }
 
-// fitText is the half of [Coordinator.fitResult] a model may write: the
-// report and the failure, each held to its bound and condensed past it by the
-// seat's auxiliary model.
+// fitText is the half of [Coordinator.fitResult] a model may write: the report
+// and the failure, each held to its bound and condensed past it.
 //
-// EACH MEASURED AS THE RECORD CARRIES IT: REDACTED, the whole of it first,
-// and a model's rewrite of it before the rewrite is measured
-// ([Coordinator.condensed]). A redaction can lengthen a text — a password's
-// value written in pieces between escaped breaks becomes a marker a piece,
-// seven times its bytes — and the record is redacted again as it is
-// published, so a piece measured before its last redaction rode the record at
-// up to seven times its bound: a runner's that redacted nothing, which the
-// coordinator trusts no runner not to hand over, and a rewrite, which no
-// runner ever saw. Redacted here, the publish's own pass is a second one over
-// redacted text, which changes nothing — save the one shape internal/redact's
-// package doc names, a key's piece beside a key's END line that runs on into a
-// password's key, which a second pass can replace with a marker — so the
-// record's arithmetic ([MaxRunTextBytes]) holds whatever the runner did, and
-// the run's report its reviewer reads carries the same text.
+// Each is measured REDACTED, as the record carries it, and a model's rewrite is
+// redacted before it is measured ([Coordinator.condensed]): a redaction can
+// lengthen text sevenfold (a password written in pieces becomes a marker per
+// piece) and the publish redacts again, so a piece measured unredacted could
+// ride the record at seven times its bound. Over redacted text the publish's
+// pass changes nothing, save the one shape internal/redact's package doc
+// names, so [MaxRunTextBytes]'s arithmetic holds whatever the runner did.
 func (c *Coordinator) fitText(ctx context.Context, run PendingRun, result Result) Result {
-	// THIS COLLECTION'S OWN, counted from nothing: the field is the
-	// coordinator's, and a runner that set it would be charging the turn
-	// for a rewrite nobody made.
+	// THIS COLLECTION'S OWN, counted from nothing: a runner that set it would
+	// charge the turn for a rewrite nobody made.
 	result.Condensed = AuxTokens{}
 	result.Text = c.fitPart(ctx, run, PartReport, redact.Secrets(result.Text), MaxRunTextBytes, &result.Condensed)
 	result.Error = c.fitPart(ctx, run, PartFailure, redact.Secrets(result.Error), MaxRunTextBytes,
 		&result.Condensed)
-	// ONE BUDGET FOR THE RUN'S REFS: what the push record says it pushed
-	// has what its own lines, bounded where the box was read ([boundBox]),
-	// leave of it ([boundPushed]).
+	// ONE BUDGET FOR THE RUN'S REFS: the push record's get what the run's own,
+	// bounded in [boundBox], leave ([boundPushed]).
 	left := MaxDeliveredRefBytes
 	for _, ref := range result.DeliveredRefs {
 		left -= len(ref)
 	}
 	result.Pushed, result.PushedElided = boundPushed(result.Pushed, result.PushedElided, left)
-	// AND WHY THE PUSH RECORD WAS UNREAD, an error built from whatever
-	// Gitlet's answer said: redacted, and held to the one bound an
-	// error a record carries has.
+	// AND WHY THE PUSH RECORD WAS UNREAD, built from Gitlet's answer: redacted
+	// and held to a record's diagnostic bound.
 	result.PushedUnread = events.ClipDiagnostic(redact.Secrets(result.PushedUnread))
 	// AND WHAT BECAME OF THE CHANGES IT ASKED TO OPEN, each sentence as
 	// that one is ([fitOpened]).
@@ -510,32 +345,16 @@ func (c *Coordinator) fitText(ctx context.Context, run PendingRun, result Result
 	return result
 }
 
-// boundRefs is a run's delivered refs as its record carries them — redacted,
-// deduplicated in the order they were found, each valid UTF-8, and held to
-// [MaxDeliveredRefBytes] — with how many more the run named than are listed.
-//
-// WHOLE REFS ONLY: a ref is an identifier, and a shortened URL names nothing.
-//
-// REDACTED FIRST, here rather than trusted to the runner, for the reason the
-// transcript is ([Coordinator.fitResult]): a ref is whatever word a run's
-// report put on its `Delivered:` line, which a box can make a credential, and
-// every reader of the record — its event, the run's report — reads these.
-// First, so the bound measures what is carried.
-//
-// NEVER ONE THAT IS NOT UTF-8, because every one of those readers reads the
-// refs through JSON, which replaces each byte that is not UTF-8 with U+FFFD:
-// listed, such a ref arrived as another — a URL the run never delivered —
-// and refs that differ only there arrived as one, past the deduplication
-// above. A branch is held to UTF-8 by its grammar
-// ([github.com/crewlet/crewlet/internal/gitref.ValidBranch]), but a URL
-// holds whatever bytes a report puts in it, and so does the host a scrape of
-// one reads; so the rule is HERE, where every runner's refs pass, rather than
-// in each runner's reading of an account, which hands on the bytes it read.
-// Judged as carried, after the redaction, and DROPPED RATHER
-// THAN MENDED: a mended ref names what nobody delivered. And COUNTED with the
-// refs past the bound, because the run named it and the record does not list
-// it: the reader is told the list is short rather than shown a ref nobody
-// delivered.
+// boundRefs is a run's delivered refs as its record carries them: redacted,
+// deduplicated in order, valid UTF-8 and held to [MaxDeliveredRefBytes] in
+// whole refs (a shortened URL names nothing), with how many more the run
+// named. Redacted here, first, rather than trusted to a runner: a `Delivered:`
+// line can carry a credential, and the bound measures what is carried. A
+// non-UTF-8 ref is DROPPED, not mended, and counted: JSON would turn its bad
+// bytes into U+FFFD, naming a URL never delivered or merging two refs past the
+// dedup. A branch's grammar
+// ([github.com/crewlet/crewlet/internal/gitref.ValidBranch]) holds it to UTF-8
+// but a URL's does not, so the rule sits here, where every runner's refs pass.
 func boundRefs(refs []string) ([]string, int) {
 	seen := make(map[string]bool, len(refs))
 	var kept []string
@@ -557,33 +376,23 @@ func boundRefs(refs []string) ([]string, int) {
 }
 
 // The two halves of a long transcript a run's record keeps, in whole lines.
-//
-// THE END GETS THE LARGER SHARE, because it is where the run's conclusion and
-// what broke sit — the reason the failure detail keeps its end too
-// ([wholeLines]). The START is kept as well, because it is the run's plan and
-// its first exploration of the code, which a log cut to its end loses
-// entirely: a reader of a long run then cannot see what it set out to do.
-// 64 KiB is some 370 tool lines at their longest — a tool line is the tool's
-// name and at most 160 bytes of what it ran, never its output — and more at
-// their usual length, which is that opening with room to spare; the rest of
+// The END gets the larger share: the conclusion and what broke sit there
+// ([wholeLines]). The START is kept for the run's plan, which a log cut to its
+// end loses. 64 KiB is some 370 tool lines at their longest (a tool's name and
+// at most 160 bytes of what it ran, never its output); the rest of
 // [MaxRunTextBytes] is the end.
 const (
 	transcriptHeadBytes = 64 << 10
 	transcriptTailBytes = MaxRunTextBytes - transcriptHeadBytes
 )
 
-// boundTranscript holds a run's transcript to its record: REDACTED WHOLE
-// FIRST, then whole lines from its start up to [transcriptHeadBytes] and from
-// its end up to [transcriptTailBytes], with one note line between them naming
-// how many lines and bytes were left out — which it also answers, for the
-// record's own fields. A transcript that fits is carried as it is.
-//
-// Redacted before anything is dropped, for the reason everything read out of a
-// box is: a secret straddling the cut survives as a fragment the pattern no
-// longer recognises. And in WHOLE LINES, because the line a byte count lands
-// in reads as a whole line it never was; a single line longer than its half
-// is the one case that cannot be met in whole lines, and it keeps its own
-// start (or end), on a character, marked.
+// boundTranscript holds a run's transcript to its record: REDACTED WHOLE FIRST
+// (a secret straddling a cut would survive as an unrecognisable fragment),
+// then whole lines from its start up to [transcriptHeadBytes] and its end up to
+// [transcriptTailBytes], with a note line between counting the lines and bytes
+// left out, which it also returns. Whole lines, because a cut line reads as a
+// whole one; a single line past its half keeps its own start (or end), on a
+// character, marked. A transcript that fits is carried as it is.
 func boundTranscript(text string) (string, int, int) {
 	text = redact.Secrets(text)
 	if len(text) <= MaxRunTextBytes {
@@ -605,8 +414,8 @@ func boundTranscript(text string) (string, int, int) {
 	}
 
 	// What lies between the halves; the text is past the budget, so there is
-	// always some. Where a half kept no whole line, its edge line keeps its
-	// own start or end instead.
+	// always some. A half that kept no whole line keeps its edge line's start
+	// or end instead.
 	middle := lines[head:tail]
 	const marker = "…"
 	var startOf, endOf string
@@ -630,9 +439,8 @@ func boundTranscript(text string) (string, int, int) {
 	if endOf != "" {
 		dropped -= len(endOf) - len(marker)
 	}
-	// Lines kept in part are not lines left out: one when only an edge line
-	// was partial, or when the whole text is that one line; two when both
-	// edges were.
+	// Lines kept in part are not lines left out: one when only one edge line
+	// was partial or the text is that one line, two when both edges were.
 	partial := 0
 	if startOf != "" {
 		partial++
@@ -663,22 +471,18 @@ func elidedNote(whole, partial, bytes int) string {
 	default:
 		what = fmt.Sprintf("%d line(s) and part of %d more, %s in all,", whole, partial, kib(bytes))
 	}
-	return fmt.Sprintf("(%s left out here: a run's record keeps the first %d KiB and the last %d KiB "+
-		"of its transcript, in whole lines)\n", what, transcriptHeadBytes>>10, transcriptTailBytes>>10)
+	return activityline.Words(activityline.TagNote, fmt.Sprintf("%s left out here: a run's record keeps the "+
+		"first %d KiB and the last %d KiB of its transcript, in whole lines", what, transcriptHeadBytes>>10,
+		transcriptTailBytes>>10)) + "\n"
 }
 
-// KeepEnd is the end of text in WHOLE LINES, at most keep bytes of it, and the
-// offset in text where what it keeps begins — the one rule for showing a
-// stream's end, shared by the live view's windows and the error stream a
-// collection reads.
-//
-// A window opens wherever a byte count put it, and the line it opened inside
-// is the end of something nobody can read whole from here, so it starts at the
-// next line instead — or right at the count, where that is already a line's
-// start. A single line longer than keep is the one case whole lines cannot
-// meet, and it keeps its own end on a character, marked with a leading "…"
-// that is not part of the text the offset counts: a process's last line is
-// where it says what went wrong.
+// KeepEnd is the end of text in WHOLE LINES, at most keep bytes, and the offset
+// in text where it begins: the one rule for a stream's end, shared by the live
+// view's windows and a collection's error stream. A window a byte count opened
+// mid-line starts at the next line (or at the count, if a line starts there),
+// since that line cannot be read whole. A single line longer than keep keeps
+// its own end on a character, marked with [KeepEndMark] outside the offset's
+// count: a process's last line is where it says what went wrong.
 func KeepEnd(text string, keep int) (string, int) {
 	if len(text) <= keep {
 		return text, 0
@@ -708,16 +512,11 @@ func kib(n int) string { return fmt.Sprintf("%d KiB", (n+1023)/1024) }
 // fitPart holds one piece of a run's account to budget: condensed past it, and
 // in whole lines where no model can condense it ([wholeLines]).
 //
-// A FAILURE PAST WHAT ONE CONDENSATION READS IS BROUGHT INSIDE IT FIRST. A
-// runner composes its failure to [MaxFailureBytes], but nothing outside this
-// package keeps that promise for it, and a harness's own error can be as long as
-// the file it was read from: handed over whole, the compactor refuses it
-// before any model is asked. So the failure keeps whole lines from both ends
-// up to [MaxCondenseBytes] — its start, where the engine speaks, and its end,
-// where what broke is said, the rule a failure is always kept by — with the
-// lines between counted in a note inside that bound, and THAT is condensed.
-// Where it still cannot be, the fallback is taken from the whole failure, so
-// it carries one note rather than two.
+// A failure past [MaxCondenseBytes] is first brought inside it, since nothing
+// outside this package keeps [MaxFailureBytes] and the compactor would refuse
+// it unasked: whole lines from both ends (the engine's start, the failure's
+// end) with a note inside the bound, and that is condensed. The fallback is
+// taken from the whole failure, so it carries one note, not two.
 func (c *Coordinator) fitPart(ctx context.Context, run PendingRun, part RunPart, text string,
 	budget int, spent *AuxTokens,
 ) string {
@@ -728,9 +527,8 @@ func (c *Coordinator) fitPart(ctx context.Context, run PendingRun, part RunPart,
 	if part == PartFailure && len(input) > MaxCondenseBytes {
 		input = condensable(input)
 		if len(input) <= budget {
-			// What is left after the middle went fits the record whole:
-			// there is nothing for a model to do, and a label saying the
-			// text was condensed would say what did not happen.
+			// What is left after the middle went fits whole: nothing for a model to
+			// do, and a condensed label would say what did not happen.
 			return input
 		}
 	}
@@ -751,15 +549,11 @@ func condensable(text string) string {
 }
 
 // condensed is the seat's auxiliary model's rewrite of a piece past its
-// budget, or false — said in the log — where none could be had. What the
-// attempt cost is added to spent either way.
-//
-// THE REWRITE IS REDACTED BEFORE IT IS MEASURED, and one the redaction puts
-// past the budget is refused as one that came back too long is, so the
-// whole-lines fallback of the redacted text stands in its place: the model
-// writes new text, which no runner redacted, and measured first, a rewrite
-// the publish's redaction lengthened rode the record past its bound — the
-// rule [boundReason] holds a reason to, a cut after every redaction.
+// budget, or false, logged, where none could be had; the attempt's cost is
+// added to spent either way. The rewrite is REDACTED BEFORE IT IS MEASURED, and
+// one the redaction puts past budget is refused like one too long, so the
+// redacted whole-lines fallback stands: no runner redacted the model's text,
+// and the publish's redaction could lengthen it past its bound ([boundReason]).
 func (c *Coordinator) condensed(ctx context.Context, run PendingRun, part RunPart, text string,
 	budget int, spent *AuxTokens,
 ) (string, bool) {
@@ -782,23 +576,15 @@ func (c *Coordinator) condensed(ctx context.Context, run PendingRun, part RunPar
 	return "", false
 }
 
-// wholeLines is a piece that could not be condensed, held to budget by
-// leaving WHOLE LINES out and saying how many — never by cutting one.
-//
-// A report (and a question) keeps its START, because each is written to be
-// read from the top and its point is where it starts. A failure keeps BOTH
-// ENDS: its end, for most of the budget, because the line naming what broke
-// is the last thing a process prints; and its start, up to an eighth of it
-// ([failureHeadShare]), because that is where the ENGINE speaks — a piece it
-// could not read, a question nobody could be asked, the exit status and the
-// harness's own error all come before the error stream they introduce. Kept from
-// its end alone, a failure with a long error stream lost every one of them.
-//
-// The note stands where the left-out lines were and is not counted against
-// the budget, for the reason [github.com/crewlet/crewlet/internal/textcut]
-// gives: the budget bounds the content. A single line past the whole budget
-// leaves nothing, and the note then says so rather than showing a fragment
-// of it.
+// wholeLines is a piece that could not be condensed, held to budget by leaving
+// WHOLE LINES out and saying how many, never by cutting one. A report (or a
+// question) keeps its START, where its point is. A failure keeps BOTH ENDS: its
+// end for most of the budget, where a process names what broke, and its start
+// up to [failureHeadShare], where the engine speaks (an unread piece, the exit
+// status, the harness's error), which an end-only cut of a long stderr loses.
+// The note stands where the lines were and is outside the budget, which bounds
+// content ([github.com/crewlet/crewlet/internal/textcut]); a single line past
+// the whole budget leaves nothing, and the note says so.
 func wholeLines(part RunPart, text string, budget int) string {
 	return keepLines(part, text, budget, fmt.Sprintf(
 		"past the %d KiB a run's record carries for it, and no model could condense them", budget>>10))
@@ -833,11 +619,10 @@ func keepLines(part RunPart, text string, budget int, why string) string {
 		strings.Join(lines[tail:], "")
 }
 
-// failureHeadShare is the fraction of a failure's budget its START keeps when
-// no model could condense it: an eighth, 32 KiB of [MaxRunTextBytes]. The
-// engine's own sentences at its start are a few hundred bytes each, so this
-// holds every one of them and the opening of a long error the harness reported;
-// the other seven eighths are the end, where a process names what broke.
+// failureHeadShare is the share of a failure's budget its START keeps when no
+// model could condense it: an eighth, 32 KiB of [MaxRunTextBytes], holding the
+// engine's sentences (a few hundred bytes each) and the opening of a long
+// harness error; the rest is the end, where a process names what broke.
 const failureHeadShare = 8
 
 // omittedLines is the note standing where whole lines were left out: after

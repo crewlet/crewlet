@@ -25,12 +25,14 @@ describe("suggestAvatar", () => {
     expect(suggestAvatar(draftOf([]))).toEqual({ character: "crewlet", color: "purple" });
   });
 
-  test("offers the first character no agent wears, a seat that chose nothing wearing the Crewlet", () => {
+  test("offers the first character no agent wears, a seat that chose nothing wearing what it is served", () => {
     const draft = draftOf([
       { name: "CEO" },
       { name: "Dev", avatar: { character: "hexlet", color: "cyan" } },
     ]);
-    expect(suggestAvatar(draft)).toEqual({ character: "peaklet", color: "green" });
+    const served = (handle: string) =>
+      handle === "ceo" ? ({ character: "crewlet", color: "amber" } as const) : undefined;
+    expect(suggestAvatar(draft, served)).toEqual({ character: "peaklet", color: "green" });
   });
 
   test("a person wears no character and moves no colour along", () => {

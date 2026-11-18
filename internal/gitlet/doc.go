@@ -169,7 +169,10 @@
 // page read, so a page is the rows it read and never scans past its limit
 // for the few it keeps. A live state asked by when its changes moved
 // ([ChangeSortUpdated]) walks its lifecycle's and its conversations' indexes
-// in step (changesort.go). One change ([ReadChange]) is read by its number on
+// in step (changesort.go). A listing narrowed by its words takes its candidates
+// from this node's own index of them and judges each in its snapshot, saying
+// how far back the index reaches while it is first built (changetext.go,
+// ADR-0156). One change ([ReadChange]) is read by its number on
 // its repository, its revisions paged newest first beside it. Both are held to
 // the asker's grant on the change's repository ([JudgeRead]): a listing that
 // names a repository, and a read of one change, are refused whole where the
@@ -298,7 +301,9 @@
 // pushes that move its head have one writer, and every record that leaves the
 // change no longer what was enqueued ends its entry in its own apply: a close,
 // a draft, a retarget and a landing dequeue it, and a push that moves its head
-// ejects it.
+// ejects it. An ejection for a check that failed names the train it failed on
+// (its candidate, base and commit, version 7), since the train's rows go with
+// it.
 //
 // A CHANGE MERGES BY ONE RECORD ITS GATE DECIDES (merge.go, ADR-0096): a merge
 // ([Merge]) built on the repository's home onto the tip it read of the target

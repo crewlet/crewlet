@@ -56,32 +56,17 @@ func (d AtlasRefreshDeps) now() time.Time {
 	return time.Now().UTC()
 }
 
-// atlasRefresh asks that one source of the atlas be read now.
+// atlasRefresh asks that one source of the atlas be read now. `applied` means
+// the ask is the fleet's record: the collect duty's node reads the source on
+// its next tick, within a minute, and what it found is the source's standing
+// (`atlas_sources`).
 //
-// # What it promises
-//
-// `applied` means the ask is the fleet's record: the node holding the collect
-// duty reads the source on its next tick, within a minute. The read itself is
-// the duty's, and what it found is the source's standing, which the
-// `atlas_sources` question answers.
-//
-// # The floor is the engine's
-//
-// A source read less than [collect.RefreshFloor] ago is not read again,
-// whoever asks: the ask is refused naming the instant it is honoured from, so
-// no gesture reads a vendor more often than the smallest cadence a company
-// may set. The duty holds the same floor on its side.
-//
-// # A second ask is not a second read
-//
-// Asking for a source somebody already asked for changes nothing and answers
-// with the ask that waits.
-//
-// # Never an agent's
-//
-// The authority table keeps it a person's: a read of a vendor is spent
-// against the company's rate limit, and an agent that doubts an entry says so
-// with its own dispute.
+// A source read less than [collect.RefreshFloor] ago is refused, whoever asks,
+// naming the instant it is honoured from: no gesture reads a vendor more often
+// than the smallest cadence a company may set, and the duty holds the same
+// floor. A second ask changes nothing and answers with the ask that waits.
+// The authority table keeps it a person's: a vendor read spends the company's
+// rate limit, and an agent that doubts an entry disputes it.
 type atlasRefresh struct{ deps AtlasRefreshDeps }
 
 var _ tools.SeatCallable = (*atlasRefresh)(nil)

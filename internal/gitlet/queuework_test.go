@@ -15,19 +15,16 @@ import (
 )
 
 // THE HOME'S QUEUE WORK IS ONE SNAPSHOT OF ONE TARGET (M5-D12, M5-D15): a
-// due-queue read of one repository answers its home a target a page, every
-// fact the queue worker decides its next step from read in one transaction by
-// the shipped reader over the shipped applier's rows — main's tip, the gate its
-// queue lands under (its depth and batch, the required check), the
-// live entry with who enqueued it, whether it closes its work item, the change
-// its merge commit is written from and that work item, and the live train with
-// the latest attempt of the required check on each candidate commit, for main.
-// The page's cursor is the target, and the page after it is empty.
+// due-queue read of one repository answers a target a page, every fact the
+// queue worker steps from read in one transaction — main's tip, the gate (depth,
+// batch, required check), the live entry with its enqueuer, whether it closes
+// its work item, the change and work item its merge commit is written from, and
+// the live train with the latest attempt of the required check on each
+// candidate commit. The page's cursor is the target; the page after it is empty.
 //
-// Mutation: answer the candidate commits' checks from the train's base rather
-// than each commit → the passed attempt on M is missing, red; drop the gate's
-// batch from the answer → zero, red; answer the enqueuer as the queue's own
-// principal → red.
+// Mutation: checks read from the train's base rather than each commit (the
+// passed attempt on M goes missing), the gate's batch dropped, or the queue's
+// own principal answered as the enqueuer → red.
 func TestTheHomesQueueWorkIsOneSnapshotOfOneTarget(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -95,20 +92,15 @@ func TestTheHomesQueueWorkIsOneSnapshotOfOneTarget(t *testing.T) {
 	}
 }
 
-// THE HOME'S QUEUE WORK READS WHAT ITS STEP NEEDS: a due-queue page names
-// as many of its target's live entries as one train under the gate takes —
-// depth × batch, here one of two, and More for the other — and their changes'
-// descriptions, the body and the authors a squash's message is written from,
-// only on a snapshot its home builds a train from (QueueDue.Builds): with no
-// train, the first entry's change with its body and its author; with a train
-// standing on the tip, the same change with neither, since testing, landing
-// and bisecting write no commit message.
+// THE HOME'S QUEUE WORK READS WHAT ITS STEP NEEDS: a due-queue page names as
+// many of its target's live entries as one train under the gate takes (depth ×
+// batch: one of two here, More for the other), and reads their changes' bodies
+// and authors, which a squash's message is written from, only on a snapshot its
+// home builds a train from (QueueDue.Builds): testing, landing and bisecting
+// write no commit message.
 //
-// Mutation: scan MaxCandidateEntries rather than depth × batch → both
-// entries are named, red; read the descriptions on every snapshot → the
-// standing train's page carries the body, red; never read them → the build's
-// page has no body, red; leave the authors unread → the build's page names
-// none, red.
+// Mutation: scan MaxCandidateEntries rather than depth × batch, read the
+// descriptions on every snapshot or on none, or leave the authors unread → red.
 func TestTheHomesQueueWorkReadsWhatItsStepNeeds(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -169,16 +161,14 @@ func TestTheHomesQueueWorkReadsWhatItsStepNeeds(t *testing.T) {
 }
 
 // THE HOME'S QUEUE WORK COUNTS WHAT ITS TARGET WAS ASKED TO LAND (M5-D28):
-// asked to, a due-queue read counts the entries enqueued on main at or
-// after an instant — the live ones and the ended ones alike, each by its
-// ENQUEUE's broker instant — and names the repository, which the merge-rate
-// alarm names the target by. An entry enqueued an hour before the window and
-// dequeued inside it is no enqueue of the window; the entry enqueued in it is;
-// a read that asks for no count gets none.
+// asked to, a due-queue read counts the entries enqueued on main at or after an
+// instant, live and ended alike, each by its ENQUEUE's broker instant, and names
+// the repository, by which the merge-rate alarm names the target. An entry
+// enqueued before the window and dequeued inside it does not count; a read that
+// asks for no count gets none.
 //
-// Mutation: count the live entries alone → the second dequeued entry is
-// missed, red; count the target's entries whenever enqueued → the first
-// entry, enqueued before the window, is counted, red.
+// Mutation: count the live entries alone, or the target's entries whenever
+// enqueued → red.
 func TestTheHomesQueueWorkCountsItsTargetsEnqueues(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -266,19 +256,17 @@ func TestTheHomesQueueWorkReadsTheDropEpoch(t *testing.T) {
 	}
 }
 
-// THE HOME'S QUEUE WORK IS READ AT THE FLOOR ITS HOME STATES: the home asks its
-// queue at `session`, floored at the position its nudge or its own record
-// landed at, so a node that has not applied that position refuses `behind`
-// rather than answer from before it — the listing of repositories and one
-// repository's page alike — and once it has, answers WITH it, at a position
-// at or past the floor, which the records the home asks next state as seen. A
-// bare `session` names nothing to wait for and is refused as a level, and a
-// floor on another log is the request's own mistake, refused before any row is
-// read.
+// THE HOME'S QUEUE WORK IS READ AT THE FLOOR ITS HOME STATES: the home asks at
+// `session`, floored at the position its nudge or own record landed at, so a
+// node that has not applied it refuses `behind` rather than answer from before
+// it (the listing and one repository's page alike), and once it has, answers at
+// a position at or past the floor, which the home's next records state as seen.
+// A bare `session` is refused as a level, and a floor on another log before any
+// row is read.
 //
-// Mutation: drop the query's level (Reader.QueueDue reading q.Fresh as
-// unstated) → the held node answers the queue from before the enqueue, red;
-// skip checkFreshness → the bare session is not refused as a level, red.
+// Mutation: Reader.QueueDue reading q.Fresh as unstated → the held node answers
+// from before the enqueue, red; skip checkFreshness → the bare session is not
+// refused, red.
 func TestTheHomesQueueWorkIsReadAtTheFloorItsHomeStates(t *testing.T) {
 	t.Parallel()
 	a, b := newTwoNodes(t)
@@ -369,26 +357,18 @@ func (n *node) trainAttempt(repoID, oid, name string, state gitlet.CheckState, p
 		store.EncodeTime(harnessAt.Add(600*time.Second)))
 }
 
-// THE HOME'S QUEUE WORK ANSWERS A GIVEN-UP TRAIN'S CHECKS: the first page of
-// a repository's due-queue read answers every attempt its queue queued that
-// has not ended — queued or running — on a commit no train of its target
-// tests or landed, `dequeued` where a change its candidate merged left its
-// queue and `abandoned` where its train was given up otherwise, and never an
-// attempt on a commit a live train tests — even one naming a candidate a
-// rebuilt train dropped, since the rebuilt train's dispatch of the same
-// commit is answered from that attempt's row — one that ended, or a tip's
-// bisect, which names no candidate. It answers them with no live entry left
-// to page — the dequeue of the last one — and the listing of repositories
-// names the repository then too, after those holding a live entry, a page at
-// a time.
+// THE HOME'S QUEUE WORK ANSWERS A GIVEN-UP TRAIN'S CHECKS: a repository's first
+// due-queue page answers every unended attempt its queue queued on a commit no
+// train of its target tests or landed — `dequeued` where its candidate's merged
+// change left the queue, `abandoned` otherwise — and never one on a commit a
+// live train tests (even naming a candidate a rebuilt train dropped: the rebuilt
+// train's dispatch is answered from that row), one that ended, or a tip's
+// bisect, which names no candidate. It answers them with no live entry left,
+// and the repository listing names the repository then too, after those
+// holding a live entry.
 //
-// Mutation: drop the test of the commit → the live train's attempts are
-// answered, red; test the candidate rather than the commit → the rebuilt
-// train's own measurement is answered, red; drop the dequeued test → the
-// dequeued candidate's attempts read abandoned, red; read the given-up
-// attempts only beside a live entry → none after the last dequeue, red; list
-// only the repositories holding a live entry → the drained repository is
-// never listed, red.
+// Mutation: drop the commit test or test the candidate instead, drop the
+// dequeued test, or need a live entry to read or list given-up attempts → red.
 func TestTheHomesQueueWorkAnswersAGivenUpTrainsChecks(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -476,9 +456,8 @@ func TestTheHomesQueueWorkAnswersAGivenUpTrainsChecks(t *testing.T) {
 			b.QueueAbandoned, err)
 	}
 
-	// THE LISTING: web holds a live entry again, so dequeue it to leave
-	// web holding given-up attempts alone, and page the listing one
-	// repository at a time.
+	// THE LISTING: dequeue web's new live entry so it holds given-up attempts
+	// alone, and page the listing one repository at a time.
 	res, err = c.ProposeQueue(t.Context(), dequeueing(repo, second.Enqueue.EntryID, ada))
 	requireQueued(t, res, err, gitlet.QueueDequeued, 0)
 	gitlet.SetPageLimits(n.reader, 1, 1<<20)

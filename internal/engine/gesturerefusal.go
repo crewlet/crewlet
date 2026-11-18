@@ -7,16 +7,12 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE RETENTION GESTURES' REFUSALS, TOLD.
-//
-// A reanchor, a capacity change, its abandonment and an exclusion are each
-// refused for a reason the operator acts on, written where the refusal is
-// decided. They used to be returned as `engine: ...` errors, some ending in the
-// store's or the broker's own words, and the routes answered that whole text as
-// the `detail` an operator read. Each is a [statelog.Told] now: the sentence is
-// what the route answers, and the error's text, which keeps what it stands on,
-// is what the route logs. An error a gesture returns that is not a Told is a
-// fault, and the route tells it in words of its own.
+// THE RETENTION GESTURES' REFUSALS, TOLD. A reanchor, a capacity change, its
+// abandonment and an exclusion are each refused with a [statelog.Told], written
+// where the refusal is decided: the sentence is what the route answers, the
+// error's text (which keeps what it stands on) what the route logs. An error a
+// gesture returns that is not a Told is a fault, which the route tells in its
+// own words.
 
 // refused is a gesture refused for the reason format says, told in those
 // words.

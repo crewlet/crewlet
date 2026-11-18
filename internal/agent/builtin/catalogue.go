@@ -8,42 +8,23 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE CATALOGUE: WHERE EACH BUILT-IN IS FILED, AND WHO MAY CALL IT.
+// THE CATALOGUE: where each built-in is filed (the group it is shown in) and
+// the gate its authority row decides, since holding a tool is not being
+// allowed to call it ([gate] asks internal/authz of the tool's own row).
 //
-// A seat holds every tool its company's surfaces support, and HOLDING ONE IS
-// NOT BEING ALLOWED TO CALL IT: each call passes [gate], which asks
-// internal/authz about the tool's own row. A person reading the catalogue has
-// to see both facts, so each built-in is filed here once: the group it is
-// shown in, and the gate its authority row decides.
-//
-// # Declared, and walked against the row
-//
-// The gate is WRITTEN DOWN rather than read off [authz.ClassOf] at run time,
-// because that accessor is for the walks: a surface that read a class and
-// decided anything from it would be the second implementation internal/authz
-// exists to remove. A gate DECIDES NOTHING here; it names, in a closed
-// vocabulary, what the row asks. So the walk in this package's tests holds
-// every declared gate to the row's class, app and artifact role, both ways,
-// and a row that changes turns the walk red until the catalogue says the same
-// thing. The groups are walked against the registry the same way: every tool
-// a seat can be offered is filed, and nothing filed is a tool nobody offers.
-//
-// # What it lists
-//
-// The tools a seat's registry holds ([Register]) and the discovery pair the
-// runner binds to every phase that discovers (internal/toolname). Not the
-// operator's own surface ([OperatorTools]): those verbs are offered to a
-// person's assistant, never to an agent, and a catalogue of what agents hold
-// listing them would answer a question nobody asked. Nor a tool the registry
-// holds whose row bars every agent (Gitlet's three a person alone
-// makes): the authority table withholds it from every seat's surfaces
-// ([Withheld]), so no agent holds it either.
+// The gate is written down, not read off [authz.ClassOf] at run time: a
+// surface deciding from a class would be the second implementation
+// internal/authz exists to remove. It decides nothing; this package's tests
+// walk every gate against its row's class, app and artifact role, and the
+// groups against the registry, both ways. Listed: what a seat's registry
+// holds ([Register]) and the discovery pair (internal/toolname); not the
+// operator's verbs ([OperatorTools]), never an agent's, nor a tool whose row
+// bars every agent ([Withheld]).
 
 // Group is one shelf of the built-in catalogue.
 //
-// A CLOSED SET, as an enum on the wire is: the dashboard draws one rail entry
-// per group and has words for each, so an unknown value is a value rather
-// than a panic ([Group.Valid]).
+// A closed set: the dashboard draws one rail entry per group, so an unknown
+// value is a value rather than a panic ([Group.Valid]).
 type Group string
 
 const (
@@ -136,11 +117,9 @@ func (g Group) Description() string { return groupWords[g].description }
 // Gate is who may call a built-in: what its authority row asks of the caller,
 // named rather than decided.
 //
-// FLAT, ONE WORD PER ROW SHAPE, because a reader asks one question of it
-// ("could this agent call it?") and the answer is one of these. Each names
-// the class, app and artifact role of the rows it stands for, and the walk
-// in this package's tests refuses a tool whose row is anything else, so a
-// row of a shape no gate names fails there until somebody names it.
+// Flat, one word per row shape, answering "could this agent call it?". The
+// walk in this package's tests holds each to its rows' class, app and
+// artifact role, so a row of a shape no gate names fails until one does.
 type Gate string
 
 const (
@@ -194,8 +173,7 @@ const (
 	GateArtifactCommenter Gate = "artifact_commenter"
 	// GateHealthTools names an agent whose role carries the health grant,
 	// `role.health_tools` ([authz.ClassAdmin] with [authz.SeatGrantHealth]):
-	// the grant alone decides an agent seat, and no app or relation does.
-	// Named after the grant, as [GateWorklet] is after the app.
+	// the grant alone decides, no app or relation.
 	GateHealthTools Gate = "health_tools"
 	// GateSSHRead names an agent whose SSH access is on with a server
 	// ([authz.ClassAdmin] with [authz.SeatGrantSSHRead]).
@@ -234,9 +212,8 @@ type Filing struct {
 // filed is every built-in the catalogue lists, each group's tools in the
 // order it shows them.
 //
-// ONE TABLE, keyed on the tool's own name as the authority table and the
-// annotations are ([annotationsFor]): a property of the NAME, which one tool
-// type serving two surfaces shares.
+// Keyed on the tool's name, as the authority table and [annotationsFor] are:
+// one tool type serving two surfaces shares it.
 var filed = []struct {
 	tool   string
 	group  Group
@@ -252,7 +229,7 @@ var filed = []struct {
 	{CreateWorkItemTool, GroupWork, GateWorklet, reachesNoVendor},
 	{UpdateWorkItemTool, GroupWork, GateWorklet, reachesNoVendor},
 	{CommentOnWorkTool, GroupWork, GateWorkletAsked, reachesNoVendor},
-	// A SEAT'S OWN QUESTION, withdrawn: its own as its sessions are.
+	// A seat's own question, as its sessions are its own.
 	{WithdrawAskTool, GroupWork, GateSelf, reachesNoVendor},
 	{RequestAccessTool, GroupWork, GateSelf, reachesNoVendor},
 	{ReviewDelegatedTool, GroupWork, GateDelegate, reachesNoVendor},
@@ -308,16 +285,12 @@ var filed = []struct {
 	{WriteArtifactDataTool, GroupArtifacts, GateArtifactViewer, reachesNoVendor},
 	{SetArtifactSchemaTool, GroupArtifacts, GateArtifactEditor, reachesNoVendor},
 
-	// GITLET'S TOOLS TAKE THE APP ON THE TABLE (ADR-0110), which every
-	// seat holds as it holds every app, and which a turn somebody woke holds
-	// to whether they use it (ADR-0109); what a seat may do to a repository
-	// is then decided in the code domain, by the repository's grant for the
-	// seat and for whoever woke its turn — never by a permission a role
-	// could hold without the grant. The reads, the everyday first; then the
-	// writes: a branch's, a repository's, a change's lifecycle and
-	// conversation, and its checks. Not the three a person alone makes
-	// (code_report_check, code_purge_unreachable, code_import_repo), whose
-	// rows bar every agent, so no seat is offered them.
+	// Gitlet's tools take the app (ADR-0110), which every seat holds and a
+	// woken turn holds to its requester's (ADR-0109); what a seat may do to a
+	// repository is the code domain's, by the repository's grant for the seat
+	// and its requester, never a role's permission. Reads first, then writes.
+	// Not the three a person alone makes (code_report_check,
+	// code_purge_unreachable, code_import_repo): their rows bar every agent.
 	{CodeListReposTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeGetRepoTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeResolveTool, GroupCode, GateGitlet, reachesNoVendor},
@@ -354,8 +327,8 @@ var filed = []struct {
 	{CodeDequeueChangeTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeRevertChangeTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeRerunChecksTool, GroupCode, GateGitlet, reachesNoVendor},
-	// A MERGE OR A DEPLOY ASKED FOR, held for a delegate or a person: any
-	// agent's to ask, the carrying out its own credential's (release.go).
+	// Held for a delegate or a person: any agent may ask; carrying it out is
+	// that approver's credential's (release.go).
 	{AskToMergeTool, GroupCode, GateEverybody, reachesNoVendor},
 	{AskToDeployTool, GroupCode, GateEverybody, reachesNoVendor},
 
@@ -385,9 +358,8 @@ var filed = []struct {
 	{LoadToolSkillTool, GroupMemory, GateSelf, reachesNoVendor},
 	{MarkOnboardedTool, GroupMemory, GateSelf, reachesNoVendor},
 
-	// NO AUTHORITY ROW DECIDES THESE TWO (internal/toolname says why):
-	// the runner hands them to every phase that discovers, and nothing is
-	// asked of the caller.
+	// No authority row decides these two (internal/toolname says why): the
+	// runner hands them to every phase that discovers.
 	{toolname.ListMCPServerTools, GroupDiscovery, GateEverybody, reachesNoVendor},
 	{toolname.Activate, GroupDiscovery, GateEverybody, reachesNoVendor},
 }

@@ -14,17 +14,14 @@ import (
 )
 
 // dutyNames is every duty-name expression a workerDuty call passes, keyed by
-// its source text, with the names it evaluates to — the dutyTTLs idiom, for the
-// first argument rather than the second.
+// its source text, with the names it evaluates to (dutyTTLs' idiom, for the
+// first argument).
 //
-// A LIST, because one expression names several duties: the identity duties
-// are claimed through one helper as `e.workerDuty(name, …)`, so `name` is
-// every duty on the roster that helper is called for (identityDutyRoster,
-// held to what the engine arms). Every other expression is one constant.
+// A LIST, because the identity duties are claimed through one helper as
+// `e.workerDuty(name, …)`, so `name` is every duty on identityDutyRoster.
 //
-// ONLY workerDuty's: a workerHold is a lease given back when one piece of work
-// ends (a provisioning pass at one third-party app), which is mutual exclusion
-// rather than a duty, and the pages say so instead of listing it.
+// ONLY workerDuty's: a workerHold is mutual exclusion over one piece of work,
+// not a duty, and the pages say so instead of listing it.
 var dutyNames = map[string][]string{
 	"schedule.DutyName":     {schedule.DutyName},
 	"waiterDutyName":        {waiterDutyName},
@@ -43,10 +40,8 @@ var dutyNames = map[string][]string{
 	"name":                  identityDutyNames(),
 }
 
-// dutyPhrases is how the pages name each duty in prose, lower-cased: a list
-// that names a duty uses one of these. Keyed by the duty's own name, so a
-// duty dutyNames lists with no phrase here fails below rather than going
-// unread.
+// dutyPhrases is how the pages name each duty in prose, lower-cased. A duty
+// dutyNames lists with no phrase here fails TestEveryDutyListNamesEveryDuty.
 var dutyPhrases = map[string][]string{
 	schedule.DutyName:     {"scheduler"},
 	waiterDutyName:        {"sandbox waiter"},
@@ -65,11 +60,8 @@ var dutyPhrases = map[string][]string{
 	identitySweepDuty:     {"identity sweep"},
 }
 
-// EVERY DUTY CLAIMED IS IN THE NAME TABLE, and every name in it is claimed.
-//
-// What keeps dutyNames honest, as TestEveryDutyClaimSiteIsInTheTTLTable keeps
-// dutyTTLs: a duty added with a name the table does not list fails here, so it
-// cannot reach the pages' gate below unwritten.
+// EVERY DUTY CLAIMED IS IN THE NAME TABLE, and every name in it is claimed,
+// so a new duty cannot skip the pages' gate below by not being written down.
 func TestEveryClaimedDutyIsInTheNameTable(t *testing.T) {
 	t.Parallel()
 	var named []string
@@ -91,14 +83,10 @@ func TestEveryClaimedDutyIsInTheNameTable(t *testing.T) {
 	}
 }
 
-// THE PAGES LIST EVERY DUTY, AND ONLY DUTIES.
-//
-// architecture.md's workers table names each `worker:DUTY` lease and
-// seat-ownership.md's singleton table says why each runs once — and both
-// listed five of the eight there were while nothing noticed. Both directions:
-// a duty the engine claims and a page omits is a lease an operator finds in
-// `crewlet fleet` with nothing to say what it is, and a row naming no duty
-// sends them looking for one that does not run.
+// THE PAGES LIST EVERY DUTY, AND ONLY DUTIES: architecture.md's workers table
+// and seat-ownership.md's singleton table. A duty a page omits is a lease an
+// operator finds in `crewlet fleet` with nothing to say what it is; a row
+// naming no duty sends them looking for one that does not run.
 func TestTheDutyTablesNameEveryDuty(t *testing.T) {
 	t.Parallel()
 	var claimed []string
@@ -128,18 +116,9 @@ func TestTheDutyTablesNameEveryDuty(t *testing.T) {
 	}
 }
 
-// EVERY HAND-KEPT LIST OF THE WORKERS ROLE NAMES EVERY DUTY.
-//
-// Beside the two tables above, the duties are listed in prose wherever a page
-// says what the `workers` role runs: the fleet guide's and the scaling page's
-// role rows, the configuration page's, the deployment guide's role bullet and
-// its account of the singletons, the satellite guide's core column, the
-// overview's diagram and the role's own doc in internal/seat/placement. Each
-// was typed by hand and fell behind the engine in its own place (one left the
-// trash reaper out, two the trash reaper and chat's horizon, one folded two
-// sweeps into "the sweeps"), so each is read here, and every duty the engine
-// claims must appear in each by one of the phrases the pages use for it
-// ([dutyPhrases]).
+// EVERY HAND-KEPT LIST OF THE WORKERS ROLE NAMES EVERY DUTY: each prose list
+// in dutyLists names every claimed duty by one of its [dutyPhrases], since
+// each was typed by hand and falls behind the engine on its own.
 //
 // Mutation: drop the trash reaper from the fleet guide's row and this names
 // the page and the duty.
@@ -241,9 +220,8 @@ func docAbove(decl string) func([]string) string {
 // tableKeys reads the markdown table under header in a docs page and returns
 // the backticked key of each row's first cell, less prefix.
 //
-// A ROW WHOSE FIRST CELL IS NOT ONE KEY FAILS rather than being skipped: a row
-// this cannot read is a row the gate would otherwise count as absent, in the
-// direction that passes.
+// A ROW WHOSE FIRST CELL IS NOT ONE KEY FAILS rather than being skipped, which
+// would count it absent, in the direction that passes.
 func tableKeys(t *testing.T, rel, header, prefix string) []string {
 	t.Helper()
 	f, err := os.Open(filepath.Join(sourcetree.Root(t), filepath.FromSlash(rel)))

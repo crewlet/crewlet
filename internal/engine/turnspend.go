@@ -19,60 +19,16 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// Spend is on the task: what one completed turn SEGMENT charges to the work
-// item the turn is on (ADR-0022).
+// Spend is on the task: each completed turn SEGMENT charges what it spent to
+// the Worklet item the turn is on (ADR-0022); a turn on another tracker's item
+// is attributed on its events and charges nothing here. A detached turn
+// completes once per segment — the dispatch, then a resume per collected run,
+// often on another node — each under [segmentOpID], so a re-run or redelivered
+// segment counts once, and only the dispatch counts a turn.
 //
-// # A segment, not a turn
-//
-// A turn that detaches its executor completes more than once under one run id:
-// the dispatch segment parks, and each collected run resumes a segment of its
-// own — minutes later, often on another node. Each segment charges what IT
-// spent, under an operation id DERIVED from the segment ([segmentOpID]): the
-// run, which segment it is (`dispatch`, or `resume` and the launch it resumed
-// from), minted at the instant the RUN began — so a segment re-run after a
-// failed resume, or a record delivered twice, lands on one turn row and is
-// counted once. ONLY THE DISPATCH SEGMENT COUNTS
-// A TURN (`turns=1`): a resumed segment is more of the same turn, and counting
-// it again would put three turns on a task one turn worked on.
-//
-// # What a segment's tokens are
-//
-// Its own phases, as their records state them — a phase that resumed across a
-// park states both halves, which is why a suspended phase is paid by the
-// segment it finished in and never twice — plus the workers it delegated to
-// and the extension judge, whose calls are metered beside the phases rather
-// than inside them, and the AUXILIARY calls made inside it: its turn-start
-// context, the rewrites its ledgers, its judge's evidence and its tools asked
-// for, and its card's own rewrite. Those come from the segment's own tally
-// (turnTelemetry.auxSpent, which every in-turn call adds to through the turn's
-// attribution), never from the records, which the ledger flushes later and
-// the fleet reads at query time; the card is rewritten after the charge is
-// decided, so it tallies on its own and is added as the charge is written
-// ([Engine.withCards]). A resumed segment adds the collected launch it
-// resumed from, which no phase of the engine's own ran — and what the ENGINE
-// spent on that run while no segment was running (turnTelemetry.jobEngine):
-// a run's bridged calls, whose auxiliary rewrites and delegated workers are
-// counted on the run's own meter and written to its row with
-// every call ([runner.BridgedSpend]), and the condensation of the run's
-// report, failure or question at collection, which the coordinator carries to
-// this resume ([sandbox.ResumeRequest.Engine]). Each figure lands beside the
-// segment's own of the same kind. REFLECTION IS NOT IN IT: the learning pass
-// runs after the turn is over, on the seat's behalf rather than the item's,
-// and charging it to whatever the turn was on would make a task's cost depend
-// on how much its seat had to remember (ADR-0022's amendment).
-//
-// # A segment charged to nothing hands its spend on
-//
-// A turn nothing at dispatch named an item for may still be charged at its end
-// by a sole write, and a segment that parks cannot conclude that. So such a
-// segment charges nothing and CARRIES what it spent on the suspended
-// conversation (execstate.State.Uncharged), and the segment that finishes the
-// turn pays it with its own if it is charged, turn count included. If it is
-// not, nothing ever is — which is what an unattributed turn is.
-//
-// ONLY A WORKLET ITEM IS CHARGED: the counters are Worklet's
-// rows. A turn on a Jira issue or a pull request is attributed on its events
-// and charges nothing here.
+// REFLECTION IS NOT CHARGED: it runs after the turn, on the seat's behalf, and
+// charging it would make a task's cost depend on how much its seat had to
+// remember (ADR-0022's amendment).
 
 // segmentCharge is what one completed segment charges, decided once.
 type segmentCharge struct {
@@ -82,55 +38,44 @@ type segmentCharge struct {
 	opID string
 	// record is the turn record to publish when item is native.
 	record worklet.TurnRecord
-	// carry is what a parked segment charged to nothing hands on to the
-	// segment that finishes the turn; nil otherwise.
+	// carry is what a parked segment charged to nothing hands on
+	// (execstate.State.Uncharged): a sole write may yet name the turn's
+	// item, which a parked segment cannot conclude, so the segment that
+	// finishes the turn pays it with its own, turn count included, or
+	// nobody does. nil otherwise.
 	carry *execstate.Uncharged
 	// soFar is what a parked segment hands on of the turn's own
 	// measurement, charged or not ([turnTelemetry.measured]); nil on a
-	// segment that did not park, and on one of a turn whose earlier
-	// segments a build before the measurement parked
-	// ([turnTelemetry.measuredWhole]).
+	// segment that did not park, or whose turn's earlier segments went
+	// unmeasured ([turnTelemetry.measuredWhole]).
 	soFar *execstate.TurnSoFar
-	// aux is the segment's attribution for the auxiliary calls its charge
-	// makes — the card's rewrite — with no tally: [Engine.withCards] gives
-	// the card one of its own, since the segment's was summed already.
+	// aux is the segment's attribution for the card's rewrite, with no
+	// tally: [Engine.withCards] gives the card its own, since the
+	// segment's was summed already.
 	aux auxspend.Use
 	// ended is the instant the segment ended, taken ONCE: the task's turn
 	// row's wall time and the completion's end and duration are all
-	// measured to it — see [Engine.endSegment].
+	// measured to it ([Engine.endSegment]).
 	ended time.Time
 }
 
-// onWorklet reports a charge Worklet takes: one on a Worklet work item. A
-// turn on nothing charges nothing, and a turn on another tracker's item is
-// attributed on its events and has no row here to add to.
+// onWorklet reports a charge Worklet takes: one on a Worklet work item. Any
+// other tracker's item has no row here to add to.
 func (c segmentCharge) onWorklet() bool {
 	return c.item != nil && c.item.Backend == types.WorkWorklet
 }
 
-// segmentOpID is the operation id of one segment of a run.
+// segmentOpID is the operation id of one segment of a run, in the
+// operation-id grammar ([statelog.DeriveOpID]): the tracker's ledger collapses
+// a segment charged twice by the instant its id was minted, and an id outside
+// the grammar is answered `unknown` where the ledger lost a row, its spend lost.
 //
-// IN THE OPERATION-ID GRAMMAR, through [statelog.DeriveOpID], because the
-// tracker's ledger is what collapses a segment charged twice and it reads the
-// instant an id was minted: an id outside the grammar carries none, so on a
-// node whose ledger has ever lost a row it is answered `unknown` and never
-// published — the segment's spend silently lost. The ids this replaced
-// (`turn/<run>/dispatch`) were exactly that.
-//
-// MINTED AT THE RUN'S OWN START, which its id carries (run ids are time-ordered
-// for this reader — [statelog.OpMintedAt]): never the segment's, which a re-run
-// moves, and never the call's. A resumed segment is the same run minutes or
-// days later, so every segment of it shares the instant and differs only in
-// the identity: which segment, and for a resume the launch it resumed from.
-//
-// UNLESS THE ATTEMPT WAS REBASED (ADR-0029): a segment that comes longer after
-// its work began than the operation ledger remembers — a backlog a seat was
-// handed a month late, a resume a month after the launch — mints at the
-// instant [rebaseFor] chose for the attempt, its rebasedTo. Minted at the start
-// instead, its charge would be answered `unknown` on every node and the
-// segment's spend lost; and the rebase is recorded before the attempt writes
-// anything, so a retry of the same segment reads it back and derives the same
-// id, which is what collapses a charge landed twice.
+// Minted at the RUN's start ([statelog.OpMintedAt]), never the segment's (a
+// re-run moves it) or the call's, so a run's segments differ only in which
+// segment and, for a resume, the launch it resumed from. A REBASED attempt
+// (ADR-0029) mints at its rebasedTo ([rebaseFor]), or one older than the
+// ledger remembers is answered `unknown`; the rebase is recorded before the
+// attempt writes, so a retry derives the same id.
 func segmentOpID(runID, launch string, segment segmentKind, rebasedTo time.Time) string {
 	at := rebasedTo
 	if at.IsZero() {
@@ -150,11 +95,10 @@ const (
 	// person's answer, told apart by the launch it resumed from.
 	segmentResume segmentKind = "resume"
 	// segmentStop is the segment that only CLOSES a turn a person stopped
-	// while it was parked on its run, or before its park could land
-	// ([Engine.closeStopped]). Its own kind, because it follows a segment
-	// that already charged under the dispatch's or a resume's id: under
-	// either, the tracker's ledger would collapse the close into the park
-	// and the task's card would go on saying the turn is parked.
+	// while parked on its run, or before its park landed
+	// ([Engine.closeStopped]). Its own kind: under the id of the segment
+	// that already charged, the ledger would collapse the close into the
+	// park and the task's card would go on saying the turn is parked.
 	segmentStop segmentKind = "stop"
 )
 
@@ -194,23 +138,20 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 		own.Turns = 1
 	}
 	total := addUncharged(own, t.uncharged)
-	// THE CARD'S ATTRIBUTION: the turn's, with neither its tally — summed
-	// above, so a rewrite added there would reach no charge
-	// ([Engine.withCards] tallies its own) — nor its METER. The card is
-	// rewritten after the segment's last call, as a record of the turn
-	// rather than an input to a round, so the meter has no call left to
-	// hold for it; asked, it would refuse the card of every turn the budget
-	// ended, which is the turn a person most needs the card of. Charged to
-	// the seat's counters like any call the meter does not carry.
+	// THE CARD'S ATTRIBUTION, without the turn's tally (summed above;
+	// [Engine.withCards] tallies its own) or its METER: the card is
+	// rewritten after the last round, so the meter has no round to hold and
+	// would only refuse the card of a turn the budget ended, the one a
+	// person most needs. Charged to the seat's counters like any call the
+	// meter does not carry.
 	cardUse := t.aux()
 	cardUse.Tally, cardUse.Budget = nil, nil
 	charge := segmentCharge{item: item, opID: segmentOpID(t.runID, t.launchID, t.segment(), t.rebasedTo),
 		aux: cardUse, ended: ended}
 	if res.Suspended && t.measuredWhole() {
-		// WHAT THE TURN HAS MEASURED OF ITSELF, handed on — but only by a
-		// turn that knows its whole past: a measurement of a turn whose
-		// first segment nobody measured would be read by the segment that
-		// ends it as the whole turn ([turnTelemetry.measuredWhole]).
+		// WHAT THE TURN HAS MEASURED OF ITSELF, handed on only by a turn
+		// that knows its whole past: otherwise the segment that ends it
+		// would read a part as the whole ([turnTelemetry.measuredWhole]).
 		soFar := t.measured(spend, ended)
 		charge.soFar = &soFar
 	}
@@ -223,30 +164,30 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 	charge.record = worklet.TurnRecord{
 		Task: item.ID, Seat: t.handle, TurnID: t.runID, Trigger: t.trigger.Type,
 		Outcome: segmentOutcome(res, err), Phases: spend.Phases, Spend: total,
-		// WHAT THE SEGMENT DID, WHOLE until the write: the writer refuses
-		// a text past [worklet.MaxTurnSummary] rather than cut it, since
-		// every data node stores it, and [Engine.recordTurnSpend] fits it
-		// to the card there — rewritten, never cut. The same summary the
-		// turn's completion event carries, so the task's card and the
-		// trace agree.
+		// WHOLE until the write: the writer refuses a text past
+		// [worklet.MaxTurnSummary] rather than cut it, and [Engine.withCards]
+		// rewrites it to fit, never cuts. The completion event's summary,
+		// so the task's card and the trace agree.
 		Summary: planSummary(res),
 		Review:  spend.Review,
 		Tools:   worklet.CountTurnTools(workTools(spend.AllTools)),
 	}
-	// WHICH PHASE BROKE, only where the segment is recorded as failed: a
-	// phase can fail and the turn still end otherwise (a person's stop is
-	// not a failure), and a name beside a success would be a claim about a
-	// turn that did not fail.
+	// WHICH PHASE BROKE, only on a failed segment: a phase can fail and the
+	// turn still end otherwise (a person's stop is not a failure).
 	if charge.record.Outcome == string(phase.Failed) {
 		charge.record.FailedIn = spend.FailedIn
 	}
 	return charge
 }
 
-// segmentTokens is the segment's model tokens, the run it collected included:
-// that run's own usage and its engine spend (its bridged calls' workers and
-// auxiliary calls, which no segment was running to tally). The one sum the
-// turn's tally and its work item's charge both read.
+// segmentTokens is the segment's model tokens, the one sum the turn's tally
+// and its item's charge both read: its phases as their records state them (a
+// phase resumed across a park is paid by the segment it finished in, never
+// twice), its delegated workers and extension judge, metered beside the
+// phases, and the run it collected — that run's usage and what the engine
+// spent on it while no segment ran ([runner.BridgedSpend],
+// [sandbox.ResumeRequest.Engine]). In-turn auxiliary calls come from
+// turnTelemetry.auxSpent, never the records the ledger flushes later.
 func (t turnTelemetry) segmentTokens(spend runner.Spend) types.TurnTokens {
 	job, aux := t.jobEngine, t.auxSpent.Total()
 	return types.TurnTokens{
@@ -261,13 +202,10 @@ func (t turnTelemetry) segmentTokens(spend runner.Spend) types.TurnTokens {
 	}
 }
 
-// closingAfter is the telemetry of the segment that CLOSES a turn on the frame
-// whose park a person's stop refused ([Engine.closeStoppedAtPark]): the turn's
-// identity and what it is on, with nothing of the parking segment's own spend —
-// no collected job, no engine spend on one, a fresh auxiliary tally and a span
-// that starts at the close — and what that segment handed on to the segment
-// that ends the turn: its carry, where its charge went to nothing, and its
-// measurement of the turn.
+// closingAfter is the telemetry of the segment that CLOSES a turn whose park a
+// person's stop refused ([Engine.closeStoppedAtPark]): the turn's identity and
+// item, none of the parking segment's own spend (it already charged), a span
+// starting at the close, and what the parked segment handed on.
 func (t turnTelemetry) closingAfter(parked segmentCharge, at time.Time) turnTelemetry {
 	t.jobInput, t.jobOutput, t.jobCacheRead, t.jobCacheWrite = 0, 0, 0, 0
 	t.jobEngine = sandbox.EngineSpend{}
@@ -283,10 +221,9 @@ func (t turnTelemetry) closingAfter(parked segmentCharge, at time.Time) turnTele
 // reads: parked on its executor, stopped by a person, failed, or the turn's own
 // decision.
 //
-// STOPPED IS NOT FAILED, here as on the turn's completion
-// ([Engine.publishTurnCompleted]): a stop reaches this frame as an error, and
-// read as one the task's card drew a turn somebody deliberately ended as a
-// turn that broke.
+// STOPPED IS NOT FAILED, as on the turn's completion
+// ([Engine.publishTurnCompleted]): a stop arrives as an error, but a turn
+// somebody deliberately ended did not break.
 func segmentOutcome(res turn.Result, err error) string {
 	switch {
 	case res.Suspended:
@@ -351,40 +288,18 @@ type turnRecorder interface {
 	RecordTurn(ctx context.Context, opID string, turn worklet.TurnRecord) (worklet.WriteResult, error)
 }
 
-// endSegment closes one segment of a turn, in the order its readers rely on:
-// its card fitted, its in-turn auxiliary records published, its end published,
-// and its charge written to its task.
+// endSegment closes one segment of a turn — however it ended, so no path can
+// drift into another order — in the order its readers rely on: card fitted,
+// in-turn auxiliary records flushed, end published, charge written.
 //
-// THE END FOLLOWS ITS COST. A reader holding the turn open asks for it again
-// when the turn ends — the Turn screen refetches on the seat leaving the turn —
-// so every in-turn record has to be on the stream before the completion, or
-// that read misses what the turn's context and its rewrites cost and the
-// page's tokens disagree with the turn list's for the same turn, with nothing
-// asking again. The card's rewrite is the segment's LAST auxiliary call, so it
-// is made first ([Engine.cardsFor]), and the ledger's records of the segment
-// are flushed after it ([auxspend.Ledger.FlushTurn]).
-//
-// THE CHARGE IS WRITTEN AFTER THE END, as it always was: the task's turn row
-// links to the turn, and it should not name a turn whose record says it is
-// still running.
-//
-// THE ORDER CHANGES WHEN THINGS ARE PUBLISHED, NEVER WHAT IS MEASURED. The
-// segment ended where [turnTelemetry.chargeFor] took its instant, and the
-// completion's end and duration are measured to that same instant
-// ([segmentCharge.ended]) — so a card rewrite of up to two auxiliary calls
-// before the publish is in neither the turn's duration nor the task's wall
-// time, and the two agree for the same segment, as they did when the
-// completion went out first. What the rewrite does delay is the completion
-// itself, and with it the seat's leaving `working` and the reflection wake;
-// that is the true state of the seat rather than a cost of the order, because
-// the turn's frame holds the seat until this returns whatever this does first
-// — the seat takes no other work until the card is written either way.
-// Publishing the completion first instead would put the card's record on the
-// stream after the read the turn's end prompts, and nothing asks again.
-//
-// ONE FUNCTION for every way a segment ends — a turn that broke before its
-// first phase, a turn that ran, a resumed segment — so the three cannot drift
-// into different orders.
+// THE END FOLLOWS ITS COST: the Turn screen refetches once when the turn ends,
+// so every in-turn record, the card's rewrite (the LAST auxiliary call,
+// [Engine.cardsFor]) included, must be on the stream before the completion
+// ([auxspend.Ledger.FlushTurn]). THE CHARGE FOLLOWS THE END, so the task's
+// turn row never links a turn still running. The order moves publishing, never
+// measuring: duration and wall time both end at [segmentCharge.ended]. The
+// rewrite only delays the completion, and the turn's frame holds the seat
+// until this returns either way.
 func (e *Engine) endSegment(ctx context.Context, tel turnTelemetry, spend runner.Spend,
 	res turn.Result, err error, charge segmentCharge,
 ) {
@@ -408,38 +323,29 @@ type cardedCharge struct {
 }
 
 // cardsFor readies a segment's charge: on a Worklet item this node can write
-// to, its card fitted to the task's turn list ([Engine.withCards]) and the
-// writer it goes through; otherwise a charge with nothing to write, and no
-// rewrite paid for a card nothing will show.
+// to, its card fitted ([Engine.withCards]) and the writer it goes through;
+// otherwise nothing to write, and no rewrite paid for a card nothing shows.
 //
-// # Through the router, as every tool's write is
-//
-// The writer is [Engine.trackerHalves]' own: a data node's router answers from
-// its own copy and a node without `data` asks one that holds the task. It was
-// this node's LOCAL writer once, which a stateless node does not have — so on
-// exactly the topology where seats run apart from the estate, every turn's
-// charge to the task that woke it was dropped without a word, and a task's
-// spend read zero however much was spent on it.
+// The writer is [Engine.trackerHalves]' router, as every tool's write is,
+// never a local writer: a node without `data` has none and asks a data node
+// holding the task, or a stateless seat's every charge would be dropped.
 func (e *Engine) cardsFor(ctx context.Context, charge segmentCharge) cardedCharge {
 	if !charge.onWorklet() {
 		return cardedCharge{segmentCharge: charge}
 	}
 	halves, ok := e.trackerHalves()
 	if !ok {
-		// A WORKLET ITEM ON A NODE THAT HANDS OUT NO WORKLET WRITER is a
-		// company that moved its tracker off the engine while the turn ran,
-		// or any node in a maintenance mode, which publishes nothing —
-		// through a data node included ([Engine.writers]): there is
-		// nowhere to charge.
+		// NO WORKLET WRITER: the company moved its tracker off the engine
+		// while the turn ran, or the node is in a maintenance mode, which
+		// publishes nothing ([Engine.writers]). Nowhere to charge.
 		return cardedCharge{segmentCharge: charge}
 	}
 	charge = e.withCards(ctx, charge)
 	return cardedCharge{segmentCharge: charge, write: halves.as(builtin.Actor{
 		Handle: charge.record.Seat, Kind: worklet.AuthorAgent,
-		// THE ENGINE'S OWN BOOKKEEPING, made as the seat ([types.ForNobody]):
-		// what a turn spent is charged once the turn's segment ends, by no
-		// call of the turn, and the charge wakes nobody (worklet's
-		// RecordTurn writes it quiet), so it carries nobody it was made for.
+		// THE ENGINE'S OWN BOOKKEEPING, made as the seat for nobody
+		// ([types.ForNobody]): no call of the turn makes it, and worklet's
+		// RecordTurn writes it quiet.
 		WrittenFor: types.ForNobody(),
 		TurnID:     charge.record.TurnID,
 	})}
@@ -447,11 +353,10 @@ func (e *Engine) cardsFor(ctx context.Context, charge segmentCharge) cardedCharg
 
 // recordTurnSpend writes a segment's readied charge to its Worklet work item.
 //
-// TELEMETRY NEVER FAILS THE WORK, so this returns nothing, on the terms
-// [Engine.publishTurnCompleted] states: the turn has finished and its result is
-// already the caller's answer. A charge that could not be written is logged
-// naming the item and the segment — the spend is still on the seat's counters
-// and in the usage domain; what is lost is the task's share of it.
+// TELEMETRY NEVER FAILS THE WORK ([Engine.publishTurnCompleted]), so this
+// returns nothing. A charge that could not be written is logged naming the
+// item and the segment: the spend stays on the seat's counters and in the
+// usage domain, only the task's share is lost.
 func (e *Engine) recordTurnSpend(ctx context.Context, charge cardedCharge) {
 	if charge.write == nil {
 		return
@@ -462,10 +367,8 @@ func (e *Engine) recordTurnSpend(ctx context.Context, charge cardedCharge) {
 // withCards fits the segment's summary and review to its task's card and adds
 // what rewriting them cost to the charge.
 //
-// A TALLY OF ITS OWN: the card is the segment's last auxiliary call and the
-// turn's work like the rest, but it is made after [turnTelemetry.chargeFor]
-// summed the segment's tally, so a rewrite tallied there would reach no
-// charge.
+// A TALLY OF ITS OWN: the card is rewritten after [turnTelemetry.chargeFor]
+// summed the segment's tally, so a rewrite tallied there would reach no charge.
 func (e *Engine) withCards(ctx context.Context, charge segmentCharge) segmentCharge {
 	use := charge.aux
 	use.Tally = auxspend.NewTally()
@@ -481,11 +384,9 @@ func (e *Engine) withCards(ctx context.Context, charge segmentCharge) segmentCha
 const condensedCard = "(condensed) "
 
 // turnCard is a turn's summary or review as its task's card carries it:
-// whole within [worklet.MaxTurnSummary], rewritten to fit by the seat's
-// auxiliary model past it, and — where no rewrite can be had — a line saying
-// how long the account is and where it is read whole. Never a cut: the card
-// is the one line a person reads for a turn, and a cut one reads as the turn's
-// whole account.
+// whole within [worklet.MaxTurnSummary], past it rewritten to fit by the
+// seat's auxiliary model, or else a line saying where to read it whole. Never
+// a cut: a cut card reads as the turn's whole account.
 func turnCard(ctx context.Context, fit compact.Bound, text string) string {
 	if len(text) <= worklet.MaxTurnSummary {
 		return text
@@ -514,9 +415,8 @@ func (e *Engine) chargeSegment(ctx context.Context, w turnRecorder, charge segme
 }
 
 // workTools is the calls a segment made that did something, without the ones
-// that only carried the phase's own answer out: `submit_work` is how an
-// executor says what it concluded (`agent/structured`), and a turn card
-// listing it beside the tools that touched the company reads as work done.
+// that only carried the phase's answer out (`submit_work`, see
+// `agent/structured`), which a turn card would list as work done.
 func workTools(calls []string) []string {
 	out := make([]string, 0, len(calls))
 	for _, name := range calls {

@@ -15,9 +15,8 @@ import (
 type FileQuery struct {
 	Project string
 
-	// Folder narrows the listing to the paths under it — `reports` answers
-	// `reports/q3.md` and `reports/2026/q1.md` and not `reportsheet.md`.
-	// Empty is the whole project.
+	// Folder narrows the listing to the paths under it: `reports` answers
+	// `reports/2026/q1.md`, not `reportsheet.md`. Empty is the whole project.
 	Folder string
 
 	// Removed includes removed files, stamped as such.
@@ -31,14 +30,10 @@ type FileQuery struct {
 	Freshness statelog.Freshness
 }
 
-// DefaultFilePage and MaxFilePage are a listing's page.
-//
-// TWO HUNDRED BY DEFAULT AND A THOUSAND AT MOST, so a project with more files
-// than that is paged through rather than sent whole. A row is about 325 bytes
-// of compact JSON with a short path, which puts the largest page near a third
-// of a megabyte: a page a reader over HTTP takes whole, and NOT one a seat's
-// tool answer carries, which is held to 64 KiB — so a seat's listing asks for
-// a page of its own, well below these.
+// DefaultFilePage and MaxFilePage are a listing's page. A row is about 325
+// bytes of compact JSON, so the largest page is near a third of a megabyte: one
+// an HTTP reader takes whole, but past a seat's 64 KiB tool answer, so a seat's
+// listing asks for a page of its own, well below these.
 const (
 	DefaultFilePage = 200
 	MaxFilePage     = 1000
@@ -47,14 +42,10 @@ const (
 // filePage is the page a listing answers for the limit it asked for:
 // [DefaultFilePage] for none, and never more than [MaxFilePage].
 //
-// HELD TO THE CAP, NEVER REFUSED, as most of the tracker's listings hold a
-// caller to theirs ([Reader.Tasks], [Reader.Projects], [Reader.Inbox],
-// [commentPage]): a page is how much of the listing one read answers, so a
-// caller asking for more is answered the largest page, with [FileListing.Next]
-// to go on from. Refusing it sent the caller round again for a page this
-// answer could have been, in an error no surface could tell from this node's
-// own failure: a seat was told the tracker had broken, and the query surface
-// answered 500.
+// HELD TO THE CAP, NEVER REFUSED, as [Reader.Tasks], [Reader.Projects],
+// [Reader.Inbox] and [commentPage] hold theirs: a caller asking for more gets
+// the largest page and [FileListing.Next]. A refusal is an error no surface
+// can tell from this node's own failure.
 func filePage(asked int) int {
 	switch {
 	case asked <= 0:
@@ -100,11 +91,8 @@ type FileListing struct {
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
 }
 
-// Files answers a page of one project's files, in path order.
-//
-// AN UNKNOWN PROJECT IS [ErrNoProject], never an empty page: a listing that
-// answered nothing for a mistyped key would tell a caller the project has no
-// files.
+// Files answers a page of one project's files, in path order. An unknown
+// project is [ErrNoProject], never an empty page that says it has no files.
 func (r *Reader) Files(ctx context.Context, q FileQuery) (FileListing, error) {
 	if q.Freshness.Level == "" {
 		return FileListing{}, fmt.Errorf("worklet: this file read names no level; " +
@@ -121,18 +109,17 @@ func (r *Reader) Files(ctx context.Context, q FileQuery) (FileListing, error) {
 			} else if !held {
 				return fmt.Errorf("%w: %s", ErrNoProject, q.Project)
 			}
-			// KEYSET PAGING ON THE INDEX'S OWN ORDER, and one row past
-			// the page so the answer knows whether there is another.
+			// Keyset paging on the index's order, one row past the page
+			// so the answer knows whether there is another.
 			query := `SELECT path, content_type, hash, size, version, created_by,
 					created_at, updated_by, updated_at, removed_by, removed_at
 				FROM tracker_files
 				WHERE project_key = ? AND path > ?`
 			args := []any{q.Project, q.After}
 			if folder != "" {
-				// A RANGE RATHER THAN A LIKE, so the index serves it and
-				// no path character is read as a pattern: every path
-				// under `folder/` sorts between `folder/` and `folder0`,
-				// `0` being the byte after `/`.
+				// A RANGE, NOT A LIKE, so the index serves it and no path
+				// character is a pattern: every path under `folder/`
+				// sorts before `folder0`, `0` being the byte after `/`.
 				query += ` AND path > ? AND path < ?`
 				args = append(args, folder+"/", folder+"0")
 			}
@@ -211,12 +198,10 @@ type FileDetail struct {
 // File answers one file by its address. A file that is not there, or was
 // removed, is [ErrNoFile].
 //
-// A POINT READ, so a record this node could not apply on this file's own
-// address refuses the read rather than answering around it — the object a put
-// this node has not applied replaced is the wrong bytes, not fewer of them.
-//
-// A file it answers always names its object: only a removal names none, and
-// the applier refuses a live file that does not.
+// A POINT READ: a record this node could not apply at this address refuses
+// the read, since after an unapplied put the object answered is the wrong
+// bytes. A live file always names its object; the applier refuses one that
+// does not.
 func (r *Reader) File(ctx context.Context, project, path string,
 	fresh statelog.Freshness) (FileDetail, error) {
 
@@ -260,12 +245,11 @@ func (r *Reader) File(ctx context.Context, project, path string,
 	return detail, nil
 }
 
-// ObjectEstate is this domain as the object store's collector reads it: a
-// barrier on the tracker's log, and a read of this node's rows that says
-// whether it covers every record. WHICH rows is not here — the collector
-// builds that from the declared tables ([FileObjectReferences]), so a
-// statement written beside the declaration can never disagree with it. See
-// internal/objstore/collect's Estate.
+// ObjectEstate is this domain as the object store's collector reads it
+// (internal/objstore/collect's Estate): a barrier on the tracker's log, and a
+// read of this node's rows that says whether it covers every record. Which
+// rows, the collector builds from the declared tables
+// ([FileObjectReferences]), so no statement here can disagree with them.
 type ObjectEstate struct {
 	Reader *Reader
 }
@@ -273,10 +257,9 @@ type ObjectEstate struct {
 // Name is the domain, as a declaration spells it.
 func (ObjectEstate) Name() string { return Domain{}.Name() }
 
-// objectScope is the references' closure: the whole domain, because a file
-// can be in any project and a record this node could not apply may be a put
-// of any of them — which is exactly the case the collector must see as
-// incomplete.
+// objectScope is the references' closure: the whole domain, because a record
+// this node could not apply may be a put in any project, and the collector
+// must see that as incomplete.
 var objectScope = statelog.ScopeSet{Paths: []string{ScopeTerm{Kind: TermDomain}.Path()}}
 
 // Barrier waits until this node has applied everything the log had committed

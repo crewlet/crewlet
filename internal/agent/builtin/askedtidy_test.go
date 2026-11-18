@@ -122,13 +122,12 @@ func refusedForTracker(got tools.Result) bool {
 
 // SOMEBODY WITHOUT THE TRACKER READS THE ITEM THEY WERE ASKED ON, AND ANSWERS.
 //
-// A company that keeps somebody off its board still asks them things, and the
-// question is filed on a work item: refused the item they could not read what
-// they were asked, and refused its thread they could not answer — so the ask
-// sat open for ever. The asked arm admits exactly the person an OPEN ask names,
-// to the read and to the answer; their comment closes the ask it answers, and
-// it does not make them follow a board they do not use. The control is the
-// same person on an item nobody asked them on.
+// A question filed on a work item reaches people a company keeps off its
+// board; refused the item or its thread, they could not read or answer it and
+// the ask sat open for ever. The asked arm admits exactly the person an OPEN
+// ask names, to the read and the answer; their comment closes the ask it
+// answers without making them follow the board. The control is the same
+// person on an item nobody asked them on.
 func TestAnAskedPersonReadsAndAnswersWithoutWorklet(t *testing.T) {
 	t.Parallel()
 	surface, trk := askedRig(t)
@@ -167,10 +166,10 @@ func TestAnAskedPersonReadsAndAnswersWithoutWorklet(t *testing.T) {
 //
 // The arm admits the answer to an open ask and nothing else: a question of
 // their own (`ask`, or a structured `decision`) is the tracker's to put, and a
-// remark on an item nobody asked them on is a comment like any other. Each is
-// refused with the table's own refusal naming the tracker, before anything is
-// written — and a tracker holder making the same call is not refused, so the
-// rule is about the app and not about the call.
+// remark on an item nobody asked them on is an ordinary comment. Each is
+// refused with the table's refusal naming the tracker before anything is
+// written; a tracker holder making the same call is not, so the rule is about
+// the app, not the call.
 func TestAnAskedPersonMayOnlyAnswer(t *testing.T) {
 	t.Parallel()
 	for name, args := range map[string]map[string]any{
@@ -218,14 +217,12 @@ func TestAnAskedPersonMayOnlyAnswer(t *testing.T) {
 // AN ANSWER MADE AGAIN AFTER IT LANDED IS ADMITTED AS THE ANSWER IT IS.
 //
 // The answer closes the ask that admitted its author, so a probe of the asks
-// open now refused the same call made again — a retry after an unknown, an
-// approval retried — as though nobody had asked them anything: told, after
-// their answer had landed, that it needed the tracker. The probe carries the id
-// the comment will carry, and a remark already posted under it is resolved from
-// its row, so the ask it answered admits it, and the writer answers it from
-// that row. A new remark is not admitted by it, and neither is somebody else
-// bringing the same operation back: the id is derived from the caller's own
-// call.
+// open now would refuse a retry (after an unknown, or an approval retried) for
+// the tracker. The probe carries the id the comment will carry, and a remark
+// already posted under it is resolved from its row: the ask it answered
+// admits it, and the writer answers it from that row. A new remark is not
+// admitted by it, nor is somebody else repeating the call: the id derives
+// from the caller's own call.
 //
 // Mutation: probe without the comment's id and the call made again is refused
 // for the tracker.
@@ -326,12 +323,10 @@ func TestAMissingItemAndAnItemYouWereNotAskedOnAreOneRefusal(t *testing.T) {
 // A PROBE THAT CANNOT READ HAS FOUND NOTHING EITHER WAY.
 //
 // Whether an open ask names the caller is a read, and a node that cannot make
-// it has not learned that nobody asked them anything: answered with the
-// table's refusal naming the tracker, the person who WAS asked would be sent
-// to go and get access they do not need, for a question still waiting on
-// them. So the read and the answer alike say the tracker could not be read —
-// the condition, which a retry clears — and nothing is written; a tracker
-// holder, who needs no probe, is not stopped by it at all.
+// it has not learned that nobody asked them: refusing for the tracker would
+// send the person who WAS asked for access they do not need. So the read and
+// the answer say the tracker could not be read (a retry clears it) and nothing
+// is written; a tracker holder, who needs no probe, is not stopped.
 func TestAProbeThatCannotReadHasFoundNothingEitherWay(t *testing.T) {
 	t.Parallel()
 	down := fmt.Errorf("the item's thread could not be read: %w", statelog.ErrUnavailable)
@@ -384,12 +379,10 @@ func tidyRig(t *testing.T, chart authz.Chart) (map[string]tools.Callable, *trash
 
 // WHOEVER FILED AN ITEM PUTS IT IN THE TRASH AND TAKES IT OUT AGAIN.
 //
-// The trash was the project lead's and an admin's alone, so somebody who filed
-// an item by mistake could not take it back off the board. The reporter is
-// admitted on both verbs — with the tracker, since every arm of a tracker verb
-// needs it — and nobody else who leads nothing is; and a reporter's restore
-// asks for the item ALONE, so what went in with it at somebody else's hand
-// stays where they put it.
+// The reporter is admitted on both verbs, so a mistaken filing can be taken
+// back off the board (with the tracker, which every arm of a tracker verb
+// needs), and nobody else who leads nothing is; a reporter's restore asks for
+// the item ALONE, so what went in with it at somebody else's hand stays put.
 func TestAReporterRemovesAndRestoresTheirOwnItem(t *testing.T) {
 	t.Parallel()
 	surface, spy := tidyRig(t, chartRefuses)
@@ -502,11 +495,10 @@ func TestAnAuthorMayNotRemoveASubtree(t *testing.T) {
 
 // WHOEVER CREATED A PAGE RENAMES, TRASHES AND RESTORES IT.
 //
-// Tidying a page was its container lead's and an admin's alone. The creator is
-// admitted to all three — the rename a `title` on save_page asks for, and the
-// trash and restore the HTTP surface decides on the same object
-// ([builtin.PageObject]) — and a colleague who neither created it nor leads
-// its space is not.
+// The creator is admitted to all three (the rename a `title` on save_page asks
+// for, and the trash and restore the HTTP surface decides on the same object,
+// [builtin.PageObject]); a colleague who neither created it nor leads its
+// space is not.
 func TestAPageCreatorRenamesTrashesAndRestoresIt(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()

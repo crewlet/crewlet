@@ -22,13 +22,8 @@ func removed(t *testing.T, r *roundTrip, id string) bool {
 	return detail.Task.Removed != nil
 }
 
-// THE TRASH IS REACHABLE FROM BOTH ENDS.
-//
-// Tombstone was defined, applied, routed as a `removed` notification and
-// readable with `removed=true` — and nothing in the tree could produce one. A
-// task could be PURGED, destroying every row on every data node with no
-// inverse, and could not be removed; the restore path the applier carries
-// could never run at all.
+// THE TRASH IS REACHABLE FROM BOTH ENDS: a task can be removed (not only
+// purged, which has no inverse), and the applier's restore path can run.
 func TestATaskCanBeRemovedAndRestored(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -47,8 +42,7 @@ func TestATaskCanBeRemovedAndRestored(t *testing.T) {
 		t.Fatal("the task is not removed after a removal")
 	}
 
-	// AND IT IS OUT OF EVERY ORDINARY LIST, which is the whole of what a
-	// removal does — while `removed=true` is the only thing that shows it.
+	// AND IT IS OUT OF EVERY ORDINARY LIST; only `removed=true` shows it.
 	if got := ids(r.ask(map[string]any{"container": "project:ENG"})); len(got) != 0 {
 		t.Errorf("the board still lists %v after the removal", got)
 	}
@@ -58,8 +52,8 @@ func TestATaskCanBeRemovedAndRestored(t *testing.T) {
 		t.Errorf("the trash lists %v, want the removed task", got)
 	}
 
-	// AND IT IS FROZEN: an ordinary patch is refused rather than silently
-	// editing something nobody can see.
+	// AND IT IS FROZEN: an ordinary patch is refused rather than editing
+	// something nobody can see.
 	title := "a new title"
 	if _, err := r.writer.UpdateTask(t.Context(), "op-edit", "t-gone", "ENG", 0,
 		worklet.TaskPatch{Title: &title}, worklet.ChangeFields, nil); err == nil {
@@ -81,12 +75,9 @@ func TestATaskCanBeRemovedAndRestored(t *testing.T) {
 	}
 }
 
-// A SUBTREE REMOVED TOGETHER COMES BACK TOGETHER — and brings back only what
-// it took.
-//
-// `removed_with` is what makes a subtree gesture's inverse exact: a task
-// already in the trash for its own reasons is not restored by somebody
-// restoring its parent.
+// A SUBTREE REMOVED TOGETHER COMES BACK TOGETHER, and brings back only what
+// it took: by `removed_with`, a task already in the trash for its own reasons
+// is not restored with its parent.
 func TestRemovingASubtreeIsReversibleAndBringsBackOnlyWhatItTook(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -141,14 +132,11 @@ func TestRemovingASubtreeIsReversibleAndBringsBackOnlyWhatItTook(t *testing.T) {
 	}
 }
 
-// A RESTORE ASKED FOR ALONE BRINGS BACK ONE TASK OR NOTHING.
-//
-// Whoever filed an item may take it out of the trash, and what went in with
-// it at somebody else's hand is not theirs to bring back — so a restore asked
-// for the task alone is refused, writing nothing, when its removal took
-// others, and lands like any restore when it took none. The writer decides it
-// over the same read the walk is made from, so the refusal and the walk cannot
-// disagree about what a restore would touch.
+// A RESTORE ASKED FOR ALONE BRINGS BACK ONE TASK OR NOTHING: what went in
+// with a task at somebody else's hand is not its filer's to bring back, so the
+// restore is refused, writing nothing, when the removal took others, and lands
+// when it took none. The writer decides over the read the walk is made from,
+// so refusal and walk agree on what a restore would touch.
 func TestARestoreAskedForAloneBringsBackOneTaskOrNothing(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -201,15 +189,11 @@ func TestARestoreAskedForAloneBringsBackOneTaskOrNothing(t *testing.T) {
 	}
 }
 
-// REMOVING A REMOVED TASK IS NOTHING TO DO, AND IT SUCCEEDS.
-//
-// A subtree removal that half-finished has to be able to be re-run, so
-// "already in the state you asked for" is a success rather than a conflict.
-// A restore is the same for a root already back with tasks still in the trash
-// behind it — that is exactly what a stopped restore leaves — and for its own
-// operation answered again; a NEW restore of a live task with nothing behind
-// it is told there is nothing to restore rather than that it restored
-// something (see TestARestoreWithNothingToBringBackSaysSo).
+// REMOVING A REMOVED TASK IS NOTHING TO DO, AND IT SUCCEEDS, so a
+// half-finished subtree removal can be re-run. A restore is the same for a
+// root already back with tasks still in the trash behind it (what a stopped
+// restore leaves) and for its own operation answered again; a NEW restore with
+// nothing behind it is told so (TestARestoreWithNothingToBringBackSaysSo).
 func TestRemovingAndRestoringAreIdempotent(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -240,14 +224,8 @@ func TestRemovingAndRestoringAreIdempotent(t *testing.T) {
 	}
 }
 
-// A CROSS-PROJECT MOVE CARRIES THE SUBTREE, and until now it could not read
-// one.
-//
-// readSubtree's recursive CTE named the column `parent`, and the column is
-// `parent_id` — so every walk that had a descendant to carry failed at the
-// first statement with a parse error, and the only reason nothing noticed is
-// that MoveTaskToProject had no test at all. It is the trash's own walk too:
-// a subtree removal reads the same function.
+// A CROSS-PROJECT MOVE CARRIES THE SUBTREE: readSubtree, which a subtree
+// removal walks too, reads every descendant.
 func TestACrossProjectMoveCarriesTheSubtree(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -260,9 +238,9 @@ func TestACrossProjectMoveCarriesTheSubtree(t *testing.T) {
 	}
 	r.drain()
 
-	// THE APPLIER RUNS, because a move with a subtree writes the root's
-	// own subject twice — its move, and the mark coming down after the
-	// walk — and the second waits for the first. See applyWhileWriting.
+	// THE APPLIER RUNS: a move with a subtree writes the root's subject twice
+	// (its move, then the mark after the walk), and the second waits for the
+	// first. See applyWhileWriting.
 	r.applyWhileWriting()
 	if _, err := r.writer.CreateTask(t.Context(), "op-root",
 		newTask("m-root"), nil); err != nil {
@@ -298,14 +276,11 @@ func TestACrossProjectMoveCarriesTheSubtree(t *testing.T) {
 }
 
 // A WRITE DECIDED ON A PROJECT THE TASK HAS LEFT IS A CONFLICT, not a write.
-//
-// Every caller reads a task's project off the row BEFORE the write and decides
-// on it who may act — a removal and a restore are that project lead's, and a
-// re-route is that project's own — so the project it passes is the premise of
-// the authority, not a label. A task moved in between is another project's to
-// remove, restore or re-route, and the write used to land anyway under a scope
-// naming the container the task had left. This moves the task between the
-// caller's read (ENG) and its write, which is exactly that race.
+// A caller decides who may act from the project it read off the row (a
+// removal and a restore are that project lead's, a re-route that project's),
+// so the project it passes is the premise of the authority, not a label: a
+// task moved since is another project's to act on. This moves the task between
+// the caller's read (ENG) and its write.
 func TestAWriteDecidedOnTheProjectATaskLeftIsAConflict(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -366,8 +341,8 @@ func TestAWriteDecidedOnTheProjectATaskLeftIsAConflict(t *testing.T) {
 		t.Error("the task took a patch decided on a project it left")
 	}
 
-	// AND THE RESTORE, which needs a task in the trash: removed on the
-	// project it IS in, then restored on the one it was read in.
+	// AND THE RESTORE: removed on the project it IS in, then restored on the
+	// one it was read in.
 	if _, err := r.writer.RemoveTask(t.Context(), "op-remove-ops", "t-moves",
 		"OPS", false, nil); err != nil {
 		t.Fatalf("RemoveTask on the task's own project: %v", err)
@@ -381,22 +356,18 @@ func TestAWriteDecidedOnTheProjectATaskLeftIsAConflict(t *testing.T) {
 	}
 }
 
-// THE TRASH IS ORDERED BY WHEN WORK WAS REMOVED, never by board rank.
-//
-// A removed task's rank is its position on a board it is no longer on, so a
-// trash listing ordered by it is ordered by a stale number — and the only
-// index over removed rows is the partial one on `removed_at`.
+// THE TRASH IS ORDERED BY WHEN WORK WAS REMOVED, never by board rank: a
+// removed task's rank is stale, and the only index over removed rows is the
+// partial one on `removed_at`.
 func TestTheTrashIsOrderedByRemoval(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	for _, id := range []string{"first", "second", "third"} {
 		filedTask(t, r, id)
 	}
-	// REMOVED OUT OF RANK ORDER, each at its own instant, so an answer
-	// ordered by rank and one ordered by removal are different lists. A
-	// removal's stamp is an AUTHORED instant — it is displayed, and §5's
-	// rule is that every displayed instant is the one somebody typed —
-	// so moving the writer's clock is what separates them.
+	// REMOVED OUT OF RANK ORDER, each at its own instant, so rank order and
+	// removal order differ. The stamp is an AUTHORED instant (a displayed
+	// one, §5), so moving the writer's clock is what separates them.
 	for i, id := range []string{"second", "third", "first"} {
 		r.at = wednesday.Add(time.Duration(i) * time.Minute)
 		if _, err := r.writer.RemoveTask(t.Context(), "op-rm-"+id, id, "ENG",
@@ -423,15 +394,10 @@ func TestTheTrashIsOrderedByRemoval(t *testing.T) {
 }
 
 // THE TRASH ANSWERS THE SAME AT EITHER SCOPE, THROUGH EVERY STATEMENT OVER IT.
-//
-// Every statement over a trash is read through an index that holds only
-// removed rows ([taskSource]), named in the statement — so a statement whose
-// predicate stopped implying that index's would fail rather than answer, and
-// one reading another scope's index would answer another scope's trash. The
-// plan test holds what each statement reads; this holds what it ANSWERS: the
-// page, the count beside it, a total and a board's columns, at the workspace
-// and inside the project, in the default subtask mode (where each row probes
-// the removal it rides along with) and flat.
+// Each statement names a removed-rows-only index ([taskSource]), so one reading
+// another scope's index would answer another scope's trash. The plan test holds
+// what each reads; this holds what it ANSWERS: page, count, total and board
+// columns, at the workspace and in the project, rolled up and flat.
 func TestTheTrashAnswersTheSameAtEitherScope(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -486,17 +452,10 @@ func TestTheTrashAnswersTheSameAtEitherScope(t *testing.T) {
 	}
 }
 
-// AND A READER MAY ASK FOR THE OTHER END OF IT.
-//
-// The default above is what an unsorted trash gets. `sort=removed` is the
-// column asked for by name, and it was REFUSED by the parser for as long as
-// the trash had no tab: the order existed, and nothing could name it.
-//
-// Both directions, because only one of them can be wrong at a time and each
-// is wrong in a way that reads as working. A key the parser admits and
-// [sortColumns] lacks is silently DROPPED — the answer comes back in the
-// default order, which for this query is descending, so an ascending request
-// that was thrown away is indistinguishable from one that was honoured.
+// AND A READER MAY ASK FOR THE OTHER END OF IT, by `sort=removed`, in both
+// directions: a key the parser admits and [sortColumns] lacks is silently
+// DROPPED to the default (descending) order, which a descending request alone
+// could not tell from one honoured.
 func TestTheTrashCanBeAskedForTheOldestRemovalFirst(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -529,13 +488,10 @@ func TestTheTrashCanBeAskedForTheOldestRemovalFirst(t *testing.T) {
 	}
 }
 
-// A REMOVAL OR A RESTORE NAMING ANOTHER PROJECT IS REFUSED.
-//
-// Its record is filed and probed under the project the caller named, so a
-// removal naming the wrong one was written under a container the task is not
-// in: a record deferred on the task's real project did not hold it back, and
-// one deferred on the named project held back a record that never touched it.
-// An edit already refused this; a removal and a restore did not.
+// A REMOVAL OR A RESTORE NAMING ANOTHER PROJECT IS REFUSED, as an edit is:
+// its record is filed and probed under the named project, so a wrong one would
+// slip past a record deferred on the task's real project and be held back by
+// one deferred on a project it never touched.
 func TestARemovalOrARestoreNamingAnotherProjectIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -570,22 +526,16 @@ func TestARemovalOrARestoreNamingAnotherProjectIsRefused(t *testing.T) {
 	}
 }
 
-// THE TRASH LISTS EVERY REMOVAL UNDER THE TASK IT WAS MADE ON.
+// THE TRASH LISTS EVERY REMOVAL UNDER THE TASK IT WAS MADE ON: what somebody
+// restores is a removal, so the default subtask mode lists each once, what it
+// took riding along, and filters the removal rather than the tree (anchored on
+// the root, a subtask removed alone under a live parent would be in no trash).
+// Three removals:
 //
-// What somebody restores is a removal — the task a gesture named, and what it
-// took with it — so in the default subtask mode the trash lists each removal
-// once, with what went with it riding along, and filters the removal rather
-// than the tree. Three shapes, each one a removal of its own:
-//
-//   - a subtask removed alone while its parent stayed live, which is what an
-//     author removing their own item does;
+//   - a subtask removed alone while its parent stayed live;
 //   - a subtree removed together, an epic and the task under it;
 //   - a subtask already in the trash when its root was removed with its
 //     subtree, which that removal does not take and does not re-stamp.
-//
-// Anchored on the tree's root instead, the default trash asked whether the
-// ROOT was removed, and the subtask removed alone under a live parent was in
-// no default-mode trash at either scope.
 func TestTheTrashListsEveryRemovalUnderItsOwnRoot(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -649,8 +599,8 @@ func TestTheTrashListsEveryRemovalUnderItsOwnRoot(t *testing.T) {
 				t.Errorf("%s: the trash lists %v, want every removed task %v",
 					what, got, every)
 			}
-			// THE REMOVAL IS FILTERED AND WHAT IT TOOK RIDES ALONG, in a
-			// rolled-up mode; flat, every task answers for itself.
+			// THE REMOVAL IS FILTERED AND WHAT IT TOOK RIDES ALONG, rolled
+			// up; flat, every task answers for itself.
 			epics, tasks := []string{"root-w", "root-n", "sub-w"}, []string{"sub-x", "sub-n"}
 			if mode == "separate" {
 				epics, tasks = []string{"root-w", "root-n"}, []string{"sub-w", "sub-x", "sub-n"}
@@ -671,21 +621,15 @@ func sameSet(got, want []string) bool {
 		!slices.ContainsFunc(want, func(id string) bool { return !slices.Contains(got, id) })
 }
 
-// A TASK WHOSE ANCHOR IS ACROSS THE TRASH IS FILTERED ON ITS OWN.
-//
-// A row rides along with its anchor — its root, or in the trash its removal —
-// and a gesture can move one to the other side of the trash without the
-// other. Two shapes, on the two sides:
+// A TASK WHOSE ANCHOR IS ACROSS THE TRASH IS FILTERED ON ITS OWN: a row rides
+// along with its anchor (its root, or in the trash its removal), and probed for
+// the anchor's answer it would be in no default-mode listing. Two shapes:
 //
 //   - the residue of a restore that stopped after its root: a subtask still
 //     in the trash whose tombstone names a root that is back;
-//   - a parent removed alone, which is all its author may do, over a live
-//     subtask.
+//   - a parent removed alone over a live subtask.
 //
-// Probed for the anchor's answer, each was in no default-mode listing — the
-// residue in no trash, the live subtask on no board — and only
-// `subtasks=separate` reached either. Each is the root of what is left, so it
-// is listed, and filtered, on its own.
+// Each is the root of what is left, so it is listed, and filtered, on its own.
 func TestATaskWhoseAnchorIsAcrossTheTrashIsFilteredOnItsOwn(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -704,8 +648,8 @@ func TestATaskWhoseAnchorIsAcrossTheTrashIsFilteredOnItsOwn(t *testing.T) {
 		}
 		r.drain()
 	}
-	// THE RESIDUE, seeded with the tombstone the stopped restore left:
-	// what is under test is the predicate that reads it.
+	// THE RESIDUE, seeded with the tombstone a stopped restore leaves: what is
+	// under test is the predicate that reads it.
 	root := "root-y"
 	file(root, "task", "", nil)
 	file("sub-y", "bug", root, &worklet.Tombstone{

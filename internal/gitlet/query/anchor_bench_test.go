@@ -13,15 +13,12 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/query"
 )
 
-// BenchmarkReanchor is a re-anchoring timed whole through a Gitlet node's query
-// server — the check of what it names, its unit of the share and its one
-// diff-pairs — of one anchor on the LAST line of a file whose next version
-// changes every other line above it: the PATHOLOGICAL pair, whose diff is a
-// hunk every two lines and every one of them above the anchor, so none is
-// passed over unread. Each arm reports the engine's own B/op and allocs/op
-// (git's are another process's), which must not grow with the hunks — the
-// placings are fed as the hunks stream and none is kept — and the hunks/op
-// the diff held.
+// BenchmarkReanchor times a re-anchoring whole through a Gitlet node's query
+// server, of one anchor on the LAST line of a file whose next version changes
+// every other line above it: a hunk every two lines, none passed over unread.
+// The engine's own B/op and allocs/op (git's are another process's) must not
+// grow with the hunks/op, since no hunk is kept; its figures are in (package
+// doc, "Measured").
 func BenchmarkReanchor(b *testing.B) {
 	gitlettest.Quiet(b)
 	for _, hunks := range []int{10_000, 100_000} {

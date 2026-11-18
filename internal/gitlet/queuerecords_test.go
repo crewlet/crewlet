@@ -2,6 +2,7 @@ package gitlet_test
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -19,9 +20,9 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A QUEUE'S OWN RECORDS — its trains, its ejections, its landings, its green
-// and broken landings and its sweep — decided by the shipped committer from one
-// snapshot on a real embedded broker and applied by the shipped applier.
+// A queue's own records (trains, ejections, landings, green and broken
+// landings, the sweep), decided by the shipped committer on a real embedded
+// broker and applied by the shipped applier.
 
 // queuedPack is a pack named id, as a home's build of a train stores it.
 func queuedPack(id string) *gitlet.PackRef {
@@ -30,15 +31,15 @@ func queuedPack(id string) *gitlet.PackRef {
 		ReverseBytes: gitlet.ReverseBytesFor(1), GitChecksum: oidOf("pack" + id), Objects: 1}
 }
 
-// training is a train of one candidate on main, built onto base: entry merged
-// as commit — the queue's candidate of it, under an operation id of its own.
+// training is a train of one candidate on main onto base: entry merged as
+// commit, under an operation id of its own.
 func training(repo, base, entry, commit string) gitlet.QueueProposal {
 	return trainOf(repo, base, gitlet.CandidateEntry{EntryID: entry, Commit: commit})
 }
 
-// trainOf is a train on main built onto base, a candidate an entry in the
-// order given — each merged as its commit onto the candidate before, its tip
-// that commit — under an operation id of its own.
+// trainOf is a train on main onto base, a candidate an entry in order, each
+// merged as its commit onto the candidate before, under an operation id of its
+// own.
 func trainOf(repo, base string, entries ...gitlet.CandidateEntry) gitlet.QueueProposal {
 	opID := statelog.NewOpID(time.Now(), "code_queue")
 	train := gitlet.QueueTrainID(opID)
@@ -50,9 +51,8 @@ func trainOf(repo, base string, entries ...gitlet.CandidateEntry) gitlet.QueuePr
 	return gitlet.QueueProposal{OpID: opID, Candidate: c}
 }
 
-// landingOf is a landing on main of entries — each change's entry and the
-// commit it lands as, in the order main moves through them — onto base, a
-// tested prefix of train, under an operation id of its own.
+// landingOf is a landing on main onto base of entries, in the order main moves
+// through them, a tested prefix of train, under an operation id of its own.
 func landingOf(repo, train, base string, entries ...gitlet.LandEntry) gitlet.QueueProposal {
 	opID := statelog.NewOpID(time.Now(), "code_queue")
 	return gitlet.QueueProposal{OpID: opID, Land: &gitlet.Land{RepoID: repo, LandID: gitlet.QueueLandID(opID),
@@ -131,8 +131,7 @@ func (n *node) landingsOf(repo, target string) []landingRow {
 	return out
 }
 
-// greenOf is target's green row on repo — its commit and position — and "" for
-// none.
+// greenOf is target's green row on repo, its commit and position; "" for none.
 func (n *node) greenOf(repo, target string) (string, int64) {
 	n.t.Helper()
 	var (
@@ -152,23 +151,18 @@ func (n *node) greenOf(repo, target string) (string, int64) {
 	return commit, position
 }
 
-// A LANDING REPROVES EVERY ENTRY'S GATE (M5-D8): an enqueue is the gate, and
-// the landing — the record that moves the branch — judges it again from its
-// own snapshot with each entry's ENQUEUER as the merger. dev's change, queued
-// by ada and tested green in its train, loses plat-lead's approval to a review
-// asking for changes after it was enqueued: its landing is refused gate_unmet,
-// naming the entry and the approval it no longer has, and appends nothing.
-// Approved again, the same landing lands as one record: the change merged by
-// the queue (merged_via queue, merged by ada, who queued it — the queue never
-// acts on its own account), main moved to the train's tip, ONE PUSH ROW `via
-// queue` naming ada's credential, the landing row green with main's green row
-// at its tip, the entry landed and the train's landed candidate gone — and
-// the stored readiness its home's merge stamped ready cleared, since a merged
-// change is ready for nobody.
+// A LANDING REPROVES EVERY ENTRY'S GATE (M5-D8), from its own snapshot with
+// each entry's ENQUEUER as merger. dev's change, queued by ada and green in
+// its train, loses plat-lead's approval to a changes-requested review after
+// the enqueue: its landing is refused gate_unmet naming the entry and the
+// approval, appending nothing. Approved again, it lands as one record: merged
+// via queue by ada (the queue never acts on its own account), the landing
+// green, main and its green row at the train's tip, ONE PUSH ROW via queue
+// under ada's credential, the entry landed, its candidate gone, and the stored
+// readiness cleared (a merged change is ready for nobody).
 //
-// Mutations: skip the re-proof (decide a landing without judging each entry's
-// gate) — the landing applies over the review asking for changes, red; leave
-// the stored readiness out of the landing's apply → it still reads ready, red.
+// Mutations: skip the re-proof — the landing applies over the review, red;
+// leave the stored readiness out of the landing's apply — still ready, red.
 func TestALandingReprovesEveryEntrysGate(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -246,12 +240,11 @@ func TestALandingReprovesEveryEntrysGate(t *testing.T) {
 	}
 }
 
-// A LAND RECORD FITS ITS CAPS: a train's whole tested prefix — sixty-four
-// changes, MaxLandEntries, as many as a train's candidates take — is ONE land
-// record, its payload within what one proposal may carry and its rows but the
-// changes its pushes move within MaxRecordRows with the horizons' room, which
-// the decide adds the moved changes to and holds whole; one entry more is
-// refused before it is queued.
+// A LAND RECORD FITS ITS CAPS: a train's whole tested prefix, MaxLandEntries
+// (as many as a train's candidates take), is ONE land record within what one
+// proposal may carry, its rows (less the changes its pushes move, which the
+// decide adds and holds whole) within MaxRecordRows with the horizons' room;
+// one entry more is refused before it is queued.
 //
 // Mutation: take one entry past MaxLandEntries in a land's validation — the
 // 65th is taken, red.
@@ -281,20 +274,18 @@ func TestALandRecordFitsItsCaps(t *testing.T) {
 	}
 }
 
-// GREEN ADVANCES ONLY ON GREEN (M5-D16): dev's change lands ahead of its checks
-// by a person's override merge past main's queue — its landing row not green,
-// main's green row untouched. Its required check FAILS on the landed tip: a
-// green naming that landing is refused not_green, appending nothing, and a
-// broken marks the landing broken while main's green row stays where it was.
-// The check run again PASSES: the
-// green then moves main's green row onto the landing, at the landing's own
-// position — so a read of main's landings above its green lists what came
-// after it — and marks the landing green; asked again, it is refused
-// no_landing, the row already there.
+// GREEN ADVANCES ONLY ON GREEN (M5-D16): an override merge lands dev's change
+// ahead of its checks, its landing not green, main's green row untouched. Its
+// required check FAILS on the tip: a green is refused not_green, appending
+// nothing, and a broken marks the landing broken, the green row unmoved. Run
+// again, the check PASSES: the green moves main's green row onto the landing
+// at the landing's own position (so a read of landings above the green lists
+// what came after it) and marks it green; asked again, it is refused
+// no_landing.
 //
-// Mutation: move the green row on a broken record — the green row reads M
-// after the broken, red; judge a green's checks by their first attempt — the
-// failed one, so the second green is refused, red.
+// Mutations: move the green row on a broken record — it reads M after the
+// broken, red; judge a green's checks by their first attempt — the second
+// green is refused, red.
 func TestGreenAdvancesOnlyOnGreen(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -353,20 +344,17 @@ func TestGreenAdvancesOnlyOnGreen(t *testing.T) {
 	requireQueueRefused(t, n, before, res, err, gitlet.MergeRefusalNoLanding, "at or past")
 }
 
-// THE WIDEST LANDING NAMES EACH ENTRY'S CHANGE, NEVER THE DOMAIN (M5-D33): a
-// landing's decide proves every entry's gate, which reads each change's
-// conversation, so its record names each change's path beside the
-// repository's and its checks' — all MaxLandEntries of them, a scope the
-// writer's own check passes — because a landing named under the whole domain
-// meets every record a node holds deferred, of any repository, and once
-// retained beside one is met by every later record of every repository
-// (MaxScopePaths' doc). Narrower records name what they read: a green and a
-// broken the repository's checks beside it, a train and an ejection the
-// repository alone.
+// THE WIDEST LANDING NAMES EACH ENTRY'S CHANGE, NEVER THE DOMAIN (M5-D33): its
+// decide proves every entry's gate, reading each change's conversation, so its
+// scope names each change's path beside the repository's and its checks' — all
+// MaxLandEntries of them, a scope the writer's check passes. Named under the
+// domain, it would meet every deferred record of any repository and, retained
+// beside one, every later record (MaxScopePaths' doc). Narrower records name what they read: a green and a
+// broken the repository and its checks, a train and an ejection the repository
+// alone.
 //
-// Mutations: name the domain past sixteen paths (the rule this replaced) —
-// the landing of sixty-four names the domain, red; cap a scope at sixteen
-// paths (MaxScopePaths = 16) — the landing's scope is refused, red.
+// Mutations: name the domain past sixteen paths — the landing of sixty-four
+// names the domain, red; MaxScopePaths = 16 — its scope is refused, red.
 func TestTheWidestLandingNamesEachEntrysChange(t *testing.T) {
 	t.Parallel()
 	repo := uuid.Must(uuid.NewV7()).String()
@@ -413,16 +401,14 @@ func TestTheWidestLandingNamesEachEntrysChange(t *testing.T) {
 	}
 }
 
-// AN IDLE TARGET'S LANDINGS ARE SWEPT (M5-D34): a repository whose queue keeps
-// working removes its own history with every train, ejection and landing; one
-// whose queue stopped has nothing of its own that ever would — so the
-// retention pass lists the repositories holding an ended entry, or a landing
-// below its target's green row, from before its clock less QueueHistory less
+// AN IDLE TARGET'S LANDINGS ARE SWEPT (M5-D34): a working queue removes its own
+// history with each train, ejection and landing; an idle one never would. So
+// the retention pass lists repositories holding an ended entry, or a landing
+// below its target's green row, older than its clock less QueueHistory less
 // QueueSweepGrace, and publishes a queue_sweep on each one's subject removing
-// every such row past the history. The landing AT the green row, and those
-// above it — what its tip checks have yet to judge — stay, as do live
-// entries; and a repository whose history is past the history but inside the
-// grace is not listed.
+// every such row past the history. The landing AT the green row and those above
+// it (its tip checks have yet to judge them) stay, as do live entries; a
+// repository past the history but inside the grace is not listed.
 //
 // Mutation: leave the queue step out of the pass — the idle repository keeps
 // its rows, red; sweep landings at or above the green row — the green landing
@@ -491,13 +477,11 @@ func TestAnIdleTargetsLandingsAreSwept(t *testing.T) {
 }
 
 // A PERSON'S PUSH LEAVES A LANDING ROW (M5-D17): every record that moves a
-// protected branch leaves its landing — so a branch's tip checks judge, and
-// its green row follows, every way it moved. ada's own push to main under
-// direct_push persons, their recorded override, lands main's landing row of
-// kind push naming their human seat, green where main's gate requires no check
-// and main's green row moving to it; on a branch whose gate requires a check
-// the landing is not green and the green row stays; and a push to a branch no
-// rule protects leaves none.
+// protected branch leaves its landing, so tip checks and the green row follow
+// every way it moved. ada's own push to main under direct_push persons lands a
+// push landing naming their human seat: green, main's green row on it, where
+// main's gate requires no check; not green, the row unmoved, where it requires
+// one. A push to a branch no rule protects leaves none.
 //
 // Mutation: stamp no landing on a push — main holds no landing row, red.
 func TestAPersonsPushLeavesALandingRow(t *testing.T) {
@@ -544,19 +528,16 @@ func TestAPersonsPushLeavesALandingRow(t *testing.T) {
 }
 
 // A PERSON'S PUSH LANDING ON MORE PROTECTED BRANCHES THAN A RECORD HOLDS IS
-// REFUSED WHOLE: every landing a push makes on a protected branch is two rows of
-// its record — the landing row and the branch's green row — which the push's
-// decide counts from the rules its snapshot holds, since the committer's
-// batching bound cannot know which branches a rule protects. ada's push of
-// MaxCommandsPerPush forced updates, each onto a branch a rule protects (force
-// allowed, direct pushes a person's), would take even a record of its own past
-// MaxRecordRows: it is refused too_many_changes, every command ng under the
-// code in one sentence naming its landings, appending nothing. The same updates
-// in two pushes land, every branch's landing row written, and no record's apply
-// writes past gitlet.MaxRecordRows.
+// REFUSED WHOLE: each landing is two rows (the landing and the branch's green
+// row), counted by the push's decide from its snapshot's rules, since the
+// committer's batching bound cannot know which branches a rule protects. ada's
+// forced push to MaxCommandsPerPush protected branches would take a record of
+// its own past MaxRecordRows: it is refused too_many_changes, every command ng
+// under one sentence naming its landings, nothing appended. In two pushes the
+// same updates land, every landing row written, no apply past MaxRecordRows.
 //
 // Mutation: count no landing among a decided entry's rows — the push is
-// admitted, and its record's apply writes past the bound, red.
+// admitted and its apply writes past the bound, red.
 func TestAPushLandingOnMoreProtectedBranchesThanARecordHoldsIsRefusedWhole(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -614,14 +595,13 @@ func TestAPushLandingOnMoreProtectedBranchesThanARecordHoldsIsRefusedWhole(t *te
 }
 
 // AN EJECTED ENTRY LEAVES ITS QUEUE AND ITS TRAIN: an eject puts a live entry
-// out — ejected, why and the checks that failed kept on its row, weighed by
-// their bytes for the sweep that removes it — abandons the
-// train it was tested in, its candidates gone, and the node whose committer
-// landed the record announces one code_queue_ejected naming the change, the
-// branch and why. An eject of an entry no longer live is refused not_queued.
+// out (why and the failed checks kept on its row, weighed by their bytes for
+// the sweep), abandons its train, the candidates gone, and the committer's node
+// announces one code_queue_ejected naming the change, the branch and why. An
+// eject of an entry no longer live is refused not_queued.
 //
 // Mutation: keep the train when its entry is ejected — its candidate outlives
-// the ejection, red; weigh no ejection (write ejected_bytes 0) — red.
+// the ejection, red; write ejected_bytes 0 — red.
 func TestAnEjectedEntryLeavesItsQueueAndItsTrain(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -673,14 +653,13 @@ func TestAnEjectedEntryLeavesItsQueueAndItsTrain(t *testing.T) {
 }
 
 // A PUSH THAT EJECTS A QUEUED HEAD ANNOUNCES IT: a push moving a queued
-// change's source branch ends its entry ejected head_moved in the push's own
-// record, which no queue record names — so the committer that landed the push
-// announces one code_queue_ejected for that entry, naming the change, why and
-// its owner dev, whose day counts it (`ejections`), from the node that landed
-// it.
+// change's source branch ejects its entry head_moved in the push's own record,
+// which no queue record names, so the committer that landed the push announces
+// one code_queue_ejected naming the change, why and its owner dev, whose day
+// counts it (`ejections`).
 //
-// Mutation: never announce a push's ejections (drop commit's call of
-// announcePushEjections) — no code_queue_ejected follows the push, red.
+// Mutation: drop commit's call of announcePushEjections — no
+// code_queue_ejected follows the push, red.
 func TestAPushThatEjectsAQueuedHeadAnnouncesIt(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -713,7 +692,7 @@ func TestAPushThatEjectsAQueuedHeadAnnouncesIt(t *testing.T) {
 }
 
 // purgeTips is every object an `expunge_tips` read of repo names from since,
-// every page of it, n's reader paging every pageRows rows.
+// over every page, n's reader paging every pageRows rows.
 func (n *node) purgeTips(repo string, since time.Time, pageRows int) []string {
 	n.t.Helper()
 	gitlet.SetPageLimits(n.reader, pageRows, 1<<20)
@@ -734,19 +713,16 @@ func (n *node) purgeTips(repo string, since time.Time, pageRows int) []string {
 }
 
 // A CANDIDATE'S TIP SURVIVES A PURGE (M6-D2): a candidate is rows and a pack,
-// never a ref, so its tip — the commit a landing moves its target
-// onto — is reached by no ref; a purge, which keeps no drop, keeps it all the
-// same, because the read its scan walks from names what rows hold in flight
-// whatever its instant: the candidate's tip, the live entry's head and the
-// open change's revision head, and — once a landing moves main — main's green
-// row. Read a row a page, every phase resumes after the place its cursor
-// names and nothing is skipped; once the train lands, its candidate and its
-// entry are history and name nothing.
+// never a ref, so no ref reaches its tip (what a landing moves the target onto);
+// a purge, which keeps no drop, keeps it because the read its scan walks from
+// names what rows hold in flight: the candidate's tip, the live entry's head,
+// the open change's revision head and, once a landing moves main, main's green
+// row. Read a row a page, every phase resumes after its cursor, skipping
+// nothing; once the train lands, its candidate and entry name nothing.
 //
-// Mutation: drop the candidates' phase from the read, and a purge drops the
-// tip a pending landing moves main onto — a landing onto a missing tip; drop
-// the green phase, and the commit mirrors follow goes too; drop the queue's,
-// and the live entry's row is missing from the pages.
+// Mutations: drop the candidates' phase — a purge drops the tip a pending
+// landing moves main onto; drop the green phase — the commit mirrors follow
+// goes; drop the queue's — the live entry's row is missing from the pages.
 func TestACandidateTipSurvivesAPurge(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -765,10 +741,10 @@ func TestACandidateTipSurvivesAPurge(t *testing.T) {
 	purged, err := c.ProposeExpunge(t.Context(), gitlet.ExpungeProposal{Request: &asked})
 	requireExpunged(t, purged, err)
 
-	// ONE PAGE answers each object once; A ROW A PAGE answers each phase's
-	// row on a page of its own, in the phases' order — the change's revision
-	// at B, the live entry at B, the candidate at M — so a phase left out is
-	// a row missing, though another phase names the same object.
+	// ONE PAGE answers each object once; A ROW A PAGE answers each phase's row on
+	// its own page, in phase order (the revision at B, the live entry at B, the
+	// candidate at M), so a phase left out is a missing row even where another
+	// phase names the same object.
 	now := time.Now()
 	if got := n.purgeTips(repo, now, gitlet.MaxSnapshotItems); !slices.Equal(got, []string{oidOf("B"), oidOf("M")}) {
 		t.Fatalf("a purge's tips in one page are %v; want the head B the change's revision and the entry "+
@@ -791,15 +767,13 @@ func TestACandidateTipSurvivesAPurge(t *testing.T) {
 }
 
 // A PURGE'S TIPS READ EVERY REVISION OF A CHANGE OPENED BETWEEN ITS PAGES
-// (M6-D2: the tip set is exact): a branch heads one live change at a time, but
-// not the same one from page to page — the change a revisions page stopped in
-// closed, and another opened on its branch, before the next page is read. The
-// cursor names the change it stopped in, so the next page reads the new
-// change from its first revision, never from the number its predecessor
-// reached.
+// (M6-D2: the tip set is exact): the change a revisions page stopped in can
+// close, and another open on its branch, before the next page. The cursor
+// names the change it stopped in, so the next page reads a new change from its
+// first revision, never from the number its predecessor reached.
 //
 // Mutation: resume a branch's change at the cursor's revision whichever change
-// it is, and the new change's first revision, its head C, is never named.
+// it is — the new change's first revision, head C, is never named.
 func TestAPurgesTipsReadEveryRevisionOfAChangeOpenedBetweenItsPages(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -820,8 +794,7 @@ func TestAPurgesTipsReadEveryRevisionOfAChangeOpenedBetweenItsPages(t *testing.T
 	}
 
 	// BETWEEN THE PAGES the change closes, feature moves to C, a second change
-	// opens on feature at C — its revision 1 — and feature moves on to D, its
-	// revision 2.
+	// opens there (revision 1 at C), and feature moves on to D (revision 2).
 	closed, err := c.ProposeChange(t.Context(), closing(repo, first, dev, 1))
 	requireChanged(t, closed, err)
 	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(featureRef, oidOf("B"), oidOf("C"))))
@@ -846,20 +819,17 @@ func TestAPurgesTipsReadEveryRevisionOfAChangeOpenedBetweenItsPages(t *testing.T
 }
 
 // A PURGE'S TIPS RESUME INSIDE EVERY PHASE (M6-D2: the tip set is exact): read
-// a row a page, a page ends INSIDE each phase that holds two rows — between
-// two live changes on two branches, two live entries on one target and two
-// candidates of one train — and the next page resumes after the row its
-// cursor names, in the same change's batch, target's queue and train, so
-// every object is named in its phases' order and none is skipped: the head B
-// and R of each change's revision, of each entry, then the tips M1 and M2 of
-// the train's candidates, the second of which a landing of the whole train
-// moves main onto.
+// a row a page, a page ends INSIDE each two-row phase (two live changes on two
+// branches, two live entries on one target, two candidates of one train) and
+// the next resumes after the row its cursor names, so every object is named in
+// phase order and none skipped: heads B and R of each revision and each entry,
+// then the candidates' tips M1 and M2, the one a whole-train landing moves
+// main onto.
 //
-// Mutations: resume the live changes after a batch's last with none — the
-// release change's revision R is skipped; resume a target's queue after its
-// target alone, never after an entry's seq — the second entry's R is skipped;
-// resume a train after it alone, never after a candidate's ordinal — the
-// second candidate's tip M2 is skipped.
+// Mutations: resume the live changes after a batch's last with none —
+// release's R is skipped; resume a queue after its target alone, never an
+// entry's seq — the second entry's R is skipped; resume a train after it
+// alone, never a candidate's ordinal — M2 is skipped.
 func TestAPurgesTipsResumeInsideEveryPhase(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -900,15 +870,15 @@ func TestAPurgesTipsResumeInsideEveryPhase(t *testing.T) {
 }
 
 // A TRAIN OR A LANDING BUILT BEFORE A BEGIN IS REFUSED EXPUNGING (M6-D4): the
-// queue's own records that move a ref onto what a build made carry the drop
-// epoch their home's copy held, and once an expunge's begin has moved the
-// repository's epoch, one built at the epoch before is refused expunging,
-// nothing appended, its sentence naming its home; built again at the begin's
-// epoch, it lands. No other queue record carries an epoch.
+// queue records that move a ref onto what a build made carry their home copy's
+// drop epoch; once an expunge's begin moves the repository's epoch, one built
+// at the epoch before is refused expunging, nothing appended, naming its home.
+// Built again at the begin's epoch, it lands. No other queue record carries an
+// epoch.
 //
-// Mutation: drop the queue decide's comparison of the epochs, and the train
-// built before the begin is recorded; compare them for a candidate alone, and
-// the landing built before the begin moves main.
+// Mutation: drop the queue decide's comparison of the epochs — the train built
+// before the begin is recorded; compare them for a candidate alone — the
+// landing built before the begin moves main.
 func TestATrainBuiltBeforeABeginIsRefusedExpunging(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -933,9 +903,8 @@ func TestATrainBuiltBeforeABeginIsRefusedExpunging(t *testing.T) {
 	res, err = c.ProposeQueue(t.Context(), train)
 	requireRecorded(t, res, err)
 
-	// THE LANDING its home built from a copy at the epoch before the begin is
-	// refused too, main left where it was; built at the begin's epoch, it
-	// moves main onto the train's tip.
+	// THE LANDING built at the epoch before the begin is refused too, main
+	// unmoved; built at the begin's epoch, it moves main onto the train's tip.
 	n.passed(repo, oidOf("M"), mainRef, "unit")
 	land := landingOf(repo, train.Candidate.Train, oidOf("A"),
 		gitlet.LandEntry{EntryID: enqueue.Enqueue.EntryID, ChangeID: change, Commit: oidOf("M")})
@@ -962,16 +931,14 @@ func TestATrainBuiltBeforeABeginIsRefusedExpunging(t *testing.T) {
 	}
 }
 
-// A QUEUE READ SAYS WHAT ITS QUEUES PUT OUT LATELY: a read of a repository
-// answers, beside its live entries, the entry its queue ejected — the change by
-// its number, who enqueued it, why, and the paths its merge conflicted on —
-// and so does a read of that entry's target; a read of another target, a read
-// of every repository and a read a day after the ejection answer none.
+// A QUEUE READ SAYS WHAT ITS QUEUES PUT OUT LATELY: a read of a repository, or
+// of the entry's target, answers beside its live entries the ejected entry —
+// its change's number, enqueuer, why and the paths its merge conflicted on; a
+// read of another target, of every repository, or a day later answers none.
 //
-// Mutations: drop the ejections from the queue listing — the first read
-// answers none, red; drop the target filter from the read — the read of
-// another target answers the ejection, red; drop the horizon — the read a
-// day later answers it, red.
+// Mutations: drop the ejections from the listing — the first read answers
+// none, red; drop the target filter — another target's read answers it, red;
+// drop the horizon — the read a day later answers it, red.
 func TestAQueueReadSaysWhatItsQueuesPutOutLately(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1031,11 +998,10 @@ func TestAQueueReadSaysWhatItsQueuesPutOutLately(t *testing.T) {
 	}
 }
 
-// queuedFor is a repository named name whose one change — dev's from feature
-// into main, a queue target ([queueGate]), carrying item — by queued asking
-// its work item closed, the enqueue made for f, and a train of it built onto
-// main's tip A, its tip M passed: the repository, the change, the entry and
-// the train, which lands it.
+// queuedFor is a repository named name whose one change (dev's, feature into
+// main, a queue target ([queueGate]), carrying item) by queued asking its work
+// item closed, the enqueue made for f, and a train of it onto main's tip A,
+// its tip M passed: the repository, the change, the entry and the train.
 func queuedFor(t *testing.T, n *node, c *gitlet.Committer, w *gitlet.ChangeWriter, name string,
 	item *types.WorkItem, by gitlet.Principal, f types.WrittenFor) (repo, change, entryID string,
 	train gitlet.QueueProposal) {
@@ -1081,25 +1047,24 @@ func landedOwingClose(t *testing.T, n *node, c *gitlet.Committer, w *gitlet.Chan
 }
 
 // A LANDED ENTRY OWES ITS WORK ITEM'S CLOSE UNTIL IT IS SETTLED (M5-D27): a
-// queued merge asking its change's work item closed lands, and the landing's
-// apply leaves the close OWED on the entry's row under the landing's own
-// step (gitlet.CloseWorkItemOpID) — what every home's queue work answers, the
-// repository listed and its first page naming the entry, its enqueuer and
-// the work item, whichever home asked the landing. A settle of it closed
-// clears it, out of the listing; a second settle, of an entry owing nothing,
-// is refused stale and appends nothing. A not_closed settle tells the
-// change's authors AND its enqueuer, under `merged`, the reason beside.
+// queued merge asking its work item closed lands, and the apply leaves the
+// close OWED on the entry's row under gitlet.CloseWorkItemOpID — what every
+// home's queue work answers (the repository listed, its first page naming the
+// entry, enqueuer and work item), whichever home asked the landing. A closed
+// settle clears it; a second settle is refused stale, appending nothing. A
+// not_closed settle tells the change's authors AND its enqueuer, under
+// `merged`, the reason beside.
 //
-// Mutations: leave close_op out of the land's write (entryLanded) — nothing
-// is owed, red; drop the settle's UPDATE — the close stays owed, red; route
-// a not_closed settle to the authors alone — the enqueuer hears nothing, red.
+// Mutations: leave close_op out of the land's write (entryLanded) — nothing is
+// owed, red; drop the settle's UPDATE — the close stays owed, red; route a
+// not_closed settle to the authors alone — the enqueuer hears nothing, red.
 func TestALandedEntryOwesItsWorkItemsCloseUntilItIsSettled(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	n.chart = testChart()
-	// WITHIN EVERY HORIZON: the broker stamps a record at the wall clock and
-	// the harness applies it at its own instant, years on, past which the
-	// applier writes no notice.
+	// WITHIN EVERY HORIZON: the broker stamps a record at the wall clock and the
+	// harness applies it at its own instant, years on, past which the applier
+	// writes no notice.
 	storedBefore(n, time.Hour)
 	c, _ := committerOn(t, n, n.pub)
 	w, _ := writerOn(t, n, n.pub)
@@ -1172,11 +1137,10 @@ func TestALandedEntryOwesItsWorkItemsCloseUntilItIsSettled(t *testing.T) {
 	}
 }
 
-// landedTwoOwingCloses is a repository named name whose two changes — dev's
-// from feature (head B, carrying ENG-7) and from release (head R, carrying
-// ENG-8) — ada queued into main asking their work items closed, and one
-// landing of both applied: the repository, and each change and its entry, in
-// the landing's order.
+// landedTwoOwingCloses is a repository named name whose two changes, dev's from
+// feature (head B, ENG-7) and from release (head R, ENG-8), ada queued into
+// main asking their work items closed, one landing of both applied: the
+// repository, and each change and its entry, in the landing's order.
 func landedTwoOwingCloses(t *testing.T, n *node, c *gitlet.Committer, w *gitlet.ChangeWriter,
 	name string) (repo string, changes, entries [2]string) {
 
@@ -1218,20 +1182,17 @@ func landedTwoOwingCloses(t *testing.T, n *node, c *gitlet.Committer, w *gitlet.
 	return repo, changes, entries
 }
 
-// ONE SETTLE RECORD SETTLES A LANDING'S CLOSES (M5-D27): a landing's closes
-// are settled by one close_settled of all of them, never a record a change —
-// and each not_closed close tells ITS change's authors and enqueuer ITS OWN
-// sentence, under `merged`. A close another settle already cleared is
-// SKIPPED, the rest of the record applied, and a record whose every close is
-// cleared already is refused stale and appends nothing.
+// ONE SETTLE RECORD SETTLES A LANDING'S CLOSES (M5-D27): one close_settled,
+// never a record a change, and each not_closed close tells ITS change's
+// authors and enqueuer ITS OWN sentence, under `merged`. A close already
+// cleared is SKIPPED, the rest applied; a record whose every close is cleared
+// is refused stale and appends nothing.
 //
-// Mutations: give every notice of the record one excerpt (the first
-// routing's) — the second change's authors read the first's sentence, red;
-// refuse the whole record where one of its closes owes nothing — the second
-// close stays owed, red; clear the closes of every entry named, owed or not,
-// on the stale record — it is applied, not refused, red; leave a code wake's
-// TriggerOrigin unset in inboundOf — dev's wakes name nothing that started
-// them, red.
+// Mutations: one excerpt for every notice (the first routing's) — the second
+// change's authors read the first's sentence, red; refuse the record where one
+// close owes nothing — the second stays owed, red; clear every named entry,
+// owed or not, on the stale record — applied, not refused, red; leave a code
+// wake's TriggerOrigin unset in inboundOf — dev's wakes name nothing, red.
 func TestOneSettleRecordSettlesALandingsClosesEachToldItsOwn(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1281,11 +1242,10 @@ func TestOneSettleRecordSettlesALandingsClosesEachToldItsOwn(t *testing.T) {
 			}
 		}
 	}
-	// EACH WAKE NAMES WHAT STARTED ITS TURN: the seat dev is woken about each
-	// change under merged, its own sentence beside, and each wake names that
-	// change by its ref, so the executors board and the turn's history say
-	// which merge's close the seat answers (ada is a person and hears by
-	// notice alone).
+	// EACH WAKE NAMES WHAT STARTED ITS TURN: dev is woken about each change under
+	// merged, its own sentence beside, each wake naming the change by its ref so
+	// the executors board and the turn's history say which merge's close it
+	// answers (ada, a person, hears by notice).
 	_, _, routed := wakesOf(t, feedRecord(t, n, res.Position))
 	if got := woken(routed); !slices.Equal(got, []string{"dev:merged", "dev:merged"}) {
 		t.Fatalf("the settle of two not_closed closes wakes %v, want dev about each change", got)
@@ -1337,8 +1297,8 @@ func TestOneSettleRecordSettlesALandingsClosesEachToldItsOwn(t *testing.T) {
 }
 
 // enqueuedForCases are the enqueues the queue's records about an entry are
-// read back for: cto's made in a turn founder woke, cto's made for nobody, the
-// seat's own work, and ada's, a person's, who writes for nobody but herself.
+// read back for: cto's in a turn founder woke, cto's for nobody (the seat's own
+// work), and ada's, a person's, who writes for nobody but herself.
 func enqueuedForCases(founder *types.WorkingFor) []struct {
 	name string
 	by   gitlet.Principal
@@ -1366,19 +1326,17 @@ func versionOf(want *types.WorkingFor) int {
 	return 1
 }
 
-// A QUEUE'S LANDING WAKES FOR WHOM ITS ENTRY WAS ENQUEUED (ADR-0109): a landing
-// names each entry's enqueuer as the merger it lands the change as, and the
-// enqueue was that seat's write in a turn somebody woke, so the change's other
-// authors are told it merged for that somebody, read off the entry's row, as
-// the seat's own merge would have told them. cto queues dev's change into main
-// in a turn founder woke: its landing carries founder beside cto, at version
-// 2, and dev, its owner, is woken by cto for founder. cto's enqueue made for
-// nobody, and ada's, a person's, carry nobody, at version 1, and dev is woken
-// by the enqueuer alone.
+// A QUEUE'S LANDING WAKES FOR WHOM ITS ENTRY WAS ENQUEUED (ADR-0109): the
+// landing names the enqueuer as merger, and the enqueue was that seat's write
+// in a turn somebody woke, so the change's other authors are told it merged
+// for that somebody, off the entry's row, as the seat's own merge would. cto
+// queues dev's change in a turn founder woke: the landing carries founder
+// beside cto at version 2, and dev is woken by cto for founder. cto's enqueue
+// for nobody, and ada's, carry nobody at version 1, dev woken by the enqueuer
+// alone.
 //
-// Mutation: the landing's decide handing its routing no carrier — the landing
-// of cto's entry made for founder carries nobody and dev is woken for nobody,
-// red.
+// Mutation: hand the landing's routing no carrier — cto's entry made for
+// founder carries nobody and dev is woken for nobody, red.
 func TestAQueuesLandingWakesForWhomItsEntryWasEnqueued(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1420,22 +1378,17 @@ func TestAQueuesLandingWakesForWhomItsEntryWasEnqueued(t *testing.T) {
 }
 
 // AN EJECTION AND AN UNMADE CLOSE WAKE FOR WHOM THEIR ENQUEUE WAS MADE
-// (ADR-0109's amendment): the merge queue's own records about an entry name no
-// actor, since no principal's act made them, and tell the entry's enqueuer and
-// its change's authors about that enqueue — that it left the queue, that the
-// landed change's work item was left open — so each carries whom the enqueue
-// was made for beside no actor, read off the entry's row, and the turn it wakes
-// works for them: worked for the told seat's own, it would queue the change
-// again, or close the item its requester could not, with every app the seat
-// holds. cto queues dev's change in a turn founder woke: its ejection, and the
-// settle of its landing's close not closed, each wake dev and cto written by
-// the engine for founder, at version 2. Enqueued for nobody, or by ada, a
-// person, each wakes its seats written by the engine alone, at version 1.
+// (ADR-0109's amendment): the queue's own records about an entry name no actor
+// (no principal's act made them) and tell its enqueuer and its change's
+// authors about that enqueue, so each carries whom it was made for, off the
+// entry's row: a turn worked for the told seat's own would requeue the change,
+// or close the item its requester could not, with every app the seat holds.
+// cto's entry queued for founder: its ejection and its not_closed settle wake
+// dev and cto written by the engine for founder, at version 2; enqueued for
+// nobody, or by ada, by the engine alone, at version 1.
 //
-// Mutations: the ejection's decide handing its routing no carrier — the
-// ejection of cto's entry made for founder wakes dev and cto for nobody, red;
-// the settle's likewise — its unmade close, red; writerOf handing the
-// engine's carrier on neither op — both wake their seats for nobody, red.
+// Mutations: no carrier on the ejection's, or the settle's, routing — dev and
+// cto woken for nobody, red; writerOf passing no engine carrier — both, red.
 func TestAnEjectionAndAnUnmadeCloseWakeForWhomTheirEnqueueWasMade(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1507,17 +1460,15 @@ func TestAnEjectionAndAnUnmadeCloseWakeForWhomTheirEnqueueWasMade(t *testing.T) 
 }
 
 // THE HOME'S QUEUE WORK SAYS WHOM EACH ENTRY WAS ENQUEUED FOR (ADR-0109): the
-// one read answer that carries whom a code write was made for, since the home
-// closes a landed change's work item for them, on either of its paths — from
-// the target's live entries the page that lands the change answers
-// (QueueDue.Entries), and from the closes a landing left owed, which a later
-// page answers (QueueOwedCloses). cto's entry enqueued in a turn founder woke
-// is answered for founder on both; cto's made for nobody, and ada's, a
-// person's, for nobody.
+// one read answer carrying whom a code write was made for, since the home
+// closes a landed change's work item for them, on both its paths: the target's
+// live entries (QueueDue.Entries) and the closes a landing left owed
+// (QueueOwedCloses). cto's entry enqueued in a turn founder woke answers
+// founder on both; cto's for nobody, and ada's, nobody.
 //
-// Mutations: the target's entries read without the carrier (workEntriesOf) —
-// cto's live entry is answered for nobody, red; the owed closes read without
-// it (owedClosesIn) — cto's owed close is answered for nobody, red.
+// Mutations: read the target's entries without the carrier (workEntriesOf) —
+// cto's live entry answers nobody, red; the owed closes likewise
+// (owedClosesIn) — cto's owed close answers nobody, red.
 func TestTheHomesQueueWorkSaysWhomEachEntryWasEnqueuedFor(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1557,4 +1508,264 @@ func TestTheHomesQueueWorkSaysWhomEachEntryWasEnqueuedFor(t *testing.T) {
 			}
 		})
 	}
+}
+
+// queuedTwo is a repository named name, its main a queue target ([queueGate]) at A, holding
+// dev's two ready changes into main, from feature at B and from release at R, each queued by
+// ada: the repository and the two entries, in queue order.
+func queuedTwo(t *testing.T, n *node, c *gitlet.Committer, w *gitlet.ChangeWriter,
+	name string) (repo string, entries [2]string) {
+
+	t.Helper()
+	s := suiteSettings()
+	s.Owner = gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Engineering"}
+	s.Protections[0].Gate = queueGate()
+	repo = n.ensure(name, s, t1).RepoID
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, gitlet.ZeroOID, oidOf("A")),
+		set(featureRef, gitlet.ZeroOID, oidOf("B")), set(releaseRef, gitlet.ZeroOID, oidOf("R"))))
+	for i, source := range []struct{ ref, head string }{{featureRef, oidOf("B")}, {releaseRef, oidOf("R")}} {
+		opened, err := c.ProposeChange(t.Context(), opening(repo, source.ref, mainRef, dev))
+		requireChanged(t, opened, err)
+		converse(t, w, n.revising(repo, opened.ChangeID, 1, source.head, mainRef, nil))
+		converse(t, w, reviewing(repo, opened.ChangeID, platLead, 1, gitlet.VerdictApprove, nil))
+		n.passed(repo, source.head, mainRef, "unit")
+		enqueue := enqueueing(repo, opened.ChangeID, ada, source.head)
+		res, err := c.ProposeQueue(t.Context(), enqueue)
+		requireQueued(t, res, err, gitlet.QueueWaiting, i+1)
+		entries[i] = enqueue.Enqueue.EntryID
+	}
+	return repo, entries
+}
+
+// batchOfTwo is a train on main onto A of ONE candidate merging both entries, the first as M1
+// and the second as M2, its tip: the proposal and the candidate's id.
+func batchOfTwo(repo string, entries [2]string) (gitlet.QueueProposal, string) {
+	opID := statelog.NewOpID(time.Now(), "code_queue")
+	train := gitlet.QueueTrainID(opID)
+	candidate := gitlet.QueueCandidateID(train, 1)
+	return gitlet.QueueProposal{OpID: opID, Candidate: &gitlet.Candidate{RepoID: repo, TargetRef: mainRef,
+		Train: train, BaseOID: oidOf("A"), Pack: queuedPack(train), Candidates: []gitlet.TrainCandidate{{
+			CandidateID: candidate, Ordinal: 1, TipOID: oidOf("M2"), Entries: []gitlet.CandidateEntry{
+				{EntryID: entries[0], Commit: oidOf("M1")}, {EntryID: entries[1], Commit: oidOf("M2")}}}}}}, candidate
+}
+
+// failedOn is an eject of entry check_failed naming e2e and the train t.
+func failedOn(repo, entry string, t *gitlet.EjectionTrain) gitlet.QueueProposal {
+	return queueRecord(func(p *gitlet.QueueProposal) {
+		p.Eject = &gitlet.Eject{RepoID: repo, Entries: []gitlet.Ejection{{EntryID: entry,
+			Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"}, TestedIn: t}}}
+	})
+}
+
+// AN EJECTION KEEPS THE TRAIN IT FAILED ON: two changes batched into one
+// candidate onto A (M1, then M2 its tip); the first ejected check_failed naming
+// the train, candidate, base A and M1, where e2e failed. The eject abandons the
+// train, the second entry waiting in no candidate, and the first's row keeps
+// the train, weighed by its bytes; the queue read and the change's card answer
+// it, and the record is stamped [gitlet.TestedInVersion].
+//
+// Mutations: leave the train out of ejectedDetail — none named, red; weigh the
+// row without the train — ejected_bytes is not its length, red.
+func TestAnEjectionKeepsTheTrainItFailedOn(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	repo, entries := queuedTwo(t, n, c, w, "web")
+	train, candidate := batchOfTwo(repo, entries)
+	res, err := c.ProposeQueue(t.Context(), train)
+	requireRecorded(t, res, err)
+
+	want := gitlet.EjectionTrain{CandidateID: candidate, BaseOID: oidOf("A"), CommitOID: oidOf("M1")}
+	tested := want
+	res, err = c.ProposeQueue(t.Context(), failedOn(repo, entries[0], &tested))
+	at := requireRecorded(t, res, err)
+	if v := n.recordAt(at).V; v != gitlet.TestedInVersion {
+		t.Errorf("the eject naming its train is stamped %d, want %d (TestedInVersion)", v, gitlet.TestedInVersion)
+	}
+	if left := n.count(`SELECT COUNT(*) FROM code_candidates WHERE repo_id = ?`, repo); left != 0 {
+		t.Fatalf("%d candidates outlive the train their entry was ejected from", left)
+	}
+	if state, _ := n.entryState(repo, entries[1]); state != gitlet.QueueWaiting ||
+		n.count(`SELECT COUNT(*) FROM code_queue WHERE repo_id = ? AND entry_id = ? AND candidate_id = ''`,
+			repo, entries[1]) != 1 {
+		t.Fatalf("the entry batched behind the culprit is %s or still in a candidate, want waiting in none", state)
+	}
+	if kept := n.count(`SELECT COUNT(*) FROM code_queue WHERE repo_id = ? AND entry_id = ?
+		AND state = 'ejected' AND ejected ->> '$.tested_in.candidate_id' = ?
+		AND ejected ->> '$.tested_in.base_oid' = ? AND ejected ->> '$.tested_in.commit_oid' = ?
+		AND ejected_bytes = length(CAST(ejected AS BLOB))`,
+		repo, entries[0], want.CandidateID, want.BaseOID, want.CommitOID); kept != 1 {
+		t.Fatalf("the ejected entry's row does not keep the train %+v weighed by its bytes", want)
+	}
+
+	var endedMicros int64
+	if err := n.db.Reader().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT ended_at FROM code_queue WHERE repo_id = ? AND entry_id = ?`,
+			repo, entries[0]).Scan(&endedMicros)
+	}); err != nil {
+		t.Fatalf("read the ejection's instant: %v", err)
+	}
+	soon := time.UnixMicro(endedMicros).UTC().Add(time.Hour)
+	n.readAt.Store(&soon)
+	answer, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadQueue, Asker: ada, Repo: "web"})
+	if err != nil {
+		t.Fatalf("read the queue: %v", err)
+	}
+	if len(answer.Ejected) != 1 || answer.Ejected[0].TestedIn == nil || *answer.Ejected[0].TestedIn != want {
+		t.Fatalf("the queue read answers the ejections %+v, want the first entry's naming %+v", answer.Ejected, want)
+	}
+	if got := cardOf(t, n, 1).Ejected; got == nil || got.TestedIn == nil || *got.TestedIn != want {
+		t.Fatalf("the ejected change's card carries %+v, want the train %+v", got, want)
+	}
+}
+
+// AN EJECTION'S TRAIN IS HELD TO THE ROWS: one naming a train its entry is not
+// testing in is refused stale, appending nothing — while the entry only waits,
+// a candidate a newer train replaced, the second entry's commit for the first,
+// another base; on a two-candidate train, the second entry naming the first
+// candidate, or its own onto the first's base. The rows' train is recorded.
+//
+// Mutations: skip testedInStale in decideEject — each recorded, red; drop its
+// check of the entry's candidate — the first candidate recorded, red; drop the
+// candidate from its match — its own onto the first's base recorded, red.
+func TestAnEjectionsTrainIsHeldToTheRows(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	repo, entries := queuedTwo(t, n, c, w, "web")
+	refused := func(what, entry string, tested gitlet.EjectionTrain) {
+		t.Helper()
+		before := n.end()
+		res, err := c.ProposeQueue(t.Context(), failedOn(repo, entry, &tested))
+		if res.Refusal != gitlet.MergeRefusalStale {
+			t.Errorf("an ejection naming %s answered %+v, %v, want refused stale", what, res, err)
+			return
+		}
+		requireQueueRefused(t, n, before, res, err, gitlet.MergeRefusalStale, "read its queue again")
+	}
+
+	first, replaced := batchOfTwo(repo, entries)
+	refused("a train while its entry waits", entries[0], gitlet.EjectionTrain{CandidateID: replaced,
+		BaseOID: oidOf("A"), CommitOID: oidOf("M1")})
+	res, err := c.ProposeQueue(t.Context(), first)
+	requireRecorded(t, res, err)
+	second, candidate := batchOfTwo(repo, entries)
+	res, err = c.ProposeQueue(t.Context(), second)
+	requireRecorded(t, res, err)
+	refused("the candidate a newer train replaced", entries[0], gitlet.EjectionTrain{CandidateID: replaced,
+		BaseOID: oidOf("A"), CommitOID: oidOf("M1")})
+	refused("the next entry's commit", entries[0], gitlet.EjectionTrain{CandidateID: candidate,
+		BaseOID: oidOf("A"), CommitOID: oidOf("M2")})
+	refused("another base", entries[0], gitlet.EjectionTrain{CandidateID: candidate, BaseOID: oidOf("Z"),
+		CommitOID: oidOf("M1")})
+	res, err = c.ProposeQueue(t.Context(), failedOn(repo, entries[0], &gitlet.EjectionTrain{
+		CandidateID: candidate, BaseOID: oidOf("A"), CommitOID: oidOf("M1")}))
+	requireRecorded(t, res, err)
+
+	// Two candidates: the first merges entry one onto A as M1, the second entry two onto M1 as M2.
+	repo, entries = queuedTwo(t, n, c, w, "api")
+	pair := trainOf(repo, oidOf("A"), gitlet.CandidateEntry{EntryID: entries[0], Commit: oidOf("M1")},
+		gitlet.CandidateEntry{EntryID: entries[1], Commit: oidOf("M2")})
+	res, err = c.ProposeQueue(t.Context(), pair)
+	requireRecorded(t, res, err)
+	one, two := pair.Candidate.Candidates[0].CandidateID, pair.Candidate.Candidates[1].CandidateID
+	refused("the candidate before its own, onto that one's base", entries[1], gitlet.EjectionTrain{
+		CandidateID: one, BaseOID: oidOf("A"), CommitOID: oidOf("M2")})
+	refused("its candidate onto the one before's base", entries[1], gitlet.EjectionTrain{CandidateID: two,
+		BaseOID: oidOf("A"), CommitOID: oidOf("M2")})
+	res, err = c.ProposeQueue(t.Context(), failedOn(repo, entries[1], &gitlet.EjectionTrain{
+		CandidateID: two, BaseOID: oidOf("M1"), CommitOID: oidOf("M2")}))
+	requireRecorded(t, res, err)
+}
+
+// ONLY A FAILED CHECK'S EJECTION NAMES ITS TRAIN, whole: a train beside a conflict, beside
+// no checks, under a candidate that is no UUIDv7, onto a base that is no whole object id, or
+// at the base itself is refused naming the ejection's tested_in; a whole one is valid.
+//
+// Mutation: drop any of Eject.validate's train rules (that case is valid, red).
+func TestOnlyAFailedChecksEjectionNamesItsTrain(t *testing.T) {
+	t.Parallel()
+	const entryID = "0190f3c4-0000-7000-8000-0000000000e1"
+	whole := gitlet.EjectionTrain{CandidateID: gitlet.QueueCandidateID(statelog.NewOpID(time.Now(), ""), 1),
+		BaseOID: oidOf("A"), CommitOID: oidOf("M")}
+	eject := func(x gitlet.Ejection) gitlet.QueueProposal {
+		return queueRecord(func(p *gitlet.QueueProposal) {
+			p.Eject = &gitlet.Eject{RepoID: "0190f3c4-0000-7000-8000-00000000c0de", Entries: []gitlet.Ejection{x}}
+		})
+	}
+	with := func(set func(*gitlet.EjectionTrain)) *gitlet.EjectionTrain {
+		tr := whole
+		set(&tr)
+		return &tr
+	}
+	if err := eject(gitlet.Ejection{EntryID: entryID, Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},
+		TestedIn: &whole}).Validate(); err != nil {
+		t.Fatalf("a failed check's ejection naming its whole train is refused: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		x    gitlet.Ejection
+		says string
+	}{
+		"a conflict's": {gitlet.Ejection{Reason: gitlet.EjectConflict, TestedIn: &whole},
+			"only a failed check's ejection names the train"},
+		"one naming no checks": {gitlet.Ejection{Reason: gitlet.EjectCheckFailed, TestedIn: &whole},
+			"names the checks that failed on its train"},
+		"a candidate that is no UUIDv7": {gitlet.Ejection{Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},
+			TestedIn: with(func(tr *gitlet.EjectionTrain) { tr.CandidateID = "candidate-1" })},
+			"tested_in.candidate_id"},
+		"a short base": {gitlet.Ejection{Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},
+			TestedIn: with(func(tr *gitlet.EjectionTrain) { tr.BaseOID = "abc123" })}, "tested_in.base_oid"},
+		"a zero commit": {gitlet.Ejection{Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},
+			TestedIn: with(func(tr *gitlet.EjectionTrain) { tr.CommitOID = gitlet.ZeroOID })},
+			"tested_in.commit_oid"},
+		"the base as its commit": {gitlet.Ejection{Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},
+			TestedIn: with(func(tr *gitlet.EjectionTrain) { tr.CommitOID = tr.BaseOID })},
+			"is not " + oidOf("A")[:7] + " itself"},
+	} {
+		tc.x.EntryID = entryID
+		err := eject(tc.x).Validate()
+		if !errors.Is(err, gitlet.ErrInvalidProposal) || !strings.Contains(err.Error(), "eject.entries[0].tested_in") ||
+			!strings.Contains(err.Error(), tc.says) {
+			t.Errorf("%s train is answered %v, want it refused naming eject.entries[0].tested_in: %q", name, err,
+				tc.says)
+		}
+	}
+}
+
+// ONLY AN EJECTION NAMING ITS TRAIN STAMPS ITS RECORD: of the ejects a queue lands, the one
+// naming its train is stamped [gitlet.TestedInVersion]; a failed check's naming none and a
+// conflict's are base format, 1.
+//
+// Mutations: drop the Ejection.TestedIn row (stamped 1, red); tag the field without
+// omitempty (every eject stamped 7, red).
+func TestOnlyAnEjectionNamingItsTrainStampsItsRecord(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	repo, entries := queuedTwo(t, n, c, w, "web")
+	train, candidate := batchOfTwo(repo, entries)
+	res, err := c.ProposeQueue(t.Context(), train)
+	requireRecorded(t, res, err)
+
+	stamped := func(what string, p gitlet.QueueProposal, want int) {
+		t.Helper()
+		got, proposeErr := c.ProposeQueue(t.Context(), p)
+		if v := n.recordAt(requireRecorded(t, got, proposeErr)).V; v != want {
+			t.Errorf("%s is stamped %d, want %d", what, v, want)
+		}
+	}
+	stamped("a culprit's eject naming its train", failedOn(repo, entries[0], &gitlet.EjectionTrain{
+		CandidateID: candidate, BaseOID: oidOf("A"), CommitOID: oidOf("M1")}), gitlet.TestedInVersion)
+	stamped("a failed check's eject naming no train", failedOn(repo, entries[1], nil), 1)
+	repo, entries = queuedTwo(t, n, c, w, "api")
+	stamped("a conflict's eject", queueRecord(func(p *gitlet.QueueProposal) {
+		p.Eject = &gitlet.Eject{RepoID: repo, Entries: []gitlet.Ejection{{EntryID: entries[0],
+			Reason: gitlet.EjectConflict, Paths: []string{"go.mod"}}}}
+	}), 1)
 }

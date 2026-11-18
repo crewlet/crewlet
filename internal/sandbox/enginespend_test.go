@@ -34,15 +34,11 @@ func condensingRig(t *testing.T, turnID string) *coordRig {
 }
 
 // WHAT THE ENGINE SPENT ON A JOB BETWEEN SEGMENTS REACHES THE RESUME THAT PAYS
-// FOR IT.
-//
-// Two things the engine pays for happen while no segment of the turn is
-// running: the calls a run makes through the tool bridge, after the
-// segment that launched it ended, and the condensation of a collected run's
-// report, which the coordinator makes before any segment resumes. Neither has
-// a segment's tally to add to, so both ride the resume request to the segment
-// that resumes from the job — its charge to the turn's work item is the only
-// one that can include them (ADR-0022).
+// FOR IT. A run's calls through the tool bridge after its segment ended, and
+// the condensation of its report before any segment resumes, have no
+// segment's tally to add to, so both ride the resume request: the resuming
+// segment's charge to the turn's work item is the only one that can include
+// them (ADR-0022).
 //
 // Mutation: drop the bridged half or the condensation from the request, and
 // the resume carries less than the job cost.
@@ -70,13 +66,11 @@ func TestACompletionsResumeCarriesWhatTheEngineSpentOnTheJob(t *testing.T) {
 	}
 }
 
-// A PARKED JOB'S ENGINE SPEND IS PAID BY THE ANSWER'S RESUME.
-//
-// The completion that parks resumes nothing, and the answer's resume — days
-// later, perhaps on another node — collects nothing. So the condensation of the
-// collection that parked (here the asking job's report, past what a run's
-// record carries) is written with the question, and the answer's resume reads it, with
-// the job's bridged spend, off the job's own record.
+// A PARKED JOB'S ENGINE SPEND IS PAID BY THE ANSWER'S RESUME. The completion
+// that parks resumes nothing, and the answer's resume (days later, perhaps on
+// another node) collects nothing, so the parking collection's condensation is
+// written with the question, and the answer's resume reads it, with the job's
+// bridged spend, off the job's own record.
 //
 // Mutation: leave the condensation off the park, or the bridged half off the
 // answer's request, and the answer's resume carries less than the job cost.
@@ -109,11 +103,10 @@ func TestAParkedJobsEngineSpendReachesTheAnswersResume(t *testing.T) {
 	}
 }
 
-// A FAILED REWRITE WAS STILL PAID FOR. A model whose rewrite came back past the
-// bound, or that answered nothing usable, spent its tokens all the same, so
-// what the condenser reports it cost is counted whether or not its answer is
-// used — and a runner's own value for the field is never trusted, since the
-// field is the coordinator's.
+// A FAILED REWRITE WAS STILL PAID FOR. A rewrite past the bound, or unusable,
+// spent its tokens all the same, so the condenser's cost counts whether or not
+// its answer is used; a runner's own value for the field is never trusted,
+// since the field is the coordinator's.
 func TestAFailedCondensationIsStillCounted(t *testing.T) {
 	t.Parallel()
 	c := &Coordinator{condense: &fakeCondenser{cost: condensing,

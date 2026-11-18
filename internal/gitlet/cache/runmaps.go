@@ -8,37 +8,21 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// THE NODE'S MAPPINGS OF RUNS: every run of an index of pushes a reader maps
-// (Cache.Provenance) is one MAPPING of the engine's process, which the kernel
-// counts against vm.max_map_count — a sysctl of the whole node, which no pod
-// sets for itself — and past that count EVERY mapping the process asks for
-// fails: the Go runtime's own among them, and a heap that cannot grow is a
-// fatal "out of memory". Kept for as long as its index named it, a run of
-// every copy a node's seats had read stayed mapped, so a node that read some
-// ten thousand copies — a handful of runs each — reached the count and
-// stopped. So the cache maps at most a node-wide number of runs at once — the
-// process's map count over MappedRunShare, read at Open — and a mapping no
-// reader holds is kept for the next reader of its copy only while that bound
-// has room: one more mapping past it unmaps the one let go longest ago, and a
-// mapping every reader still holds is never taken from under them. A reader
-// that finds the bound held whole by readers is answered without the index
-// (errMapsFull), as one that finds a run unchecked is: an index decorates an
-// answer.
+// The node maps at most a bound of runs at once (package doc, "The index of
+// pushes"): an idle mapping is kept for its copy's next reader only while the
+// bound has room, unmapped let-go-longest-ago first past it, and a held one is
+// never taken from under its readers. A reader finding the bound held whole is
+// answered without the index (errMapsFull): an index decorates an answer. A
+// code index's tip map and segments (codeindex.go) count against the same
+// bound, since the sysctl it guards is one count of the process's; a search
+// finding it full reads the tip with git grep.
 //
-// Every count here is taken under runMaps.mu, a LEAF: taken under an entry's
-// mu, and nothing is taken under it. A mapping is unmapped only once nobody
-// holds it and nobody can take it again — gone, decided under the lock — so
-// the munmap itself runs holding none.
+// runMaps.mu is a LEAF: taken under an entry's mu, nothing taken under it. A
+// mapping is unmapped only once gone (decided under the lock, so nobody holds
+// or takes it again), and the munmap itself runs holding no lock.
 
-// THE CODE INDEX'S FILES COUNT HERE TOO (codeindex.go): a code index's tip
-// map and segments are mapped as a run is, held by a search's reader for as
-// long as its Synced is, kept idle for the next and unmapped past the bound
-// alike — one bound, since the sysctl it guards is one count of the
-// process's. A search that finds the bound held whole reads the tip with git
-// grep instead.
-//
-// errMapsFull is a mapping the node's bound on mapped runs has no room for:
-// every run mapped is held by a reader.
+// errMapsFull is a mapping the bound has no room for: readers hold every
+// mapped run.
 var errMapsFull = errors.New("cache: the node maps as many files of its indexes as it may, " +
 	"and its readers hold every one")
 
@@ -62,10 +46,10 @@ func newRunMaps(most int) *runMaps { return &runMaps{most: max(most, 1)} }
 // count holds itself to.
 func mappedRunsOf(count int) int { return max(count/MappedRunShare, 1) }
 
-// reserve takes the room for one mapping about to be made — unmapping, past
-// the bound, the idle mappings let go longest ago — or answers errMapsFull
-// where readers hold every mapping there is. A reservation is given back by
-// unreserve if no mapping is made of it, and by the mapping's unmap if one is.
+// reserve takes the room for one mapping about to be made, unmapping idle
+// mappings let go longest ago past the bound, or answers errMapsFull. A
+// reservation is given back by unreserve if no mapping is made of it, and by
+// the mapping's unmap if one is.
 func (rm *runMaps) reserve() error {
 	var victims []*mappedRun
 	rm.mu.Lock()
@@ -120,9 +104,8 @@ func (rm *runMaps) hold(m *mappedRun) bool {
 }
 
 // let gives one hold of m back. The last hold of a run its index still names
-// leaves it idle, kept for the next reader; of one it no longer names, it is
-// unmapped — let answers true, and the caller unmaps it holding no lock it
-// need not.
+// leaves it idle for the next reader; of one it no longer names, let answers
+// true and the caller unmaps it, holding no lock.
 func (rm *runMaps) let(m *mappedRun) bool {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
@@ -139,10 +122,9 @@ func (rm *runMaps) let(m *mappedRun) bool {
 	return false
 }
 
-// forget marks m a run its index no longer names — or one of an incarnation
-// that is gone — so it is never held again, and answers true where nobody
-// holds it now: the caller unmaps it. A held one is unmapped at its last
-// release (let).
+// forget marks m a run its index (or its incarnation) no longer names, so it
+// is never held again, and answers true where nobody holds it now: the caller
+// unmaps it. A held one is unmapped at its last release (let).
 func (rm *runMaps) forget(m *mappedRun) bool {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
@@ -161,9 +143,9 @@ func (rm *runMaps) forget(m *mappedRun) bool {
 	return true
 }
 
-// drop unmaps m, a mapping made for one use and held by nobody else — a
-// merge's input, or a reader's that another reader's mapping of the same run
-// made needless — and gives back its room.
+// drop unmaps m, a mapping made for one use and held by nobody else (a
+// merge's input, or a reader's made needless by another reader's mapping of
+// the same run), and gives back its room.
 func (rm *runMaps) drop(m *mappedRun) {
 	rm.mu.Lock()
 	gone := m.gone
@@ -177,9 +159,9 @@ func (rm *runMaps) drop(m *mappedRun) {
 	}
 }
 
-// idleRuns is the mappings nobody holds, in the order they were let go: a
-// list through the mappings themselves, so letting one go and taking it again
-// allocates nothing.
+// idleRuns is the mappings nobody holds, in the order they were let go,
+// linked through the mappings themselves so a let and a hold allocate
+// nothing.
 type idleRuns struct {
 	head, tail *mappedRun
 }
@@ -216,11 +198,10 @@ type mappedRun struct {
 	n    uint64
 	data []byte
 	file runFile
-	// Under runMaps.mu: holds is how many readers hold it (Cache.Provenance);
-	// stale, that its index no longer names it — or its incarnation is gone
-	// — so it is unmapped at its last release rather than kept idle; gone,
-	// that it is unmapped or about to be, so nobody takes it again; and
-	// prev, next and idling its place among the idle.
+	// Under runMaps.mu: holds counts its readers; stale, that its index (or
+	// incarnation) no longer names it, so its last release unmaps it rather
+	// than idling it; gone, that it is unmapped or about to be, so nobody
+	// takes it again; prev, next and idling, its place among the idle.
 	holds      int
 	stale      bool
 	gone       bool

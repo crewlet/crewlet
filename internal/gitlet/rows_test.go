@@ -11,27 +11,20 @@ import (
 
 // BOTH APPLY GATES ARE READ IN ONE TRANSACTION.
 //
-// [gitlet.Gates.GatedAt] is one answer made of two reads — the repository's deletion
-// marker and the writer's eviction window — and it shipped as two
-// `Read` calls under a comment saying it was one. Two calls are two snapshots,
-// and two resolutions of the replicated estate, which an adoption replaces
-// while readers run: the applier commits between them, a purge of the repository can
-// land between them, and the two halves then describe two states of the
-// estate — possibly two files.
+// [gitlet.Gates.GatedAt] is one answer made of two reads, the deletion marker
+// and the writer's eviction window. Two `Read` calls would be two snapshots and
+// two resolutions of an estate an adoption replaces while readers run, so the
+// halves could describe two states of it, possibly two files.
 //
-// A STRUCTURAL TEST, because the defect is structural, for the reason
-// read_test.go gives: a behavioural one would have to commit a purge or swap
-// the estate between two statements of one call, which is a race a test can
-// only lose reliably. So it holds the shape instead: exactly one transaction,
-// both gate tables named inside it, and every statement run on that
-// transaction's own handle rather than on a pool a statement could reach
-// around it through.
+// A STRUCTURAL TEST, for the reason read_test.go gives: a behavioural one
+// would have to land a purge or swap the estate between two statements, a
+// race a test only loses. It holds the shape: exactly one transaction, both
+// gate tables named inside it, every statement on that transaction's handle.
 func TestGatedAtReadsBothGatesInOneTransaction(t *testing.T) {
 	t.Parallel()
 
-	// THE MATCHER, ON INPUT WHOSE VERDICT IS KNOWN. A guard asserting a
-	// shape passes identically when the shape holds and when the guard has
-	// stopped looking.
+	// THE MATCHER, ON INPUT WHOSE VERDICT IS KNOWN: a shape guard otherwise
+	// passes alike when the shape holds and when it has stopped looking.
 	for name, tc := range map[string]struct {
 		src   string
 		clean bool
@@ -156,10 +149,8 @@ func gatedAt(file *ast.File) *ast.FuncDecl {
 // that reads both gate tables through its own handle.
 //
 // A STATEMENT IS ITS TEXT WHEREVER IT IS SPELLED: this domain names each
-// statement by a constant declared in the file, so an identifier inside the
-// transaction that names one of the file's string constants reads as that
-// constant's text — a guard that read only literals would find neither table
-// and could not tell the two transactions this replaced from one.
+// statement by a file constant, so an identifier naming one reads as its text;
+// a guard that read only literals would find neither table.
 func oneTransaction(fset *token.FileSet, file *ast.File, fn *ast.FuncDecl) []string {
 	consts := stringConsts(file)
 	var opens, statements []*ast.CallExpr
@@ -222,8 +213,7 @@ func oneTransaction(fset *token.FileSet, file *ast.File, fn *ast.FuncDecl) []str
 	return problems
 }
 
-// stringConsts is every constant the file declares as one string literal, by
-// name.
+// stringConsts is every constant the file declares as one string literal, by name.
 func stringConsts(file *ast.File) map[string]string {
 	out := map[string]string{}
 	for _, decl := range file.Decls {

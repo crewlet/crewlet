@@ -14,20 +14,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE QUEUE'S OWN RECORDS, DECIDED (queuerecords.go): each from ONE snapshot of
-// the repository's rows on its committer, as an enqueue is — what its home
-// built is proposed with what it was built from, and the decide holds the rows
-// to it: the target AT THE TIP the train or the landing was built onto, read off
-// the snapshot's refs (target_moved, which its home answers by building
-// again); every entry LIVE in the target's queue (not_queued); and, for a
-// landing, every entry's gate MET AGAIN with its enqueuer as the merger — the
-// verdict race between an enqueue and its landing is the deliberate one, and
-// the landing is the record that moves the branch.
+// THE QUEUE'S OWN RECORDS, DECIDED (queuerecords.go), each from ONE snapshot
+// of the repository's rows on its committer: its home proposes what it built
+// with what it built it from, and the decide holds the rows to it — the target
+// AT THE TIP it was built onto (target_moved: its home builds again), every
+// entry LIVE in the target's queue (not_queued) and, for a landing, every
+// entry's gate MET AGAIN with its enqueuer as the merger. The verdict race
+// between an enqueue and its landing is deliberate: the landing moves the branch.
 
-// The rows each of the queue's own records makes its apply touch at most,
-// beside a landing's pushes, which its decide counts as their apply writes
-// them ([Committer.ProposeQueue] charges each; [TestALandRecordFitsItsCaps]
-// holds them under MaxRecordRows).
+// The most rows each of the queue's own records' apply touches, beside a
+// landing's pushes, which its decide counts ([Committer.ProposeQueue] charges
+// each; [TestALandRecordFitsItsCaps] holds them under MaxRecordRows).
 const (
 	// candidateDecidedRows: the target's earlier train abandoned
 	// ([trainRows]), every entry of the new one testing, its candidates'
@@ -37,29 +34,26 @@ const (
 	// repository's, and the notices its routing makes.
 	brokenDecidedRows = 3 + routingNoticeRows
 	// greenDecidedRows: the target's green row, its row of tip work and the
-	// repository's — whatever lies beneath the green: a landing is green by
-	// its position, so no green writes one a landing ([Applier.applyGreen]).
+	// repository's, whatever lies beneath: a landing is green by its
+	// position, so a green writes no row for one ([Applier.applyGreen]).
 	greenDecidedRows = 3
 )
 
-// closeSettledRows is the rows a close_settled of n closes makes its apply
-// touch of its own: each entry's row and the repository's. Its routings'
-// notices are kept within what [MaxRecordRows] leaves beside them
-// ([keptRoutings]).
+// closeSettledRows is the rows a close_settled of n closes' apply touches of
+// its own: each entry's and the repository's. [keptRoutings] holds its
+// routings' notices within what [MaxRecordRows] leaves beside them.
 func closeSettledRows(n int) int { return n + 1 }
 
 // closeSettledDecidedRows is what the committer charges a close_settled of n
-// closes: its own rows and, every close not_closed, a routing's notices each
-// ([routingNoticeRows]) — never past [MaxRecordRows], which its kept
-// routings stay within.
+// closes: its own rows and a routing's notices ([routingNoticeRows]) per
+// not_closed close, capped at [MaxRecordRows], which its kept routings fit.
 func closeSettledDecidedRows(n int) int {
 	return min(closeSettledRows(n)+n*routingNoticeRows, MaxRecordRows)
 }
 
-// owedNamedSQL is a repository's entries named by a JSON list, each by its
-// key, with the close each owes its work item ("" for none): what a
-// close_settled's decide, its apply and its answer read — one statement for
-// every close the record settles.
+// owedNamedSQL reads a repository's entries named by a JSON list, by key, each
+// with the close it owes its work item ("" for none): one statement for every
+// close a close_settled settles, read by its decide, its apply and its answer.
 const owedNamedSQL = `SELECT ` + qualifiedEntryColumns + `, q.close_op FROM json_each(?1) AS j
 		CROSS JOIN code_queue AS q INDEXED BY ` + queueKey + `
 		WHERE q.repo_id = ?2 AND q.entry_id = CAST(j.value AS TEXT)`
@@ -69,12 +63,11 @@ const owedNamedSQL = `SELECT ` + qualifiedEntryColumns + `, q.close_op FROM json
 // repository's and the queue's horizon.
 func ejectDecidedRows(n int) int { return n + trainRows + 1 + queueHorizonRows }
 
-// landDecidedRows is the most rows a land of n entries makes its apply touch
-// of its OWN, beside the pushes it lands: each entry's change merged, its
-// stored readiness cleared ([clearReadiness]), its entry landed and its
-// landing row; the target's green row and its row of tip work; the tally row
-// its merges move (apply_counts.go); its train's landed candidates; and the
-// queue's horizon.
+// landDecidedRows is the most rows a land of n entries' apply touches of its
+// OWN, beside its pushes: per entry its change merged, its readiness cleared
+// ([clearReadiness]), the entry landed and its landing row; the target's green
+// row and row of tip work; the tally row its merges move (apply_counts.go);
+// its train's landed candidates; and the queue's horizon.
 func landDecidedRows(n int) int { return 4*n + 2 + tallyRows + MaxQueueDepth + queueHorizonRows }
 
 // landPushRows is the most rows a land's n pushes write before the changes
@@ -83,17 +76,15 @@ func landDecidedRows(n int) int { return 4*n + 2 + tallyRows + MaxQueueDepth + q
 // pusher day ([pusherDayRows]), and the first its pack.
 func landPushRows(n int) int { return n*(1+1+3+pusherDayRows) + 1 }
 
-// landRecordRows is a land record's rows but the changes its pushes move,
-// which its decide counts ([decideLand]): what the committer charges it.
+// landRecordRows is what the committer charges a land record: its rows but the
+// changes its pushes move, which [decideLand] counts.
 func landRecordRows(n int) int { return landDecidedRows(n) + landPushRows(n) }
 
 // decideCandidate is a candidate's rules over the rows tx holds: the target at
 // the train's base (target_moved), every entry live in the target's queue
-// (not_queued), each candidate's commits what its entries' methods make (a
-// fast-forward its head, a merge or a squash a commit of its own) and the pack
-// carrying them (stale), and the pack held to a push's rules (upload_expired,
-// repo_size, compaction_behind — m3-k5's rule 6c: a busy queue waits for
-// compaction rather than outrunning it).
+// (not_queued), each candidate's commits what its entries' methods make and
+// the pack carrying them (stale), and the pack held to a push's rules
+// ([queuePack]: a busy queue waits for compaction rather than outrunning it).
 func decideCandidate(ctx context.Context, tx *sql.Tx, c Candidate, repo pushRepo, limits Limits, now time.Time,
 	d queueDecision) (queueDecision, error) {
 
@@ -135,16 +126,16 @@ func decideCandidate(ctx context.Context, tx *sql.Tx, c Candidate, repo pushRepo
 	return d, nil
 }
 
-// decideEject is an eject's rules over the rows tx holds: an ejection naming
-// its repository a pull mirror on one that is not (stale), every entry live in
-// its queue, and all of them one target's, whose train it abandons
-// (not_queued).
+// decideEject is an eject's rules over the rows tx holds: no ejection calls
+// its repository a pull mirror when it is not (stale); every entry is live in
+// one target's queue, whose train it abandons (not_queued); and every train an
+// ejection names is the one the rows test its entry in (stale).
 func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queueDecision) (queueDecision,
 	error) {
 
-	// A REPOSITORY THAT IS A PULL MIRROR NO LONGER — its mirror_from removed
-	// between the home's read and this decide — takes its queue's work again,
-	// so its entries are not put out for a reason the rows no longer hold.
+	// A PULL MIRROR NO LONGER (mirror_from removed since the home's read)
+	// takes its queue's work again: no entry goes out for a reason the rows
+	// no longer hold.
 	if !repo.mirrored && slices.ContainsFunc(e.Entries, func(x Ejection) bool {
 		return x.Reason == EjectRepoMirrored
 	}) {
@@ -170,12 +161,20 @@ func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queu
 				"one target's live entries out", x.EntryID, repo.name, why))
 		}
 	}
-	// WHOM IT CONCERNS, a routing an entry's change: its authors and its
-	// enqueuer told it left the queue — its authors that its merge
-	// conflicted, where it did — the home's own record, so nobody's actor,
-	// carrying whom the entry's enqueue was made for (concerns.go's head,
-	// "Whom the actor acted for"): the turn it wakes fixes and queues the
-	// change again for them, never with every app the told seat holds.
+	stale, err := testedInStale(ctx, tx, e, entries, target)
+	if err != nil {
+		return queueDecision{}, err
+	}
+	if stale != "" {
+		return d.refuse(MergeRefusalStale, fmt.Sprintf("%s of %s's queues: read its queue again", stale,
+			repo.name))
+	}
+	// WHOM IT CONCERNS, a routing per entry's change: its authors and
+	// enqueuer, told it left the queue (the authors also that its merge
+	// conflicted, where it did). The home's own record, so nobody's actor,
+	// carrying whom the enqueue was made for (concerns.go, "Whom the actor
+	// acted for"): the woken turn fixes and re-queues it for them, never with
+	// every app the seat holds.
 	ids := make([]string, len(e.Entries))
 	for i, x := range e.Entries {
 		ids[i] = entries[x.EntryID].ChangeID
@@ -212,30 +211,49 @@ func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queu
 	return d, nil
 }
 
-// decideLand is a landing's rules over the rows tx holds, in their order:
-//
-//  1. the target at the landing's base, read off the snapshot's refs
-//     (target_moved);
-//  2. the target a queue target (no_queue);
-//  3. every entry live in the target's queue, of its change, at the head it
-//     was enqueued at, its commit what its method makes (not_queued, stale);
-//  4. the landing a PREFIX of the target's train — its candidates from the
-//     first, in order, up to the one whose tip is the landing's — whose
-//     every required check passed on its tip, by its latest attempt checked
-//     for the target (stale, not_green);
-//  5. EVERY ENTRY'S GATE MET AGAIN, from this snapshot, with its ENQUEUER as
-//     the merger — every precondition but `mergeable`, which its candidate
-//     proved on the branch, and the entry's own place in the queue
-//     — its change open, not a draft, into the target at the entry's head:
-//     each entry it would not land named in [QueueResult.Refused]
-//     (gate_unmet, head_moved, change_not_open), for its home to eject;
-//  6. its rows within a record — its own, its pushes', and the live changes
-//     those pushes move, counted as their apply writes them (record_full).
-//
-// It STAMPS what its snapshot holds, so the apply matches no pattern: each
-// entry's source deleted where the entry asked it and a push deleting it as
-// its enqueuer would be taken. A landing lands GREEN, its required checks
-// proved on its tip by rule 4, so its apply moves the target's green row.
+// testedInStale is why the first train an ejection of e names is not the one
+// the rows hold its entry testing in (that candidate, at that commit, onto that
+// base), "" where every named train is. It reads target's train at most once.
+func testedInStale(ctx context.Context, tx *sql.Tx, e Eject, entries map[string]queueEntry,
+	target string) (string, error) {
+
+	if !slices.ContainsFunc(e.Entries, func(x Ejection) bool { return x.TestedIn != nil }) {
+		return "", nil
+	}
+	train, err := trainsOf(ctx, tx, e.RepoID, target)
+	if err != nil {
+		return "", err
+	}
+	for _, x := range e.Entries {
+		t := x.TestedIn
+		if t == nil {
+			continue
+		}
+		entry := entries[x.EntryID]
+		held := slices.ContainsFunc(train, func(c CandidateRow) bool {
+			return c.CandidateID == t.CandidateID && c.BaseOID == t.BaseOID
+		})
+		if !held || entry.State != QueueTesting || entry.CandidateID != t.CandidateID ||
+			entry.CommitOID != t.CommitOID {
+			return fmt.Sprintf("entry %s is not testing in candidate %s merged onto %s at %s", x.EntryID,
+				t.CandidateID, short(t.BaseOID), short(t.CommitOID)), nil
+		}
+	}
+	return "", nil
+}
+
+// decideLand is a landing's rules over the rows tx holds, in order: the target
+// at its base (target_moved); a queue target (no_queue); every entry live in
+// its queue, of its change, its commit what its method makes (not_queued,
+// stale); the landing a PREFIX of the train ([prefixOfTrain]), every required
+// check passed on its tip (stale, not_green); EVERY ENTRY'S GATE MET AGAIN with
+// its ENQUEUER as the merger, but `mergeable`, which its candidate proved, and
+// its queue place — its change open, not a draft, at the entry's head — each
+// entry it would not land named in [QueueResult.Refused] for its home to eject
+// (gate_unmet, head_moved, change_not_open); its own, its pushes' and their
+// moved live changes' rows within a record (record_full). It STAMPS each
+// source deletion from its snapshot, so the apply matches no pattern, and a
+// landing lands GREEN by its checks, so its apply moves the green row.
 func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats SeatRules, limits Limits,
 	d queueDecision) (queueDecision, error) {
 
@@ -367,9 +385,9 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 			len(d.refused), len(l.Entries), first.Detail))
 	}
 
-	// THE SOURCES, each deleted where its entry asks it and a push deleting
-	// it as its enqueuer would be taken — kept otherwise, as a merge asked
-	// keeping its source; never a refusal, since nobody is asking to answer.
+	// THE SOURCES, each deleted where its entry asks and a push deleting it as
+	// its enqueuer would be taken, kept otherwise as a merge keeping its
+	// source: never a refusal, since nobody is waiting on the answer.
 	sources := make([]string, 0, len(rows))
 	for _, row := range rows {
 		sources = append(sources, row.source)
@@ -392,8 +410,7 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 		}
 	}
 
-	// ITS ROWS, the pushes' moves of the live changes among them, as the
-	// apply writes them.
+	// ITS ROWS, with the pushes' moves of live changes, as the apply writes them.
 	pushes := stamped.pushes(entries, rows)
 	book, err := readChangeBook(ctx, tx, l.RepoID, pushes, 0, 0)
 	if err != nil {
@@ -410,11 +427,11 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 			"the live changes its pushes move, past MaxRecordRows (%d): land fewer at once", len(pushes),
 			l.TargetRef, total, MaxRecordRows))
 	}
-	// WHOM IT CONCERNS, a routing an entry's change: its authors told it
-	// merged — all but its enqueuer, who merged it as the landing's push
-	// names them, and for whom their enqueue was made, as the entry's row
-	// keeps it (concerns.go's head, "Whom the actor acted for") — within what
-	// the record's rows and bytes leave.
+	// WHOM IT CONCERNS, a routing per entry's change: its authors but its
+	// enqueuer told it merged by the enqueuer, the landing push's principal,
+	// acting for whom the entry's row says the enqueue was made (concerns.go,
+	// "Whom the actor acted for"), within what the record's rows and bytes
+	// leave.
 	routings := make([]ChangeRouting, 0, len(stamped.Entries))
 	for i, e := range stamped.Entries {
 		entry := entries[e.EntryID]
@@ -442,9 +459,9 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 
 // decideGreen is a green's rules over the rows tx holds: a landing record at
 // Through on the target, above its green row, whose last landing's commit is
-// OID (no_landing); every check the target's gate requires passed on OID by
-// its latest attempt checked for the target (not_green). Never record_full:
-// it writes [greenDecidedRows] whatever lies beneath it.
+// OID (no_landing), and every check the target's gate requires passed on OID by
+// its latest attempt (not_green). Never record_full: it writes
+// [greenDecidedRows] whatever lies beneath it.
 func decideGreen(ctx context.Context, tx *sql.Tx, g Green, d queueDecision) (queueDecision,
 	error) {
 
@@ -482,16 +499,15 @@ func decideGreen(ctx context.Context, tx *sql.Tx, g Green, d queueDecision) (que
 	return d, nil
 }
 
-// decideCloseSettled is a close_settled's rules over the rows tx holds: of
-// its closes, those whose entry LANDED and still OWES its close are recorded
-// and every other SKIPPED — another home's settle reached it first, which its
-// asker reads as done — and a record none of whose closes is owed any more is
-// refused stale. Each not_closed close recorded is stamped whom it tells: its
-// change's authors and its enqueuer, under `merged`, its detail beside — the
-// home's own record, so nobody's actor, carrying whom the entry's enqueue was
-// made for, so the turn it wakes leaves the item to what they may use rather
-// than close it with every app the told seat holds (concerns.go's head, "Whom
-// the actor acted for"); nobody where the repository holds the change no more.
+// decideCloseSettled is a close_settled's rules over the rows tx holds: a close
+// whose entry LANDED and still OWES it is recorded, every other SKIPPED
+// (another home's settle reached it first, which its asker reads as done), and
+// a record owing none is refused stale. Each not_closed close tells its
+// change's authors and enqueuer, under `merged`, with its detail: the home's
+// own record, so nobody's actor, carrying whom the enqueue was made for, so the
+// woken turn leaves the item to what they may use rather than close it with
+// every app the seat holds (concerns.go, "Whom the actor acted for"); nobody
+// where the repository no longer holds the change.
 func decideCloseSettled(ctx context.Context, tx *sql.Tx, c CloseSettled, repo pushRepo, d queueDecision) (
 	queueDecision, error) {
 
@@ -557,9 +573,8 @@ type owedClose struct {
 	op    string
 }
 
-// owedClosesNamed reads repository repoID's entries ids by their key, each
-// with the close it owes its work item, in one statement; an entry its
-// queues hold no such row of is absent.
+// owedClosesNamed reads repoID's entries ids by key, each with the close it
+// owes its work item, in one statement ([owedNamedSQL]); an unheld id is absent.
 func owedClosesNamed(ctx context.Context, tx *sql.Tx, repoID string, ids []string) (map[string]owedClose, error) {
 	out := make(map[string]owedClose, len(ids))
 	list, err := jsonList(ids)
@@ -584,8 +599,8 @@ func owedClosesNamed(ctx context.Context, tx *sql.Tx, repoID string, ids []strin
 
 // decideBroken is a broken's rules over the rows tx holds: the landing at its
 // key, at its commit, above its target's green row (no_landing), and every
-// check it names FAILED on the commit by its latest attempt checked for the
-// target — a measurement, never an infrastructure's error (not_red).
+// check it names FAILED on the commit by its latest attempt for the target: a
+// measurement, never an infrastructure's error (not_red).
 func decideBroken(ctx context.Context, tx *sql.Tx, b Broken, repo pushRepo, seats SeatRules,
 	d queueDecision) (queueDecision, error) {
 
@@ -620,13 +635,12 @@ func decideBroken(ctx context.Context, tx *sql.Tx, b Broken, repo pushRepo, seat
 				"a check that failed on it", name, short(b.OID), state))
 		}
 	}
-	// WHOM IT CONCERNS: the authors of the change the landing merged and the
-	// effective lead of the repository's owner — the home's own record, so
-	// nobody's actor; nobody for a landing no change made. NEVER AN
-	// ENQUEUER: a queue's landing lands green, its green row at its own
-	// position, so the green row refuses every broken naming one above; what
-	// a broken can name landed ahead of its checks — a person's override
-	// merge or push — and no queue landed it.
+	// WHOM IT CONCERNS: the landed change's authors and the effective lead of
+	// the repository's owner (the home's own record, so nobody's actor);
+	// nobody for a landing no change made. NEVER AN ENQUEUER: a queue's
+	// landing moves the green row to its own position, which refuses a broken
+	// naming it, so a broken names only what landed ahead of its checks (a
+	// person's override merge or push).
 	if landing.changeID != "" {
 		row, found, err := changeRowIn(ctx, tx, landing.changeID)
 		if err != nil {
@@ -654,8 +668,8 @@ func (e queueEntry) enqueuer() Principal {
 	return Principal{Kind: PrincipalOperator, OperatorID: e.EnqueuedOperator, Seat: e.EnqueuedBy.Handle}
 }
 
-// whyNotLive is why entry, found or not, is no live entry of target's queue — ""
-// where it is one.
+// whyNotLive is why entry, found or not, is no live entry of target's queue,
+// "" where it is one.
 func whyNotLive(entry queueEntry, found bool, target string) string {
 	switch {
 	case !found:
@@ -668,9 +682,8 @@ func whyNotLive(entry queueEntry, found bool, target string) string {
 	return ""
 }
 
-// builtAs is why commit is not what entry's method makes of its head — "" where
-// it is: a fast-forward its head itself, a merge or a squash a commit of its
-// own.
+// builtAs is why commit is not what entry's method makes of its head, "" where
+// it is: a fast-forward its head itself, a merge or a squash a commit of its own.
 func builtAs(entry queueEntry, commit string) string {
 	switch {
 	case entry.Method == MergeMethodFastForward && commit != entry.HeadOID:
@@ -683,11 +696,11 @@ func builtAs(entry queueEntry, commit string) string {
 	return ""
 }
 
-// queuePack is a train's pack held to a push's rules — or why it may not be:
+// queuePack is why a train's pack fails a push's rules, "" where it passes:
 // carried exactly where the train built a commit (stale), uploaded recently
 // enough for a record to name it (upload_expired), within the repository's
-// size (repo_size) and into a repository whose compaction keeps pace with its
-// packs (compaction_behind, m3-k5's rule 6c).
+// size (repo_size), and into a repository whose compaction keeps pace with its
+// packs (compaction_behind: a busy queue waits rather than outrunning it).
 func queuePack(pack *PackRef, builds bool, repo pushRepo, limits Limits, now time.Time) (MergeRefusal, string) {
 	switch {
 	case pack == nil && builds:
@@ -754,8 +767,8 @@ func prefixOfTrain(ctx context.Context, tx *sql.Tx, l Land) (string, bool, error
 }
 
 // latestChecksOn is the latest attempt of each of names checked on commit for
-// target, by name — none for a name no attempt of which is recorded there —
-// in ONE statement over the checks' key, the gate's own ([gateChecksIn]).
+// target (none for a name with no attempt there), in ONE statement over the
+// checks' key, the gate's own ([gateChecksIn]).
 func latestChecksOn(ctx context.Context, tx *sql.Tx, repoID, commit, target string, names []string) ([]GateCheck,
 	error) {
 
@@ -774,8 +787,8 @@ func latestChecksOn(ctx context.Context, tx *sql.Tx, repoID, commit, target stri
 	return out[0].Checks, nil
 }
 
-// notPassed is every name of names whose latest attempt of checks did not pass
-// — or was skipped, its paths untouched — each with where it stands.
+// notPassed is every name of names whose latest attempt in checks neither
+// passed nor was skipped (its paths untouched), each with where it stands.
 func notPassed(names []string, checks []GateCheck) []string {
 	var out []string
 	for _, name := range names {
@@ -790,8 +803,8 @@ func notPassed(names []string, checks []GateCheck) []string {
 	return out
 }
 
-// gateOf is the merge gate target is held to on repoID by its rules as tx
-// holds them — the checks it requires its tip to pass.
+// gateOf is the merge gate target is held to on repoID by the rules tx holds:
+// the checks its tip must pass.
 func gateOf(ctx context.Context, tx *sql.Tx, repoID, target string) (GateRules, error) {
 	rules, err := rulesOfRepos(ctx, tx, []readinessSubject{{repo: RepoRef{ID: repoID}}})
 	if err != nil {
@@ -809,8 +822,8 @@ func targetTip(ctx context.Context, tx *sql.Tx, repoID, target string) (string, 
 	return refTip(refs, target), nil
 }
 
-// entriesNamed reads repository repoID's entries of ids by their key, by id —
-// one statement driven from the list, a seek of the key an id.
+// entriesNamed reads repoID's entries ids by key, in one statement driven from
+// the list, a seek of the key per id.
 func entriesNamed(ctx context.Context, tx *sql.Tx, repoID string, ids []string) (map[string]queueEntry, error) {
 	out := map[string]queueEntry{}
 	if len(ids) == 0 {
@@ -836,7 +849,7 @@ func entriesNamed(ctx context.Context, tx *sql.Tx, repoID string, ids []string) 
 }
 
 // landingTipAt is the commit of the LAST landing on target of the record at
-// position — the record's tip — and false where it landed none there.
+// position (the record's tip), false where it landed none there.
 func landingTipAt(ctx context.Context, tx *sql.Tx, repoID, target string, position int64) (string, bool, error) {
 	var commit string
 	switch err := tx.QueryRowContext(ctx, landingTipSQL, repoID, target, position).Scan(&commit); {
@@ -854,8 +867,7 @@ type landingRow struct {
 	commit, changeID string
 }
 
-// landingAt is target's landing at (position, ordinal), and false where there
-// is none.
+// landingAt is target's landing at (position, ordinal), false where none.
 func landingAt(ctx context.Context, tx *sql.Tx, repoID, target string, position int64, ordinal int) (landingRow,
 	bool, error) {
 
@@ -871,19 +883,15 @@ func landingAt(ctx context.Context, tx *sql.Tx, repoID, target string, position 
 	return l, true, nil
 }
 
-// pushes is the push each of l's entries lands as, in order — its push id
-// derived from the landing's, its enqueuer its principal and whom its enqueue
-// was made for its carrier, `via queue`, the target moved from what the entry
-// before it left onto its commit (a fast-forward, which leaves nothing
-// behind), the change's source deleted where the decide stamped it, and what
-// it introduced: the commit a merge or a squash built, none for a
-// fast-forward, whose head its change's own pushes brought. entries are the
-// entries' rows and rows their changes', in l's order.
-//
-// THE CARRIER IS THE ENTRY'S ROW'S, never the land record's, which carries
-// none: the enqueue's own apply kept it there (code_queue.working_for), on
-// every node of this build alike, so the landing's push rows are the same on
-// every node too.
+// pushes is the push each of l's entries lands as, in order: its id derived
+// from the landing's, its enqueuer its principal, `via queue`; the target
+// fast-forwarded from what the entry before left onto its commit; the change's
+// source deleted where the decide stamped it; and introducing the commit a
+// merge or a squash built, none for a fast-forward, whose head its change's
+// own pushes brought. entries and rows are the entries' and their changes'
+// rows, in l's order. Its carrier is the entry row's (code_queue.working_for),
+// which the enqueue's apply wrote on every node alike — never the land
+// record's, which carries none — so every node writes the same push rows.
 func (l Land) pushes(entries map[string]queueEntry, rows []changeRow) []PushEntry {
 	out := make([]PushEntry, len(l.Entries))
 	from := l.BaseOID
@@ -905,13 +913,13 @@ func (l Land) pushes(entries map[string]queueEntry, rows []changeRow) []PushEntr
 	return out
 }
 
-// appliedQueueRecord answers one of the queue's own records whose record
-// applied at at, FROM THE ROWS IT WROTE — rows no later record rewrites,
-// wherever they can be: a landing's first push row, an eject's ended entries,
-// a green row at or past its landing, a broken landing; and a candidate's
-// train at the record's position, which a later record may abandon. Rows that
-// do not carry it are a record that applied and wrote what this node does not
-// hold — or, for a train, one abandoned since — logged and answered unknown.
+// appliedQueueRecord answers one of the queue's own records applied at at FROM
+// THE ROWS IT WROTE, rows no later record rewrites wherever there are such: a
+// landing's first push row, an eject's ended entries, a green row at or past
+// its landing, a broken landing; and, rewritable, a candidate's train at the
+// record's position. Rows that do not carry it (this node lacks what the
+// record wrote, or the train was abandoned since) are logged and answered
+// unknown.
 func (c *Committer) appliedQueueRecord(ctx context.Context, p QueueProposal, at statelog.Position) (QueueResult,
 	error) {
 
@@ -977,9 +985,8 @@ func queueRecordHeld(ctx context.Context, tx *sql.Tx, p QueueProposal, at statel
 		}
 		return broken, err
 	case p.CloseSettled != nil:
-		// SETTLED, every entry it names owing no close any more: the
-		// record's apply is the one write that clears one, and an entry its
-		// decide skipped owed none already.
+		// SETTLED once no entry it names owes a close: its apply is the one
+		// write that clears one, and an entry its decide skipped owed none.
 		ids := p.CloseSettled.entries()
 		owed, err := owedClosesNamed(ctx, tx, repoID, ids)
 		if err != nil {
@@ -1003,14 +1010,12 @@ func (c *Committer) announceEjected(e Eject, at statelog.Position) {
 	})
 }
 
-// announcePushEjections hands the announcer a code_queue_ejected event for each live
-// queue entry of the changes the push record at at moved the heads of
-// (ejected, [batchMoves]) — ended head_moved by the record's own apply, which
-// no queue record names, so without this a seat's day counted none of the
-// commonest ejection while the queue read listed every one. Each entry is the
-// one the record ended — its change's entry ended at the record's position,
-// ejected head_moved, read from this node's rows: one statement over the
-// changes, a seek of code_queue_change_idx each ([pushEjectedSQL]).
+// announcePushEjections hands the announcer a code_queue_ejected event for each
+// entry the push record at at ejected head_moved by moving its change's head
+// (ejected, [batchMoves]). No queue record names these, so without this a
+// seat's day would count none of the commonest ejection while the queue read
+// lists every one. The entries are read from this node's rows in one statement
+// over the changes, a seek of code_queue_change_idx each ([pushEjectedSQL]).
 func (c *Committer) announcePushEjections(repoID string, ejected []string, at statelog.Position) {
 	c.announceEjectionsLater(repoID, at, func(ctx context.Context, tx *sql.Tx) ([]Ejection, error) {
 		list, err := jsonList(ejected)
@@ -1037,7 +1042,7 @@ func (c *Committer) announcePushEjections(repoID string, ejected []string, at st
 
 // announceEjectionsLater hands the announcer the ejections read names
 // ([Committer.announceEjections]), so the repository's next write waits on
-// none of their read or publish (announce.go).
+// neither their read nor their publish (announce.go).
 func (c *Committer) announceEjectionsLater(repoID string, at statelog.Position,
 	read func(context.Context, *sql.Tx) ([]Ejection, error)) {
 
@@ -1045,14 +1050,13 @@ func (c *Committer) announceEjectionsLater(repoID string, at statelog.Position,
 		publish: func(ctx context.Context, when time.Time) { c.announceEjections(ctx, when, repoID, at, read) }})
 }
 
-// announceEjections publishes a code_queue_ejected event for each entry read
-// puts out of repoID's queues at at, on this node's event stream, stamped
-// when, under ctx — the announcer's one [checkEventBudget], as a merge's event
-// is ([Committer.announceMerged]): each names the entry's change by its
-// repository and number, read from this node's rows, and a stream that does
-// not take one is logged — the entry's row still says it was ejected. read is
-// asked inside the one read, so the entries it names and the rows that
-// describe them are one snapshot.
+// announceEjections publishes on this node's event stream a code_queue_ejected
+// event for each entry read puts out of repoID's queues at at, stamped when,
+// under ctx: the announcer's one [checkEventBudget], as
+// [Committer.announceMerged]. Each names the entry's change by repository and
+// number from this node's rows; a stream that refuses one is logged, the
+// entry's row still saying it was ejected. read runs inside the one read, so
+// its entries and the rows describing them are one snapshot.
 func (c *Committer) announceEjections(ctx context.Context, when time.Time, repoID string, at statelog.Position,
 	read func(context.Context, *sql.Tx) ([]Ejection, error)) {
 
@@ -1098,8 +1102,8 @@ func (c *Committer) announceEjections(ctx context.Context, when time.Time, repoI
 				Reason: string(x.Reason), Checks: x.Checks, Paths: x.Paths, EnqueuedBy: entry.EnqueuedBy.Handle,
 				EnqueuedByKind: string(entry.EnqueuedBy.Kind)}
 			// THE CHANGE'S OWNER, whose day counts the ejection
-			// (types.CodeQueueEjected.Owner): one seek of the changes' key
-			// an entry, of a record that ejects at most a queue's depth.
+			// (types.CodeQueueEjected.Owner): a seek of the changes' key per
+			// entry, at most a queue's depth of them.
 			change, found, err := changeRowIn(ctx, tx, entry.ChangeID)
 			if err != nil {
 				return err
@@ -1128,18 +1132,17 @@ func (c *Committer) announceEjections(ctx context.Context, when time.Time, repoI
 
 // announceBroken hands the announcer the code_target_broken event of the
 // broken at at ([Committer.publishBroken]), so the repository's next write
-// waits on none of its read or publish (announce.go).
+// waits on neither its read nor its publish (announce.go).
 func (c *Committer) announceBroken(b Broken, at statelog.Position) {
 	c.announceLater(announcement{kind: "code_target_broken", repoID: b.RepoID, id: at.String(),
 		publish: func(ctx context.Context, when time.Time) { c.publishBroken(ctx, when, b, at) }})
 }
 
-// publishBroken publishes ONE code_target_broken event for the landing the
-// broken at at named (ADR-0098), on this node's event stream, stamped when,
-// under ctx — the announcer's one [checkEventBudget], as an ejection's is: the
-// landing's kind, its change by its repository and number and who landed it,
-// read from this node's rows, and a stream that does not take it logged — the
-// landing's row still says it is broken.
+// publishBroken publishes on this node's event stream ONE code_target_broken
+// event for the landing the broken at at named (ADR-0098), stamped when, under
+// ctx (the announcer's one [checkEventBudget]): the landing's kind, its change
+// by repository and number, and who landed it, from this node's rows. A stream
+// that refuses it is logged; the landing's row still says it is broken.
 func (c *Committer) publishBroken(ctx context.Context, when time.Time, b Broken, at statelog.Position) {
 	ev := types.CodeTargetBroken{RepoID: b.RepoID, RepoName: b.RepoID, Target: b.TargetRef, Commit: b.OID,
 		Checks: b.Checks}
@@ -1174,26 +1177,26 @@ func (c *Committer) publishBroken(ctx context.Context, when time.Time, b Broken,
 }
 
 // ejectedDetail is an ejection's detail as code_queue.ejected keeps it: its
-// checks and its paths, JSON, "" for an ejection naming neither.
+// checks, paths and the train it failed on as JSON, "" where it names none.
 func ejectedDetail(x Ejection) (string, error) {
-	if len(x.Checks) == 0 && len(x.Paths) == 0 {
+	if len(x.Checks) == 0 && len(x.Paths) == 0 && x.TestedIn == nil {
 		return "", nil
 	}
 	encoded, err := json.Marshal(struct {
-		Checks []string `json:"checks,omitempty"`
-		Paths  []string `json:"paths,omitempty"`
-	}{x.Checks, x.Paths})
+		Checks   []string       `json:"checks,omitempty"`
+		Paths    []string       `json:"paths,omitempty"`
+		TestedIn *EjectionTrain `json:"tested_in,omitempty"`
+	}{x.Checks, x.Paths, x.TestedIn})
 	return string(encoded), err
 }
 
-// The queue's own records' reads, each registered in plan_test.go: a list of
-// entries by their key, driven from the list; a train's candidates at a
-// record's position, over code_candidates_train_idx; a landing record's tip,
-// its last landing by the landings' key; a landing by its key, its commit and
-// whether it is broken, and what a broken one announces; and the entries a
-// push record ended by
-// moving their changes' heads, driven from the list of the changes, one seek
-// of code_queue_change_idx a change.
+// The queue's own records' reads, each registered in plan_test.go: entries by
+// key, driven from the list; a train's candidates at a record's position
+// (code_candidates_train_idx); a landing record's tip, its last landing by the
+// landings' key; a landing by key (its commit, whether it is broken, what a
+// broken one announces); and the entries a push record ended by moving their
+// changes' heads, driven from the list of changes, a seek of
+// code_queue_change_idx each.
 const (
 	entriesNamedSQL = `SELECT ` + qualifiedEntryColumns + ` FROM json_each(?1) AS j
 		CROSS JOIN code_queue AS q INDEXED BY ` + queueKey + `

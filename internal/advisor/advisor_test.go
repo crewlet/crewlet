@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
@@ -290,9 +291,10 @@ func TestFindingsOfOneClassSayTheSameAboutEverySubject(t *testing.T) {
 			fires = append(fires, s)
 		}
 	}
-	ev := advisor.Evidence{Fires: fires, MemoryKills: []advisor.MemoryKill{
-		{Seat: "app", MemoryBytes: 2 << 30}, {Seat: "app", MemoryBytes: 2 << 30},
-		{Seat: "qa"}, {Seat: "qa"}, {Seat: "qa"},
+	oom := types.ExecutorErrorOutOfMemory
+	ev := advisor.Evidence{Fires: fires, Runs: []advisor.EndedRun{
+		{Seat: "app", Kind: oom, MemoryBytes: 2 << 30}, {Seat: "app", Kind: oom, MemoryBytes: 2 << 30},
+		{Seat: "qa", Kind: oom}, {Seat: "qa", Kind: oom}, {Seat: "qa", Kind: oom},
 	}}
 	answer := advisor.ReadWithEvidence(advisor.Inputs{Company: liveShape(t), Revision: "r1"}, ev)
 	byClass := map[advisor.Class][]advisor.Finding{}

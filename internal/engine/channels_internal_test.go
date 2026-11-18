@@ -70,11 +70,9 @@ units:
 }
 
 // THE ENGINE'S OWN CHAT IS A SURFACE EVERY AGENT SEAT CAN POST ON, with no bot
-// to hold: on a company whose chat is Chatlet, a seat posts as itself, and the
-// inform it promises is discharged by its own chat tools. It was left out, so
-// every inform a Chatlet company's seat promised was refused as a surface
-// it could not post on. A person has no turn to hold open, and a company whose
-// chat is a vendor's has no Chatlet at all.
+// to hold: on a Chatlet company a seat posts as itself, discharging its inform
+// with its own chat tools. A person has no turn to hold open, and a company
+// without Chatlet offers no such surface.
 func TestTheEnginesOwnChatIsEveryAgentSeatsSurface(t *testing.T) {
 	t.Parallel()
 	const doc = `

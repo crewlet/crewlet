@@ -24,35 +24,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE ATLAS'S AGENT TOOLS: how an agent records what its own work showed it
-// about what the company runs on, and says that something the atlas holds is
-// wrong or gone (ADR-0132).
-//
-// # Only what a call of the same turn showed
-//
-// A record cites a tool the agent called in this turn (`seen_in`), and the
-// engine reads the cited call's own answer, as the model was handed it
-// ([turnctx.Seen]): a new entry's identifier, every fact's value and a
-// relation's target must stand in that text. A value no cited answer shows is
-// refused, so an agent cannot record a host no tool returned.
-//
-// # The engine derives the confidence
-//
-// What the cited call is evidence of is read off its TOOL ([evidenceOf]),
-// never off anything the agent says: a server's or a vendor's own answer, read
-// with the company's credential, makes the record likely; a repository file
-// makes it likely as declared in code; anything else (a message, a page, a
-// work item, a colleague's answer, the atlas itself) is text anybody could
-// have written, and the record stays unconfirmed and hidden until a person
-// confirms it.
-//
-// # What an agent never does
-//
-// It never removes or retires anything: a dispute is shown beside the value
-// and never wins ([atlas.Dispute]). It never sets a fact of meaning, an owner
-// or a dependency, which the vocabulary refuses. It records nothing in a turn
-// somebody outside the company woke, or somebody without Atlas: the authority
-// gate refuses the call before it reaches here (ADR-0109).
+// THE ATLAS'S AGENT TOOLS (ADR-0132; package doc, "What an agent records in
+// the atlas"). A record cites a call of this turn (`seen_in`), and the engine
+// reads that call's answer as the model was handed it ([turnctx.Seen]): a new
+// entry's identifier, every fact's value and a relation's target must stand in
+// it, so an agent cannot record a host no tool returned. The confidence is read
+// off the cited TOOL ([evidenceOf]), never off what the agent says; a record
+// citing text anybody could have written stays unconfirmed and hidden until a
+// person confirms it. An agent never removes or retires anything (a dispute
+// shows beside the value and never wins, [atlas.Dispute]), never sets a fact
+// of meaning such as an owner or a dependency (the vocabulary refuses them),
+// and records nothing in a turn woken from outside the company or by somebody
+// without Atlas: the authority gate refuses it first (ADR-0109).
 
 // The agent tools' names, each its authority row's action.
 const (

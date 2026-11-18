@@ -19,25 +19,21 @@ import (
 )
 
 // walkCommits is the history TestAPushsWalksGoByGeneration walks: long enough
-// that a walk of all of it is tens of milliseconds of git's CPU even read
-// from a commit-graph (0.42 µs a commit on the node pin, git 2.56.0: the
-// listing in date order 50 ms over these 120 000, against 1.1–2.4 ms for each
-// of the host's walks by generation), against the few milliseconds a process
-// costs to start — a gap no load closes, since a
-// process's CPU is its own whatever else the machine runs.
+// that walking all of it costs tens of milliseconds of git's CPU even from a
+// commit-graph (git 2.56.0: 50 ms in date order, against 1.1–2.4 ms for each
+// of the host's walks by generation), past the few milliseconds a process
+// costs to start; no load closes the gap, since a process's CPU is its own.
 const walkCommits = 120_000
 
 // walkEpoch is the history's first commit's time; each later one a second on.
 const walkEpoch = 1_767_225_600
 
-// A PUSH'S WALKS GO BY GENERATION: over a history its node holds a
-// commit-graph of, a tip dated before its parent — a person's skewed clock —
-// is answered by the force check, the listing of what the push introduces and
-// the search for a blob's path in about the CPU a tip dated after its parent
-// costs, never a walk of every commit. The fixture proves it can tell: the
-// listing asked in date order, as rev-list gives it without --topo-order, is
-// held to cost several times the host's own on the same tip, or the case
-// fails as unable to judge rather than passing.
+// A PUSH'S WALKS GO BY GENERATION: over a history with a commit-graph, a tip
+// dated before its parent (a skewed clock) costs the force check, the listing
+// of what the push introduces and a blob's path search about what a tip dated
+// after its parent does, never a walk of every commit. The control, a listing
+// in date order (rev-list without --topo-order), must cost several times the
+// host's, or the case fails as unable to judge rather than passing.
 //
 // Mutation: drop --topo-order from introduced or pathOf (scan.go), and that
 // walk costs what the control does.
@@ -64,11 +60,10 @@ func TestAPushsWalksGoByGeneration(t *testing.T) {
 		t.Fatalf("push the history: %s", res)
 	}
 
-	// THE SCRATCH a push of one commit on top would be received in, with a
-	// commit-graph over the history — the maintainer writes one into the
-	// cache first; here it is the scratch's own, which git reads the same
-	// way — and two commits on top of the tip, outside it: one dated after
-	// its parent, one dated before the history began.
+	// THE SCRATCH a one-commit push would be received in, with its own
+	// commit-graph over the history (git reads it as it would the
+	// maintainer's in the cache), and two commits on the tip outside it: one
+	// dated after its parent, one dated before the history began.
 	synced, err := node.Cache().Sync(c.Ctx, c.Rows().Repo.ID, gitlettest.Linearizable)
 	if err != nil {
 		t.Fatal(err)
@@ -169,21 +164,20 @@ func TestAPushsWalksGoByGeneration(t *testing.T) {
 	}
 }
 
-// measuredWalkPerCommit is the dearest a walk by date costs a commit of the
-// history with no commit-graph: the node pin, git 2.56.0, on two E-cores, the
-// force check's merge-base over the gigabyte history BenchmarkPushSmall
-// pushes (its step= arms: 4.96 µs, the listing of what a push introduces
-// 4.5, the path search 4.6, receive-pack's connectivity check 4.6;
-// gitproc.WalkPerObject says where it comes from), rounded up.
+// measuredWalkPerCommit is the dearest a walk by date costs a commit with no
+// commit-graph, rounded up: git 2.56.0 on two E-cores over BenchmarkPushSmall's
+// gigabyte history (its step= arms: the force check's merge-base 4.96 µs, the
+// listing 4.5, the path search 4.6, receive-pack's connectivity check 4.6;
+// gitproc.WalkPerObject says where it comes from).
 const measuredWalkPerCommit = 5000 * time.Nanosecond
 
-// NO WALK OF A PUSH'S IS BOUNDED BY THE PUSH ALONE: each is given what a walk
-// of the whole history may cost beside what the push sends, at the bound the
-// repository's live objects set — which bound its commits — so a commit dated
-// before its parent pushed into a large repository with no commit-graph yet
-// is slow and never refused. Held at every size the defaults admit, for a
-// history of nothing but commits (every live object one); a bound of one read
-// attempt alone refused such a push into a repository of 2.2 million.
+// NO WALK OF A PUSH'S IS BOUNDED BY THE PUSH ALONE: each is also given what a
+// walk of the whole history may cost, at the bound the repository's live
+// objects (which bound its commits) set, so a commit dated before its parent
+// pushed into a large repository with no commit-graph yet is slow, never
+// refused. Held at every size the defaults admit, for a history of nothing but
+// commits; one read attempt's bound alone would refuse such a push into 2.2
+// million.
 //
 // Mutation: drop the history term from forceDeadline, listingDeadline or
 // hookWalks, or count no force check in hookWalks, and a push is refused.
@@ -227,15 +221,13 @@ func TestAPushsWalksAreBoundedByItsHistory(t *testing.T) {
 	}
 }
 
-// A PUSH'S DEADLINES REACH THE POOL WITH ITS HISTORY: every bound of a push
-// that a walk of the repository's history can reach — receive-pack's (git's
-// own connectivity check, and the landing its hook runs inside the process),
-// the force check, the listing of what the push introduces and a blob's path
-// — carries the history term of the LIVE OBJECTS its synced row counts, in
-// the Cmd the pool is HANDED. TestAPushsWalksAreBoundedByItsHistory holds the
-// helpers; this holds the call sites, since a call site that handed a helper
-// no history would refuse a skewed push into a large history with every
-// helper right.
+// A PUSH'S DEADLINES REACH THE POOL WITH ITS HISTORY: every bound of a push a
+// walk of the history can reach (receive-pack's, for git's connectivity check
+// and the landing its hook runs; the force check; the listing; a blob's path)
+// carries the history term of its synced row's LIVE OBJECTS in the Cmd the
+// pool is HANDED. TestAPushsWalksAreBoundedByItsHistory holds the helpers;
+// this holds the call sites: one handing a right helper no history would
+// refuse a skewed push into a large history.
 //
 // Mutation: hand 0 for the live objects to receivePackDeadline's history
 // term or to hookWalks, drop hookWalks from it, hand it a row other than the

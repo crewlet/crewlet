@@ -10,51 +10,25 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// SEQUENCE: a dependency, which is the one relation with two ends.
-//
-// # The two ends are not symmetric
-//
-// `waiting_on` is AUTHORED on the dependent; [Task.Dependents] on the blocker
-// is the MIRROR, kept so a close can name who it unblocks without a reverse
-// scan over every task in the company. That asymmetry decides everything else
-// here: the authored edge is the fact, the mirror is a copy of it, and a scan
-// that wants to find a half-written dependency looks for an authored edge
-// whose mirror is missing.
-//
-// # The order, the residue, and the repair
-//
-//  1. EVERY COUNTERPARTY IS READ FIRST, before anything is published. A
-//     blocker that is tombstoned, absent, or already at [MaxDependents]
-//     refuses the edge — and refusing it after the authored commit had landed
-//     would leave an edge whose mirror can never be written.
-//  2. THE AUTHORED COMMITS, one per task whose `waiting_on` set this call
-//     changes. Each routes to ITS OWN task's parties, which is why none of
-//     them is the blocker's notice.
-//  3. THE MIRRORS, one per task whose `Dependents` set this call changes —
-//     ONE commit per counterparty however many edges of this call name it.
-//     The mirror carries [Snapshot.Dependents], and that is what routes
-//     `blocking` to the blocker's assignee.
-//
-// THE CRASH RESIDUE IS A ONE-SIDED EDGE: step 2 landed and a step-3 commit did
-// not, so a task waits on a blocker that does not know it. That is a NAMED
-// state rather than a silent one (the applier flags such an edge `one_sided`),
-// and the Worklet duty writes the missing commit, carrying the same
-// [Snapshot.Dependents] and `Late: true`, because the blocker's assignee was
-// never told at all.
-//
-// The other order was considered and is worse: mirroring first leaves a
-// blocker listing a dependent whose own edge does not exist, which no scan can
-// find — there is no authored `waiting_on` row to flag it by.
+// SEQUENCE: a dependency. `waiting_on` is AUTHORED on the dependent (the fact);
+// [Task.Dependents] on the blocker is its MIRROR, so a close can name whom it
+// unblocks without a reverse scan.
+//  1. every counterparty is read first: a tombstoned, absent or full
+//     ([MaxDependents]) blocker refuses before an edge it can never mirror lands;
+//  2. the authored commits, one per task whose `waiting_on` changes, each
+//     routed to its own task's parties;
+//  3. the mirrors, ONE commit per task whose `Dependents` changes, carrying the
+//     [Snapshot.Dependents] that routes `blocking` to the blocker's assignee.
+// A crash after 2 leaves an edge the applier flags `one_sided`; the duty writes
+// its mirror `Late: true`, its assignee never told. Mirroring first would leave
+// a dependent no scan can find, with no authored row to flag it by.
 
-// DependencyChange is one call's worth of dependency edits on ONE task.
-//
-// THE TWO DIRECTIONS ARE SEPARATE FIELDS because they are separate gestures
-// against separate counterparties: `WaitingOn` names the tasks THIS one waits
-// for, and `Blocking` the tasks that wait for it.
+// DependencyChange is one call's dependency edits on ONE task. `WaitingOn`
+// names the tasks this one waits for and `Blocking` the tasks that wait for it:
+// separate gestures against separate counterparties.
 type DependencyChange struct {
-	// Task is the subject this call is about, by id, and Project its
-	// home — which the scope needs and no read here should be asked for
-	// twice.
+	// Task is the subject by id, and Project its home, which the scope needs
+	// and the caller already holds, so no read here fetches it again.
 	Task    string
 	Project string
 
@@ -73,22 +47,16 @@ func (d DependencyChange) Empty() bool {
 
 // DependencyResult is what the sequence did, per counterparty.
 type DependencyResult struct {
-	// WriteResult answers for EVERY commit this call made rather than for
-	// any one of them — see [DependencyResult.fold]. Its Version is the
-	// dependency's OWN task's version after this call, zero where the call
-	// landed nothing on that task's subject (a `blocking`-only change whose
-	// mirror on this task was left one-sided): never the last commit's,
-	// which is usually another task's — every blocker's mirror and every
-	// dependent's edge is a commit of this call, on the other task's
-	// subject.
+	// WriteResult answers for EVERY commit this call made
+	// ([DependencyResult.fold]). Its Version is this call's OWN task's, zero
+	// where nothing landed on that task's subject: never the last commit's,
+	// which is usually another task's.
 	WriteResult
 
-	// Mirrored is every task whose mirror commit landed, and OneSided
-	// every one whose did not.
-	//
-	// REPORTED RATHER THAN RAISED: the authored edge is durable either
-	// way, and the duty repairs the rest. A caller told "failed" about a
-	// dependency that exists would re-issue it.
+	// Mirrored is every task whose mirror commit landed, and OneSided every
+	// one whose did not: REPORTED, not raised, since the authored edge is
+	// durable and the duty repairs the rest; a caller told "failed" would
+	// re-issue it.
 	Mirrored []string
 	OneSided []string
 }
@@ -119,26 +87,21 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 	}
 	at := w.Now()
 	var out DependencyResult
-	// authored is the position of step 2's commit on this task's own
-	// subject, which the one mirror landing on that same subject has to see
-	// ([Writer.After]).
+	// authored is step 2's position on this task's own subject, which this
+	// task's own mirror must see ([Writer.After]).
 	var authored statelog.Position
 
-	// STEP 2 — THE AUTHORED EDGES.
-	//
-	// This task's own `waiting_on` delta is one commit on its subject;
-	// each task this call makes WAIT on it carries its own `waiting_on`
-	// edge, so those are commits on their subjects rather than on this.
+	// STEP 2 — THE AUTHORED EDGES: this task's own `waiting_on` delta on its
+	// subject, then each task made to wait on it, on that task's subject.
 	if intent := edgesOn(change.WaitingOnAdd, change.WaitingOnRemove,
 		w.Actor, change.Note, at); intent != nil {
 		result, err := w.UpdateTask(ctx, stepID(opID, "waiting"), change.Task,
 			change.Project, NoIfMatch, TaskPatch{Relate: intent},
 			ChangeRelations, found.wakeFor(found.self, nil, leads))
 		out.fold(result, true)
-		// AN UNKNOWN AUTHORED EDGE STOPS THE CALL BEFORE ITS MIRRORS. A
-		// mirror written over an edge that may not exist is the residue
-		// the order above exists to rule out: a blocker listing a
-		// dependent whose own edge is missing, which no scan can find.
+		// AN UNKNOWN AUTHORED EDGE STOPS THE CALL BEFORE ITS MIRRORS: a
+		// mirror over an edge that may not exist lists a dependent no scan
+		// can find.
 		if err = resolved(fmt.Sprintf("task %s's own dependency edges",
 			change.Task), result, err); err != nil {
 			return out, err
@@ -159,10 +122,8 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 		} else {
 			intent.Remove = []Relation{edge}
 		}
-		// AN UNBLOCK TELLS NOBODY. "You no longer wait on X" is not an
-		// event anybody acts on, and the wake that matters — that the
-		// work is now startable — is the `unblocked` one a close
-		// carries.
+		// AN UNBLOCK TELLS NOBODY: the wake that matters, that the work is
+		// startable, is the `unblocked` one a close carries.
 		var notify *Notify
 		if adding {
 			notify = found.wakeFor(other, nil, leads)
@@ -172,10 +133,9 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 		result, err := w.UpdateTask(ctx, stepID(opID, authoredStep(adding, id)),
 			id, other.Project, NoIfMatch, TaskPatch{Relate: intent},
 			ChangeRelations, notify)
-		// A COMMIT OF THIS CALL LIKE ANY OTHER, folded before it is judged,
-		// so a `blocking`-only change whose mirror below is left one-sided
-		// still reports the edges it authored on the other tasks — and one
-		// stopped here reports the step it stopped at.
+		// FOLDED BEFORE IT IS JUDGED, so a `blocking`-only change whose own
+		// mirror is left one-sided still reports the edges it authored, and
+		// one stopped here reports the step it stopped at.
 		out.fold(result, false)
 		if err = resolved(fmt.Sprintf("task %s's edge to %s", id,
 			change.Task), result, err); err != nil {
@@ -184,39 +144,24 @@ func (w *Writer) Depend(ctx context.Context, opID string, change DependencyChang
 		}
 	}
 
-	// STEP 3 — THE MIRRORS, best effort.
-	//
-	// THE AUTHORED COMMIT'S POSITION TRAVELS WITH THEM, because a call
-	// naming both directions writes THIS task's subject twice: once above
-	// for its own `waiting_on` edges, and once here for the dependents it
-	// gains. See [Writer.After] for what the second one would otherwise
-	// spend discovering that the first had moved it.
+	// STEP 3 — THE MIRRORS, best effort, with the authored position: a call
+	// naming both directions writes THIS task's subject twice ([Writer.After]).
 	out.Mirrored, out.OneSided = w.mirror(ctx, opID, change, found, leads,
 		authored, &out)
 	return out, nil
 }
 
-// fold is how every commit this call made reaches the one answer it returns.
+// fold folds one commit of this call into the answer for EVERY record; own
+// says the commit is on the call's own task.
 //
-// THE CALL ANSWERS FOR EVERY RECORD, never for the first or the last:
-//
-//   - the POSITION is the latest of them, because a caller barriers on it
-//     before its next read. A `blocking`-only change writes nothing on its
-//     own subject before the mirror, and a waiting-on change's mirrors land
-//     after its authored commit — either earlier position is a floor below a
-//     record this call made, and a read at it comes back without the edge;
-//   - the OUTCOME is the least certain of them, so an authored commit whose
-//     outcome is `unknown` is never reported `applied` because a mirror after
-//     it was confirmed (the rule [statelog.LessCertain] states) — and an
-//     unknown the ledger could not vouch for says so ([statelog.Result.Unvouched]);
-//   - the VERSION is this task's OWN, from the latest commit on its subject,
-//     and zero where the call landed nothing there. A caller reads it as the
-//     item's version and passes it back as an If-Match, so a counterparty's
-//     version — which answering with the last commit whole handed over
-//     whenever a mirror or a dependent's edge landed last — refused that
-//     caller's very next edit.
-//
-// own says whether the commit is on the call's own task.
+//   - the POSITION is the latest, because a caller barriers its next read on
+//     it and any earlier one is a floor below a record this call made;
+//   - the OUTCOME is the least certain ([statelog.LessCertain]), so an unknown
+//     authored commit is never reported applied because a later mirror was,
+//     and an unvouched unknown says so ([statelog.Result.Unvouched]);
+//   - the VERSION is this task's OWN, from its latest commit there, or zero:
+//     a caller passes it back as an If-Match, and a counterparty's would
+//     refuse its next edit.
 func (out *DependencyResult) fold(result WriteResult, own bool) {
 	if !result.Wrote() {
 		return
@@ -239,20 +184,14 @@ func (out *DependencyResult) fold(result WriteResult, own bool) {
 // authoredStep and mirrorStep name one append of a dependency change BY THE
 // TASK IT WRITES, never by its place in the list.
 //
-// A retry answers each step from the ledger by its step's id
-// ([statelog.Snap.Held]), so the id has to name the same write on every run of
-// the gesture — and the lists do not keep their places. A caller recomputes a
-// whole-set change against what the first run already landed: the retry of
-// `waiting_on: [X]` plus `blocking: [Z]` finds X's edge written and authors
-// none, so its mirror list loses X and this task's own mirror moves from
-// second to first. Named by position, that mirror was answered with X's ledger
-// row — refused as an operation that landed on another object, or before that
-// check existed, answered as landed — and this task never learned of its new
-// dependent.
+// A retry answers each step from the ledger by its id ([statelog.Snap.Held]),
+// and a caller's retry recomputes the change against what already landed, so
+// its lists lose the landed steps and the rest move up: named by position, a
+// step is answered with another task's ledger row and its own write is never
+// made (TestADependencyRetryAnswersEachStepWithItsOwnWrite).
 //
-// THE SIGN IS PART OF AN AUTHORED STEP'S NAME, because one call may add an
-// edge on a task and remove another's, and a task listed on both sides must
-// not share one step. A mirror needs none: one commit per task carries both.
+// An authored step's name carries the SIGN, since one call may add an edge on a
+// task and remove another's; a mirror needs none, one commit carrying both.
 func authoredStep(adding bool, task string) string {
 	if adding {
 		return "b+/" + task
@@ -285,16 +224,11 @@ func edgesOn(add, remove []string, actor, note string, at time.Time) *RelationIn
 	return intent
 }
 
-// mirror is step 3: every task whose `Dependents` set this call changes, ONE
-// commit each.
-//
-// BEST EFFORT, by design: the authored edge is durable after step 2, and a
-// mirror that lost its race is a `one_sided` edge the duty repairs. So a
-// failure here is COLLECTED rather than raised — a caller told "failed" about
-// a dependency that exists would write it a second time.
-// authored is the position of step 2's commit on this call's own task, or the
-// zero position when this call authored no `waiting_on` edge of its own. It is
-// the session mark for the ONE mirror that lands on that same subject.
+// mirror is step 3: ONE commit per task whose `Dependents` set this call
+// changes. BEST EFFORT: the authored edge is durable after step 2, so a failed
+// mirror is COLLECTED as one-sided, for the duty to repair, rather than raised.
+// authored is step 2's position on this call's own task (zero when it authored
+// none), the session mark for the ONE mirror on that subject.
 func (w *Writer) mirror(ctx context.Context, opID string, change DependencyChange,
 	found parties, leads Leads,
 	authored statelog.Position, out *DependencyResult) (mirrored, oneSided []string) {
@@ -354,10 +288,8 @@ func (w *Writer) mirror(ctx context.Context, opID string, change DependencyChang
 		if len(e.announce) > 0 {
 			notify = found.wakeFor(subject, e.announce, leads)
 		}
-		// ONLY THIS CALL'S OWN TASK CARRIES THE MARK. Every other
-		// mirror is the FIRST record this gesture puts on its subject,
-		// so a wait there would be a wait for a position that says
-		// nothing about it.
+		// ONLY THIS CALL'S OWN TASK CARRIES THE MARK: every other mirror is
+		// this gesture's FIRST record on its subject, with nothing to wait for.
 		writer := w
 		if id == change.Task {
 			writer = w.After(authored)
@@ -365,10 +297,9 @@ func (w *Writer) mirror(ctx context.Context, opID string, change DependencyChang
 		result, err := writer.UpdateTask(ctx, stepID(opID, mirrorStep(id)),
 			id, subject.Project, NoIfMatch, TaskPatch{Depend: intent},
 			ChangeRelations, notify)
-		// AN UNKNOWN MIRROR IS REPORTED ONE-SIDED, not mirrored: it may not
-		// be on the log, and one that is not is exactly the edge the duty
-		// repairs. Reported mirrored, a caller would be told a blocker
-		// knows about a dependent it may never hear of.
+		// AN UNKNOWN MIRROR IS REPORTED ONE-SIDED: it may not be on the log,
+		// and reported mirrored, a caller would believe a blocker knows of a
+		// dependent it may never hear of.
 		if resolved("a mirror", result, err) != nil {
 			oneSided = append(oneSided, id)
 			continue
@@ -395,9 +326,8 @@ func (p parties) partyOf(t Task) TaskParty {
 
 // wakeFor builds a commit's notification from the task the commit is ABOUT.
 //
-// THROUGH [Wake] rather than a literal, so the snapshot a dependency commit
-// carries is the same snapshot every other commit carries — a second builder
-// here is how one of them stops filling a field the router reads.
+// THROUGH [Wake] rather than a literal, so a dependency commit carries the same
+// snapshot as every other, with every field the router reads filled.
 func (p parties) wakeFor(subject Task, dependents []TaskParty, leads Leads) *Notify {
 	return Wake{
 		Kind: ChangeRelations, Before: subject, After: subject,
@@ -408,9 +338,9 @@ func (p parties) wakeFor(subject Task, dependents []TaskParty, leads Leads) *Not
 // readParties is step 1: ONE transaction over every counterparty this call
 // names, plus the task itself.
 //
-// ONE READ RATHER THAN ONE PER EDGE, because the checks are about a SET — is
-// any blocker full, tombstoned or absent — and a read per edge would answer
-// each question against a different instant.
+// ONE READ RATHER THAN ONE PER EDGE: the checks are over a SET (any blocker
+// full, tombstoned or absent), and a read per edge answers each at another
+// instant.
 func (w *Writer) readParties(ctx context.Context, change DependencyChange) (parties, error) {
 	if w.db.IsZero() {
 		return parties{}, fmt.Errorf("worklet: this writer has no replicated " +
@@ -469,17 +399,14 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 			adding := slices.Contains(required, id)
 			switch {
 			case !held && adding:
-				// NO EDGE TO A TASK THIS NODE DOES NOT HOLD, and the
-				// refusal is [missingTask]'s two answers rather than
-				// one: a purged task is gone for good, and a task with
-				// no row and no marker may be a create this node has
-				// not applied — which "there is no task" told the
-				// caller never to retry.
+				// NO EDGE TO A TASK THIS NODE DOES NOT HOLD, refused with
+				// [missingTask]'s two answers: a purged task is gone for
+				// good, and one with no row and no marker may be a create
+				// not yet applied here, which the caller may retry.
 				return missingTask(ctx, tx, id, "no dependency can be drawn to it")
 			case !held:
-				// A REMOVE OF AN EDGE TO A VANISHED TASK IS THE
-				// CORRECTION SOMEBODY IS MAKING, so it is skipped
-				// here and still applied on this task's own side.
+				// A REMOVE OF AN EDGE TO A VANISHED TASK is a correction:
+				// skipped here, still applied on this task's own side.
 				continue
 			case current.Removed != nil && adding:
 				return invalid("task %s was removed by %s at %s, "+

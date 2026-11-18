@@ -31,10 +31,10 @@ import (
 )
 
 // bootstrap is a node's Tier A for a case, its store in the case's own
-// directory and MIGRATED ALREADY, from the image this binary builds once, when
-// the store is still where this put it: a boot here is about the engine, never
-// about the migration chain, which internal/store certifies. A case that moves
-// the store — onto a directory, or a path two boots share — decides for itself
+// directory and already MIGRATED from the image this binary builds once, while
+// the store is where this put it: a boot here is about the engine, never the
+// migration chain, which internal/store certifies. A case that moves the store
+// (onto a directory, or a path two boots share) seeds it itself
 // ([engine.SeedStore]).
 func bootstrap(t *testing.T, mutate func(*config.Bootstrap)) *config.Bootstrap {
 	t.Helper()
@@ -51,17 +51,15 @@ func bootstrap(t *testing.T, mutate func(*config.Bootstrap)) *config.Bootstrap {
 func unseededBootstrap(t *testing.T, mutate func(*config.Bootstrap)) (*config.Bootstrap, string) {
 	t.Helper()
 	b := config.DefaultBootstrap()
-	// The default store path is relative, so a test that took it would
-	// create a database in the package directory and share it with every
-	// other test in the run. One process owns a store file exclusively.
+	// The default store path is relative: a test taking it would create a
+	// database in the package directory shared with every other test, and one
+	// process owns a store file exclusively.
 	chosen := filepath.Join(t.TempDir(), "crewlet.db")
 	b.Store.Path = chosen
 	engine.PinGitLanes(&b)
-	// AND A KEYRING, because every record on every state log is signed
-	// under one and a node that has none refuses to start. It is not in
-	// [config.DefaultBootstrap] and must not be: a default key is a key
-	// every deployment in the world shares, which is the opposite of what
-	// signing a record buys.
+	// AND A KEYRING: every state-log record is signed and a node with none
+	// refuses to start. Never in [config.DefaultBootstrap]: a default key is
+	// one every deployment shares, the opposite of what signing buys.
 	b.Secrets.ActiveKeyID = "test"
 	b.Secrets.Keys = []config.SecretKey{{ID: "test", Material: testKeyMaterial(t)}}
 	if mutate != nil {
@@ -70,10 +68,9 @@ func unseededBootstrap(t *testing.T, mutate func(*config.Bootstrap)) (*config.Bo
 	return &b, chosen
 }
 
-// testKeyMaterial mints one THROUGH THE MINTER `crewlet secrets keygen` uses,
-// so the size, the randomness and the encoding are read off the production
-// definition rather than restated here. Per call rather than a constant: two
-// cases running in parallel share no key.
+// testKeyMaterial mints one through the minter `crewlet secrets keygen` uses,
+// so size, randomness and encoding come from the production definition; per
+// call, so parallel cases share no key.
 func testKeyMaterial(t *testing.T) string {
 	t.Helper()
 	key, err := secrets.GenerateKey()
@@ -103,8 +100,8 @@ func openBackends(t *testing.T, b *config.Bootstrap) (*engine.Backends, error) {
 
 func TestTheDefaultTopologyRunsWithNoExternalService(t *testing.T) {
 	t.Parallel()
-	// The single-binary promise: a company with nothing configured starts.
-	// If this needs a broker, the promise is not kept.
+	// The single-binary promise: a company with nothing configured starts
+	// without an external broker.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
@@ -120,9 +117,8 @@ func TestTheDefaultTopologyRunsWithNoExternalService(t *testing.T) {
 
 func TestBothSlotsCloseTogether(t *testing.T) {
 	t.Parallel()
-	// A node holding one without the other can hear work it may not do, or
-	// hold seats it cannot serve. Closing twice must also be safe: a
-	// deferred Close beside an explicit one is the ordinary shape.
+	// A node holding one slot without the other can hear work it may not do,
+	// or hold seats it cannot serve.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
@@ -131,20 +127,17 @@ func TestBothSlotsCloseTogether(t *testing.T) {
 		t.Fatalf("OpenBackends: %v", err)
 	}
 	back.Close(t.Context())
-	// Twice is safe: a deferred Close beside an explicit one is the
-	// ordinary shape, and a second Stop on a stopped queue is a no-op.
+	// Twice is safe: a deferred Close beside an explicit one is the ordinary
+	// shape.
 	back.Close(t.Context())
 }
 
 func TestAnEmbeddedKVStoreLivesOnTheStreamsOwnBroker(t *testing.T) {
 	t.Parallel()
-	// A second estate would work and would be worse: two estates fail
-	// independently, so a node could hold live leases on one while the
-	// other has lost its inbox — alive to its peers, deaf to its work
-	// (ADR-0001). The connection it rides is the case below's.
-	//
-	// Observable as: the KV slot builds at all on an embedded stream, which
-	// it can only do by reaching the in-process server.
+	// A second estate would fail independently: a node could hold live leases
+	// on one while the other lost its inbox, alive to its peers and deaf to its
+	// work (ADR-0001). Observable as the KV slot building at all on an embedded
+	// stream, which it can only do by reaching the in-process server.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.Coordination.Type = config.CoordinationEmbeddedKV
@@ -164,9 +157,8 @@ func TestAnEmbeddedKVStoreLivesOnTheStreamsOwnBroker(t *testing.T) {
 	if lease == nil {
 		t.Fatal("the coordination slot refused a first acquire")
 	}
-	// And it is EXCLUSIVE, which a memory backend standing in for it would
-	// also be — so the test above is what says it is the KV store, and this
-	// is what says it works.
+	// And EXCLUSIVE, which a memory stand-in would also be: the build above
+	// says it is the KV store, this says it works.
 	if got, _, err := back.Coord.TryAcquire(t.Context(), "seat:ceo",
 		coord.AcquireOptions{Owner: "owner-2", TTL: 30 * time.Second}); err != nil {
 		t.Fatalf("second Acquire: %v", err)
@@ -177,17 +169,14 @@ func TestAnEmbeddedKVStoreLivesOnTheStreamsOwnBroker(t *testing.T) {
 
 // THE COORDINATION STORE'S CONNECTION IS ONE THE NODE HEARS LOSING.
 //
-// On an embedded broker the store rides a connection of its own beside the
-// queue's, and it holds every lease this node renews — so NATS closing it for
-// good is a node with no leases, and the queue reports it with its own
-// connection's (jetstream.Queue.Lost). That is only true of a connection dialled
-// watched: the client is told to call a closed handler for a close it made, and
-// told not to for the node's own Close at shutdown. A connection dialled the
-// way a donor's is carries neither, and its loss would be heard by nothing.
-//
-// It is the engine's half of the gate ADR-0001 names: the jetstream package
-// holds that a DialWatched connection is watched, and this holds that the
-// coordination store's connection is one.
+// On an embedded broker the store rides its own connection and holds every
+// lease this node renews, so NATS closing it for good is a node with no
+// leases, reported with the queue's own loss (jetstream.Queue.Lost). Only a
+// connection dialled watched does that: told to call a closed handler for a
+// close NATS made, and not for the node's own Close at shutdown. This is the
+// engine's half of ADR-0001's gate; the jetstream package holds that
+// DialWatched is watched. A DialOwned (donor-style) connection's loss would be
+// heard by nothing.
 //
 // Mutation: open it with DialOwned and both halves go red.
 func TestTheCoordinationConnectionIsWatched(t *testing.T) {
@@ -217,9 +206,9 @@ func TestTheCoordinationConnectionIsWatched(t *testing.T) {
 
 func TestLocalCoordinationNeedsNoBroker(t *testing.T) {
 	t.Parallel()
-	// The default. One node, no quorum, no network — and the coordination
-	// slot still has to be a real backend, because a nil one surfaces as a
-	// panic in the seat host rather than a configuration error.
+	// The default: one node, no quorum, no network, and still a real backend,
+	// because a nil one surfaces as a panic in the seat host rather than a
+	// configuration error.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.Coordination.Type = config.CoordinationLocal
@@ -247,9 +236,9 @@ func TestNoBootstrapIsRefused(t *testing.T) {
 
 func TestAnUnknownStreamTypeNamesItself(t *testing.T) {
 	t.Parallel()
-	// A Bootstrap is an exported struct, so this is reachable without going
-	// through validation — and an error that does not name the value sends
-	// a reader to read the code instead of their config.
+	// A Bootstrap is an exported struct, so this is reachable past validation,
+	// and an error not naming the value sends a reader to the code instead of
+	// their config.
 	b := bootstrap(t, func(b *config.Bootstrap) { b.Stream.Type = "kafka" })
 	_, err := engine.OpenBackends(context.Background(), b, parsedCompany(t, companyDoc), nil)
 	if err == nil {
@@ -262,14 +251,12 @@ func TestAnUnknownStreamTypeNamesItself(t *testing.T) {
 
 func TestAnEmbeddedStreamPersistsAcrossARestart(t *testing.T) {
 	t.Parallel()
-	// Two properties in one round trip, and both were unasserted:
+	// Two properties in one round trip:
 	//
-	//   - Close actually SHUTS THE SERVER DOWN. A leaked embedded server
-	//     holds its store directory, so the second open below fails outright
-	//     if the first one is still running.
-	//   - StoreDir is actually USED. Ignoring it selects an in-memory
-	//     server, which starts and works and loses everything on restart —
-	//     the failure a company only discovers the first time it restarts.
+	//   - Close SHUTS THE SERVER DOWN: a leaked server holds its store
+	//     directory, so the second open below fails.
+	//   - StoreDir is USED: ignoring it selects an in-memory server, which
+	//     loses everything at the first restart.
 	dir := filepath.Join(brokertest.TempDir(t), "stream")
 	mk := func() *engine.Backends {
 		t.Helper()
@@ -289,8 +276,8 @@ func TestAnEmbeddedStreamPersistsAcrossARestart(t *testing.T) {
 	if err := first.Queue.Publish(t.Context(), topics.Event(ev.Type), ev); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	// Close stops the queue itself — that is step one of its order, and
-	// stopping it here as well would hide whether it does.
+	// Close stops the queue itself (step one of its order); stopping it here
+	// too would hide whether it does.
 	first.Close(t.Context())
 
 	// A second server on the same directory: it can only start if the first
@@ -333,24 +320,17 @@ func (marker) EventType() string { return "engine.restart_marker" }
 
 func init() { events.Register[marker]() }
 
-// NOTE ON WHAT THIS SUITE CANNOT SEE.
+// NOTE ON WHAT THIS SUITE CANNOT SEE: two of Close's three steps act outside
+// this package's reach, and removing either leaves every test here green.
 //
-// Two of Close's three steps have effects outside this package's reach, and
-// mutation confirms it: removing either leaves every test here green.
+//   - Stopping the QUEUE before the server buys a peer a fast handoff, which
+//     only two nodes on one broker show (the fleet suite's shape).
+//   - Shutting the SERVER down releases its resources: a solo embedded server
+//     binds no port (DontListen), and a single clustered member never reaches
+//     JetStream quorum, so neither can be probed here.
 //
-//   - Stopping the QUEUE before the server buys a peer a fast handoff. In one
-//     process the shut-down server kills the connection either way, so there
-//     is nothing to observe; two nodes and one broker would show it, which is
-//     the fleet suite's shape.
-//   - Shutting the SERVER down releases its resources. A solo embedded server
-//     runs with DontListen and binds no port at all, so there is no socket to
-//     probe; a clustered one does bind, but a single member never reaches
-//     JetStream quorum (measured: it waits the full 60 s and fails), so
-//     standing one up here is not possible either.
-//
-// Both are stated at their site in backends.go rather than left as apparent
-// coverage. Writing a test that passes without exercising them would be worse
-// than having none.
+// Both are stated at their site in backends.go; a test that passed without
+// exercising them would be worse than none.
 
 // --- the store slot -------------------------------------------------------- //
 
@@ -381,10 +361,9 @@ func TestTheStoreOpensWithTheOtherSlots(t *testing.T) {
 
 func TestTheStoreTakesItsVectorWidthFromTheCompany(t *testing.T) {
 	t.Parallel()
-	// The store is the only thing that knows how wide the packed BLOBs in
-	// its vector columns are, and the model that decides is Tier B. A width
-	// it was never told refuses every write from the right one, and recall
-	// simply stops returning anything.
+	// The store alone knows how wide its packed vector BLOBs are, and Tier B's
+	// model decides it: a width it was never told refuses every write from the
+	// right one, and recall stops returning anything.
 	const doc = `
 name: Acme
 providers:
@@ -417,10 +396,9 @@ roles:
 
 func TestNoEmbeddingProviderIsAWidthOfNoneNotADefault(t *testing.T) {
 	t.Parallel()
-	// The counterfactual to the case above, and the one that says the width
-	// is READ rather than guessed. "This company does not remember by
-	// similarity" is a real answer; inventing 1536 for it would let a
-	// vector of that width be written to a company that can produce none.
+	// The counterfactual: the width is READ, not guessed. "No similarity
+	// recall" is a real answer; inventing 1536 would let a vector of that width
+	// be written to a company that can produce none.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
@@ -434,18 +412,14 @@ func TestNoEmbeddingProviderIsAWidthOfNoneNotADefault(t *testing.T) {
 	}
 }
 
-// NO COMPANY OPENS AT WIDTH 0, because a node has to open its store before it
-// can read the company out of it — and a node with no active revision has no
-// company to be asked for at all.
+// NO COMPANY OPENS AT WIDTH 0, because a node opens its store before it can
+// read the company out of it, and a node with no active revision has none.
 //
-// This was REFUSED while the width was fixed at open, and rightly: a store
-// stuck at the wrong width refuses every write from the right one, and recall
-// stops returning anything with no reason in the log. What makes it safe now
-// is that a store never told a width LEARNS it from the first revision this
-// node applies, and holds it from then on (see
-// TestTheEmbeddingWidthIsLearnedOnceAndHeld) — so 0 here is "not yet told",
-// which the first apply settles, never a width a write is checked against. If
-// that ever stops being true, this has to go back to being a refusal.
+// Safe because a store never told a width LEARNS it from the first revision it
+// applies and holds it from then on (TestTheEmbeddingWidthIsLearnedOnceAndHeld):
+// 0 is "not yet told", never a width a write is checked against. If that stops
+// being true this must become a refusal again, since a store stuck at the
+// wrong width refuses every write from the right one.
 func TestNoCompanyOpensAtWidthZero(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -461,11 +435,9 @@ func TestNoCompanyOpensAtWidthZero(t *testing.T) {
 	}
 }
 
-// settledGoroutines waits for the goroutine count to stop moving.
-//
-// A count taken immediately after a shutdown is meaningless: the goroutines a
-// server was told to stop are still winding down. This polls until two
-// consecutive readings agree, so what it returns is what stayed.
+// settledGoroutines polls until two consecutive goroutine counts agree, so
+// what it returns is what stayed after a shutdown, not what is still winding
+// down.
 func settledGoroutines() int {
 	prev := -1
 	for range 40 {
@@ -483,20 +455,13 @@ func settledGoroutines() int {
 func TestAStoreThatCannotOpenTakesTheBrokerDownWithIt(t *testing.T) {
 	// NOT parallel: the observable is a process-wide goroutine count.
 	//
-	// The store is opened LAST, so its failure is the only one with
-	// something to clean up behind it. An embedded server left running
-	// after a failed open is a leak nothing else reports — the process
-	// carries a broker nobody holds a handle to, for its whole life.
-	//
-	// Goroutines are the observable, and the first thing tried was not:
-	// asserting that a second open on the same stream directory succeeds
-	// proves nothing, because two embedded servers share a store directory
-	// without complaint (measured). That test passed with the cleanup
-	// removed, which makes it worse than no test.
-	//
-	// The margin here is not delicate: three failed opens leak about a
-	// hundred goroutines, against a residue of one when they are cleaned
-	// up. The threshold sits far from both.
+	// The store opens LAST, so its failure alone has something to clean up
+	// behind it: an embedded server left running after a failed open is a
+	// broker nobody holds a handle to, for the life of the process. Goroutines,
+	// because a second open on the same stream directory succeeds either way
+	// (two embedded servers share one without complaint). Three failed opens
+	// leak about a hundred goroutines against a residue of one when cleaned up;
+	// the threshold sits far from both.
 	dir := brokertest.TempDir(t)
 	before := settledGoroutines()
 	for i := range failedOpenAttempts {
@@ -516,30 +481,26 @@ func TestAStoreThatCannotOpenTakesTheBrokerDownWithIt(t *testing.T) {
 }
 
 const (
-	// failedOpenAttempts is how many times the failure is repeated, so one
-	// leak becomes a multiple of itself and cannot be mistaken for noise.
+	// failedOpenAttempts repeats the failure so one leak becomes a multiple of
+	// itself and cannot be mistaken for noise.
 	failedOpenAttempts = 3
 
-	// leakThreshold sits between the two measured outcomes — a residue of
-	// one goroutine when the broker is closed, about a hundred when it is
-	// not — rather than at zero, which would make the test fail on any
-	// unrelated background goroutine that happens to still be settling.
+	// leakThreshold sits between the measured outcomes (a residue of one, about
+	// a hundred when leaked) rather than at zero, which would fail on any
+	// unrelated goroutine still settling.
 	leakThreshold = 10
 )
 
 func TestTheStoreOutlivesTheHandlersThatWriteToIt(t *testing.T) {
 	t.Parallel()
-	// Close order. The queue stops first and waits for in-flight handlers;
-	// the store closes after, because everything writes to it. Closing it
-	// first would turn the tail of a graceful drain into a run of "database
-	// is closed" — the drain would still finish, and would finish having
-	// recorded none of what it drained.
+	// Close order: the queue stops first and waits for in-flight handlers, and
+	// the store closes after, because everything writes to it; closing it first
+	// turns the tail of a graceful drain into "database is closed", a drain that
+	// records none of what it drained.
 	//
-	// The assertion is on the FILE, read back after everything is shut, not
-	// on an error variable the handler set. An error captured in one
-	// goroutine and read in another needs a happens-before edge to be worth
-	// anything, and the edge in question — whether Close waits for the
-	// handler — is the very thing under test.
+	// Asserted on the FILE read back after shutdown, not on an error the
+	// handler set: reading that across goroutines needs the very happens-before
+	// edge (Close waiting for the handler) under test.
 	dir := brokertest.TempDir(t)
 	path := filepath.Join(dir, "crewlet.db")
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -558,10 +519,9 @@ func TestTheStoreOutlivesTheHandlersThatWriteToIt(t *testing.T) {
 		func(ctx context.Context, _ *events.Event) queue.Result {
 			once.Do(func() { close(entered) })
 			<-release
-			// Written while Close is running, which is the whole point.
-			// The context is detached because cancelling the delivery is
-			// how a shutdown reaches a handler, and a write refused for
-			// that reason would not be evidence about the store.
+			// Written while Close runs, which is the point. Detached, because
+			// cancelling the delivery is how shutdown reaches a handler, and a
+			// write refused for that is no evidence about the store.
 			_, _ = back.Store.SQL().ExecContext(context.WithoutCancel(ctx),
 				`INSERT INTO scheduled_runs
 				     (scope_type, scope_id, schedule_name, fire_label, scheduled_at, fired_at)
@@ -613,11 +573,9 @@ func TestTheStoreOutlivesTheHandlersThatWriteToIt(t *testing.T) {
 
 func TestCloseLeavesTheStoreClosed(t *testing.T) {
 	t.Parallel()
-	// The counterfactual to the ordering above. "Closes last" is satisfied
-	// just as well by "never closes", and a store handle left open holds
-	// the file for the life of the process — which matters because one
-	// process owns it exclusively, so a restart in-process contends with
-	// the corpse of the last one.
+	// The counterfactual: "closes last" is also satisfied by "never closes", and
+	// an open handle holds the file, which one process owns exclusively, so an
+	// in-process restart contends with the last one.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
@@ -637,15 +595,9 @@ func TestCloseLeavesTheStoreClosed(t *testing.T) {
 
 func TestTheStoreTakesItsPoolKnobsFromConfig(t *testing.T) {
 	t.Parallel()
-	// Both are Tier A knobs an operator sets and nothing else reports. A
-	// busy timeout ignored means statements giving up on lock contention
-	// far sooner than asked, and a pool bound ignored means the dashboard's
-	// read burst landing on however many connections database/sql felt
-	// like opening.
-	//
-	// The driver used to be the third knob here and is gone with it:
-	// there is one driver, and TestTursoIsTheOnlyDriverInTheBinary in
-	// internal/store is what asserts that now.
+	// Tier A knobs nothing else reports: an ignored busy timeout gives up on
+	// lock contention far sooner than asked, and an ignored pool bound lets the
+	// dashboard's read burst open however many connections database/sql likes.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 		b.Store.BusyTimeoutSeconds = 11
@@ -665,11 +617,11 @@ func TestTheStoreTakesItsPoolKnobsFromConfig(t *testing.T) {
 	if busyMS != 11_000 {
 		t.Errorf("busy_timeout = %dms, want the configured 11000", busyMS)
 	}
-	// THE CONFIGURED READERS, with what the store keeps beside them on top:
-	// `max_open_conns` bounds ORDINARY readers, and the connection a store
-	// reserves for resolving who is acting is added to it rather than taken
-	// from it. Read off a store opened with the same knob, so this holds the
-	// engine to passing the knob through and the store to what it adds.
+	// THE CONFIGURED READERS plus what the store keeps beside them: the
+	// connection it reserves for resolving who is acting is added to
+	// `max_open_conns`, not taken from it. Read off a store opened with the same
+	// knob, so the engine is held to passing it through and the store to what
+	// it adds.
 	reference := storetest.OpenNode(t, filepath.Join(t.TempDir(), "reference.db"),
 		store.Options{MaxOpenConns: 3})
 	t.Cleanup(func() { _ = reference.Close() })
@@ -682,10 +634,9 @@ func TestTheStoreTakesItsPoolKnobsFromConfig(t *testing.T) {
 
 func TestAnUnsetTimeoutTakesTheStoreDefault(t *testing.T) {
 	t.Parallel()
-	// The counterfactual. Passing the configured values through is only
-	// half the contract: zero must reach the store as "you choose", not as
-	// a literal zero, which for a busy timeout means every contended
-	// statement failing immediately.
+	// The counterfactual: zero must reach the store as "you choose", not as a
+	// literal zero, which for a busy timeout fails every contended statement
+	// at once.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(brokertest.TempDir(t), "stream"))
 	})
@@ -704,9 +655,9 @@ func TestAnUnsetTimeoutTakesTheStoreDefault(t *testing.T) {
 		t.Errorf("busy_timeout = %dms: an unset timeout reached the store as a "+
 			"literal zero, so every contended statement fails at once", busyMS)
 	}
-	// Zero must mean "the store chooses", not "one connection at a time" —
-	// and certainly not database/sql's own unlimited, which on a single
-	// SQLite file is how a dashboard query storm becomes lock contention.
+	// Zero means "the store chooses": not one connection at a time, and not
+	// database/sql's unlimited, which on one SQLite file turns a dashboard
+	// query storm into lock contention.
 	if got := back.Store.SQL().Stats().MaxOpenConnections; got <= 0 {
 		t.Errorf("max open conns = %d: an unset bound reached the store as a "+
 			"literal zero", got)
@@ -767,16 +718,11 @@ func TestTheFleetStoreSurvivesARestartOnLocalCoordination(t *testing.T) {
 
 // AN EXTERNAL URL IS DIALLED, not quietly replaced with a private broker.
 //
-// `stream.type: nats` with a URL means "the cluster somebody else runs".
-// Every path here used to start an in-process member and connect to THAT,
-// ignoring the URL: an operator who pointed a fleet at an external cluster
-// got one private broker per node, so no node shared a stream or a
-// coordination bucket with any other — and nothing said so. Every symptom
-// that followed was a fleet-shared-state break wearing a different mask.
-//
-// Asserted as a REFUSAL against an address nothing answers on, which is the
-// one shape that needs no broker: a node that starts cleanly here is a node
-// that never tried to reach the URL it was given.
+// `stream.type: nats` with a URL means "the cluster somebody else runs"; a
+// node that started an in-process member instead would share no stream or
+// coordination bucket with its peers, and nothing would say so. Asserted as a
+// REFUSAL against an address nothing answers on, the one shape needing no
+// broker: a node that starts cleanly here never tried the URL it was given.
 func TestAnExternalStreamURLIsActuallyDialled(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -798,12 +744,9 @@ func TestAnExternalStreamURLIsActuallyDialled(t *testing.T) {
 	}
 }
 
-// AND ITS TLS MATERIAL TRAVELS WITH IT.
-//
-// The field is read by config, validated, and then has to reach the dial. A
-// block that is set, accepted by `crewlet validate`, and never applied leaves
-// a broker rejecting every connection for a reason no log line connects to
-// the omission.
+// AND ITS TLS MATERIAL TRAVELS WITH IT: a block set, accepted by `crewlet
+// validate` and never applied leaves a broker rejecting every connection for
+// a reason no log line connects to the omission.
 func TestAnExternalStreamsTLSMaterialReachesTheDial(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -826,17 +769,12 @@ func TestAnExternalStreamsTLSMaterialReachesTheDial(t *testing.T) {
 
 // A NODE WILL NOT BOOT AGAINST A NATS SERVER THAT CANNOT CARRY WHAT IT WRITES.
 //
-// deployment.md told an operator to set max_payload to 8 MiB on an external
-// cluster and nothing checked it, and nats-server's own default is 1 MiB. So a
-// node pointed at a server nobody had configured for this engine booted,
-// reported itself healthy and served — and refused its first state-log record
-// or event past the server's limit, `record_too_large`, at the moment nobody
-// is looking at the broker's configuration. It is refused at boot now, by a
-// sentence that names the setting, the value the server announced and the
-// value this build needs; and a server that carries the contract boots, which
-// is the control that keeps the refusal from being a refusal of every
-// external server. The refusal is also the sentence deployment.md prints, so
-// the example an operator greps for cannot drift from what a boot writes.
+// nats-server defaults max_payload to 1 MiB; a node on such a server would
+// serve and then refuse its first record past it (`record_too_large`) when
+// nobody looks at the broker. So boot refuses by a sentence naming the
+// setting, the value the server announced and the one this build needs, which
+// is also the sentence deployment.md prints, so the example an operator greps
+// for cannot drift. A server carrying the contract boots: the control.
 //
 // Mutation: drop the check from the jetstream backend's dial and the refusal
 // row goes red; compare with `>` and the control does; edit the guide's
@@ -882,9 +820,8 @@ func TestABootAgainstAServerBelowTheContractIsRefusedByName(t *testing.T) {
 					t.Errorf("the refusal %q does not say %q", err, want)
 				}
 			}
-			// AND IT IS THE SENTENCE THE DEPLOYMENT GUIDE PRINTS, which is
-			// what an operator greps for: the guide's example is a boot
-			// against nats-server's own default, at its own address.
+			// AND IT IS THE SENTENCE THE DEPLOYMENT GUIDE PRINTS, for a boot
+			// against nats-server's own default at the guide's address.
 			guide, rerr := os.ReadFile(filepath.Join(sourcetree.Root(t),
 				"docs", "guides", "deployment.md"))
 			if rerr != nil {
@@ -901,19 +838,14 @@ func TestABootAgainstAServerBelowTheContractIsRefusedByName(t *testing.T) {
 
 // THE WIDTH IS LEARNED ONCE AND THEN HELD.
 //
-// The width belongs to the vectors already in the file, not to the current
-// config, so it is not something an apply may change: buildEmbedder refuses a
-// revision whose width differs from the one the store was opened at and tells
-// the operator to restart. A store that was never told a width is the one
-// exception — a node that booted with no active revision, holding no rows —
-// and it learns from its first epoch.
-//
-// The direction that must NOT work is the way back. Were the width simply
-// re-stated on every apply, dropping the embeddings provider would set it to 0
-// and turn that guard off, and re-adding the provider at a different width
-// would then be accepted — putting rows of two widths in one recall pool,
-// which the reader can match neither of. Zero is "no declared width", and
-// EncodeVector checks nothing against it, so nothing would report this.
+// The width belongs to the vectors in the file, not to the config, so
+// buildEmbedder refuses a revision whose width differs and tells the operator
+// to restart; a store never told one (no active revision at boot, no rows)
+// learns it from its first epoch. The way back must NOT work: were it
+// re-stated on every apply, dropping the provider would set 0 and turn the
+// guard off, and re-adding it at another width would put two widths in one
+// recall pool, which the reader matches neither of and EncodeVector,
+// checking nothing against 0, would never report.
 func TestTheEmbeddingWidthIsLearnedOnceAndHeld(t *testing.T) {
 	t.Parallel()
 	const noVectors = `
@@ -954,8 +886,8 @@ roles:
 		t.Fatalf("booted at width %d, want 0 for a company with no embeddings", got)
 	}
 
-	// LEARNED: the unconfigured node taking its first revision. Nothing was
-	// being refused at 0 — the dimension guard was simply off.
+	// LEARNED: the unconfigured node's first revision turns the dimension
+	// guard on.
 	if _, _, err := e.Apply(t.Context(), parsedCompany(t, wide), time.Now()); err != nil {
 		t.Fatalf("apply the embedding provider: %v", err)
 	}
@@ -970,8 +902,8 @@ roles:
 		t.Error("a mis-sized vector was accepted: the guard did not come on")
 	}
 
-	// HELD: a revision that would change it is refused, by the guard that
-	// already existed. This is what the learn-once rule protects.
+	// HELD: a revision changing it is refused, by the guard that already
+	// existed.
 	if _, _, err := e.Apply(t.Context(), parsedCompany(t, narrow), time.Now()); err == nil {
 		t.Error("a revision changing the store's width was applied")
 	}
@@ -979,8 +911,8 @@ roles:
 		t.Errorf("a refused apply moved the width to %d", got)
 	}
 
-	// AND HELD ACROSS A REMOVAL, which is the two-step way around the guard.
-	// Dropping the provider must not reset the width to "never told".
+	// AND HELD ACROSS A REMOVAL, the two-step way around the guard: dropping
+	// the provider must not reset the width to "never told".
 	if _, _, err := e.Apply(t.Context(), parsedCompany(t, noVectors), time.Now()); err != nil {
 		t.Fatalf("apply the removal: %v", err)
 	}
@@ -996,22 +928,17 @@ roles:
 
 // A NODE WHOSE ROUTE PORT IS ALREADY TAKEN REFUSES TO START, naming the port.
 //
-// # Why this needs a guard of its own
-//
-// Because it was once the only symptom there was. nats-server reports a route
-// listener that cannot bind through its fatal log call and carries on, and
-// before the engine acted on that call the member came up, answered its health
-// check and simply never formed a route to a peer — reported a minute later as
-// the readiness wait expiring and naming the CLUSTER, which sent an operator
-// to debug peers, a firewall and a network path that were all fine. The bind
-// failure now refuses the start by itself; this holds the refusal to name the
-// port and the setting, which is the one fact an operator cannot derive from
-// anywhere else.
+// nats-server reports a route listener that cannot bind through its fatal log
+// call and carries on, so without the engine acting on that call the member
+// comes up healthy and never forms a route, surfacing a minute later as the
+// readiness wait naming the CLUSTER and sending an operator after peers and a
+// network that are fine. The refusal names the port and the setting, the one
+// fact an operator cannot derive elsewhere.
 func TestANodeRefusesToStartWhenItsRoutePortIsTaken(t *testing.T) {
 	t.Parallel()
 
-	// SOMETHING ELSE HOLDS IT, which is the whole input. Held for the
-	// length of the case, so the engine's listener cannot have it.
+	// SOMETHING ELSE HOLDS IT for the length of the case, so the engine's
+	// listener cannot.
 	var lc net.ListenConfig
 	held, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1027,9 +954,8 @@ func TestANodeRefusesToStartWhenItsRoutePortIsTaken(t *testing.T) {
 		b.Stream.Cluster.Name = "crewlet-route-taken"
 		b.Stream.Cluster.Host = "127.0.0.1"
 		b.Stream.Cluster.Port = taken
-		// A PEER THAT DOES NOT EXIST, deliberately: this case is about
-		// failing before the readiness wait, so the peer must never be
-		// the thing that answers.
+		// A PEER THAT DOES NOT EXIST: this case fails before the readiness
+		// wait, so a peer must never be what answers.
 		b.Stream.Cluster.Peers = []string{"nats://127.0.0.1:1"}
 	})
 
@@ -1040,8 +966,7 @@ func TestANodeRefusesToStartWhenItsRoutePortIsTaken(t *testing.T) {
 			"that cannot route is, from outside, indistinguishable from a slow " +
 			"cluster")
 	}
-	// THE PORT IS IN THE MESSAGE, because that is the one fact an operator
-	// cannot derive from anywhere else.
+	// THE PORT AND THE FIELD ARE IN THE MESSAGE.
 	if !strings.Contains(err.Error(), strconv.Itoa(taken)) {
 		t.Errorf("the failure does not name the port that was taken: %v", err)
 	}

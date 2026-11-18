@@ -152,10 +152,10 @@ func TestASeatsAWSServerIsSignedWithItsOwnSession(t *testing.T) {
 	}
 }
 
-// EACH ISSUER IS ASKED FOR ITS OWN LIVES: one that declares none keeps the hour
-// the shared paths have always asked (a launch 50 minutes, a tool or a refresh
-// 10), and AWS's 15-minute session is asked for 10 at a launch and 5 at a
-// tool's start, so a session never has to outlast what AWS issues.
+// EACH ISSUER IS ASKED FOR ITS OWN LIVES: one that declares none keeps the
+// hour's defaults (a launch 50 minutes, a tool or a refresh 10), and AWS's
+// 15-minute session is asked for 10 at a launch and 5 at a tool's start, so a
+// session never has to outlast what AWS issues.
 func TestEachIssuerIsAskedForItsOwnLives(t *testing.T) {
 	t.Parallel()
 	gh, aws := livesOf(githubSeatIssuer{}), livesOf(awsSeatIssuer{})

@@ -33,8 +33,7 @@ func atlasRouter(t *testing.T) (*Router, *recordingAsker) {
 }
 
 // THE FACADES ASK EXACTLY THE ATLAS LOG'S OPERATIONS, each method one: every
-// atlas read through the reader facade and every atlas write through the writer
-// facade, and nothing else through either.
+// read through AtlasReads, every write through AtlasWrites, nothing else.
 //
 // Mutation: point AtlasReads.Log at opAtlasEntry, or AtlasWrites.PurgeEntry
 // at opAtlasPurgeValue, and a facade's operations lack one.
@@ -229,10 +228,10 @@ func TestAPersonsAtlasWriteFromANodeWithoutDataCrossesWhole(t *testing.T) {
 }
 
 // AN AGENT'S ATLAS RECORD FROM A NODE HOLDING NO DATA IS A DATA NODE'S WRITE
-// (ADR-0132): the claim, the turn it was made in, the evidence the asking node
-// derived, the seat and the operation cross whole, and a refusal keeps its
-// identity. A seat is held wherever its lease lands, a leaf without data
-// included, and only that node holds what its turn's calls answered.
+// (ADR-0132): the claim, its turn, the evidence the asking node derived, the
+// seat and the operation cross whole, and a refusal keeps its identity. Only
+// the node holding the seat (wherever its lease lands, a leaf without data
+// included) holds what its turn's calls answered.
 //
 // Mutation: drop Seen from atlasObserveArgs and the record arrives naming no
 // turn, which the data node refuses.

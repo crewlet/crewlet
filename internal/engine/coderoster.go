@@ -8,39 +8,18 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// codeRoster is the chart as [gitlet.Roster] reads it — every grant a seat holds
-// on a repository is judged by it ([gitlet.GrantOf]) — built ONCE an epoch from
-// its organization: O(units + seats) once, then O(1) a seat and O(depth) a
-// lead chain or a subtree test. Once, because a listing judges every row it
-// returns: a page of 500 repositories asked of a walk of the chart a row is
-// 500 walks, every one of them inside a read transaction of the estate.
+// codeRoster is the chart as [gitlet.Roster] reads it ([gitlet.GrantOf]),
+// built ONCE an epoch because a listing judges every row it returns, each
+// inside an estate read transaction. The build is linear
+// (BenchmarkBuildingTheCodeRoster) because each unit's lead is the index's
+// ([org.Index.EffectiveLead]), never [org.Organization.EffectiveLead], whose
+// search for an inherited lead made it units × seats, paid by the first code
+// read after each activation with every read behind it waiting.
 //
-// LINEAR BECAUSE EVERY UNIT'S LEAD IS THE INDEX'S ([org.Index.EffectiveLead]),
-// never [org.Organization.EffectiveLead]: a team's lead is usually inherited
-// from its division, and the chart's own method finds an inherited lead by
-// searching the team's subtree and then walking every seat of the chart, which
-// asked of every unit made the build units × seats. The build is paid by the
-// first agent code read after each activation, on that read's own goroutine,
-// with every agent read arriving meanwhile waiting behind it — measured
-// (BenchmarkBuildingTheCodeRoster, divisions each led by a seat of their own
-// over ten teams of three seats that inherit the lead; four vCPUs of a 2.8 GHz
-// Xeon under a load average near 15): 2.9–3.9 ms and 0.97 MB a build for 330
-// units and 930 seats, 9.4–11 ms and 2.6 MB for 1 100 and 3 100 — against
-// 7.3–9.8 ms and 3.3 MB, and 60–73 ms and 29 MB, through the chart's own
-// lookup.
-//
-// A UNIT REFERENCE IS A DURABLE VALUE, resolved through the chart's own
-// durable lookup ([org.Index.UnitByRef]: its key, exactly and then folded,
-// before any name, and a name only where one unit alone carries it) and
-// never compared with [org.Unit.Key]. A repository's owner is written when it
-// is created or declared and outlives the spelling of its unit: a unit that
-// gains an `id:` after a repository was made under its name keeps that
-// name in every row, and an exact read of a map keyed on Key would lose the
-// unit's lead its maintain and its members their write on their own
-// repository. So the parent and lead maps are keyed by the unit itself.
-//
-// Frozen like the organization it is built from: nothing writes it after
-// [newCodeRoster], so every goroutine reading the epoch reads it unlocked.
+// A unit reference resolves through [org.Index.UnitByRef], never compared with
+// [org.Unit.Key]: a repository's owner outlives its unit's spelling (a unit
+// that gains an `id:` keeps its name in every row), so the maps are keyed by
+// the unit itself. Frozen after [newCodeRoster], so read unlocked.
 type codeRoster struct {
 	units *org.Index
 	// seats is every seat by handle, the first in the chart's walk order
@@ -139,26 +118,21 @@ func (r codeRoster) Within(ref, ancestor string) bool {
 	return false
 }
 
-// rosterOf is the epoch c's roster, built at its first question: a
-// [sync.OnceValue] stamped on the epoch as it is installed
-// ([Engine.installEpoch]), because most epochs a node installs are never asked
-// — only an agent's code read asks — and an apply should not pay a walk of the
-// chart for a question nobody puts.
+// rosterOf is the epoch c's roster, built at its first question
+// ([Engine.installEpoch] stamps it): only an agent's code read asks, so an
+// apply should not pay a walk of the chart nobody may need.
 func rosterOf(c *Company) func() codeRoster {
 	return sync.OnceValue(func() codeRoster { return newCodeRoster(c.Org) })
 }
 
-// codeRoster is the CURRENT epoch's chart as Gitlet reads a seat's
-// grant — read per call, so a revision that moves a seat or a lead is in force
-// from its activation on this node, with no restart — or nil where no epoch is
-// installed: NO CHART, which says nothing about the seat. Its two readers
-// refuse a seat's read on nil as a refusal about THIS NODE — the code reader
-// [gitlet.ErrNotServing] ([gitlet.ReaderOptions.Roster]), so the estate's walk
-// asks a data node that holds a chart, and the git reads [gitlet.ErrGitUnready]
-// with [gitlet.UnreadyNoChart], so another Gitlet node is asked — and never answer
-// that the seat stands nowhere, which only a chart that denies it may answer,
-// nor that every seat reads. [gitlet.GrantOf] itself still holds an agent to
-// none on a nil roster, for a judge that asks it with no chart.
+// codeRoster is the CURRENT epoch's chart as Gitlet reads a seat's grant,
+// read per call so a revision is in force from its activation, or nil with no
+// epoch: NO CHART, which says nothing about the seat. Its readers refuse on nil
+// as about THIS NODE, so another node is asked: the code reader with
+// [gitlet.ErrNotServing] ([gitlet.ReaderOptions.Roster]), the git reads with
+// [gitlet.ErrGitUnready] and [gitlet.UnreadyNoChart]. Never that the seat
+// stands nowhere (only a denying chart says that), nor that every seat reads;
+// [gitlet.GrantOf] still holds an agent to none on a nil roster.
 func (e *Engine) codeRoster() gitlet.Roster {
 	c := e.Company()
 	if c == nil || c.roster == nil {

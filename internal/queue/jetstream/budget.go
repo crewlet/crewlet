@@ -11,49 +11,36 @@ import (
 	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
-// A stream's byte ceiling is a RESERVATION, and this file is what the broker
-// will actually let this node reserve.
+// A stream's byte ceiling is a RESERVATION; this file reads what the broker
+// will let this node reserve.
 //
-// # Why the number is read rather than modelled
+// READ, NOT MODELLED: the broker refuses a create (`insufficient storage
+// resources available`, naming no number) against a limit of its own — three
+// quarters of its volume for a file store, of the host's memory for a memory
+// store, or the account's JetStream limit where one is set — so a ceiling
+// derived from the disk alone can be refused on a machine with the space.
 //
-// The broker refuses to create a stream it could not honour, with `insufficient
-// storage resources available` and nothing naming the number it compared
-// against. A ceiling derived from the disk alone can be refused on a machine
-// that has the space, because the broker compares against a limit of its own:
-// three quarters of its volume for an embedded file store, three quarters of
-// the host's memory for one that keeps its streams in memory, and the account's
-// JetStream limit wherever an operator set one. Each is a number the broker can
-// state, so each is read from the broker.
-//
-// # And why it is RESERVATIONS that count against it, not bytes stored
-//
-// The broker adds a new ceiling to the ceilings it has already granted and
-// compares the sum against its limit; what those streams actually hold is not
-// in the sum. So an account that has granted 12 GiB of ceilings and stores
-// 40 MiB has a few gibibytes left rather than nearly all of it, and a figure
-// read from what is stored double-grants the difference on every restart.
+// RESERVATIONS COUNT, NOT BYTES STORED: the broker sums the ceilings it has
+// granted, so a figure read from what is stored double-grants the difference
+// on every restart.
 
 // StorageBudget is what the broker compares a new stream's byte ceiling
 // against, in the units of a ceiling.
 //
-// IN CEILING UNITS, because that is the only number a caller has to hand: an
-// untiered account limit counts every replica of a ceiling against itself, so
-// a replicated account's limit is divided by the replica count here rather than
-// multiplied into every comparison a caller makes.
+// IN CEILING UNITS, the only number a caller has to hand: an untiered account
+// counts every replica of a ceiling, so its limit is divided by the replica
+// count here rather than multiplied into every comparison a caller makes.
 type StorageBudget struct {
 	// Limit is the most this node's streams may reserve between them, -1
 	// when the broker states no limit this client can read.
 	Limit int64
 
 	// Committed is what already counts against Limit: the ceilings the
-	// broker has granted. Carried where Limit is unstated as well, because
-	// what an account has reserved is reported whether or not it has a
-	// limit, and a node that sizes from its own disk in place of the limit
-	// has to take the reservations already granted off that figure too.
+	// broker has granted. Carried where Limit is unstated too: a node that
+	// sizes from its own disk in place of the limit takes them off that.
 	Committed int64
 
-	// Source is who sets Limit, which is what an operator changes to raise
-	// it.
+	// Source is who sets Limit: what an operator changes to raise it.
 	Source BudgetSource
 }
 
@@ -86,34 +73,23 @@ const (
 
 	// BudgetAccountNoTier is a TIERED account that declares no tier for the
 	// replica class this node's streams are created at — `R1` and `R5`
-	// declared while `stream.replicas` is 3.
+	// declared while `stream.replicas` is 3. The server refuses every create
+	// on it (`no JetStream default or applicable tiered limit present`)
+	// before comparing a byte.
 	//
-	// ITS OWN SOURCE rather than [BudgetAccount] with a zero, because the
-	// zero is the same number an exhausted account reports and the two
-	// send an operator to opposite places: one waits for room, the other
-	// changes a setting. The server refuses every create on such an
-	// account with `no JetStream default or applicable tiered limit
-	// present` before it compares a single byte, so a refusal has two
-	// levers to name and neither is capacity.
+	// Not [BudgetAccount] with a zero: an exhausted account reports the same
+	// zero, and the two send an operator to opposite places — wait for room,
+	// or change a setting.
 	BudgetAccountNoTier BudgetSource = "account_no_tier"
 
 	// BudgetAccountTierNoLimit is a TIERED account that HAS this node's
 	// replica class and declares no limit on it.
 	//
-	// The report does not promise that a tier it lists carries one:
-	// `Account.JetStreamUsage` builds Tiers from the account's USAGE as
-	// much as from its limits — the tier loop keeps any class with
-	// non-zero usage and fills `Limits: jsa.limits[t]` whether or not that
-	// map has an entry, and the clustered arm below it inserts a bare
-	// `JetStreamTier{}` for every class it finds a stream or a consumer in
-	// (server/jetstream.go). So a class this account holds objects in but
-	// declares no limit for arrives PRESENT, with its MaxStore at the zero
-	// value.
-	//
-	// The server draws no distinction — `jsa.selectLimits` resolves both
-	// shapes through the same map and answers not-ok for each — but an
-	// operator does: "declare a tier" and "declare a limit on the tier you
-	// already have" are different things to go and do.
+	// `Account.JetStreamUsage` (server/jetstream.go) lists a tier for USAGE
+	// as well as for limits, so a class the account holds objects in arrives
+	// present with MaxStore at zero. The server treats it as a missing tier
+	// (`jsa.selectLimits` answers not-ok for both), but for an operator
+	// "declare a tier" and "declare a limit on the tier you have" differ.
 	BudgetAccountTierNoLimit BudgetSource = "account_tier_no_limit"
 
 	// BudgetUnstated is an external broker whose account states no limit.
@@ -134,27 +110,21 @@ func (s BudgetSource) Valid() bool { return slices.Contains(BudgetSources, s) }
 // broker may hold: the limit its server enforces on what its streams STORE, and
 // what they store there now.
 //
-// # Bytes stored, never reservations
-//
-// [StorageBudget] is the other question — what a new stream may RESERVE — and
-// it counts ceilings, because that is what a create is compared against. A
-// neighbour on the same disk asks what the broker can still WRITE, and that is
-// bounded by bytes: the server refuses a message that would take what its
-// streams store past this limit (nats-server's limitsExceeded), whatever
-// their ceilings add up to, and a stream with no ceiling — the files bucket,
-// a seat's mailbox — grows into it like any other. So the room the broker may
-// yet take from the volume is the limit less what it stores, which no budget
-// in ceiling units says.
+// BYTES STORED, NEVER RESERVATIONS: [StorageBudget] answers what a new stream
+// may reserve; a neighbour on the same disk asks what the broker can still
+// write, and the server refuses a message that takes its stored bytes past
+// this limit (nats-server's limitsExceeded) whatever the ceilings add up to,
+// while a stream with no ceiling (the files bucket, a seat's mailbox) grows
+// into it like any other.
 type VolumeClaim struct {
 	// Dir is the store directory the broker's files live under — the
 	// volume a neighbour compares its own with.
 	Dir string
 
 	// Limit is the server's limit in force: stream.store_max_bytes where
-	// one was declared, and otherwise nats-server's own derivation, three
-	// quarters of the volume's free space when its JetStream came up plus
-	// what it already stored there. -1 is a server holding to none, which
-	// may take the whole volume.
+	// declared, otherwise nats-server's derivation, three quarters of the
+	// volume's free space when its JetStream came up plus what it already
+	// stored there. -1 is a server holding to none: the whole volume.
 	Limit int64
 
 	// Stored is what the broker's streams occupy on the volume now.
@@ -176,10 +146,9 @@ func (c VolumeClaim) Unclaimed() int64 {
 // streams in memory, a leaf (whose streams are its members'), and an external
 // cluster (whose disks are its operator's).
 //
-// READ FROM THE SERVER IN THIS PROCESS — a struct field, never a round trip —
-// for [Queue.budget]'s reason: the number is the server's own, declared or
-// derived, so a reader cannot model it differently from the server that
-// enforces it.
+// READ FROM THE SERVER IN THIS PROCESS (a struct field, never a round trip):
+// the number is the server's own, declared or derived, so a reader cannot
+// model it differently from the server that enforces it.
 func (q *Queue) VolumeClaim() (VolumeClaim, bool, error) {
 	if !q.embedded.holdsStreams() || q.storage() != jetstream.FileStorage {
 		return VolumeClaim{}, false, nil
@@ -195,14 +164,9 @@ func (q *Queue) VolumeClaim() (VolumeClaim, bool, error) {
 }
 
 // StreamBudget is what the broker will let this node reserve for a new stream
-// of the storage class this queue creates, and how much of that is taken.
-//
-// # Both halves, and the tighter one wins
-//
-// The account's limit is what every broker states; an embedded broker's
-// account states none, and its own cap is what refuses there. Where both are
-// stated (an embedded member whose account an operator limited), the one with
-// less room is the one a reservation meets first.
+// of the storage class this queue creates, and how much of that is taken: the
+// tighter of the account's limit and, on an embedded broker (whose account
+// usually states none), the server's own cap.
 func (q *Queue) StreamBudget(ctx context.Context) (StorageBudget, error) {
 	return q.budget(ctx, q.embedded.holdsStreams())
 }
@@ -211,42 +175,27 @@ func (q *Queue) StreamBudget(ctx context.Context) (StorageBudget, error) {
 // broker refuses the update, stated only where this node can read the limit
 // the broker holds the update to.
 //
-// # Why it is not [Queue.StreamBudget]
-//
-// A create and an update are refused by different rules. A create is PLACED,
-// so a clustered member's own room is what the cluster weighs, and that is what
-// StreamBudget reads. An update is checked by the server that leads the
-// metadata group, against that server's own reservations, and a member cannot
-// read another server's. So the server half is stated here only on a lone
-// embedded server, where the leader is this process, and elsewhere only an
-// account's limit, which every server shares, is held against a raise. A
+// Not [Queue.StreamBudget]: a create is PLACED, so a member's own room is what
+// the cluster weighs, but an update is checked by the metadata leader against
+// its own reservations, which a member cannot read. So the server half counts
+// only on a lone embedded server (the leader is this process); elsewhere only
+// the account's limit, shared by every server, is held against a raise — a
 // number this node cannot read exactly would refuse raises the broker grants.
 func (q *Queue) GrowthBudget(ctx context.Context) (StorageBudget, error) {
 	return q.budget(ctx, q.embedded.holdsStreams() && !q.embedded.clustered)
 }
 
-// budget is the account's stated limit and, when withServer says the embedded
-// server's own cap is this node's to hold a request to, that cap as well,
-// whichever a reservation meets first.
+// budget is the account's stated limit and, when withServer holds the request
+// to the embedded server's own cap, that cap too, whichever is met first.
 //
-// # The server half is read FIRST, and it is what survives a broker that will
-// not answer
-//
-// That server is in this process, and its configuration is a struct field
-// rather than a request — it cannot fail to answer because the broker is busy.
-// The account half is a round trip, and on an embedded broker it states no
-// limit at all in the ordinary case, because nothing here sets one. Failing
-// the whole read on it therefore threw away the one number this node
-// definitely had, for the one that is usually absent: [internal/engine] reads
-// a failure here as "no limit" and sizes its state logs from FREE DISK
-// instead, which is both looser than the cap that just went unread and the
-// arithmetic the cap exists to replace.
-//
-// So the account half degrades to what it states when nobody can read it —
-// nothing — and the SOURCE says which limit is bounding the answer, so a
-// refusal names the one an operator can raise. Where no server half is stated
-// (an external broker) the account's limit is the only thing readable, and a
-// failure there is a failure: there is nothing left to hold a ceiling to.
+// THE SERVER HALF IS READ FIRST AND SURVIVES AN UNANSWERED ACCOUNT READ: it is
+// a struct field in this process, while the account half is a round trip that
+// on an embedded broker usually states no limit at all. Failing on it would
+// discard the one number this node has, and [internal/engine] reads a failure
+// as "no limit" and sizes its state logs from free disk, the arithmetic the
+// cap replaces. So the account half degrades to nothing and the SOURCE names
+// the limit bounding the answer. With no server half (an external broker) an
+// account failure is a failure: nothing is left to hold a ceiling to.
 func (q *Queue) budget(ctx context.Context, withServer bool) (StorageBudget, error) {
 	memory := q.storage() == jetstream.MemoryStorage
 	var server StorageBudget
@@ -256,15 +205,12 @@ func (q *Queue) budget(ctx context.Context, withServer bool) (StorageBudget, err
 			return StorageBudget{}, err
 		}
 	}
-	// ASKED AS A METADATA READ ([jsprovision.ReadBoundedWith]): only the
-	// metadata leader answers an account's info, so a member that still
-	// believes in a leader the group has just lost drops it without a word,
-	// and one request held for the client's five-second default read an
-	// account limit that was there all along as one nobody could read. A
-	// boot with no deadline keeps those five seconds, asked again inside
-	// them — the bound a data pod's startup window counts this read at —
-	// rather than [askRead]'s lookup ceiling, which bounds the reads that
-	// were asked again from the start.
+	// A METADATA READ ([jsprovision.ReadBoundedWith]): only the metadata
+	// leader answers account info, and a member still believing in a lost
+	// leader drops it silently, so it is asked again. A boot with no
+	// deadline keeps the client's five-second default (the bound a data
+	// pod's startup window counts this read at), not [askRead]'s lookup
+	// ceiling.
 	info, err := jsprovision.ReadBoundedWith(ctx, q.provisioning(), q.js.Options().DefaultTimeout,
 		func(ctx context.Context) (*jetstream.AccountInfo, error) {
 			return q.js.AccountInfo(ctx)
@@ -301,31 +247,15 @@ func tighter(a, b StorageBudget) StorageBudget {
 // accountBudget is the account's stated limit for a stream of this storage
 // class and replica count, in ceiling units.
 //
-// # The two account shapes
-//
-// An UNTIERED account has one limit, and the broker counts every replica of a
-// ceiling against it: a 1 GiB ceiling on an R3 stream takes 3 GiB. A TIERED
-// account has a limit per replica count (`R1`, `R3`), which already accounts
-// for replication, and its top-level limits are zero: read there, a tiered
-// account with room for terabytes reports none at all.
-//
-// A tiered account with no tier for this replica count grants nothing, and the
-// broker refuses such a stream outright; zero says so rather than "unstated",
-// which would read as a limit nobody set. It carries [BudgetAccountNoTier]
-// rather than [BudgetAccount], because the same zero from an account that is
-// merely full is a different instruction to whoever reads the refusal.
-//
-// THE DISCRIMINATOR IS WHETHER TIERS ARE PRESENT AT ALL, never whether the one
-// named for this node is. The two are different questions, and the server
-// answers the first: `Account.JetStreamUsage` fills `Tiers` OR the un-tiered
-// `Limits` on the two arms of one either-or, and `JetStreamAccountStats`
-// says so in the comment on the tier it embeds — "in case tiers are used,
-// reflects totals with limits not set". Asked the second question, a tiered
-// account missing this node's class fell through to the un-tiered branch and
-// read a MaxStore of 0 as a limit somebody had set.
-//
-// The reservation the broker reports is the sum of ceilings, NOT multiplied by
-// replicas, which is why only the limit is divided.
+// An UNTIERED account has one limit and counts every replica of a ceiling
+// against it (1 GiB on R3 takes 3 GiB), so the limit is divided by replicas;
+// the reported reservation is the sum of ceilings, unmultiplied, so it is not.
+// A TIERED account has a limit per replica count (`R1`, `R3`) and zero
+// top-level limits; with no tier for this count it grants nothing
+// ([BudgetAccountNoTier], not a full [BudgetAccount]). Tiered is decided by
+// whether ANY tier is present, never this node's: `Account.JetStreamUsage`
+// fills `Tiers` or the untiered `Limits`, never both, so a tiered account
+// missing this class must not read its top-level MaxStore of 0 as a limit.
 func accountBudget(info *jetstream.AccountInfo, replicas int, memory bool) StorageBudget {
 	tier, perCeiling := info.Tier, int64(replicas)
 	if len(info.Tiers) > 0 {
@@ -340,24 +270,17 @@ func accountBudget(info *jetstream.AccountInfo, replicas int, memory bool) Stora
 		limit, reserved = tier.Limits.MaxMemory, tier.ReservedMemory
 	}
 	if limit < 0 {
-		// THE RESERVATIONS ARE CARRIED WITH NO LIMIT TO HOLD THEM TO: a
-		// node that stands its free space in for the limit
-		// ([internal/engine]'s state-log sizing) spends them from it, as
-		// the broker's own cap does.
+		// RESERVATIONS CARRIED WITH NO LIMIT: a node standing its free
+		// space in for the limit ([internal/engine]'s state-log sizing)
+		// spends them from it, as the broker's own cap does.
 		return StorageBudget{Limit: -1, Committed: int64(reserved), Source: BudgetUnstated}
 	}
-	// A TIER THAT IS THERE AND STATES NOTHING is the missing tier's other
-	// shape, and ZERO IS NOT THE SAME TEST AS BELOW ZERO: a tier declared
-	// unlimited reports its limit negative, selectLimits answers ok for it
-	// and the broker creates against it, so a `<= 0` check here would
-	// refuse the tiered account with the most room of all — which is why
-	// this sits after the negative arm rather than in front of it.
+	// A TIER PRESENT WITH A ZERO LIMIT is the missing tier's other shape.
+	// Zero, never `<= 0`: a tier declared unlimited reports a negative
+	// limit and the broker creates against it, hence after the negative arm.
 	if limit == 0 && perCeiling == 1 {
-		// THE USAGE IS CARRIED, although nothing can be reserved
-		// against a limit of zero: it is why the tier is in the report
-		// at all — a class an account merely holds objects in is
-		// listed — so it is the evidence for the diagnosis rather than
-		// a number beside it.
+		// The usage is carried although nothing can be reserved: it is
+		// why the tier is listed at all, the evidence for the diagnosis.
 		return StorageBudget{
 			Limit: 0, Committed: int64(reserved), Source: BudgetAccountTierNoLimit,
 		}
@@ -371,14 +294,10 @@ func accountBudget(info *jetstream.AccountInfo, replicas int, memory bool) Stora
 
 // budget is this embedded member's own cap and what counts against it.
 //
-// # Why the member's committed figure depends on whether it is clustered
-//
-// A solo server compares a new ceiling against the ceilings it has granted and
-// nothing else. A clustered one PLACES the stream, and placement counts the
+// Committed follows the server's own rule: a solo server compares against the
+// ceilings it has granted; a clustered one PLACES the stream, counting the
 // larger of a peer's reservations and what it stores, so a member holding an
-// unbounded stream of events has less room than its reservations say. Each is
-// the rule the server itself applies, so neither over-promises nor refuses
-// what the broker would grant.
+// unbounded stream has less room than its reservations say.
 func (e *embeddedServer) budget(memory bool) (StorageBudget, error) {
 	info, err := e.ns.Jsz(nil)
 	if err != nil {
@@ -407,53 +326,28 @@ func (e *embeddedServer) budget(memory bool) (StorageBudget, error) {
 // ErrInsufficientStorage reports a reservation the broker would not make —
 // a stream it would not create, or a ceiling it would not raise.
 //
-// A SENTINEL rather than the broker's own error, because the broker says it in
-// two codes, one per storage class, and neither names the number it compared
-// against: a caller that wants to say what was needed, what was available and
-// what to change has to recognise the refusal first, and must not have to know
-// this backend's vocabulary to do it.
-//
-// BOTH WRITES, because both callers act on it the same way and for the same
-// reason: a refusal is an ANSWER. The broker compared the ceiling against its
-// limit and declined, so nothing was written and nothing is in flight — which
-// is the one create failure that is not read back, and the one capacity-apply
-// failure that is not an unknown the fleet has to seal to retire.
+// A SENTINEL because the broker says it in two codes, one per storage class,
+// neither naming the number compared, and a caller must recognise the refusal
+// without knowing this backend's vocabulary. For both writes a refusal is an
+// ANSWER: nothing was written and nothing is in flight, so a create is not
+// read back and a capacity apply is not an unknown the fleet must seal.
 var ErrInsufficientStorage = errors.New("jetstream: the broker cannot reserve the stream's byte ceiling")
 
-// The broker's codes for a reservation it refused for want of room are
-// [jsprovision.OutOfCapacity]'s, for a create and for an update alike: the
-// coordination store's buckets meet the same refusal, and two spellings of one
-// rule are how one of them learns a third code and the other does not.
-// Placement is deliberately not one of them, and neither is `insufficient
-// resources` (10023) — see that predicate for why.
+// The broker's codes for a reservation refused for want of room are
+// [jsprovision.OutOfCapacity]'s, for create and update alike, so the
+// coordination store's buckets share one spelling; placement and `insufficient
+// resources` (10023) are deliberately not among them (see that predicate).
 
 // DomainStreamCeiling is the byte ceiling a domain's stream holds, and whether
-// the stream exists at all.
+// the stream exists: held, it is part of what the state logs have reserved;
+// absent, this boot creates it; unknown (an error) is neither.
 //
-// THREE ANSWERS, because the caller does something different with each: a
-// ceiling it already holds is part of what the state logs have reserved, an
-// absent stream is one this boot will create, and a broker that could not say
-// is neither.
-//
-// # A READ ON THE BOOT PATH
-//
-// Sized and re-asked as one — see [Queue.askRead]. It is asked while the logs
-// are sized at state-log start, which on a fleet booting together is the
-// moment the peers beside this node are creating these same streams — exactly
-// the window in which a member drops a read of a stream another node has in
-// flight ([jsprovision.ReadTerm]). Asked once on the boot's context, which
-// carries no deadline, it was nats.go's own five-second default that decided
-// it: each dropped read stalled the boot five seconds and then came back
-// unknown. And the sizing that reads this carries an unknown as an absent
-// stream, so every log that boot created was sized without what the stream
-// holds, and kept the ceiling that gave it for good. Measured on a stream
-// holding 3 GiB whose first request went unanswered: asked once, five seconds
-// and no ceiling; asked as a read, two seconds and the 3 GiB.
-//
-// What that costs is a read the broker never answers, which now takes the
-// whole lookup ceiling rather than five seconds — so [internal/engine] asks
-// every log's at once, and the sizing costs one ceiling rather than one per
-// log.
+// A BOOT-PATH READ, sized and re-asked by [Queue.askRead]: it runs while peers
+// booting together create these same streams, when a member drops reads of a
+// stream in flight ([jsprovision.ReadTerm]), and the sizing would carry an
+// unknown as absent and fix a ceiling without what the stream holds. An
+// unanswered read costs the whole lookup ceiling, so [internal/engine] asks
+// every log's at once.
 func (q *Queue) DomainStreamCeiling(ctx context.Context, stream string) (int64, bool, error) {
 	s, err := askRead(ctx, q, func(ctx context.Context) (jetstream.Stream, error) {
 		return q.js.Stream(ctx, stream)
@@ -464,7 +358,6 @@ func (q *Queue) DomainStreamCeiling(ctx context.Context, stream string) (int64, 
 	case err != nil:
 		return 0, false, fmt.Errorf("jetstream: read %q's ceiling: %w", stream, err)
 	}
-	// A STREAM WITH NO CEILING RESERVES NOTHING, which the broker spells
-	// -1.
+	// A STREAM WITH NO CEILING (-1) RESERVES NOTHING.
 	return max(s.CachedInfo().Config.MaxBytes, 0), true, nil
 }

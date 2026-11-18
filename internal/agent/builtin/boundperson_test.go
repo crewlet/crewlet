@@ -16,24 +16,15 @@ import (
 )
 
 // A PERSON THE IDENTITY DIRECTORY BINDS TO A SEAT ACTS AS THAT SEAT on every
-// work tool the operator surface serves — as its AUTHOR, as the ADDRESS a
+// work tool the operator surface serves: as its author, as the address a
 // gesture about them lands on, and as the party a lead relation is asked
-// about.
-//
-// Each of these was once asked about the credential in the person's hand, and
-// each answered about a name no chart has ever contained: a re-route refused a
-// lead leading the project, a watch put a token in the watcher set where every
-// later wake dropped it, a comment left the ask it answered open, a create
-// found no home project, and `preset=my_queue` read the token's queue. Here
-// the conversion is [builtin.PrincipalActor] over [iam.ActorFor], so the seat
-// is the author and there is no second name to reconcile — which is exactly
-// what these cases hold, through the served tools rather than the conversion
-// alone, so a tool that reached for the login instead goes red.
+// about. [builtin.PrincipalActor] over [iam.ActorFor] makes the seat the
+// author; these cases hold it through the served tools, so a tool that
+// reaches for the login instead goes red.
 
 // seatChart is a chart in which ONE seat leads ONE project, recording every
-// actor the project relation was asked about — because a refusal alone is
-// indistinguishable between "this person does not lead it" and "the chart was
-// asked about a name it has never seen".
+// actor the project relation was asked about: a refusal alone cannot tell
+// "does not lead it" from "asked about a name the chart has never seen".
 type seatChart struct {
 	seat, project string
 	asked         []string
@@ -85,9 +76,8 @@ func boundSurface(t *testing.T, trk *fakeTracker, chart *seatChart) *tools.Regis
 		Work: builtin.WorkDeps{
 			Reader: trk, Writer: trk.as, Units: stubUnits{},
 			ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return trk },
-			// THE SEAT'S TEAM OWNS ENG AND THE LOGIN OWNS NOTHING, because
-			// a home project is resolved from the chart by handle exactly
-			// as the lead relation is.
+			// THE SEAT'S TEAM OWNS ENG AND THE LOGIN OWNS NOTHING: a home
+			// project is resolved by handle, as the lead relation is.
 			DefaultProject: func(handle string) string {
 				if handle == "jane-founder" {
 					return "ENG"

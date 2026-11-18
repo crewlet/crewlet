@@ -20,13 +20,12 @@ import (
 )
 
 // When a call is counted in its run's call log, and what becomes of an update
-// the ledger could not land (the package doc's "A call is on its run's record
+// the ledger could not land (package doc, "A call is on its run's record
 // before it runs").
 
-// ordinalTool moves an item to the state its call names, recording, as each
-// call of it runs, the ordinal its run's call log hands the call: the repeat
-// count every operation id the call derives carries. A call to the state
-// "broken" could not run at all, as a call whose turn was torn down under it.
+// ordinalTool moves an item to the state its call names, recording the ordinal
+// the run's call log hands each call (the repeat count its operation ids
+// carry). State "broken" fails as a call whose turn was torn down under it.
 type ordinalTool struct {
 	mu       sync.Mutex
 	ordinals map[string]int
@@ -65,9 +64,8 @@ func (m *ordinalTool) derived() map[string]int {
 	return maps.Clone(m.ordinals)
 }
 
-// firstBeginRefused refuses the entry of the session's first call, as a
-// coordination store in an outage refuses every attempt within the ledger's
-// bound, and takes every later one.
+// firstBeginRefused refuses the session's first entry, as a store in an outage
+// past the ledger's bound would, and takes every later one.
 type firstBeginRefused struct {
 	*ledger
 	begins atomic.Int32
@@ -93,11 +91,9 @@ func inFlightOf(l *ledger) []mcpbridge.Begun {
 	})
 }
 
-// seededFrom is the call log a later segment of the run seeds from what the
-// run's ledger holds alone — every call it lists and every entry still in
-// flight, by the identity each carries, and a listed call that carries none by
-// its canonical arguments — as internal/agent/runner's seedCalls seeds a
-// resumed segment's.
+// seededFrom is the call log a later segment seeds from the ledger alone: every
+// listed call and in-flight entry by its identity, a listed call without one by
+// its canonical arguments, as internal/agent/runner's seedCalls does.
 func seededFrom(l *ledger, surface *tools.Surface) *turnctx.CallLog {
 	seeded := turnctx.NewCallLog()
 	for _, row := range l.rows() {
@@ -113,23 +109,18 @@ func seededFrom(l *ledger, surface *tools.Surface) *turnctx.CallLog {
 	return seeded
 }
 
-// moveFrom makes a call moving the item to a state from a box, and hands back
-// its answer once the call returns.
+// moveFrom makes a call from a box moving the item to state, and returns its
+// answer.
 type moveFrom func(state string) *mcp.CallToolResult
 
-// THE RUN'S CALL LOG COUNTS ONLY THE CALLS ITS RECORD HOLDS. A write's operation
-// id carries how many earlier calls of its tool in the run asked for something
-// else ([turnctx.CallLog]), and a later segment of the run — a collection, a
-// continuation, a node that took the seat over — seeds its own log from the
-// run's record alone. So the log of the segment that makes the calls must count
-// exactly the calls that record holds, by their identity: a call it counted and
-// no record holds makes the resumed segment derive, for a new call, the
-// operation id a call of this segment already used, and the new call is taken
-// for the old one's retry — the item moved to done and back stays done. A call
-// refused at its entry, or whose opening ended while its entry was written, is
-// counted nowhere, its entry withdrawn; one the log counted that its tool then
-// could not run is on the record as a call not run, by the identity the log
-// counted it under.
+// THE RUN'S CALL LOG COUNTS ONLY THE CALLS ITS RECORD HOLDS. An operation id
+// carries the count of earlier calls of its tool ([turnctx.CallLog]), and a
+// later segment of the run seeds its log from the record alone, so a call
+// counted here and held nowhere makes a resumed segment reuse an operation id:
+// the new call is taken for the old one's retry. A call refused at its entry,
+// or whose opening ended while it was written, is counted nowhere, its entry
+// withdrawn; one counted that its tool could not run is recorded as not run,
+// under the identity it was counted by.
 //
 // Mutation: admit a call refused at its entry all the same
 // (refused-call-admitted), and this segment counts a call no record holds.
@@ -223,8 +214,8 @@ func TestTheRunsCallLogCountsOnlyTheCallsItsRecordHolds(t *testing.T) {
 	}
 }
 
-// heldBegin holds the entry of the call at place seq until released, saying, as
-// every entry reaches it, whose it is.
+// heldBegin holds the entry at place seq until release, reporting each entry's
+// seq as it arrives.
 type heldBegin struct {
 	*ledger
 	seq     int
@@ -241,13 +232,9 @@ func (l *heldBegin) Begin(ctx context.Context, runID string, b mcpbridge.Begun) 
 }
 
 // SIDE-BY-SIDE CALLS ARE ADMITTED IN THE ORDER THEY ARRIVED, whichever entry's
-// write comes back first. A harness makes a response's calls at once, and a
-// call's count reads every call admitted before it, so admitted in the order
-// their entries landed, two calls' counts would depend on which write the
-// store answered first, and a re-run making the same calls would not reproduce
-// them. Each call is admitted only once the call that arrived before it has
-// been: the second call, its entry written, waits for the first's, and runs
-// after it, counting it.
+// write comes back first. A call's count reads every call admitted before it,
+// so admitting in the order entries landed would make two concurrent calls'
+// counts depend on the store, and a re-run would not reproduce them.
 //
 // Mutation: admit a call as soon as its own entry is written
 // (admission-out-of-arrival-order), and the second call runs first, counting
@@ -288,10 +275,8 @@ func TestSideBySideCallsAreAdmittedInTheOrderTheyArrived(t *testing.T) {
 	})
 }
 
-// owingLedger answers the update of every call as one the ledger could not land
-// within its own attempts ([mcpbridge.ErrUnrecorded]) until it has refused
-// refuse of them — every one, where refuse is negative — and takes every update
-// after on its ledger; it keeps when each was asked for.
+// owingLedger refuses the first refuse updates (all of them when negative) as
+// [mcpbridge.ErrUnrecorded], takes the rest, and keeps when each was asked.
 type owingLedger struct {
 	*ledger
 	refuse int
@@ -317,15 +302,10 @@ func (l *owingLedger) asks() []time.Time {
 }
 
 // AN UPDATE THE LEDGER COULD NOT LAND IS ASKED FOR AGAIN ONCE ITS ANSWER IS OUT.
-// The update is everything the call did — what it answered, cost and committed,
-// a submission among them — and a store that refuses it for longer than the
-// ledger's own attempts comes back from that outage. So the call is answered at
-// once, with its own result, and its goroutine asks for the same update again
-// until it lands, once: a store back before the call's bound takes it, and the
-// run's record lists the call with what it answered. Past the call's bound,
-// past which no collection waits for it, the bridge asks no longer, and the
-// call's entry stays, its outcome unknown. On a bubble's clock, so the asks'
-// spacing costs the suite nothing.
+// The update is everything the call did, and a store out longer than the
+// ledger's own attempts comes back. So the call is answered at once and its
+// goroutine re-asks until the update lands once; past the call's bound, which
+// no collection waits beyond, it stops and the entry stays, outcome unknown.
 //
 // Mutation: ask for an update the ledger could not land no more
 // (owed-update-never-asked-again), and the call's outcome is lost though the

@@ -14,39 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// Moving a work item to another project — `move_work_item`. Never a board
-// drag, which re-orders a card inside its own project and is
-// `place_work_item` (workplace.go): the two differ in every property a tool is
-// registered with, so they are two verbs.
+// Moving a work item to another project: `move_work_item`. A board drag inside
+// a project is `place_work_item` (workplace.go), a separate verb because the
+// two differ in every property a tool is registered with. Not a patch field:
+// the KEY is minted from the project's counter, so a move re-keys the item and
+// its whole subtree, the tracker's cross-project move, which reads the subtree
+// before its first append as a patch tool cannot.
 //
-// # Why this is a verb and not an argument
-//
-// A project is not a field a patch can change: the item's KEY is minted from
-// its project's counter, so a move re-keys it, and every subtask under it has
-// to follow or the tree is split across two boards. That is the tracker's
-// cross-project move — a sequence that reads the subtree before its first
-// append, takes a fleet claim, mints a key range and walks the descendants —
-// and a patch tool has no read of the subtree to do any of it. The sequence
-// existed, and so did the documentation of what it leaves behind when it
-// stops part of the way through; nothing could start one.
-//
-// # Why it is the lead's of the project the item is in
-//
-// Moving work to another project hands it to another team's board, which is
-// the decision `routing_unit` already puts behind the project's LEAD — a
-// re-route is this without the re-key — so it is decided by the same
-// relation ([authz.ClassDestructive], as a re-route's [authz.ClassContainer]
-// is): the lead of the project the item is in, or an admin, with the
-// tracker. Which project that is comes out of the stored
-// row rather than the arguments, so the tool asks its own action once it has
-// read the item, exactly as the trash does ([subjectOf] marks it `inTool`).
-//
-// A MOVE INTO THE PROJECT THE ITEM IS ALREADY IN takes neither: it moves
-// nothing, and it is how the retry an unknown or a stopped move prescribes
-// arrives once its first attempt landed. The tracker answers it from the
-// move's own ledger — this operation's move, finished — or refuses it as
-// somebody else's, so the authority that matters was checked when the item
-// left its project.
+// Like `routing_unit` (a re-route is a move without the re-key), it is the
+// LEAD's of the item's CURRENT project, or an admin's, with the tracker
+// ([authz.ClassDestructive], as a re-route's [authz.ClassContainer]), asked
+// once the tool has read the stored row ([subjectOf] marks it `inTool`). A
+// move into its own project is ungated: a retry the ledger answers or refuses.
 
 // ---- move_work_item ----------------------------------------------------- //
 
@@ -121,19 +100,14 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case err != nil:
 		return readFailure(ctx, worklet.MoveWorkItemTool, err), nil
 	}
-	// THE GATE IS ON THE OPERATION, NOT ON THE STATE IT PRODUCED. An item
-	// already in the target is either this operation's own move answered
-	// again — the retry an `unknown` or a stopped walk prescribes, whose
-	// first attempt landed — or somebody else's, and which of the two only
-	// the move's ledger can say ([worklet.Writer.MoveTaskToProject] answers
-	// the first and refuses the second without writing). Gating it on the
-	// lead of the project the item is in NOW asked the lead of the TARGET:
-	// a seat leading ENG and not OPS was told to ask OPS's lead for a move
-	// that had already happened, and never learned it had.
+	// The gate is on the operation, not the state it produced: an item
+	// already in the target is this operation's retry (after an `unknown` or
+	// a stopped walk) or somebody else's move, and only the move's ledger can
+	// tell ([worklet.Writer.MoveTaskToProject] answers the first, refuses the
+	// second). Gating on the item's project NOW would ask the TARGET's lead.
 	//
-	// `from` is the KEY it is leaving, which is what `moved_from` reports —
-	// what the item was called, not a reference to it. The prose names the
-	// item as it can be opened NOW ([worklet.TaskDetail.Named]), because a
+	// `from` is the KEY being left, which `moved_from` reports; the prose
+	// names the item as it opens NOW ([worklet.TaskDetail.Named]), because a
 	// duplicate of a key named by the key alone is the claimant.
 	from, named := before.Task.Key, before.Named()
 	if before.Task.Project == target {
@@ -144,9 +118,8 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *denied, nil
 	}
 
-	// THE WAKE DESCRIBES WHERE THE ITEM IS GOING. Its new key is minted by
-	// the move itself, so the snapshot names the project it lands in and
-	// the recipient reads the key off the item.
+	// The wake names the project the item lands in; the move mints its new
+	// key, which the recipient reads off the item.
 	after := before.Task
 	after.Project = target
 	opID := opIDFor(actor, t.Name(), "move", before.Task.ID, args)
@@ -157,17 +130,16 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	var stopped *worklet.MoveStopped
 	switch {
 	case errors.As(err, &stopped):
-		// THE ROOT MOVED — whatever stopped the walk, and an unknown step
-		// included, since the root's own move is not the step in doubt.
+		// The root moved, whatever stopped the walk (an unknown step too:
+		// the root's own move is not the step in doubt).
 		return t.deps.moveStopped(ctx, actor, from, named, got, stopped)
 	case err != nil:
 		return writeFailure(ctx, actor, worklet.MoveWorkItemTool, err), nil
 	}
 	if got.Outcome == statelog.OutcomeUnknown {
-		// NEVER A NEW KEY FOR A MOVE NOBODY CAN SAY LANDED: the one this
-		// attempt minted is a gap if the root never moved. See
-		// [unknownWrite], and [mergeWorkItem] for why the seam's contract
-		// is held here.
+		// Never a new key for a move nobody can say landed: the one minted
+		// is a gap if the root never moved ([unknownWrite]; [mergeWorkItem]
+		// says why the seam's contract is held here).
 		return unknownWrite(actor, worklet.MoveWorkItemTool,
 			fmt.Sprintf("%s moved to %s", named, target), opID,
 			got.Unvouched, unknownNext(got.Unvouched,
@@ -185,29 +157,17 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // moveStopped answers a cross-project move whose ROOT landed in the target and
-// whose walk over the subtree did not finish ([worklet.MoveStopped]).
+// whose walk over the subtree did not finish ([worklet.MoveStopped]). Neither
+// failure nor success, for [WorkDeps.subtreeStopped]'s reason: the named item
+// IS moved and re-keyed, so "NOT made" would get it moved again, yet part of
+// its subtree is still in the old project. So: the root's receipt, the walk's
+// count, and what finishes it.
 //
-// # Why it is not a failure, and not a success either
-//
-// For [WorkDeps.subtreeStopped]'s reason: the item the caller named IS in the
-// new project, under a new key, so "the change was NOT made" — which is what
-// every such stop but an unknown step answered — was false about the one thing
-// the caller asked about by name, and a caller told it moved the item again.
-// And the gesture is NOT done: part of its subtree is still in the old
-// project. So the answer is the root's receipt with the walk's own count
-// beside it and what finishes it.
-//
-// # Why the remedy is the SAME operation, where a removal's is either
-//
-// A second removal finishes a first because a task already in the trash is
-// nothing to do. A second MOVE under a new operation is refused: the root is
-// in the target and that operation's ledger never put it there, which is
-// exactly how somebody else's move looks ([worklet.Writer.MoveTaskToProject]).
-// So the one call that finishes it here is the same one — and the root stays
-// marked mid-move for as long as anything is left, so the Worklet duty
-// finishes the walk on its own once nobody holds its claim, which is the
-// remedy where this caller has no repeat that is the same operation, or where
-// this node cannot vouch for the task the walk stopped at.
+// The remedy is the SAME operation: unlike a second removal, a second move
+// under a new operation is refused as somebody else's
+// ([worklet.Writer.MoveTaskToProject]). The root stays marked mid-move, so the
+// Worklet duty finishes the walk once nobody holds its claim: the remedy where
+// the caller has no same-operation repeat, or no vouching for its stop.
 func (d WorkDeps) moveStopped(ctx context.Context, actor Actor, from, named string,
 	got worklet.WriteResult, stopped *worklet.MoveStopped) (tools.Result, error) {
 
@@ -264,15 +224,12 @@ func (d WorkDeps) moveStopped(ctx context.Context, actor Actor, from, named stri
 }
 
 // replacedKey is the key a move into the project an item is already in
-// replaced: the newest of its former keys, since every move appends the key it
-// replaces ([worklet.Writer.MoveTaskToProject]). The item's CURRENT key is the
-// one the move minted, so an answer reporting it as `moved_from` names the
-// same key twice.
-//
-// Newest, not this operation's own: the ledger that answers the retry keeps no
-// key, so an item somebody moved out of the target and back since reports the
-// key that later move replaced. An item with no former key was never moved,
-// and the move refuses it rather than answering; its own key is what is left.
+// replaced: the newest former key, since every move appends the key it
+// replaces ([worklet.Writer.MoveTaskToProject]); the CURRENT key is the one the
+// move minted, which as `moved_from` would name one key twice. Newest, not this
+// operation's own: the ledger answering the retry keeps no key, so an item
+// moved out and back since reports that later move's key. An item with no
+// former key was never moved (the move refuses it); its own key is left.
 func replacedKey(task worklet.Task) string {
 	if n := len(task.FormerKeys); n > 0 {
 		return task.FormerKeys[n-1]

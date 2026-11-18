@@ -29,24 +29,17 @@ import (
 )
 
 // THE CODE INDEX (DerivedCodeIndex, M6-D12): the trigram index of a
-// `search: indexed` repository's default branch, kept on the Gitlet nodes its
-// search is placed on — the first gitlet.IndexHolders of the repository's
-// rendezvous order over the live Gitlet nodes — INSIDE the incarnation, under
-// crewlet/codeindex, so it is counted by the budget, leaves with the
-// repository and crosses a compaction's swap and a rebuild by hard link
-// (S18): its postings are keyed by BLOB, which no pack moving changes.
-//
-// What the index holds is its RECORD (codeIndexState): the tip it was read
-// at, the TIP MAP naming that tip's every file and its blob, and the
-// SEGMENTS, each the trigrams of a batch of blobs. A new tip indexes ONLY
-// THE BLOBS IT BROUGHT — every blob a segment already holds is known,
-// skipped ones included — into new segments of at most
-// codeindex.SegmentSourceBytes of source each, read through ONE cat-file in
-// the maintenance lane; a merge of the newest segments, keeping only the
-// blobs the tip still names, keeps them geometric (codeindex.MaxSegments).
-// The record changes as one step under the entry's lock, and the files the
-// new record no longer names wait for the next state written (retiredRuns),
-// as a retired run of the index of pushes does.
+// `search: indexed` repository's default branch on the first
+// gitlet.IndexHolders of its rendezvous order over the live Gitlet nodes,
+// INSIDE the incarnation under crewlet/codeindex: counted by the budget, gone
+// with the repository, hard-linked across a swap or rebuild (S18), its
+// postings keyed by BLOB, which no pack move changes. Its RECORD
+// (codeIndexState) names the tip, the TIP MAP (each file's blob) and the
+// SEGMENTS. A new tip indexes ONLY THE BLOBS NO SEGMENT HOLDS, skipped ones
+// included, into segments of at most codeindex.SegmentSourceBytes of source,
+// through ONE cat-file in the maintenance lane; merges keep them geometric
+// (codeindex.MaxSegments). The record changes as one step under the entry's
+// lock; files it no longer names wait for the next state written (retiredRuns).
 
 // codeIndexFile is the file that writes the code index: its declaration's
 // Writer.File, which the writers gate holds to its row.
@@ -56,50 +49,39 @@ const codeIndexFile = "internal/gitlet/cache/codeindex.go"
 const codeIndexDir = engineRoot + "/codeindex"
 
 // IndexPoll is how often the indexer looks at every repository it keeps an
-// index of, whatever nudged it meanwhile: the compactor's poll
-// (compact.Poll), so a Gitlet node whose nudges were lost catches up in the
-// time a compaction would.
+// index of, nudged or not: the compactor's poll (compact.Poll), so a node whose
+// nudges were lost catches up in the time a compaction would.
 const IndexPoll = time.Minute
 
 // IndexPlacementGrace is how long this node's place among a repository's
-// index holders must stand, once a look has seen it change, before the
-// indexer acts on it: a node that BECOMES a holder fills and builds nothing
-// until then, and one the order moved PAST keeps its index until then.
+// index holders must stand, once a look saw it change, before the indexer
+// acts on it: a node that BECOMES a holder fills and builds nothing until
+// then, and one the order moved PAST keeps its index until then.
 //
-// The order is over the LIVE Gitlet nodes, and a node gives up its presence at
-// the first step of its drain, so every restart of a Gitlet node made the next
-// node of each of its repositories' orders a holder — which filled a copy and
-// built an index from every blob of the tip — and, once the node was back,
-// dropped them again: a rolling upgrade of the Gitlet nodes cost some two full
-// fills and builds for every indexed repository, all thrown away. Ten
-// IndexPolls cover a restart: the drain waits for the node's turns and git
-// requests (a multi-tool turn takes two to five minutes; the drain's own
-// stop up to about a minute more, agent-runtime.md's grace rule) and the
-// boot that follows it, while a holder truly gone costs its repositories one
-// index for ten minutes more — searched the first holder's way, or with git
-// grep — rather than none. A JUDGMENT, from those figures rather than a
-// measured restart.
+// The order is over LIVE Gitlet nodes and a drain gives up presence first, so
+// without the grace each restart made the next node a holder that filled and
+// built every indexed repository, then dropped them. Ten IndexPolls cover a
+// restart: the drain waits for turns (two to five minutes) and its own stop
+// (about a minute more, agent-runtime.md's grace rule), then the boot. A holder
+// truly gone costs one index for ten minutes more, searched the first holder's
+// way or with git grep. A JUDGMENT from those figures, not a measured restart.
 const IndexPlacementGrace = 10 * IndexPoll
 
 // CodeIndexShare is the share of the cache's budget the node's code indexes
-// may hold — a third, trimmed before any repository is evicted, the
-// repository searched least recently first: one dropped is built again from
-// the blobs of one tip, at 78 seconds of a core a gigabyte of source, once
-// the share has room or its repository is searched again (indexTaken), where a
-// repository evicted is fetched again whole. A
-// third holds every index a full cache can carry: BenchmarkCodeIndex
-// measured an index at 0.147 bytes a source byte and the source deflated as
-// a pack holds it at 0.327, so an index is at most 0.45 of its copy — of a
-// copy holding its tip and no history — and the indexes of a cache full of
-// such copies 31% of its budget. History only makes the copies larger.
-// Re-derived from the PROVISIONAL 4 (M3-O6), which rested on P8's estimate of
-// a sixth of the working set and trimmed the indexes of young repositories.
+// may hold — a third — trimmed before any repository is evicted, the least
+// recently searched first: a dropped index is rebuilt from one tip's blobs (78
+// seconds of a core a gigabyte of source) once there is room or it is searched
+// again (indexTaken), where an evicted repository is fetched again whole. A
+// third holds every index a full cache can carry: BenchmarkCodeIndex measured
+// an index at 0.147 bytes a source byte and a pack's deflated source at 0.327,
+// so an index is at most 0.45 of a tip-only copy and a full cache's indexes
+// 31% of its budget; history only makes the copies larger.
 const CodeIndexShare = 3
 
-// codeIndexState is the code index's record, which only its declaration's
-// entry carries (derivedState.CodeIndex), and only with its Step: a set of
-// files with no main one, so the record is what says it is there.
-// IMMUTABLE once stored, as the index of pushes' is.
+// codeIndexState is the code index's record, carried only on its
+// declaration's entry (derivedState.CodeIndex) with its Step: the index is
+// files with no main one, so the record is what says it is there. IMMUTABLE
+// once stored.
 type codeIndexState struct {
 	// Tip is the commit the tip map was read at, forty hex digits.
 	Tip string `json:"tip"`
@@ -190,13 +172,11 @@ type IndexedTip struct {
 	// answers the same hits.
 	Holder bool
 	// PassesOn is whether this node is the FIRST of those holders and the
-	// order names a second: what lets a search of the default branch that
-	// this node's index does not answer for yet send the walk on to the
-	// second holder (gitlet.UnreadyIndexBuilding) rather than read it with git
-	// grep. Never the second holder's, nor the only one's: no holder follows
-	// either in the walk, so a refusal there would leave a search unanswered
-	// until the indexer caught up — on a fleet of one Gitlet node, after every
-	// push.
+	// order names a second: a search of the default branch this index does not
+	// answer for yet then passes to the second (gitlet.UnreadyIndexBuilding)
+	// rather than greps. Never on the second or a lone holder: nothing follows
+	// them in the walk, so a refusal would leave the search unanswered until
+	// the indexer caught up — after every push, on a one-node fleet.
 	PassesOn bool
 }
 
@@ -210,11 +190,10 @@ type CodeIndexView struct {
 
 // IndexTip is the tip s's copy keeps an index of, and whether this node is
 // one of the repository's index holders — false for a copy keeping none on a
-// node that holds none, or s not handed out. It is what every search of one
-// repository asks first, so it is what notes the repository SEARCHED here
-// (entry.searched), whether or not the copy keeps an index: what the trim of
-// the code indexes keeps first, and what lets a build displace an index
-// searched less recently (Cache.mayBuildIndex).
+// node that holds none, or s not handed out. Every search of a repository
+// asks it first, so it notes the repository SEARCHED here (entry.searched),
+// index or not: what the trim keeps first, and what lets a build displace an
+// index searched less recently (Cache.mayBuildIndex).
 func (c *Cache) IndexTip(s Synced) (IndexedTip, bool) {
 	if c.handedOut(s, "a read of the code index") != nil {
 		return IndexedTip{}, false
@@ -253,24 +232,17 @@ func (c *Cache) indexHolder(repoID string) (holder, passesOn bool) {
 }
 
 // CodeIndex is the code index of s's copy, mapped and opened, as a SEARCH
-// reads it — VALID WHILE s IS HELD: its files stay mapped for s's reader
-// until s is released (openedCodeIndex). False where the copy keeps none,
-// where the node's bound on mappings is held whole by readers, where a file
-// of it cannot be read — which also drops the index for the indexer to build
-// again — and where a file of it is not yet one this process wrote or held to
-// its trailer: a search answers each by reading the tip with git grep.
+// reads it, VALID WHILE s IS HELD (openedCodeIndex). False where the copy
+// keeps none, readers hold the node's whole bound on mappings, a file cannot
+// be read (which also drops the index for a rebuild), or a file is not yet
+// one this process wrote or held to its trailer: the search then greps.
 //
-// A SEARCH NEVER HASHES AN INDEX. After a restart nothing has vouched for an
-// index's files, and the first open of one hashes every byte of every file —
-// a cold read of an index of a gigabyte or more and seconds of a core — which
-// on a search's path ran outside its budget (gitlet.SearchBudget), and once for
-// each of the concurrent first searches that each found it unopened. A
-// search that finds the index unverified greps and NUDGES THE INDEXER, whose
-// look verifies it (Index), one look at a time, off every request's path;
-// and an opening in progress is waited on by every other reader of the
-// incarnation (incarnation.codeIndexOpening), so the mappings it reserves are
-// made once — but for the indexer's verifying one, which no search waits
-// for.
+// A SEARCH NEVER HASHES AN INDEX: verifying one after a restart is a cold read
+// of every byte, seconds of a core, outside gitlet.SearchBudget. It greps and
+// NUDGES THE INDEXER, which verifies off every request's path (Index). Other
+// readers wait on an opening in progress (incarnation.codeIndexOpening), so
+// its mappings are made once — but for the indexer's verifying one, which no
+// search waits for.
 func (c *Cache) CodeIndex(ctx context.Context, s Synced) (*CodeIndexView, bool) {
 	return c.codeIndex(ctx, s, false)
 }
@@ -314,8 +286,7 @@ func (c *Cache) codeIndex(ctx context.Context, s Synced, verify bool) (*CodeInde
 		if opening := inc.codeIndexOpening; opening != nil {
 			e.mu.Unlock()
 			if opening.verifying && !verify {
-				// The indexer is holding the files to their trailers: a
-				// search waits for none of that, and greps.
+				// The indexer is verifying: a search never waits on that.
 				return nil, false
 			}
 			// Another reader is mapping it: this one takes that opening.
@@ -339,8 +310,8 @@ func (c *Cache) codeIndex(ctx context.Context, s Synced, verify bool) (*CodeInde
 			c.nudgeIndex(e.id)
 			return nil, false
 		case errors.Is(err, errMapsFull):
-			// Every mapping the node may make is a reader's: this search
-			// reads the tip with git grep, and the index stays.
+			// Readers hold the whole bound: this search greps, and the
+			// index stays.
 			e.mu.Unlock()
 			return nil, false
 		case err != nil:
@@ -367,17 +338,13 @@ func (c *Cache) codeIndex(ctx context.Context, s Synced, verify bool) (*CodeInde
 // openedCodeIndex is a record's files MAPPED and opened, kept on the
 // incarnation for the next reader while the record is the incarnation's.
 //
-// MAPPED, NEVER READ INTO THE HEAP: a code index is up to a third of the
-// cache's budget on disk (CodeIndexShare), and a node's searches touch a few
-// of its pages — the lists a plan names, the tip map's entries of its
-// candidates. Read whole and kept for the next search, every index a node's
-// searches had opened stayed in its heap (a 100 GiB cache's 33 GiB of
-// indexes, in the worst case); mapped, the kernel keeps the pages a search
-// reads in its page cache and gives them back under pressure. Each file is
-// one mapping of the process, counted against the node's bound on mappings
-// with the runs of the indexes of pushes (runmaps.go), held by a reader for
-// as long as its Synced is (Cache.release lets it go) and unmapped past the
-// bound only while nobody holds it.
+// MAPPED, NEVER READ INTO THE HEAP: the indexes are up to a third of the
+// budget (CodeIndexShare) and a search touches a few pages, so heap copies
+// kept for the next search would hold every opened index (33 GiB of a 100 GiB
+// cache), where the page cache gives pages back under pressure. Each file is
+// one mapping, counted against the node's bound with the runs of the indexes
+// of pushes (runmaps.go), held for as long as its reader's Synced
+// (Cache.release lets it go) and unmapped past the bound only while unheld.
 type openedCodeIndex struct {
 	rec  *codeIndexState
 	view *CodeIndexView
@@ -561,9 +528,9 @@ func (c *Cache) setCodeIndex(inc *incarnation, rec *codeIndexState) {
 }
 
 // dropCodeIndex drops inc's code index where it is still rec, and writes the
-// state that names it no more — under ctx's values but never its
-// cancellation: the drop is already made in memory, so a write the caller's
-// ending cut would leave the state naming an index nothing keeps.
+// state that names it no more, never under ctx's cancellation: the drop is
+// already made in memory, so a cut write would leave the state naming an
+// index nothing keeps.
 func (c *Cache) dropCodeIndex(ctx context.Context, e *entry, inc *incarnation, rec *codeIndexState) {
 	e.mu.Lock()
 	stale := inc.codeIndexRecord() != rec || inc.discarded
@@ -600,14 +567,12 @@ type treeFile struct {
 }
 
 // Index brings the code index of s's copy to its default branch's tip: the
-// tip's files listed, the blobs no segment holds read through one cat-file
-// and indexed into new segments, the newest segments merged while they are
-// geometric, and the tip map written — then the record stored as one step,
-// where the copy is still the entry's and its index still the one the build
-// read. A copy whose repository is searched with grep keeps none, and one it
-// keeps is dropped. An index nothing in this process has held to its
-// trailers yet — a boot's — is verified and opened here first, so no search
-// pays for it (CodeIndex).
+// blobs no segment holds indexed into new segments through one cat-file,
+// merged while geometric, the tip map written, and the record stored as one
+// step where the copy and its index are still the ones the build read. A
+// repository searched with grep keeps none, and one kept is dropped. An index
+// this process has not yet held to its trailers (a boot's) is verified here
+// first, so no search pays for it (CodeIndex).
 func (c *Cache) Index(ctx context.Context, s Synced) (IndexOutcome, error) {
 	if err := c.handedOut(s, "a build of the code index"); err != nil {
 		return "", err
@@ -630,9 +595,8 @@ func (c *Cache) Index(ctx context.Context, s Synced) (IndexOutcome, error) {
 			e.mu.Unlock()
 		}
 	}
-	// The refs as the copy holds them now, read BEFORE the tip: refs that
-	// move while it is read are another digest, which the next look reads
-	// the tip under again.
+	// Refs read BEFORE the tip: a move during the read is another digest,
+	// so the next look reads the tip again.
 	e.mu.Lock()
 	refs := indexRefs{rec: rec, digest: inc.refsDigest, branch: s.Repo.DefaultBranch}
 	unmoved := rec != nil && refs.digest != "" && inc.codeIndexRefs == refs
@@ -688,14 +652,11 @@ func (c *Cache) Index(ctx context.Context, s Synced) (IndexOutcome, error) {
 }
 
 // indexRefs is the refs a code index's tip was read under: the record it
-// answers for, the copy's packed-refs as its digest names it, and the
-// default branch the tip was read of.
-//
-// THE INDEXER'S LOOK READS NO TIP WHILE THEY STAND (Index): it looks at every
-// repository it keeps an index of every IndexPoll, and reading the tip is a
-// git process — two thousand held repositories were some 33 a second around
-// the clock on a quiet company — while what moves the tip is a round that
-// writes the copy's refs, which moves the digest and nudges the indexer.
+// answers for, the copy's packed-refs digest, and the default branch read.
+// While they stand the indexer's look reads no tip (Index): that is a git
+// process per indexed repository every IndexPoll (some 33 a second for two
+// thousand), and only a round writing the refs moves the tip, which moves the
+// digest and nudges the indexer.
 type indexRefs struct {
 	rec    *codeIndexState
 	digest string
@@ -803,9 +764,8 @@ func (b *indexBuild) alloc() uint64 {
 }
 
 // place writes a file of the index through write STREAMED INTO ITS STAGED
-// FILE in tmp/ — never into a buffer: a segment is up to the index's whole
-// size once merged, and every format's writer buffers and hashes as it goes
-// (codeindex.WriteSegment, MergeSegments, WriteTipMap) — renamed in at rel,
+// FILE in tmp/, never a buffer (a merged segment is up to the whole index, and
+// each format's writer buffers and hashes as it goes), renames it in at rel,
 // and answers its size.
 func (b *indexBuild) place(rel string, write func(io.Writer) error) (int64, error) {
 	var size int64
@@ -855,12 +815,10 @@ func (b *indexBuild) mkdir() error {
 	return os.MkdirAll(dir, hostbox.DirMode)
 }
 
-// durable syncs every directory the build's renames changed, ONCE each,
-// before its commit stores the record that names them — the cache's rule of
-// one sync a directory a step writes ([Cache.place]): nothing names a file the
-// build placed until then, and each staged file was synced as it was written
-// (stage), so a sync after each placement, as the build once made, bought
-// nothing but a second fsync a file — hundreds of them for a first build.
+// durable syncs every directory the build's renames changed, ONCE each, before
+// its commit stores the record naming them ([Cache.place]'s one sync a
+// directory a step): nothing names a placed file until then, and stage synced
+// each file as written, so a sync per placement is only a second fsync a file.
 func (b *indexBuild) durable() error {
 	for _, dir := range b.dirs {
 		if err := b.c.durableDir(dir); err != nil {
@@ -871,12 +829,10 @@ func (b *indexBuild) durable() error {
 }
 
 // placeSegment places a segment through write at a number of its own and
-// opens it again by MAPPING the file it placed (openBuilt), never from the
-// bytes it wrote: a build reads back every segment it writes — its blobs to
-// know what the next tip brings, both inputs of every merge — and a first
-// build of a large repository writes many, so held in the heap as written
-// they made the build's peak the repository's whole index, twice over in its
-// last merge, where the declaration's charge is one segment's postings.
+// opens it again by MAPPING the placed file (openBuilt), never from the bytes
+// written: a build reads back every segment (its blobs, and both inputs of
+// each merge), so heap copies would make its peak the whole index, twice over
+// in its last merge, where the declaration's charge is one segment's postings.
 func (b *indexBuild) placeSegment(write func(io.Writer) error) (builtSegment, error) {
 	n := b.alloc()
 	rel := codeIndexSegRel(n)
@@ -1106,11 +1062,10 @@ func (c *Cache) catBlobs(ctx context.Context, s Synced, oids []codeindex.OID, to
 
 // merge keeps the index's segments few and geometric: while
 // codeindex.MergeNewest says so, the two newest are merged into one, keeping
-// only the blobs the tip names — so a blob is rewritten a logarithmic number
-// of times, and a blob the branch no longer holds leaves at its next merge.
-// It is called after EACH segment the build writes (flush), as MergeNewest
-// asks: called once after a build of many, it folded them into one from the
-// end, rewriting what it had merged at every step.
+// only the blobs the tip names, so a blob is rewritten a logarithmic number of
+// times and one the branch dropped leaves at its next merge. It runs after
+// EACH segment the build writes (flush), as MergeNewest asks: once at the end,
+// it would rewrite what it had merged at every step.
 func (b *indexBuild) merge() error {
 	for n := len(b.segs); n >= 2; n = len(b.segs) {
 		sizes := make([]int64, n)
@@ -1129,9 +1084,8 @@ func (b *indexBuild) merge() error {
 			return err
 		}
 		b.segs = append(b.segs[:n-2], g)
-		// The inputs this build wrote are read no more: their mappings go
-		// now, not at the build's end, so what a build maps at once is the
-		// few segments a geometric index keeps.
+		// Unmapped now, not at the build's end, so a build maps at once
+		// only the few segments a geometric index keeps.
 		b.unmapBuilt(older, newer)
 	}
 	return nil
@@ -1347,20 +1301,16 @@ func (c *Cache) settled(repoID string, holder bool) bool {
 
 // indexTaken is what the budget took of a repository this node keeps a code
 // index of, by the bytes each held: copyBytes, the copy its eviction took,
-// and indexBytes, the index its trim took — zero for what it took nothing
-// of.
+// and indexBytes, the index its trim took; zero for what it took nothing of.
 //
-// WHAT THE BUDGET TOOK IS NOT TAKEN STRAIGHT BACK. Built again at the next
-// look, an index the trim dropped put the indexes past their share again,
-// and the trim dropped the next one: while a node's indexes exceeded the
-// share, it rebuilt an index from every blob of its tip every minute, for
-// ever. Filled again at the next look, a copy the budget evicted evicted the
-// next least used, a GET a pack each minute. So the indexer builds a trimmed
-// index again only into room for what it held, or for a repository searched
-// more recently than an index it would displace (mayBuildIndex), and fills
-// an evicted copy only into room for what it held (roomToFill): an
-// over-committed node keeps the indexes searched most recently and greps
-// the rest, rather than churning.
+// WHAT THE BUDGET TOOK IS NOT TAKEN STRAIGHT BACK: a trimmed index rebuilt at
+// the next look puts the indexes over their share and trims the next, a full
+// rebuild every minute forever, and an evicted copy refilled evicts the next.
+// So a trimmed index is rebuilt only into room for what it held or for a
+// repository searched more recently than the index it displaces
+// (mayBuildIndex), and an evicted copy refilled only into room for what it
+// held (roomToFill): an over-committed node keeps the indexes searched most
+// recently and greps the rest.
 type indexTaken struct{ copyBytes, indexBytes int64 }
 
 // tookBack notes what the budget took of repoID: an eviction's copy bytes,
@@ -1466,21 +1416,17 @@ func (c *Cache) keepsCodeIndex(repoID string) (held, keeps bool) {
 }
 
 // THE INDEXER (Start runs it on a cache with a Placement): every IndexPoll it
-// lists the repositories searched by index (gitlet.ReadIndexed, at STALE: a
-// repository a stale page misses is listed at the next look) and, for each one
-// this node is among the first gitlet.IndexHolders of — its git order read
-// again at every look, so a node that joins or leaves moves the index with the
-// order, once the move has stood IndexPlacementGrace (settled), so a node's
-// restart moves none — syncs its copy, FILLING ONE THIS NODE DOES NOT HOLD (M6-D12: the
-// index's holder holds a copy deliberately, where a read fills one only on
-// the home), and brings the index to the default branch's tip — as NO USE
-// of the copy (indexSync), and never straight back into what the budget
-// just took (indexTaken: a copy it evicted, an index it trimmed). Between looks,
-// a round that moves a repository's refs NUDGES it (nudgeIndex), and only
-// that repository is looked at. A repository this node has been no holder of
-// for the grace has its index dropped where its copy keeps one: an index nobody's
-// search reads is budget a held one needs, and a placement back finds the
-// tip from nothing, which is what a new holder pays anyway.
+// lists the repositories searched by index (gitlet.ReadIndexed at STALE: one a
+// stale page misses is listed next look) and, for each one this node is among
+// the first gitlet.IndexHolders of (the order read every look, a move acted on
+// once it stood IndexPlacementGrace: settled), syncs its copy, FILLING ONE IT
+// DOES NOT HOLD (M6-D12: a holder keeps a copy on purpose; a read fills only
+// on the home), as NO USE of it (indexSync), and brings the index to the tip,
+// never straight back into what the budget took (indexTaken). Between looks a
+// round moving a repository's refs NUDGES just it (nudgeIndex). A node no
+// holder for the grace drops its index: no search reads it, its budget is a
+// held one's, and a holder placed back builds from nothing, as any new holder
+// does.
 func (c *Cache) indexer(ctx context.Context) {
 	if c.placement == nil {
 		return
@@ -1682,10 +1628,8 @@ func (c *Cache) codeIndexExcess() int64 {
 // dropped WHOLE — a part of one answers no search — and noted, so it is not
 // built straight back (indexTaken); it answers whether it dropped any. A
 // search already reading a dropped index answers from the view it opened.
-//
-// Never by the copy's last use alone: the indexer looks at every copy it
-// keeps an index of every minute, which once counted as a use, so the trim
-// took whichever index the last look happened to reach first.
+// Never by the copy's last use alone: the indexer's look uses every copy
+// each minute, so the trim would take whichever index it reached first.
 func (c *Cache) trimCodeIndexes(ctx context.Context) bool {
 	if c.codeIndexExcess() <= 0 {
 		return false

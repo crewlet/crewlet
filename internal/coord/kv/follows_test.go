@@ -9,11 +9,9 @@ import (
 
 // THE BUCKET'S AGE IS WHAT ENDS A FOLLOW, because nothing else does.
 //
-// There is no unfollow ([coord.Follows]): a follow is rewritten by every
-// re-assert and removed only by the broker expiring what has gone quiet. A
-// bucket opened without an age would therefore keep every follow any seat
-// ever recorded, read on the hot path of every inbound chat message, for the
-// life of the deployment.
+// There is no unfollow ([coord.Follows]), so a bucket without an age would
+// keep every follow ever recorded, read on the hot path of every inbound chat
+// message, for the life of the deployment.
 func TestTheFollowsBucketsAgeIsWhatEndsAFollow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -39,12 +37,9 @@ func overwrite(reason string) func(string, bool) string {
 
 // A FOLLOW WRITES ONLY OVER THE REVISION IT READ, OR IT DOES NOT WRITE.
 //
-// [FleetStore.writeFollowAt] is the rule [FleetStore.Follow] is built from,
-// and it is tested here rather than through Follow because the interleaving
-// it exists for opens INSIDE that method — between its read and its write —
-// and cannot be staged from outside it without a seam. A write that landed
-// over a record it never read would put a reason chosen against one record
-// over another — a broadcast decided before a mention was written, over the
+// Tested through [FleetStore.writeFollowAt], since the race opens INSIDE
+// [FleetStore.Follow], between its read and its write. A write over a record
+// it never read would put a broadcast decided before a mention over the
 // mention.
 func TestAFollowWrittenAtAStaleRevisionDoesNotLand(t *testing.T) {
 	t.Parallel()

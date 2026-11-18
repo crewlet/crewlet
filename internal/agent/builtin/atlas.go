@@ -50,8 +50,8 @@ const (
 )
 
 // AtlasSettings is the settings an atlas read reads: the document this node runs
-// (read only through its redacting copy), its revision, empty where this node
-// cannot tell, and the addresses the deployment answers at.
+// (read only through its redacting copy), its revision (empty where this node
+// cannot tell), and the addresses the deployment answers at.
 type AtlasSettings struct {
 	Company    *config.Company
 	Revision   string
@@ -199,9 +199,9 @@ const noAtlas = "this node runs no company yet, so there is no atlas to read. " 
 	"Try again once its settings are applied."
 
 // atlas is the atlas as this call's caller reads it, at fresh: every source
-// this node reaches, what people recorded among them, and Gitlet as the caller
-// and only where they may read code (gitlet says whether it was read).
-// missing says why there is no atlas at all: a node that runs no company yet.
+// this node reaches and what people recorded among them, Gitlet read as the
+// caller only where they may read code (gitlet says whether it was).
+// missing is why there is none: this node runs no company yet.
 func (r atlasReader) atlas(ctx context.Context, turn *turnctx.Turn, tool string, fresh statelog.Freshness,
 	now time.Time) (answer gather.Answer, gitlet bool, missing string) {
 
@@ -358,9 +358,7 @@ func (t *atlasSearch) Call(ctx context.Context, args map[string]any) (tools.Resu
 }
 
 // atlasCoverage is what every atlas tool's answer says of its read: which
-// sources were read in full, how many values were left out for being shaped
-// like a credential, and how many private addresses were left out as outside
-// the reading agent's reach, each counted and never shown.
+// sources were read in full, and [atlasRead]'s withheld and hidden counts.
 type atlasCoverage struct {
 	Coverage []gather.Coverage `json:"coverage"`
 	Withheld int               `json:"withheld,omitempty"`

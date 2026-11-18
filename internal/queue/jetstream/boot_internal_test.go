@@ -21,44 +21,18 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
-// A STORE RECOVERY LONGER THAN THE LISTENER BUDGET STILL BOOTS.
+// A STORE RECOVERY LONGER THAN THE LISTENER BUDGET STILL BOOTS: the budget
+// bounds the listeners alone, never nats-server's Start, whose recovery is
+// linear in the store and cannot be stopped — a store whose recovery outran it
+// could otherwise never boot.
 //
-// # The failure this pins
+// The recovery is HELD by a named pipe in place of one stream's metadata file,
+// from the recovery's open of it until the boot's own report says the start ran
+// five listener budgets; then let go, and nats-server skips that stream. Held
+// by the boot's clock, not the test's, so a late-scheduled boot can neither
+// hang on the pipe nor be held for less than the budget.
 //
-// A start's budget used to bound nats-server's whole Start, and on a store
-// worth the name Start is its recovery — linear in what the store holds, and
-// the object store has no ceiling. A recovery that outran the budget failed
-// the boot, after waiting for it anyway (nats-server cannot stop a recovery),
-// and the next boot recovered the same store again: a store whose recovery
-// was longer than the budget could never boot. The budget now bounds the
-// listeners alone, which open after Start has returned.
-//
-// # The input
-//
-// A real store whose recovery is HELD: one stream's metadata file replaced by
-// a named pipe, which nats-server's recovery opens and reads, and which blocks
-// it for as long as this test holds the pipe's other end — from the moment the
-// recovery opened the pipe, which is when the test's own open of that end
-// returns, until the boot has said in its own report of a start still running
-// that the start has run for a second: five listener budgets. Then let go —
-// the pipe gives up nothing, so nats-server skips that stream as unreadable and
-// finishes the start.
-//
-// # Held by the boot's own clock
-//
-// The hold used to be a second of the test's clock from when it started the
-// boot, with the start asserted still running at its end. A boot the scheduler
-// started late reached the pipe after the test had let go of it, and waited on
-// it for ever: a healthy build failed. One that reached it late, but in time,
-// was held for less than the budget, so a boot whose budget bounded the start
-// passed. Read from the boot's report, the start has run past the budget by
-// the boot's own measure, with the recovery held from its open of the pipe to
-// the end of the hold: a budget that bounded the start has run out by then,
-// and a boot that cut the start short has already ended.
-//
-// NOT PARALLEL, because the report is a log line and the logger is the
-// process's: a case that points it somewhere has to be the only case running,
-// as the engine's own cases that read a log line are.
+// NOT PARALLEL: the report is a line on the process's logger.
 func TestARecoveryLongerThanTheListenerBudgetStillBoots(t *testing.T) {
 	reports := captureBootReports(t)
 	store := brokertest.TempDir(t)
@@ -73,10 +47,9 @@ func TestARecoveryLongerThanTheListenerBudgetStillBoots(t *testing.T) {
 	if err := syscall.Mkfifo(metas[0], 0o600); err != nil {
 		t.Fatalf("plant a pipe where the metadata file was: %v", err)
 	}
-	// THE PIPE'S OTHER END, opened for writing on a goroutine: the open
-	// returns only once the recovery has opened the pipe to read it, and the
-	// recovery's read then blocks until that end is closed. A nil file is an
-	// open that failed.
+	// THE PIPE'S OTHER END: the open returns once the recovery has opened
+	// the pipe, whose read then blocks until this end closes. A nil file is
+	// an open that failed.
 	writer := make(chan *os.File, 1)
 	go func() {
 		f, err := os.OpenFile(metas[0], os.O_WRONLY, 0)
@@ -86,10 +59,9 @@ func TestARecoveryLongerThanTheListenerBudgetStillBoots(t *testing.T) {
 		}
 		writer <- f
 	}()
-	// AND LET GO on the way out, however the case ends, so a case that fails
-	// with the recovery still held does not leave it blocked: the held end
-	// closed, or — where the recovery never opened the pipe — a reader of the
-	// case's own, which lets the waiting open return so its end can be closed.
+	// AND LET GO however the case ends: the held end closed, or — where the
+	// recovery never opened the pipe — a reader of the case's own lets the
+	// waiting open return so its end can be closed.
 	var held *os.File
 	opened := false
 	t.Cleanup(func() {
@@ -107,8 +79,7 @@ func TestARecoveryLongerThanTheListenerBudgetStillBoots(t *testing.T) {
 	})
 
 	timing := startTiming{listen: 200 * time.Millisecond, report: 50 * time.Millisecond}
-	// FIVE LISTENER BUDGETS, a second: a whole number of the seconds the
-	// boot's report counts in.
+	// FIVE LISTENER BUDGETS, a second: the report counts whole seconds.
 	holdFor := 5 * timing.listen
 	type outcome struct {
 		srv *Server
@@ -240,11 +211,9 @@ func seedAStream(t *testing.T, dir string) {
 	}
 }
 
-// EVERY UNSET START TIMING IS PRODUCTION'S, FIELD BY FIELD.
-//
-// Resolved as a whole struct, a case that set only the listener budget kept a
-// report interval of zero, and the boot's ticker panics on that rather than
-// failing the case.
+// EVERY UNSET START TIMING IS PRODUCTION'S, FIELD BY FIELD: resolved as a
+// whole struct, a case setting only the listener budget would keep a zero
+// report interval, on which the boot's ticker panics.
 func TestAStartTimingFillsEachUnsetFieldOnItsOwn(t *testing.T) {
 	t.Parallel()
 	production := startTiming{listen: listenTimeout, report: startReportEvery}
@@ -282,18 +251,10 @@ func startedAfter(d time.Duration) <-chan struct{} {
 // even one that arrives with readiness; and a cancel ends the wait, never the
 // start, which the caller's shutdown then waits for.
 //
-// EVERY CASE RUNS IN A BUBBLE, because what each claims is about the boot's
-// clock: a start that runs ten listener budgets and the reports a running start
-// makes, a death or a cancel that lands a listener budget in. On the machine's
-// clock the first was a bet that a 20 ms ticker fired inside a 500 ms start,
-// and a runner that held the waiter past the start's end lost it on a healthy
-// build: the wait found the start over and took it before any report. In the
-// bubble every instant is exact, so the reports are counted, each with how long
-// the start had run, and a death is answered at the instant it was declared.
-//
-// Mutation: drop the report from the wait and the long start says nothing;
-// report a running time of nothing and its reports say so; answer a death one
-// report late and it is answered after it was declared.
+// EVERY CASE RUNS IN A BUBBLE, because each claim is about the boot's clock:
+// there the reports are counted exactly, and a death is answered at the
+// instant it was declared. Mutation: drop the report, report a zero running
+// time, or answer a death one report late, and a case fails.
 func TestTheBootWaitsTheStartOutAndBoundsTheListeners(t *testing.T) {
 	t.Parallel()
 	timing := startTiming{listen: 50 * time.Millisecond, report: 20 * time.Millisecond}
@@ -314,9 +275,8 @@ func TestTheBootWaitsTheStartOutAndBoundsTheListeners(t *testing.T) {
 			if err != nil {
 				t.Fatalf("a start that outran the listener budget failed the boot: %v", err)
 			}
-			// ONE REPORT FOR EVERY INTERVAL THE START RAN, each saying how
-			// long it had: the last interval ends as the start does, and
-			// the wait may take either first.
+			// ONE REPORT FOR EVERY INTERVAL THE START RAN: the last ends as
+			// the start does, and the wait may take either first.
 			if every := int(lasts / timing.report); len(reports) < every-1 {
 				t.Fatalf("a start that ran for ten listener budgets said it was still "+
 					"starting %d times, want one for each of the %d report intervals "+
@@ -346,10 +306,9 @@ func TestTheBootWaitsTheStartOutAndBoundsTheListeners(t *testing.T) {
 		})
 	})
 
-	// THE DEATH WINS EVERY RACE WITH SUCCESS. Each case below hands the wait
-	// a death and a success together, and a select picks between ready cases
-	// at random, so each is asked enough times that an ordering which let
-	// success through would turn up.
+	// THE DEATH WINS EVERY RACE WITH SUCCESS. Each case hands the wait both
+	// together, and a select picks at random, so each is asked enough times
+	// that an ordering letting success through would turn up.
 	const races = 64
 	t.Run("a death declared by a Start that went on", func(t *testing.T) {
 		t.Parallel()
@@ -357,8 +316,8 @@ func TestTheBootWaitsTheStartOutAndBoundsTheListeners(t *testing.T) {
 			for range races {
 				death := newDeath()
 				// The one Fatalf of v2.15.1's Start that does not return:
-				// the server goes on to finish its start past a failure it
-				// called fatal — so both have happened when the wait looks.
+				// the server finishes its start past it, so both have
+				// happened when the wait looks.
 				death.declare("Not allowed to enable JetStream on the system account")
 				started := make(chan struct{})
 				close(started)
@@ -373,11 +332,9 @@ func TestTheBootWaitsTheStartOutAndBoundsTheListeners(t *testing.T) {
 			}
 		})
 	})
-	// Unlike the case above, this one cannot hand the wait both at once: the
-	// readiness answer comes from a goroutine the wait starts, and a wait
-	// already parked on its select wakes to whichever lands first. It holds
-	// the property — a death that lands with readiness fails the boot — for
-	// the orderings a test can produce.
+	// This case cannot hand the wait both at once: readiness comes from a
+	// goroutine the wait starts. It holds the property — a death landing with
+	// readiness fails the boot — for the orderings a test can produce.
 	t.Run("a death that came with readiness", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {
@@ -444,9 +401,8 @@ func TestTheBootWaitsTheStartOutAndBoundsTheListeners(t *testing.T) {
 	})
 
 	// A CANCEL THAT LANDS AS THE START RETURNS waits for nothing, and must
-	// not say it does: both are ready when the wait looks, and the select
-	// picks between them at random, so the case is asked enough times that
-	// an announcement made regardless would turn up.
+	// not say it does: the select picks at random, so the case is asked
+	// enough times that an announcement made regardless would turn up.
 	t.Run("a cancel as the start returns announces no wait", func(t *testing.T) {
 		t.Parallel()
 		inBubble(t, func(t *testing.T) {

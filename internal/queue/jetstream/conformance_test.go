@@ -18,9 +18,8 @@ import (
 )
 
 // TestConformance certifies this backend against the one suite every backend
-// runs. A backend the suite has not certified does not exist as far as the
-// engine is concerned — which is the whole reason the suite is separate from
-// any backend that passes it.
+// runs: a backend the suite has not certified does not exist as far as the
+// engine is concerned.
 func TestConformance(t *testing.T) {
 	t.Parallel()
 	queuetest.RunWith(t, newConformanceQueue, capabilities())
@@ -28,10 +27,8 @@ func TestConformance(t *testing.T) {
 
 // TestInspectionClientsEndWithTheirTest pins that the inspection registry, and
 // the BrokerDown registry beside it, hold a queue only while the test that
-// opened it runs. Each entry holds a
-// whole broker, so one that outlives its test is a broker the binary keeps
-// until it exits — which is how a -count=20 run of this package reached
-// 12 GB and was killed.
+// opened it runs: each entry holds a whole broker, which would otherwise live
+// until the binary exits ([admins]).
 func TestInspectionClientsEndWithTheirTest(t *testing.T) {
 	t.Parallel()
 	var q *Queue
@@ -65,12 +62,9 @@ func newConformanceQueue(t *testing.T, opts ...queue.Option) queue.EventQueue {
 }
 
 // openForTest starts a broker owned by the TEST, not by the queue, and
-// returns a client of it.
-//
-// That split is what lets the suite inspect a subscription after stopping
-// the client that used it — "the mail survived a node leaving" is precisely
-// the property seat ownership rests on, and it is unobservable if stopping
-// the node also took the broker down.
+// returns a client of it, so the suite can inspect a subscription after
+// stopping the client that used it: "the mail survived a node leaving" is the
+// property seat ownership rests on, unobservable if the broker stopped too.
 func openForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 	t.Helper()
 	srv := startTestServer(t, testTimings(cfg))
@@ -101,12 +95,10 @@ func startTestServer(t *testing.T, cfg Config) testServer {
 	return testServer{Server: srv, stop: stop}
 }
 
-// testTimings shortens the timings a suite would otherwise wait out.
-//
-// Production timings would make this suite take hours: a 30-minute ack
-// window, a one-second poll, a one-second redelivery delay. The behaviours
-// under test are the same at any scale, and the numbers themselves are pinned
-// separately by the measurement harness.
+// testTimings shortens the timings a suite would otherwise wait out for hours
+// (a 30-minute ack window, a one-second poll, a one-second redelivery delay).
+// The behaviours under test are the same at any scale; the production numbers
+// are pinned by the measurement harness.
 func testTimings(cfg Config) Config {
 	if cfg.AckWait == 0 {
 		cfg.AckWait = 2 * time.Second
@@ -114,12 +106,11 @@ func testTimings(cfg Config) Config {
 	if cfg.FetchWait == 0 {
 		cfg.FetchWait = 25 * time.Millisecond
 	}
-	// 25 ms, and it is what queuetest's return-order case stands on: a
-	// failure is returned with NakWithDelay and the consumer serves the
-	// never-delivered mail while it waits, so it comes back BEHIND it, while
-	// a hand-back is a plain Nak whose redelivery the broker serves before
-	// new mail. Measured 100 of 100 each way, 60 of them under CPU pressure,
-	// at this value (76ad6f656).
+	// 25 ms is what queuetest's return-order case stands on: a failure is
+	// returned with NakWithDelay and the consumer serves never-delivered mail
+	// meanwhile, so it comes back BEHIND it, while a hand-back is a plain Nak
+	// the broker redelivers before new mail. Held 100 of 100 each way, under
+	// CPU pressure too, at this value.
 	if cfg.NakDelay == 0 {
 		cfg.NakDelay = 25 * time.Millisecond
 	}
@@ -146,9 +137,8 @@ func clientUnderTest(t *testing.T, srv testServer, inspect *Server, opts ...queu
 		}
 	})
 
-	// An inspection client the suite's capabilities read through. It
-	// outlives the queue under test on purpose: the backlog left behind
-	// by a stopped node is exactly what several cases assert about.
+	// The inspection client the capabilities read through outlives the queue
+	// under test: the backlog a stopped node leaves is what cases assert.
 	admin, err := inspect.Client(t.Context())
 	if err != nil {
 		t.Fatalf("admin Client: %v", err)
@@ -159,8 +149,7 @@ func clientUnderTest(t *testing.T, srv testServer, inspect *Server, opts ...queu
 	servers[q] = srv.stop
 	adminMu.Unlock()
 	// Registered after both Stops so it runs before them, and after every
-	// cleanup the case itself registers — those may still read through the
-	// inspector.
+	// cleanup the case registers, which may still read through the inspector.
 	t.Cleanup(func() {
 		adminMu.Lock()
 		delete(admins, q)
@@ -172,16 +161,14 @@ func clientUnderTest(t *testing.T, srv testServer, inspect *Server, opts ...queu
 }
 
 // admins maps a queue under test to the inspection client for its broker, and
-// servers to what stops the broker it is a client of — the BrokerDown
-// capability's one way of taking a broker away — each for as long as the test
-// that opened the queue runs.
+// servers to what stops the broker it is a client of (BrokerDown's one way of
+// taking a broker away), each for as long as the test that opened the queue
+// runs.
 //
 // THE ENTRIES GO WITH THE TEST, because both keys hold the whole broker: a
-// Queue keeps its embeddedServer, and with it the nats-server and every
-// stream, buffer and subscription list it allocated. A package-level map that
-// is never pruned keeps every broker the package ever started — about 50 MB
-// of heap per conformance run, 240 MB of resident memory under -race — and a
-// run at -count=20 was OOM-killed at 12 GB.
+// Queue keeps its embeddedServer, with every stream, buffer and subscription
+// list it allocated. A map never pruned keeps every broker the package started
+// (about 50 MB of heap per conformance run, 240 MB resident under -race).
 var (
 	adminMu sync.Mutex
 	admins  = map[*Queue]*Queue{}
@@ -192,10 +179,9 @@ var (
 // connection has noticed, so the verb sent next meets a connection that is
 // down rather than racing the client's discovery of it.
 //
-// STOPPED, NOT PARTITIONED, because stopping is the one outage the harness can
-// produce exactly: the connection goes into the reconnect loop every
-// connection to a broker that went away goes into, and stays there for the
-// reconnect budget — far longer than any case takes to send its verbs.
+// STOPPED, NOT PARTITIONED: stopping is the one outage the harness produces
+// exactly; the connection enters the reconnect loop and stays there for the
+// reconnect budget, far longer than any case takes to send its verbs.
 func takeBrokerDown(t *testing.T, q queue.EventQueue) {
 	t.Helper()
 	jq, ok := q.(*Queue)
@@ -240,28 +226,16 @@ func inspector(q queue.EventQueue) *Queue {
 const settlePoll = 5 * time.Millisecond
 
 // settleQueue is this backend's Settle: it returns once q will dispatch nothing
-// more until the next verb is sent to it.
-//
-// A consume loop is the one goroutine that dispatches for its attachment, and
-// it dispatches only between a fetch and its next loop top ([Queue.Loops]). So
-// once, after a snapshot of every loop, each has
-//
-//   - ended (it is gone from Loops);
-//   - stood at a loop top after the snapshot with its gate shut, so that it
-//     fetches nothing until a verb opens it;
-//   - stood at a loop top after the snapshot with its connection down, when it
-//     was down at the snapshot already: what it fetched before is dispatched,
-//     and every fetch after it is asked of a broker that cannot answer, since
-//     the outage BrokerDown takes is one-way;
-//   - or a mailbox that reads empty ([Queue.Backlog]), sized from the stream,
-//     whose ack floor can only lag backwards — so an empty read is never a
-//     message still owed, and a message not yet acked is never read as gone —
-//
-// nothing is left that it could hand a handler. The broker's own counts cannot
-// say this: they are snapshots, which cannot tell a loop parked at its gate
-// from one between two pulls, and a consumer's pending counts lag a publish.
-// The mailbox is not read with the connection down, where the broker that holds
-// it may be the one that stopped.
+// more until the next verb is sent to it. A consume loop dispatches only
+// between a fetch and its next loop top ([Queue.Loops]), so q is settled once,
+// after a snapshot of every loop, each has ended; or stood at a loop top since
+// with its gate shut; or with its connection down, down at the snapshot too
+// (BrokerDown's outage is one-way, so no later fetch is answered); or reads an
+// empty mailbox ([Queue.Backlog]), whose ack floor only lags, so empty is
+// never mail still owed. The broker's counts cannot say this: snapshots cannot
+// tell a loop parked at its gate from one between pulls, and pending counts
+// lag a publish. The mailbox is not read with the connection down, where its
+// broker may be the one that stopped.
 func settleQueue(ctx context.Context, t *testing.T, eq queue.EventQueue) error {
 	t.Helper()
 	q, ok := eq.(*Queue)
@@ -271,10 +245,9 @@ func settleQueue(ctx context.Context, t *testing.T, eq queue.EventQueue) error {
 	before := q.Loops()
 	down := q.nc.Status() != nats.CONNECTED
 	// A PAIR THIS CLIENT IS ATTACHED TO WITH NO LOOP IN THE SNAPSHOT is a
-	// Loops that stopped reporting — a field renamed, a map it no longer
-	// reads — and settling over it would check nothing. The pairs are read
-	// after the loops, so a pair let go of between the two reads drops out
-	// of the second rather than reading as missing from the first.
+	// Loops that stopped reporting, and settling over it would check
+	// nothing. Pairs are read after loops, so a pair let go of between the
+	// reads drops out rather than reading as missing.
 	for _, pair := range q.Attachments() {
 		if !slices.ContainsFunc(before, func(l Loop) bool { return l.Topic == pair[0] && l.Group == pair[1] }) {
 			return fmt.Errorf("no consume loop in Loops for the attached pair (%s, %s), "+
@@ -314,12 +287,10 @@ func untilLoops(ctx context.Context, what string, waiting func() ([]string, erro
 
 // parkedLoops is this backend's Parked: it returns once every consume loop of
 // (topic, group) has come round to the top of its cycle since the call and
-// found its gate shut there ([Queue.Loops]). A loop is the one goroutine that
-// dispatches for its attachment, and it reaches its top only once what it
-// fetched before is dispatched or handed back; with the gate shut there, it
-// fetches nothing more until a verb opens it. A loop that returns instead
-// never comes round again, so it is named when ctx ends — or at once, when it
-// was let go of and has left Loops.
+// found its gate shut there ([Queue.Loops]). A loop reaches its top only once
+// what it fetched is dispatched or handed back, and with the gate shut it
+// fetches nothing more until a verb opens it. A loop that returns never comes
+// round, so it is named when ctx ends, or at once when it has left Loops.
 func parkedLoops(ctx context.Context, _ *testing.T, eq queue.EventQueue, topic, group string) error {
 	q, ok := eq.(*Queue)
 	if !ok {
@@ -401,8 +372,8 @@ func unsettledLoops(ctx context.Context, q *Queue, since map[uint64]uint64, down
 // Settle returns before the redelivery.
 func TestSettleWaitsOutARedeliveryTheBrokerStillOwes(t *testing.T) {
 	t.Parallel()
-	// The spacing is what puts loop tops between the failure and its
-	// redelivery: twenty of the harness's polls.
+	// Twenty of the harness's polls, putting loop tops between the failure
+	// and its redelivery.
 	const spacing = 500 * time.Millisecond
 	q := openForTest(t, Config{NakDelay: spacing, NakCeiling: spacing})
 	failed := make(chan struct{})
@@ -479,10 +450,9 @@ func capabilitiesFor(open func(*testing.T, Config) *Queue) queuetest.Capabilitie
 			return open(t, Config{MaxDeliver: attempts})
 		},
 
-		// Both reads report a failure AS a failure. Returning the error as
-		// an empty result would tell the suite the seat is holding no mail
-		// whenever the broker did not answer, inside the group that asserts
-		// absences.
+		// Both reads report a failure AS a failure: an empty result would
+		// tell the suite's absence cases the seat holds no mail whenever the
+		// broker did not answer.
 		Backlog: func(t *testing.T, q queue.EventQueue, topic, group string) []*events.Event {
 			t.Helper()
 			evs, err := inspector(q).Backlog(context.Background(), topic, group)
@@ -535,13 +505,11 @@ func capabilitiesFor(open func(*testing.T, Config) *Queue) queuetest.Capabilitie
 			return q.(*Queue).StreamSubscriptions()
 		},
 
-		// THE CLIENT'S OWN BARRIER, BEHIND A FLUSH. A broadcast this
-		// client sent reaches its own listeners from its own server, which
-		// delivers it to the connection ahead of the PONG the flush waits
-		// for, so once the flush returns the client has queued it to every
-		// subscription it matched; nats.Conn.Barrier then runs once each of
-		// the connection's callback subscriptions has delivered what it held
-		// — the listeners' handlers called and returned.
+		// THE CLIENT'S OWN BARRIER, BEHIND A FLUSH. The server delivers this
+		// client's broadcast to it ahead of the PONG the flush waits for, so
+		// once the flush returns it is queued to every matching subscription;
+		// nats.Conn.Barrier then runs once each callback subscription has
+		// delivered what it held, the listeners' handlers returned.
 		ListenBarrier: func(ctx context.Context, t *testing.T, q queue.EventQueue) {
 			t.Helper()
 			nc := q.(*Queue).Conn()
@@ -565,30 +533,22 @@ func capabilitiesFor(open func(*testing.T, Config) *Queue) queuetest.Capabilitie
 		},
 
 		// THE QUEUE UNDER TEST, never the inspector: this counts what the
-		// client being certified asked the broker for, and the admin
-		// connection asked for none of it. Reading it through inspector()
-		// the way the two mail reads do would report zero for ever and
-		// pass the case vacuously.
+		// certified client asked the broker for; read through inspector() it
+		// would report zero for ever and pass the case vacuously.
 		ConsumerProposals: func(q queue.EventQueue) int {
 			return q.(*Queue).ConsumerProposals()
 		},
 
 		BrokerDown: takeBrokerDown,
 
-		// Deliberately NOT declared, each for a measured reason:
-		//
-		// InlineDispatch — pull consumers fetch on their own schedule, so
-		// a publish returns before anything has been dispatched.
-		//
-		// StrictRoundRobin — JetStream serves whichever member asks
-		// first. Each event still reaches exactly one member, which is
-		// the part every broker owes.
-		//
-		// History — this backend has no ledger of everything ever
-		// published; interest retention deliberately drops what no
-		// subscription covers, which is the mailbox semantic itself.
-		//
-		// RequiresStart — Open establishes the connection and
-		// streams, so a publish before Start is legitimate here.
+		// Deliberately NOT declared:
+		//   - InlineDispatch: pull consumers fetch on their own schedule, so a
+		//     publish returns before anything is dispatched.
+		//   - StrictRoundRobin: JetStream serves whichever member asks first;
+		//     each event still reaches exactly one member, all a broker owes.
+		//   - History: no ledger of everything published; interest retention
+		//     drops what no subscription covers, the mailbox semantic itself.
+		//   - RequiresStart: Open establishes the connection and streams, so a
+		//     publish before Start is legitimate here.
 	}
 }

@@ -40,11 +40,9 @@ func askIn(h *readHarness, loc *time.Location, kv map[string]any) worklet.Answer
 
 // THE BOARD'S RECENT SCOPE IS THE OPEN WORK AND WHAT FINISHED SINCE A DATE.
 //
-// `closed_since=sow` is a Done lane that holds this week's work and empties
-// itself on Monday — and it is the whole finished set that is bounded, so a
-// task cancelled this week is on the board exactly as one done this week is,
-// while last week's is not. Open work is never bounded by it: an open task has
-// not finished, so no date about finishing can exclude it.
+// `closed_since=sow` is a Done lane that empties itself on Monday. It bounds the
+// whole finished set, so a task cancelled this week is on the board as one done
+// this week is, and last week's is not. Open work is never bounded by it.
 func TestClosedSinceIncludesOpenAndRecentlyFinished(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -77,10 +75,8 @@ func TestClosedSinceIncludesOpenAndRecentlyFinished(t *testing.T) {
 			"bound is at or after the day's first instant", got)
 	}
 
-	// A BOARD GROUPED BY STATUS DRAWS THE FINISHED COLUMNS, because the
-	// query now admits finished work — an open-work board never draws
-	// Done, and a Recent board that did not would hide the lane the scope
-	// exists for.
+	// A BOARD GROUPED BY STATUS DRAWS THE FINISHED COLUMNS: a Recent board
+	// without Done would hide the lane the scope exists for.
 	board := h.ask(map[string]any{
 		"container": "project:ENG", "closed_since": "sow", "group_by": "status",
 	})
@@ -112,12 +108,9 @@ func TestClosedSinceIncludesOpenAndRecentlyFinished(t *testing.T) {
 }
 
 // A BOUND AT THE ZERO INSTANT IS NO BOUND, AND IS REFUSED NAMING THE ONE THAT
-// SAYS IT. `closed_since` at January of year one is every finished task, which
-// `show_closed=true` already asks — and a query holding the zero instant as its
-// bound could not cross the estate's wire as itself, since the wire leaves a
-// value its type calls zero off: read through a node without data, it arrived
-// as no bound at all and left every finished task out. So the parse refuses it,
-// and a bound it takes is never the zero instant.
+// SAYS IT. `closed_since` at January of year one is `show_closed=true`, and the
+// estate's wire leaves a zero value off, so through a node without data the
+// bound would arrive as none and leave every finished task out.
 //
 // Mutation: drop the parse's refusal of the zero instant and the query parses,
 // holding no bound.
@@ -142,11 +135,9 @@ func TestAClosedSinceAtTheZeroInstantIsRefused(t *testing.T) {
 // THE WEEK BEGINS AT THE COMPANY'S MIDNIGHT, NOT UTC'S.
 //
 // A task finished at 23:30 UTC on Sunday the 13th finished at 01:30 on MONDAY
-// in Berlin. For a Berlin company that is this week's work and on the Recent
-// board; for a company on UTC it is last week's and off it. A bound resolved on
-// any clock but the company's own would move a task between two weeks for the
-// two hours a year nobody checks — and disagree with `due=range:sow..eow`,
-// which is cut on the company's calendar.
+// in Berlin: this week's work for a Berlin company, last week's for one on UTC.
+// Any other clock would also disagree with `due=range:sow..eow`, which is cut
+// on the company's calendar.
 func TestClosedSinceTokenResolvesInCompanyZone(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)

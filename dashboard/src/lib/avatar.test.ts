@@ -12,7 +12,7 @@ import { CREWLET_CHARACTERS } from "@crewlethq/icons/characters";
 import { NODE_HUES } from "@crewlethq/ui";
 
 import { AVATAR_CHARACTERS, AVATAR_COLORS } from "../contract/avatar.ts";
-import { DEFAULT_AVATAR, avatarOf } from "./avatar.ts";
+import { avatarOf, lookOf } from "./avatar.ts";
 
 describe("the avatar contract", () => {
   test("names exactly the characters the installed kit draws, in its order", () => {
@@ -24,27 +24,36 @@ describe("the avatar contract", () => {
   });
 });
 
+// THE LOOK IS THE ENGINE'S: the dashboard draws what it is served and picks nothing.
 describe("avatarOf", () => {
-  test("takes each part as written", () => {
+  test("takes a served look whose parts this build draws", () => {
     expect(avatarOf({ character: "hexlet", color: "cyan" })).toEqual({
       character: "hexlet",
       color: "cyan",
     });
   });
 
-  test("draws a seat that chose nothing as the original Crewlet, in purple", () => {
-    expect(DEFAULT_AVATAR).toEqual({ character: "crewlet", color: "purple" });
-    expect(avatarOf(undefined)).toEqual(DEFAULT_AVATAR);
-    expect(avatarOf({})).toEqual(DEFAULT_AVATAR);
+  test("is no look where a part is missing or one this build cannot draw", () => {
+    expect(avatarOf(undefined)).toBeNull();
+    expect(avatarOf({ color: "rose" })).toBeNull();
+    expect(avatarOf({ character: "starfish", color: "teal" })).toBeNull();
+  });
+});
+
+describe("lookOf", () => {
+  const served = { character: "flasklet", color: "amber" } as const;
+
+  test("lays the parts an author wrote over the served look", () => {
+    expect(lookOf({ color: "rose" }, served)).toEqual({ character: "flasklet", color: "rose" });
+    expect(lookOf({ character: "foxlet" }, served)).toEqual({
+      character: "foxlet",
+      color: "amber",
+    });
+    expect(lookOf(undefined, served)).toEqual(served);
   });
 
-  test("keeps the default for the part a seat left out", () => {
-    expect(avatarOf({ color: "rose" })).toEqual({ character: "crewlet", color: "rose" });
-    expect(avatarOf({ character: "foxlet" })).toEqual({ character: "foxlet", color: "purple" });
-  });
-
-  test("draws a part this build cannot draw as the default part, never as nothing", () => {
-    expect(avatarOf({ character: "starfish", color: "teal" })).toEqual(DEFAULT_AVATAR);
-    expect(avatarOf({ character: 7, color: null })).toEqual(DEFAULT_AVATAR);
+  test("is no look where neither the author nor the running seat says", () => {
+    expect(lookOf({ color: "rose" }, undefined)).toBeNull();
+    expect(lookOf(undefined, null)).toBeNull();
   });
 });

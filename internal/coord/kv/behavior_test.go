@@ -1,19 +1,14 @@
 // Broker measurement harness — the empirical half of the coordination design.
 //
-// Every property the coordination contract rests on is a behaviour of
-// JetStream KV, and none of them is in the client's documentation in a form
-// you could design against. These are MEASUREMENTS, not unit tests:
-// each one asserts the property the design depends on and prints the number the
-// design is tuned to, so a broker upgrade that changes the behaviour fails here
-// rather than in a seat handoff at 3am.
-//
-// Run them and read the numbers:
+// These are MEASUREMENTS, not unit tests: each asserts a JetStream KV property
+// the design rests on and prints the number it is tuned to, so a broker
+// upgrade that changes the behaviour fails here rather than in a seat handoff.
+// Run them alone and read the numbers:
 //
 //	go test ./internal/coord/kv/ -run TestBrokerBehavior -v
 //
-// Measured on nats-server 2.15.1 / nats.go 1.54.0, embedded in-process with
-// file storage (a run prints the versions it ran on as its first row, read
-// from the binary rather than from here):
+// Measured on nats-server 2.15.1 / nats.go 1.54.0, embedded, file storage (a
+// run prints the versions it ran on as its first row):
 //
 //	bucket TTL (MaxAge) under test                1s
 //	renewed through Update, held for              3x the bucket TTL, no lapse
@@ -29,25 +24,14 @@
 //	Update                                        30 µs
 //	WatchAll over 21 keys                         760 µs
 //
-// Three of these decide something.
-//
-// The REAP LAG is not zero and is not bounded by the TTL: the broker sweeps
-// expired messages on a timer, so a seat comes free at TTL + up to a few
-// hundred milliseconds, not at TTL. Everything above this layer already treats
-// takeover as eventual rather than instant, and this is the reason the number
-// it is eventual by is the broker's and not the engine's.
-//
-// The SCAN COSTS 18 GETS at 20 seats and grows with the company, which is why
-// an ungated claim — node presence, renewed on every heartbeat of every node —
-// reads one key instead of listing the bucket.
-//
-// And PER-KEY TTL is why the leases bucket uses MaxAge. KeyTTL is create-only
-// by design ("the TTL is set when the key is created and cannot be changed
-// later") and Update clears it, so a lease renewed the obvious way never
-// expires — and a dead node's seat could never be reclaimed. That failure is
-// invisible in every functional test, because everything works; the seat just
-// never comes back. The assertion below is here so a future maintainer cannot
-// walk into it.
+// Three of these decide something. The REAP LAG: the broker sweeps expired
+// messages on a timer, so a seat comes free at TTL plus up to a few hundred
+// milliseconds, and takeover above this layer is eventual by the broker's
+// number, not the engine's. The SCAN costs 18 Gets at 20 seats and grows with
+// the company, so an ungated claim (node presence, renewed on every heartbeat)
+// reads one key instead of listing the bucket. And PER-KEY TTL is never
+// renewable, which no functional test would notice, so the leases bucket uses
+// MaxAge (package doc, "Per-key TTL cannot be used for this").
 package kv
 
 import (
@@ -65,24 +49,18 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// behaviorTTL is the bucket TTL these measurements run against. Short enough
-// that waiting one out costs a second, long enough to be above nats-server's
-// 100 ms floor on a stream MaxAge by an order of magnitude, so the reap lag
-// being measured is the broker's own and not a rounding artefact.
+// behaviorTTL is the bucket TTL these measurements run against: waiting one
+// out costs a second, and it is an order of magnitude above nats-server's
+// 100 ms floor on a stream MaxAge, so the reap lag measured is the broker's
+// own and not a rounding artefact.
 const behaviorTTL = time.Second
 
-// behaviorRenew is how long these measurements wait between the writes that
-// keep a key alive.
-//
-// A QUARTER OF THE TTL, so a renew that wakes up to three quarters of a TTL
-// late still lands before the broker can reap the key. These cases run beside
-// the package's others, under the race detector on a shared runner, where a
-// sleeper can wake hundreds of milliseconds late; at the half TTL the renewal
-// case used to wait, a wake more than 500 ms late could let the broker reap the
-// key — how much later it actually does depends on where its expiry sweep
-// stands — and fail the case on the scheduler rather than on the broker. What
-// is measured, that a write restarts an entry's age, does not depend on how
-// soon before the TTL the write comes, only on its coming before it.
+// behaviorRenew is the wait between the writes that keep a key alive: A
+// QUARTER OF THE TTL, so a renew that wakes up to three quarters of a TTL late
+// (beside the package's other cases, under the race detector on a shared
+// runner) still lands before the broker can reap the key, rather than failing
+// the case on the scheduler. What is measured, that a write restarts an
+// entry's age, needs the write only to come before the TTL.
 const behaviorRenew = behaviorTTL / 4
 
 // reapPoll is how often the harness asks whether an expired key is gone. It
@@ -122,12 +100,9 @@ func (r *results) print(t *testing.T) {
 }
 
 // TestBrokerBehavior runs BESIDE the package's other cases, on a broker of its
-// own. What it asserts has the room for that — every write that keeps a key
-// alive comes a [behaviorRenew] after the last, three quarters of a TTL short
-// of the reap — and what it only prints does not: a round trip measured while
-// the runner is busy is a busy runner's number. The numbers the design is
-// tuned to are the ones the command in this file's doc prints, which runs it
-// alone.
+// own: what it asserts has the room ([behaviorRenew]), but a round trip it
+// prints on a busy runner is a busy runner's number. The numbers the design is
+// tuned to come from the command in this file's doc, which runs it alone.
 func TestBrokerBehavior(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -183,13 +158,10 @@ func TestBrokerBehavior(t *testing.T) {
 	})
 
 	t.Run("update_refreshes_the_entrys_age", func(t *testing.T) {
-		// THE load-bearing measurement. The bucket's MaxAge is the renewable
-		// TTL: because every write restarts an entry's age, a heartbeat that
-		// Updates is a renew, with no second mechanism and nothing to keep
-		// in sync.
-		//
-		// Renewed every [behaviorRenew], and twelve of those hold the key
-		// for three TTLs, which is what is measured.
+		// THE load-bearing measurement: every write restarts an entry's age,
+		// so the bucket's MaxAge is the renewable TTL and a heartbeat that
+		// Updates is a renew, with no second mechanism. Twelve renewals at
+		// [behaviorRenew] hold the key for three TTLs.
 		key := "renewed"
 		rev, err := leases.Create(ctx, key, []byte("held"))
 		if err != nil {
@@ -216,17 +188,13 @@ func TestBrokerBehavior(t *testing.T) {
 	t.Run("an_unrenewed_key_expires_server_side", func(t *testing.T) {
 		// The other half: a node that dies stops writing, and the broker —
 		// not a peer, and not anybody's wall clock — decides the seat is
-		// free. This is the arbiter Postgres now() used to be.
+		// free.
 		key := "abandoned"
-		// THE CLOCK IS READ BEFORE THE WRITE, never after it. The broker
-		// stamps the message somewhere inside the Create's round trip, so
-		// the instant before the call is the one bound that is never later
-		// than the stamp. Read after the call returns, an acknowledgement
-		// that came back late — a scheduler that woke this goroutine a few
-		// hundred milliseconds after the broker answered — was taken off
-		// the key's measured age, and a broker reaping exactly on time read
-		// as one reaping early: the "sooner than its TTL" failure below,
-		// raised against a broker that had done nothing wrong.
+		// THE CLOCK IS READ BEFORE THE WRITE: the broker stamps the message
+		// inside the Create's round trip, so the instant before the call is
+		// the one bound never later than the stamp. Read after, a late
+		// acknowledgement shortens the measured age, and a broker reaping on
+		// time fails the "sooner than its TTL" check below.
 		written := time.Now()
 		if _, err := leases.Create(ctx, key, []byte("held")); err != nil {
 			t.Fatalf("Create: %v", err)
@@ -303,17 +271,12 @@ func TestBrokerBehavior(t *testing.T) {
 			LimitMarkerTTL: time.Minute,
 		})
 
-		// FATAL, NOT A SKIP, and the skip it replaces said so itself
-		// ("skipping is not passing") while skipping anyway.
-		//
-		// The broker is not an environment here. nats-server is pinned in
-		// go.mod and embedded in this process, so per-key TTL is a property of
-		// a PINNED DEPENDENCY — the same situation internal/store's
-		// capability_test.go is in, and it is the model: measure the surface,
-		// and fail when the measurement moves in either direction. Skipping
-		// here would mean a bump that dropped KeyTTL silently retires the one
-		// case standing between a renewed lease and an immortal one, on the
-		// very run that should have caught it.
+		// FATAL, NOT A SKIP: nats-server is pinned in go.mod and embedded, so
+		// per-key TTL is a property of a PINNED DEPENDENCY, measured as
+		// internal/store's capability_test.go measures its driver: fail when
+		// the measurement moves either way. A skip would let a bump that
+		// dropped KeyTTL silently retire the one case standing between a
+		// renewed lease and an immortal one.
 		if _, err := marked.Create(ctx, "untouched", []byte("v"), jetstream.KeyTTL(behaviorTTL)); err != nil {
 			t.Fatalf("the pinned broker refused jetstream.KeyTTL (%v). If a bump "+
 				"removed per-key TTL, the coordination design that rests on this "+
@@ -327,9 +290,8 @@ func TestBrokerBehavior(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create with a per-key TTL: %v", err)
 		}
-		// One renew, well inside the TTL — exactly what a heartbeat does —
-		// and at [behaviorRenew] for that constant's reason: a renew that
-		// woke too late to land would fail this case on the scheduler.
+		// One renew inside the TTL, as a heartbeat does, at [behaviorRenew]
+		// for that constant's reason.
 		time.Sleep(behaviorRenew)
 		if _, err := marked.Update(ctx, "renewed", []byte("v"), rev); err != nil {
 			t.Fatalf("Update: %v", err)
@@ -396,13 +358,9 @@ func TestBrokerBehavior(t *testing.T) {
 }
 
 // brokerVersions names the nats-server and nats.go these measurements ran on,
-// read from this test binary's own build information.
-//
-// READ, NEVER WRITTEN DOWN, because a version spelled beside a measurement is
-// one the next go.mod bump leaves behind: this row printed "2.14.5 / 1.53.1
-// (see go.mod)" for as long as go.mod said 2.15.0 / 1.54.0, so every table it
-// headed attributed its numbers to a broker the binary did not contain. A
-// replaced module reports its replacement, since that is the code that ran.
+// READ from this test binary's build information, never written down: a
+// version spelled beside a measurement is one the next go.mod bump leaves
+// behind. A replaced module reports its replacement, the code that ran.
 func brokerVersions(t *testing.T) string {
 	t.Helper()
 	info, ok := debug.ReadBuildInfo()
@@ -456,9 +414,8 @@ func waitReaped(ctx context.Context, t *testing.T, kv jetstream.KeyValue, key st
 	t.Fatalf("%s/%s was never reaped", kv.Bucket(), key)
 }
 
-// median times n calls and reports the middle one. The median rather than the
-// mean because one scheduling hiccup in a test container should not become the
-// number a design is budgeted against.
+// median times n calls and reports the middle one: not the mean, so one
+// scheduling hiccup does not become the number a design is budgeted against.
 func median(t *testing.T, n int, call func() error) time.Duration {
 	t.Helper()
 	taken := make([]time.Duration, 0, n)

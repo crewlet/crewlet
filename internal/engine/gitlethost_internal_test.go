@@ -64,13 +64,11 @@ func servesCodeReads(t *testing.T, e *Engine) gitlet.ReadAnswer {
 // A COMPANY THAT SETS code.backend: gitlet IS SERVED GITLET ON EVERY DATA NODE,
 // and one that does not is told this node runs none.
 //
-// The runtime builds the committer and the lifecycle store beside the code
-// log's reader where the company that started it hosts code, the estate
-// backend hands them to the router, and the seat the API's routes and the host
-// read through is handed out exactly there. Without code.backend: gitlet the code log
-// still runs in the register — its reader answers the object store — but no
-// operation is served: a listing is refused as a node with no backend for it,
-// never answered as a company with no repositories.
+// The runtime builds the committer and the lifecycle store only where the
+// company hosts code, and the router serves code from exactly those. Without
+// code.backend: gitlet the code log's reader still runs (it answers the object
+// store), but a listing is refused as unserved (no native backend), never
+// answered as a company with no repositories.
 func TestACompanyOnGitletServesItsOperations(t *testing.T) {
 	t.Parallel()
 	t.Run("hosting code", func(t *testing.T) {
@@ -114,19 +112,14 @@ func TestACompanyOnGitletServesItsOperations(t *testing.T) {
 	})
 }
 
-// A GITLET NODE'S PRESENCE ROW ADVERTISES ITS CACHE'S BACKGROUND BUDGET: from the
-// first beat of a started node, across the lease store's JSON and back and
-// beside the status rather than in it, the very figure the node's cache holds
-// its maintenance to (Cache.BackgroundBudget), read from the published runtime
-// — and a node without the gitlet role, which holds no cache for a company that
-// hosts code, writes no such key: it serves no git, so no Gitlet node weighs it.
-// The status carries no figure of it at all, so a beat whose status read
-// overran drops nothing a Gitlet node places maintenance by.
+// A GITLET NODE'S PRESENCE ROW ADVERTISES ITS CACHE'S BACKGROUND BUDGET
+// (Cache.BackgroundBudget) from its first beat, beside the status rather than
+// in it, so a beat whose status read overran drops nothing a Gitlet node
+// places maintenance by. A node without the gitlet role holds no cache and
+// writes no such key.
 //
-// Mutations: leave the node's GitBackground hook unset — the Gitlet node's row
-// says nothing, red; fill it from the node's memory rather than its cache's
-// budget — the two differ by what the node keeps for serving, red; hand every
-// node the hook — the node without the gitlet role says a budget, red.
+// Mutations, each red: leave the GitBackground hook unset; fill it from the
+// node's memory rather than its cache's budget; hand every node the hook.
 func TestThePresenceAdvertisesTheCacheBudget(t *testing.T) {
 	t.Parallel()
 	const memory = int64(16) << 30
@@ -207,13 +200,10 @@ func presenceRow(t *testing.T, e *Engine) coord.Lease {
 
 // A NODE IN A MAINTENANCE MODE DECIDES NO PUSH, ITS OWN OR A PEER'S.
 //
-// The mode is this node's promise that it appends nothing, and a committer
-// handed to the estate server would append every push the router asks it to
-// decide — the node is the committer of every repository rendezvous ranks it
-// first for. So it holds a committer it never hands out ([Engine.writeSide]),
-// and a proposal is refused as a node that ran nothing, which the router asks
-// the repository's runner-up about with the same push id. Reads are still
-// answered: the mode stops writes, never the copy.
+// The mode promises the node appends nothing, so it holds a committer it never
+// hands the estate server ([Engine.writeSide]): a proposal is refused as a node
+// that ran nothing, and the router asks the repository's runner-up with the
+// same push id. Reads are still answered: the mode stops writes, never the copy.
 func TestAMaintenanceModeNodeRefusesAProposal(t *testing.T) {
 	t.Parallel()
 	e, _ := aNodeOf(t, gitletHostCompany, statelog.ModeMaintenance)
@@ -241,23 +231,16 @@ func TestAMaintenanceModeNodeRefusesAProposal(t *testing.T) {
 
 // THE CODE LOG'S CENSUS COUNTS ITS GIT CLIENTS, WHATEVER THIS NODE HOSTS.
 //
-// The code log's linearizable reads are a person's or their CI's beyond the
-// seats' own (a ref resolved for a seat, a read by object id's one re-sync,
-// which the seats' term counts), so held to the seats' term alone a five-seat
-// company's code log fires census_drift at 1 300 git reads a day — a few
-// developers and one CI. The census adds the git
-// reads the ceiling the log's stream HOLDS was sized for — never the Tier A
-// figure this node would create it with ([stateLog.specOf]), which the census
-// was handed here once and which nothing applies to a stream that exists — and
-// a pass that could not read the stream's ceiling leaves the code log out
-// rather than judge it by the seats' term alone.
+// Git clients' linearizable reads come beyond the seats', so held to the seats'
+// term alone a five-seat company's code log fires census_drift at 1 300 git
+// reads a day. The census adds the git reads the ceiling the stream HOLDS was
+// sized for, never the Tier A figure ([stateLog.specOf]) that nothing applies
+// to an existing stream; a pass that could not read that ceiling leaves the
+// code log out rather than judge it by the seats' term alone.
 //
-// The term is the LOG'S, so a node whose runtime was built without
-// code.backend: gitlet counts it too: the rate the census is held against is every
-// node's barriers over the alarm's day, and keyed on this node's runtime the
-// term judged a day of the fleet's git reads by the seats' term alone — on a
-// node restarted after a revision turned the host off, and on one not yet
-// restarted after a revision turned it on.
+// The term is the LOG'S, not this node's runtime's: the census is held against
+// every node's barriers over the day, so a node built without code.backend:
+// gitlet (the host turned off, or turned on but not yet restarted) counts it.
 func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 	t.Parallel()
 	const (
@@ -275,8 +258,7 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 		s := e.core.Load().log
 		running := s.Domain(gitlet.Domain{}.Name())
 		// THE LOG IS RESIZED UNDER THE RUNNING NODE, as `crewlet retention
-		// set-capacity` resizes it: the stream now holds half of what this
-		// node's Tier A sized it at, and nothing re-sizes the spec.
+		// set-capacity` does: the stream holds half its spec, which stays.
 		holds := running.spec.MaxBytes / 2
 		if err := running.log.SetMaxBytes(t.Context(), uint64(holds)); err != nil {
 			t.Fatalf("resize the code log: %v", err)
@@ -308,11 +290,9 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 				running.spec.MaxBytes)
 		}
 	})
-	// THE NODE'S OWN TRIM, ON A RUNTIME THAT HOSTS NO CODE: what a node
-	// restarted after a revision turned the host off runs while up to a day
-	// of the fleet's git reads from before the switch are still in the
-	// window, and what a node not yet restarted after a revision turned the
-	// host on runs while its peers serve git.
+	// THE NODE'S OWN TRIM, ON A RUNTIME THAT HOSTS NO CODE: the fleet's git
+	// reads still fill its window, whether the host was turned off before its
+	// restart or turned on and it is not yet restarted.
 	t.Run("through the report, on a runtime built without Gitlet", func(t *testing.T) {
 		t.Parallel()
 		recorder, err := metrics.New()
@@ -336,9 +316,8 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 			t.Fatalf("resize the code log: %v", err)
 		}
 		name := gitlet.Domain{}.Name()
-		// THE SEATS' TERM AT THE RATE THE REGISTER DECLARES for the code
-		// domain, as the report counts it: left out, the census this case
-		// expects is short the seats' reads the alarm adds, and the control
+		// THE SEATS' TERM AT THE RATE THE REGISTER DECLARES, as the report
+		// counts it: left out, the expected census is short and the control
 		// below stays inside twice the report's own.
 		reads, declared := readModel(gitlet.Domain{})
 		if !declared {
@@ -483,19 +462,13 @@ const gitletHostLimited = nativeCleanupCompany + `code:
 // A REVISION THAT TURNS GITLET OFF LEAVES THE RUNNING HOST ITS SETTINGS
 // — the committer its limits and the retention duty its retention.
 //
-// `code.limits` and `code.deleted_retention_days` without `code.backend: gitlet` are
-// refused, so the revision that turns the host off must drop them too — and a
-// node whose runtime was built with the host keeps serving it until a restart
-// ([backendSwitches]). Read off that revision, every push the still-running
-// committer decided was held to the defaults: a company that had capped a
-// repository at 2 GiB, a push at 64 MiB and a seat at 40 pushes a day was
-// handed 20 GiB repositories, 1 GiB pushes and a thousand pushes a seat on a
-// host it had just asked to wind down — and one holding merges to maintainers
-// would have its floor dropped to writers — and the still-running retention duty
-// would purge, by the default week, a repository the company had chosen to
-// keep restorable for a year. The settings in force are the newest activated
-// revision's that hosted code, carried from epoch to epoch; a revision that
-// hosts code again brings its own.
+// That revision must drop `code.limits` and `code.deleted_retention_days`
+// (refused without `code.backend: gitlet`), yet a runtime built with the host
+// serves it until a restart ([backendSwitches]). Read off that revision, the
+// still-running host would fall to the defaults: far looser caps, a writers'
+// merge floor, and a week's retention for repositories kept for a year. The
+// settings in force are the newest activated revision's that hosted code,
+// carried from epoch to epoch; a revision that hosts code again brings its own.
 func TestTheCodeSettingsOutliveTheRevisionThatTurnsTheHostOff(t *testing.T) {
 	t.Parallel()
 	e := newSandboxNode(t, parseCompany(t, gitletHostLimited))

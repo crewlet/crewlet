@@ -11,67 +11,17 @@ import (
 	"github.com/google/uuid"
 )
 
-// BenchmarkDecideABatch is the push decide of ONE BATCH over a repository of
-// ten thousand refs and [MaxProtectionsPerRepo] rules, in its two parts: the
-// FORMATION of the protection verdicts before the publish
-// ([verdicts.formBefore] — a read of the rules and every command against
-// every rule, holding no snapshot), and a ROUND inside the publisher's
-// snapshot — the two reads, and every command against the verdicts.
-//
-// The batches and their rules:
-//
-//   - maximal: three pushes of [MaxCommandsPerPush] ref creations against
-//     rules of the shape a team's convention
-//     writes (refs/heads/teamNN/release/**), each rule asked about each
-//     command because none matches — the batch a burst of wide pushes makes;
-//   - group: [MaxPushesPerRecord] pushes of one command each against the same
-//     rules, the batch a burst of small pushes makes;
-//   - worst: the costliest batch a repository's rules can make — every rule
-//     of gitref's costliest shape (a run of four globs between two **s, three
-//     matching every component of the ref and a fourth failing, so the run is
-//     tried at every place and fails at its last part each time), asked about
-//     as many refs of the widest shape that costs it most (255 bytes of
-//     six-byte components) as one record carries ([filledRecord]), none
-//     matching;
-//   - worst-refused: the same, with the last rule in the rules' order matching
-//     every ref with direct_push none, so every command is refused, and the
-//     sentence naming the rule that refused it is formed too;
-//   - deepest: as many creates as one record carries ([filledRecord]) of the
-//     deepest refs ([deepestRef]), each making 118 directories — the most
-//     seeks [RefusalRefConflict] asks of a round;
-//   - buried: one push creating every directory of the deepest chain a ref
-//     can sit under ([buriedChain]: refs/heads/a, refs/heads/a/a, … 118 of
-//     them) at a repository holding [MaxTombstonesPerRepo] tombstones under
-//     the chain's deepest directory, so every create's range under it spans
-//     every tombstone; the first create lands and the rest are refused
-//     ref_conflict, each having asked whether a live ref lies under it;
-//   - fanned: the same 118 creates of the chain, then as many creates under
-//     its deepest directory as the rest of a record carries
-//     ([filledRecord]: 2 492 more), so every create of the chain holds every
-//     name the record spells below it — the most gaps a record's ranges can
-//     be cut into, and the most names a nested create's own walk passes;
-//   - changes: one push moving the heads of [MaxCommandsPerPush] live changes
-//     by a pusher already their author ([estate.seedLiveChanges]), then
-//     [MaxPushesPerRecord] − 1 pushes of one create each that move none — the
-//     round whose change book ([changeBook]) holds the most changes beside
-//     the most entries it tries that reach none of them.
-//
-// And what each arm times:
-//
-//   - "round": a round as the committer runs it, with the verdicts the
-//     formation formed — a first round and every later one alike, since a
-//     round under the rules the formation read forms nothing;
-//   - "formation": the formation alone, on the committer goroutine;
-//   - "reformed": a round whose snapshot holds rules the formation did not
-//     read — an activation changing this repository's protections between
-//     the two — which forms every verdict inside the snapshot: the longest a
-//     round can hold its reader.
-//
-// A round runs on the repository's ONE committer goroutine inside one read
-// transaction, which holds a connection of the replicated estate's reader
-// pool for its length, and again on every round a peer's record forces, up to
-// the publisher's sixteen; doc.go's measured section records the figures, and
-// [CommitBudget] is held against the worst.
+// BenchmarkDecideABatch times the push decide of ONE BATCH over a repository
+// of ten thousand refs and [MaxProtectionsPerRepo] rules. Per arm: "formation"
+// is [verdicts.formBefore] alone, on the committer goroutine, the protection
+// verdicts formed before the publish holding no snapshot; "round" is a round inside the publisher's
+// snapshot with those verdicts, as every round under unchanged rules runs;
+// "reformed" is a round whose snapshot holds rules the formation did not read
+// (an activation between the two), forming every verdict inside the snapshot:
+// the longest a round holds its reader. A round runs on the repository's one
+// committer goroutine holding a reader-pool connection, again for every round
+// a peer's record forces (up to the publisher's sixteen); doc.go's measured
+// section records the figures, and [CommitBudget] is held against the worst.
 func BenchmarkDecideABatch(b *testing.B) {
 	quiet(b)
 	e := openApplyEstate(b)
@@ -97,6 +47,10 @@ func BenchmarkDecideABatch(b *testing.B) {
 	}
 	repository(typical, team)
 
+	// worst asks every rule of gitref's costliest shape ([costliestRules])
+	// about a record full ([filledRecord]) of [widestRef]s, none matching;
+	// worstRefused adds a last rule refusing every ref (direct_push none), so
+	// the sentence naming the refusing rule is formed too.
 	const worst, worstRefused = "0190f3c4-0000-7000-8000-00000000be02",
 		"0190f3c4-0000-7000-8000-00000000be03"
 	costliest := costliestRules(MaxProtectionsPerRepo)
@@ -107,6 +61,9 @@ func BenchmarkDecideABatch(b *testing.B) {
 		Protection{PushRule: PushRule{Pattern: "refs/heads/" + widestComponent + "/**", DirectPush: DirectNone}})
 	repository(worstRefused, refusing)
 
+	// maximal is three pushes of [MaxCommandsPerPush] creates, group
+	// [MaxPushesPerRecord] pushes of one; each command is asked of every team
+	// rule, since none matches.
 	var maximal, group []Proposal
 	for p := range 3 {
 		var cmds []Command
@@ -122,8 +79,13 @@ func BenchmarkDecideABatch(b *testing.B) {
 	}
 	widest := filledRecord(b, worst, widestRef)
 	widestRefused := filledRecord(b, worstRefused, widestRef)
+	// deepest: a record of [deepestRef]s, each making 118 directories, the
+	// most seeks [RefusalRefConflict] asks of a round.
 	deepest := filledRecord(b, typical, deepestRef)
 
+	// buried creates every directory of [buriedChain] in one push over
+	// [MaxTombstonesPerRepo] tombstones under its deepest directory, so every
+	// create's range spans every tombstone.
 	const buried = "0190f3c4-0000-7000-8000-00000000be04"
 	repository(buried, team)
 	chain := buriedChain()
@@ -136,8 +98,8 @@ func BenchmarkDecideABatch(b *testing.B) {
 	for i, ref := range chain {
 		nested[i] = Command{Ref: ref, Old: ZeroOID, New: oid(fmt.Sprint("buried", i))}
 	}
-	// THE FIRST CREATE TAKES THE CHAIN and every later one meets it — each
-	// decided all the same, past every read the rule asks of it.
+	// THE FIRST CREATE TAKES THE CHAIN; every later one is refused only after
+	// every read the rule asks of it.
 	firstLands := func(ref string) Refusal {
 		if ref == chain[0] {
 			return ""
@@ -145,6 +107,10 @@ func BenchmarkDecideABatch(b *testing.B) {
 		return RefusalRefConflict
 	}
 
+	// changed moves the heads of [MaxCommandsPerPush] live changes their author
+	// pushes ([estate.seedLiveChanges]), then [MaxPushesPerRecord]-1 creates
+	// moving none: the most changes in [changeBook] beside the most entries
+	// reaching none.
 	const changed = "0190f3c4-0000-7000-8000-00000000be05"
 	repository(changed, team)
 	e.seedLiveChanges(changed, MaxCommandsPerPush)
@@ -173,6 +139,10 @@ func BenchmarkDecideABatch(b *testing.B) {
 		{"worst-refused", worstRefused, widestRefused, RefusalProtectedDirect, nil},
 		{"deepest", typical, deepest, "", nil},
 		{"buried", buried, []Proposal{benchProposal(buried, nested)}, "", firstLands},
+		// fanned: the chain's creates, then the rest of a record under its
+		// deepest directory, so each chain create holds every name below it:
+		// the most gaps a record's ranges are cut into, and the most names a
+		// nested create's walk passes.
 		{"fanned", typical, filledRecord(b, typical, func(p, c int) string {
 			if i := p*MaxCommandsPerPush + c; i < len(chain) {
 				return chain[i]
@@ -190,9 +160,8 @@ func BenchmarkDecideABatch(b *testing.B) {
 		for _, p := range shape.batch {
 			commands += len(p.Commands)
 		}
-		// formation is the batch's verdicts formed as the committer forms
-		// them, every command's, each as the arm says — so a formation cut
-		// short, or one a round would form again, is never what is measured.
+		// formation fails unless it formed every command's verdict as the arm
+		// says, so a short formation, or one a round redoes, is never measured.
 		formation := func() (*verdicts, error) {
 			v := &verdicts{}
 			v.formBefore(ctx, e.db.Reader(), shape.repo, shape.batch)
@@ -214,9 +183,8 @@ func BenchmarkDecideABatch(b *testing.B) {
 				if err != nil {
 					return err
 				}
-				// EVERY COMMAND DECIDED AS THE ARM SAYS, so a round cut
-				// short by a refusal nobody meant is never what is
-				// measured.
+				// EVERY COMMAND DECIDED AS THE ARM SAYS, so a round cut short
+				// by an unmeant refusal is never what is measured.
 				for i, a := range answers {
 					if len(a.commands) != len(shape.batch[i].Commands) {
 						return fmt.Errorf("push %d was answered %d commands of %d", i,
@@ -301,10 +269,9 @@ func deepestRef(push, command int) string {
 	return ref
 }
 
-// buriedChain is every directory of the deepest chain a tombstone of the
-// buried arm sits under, shallowest first: refs/heads/a, then one "/a" more
-// each, to the deepest that leaves [buriedLeaf] room in [MaxRefNameBytes] —
-// 118 refs, each an ancestor of every tombstone.
+// buriedChain is every directory the buried arm's tombstones sit under,
+// shallowest first: refs/heads/a, then one "/a" more each while [buriedLeaf]
+// still fits in [MaxRefNameBytes], 118 refs.
 func buriedChain() []string {
 	out := []string{"refs/heads/a"}
 	for {
@@ -316,15 +283,15 @@ func buriedChain() []string {
 	}
 }
 
-// buriedLeaf is the spelling of the last component of each of the buried
-// arm's tombstones, as the seeding statement prints its number.
+// buriedLeaf is the last component of a buried arm tombstone, as the seeding
+// statement prints it.
 const buriedLeaf = "/t000000"
 
 // costliestRules are n distinct rules of gitref's costliest shape: a run of
 // four globs between two **s, the first three matching every
-// [widestComponent] at every place they are tried, a piece a byte, and the
-// fourth failing on its last piece — a byte no component of [widestRef] holds,
-// one for each rule. Sorted, as a repository's rules are stored.
+// [widestComponent] wherever tried, the fourth failing on its last byte, one
+// no component of [widestRef] holds and distinct per rule. Sorted, as a
+// repository's rules are stored.
 func costliestRules(n int) []Protection {
 	const last = "bcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_+"
 	if n > len(last) {

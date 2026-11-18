@@ -12,54 +12,29 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// WHOM ONE CHANGE'S RECORDS REACHED — the `change_routing` read, the change
-// page's Woke tab: the change by its number on its repository, as a `change`
-// read names it and held to the same grant, and the records about it that
-// reached anybody, newest first, each with every recipient its notices name
-// (code_notifications, written by the applier per record, change and
-// recipient, apply_notices.go — read here for this one change, so a record
-// lists each recipient once). It is the OTHER axis of the rows a person's
-// code inbox reads: an inbox is one recipient's notices across changes, this
-// is one change's notices across recipients, sought by
-// code_notifications_change_idx.
-//
-// # Whole records, a page at a time
-//
-// A page lists whole records: every notice of one record shares its position,
-// the index's order after the change, so a record's recipients are read
-// together and a page closes only between two records — a cursor naming a
-// position never splits one. A record's recipients are bounded where it is
-// written (its routing's own bounds), so a whole record always fits.
-//
-// # An empty answer is two facts, told apart by the horizon
-//
-// Every record about a change says whom it concerns — its routing
-// ([ChangeRouting]), or none where it concerns nobody — so a change whose
-// records list nobody is one of two things: its records concerned nobody, or
-// only their own actors, or its notices were swept, or never written, past
-// their horizon. They send a
-// reader to two different places, and [routing.DeliveryOf] is the rule that
-// tells them apart, dated by the change's opening — its oldest record —
-// against [RoutedPage.RetainedFrom]: the instant from which every notice is
-// kept, a seat's and a person's alike, which is the shorter horizon of the
-// two (a seat's, [SeatNoticeHorizon]; a person's is the company's
-// inbox.retention_days, at least as long). The serving node's clock dates
-// it, since it is that node's sweeps that keep or take its rows.
+// The change_routing read (the change page's Woke tab): the change named and
+// granted as a `change` read, and the records about it that reached anybody,
+// newest first, each with every recipient its code_notifications rows (one
+// per record, change and recipient: apply_notices.go) name once — an inbox's
+// other axis, sought by code_notifications_change_idx. A page holds whole records: a record's
+// notices share one position, so a cursor never splits one, and its routing
+// bounds its recipients, so one always fits. An empty answer is nobody
+// concerned or notices swept past their horizon; [routing.DeliveryOf] tells
+// them apart by the change's opening against [RoutedPage.RetainedFrom], the
+// seat horizon ([SeatNoticeHorizon], no longer than a person's
+// inbox.retention_days), dated by the serving node's clock, whose sweeps keep
+// the rows.
 
-// The page of a change's routing: a page of RECORDS, each whole — fifty by
-// default, as a page of a change's reviews or comments, and at most two
-// hundred, the bound every page of a change's conversation keeps; the bytes
-// of a page are bounded by [MaxPageBytes] beside them.
+// A page of a change's routing counts whole RECORDS: fifty by default and at
+// most two hundred, as every page of a change's conversation; [MaxPageBytes]
+// bounds its bytes.
 const (
 	defaultRoutedLimit      = 50
 	MaxRoutedRecordsPerPage = 200
 )
 
-// changeRouting serves one page of whom change q.Change of repository q.Repo
-// reached: the change's name and its opening, judged against the grant from
-// the repository's row ([readableIn]) as a `change` read is, and the records
-// about it that reached anybody, newest first, after the position a cursor
-// names.
+// changeRouting serves one page of whom change q.Change of q.Repo reached,
+// judged by [readableIn] as a `change` read is.
 func (r *Reader) changeRouting(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
 	repo, err := readableIn(ctx, tx, q.Repo, q.Asker, q.CeilingSeat, chart)
 	if err != nil {
@@ -96,8 +71,7 @@ func (r *Reader) changeRouting(ctx context.Context, tx *sql.Tx, q ReadQuery, cha
 		record *RoutedRecord
 		seq    int64
 	)
-	// finish counts the record read so far into the page, its recipients in
-	// the order a reader wants them, and reports a page that takes no more.
+	// finish adds the record read so far to the page and reports a full page.
 	finish := func() bool {
 		sortRecipients(record.Recipients)
 		routed.Records = append(routed.Records, *record)
@@ -129,8 +103,7 @@ func (r *Reader) changeRouting(ctx context.Context, tx *sql.Tx, q ReadQuery, cha
 		}
 		n.Kind, n.Reason, n.Addressed, n.Fallback = PartyKind(kind), Reason(reason), addressed, fallback
 		if !n.Fallback {
-			// A RANK WITHOUT A FALLBACK IS NOISE: the column is zero on
-			// every ordinary notice, and a surface reading it would render
+			// A rank without a fallback is noise a surface would render as
 			// "1st substitute" beside a reviewer.
 			n.FallbackRank = 0
 		}
@@ -146,13 +119,10 @@ func (r *Reader) changeRouting(ctx context.Context, tx *sql.Tx, q ReadQuery, cha
 	return nil
 }
 
-// routedDelivery is what a page of a change's routing can say about whom its
-// records reached ([RoutedPage.Delivery]): a page after a cursor continues a
-// listing whose first page held records, and every other page is
-// [routing.DeliveryOf] over the change — held, since the read found it;
-// announced, since every record about a change says whom it concerns, a
-// routing or none for nobody — dated by
-// its opening against the page's horizon.
+// routedDelivery is [RoutedPage.Delivery]: a page after a cursor continues a
+// listing whose first page held records; any other is [routing.DeliveryOf]
+// over the change — held, since the read found it, and announced, since every
+// record says whom it concerns — dated by its opening against the horizon.
 func routedDelivery(p *RoutedPage, later bool) routing.Delivery {
 	if later {
 		return routing.DeliveryReached
@@ -182,12 +152,10 @@ func sortRecipients(rs []RoutedRecipient) {
 	})
 }
 
-// The change's notices, newest record first, each record's together: one
-// range of code_notifications_change_idx, (change_id, log_seq), walked
-// backward, and after a cursor the same range below the position it names.
-// Unbounded in the statement and bounded by the page, which stops reading
-// at the first record past it — a LIMIT counts rows, and a page counts whole
-// records. Registered in plan_test.go.
+// The change's notices, newest record first: one backward range of
+// code_notifications_change_idx (change_id, log_seq), below the cursor's
+// position after one. No LIMIT: it counts rows, and the page stops at the
+// first whole record past it. Registered in plan_test.go.
 const (
 	changeNoticesSQL = `SELECT record_id, recipient, recipient_kind, reason, addressed, fallback_only,
 			fallback_rank, excerpt, created_at, log_seq

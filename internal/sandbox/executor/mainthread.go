@@ -10,46 +10,27 @@ import (
 
 // A CLAUDE CODE MAIN THREAD, WALKED ONCE BY EVERY READING ASKED OF IT.
 //
-// Two places read a session's main thread whole: the take's context meter, over
-// the archive it keeps (measure.go), and the read that collects a job, over the
-// copy its box holds (internal/sandbox's mainthread.go,
-// [Runner.ReadMainThread]). Each is ONE WALK of the thread's whole lines
-// through the line layer ([walkThread]), into which every reading the caller
-// asks is composed ([threadReading]): the count of what Claude Code counts the
-// session at ([resumedReading]), its estimate of the session's next request
-// ([nextReading]), and at the take the last request's input
-// ([contextReading]). A reading never reads the thread itself,
-// so a thread is read once whatever readings ask of it, and a reading a later
-// change adds joins the same walk rather than read the thread again. An
-// OpenCode session is one thread its export holds, read in the same two places
-// by one walk of the export ([meterExport], [OpenCode.readMainThread]).
+// The take's context meter (measure.go) and the job's collection before it
+// ([Runner.ReadMainThread]) each read a thread in ONE WALK ([walkThread]) that
+// every reading asked is composed into ([threadReading]).
 //
-// IN THE BOX, the read is the collection's, before the take, within the one wait
-// every reading of it shares (internal/sandbox's MainThreadReadWait), and in this
-// order, cheapest first, so a count marked before the walk costs no read:
-// a session whose id names no file is unread; a release the count's rules were
-// not read in is [sandbox.CountRelease]; a saved compaction under either name
-// Claude Code reads one by ([claudePrecompact]), found by a look at each name's
-// size and never a read of its body, is [sandbox.CountPrecompact]; and only
-// then is the thread opened, streamed (through envd on e2b) and walked. A
-// count marked before the walk leaves the estimate of the next request none,
-// since the thread was not read: the floor then reads the copy's last
-// request's input, as it did before the estimate existed.
+// IN THE BOX the read runs within internal/sandbox's MainThreadReadWait, cheapest
+// check first, so a count marked early costs no read: a session id naming no
+// file is unread; a release below [claudeCountFloor], or none, is
+// [sandbox.CountRelease]; a saved compaction under either name ([claudePrecompact]), found by its size,
+// never its body, is [sandbox.CountPrecompact]; only then is the thread opened
+// (through envd on e2b) and walked.
 
 // threadReading is one reader's account of a Claude Code thread, composed into
-// the ONE walk of its whole lines ([walkThread]): handed every whole line in
-// file order, each line the layer refuses, and then how the walk ended. A
-// reading never reads the thread itself, so a thread is read once whatever
-// readings ask of it: the count ([resumedReading]), the estimate of the next
-// request ([nextReading]) and the meter's last request's input
-// ([contextReading]) now, and any later reading of the thread when it joins.
+// the one walk ([walkThread]) and never reading the thread itself, so a thread
+// is read once however many readings ask: the count ([resumedReading]), the
+// estimate of the next request ([nextReading]), the meter's last request's
+// input ([contextReading]), and any reading added later.
 type threadReading interface {
-	// line is the thread's next whole line that is one record, the
-	// reading's to keep ([threadLine]).
+	// line is the thread's next whole line that is one record ([threadLine]).
 	line(l threadLine)
-	// refused is the thread's next whole line that is no record: what it
-	// costs the reading is the reading's to decide (the layer's rule,
-	// [threadReader.Next]).
+	// refused is the next whole line that is no record; what it costs is the
+	// reading's to decide ([threadReader.Next]).
 	refused(err *threadLineError)
 	// end is how the walk ended: err nil at the member's end, torn whether a
 	// last piece with no break was left unread; else what ended it
@@ -57,12 +38,11 @@ type threadReading interface {
 	end(torn bool, err error)
 }
 
-// walkThread reads r, one thread member, a whole line at a time through the
-// layer's reader ([newThreadReader]) within maxBytes, handing each line to
-// every reading in the order given, ctx asked by the reader before each line
-// ([threadReader.Next]), and each reading's end once. It goes on past a
-// refused line, the reader staying usable, so a reading that reads past one
-// (the floor's figure, which counts nothing of it) reads every line after it.
+// walkThread reads r, one thread member, a whole line at a time within maxBytes
+// ([newThreadReader], which checks ctx before each line), handing each line to
+// every reading in order and each reading's end once. It goes on past a refused
+// line, so a reading that tolerates one (the floor's figure) reads every line
+// after it.
 func walkThread(ctx context.Context, r io.Reader, maxBytes int64, readings ...threadReading) {
 	reader := newThreadReader(r, maxBytes)
 	ended := func(torn bool, err error) {
@@ -100,9 +80,9 @@ type mainThreadHarness interface {
 		ask sandbox.MainThreadAsk) sandbox.MainThreadReading
 }
 
-// ReadMainThread reads the main thread of the session a job's box ran, once,
-// for every reading ask asks of it (internal/sandbox's mainthread.go), through
-// the runner's harness: zero for a harness that reads none.
+// ReadMainThread reads the main thread of the session a job's box ran, once
+// for every reading ask asks of it, through the runner's harness: zero for a
+// harness that reads none.
 func (r *Runner) ReadMainThread(ctx context.Context, box sandbox.Sandbox,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
@@ -119,9 +99,9 @@ var (
 )
 
 // readMainThread is Claude Code's read of the main thread of ask's session in
-// box, in the order the file comment states: the session's id, the release,
-// the saved compaction's two names, then ONE walk of the thread for every
-// reading asked.
+// box, in the order the file comment states. A count marked before the walk
+// leaves no estimate of the next request, so the floor reads the copy's last
+// request's input.
 func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
@@ -143,8 +123,8 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 	}
 	saved, _ := claudePrecompact(ask.Session)
 	for _, name := range saved {
-		// A LOOK AT ITS SIZE, never a read of its body: a file of no bytes is
-		// one the harness cannot read, so it holds no saved compaction.
+		// Its size, never its body: an empty file is one the harness cannot
+		// read, so it holds no saved compaction.
 		tail, err := box.ReadTail(ctx, paths.ClaudeConfigDir()+"/"+name, 0)
 		switch {
 		case err != nil:

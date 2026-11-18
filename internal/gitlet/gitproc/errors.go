@@ -2,10 +2,10 @@ package gitproc
 
 import "errors"
 
-// The refusals and ends a [Pool.Run] answers with, beside the four kinds a git
-// failure is classified into (classify.go). Every message built on one of
-// these names what to change — a field of [Cmd], the allowlist, a file under
-// HOME — because the person reading it is the one who has to change it.
+// The refusals and ends [Pool.Run] answers with, beside the four failure kinds
+// classify.go sorts git's own into. Every message built on one names what to
+// change (a field of [Cmd], the allowlist, a file under HOME): its reader is
+// the one who has to change it.
 var (
 	// ErrBusy: no slot in the run's lane was free within [SlotWait] (or, for
 	// maintenance, at all). The host answers it 503 with a Retry-After.
@@ -26,32 +26,30 @@ var (
 	// directory.
 	ErrInvalid = errors.New("gitproc: a malformed git command")
 
-	// ErrRemote: a remote no git process may dial as given — a URL that is
-	// not https, names a user, a query or a fragment, or a host in any form
-	// but the one [ResolveRemote] reads, a header that is not one line, a
-	// proxy git cannot be handed, or an SSL_CERT_DIR naming more directories
-	// of authorities than libcurl reads. Never an address the public-address
-	// rule refused, which is httpx.ErrNotPublic, nor a lookup that failed,
-	// which is the resolver's own error, because the three ask different
-	// people for different things: a malformed remote is corrected where it
-	// was written, a refused address is the operator's
-	// (gitlet.import_allow_private), and a failed lookup is worth asking again.
+	// ErrRemote: a remote no git process may dial as given: a URL that is not
+	// https, names a user, a query or a fragment, or a host in any form but
+	// the one [ResolveRemote] reads; a header that is not one line; a proxy
+	// git cannot be handed; an SSL_CERT_DIR of more directories than libcurl
+	// reads. A refused address (httpx.ErrNotPublic) and a failed lookup (the
+	// resolver's error) stay distinct, because each asks someone else: a
+	// malformed remote is fixed where it was written, a refused address is
+	// the operator's (gitlet.import_allow_private), a failed lookup is worth
+	// retrying.
 	ErrRemote = errors.New("gitproc: not a remote a git process may dial")
 
-	// ErrRepoShape: a Cmd.Dir (or the alternate the call names, at its real
-	// path) that is definitely not a repository the engine wrote by hand —
-	// always a *ShapeError, which names the rule and the repository. A file
-	// that could not be READ is never this: that is the read's own error,
-	// and says nothing about what the file holds.
+	// ErrRepoShape: a Cmd.Dir (or the call's alternate, at its real path)
+	// that is definitely not a repository the engine wrote by hand; always a
+	// *ShapeError naming the rule and the repository. A file that could not
+	// be READ is never this: that is the read's own error.
 	ErrRepoShape = errors.New("gitproc: not a repository the engine made")
 
 	// ErrHome: the pool's HOME is not an empty directory.
 	ErrHome = errors.New("gitproc: git's HOME is not an empty directory")
 
-	// ErrNoTrace: the node's git wrote no trace2 event stream on the
-	// descriptor the pool gave it, so no failure it reports could be
-	// classified (trace.go) — refused at New rather than run with every
-	// damaged cache read as git's own failure.
+	// ErrNoTrace: the node's git wrote no trace2 event stream on the pool's
+	// descriptor, so none of its failures could be classified (trace.go).
+	// Refused at New rather than run with every damaged cache read as git's
+	// own failure.
 	ErrNoTrace = errors.New("gitproc: git wrote no trace2 event stream")
 
 	// ErrDeadline: the run outlived its Cmd.Deadline and was killed.

@@ -54,6 +54,12 @@ actually the answer. There is no phrase query, no proximity and no query
 language, because the seam deliberately does not have one: an agent writes a
 keyword line and a person types into a box.
 
+The engine keeps three keyword indexes of its own, each over its own rows and
+none ranked against another: the knowledge base's, over pages and work items;
+chat's ([Chatlet](chatlet.md)); and the words of Gitlet's changes
+([Searching changes by their words](gitlet.md#searching-changes-by-their-words)),
+which narrow a listing of changes and are never ranked.
+
 ### Semantic search: two stages, the first one indexed, no new dependency
 
 Keyword search finds what shares words. Semantic search finds what shares

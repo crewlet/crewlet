@@ -1,73 +1,38 @@
 /**
- * Gitlet › Pushes: one repository's pushes, newest first — who pushed, what
- * became of its refs, what it brought, and the turn behind a seat's push.
- *
- * # One repository at a time
- *
- * The engine keeps a push history per repository (`code_pushes`, newest first
- * in the order the pushes landed on the code log) and no listing that spans
- * them: a company-wide log here would be every repository's history merged in
- * the browser, page by page, which could only ever be right for the pages it
- * happened to hold. So the section is narrowed to one repository, `repo=`,
- * chosen in its bar or arriving from a link, and a name no repository can
- * have is said in place rather than asked about (`lib/code.ts`). A
- * repository's own page draws the same history on its Pushes tab
- * ([PushHistory]).
- *
- * # A log reaches its older rows by fetching them
- *
- * A page boundary is not a window, so a history that fills its page offers
- * Load older and holds the pages it has, discarding them together when the
- * repository changes. The first page stays live while the reader pages back,
- * and the cursor was minted from its last row: read again under newer pushes,
- * it pushes that row off its foot, and the pushes between the two pages would
- * belong to neither — so the pager, the one every paged history shares
- * (`lib/usePaged.ts`), reads the pushes between and joins the pages before the
- * history is drawn again.
- *
- * # A push is drawn in brief, and read whole on demand
- *
- * A push carries up to a thousand ref updates (`gitlet.MaxCommandsPerPush`, what
- * `crewlet gitlet import` sends at a time), each a line, and the commits it
- * introduced, which this screen never draws. So the history is asked IN BRIEF
- * (`brief`): five updates of a push at most — its refused ones first, each
- * with its reason — and the rest COUNTED by what became of each, which the row
- * says; the whole push is one read of it away (`push`), made when the reader
- * asks for every ref. Read whole, a page of a freshly imported repository was
- * up to four mebibytes, sent again by every poll, and twenty thousand lines a
- * render.
- *
- * AND THE CLOCK RE-RENDERS ONE CELL, the time a push landed: the refs are the
- * tallest thing a row draws, memoised on the row, so a tick of the second
- * hand walks none of them.
- *
- * # What a row says is what the engine stamped
- *
- * Who pushed is the row's actor — a seat, or the credential a person pushed
- * through, with the seat it acts as — and a seat's turn, its work item and its
- * model are what the engine stamped from the call that made the push, never
- * what a commit says about itself.
+ * Gitlet › Pushes and a repository's Pushes tab: one repository's pushes, newest first, as a feed
+ * of sentences on the reader's days, each day counted by the engine (`push_days`).
  */
 
-import { Fragment, memo, useId, useMemo, useState } from "react";
+import { Fragment, memo, useId, useMemo, useState, type ReactNode } from "react";
 import {
+  AsideLayout,
+  AvatarStack,
   Button,
   Callout,
   EmptyState,
+  IconTile,
+  RelativeTime,
+  Select,
   Skeleton,
-  TableDateCell,
-  TableEntityCell,
-  TableNumberCell,
-  TableTextCell,
   Tag,
+  type SelectOption,
 } from "@crewlethq/ui";
-import { BookmarkGlyph, GitBranchGlyph, UploadGlyph } from "@crewlethq/icons/glyphs";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { plainSeat } from "~/app/frame/cells.tsx";
-import { href, useParam } from "~/app/router.tsx";
-import { PageFailed, QueryState } from "~/components/common.tsx";
-import { useNow } from "~/lib/clock.ts";
 import {
+  BotGlyph,
+  CalendarGlyph,
+  GitBranchGlyph,
+  KeyGlyph,
+  PackageGlyph,
+  ShieldGlyph,
+  TagGlyph,
+  UploadGlyph,
+} from "@crewlethq/icons/glyphs";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { AgoTime } from "~/components/AgoTime.tsx";
+import { QueryState } from "~/components/common.tsx";
+import { useClock, useNow } from "~/lib/clock.ts";
+import {
+  PUSH_HISTORY_DAYS,
   commandWord,
   isRepoName,
   omittedOf,
@@ -75,270 +40,600 @@ import {
   shortOID,
   type OutcomeCount,
 } from "~/lib/code.ts";
-import { fmtBytes, fmtCount, plural } from "~/lib/format.ts";
-import { useSeatBadgeOf } from "~/lib/seats.ts";
+import { fmtBytes, fmtCount, fmtDate, fmtDateTime, plural, readerDay } from "~/lib/format.ts";
+import { zone } from "~/lib/prefs.ts";
+import { useOrgIndex, useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import {
   queryErrorCode,
   type CodePushCommand,
+  type CodePushers,
   type CodePushRow,
   type CodePushesAnswer,
 } from "~/protocol/index.ts";
 import { spellPosition } from "~/protocol/session.ts";
-import { REPO_PARAM, commitHref, compareHref } from "./paths.ts";
-import { RepoPicker } from "./RepoPicker.tsx";
+import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import { ChangeRefPill } from "./ChangeRow.tsx";
+import { CodeList, useDayGroups, type ListDay } from "./CodeList.tsx";
+import { REPO_PARAM, commitHref, compareHref, repoHref } from "./paths.ts";
+import {
+  credentialWords,
+  dayAside,
+  dayCounts,
+  pusherParams,
+  pushSubject,
+  pushWords,
+  type PushPart,
+} from "./pushWords.ts";
+import { PUSHER_DAYS } from "./activity.tsx";
+import { PushesRail } from "./PushesRail.tsx";
+import { usePushActivity } from "./railParts.tsx";
+import { REFUSED_CODES, refusalSentence } from "./repo/marks.ts";
+import { RepoPicker } from "./RepoPicker.tsx";
+import { BranchChip, Face, GITLET, useWhoName } from "./ui.tsx";
+import { WHEN, dayBoundsFor, sinceOf } from "./when.ts";
 import "~/styles/gitlet.css";
 
-/**
- * How often the newest page is read again: a MINUTE, the cadence this
- * dashboard reads the other change log nothing pushes to it at (Worklet's
- * History). The code log has no push to the
- * dashboard, so another person's push reaches the open history by this read
- * or not at all.
- */
+/** How often the newest page is read again: the code log has no push to the dashboard. */
 const PUSHES_POLL_MS = 60_000;
 
-/** A history page's pushes, each push's id, and the cursor to the page after. */
 const pushesOf = (a: CodePushesAnswer) => a.pushes ?? [];
 const pushIdOf = (p: CodePushRow) => p.push_id;
 const pushesAfter = (a: CodePushesAnswer) => a.next ?? "";
+const landedAt = (p: CodePushRow) => p.at;
 
-/** Every way a push's commit and pack came to be, in words (`gitlet.PushVias`). */
+/** How each push was built, in a chip's words (`gitlet.PushVias`); a newer way said as it is. */
 const VIA_WORDS: Readonly<Record<string, string>> = {
-  git: "git push",
-  engine: "built by the engine",
+  git: "with git",
+  engine: "via the engine",
   merge: "a change merged",
-  expiry: "an idle seat branch expired",
-  queue: "a merge queue landed it",
-  import: "imported from another host",
-  mirror: "synced from the repository it mirrors",
+  queue: "its queue landed it",
+  import: "imported",
+  mirror: "a mirror's sync",
+  expiry: "an idle branch expired",
 };
 
 export function Pushes() {
-  // THE REPOSITORY, by its name. A filter, so choosing another replaces the
-  // history entry rather than adding one per repository looked at.
   const [repo, setRepo] = useParam(REPO_PARAM, "", "filter");
-  const named = repo !== "" && isRepoName(repo);
+  const picker = <RepoPicker size="sm" repo={repo} onChoose={setRepo} />;
+  if (repo !== "" && isRepoName(repo)) {
+    return <PushHistory repo={repo} toolbarLead={picker} rail />;
+  }
 
   return (
     <>
-      <PageToolbar>
-        <RepoPicker size="sm" repo={repo} onChoose={setRepo} />
-      </PageToolbar>
-
+      <PageToolbar>{picker}</PageToolbar>
       {repo === "" ? (
         <EmptyState
           icon={<UploadGlyph size={32} />}
           title="Choose a repository"
           description="A push history is kept with its repository: choose one above, or open one from Repositories."
         />
-      ) : !named ? (
+      ) : (
         <Callout variant="warning">
           “{repo}” is not a repository’s name: one is lowercase letters, digits and hyphens,
           beginning and ending with a letter or a digit, at most 63 in all.
         </Callout>
-      ) : (
-        <PushHistory repo={repo} />
       )}
     </>
   );
 }
 
-/**
- * One repository's push history, newest first, a page at a time — what Gitlet ›
- * Pushes draws for the repository its bar names, and a repository's own page
- * draws on its Pushes tab. `repo` is a name a repository can have
- * (`isRepoName`); the caller says in place what one that is not is.
- */
-export function PushHistory({ repo }: { repo: string }) {
-  const seatBadge = useSeatBadgeOf();
-  // IN BRIEF, every page of it: see the file's doc.
-  const params = useMemo(() => ({ name: repo, brief: true }), [repo]);
-  // ANOTHER REPOSITORY IS ANOTHER HISTORY: its first page is never followed by
-  // the last one's second (see the file's doc).
-  const first = useCodeQuery("code_pushes", params, {
-    pollMs: PUSHES_POLL_MS,
+/** A day's heading: Today, Yesterday, or its date. */
+const dayHeading = (day: ListDay | null, first: CodePushRow) =>
+  day === null
+    ? "Undated"
+    : day.ago === 0
+      ? "Today"
+      : day.ago === 1
+        ? "Yesterday"
+        : fmtDate(first.at);
+
+/** The reader's day a push landed on, or "" where its instant does not parse. */
+function dayOf(p: CodePushRow): string {
+  const at = Date.parse(p.at);
+  return Number.isNaN(at) ? "" : readerDay(at);
+}
+
+/** The history refused for good (an older fleet refusing a key it lacks), in the engine's words. */
+function historyRefused(error: string | null, refusal: unknown, detail?: string): string | null {
+  if (!error || !REFUSED_CODES.has(error) || error === "unauthorized" || error === "not_found") {
+    return null;
+  }
+  // A NODE CATCHING UP is QueryState's to say: waiting clears it.
+  const retry = (refusal as { retryAfter?: number } | null)?.retryAfter ?? 0;
+  if (error === "unavailable" && retry > 0) return null;
+  const sentence = refusalSentence({
+    detail,
+    refusal: refusal as Parameters<typeof refusalSentence>[0]["refusal"],
   });
+  const lead = "Pushes are unavailable on this fleet yet";
+  return sentence ? `${lead}: ${sentence.replace(/\.$/, "")}.` : `${lead}.`;
+}
+
+/**
+ * One repository's pushes, newest first, a page at a time, under day headings, narrowed on the
+ * engine by who pushed (`by=`) and when (`when=`). `repo` is a name a repository can have; `rail`
+ * draws the pushers and protection beside it, and the total in the toolbar.
+ */
+export function PushHistory({
+  repo,
+  toolbarLead,
+  rail = false,
+}: {
+  repo: string;
+  toolbarLead?: ReactNode;
+  rail?: boolean;
+}) {
+  const [by, setBy] = useParam("by", "", "filter");
+  const [when, setWhen] = useParam("when", "", "filter");
+  const nav = useNavigator();
+  const whoName = useWhoName();
+  // THE READER'S DAY, read again only when it turns, so the first page's key holds all day.
+  const today = useClock((t) => readerDay(t));
+  const inZone = zone();
+  const activity = usePushActivity(repo, PUSHES_POLL_MS);
+  const rules = useCodeQuery(
+    "code_repo",
+    { name: repo, gates: true },
+    { enabled: rail, pollMs: PUSHES_POLL_MS },
+  );
+  const total = rail ? rules.data?.repo?.pushes : undefined;
+  const seats = usePusherChoices(activity.read.data?.repo?.pushers, by);
+  const kind = by === "" ? "" : (pusherParams(by, seats.kindOf).pusher_kind ?? "");
+  const since = sinceOf(when, today);
+  const base = useMemo(
+    () => ({
+      name: repo,
+      brief: true,
+      ...(kind ? { pusher_kind: kind } : {}),
+      ...(kind && kind !== "gitlet" ? { pusher: by } : {}),
+      ...(since ? { since } : {}),
+    }),
+    [repo, kind, by, since],
+  );
+  // THE DAY COUNTS RIDE THE FIRST PAGE, one snapshot with its rows; never beside a pusher.
+  const bounds = useMemo(
+    () => (by === "" ? dayBoundsFor(when, today, inZone) : []),
+    [by, when, today, inZone],
+  );
+  const params = useMemo(
+    () => (bounds.length > 0 ? { ...base, day_bounds: bounds.join(",") } : base),
+    [base, bounds],
+  );
+  const first = useCodeQuery("code_pushes", params, { pollMs: PUSHES_POLL_MS });
   const paged = usePaged(
     first,
     params,
-    (cursor) => codeRest.query("code_pushes", { ...params, cursor }),
+    (cursor) => codeRest.query("code_pushes", { ...base, cursor }),
     pushesOf,
     pushIdOf,
     pushesAfter,
   );
-  // ONE ROW PER PUSH across pages, by its id.
   const rows = paged.items;
-  const more = paged.more;
+  const pushDays = first.data?.push_days;
+  const counted = useMemo(() => dayCounts(bounds, pushDays), [bounds, pushDays]);
+  const runs = useDayGroups(rows, landedAt, dayHeading);
+  const groups = useMemo(() => {
+    const loaded = new Map<string, number>();
+    for (const p of rows) loaded.set(dayOf(p), (loaded.get(dayOf(p)) ?? 0) + 1);
+    return runs.map((g) => {
+      const day = dayOf(g.rows[0]!);
+      if (day === "") return g;
+      const aside = dayAside(loaded.get(day) ?? 0, counted.get(day), fmtDate(g.rows[0]!.at));
+      return { ...g, aside: <span title={aside.title}>{aside.text}</span> };
+    });
+  }, [rows, runs, counted]);
+  const refused = historyRefused(paged.error, paged.refusal, first.detail);
+  const filtered = by !== "" || when !== "";
+  const narrowed = `${by ? ` by ${by === "gitlet" ? "Gitlet" : whoName(by)}` : ""}${
+    when ? ` ${WHEN.find((w) => w.value === when)?.words ?? when}` : ""
+  }`;
+  const scannedTo = paged.more ? paged.answers.at(-1)?.push_scan?.to : undefined;
+  const clear = (
+    <Button size="small" variant="secondary" onClick={() => nav.filter({ by: null, when: null })}>
+      Clear filters
+    </Button>
+  );
 
-  return (
-    <>
-      {first.error === "not_found" ? (
+  const toolbar = (
+    <PageToolbar>
+      {toolbarLead}
+      <Select
+        size="sm"
+        width="auto"
+        value={by}
+        onChange={(value) => setBy(String(value))}
+        options={seats.options}
+        ariaLabel="Pushed by"
+        searchable
+        active={by !== ""}
+      />
+      <span title="By the time each push landed.">
+        <Select
+          size="sm"
+          width="auto"
+          value={when}
+          onChange={(value) => setWhen(String(value))}
+          options={WHEN.map((w) => ({
+            value: w.value,
+            label: w.label,
+            leading: <CalendarGlyph size="sm" />,
+          }))}
+          ariaLabel="Pushed"
+          active={when !== ""}
+        />
+      </span>
+      {total !== undefined && (
+        <span
+          className="code-pushes-total"
+          title={`Every push it has had; the history keeps the last ${PUSH_HISTORY_DAYS} days.`}
+        >
+          <strong>{fmtCount(total)}</strong> {total === 1 ? "push" : "pushes"} to {repo}
+        </span>
+      )}
+    </PageToolbar>
+  );
+
+  if (first.error === "not_found") {
+    return (
+      <>
+        {toolbar}
         <EmptyState
           icon={<UploadGlyph size={32} />}
           title={`No repository named “${repo}”`}
           description={first.detail ?? "It is not declared, or it has been purged."}
         />
+      </>
+    );
+  }
+  const feed = (
+    <>
+      {paged.loading && rows.length === 0 && refused === null && (
+        <Skeleton variant="text" rows={6} label={`Loading the pushes to ${repo}`} />
+      )}
+      {refused !== null ? (
+        <div className="code-pushes-refused">
+          <Callout variant="warning">{refused}</Callout>
+          {filtered && clear}
+        </div>
       ) : (
-        <>
-          {first.loading && rows.length === 0 && (
-            <Skeleton variant="text" rows={6} label={`Loading the pushes to ${repo}`} />
-          )}
-          <QueryState
-            error={first.error}
-            refusal={first.refusal}
-            detail={first.detail}
-            loading={first.loading}
-            empty={
-              rows.length > 0 || more
-                ? undefined
+        <QueryState
+          error={paged.error}
+          refusal={paged.refusal}
+          detail={first.detail}
+          loading={paged.loading}
+          empty={
+            rows.length > 0 || paged.more
+              ? undefined
+              : filtered
+                ? {
+                    title: `No push${narrowed}`,
+                    hint: `Clear the filters to read every push to ${repo}.`,
+                    action: clear,
+                  }
                 : {
                     title: `Nobody has pushed to ${repo} yet`,
                     hint: "A push is listed once its record applies: the refs it moved, who pushed and what it brought.",
                   }
-            }
-          >
-            <DataGrid<CodePushRow>
-              rows={rows}
-              rowKey={(p) => p.push_id}
-              // NEWEST FIRST IN LOG ORDER, the engine's: a head that sorted the
-              // pages loaded would answer a different question.
-              serverSorted
+          }
+        >
+          <div className="code-pushes-feed">
+            <CodeList<CodePushRow>
+              groups={groups}
+              look="timeline"
+              spine={UploadGlyph}
+              rowKey={pushIdOf}
               aria-label={`Pushes to ${repo}`}
-              columns={[
-                {
-                  key: "actor",
-                  header: "Pushed by",
-                  shrink: true,
-                  cell: (p) => <PushedBy push={p} seatBadge={seatBadge} />,
-                },
-                {
-                  key: "refs",
-                  header: "Refs",
-                  floor: "14rem",
-                  phoneLead: true,
-                  cell: (p) => <PushRefs push={p} repo={repo} />,
-                },
-                {
-                  key: "commits",
-                  header: "Commits",
-                  shrink: true,
-                  align: "right",
-                  // ABSENT IS NONE HERE: the count is omitted at zero, a push
-                  // that only moved or removed refs.
-                  cell: (p) => (
-                    <TableNumberCell value={p.introduced_count ?? 0} format={fmtCount} />
-                  ),
-                },
-                {
-                  key: "turn",
-                  header: "Turn",
-                  shrink: true,
-                  drop: 3,
-                  cell: (p) => <RunCell push={p} />,
-                },
-                {
-                  key: "via",
-                  header: "How",
-                  shrink: true,
-                  drop: 1,
-                  cell: (p) => <TableTextCell>{VIA_WORDS[p.via] ?? p.via}</TableTextCell>,
-                },
-                {
-                  key: "size",
-                  header: "Pack",
-                  shrink: true,
-                  align: "right",
-                  drop: 2,
-                  cell: (p) => (
-                    <TableNumberCell
-                      value={p.pack_bytes ?? null}
-                      format={fmtBytes}
-                      emptyLabel="No pack: nothing new to store"
-                    />
-                  ),
-                },
-                {
-                  key: "at",
-                  header: "When",
-                  shrink: true,
-                  align: "right",
-                  cell: (p) => <LandedAt at={p.at} />,
-                },
-              ]}
+              lead={(p) => <PushFace push={p} />}
+              title={(p) => <PushSentenceLine push={p} />}
+              titleAfter={(p) => <ChangeTitle push={p} />}
+              meta={(p) => <PushChips push={p} />}
+              facts={(p) => <PushFacts push={p} />}
+              below={(p) => <PushBelow push={p} repo={repo} />}
+              paged={paged}
+              moreLabel="Load older pushes"
+              foot={footOf(rows.length, paged.more, narrowed, scannedTo)}
             />
-          </QueryState>
-          {(rows.length > 0 || more || paged.pageError) && (
-            <div className="row gap-2 wrap">
-              {more ? (
-                <Button
-                  size="small"
-                  variant="secondary"
-                  onClick={paged.next}
-                  disabled={paged.paging}
-                  loading={paged.paging}
-                >
-                  Load older
-                </Button>
-              ) : (
-                <span className="t-caption">That is every push the repository keeps.</span>
-              )}
-              {/* BESIDE THE CONTROL, which asks the page again. */}
-              {paged.pageError && <PageFailed error={paged.pageError} />}
-              {rows.length > 0 && (
-                <span className="t-caption">{plural(rows.length, "push", "pushes")} listed</span>
-              )}
-            </div>
-          )}
-        </>
+          </div>
+        </QueryState>
+      )}
+    </>
+  );
+  return (
+    <>
+      {toolbar}
+      {rail ? (
+        <AsideLayout
+          fit="page"
+          sticky
+          asideLabel={`Pushes to ${repo}`}
+          aside={<PushesRail repo={repo} activity={activity} rules={rules} />}
+        >
+          {feed}
+        </AsideLayout>
+      ) : (
+        feed
       )}
     </>
   );
 }
 
 /**
- * Who pushed: the seat — a seat's own push, or the seat a person's credential
- * acts as — with the credential on the title; or, for a credential bound to no
- * seat, that credential.
+ * Under the rows: how many are loaded (and narrowed how), how far a narrowed read looked, and at
+ * the end how long the history keeps.
  */
-function PushedBy({
-  push,
-  seatBadge,
-}: {
-  push: CodePushRow;
-  seatBadge: ReturnType<typeof useSeatBadgeOf>;
-}) {
-  const seat = push.actor_seat || (push.actor_kind === "agent" ? push.actor : "");
-  if (!seat) {
+function footOf(count: number, more: boolean, narrowed: string, scannedTo?: string): ReactNode {
+  const loaded =
+    count === 0 ? "" : `${plural(count, "push", "pushes")}${narrowed} loaded, newest first`;
+  if (scannedTo) {
     return (
-      <span
-        className="mono"
-        title={
-          push.actor_kind === "system"
-            ? "The engine's own account"
-            : "A credential bound to no seat"
-        }
-      >
-        {push.actor}
-      </span>
+      <>
+        {loaded && `${loaded}. `}Looked back to <AgoTime value={scannedTo} />; Load older looks
+        further.
+      </>
     );
   }
-  // THE CREDENTIAL A PERSON PUSHED THROUGH is the record's own name for the
-  // push; the seat beside it is who it acts as.
-  const through = push.actor_kind === "agent" ? undefined : `through ${push.actor}`;
-  return <TableEntityCell {...plainSeat({ ...seatBadge(seat) })} title={through} />;
+  if (count === 0) return null;
+  if (more || narrowed) return loaded;
+  return `${loaded}. That is every push the history keeps: the last ${PUSH_HISTORY_DAYS} days.`;
 }
 
-/**
- * When a push landed, against the one clock — read HERE rather than by the
- * screen, so its tick re-renders this cell and nothing else of the grid.
- */
+/** Whom the seat filter offers: who pushed here, most first, then every other seat of the chart. */
+function usePusherChoices(pushers: CodePushers | undefined, by: string) {
+  const index = useOrgIndex();
+  const badge = useSeatBadgeOf();
+  return useMemo(() => {
+    const top = pushers?.top ?? [];
+    const kinds = new Map(
+      top.map((p) => [p.kind === "gitlet" ? "gitlet" : (p.handle ?? ""), p.kind]),
+    );
+    const kindOf = (handle: string) =>
+      kinds.get(handle) ??
+      (index.byHandle.has(handle)
+        ? index.byHandle.get(handle)!.kind === "human"
+          ? "person"
+          : "agent"
+        : undefined);
+    const faces = top
+      .filter((p) => p.kind !== "gitlet" && p.handle)
+      .slice(0, 3)
+      .map((p) => {
+        const seat = badge(p.handle!);
+        return { id: p.handle!, ...seatBadge(seat.name || p.handle!, seat.kind, seat.avatar) };
+      });
+    const option = (value: string, group?: string, hint?: number): SelectOption => {
+      const name = value === "gitlet" ? "Gitlet" : badge(value).name || value;
+      return {
+        value,
+        label: name,
+        text: `${name} ${value}`,
+        leading: <Face who={value === "gitlet" ? GITLET : value} />,
+        ...(group ? { group } : {}),
+        ...(hint !== undefined ? { hint: fmtCount(hint) } : {}),
+      };
+    };
+    const all: SelectOption = {
+      value: "",
+      label: "All seats",
+      ...(faces.length > 0
+        ? { leading: <AvatarStack members={faces} max={3} size="xs" decorative /> }
+        : {}),
+    };
+    const seats = [...index.seats].sort((a, b) => a.name.localeCompare(b.name));
+    let options: SelectOption[];
+    if (pushers) {
+      const named = top.filter((p) => p.kind === "gitlet" || p.handle);
+      const pushed = new Set(named.map((p) => (p.kind === "gitlet" ? "gitlet" : p.handle!)));
+      const here = `Pushed here in ${PUSHER_DAYS} days`;
+      options = [
+        all,
+        ...named.map((p) => option(p.kind === "gitlet" ? "gitlet" : p.handle!, here, p.pushes)),
+        ...(pushers.omitted
+          ? [
+              {
+                // NO HANDLE HOLDS A SPACE, so this line can never be a seat's value.
+                value: " more",
+                label: `and ${fmtCount(pushers.omitted)} more who pushed less`,
+                description: "Type a name to choose one",
+                disabled: true,
+                group: here,
+              },
+            ]
+          : []),
+        ...seats
+          .filter((s) => !pushed.has(s.handle))
+          .map((s) => option(s.handle, "Every other seat")),
+      ];
+    } else {
+      options = [all, option("gitlet"), ...seats.map((s) => option(s.handle))];
+    }
+    if (by !== "" && !options.some((o) => o.value === by)) options.push({ value: by, label: by });
+    return { options, kindOf };
+  }, [pushers, by, index, badge]);
+}
+
+/** The subject's face: a seat's or a person's, Gitlet's mark, or a credential bound to no seat. */
+function PushFace({ push }: { push: CodePushRow }) {
+  const subject = pushSubject(push);
+  if (subject.kind === "credential") {
+    return (
+      <IconTile size="sm" aria-hidden="true">
+        <KeyGlyph />
+      </IconTile>
+    );
+  }
+  return <Face who={subject.kind === "gitlet" ? GITLET : subject.handle} size="sm" />;
+}
+
+/** The sentence: the subject's name in the strong weight, then what the push did. */
+function PushSentenceLine({ push }: { push: CodePushRow }) {
+  const whoName = useWhoName();
+  const subject = pushSubject(push);
+  const sentence = pushWords(push);
+  return (
+    <span className="code-push-sentence">
+      {subject.kind === "credential" ? (
+        <strong className="mono">{subject.login}</strong>
+      ) : (
+        <strong>{whoName(subject.kind === "gitlet" ? GITLET : subject.handle)}</strong>
+      )}{" "}
+      {sentence.parts.map((part, i) => (
+        <Part key={i} part={part} />
+      ))}
+      {sentence.refused > 0 && (
+        <>
+          {" "}
+          <Tag variant="danger" size="xs">{`${fmtCount(sentence.refused)} refused`}</Tag>
+        </>
+      )}
+    </span>
+  );
+}
+
+function Part({ part }: { part: PushPart }) {
+  if (typeof part === "string") return <>{part}</>;
+  if ("change" in part) return <ChangeRefPill change={part.change} />;
+  if ("gone" in part) return <span className="mono">{part.gone}</span>;
+  return <RefChip gitRef={part.ref} />;
+}
+
+/** A ref in a sentence: a branch's chip, a tag's, or any other ref in the code face. */
+function RefChip({ gitRef }: { gitRef: string }) {
+  const ref = refName(gitRef);
+  if (ref.kind === "branch") return <BranchChip name={ref.name} />;
+  if (ref.kind === "tag") {
+    return (
+      <Tag appearance="outline" size="xs" leadingIcon={<TagGlyph size="xs" />}>
+        {ref.name}
+      </Tag>
+    );
+  }
+  return <span className="mono">{ref.name}</span>;
+}
+
+/** A merge's or a landing's change title after its sentence, and the changes beside it. */
+function ChangeTitle({ push }: { push: CodePushRow }) {
+  const landing = push.via === "merge" || push.via === "queue";
+  if (!push.change || (!landing && !push.changes_more)) return null;
+  return (
+    <span className="code-push-change" title={push.change.title}>
+      {landing && `· ${push.change.title}`}
+      {push.changes_more ? ` and ${plural(push.changes_more, "more change")}` : ""}
+    </span>
+  );
+}
+
+/** The turn's page, from a chip. */
+function TurnLink({ turn }: { turn: string }) {
+  return (
+    <>
+      {" · "}
+      <a className="t-link" href={href(["live", "turns", turn])}>
+        turn
+      </a>
+    </>
+  );
+}
+
+/** The chips under the sentence: the run or who asked, the credential, and how it was built. */
+function PushChips({ push }: { push: CodePushRow }) {
+  const whoName = useWhoName();
+  const run = push.run;
+  const asker = push.actor_seat || push.actor;
+  const landing = push.via === "merge" || push.via === "queue";
+  const model = run?.model
+    ? `Model ${run.model}${run.harness ? ` in ${run.harness}` : ""}`
+    : undefined;
+  return (
+    <>
+      {landing ? (
+        <Tag
+          appearance="outline"
+          size="xs"
+          title={model}
+          leadingIcon={<Face who={asker} size="text" />}
+        >
+          {push.via === "queue" ? "Queued by" : "Asked by"} <strong>{whoName(asker)}</strong>
+          {run?.turn_id && <TurnLink turn={run.turn_id} />}
+        </Tag>
+      ) : (
+        run?.turn_id && (
+          <Tag appearance="outline" size="xs" leadingIcon={<BotGlyph size="xs" />} title={model}>
+            {run.work_key ? (
+              <>
+                Run for{" "}
+                <strong className="mono" title={run.work_backend}>
+                  {run.work_key}
+                </strong>
+              </>
+            ) : (
+              "Run"
+            )}
+            <TurnLink turn={run.turn_id} />
+          </Tag>
+        )
+      )}
+      {push.actor_kind === "operator" && !landing && (
+        <Tag appearance="outline" size="xs" leadingIcon={<KeyGlyph size="xs" />}>
+          {credentialWords(push.actor)} <span className="mono">{push.actor}</span>
+        </Tag>
+      )}
+      <Tag appearance="outline" size="xs">
+        {VIA_WORDS[push.via] ?? push.via}
+      </Tag>
+    </>
+  );
+}
+
+/** At the row's end: when it landed, and its pack. */
+function PushFacts({ push }: { push: CodePushRow }) {
+  return (
+    <span className="code-push-facts">
+      <LandedAt at={push.at} />
+      {push.pack_bytes ? (
+        <span className="code-push-pack">
+          <PackageGlyph size="xs" aria-hidden />
+          {fmtBytes(push.pack_bytes)}
+        </span>
+      ) : (
+        <span className="code-push-pack" title="Nothing new to store">
+          No pack
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** When a push landed, against the one clock: its tick re-renders this alone. */
 function LandedAt({ at }: { at: string }) {
   const now = useNow();
-  return <TableDateCell value={at} now={now} />;
+  return <RelativeTime value={at} now={now} title={fmtDateTime(at)} />;
+}
+
+/** Under the row: its refs, and for a push refused whole, that nothing was stored and why. */
+function PushBelow({ push, repo }: { push: CodePushRow; repo: string }) {
+  const attempt = pushWords(push).attempt;
+  const detail = (push.commands ?? []).find((c) => c.result === "ng")?.detail?.replace(/\.$/, "");
+  return (
+    <>
+      <PushRefs push={push} repo={repo} />
+      {attempt && (
+        <p className="code-push-stored">
+          <ShieldGlyph size="xs" aria-hidden />
+          <span>
+            Nothing was stored{detail ? `: ${detail}` : ""}.{" "}
+            <a className="t-link prose-link" href={repoHref(repo, { tab: "settings" })}>
+              See its rules
+            </a>
+          </span>
+        </p>
+      )}
+    </>
+  );
 }
 
 /** Where the whole of one push is: not asked yet, on its way, read, not to be had, or refused. */
@@ -352,14 +647,8 @@ type WholePush =
 const UNREAD: WholePush = { state: "unread" };
 
 /**
- * A push's refs as its row draws them: those the history in brief carries —
- * its refused ones first, each with its reason — and how many it left out and
- * what became of them, with every ref one read of the push away. The push is
- * read once, the first time it is opened, and kept while the row is drawn.
- *
- * MEMOISED ON ITS ROW: the refs are the tallest thing a row draws, and only a
- * newer reading of the row changes them — never the clock, which the When
- * cell reads alone, nor a page landing below it.
+ * A push's refs as the history in brief carries them, the rest counted, and every ref one read of
+ * the push away. Memoised on its row, so the clock's tick draws no ref.
  */
 const PushRefs = memo(function PushRefs({ push, repo }: { push: CodePushRow; repo: string }) {
   const [whole, setWhole] = useState<WholePush>(UNREAD);
@@ -375,9 +664,7 @@ const PushRefs = memo(function PushRefs({ push, repo }: { push: CodePushRow; rep
       const answer = await codeRest.query("code_pushes", {
         name: repo,
         push: push.push_id,
-        // AT THE PUSH'S OWN POSITION, which every copy holding it has
-        // reached: a copy behind the page this row came from waits for it,
-        // rather than answering that the history holds no such push.
+        // AT THE PUSH'S OWN POSITION: a copy behind the page it came from waits for it.
         read_level: "session",
         min_position: [spellPosition(push.position)],
       });
@@ -401,9 +688,7 @@ const PushRefs = memo(function PushRefs({ push, repo }: { push: CodePushRow; rep
       {whole.state === "gone" && (
         <span className="t-caption">The history no longer holds this push.</span>
       )}
-      {/* SAID BESIDE THE CONTROL, which asks again: a push the reader asked
-          for once is asked again by the reader alone, so no banner that
-          promises a retry on its own. */}
+      {/* BESIDE THE CONTROL, which asks again: nothing retries on its own. */}
       {whole.state === "failed" && (
         <span className="t-caption" role="alert">
           {`Could not read this push (${whole.error}). Try again.`}
@@ -435,10 +720,7 @@ const PushRefs = memo(function PushRefs({ push, repo }: { push: CodePushRow; rep
   );
 });
 
-/**
- * What a push read in brief left out, in a line: how many, and what became of
- * them — the refusals first, in the tone every failure mark wears.
- */
+/** What a push read in brief left out: how many, and what became of them, refusals first. */
 function Omitted({ outcomes, total }: { outcomes: readonly OutcomeCount[]; total: number }) {
   return (
     <span className="t-caption">
@@ -458,11 +740,8 @@ function Omitted({ outcomes, total }: { outcomes: readonly OutcomeCount[]; total
 }
 
 /**
- * Every ref a push asked to move, and what became of each, one per line: its
- * glyph (a branch, or a tag), its name, the word for what became of it, and
- * the commits it moved between — a moved ref's two ids the way to the
- * comparison of what the push changed on it, a created ref's id the way to
- * the commit it was made at.
+ * Each ref a push asked to move, one block each: its glyph, what became of it, its name, and the
+ * commits it moved between (the comparison), was made at, or was deleted from.
  */
 function Commands({ commands, repo }: { commands: readonly CodePushCommand[]; repo: string }) {
   return (
@@ -470,49 +749,20 @@ function Commands({ commands, repo }: { commands: readonly CodePushCommand[]; re
       {commands.map((c) => {
         const ref = refName(c.ref);
         const word = commandWord(c);
-        const moved = c.result === "ok" && word !== "created" && word !== "deleted";
+        const ok = c.result === "ok";
+        const Glyph = ref.kind === "tag" ? TagGlyph : GitBranchGlyph;
         return (
           <span key={c.ref} className="code-push-ref" title={c.ref}>
-            {ref.kind === "tag" ? (
-              <BookmarkGlyph size="sm" className="code-glyph" />
-            ) : (
-              <GitBranchGlyph size="sm" className="code-glyph" />
-            )}
-            {/* A TAG IS SAID AS ONE, beside its glyph: the glyph is a
-                bookmark, which no reader takes for a tag unaided. */}
-            <span className="code-push-ref__name">
-              {ref.kind === "tag" ? `tag ${ref.name}` : ref.name}
-            </span>
+            <Glyph size="sm" className="code-glyph" />
             {c.result === "ng" ? (
-              // A REFUSAL IS THE DANGER TONE, the one every failure mark
-              // wears, its reason the engine's own word.
-              <Tag variant="danger" title={c.detail || c.reason || undefined}>
-                {c.reason ? `refused: ${c.reason}` : word}
+              <Tag variant="danger" size="xs" title={c.detail || c.reason || undefined}>
+                {c.reason ? `refused: ${c.reason.replaceAll("_", " ")}` : word}
               </Tag>
             ) : (
-              <span className="code-push-ref__word">{word}</span>
+              <strong className="code-push-ref__word">{word}</strong>
             )}
-            {c.result === "ok" && word === "created" && (
-              <a className="mono t-link" href={commitHref(repo, c.new)} title={c.new}>
-                {shortOID(c.new)}
-              </a>
-            )}
-            {c.result === "ok" && word === "deleted" && (
-              <span className="mono muted" title={c.old}>
-                {shortOID(c.old)}
-              </span>
-            )}
-            {moved && (
-              // THE IDS A REF MOVED BETWEEN, as the comparison that reads
-              // what the push changed on it: base its old, head its new.
-              <a
-                className="mono t-link"
-                href={compareHref(repo, { base: c.old, head: c.new })}
-                title={`${c.old}..${c.new}`}
-              >
-                {`${shortOID(c.old)}..${shortOID(c.new)}`}
-              </a>
-            )}
+            <span className="code-push-ref__name">{ref.name}</span>
+            <RefIds command={c} word={ok ? word : ""} repo={repo} />
           </span>
         );
       })}
@@ -520,29 +770,51 @@ function Commands({ commands, repo }: { commands: readonly CodePushCommand[]; re
   );
 }
 
-/**
- * A seat's push: the turn that made it and the work item it is charged to, as
- * the engine stamped them; nothing for a person's, which carries none.
- *
- * THE WORK ITEM IS ITS KEY, NOT A LINK. The stamp names the item by the key its
- * tracker showed and by no id, and a task is addressed by its key only where
- * no other task claimed that key first (`lib/work.ts`'s `itemAddress`), which
- * nothing here can tell. The turn's own page names the item as its record
- * does, one press away.
- */
-function RunCell({ push }: { push: CodePushRow }) {
-  const run = push.run;
-  if (!run?.turn_id) return null;
-  return (
-    <span className="row gap-1 nowrap" title={run.model ? `Model ${run.model}` : undefined}>
-      {run.work_key && (
-        <span className="mono t-caption item-key" title={run.work_backend}>
-          {run.work_key}
-        </span>
-      )}
-      <a className="t-link" href={href(["live", "turns", run.turn_id])}>
-        turn →
+/** The ids a ref moved between (the comparison), was made at, or held when deleted or refused. */
+function RefIds({
+  command: c,
+  word,
+  repo,
+}: {
+  command: CodePushCommand;
+  word: string;
+  repo: string;
+}) {
+  if (word === "created") {
+    return (
+      <span className="code-push-ref__ids">
+        at{" "}
+        <a className="mono t-link prose-link" href={commitHref(repo, c.new)} title={c.new}>
+          {shortOID(c.new)}
+        </a>
+      </span>
+    );
+  }
+  if (word === "deleted") {
+    return (
+      <span className="mono muted" title={c.old}>
+        {shortOID(c.old)}
+      </span>
+    );
+  }
+  if (word === "moved" || word === "forced") {
+    return (
+      <a
+        className="mono t-link code-push-ref__ids"
+        href={compareHref(repo, { base: c.old, head: c.new })}
+        title={`${c.old}..${c.new}`}
+      >
+        {`${shortOID(c.old)} → ${shortOID(c.new)}`}
       </a>
-    </span>
-  );
+    );
+  }
+  // A REFUSED REF STORED NOTHING: its ids are words, never a comparison of commits not kept.
+  if (c.result === "ng") {
+    return (
+      <span className="mono muted code-push-ref__ids" title={`${c.old}..${c.new}`}>
+        {`${shortOID(c.old)} → ${shortOID(c.new)}`}
+      </span>
+    );
+  }
+  return null;
 }

@@ -23,12 +23,11 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY WRITE SENTINEL HAS ITS OWN CLASS, because the class is what a person's
-// surface acts on and the sentence is not: a stale version is re-read and
-// offered again, a lost race is retried, a spent hand-off budget is never
-// retried, an authority refusal names whom to ask, and a log that refused the
-// append is this node's condition. Each row is wrapped the way the writer
-// wraps it, so a mapping that matched the sentinel only when bare would fail.
+// EVERY WRITE SENTINEL HAS ITS OWN CLASS: a person's surface acts on the
+// class, not the sentence (a stale version is re-read, a lost race retried, a
+// spent hand-off budget never retried, an authority refusal names whom to ask,
+// a refused append is this node's condition). Each row is wrapped as the
+// writer wraps it, so a mapping that matched only the bare sentinel fails.
 func TestWriteFailureClassesEachSentinel(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -47,8 +46,8 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		// one — read_through — so it is not a content refusal either.
 		{"inbox full", fmt.Errorf("x: %w", inbox.ErrFull), tools.RefusalInboxFull},
 		// A SECOND ANSWER THAT LOST THE RACE is refused by the write's own
-		// snapshot, after the thread read passed it — typed, naming who
-		// answered. It is not the node's failure and not a retry.
+		// snapshot after the thread read passed it, typed and naming who
+		// answered: neither the node's failure nor a retry.
 		{"already answered", fmt.Errorf("x: %w", &worklet.AlreadyAnsweredError{
 			Task: "t-1", Comment: "c-1", By: "ana"}), tools.RefusalAlreadyAnswered},
 		// A maintenance or sealed fleet has no publisher and an evicted,
@@ -81,9 +80,8 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		// node is stopping, which is a condition too.
 		{"event queue not live", fmt.Errorf("x: %w", queue.ErrNotLive),
 			tools.RefusalUnavailable},
-		// THE WRITER'S OWN REFUSAL ON CONTENT, marked, which names what
-		// it refused: offering a retry for it would be a retry that
-		// never lands.
+		// THE WRITER'S OWN REFUSAL ON CONTENT names what it refused: a
+		// retry offered for it never lands.
 		{"refused on content", fmt.Errorf("worklet: field estimate is exact "+
 			"to two places: %w", worklet.ErrInvalid), tools.RefusalInvalid},
 		{"text past its cap", fmt.Errorf("x: %w", &worklet.TextCapError{
@@ -102,43 +100,37 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 			Err: errors.New("task t1 was removed by jane; restore it first")},
 			tools.RefusalConflict},
 		// EVERY OTHER REFUSAL A DOMAIN DECIDED is its class too
-		// ([WriterClass]): with no arm of its own here each fell to the
-		// fault, and told a caller the node had broken over a comment
-		// that is not there or a remark that is not theirs.
+		// ([WriterClass]), never a fault blaming the node.
 		{"a comment that is not there", fmt.Errorf("x: %w", worklet.ErrNoComment),
 			tools.RefusalNotFound},
 		{"a project that is not there", fmt.Errorf("x: %w", worklet.ErrNoProject),
 			tools.RefusalNotFound},
 		{"a remark that is not the caller's", fmt.Errorf("x: %w", worklet.ErrNotAuthor),
 			tools.RefusalForbidden},
-		// AND THE DOMAIN'S CLASS IS TAKEN BEFORE A CONDITION ITS ERROR
-		// ALSO CARRIES: a file filed under a project this node does not
-		// hold wraps the log's unavailable beside the domain's own
-		// sentinel, as the tracker writes it, and is the not-found its
-		// sentinel names — the project may be on its way, and the
-		// sentence says so.
+		// AND THE DOMAIN'S CLASS WINS OVER A CONDITION ITS ERROR ALSO
+		// CARRIES: a project this node does not hold yet wraps the log's
+		// unavailable beside the domain's sentinel, as the tracker writes
+		// it, and is that sentinel's not-found, whose sentence says the
+		// project may be on its way.
 		{"a project not on this node yet", fmt.Errorf("%w: %s (or it is not on this node yet: %w)",
 			worklet.ErrNoProject, "ENG", statelog.ErrUnavailable), tools.RefusalNotFound},
 		// A GESTURE STOPPED AT A STEP WHOSE OUTCOME IS UNKNOWN may have
-		// written part of what it asked for, so it is never a refusal of
-		// what was asked: it is the class an interrupted call answers,
-		// the node's and not the request's — see [writeCause].
+		// written part of what it asked for, so it is the node's
+		// interrupted-call class, never a refusal of what was asked
+		// ([writeCause]).
 		{"a step whose outcome is unknown", fmt.Errorf("x: %w",
 			worklet.ErrStepUnresolved), tools.RefusalUnavailable},
 		{"a step this node cannot vouch for", fmt.Errorf("x: %w",
 			worklet.ErrStepUnvouched), tools.RefusalUnavailable},
-		// AN UNMARKED FAILURE IS THE NODE'S, AND A FAULT. These arrive raw
-		// from the publisher and the writer's own reads — telling a person
-		// to fix their input over a disk error is one lie these rows pin,
-		// and telling them to come back in two seconds, for ever, is the
-		// other.
+		// AN UNMARKED FAILURE IS THE NODE'S, AND A FAULT: neither "fix
+		// your input" over a disk error nor "come back in two seconds",
+		// for ever.
 		{"ledger unreadable", errors.New("statelog: read the operation " +
 			"ledger: disk I/O"), tools.RefusalInternalError},
 		// THE WORDS ARE NOT THE MARK: "database is locked" a store did not
 		// mark busy, and "no responders" a queue did not mark unavailable,
-		// stay faults — the marks are what their own packages decided, and
-		// a classifier reading text would call any error naming a lock a
-		// wait.
+		// stay faults; a classifier reading text would call any error
+		// naming a lock a wait.
 		{"re-spread unreadable", errors.New("worklet: read the re-spread " +
 			"window in ENG: database is locked"), tools.RefusalInternalError},
 		{"broker words with no mark", errors.New("publish x: nats: no " +
@@ -198,13 +190,9 @@ func TestAReusedOperationIsTheCallersToChange(t *testing.T) {
 }
 
 // A CONTENT REFUSAL IS THE WRITER'S SENTENCE. The invalid class is the one a
-// caller corrects its call by — "the sentence names the argument" — so it must
-// not carry the node-failure wording written for a failure the call did not
-// meet, nor anything the caller never sent. A title
-// filed from the dashboard at 600 bytes came back as "create_work_item did not
-// land (worklet: the title on task 68c5… is 600 bytes …). The change was NOT
-// made — do not report it as done." — a tool name, a Go error prefix, the id
-// of a task that was never created, and an instruction meant for a model.
+// caller corrects its call by, so it carries neither the node-failure wording
+// nor what the caller never sent: a tool name, a Go error prefix, the id of a
+// task never created.
 func TestAContentRefusalIsTheWritersSentence(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -281,12 +269,12 @@ func TestPageWriteFailureClassesEachSentinel(t *testing.T) {
 	}
 }
 
-// EVERY CHAT SENTINEL HAS ITS OWN CLASS, on [TestPageWriteFailureClassesEachSentinel]'s
-// reasoning — and the chat store wraps every refusal it decides on what was
-// asked in one of them, so the unmarked remainder is this node's: a condition
-// waiting clears, or a fault. Every row is shaped the way the store builds it:
-// a field refusal from a payload's own validation, the rest wrapping their
-// mark with the sentence after it.
+// EVERY CHAT SENTINEL HAS ITS OWN CLASS, as in
+// [TestPageWriteFailureClassesEachSentinel]: the chat store wraps every
+// refusal of what was asked in one, so the unmarked remainder is this node's
+// (a condition waiting clears, or a fault). Each row is shaped as the store
+// builds it: a field refusal from a payload's own validation, the rest
+// wrapping their mark with the sentence after it.
 //
 // Mutation: drop any arm of chatClass and its row goes red.
 func TestChatWriteFailureClassesEachSentinel(t *testing.T) {
@@ -308,8 +296,7 @@ func TestChatWriteFailureClassesEachSentinel(t *testing.T) {
 		{"not this actor's", fmt.Errorf("%w: message m1 was written by ana",
 			chatlet.ErrForbidden), tools.RefusalForbidden},
 		// A ROOM A NEWER PEER MADE is this node's to serve once upgraded,
-		// never a permission: told "forbidden", a caller stops asking for
-		// something that lands the moment this node is upgraded.
+		// never a permission: told "forbidden", a caller stops asking.
 		{"a room of a kind this build does not know", fmt.Errorf("%w: room-1 is "+
 			"a \"guild\" room", chatlet.ErrUnknownKind), tools.RefusalUnavailable},
 		{"a name somebody holds", fmt.Errorf("%w: launch", chatlet.ErrNameTaken),
@@ -321,8 +308,7 @@ func TestChatWriteFailureClassesEachSentinel(t *testing.T) {
 		{"no such room", fmt.Errorf("%w: room room-1", chatlet.ErrNotFound),
 			tools.RefusalNotFound},
 		// THE LOG'S OWN REFUSAL is the node's condition, and anything
-		// unmarked its fault: a person told to fix their input over a disk
-		// error is the lie these rows pin.
+		// unmarked its fault, never the caller's input.
 		{"log refused", &statelog.Unavailable{Reason: statelog.ReasonDeferred},
 			tools.RefusalUnavailable},
 		{"timed out", fmt.Errorf("x: %w", context.DeadlineExceeded), tools.RefusalUnavailable},
@@ -340,9 +326,8 @@ func TestChatWriteFailureClassesEachSentinel(t *testing.T) {
 }
 
 // AND A REFUSAL OF WHAT A CHAT CALL ASKED IS THE STORE'S OWN SENTENCE: the
-// field, the rule or the room it names, without the package's Go prefix, and
-// none of the wording a tool tells a model about a failure of the node, since
-// nothing failed: the call was refused for what it asked.
+// field, rule or room it names, without the Go prefix and without the
+// node-failure wording, since nothing failed.
 func TestAChatRefusalIsTheStoresOwnSentence(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -377,11 +362,9 @@ func TestAChatRefusalIsTheStoresOwnSentence(t *testing.T) {
 }
 
 // A CHAT WRITE NOBODY ANSWERED IS UNKNOWN, and nothing wrapping the answer
-// turns it back. A post the router sent to a data node that never answered
-// may have been said; send_dm's post after its open rewrote every node-class
-// answer as "the message was NOT sent", and that class is the one an unknown
-// outcome is answered in — so the mapper's unknown would reach the caller as a
-// refusal saying the opposite.
+// turns it back: a post sent to a data node that never answered may have been
+// said, so neither the mapper nor send_dm's post after its open may say it was
+// NOT sent.
 func TestAChatWriteNobodyAnsweredIsUnknown(t *testing.T) {
 	t.Parallel()
 	err := fmt.Errorf("%w (chat.post, asked of data-1, data-2)", estate.ErrOutcomeUnknown)
@@ -451,11 +434,8 @@ func TestTheSharedRefusalsCarryTheirClass(t *testing.T) {
 }
 
 // A READ REFUSED FOR WHAT IT ASKED IS TOLD WITHOUT A PACKAGE'S NAME, wherever
-// in the message it sits: a feed's `since` on another log is the tracker's
-// refusal wrapping the framework's ("worklet: this read's request cannot be
-// run: since: statelog: a position on another log: …"), and readFailure
-// printed it whole. The log it is on stays named, because that is what to
-// change.
+// in the message it sits (a feed's `since` on another log nests statelog's
+// refusal in worklet's). The log it is on stays named: that is what to change.
 //
 // Mutation: print the error with %v again in readFailure, or drop "statelog: "
 // from ReadRefusalSentence, and a row goes red.
@@ -479,11 +459,9 @@ func TestARefusedReadIsToldWithoutAPackagesName(t *testing.T) {
 	}
 }
 
-// AN `answers` THE READER REFUSES IS NOT A READ FAILURE. Each of these used to
-// reach the model as "could not read the tracker — try again", a retry that
-// refused identically; each has its own class because each asks a different
-// thing of the caller, and a failure the reader did NOT write stays the read
-// failure it is.
+// AN `answers` THE READER REFUSES IS NOT A READ FAILURE, whose "try again"
+// would refuse identically: each has its own class, asking a different thing
+// of the caller, and a failure the reader did NOT write stays a read failure.
 func TestAnAnswerTheReaderRefusesCarriesItsClass(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -509,9 +487,9 @@ func TestAnAnswerTheReaderRefusesCarriesItsClass(t *testing.T) {
 	}
 }
 
-// A NOTE LIST CUT TO A LIMIT SAYS HOW MANY IT LEFT OFF. The filter picks up to
-// eight; the default shows every one of them, and a smaller limit is a
-// narrowing the answer admits to rather than a list that reads as complete.
+// A NOTE LIST CUT TO A LIMIT SAYS HOW MANY IT LEFT OFF. The default shows
+// every pick (up to [noteLimit]); a smaller limit admits what it narrowed
+// rather than reading as complete.
 func TestRefreshMemorySaysWhatALimitLeftOff(t *testing.T) {
 	t.Parallel()
 	entries := make([]learning.DiaryEntry, noteLimit)
@@ -528,10 +506,9 @@ func TestRefreshMemorySaysWhatALimitLeftOff(t *testing.T) {
 	}
 }
 
-// AN AMBIGUOUS ANSWER'S CANDIDATES ARE WHOLE OR BY REFERENCE. They were the
-// first hundred and twenty characters of each, unmarked, so two questions that
-// opened alike read as one question asked twice — and the refusal exists to
-// tell them apart.
+// AN AMBIGUOUS ANSWER'S CANDIDATES ARE WHOLE OR BY REFERENCE, never cut: two
+// questions that open alike would read as one asked twice, and the refusal
+// exists to tell them apart.
 func TestAmbiguousAnswerCandidatesAreWholeOrReferenced(t *testing.T) {
 	t.Parallel()
 	opening := strings.Repeat("About the release plan for next week, ", 4)
@@ -554,9 +531,7 @@ func TestAmbiguousAnswerCandidatesAreWholeOrReferenced(t *testing.T) {
 }
 
 // A MODE THIS BUILD DOES NOT KNOW IS REFUSED NAMING THE ONES IT DOES, in the
-// tool's own words: the parser's error opens with its package, which both
-// searches printed after their own name ("search_knowledge: knowledge: unknown
-// search mode …").
+// tool's own words, without the parser's package prefix.
 //
 // Mutation: print the parser's error again and the prefix check goes red.
 func TestAModeThisBuildDoesNotKnowIsRefusedNamingTheOnesItDoes(t *testing.T) {

@@ -11,10 +11,8 @@ import (
 )
 
 // A PERSON IS NAMED BY `@handle` OR BY THE NAME THE CHART GIVES THEM, NEVER BY
-// A COMMON WORD (ADR-0122): a handle or a one-word name that is also an
-// ordinary word (`will`, `may`, `max`) is not matched where the text uses the
-// word, so a date wait whose reason says "the release will be cut Friday" waits
-// on nobody; `@will` and "Will Turner" name the person.
+// A COMMON WORD (ADR-0122): "the release will be cut Friday" waits on nobody;
+// `@will` and "Will Turner" name the person.
 //
 // Mutation: match a bare handle as a whole word, and "the release will be cut
 // Friday" waits on will.
@@ -62,12 +60,11 @@ func (r *roundTrip) readyNaming(handle string, people []worklet.PersonSeat) work
 }
 
 // AN AGENT'S WAIT ON A PERSON IT HAS NOT ASKED IS READY BEFORE ITS DATE
-// (ADR-0122): a wait until a later date whose reason names a person comes back
-// to its holder, naming them, however long ago it was written; it does not
-// when its reason names nobody, when no person is declared, when a person
-// wrote the wait, when the holder already asked on the item (it is held on
-// that question), or when the agent that set the wait asked that person; and a
-// wait whose writer asked one person it names still comes back for another.
+// (ADR-0122): a dated wait whose reason names a person comes back to its
+// holder, naming them; not when it names nobody, no person is declared, a
+// person wrote it, the holder already asked on the item, or the wait's writer
+// asked that person; it still comes back for a named person its writer did
+// not ask.
 //
 // Mutation: drop the wait block from the ready read, and the item sits out its
 // date with nobody asked; read the writer's asks from the holder alone, and a

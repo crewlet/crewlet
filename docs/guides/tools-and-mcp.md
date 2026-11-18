@@ -751,7 +751,7 @@ is woken, never shown an inbox ([How a person learns they have work](../concepts
 **Nor is `code_mark_viewed`**, which the operator catalogue serves beside the
 code writes: a person's own marks over the files of a change they review, each
 at the object id and mode they read, kept while the change is a draft or open,
-which the change's Files tab reads back. It writes the caller's own record
+which the change's Files changed tab reads back. It writes the caller's own record
 alone and takes `gitlet`. A seat is never offered it: a seat reviews a change
 whole and keeps no viewed files ([Viewed files](../concepts/gitlet.md#viewed-files)).
 
@@ -1387,9 +1387,10 @@ mcp_servers:
   a box lists is refused at that box's entry. The seat still reaches the server's
   tools over the bridge, each at its level. A stored revision that breaks the
   rule runs, its boxes given no such server, and warns.
-- **A change of level restarts the server's instances**, as a change to its
-  `tool_prefix` or `tool_annotations` does: a server's tools are filed when the
-  engine starts it.
+- **A change of level restarts nothing**, nor does a change to a server's
+  `tool_prefix` or `tool_annotations`: the engine files the server's tools
+  again from the listing it last answered, and its instances run on. A call
+  Always allow answers is made on the process it was held for.
 
 The server's Tools tab writes the levels with
 [`PUT /mcp-servers/{name}/tools`](../reference/api-endpoints.md#put-mcp-serversnametools),
@@ -2121,7 +2122,9 @@ surface answers one — and a first-party tool that failed without a class — a
 `internal_error`: neither has a remedy the caller can apply. What the engine
 refuses **about** a server is classed: a call to one that is not running
 (down and being restarted, or stopped), or whose session ended with the call
-in flight, is `unavailable`, in the engine's own words. See
+in flight, is `unavailable`, in the engine's own words, and one made while the
+server was replaced by a process that lists the tool otherwise is
+`stale_version`. See
 [A server that dies, or will not start](#a-server-that-dies-or-will-not-start).
 
 ---
@@ -2283,6 +2286,18 @@ into the new spec, as it does a running child whose spec moved, since a restart
 from the old spec would bring back what the revision replaced. A child whose
 start failed is the reconcile's to retry, as before.
 
+**A restart into a new spec drops no call.** Only what the process runs from
+moves a spec: its command, arguments, environment, URL, headers, timeouts and
+the credentials they resolve, an issued one renewed included. The old process
+is stopped before the new one starts, so a seat's child never runs twice, but
+the calls in flight answer first: the restart waits for them, up to the
+server's request timeout (`server_replacement_waiting`). A call made while the
+server is replaced waits and is made on the new process, where it lists the
+tool unchanged at a level that asks no less; otherwise the call is refused
+unsent, as `stale_version` where the tool changed and `unavailable` where the
+new process did not come up. A box's harness is told to wait that long for a
+call ([How long a box waits](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
+
 On the node's [status record](../concepts/coordination.md#its-status-record),
 and so on the **Servers** tab of Settings › MCP & tools (`GET /mcp-servers`), a
 server that is down counts as failed, with what took it down, until it is back.
@@ -2296,6 +2311,8 @@ server that is down counts as failed, with what took it down, until it is back.
 | `server_restarted` | info | The server is back: `attempt`, `down_seconds`, and what took it down in `was` |
 | `server_catalogue_changed` | info | It came back with different tools: `added`, `removed` |
 | `server_restart_requested` | info | A person's [restart](#restarting-a-server-now) ended its session, and a fresh one is starting at once |
+| `server_replacement_waiting` | info | A restart into a new spec is waiting for `calls_in_flight` to answer before it stops the old process |
+| `server_refiled` | info | A revision moved the server's tool levels, `tool_prefix` or `tool_annotations`: its tools were filed again and its process runs on |
 | `mcp_restart_applied` | info | A node restarted, or tried now, what a person's restart asked of it: `restarted` and `retried` instances, `by` |
 
 A server that keeps logging `server_exited` soon after each `server_restarted`

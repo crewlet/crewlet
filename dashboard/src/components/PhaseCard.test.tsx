@@ -544,7 +544,8 @@ describe("an executor round's launches", () => {
     launchId: "job-1",
     model: "claude-sonnet-5",
     response: "Fixed the flake and opened the pull request.",
-    transcript: "[tool] bash: git clone\n[tool] bash: go test ./...",
+    transcript:
+      "[tool 1] bash: git clone\n[ok 1 900ms]\n[tool 2] bash: go test ./...\n[ok 2 4100ms]",
     inputTokens: 9_000,
     outputTokens: 700,
     totalTokens: 9_700,
@@ -562,6 +563,7 @@ describe("an executor round's launches", () => {
     const activity = screen.getByRole("button", { name: /^Activity/ });
     fireEvent.click(activity);
     expect(screen.getByText(/go test \.\/\.\.\./)).toBeDefined();
+    expect(screen.getByText("4.1s")).toBeDefined();
   });
 
   // THE ROUND'S FIGURE IS WHAT THE ROUND SPENT. The executor's record states
@@ -746,7 +748,7 @@ describe("an executor round's launches", () => {
           phase({
             ...LAUNCH,
             transcript:
-              "[tool] Bash: go test ./...\n(1200 line(s), 380 KiB, left out here)\nAll green.",
+              "[tool 1] Bash: go test ./...\n[note] 1200 line(s), 380 KiB, left out here\nAll green.",
             transcriptElidedLines: 1200,
             transcriptElidedBytes: 389_120,
           }),

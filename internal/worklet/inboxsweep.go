@@ -10,58 +10,29 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The inbox retention sweep.
+// The inbox retention sweep: it ages out the per-recipient rows of
+// `tracker_notifications` past the company's `inbox.retention_days`. A notice
+// is a pointer at a history row; only the mailbox entry ages out, and the
+// history it points at is untouched.
 //
-// # It was designed, indexed, configured — and never written
-//
-// `tracker_notifications` ships `tracker_notifications_swept_idx ON
-// (created_at)`, whose migration comment names "the per-node inbox retention
-// sweep, which is a range delete". The inbox horizon — the company's
-// `inbox.retention_days` now — is a validated company setting with a default,
-// a floor and a ceiling, and its doc says it is "the one horizon here that
-// deletes anything". Nothing deleted anything: the horizon was read at APPLY
-// time, where it stops a whole-log replay rebuilding an expired inbox, and no
-// row ever aged out afterwards.
-//
-// So every routed change wrote a row per recipient and kept it for the life of
-// the deployment — on every data node, since each applies the same log. That
-// is the exact failure the maintenance package doc names about the
-// `<domain>_ops` tables, one table over.
-//
-// # [maintenance.NodeLocal], and the table's class is why
-//
-// `tracker_notifications` is [statelog.Divergent]: it travels inside a
-// snapshot but is NOT in the identity claim, because what it holds depends on
-// the epoch's own horizon. Two nodes on different epochs legitimately hold
-// different rows, so deleting on this node's own authority breaks nothing —
-// and a fleet singleton would sweep one node and let the table grow for ever
-// on every other, which looks exactly like a sweep that is working to the
-// operator who checks the node it ran on.
-//
-// # The history is untouched
-//
-// A notice is a POINTER at a history row, and the history answers for ever.
-// What ages out is the mailbox entry, which is what the config doc promises:
-// "the history it points at is untouched".
+// It is [maintenance.NodeLocal] because the table is [statelog.Divergent]:
+// outside the identity claim, so two nodes on different epochs legitimately
+// hold different rows and deleting on this node's own authority breaks
+// nothing. A fleet singleton would sweep one node and let the table grow on
+// every other.
 
 // InboxJobs is the sweep for a person's inbox rows, over the replicated estate
 // db: the zero handle is a node with no tracker to sweep, which contributes no
 // job rather than one that fails every tick.
 //
-// # retention is ASKED AT EVERY SWEEP, and never held as a value
-//
-// The applier declines to write an inbox row for a record older than the
-// horizon, reading it off the epoch at every batch, and [purgeInbox] deletes
-// exactly the rows a replay would decline to write — the two must hold ONE
-// horizon, or an inbox grows back on every reanchor by the width of their
-// disagreement. The horizon is the company's `inbox.retention_days` and an
-// apply moves it under a running node; the applier follows an activation from
-// its next batch, so the sweep follows it from its next tick — handed a
-// value, it kept the horizon the node's first company stated for the life of
-// the process while the applier moved on. So it is the job's [maintenance.Job.Horizon], which the worker
-// asks afresh on every sweep and derives the cutoff from — and a horizon of
-// zero or less is refused there rather than read as "retain nothing", which
-// would empty every inbox. See [maintenance.Horizon].
+// The applier declines to write an inbox row older than the horizon, read off
+// the epoch at every batch, and [purgeInbox] deletes exactly those rows: the
+// two must hold ONE horizon, or an inbox grows back on every reanchor. An
+// apply moves `inbox.retention_days` under a running node, so retention is
+// the job's [maintenance.Job.Horizon], asked afresh on every sweep rather than
+// held as a value; a horizon of zero or less is refused there rather than
+// read as "retain nothing", which would empty every inbox. See
+// [maintenance.Horizon].
 func InboxJobs(db store.ReplicatedHandle, retention maintenance.Horizon) []maintenance.Job {
 	if db.IsZero() {
 		return nil
@@ -76,20 +47,14 @@ func InboxJobs(db store.ReplicatedHandle, retention maintenance.Horizon) []maint
 
 // purgeInbox deletes the notification rows authored before the cutoff.
 //
-// ON THE AUTHORED INSTANT, which is the column the index is on and the one the
-// applier's own horizon compares against — so a row this sweep deletes is
-// exactly a row a replay would decline to write. Comparing on the effective
-// instant instead would make the two disagree, and an inbox would grow back on
-// every reanchor by the width of that disagreement.
+// It compares the AUTHORED instant, the indexed column the applier's horizon
+// also compares, so it deletes exactly what a replay would decline to write;
+// the effective instant would let the inbox grow back on every reanchor.
 //
-// A POOLED TRANSACTION, NOT A PIN. A pin keeps a LONG-LIVED writer out of the
-// pool's competition; this runs once a tick and is done, so a pin here is a
-// per-run pin and unpin with the declared-count bookkeeping attached — and
-// every pin the replicated estate declares belongs to a domain's applier for
-// the life of the process, so asking for one was refused on every tick of a
-// running node. A pooled write transaction takes the same write lock through
-// the same queue (see internal/store's writequeue.go), which is all this
-// needs.
+// A pooled write transaction, not a pin: every pin the replicated estate
+// declares belongs to a domain's applier for the process's life, so a pin
+// would be refused every tick, and the pooled transaction takes the same
+// write lock through the same queue (internal/store's writequeue.go).
 func purgeInbox(ctx context.Context, db store.ReplicatedHandle, cutoff time.Time) (int64, error) {
 	var swept int64
 	err := db.Tx(ctx, func(tx *sql.Tx) error {

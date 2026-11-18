@@ -20,11 +20,10 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// restartBridge stands in for this node's process starting again under a run
-// that is still out: a fresh bridge on the same keyring holding no session,
-// served on a listener of its own. It answers the URL the run's box dials once
-// it is pointed at the new listener: the token, the box's half of the URL, is
-// unchanged.
+// restartBridge stands in for this node's process restarting under a run still
+// out: a fresh bridge on the same keyring, holding no session, on a listener of
+// its own. It answers the URL the box dials once pointed at the new listener;
+// the token, the box's half of the URL, is unchanged.
 func restartBridge(t *testing.T, e *Engine, endpoint string) string {
 	t.Helper()
 	fresh := bridgeFor(t, mcpbridge.Options{
@@ -61,14 +60,12 @@ func parkOnARun(t *testing.T, e *Engine, rig *runRig, runID string) string {
 }
 
 // A NODE THAT RECOVERS A RUNNING JOB SERVES ITS BOX AGAIN, FROM THE TURN IT
-// PARKED. Every bridge session lives in the process that opened it, so a
-// restart drops them all — while the run goes on, and its box keeps dialing
-// with the token it was handed. As the node takes the seat back it rebuilds
-// the run's surface from the park a real turn wrote ([Engine.reopenAgentRun],
-// the coordinator's Recovered hook), opens the job again under that token, and
-// the box's next call — its submit_work, here — lands on the run's row as any
-// call does: refused, the run that did its work was rescued as incomplete for
-// want of a submission it had made.
+// PARKED. A restart drops every bridge session while the run goes on and its
+// box keeps dialing with its token. Taking the seat back, the node rebuilds the
+// run's surface from the parked turn ([Engine.reopenAgentRun], the
+// coordinator's Recovered hook) and reopens the job under that token, so the
+// box's next call, its submit_work here, lands on the run's row; refused, a run
+// that did its work would be rescued as incomplete for want of its submission.
 //
 // Mutation: rebuild the parked turn with another construction than the
 // resume's, so the surface loses submit_work, or open the session under
@@ -107,11 +104,9 @@ func TestARecoveredRunsBoxIsServedFromItsParkedTurn(t *testing.T) {
 	}
 }
 
-// A RUN WHOSE ENDING IS DECIDED IS NOT SERVED AGAIN. A person's stop, or a
-// failure, records the run's ending before its steps close the session and
-// reclaim the box; a node recovering the seat in between would hand the box
-// its tools back for the moments before its reclaim, as a seat the stop said
-// was done.
+// A RUN WHOSE ENDING IS DECIDED IS NOT SERVED AGAIN. A stop or a failure
+// records the ending before closing the session and reclaiming the box; a node
+// recovering the seat in between must not hand the box its tools back.
 //
 // Mutation: drop the ending check from reopenAgentRun, and the ended run's
 // session is open.

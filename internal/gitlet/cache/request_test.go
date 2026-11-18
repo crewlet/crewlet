@@ -23,19 +23,15 @@ import (
 )
 
 // A REQUEST'S PACK OR OBJECT DAMAGE IS REPAIRED IN PLACE FIRST (rebuild.go):
-// the failure a git process met is handed to Cache.Rebuild, which repairs the
-// copy the request holds without a new incarnation wherever it can — the
-// forced round fetching again, one GET a pack, every pack whose index files
-// fail their checksums, vouched or not; the scrub that round runs for the
-// request when it found nothing, fetching again a pack whose BODY fails its
-// own; and only past both the whole rebuild, seeded with every pack the scrub
-// found whole.
+// Cache.Rebuild runs the forced round (fetching again a pack whose index files
+// fail their checksums, vouched or not), then, if it found nothing, the
+// request's scrub (fetching again a pack whose BODY fails its own), and only
+// past both the whole rebuild, seeded with every pack the scrub found whole.
 
 // failureOf is the failure a git run over s's directory meets, as the host
 // reads it (cache.DamageReason), failing t when the run succeeds or names no
-// damage the cache repairs. The run names s's reader as the one that repairs
-// it (Synced.Repairer), as the host's does: the case is the request, and asks
-// the repair itself.
+// damage the cache repairs. The run names s.Repairer, as the host's does, so
+// the case, as the request, asks the repair itself.
 func failureOf(t *testing.T, w *syncWorld, s cache.Synced, args ...string) cache.Failure {
 	t.Helper()
 	_, err := w.pool.Run(t.Context(), gitproc.Cmd{Dir: s.Dir, Args: args, Repairer: s.Repairer,
@@ -62,37 +58,18 @@ func checks(w *syncWorld, file, outcome, trigger string) uint64 {
 		"trigger": trigger})
 }
 
-// A REQUEST'S PACK DAMAGE IS REPAIRED IN PLACE FIRST, in ONE Rebuild call
-// whatever it takes:
+// A REQUEST'S PACK DAMAGE IS REPAIRED IN PLACE FIRST, in ONE Rebuild call, each
+// arm's finder named by code_cache_pack_reinstalled's found and trigger: an
+// index truncated (B: the round sees its size, one GET); every index damaged IN
+// PLACE, identity kept after it was vouched for (M: only the forced checksums
+// see it, two GETs); a pack's body (G: the request's scrub fails its trailer,
+// one GET); a pack LOST (reinstalled, found=absent, one GET); a SOUND copy
+// (damage in the rows: the rebuild, SEEDED by the scrub, downloads nothing).
 //
-//   - an index file truncated (B), which the request's in-place round finds
-//     at another size than its row's and fetches its pack again — one GET,
-//     the same incarnation, counted `stored`;
-//   - every index file damaged IN PLACE (M), keeping each file's identity
-//     after this process vouched for it, as media damage does: only a round
-//     FORCED to hold every index file to its checksum whatever it vouched for
-//     sees it — two GETs, one a pack;
-//   - a pack's body (G, the tip commit's compressed bytes), which no index
-//     file shows: the in-place round finds nothing, and the scrub it runs for
-//     the request at once finds the pack failing its trailer — one GET;
-//   - a pack the copy LOST, its three files gone: the in-place round installs
-//     it again as a pack the rows named at a position the copy had already
-//     read (logged found=absent) — one GET;
-//   - a SOUND copy (the damage the request met is in the rows): the in-place
-//     round and the scrub find nothing, and the whole rebuild is asked —
-//     SEEDED with every pack the scrub found whole, so it downloads nothing.
-//
-// Each arm names what found its damage by the reinstall's own log line
-// (code_cache_pack_reinstalled's found and trigger).
-//
-// Mutations: no forced check (the in-place arm's damage is found by the scrub
-// instead — trigger `request`, not `forced`); no escalation (the body arm is
-// answered from the unrepaired copy, its git still failing); no scrub step
-// (the body arm reaches the whole rebuild — a new incarnation); an unseeded
-// whole rebuild (the sound arm downloads every pack); the whole rebuild first
-// (every arm is a new incarnation that downloaded every pack); a lost pack's
-// install counted no repair (the lost arm's round is answered as a write the
-// failure predates — nothing counted `stored`, nothing logged found=absent).
+// Mutations: no forced check (trigger `request`); no escalation (G's git
+// fails); no scrub step, or the whole rebuild first (a new incarnation); an
+// unseeded rebuild (the sound arm downloads); a lost pack's install no repair
+// (no found=absent).
 func TestARequestsPackDamageIsRepairedInPlaceFirst(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -334,12 +311,11 @@ func TestAFailureThatPredatesARepairIsNotEscalated(t *testing.T) {
 }
 
 // A PUSH IS NO REPAIR OF A FAILING REQUEST. A pack this process installs or
-// adopts for a push the copy had not yet read adds objects no failed request
-// needed and leaves whatever failed it as it was, so a request whose git
-// began before it is repaired all the same: its in-place round runs, forced,
-// and nothing is answered `stale`. Taken for a repair, every request's damage
-// on a repository taking pushes was answered "as it stands" — both of a
-// request's tries, the host then giving up — and never repaired.
+// adopts for a push the copy had not yet read leaves whatever failed a request
+// as it was, so a request whose git began before it is repaired all the same:
+// its in-place round runs, forced, and nothing is answered `stale`. Taken for
+// a repair, damage on a repository taking pushes is never repaired: both of a
+// request's tries are answered as it stands.
 //
 // Mutation: stamp a push's install or an adoption as a repair — the request
 // is answered as it stands, with no in-place round.
@@ -394,27 +370,17 @@ func TestAPushIsNoRepairOfAFailingRequest(t *testing.T) {
 }
 
 // A LOST PACK ANY ROUND PUTS BACK IS A REPAIR. A pack the copy had read and
-// lost — its files gone, the rows naming it at a position the copy had read —
-// is what a request's git fails on (an object no pack holds), and putting it
-// back ends that failure whichever round does it: a request's forced round, a
-// sync's own repair, or any round that reads the copy whole — here one its
-// shape marked. So that round writes a REPAIR into the copy (the guard's
-// incarnation.repairWrite), counts it `stored` and logs it found=absent, and
-// a request whose git began before it is answered from the copy as it stands,
-// its git run once more over a copy that holds the pack again. Counted only
-// by a forced round, it was no repair to the guard: such a request was handed
-// a forced round that found nothing, the scrub, and a whole rebuild of a copy
-// nothing was wrong with any more.
-//
-// And a pack a log gone back names is no pack the copy lost: restored from an
-// older copy, the log gives the positions past that copy to other records, so
-// a push it takes sits at a position the copy had read without the copy ever
-// having held it.
+// lost (files gone, rows naming it at a position read) fails a request's git,
+// and any round reading the copy whole (here one its shape marked) that puts
+// it back ends that failure, so writes a REPAIR (incarnation.repairWrite),
+// counted `stored` and logged found=absent: a request whose git began before
+// it is answered as it stands, not escalated to a scrub and a whole rebuild of
+// a copy nothing is wrong with. A pack a log gone back names is no lost pack:
+// the log, restored from an older copy, gives positions the copy had read to
+// pushes it never held.
 //
 // Mutations: a lost pack counted only by a forced round (the request is
-// escalated — a forced check, a scrub and a new incarnation); lost packs read
-// against a position the log has gone back below (the gone-back arm counts a
-// push `stored` and logs it found=absent).
+// escalated); lost packs read against a gone-back log (a push found=absent).
 func TestALostPackAnyRoundPutsBackIsARepair(t *testing.T) {
 	t.Parallel()
 	t.Run("a round its shape marked", func(t *testing.T) {
@@ -499,19 +465,16 @@ func TestALostPackAnyRoundPutsBackIsARepair(t *testing.T) {
 	})
 }
 
-// A CONFIRMED HINT REINSTALLS ONE PACK. A git process that names the pack
-// holding a corrupt object — the row naming a corrupt packed object, from 2.55,
-// or its sentence through a bare "%s", from 2.56 — has the pack held to its
-// row (Cache.ConfirmHint), and a pack that is not its row's is named to the
-// repair (Failure.Packs): the request's in-place round fetches THAT pack
-// again over its files — one GET, the same incarnation, logged found=hint —
-// without hashing it again, and runs no scrub. Damage here is eight bytes of
-// the newer pack's middle (C), in place; a hint naming the SOUND pack beside
-// it asks no repair.
+// A CONFIRMED HINT REINSTALLS ONE PACK. A git that names the pack holding a
+// corrupt object (2.55's packed-object row, 2.56's bare "%s" sentence) has it
+// held to its row (Cache.ConfirmHint); one that is not its row's is named to
+// the repair (Failure.Packs), and the in-place round fetches THAT pack again
+// (one GET, same incarnation, found=hint) with no second hash and no scrub.
+// The damage is eight bytes in place in the newer pack (C); a hint naming the
+// sound pack beside it asks no repair.
 //
-// Mutation: a confirmed hint answers the repair without its pack (pre7's
-// RebuildCorrupt alone) — the in-place round finds nothing, and the scrub,
-// not the hint, finds the pack (found=trailer, and a scrub's checks).
+// Mutation: a confirmed hint's repair without its pack (RebuildCorrupt alone)
+// — the scrub, not the hint, finds the pack (found=trailer, a scrub's checks).
 func TestAConfirmedHintReinstallsOnePack(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -556,13 +519,11 @@ func TestAConfirmedHintReinstallsOnePack(t *testing.T) {
 	}
 }
 
-// A REQUEST ON A COPY A REBUILD REPLACED IS ANSWERED BY THE REBUILD. A request
-// that failed on an incarnation asks a round of it (its in-place repair); a
-// whole rebuild already running replaces that incarnation before the round
-// runs, so the round reads the rebuilt one — the copy the request failed on is
-// gone. The request is answered from the rebuilt copy, never handed to the
-// scrub and the whole rebuild of a copy that never failed it, which a rebuild
-// just read and would refuse to read again ("unchanged").
+// A REQUEST ON A COPY A REBUILD REPLACED IS ANSWERED BY THE REBUILD. A whole
+// rebuild already running replaces the incarnation a request failed on before
+// its in-place round runs, so the request is answered from the rebuilt copy,
+// never escalated to a scrub and rebuild of a copy that never failed it, which
+// the rebuild just read and would refuse ("unchanged").
 //
 // Mutation: escalate whatever incarnation the round read (no
 // waiter.failedOn) — the second request is refused.
@@ -634,30 +595,17 @@ func TestARequestOnACopyARebuildReplacedIsAnsweredByTheRebuild(t *testing.T) {
 }
 
 // A REPAIR WHILE A REQUEST'S REPAIR RUNS ANSWERS IT AS IT STANDS; A PUSH DOES
-// NOT. The guard (rebuild.go) is asked again as the repair escalates, before
-// the scrub and before the rebuild, because the copy is written into while it
-// runs — and only a write that can repair is a reason to answer as it stands:
+// NOT. The guard (rebuild.go) is asked again before the scrub and before the
+// rebuild, since the copy is written into meanwhile, and only a write that can
+// repair counts: a push the in-place round installs repairs nothing (no
+// found=absent, no `stored`), so the request still goes to its scrub and the
+// whole rebuild; a REPAIR landing during the scrub (here a reported derived
+// file dropped, standing in for the scrubber's own repair) answers it as it
+// stands, never with a rebuild of a copy the repair may have mended.
 //
-//   - the in-place round itself installs a push the copy had not yet read —
-//     which repairs nothing (no pack the copy LOST: logged no found=absent,
-//     counted no `stored`), and guards nothing: the request goes on to its
-//     scrub, which finds the copy whole, and to the whole rebuild, as it would
-//     with no push;
-//   - a REPAIR lands while the request's scrub runs — here a derived file a
-//     report names, dropped by the repair round beside the scrub, standing in
-//     for the scrubber's own repair of the same damage, which a report makes
-//     due as the request fails — and the scrub finds every file whole: the
-//     request is answered as it stands, never handed a rebuild of a copy the
-//     repair may have mended (the flake this case was written from: a
-//     fetch's G damage repaired by the scrubber while the request's own scrub
-//     read the repaired pack, and the copy downloaded whole into a new
-//     incarnation).
-//
-// Mutations: a push's pack counted as the request's repair (the first arm is
-// answered repaired, counted `stored`, logged found=absent); a push's install
-// taken for a repair (the first arm is answered as it stands, never
-// scrubbed); no guard after the scrub (the second arm is rebuilt into a new
-// incarnation).
+// Mutations: a push's pack counted as the repair (the first arm `stored`,
+// found=absent); a push's install taken for a repair (the first arm never
+// scrubbed); no guard after the scrub (the second arm gets a new incarnation).
 func TestARepairWhileARequestIsRepairedAnswersItAsItStands(t *testing.T) {
 	t.Parallel()
 	t.Run("the in-place round installs a push", func(t *testing.T) {
@@ -754,21 +702,14 @@ func TestARepairWhileARequestIsRepairedAnswersItAsItStands(t *testing.T) {
 }
 
 // A REQUEST THE GUARD ANSWERS AS IT STANDS WAITS FOR THE ROUND STILL WRITING
-// THE REPAIR. A round repairing the copy writes it in steps — the derived
-// files dropped, then a pack's files renamed over one by one — and its first
-// write already makes an earlier failure one that predates a repair. Pinned
-// at once, such a request would be handed the copy half way, and its retry
-// fail as it failed; it joins the round queued behind the one running
-// instead, and is answered from the copy as it stands once that one ends.
-// Joined is read off the waiters the cache keeps (cache.Waiting), never
-// waited out: the read decides that the guarded request waits on the round
-// queued behind the held one rather than being answered at once, however late
-// its goroutine ran. It cannot decide that nothing answers the request later
-// while the held round runs — once a wait on a clock of the cache's own has
-// passed, say — since the case runs on the machine's clock, which it does not
-// move: the request is guarded because the repair stamped its write after an
-// instant the case read before it (predates), and in a synctest bubble the
-// two would be one instant.
+// THE REPAIR. A repairing round writes in steps (derived files dropped, then a
+// pack's files renamed over), and its first write already guards an earlier
+// failure; pinned at once, such a request would get a half-repaired copy and
+// fail again, so it joins the round queued behind the running one. Joined is
+// read off cache.Waiting, never waited out. The case cannot rule out a later
+// answer once a wait on the cache's own clock passes: it runs on the machine's
+// clock, since the guard compares the repair's stamp with an instant read
+// before it, which a synctest bubble would make one instant.
 //
 // Mutation: answer a guarded request at once (asItStands pinning while the
 // round runs) — the request returns while the repairing round is held.
@@ -875,15 +816,12 @@ func TestAGuardedRequestWaitsForTheRoundStillRepairing(t *testing.T) {
 }
 
 // A FORCED ROUND THAT REPAIRED NOTHING ANSWERS THE NEXT HOUR'S REQUESTS. When
-// the damage a request met is in the rows — a sound copy, a whole rebuild of
-// it already made and refused again — every request failing on it would pay
-// a forced round: the rows read whole at linearizable and every index file
-// hashed, about a quarter of the copy's pack bytes, holding every reader of
-// the repository, before the scrub's cached verdict and the rebuild's refusal
-// answered it. One such round in ScrubCooldown is enough while no repair is
-// written: the requests after it go straight to the scrub's verdict and the
-// refusal, which answer at once — and once the cooldown has passed, a request
-// is given a forced round again.
+// the damage is in the rows (a sound copy, its whole rebuild made and refused
+// again), a forced round per request would read the rows whole at linearizable
+// and hash every index file (about a quarter of the pack bytes), holding every
+// reader, only to reach the scrub's cached verdict and the refusal. So while
+// no repair is written, one forced round per ScrubCooldown: later requests go
+// straight to the verdict and the refusal, and past it get a forced round.
 //
 // Mutation: no bound on step 2 — every request hashes every index file
 // again (checks{trigger=forced} grows).
@@ -943,18 +881,13 @@ func TestAForcedRoundThatFoundNothingIsNotRepeatedForAnHour(t *testing.T) {
 }
 
 // A FORCED ROUND THAT FAILS AFTER ITS CHECK STILL BOUNDS THE NEXT. Its check
-// held every index file to its trailer and left what it found on the repair
-// mark, whatever the round met after it — here its install failing on a push
-// the object store will not hand over — so a forced round asked within
-// ScrubCooldown, with nothing written into the copy since, would hash the same
-// files the same and learn nothing the mark does not already hold: a failure
-// of the hour after it goes to the scrub's answer, as one after a forced round
-// that converged having repaired nothing does. Recorded only by a round that
-// got past its install, the verdict sent every request on a copy whose store
-// refused a push to a forced round of its own. Once the hour has passed, a
-// request is given one again. Both shapes of check: one that found nothing,
-// and one that found an index damaged in place — whose pack's GET the case
-// holds until the round has failed (refusePush), so no repair is written.
+// leaves what it found on the repair mark whatever fails after it (here its
+// install, on a push the object store will not hand over), so a forced round
+// within ScrubCooldown with nothing written since would learn nothing new: the
+// next request goes to the scrub's answer, as after a round that converged
+// repairing nothing, and past the hour gets a forced round again. Both checks:
+// one that found nothing, and one that found an index damaged in place, whose
+// GET refusePush holds until the round has failed, so no repair is written.
 //
 // Mutation: record the verdict only for a round that got past its install —
 // the request within the hour runs a forced round.

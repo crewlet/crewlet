@@ -3,8 +3,8 @@
 package cache
 
 // readMapCount is Linux's default count of mappings a process may hold:
-// darwin, the one other platform the engine builds for (internal/store's
-// platform.go), keeps no such count of the same order, and a Gitlet node in
-// production runs Linux — in a container on a Mac too — so the bound a node
-// there meets is the one a darwin build holds itself to.
+// darwin (the only other build target, internal/store's platform.go) has no
+// count of the same order, and a production Gitlet node runs Linux, in a
+// container on a Mac too, so a darwin build holds itself to the bound that
+// node meets.
 func readMapCount() (int, error) { return DefaultMapCount, nil }

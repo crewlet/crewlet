@@ -19,11 +19,13 @@
 //     geometrically, git's own `repack --geometric=2` split over the packs
 //     that are not FULL, into one or a few pack bundles in the stored format,
 //     stores each as one object, and proposes ONE compaction to the
-//     repository's committer, which decides it in one snapshot and retires
-//     the inputs into code_packs_retired for gitlet.RetireGrace. Every Gitlet
-//     node's cache drops a retired pack by an incarnation swap over hard
-//     links, so a reader holding the old directory keeps every file it may
-//     open (internal/gitlet/cache's swap.go).
+//     repository's committer — `code.compact`, idempotent by the id its build
+//     minted once, so a proposal retried across a failover is one compaction
+//     (internal/estate's opCodeCompact) — which decides it in one snapshot and
+//     retires the inputs into code_packs_retired for gitlet.RetireGrace.
+//     Every Gitlet node's cache drops a retired pack by an incarnation swap
+//     over hard links, so a reader holding the old directory keeps every file
+//     it may open (internal/gitlet/cache's swap.go).
 //   - THE PUBLICATION LOOP ([Compactor.PublishPass]): on every [PublishPoll]
 //     it lists the repositories holding a pack no published layer covers,
 //     least recently published first (`publication_due`), and the
@@ -254,6 +256,12 @@
 // layer (ADR-0091), so every node serves in own mode until each repository's
 // maintainer publishes again. None of this alarms: a lost layer costs a
 // publication, never data.
+//
+// Each loop's crash points are gitletfault's CompactPath, PublishPath and
+// ExpungePath, which the suite crashes at: a loop stopped at any of them
+// leaves each record it proposes applied or absent, never half of one, and
+// what it stored that no row names is the collector's (# The expunge for an
+// expunge left open).
 //
 // # The expunge
 //

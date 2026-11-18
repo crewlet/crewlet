@@ -21,56 +21,38 @@ import (
 )
 
 // Backstop is the interval between two of a home's backstop passes, and how
-// long one repository's turn may take: ONE MINUTE, the compactor's cadence
+// long one repository's turn may take: one minute, the compactor's cadence
 // (internal/gitlet/compact's Poll), so a home's background work runs at one
-// cadence on every Gitlet node. A pass is one indexed listing a worker, and a
-// minute is what a nudge lost costs its repository's work at the most.
-//
-// WHAT A PASS COSTS THE FLEET: the change work's listing walks every live
-// change of the company, 215 ms at 21 000 of them (BenchmarkChangesDue,
-// internal/gitlet's changesdue.go, whose head states the measure), and every
-// Gitlet node lists every repository each Backstop — G × 215 ms of its data
-// nodes' reads a minute for a fleet of G Gitlet nodes, about 1 % of one core for
-// three.
-//
-// A TURN HOLDS A WHOLE CHAIN: the queue builds its train in one turn, and a
-// chain's git is given gitlet.ChainBuildDeadline at the most, which leaves a
-// third of a turn for its reads, the bundle's store and the record
-// (TestATurnHoldsAWholeChain holds the two together).
+// cadence on every Gitlet node, and a lost nudge costs its repository's work a
+// minute at most. A pass's change listing takes 215 ms at 21 000 live
+// changes (BenchmarkChangesDue, internal/gitlet's changesdue.go), so a fleet
+// of G Gitlet nodes costs G × 215 ms of data node reads a minute, about 1 % of
+// one core for three. A TURN HOLDS A WHOLE CHAIN: the queue builds its train
+// in one turn, a chain's git getting gitlet.ChainBuildDeadline at most, which
+// leaves a third of a turn for its reads, the bundle's store and the record
+// (TestATurnHoldsAWholeChain).
 const Backstop = time.Minute
 
-// Concurrency is how many repositories one home works at once: TWO. A turn
-// spends its time waiting — on its git reads, which [OwnReads] bounds apart,
-// and on its records, each one turn of its repository's committer — so a
-// second turn overlaps one turn's records with the other's read, and a burst
-// of nudges does not queue behind one large repository's records. More turns
-// buy nothing a read can use: the reads are bounded by the node's share, not
-// by the turns. MEASURED (BenchmarkHomeLoop, home_bench_test.go: one run of
-// three bursts a cell, -benchtime 3x, on two cores; a model whose facts read
-// holds a unit 20 ms and whose record takes 5 ms): sixteen repositories due
-// at once drained in 348 ms at two turns against 493 at one, on a share of
-// one unit as of two (332 and 494) — the reads' own floor is 320, sixteen
-// reads one at a time — and no faster at four (348, 333), whose turns only
-// waited on the same reads. Beside them a seat's read waited at most 19 ms,
-// one facts read's hold, on a one-unit share, and 0.03 ms on a two-unit one,
-// whatever the turns: [OwnReads], not this, is what a seat waits behind.
-// query.MaxPatchSpools, the patches a Gitlet node spools at once, is this
-// many, since no more of the home's facts reads run at once than its turns
+// Concurrency is how many repositories one home works at once: two, so one
+// turn's records overlap the other's read (package doc, "Its bounds"). More
+// buy nothing: the reads are bounded by the node's share ([OwnReads]), not by
+// the turns. MEASURED (BenchmarkHomeLoop, home_bench_test.go): sixteen
+// repositories due at once drained in 348 ms at two turns against 493 at one,
+// and no faster at four; a seat's read waited one facts read's hold at most,
+// whatever the turns. query.MaxPatchSpools is this many, since no more of the
+// home's facts reads run at once than its turns
 // (engine.TestEveryFactsReadOfAHomeHasASpool).
 const Concurrency = 2
 
-// OwnReads is how many of the home's own git reads — a revision's facts, a
-// checks file (gitlet.SeatWorkEngine) — one node's loop runs at once, of a seat
-// git-work share of units units: ALL BUT ONE, AT LEAST ONE. Each holds a unit
-// of the ANSWERING node's share for its git (the home's own, which its git
-// walk asks first), and a seat's read that finds the share held waits at most
-// gitlet.GitShareWait before it is sent to another Gitlet node — which holds no
-// copy unless a read already filled one, since the walk fills only its home
-// (gitlet.UnreadyShare). So the home leaves its seats a unit wherever the share
-// has two, and on a node of one (three cores or fewer) runs one read at a time
-// — a seat waiting behind one background read at the most, never behind a
-// queue of them, since the turns past the bound wait HERE rather than ahead
-// of the seats in the share's own FIFO. None would stop the change work.
+// OwnReads is how many of the home's own git reads (a revision's facts, a
+// checks file; gitlet.SeatWorkEngine) one node's loop runs at once, of a seat
+// git-work share of units: all but one, at least one (none would stop the
+// change work). Each holds a unit of
+// the answering node's share, and a seat's read finding it held waits
+// gitlet.GitShareWait, then goes to a node that likely holds no copy
+// (gitlet.UnreadyShare); so the seats keep a unit wherever the share has two,
+// and turns past the bound wait here rather than ahead of the seats in the
+// share's FIFO (package doc, "Its bounds").
 func OwnReads(units int) int { return max(1, units-1) }
 
 // Placement answers who is a repository's home — the router satisfies it
@@ -125,10 +107,9 @@ func (o ownReads) GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAns
 	return o.Estate.GitRead(ctx, q)
 }
 
-// GitRead is one of the home's own git reads made for a [Worker] the engine
-// registers: held to the same bound as the loop's own ([OwnReads]), so a
-// registered worker's reads wait here too, never ahead of the seats in the
-// node's share.
+// GitRead is one of the home's own git reads for a [Worker] the engine
+// registers, held to the loop's [OwnReads] bound so it never goes ahead of
+// the seats in the node's share.
 func (l *Loop) GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	return l.o.Estate.GitRead(ctx, q)
 }
@@ -154,9 +135,9 @@ type Options struct {
 	// Placement answers who is home; Nudges is the code log's watch.
 	Placement Placement
 	Nudges    Nudges
-	// Cache is this node's git cache, a copy of which every merge of the
-	// home's runs over in a scratch beside it ([MergeScratchID]), and Git the
-	// node's git pool the merge runs in, in its maintenance lane.
+	// Cache is this node's git cache, whose copy every merge of the home's
+	// runs over in a scratch beside it ([MergeScratchID]); Git is the
+	// node's git pool, the merge running in its maintenance lane.
 	Cache Cache
 	Git   Pool
 	// Chains builds the merge queue's trains on this node, and Tasks closes
@@ -171,9 +152,8 @@ type Options struct {
 	NodeID string
 	// Chart is the activation of the chart this node holds now
 	// (configplane.ActivationStamp), 0 while it holds none, read at every
-	// listing of the change work: a change whose stored readiness an earlier
-	// chart judged is due a refresh (gitlet.ChangesDueQuery.ChartEpoch), since
-	// the chart is the one input of a readiness no record of the log moves.
+	// change-work listing: a readiness an earlier chart judged is due a refresh
+	// (gitlet.ChangesDueQuery.ChartEpoch), since no log record moves the chart.
 	Chart func() int64
 	// Metrics nil records nothing; Logger nil is the package's own
 	// (component gitlet.home); Now nil is time.Now.
@@ -209,12 +189,11 @@ const (
 	nudgeGap       = "gap"
 )
 
-// nudgeFilters are the filters the loop watches the code log under, a watch
-// each: every record on a repository's subject — a push, a change's open,
-// edit, retarget, close, reopen and landing — and every record on a
-// repository's CHECKS subject — an attempt queued, claimed or ended, a
-// head's dispatch — which moves the check work and, through the readiness
-// a change's head's checks are an input of, the change work.
+// nudgeFilters are the code-log filters the loop watches, one watch each: a
+// repository's subject (a push; a change's open, edit, retarget, close,
+// reopen, landing) and its CHECKS subject (an attempt queued, claimed or
+// ended; a head's dispatch), which moves the check work and, through a
+// change's readiness, the change work.
 var nudgeFilters = []string{
 	topics.CodeLogPrefix + "." + string(gitlet.KindRepo) + ".>",
 	topics.CodeLogPrefix + "." + string(gitlet.KindChecks) + ".>",
@@ -226,10 +205,10 @@ type Loop struct {
 	o   Options
 	log *slog.Logger
 	now func() time.Time
-	// backstop is the passes' interval and a turn's bound: [Backstop], a
-	// suite's own (export_test.go). ticks, nil in production, is a suite's
-	// own pacing of the passes in place of a ticker of backstop
-	// (export_test.go), so a case says exactly when a paced pass begins.
+	// backstop is the passes' interval and a turn's bound ([Backstop], or a
+	// suite's own); ticks, nil in production, lets a suite pace the passes in
+	// place of a ticker so a case says exactly when a paced pass begins
+	// (export_test.go).
 	backstop time.Duration
 	ticks    <-chan time.Time
 	// turnsAtOnce is how many turns run at once: [Concurrency], a
@@ -342,12 +321,10 @@ func (l *Loop) follow(w Worker, repoID string, at statelog.Position) {
 
 // AlarmReading fills the reading's merge-rate half from the merge queues this
 // node is home to: how many were asked to land more within the window than
-// they can, and the one asked furthest past its capacity — what raises
-// code_merge_rate_over_capacity. A node home to no queue, or one whose queues
-// keep up, leaves the fields zero, which the alarm table reads as nothing
-// wrong here. Assigned through the queue worker's own concrete method, so the
-// reading's producers gate reaches each field (internal/engine's
-// TestEveryAlarmReadingFieldHasAProducer).
+// they can, and the one furthest past its capacity, which raise
+// code_merge_rate_over_capacity; zero fields read as nothing wrong here. It
+// goes through the queue worker's concrete method so internal/engine's
+// TestEveryAlarmReadingFieldHasAProducer reaches each field.
 func (l *Loop) AlarmReading(out *statelog.Reading) {
 	l.merges.AlarmReading(out)
 }
@@ -379,15 +356,14 @@ func (l *Loop) named(name string) bool {
 }
 
 // Start begins the watch, runs a pass at once and then one every [Backstop],
-// and works what they schedule, [Concurrency] repositories at a time, on
-// goroutines of its own, until [Loop.Stop]. The watch BEGINS BEFORE THE PASS,
-// so a record appended in between is told to the watch or is in the rows the
-// pass reads; a watch that could not begin is asked again before every pass,
-// the backstop doing its work meanwhile. Its caller starts it once the
-// runtime its seams read through is published and the node writes: its first
-// pass asks who serves git and lists the rows at once, and every turn asks
-// records of the repositories' writers. A second Start does nothing, and so
-// does one once Stop has begun.
+// and works what they schedule, [Concurrency] repositories at a time, on its
+// own goroutines until [Loop.Stop]. The watch BEGINS BEFORE THE PASS, so a
+// record appended in between is told to the watch or is in the rows the pass
+// reads; a watch that could not begin is asked again before every pass. Call
+// it once the runtime its seams read through is published and the node
+// writes: the first pass reads placement and rows at once, and every turn
+// asks records of the repositories' writers. A second Start, or one once Stop
+// has begun, does nothing.
 func (l *Loop) Start() {
 	l.mu.Lock()
 	if l.started || l.stopped {
@@ -408,12 +384,11 @@ func (l *Loop) Start() {
 		"concurrency", l.turnsAtOnce, "own_reads", OwnReads(l.o.Share.Units()))
 }
 
-// Stop ends the loop: the watch, the passes and every turn in flight — a
-// facts read cut, a merge's git ended, a record asked of a committer
-// cancelled, which lands or does not on its own — and waits for them to end,
-// until ctx does. Called by whoever stops Gitlet, BEFORE the cache a
-// merge reads. Idempotent; a stop of a loop never started ends nothing, and a
-// Start after it starts nothing.
+// Stop ends the watch, the passes and every turn in flight (a facts read cut,
+// a merge's git ended, a record's ask cancelled, which lands or not on its
+// own) and waits for them until ctx ends. Whoever stops Gitlet calls it
+// BEFORE stopping the cache a merge reads. Idempotent; a stop of a loop never
+// started ends nothing, and a Start after it starts nothing.
 func (l *Loop) Stop(ctx context.Context) {
 	l.mu.Lock()
 	l.stopped = true
@@ -476,16 +451,14 @@ func (l *Loop) passes() {
 	}
 }
 
-// ensureWatch begins each filter's watch where none runs, and leaves none
-// where it cannot begin — the backstop passes the work meanwhile, and the
-// next pass asks again.
+// ensureWatch begins each filter's watch where none runs; one that cannot
+// begin is left to the backstop and asked again at the next pass.
 //
-// DECIDED BY stopped, UNDER mu, NEVER BY THE LIFE'S END: Stop sets stopped and
-// takes the watches under mu, and ends the life only after it lets mu go, so a
-// watch that began in between would find the life still running, and stored
-// once Stop had read the watches, nothing would ever stop it — a consumer of
-// the code log, and its supervision, calling a stopped loop until the queue's
-// connection closed.
+// DECIDED BY stopped UNDER mu, NEVER BY THE LIFE'S END: Stop sets stopped and
+// takes the watches under mu but ends the life only after releasing mu, so a
+// watch begun in between would see a live life, be stored after Stop read the
+// watches, and never be stopped: a code-log consumer calling a stopped loop
+// until the queue's connection closed.
 func (l *Loop) ensureWatch() {
 	for i, filter := range nudgeFilters {
 		l.mu.Lock()
@@ -529,12 +502,12 @@ func (l *Loop) takeGap() statelog.Position {
 }
 
 // Poll is one backstop pass: every worker's listing, every page, read at
-// floor — a Gap's position, so the rows hold what the watch may have missed —
-// or stale where it is zero; who serves git, ONE READING for every repository
-// the pass lists; and every listed repository this node is home to scheduled
-// for that worker, at floor. A placement that cannot be read schedules
-// nothing that pass; a worker whose listing fails is skipped, the others
-// listed. Logged code_home_pass, at DEBUG unless it scheduled something.
+// floor (a Gap's position, so the rows hold what the watch may have missed;
+// stale where zero); ONE placement reading for every listed repository; and
+// each listed repository this node is home to scheduled for its worker at
+// floor. An unreadable placement schedules nothing that pass; a worker whose
+// listing fails is skipped. Logged code_home_pass, at DEBUG unless it
+// scheduled something.
 func (l *Loop) Poll(ctx context.Context, floor statelog.Position) (PollReport, error) {
 	began := l.now()
 	l.mu.Lock()
@@ -604,10 +577,10 @@ func listing(ctx context.Context, w Worker, floor statelog.Position) ([]string, 
 	}
 }
 
-// nudged is a watch's word that a record landed on subject at at: the
-// repository it names — a repository's subject, or its checks' — scheduled
-// for every worker at that position, where this node is its home. Called on the queue's delivery path, so it schedules work
-// and does none.
+// nudged is a watch's word that a record landed on subject at at: where this
+// node is home to the repository it names (its subject or its checks'), the
+// repository is scheduled for every worker at that position. It runs on the
+// queue's delivery path, so it schedules work and does none.
 func (l *Loop) nudged(subject string, at statelog.Position) {
 	kind, repoID, ok := topics.CodeLogPath(subject)
 	if !ok || (kind != string(gitlet.KindRepo) && kind != string(gitlet.KindChecks)) {
@@ -722,13 +695,10 @@ func (l *Loop) next() (turnKey, statelog.Position, bool) {
 // turn works one pair under a context one [Backstop] long, inside life,
 // counts it, and queues it once more where it was asked for again meanwhile.
 //
-// CUT ONLY WHERE ITS WORK FAILED once that bound had ended: a worker's Work
-// whose context ended stops at its next step and answers the context's error,
-// so its error is what says work is left, never the clock. A turn whose work
-// returned did it, however long it ran. Judged by the clock alone, a turn that
-// finished just past its bound was counted cut and logged as leaving work for
-// the next pass when it left none, and on a node whose turns all ran a little
-// long the home counted none worked (#826).
+// CUT ONLY WHERE ITS WORK FAILED once that bound ended: a Work whose context
+// ended answers the context's error, so the error says work is left, never
+// the clock. A turn whose work returned did it, however long it ran; judged by
+// the clock, one finishing just past its bound would count as cut.
 func (l *Loop) turn(life context.Context, k turnKey, floor statelog.Position) {
 	l.mu.Lock()
 	w := l.workers[k.worker]

@@ -9,38 +9,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// applyMergeability writes a change's mergeability ([Mergeability]) — its one
-// row, replaced whole by every merge the decide took, with the readiness the
-// decide stamped beside it — moving the change's conversation's text_bytes by
-// what the conflicted paths weigh, less what the row they replace weighed, so
-// a purge weighs the change's subject's wide rows by its one narrow row. The
-// row's instant is the record's broker instant, which its home's next recheck
-// is paced by (changesdue.go).
+// applyMergeability writes a change's mergeability ([Mergeability]): its one
+// row, replaced whole by every merge the decide took, with the stamped
+// readiness, moving the conversation's text_bytes by the conflicted paths'
+// weight less the replaced row's, so a purge weighs the subject's wide rows by
+// its one narrow row. The row's instant is the broker instant, which its
+// home's next recheck is paced by (changesdue.go).
 //
-// A REFRESH rewrites the row's readiness and the versions, the checks
-// position and the chart it was judged at, and nothing of its merge: the
-// instant a recheck is paced by stays the merge's, and the conflicted paths
-// are the row's own. It writes the row only while the row is still the merge
-// the decide stamped on the record — which the arbitration on the change's
-// subject keeps true, since no other record writes the row's merge (a close's
-// or a landing's clear writes its answer alone) — and applies as nothing
-// otherwise.
-//
-// A CHANGE THAT IS NO LONGER LIVE STORES NO ANSWER: ready and waits_person
-// are written false whatever the record stamped, where the change's row is
-// closed or merged by the time the record applies. The record was decided
-// over a live change on the change's OWN subject, and the close or the
-// landing that ended it is a record on the REPOSITORY'S, which that
-// arbitration does not order it against — so the two can land either way
-// round, and a stored answer of an ended change would sit in
-// code_mergeability_ready_idx or code_mergeability_waits_idx, which
-// readiness=ready and needs=person walk, until its
-// repository's purge. The record that ends a change clears what it stored
-// before ([clearReadiness]); this is the same rule for the record that lands
-// after it.
-//
-// PURE IN THE RECORD, its position, its broker instant, the prior row and the
-// change's state.
+// A REFRESH rewrites only the readiness, the versions, the checks position and
+// the chart, keeping the merge, its instant and its conflicted paths, and only
+// while the row is still the merge the record names (no other record writes a
+// row's merge), else applies as nothing. Pure in the record, its position and
+// instant, the prior row and the change's state.
 func applyMergeability(ctx context.Context, tx *sql.Tx, at applyContext, m Mergeability) (int, conversationCounts,
 	error) {
 
@@ -52,6 +32,11 @@ func applyMergeability(ctx context.Context, tx *sql.Tx, at applyContext, m Merge
 	if err != nil {
 		return 0, conversationCounts{}, err
 	}
+	// An ended change stores no answer: this record, on the change's subject,
+	// is not ordered against the close or landing on the repository's, so it
+	// can land after that record's [clearReadiness] and would leave the change
+	// in code_mergeability_ready_idx or code_mergeability_waits_idx until its
+	// repository's purge.
 	if !found || !change.state.Live() {
 		m.Ready, m.WaitsPerson = false, false
 	}
@@ -93,34 +78,16 @@ func applyMergeability(ctx context.Context, tx *sql.Tx, at applyContext, m Merge
 
 // applyMergeabilityKept moves what a re-evaluation that kept the row's outcome
 // moved ([MergeabilityKept]): a recheck's tip, its position and the row's
-// instant — the one the home's next recheck is paced from — and the versions,
-// the checks position and the chart a readiness was judged at, each part only
-// where the record carries it, and nothing else: the state, the conflicted
-// paths, the stored answer, the node and the position of the record that
-// recorded them stay the row's. A refresh alone leaves the instant, as a
-// refresh's full record does, so a review never postpones a moved target's
-// recheck.
+// instant, and a judgement's versions, checks position and chart, each only
+// where the record carries it; the state, conflicts, stored answer and node
+// stay. A refresh alone leaves the instant, so a review never postpones a
+// moved target's recheck.
 //
-// It writes the row only while it is of the record's revision and holds no
-// later tip than a recheck's — the guard the merge's own record is decided by
-// — nor a later change or readiness version than a judgement's, all of which
-// the arbitration on the change's subject keeps true since no other record
-// writes the row; and applies as nothing otherwise. THE CHECKS POSITION AND THE
-// CHART ARE WRITTEN AS THE DECIDE STAMPED THEM, LOWER THAN THE ROW'S OR NOT,
-// as a refresh's full record writes them: the checks position is the highest
-// over the head's check rows, which the history removes ([CheckHistory]: an
-// ending's horizon, a checks_sweep), so a change still open a month after
-// its head's checks ended is judged at zero; and the chart is the deciding
-// node's, which may be an activation behind the row's. A guard holding
-// either forward would apply such a judgement as nothing, its versions with
-// it, and leave the change due a refresh — a record every data node applies
-// as nothing — at every pass of its home: for ever where the head's checks
-// are gone, until the node takes the activation where its chart is behind.
-// The full record's apply holds neither forward either. The versions are
-// held forward because they only grow: the change's row's version and its
-// conversation's readiness version.
-//
-// PURE IN THE RECORD, its position, its broker instant and the prior row.
+// It writes only while the row is of the record's revision with no later tip
+// or version (versions only grow), else nothing. The checks position and chart
+// are written as stamped, even lower: [CheckHistory] removes a head's check
+// rows and a chart may be an activation behind, so holding them forward would
+// leave the change due a refresh that applies as nothing at every pass.
 func applyMergeabilityKept(ctx context.Context, tx *sql.Tx, at applyContext, k MergeabilityKept) (int, error) {
 	retarget, rejudge := k.TargetOID != "", k.ChangeVersion != 0
 	if !retarget && !rejudge {
@@ -140,17 +107,13 @@ func applyMergeabilityKept(ctx context.Context, tx *sql.Tx, at applyContext, k M
 	return 1, nil
 }
 
-// clearReadiness clears the stored readiness of the changes ids names — each
-// one a record has just closed or merged — and answers the rows it wrote: one
-// for each whose row held an answer, ready or waiting on a person, and none
-// for the rest, which the statement does not write. An ended change merges
-// nothing, so it is ready for nobody and waits on nobody; and a row left
-// ready or waiting would stay in code_mergeability_ready_idx or
-// code_mergeability_waits_idx, which readiness=ready and needs=person walk
-// and whose partial predicates keep them to the changes ready or in front of the
-// company's persons, until its repository's purge — since no record of its
-// home's refreshes an ended change. A reopen moves the change's version, so
-// its home's next pass judges it again (changesdue.go's refresh term).
+// clearReadiness clears the stored readiness of the changes ids names, each
+// just closed or merged, answering one row for each that held an answer. An
+// ended change is ready for and waits on nobody, and no refresh reaches it, so
+// a row left answering would stay in code_mergeability_ready_idx or
+// code_mergeability_waits_idx (which readiness=ready and needs=person walk)
+// until its repository's purge. A reopen moves the change's version, so its
+// home judges it again (changesdue.go's refresh term).
 func clearReadiness(ctx context.Context, tx store.Execer, ids []string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -170,16 +133,11 @@ func clearReadiness(ctx context.Context, tx store.Execer, ids []string) (int, er
 	return int(n), nil
 }
 
-// A mergeability's writes: the row by the change's key, replaced whole by
-// every merge the decide took; a refresh's readiness, written by the same key
-// only while the row is the merge the record names; a kept re-evaluation's
-// moves, by the same key only while the row holds no later tip or version
-// than they do; and the
-// readiness of a list of ended changes cleared, each by its key, only where
-// the row holds an answer — a write naming waits_person rewrites the row's
-// entry in code_mergeability_waits_idx, as one naming ready does in
-// code_mergeability_ready_idx, whatever the value, so a row with
-// nothing to clear is not written.
+// A mergeability's writes, each by the change's key: the row replaced whole; a
+// refresh's readiness only while the row is the record's merge; a kept
+// re-evaluation only while the row holds no later tip or version; and ended
+// changes' readiness cleared only where the row holds an answer, since writing
+// ready or waits_person rewrites its partial index entry whatever the value.
 const (
 	writeMergeabilitySQL = `INSERT INTO code_mergeability (change_id, revision, target_ref, target_oid,
 			target_position, state, conflicts_count, conflicts_omitted, node, bytes, position, at, change_version,

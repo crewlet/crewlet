@@ -12,13 +12,9 @@ import (
 )
 
 // ONLY A LOG WHOSE HEALTH GATES ADMISSION TELLS THE CLAIM GATE IT HAS COME
-// LEVEL.
-//
-// The gate's strict half is that every such log is level now, so each of them
-// coming level is an event that can open it — and a log whose health the gate
-// never reads (a compacted one, whose gaps are its policy working) coming
-// level is not, and told, it would ask the gate again on every burst of writes
-// that log takes, for nothing.
+// LEVEL: each such log coming level can open the gate, while a log the gate
+// never reads (a compacted one, whose gaps are its policy working) would have
+// the gate asked again on every burst of writes it takes, for nothing.
 //
 // Mutation: hand every domain the hook, or none, and this fails naming the
 // domain.
@@ -56,13 +52,10 @@ func TestOnlyTheLogsThatGateAdmissionTellTheClaimGate(t *testing.T) {
 	}
 }
 
-// AND THE APPLIERS A NODE RUNS FROM BOOT ARE HANDED IT.
-//
-// A node's appliers start in [New] and come level as they drain their logs,
-// before anything has started the seat host: each such moment is one the gate
-// may open at. The nudge is buffered, so the boot's arrives whether or not the
-// watch that reads it is running yet — which, before [Engine.Start], it is
-// not, and nothing else sends on it.
+// AND THE APPLIERS A NODE RUNS FROM BOOT ARE HANDED IT: they start in [New]
+// and come level before the seat host starts. The nudge is buffered, so the
+// boot's waits for the watch, which runs only from [Engine.Start]; before then
+// nothing else sends on it.
 //
 // Mutation: drop OnLevel from the runner's deps, and no nudge ever arrives.
 func TestALogComingLevelAtBootTellsTheClaimGate(t *testing.T) {
@@ -109,13 +102,10 @@ func (g *scriptedGate) admits(context.Context) bool {
 	return g.open.Load()
 }
 
-// A REFUSAL IS ANSWERED ONCE, AND ONLY ONCE THE GATE OPENS.
-//
-// The watch asks the host for a pass when an event finds the gate open after
-// it refused one. Still closed, an event asks nothing and leaves the refusal
-// waiting; open, it asks once and disarms, so the next event neither asks for
-// another pass nor even asks the gate — the pass it asked for asks the gate
-// itself, and re-arms the watch if it is refused.
+// A REFUSAL IS ANSWERED ONCE, AND ONLY ONCE THE GATE OPENS: still closed, an
+// event asks nothing and leaves the refusal waiting; open, it asks once and
+// disarms, so the next event asks neither the host nor the gate (the pass it
+// asked for asks the gate, and re-arms the watch if refused).
 //
 // Mutation: drop the disarm and the second event asks again; drop the gate's
 // answer from readmit and the closed gate is answered with a pass.
@@ -148,13 +138,10 @@ func TestARefusalIsAnsweredOnceTheGateOpens(t *testing.T) {
 	}
 }
 
-// A NODE WHOSE LAST PASS WAS ADMITTED EVALUATES NOTHING ON AN EVENT.
-//
-// Every burst of writes a healthy node applies ends with its logs coming level,
-// and each is an event: evaluated, every one would cost the broker a health
-// read per log, and asked for, a listing of the fleet — for a gate that had
-// nothing waiting on it. Disarmed by the pass the gate admitted, even after a
-// refusal it never answered.
+// A NODE WHOSE LAST PASS WAS ADMITTED EVALUATES NOTHING ON AN EVENT, even
+// after a refusal the watch never answered: every write burst a healthy node
+// applies ends in an event, and each would cost a broker health read per log
+// and a fleet listing, for a gate with nothing waiting on it.
 //
 // Mutation: arm the watch on an admission, or leave a refusal armed past one,
 // and this fails.
@@ -180,12 +167,10 @@ func TestAnEventAfterAnAdmittedPassAsksNothing(t *testing.T) {
 	}
 }
 
-// A PASS THE GATE ADMITS WHILE THE WATCH DECIDES IS NOT FOLLOWED BY ANOTHER.
-//
-// The watch reads the refusal, then asks the gate. A pass can run in between
-// — the tick, or an apply's — and be admitted, which leaves nothing waiting;
-// the watch's ask would be a second pass with nothing to claim, spending the
-// one early pass an interval honours ahead of the next apply's.
+// A PASS THE GATE ADMITS WHILE THE WATCH DECIDES IS NOT FOLLOWED BY ANOTHER: a
+// pass (the tick's or an apply's) admitted between the watch reading the
+// refusal and asking the gate leaves nothing to claim, and a second would spend
+// the one early pass an interval honours ahead of the next apply's.
 //
 // Mutation: disarm with a plain store rather than the compare-and-swap, and
 // the host is asked.
@@ -193,8 +178,7 @@ func TestAPassAdmittedWhileTheWatchDecidesIsNotFollowedByAnother(t *testing.T) {
 	t.Parallel()
 	var w *gateWatch
 	w = newGateWatch(func(context.Context) bool {
-		// THE PASS that runs while the watch asks: admitted, it
-		// disarms the watch first.
+		// THE PASS that runs while the watch asks, admitted: it disarms first.
 		w.refused.Store(false)
 		return true
 	})
@@ -206,13 +190,10 @@ func TestAPassAdmittedWhileTheWatchDecidesIsNotFollowedByAnother(t *testing.T) {
 	}
 }
 
-// A REFUSAL IS ITSELF AN EVENT FOR THE WATCH.
-//
-// A log comes level while a pass is deciding — after the pass read its lag,
-// before the refusal was recorded — and the watch, told of it then, finds
-// nothing armed. With every log level no event follows, so unless the refusal
-// tells the watch as it is recorded, the gate the pass raced is next asked by
-// the tick, up to an interval of seats unclaimed behind an open gate.
+// A REFUSAL IS ITSELF AN EVENT FOR THE WATCH: a log coming level after a pass
+// read its lag but before its refusal was recorded finds the watch unarmed, and
+// with every log level no event follows, so without the refusal's own nudge
+// the seats wait up to a tick behind an open gate.
 //
 // Mutation: drop the gate's nudge on a refusal, and nothing is pending.
 func TestARefusalIsItselfAnEventForTheWatch(t *testing.T) {
@@ -234,10 +215,9 @@ func TestARefusalIsItselfAnEventForTheWatch(t *testing.T) {
 	}
 }
 
-// AND THE WATCH, RUNNING, ASKS FOR THE PASS THE GATE'S OPENING CALLS FOR.
-//
-// The event loop end to end: a refusal, then the gate opening and a log saying
-// so, and the host is asked — without a tick, which this watch has none of.
+// AND THE WATCH, RUNNING, ASKS FOR THE PASS THE GATE'S OPENING CALLS FOR: end
+// to end, a refusal, then the gate opening and a log saying so, and the host is
+// asked with no tick.
 //
 // Mutation: drop the ask from readmit, and no pass is asked for.
 func TestTheWatchAsksForAPassWhenTheGateOpens(t *testing.T) {

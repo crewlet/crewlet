@@ -16,18 +16,14 @@ import (
 	"time"
 )
 
-// The in-process test doubles.
-//
-// They live in the package rather than a _test.go file because the coordinator,
-// the waiter, the tool and the engine all drive a sandbox and all need one to
-// drive. A double per consumer is how the state machine ends up modelled four
-// different ways, with each copy agreeing with the code that grew beside it.
-//
-// What they model is the SHAPE the real backends share — a box with a
-// filesystem, a background job that finishes when a test says so, a provider
-// that can lose a box — and nothing else. Where a real backend's behaviour is
-// load-bearing (process groups, the pause reaper, path escapes) the test for it
-// runs against the real thing; see local_test.go.
+// The in-process test doubles live in the package, not a _test.go file: the
+// coordinator, the waiter, the tool and the engine all drive a sandbox, and a
+// double per consumer would model the state machine four ways, each agreeing
+// with the code beside it. They model only the SHAPE the real backends share (a
+// box with a filesystem, a background job that finishes when a test says so, a
+// provider that can lose a box); where a real backend's behaviour is
+// load-bearing (process groups, the pause reaper, path escapes) its test runs
+// against the real thing (local_test.go).
 
 // FakeSandbox is an in-memory box.
 type FakeSandbox struct {
@@ -40,8 +36,7 @@ type FakeSandbox struct {
 	timeouts []FakeTimeout
 	paused   bool
 	closed   bool
-	// reclaimed is a box its provider killed ([FakeProvider.Kill]), which
-	// nothing reads any more.
+	// reclaimed is a box its provider killed ([FakeProvider.Kill]): unreadable.
 	reclaimed  bool
 	commands   []string
 	background []string
@@ -88,13 +83,12 @@ func NewFakeSandbox(id string) *FakeSandbox {
 // CapReads holds the box's whole reads to n bytes rather than [MaxFileBytes],
 // and returns the box.
 //
-// FOR A SUITE THAT HAS TO GO PAST THE CAP: a stream, a report or a question
-// one byte over it is the case such a suite is about, and at 32 MiB each one is
-// built, copied and redacted under -race for seconds. Every branch it reaches
-// is the same at any cap, so it runs at one it can fill, sizes what it writes
-// from [FakeSandbox.ReadCap], and leaves the real figure to the file contract,
-// which every real backend keeps at it. n must be positive: a cap of nothing
-// refuses every file, and no case means that.
+// FOR A SUITE THAT HAS TO GO PAST THE CAP: at 32 MiB each over-cap stream,
+// report or question takes seconds to build, copy and redact under -race, and
+// every branch is the same at any cap, so the suite runs at a cap it can fill,
+// sizes what it writes from [FakeSandbox.ReadCap], and the file contract holds
+// real backends to the real figure. n must be positive: a zero cap refuses
+// every file, and no case means that.
 func (s *FakeSandbox) CapReads(n int) *FakeSandbox {
 	if n <= 0 {
 		panic(fmt.Sprintf("sandbox: FakeSandbox.CapReads(%d): a cap must be at least one byte", n))
@@ -116,8 +110,7 @@ func (s *FakeSandbox) ReadCap() int {
 // ID is the box's identifier.
 func (s *FakeSandbox) ID() string { return s.id }
 
-// Home is the box's root directory, which for a fake is a fixed path
-// nothing on disk backs.
+// Home is the box's root directory: a fixed path nothing on disk backs.
 func (s *FakeSandbox) Home() string { return s.home }
 
 // FakeExec is one command a [FakeSandbox] was asked to run, and the
@@ -156,9 +149,8 @@ func (s *FakeSandbox) StartBackground(ctx context.Context, cmd string, opts Exec
 
 // Execs is every command the box was asked to run — foreground, a scripted
 // [FakeSandbox.ExecFunc]'s included, and detached — in order, each with the
-// environment and directory it was given: what a case about a run's
-// environment reaching its box reads, since nothing else of a fake box keeps
-// one.
+// environment and directory it was given: the only record of a run's
+// environment reaching a fake box.
 func (s *FakeSandbox) Execs() []FakeExec {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -216,10 +208,9 @@ func (s *FakeSandbox) WriteFile(ctx context.Context, p string, content []byte) e
 }
 
 // WriteStream stores what content yields, read whole BEFORE the box's lock is
-// taken — a source is the caller's and may be slow — and only then put in the
-// file's place, so a source that fails part way leaves the file as it was, as
-// every real backend's staged write does ([Sandbox.WriteStream]). An empty
-// source stores what an empty slice always did: nothing, read as an empty file.
+// taken (a source is the caller's and may be slow), so a source that fails part
+// way leaves the file as it was, as every real backend's staged write does
+// ([Sandbox.WriteStream]). An empty source stores nil, read as an empty file.
 func (s *FakeSandbox) WriteStream(ctx context.Context, p string, content io.Reader) error {
 	got, err := io.ReadAll(readUnder(ctx, content))
 	if err != nil {
@@ -241,11 +232,8 @@ func (s *FakeSandbox) WriteStream(ctx context.Context, p string, content io.Read
 // for markers that do not exist until the job finishes.
 //
 // It REFUSES A FILE PAST ITS CAP — [MaxFileBytes] unless a suite set another
-// ([FakeSandbox.CapReads]) — exactly as every real backend does ([readCapped]
-// is their rule too). It answered the whole file whatever its size, so every
-// runner and coordinator test that ran through this twin certified a read no
-// real box would make: a 33 MiB stdout read whole here was a run wedged or
-// lost on every backend it could reach.
+// ([FakeSandbox.CapReads]) — by the real backends' own rule ([readCapped]), so
+// a test through this twin certifies no read a real box would refuse.
 func (s *FakeSandbox) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	content, err := s.content(p)
 	if err != nil || content == nil {
@@ -289,9 +277,9 @@ func (s *FakeSandbox) OpenTail(ctx context.Context, p string, n int64) (io.ReadC
 }
 
 // Delivered is how many bytes of its files the box's reads have handed out —
-// each stream counted as far as its reader took it, a refused whole read as
-// far as the refusal read: what a remote box would have sent over the wire,
-// which a suite holds a reader's cost to.
+// each stream as far as its reader took it, a refused whole read as far as the
+// refusal read: what a remote box would have sent over the wire, a reader's
+// cost.
 func (s *FakeSandbox) Delivered() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -327,9 +315,8 @@ func (s *FakeSandbox) content(p string) ([]byte, error) {
 	return slices.Clone(s.files[path.Clean(p)]), nil
 }
 
-// SetTimeout records the refresh, and when it came, and ends nothing: a case
-// about a box its timer can end models the end itself, from
-// [FakeSandbox.Timeouts].
+// SetTimeout records the refresh and when it came, and ends nothing: a case
+// about a box its timer ends models the end from [FakeSandbox.Timeouts].
 func (s *FakeSandbox) SetTimeout(ctx context.Context, seconds float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -426,8 +413,8 @@ func (s *FakeSandbox) Put(p, content string) {
 }
 
 // FakeProvider mints [FakeSandbox]es and remembers them, so Connect returns
-// the same box a Create handed out — which is what makes a reconnect across a
-// simulated restart testable.
+// the box a Create handed out and a reconnect across a simulated restart is
+// testable.
 type FakeProvider struct {
 	mu    sync.Mutex
 	boxes map[string]*FakeSandbox
@@ -444,22 +431,20 @@ type FakeProvider struct {
 	// for a provider that could not be reached to reclaim a box.
 	KillErr error
 	// AttachFunc, when set, is called by every Attach before it answers,
-	// WITHOUT the provider's lock, and a non-nil answer fails the Attach —
-	// a control plane that is slow to answer, or does not, for one box
-	// while it answers for the rest.
+	// WITHOUT the provider's lock, and a non-nil answer fails the Attach: a
+	// control plane slow or silent for one box while it answers the rest.
 	AttachFunc func(ctx context.Context, sandboxID string) error
 	// KillFunc, when set, is called by every Kill on a live context before
 	// it answers, WITHOUT the provider's lock, and a non-nil answer fails
-	// the Kill unrecorded — a control plane that is slow to answer a
-	// reclaim, or does not.
+	// the Kill unrecorded: a control plane slow or silent on a reclaim.
 	KillFunc func(ctx context.Context, sandboxID string) error
 	// Made, when set, is handed every box Create makes, before Create
 	// answers: a case scripts a fresh box's commands there.
 	Made func(box *FakeSandbox)
 
-	// runs is the run each box was made for, as a local box records it
-	// ([HostBox]): kept for a box made for a turn in a cell on the engine's
-	// host, the one kind a local backend lists.
+	// runs is the run each box was made for ([HostBox]), kept only for a box
+	// made for a turn in a cell on the engine's host: the one kind a local
+	// backend lists.
 	runs map[string]HostBox
 }
 
@@ -510,8 +495,7 @@ func (p *FakeProvider) RunBoxes() ([]HostBox, error) {
 	return out, nil
 }
 
-// Connect returns a previously created box, which is what makes a
-// reconnect across a simulated restart testable.
+// Connect returns a previously created box, resumed.
 func (p *FakeProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -522,7 +506,7 @@ func (p *FakeProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, 
 	if !ok {
 		return nil, boxGone{fmt.Errorf("sandbox %q is gone", sandboxID)}
 	}
-	// Connect auto-resumes, matching every real backend.
+	// Every real backend's Connect resumes the box.
 	box.mu.Lock()
 	box.paused = false
 	box.mu.Unlock()
@@ -530,9 +514,9 @@ func (p *FakeProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, 
 }
 
 // Attach returns a previously created box WITHOUT resuming it, and refuses a
-// paused one with [ErrBoxPaused] — what the remote backend does, and the
-// stricter of the two real answers, so a reader certified here is one that
-// copes with a box it may not read.
+// paused one with [ErrBoxPaused], as the remote backend does: the stricter of
+// the two real answers, so a reader certified here copes with a box it may not
+// read.
 func (p *FakeProvider) Attach(ctx context.Context, sandboxID string) (Sandbox, error) {
 	p.mu.Lock()
 	attach := p.AttachFunc
@@ -554,11 +538,11 @@ func (p *FakeProvider) Attach(ctx context.Context, sandboxID string) (Sandbox, e
 	return box, nil
 }
 
-// Kill records the id and forgets the box.
-// Kill HONOURS ctx, like every real provider: E2B's is an HTTP call and the
-// local one waits on a process group, so both fail on a dead context. A fake
-// that reaped regardless would make every teardown-detach guard untestable —
-// the box would come back reclaimed whether or not the caller detached.
+// Kill records the id and forgets the box. It HONOURS ctx, as every real
+// provider does (E2B's is an HTTP call, the local one waits on a process
+// group): a fake that reaped on a dead context would leave every
+// teardown-detach guard untested, the box reclaimed whether or not the caller
+// detached.
 func (p *FakeProvider) Kill(ctx context.Context, sandboxID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -616,40 +600,32 @@ type FakeRunner struct {
 	lost *fakeLoss
 
 	// Player, when set, is what each job started on this runner DOES: called
-	// once per job with the request it was started with, and its answer is
-	// the job's result. Set it before the first Start.
+	// once per job with its start request, its answer the job's result. Set
+	// it before the first Start.
 	//
-	// PLAYED ON THE JOB'S FIRST POLL OR COLLECT, never at Start: a detached
-	// job does its work after its launch has returned and its turn has
-	// parked, and a play that ran inside Start would make every bridged call
-	// it makes land while the launch is still in flight — a shape no real
-	// job has. And played on the poller's goroutine rather than one of the
-	// runner's own, so there is no goroutine here to outlive the test or the
-	// process: the job's work is bounded by the poll that asked for it.
-	//
-	// A job this runner did not start — one a previous process launched —
-	// is reported done and failed, saying so: its play lived in the process
-	// that started it, and a fake has nothing to resume it from.
+	// PLAYED ON THE JOB'S FIRST POLL OR COLLECT, never at Start: a real job
+	// works after its launch returned and its turn parked, so a play inside
+	// Start would land its bridged calls mid-launch. It runs on the poller's
+	// goroutine, so none here outlives the test. A job this runner did not
+	// start (a previous process's) is reported done and failed, saying so:
+	// its play lived in that process.
 	Player func(ctx context.Context, req RunRequest) Result
 	plays  map[string]*fakePlay
 
-	// MainThread, when set, is what a collection's read of a job's main
-	// thread answers ([FakeRunner.ReadMainThread]); unset, it answers no
-	// reading, which a Claude Code collection takes for a thread not read.
-	// Set it before the first collection.
+	// MainThread, when set, answers a collection's read of a job's main
+	// thread ([FakeRunner.ReadMainThread]); unset, it answers no reading,
+	// which a Claude Code collection takes for a thread not read. Set it
+	// before the first collection.
 	MainThread func(ctx context.Context, box Sandbox, ask MainThreadAsk) MainThreadReading
 
-	// TakesNotes is what [FakeRunner.ReadsNotes] answers: whether the harness
-	// this fake stands in for takes a person's notes between its own steps,
-	// as a real runner's harness taught to does. Set it before the first
-	// collection.
+	// TakesNotes is what [FakeRunner.ReadsNotes] answers: whether the
+	// harness this fake stands in for takes a person's notes between its own
+	// steps. Set it before the first collection.
 	TakesNotes bool
 
 	// CallIDKey is what [FakeRunner.CallIDMeta] answers: the `_meta` key the
-	// harness this fake stands in for sends each call's own id under, as a
-	// real runner of a harness that sends one declares it. "" declares none,
-	// as a harness whose `_meta` carries no id does. Set it before the launch
-	// that should read it.
+	// harness this fake stands in for sends each call's id under, "" for
+	// none. Set it before the launch that should read it.
 	CallIDKey string
 
 	// StartErr, when set, fails every Start.
@@ -658,9 +634,8 @@ type FakeRunner struct {
 	// must retry rather than treat as completion.
 	PollErr error
 	// PollFunc, when set, answers every Poll in place of the queued state,
-	// and is called WITHOUT the runner's lock — so one box's poll can be
-	// held while another's runs, as a real runner's are, rather than every
-	// poll queueing behind the fake's own mutex.
+	// called WITHOUT the runner's lock so one box's poll can be held while
+	// another's runs, as a real runner's can.
 	PollFunc func(ctx context.Context, box Sandbox) (JobState, error)
 	// CollectErr, when set, fails every Collect.
 	CollectErr error
@@ -675,11 +650,10 @@ type FakeRunner struct {
 	LiveGate chan struct{}
 
 	// EndFunc, when set, answers every request to end a job
-	// ([FakeRunner.AskEnd]) in place of the default — a script that hears it
-	// and ends its job — and is called without the runner's lock. Unheard
-	// makes every request answer [EndUnheard] and ask nothing: a script that
-	// records no end protocol, as an older build's records none. Set either
-	// before the first stop or loss.
+	// ([FakeRunner.AskEnd]) in place of the default (a script that hears it
+	// and ends its job), called without the runner's lock. Unheard makes
+	// every request answer [EndUnheard] and ask nothing: a script that
+	// records no end protocol. Set either before the first stop or loss.
 	EndFunc func(ctx context.Context, box Sandbox, handle RunHandle) (EndAsk, error)
 	Unheard bool
 	// endsAs is what a job asked to end reports ([FakeRunner.EndsAs]), nil
@@ -691,18 +665,16 @@ type FakeRunner struct {
 	asks   int
 
 	// Session, when set, is the harness session every box this runner is
-	// asked about holds: what [FakeRunner.TakeSession] hands a capture,
-	// and what makes this fake a [SessionTaker]. Set it before the first
-	// collection.
+	// asked about holds, which [FakeRunner.TakeSession] hands a capture. Set
+	// it before the first collection.
 	Session *FakeSession
 	// takes is every capture asked of this runner, in order.
 	takes []SessionTake
 
 	// Carries makes this fake restore a session carried from another box
 	// ([SessionRestorer]): one its own harness wrote, in [FakeArchiveFormat],
-	// which every box it is asked about can take up unless CarryWhy says why
-	// its harness cannot — what a runner of a harness that packs and restores
-	// answers. Unset, it restores none. Set both before the first launch.
+	// which every box can take up unless CarryWhy says why its harness
+	// cannot. Unset, it restores none. Set both before the first launch.
 	Carries  bool
 	CarryWhy string
 	// CarryVersion is the release every box's harness answers when asked
@@ -714,10 +686,10 @@ type FakeRunner struct {
 	// runner writes it into its box.
 	carried []FakeCarried
 
-	// Holdings, when set, is what a reading of what a kept session holds
-	// answers ([FakeRunner.ReadHoldings]), handed the archive and the ask,
-	// once the archive's stream has been read to its end; unset, every
-	// reading answers none. Set it before the relaunch that asks.
+	// Holdings, when set, answers a reading of what a kept session holds
+	// ([FakeRunner.ReadHoldings]), once the archive's stream has been read to
+	// its end; unset, every reading answers none. Set it before the relaunch
+	// that asks.
 	Holdings func(SessionArchive, HoldingsAsk) (SessionHoldings, error)
 	// holdingsAsks is every ask a reading was handed, in order.
 	holdingsAsks []HoldingsAsk
@@ -771,18 +743,17 @@ func NewFakeRunner(name string) *FakeRunner {
 }
 
 // fakeScriptPID is the pid a [FakeRunner]'s job's script answers an end request
-// on, as a real script records its own in its box.
+// on, standing in for the one a real script records in its box.
 const fakeScriptPID = 4243
 
 var _ JobEnder = (*FakeRunner)(nil)
 
-// AskEnd asks the job in box to end, as a real runner does: the request sent
-// through the box ([Sandbox.EndJob], which a [FakeSandbox] records), and the
-// job — by default — hearing it and ending, so the next poll of its box
-// reports it over and its collection reads what [FakeRunner.EndsAs] set, or
-// what it would have reported as it stood. [FakeRunner.EndFunc] and
-// [FakeRunner.Unheard] say otherwise; a box that answers the pid is no process
-// of the job is [EndGone].
+// AskEnd asks the job in box to end, as a real runner does: through the box
+// ([Sandbox.EndJob]), the job by default hearing it and ending, so its next
+// poll reports it over and its collection reads what [FakeRunner.EndsAs] set,
+// or what it would have reported as it stood. [FakeRunner.EndFunc] and
+// [FakeRunner.Unheard] say otherwise; a box that answers the pid is no
+// process of the job is [EndGone].
 func (r *FakeRunner) AskEnd(ctx context.Context, box Sandbox, handle RunHandle) (EndAsk, error) {
 	r.mu.Lock()
 	end, unheard := r.EndFunc, r.Unheard
@@ -811,9 +782,9 @@ func (r *FakeRunner) EndsAs(result Result) {
 	r.endsAs = &result
 }
 
-// EndJobIn is the job in box ending as a request to end it would leave it: over
-// at its next poll, reporting what [FakeRunner.EndsAs] set — what an
-// [FakeRunner.EndFunc] calls where it lets a request end the job.
+// EndJobIn ends the job in box as a request would: over at its next poll,
+// reporting what [FakeRunner.EndsAs] set. A [FakeRunner.EndFunc] calls it to
+// let a request end the job.
 func (r *FakeRunner) EndJobIn(box Sandbox) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -851,9 +822,9 @@ func (r *FakeRunner) play(ctx context.Context, handle RunHandle) (Result, bool) 
 		return Result{Error: "the fake runner did not start this job: its play lived in " +
 			"the process that started it"}, true
 	}
-	// ONCE, under the job's own guard rather than the runner's lock: the
-	// play can take as long as its work does, and every other job's poll —
-	// and every read of what was started — must not queue behind it.
+	// ONCE, under the job's own guard rather than the runner's lock: a play
+	// takes as long as its work, and no other job's poll or read of what was
+	// started may queue behind it.
 	p.once.Do(func() {
 		p.result = player(ctx, p.req)
 		p.finished.Store(true)
@@ -883,7 +854,7 @@ func (r *FakeRunner) Install(ctx context.Context, box Sandbox) error {
 }
 
 // Start records the request and hands back a handle that stays unfinished
-// until a test calls [FakeRunner.Finish].
+// until a test calls [FakeRunner.Finish] or the job is played.
 func (r *FakeRunner) Start(ctx context.Context, box Sandbox, req RunRequest) (RunHandle, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -903,10 +874,10 @@ func (r *FakeRunner) Start(ctx context.Context, box Sandbox, req RunRequest) (Ru
 	r.started = append(r.started, req)
 	handle := RunHandle{CommandID: fmt.Sprintf("cmd-%d", len(r.started)), PID: 4242}
 	// THE SESSION THE RUN WORKS IN, NAMED AS IT STARTS, as a runner names it
-	// before its harness starts: the one it continues, or one minted for it —
-	// and, for a run that continues one, the session its script starts of its
-	// own in that one's place. What a job's box ran is read off these and its
-	// word ([PendingRun.SessionRan]), never off what its collection reports.
+	// before its harness starts: the one it continues or one minted for it,
+	// plus, for a continuing run, the fresh one its script starts in that
+	// one's place. What a box ran is read off these and its word
+	// ([PendingRun.SessionRan]), never off its collection.
 	handle.SessionID = "session-" + handle.CommandID
 	if req.Resume != "" {
 		handle.SessionID = req.Resume
@@ -989,11 +960,11 @@ func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle)
 // Follow begins a live reading of the account a test writes with
 // [FakeRunner.Say].
 //
-// THE ACCOUNT IS DETERMINISTIC, as a real runner's derivation is: every
-// reading of the same account under the same origin reads the same text, so a
-// reading begun afresh — another owner on the same build — continues where an
-// earlier one stopped. [FakeRunner.Rewrite] is the other case: the same origin
-// deriving different text, a build whose parser or redaction changed.
+// THE ACCOUNT IS DETERMINISTIC, as a real runner's derivation is: the same
+// account under the same origin reads the same text, so a reading begun afresh
+// (another owner on the same build) continues where an earlier one stopped.
+// [FakeRunner.Rewrite] is the other case: a build whose parser or redaction
+// derives different text under the same origin.
 func (r *FakeRunner) Follow(handle RunHandle) LiveReading {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1093,12 +1064,11 @@ func (r *FakeRunner) Finish(result Result) {
 	r.result = result
 }
 
-// Lose takes every job running now down with its engine — the jobs a host's
-// restart killed mid-step: each this runner has started so far and not played,
-// and each it is asked about that it never started, which a previous process
-// of the engine did. A poll of one reports it [JobLost], and a collection of
-// one reads partial, what it had said before it went. A job started after it
-// is not lost.
+// Lose takes every job running now down with its engine, as a host's restart
+// does mid-step: each this runner started and has not played, and each it is
+// asked about that it never started (a previous process's). A poll of one
+// reports [JobLost], and a collection reads partial, what it had said before
+// it went. A job started afterwards is not lost.
 func (r *FakeRunner) Lose(partial Result) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1160,21 +1130,20 @@ type FakeSession struct {
 	// ([TakenSession.CountProvider]), "" for none.
 	CountProvider string
 
-	// Taking, where set, runs as a take reads the box — after the capture
-	// read the run's log to place the session, and before the archive is
-	// handed over — so a case can land a call between the two, as a call
-	// answered while its box is read does, or spend the take's time, as a
-	// pack and a scrub at their bound do: it is handed the take's context.
+	// Taking, where set, runs with the take's context as a take reads the
+	// box, after the capture placed the session from the run's log and before
+	// the archive is handed over: a case lands a call between the two there,
+	// or spends the take's time as a pack and scrub at their bound do.
 	Taking func(ctx context.Context)
 
-	// Streaming, where set, runs as the take's archive is first read, once its
-	// place is reserved and it spools, handed the take's context, so a case can
-	// spend the take's time where a stream at its bound spends it.
+	// Streaming, where set, runs with the take's context as the archive is
+	// first read (its place reserved, spooling), so a case can spend the
+	// take's time where a stream at its bound does.
 	Streaming func(ctx context.Context)
 
-	// Keeping, where set, runs as the take's digest is recorded in the box
-	// ([TakenSession.Keep]), before it is, handed the digest's context, so a
-	// case can stand in for a box slow to answer the write.
+	// Keeping, where set, runs with the digest's context just before the
+	// take's digest is recorded in the box ([TakenSession.Keep]): a box slow
+	// to answer the write.
 	Keeping func(ctx context.Context)
 
 	// kept counts the digests recorded.
@@ -1187,10 +1156,8 @@ func (s *FakeSession) Kept() int { return int(s.kept.Load()) }
 // TakeSession hands a capture the runner's [FakeRunner.Session], recording what
 // it was asked ([FakeRunner.Takes]); a runner with none holds no session.
 //
-// A BOX THAT IS PAUSED OR RECLAIMED IS NOT READ, as a remote box paused for its
-// snapshot is not, and a reclaimed one of any cell: a capture made after the
-// pause or the reclaim it must come before is refused here as it would be
-// there.
+// A BOX THAT IS PAUSED OR RECLAIMED IS NOT READ, as no real one is: a capture
+// made after the pause or reclaim it must precede is refused here as there.
 func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionTake) (TakenSession, error) {
 	r.mu.Lock()
 	recorded := take
@@ -1319,10 +1286,9 @@ func (r *FakeRunner) CheckCarry(_ context.Context, _ Sandbox, archive SessionArc
 var _ HoldingsReader = (*FakeRunner)(nil)
 
 // ReadHoldings records ask, reads what open streams to its end and closes it,
-// and answers [FakeRunner.Holdings] of archive and ask: a reading as the case
-// scripts it, read through whatever calls it ([Coordinator.HoldingsOf]). Unset,
-// it answers no reading and opens nothing, as a reader that refuses the ask
-// before it opens the archive does.
+// and answers [FakeRunner.Holdings] of archive and ask, read through whatever
+// calls it ([Coordinator.HoldingsOf]). Unset, it answers no reading and opens
+// nothing, as a reader that refuses the ask before opening the archive does.
 func (r *FakeRunner) ReadHoldings(ctx context.Context, archive SessionArchive,
 	open func(context.Context) (io.ReadCloser, error), ask HoldingsAsk) (SessionHoldings, error) {
 
@@ -1361,9 +1327,9 @@ func (r *FakeRunner) Installed(sandboxID string) bool {
 	return r.installed[sandboxID]
 }
 
-// Started is every run request handed to Start, in order — whole, the steer
-// wiring a job was handed among it ([RunRequest.Steer]), so a case can play the
-// harness's own side of the run against what the launch gave it.
+// Started is every run request handed to Start, in order and whole, steer
+// wiring included ([RunRequest.Steer]), so a case can play the harness's side
+// of the run against what the launch gave it.
 func (r *FakeRunner) Started() []RunRequest {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -8,17 +8,15 @@ import (
 	"testing"
 )
 
-// A CALL'S HARNESS ID SURVIVES A BUILD THAT DOES NOT KNOW IT. In a fleet
-// mid-upgrade an older build rewrites the run's log whole on every step it
-// takes of it, decoding each call and each entry in flight into a struct with
-// no such field: it keeps the id only as a key it does not know, carried in the
-// call's Extra and written back verbatim (wirekeys.go). So the id is a wire key
-// of its own, `call_id`, and a decode that declares every key of the call but
-// that one — that build's — writes it back, for this build to read as the id
-// its harness gave the call again, on a listed call and on an entry alike.
+// A CALL'S HARNESS ID SURVIVES A BUILD THAT DOES NOT KNOW IT. Mid-upgrade an
+// older build rewrites the run's log whole on every step, decoding each call
+// and entry into a struct with no such field and carrying unknown keys back
+// verbatim in Extra (wirekeys.go). So the id is a wire key of its own,
+// `call_id`, which that build's decode writes back, on a listed call and an
+// entry in flight alike.
 //
-// Mutation: write the id under no wire key (call-id-under-no-wire-key), and the
-// log never carries it.
+// Mutation: write the id under no wire key (call-id-under-no-wire-key), and
+// the log never carries it.
 func TestACallsHarnessIDSurvivesABuildThatDoesNotKnowIt(t *testing.T) {
 	t.Parallel()
 	const id = "toolu_01survivesanolderbuild"

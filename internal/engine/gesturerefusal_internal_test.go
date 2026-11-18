@@ -16,13 +16,12 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A RETENTION GESTURE'S REFUSAL IS TOLD, AND A FAULT UNDER IT IS NOT.
-//
-// The retention routes answer a refusal the engine tells ([statelog.Told]) in
-// its sentence and keep the error for their log, so every refusal a capacity
-// change, a reanchor or a node gate makes has to be one, in words that carry
-// neither the package that wrote them nor the broker's own text. Mutation:
-// return any of these as the `engine: ...` error it was and its case fails.
+// A RETENTION GESTURE'S REFUSAL IS TOLD, AND A FAULT UNDER IT IS NOT. Every
+// refusal a capacity change, a reanchor or a node gate makes is a
+// [statelog.Told] the routes answer, keeping the error for their log, in words
+// that carry neither the package that wrote them nor the broker's own text.
+// Mutation: return any of these as a plain `engine: ...` error and its case
+// fails.
 func TestAGestureRefusalIsToldWithoutWhatItStandsOn(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -67,11 +66,10 @@ func TestAGestureRefusalIsToldWithoutWhatItStandsOn(t *testing.T) {
 			t.Errorf("the error %q lost the broker's words, which the log keeps", err)
 		}
 	})
-	// AND WITH THE BROKER'S LIMIT STATED, which is the ordinary embedded
-	// case and the one that splices what the broker had left into the
-	// sentence: with no stated room the clause never appeared, so the case
-	// above could not see what it said. Mutation: put the em dash back in
-	// capacityRefusal and this fails.
+	// AND WITH THE BROKER'S LIMIT STATED, the ordinary embedded case and the
+	// only one that splices what the broker had left into the sentence, which
+	// the case above cannot see. Mutation: splice that clause in with an em
+	// dash in capacityRefusal and this fails.
 	t.Run("a raise the broker refused, its limit stated", func(t *testing.T) {
 		stated, _, statedStream := capacityNode(t, budgetHost{room: jetstream.StorageBudget{
 			Limit: 8 << 30, Committed: 7 << 30, Source: jetstream.BudgetServerStore}})
@@ -85,11 +83,10 @@ func TestAGestureRefusalIsToldWithoutWhatItStandsOn(t *testing.T) {
 			TargetMaxBytes: 7 << 30}, errors.New("nats: timeout"))
 		clean(t, err, "the outcome is unknown")
 	})
-	// A STREAM NO WINDOW CAN BE OPEN ON is one somebody mistyped, told as
-	// that by every capacity verb rather than as a log with no window:
-	// "there's no capacity operation on X" sent an operator looking for a
-	// window that could never exist. Mutation: drop windowStream from any of
-	// the three and its case fails.
+	// A STREAM NO WINDOW CAN BE OPEN ON is one somebody mistyped, told as that
+	// by every capacity verb rather than as a log with no window, which sends
+	// an operator looking for a window that can never exist. Mutation: drop
+	// windowStream from any of the three and its case fails.
 	t.Run("a window verb on a stream no window can be open on", func(t *testing.T) {
 		const nope = "CREWLET_NOPE_LOG"
 		_, abandonErr := e.AbandonCapacity(ctx, nope, "capacity:open", iam.Actor{Name: "ops-3"})
@@ -138,10 +135,9 @@ func TestAGestureRefusalIsToldWithoutWhatItStandsOn(t *testing.T) {
 		clean(t, &ReadmissionUnjudged{Node: "node-4", Log: "tracker",
 			Err: errors.New("nats: timeout")}, "on tracker")
 	})
-	// A LOG THE FLEET RE-ANCHORED PAST THIS NODE is a condition another
-	// node clears, told as one: it was a plain error, answered as a 500
-	// fault with the one remedy that works (ask a node that has caught up)
-	// in this node's log alone.
+	// A LOG THE FLEET RE-ANCHORED PAST THIS NODE is a condition another node
+	// clears, told as one with the remedy that works (ask a node that has
+	// caught up), never a bare 500 fault.
 	t.Run("a readmission on a log this node is behind on", func(t *testing.T) {
 		err := &ReadmissionUnjudged{Node: "node-4", Log: "tracker", Behind: true,
 			Err: &statelog.ReanchorNotApplied{Node: "node-4", Domain: "tracker",

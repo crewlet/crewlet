@@ -16,12 +16,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A CHANGE'S MERGEABILITY THROUGH THE CHANGE WRITER: what the repository's
-// home Gitlet node found merging a change's head into its target's tip, handed
-// to the change writer as the home's own write (no asker), decided in one
-// snapshot on a real embedded broker as a record on the change's own subject,
-// applied by the shipped applier — and the due listing that asks it of the
-// home again once the target moves.
+// A CHANGE'S MERGEABILITY THROUGH THE CHANGE WRITER: the home's record of merging
+// a change's head into its target's tip, written as the home itself (no asker) on
+// the change's own subject over a real broker and the shipped applier, and the
+// due listing that asks it again once the target moves.
 
 // merging is the home's write of change's merge — revision rev, its head
 // head, into target at its tip as n's rows hold it — that state, naming
@@ -77,25 +75,18 @@ func (n *node) mergeability(change string) heldMerge {
 	return m
 }
 
-// A MERGEABILITY RECORD IS MONOTONE: a change's mergeability is recorded only
-// of its HEAD revision and head, into the branch it merges into now — one of a
-// revision a push has moved past, of a head the change does not have, or into
-// another branch is refused superseded, appending nothing — and, for that
-// revision against that branch, only forward in the target's tip: a merge into
-// an earlier tip than the row holds (a pass that read before the target moved,
-// slower than the one that read after) is superseded, and so is the same tip
-// merged again once the row says clean or conflict, since a merge of two
-// commits is decided once. The one same tip taken is an UNKNOWN row's —
-// decided at last, or tried again, the row's instant moving so the next try
-// waits its home's refresh. A later tip, a new revision and a decided merge
-// after an undecided one each replace the one row; its conflicted paths are
-// weighed in the change's conversation's text and come back on the change's
-// read. A closed change takes no merge; a mergeability naming an asker, or
-// conflicts beside a clean merge, is no write at all.
+// A MERGEABILITY RECORD IS MONOTONE: taken only of the change's head revision
+// and head into the branch it targets now (else superseded, nothing appended),
+// and only forward in the target's tip: an earlier tip than the row's (a slower
+// pass) is superseded, as is the same tip once the row is clean or conflict, a
+// merge of two commits being decided once. Only an UNKNOWN row takes its tip
+// again, its instant moving so the next try waits its home's refresh. A later
+// tip, a new revision or a decision after an unknown replaces the one row, its
+// conflicted paths weighed in the conversation's text and back on the change's read. A
+// closed change takes no merge; an asker, or conflicts beside clean, no write.
 //
-// Mutations: drop the guard's position term, and the merge into the earlier
-// tip replaces the later one's row; drop its decided term, and the same tip
-// merged again appends a second record.
+// Mutations: drop the guard's position term → the earlier tip replaces the row;
+// drop its decided term → the same tip merged again appends a second record.
 func TestAMergeabilityRecordIsMonotone(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -271,20 +262,17 @@ func (n *node) reposDueAt(recheck time.Time) []string {
 }
 
 // A MOVED TARGET'S MERGES ARE DUE AGAIN, OLDEST FIRST, ONCE THEIR REFRESH HAS
-// PASSED: a change whose head revision holds a mergeability into its branch is
-// due no merge while its target holds the tip it merged into — nor named among
-// a repository's rechecks — and once the target moves past that tip it is
-// named a RECHECK only where its mergeability was recorded at or before the
-// instant the home's refresh asks, the oldest merge first and no more than the
-// home asks; the listing of repositories names the repository exactly then. An
-// undecided merge is a recheck at its own tip too, once old enough; a merge
-// into a branch the change no longer targets, or of a revision it has moved
-// past, owes a MERGE at once, whatever its age.
+// PASSED: while the target holds the tip a change's head revision merged into,
+// it owes no merge and is no recheck; once the target moves, it is a RECHECK
+// only if its merge was recorded at or before the home's refresh instant, oldest
+// first, at most as many as the home asks, and the repository listing names the
+// repository exactly then. An undecided merge is a recheck at its own tip too,
+// once old enough; a merge into a branch no longer targeted, or of a revision
+// moved past, owes a MERGE at once, whatever its age.
 //
-// Mutations: order the rechecks by change rather than by when they were
-// merged, and the home's budget rechecks the same first ones every refresh;
-// drop the instant's term, and a moved target's changes are merged again on
-// every pass.
+// Mutations: order the rechecks by change, not merge time → the budget rechecks
+// the same first ones every refresh; drop the instant's term → a moved target's
+// changes are merged again every pass.
 func TestAMovedTargetsMergesAreDueOldestFirst(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -376,25 +364,17 @@ func TestAMovedTargetsMergesAreDueOldestFirst(t *testing.T) {
 }
 
 // A RE-EVALUATION THAT KEEPS THE OUTCOME RECORDS WHAT IT MOVED: a recheck of a
-// moved target that merges as the row says, and a refresh whose readiness is
-// the row's, each append a mergeability_kept naming only what moved — the tip
-// and its position, or the versions the readiness was judged at — which moves
-// those columns and nothing else: the recheck the row's instant too, the
-// refresh never. Every transition is the full record: the first merge, a merge
-// that turns into a conflict, and a conflict whose paths changed; a conflict
-// rechecked with the same paths is kept, its paths never written again. A
-// stale recheck — of a tip before the row's — is refused superseded, as the
-// merge it replaces is. And a record that concerns nobody carries no routing
-// and writes no notice, where one that turns a merge into a conflict carries
-// its routing and tells the change's authors.
+// moved target merging as the row says, or a refresh whose readiness is the
+// row's, appends a mergeability_kept naming only what moved (the tip and its
+// position, or the readiness versions) and moves nothing else but the recheck's
+// instant. A transition (the first merge, a merge turned conflict, a conflict's
+// paths changed) is the full record; the same conflict rechecked is kept,
+// paths unwritten; a stale recheck is superseded. Only a merge turned
+// conflict carries a routing and tells the change's authors.
 //
-// Mutations: write the full record whatever the row holds → the recheck
-// appends a mergeability, red; leave the conflicts out of the outcome compared
-// → the changed conflict list is kept and the row keeps the old path, red;
-// drop the tip from the kept apply → the row stays at A, red; drop the
-// versions from it → the refresh moves no version, red; move the instant on a
-// refresh → the row's instant moves, red; stamp a routing whatever the
-// audience → the first merge carries one, red.
+// Mutations, each red: the full record always; the conflicts left out of the
+// outcome compared; the tip or the versions dropped from the kept apply; the
+// instant moved on a refresh; a routing stamped whatever the audience.
 func TestAReEvaluationThatKeepsTheOutcomeRecordsWhatItMoved(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -503,21 +483,17 @@ func TestAReEvaluationThatKeepsTheOutcomeRecordsWhatItMoved(t *testing.T) {
 	}
 }
 
-// A KEPT JUDGEMENT TAKES A CHECKS POSITION THE HISTORY LOWERED: the position a
-// readiness is judged at of its head's checks is the highest over the head's
-// check rows, and an ending's horizon removes the rows that ended more than
-// CheckHistory before it — so a change still open that long after its head's
-// checks ended is judged at zero, below the position its row holds. A refresh
-// after an ask then, and a recheck of a moved target after another ask, each
-// keep the row's outcome and are recorded as a mergeability_kept that APPLIES:
-// the row takes the later versions, the recheck's tip and instant and the zero
-// position, and the change leaves its home's due listing — rather than apply
-// as nothing, its writer answering unknown, and stay due a refresh at every
-// pass of its home, for ever.
+// A KEPT JUDGEMENT TAKES A CHECKS POSITION THE HISTORY LOWERED: a readiness is
+// judged at the highest position of its head's check rows, and an ending's
+// horizon removes rows ended more than CheckHistory before it, so a change open
+// that long is judged at zero, below its row's position. A refresh after an ask,
+// and a recheck of a moved target after another, then each keep the outcome as
+// a mergeability_kept that APPLIES (the later versions, the recheck's tip and
+// instant, the zero position) and leaves the due listing; applied as nothing,
+// its writer would answer unknown and the change stay due every pass, for ever.
 //
-// Mutation: hold the kept apply's checks position forward
-// (checks_position <= ?8 in its guard) → the refresh after the history
-// applies as nothing — red.
+// Mutation: hold the kept apply's checks position forward (checks_position <= ?8
+// in its guard) → the refresh after the history applies as nothing — red.
 func TestAKeptJudgementTakesAChecksPositionTheHistoryLowered(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

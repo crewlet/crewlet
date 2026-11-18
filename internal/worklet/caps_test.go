@@ -20,18 +20,13 @@ func handlesOf(n int) []string {
 }
 
 // EVERY COLLECTION A ROUTING SNAPSHOT CARRIES IS BOUNDED AT THE PUBLISH
-// BOUNDARY.
+// BOUNDARY, by [worklet.Notify.Validate]. A snapshot is copied onto the log,
+// held by every replica for the retention window and applied into every data
+// node's rows, and MaxCommitBytes is sized from these caps' sum (about 19 KiB
+// worst).
 //
-// [worklet.Notify.Validate] read `Kind`, `Fields` and `Excerpt` and NOTHING on
-// the snapshot, so ten collections went onto the log unbounded. That is not a
-// screen rendering badly: a snapshot is copied onto the log, held by each of
-// the stream's replicas for its whole retention window and applied into every
-// data node's rows — and the design's own arithmetic sums these caps to about
-// 19 KiB worst and sizes MaxCommitBytes from it. The caps that held were
-// incidental properties of whichever builder happened to read a bounded table.
-//
-// THE WALK IS PER FIELD, because a check that bounded nine of ten would pass
-// any case written about the interesting one.
+// Per field, because a check that bounded nine of ten would pass any case
+// written about the interesting one.
 func TestEverySnapshotCollectionIsBounded(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -80,8 +75,8 @@ func TestEverySnapshotCollectionIsBounded(t *testing.T) {
 				t.Errorf("the refusal does not name %s: %v", tc.field, err)
 			}
 
-			// AND AT THE CAP IT IS ACCEPTED, so this bounds the
-			// collection rather than forbidding it.
+			// And at the cap it is accepted, so this bounds the collection
+			// rather than forbidding it.
 			at := &worklet.Notify{Kind: worklet.ChangeFields}
 			tc.over(at)
 			trimToCap(at, tc.field, tc.max)
@@ -125,29 +120,24 @@ func trimToCap(n *worklet.Notify, field string, max int) {
 	}
 }
 
-// AN UNWATCH IS NEVER REFUSED, whatever the set is holding.
-//
-// The cap check ran on BOTH branches of the watch gesture, over a set an
-// unwatch can only shrink. So a task that had grown past MaxWatchers — which
-// the whole-set spelling could do, since nothing bounded it — was one nobody
-// could leave: the only gesture that could have brought it back under the cap
-// was the one being refused, for being over it.
+// AN UNWATCH IS NEVER REFUSED, whatever the set is holding: it can only
+// shrink the set, so a cap check on it would leave a task grown past
+// MaxWatchers one nobody could leave or bring back under the cap.
 func TestAnUnwatchIsNeverRefusedHoweverManyAreWatching(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	task := newTask("t-1")
-	// AT THE CAP, which a create may set: the gesture's check is about
-	// growth past it, and this fixture is what growth would start from.
+	// At the cap, which a create may set: the gesture's check is about
+	// growth past it.
 	task.Watchers = handlesOf(worklet.MaxWatchers)
 	if _, err := r.writer.CreateTask(t.Context(), "op-t-1", task, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	r.drain()
 
-	// GROWING PAST IT IS REFUSED, which is the cap doing its job — as the
-	// TASK'S STATE: the gesture names one person, and it lands once
-	// somebody stops watching. Refused as the request's, it told a caller
-	// to change an argument nothing was wrong with.
+	// Growing past it is refused as the TASK'S STATE, not the request's:
+	// the gesture names one person and lands once somebody stops watching,
+	// so ErrInvalid would blame an argument nothing is wrong with.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-watch", "t-1", "ENG",
 		worklet.NoIfMatch,
 		worklet.TaskPatch{Watch: &worklet.WatchIntent{
@@ -157,7 +147,7 @@ func TestAnUnwatchIsNeverRefusedHoweverManyAreWatching(t *testing.T) {
 		t.Errorf("a sixty-fifth explicit watch answered %v, want the task's state", err)
 	}
 
-	// AND LEAVING IS NOT, which is the half that was broken.
+	// And leaving is not.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-unwatch", "t-1", "ENG",
 		worklet.NoIfMatch,
 		worklet.TaskPatch{Watch: &worklet.WatchIntent{
@@ -170,13 +160,9 @@ func TestAnUnwatchIsNeverRefusedHoweverManyAreWatching(t *testing.T) {
 	r.drain()
 }
 
-// AN AUTOMATIC WATCH IS SKIPPED AT THE CAP, never refused — which is what lets
-// somebody comment on a task sixty-four people are already watching.
-//
-// MaxWatchers' own doc states the two modes ("an explicit sixty-fifth watch is
-// refused, and an automatic one is skipped") and neither was implemented for
-// the comment path, which sent the whole watcher set instead and checked
-// nothing.
+// AN AUTOMATIC WATCH IS SKIPPED AT THE CAP, never refused, so somebody can
+// comment on a task sixty-four people already watch: the second of the two
+// modes MaxWatchers' doc states, on the comment path.
 func TestAnAutomaticWatchIsSkippedRatherThanRefusingTheWrite(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -204,7 +190,7 @@ func TestAnAutomaticWatchIsSkippedRatherThanRefusingTheWrite(t *testing.T) {
 	}
 	r.drain()
 
-	// THE COMMENT LANDED AND THE WATCH DID NOT.
+	// The comment landed and the watch did not.
 	detail, err := r.reader.Task(t.Context(), "t-1",
 		worklet.DetailWants{Comments: true}, statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
@@ -221,23 +207,13 @@ func TestAnAutomaticWatchIsSkippedRatherThanRefusingTheWrite(t *testing.T) {
 	}
 }
 
-// A TASK'S OWN TEXT IS REFUSED AT THE WRITE, WHICH IS WHAT THE CAPS SAID ALL
-// ALONG AND NOTHING DID.
+// A TASK'S OWN TEXT IS REFUSED AT THE WRITE, naming the field, never cut,
+// as [worklet.MaxTitle], [worklet.MaxBody] and [worklet.MaxCommentBody]
+// promise; MaxCommitBytes, about forty times these and phrased about the
+// record, is no substitute. A thread page carries every comment WHOLE, so a
+// body past MaxCommentBody would make a page too heavy for one tool answer.
 //
-// [worklet.MaxTitle], [worklet.MaxBody] and [worklet.MaxCommentBody] are
-// declared under a sentence promising each is "refused at WRITE naming the
-// field, never cut" — and not one of them had a comparison anywhere in the
-// tree. A search found the three constants, one alias and four doc comments.
-// The nearest bound that fired was MaxCommitBytes, about forty times these
-// and phrased about the record rather than the field, so a caller past a cap
-// got either silence or a number they could not act on.
-//
-// The comment is where the cost shows: a thread page carries every comment
-// WHOLE and at least one, so a body stored past MaxCommentBody would make a
-// page too heavy for one tool answer — reachable through no tool in the
-// engine. The cap is what keeps "whole" deliverable.
-//
-// PER FIELD, because a check that bounded two of three would pass any case
+// Per field, because a check that bounded two of three would pass any case
 // written about the interesting one.
 func TestATasksOwnTextIsRefusedPastItsCap(t *testing.T) {
 	t.Parallel()
@@ -274,17 +250,17 @@ func TestATasksOwnTextIsRefusedPastItsCap(t *testing.T) {
 			r := newRoundTrip(t)
 			task := r.createTask("A task to write text onto")
 
-			// AT THE CAP IT LANDS, which is the half that keeps the
-			// refusal from being a cap somebody quietly lowered.
+			// At the cap it lands, which keeps the refusal from being a cap
+			// somebody quietly lowered.
 			if err := tc.write(r, task, tc.max); err != nil {
 				t.Fatalf("a %s of exactly %d bytes was refused: %v",
 					tc.field, tc.max, err)
 			}
 			r.drain()
 
-			// ONE BYTE PAST IT IS REFUSED, NAMING THE FIELD — because a
-			// caller told only that "the record is too large" cannot tell
-			// which of the eleven things it sent was the problem.
+			// One byte past it is refused naming the field: "the record is
+			// too large" cannot tell a caller which of the eleven things it sent
+			// was the problem.
 			err := tc.write(r, task, tc.max+1)
 			if err == nil {
 				t.Fatalf("a %s of %d bytes was accepted against a cap of %d — "+
@@ -295,9 +271,8 @@ func TestATasksOwnTextIsRefusedPastItsCap(t *testing.T) {
 				t.Errorf("the refusal does not name %q, so a caller cannot "+
 					"tell which value to shorten: %v", tc.field, err)
 			}
-			// TYPED, carrying what a caller names to a person — the
-			// field, what was sent and the cap — and marked as content,
-			// so no surface offers a retry that refuses identically.
+			// Typed, carrying the field, the size sent and the cap, and marked
+			// as content, so no surface offers a retry that refuses identically.
 			var capped *worklet.TextCapError
 			if !errors.As(err, &capped) || string(capped.Field) != tc.field ||
 				capped.Size != tc.max+1 || capped.Limit != tc.max {
@@ -307,16 +282,14 @@ func TestATasksOwnTextIsRefusedPastItsCap(t *testing.T) {
 			if !errors.Is(err, worklet.ErrInvalid) {
 				t.Errorf("the refusal is not marked as content: %v", err)
 			}
-			// AND IT NAMES NO TASK: the caller named the item it was
-			// editing, and a uuid in the sentence is one more thing a
-			// person is shown that they never typed.
+			// And it names no task: the caller named the item it was editing,
+			// and a uuid is one more thing a person is shown they never typed.
 			if strings.Contains(err.Error(), task.ID) {
 				t.Errorf("the refusal names the task's id: %v", err)
 			}
-			// AND IT NAMES A REMEDY THAT EXISTS. It used to offer "an
-			// attachment", which this tracker has no verb for — a model
-			// told to attach went looking for a tool that is not there.
-			// A page is, and a link is how a task points at one.
+			// And it names a remedy that exists: a page and a link. The
+			// tracker has no attachment verb, so a model told to attach would
+			// hunt for a tool that is not there.
 			if !strings.Contains(err.Error(), "on a page and link it") ||
 				strings.Contains(err.Error(), "attachment") {
 				t.Errorf("the refusal's remedy is not page linking: %v", err)
@@ -325,11 +298,9 @@ func TestATasksOwnTextIsRefusedPastItsCap(t *testing.T) {
 	}
 }
 
-// A CREATE PAST A CAP NAMES NO TASK, because there is none. The create's id is
-// minted before the write — so every node derives the same one from the
-// request — and a refusal that quoted it told a person filing from the
-// dashboard that "the title on task 68c5…" was too long, about a task that was
-// never created and could never be looked up.
+// A CREATE PAST A CAP NAMES NO TASK, because there is none: the create's id
+// is minted before the write (so every node derives the same one), and quoting
+// it would name a task that was never created and can never be looked up.
 func TestACreatePastACapNamesNoTask(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -348,14 +319,11 @@ func TestACreatePastACapNamesNoTask(t *testing.T) {
 }
 
 // ONE CALL NAMES AT MOST [worklet.MaxTasksNamed] OTHER TASKS: a dependency
-// change's counterparties, and a rank order's own moves beside a re-spread's
-// neighbours.
-//
-// Each counterparty is a commit of its own and each move a placement on one
-// record, so a call past the cap is a batch rather than a gesture, and both
-// writers refuse it before anything is read or published — naming the count,
-// so the caller knows how far to split it. AT the cap neither refusal is the
-// cap's: the call goes on to whatever it would have met next.
+// change's counterparties, and a rank order's moves beside a re-spread's
+// neighbours. Each counterparty is a commit and each move a placement on one
+// record, so a call past the cap is a batch, refused before anything is read
+// or published and naming the count, so the caller knows how far to split
+// it. AT the cap neither refusal is the cap's.
 //
 // Mutation: drop either check and its over-the-cap row is accepted.
 func TestOneCallNamesAtMostMaxTasksNamedTasks(t *testing.T) {

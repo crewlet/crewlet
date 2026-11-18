@@ -5,41 +5,28 @@ import (
 	"time"
 )
 
-// THE JOB'S MAIN THREAD, READ ONCE BY THE COLLECTION.
-//
-// A relaunch that carries a round on in the job's own box continues the copy of
-// the session that box holds, and its harness may compact that copy before the
-// relaunch's first request (resumed.go). The run's event stream measures the
-// input of the newest request alone ([Result.LastRequest]), never the reply's
-// output nor what came after it, so only the box's thread bounds what the
-// harness counts there: a Claude Code job's main thread, and an OpenCode job's
-// session as the export its script left at the job's end holds it, the copy
-// the box holds once the harness ended its own run. So the read that collects
-// a job reads the job's main thread ONCE, on the box's host, before the take
-// ([Coordinator.readMainThread]), and every reading the collection asks of
-// that thread shares the one read ([MainThreadAsk]): what the harness counts
-// the copy at ([ResumedCount]), with the provider of the reply an OpenCode
-// count is anchored on, and what it estimates the copy's next request at
-// ([NextRequest]) now, and whatever later reading of the thread joins them,
-// never a second read of the thread.
-//
-// ITS ANSWER IS WRITTEN WITH HOW THE HARNESS ENDED, after the take, in the
-// collection's one write of the job's end ([EndRead.Count], [EndRead.Next]),
-// never in a write of its own. A stop's read and a loss's ask nothing: no relaunch carries their
-// round on in place. A job not over is not read: its harness may still write.
+// THE JOB'S MAIN THREAD, READ ONCE BY THE COLLECTION. A relaunch carrying a
+// round on in the job's own box continues the session copy the box holds, which
+// its harness may compact before its first request (resumed.go); the event
+// stream measures only the newest request's input ([Result.LastRequest]), so
+// only the box's thread bounds what the harness counts: a Claude Code job's
+// main thread, an OpenCode job's export its script left. So the collecting read
+// reads that thread ONCE, on the box's host, before the take
+// ([Coordinator.readMainThread]), and every reading asked of it ([ResumedCount],
+// [NextRequest]) shares the one read ([MainThreadAsk]), written after the take
+// in the collection's one write of the job's end ([EndRead.Count],
+// [EndRead.Next]). A stop's read and a loss's ask nothing; a job not over is
+// not read: its harness may still write.
 
 // MainThreadReadWait bounds the read of a job's main thread at its collection
-// ([Coordinator.readMainThread]): the one wait every reading of the one read
-// shares.
+// ([Coordinator.readMainThread]): one wait every reading of the read shares.
 //
-// FIFTEEN SECONDS, the ground the hook receipt's read of the same thread
-// stated: the main thread at its bound, a quarter of a gibibyte read a whole
-// line at a time with each line decoded into every fact its readers read, in
-// 1.9 to 2.0 s on two cores of the engine host (the executor's
-// BenchmarkTheMainThreadReadAtItsBound), twice that on a loaded host, and on
-// e2b streamed through envd. A read past it answers [CountUnread], the safe
-// side: a continuation told as one that may be cut off. It is held inside the
-// box read's budget ([BoxReadBudget]) for a Claude Code or an OpenCode
+// FIFTEEN SECONDS: the main thread at its bound, a quarter of a gibibyte read a
+// line at a time with each line decoded, takes 1.9 to 2.0 s on two cores of
+// the engine host (the executor's BenchmarkTheMainThreadReadAtItsBound), twice
+// that loaded, and more on e2b, streamed through envd. A read past it answers
+// [CountUnread], the safe side: a continuation told as one that may be cut
+// off. It is held inside [BoxReadBudget] for a Claude Code or an OpenCode
 // collection, before the take, so the take keeps its own.
 const MainThreadReadWait = 15 * time.Second
 
@@ -84,22 +71,17 @@ type MainThreadReading struct {
 }
 
 // readMainThread reads run's job's main thread in box through runner, once, for
-// every reading the collection asks of it: what the harness counts the copy at
-// and what it estimates its next request at, for a Claude Code or an OpenCode
-// job's collection ([BoxReadCollect]); a Claude Code job's whether or not its
-// harness ended its own run, since the count decides the copy's skill guard
-// too. Nothing where nothing is asked: a stop's read, a loss's, and another
-// harness's job. A job not over is [CountUnread] with no read and no estimate
-// ([capturePoint.final]), and so is a runner that reads no thread, and an
-// OpenCode job whose harness did not end its own run ([capturePoint.cutOff]):
-// its script exports the session after its harness stops, so its export may
-// lack what its copy holds, and a job its script packed nothing for left no
-// export to read. The count carries the least window the run reported
-// ([Result.ReportedWindow]).
-//
-// WITHIN [Coordinator.mainThreadWait], armed here, inside the read's context:
-// past it, the read ends where it is, and the count is [CountUnread]. Logged
-// where the count is marked.
+// every reading the collection asks: what the harness counts the copy at and
+// estimates its next request at, for a Claude Code or an OpenCode job's
+// collection ([BoxReadCollect]); a Claude Code job's whether or not its harness
+// ended its own run, since the count decides the copy's skill guard too. A
+// stop's read, a loss's and another harness's job ask nothing. A job not over
+// ([capturePoint.final]), a runner that reads no thread, and an OpenCode job
+// whose harness did not end its own run ([capturePoint.cutOff]; its export may
+// lack what its copy holds) are [CountUnread] with no read. The count carries
+// the least window the run reported ([Result.ReportedWindow]). The read is held
+// within [Coordinator.mainThreadWait], armed here, past which the count is
+// [CountUnread]; a marked count is logged.
 func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sandbox, runner Runner,
 	read BoxRead, at capturePoint, result Result) MainThreadReading {
 
@@ -154,13 +136,12 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 	return MainThreadReading{Count: count, Next: next, Provider: provider}
 }
 
-// unboundedBecause is why a read of a job's main thread that answered mark holds
-// no bound, as its log says it: of a thread not read whole, what may have
-// stopped the read; of a release the count's rules were not read in, or a saved
-// compaction, that the thread was not read at all, since each is found before
-// it is opened (internal/sandbox/executor's mainthread.go); and of every other
-// mark, that the thread was read whole and its bytes cannot bound what the mark
-// names.
+// unboundedBecause is why a read that answered mark holds no bound, as its log
+// says: of a thread not read whole, what may have stopped the read; of a
+// release the count's rules were not read in, or a saved compaction, that the
+// thread was not read at all, each being found before it is opened
+// (internal/sandbox/executor's mainthread.go); of any other mark, that the
+// thread was read whole and its bytes cannot bound what the mark names.
 func unboundedBecause(mark CountMark) string {
 	switch mark {
 	case CountUnread:

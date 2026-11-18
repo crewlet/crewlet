@@ -10,42 +10,33 @@ import (
 // liveData is who the fleet says is a live DATA node: the half of every log's
 // counted set that is not the positions register ([statelog.CountedSet]).
 //
-// # Why every log counts the live data nodes
-//
-// The trim may not remove a record a node that applies the log has not applied,
-// and every data node applies every log from boot — the estate is one, held
-// whole by each of them — while a node without `data` applies none. So a log's
-// counted set is the register's rows naming it, UNION every live data node,
-// whether or not that node has reported a position — one whose row has not
-// landed applies the log all the same, and counts at zero — MINUS the
-// tombstones past their window.
-// Counting every live node instead would pin every log for as long as a node
-// without `data` ran, at a position it never reports.
+// The trim may not remove a record a node applying the log has not applied;
+// every data node applies every log from boot and a node without `data`
+// applies none. So a log's counted set is the register's rows naming it, UNION
+// every live data node (one with no row yet counts at zero), MINUS the
+// tombstones past their window. Counting every live node instead would pin
+// every log while a node without `data` ran, at a position it never reports.
 type liveData interface {
 	LiveData(ctx context.Context) ([]statelog.Presence, error)
 }
 
 // holdersOf is who holds the estate as every counted set on this node reads it:
-// the live data nodes, listed afresh ([presenceHolders]).
-//
-// ONE CHOICE, made here, for every reading of a log's counted set that
-// licenses removing records — the trim's — so two of them can never disagree
-// about who the log's readers are.
+// the live data nodes, listed afresh ([presenceHolders]). The one choice for
+// every reading of a counted set that licenses removing records (the trim's),
+// so no two can disagree about who the log's readers are.
 func (e *Engine) holdersOf() liveData {
 	return presenceHolders{leases: e.backends.Coord}
 }
 
 // watchedHolders is who holds the estate as this node's WATCHED presence view
-// answers it ([viewHolders]), for a question asked often that decides nothing
-// a view's age could make unsafe: whether the estate has anybody to donate a
-// snapshot to ([Engine.counted]).
+// answers it ([viewHolders]), for a frequent question no stale view makes
+// unsafe: whether the estate has anybody to donate a snapshot to
+// ([Engine.counted]).
 //
-// NOT THE TRIM'S ANSWER, which lists presence afresh on every tick
-// ([Engine.holdersOf]): the trim licenses removing records, and a listing up to
-// a heartbeat old may miss a live data node that has just taken its lease with
-// no row of its own landed — its heartbeat's first write refused — which the
-// trim counts at position zero until the row lands ([statelog.CountedSet]),
-// the one node it must not pass.
+// Not the trim's fresh listing ([Engine.holdersOf]): a view up to a heartbeat old can
+// miss a live data node that has just taken its lease with no row landed yet,
+// the node the trim counts at position zero ([statelog.CountedSet]) and must
+// not pass.
 func (e *Engine) watchedHolders() liveData {
 	return viewHolders{view: e.dataView}
 }

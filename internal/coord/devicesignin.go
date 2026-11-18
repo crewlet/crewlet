@@ -12,39 +12,17 @@ import (
 )
 
 // A DEVICE SIGN-IN is a harness's device-code login in progress for one model
-// entry: the engine runs `codex login --device-auth`, relays the verification
-// address and the one-time code, and a person approves it in their browser.
+// entry (`codex login --device-auth`): the engine relays the verification
+// address and code, and a person approves it in their browser.
 //
-// # Who has to agree on it
-//
-// The whole company, now. One node runs the harness's process, but any node may
-// serve the status read the dashboard polls, a cancel may arrive at any node,
-// and a second start for the same entry must be refused fleet-wide: two
-// processes signing one entry in would race to write one login. So the
-// session is one record in the coordination store, written by the node running
-// it and watched by every node (internal/engine/devicesignin.go).
-//
-// # One record per entry
-//
-// Filed under the ENTRY's key, not the session's id, so "one session per entry
-// across the fleet" is the store's own create-if-absent rather than a second
-// lock record kept in step with the first. A start over a record whose session
-// has ENDED (or lapsed, or whose node is gone) replaces it at the version read.
-// The status read by id lists the class, which holds one record per entry the
-// company signs in this way.
-//
-// # An expiry the readers keep, and no bucket age
-//
-// A session outlives its process only long enough for the page that started it
-// to read how it ended: until [DeviceSignIn.ExpiresAt] plus
-// [DeviceSignInLinger]. That is a per-record lifetime, which a bucket age
-// cannot hold (an update would restart it; internal/coord/kv's package doc has
-// the measurement), so the record lives in the positions register, the bucket
-// with no age, and is LAPSED by its own fields: [DeviceSignIn.Lapsed] is "as
-// good as gone", every reader answers it absent, and every node's watch
-// removes the lapsed records it sees. A node that dies mid-session leaves a
-// record no process will end; every other node marks it failed once the dead
-// node's presence lease is gone, so nobody waits out a code nobody is reading.
+// One fleet-wide record per ENTRY, not per session: any node may serve the
+// status read or a cancel, and two processes signing one entry in would race to
+// write one login, so the store's create-if-absent is the one-per-entry lock. A
+// start over an ended, lapsed or orphaned record replaces it at the version read.
+// No bucket age, which an update would restart (internal/coord/kv's package
+// doc; [PositionKey]): readers answer a [DeviceSignIn.Lapsed] record absent and
+// every node's watch removes it, and once a dead node's presence lease is gone
+// the others mark its session failed (internal/engine/devicesignin.go).
 
 // DeviceSignInStatus is where a device sign-in is.
 type DeviceSignInStatus string

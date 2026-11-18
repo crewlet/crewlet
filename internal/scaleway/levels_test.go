@@ -35,6 +35,38 @@ func TestNoLevelGrantsANeverGrantedSet(t *testing.T) {
 	}
 }
 
+// THE NEVER-GRANTED LIST IS PINNED, a set leaving it only with an ADR, and no
+// level holds a set granted for one change. Mutation: drop
+// ObjectStorageBucketPolicyFullAccess, or add ObjectStorageBucketsWrite to Operate.
+func TestTheNeverGrantedListIsPinned(t *testing.T) {
+	t.Parallel()
+	want := []string{
+		"AllProductsFullAccess", "AllProductsReadOnly", "BillingManager", "BillingReadOnly",
+		"DomainsDNSFullAccess", "IAMApplicationManager", "IAMGroupManager", "IAMManager",
+		"IAMPolicyManager", "IAMReadOnly", "IAMUserManager", "KeyManagerFullAccess",
+		"KeyManagerKeyCreate", "KeyManagerKeyDecrypt", "KubernetesSystemMastersGroupAccess",
+		"ObjectStorageBucketPolicyFullAccess", "ObjectStorageFullAccess", "ObjectStorageObjectsRead",
+		"ObjectStorageObjectsWrite", "ObjectStorageReadOnly", "ObservabilityFullAccess",
+		"OrganizationManager", "ProjectManager", "SSHKeysFullAccess", "SecretManagerFullAccess",
+		"SecretManagerSecretAccess", "SecretManagerSecretCreate", "SecretManagerSecretDelete",
+		"SecretManagerSecretWrite",
+	}
+	if got := slices.Sorted(slices.Values(scaleway.NeverGranted())); !slices.Equal(got, want) {
+		t.Errorf("the never-granted list is %q, want %q; a change to it is a decision for an ADR", got, want)
+	}
+	if got := scaleway.OneChangeSets(); !slices.Equal(got, []string{"ObjectStorageBucketsWrite"}) {
+		t.Errorf("the sets granted for one change are %q", got)
+	}
+	for _, level := range scaleway.Levels() {
+		sets, _ := scaleway.ProjectSets(level)
+		for _, set := range scaleway.OneChangeSets() {
+			if slices.Contains(sets, set) || slices.Contains(scaleway.NeverGranted(), set) {
+				t.Errorf("%s, granted for one change, is in %s or on the never-granted list", set, level)
+			}
+		}
+	}
+}
+
 // EACH LEVEL GRANTS EVERYTHING THE ONE BELOW IT DOES, AND MORE, and only
 // Administer is an administration grant.
 func TestEachLevelGrantsTheOneBelowItAndMore(t *testing.T) {

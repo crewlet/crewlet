@@ -12,10 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
-// droppingLookups is a broker that DROPS the first bucket lookup it is sent —
-// it never answers it, the way every member but one drops a read of a bucket
-// that is still in flight — and answers every later one from the real broker
-// beneath it.
+// droppingLookups is a broker that DROPS (never answers) the first bucket
+// lookup, as every member but one drops a read of a bucket still in flight,
+// and answers every later one from the real broker beneath it.
 type droppingLookups struct {
 	jetstream.JetStream
 	lookups atomic.Int64
@@ -33,16 +32,13 @@ func (d *droppingLookups) KeyValue(ctx context.Context, bucket string) (jetstrea
 // WRITE'S.
 //
 // The broker answers a read when it processes it or never, and a fleet booting
-// together drops reads as a matter of course: a bucket a peer has just asked
-// for is assigned with no leader yet, and only the member chosen to lead it
-// answers for it. A WRITE's reply, by contrast, is held until the object has a
-// leader, which is why a create waits [jsprovision.AskTerm] — fifteen seconds
-// on a cluster — before asking again. The lookup used to be asked at that same
-// term, so every lookup dropped at boot stalled the node for sixteen seconds
-// waiting for a reply that did not exist.
+// together drops reads routinely: a just-assigned bucket has no leader yet, and
+// only its leader-to-be answers. A WRITE's reply is held until a leader exists,
+// so a create waits [jsprovision.AskTerm] (fifteen seconds clustered); a lookup
+// asked at that term stalls the boot waiting for a reply that never comes.
 //
-// CLUSTERED, because that is the topology whose write term is the long one: on
-// a solo broker the two terms would not tell the bug from the fix.
+// CLUSTERED, because that topology's write term is the long one: on a solo
+// broker the two terms would not tell a lookup asked at either apart.
 func TestADroppedBucketLookupIsAskedAgainAfterAReadsTerm(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -74,9 +70,8 @@ func TestADroppedBucketLookupIsAskedAgainAfterAReadsTerm(t *testing.T) {
 	}
 }
 
-// droppingStreamReads is a broker that DROPS the first stream-info read it is
-// sent — what a bucket's status is read through — and answers every later one
-// from the real broker beneath it.
+// droppingStreamReads is a broker that DROPS the first stream-info read (what
+// a bucket's status is read through) and answers every later one for real.
 type droppingStreamReads struct {
 	jetstream.JetStream
 	reads atomic.Int64
@@ -93,18 +88,15 @@ func (d *droppingStreamReads) Stream(ctx context.Context, name string) (jetstrea
 // A REPLICA-COUNT READ NOBODY ANSWERED IS ASKED AGAIN RATHER THAN FAILING THE
 // BOOT.
 //
-// The check that refuses a bucket replicated below this node's configuration
-// reads the bucket's status — a metadata read like the lookup above, dropped
-// by the same members in the same window. It was asked ONCE, with the whole
-// [jsprovision.ReadBack] window as its deadline, so a dropped request waited
-// out the window for a reply that did not exist and failed the boot over a
-// bucket it had just found. It now reads through the one status read on the
-// path, which re-asks a request nobody answered.
+// The check refusing a bucket replicated below this node's configuration reads
+// its status, a metadata read dropped like the lookup above. Asked once with
+// the whole [jsprovision.ReadBack] window as deadline, a dropped request fails
+// the boot over a bucket just found, so it goes through the one status read on
+// the path, which re-asks an unanswered request.
 //
-// THE ANSWER IS THE PROOF. The bucket was made at one replica and the node
-// asks for three, so a read that was answered comes back as the replication
-// refusal naming both counts, and one that was never asked again as a status
-// failure naming neither.
+// THE ANSWER IS THE PROOF: the bucket has one replica and the node asks for
+// three, so an answered read is the replication refusal naming both counts, and
+// one never re-asked a status failure naming neither.
 func TestADroppedReplicaReadIsAskedAgainRatherThanFailingTheBoot(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)

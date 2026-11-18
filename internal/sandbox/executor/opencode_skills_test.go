@@ -218,10 +218,9 @@ func skillLoaded(id string) (string, string, map[string]any) {
 }
 
 // A LOAD IS ON RECORD BEFORE THE MODEL GOES ON: the plugin posts the skill's id
-// to the route once OpenCode's skill tool has answered, and its hook — which
-// OpenCode waits for before it hands the tool's answer back — resolves only
-// once the route has answered, so a call the skill unlocks, made in the
-// model's next request, finds the load recorded.
+// once OpenCode's skill tool has answered, and its hook (which OpenCode awaits
+// before handing the answer back) resolves only once the route has answered, so
+// a call the skill unlocks in the model's next request finds the load recorded.
 //
 // Mutation: fire the report and resolve at once, and the hook resolves while
 // the route still holds the report.
@@ -266,9 +265,8 @@ func TestTheSkillsPluginReportsOnlyALoadThatHappened(t *testing.T) {
 }
 
 // A ROUTE THAT REFUSES THE RUN ENDS ITS REPORTS: a token the bridge no longer
-// resolves (401), or a run with no skill route (404), will not be answered
-// otherwise later, so no later load is posted. A route that failed any other
-// way — a node stopping, a relay cut — is asked again at the next load.
+// resolves (401) or a run with no skill route (404) will not change, so no
+// later load is posted. Any other failure is asked again at the next load.
 func TestARouteThatRefusesTheRunEndsItsReports(t *testing.T) {
 	t.Parallel()
 	for _, status := range []int{http.StatusNotFound, http.StatusUnauthorized} {
@@ -293,8 +291,8 @@ func TestARouteThatRefusesTheRunEndsItsReports(t *testing.T) {
 }
 
 // A REPORT NOBODY ANSWERS LETS THE MODEL GO ON: the hook gives the route five
-// seconds and resolves, letting go of its request, so a bridge that hangs costs
-// the run a pause rather than its next request.
+// seconds, then resolves and lets go of its request, so a hung bridge costs the
+// run a pause rather than its next request.
 func TestAReportNobodyAnswersLetsTheModelGoOn(t *testing.T) {
 	t.Parallel()
 	route, pr := newSkillRoute(t), startSkillsProbe(t)

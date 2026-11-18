@@ -11,10 +11,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// dropCached asks the kernel to drop every page it caches of the files under
-// dir (posix_fadvise DONTNEED, each made durable first, since a dirty page is
-// not dropped), so the next read of them is the volume's — and answers true:
-// a benchmark's cold arm reads at the disk's own throughput.
+// dropCached drops the kernel's cached pages of every file under dir
+// (posix_fadvise DONTNEED, after a sync, since a dirty page is not dropped)
+// and answers true, so a benchmark's cold arm reads at the disk's throughput.
 func dropCached(b *testing.B, dir string) bool {
 	b.Helper()
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {

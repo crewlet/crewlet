@@ -42,6 +42,26 @@ const OPEN_SENTENCE = /(^|\/)lib\/format(\.ts)?$|^\.\/format(\.ts)?$/;
 /** Each excused time, keyed by module and enclosing function, with its reason. */
 const EXCEPTIONS: Record<string, { form: Form; why: string }> = {
   "routes/gitlet/ui.tsx#Byline": { form: "words", why: "the verb arrives as a prop" },
+  "routes/gitlet/change/ChangePage.tsx#ChangeHeader": {
+    form: "words",
+    why: "the header sentence's time, after its verb, in a time element of its own",
+  },
+  "routes/gitlet/change/Merge.tsx#EndedAgo": {
+    form: "words",
+    why: "a check's or queue's time after its state word, which arrives as a prop",
+  },
+  "routes/gitlet/change/Merge.tsx#measured": {
+    form: "words",
+    why: "the Merges sentence's time, after its commit, in a time element of its own",
+  },
+  "routes/gitlet/change/Timeline.tsx#Said": {
+    form: "words",
+    why: "a byline whose face is on the timeline's rail: the verb arrives as a prop",
+  },
+  "routes/gitlet/commit/Provenance.tsx#Row": {
+    form: "words",
+    why: "a provenance row's time at its end, the close of the row's sentence",
+  },
   "routes/gitlet/repo/Branches.tsx#MovedBy": {
     form: "words",
     why: "a byline: who moved the branch arrives as a prop",

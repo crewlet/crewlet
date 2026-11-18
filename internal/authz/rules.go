@@ -511,6 +511,10 @@ const (
 	// credential's write and a device sign-in are `secrets.write`.
 	ActionModelsCheck Action = "models.check"
 	ActionModelsRetry Action = "models.retry"
+	// ActionAdvisorRun starts the advisor's analyst now, or records an answer
+	// to one of its findings (`POST /advisor/analysis`, `.../answers`): runtime
+	// records the company keeps, never config or a credential (ADR-0157).
+	ActionAdvisorRun Action = "advisor.run"
 	// ActionToolsRetry restarts an MCP server now, on every node or on the
 	// node holding one seat (`POST /mcp-servers/{name}/retry`). Like a
 	// model's retry it changes RUNTIME state the company already reaches,
@@ -1919,6 +1923,9 @@ var rules = map[Action]rule{
 	// retry moves every node.
 	ActionModelsCheck: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
 	ActionModelsRetry: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
+	// THE ANALYST'S RUN AND ITS ANSWERS are admin's with no step-up, for a
+	// model check's reason; the assistant proposes a run, since it spends tokens.
+	ActionAdvisorRun: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
 	// AN MCP SERVER'S RESTART is admin's with no step-up, as a model's retry
 	// is and for its reason: it writes neither the company nor a credential,
 	// and the person reaching for it is watching a server fail now. The

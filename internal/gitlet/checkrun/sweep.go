@@ -21,17 +21,16 @@ import (
 // registers it, and as crewlet.code.home.passes counts its turns.
 const WorkerCheckRunners = "check_runners"
 
-// SweepPolls is how many polls past its check's own timeout and a setup's
-// grace a running attempt's claim may age before the home takes its runner for
-// lost: EIGHT, two minutes at CheckPoll — the poll at which its runner finds
-// the command ended or past its timeout, EndPolls polls of reading its ending
-// from the box (its reports and its kept log, bounded by Timing.End),
-// FinishPolls polls of asking for its ending again, and one more for the
-// clocks of two nodes and a loaded one's lateness. A runner holding an attempt
-// ends it by its claim, the setup's grace, its timeout and that much, or it is
-// not running it: a node restarted mid-run, in the git order again but holding
-// nothing. Four, with no time for the ending's reads, took a runner still
-// uploading a large log for lost and queued its attempt again beside it.
+// SweepPolls is how many polls past its check's timeout and a setup's grace a
+// running attempt's claim may age before the home takes its runner for lost:
+// eight, two minutes at CheckPoll. One poll for the runner to find the command
+// ended or timed out, EndPolls to read its ending from the box (reports and
+// kept log, bounded by Timing.End), FinishPolls to ask for its ending again,
+// and one for two nodes' clocks and a loaded node's lateness. A runner holding
+// an attempt ends it within that, or it is not running it (a node restarted
+// mid-run, in the git order again but holding nothing). Less leaves no time
+// for the ending's reads: a runner still uploading a large log is taken for
+// lost and its attempt queued again beside it.
 const SweepPolls = 1 + EndPolls + FinishPolls + 1
 
 // SweeperOptions build a [Sweeper]. Every field but Logger and Now is
@@ -54,9 +53,9 @@ type SweeperOptions struct {
 
 // Sweeper is a repository's HOME's sweep of the checks whose runner is gone:
 // a worker of internal/gitlet/home's loop (its Worker: Name, Due, Work), which
-// this package does not import and the engine registers. The loop asks it,
-// at every pass and every nudge, for the repositories holding a running
-// attempt and works each one this node is home to.
+// this package does not import and the engine registers. At every pass and
+// nudge the loop asks it for the repositories holding a running attempt and
+// works each one this node is home to.
 type Sweeper struct {
 	o   SweeperOptions
 	log *slog.Logger
@@ -116,14 +115,12 @@ func (s *Sweeper) Due(ctx context.Context, floor statelog.Position, cursor strin
 
 // Work sweeps repoID's running attempts: each whose runner has left the
 // repository's git order, or whose claim has outlived its check's timeout,
-// the setup's grace and the slack, is ended `errored runner_lost` — and its
-// box killed where it is a remote one. A container box on a node that left is
-// that node's container runtime's, reclaimed by its own reaping. An attempt a
-// person's CI reports runs on no runner of the engine's, and is not swept.
+// the setup's grace and SweepPolls, is ended `errored runner_lost`, its box
+// killed where it is remote (package doc, "A runner that is gone"). An attempt
+// a person's CI reports runs on no engine runner and is not swept.
 //
-// AN ENDING ASKED BY TWO HOMES — a presence view split for a moment — is one
-// write: its operation id is derived from the attempt and its claim, so the
-// second collapses onto the first.
+// AN ENDING ASKED BY TWO HOMES (a presence view split for a moment) is one
+// write: its operation id derives from the attempt and its claim.
 func (s *Sweeper) Work(ctx context.Context, repoID string, floor statelog.Position) error {
 	order, err := s.o.Order.GitOrder(repoID)
 	if err != nil {
@@ -187,10 +184,9 @@ func (s *Sweeper) end(ctx context.Context, row gitlet.CheckRow, why string) erro
 	return nil
 }
 
-// kill ends a lost runner's REMOTE box through its provider: a box of the
-// catalogue's e2b cell, which no other node's teardown reaches and which
-// bills until its TTL. Best effort — a box already gone is no error, and one
-// that cannot be reached is reclaimed by its TTL.
+// kill ends a lost runner's REMOTE (e2b) box through its provider, since no
+// other node's teardown reaches it and it bills until its TTL. Best effort: a
+// box already gone is no error, and its TTL reclaims one that cannot be reached.
 func (s *Sweeper) kill(ctx context.Context, row gitlet.CheckRow) {
 	if row.Placement != gitlet.PlacementE2B || row.Box == "" {
 		return

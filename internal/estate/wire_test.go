@@ -25,12 +25,11 @@ import (
 )
 
 // carriedByServer is every field an operation's types hold that the wire does
-// NOT carry, and why that is right — who supplies it on the far side, or why
-// no value that crosses ever holds one.
+// NOT carry, and why that is right: who supplies it on the far side, or why no
+// value that crosses ever holds one.
 //
-// TWO-SIDED: a field found and not listed fails, and a listed field no
-// operation carries any more fails too, so the list is never a record of a
-// type that has since changed.
+// TWO-SIDED: a field found and not listed fails, and so does a listed field no
+// operation carries any more.
 var carriedByServer = map[string]string{
 	"worklet.Query.Units":              "the serving node attaches its own chart (opTasks)",
 	"worklet.ViewQuery.Units":          "the serving node attaches its own chart (opViews)",
@@ -78,16 +77,13 @@ var carriedByServer = map[string]string{
 }
 
 // plainlyEncoded are the types an operation carries that decode themselves
-// (jsonv2.UnmarshalerFrom) through the caller's own decoder, only to state on
-// arrival whom their writes are for, and that have no encoder of their own: the
-// actors, and the six requests a code write forms, which hold whom it is made
-// for beside their asker (ADR-0109; gitlet's writtenfor.go) and refuse the
-// carrier's kind, or an app a credential's carrier names, that their build
-// does not know, as the decoder refuses a member it does not declare. Every
-// field they hold crosses exactly as a plain struct's would, so the gates over
-// what an operation takes ([uncarried] here, and wirerule_test.go's
-// [inputTypes] with every gate that reads it) walk into them as into any struct;
-// TestAPlainlyEncodedTypeWritesItsPlainEncoding holds each to that, and
+// (jsonv2.UnmarshalerFrom, through the caller's decoder) only to state on
+// arrival whom their writes are for (ADR-0109; gitlet's writtenfor.go) and to
+// refuse a carrier's kind or app their build does not know, and that have no
+// encoder: the actors and the six requests a code write forms. Their fields
+// cross as a plain struct's, so the gates ([uncarried], wirerule_test.go's
+// [inputTypes]) walk into them; TestAPlainlyEncodedTypeWritesItsPlainEncoding
+// holds each to that, and
 // TestATypeThatDecodesItselfAndWritesNoEncodingIsWalkedInto holds every such
 // type an operation takes to this list.
 var plainlyEncoded = map[reflect.Type]bool{
@@ -103,11 +99,9 @@ var plainlyEncoded = map[reflect.Type]bool{
 }
 
 // encodesItself reports a type the gates over what an operation takes stop at:
-// one that writes or reads its own encoding — a MarshalJSON, or the standard
-// library's v2 twin of either method (MarshalJSONTo, UnmarshalJSONFrom), on the
-// value or the pointer — so that nothing inside it crosses as a struct's field
-// does. Never one of [plainlyEncoded] — the actors and the code writes'
-// requests — or a pointer at one, which are walked into.
+// one with a MarshalJSON, MarshalJSONTo or UnmarshalJSONFrom on the value or
+// the pointer, so nothing inside it crosses as a struct's field does. Never one
+// of [plainlyEncoded] or a pointer at one, which are walked into.
 func encodesItself(ty reflect.Type) bool {
 	if plainlyEncoded[ty] || (ty.Kind() == reflect.Pointer && plainlyEncoded[ty.Elem()]) {
 		return false
@@ -122,10 +116,9 @@ func encodesItself(ty reflect.Type) bool {
 }
 
 // extraField is the one field name every record type keeps a newer build's
-// unknown fields in. It is listed once rather than per type: none of it is
-// ever set on a value an operation carries — the tables have no column for
-// it, so an answer read from rows holds none, and a caller building a task or
-// a patch has no unknown fields to set.
+// unknown fields in, listed once rather than per type: no value an operation
+// carries sets it, since the tables have no column for it and a caller
+// building a task or a patch has no unknown fields to set.
 const extraField = "Extra"
 
 // uncarried is every field reachable from an operation's types that the wire
@@ -179,11 +172,8 @@ func uncarried(t *testing.T) map[string]string {
 		walk(spec.args)
 		walk(spec.result)
 	}
-	// AND THE ENVELOPE EVERY ONE OF THEM TRAVELS IN, since a field of the
-	// request or the reply that does not cross loses every operation's
-	// answer at once.
-	// And the actor a write runs as, which the request carries encoded as
-	// its arguments are.
+	// And the envelope they all travel in, whose lost field loses every
+	// operation's answer at once, and the actor, encoded as arguments are.
 	for _, envelope := range []reflect.Type{reflect.TypeFor[request](), reflect.TypeFor[reply](),
 		reflect.TypeFor[Actor]()} {
 		walk(envelope)
@@ -214,21 +204,16 @@ func TestEveryFieldAnOperationCarriesArrives(t *testing.T) {
 }
 
 // A PLAINLY ENCODED TYPE WRITES ITS PLAIN ENCODING: each of [plainlyEncoded]
-// — an actor, or a request a code write forms — encodes under the wire's rule
-// ([encodeInput]) exactly as a struct of the same fields and no methods would:
-// with every field it sends set, and with all but what it must carry left at
-// their zero — an actor's author, a request's asker, and whom it is made for
-// stated nobody — which the rule leaves off inside the type as it does
-// anywhere else in what an operation takes. That is the premise on which the
-// gates walk into such a type despite the decoder it has of its own, so an
-// encoder it gains later (a refusal, a renamed key, a MarshalJSON over
-// encoding/json's defaults) fails here rather than leave the gates reading
-// fields that are no longer what crosses.
+// encodes under [encodeInput] exactly as a struct of the same fields and no
+// methods would, both fully set and at its zero but what it must carry (an
+// actor's author, a request's asker, whom it is for stated nobody). That is the
+// premise on which the gates walk into it despite its own decoder, so an
+// encoder it gains later fails here rather than leave the gates reading fields
+// that are no longer what crosses.
 //
-// Mutation: give an actor or a request a MarshalJSON over encoding/json, whose
-// defaults hold no rule of the wire's, and its sample at the zero sends every
-// field it leaves there; give it a MarshalJSONTo that renames a key, and its
-// full sample fails.
+// Mutation: give an actor or a request a MarshalJSON over encoding/json's
+// defaults, and its zero sample sends every field; a MarshalJSONTo that renames
+// a key fails its full sample.
 func TestAPlainlyEncodedTypeWritesItsPlainEncoding(t *testing.T) {
 	t.Parallel()
 	carrier := types.ForTurn(&types.WorkingFor{Kind: types.WorkingForCredential, Login: "token:ci",
@@ -324,16 +309,12 @@ func TestAPlainlyEncodedTypeWritesItsPlainEncoding(t *testing.T) {
 }
 
 // A TYPE THAT DECODES ITSELF AND WRITES NO ENCODING IS WALKED INTO: every type
-// an operation takes ([inputTypes]) with a decoder of its own (an
-// UnmarshalJSON, or the standard library's v2 twin) and no encoder of its own
-// crosses as the plain encoding of its fields, so it is one of
-// [plainlyEncoded], which the gates walk into. Left off that list, it is a type
-// [encodesItself] stops at, and every field of it, and of everything beneath
-// it, drops out of every gate over what an operation takes — what arrives,
-// what leaves the wire at its zero, which zero a method decides, which member
-// a build does not declare — while the gates' count of the structs they read
-// still passes. Today that is the three actors and the six requests a code
-// write forms; a walk that finds fewer reads nothing it should.
+// an operation takes ([inputTypes]) with its own decoder (UnmarshalJSON or the
+// v2 twin) and no encoder crosses as its fields' plain encoding, so it belongs
+// in [plainlyEncoded]. Left off, [encodesItself] stops at it and everything
+// beneath it drops out of every gate over what an operation takes, while those
+// gates' count of the structs they read still passes. Today that is the three
+// actors and the six code writes' requests.
 //
 // Mutation: leave gitlet.ChangeProposal out of plainlyEncoded, and the gate
 // names it.
@@ -400,10 +381,9 @@ func TestEveryOperationsTypesDecode(t *testing.T) {
 // is not a log's rows at a position, so no floor could hold its answer to
 // anything.
 //
-// TWO-SIDED, like [carriedByServer]: an operation that declares no floor and
-// is not listed fails — one that forgot its domain would read from before the
-// asker's own writes with nothing to show for it — and a listed one that now
-// declares a floor fails too.
+// TWO-SIDED, like [carriedByServer]: an unlisted operation with no floor fails
+// (one that forgot its domain would silently read from before the asker's own
+// writes), and so does a listed one that declares a floor.
 var floorless = map[string]string{
 	"tracker.search": "reads the lexical and semantic indexes, which each node " +
 		"maintains behind its applier on its own schedule",
@@ -440,16 +420,10 @@ var floorless = map[string]string{
 	"usage.repo_reads_elided": "reads the usage domain, as usage.spend does",
 }
 
-// EVERY OPERATION SAYS WHICH LOG ITS FLOORS ARE ON: an operation that carries a
-// floor names its domain, the domain is one whose log a floor can be on, and
-// the stream it waits on is that domain's own log — the tracker's
-// CREWLET_TRACKER_LOG, the knowledge base's CREWLET_PAGES_LOG, Gitlet's
-// CREWLET_CODE_LOG, the identity directory's CREWLET_IAM_LOG, chat's
-// CREWLET_CHAT_LOG, the executor's CREWLET_EXECUTOR_LOG, the access log's
-// CREWLET_ACCESS_LOG, the atlas log's CREWLET_ATLAS_LOG or the artifacts
-// estate's and its datastore's, each named as its domain declares it. One that
-// waited on none would carry no floor at all, and one that named another
-// domain's would wait on an applier it does not depend on ([ready]).
+// EVERY OPERATION SAYS WHICH LOG ITS FLOORS ARE ON: one that carries a floor
+// names a domain whose log a floor can be on, and waits on that domain's own
+// log. One that waited on none would carry no floor at all, and one that named
+// another domain's would wait on an applier it does not depend on ([ready]).
 func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 	t.Parallel()
 	logs := map[string]string{
@@ -492,23 +466,20 @@ func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 // seatCopyOps is every operation that asks about the copy a SEAT is served by
 // ([SeatCopy]) rather than one domain's, and why.
 //
-// TWO-SIDED, like [floorless]: an operation naming the seat copy that is not
-// listed fails — it would run on a copy whose own domain the verdict never
-// asked about — and a listed one that names a domain fails too.
+// TWO-SIDED, like [floorless]: an unlisted operation naming the seat copy fails
+// (no verdict would ask about the domain it reads), and so does a listed one
+// that names a domain.
 var seatCopyOps = map[string]string{
 	"estate.ping": "asks whether the copy a seat is served by admits one — every " +
 		"domain that gates seat admission, not one domain's",
 }
 
-// EVERY OPERATION NAMES THE COPY IT READS, because that is the verdict the
-// router and the server ask before running it here: a domain's copy that is
-// wrong runs none of that domain's operations and every other domain's
-// (ADR-0079). An operation naming no domain — the search ops once did, since
-// they carry no floor — would be asked of no domain's verdict at all: run from
-// a copy out of service, or held to one it does not read. The one copy that
-// is no domain's is a Gitlet node's git half ([GitCopy]), which a git operation
-// alone names — one keyed on the Gitlet nodes and answered on a git lane — and no
-// data operation may.
+// EVERY OPERATION NAMES THE COPY IT READS, the verdict the router and the
+// server ask before running it: a domain's wrong copy runs none of that
+// domain's operations and every other's (ADR-0079), so one naming no domain
+// would run from a copy out of service, or be held to one it does not read.
+// The one copy that is no domain's, a Gitlet node's git half ([GitCopy]), only
+// a git operation (keyed on the Gitlet nodes, answered on a git lane) may name.
 func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
 	t.Parallel()
 	domains := []string{trackerDomain, pagesDomain, usageDomain, codeDomain,
@@ -542,11 +513,10 @@ func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
 // readsSeveral is every operation that reads another domain's rows beside its
 // own ([op.alsoReads]), with the domains it reads and why.
 //
-// TWO-SIDED, like [floorless]: an operation that declares a second domain and
-// is not listed fails, and so does a listed one that no longer declares what
-// the list says — because which copies an operation reads is what decides
-// where it may run, and a second domain an operation reads and does not
-// declare is one whose wrong copy it answers from.
+// TWO-SIDED, like [floorless]: an unlisted operation declaring a second domain
+// fails, and so does a listed one no longer declaring what the list says. The
+// copies an operation reads decide where it may run, and an undeclared one is
+// one whose wrong copy it answers from.
 var readsSeveral = map[string][]string{
 	// The links come from both corpora's bodies, and a task names the page
 	// as a linked page in the tracker's own relation rows.
@@ -581,15 +551,11 @@ func TestAnOperationThatReadsSeveralDomainsDeclaresThem(t *testing.T) {
 	}
 }
 
-// THE ENVELOPE IS PINNED, BYTE FOR BYTE: one read request, one asked again
-// after a node refused it, a write by a seat and one by a credential with the
-// apps it uses, a reply that answers it, admission's ping and a copy out of
-// service. A field added to the
-// envelope, renamed or made to send its zero value changes what every node of
-// a fleet reads of every other, and this is where that shows — rather than in
-// a router that silently reads a field its peer stopped sending. What is pinned
-// is the BODY a signature covers ([Envelopes]); the frame around it is the
-// state log's own, pinned there.
+// THE ENVELOPE IS PINNED, BYTE FOR BYTE, in each shape it takes. A field added,
+// renamed or made to send its zero changes what every node of a fleet reads of
+// every other, and shows here rather than in a router silently reading a field
+// its peer stopped sending. Pinned is the BODY a signature covers
+// ([Envelopes]); the frame around it is the state log's, pinned there.
 //
 // Mutation: drop OmitZeroStructFields from inputEncoding and both writes'
 // actors are sent with every field at its zero.
@@ -621,12 +587,11 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 				`"waited":[{"stream":"CREWLET_TRACKER_LOG","generation":1,"seq":9}],` +
 				`"unconfirmed":["CREWLET_PAGES_LOG"]}}`,
 		},
-		// THE ACTOR IS AN INPUT OF THE OPERATION, under the wire's rule for
-		// one ([encodeInput]): a field at its zero is not on it at all, so a
-		// data node of a build without a field a newer one added to the
-		// actor serves every write that does not set it. An agent stated
-		// for nobody sends an empty provenance: being stated is no zero,
-		// and nothing of it crosses (ADR-0109).
+		// THE ACTOR IS AN INPUT, under [encodeInput]: a field at its zero is
+		// off the wire, so an older data node serves every write that does
+		// not set a newer field. An agent stated for nobody sends an empty
+		// provenance: being stated is no zero, and nothing of it crosses
+		// (ADR-0109).
 		"a write's last resort": {
 			value: request{ID: "r-2", Op: opCreateTask.spec.name, Actor: mustInput(t, swe),
 				Deadline: envelopeInstant, AcceptLagging: true},
@@ -711,10 +676,8 @@ var pingEnvelope = request{ID: "r-3", Op: opPing.spec.name, Args: json.RawMessag
 	Deadline: envelopeInstant, From: "agent-1"}
 
 // WHAT THE ROUTER ACTUALLY SENDS FOR ADMISSION'S PING is the golden above, read
-// off the wire rather than built by hand: the envelope test pins a request a
-// test spelled, and only this one fails when [Router.Serves] starts sending
-// arguments a data node would read differently — a partition, a layout,
-// anything at all beyond the empty object.
+// off the wire: the envelope test pins a request spelled by hand, so only this
+// one fails when [Router.Serves] sends anything beyond the empty object.
 func TestAdmissionsPingIsTheOneTheEnvelopePins(t *testing.T) {
 	t.Parallel()
 	asker := &recordingAsker{answer: reply{Node: "data-a",
@@ -745,9 +708,8 @@ func TestAdmissionsPingIsTheOneTheEnvelopePins(t *testing.T) {
 			admitted.Disposition, admitted.Why)
 	}
 	req := admitted.Request
-	// THE ID AND THE DEADLINE ARE THE ATTEMPT'S, which move with every ask
-	// and the clock: each must be there, and everything else is compared
-	// byte for byte against the golden.
+	// The id and the deadline move with every ask: each must be there, and
+	// everything else is compared byte for byte.
 	if req.ID == "" {
 		t.Error("the ping carries no id, so its reply could be anybody's")
 	}
@@ -810,11 +772,9 @@ func (s selfEncoded) AppendJSON(dst []byte) ([]byte, error) {
 	return append(dst, `{"held":"`+s.held+`"}`...), nil
 }
 
-// AN ANSWER THAT HOLDS ITS OWN ENCODING IS SENT AS IT IS. A usage page's rows
-// were encoded once already, to cut the page at its budget, and a reply that
-// encoded the page again with json.Marshal encoded every row twice; so the
-// serving half writes an answer's own encoding where it holds one, and the
-// ordinary encoding of everything else.
+// AN ANSWER THAT HOLDS ITS OWN ENCODING IS SENT AS IT IS: a usage page's rows
+// are encoded once already, to cut the page at its budget, and json.Marshal
+// would encode every row again. Everything else gets the ordinary encoding.
 func TestAnAnswerThatHoldsItsOwnEncodingIsSentAsItIs(t *testing.T) {
 	t.Parallel()
 	got, err := encodeResult(opUsageSeatDays.spec, selfEncoded{held: "rows"})

@@ -12,26 +12,16 @@ import (
 
 // Reading every saved view a person can see, across every container.
 //
-// # Why a strip read is not enough
+// [Reader.Views] answers one container's strip, the tabs over one board. The
+// inventory of somebody's views and the sidebar's pinned group are about a
+// PERSON, so a view saved on a project board (container `project:ENG`) must
+// reach both; widening the strip read would change what a board's tabs are.
 //
-// [Reader.Views] answers ONE container's strip — the tabs over one board — and
-// that is the right shape for a board. It is the wrong shape for the two
-// surfaces that are about a PERSON's views rather than a container's: the
-// inventory of everything somebody saved, and the sidebar's pinned group. Both
-// asked the workspace strip, so a view saved with a project board's "+ View"
-// (container `project:ENG`) was in no inventory and no sidebar — it could not
-// be pinned from the screen that offers pins, and a pin set another way never
-// reached the sidebar that draws them. The strip read cannot be widened into
-// this one without changing what a board's tabs are, so it is a sibling.
-//
-// # The same rules as a strip
-//
-// A personal view is its owner's alone, filtered in SQL exactly as
-// [savedViews] filters it; a pin is the viewer's own; a pinned view's count is
-// [countView]'s — the view run in ITS OWN container, which is what opening it
-// runs — so a sidebar number agrees with the list it opens whichever
-// container the view lives in. The builtins are not here: they are a
-// container's own tabs, carry no id, and there is nothing to pin.
+// The rules are a strip's: a personal view is its owner's alone, filtered in
+// SQL as [savedViews] does; a pin is the viewer's own; a pinned view's count is
+// [countView]'s, run in the view's own container as opening it is, so a
+// sidebar number agrees with the list it opens. Builtins are a container's own
+// tabs with no id, so there is nothing to pin and they are left out.
 
 // EveryViewQuery asks for every saved view [EveryViewQuery.Viewer] can see.
 //
@@ -63,9 +53,9 @@ type EveryViewQuery struct {
 // first, then by container (the workspace, projects, units, people) and within
 // a container by the strip's own rank.
 //
-// ONE READ TRANSACTION for the rows, the pins and the counts, like a strip.
-// Its closure is the whole domain: the rows span every container and a
-// count's own closure is not known until its row is read.
+// ONE READ TRANSACTION for the rows, pins and counts, like a strip; its
+// closure is the whole domain, since the rows span every container and a
+// count's own closure is known only once its row is read.
 func (r *Reader) EveryView(ctx context.Context, q EveryViewQuery) (ViewListing, error) {
 	if q.Level == "" {
 		return ViewListing{}, fmt.Errorf("worklet: this view read names no " +
@@ -137,10 +127,10 @@ func (r *Reader) EveryView(ctx context.Context, q EveryViewQuery) (ViewListing, 
 //
 // A DELETED VIEW IS LEFT OUT, as [savedViews] leaves it out.
 //
-// THE ORDER IS THE CONTAINERS' AND THEN THE STRIP'S: the workspace first, then
-// projects, units and people, each by its id, and inside one container by
-// rank — so a container's views read in the order its own strip draws them.
-// TWO ORDERS CONCATENATED, as [savedViews] does, so a pin re-ranks nothing.
+// THE ORDER IS THE CONTAINERS' AND THEN THE STRIP'S: workspace, projects,
+// units, people, each by id, and by rank within one container, as its own
+// strip draws them. Pinned and unpinned are TWO ORDERS CONCATENATED, as
+// [savedViews] does, so a pin re-ranks nothing.
 func everySavedView(ctx context.Context, tx *sql.Tx, viewer string,
 	pinned map[string]bool) ([]ViewRow, error) {
 

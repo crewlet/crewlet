@@ -9,19 +9,16 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// BenchmarkRefsNearLimit times ONE READING of code_refs_near_limit at
-// Gitlet's size (M3-master §11 #7): config.CodeMaxRepos (10 000) active
-// repositories walked by name, three of them candidates each holding
-// MaxRefsPerRepo live refs, every one set within RefExpiry, and
-// MaxTombstonesPerRepo tombstones beside them — so each count reads the
-// widest range its key's repo_id prefix has, 200 000 entries.
+// BenchmarkRefsNearLimit times one reading of code_refs_near_limit at
+// Gitlet's size: config.CodeMaxRepos (10 000) active repositories, three of
+// them candidates each holding MaxRefsPerRepo live refs set within RefExpiry
+// and MaxTombstonesPerRepo tombstones, so each count reads its repo_id
+// prefix's widest range, 200 000 entries.
 //
-// THE DECISION RULE (M3-boxes §10.5): past one second a reading, the count
-// moves to an index of its own — code_refs_live_at_idx, over code_refs'
-// (repo_id, at) of the rows with a target — in a migration of its own; under
-// it, the primary key serves. Measured with -benchtime 1x -count 1 on the
-// runner's two E-cores: 142 ms a reading, a seventh of the rule's second, so
-// the primary key serves and no index was added.
+// The rule: past one second a reading, the count gets an index of its own
+// (code_refs_live_at_idx, over (repo_id, at) of the rows with a target);
+// under it the primary key serves. It reads in 142 ms (-benchtime 1x on two
+// E-cores), so there is no such index.
 func BenchmarkRefsNearLimit(b *testing.B) {
 	n := newNode(b)
 	ctx := context.Background()

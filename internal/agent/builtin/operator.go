@@ -9,32 +9,16 @@ import (
 )
 
 // The OPERATOR catalogue: the same tools a seat holds, offered to a person's
-// own AI assistant.
+// own AI assistant and to the dashboard, which makes every change through it
+// (ADR-0024). Each entry is the value [Register] files into a seat's registry;
+// only who a write is attributed to differs ([WorkDeps.Actor]), since a second
+// copy drifts on trims, defaults and refusals, and only one copy gets tested.
 //
-// # One implementation, two writers
-//
-// Every entry here is the same value [Register] files into a seat's registry.
-// The only thing that differs is who a write is attributed to, and that is
-// [WorkDeps.Actor] — a single field — rather than a second copy of the tools.
-// Two copies drift on exactly the parts nobody looks at: which field is
-// trimmed, which default applies, what a refusal says. Only one of the two is
-// ever tested, and it is never the copy that broke.
-//
-// # What is deliberately NOT here
-//
-// The tools that only make sense INSIDE a turn: the memory tools (a diary
-// belongs to a seat, and an operator has none), the skill tools (a skill is
-// loaded into a phase), `a2a_ask` (a colleague ask is answered by waking a
-// seat, and there is nobody here for the answer to come back to), and
-// `lookup_colleague` — which would be useful, but resolves against the turn's
-// own org and has no other source. A run a seat parked on a question IS a
-// person's to answer, though, which is `answer_executor`.
-//
-// What is left is the surface an operator's assistant actually needs — and
-// the dashboard, which makes every change it makes through this catalogue
-// (ADR-0024): read the board, file and move work, read and write the wiki,
-// search what the company knows, talk in the company's own chat, read and
-// change the company's code, and read the deployment's health.
+// Deliberately absent: the tools that need a turn. The memory tools (a diary is
+// a seat's), the skill tools (loaded into a phase), `a2a_ask` (nobody here for
+// the answer to come back to) and `lookup_colleague` (resolves against the
+// turn's org). A run a seat parked on a question is a person's to answer,
+// though: `answer_executor`.
 
 // OperatorDeps are the halves an operator surface can serve.
 type OperatorDeps struct {
@@ -47,10 +31,9 @@ type OperatorDeps struct {
 	Artifacts    ArtifactDeps
 	ArtifactData ArtifactDataDeps
 
-	// Code is the code tools' — the SAME [CodeTools] list a seat's registry
-	// takes, its Actor the request's principal: the reads, and the writes
-	// where its Writer is set. The zero value omits them: a company that
-	// hosts no code.
+	// Code is the code tools' half: the SAME [CodeTools] list a seat's registry
+	// takes, its Actor the request's principal, writes only where its Writer
+	// is set. The zero value (a company hosting no code) omits them.
 	Code CodeDeps
 
 	// Atlas is the atlas tools' half: the settings this node runs, read per
@@ -81,34 +64,24 @@ type OperatorDeps struct {
 	// zero value omits both.
 	Health HealthDeps
 
-	// Chat is the company's own chat. Its [ChatDeps.Actor] is the
-	// request's principal ([PrincipalChatActor]): a person writes as the
-	// `kind: human` seat their credential is bound to — a room renders a
-	// speaker by seat, so that is the handle every message carries — with
-	// the credential beside it. A credential acting as itself is refused
-	// every chat verb, the reads included, by the table first
-	// (`unseated`) and by the tools after it.
+	// Chat is the company's own chat, its [ChatDeps.Actor] the request's
+	// principal ([PrincipalChatActor]): a person writes as the `kind: human`
+	// seat their credential is bound to, the credential beside it, since a
+	// room renders a speaker by seat. A credential acting as itself is refused
+	// every chat verb, reads included, by the table (`unseated`) and the tools.
 	Chat ChatDeps
 
-	// Org is the company this surface is about, resolved per call because
-	// a config apply replaces it. An operator has no turn and therefore no
-	// org to read from one, so search_knowledge takes it from here — and
-	// with it nil that tool refuses every call it is registered for.
+	// Org is the company this surface is about, resolved per call because a
+	// config apply replaces it. With no turn to read one from, search_knowledge
+	// takes it from here, and refuses every call while it is nil.
 	Org func() *org.Organization
 
-	// Authorize decides whether the party behind a call may make it, and
-	// it is the SAME seam a seat's registry and the HTTP surface use.
+	// Authorize decides whether the party behind a call may make it: the SAME
+	// seam a seat's registry and the HTTP surface use, so a permission an HTTP
+	// route honours is honoured here too.
 	//
-	// It replaced `Leads` and `LeadsProject`, which asked the chart the
-	// two relation questions [authz.ClassOwnOrLead] and
-	// [authz.ClassContainer] already ask — from the tool rather than from
-	// the table, two-valued, and consulting no permission at all, so an
-	// admin was refused here while every HTTP route allowed.
-	//
-	// NIL REFUSES EVERYTHING, on [Deps.Authorize]'s rule. Pushed down
-	// into [OperatorDeps.Work], [OperatorDeps.Pages] and
-	// [OperatorDeps.Chat] by [OperatorTools], so a caller cannot set the
-	// four differently.
+	// NIL REFUSES EVERYTHING, on [Deps.Authorize]'s rule. [OperatorTools]
+	// pushes it into Work, Pages and Chat, so a caller cannot set them apart.
 	Authorize Authorizer
 
 	// Runs answers a parked executor by its turn — see answerexecutor.go.
@@ -142,14 +115,9 @@ type OperatorDeps struct {
 func OperatorTools(deps OperatorDeps) []tools.Callable {
 	deps.Work.Authorize, deps.Pages.Authorize = deps.Authorize, deps.Authorize
 	deps.Chat.Authorize = deps.Authorize
-	// A CALL HERE IS AN OPERATION ITS CALLER HOLDS, because there is no
-	// turn to derive one from: every write answers with its `op_id`, and
-	// the call brought back with it is that operation again ([operations]).
-	// This is the only place that says so, for every family of write tools
-	// built below — the tracker's here, the artifacts' and the datastore's
-	// from deps.Artifacts, Gitlet's from deps.Code — because it is a
-	// fact about this surface rather than a setting. The artifacts mint on
-	// their own clock.
+	// A CALL HERE IS AN OPERATION ITS CALLER HOLDS, having no turn to derive
+	// one from ([operations]). Set here alone, for every write family built
+	// below, as a fact about this surface; the artifacts mint on their own clock.
 	deps.Work.ops = operations{callerOperations: true}
 	deps.Artifacts.ops = operations{callerOperations: true, now: deps.Artifacts.Now}
 	deps.Code.ops = operations{callerOperations: true}
@@ -240,15 +208,11 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// company's expense, and a seat has search_knowledge and a model
 		// of its own — see answerknowledge.go.
 		{newAnswerKnowledge(deps), answerable(deps)},
-		// NOR THIS: who read a unit's repository names the people, the
-		// credentials and the seats that read its code — an audit, and
-		// admin's (authz.ActionCodeRepoReaders) — and a seat that could
-		// ask it would be a model watching the people it works for. See
-		// codereaders.go. On the code reads' own terms ([CodeDeps.serves]),
-		// never Gitlet's alone: wired without the requester
-		// ceiling's halves those reads are not offered, and an audit of the
-		// reads beside none of them would be a code tool served where the
-		// rest are not.
+		// NOR THIS: who read a unit's repository is an audit, admin's
+		// (authz.ActionCodeRepoReaders), and a seat asking it would be a model
+		// watching the people it works for (codereaders.go). Served on the code
+		// reads' own terms ([CodeDeps.serves]), never Gitlet's alone: an audit
+		// of reads not offered would be a code tool served where the rest are not.
 		{&codeRepoReaders{code: deps.Code, deps: deps.Readers},
 			deps.Code.serves() && deps.Readers.Readers != nil},
 		// NOR THIS: a person's marks over their own code notices — a seat
@@ -258,15 +222,11 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&codeMarkInbox{deps: deps.Code}, deps.Code.serves() && deps.Code.Writer != nil},
 		// Nor a person's viewed files of a change: a seat reviews a change whole and keeps none.
 		{&codeMarkViewed{deps: deps.Code}, deps.Code.serves() && deps.Code.Writer != nil},
-		// EVERY CHAT GESTURE A PERSON MAKES, because the dashboard makes
-		// them through this catalogue (ADR-0024): read the rooms, find
-		// what was said, say something, react, move one's own membership
-		// — the nine a seat holds — and the furniture only a person
-		// arranges, which no seat is given: a room made or its settings
-		// changed, its whole membership stated, a message rewritten or
-		// taken back, a conversation opened before its first word, and
-		// how far one has read. See chatoperator.go for why each is a
-		// person's.
+		// EVERY CHAT GESTURE A PERSON MAKES, since the dashboard makes them here
+		// (ADR-0024): the nine a seat holds, plus the furniture only a person
+		// arranges (a room made or changed, its whole membership stated, a
+		// message rewritten or taken back, a conversation opened before its
+		// first word, how far one has read). chatoperator.go says why.
 		{&listChannels{deps: talk}, talk.Reader != nil},
 		{&readChannel{deps: talk}, talk.Reader != nil},
 		{&searchMessages{deps: talk}, talk.Search != nil},
@@ -294,12 +254,11 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// AND THE ATLAS'S WRITES, which no seat's registry holds: what the
 		// company's map says is a person's to correct (see atlaswrite.go).
 		atlasWriteCandidates(deps),
-		// THE CODE TOOLS, the list a seat's registry takes whole: a person
-		// reads every repository and maintains every one a tool made, so
-		// their assistant answers the same questions a seat's turn does,
-		// about all of them, and makes the same changes, as the human seat
-		// the person holds. An operator holds no turn, so it holds nothing
-		// from a scratch repository's expiry.
+		// THE CODE TOOLS, the list a seat's registry takes whole: a person's
+		// assistant reads every repository and changes code as the human seat
+		// the person holds.
+		// An operator holds no turn, so it holds nothing from a scratch
+		// repository's expiry.
 		codeCandidates(deps.Code),
 		// AND THE HEALTH TOOLS, the list a granted seat's registry takes:
 		// the deployment as an administrator reads it, which the table
@@ -308,11 +267,9 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 	var out []tools.Callable
 	for _, c := range candidates {
 		if c.on {
-			// GATED HERE TOO, and with the same decision a seat's
-			// registry is gated with. An operator's assistant is a
-			// caller like any other: the tools it holds are the same
-			// values, and a catalogue that skipped the wrapper would
-			// be the one surface of three that decided nothing.
+			// GATED HERE TOO, with the decision a seat's registry is gated
+			// with: a catalogue that skipped the wrapper would be the one
+			// surface of three that decided nothing.
 			out = append(out, gate(c.tool, deps.Authorize, nil))
 		}
 	}

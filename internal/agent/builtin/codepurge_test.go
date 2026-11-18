@@ -45,15 +45,13 @@ func purgeTool(t *testing.T, host *gitletHost, writer *codeWrites) tools.SeatCal
 		builtin.CodePurgeUnreachableTool)
 }
 
-// ONLY A PERSON PURGES, with a fresh proof of who they are: the authority
-// table's row is human-only and asks a step-up, so a seat — whatever it holds
-// — is refused by the table before anything is read; a token bound to nobody
-// is refused as every code write is (gitlet.UnboundDetail), and a person whose
-// proof is older than their step-up window is told to prove it again; nothing
-// is sent for any of them. A person bound to a seat, proved, records one
-// request of the repository, as themselves, and is answered with it: where
-// its record landed, the Gitlet node that serves it, and what still holds the
-// objects after it is served.
+// ONLY A PERSON PURGES, with a fresh proof: the authority table's row is
+// human-only with step-up, so a seat is refused before anything is read; a
+// token bound to nobody is refused as every code write is
+// (gitlet.UnboundDetail), and a proof older than the step-up window is told to
+// prove it again; nothing is sent for any of them. A proved person bound to a
+// seat records one request as themselves and is answered with where its record
+// landed, the Gitlet node that serves it, and what still holds the objects.
 //
 // Mutation: drop humanOnly from code_purge_unreachable's row, or let the tool
 // send a request for a token bound to nobody → red.
@@ -128,11 +126,10 @@ func TestOnlyAPersonPurges(t *testing.T) {
 	}
 }
 
-// TWO PURGE REQUESTS ARE ONE: the request's id is the call's operation, so
-// the same call made again — a person's assistant bringing back the op_id an
-// earlier answer carried, after an `unknown` or a lost answer — sends the
-// same request, which the committer's ledger collapses and answers as the
-// first: one request, at one position.
+// TWO PURGE REQUESTS ARE ONE: the request's id is the call's operation, so the
+// same call made again (an assistant bringing back an earlier op_id) is the
+// same request, which the committer's ledger answers as the first: one request,
+// at one position.
 //
 // Mutation: mint the request's id afresh at every call (statelog.NewOpID in
 // place of opIDFor) → red.

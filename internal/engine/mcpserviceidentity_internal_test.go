@@ -25,9 +25,8 @@ import (
 )
 
 // serviceVendor is a remote MCP server and its authorization server on one
-// origin, issuing access tokens to one client by the client credentials grant
-// and serving MCP requests that carry a token it issued, challenging every
-// other.
+// origin: it issues tokens to one client by the client credentials grant and
+// challenges any MCP request not carrying one of them.
 type serviceVendor struct {
 	srv *httptest.Server
 
@@ -153,9 +152,9 @@ func (c *serviceClock) advance(d time.Duration) {
 	c.at.Store(&next)
 }
 
-// serviceNodes are two nodes of one fleet, sharing its stores, its keyring and
-// its clock, each running a company whose server signs in as a service
-// identity, its entry's oauth block carrying lines beside the grant.
+// serviceNodes are two nodes of one fleet sharing its stores, keyring and
+// clock, each running a company whose server signs in as a service identity;
+// lines are added to its entry's oauth block.
 func serviceNodes(t *testing.T, v *serviceVendor, lines string) (*Engine, *Engine, *serviceClock) {
 	t.Helper()
 	company := companyFor(t, `
@@ -199,11 +198,10 @@ func sourceOf(t *testing.T, e *Engine) mcp.BearerSource {
 }
 
 // A SERVICE IDENTITY IS ISSUED ITS TOKEN AT USE AND KEEPS NOTHING: with nobody
-// signed in, a pass starts the server with a source that signs in as the
-// company's client (the grant, the server as the resource, the configured
-// scopes, the secret by basic authentication) the first time a request needs a
-// token, holds it for the next, and is the same source at the next pass; each
-// node is issued its own; and no grant, sealed row or sign-in is written.
+// signed in, the source asks as the company's client (the grant, the server as
+// the resource, the scopes, the secret by basic auth) only when a request
+// needs a token, holds it, and survives the next pass; each node gets its own;
+// no grant, sealed row or sign-in is written.
 //
 // Mutation: start the server through the person's grant ([Engine.bearerFor])
 // and it is held back for a sign-in nobody makes.
@@ -251,10 +249,10 @@ func TestAServiceIdentityIsIssuedItsTokenAtUseAndKeepsNothing(t *testing.T) {
 }
 
 // A REFUSED SERVICE IDENTITY IS HELD, NOT ASKED AGAIN BY EVERY REQUEST: the
-// vendor's refusal is the server's failure, classed and in its words, never
-// quoting the secret; every request within the restart schedule's wait is
-// answered it without the vendor being asked; the first after the wait asks
-// again; and new credentials ask at once.
+// refusal is the server's failure, classed, in the vendor's words, never
+// quoting the secret; requests within the restart schedule's wait get it
+// without asking the vendor; the first after the wait asks again; new
+// credentials ask at once.
 //
 // Mutation: drop the held failure, and each request asks the vendor again.
 func TestARefusedServiceIdentityIsHeldUntilItsWaitOrNewCredentials(t *testing.T) {
@@ -308,11 +306,10 @@ func TestARefusedServiceIdentityIsHeldUntilItsWaitOrNewCredentials(t *testing.T)
 }
 
 // A 401 RENEWS A SERVICE IDENTITY'S TOKEN ONCE, AND A TOKEN NEAR ITS END IS
-// RENEWED AHEAD OF IT: a refusal of a token issued within the fresh window
-// answers the same token (a renewal would not change it); a refusal after it
-// is one new token, and every request the old one was refused on is answered
-// that one; and a token within the renewal's lead of its end is replaced
-// before it is sent.
+// RENEWED AHEAD OF IT: a refusal within the fresh window answers the same
+// token (a renewal would not change it); a later refusal gets one new token
+// for every request the old one was refused on; and a token within
+// oauthRenewAhead of its end is replaced before it is sent.
 //
 // Mutation: renew on every refusal, and one refused token costs a vendor ask
 // per request.
@@ -343,9 +340,9 @@ func TestA401RenewsAServiceIdentitysTokenOnce(t *testing.T) {
 }
 
 // A SERVICE IDENTITY IS NEVER SIGNED IN TO, AND RAISES NO SIGN-IN ALARM: a
-// sign-in is refused naming why, a grant a person made before the server
-// changed its grant is neither the source it starts with nor a sign-in
-// condition, and its credential's failures are its instances'.
+// sign-in is refused naming why, and a person's grant left from before the
+// server changed its grant is neither its source nor a sign-in condition; its
+// credential's failures are its instances'.
 func TestAServiceIdentityIsNeverSignedInToAndRaisesNoSignInAlarm(t *testing.T) {
 	t.Parallel()
 	v := newServiceVendor(t)
@@ -369,9 +366,9 @@ func TestAServiceIdentityIsNeverSignedInToAndRaisesNoSignInAlarm(t *testing.T) {
 }
 
 // A TEST OF A SERVICE IDENTITY SIGNS IN WITH WHAT IT TESTS: the saved server
-// is tested with a token issued for the test, which reaches the server; a test
-// with another secret is refused as the credential, in the vendor's words; and
-// neither touches the source the running server holds.
+// is tested with a token issued for the test; another secret is refused as the
+// credential, in the vendor's words; neither touches the running server's
+// source.
 func TestATestOfAServiceIdentitySignsInWithWhatItTests(t *testing.T) {
 	t.Parallel()
 	v := newServiceVendor(t)
@@ -400,8 +397,8 @@ func TestATestOfAServiceIdentitySignsInWithWhatItTests(t *testing.T) {
 }
 
 // A SERVICE IDENTITY'S TOKEN ENDPOINT IS DIALLED ONLY THROUGH THE GUARD: one
-// the server's metadata names on another origin at an internal address is sent
-// nothing, and the server's failure says the address was blocked.
+// the metadata names at an internal address on another origin is sent nothing,
+// and the failure says the address was blocked.
 func TestAServiceIdentitysTokenEndpointIsDialledOnlyThroughTheGuard(t *testing.T) {
 	t.Parallel()
 	var reached atomic.Int32

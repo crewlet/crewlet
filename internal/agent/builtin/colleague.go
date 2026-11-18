@@ -71,6 +71,84 @@
 // carrying `outcome: unknown` beside a key or a version, which a model reads as
 // the write done and a person's screen would draw.
 //
+// # What the tracker's tools derive from a call's key
+//
+// The tracker's store is handed the ids its writes are published under, so
+// its tools derive them from the call's key ([callOpKey]) rather than handing
+// the key on, each under a namespace of its own ([opIDNamespace],
+// [commentNamespace]) that keeps the ids apart from each other and from every
+// store's derivation over the same key. A namespace is FIXED for the life of
+// the format: a new one makes every retry straddling the change a second
+// write.
+//
+// The operation id ([opIDFor]) is named `<verb>-<object>`, the object one
+// grammar segment ([statelog.OpNamePart]), where the stores name theirs by the
+// verb alone: under an [Actor.Operation] each write is a STEP whose name is
+// its whole identity within the call, and one call writes one verb on several
+// objects. A comment's id ([commentID]) and a created task's or view's
+// ([createdTaskID], [createdViewID]) are UUIDv5s, not operation ids, because
+// each keys its row apart from the operation writing it (a page's comment, by
+// contrast, IS its operation: [statelog.KeyedObjectOpID]). So they derive from
+// the key as the work began ([Actor.asBegun]): a rebase re-mints operations
+// for a ledger that forgot them, and the row has not forgotten. Every id binds
+// the call's digest beside the key, as the stores bind what a write says,
+// since a request's key names the request rather than what it asked; in a
+// turn the digest is already in the key.
+//
+// # The code tools
+//
+// The code tools (codetools.go and its siblings) read and write the company's
+// Gitlet repositories on the server, never in a clone, from ONE list
+// ([CodeTools]) a seat's registry and the operator catalogue share.
+//
+// Every read is judged where it is answered. The gate admits everybody
+// (`authz.ClassEverybody`), since a repository's read grant is derived by the
+// serving node from its own chart (ADR-0088) and the gate cannot ask it before
+// the read. So each call names its caller ([CodeAskerOf]) and the answering
+// node holds the read to that grant: a listing leaves out what the caller may
+// not read, and a read of it is refused `not_permitted`. No argument names who
+// reads.
+//
+// Every read is decided again for whoever woke the turn ([ceilingOf]): a seat
+// reading in a turn somebody woke is their deputy, and would otherwise hand a
+// `visibility: unit` repository to anybody who can message one of the unit's
+// seats. The tool's row is decided for the requester ([authz.DecideWithin]),
+// so a stranger, or a person who may not act now, reads nothing. A colleague
+// seat's grant rides on every read ([gitlet.ReadQuery.CeilingSeat]) and is
+// judged by the answering node ([gitlet.ErrAboveCeiling]), never on the turn's
+// memo of the repository, which would keep reading for a colleague a later
+// activation shut out. A person bounds nothing (every person maintains every
+// repository, ADR-0085), and a call outside any turn reads for its caller
+// alone. The ceiling only narrows: what is read is the seat's own read.
+//
+// Rows at the seat's level, objects by id. A repository and its refs are rows,
+// read linearizably ([seatReadLevel]), so an answer includes every push that
+// landed before the call. An object id names the same object on every node,
+// so its read needs no barrier: it is asked at a SYNC level floored at this
+// node's own pushes to the repository and at where each named ref last moved
+// ([CodeDeps.gitFresh], [gitlet.RefsFloor]) — never at the checkpoint the
+// resolve read the ref at, which sits past its own barrier and would make a
+// current copy sync for nothing on every read by a ref. A turn pays one
+// barrier per repository ([CodeDeps.repo]) and one per call that names refs,
+// all resolved in one read ([CodeDeps.resolveRef]); a call naming commits by
+// id pays none beyond the repository's.
+//
+// Text somebody else wrote is fenced. A file's lines (code_read, code_blame),
+// a patch (code_diff) and a commit's subject (code_log, code_blame, up to
+// [gitlet.MaxLogSubjectBytes]) are a committer's words a read by object id
+// cannot attribute, so each goes out fenced at trust `external`, naming no
+// writer (ADR-0040); every other string — a path, a ref name, a description,
+// an author — is defused ([foreignRead]). The Gitlet node counts the fences
+// and the defusing into a page's bytes (internal/gitlet/query's page.go).
+//
+// One page is one tool answer, sent as measured. A Gitlet node cuts a page at
+// [gitlet.MaxGitAnswerBytes] of compact JSON, and these tools send it compact
+// ([compactAnswer]): indented, a page of short entries would overrun the
+// answer it was cut to fit. A row listing is cut here, whole rows, at the
+// answer as sent ([foreignRead.fit]). A page the fence lengthens past the
+// answer (text spelling fence markers) is refused naming a narrower read,
+// never cut.
+//
 // # The company's servers
 //
 // ssh_read and ssh_operate reach a seat's servers for the company alone, and
@@ -105,10 +183,9 @@ const LookupColleagueTool = toolname.LookupColleague
 // lookupColleague resolves a free-text query to one colleague, or to the list
 // it might be.
 //
-// NEVER A GUESS. An agent that silently addressed the wrong colleague is worse
-// than one that asked which — the wrong person gets pulled into work that is
-// not theirs, and the right one never hears about it. So an ambiguous query
-// returns the candidates and says they are candidates.
+// NEVER A GUESS: addressing the wrong colleague pulls the wrong person into the
+// work and leaves the right one unaware, so an ambiguous query returns the
+// candidates, labelled as candidates.
 //
 // env resolves the chart's `${VAR}` contacts ([Deps.Env]).
 type lookupColleague struct{ env org.EnvLookup }
@@ -145,9 +222,9 @@ func (t *lookupColleague) Parameters() map[string]any {
 	}
 }
 
-// Call without a turn cannot resolve anyone: the corpus is the turn's pinned
-// org. Reported as a failed result rather than an error, because the model
-// asked for something reasonable in a context that cannot serve it.
+// Call without a turn cannot resolve anyone (the corpus is the turn's pinned
+// org); it answers a refusal rather than an error, since the model's request
+// was reasonable.
 func (t *lookupColleague) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
 	return t.CallForTurn(ctx, nil, args)
 }
@@ -169,9 +246,8 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 	switch {
 	case len(found) == 0:
 		log.Debug("lookup_colleague_no_match", "query", safe, "corpus", len(seats))
-		// NOT FOUND, because the colleague IS what this call is about —
-		// unlike a2a_ask's `target`, where an unmatched spelling is an
-		// argument to correct before the ask can be sent.
+		// NOT FOUND: the colleague is what this call is about, unlike
+		// a2a_ask's `target`, where it is an argument to correct.
 		return refused(tools.RefusalNotFound, fmt.Sprintf(
 			"No colleague matches %q. Known handles: %s.",
 			safe, strings.Join(allHandles(seats), ", "))), nil
@@ -180,16 +256,13 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 		return tools.Result{Output: describe(found[0].Seat)}, nil
 	}
 
-	// AMBIGUOUS. The list, and the word "ambiguous", so the model asks
-	// again with a handle rather than picking the first row.
+	// The word "ambiguous", so the model retries with a handle rather than
+	// picking the first row.
 	var b strings.Builder
 	fmt.Fprintf(&b, "%q is ambiguous — %d colleagues match. Call "+LookupColleagueTool+" "+
 		"again with one of these handles:\n", safe, len(found))
-	// EVERY candidate. This message's whole job is to let the model retry
-	// with an exact handle, and a handle it cannot see is one it cannot
-	// name — a cap here answers "who might you mean" with a list that may
-	// not contain the answer. A company's seats are its org chart, so the
-	// list is bounded by the config a founder wrote.
+	// EVERY candidate, uncapped: a handle the model cannot see is one it
+	// cannot retry with. The org chart bounds the list.
 	for _, c := range found {
 		fmt.Fprintf(&b, "  - %s (%s, %s)", c.Seat.Handle, c.Seat.Name, c.Seat.Kind)
 		if label := c.Method.Label(); label != "" {
@@ -200,24 +273,18 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 	return failed(b.String()), nil
 }
 
-// Corpus is every addressable seat in an org: agents AND humans.
-//
-// Both, because the question a lookup answers is "who do I talk to", and a
-// human seat is addressable — it just cannot be reached the same way. Leaving
-// humans out would make the tool silently unable to find the people an agent
-// most often needs.
+// Corpus is every addressable seat in an org: agents AND humans, since a
+// lookup answers "who do I talk to".
 //
 // lookup resolves a person's `${VAR}` contact ids
-// ([org.HumanContact.ResolvedIdentities]); a node passes its own chain, the
-// secret store and then the environment it was handed, which is what the
-// notification routing that mentions these same people reads. Nil reads the
+// ([org.HumanContact.ResolvedIdentities]); a node passes the same chain its
+// notification routing reads (secret store, then environment). Nil reads the
 // process environment.
 //
-// withheld is the identity directory's reading, the one the party registry was
-// built from: a human seat it withholds keeps its place and loses every
-// external id, so an id copied from that person's accounts matches nobody —
-// exactly as an inbound message from them resolves to nobody — and the seat is
-// marked [colleague.Seat.Withheld]. Nil withholds nothing.
+// withheld is the identity directory's reading the party registry was built
+// from: a withheld human keeps the seat, marked [colleague.Seat.Withheld], but
+// loses every external id, so an id from their accounts matches nobody, as an
+// inbound message from them does. Nil withholds nothing.
 func Corpus(o *org.Organization, lookup org.EnvLookup, withheld func(handle string) bool) []colleague.Seat {
 	if o == nil {
 		return nil
@@ -237,19 +304,10 @@ func Corpus(o *org.Organization, lookup org.EnvLookup, withheld func(handle stri
 			continue
 		}
 		for _, id := range role.Contact.ResolvedIdentities(lookup) {
-			// EVERY TRANSPORT HERE IS A PLACE A MESSAGE CAN BE SENT.
-			// It was not always: a `crewlet` transport carried the
-			// operator id a Tier A token bound a seat with, and it had
-			// to be filtered out of this map — which is both the
-			// exact-id index and what describe renders under a person's
-			// name — or an attribution key appeared beside their Slack
-			// id as though an agent could mention them there. The
-			// identity estate holds that binding now and the transport
-			// is gone, so there is nothing left to filter.
-			//
+			// Every transport here is a place a message can be sent: this
+			// map is both the exact-id index and what describe renders.
 			// Keyed by transport, so an exact-id query matches whichever
-			// platform the id was copied from without the tool having to
-			// be told which.
+			// platform the id came from.
 			seat.External[string(id.Transport)] = id.ExternalID
 		}
 		out = append(out, seat)
@@ -259,9 +317,8 @@ func Corpus(o *org.Organization, lookup org.EnvLookup, withheld func(handle stri
 
 // describe renders one resolved colleague.
 //
-// A human's entry says how to reach them and says explicitly that a2a_ask is
-// not the way: an agent that tries it gets a refusal at best, and at worst
-// waits for an answer from a channel no person is watching.
+// A human's entry says how to reach them and that a2a_ask is not the way: an
+// agent that tries it waits on a channel no person watches.
 func describe(s colleague.Seat) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s (%s)\n  handle: %s\n  kind: %s\n", s.Name, s.Kind, s.Handle, s.Kind)
@@ -272,8 +329,8 @@ func describe(s colleague.Seat) string {
 	}
 	switch {
 	case s.Kind == string(org.KindHuman) && s.Withheld:
-		// NOT WHY: a person's standing is not an agent's business, and
-		// what the agent needs is only that nothing it sends will arrive.
+		// Not why: a person's standing is not the agent's business, only
+		// that nothing it sends will arrive.
 		b.WriteString("  reach them: they cannot be reached on any chat or " +
 			"code-host account right now, so there is nobody to mention or " +
 			"message. Work for this seat goes in the PM tool, assigned to " +
@@ -288,9 +345,8 @@ func describe(s colleague.Seat) string {
 
 // allHandles is every seat's handle, sorted.
 //
-// EVERY one, with no cap. This list is what a model that missed reads to find
-// the handle it should have used; "...and 7 more" tells it the answer exists
-// and withholds it.
+// Uncapped: a model that missed reads it for the handle it meant, and
+// "...and 7 more" withholds the answer.
 func allHandles(seats []colleague.Seat) []string {
 	out := make([]string, 0, len(seats))
 	for _, s := range seats {

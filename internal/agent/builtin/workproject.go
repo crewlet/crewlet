@@ -16,39 +16,27 @@ import (
 
 // `write_project` — the project settings a TOOL owns, and who owns each.
 //
-// # Why one verb over two writers
+// ONE TOOL over two writers: policy and tag set are two objects on two subjects
+// so a seat's tag add never contends with a lead's field edit
+// (internal/worklet/project.go), but "change this project" is one thought to a
+// caller. The tool does both writes and reports both.
 //
-// A project's policy and its tag set are two objects on two subjects, so that
-// every seat's tag add never contends with a lead's field edit (see
-// internal/worklet/project.go). They are ONE TOOL anyway, because the split is
-// about arbitration and a caller's question is not: "change something about
-// this project" is one thought, and a surface that made it two would leave a
-// model choosing between `write_project` and `write_project_tags` on grounds it
-// cannot see. The tool does two writes and reports both.
-//
-// # Why a SEAT holds it
-//
-// For exactly one facet: `tags.add`. A tag is how work is grouped for a week,
-// declaring one is open to every seat by design, and `create_work_item` refuses
-// a label the project has not declared — so a seat without this verb is a seat
-// that can never use the `labels` argument on the tools it does hold. Every
-// other facet is gated inside, and the refusals name who can.
+// A SEAT holds it for one facet, `tags.add`: `create_work_item` refuses a label
+// the project has not declared, so without it a seat could never use `labels`.
+// Every other facet is gated inside, and the refusals name who can.
 
-// ProjectWriter is the tracker write side this tool needs.
-//
-// BOTH VERBS IN ONE INTERFACE although they are two objects, because this is
-// the consumer's interface and the consumer calls both — the seam is "what a
-// project settings tool needs", not "what one tracker subject accepts".
+// ProjectWriter is the tracker write side this tool needs: both verbs in one
+// interface, since the seam is what a project settings tool needs, not what one
+// tracker subject accepts.
 type ProjectWriter interface {
 	WriteProject(ctx context.Context, opID, key string, edit worklet.ProjectEdit,
 		authority worklet.ProjectAuthority) (worklet.WriteResult, error)
 	WriteTags(ctx context.Context, opID, project string, edit worklet.TagEdit,
 		authority worklet.TagAuthority) (worklet.WriteResult, error)
 
-	// EnsureTags is the INLINE half of the declare rule, used by the
-	// create and update tools rather than by this one: a seat that said
-	// `labels_create_missing` declares what its write is about to use in
-	// one append, before the task's own.
+	// EnsureTags is the INLINE half of the declare rule, for the create and
+	// update tools: a seat that said `labels_create_missing` declares what its
+	// write is about to use in one append, before the task's own.
 	EnsureTags(ctx context.Context, opID, project string, tags []string) (
 		[]string, []caveat.Caveat, error)
 }
@@ -176,13 +164,9 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != "" {
 		return failed(refusal), nil
 	}
-	// THE DEFAULT ASSIGNEE IS RESOLVED AGAINST THE CHART, because it is
-	// where every unassigned task in the project lands: a typo there
-	// routes a whole project's triage to somebody who does not exist, and
-	// every wake to them is dropped in silence.
-	//
-	// THE EMPTY STRING IS NOT A HANDLE. It is a real setting here — it
-	// means triage — so it is left alone rather than resolved.
+	// THE DEFAULT ASSIGNEE IS RESOLVED AGAINST THE CHART: a typo would route
+	// a whole project's triage to nobody, every wake dropped in silence. The
+	// empty string means triage and is left unresolved.
 	if edit.DefaultAssignee != nil && *edit.DefaultAssignee != "" {
 		who, unknown := t.deps.resolveHandle(ctx, worklet.WriteProjectTool,
 			"`default_assignee`", *edit.DefaultAssignee)
@@ -196,17 +180,11 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"`tags_rename`, `tags_archive`, `fields`, " +
 			"`default_assignee`, `target_date` or `archived`."), nil
 	}
-	// THE AUTHORITY IS RESOLVED ONCE, before either write, so a call that
-	// holds both facets cannot land the tag half and then be refused the
-	// policy half on a different answer to the same question.
-	//
-	// AND IT IS ASKED PER FACET, because they are two rules: adding a
-	// label is open to every colleague — which is what the tool's own
-	// gate already decided — while renaming one, archiving one or
-	// touching the policy is the project lead's, and taking the project
-	// out of circulation is that AND never an agent's. Asking the whole
-	// verb as the lead's refused a colleague the one facet
-	// internal/worklet grants them.
+	// THE AUTHORITY IS RESOLVED ONCE, before either write, so the two halves
+	// cannot be decided on different answers. And PER FACET: adding a label is
+	// every colleague's (the tool's own gate), renaming or archiving one or any
+	// policy edit is the project lead's, and archiving the project is that AND
+	// never an agent's.
 	project := authz.Object{Kind: authz.KindProject, Container: key}
 	var authority worklet.ProjectAuthority
 	if !edit.Empty() || len(tagEdit.Rename) > 0 || len(tagEdit.Archive) > 0 {
@@ -233,13 +211,10 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// own detail beneath it — see [callOutcome].
 	var call callOutcome
 
-	// THE TAGS FIRST, because the policy half may archive the project and
-	// a tag declared into an archived project is the one order that reads
-	// as a mistake. Two writes, never one — two objects on two subjects.
-	//
-	// EACH UNDER AN OPERATION DERIVED FROM THE CALL ([opIDFor]) — its
-	// verb telling the two records apart — so the call made again, a seat's
-	// re-run or an operator's retry, writes each record once.
+	// THE TAGS FIRST: the policy half may archive the project, and a tag
+	// declared into an archived project reads as a mistake. Each write under an
+	// operation derived from the call ([opIDFor]), its verb telling the two
+	// apart, so a retry writes each record once.
 	if !tagEdit.Empty() {
 		opID := opIDFor(actor, t.Name(), "tags", key, args)
 		result, err := writer.WriteTags(ctx, opID, key,
@@ -293,17 +268,14 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		policy := map[string]any{
 			"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 		}
-		// THE TARGET DATE'S TRUNCATION IS SAID, as the tags half's
-		// near-matches are: an instant stored as a day is the writer's
-		// value changed, and a caller told `applied` alone reads it as
-		// stored verbatim.
+		// THE TARGET DATE'S TRUNCATION IS SAID: an instant stored as a day is
+		// the caller's value changed, and `applied` alone reads as verbatim.
 		caveats = append(caveats, result.Caveats...)
 		out["policy"] = policy
 	}
 	call.stamp(out)
-	// ONE LIST AT THE TOP, whichever half raised it ([caveated]): each
-	// sentence names what it is about, and a list nested under a half was
-	// one the act route could not take off a person's receipt.
+	// ONE LIST AT THE TOP, whichever half raised it ([caveated]): a list
+	// nested under a half is one the act route cannot take off a receipt.
 	return caveated(out, caveats)
 }
 
@@ -346,8 +318,7 @@ func projectTagEdit(args map[string]any) (worklet.TagEdit, string) {
 // projectPolicyEdit reads the four policy facets a caller sent.
 //
 // PRESENCE DECIDES, never the value: `default_assignee: ""` means triage and
-// omitting it means leave it alone, and a reader that could not tell them apart
-// would clear a project's default every time somebody declared a field.
+// omitting it means leave it alone, or declaring a field would clear the default.
 func projectPolicyEdit(args map[string]any) (worklet.ProjectEdit, string) {
 	var edit worklet.ProjectEdit
 	if _, held := args["fields"]; held {
@@ -361,9 +332,8 @@ func projectPolicyEdit(args map[string]any) (worklet.ProjectEdit, string) {
 		who := strings.TrimSpace(argString(args, "default_assignee"))
 		edit.DefaultAssignee = &who
 	}
-	// NULL AND THE EMPTY STRING BOTH CLEAR the target, which the schema
-	// admits: "no target" is a setting, and the tracker coerces whatever
-	// else was sent — or refuses it naming both spellings.
+	// NULL AND THE EMPTY STRING BOTH CLEAR the target ("no target" is a
+	// setting); the tracker coerces anything else, or refuses it.
 	if raw, held := args["target_date"]; held {
 		target := ""
 		if raw != nil {

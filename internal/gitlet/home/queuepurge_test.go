@@ -15,13 +15,12 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE MERGE QUEUE ON REAL GIT, ACROSS A PURGE: one solo fleet's Gitlet node is
-// home to gitlettest.RepoName, whose main is a queue target, and the
-// home's three workers — its change work, its check work and its queue — are
-// turned one at a time over the fleet's own estate, its cache and its pool,
-// the train built by the Gitlet node's own chain builder: every record but a
-// runner's claim and ending of a check — the case's, as no runner runs here —
-// is the one production asks for, decided by the data node's committer.
+// THE MERGE QUEUE ON REAL GIT, ACROSS A PURGE: a solo fleet's Gitlet node homes
+// gitlettest.RepoName, whose main is a queue target; its change, check and
+// queue workers are turned one at a time over the fleet's own estate, cache
+// and pool, the train built by the node's own chain builder, so every record
+// but a runner's claim and ending of a check (the case's, as no runner runs)
+// is production's, decided by the data node's committer.
 
 // queueChecksFile is the checks file main holds: its one check, the one the
 // queue gate requires.
@@ -115,14 +114,12 @@ func (h *gitHome) purged() {
 		h.t.Fatalf("the purge request: %+v, %v", res, err)
 	}
 	for range 12 {
-		// THE NODE'S MAINTAINER keeps the one slot of the maintenance lane an
-		// expunge's build may take for a moment at a time: a busy answer is
-		// asked again, for a minute at the most — of what the listing names
-		// then, as the next pass asks it. A cycle's busy answer may come after
-		// its begin has applied, and the listing names that expunge open from
-		// then on: a cycle of the candidate read before it, which names none,
-		// would plan over a copy whose every live pack the begin dated at its
-		// scan, find the purge in hand and answer not_due (#840).
+		// THE NODE'S MAINTAINER holds the maintenance lane's one slot an
+		// expunge's build takes briefly: a busy answer is asked again, for a
+		// minute at most, of what the listing names THEN. A busy answer may
+		// follow its begin applying; a cycle of the listing read before it
+		// would plan over packs the begin dated, find the purge in hand and
+		// answer not_due (#840).
 		deadline := time.Now().Add(time.Minute)
 		for {
 			a, err := served.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadExpungeDue, Fresh: gitlettest.Linearizable})
@@ -150,20 +147,16 @@ func (h *gitHome) purged() {
 }
 
 // A PENDING LANDING'S TIP SURVIVES A PURGE, ON REAL GIT (M6-D2, M6-D4): a
-// queued change's train is a merge commit its home builds in a scratch and
-// stores in a pack, which no ref reaches until the landing moves main onto it
-// — so a purge between the train and its landing, which keeps no ref drop,
-// keeps the candidate's tip all the same, because the expunge's tips name
-// every candidate's; and the landing, read after the purge, states the drop
-// epoch the purge's begin moved, so it lands. A cache rebuilt from the rows
-// alone then holds every object main reaches (git fsck), its tip the
-// candidate's merge commit among them.
+// train's merge commit sits in a pack no ref reaches until the landing moves
+// main onto it, so a purge between train and landing keeps it only because
+// the expunge's tips name every candidate's; the landing, read after the
+// purge, states the drop epoch the purge's begin moved, so it lands. A cache
+// rebuilt from the rows alone then holds every object main reaches (git
+// fsck), the candidate's merge commit among them.
 //
-// Mutations: drop the candidates' phase from an expunge's tips, and the purge
-// drops the merge commit only the train's pack held — main lands on an object
-// no pack holds, and the rebuilt cache's fsck fails; land at the drop epoch
-// the train was built at rather than the one its read held, and the landing
-// is refused expunging after the purge — main never moves.
+// Mutations: drop the candidates' phase from an expunge's tips → main lands on
+// an object no pack holds and the rebuilt cache's fsck fails; land at the
+// train's build epoch, not its read's → refused expunging, main never moves.
 func TestAPendingLandingsTipSurvivesAPurge(t *testing.T) {
 	t.Parallel()
 	h, l := queueHome(t)

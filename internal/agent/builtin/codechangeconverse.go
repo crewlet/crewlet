@@ -19,43 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE CONVERSATION WRITES: what is said about a change — an ask for review,
-// a review with its findings, a comment and a thread's resolution, and an
-// answer to findings — each ONE write of the change's conversation, decided by
-// the repository's committing data node in one snapshot
-// (gitlet.ConversationWrite, CodeWriter.Converse) on the change's own subject:
-// its writer stamps who wrote it, a reviewer's kind, a comment's and a
-// review's ids, from the write's asker, the chart and its snapshot. Every one
-// is a change write ([ChangeWrites]) on the change writes' terms
-// (codechangewrite.go): admitted for every principal and judged where it is
-// decided — who may ask, review, answer or dismiss (the change domain's rule
-// D21) — named by the same operation rule, a token bound to nobody writing
-// nothing.
-//
-// # Each is decided at or past its caller's read of the change
-//
-// The call reads the change ONCE, at the seat's level, for the id a write
-// names it by — and a review or an anchored comment for the revision it
-// judges, the head unless the call names an earlier one — and the write is
-// decided at or past that read (gitlet.ConversationWrite.Seen): a revision the
-// deciding node has not reached is refused unknown_revision rather than taken
-// for one that does not exist. An ask for review and a comment are additive —
-// the operation makes the same call made again the same write — so neither
-// names a version; nor does a review, which judges the revision it names
-// whatever has moved since.
-//
-// # A finding is anchored where its lines were read
-//
-// A finding, and a comment anchored to a line, names the commit and the blob
-// its lines were read in — the revision's head on the new side of its diff,
-// its recorded base on the old — so a later revision can carry it to where
-// those lines went (gitlet.Reanchor). The call reads every blob it names in ONE
-// read by object id, the revision's diff kept to the files they are on, at the
-// floor of the records that moved the revision's head and its target: a
-// finding is about a file the revision CHANGES, and one about any other is
-// refused, to be said in the review's summary or a comment. A revision whose
-// base its home has not recorded yet is answered not yet readable, as
-// code_get_change's files are.
+// THE CONVERSATION WRITES (an ask for review, a review with its findings, a
+// comment and a thread's resolution, an answer to findings) are each ONE write
+// of the change's conversation, decided by the repository's committing data
+// node in one snapshot on the change's subject (gitlet.ConversationWrite,
+// CodeWriter.Converse), whose writer stamps authors and ids. Each is a change
+// write ([ChangeWrites], codechangewrite.go): admitted for every principal,
+// judged where decided (rule D21), named by the same operation rule. The call
+// reads the change ONCE and the write is decided at or past that read
+// (ConversationWrite.Seen), so an unreached revision is unknown_revision, not
+// nonexistent. None names a version: asks and comments are additive, and a
+// review judges the revision it names. A finding or anchored comment names the
+// commit and blob its lines were read in, for gitlet.Reanchor ([conversing.anchor]).
 
 // The conversation write tools' names: each is its authority row's action.
 const (
@@ -72,11 +47,9 @@ const emptyTreeID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 // ---- one write of a change's conversation ----------------------------------- //
 
-// conversing is one call of a conversation write: who writes, the repository
-// the turn resolved and the change by its number on it ([changeRead]), the
-// call's arguments, and the call's one read of the change — its row, with its
-// readiness where the write acts on it, its head revision and the position it
-// was read at.
+// conversing is one conversation-write call: its caller, repository and change
+// ([changeRead]), its arguments, and its one read of the change (the row, with
+// readiness where the write acts on it, the head revision, the read position).
 type conversing struct {
 	g      changeRead
 	args   map[string]any
@@ -85,16 +58,11 @@ type conversing struct {
 	at     statelog.Position
 }
 
-// conversation binds a call's operation by the rule every write takes,
-// resolves the repository it names and reads its change, for a write of the
-// change's conversation to name — or answers the refusal the call is answered
-// with. The read is the call's ONE linearizable read, its resolution of the
-// repository too where the turn has none ([changeRead.ask]), and reads the
-// change IN BRIEF ([changeRead.head]): no write of a conversation reads the
-// change's description, its authors, its conversation's counts or its
-// mergeability. judged reads it in detail, for its readiness
-// ([changeRead.detail]) — the one write that acts on it, a dequeue, whose
-// entry its queue precondition names.
+// conversation binds the call's operation, resolves its repository and reads
+// its change in the call's ONE linearizable read ([changeRead.ask]), IN BRIEF
+// ([changeRead.head]): no conversation write needs the description, authors,
+// counts or mergeability. judged reads it in detail ([changeRead.detail]) for
+// the readiness a dequeue's queue precondition names.
 func (d CodeDeps) conversation(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	args map[string]any, name string, number int64, judged bool) (conversing, *tools.Result) {
 
@@ -124,9 +92,8 @@ func (cv conversing) op() string {
 	return opIDFor(cv.g.c.actor, cv.g.tool, changeVerb, cv.g.repo.ID, cv.args)
 }
 
-// send asks the repository's committing data node to decide w — under the
-// call's operation, as its caller, at or past the call's read of the change —
-// and answers what it came to, or the refusal the call is answered with.
+// send has the committing data node decide w under the call's operation, at or
+// past the call's read of the change.
 func (cv conversing) send(ctx context.Context, w gitlet.ConversationWrite) (gitlet.ConversationResult,
 	*tools.Result) {
 
@@ -134,12 +101,10 @@ func (cv conversing) send(ctx context.Context, w gitlet.ConversationWrite) (gitl
 	return cv.decided(ctx, w)
 }
 
-// decided completes w with its asker, the ceiling whoever the turn works for
-// bounds it by and whom it is made for — the three stamped together from the
-// call's caller, the carrier composed from the call's own bound ceiling and
-// never from a tool's arguments — and asks it, held first to the rule every
-// change writer holds a write to (gitlet.ConversationWrite's Validate), so one
-// no node would decide is refused naming its field before it is routed.
+// decided stamps w's asker, ceiling and written-for together from the call's
+// caller (the ceiling from its own bound carrier, never from tool arguments),
+// then validates it as every change writer does (ConversationWrite.Validate),
+// so a write no node would decide is refused naming its field before routing.
 func (cv conversing) decided(ctx context.Context, w gitlet.ConversationWrite) (gitlet.ConversationResult,
 	*tools.Result) {
 
@@ -174,10 +139,9 @@ func (cv conversing) decided(ctx context.Context, w gitlet.ConversationWrite) (g
 	return gitlet.ConversationResult{}, &r
 }
 
-// codeConversationAnswer is a conversation write's answer: the change, what
-// became of the write, what it made — a comment's or a review's id, a review's
-// findings' ids in the order it raised them — and, for a comment that also
-// set its thread's state, what became of that.
+// codeConversationAnswer is a conversation write's answer: its outcome, the id
+// it made (a review's findings' ids in the order raised) and, for a comment
+// that also set its thread, what became of that.
 type codeConversationAnswer struct {
 	Repo          string           `json:"repo"`
 	RenamedTo     string           `json:"renamed_to,omitempty"`
@@ -188,9 +152,8 @@ type codeConversationAnswer struct {
 	ID            string           `json:"id,omitempty"`
 	Findings      []string         `json:"findings,omitempty"`
 	Position      string           `json:"position,omitempty"`
-	// ThreadResolved is the state a comment's call left its thread in, and
-	// ThreadNotSet why it left the thread as it was: the comment stands all
-	// the same.
+	// ThreadResolved is the state the call left the thread in, ThreadNotSet
+	// why it left it unchanged; the comment stands either way.
 	ThreadResolved *bool  `json:"thread_resolved,omitempty"`
 	ThreadNotSet   string `json:"thread_not_set,omitempty"`
 	OpID           string `json:"op_id,omitempty"`
@@ -209,16 +172,12 @@ func (cv conversing) page(ctx context.Context, out codeConversationAnswer) (tool
 	return newForeignRead(cv.g.turn, cv.g.c.asker.Seat).page(ctx, cv.g.tool, out, "")
 }
 
-// conversationClass is the class a refusal of a change's conversation is
-// answered in, on [changeClass]'s reading: a rule of the change refusing the
-// caller — who may ask, review, answer or dismiss — FORBIDDEN; a revision the
-// deciding node has not reached STALE_VERSION; the change or its repository in
-// a state that refuses the write until somebody changes it CONFLICT — a
-// change closed or merged, a repository archived; a repository, a change, a
-// thread or a finding gone NOT_FOUND; a reviewer no seat holds and an ask or
-// a review past its bound INVALID — the fix is another call; and what waiting
-// clears UNAVAILABLE. superseded is the home's own refusal, never a caller's,
-// and has none.
+// conversationClass is a conversation refusal's class on [changeClass]'s
+// reading: a rule of the change refusing the caller FORBIDDEN; an unreached
+// revision STALE_VERSION; a state somebody must change (closed, merged,
+// archived) CONFLICT; what is gone NOT_FOUND; what another call fixes INVALID;
+// what waiting clears UNAVAILABLE. superseded is the home's own refusal, never
+// a caller's, and has none.
 func conversationClass(r gitlet.ConversationRefusal) (tools.Refusal, bool) {
 	switch r {
 	case gitlet.ConversationRefusalNotPermitted, gitlet.ConversationRefusalOwnChange,
@@ -269,13 +228,11 @@ func conversationRefused(tool string, res gitlet.ConversationResult) tools.Resul
 	return toPerson(refusedBy(class, cause, said), conversationRefusalWords(res.Refusal))
 }
 
-// conversationRefusalWords is a person's words for the conversation refusals
-// a person meets from the change page's own controls: a review of a change
-// they wrote, which the page holds for its authors and which only a change
-// gaining them as an author since the page's read reaches. Every other
-// conversation refusal is answered in its code's own sentence, the floor
-// ADR-0060 sets: not_permitted's rules are four, and its sentence names none of
-// them for a person.
+// conversationRefusalWords is a person's words for own_change, the one
+// conversation refusal the change page's controls reach (when the person became
+// an author since the page's read). Every other one keeps its code's own
+// sentence, ADR-0060's floor: not_permitted has four rules, and its sentence
+// names none of them.
 func conversationRefusalWords(refusal gitlet.ConversationRefusal) caveat.Refusal {
 	if refusal == gitlet.ConversationRefusalOwnChange {
 		return caveat.ReviewOfYourOwnChange()
@@ -299,15 +256,14 @@ type anchored struct {
 	blob   map[anchorAt]string
 }
 
-// anchor reads where lines of revision rev are, for each place a call anchors
-// them: its head on the new side, its recorded base on the old — refused, as
-// code_get_change refuses its files, where the base is not recorded yet, and
-// for the old side of a revision sharing no history with its target, whose
-// base holds nothing — and the blob each file is on its side, from ONE read of
-// the revision's diff by object id kept to those files, at the floor of the
-// records that moved its head and its target. A file the revision does not
-// change, or one absent on the side named, is refused: a finding and an
-// anchored comment are about the change's own lines.
+// anchor reads where rev's lines are for each place: its head on the new side,
+// its recorded base on the old (refused as code_get_change's files are while
+// the base is unrecorded, and on the old side of a revision sharing no history
+// with its target, whose base holds nothing), and each file's blob from ONE
+// diff read by object id kept to those files, at the floor of the records that
+// moved its head and target.
+// A file the revision does not change, or absent on the named side, is
+// refused: findings and anchored comments are about the change's own lines.
 func (cv conversing) anchor(ctx context.Context, rev gitlet.RevisionRow, at []anchorAt) (anchored, *tools.Result) {
 	g := cv.g
 	old := slices.ContainsFunc(at, func(a anchorAt) bool { return a.side == gitlet.SideOld })
@@ -330,9 +286,8 @@ func (cv conversing) anchor(ctx context.Context, rev gitlet.RevisionRow, at []an
 	files := map[string]gitlet.DiffFile{}
 	q := gitlet.GitQuery{Kind: gitlet.GitDiff, RepoID: g.repo.ID, Fresh: g.floor(rev),
 		Diff: &gitlet.DiffQuery{Base: base, Head: rev.Head, Paths: paths}}
-	// THE DIFF'S PAGES, each its files in git's order: a page of at most
-	// gitlet.MaxDiffPaths files is one page but where their paths fill one, so
-	// a page names where the next begins and the read goes on.
+	// Even within gitlet.MaxDiffPaths files, long paths can fill a page, so
+	// the read follows each page's Next.
 	for {
 		page, refusal := g.deps.gitRead(ctx, g.turn, g.tool, g.c, g.repo, q)
 		if refusal != nil {
@@ -377,9 +332,8 @@ func (cv conversing) anchor(ctx context.Context, rev gitlet.RevisionRow, at []an
 	return out, nil
 }
 
-// revisionOf is the revision a call judges: the change's head, or the earlier
-// one `revision` names, read at session floored at the call's read of the
-// change.
+// revisionOf is the revision a call judges: the head, or the one `revision`
+// names, read at session floored at the call's read of the change.
 func (cv conversing) revisionOf(ctx context.Context, n int64) (gitlet.RevisionRow, *tools.Result) {
 	if n == 0 || n == cv.head.N {
 		return cv.head, nil
@@ -616,13 +570,10 @@ func (t *codeReviewChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return cv.page(ctx, cv.answerOf(res))
 }
 
-// reviewArgs is the review a call's arguments ask for — its verdict, summary,
-// carried findings and findings, each finding's commit and blob left for the
-// call's one read of the revision to fill — and the places its findings
-// anchor lines, or the refusal of one no review could carry, before anything
-// is read. What each field may hold beyond its shape — a title's bytes, a
-// body's — is the change writer's rule, which the write is held to before it
-// is routed.
+// reviewArgs is the review a call asks for, its findings' commits and blobs
+// left for [conversing.anchor], and the places they anchor, or a refusal before
+// anything is read. Limits beyond a field's shape (a title's bytes) are the
+// change writer's rule, which [conversing.decided] holds before routing.
 func reviewArgs(tool string, args map[string]any) (gitlet.Review, []anchorAt, *tools.Result) {
 	review := gitlet.Review{Verdict: gitlet.Verdict(strings.TrimSpace(argString(args, "verdict"))),
 		Summary: argString(args, "summary"), Carries: argStrings(args, "carries")}
@@ -657,8 +608,8 @@ func reviewArgs(tool string, args map[string]any) (gitlet.Review, []anchorAt, *t
 		if f.LineEnd == 0 {
 			f.LineEnd = f.LineStart
 		}
-		// A NULL `suggestion` IS NONE, as argval.Object reads every member
-		// that is null; a list or an object is no lines.
+		// A null `suggestion` is none, as argval.Object reads every null
+		// member; a list or an object is refused.
 		if s, present := m["suggestion"]; present {
 			text, ok := argval.String(s)
 			if !ok {
@@ -808,9 +759,8 @@ func (t *codeCommentOnChange) CallForTurn(ctx context.Context, turn *turnctx.Tur
 	return cv.page(ctx, out)
 }
 
-// anchorLine is a comment's anchor: the line of a file of a revision — the
-// head unless it names one — on one side of its diff, with the blob it was
-// read in.
+// anchorLine is a comment's anchor: a line of a file of a revision (the head
+// unless named) on one side of its diff, with the blob it was read in.
 func (cv conversing) anchorLine(ctx context.Context, tool string, a anchorArg) (*gitlet.CommentAnchor,
 	*tools.Result) {
 
@@ -836,12 +786,10 @@ func (cv conversing) anchorLine(ctx context.Context, tool string, a anchorArg) (
 		nil
 }
 
-// setThread makes a comment's second write — its thread marked resolved, or
-// open again — once the comment is said (applied or pending), as a STEP of
-// the comment's operation, decided at or past the comment's own record.
-// Whatever became of it is said on the answer beside the comment, never as the
-// comment's failure: the comment WAS said, and the call made again says it
-// once.
+// setThread marks the thread resolved or open once the comment is said
+// (applied or pending), as a STEP of the comment's operation decided at or past
+// the comment's record. Its failure is said beside the comment, never as the
+// call's: the comment WAS said, and the same call again says it once.
 func (cv conversing) setThread(ctx context.Context, said gitlet.ConversationResult, thread string, resolved bool,
 	out *codeConversationAnswer) {
 

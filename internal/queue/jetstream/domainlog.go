@@ -24,108 +24,66 @@ import (
 )
 
 // DomainLog is one state-log domain's append surface: a conditional publish
-// that returns the acknowledgement the ordinary publish path discards, and
-// the last-message query a rejection is discriminated with — and the WATCH
-// ([DomainLog.Watch]) a reader takes when what it needs from the log is which
-// objects moved, never what the records say.
+// that returns its acknowledgement, the last-message query a rejection is
+// discriminated with, and a WATCH ([DomainLog.Watch]) for a reader that needs
+// only which objects moved.
 //
-// # Why this is not Queue.Publish
-//
-// [Queue.Publish] throws the PubAck away, and for its own traffic that is
-// right: an event's sequence is nobody's business. For a state log the
-// sequence inside it is the object's new version, the applier's checkpoint
-// and the next writer's expectation, all at once — so the framework
-// publishes through here instead, on the same connection and with the same
-// credentials.
+// Not [Queue.Publish], which discards the PubAck: for a state log the sequence
+// is the object's new version, the applier's checkpoint and the next writer's
+// expectation at once.
 type DomainLog struct {
 	js     jetstream.JetStream
 	stream jetstream.Stream
 	name   string
 
-	// q is the queue this log was opened on, held for the ONE thing a
-	// bare JetStream context cannot do: ensure a durable consumer in a
-	// way that survives a peer creating the same name at the same instant.
-	// See [Queue.ensureDurableConsumer].
+	// q is the queue this log was opened on, for the one thing a bare
+	// JetStream context cannot do: ensure a durable consumer that survives a
+	// peer creating the same name at once ([Queue.ensureDurableConsumer]).
 	q *Queue
 
-	// arrival is how long the reply to a leader's read of one of this
-	// log's records by its position is given beyond the read term and the
-	// lookup ceiling to reach this node whole, where nothing says how large
-	// the record is: the arrival of the largest record the log stores — its
-	// handling on every connection, and its crossing at the connection's
-	// pace across a link ([Queue.recordArrival]). A log read through its
-	// copies gives each record its own instead ([DomainLog.replyArrival]).
-	// Fixed at open.
+	// arrival is what a leader's read by position is given beyond the read
+	// term and the lookup ceiling for its reply to reach this node whole,
+	// where the record's size is unknown: the largest record's arrival
+	// ([Queue.recordArrival]). A log read through its copies gives each
+	// record its own ([DomainLog.replyArrival]). Fixed at open.
 	arrival time.Duration
 
-	// copies reads this log's records through consumers on the leader's
-	// own copy ([copyRead]), where a leaf's link stands between the
-	// connection and the leader and the leader's reply of the log's largest
-	// record could not cross it ([Queue.leaderCarries]) — [DomainLog.At] and
-	// [DomainLog.LastSeq] — and is nil wherever the leader's reply of every
-	// record reaches this node. Fixed at open.
+	// copies reads records ([DomainLog.At], [DomainLog.LastSeq]) through
+	// consumers on the leader's own copy ([copyRead]) where a leaf's link
+	// stands between connection and leader and the leader's reply of the
+	// largest record could not cross it ([Queue.leaderCarries]); nil where
+	// every reply reaches this node. Fixed at open.
 	copies *copyRead
 
-	// info reads the stream's info — its ends, its size, its ceiling, its
-	// identity — through A HANDLE OF ITS OWN EVERY TIME it is asked
-	// ([DomainLog.stateInfo]), and is what [DomainLog.Stats] and
-	// [DomainLog.SetMaxBytes] read; nothing else here reads the info.
+	// info reads the stream's info through A HANDLE OF ITS OWN EVERY TIME
+	// ([DomainLog.stateInfo]), for [DomainLog.Stats] and [DomainLog.SetMaxBytes].
 	//
-	// # Why a state read never goes through a handle another read holds
-	//
-	// The vendored stream handle is not safe for concurrent use, and the
-	// shared mutable state is exactly one field: `Info` caches its reply
-	// into `s.info` with no lock (stream.go:498), and `getMsg` — which is
-	// what `GetMsg` and `GetLastMsgForSubject` are — READS `s.info.Config`
-	// on the same handle (stream.go:577). So one goroutine asking for the
-	// log's size on the handle above would race every goroutine reading a
-	// record by sequence or by subject, on a DomainLog that is shared by
-	// design: the applier's readiness check, the publisher's expectation
-	// read and the retention tick all hold this one. Nothing calls `Info`
-	// on that handle, so its `s.info` is written once at open and read
-	// immutably thereafter, and `LastSeq` — on the WRITE path, every
-	// conditional append that loses its expectation reads it — takes no
-	// lock.
-	//
-	// AND NOT A SECOND SHARED HANDLE EITHER, which is what this was: a
-	// second handle needed its callers to take turns, and a state read is
-	// asked as a hedged read ([jsprovision.ReadWith]) whose requests may be
-	// out two at a time, which on one handle is the same race. A handle a
-	// request opens for itself (one STREAM.INFO, the same request `Info`
-	// sends) is shared with nobody, so state reads take no turn and wait
-	// for nobody else's: the readiness checks, the trim tick, the operator
-	// report — and the GATE RESERVE'S USAGE READING, which is on the
-	// hottest path the log has: every ordinary append and every barrier,
-	// which is to say every linearizable read, is admitted through it
-	// ([statelog.Reserve.Admit]) and waits for a state round trip that
-	// starts after it arrives. NOT A READ'S READINESS: a read is served
-	// the log's ends from memory, refreshed from here at most once a
-	// second whatever the read rate.
+	// The vendored handle is not safe for concurrent use: `Info` caches into
+	// `s.info` unlocked (stream.go:498) and `getMsg` (GetMsg,
+	// GetLastMsgForSubject) reads `s.info.Config` (stream.go:577). So nothing
+	// calls `Info` on the shared [DomainLog.stream], and `LastSeq` on the
+	// write path takes no lock. Nor a second shared handle: a hedged state
+	// read ([jsprovision.ReadWith]) has two requests out at once, and a
+	// per-request handle makes no read wait its turn — the reserve's usage
+	// reading admits every append and barrier ([statelog.Reserve.Admit]).
 	info func(ctx context.Context) (*jetstream.StreamInfo, error)
 
-	// members is how many members store the stream, as the broker last
-	// reported it: in the info its open read, and then in every state read
-	// ([DomainLog.stateInfo]) — so a stream an operator re-replicates is seen
-	// within the second a read's ends are re-read in, and asking it costs no
-	// round trip ([DomainLog.Members]).
+	// members is how many members store the stream, as its open and every
+	// state read ([DomainLog.stateInfo]) last reported it, so a
+	// re-replication is seen within a second at no round trip
+	// ([DomainLog.Members]).
 	members atomic.Int32
 
-	// watchTiming is every duration a watch on this log waits on, and the
-	// ZERO VALUE IS PRODUCTION: [DomainLog.watching] answers the constants
-	// beside [DomainLog.Watch] whenever it is unset, which is always
-	// outside this package's own tests — for [Queue.timing]'s reason: the
-	// branches worth proving are a reconnect noticed and a create asked
-	// again, and at the production numbers a case proving one waits them
-	// out. Set only before the log's first Watch.
+	// watchTiming is every duration a watch on this log waits on; the ZERO
+	// VALUE IS PRODUCTION ([DomainLog.watching]). Only this package's tests
+	// set it, for [Queue.timing]'s reason, before the log's first Watch.
 	watchTiming watchTiming
 }
 
 // DomainLog opens the append surface for a stream this node has provisioned.
 //
-// It resolves the stream ONCE, at open, rather than per call: the
-// last-message query needs a stream handle, and looking one up on every
-// rejection would put an extra round trip on the path that is already the
-// slowest one the write authority has.
+// It resolves the stream once, at open: a lookup on every rejection would add
+// a round trip to the write authority's slowest path.
 func (q *Queue) DomainLog(ctx context.Context, stream string) (*DomainLog, error) {
 	s, err := q.openProvisioned(ctx, stream)
 	if err != nil {
@@ -154,13 +112,10 @@ func (q *Queue) DomainLog(ctx context.Context, stream string) (*DomainLog, error
 // Members is how many members store this log — its replication factor as the
 // broker last reported it — and at least one.
 //
-// It is what a barrier that did not commit MEANS ([statelog.NewReadIndex]):
-// on several members, a majority that did not agree in time; on one, never
-// that, since the sole member's acknowledgement waits on nobody else's — the
-// member's own write did not complete. Read from the stream's info rather
-// than from Tier A's stream.replicas, which is a floor the running stream may
-// exceed ([Queue.observeStream]): a node configured for one copy starts
-// against a stream that keeps three.
+// It is what a barrier that did not commit MEANS ([statelog.NewReadIndex]): on
+// several members, no majority agreed in time; on one, the member's own write
+// did not complete. Read from the stream's info, not Tier A's stream.replicas,
+// a floor the running stream may exceed ([Queue.observeStream]).
 func (l *DomainLog) Members() int { return int(max(l.members.Load(), 1)) }
 
 // noteMembers records the replication factor info states, where it states
@@ -171,30 +126,21 @@ func (l *DomainLog) noteMembers(info *jetstream.StreamInfo) {
 	}
 }
 
-// recordArrival is how long the reply to a leader's read of one of s's
-// records by its position is given beyond the read term and the lookup
-// ceiling to reach this queue's connection whole, where nothing says how
-// large the record is — see [DomainLog.At]: the arrival of the largest
-// message s stores ([jsapi.Arrival]) — its handling in the engine's own
-// processes on every connection, a member's own included, and where the
-// connection crosses a link its crossing at the connection's pace
-// ([link.pace]) besides: the one decision of how slow this connection may be,
-// which its writes are paced by too, and the object store's floor, the pace
-// internal/objstore/natsobj sizes its piece reads and its puts' window by on
-// this same connection. A log read through its copies ([DomainLog.copies])
-// asks the leader only for a record whose own reply crosses, given that
-// reply's arrival ([DomainLog.replyArrival]). s is the handle just opened,
-// whose info is its open's and is read by nothing that writes it.
+// recordArrival is what a leader's read of one of s's records by position is
+// given beyond the read term and the lookup ceiling ([DomainLog.At]), where the
+// record's size is unknown: the arrival of the largest message s stores
+// ([jsapi.Arrival]) — its handling on every connection, plus, across a link,
+// its crossing at the connection's pace ([link.pace]), the one pace this
+// connection's writes and internal/objstore/natsobj's reads and puts use too.
+// s is the handle just opened, whose info nothing writes.
 func (q *Queue) recordArrival(s jetstream.Stream) time.Duration {
 	return jsapi.Arrival(q.largestMessage(s), q.link.pace)
 }
 
 // replyArrival is how long the reply to a leader's read of a record of
-// recordBytes — header block and payload, as a probe of its headers counted
-// it ([copyRead.at]) — takes to reach this log's connection whole at its pace
-// ([jsapi.Arrival], [link.pace]): what [DomainLog.At] gives that read beyond
-// the read term and the lookup ceiling, in place of the log's largest
-// record's arrival ([DomainLog.arrival]).
+// recordBytes (header block and payload, as [copyRead.at] counted them) takes
+// to reach this connection whole at its pace ([jsapi.Arrival]): what
+// [DomainLog.At] gives in place of [DomainLog.arrival].
 func (l *DomainLog) replyArrival(recordBytes int) time.Duration {
 	return jsapi.Arrival(recordBytes, l.q.link.pace)
 }
@@ -214,23 +160,14 @@ func (q *Queue) largestMessage(s jetstream.Stream) int {
 // stateInfo is the stream's info, read through a handle of its own
 // ([DomainLog.info]).
 //
-// ASKED AS A READ ([jsprovision.ReadWith]): each request presumed lost after
-// the read term, and another sent while nobody answers. A stream's info is
-// answered by its LEADER, and a member that still believes in a leader the
-// cluster has just lost stays silent rather than answer — so a request sent in
-// the window after a leader died is never answered at all, the new leader's
-// election notwithstanding, and one request held for its caller's whole
-// context waited out the committer's thirty-second budget for a reply nobody
-// was going to send, where asked again it was answered by the new leader a
-// second or two later.
-//
-// AND EVERY REQUEST STAYS OUTSTANDING while the next is asked, because the
-// leader queues each for a pool of workers and a backlog answers it LATE
-// rather than never. Thrown away at the read term, a reading from a leader
-// slower than a second was never taken at all — and the reserve that admits
-// every append and every barrier through this reading failed each of them at
-// its own budget, every push batch and every linearizable read on the node
-// at once, where waiting would only have slowed them.
+// ASKED AS A READ ([jsprovision.ReadWith]), each request presumed lost after
+// the read term and another sent: a member still believing in a leader the
+// cluster just lost stays silent, so one request held for the whole context
+// waits out the committer's thirty-second budget where a re-ask is answered
+// by the new leader in seconds. EVERY REQUEST STAYS OUTSTANDING meanwhile: a
+// backlogged leader answers late, not never, and the reserve admitting every
+// append and barrier through this reading must not fail them all for a reply
+// that was only slow.
 func (l *DomainLog) stateInfo(ctx context.Context) (*jetstream.StreamInfo, error) {
 	info, err := jsprovision.ReadWith(ctx, l.q.provisioning(), l.info, nil)
 	if err == nil {
@@ -243,88 +180,45 @@ func (l *DomainLog) stateInfo(ctx context.Context) (*jetstream.StreamInfo, error
 // out the window in which its own create has committed but is not yet visible
 // to it.
 //
-// # Why a bare lookup was wrong here
-//
-// Every caller of [Queue.DomainLog] reaches it immediately after
-// [Queue.EnsureDomainStream] returned nil for the same name — that is the
-// contract, and the two are consecutive statements in the state log's
-// provision step. On one node the lookup after a successful create cannot
-// fail. On a CLUSTER it can: the create is committed by the metadata leader
-// and the asking member learns of it on the next metadata update, so there is
-// a window in which the member that made the stream is told it does not
-// exist.
-//
-// That is not a hypothetical. It failed a clustered boot outright —
-// `open the log "CREWLET_TRACKER_VECTORS": nats: API error: code=404
-// err_code=10059 description=stream not found`, reported by the node whose own
-// create of that stream had just succeeded. Everything else on this path
-// already tolerates the window: [Queue.createOrObserveStream] re-asks after a
-// lost race and so does [openBucket] in [internal/coord/kv]. This was the one
-// lookup with no tolerance at all, which is why it was the one that broke.
-//
-// # Why it is bounded by ReadBack rather than the provisioning budget
-//
-// The create has already returned successfully, so what is being waited out is
-// metadata propagation and not placement — a round trip, not a raft election.
-// A not-found that outlives [jsprovision.ReadBack] is a stream that really is
-// gone, and reporting that promptly is what the caller needs. A placement
-// failure is deliberately NOT waited out here: nothing is being placed, so
-// waiting for peers would be waiting for something nobody is going to do.
+// Every caller reaches it right after [Queue.EnsureDomainStream] returned nil.
+// On a cluster the metadata leader commits the create and the asking member
+// learns of it on the next metadata update, so meanwhile a bare lookup is
+// told "stream not found" (err_code=10059) and fails the boot. Bounded by
+// [jsprovision.ReadBack], not the provisioning budget: what is waited out is
+// propagation, a round trip, so a longer not-found is a stream really gone;
+// and a placement failure is not waited out, since nothing is being placed.
 func (q *Queue) openProvisioned(ctx context.Context, stream string) (jetstream.Stream, error) {
-	// THE CEILING IS REAL, which means it bounds the LOOKUPS and not only
-	// the gaps between them — and that is [jsprovision.Settle]'s to own
-	// rather than this caller's: it hands each attempt a context carrying
-	// the window, so a single metadata request that blocked cannot outlive
-	// the window this function documents and hang until the boot context
-	// expired. ctx goes in undiminished, which is what lets an operator who
-	// cancels a boot be answered at once.
+	// [jsprovision.SettleWith] hands each attempt a context carrying the
+	// window, so a blocked lookup cannot outlive it; ctx goes in
+	// undiminished, so a cancelled boot is answered at once.
 	return jsprovision.SettleWith(ctx, q.provisioning(),
 		func(ctx context.Context) (jetstream.Stream, error) { return q.js.Stream(ctx, stream) })
 }
 
 // Append publishes one record.
 //
-// expect is the per-subject last sequence the append is conditional on, and
-// NIL means no expectation header at all — which is correct only where the
-// records commute. A pointer rather than a sentinel because zero is a real
-// expectation with a specific meaning, "this subject holds nothing", and it
-// is the one branch where being wrong costs a silent lost update.
+// expect is the per-subject last sequence the append is conditional on; NIL
+// sends no expectation, correct only where the records commute. A pointer
+// because zero is a real expectation, "this subject holds nothing", and
+// mistaking it for none costs a silent lost update.
 //
-// msgID empty sends no message id, which the read barrier requires: a
-// repeated id inside the duplicate window is served out of the window with no
-// quorum round trip, so an acknowledgement carrying one would prove nothing
-// about the log's end.
+// msgID empty sends no message id, which the read barrier requires: a repeated
+// id inside the duplicate window is answered without a quorum round trip, so
+// its acknowledgement proves nothing about the log's end.
 func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *uint64, body []byte) (uint64, bool, error) {
 	msg := appendMsg(subject, msgID, expect, body)
-	// DECIDED BEFORE IT IS ANSWERED. A conditional append the leader refuses
-	// because another write to the subject is still in flight has not been
-	// compared with anything — the write ahead may be this node's own, already
-	// acknowledged — and handed up as a rejection it sent the publisher round
-	// the discriminator to re-decide against the very anchor it had, for as
-	// many rounds as that write took to clear. [jsinflight.Decide] waits it out
-	// within the append's own budget; the leader stored nothing of a refused
-	// attempt, its message id included, so the retry is the same append. One
-	// still in flight at the deadline is [jsinflight.Undecided], which carries
-	// no API error, so the state log reads it as the no-answer it is.
+	// DECIDED BEFORE IT IS ANSWERED: an append the leader refuses because
+	// another write to the subject (maybe this node's own) is in flight was
+	// compared with nothing, and handed up as a rejection it sent the
+	// publisher round the discriminator against its own anchor.
+	// [jsinflight.Decide] waits it out within the append's budget (a refused
+	// attempt stored nothing, its id included, so the retry is the same
+	// append); one still in flight at the deadline is [jsinflight.Undecided],
+	// which the state log reads as no answer.
 	//
-	// AND EACH OF ITS FIRST SENDS WAITED FOR AS LONG AS ITS BYTES TAKE TO
-	// CROSS, where its caller set no deadline: the request term, and across
-	// a link the time the record and the headers it rides with take at the
-	// connection's pace for each of its first [jsapi.WriteSends] sends
-	// ([Queue.writing]) — an attempt after an in-flight answer, and a send
-	// again after nobody heard one, carry the whole record again — and a send
-	// past those waits in the budget as it stands, whose end the append's
-	// start fixed. A record may be the transport's whole eight
-	// mebibytes, about four minutes at the slowest pace allowed; held to the
-	// request term alone it failed as no answer while the link was carrying
-	// it, and held to one crossing, so did the attempt after an in-flight
-	// answer. For those minutes everything the node sends behind it on the
-	// link waits too, its lease renewals among them (crewlet/crewlet#1035,
-	// which this does not fix). A caller's own deadline is kept, but on an
-	// external broker it is not checked while the send waits for the
-	// connection's lock behind another large write, nor while the send is in
-	// the client's socket, each such write holding it up to the dial's write
-	// deadline ([externalWriteDeadline]).
+	// Each of its first sends is given the time its bytes take to cross
+	// ([Queue.writing]; package doc, "A write across a link is given the time
+	// its bytes take to cross", which also says what that leaves unbounded).
 	var ack *jetstream.PubAck
 	sends := l.q.writing(msg)
 	err := jsinflight.Decide(ctx, sends, func(ctx context.Context) error {
@@ -333,11 +227,10 @@ func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *u
 		return err
 	})
 	if err != nil {
-		// THE SIZES TRAVEL WITH A RECORD TOO LARGE TO SEND, because the
-		// client's refusal carries neither and they are the whole of what
-		// its remedy turns on: how far over the record is, and which
-		// server's max_payload it was measured against. Wrapped, so the
-		// state log still classifies it by the sentinel.
+		// THE SIZES TRAVEL WITH A RECORD TOO LARGE TO SEND: the client's
+		// refusal carries neither the record's excess nor the server's
+		// max_payload, and the remedy turns on both. Wrapped, so the state
+		// log still classifies it by the sentinel.
 		if errors.Is(err, nats.ErrMaxPayload) {
 			return 0, false, fmt.Errorf("%s: %w",
 				tooLarge(l.js.Conn(), "append to", subject, len(body)), err)
@@ -347,11 +240,10 @@ func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *u
 	return ack.Sequence, ack.Duplicate, nil
 }
 
-// appendMsg is the message an append publishes: its record as the payload,
-// and as headers its operation's id and its expectation, where it has them —
+// appendMsg is the message an append publishes: the record as payload, and
 // the headers the client's WithMsgID and WithExpectLastSequencePerSubject
-// write, set on the message itself so it is the whole of what the append
-// sends, and the count its budget is given is of what crosses ([carried]).
+// write, set on the message so it is all the append sends and its budget
+// counts what crosses ([carried]).
 func appendMsg(subject, msgID string, expect *uint64, body []byte) *nats.Msg {
 	msg := &nats.Msg{Subject: subject, Data: body, Header: nats.Header{}}
 	if msgID != "" {
@@ -366,48 +258,15 @@ func appendMsg(subject, msgID string, expect *uint64, body []byte) *nats.Msg {
 // LastSeq answers the last sequence on a subject, reporting false with a nil
 // error when the subject holds no message.
 //
-// "No message here" is a FACT and not a failure: it is what tells a trimmed
-// anchor from a lost race, and the two have opposite remedies. Returning the
-// broker's not-found as an error would make every caller re-derive that
-// distinction, and the first one to forget it would take the trimmed-anchor
-// branch on a broker that was merely unreachable.
-//
-// ASKED AS A READ, for [DomainLog.stateInfo]'s reasons: a domain log allows no
-// direct get, so the leader's read is answered by the stream's leader or by
-// nobody — and it is on the write path, discriminating every rejected append.
-//
-// # The leader's read, at the read term, even across a link
-//
-// It is the leader's read wherever that read's reply reaches this node: on a
-// member's own connection, and across a link no leaf stands on — a client of
-// an external cluster, which every data node of a fleet on one is. Its reply
-// is a whole record — the subject's newest, base64-encoded, as large as the
-// log's largest — so across a link a re-ask of a large one puts another on
-// the link before the first has landed, which [DomainLog.At]'s term is sized
-// to prevent. This read keeps the read term anyway, because a writer is
-// waiting on it: every create asks it, a subject never written answering "no
-// message here" in a few hundred bytes, and so does every append that lost
-// its expectation or its answer — and a request a member dropped across an
-// election has to be asked again in seconds there, where a term sized for the
-// largest record would hold the write for its whole budget. So across a link
-// slower than its reply a re-ask puts a second reply on the link, and the
-// ceiling ends a read whose reply cannot land inside it.
-//
-// # Across a leaf's link, from the headers of the leader's newest
-//
-// A log whose largest record's reply is past the transport cannot have it
-// cross a leaf's link at all: the leaf's server closes its whole link on it,
-// and every lease and mailbox the node holds across it with it
-// ([Queue.leaderCarries], crewlet/crewlet#1031). So where a leaf's link
-// stands between the connection and the leader and the log's records may be
-// that large ([DomainLog.copies]), the newest on the subject is read from its
-// HEADERS, no record crossing at all, through a consumer on the leader's own
-// copy ([copyRead.last]) — the leader's answer, from where the leader's read
-// answers it, at the cost of the leader's info, a consumer or more the
-// metadata leader makes and deletes, and a pull, where the leader's read is
-// one request. No node opens a state log across a leaf's link today: every
-// log is opened by a data node (internal/engine's startCore), and a node
-// without `data` is the one that joins the members as a leaf.
+// "No message here" is a FACT, not a failure: it tells a trimmed anchor from a
+// lost race, and as an error a caller that forgot to check would take the
+// trimmed-anchor branch on a broker merely unreachable. Asked as a read, for
+// [DomainLog.stateInfo]'s reasons, and at the read term even where its reply
+// (the subject's newest record) crosses a slow link, unlike [DomainLog.At]:
+// every create and every rejected append waits on it, and a request dropped
+// across an election must be re-asked in seconds, a second reply on a slow
+// link the price. Across a leaf's link (package doc, "A message too large for
+// a leader's reply is read raw") it reads the newest's headers ([copyRead.last]).
 func (l *DomainLog) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
 	if l.copies != nil {
 		seq, found, err := l.copies.last(ctx, subject)
@@ -431,12 +290,8 @@ func (l *DomainLog) LastSeq(ctx context.Context, subject string) (uint64, bool, 
 
 // End is the stream's own last sequence, across every subject.
 //
-// SEPARATE FROM [DomainLog.LastSeq], which is per subject, because the two
-// answer different questions: a writer forming an expectation wants its own
-// subject's last message, and a reader establishing how far the log goes wants
-// the stream's. Reading one for the other is how a lag figure comes back as
-// zero on a busy company because the subject a node happened to ask about is
-// quiet.
+// Not [DomainLog.LastSeq], which is per subject: a reader measuring how far
+// the log goes from a quiet subject's end reports zero lag on a busy company.
 func (l *DomainLog) End(ctx context.Context) (uint64, error) {
 	_, last, err := l.Bounds(ctx)
 	return last, err
@@ -445,21 +300,12 @@ func (l *DomainLog) End(ctx context.Context) (uint64, error) {
 // Bounds is BOTH ends of the log: the first sequence still held and the last
 // one written.
 //
-// # Why the first end is not a detail
-//
-// A consumer whose position falls below the stream's first sequence is CLAMPED
-// UPWARD by the server with no error at all, and then reports itself perfectly
-// caught up — over a hole. The only thing that can notice is a comparison
-// against this number, so a readiness check that read only the end would call
-// such a node established for ever.
-//
-// ONE ROUND TRIP for both, because they are one answer: read separately, a
-// caller can pair a first sequence from before a trim with a last sequence
-// from after it and compute a window neither describes.
+// The first end matters: the server CLAMPS a consumer whose position falls
+// below it upward with no error, and the consumer then reports itself caught
+// up over a hole, which only a comparison against this number catches. ONE
+// ROUND TRIP for both, so a caller never pairs ends from either side of a trim.
 func (l *DomainLog) Bounds(ctx context.Context) (first, last uint64, err error) {
-	// THROUGH [DomainLog.Stats], so the pairing rule above has one
-	// implementation: a second read of the same stream info is a second
-	// place for a caller to end up holding two ends from two instants.
+	// THROUGH [DomainLog.Stats], so the pairing rule has one implementation.
 	stats, err := l.Stats(ctx)
 	if err != nil {
 		return 0, 0, err
@@ -467,77 +313,18 @@ func (l *DomainLog) Bounds(ctx context.Context) (first, last uint64, err error) 
 	return stats.FirstSeq, stats.LastSeq, nil
 }
 
-// At reads one record back by sequence.
+// At reads one record back by sequence, reporting (false, nil) for one the
+// stream no longer holds: a trim is the retention gate's ordinary work, and
+// "gone" must not read as "the broker is unreachable".
 //
-// # Why a domain needs this at all
-//
-// Almost nothing reads a log by position: a consumer is how records are
-// delivered, and a consumer is what the apply loop uses. What needs this is
-// the small set of paths that address the log directly rather than following
-// it — a reanchor establishing what the old stream's head was, a snapshot's
-// verification, and any tool that has a position and needs the record at it.
-//
-// It reports (false, nil) for a sequence the stream no longer holds, which is
-// an ordinary answer rather than an error: a trimmed record is exactly what
-// the retention gate exists to produce, and a caller distinguishing "gone" from
-// "the broker is unreachable" is the whole reason it is not one error value.
-// Asked as a read, for [DomainLog.LastSeq]'s reason.
-//
-// # Across a leaf's link, a record too large for the leader's reply is read raw
-//
-// A record may be as large as its log's largest message — the code log's is
-// the transport's whole [statelog.MaxTransportRecordBytes], 8 MiB less 4 KiB —
-// and the leader's `STREAM.MSG.GET` reply (a domain log allows no direct get)
-// is JSON, the record base64-encoded inside it beside its envelope, about
-// 11.2 MB for the largest record: past the transport, which a leaf's server
-// closes its whole link on ([Queue.leaderCarries], crewlet/crewlet#1031). So
-// where a leaf's link stands between the connection and the leader and the
-// log's records may be that large ([DomainLog.copies]), what the position
-// holds is found from its HEADERS first, through a consumer on the leader's
-// own copy ([copyRead.at]), and the record is then read with the leader's
-// read where the leaf's server carries its own reply, given that reply's
-// arrival ([DomainLog.replyArrival]), and otherwise RAW through such a
-// consumer ([copyRead.message]), its read given the time the record takes to
-// cross at the link's pace: the leader's answer either way.
-//
-// # The leader's term and its ceiling count the reply's arrival
-//
-// The leader's reply is heard only once its last byte is in. The hedge asks a
-// read nobody has answered again two seconds after it was sent and every two
-// seconds after that, every request still outstanding, so a reply still being
-// built, or still crossing a link, when a re-ask goes out is a second whole
-// reply: built beside the first, and queued on the link ahead of everything
-// else the node's connection carries, its lease renewals among them. And the
-// ceiling's thirty seconds ended a read whose reply needed longer than that to
-// land: across a link no leaf stands on, the largest record below about
-// 3 Mbit/s was never read back by position from the leader
-// (crewlet/crewlet#1149).
-//
-// So a read is given the ARRIVAL of its reply ([jsapi.Arrival]) beyond the
-// read term and beyond the lookup ceiling
-// (jsprovision.Timing.Arriving) — the record's own, where its headers said
-// how large it is, and otherwise the log's largest: its handling in the
-// engine's own processes on every connection, and where the connection
-// crosses a LINK to the stream — a client of an external cluster, a leaf — its
-// crossing at the object store's floor ([Queue.recordArrival]), which is what
-// internal/objstore/natsobj gives its piece reads on the same connection
-// (internal/jsapi's Leader.Carrying). On a member's own connection the largest
-// record took 46 ms to read back on four cores
-// (BenchmarkADomainLogReadOfItsLargestRecord), and 0.73 s under the race
-// detector, which a loaded runner stretched past the read term, so the read
-// was asked again while its first reply was still being built; its handling
-// gives it 10.7 seconds (internal/jsapi's HandlingPace says why). For a log
-// whose records may be megabytes such a read is therefore ONE request while
-// its reply can still be on its way, held to its caller's deadline or to the
-// ceiling and that arrival: a request a member dropped across an election
-// costs its caller that wait rather than two seconds, and no record is built
-// twice, nor carried twice ahead of the node's leases. The reads that ask
-// this can afford it — the retention's age floor and the intake rate a log is
-// measured by, a checkpoint's verification at the applier's start, whether
-// the log still holds a peer's checkpoint, a reanchor's walk back along the
-// log, a standing read, and an ambiguous append's read of its own record
-// after its answer was already lost — where [DomainLog.LastSeq], which every
-// create and every rejected append asks, keeps the read term (see there).
+// The leader's read is given its reply's ARRIVAL beyond the read term and the
+// lookup ceiling (jsprovision.Timing.Arriving): the record's own where
+// [copyRead.at] sized it, else [DomainLog.arrival], whose handling
+// BenchmarkADomainLogReadOfItsLargestRecord measured. So a reply still being
+// built or crossing is never re-asked into a second one queued ahead of the
+// node's lease renewals; its callers can afford a slower re-ask after an
+// election, where [DomainLog.LastSeq] cannot. Across a leaf's link: package
+// doc, "A message too large for a leader's reply is read raw".
 func (l *DomainLog) At(ctx context.Context, seq uint64) (subject string,
 	payload []byte, storedAt time.Time, ok bool, err error) {
 
@@ -573,17 +360,10 @@ func (l *DomainLog) At(ctx context.Context, seq uint64) (subject string,
 	return msg.Subject, msg.Data, msg.Time, true, nil
 }
 
-// LogStats is everything the retention gate reads about a log, in ONE answer.
-//
-// # Why it is one call and not four
-//
-// [DomainLog.Bounds] already gives the reason for two of them, and the trim
-// needs four: it divides bytes by the ceiling to publish headroom, compares
-// the first sequence against what it is about to remove, and reports the last
-// one as the fleet's head. Read separately, a tick can pair a byte count from
-// before a purge with a first sequence from after it and publish a headroom
-// figure describing no state the stream was ever in — which is the number an
-// operator watches approach a threshold.
+// LogStats is everything the retention gate reads about a log, in ONE answer,
+// for [DomainLog.Bounds]'s reason: a byte count from before a purge paired
+// with a first sequence from after it publishes a headroom figure for a state
+// the stream was never in, the number an operator watches near a threshold.
 type LogStats struct {
 	// FirstSeq and LastSeq are the log's two ends.
 	FirstSeq, LastSeq uint64
@@ -593,14 +373,9 @@ type LogStats struct {
 	Messages uint64
 
 	// Bytes is what the stream holds and MaxBytes the ceiling the BROKER
-	// is enforcing, read from the stream's own configuration rather than
-	// from the Tier A field, because Tier A is per node and is only the
-	// value a stream is created with: once the stream exists an edit to the
-	// field names a ceiling nothing is applying, restart or not, and this
-	// is the number an operator divides by.
-	//
-	// MaxBytes is zero when the stream declares no ceiling, which is a
-	// real setting rather than a full log.
+	// enforces, from the stream's own configuration: Tier A's field only
+	// creates a stream, so once it exists an edit to it names a ceiling
+	// nothing applies. MaxBytes is zero for no ceiling, not a full log.
 	Bytes, MaxBytes uint64
 
 	// CreatedAt is the creation instant the stream's identity is keyed to
@@ -614,9 +389,9 @@ func (l *DomainLog) Stats(ctx context.Context) (LogStats, error) {
 	if err != nil {
 		return LogStats{}, fmt.Errorf("jetstream: read %q's state: %w", l.name, err)
 	}
-	// THE STREAM'S IDENTITY, read the one way every consumer reads it —
-	// the instant stamped at its creation, which a snapshot restore keeps
-	// and the broker's own instant does not ([statelog.StreamCreatedAt]).
+	// THE STREAM'S IDENTITY, read as every consumer reads it: the instant
+	// stamped at creation, which a snapshot restore keeps and the broker's
+	// own does not ([statelog.StreamCreatedAt]).
 	created, err := statelog.StreamCreatedAt(info)
 	if err != nil {
 		return LogStats{}, fmt.Errorf("jetstream: read %q's identity: %w", l.name, err)
@@ -634,20 +409,13 @@ func (l *DomainLog) Stats(ctx context.Context) (LogStats, error) {
 	return stats, nil
 }
 
-// Purge removes every record BELOW upTo, which is the exclusive sequence the
-// retention gate concluded may go.
+// Purge removes every record BELOW upTo, the exclusive sequence the retention
+// gate concluded may go.
 //
-// # Why nothing here re-decides
-//
-// The six terms are a minimum taken somewhere else, deliberately: the gate is
-// a policy with an inversion in it that three readers got backwards, and a
-// policy that can only be exercised through a live broker is one nobody
-// checks. This call is the effect, and its only judgement is the one thing the
-// arithmetic cannot know — that removing nothing is not worth a round trip.
-//
-// The broker's own semantics are what make the exclusive bound safe: a purge
-// at sequence N leaves N itself, so a caller that has established every node
-// committed THROUGH N − 1 can pass N without arithmetic of its own.
+// Nothing here re-decides: the gate's minimum is taken where it can be tested
+// without a broker, and the only judgement here is that removing nothing is
+// not worth a round trip. A purge at N leaves N itself, so a caller that
+// established every node committed THROUGH N − 1 passes N as it is.
 func (l *DomainLog) Purge(ctx context.Context, upTo uint64) error {
 	if upTo == 0 {
 		return nil
@@ -660,25 +428,14 @@ func (l *DomainLog) Purge(ctx context.Context, upTo uint64) error {
 
 // SetMaxBytes changes the log's byte ceiling.
 //
-// # The one stream-configuration write in the engine
-//
-// Every other stream call here creates, reads or purges. This one UPDATES a
-// running stream's configuration, and it is deliberately the only one: a
-// second site could raise a ceiling a capacity operation was in the middle of
-// lowering, and neither would know.
-//
-// It is safe to call only from a process that has established the exclusion —
-// see internal/engine/capacity.go, which is its one caller — because the
-// usage a resize is decided against has to be a quantity nothing can move.
-// Nothing here checks that: the exclusion is structural, established by every
-// node of the fleet running a mode that starts no publisher, and a check here
-// would be an observation of the thing the mode makes impossible.
-//
-// The update carries the stream's CURRENT configuration with one field
-// changed, read in the same call, because a JetStream update replaces the
-// whole configuration: sending a config built from this node's own spec would
-// silently reset every field an operator had set, or that the node which
-// created the stream set from its own Tier A.
+// It is the engine's ONE write of a running stream's configuration
+// (TestOnlyOnePlaceWritesARunningStreamsConfiguration): a second could raise a
+// ceiling a capacity operation was lowering. Its one caller,
+// internal/engine/capacity.go, runs only once every node runs a mode that
+// starts no publisher, so the usage a resize is decided against cannot move;
+// nothing here checks it. The update carries the stream's CURRENT config with
+// one field changed, since an update replaces the whole configuration and one
+// built from this node's spec would reset what others had set.
 func (l *DomainLog) SetMaxBytes(ctx context.Context, maxBytes uint64) error {
 	info, err := l.stateInfo(ctx)
 	if err != nil {
@@ -689,12 +446,9 @@ func (l *DomainLog) SetMaxBytes(ctx context.Context, maxBytes uint64) error {
 	config.MaxBytes = int64(maxBytes)
 	_, err = l.js.UpdateStream(ctx, config)
 	if jsprovision.OutOfCapacity(err) {
-		// NAMED, exactly as a refused CREATE is. The broker answers a
-		// raise it cannot reserve with the same two codes and the same
-		// numberless sentence, and a caller that reported it as "the
-		// outcome is unknown" sent an operator to a fleet-wide seal for
-		// evidence the broker had already given: a refusal wrote
-		// nothing and nothing is in flight.
+		// NAMED, as a refused create is: the broker answers a raise it
+		// cannot reserve with the same codes, and the refusal wrote nothing,
+		// so "outcome unknown" would send an operator to a needless seal.
 		return fmt.Errorf("jetstream: set %q's ceiling to %d: %w: %w",
 			l.name, maxBytes, ErrInsufficientStorage, err)
 	}
@@ -709,119 +463,43 @@ func (l *DomainLog) SetMaxBytes(ctx context.Context, maxBytes uint64) error {
 // record appended under its filter, and every moment it may have missed one,
 // with how far the caller's rows must reach to hold what it missed.
 //
-// The two are called ONE AT A TIME, never concurrently, and never once
-// [DomainWatch.Stop] has returned, so a caller keeps what the two share without
-// a lock of its own. They run on the delivery path of the queue's connection,
-// so each returns promptly — a nudge schedules work and does not do it — and
-// neither may call Stop.
+// The two are called ONE AT A TIME, never once [DomainWatch.Stop] has
+// returned, so a caller needs no lock for what they share. They run on the
+// connection's delivery path: each returns promptly (a nudge schedules work,
+// it does not do it) and neither calls Stop.
 type WatchHandler struct {
-	// Subject is called once for each record appended under the watch's
-	// filter after the watch began, in log order, with the record's subject
-	// and its sequence on the log.
-	//
-	// THE SEQUENCE TRAVELS WITH THE SUBJECT because the watch hears of a
-	// record when the broker stores it, which is before any applier has
-	// applied it: a reader about to read the rows the record wrote waits for
-	// its copy to reach that position first, or it reads the rows from
-	// before the record and finds nothing to do.
+	// Subject is called for each record appended under the filter after the
+	// watch began, in log order, with its subject and sequence. THE SEQUENCE
+	// TRAVELS WITH IT because the watch hears of a record when the broker
+	// stores it, before any applier has: a reader waits for its copy to reach
+	// that position, or it reads the rows from before the record.
 	Subject func(subject string, seq uint64)
 
-	// Gap is called whenever the watch may have missed a record — it lost its
-	// consumer and began again at the log's end, a delivery its consumer
-	// counted never reached it, a delivery came whose position it could not
-	// read, or the queue's connection to the broker went away and came back —
-	// with through, a position on the log at or past every record it may
-	// have missed. The caller waits for its copy to reach through, then reads
-	// its rows, which hold what the watch did not tell it.
+	// Gap is called whenever the watch may have missed a record — its
+	// consumer lost and begun again at the log's end, a delivery counted and
+	// never received, a delivery whose position it could not read, or a
+	// reconnect — with through, a position at or past every record it may
+	// have missed. The caller waits for its copy to reach through, for
+	// Subject's reason, then reads its rows.
 	//
-	// THE POSITION TRAVELS WITH THE GAP for Subject's reason. A Gap is told
-	// when the watch notices it, which says nothing of how far this node's
-	// copy has come, and what cost the watch its records — a member
-	// restarting, a connection lost — can hold the copy's applier back as
-	// well: rows read before the copy reaches through can predate the very
-	// records the Gap is about, and the caller would find them only at its
-	// next pass over its rows. Every record appended under the filter after
-	// the watch began is told to Subject or lies at or below the through of a
-	// Gap told after the watch may have missed it — so a Gap can follow
-	// Subjects of records past it, and a record can be both told and covered:
-	// a nudge twice is still a nudge.
+	// Every record appended under the filter after the watch began is told to
+	// Subject or lies at or below the through of a Gap told after it may have
+	// been missed, so a Gap may follow Subjects of records past it, and a
+	// record may be both told and covered.
 	Gap func(through uint64)
 }
 
 // Watch tells h the subject of every record appended to the log under filter
-// from now on, without taking the records: the nudge a reader that keeps its
-// work in rows takes as "look at this object now", where its own periodic
-// pass over the rows would find the record a cadence later. filter is a
-// subject pattern that meets the log's own subject space; one that meets none
-// of it is refused ([DomainLog.carries]).
+// from now on, without taking the records (package doc, "A watch is told which
+// records moved, and never carries them"). filter must meet the log's subject
+// space ([DomainLog.carries]).
 //
-// It returns once the watch has begun — every record appended after it
-// returns is told to h.Subject or lies within a Gap told after it — and the
-// watch is its caller's to end with [DomainWatch.Stop]. A watch that could
-// not begin is an error and leaves nothing running. One that has begun
-// outlives its consumer and its connection's reconnects on its own, saying so
-// through h.Gap, until it is stopped or the queue's connection is closed for
-// good, which takes the node down with it ([Queue.Lost]).
-//
-// # Subjects and never records
-//
-// The consumer is HEADERS ONLY: the broker sends each record's subject, its
-// headers and its position, and never its body. The records a watch looks at
-// are a domain's own — the code log's as large as the transport's whole
-// [statelog.MaxTransportRecordBytes], 8 MiB less 4 KiB — and a watcher wants
-// to know WHICH object moved, which it reads from the rows its own copy
-// derives. Carrying every record to every watching node as well would cost
-// each of them the log's whole volume a second time, over a leaf's link as
-// much as over a member's routes.
-//
-// # From the log's end, and acknowledging nothing
-//
-// It begins at the log's END (DeliverNew): what the log held before the watch
-// began is what the caller's rows already say, read by the pass the caller
-// makes once the watch has begun. And it acknowledges NOTHING (AckNone), so
-// no delivery is ever held, redelivered or counted against anybody: a nudge
-// is worth something only while it is early, and the rows decide every
-// question it raises.
-//
-// # One replica, in memory, replaced rather than repaired
-//
-// The consumer is ONE replica held IN MEMORY by one member of the stream's
-// group: its whole state is how far it has delivered, which nothing needs to
-// survive. A replicated consumer would be a raft group per watching node and
-// a proposal per delivery, for state a new consumer at the log's end replaces
-// for the price of one create. So a consumer that goes — the member holding it
-// stopped or was cut off, the broker reaped it while this node was away
-// ([ephemeralInactive]), somebody deleted it — is not waited for: the watch
-// creates another at the log's end, under a name of its own, and calls h.Gap
-// through the position the new consumer begins after, and the caller reads
-// its rows for what the gap held once its copy is there.
-//
-// # How a loss is known, and how far its Gap reaches
-//
-// The broker sends an idle heartbeat to a standing pull every
-// [watchHeartbeat] while it has nothing to deliver, so silence for two of
-// them is a consumer that is not serving this watch whatever the reason — and
-// so is a pull nobody serves (no responders: no member holds the consumer),
-// and the broker's word that it deleted the consumer or that the member
-// holding it is shutting down ([lostConsumer]). Each is a loss, answered with
-// a new consumer, and its Gap reaches the log's end when the broker made that
-// consumer, because the new consumer delivers everything past it — a position
-// the create's own reply carries, so telling it costs nothing more.
-//
-// Two things are not a loss, and each is a Gap with the consumer kept. One is
-// a delivery the consumer counted and this node never received: every
-// delivery carries the consumer's own count, which must rise by one each
-// time, and the Gap reaches the position of the delivery that revealed the
-// miss, since the consumer delivers in log order. The other is a reconnect of
-// the queue's connection, across which a delivery may have gone to an inbox
-// nobody held: the connection's reconnect count is read every heartbeat, so
-// the caller hears of one within one, and the Gap reaches the log's end, read
-// once the reconnect is noticed — at or past every record the consumer can
-// have delivered by then, since a consumer delivers only what the log already
-// holds. A delivery whose position cannot be read is told as a reconnect is.
-// One the broker still makes to the old interest after that read, in the
-// instant before this node's resubscription reaches the consumer's member, the
-// consumer's count reveals at the next delivery.
+// It returns once the watch has begun: every record appended after is told to
+// h.Subject or lies within a later Gap, and the caller then reads its rows for
+// what came before. A watch that could not begin is an
+// error and leaves nothing running; one that began outlives lost consumers and
+// reconnects, saying so through h.Gap, until [DomainWatch.Stop] or the
+// connection closes for good, which takes the node down ([Queue.Lost]).
 func (l *DomainLog) Watch(ctx context.Context, filter string, h WatchHandler) (*DomainWatch, error) {
 	if l.q.isClosed() {
 		return nil, ErrClosed
@@ -836,20 +514,17 @@ func (l *DomainLog) Watch(ctx context.Context, filter string, h WatchHandler) (*
 			"handlers — a watch without Gap would miss records and say nothing",
 			l.name, filter)
 	}
-	// REFUSED HERE, because the broker does not: it makes a consumer under
-	// any filter at all (the subset check its error 10093 names is gone
-	// from it), and one outside the stream's subjects delivers nothing, for
-	// ever, with nothing saying why. A filter that is not a subject pattern
-	// at all the client library and the broker both refuse, so its syntax
-	// stays theirs.
+	// REFUSED HERE, because the broker makes a consumer under any filter
+	// (error 10093's subset check is gone from it) and one outside the
+	// stream's subjects delivers nothing, silently. A filter that is no
+	// subject pattern the client and the broker refuse themselves.
 	if server.IsValidSubject(filter) && !l.carries(filter) {
 		return nil, fmt.Errorf("jetstream: a watch on %q under %s would hear "+
 			"nothing — the log carries %s, and no subject there matches it; "+
 			"name subjects inside them", l.name, filter, words.And(l.subjects()))
 	}
-	// DETACHED from the call that begins the watch, as the live feed's
-	// consumer is: ctx bounds the first create, and the watch lives until
-	// Stop.
+	// DETACHED, as the live feed's consumer is: ctx bounds the first create,
+	// and the watch lives until Stop.
 	life, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	w := &DomainWatch{
 		l: l, filter: filter, h: h, timing: l.watching(), logger: l.q.log,
@@ -865,33 +540,26 @@ func (l *DomainLog) Watch(ctx context.Context, filter string, h WatchHandler) (*
 	return w, nil
 }
 
-// watchHeartbeat is how often the broker tells an idle watch that its
-// consumer is still serving it — and so, at two of them missed, how long a
-// consumer that stopped is still taken to be serving.
+// watchHeartbeat is how often the broker tells an idle watch that its consumer
+// still serves it; two missed is a loss ([lostConsumer]).
 //
-// FIVE SECONDS, the client library's own heartbeat for its ordered consumer,
-// the one other reader it builds to replace a consumer it lost rather than
-// wait for it (nats.go's jetstream/pull.go): a watch notices a member that
-// went within ten seconds, for one heartbeat every five to a watch with
-// nothing to deliver, where the library's default for a plain pull, fifteen,
-// left a watch deaf for thirty. The pull's other two settings are the
-// library's defaults and hold here: a request that stands thirty seconds and
-// is asked again as it ends, and five hundred records a request, which as
-// headers is a few hundred kilobytes in flight at most.
+// FIVE SECONDS, the client library's heartbeat for its ordered consumer, the
+// other reader that replaces a lost consumer rather than wait (nats.go's
+// jetstream/pull.go): a lost member is noticed within ten seconds, where a
+// plain pull's fifteen left a watch deaf for thirty. The pull's other settings
+// are the library's defaults: a request standing thirty seconds, renewed as it
+// ends, and five hundred records, a few hundred kilobytes of headers at most.
 const watchHeartbeat = 5 * time.Second
 
 // watchRetry and watchRetryCeiling space the attempts to replace a lost
-// consumer — the first at once, then a second later, doubling to ten seconds
-// between attempts — spread by watchRetryJitter so the watching nodes of a
-// fleet that lost a member together do not ask its metadata group in step.
+// consumer — at once, then a second later, doubling to ten seconds — spread by
+// watchRetryJitter so a fleet's watchers that lost a member together do not
+// ask its metadata group in step.
 //
-// THE CLIENT LIBRARY'S NUMBERS for replacing its ordered consumer (nats.go's
-// jetstream/ordered.go), for the same kind of reader. A member's re-election
-// or restart takes seconds, so the first attempts meet its return; a broker
-// that stays away is asked every ten seconds, one metadata proposal a
-// watching node, which a recovering group can afford. And a watch that cannot
-// begin again costs its caller latency and nothing else, since the caller's
-// rows are its record.
+// THE CLIENT LIBRARY'S NUMBERS for its ordered consumer (nats.go's
+// jetstream/ordered.go): a member's re-election or restart takes seconds, a
+// broker that stays away costs one proposal a watcher every ten seconds, and a
+// watch that cannot begin costs only latency, since the rows are the record.
 const (
 	watchRetry        = time.Second
 	watchRetryCeiling = 10 * time.Second
@@ -907,22 +575,15 @@ type watchTiming struct {
 	// count, and how soon a read of the log's end that failed is asked
 	// again: every heartbeat, in production.
 	recheck time.Duration
-	// attempt bounds one create of a replacement consumer: in production
-	// the client's own default for a request with no deadline, the five
-	// seconds every request this node sends without one is given. The
-	// reply to a create comes once the metadata group has committed it and
-	// the consumer's one member leads it — milliseconds on a healthy
-	// fleet — and an attempt that outlasts it, its request lost with a
-	// member going down, is asked again under the SAME name, which the
-	// broker answers with the consumer an earlier attempt made rather than
-	// a second one. Not the provisioning's write term ([jsprovision.AskTerm],
-	// fifteen seconds clustered and thirty solo): that is sized for a
-	// replicated group's election, which a one-member consumer has none of,
-	// and a create lost to a restarting member would hold the watch deaf
-	// for all of it. It bounds the read of the log's end a Gap with no
-	// position of its own waits for too ([DomainWatch.placeGap]): one
-	// request the stream's leader answers as fast, asked again inside the
-	// bound as every read of the log's state is ([DomainLog.stateInfo]).
+	// attempt bounds one create of a replacement consumer: in production the
+	// client's default request timeout, five seconds. A create is answered
+	// once the metadata group commits it and its one member leads it —
+	// milliseconds when healthy — and one lost with a member going down is
+	// asked again under the SAME name, answered with the consumer already
+	// made. Not the provisioning's write term ([jsprovision.AskTerm]), sized
+	// for a replicated group's election this consumer has none of, which
+	// would hold the watch deaf. It also bounds [DomainWatch.placeGap]'s read
+	// of the log's end, hedged like every state read ([DomainLog.stateInfo]).
 	attempt time.Duration
 	// retry and retryCeiling space the attempts to replace a lost consumer.
 	retry, retryCeiling time.Duration
@@ -930,11 +591,10 @@ type watchTiming struct {
 
 // carries reports whether filter can match a subject the log carries.
 //
-// OVERLAP, not containment: a filter wider than the log (the code log's
-// `crewlet.code.>`, say) watches every record the log holds, which is a
-// watch its caller can mean; one that meets none of its subjects can only be
-// a mistake. The subjects are the handle's, read at open: a safety field no
-// node changes on a running stream ([Queue.observeStream]).
+// OVERLAP, not containment: a filter wider than the log (`crewlet.code.>` on
+// the code log) watches every record, which a caller can mean; one meeting
+// none of its subjects can only be a mistake. The subjects are the handle's,
+// read at open: no node changes them on a running stream ([Queue.observeStream]).
 func (l *DomainLog) carries(filter string) bool {
 	for _, subject := range l.subjects() {
 		if server.SubjectsCollide(filter, subject) {
@@ -971,13 +631,12 @@ var errWatchStopped = errors.New("jetstream: the watch was stopped")
 
 // DomainWatch is one running [DomainLog.Watch].
 //
-// ONE GOROUTINE OF ITS OWN, the supervisor, which replaces a lost consumer,
-// reads the connection's reconnect count and reads the log's end for a Gap
-// that has no position of its own, and which [DomainWatch.Stop] ends and
-// waits for — so no request the watch sends is made on the delivery path.
-// Deliveries and the client's reports about its pull arrive on the client's
-// own goroutines; all three meet under mu, where every call to the handler is
-// made, which is what makes the calls one at a time and none after Stop.
+// Its one goroutine, the supervisor, sends every request the watch makes —
+// replacing a lost consumer, reading the reconnect count and the log's end —
+// so none is made on the delivery path; [DomainWatch.Stop] ends it and waits.
+// Deliveries and the client's reports arrive on the client's goroutines; all
+// three meet under mu, where every handler call is made, which makes the calls
+// one at a time and none after Stop.
 type DomainWatch struct {
 	l      *DomainLog
 	filter string
@@ -985,16 +644,13 @@ type DomainWatch struct {
 	timing watchTiming
 	logger *slog.Logger
 
-	// prefix begins the name of each of this watch's consumers, one a
-	// GENERATION, the generation's number after it — so a create asked
-	// again after a reply that never came is the same create, which the
-	// broker answers with the consumer it already made, rather than a second
-	// consumer beside it.
+	// prefix begins each GENERATION's consumer name, its number after it, so
+	// a create asked again after a lost reply is answered with the consumer
+	// already made rather than a second beside it.
 	prefix string
 
-	// cancel ends the watch's own context, which its supervisor is handed
-	// and asks every create and read under ([DomainWatch.supervise]); Stop
-	// calls it.
+	// cancel ends the watch's own context, under which the supervisor asks
+	// every create and read; Stop calls it.
 	cancel context.CancelFunc
 	// wake tells the supervisor a loss was reported or a Gap waits for the
 	// log's end. Capacity one, so a report is never lost and its sender
@@ -1020,11 +676,10 @@ type DomainWatch struct {
 	began   uint64
 	// delivered is the consumer's own count of the last delivery taken.
 	delivered uint64
-	// gapPending is the Gap a loss owes, called once its replacement has
-	// begun — by the replacement's first delivery or by the supervisor,
-	// whichever comes first — through the position the replacement began
-	// after, and never before, or the records appended between the call and
-	// the new consumer would be covered by nothing.
+	// gapPending is the Gap a loss owes, called through the position its
+	// replacement began after once it has begun (by its first delivery or the
+	// supervisor, whichever is first), never before, or records appended in
+	// between would be covered by nothing.
 	gapPending bool
 	// gapUnread is a Gap owed within gen that has no position of its own — a
 	// reconnect, a delivery whose position could not be read — which the
@@ -1038,8 +693,15 @@ type DomainWatch struct {
 	reconnects uint64
 }
 
-// config is the consumer one generation reads through — see [DomainLog.Watch]
-// for why each setting is what it is.
+// config is the consumer one generation reads through (package doc, "A watch
+// is told which records moved, and never carries them"). HEADERS ONLY: a
+// record may be the transport's whole 8 MiB, and carrying each to every
+// watcher would cost each the log's volume again. From the END (DeliverNew),
+// since the caller's rows hold the rest, and acknowledging NOTHING (AckNone),
+// since a nudge is worth something only early. ONE REPLICA IN MEMORY: its only
+// state is how far it delivered, and a replicated one would be a raft group a
+// watcher and a proposal a delivery for state one create replaces — so a lost
+// consumer is replaced, never waited for ([DomainWatch.replace]).
 func (w *DomainWatch) config(name string) jetstream.ConsumerConfig {
 	description := "a watch on " + w.filter
 	if node := w.l.q.contract.Node; node != "" {
@@ -1062,27 +724,21 @@ func (w *DomainWatch) config(name string) jetstream.ConsumerConfig {
 // starts its standing pull.
 func (w *DomainWatch) begin(ctx context.Context, gen uint64) error {
 	name := w.prefix + strconv.FormatUint(gen, 10)
-	// READ BEFORE THE CONSUMER EXISTS, so a reconnect while it is being
-	// made is one the watch notices at its next recheck rather than one it
-	// starts past. One before it is answered without a Gap of its own:
-	// whatever a delivery lost to it carried lies at or below the position
-	// this consumer begins after, which the Gap a loss owes reaches, or this
-	// consumer delivers it.
+	// READ BEFORE THE CONSUMER EXISTS, so a reconnect during the create is
+	// noticed at the next recheck. One before it needs no Gap of its own:
+	// what it lost lies at or below where this consumer begins, which the
+	// loss's Gap reaches, or this consumer delivers it.
 	reconnects := w.l.js.Conn().Stats().Reconnects
 	w.l.q.noteConsumerProposal()
 	cons, err := w.l.js.CreateConsumer(ctx, w.l.name, w.config(name))
 	if err != nil {
 		return fmt.Errorf("create the consumer %s: %w", name, err)
 	}
-	// WHERE IT BEGINS, from the create's own reply: a consumer of new
-	// records reports everything up to the log's end when the broker made
-	// it as delivered, and delivers every record after. So that end is
-	// exactly how far a caller's rows must reach to hold what the watch
-	// missed before this consumer, told for nothing beyond the create —
-	// where a read of the log's end would be a second request saying less.
-	// A create asked again is answered with the consumer an earlier attempt
-	// made, which reports where IT was made: the position that holds, since
-	// that consumer delivers everything after it.
+	// WHERE IT BEGINS, from the create's own reply: a DeliverNew consumer
+	// reports the log's end at its creation as delivered and delivers every
+	// record after, so that end is how far the rows must reach, at no extra
+	// request. A create asked again returns the earlier attempt's consumer,
+	// whose own beginning is the one that holds.
 	began := cons.CachedInfo().Delivered.Stream
 	w.mu.Lock()
 	if w.stopped {
@@ -1137,10 +793,8 @@ func (w *DomainWatch) take(gen uint64, subject string, meta *jetstream.MsgMetada
 	}
 	w.flushGap()
 	if metaErr != nil {
-		// NO COUNT, so nothing says whether a delivery went missing before
-		// this one, and NO POSITION, so nothing says how far the record it
-		// carried lies: a Gap through the log's end, which the supervisor
-		// reads — a request, which the delivery path never waits on.
+		// NO COUNT and NO POSITION: a Gap through the log's end, which the
+		// supervisor reads, since the delivery path never waits on a request.
 		w.logger.Warn("jetstream_watch_unreadable", "stream", w.l.name,
 			"filter", w.filter, "consumer", w.name, "subject", subject,
 			"error", metaErr.Error(),
@@ -1169,9 +823,9 @@ func (w *DomainWatch) take(gen uint64, subject string, meta *jetstream.MsgMetada
 // flushGap calls the Gap a loss owes, once, through the position its
 // replacement began after. Under mu.
 //
-// IT ANSWERS FOR A GAP STILL WAITING FOR THE LOG'S END ([DomainWatch.gapUnread])
-// as well: whatever a delivery the lost consumer made and this node never took
-// carried lies at or below that position, or the replacement delivers it.
+// It answers for a pending [DomainWatch.gapUnread] too: what the lost consumer
+// delivered unseen lies at or below that position, or the replacement
+// delivers it.
 func (w *DomainWatch) flushGap() {
 	if w.gapPending {
 		w.gapPending, w.gapUnread = false, false
@@ -1269,7 +923,9 @@ func (w *DomainWatch) supervise(life context.Context) {
 // recheckConnection owes a Gap when the queue's connection reconnected since
 // it was last read: a delivery made while it was away may have gone to an
 // inbox nobody held, and nothing would say so until the next one. It reaches
-// the log's end, which [DomainWatch.placeGap] reads next.
+// the log's end, which [DomainWatch.placeGap] reads next. One sent to the old
+// inbox after this read, before the resubscription lands, the consumer's
+// count reveals ([DomainWatch.take]).
 func (w *DomainWatch) recheckConnection() {
 	reconnects := w.l.js.Conn().Stats().Reconnects
 	w.mu.Lock()
@@ -1293,22 +949,15 @@ func (w *DomainWatch) recheckConnection() {
 }
 
 // placeGap calls a Gap the current generation owes with no position of its own
-// — a reconnect, a delivery whose position could not be read — through the
-// log's end, once it has read it: every record the consumer delivered before
-// the read lies at or below it, since a consumer delivers only what the log
-// already holds. Read here and not where the Gap was noticed, because a read
-// is a request and the delivery path never waits on one.
+// — a reconnect, an unreadable delivery — through the log's end once it has
+// read it: no consumer delivers past the log's end. Read here, not where the
+// Gap was noticed, because the delivery path never waits on a request.
 //
-// THE LOG'S END, NOT THE CONSUMER'S OWN DELIVERED POSITION, though the
-// consumer's info would name a tighter one: a member answers for a one-replica
-// consumer it holds before the consumer has chosen where it begins — on a
-// cluster that choice waits for it to lead, as after the member restarted and
-// made it again — and reports it as having delivered nothing, a position
-// below everything its predecessor delivered. The log's end has no such
-// moment: no consumer delivers past it.
-//
-// A read that fails leaves the Gap owed, asked again at the next recheck. A
-// loss meanwhile owes a Gap of its own, which answers for this one
+// NOT THE CONSUMER'S DELIVERED POSITION, though tighter: a member answers for
+// a one-replica consumer before it has chosen where it begins (on a cluster,
+// once it leads, as after a restart) and reports nothing delivered, below all
+// its predecessor delivered. A failed read leaves the Gap owed for the next
+// recheck; a loss meanwhile owes its own, which answers for this one
 // ([DomainWatch.flushGap]).
 func (w *DomainWatch) placeGap(life context.Context) {
 	w.mu.Lock()
@@ -1410,13 +1059,11 @@ func (w *DomainWatch) replace(life context.Context) bool {
 }
 
 // Stop ends the watch: when it returns, the handler is not being called and
-// never will be again. Safe to call more than once and from more than one
-// goroutine.
+// never will be again. Safe to call more than once, concurrently.
 //
-// THE CONSUMER IS LEFT for the broker to reap ([ephemeralInactive]) rather
-// than deleted: a delete is a metadata proposal on the stopping path, which
-// is where a node is least able to wait for one, and a consumer nothing pulls
-// from costs its member nothing a minute does not end.
+// THE CONSUMER IS LEFT for the broker to reap ([ephemeralInactive]): a delete
+// is a metadata proposal on the stopping path, where a node can least wait for
+// one, and an unpulled consumer costs its member little for a minute.
 func (w *DomainWatch) Stop() {
 	w.stop.Do(func() {
 		w.mu.Lock()

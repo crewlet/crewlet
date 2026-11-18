@@ -16,10 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// testLeads is the seal a coordinator a case builds by hand seals the leads its
-// launches' briefs open with under ([sandbox.CoordinatorOptions.Leads]), and a
-// resume opens them with ([runnerResume]): the engine cases' one fleet keyring,
-// as a fleet shares one.
+// testLeads is the seal a hand-built coordinator seals its briefs' leads under
+// ([sandbox.CoordinatorOptions.Leads]) and a resume opens them with
+// ([runnerResume]): one keyring for every engine case, as a fleet shares one.
 var testLeads = sync.OnceValue(func() *sandbox.LeadSeal {
 	seal, err := sandbox.NewLeadSeal(recordseal.OneKey("answers", "the engine cases' fleet key material"))
 	if err != nil {
@@ -32,9 +31,8 @@ var testLeads = sync.OnceValue(func() *sandbox.LeadSeal {
 const leadsHeading = "## Messages that carried this work on that the session above may not show"
 
 // relaunchHanded is the request a relaunch built from resume hands its launcher:
-// the runner c builds for its seat handle's turn tc, as a resumed segment's is,
-// relaunching through a launcher that keeps what it is handed and launches
-// nothing ([relaunchRecorder]).
+// the runner c builds for handle's turn tc, as a resumed segment's is,
+// relaunching through [relaunchRecorder], which keeps it and launches nothing.
 func relaunchHanded(t *testing.T, c *Company, handle string, tc *turnctx.Turn,
 	resume *runner.Resume) *runner.AgentRunRequest {
 
@@ -48,7 +46,7 @@ func relaunchHanded(t *testing.T, c *Company, handle string, tc *turnctx.Turn,
 	if err != nil {
 		t.Fatalf("RunnerFor: %v", err)
 	}
-	// REFUSED BY THE RECORDER, which launches nothing: what it was handed is
+	// Refused by the recorder, which launches nothing; what it was handed is
 	// the case's.
 	_, _, _ = r.Resume(t.Context(), nil)
 	handed := recorder.handed()
@@ -58,22 +56,18 @@ func relaunchHanded(t *testing.T, c *Company, handle string, tc *turnctx.Turn,
 	return handed
 }
 
-// A RESUME OPENS THE LEADS ITS JOB'S BRIEF TOLD. The run keeps the turn's leads
-// beside its record, oldest first, each sealed by the job whose brief first told
-// it and numbered as taken, and the job's record marks the ones its own brief
-// told by those numbers: the resume hands the runner every lead it read beside
-// the row opened, in order, those the record marks as told (a held call's
-// result opened from the seal its row put on it), with how many earlier ones
-// are not kept and where the turn began. A lead under a key
-// this node does not hold is handed on as one that cannot be read here, by its
-// kind, job and round: never dropped, so the brief that tells it again says a
-// message is missing. A held call's result that does not open here, under a key
-// this node lacks or with no call seal at all, leaves its lead told without it,
-// as a call made whose result cannot be read here.
+// A RESUME OPENS THE LEADS ITS JOB'S BRIEF TOLD. The run keeps the turn's
+// leads, oldest first, each sealed by the job whose brief first told it and
+// numbered as taken; the job's record marks by number the ones its brief told.
+// The resume hands the runner every lead read, opened, in order, the marked
+// ones as told (a held call's result opened from its row's seal), with how
+// many earlier ones are not kept and where the turn began. A lead under a key
+// this node lacks is handed on as unreadable by kind, job and round, never
+// dropped, so the retelling says a message is missing. A held call's result
+// unopened here (no key, no call seal) leaves its lead told without it.
 //
-// Mutation: drop a lead that does not open, read every lead as told, or none,
-// open no held call's result, or leave the count or the turn's base off the
-// resume, and a check goes red.
+// Mutation: drop an unopened lead, read every lead as told or none, open no
+// held result, or drop the count or the turn's base, and a check goes red.
 func TestAResumeOpensTheLeadsItsJobsBriefTold(t *testing.T) {
 	t.Parallel()
 	seal := func(s *sandbox.LeadSeal, lead sandbox.Lead, words string) sandbox.KeptLead {
@@ -153,16 +147,14 @@ func TestAResumeOpensTheLeadsItsJobsBriefTold(t *testing.T) {
 	}
 }
 
-// A RESUME OF A JOB WHOSE SESSION HOLDS ITS BRIEF TELLS NO LEAD OF IT AGAIN. A
-// job whose launch handed its run a fresh brief, or whose box started a session
-// of its own in a continued one's place, holds that brief wherever its session
-// is continued, the lead it opened with among it, whatever the record marked
-// told when the brief was handed: the resume hands its leads on as ones the
-// job's brief did not tell (sandbox.LaunchRecord.ToldLeads), so no continuation
-// of that session tells them again.
+// A RESUME OF A JOB WHOSE SESSION HOLDS ITS BRIEF TELLS NO LEAD OF IT AGAIN.
+// A job launched with a fresh brief, or whose box started its own session in a
+// continued one's place, holds that brief and its opening lead wherever the
+// session continues, whatever the record marked: the resume hands its leads on
+// as untold by the brief (sandbox.LaunchRecord.ToldLeads).
 //
-// Mutation: read the record's marks whatever the session its job's box
-// started, and a case goes red.
+// Mutation: read the record's marks whatever session the job's box started,
+// and a case goes red.
 func TestAResumeOfAJobWhoseSessionHoldsItsBriefTellsNoLeadOfItAgain(t *testing.T) {
 	t.Parallel()
 	own, err := testLeads().Seal("t1", sandbox.Lead{Kind: sandbox.LeadKindAnswer, Job: "job-1", Seq: 1, Round: 1,
@@ -186,15 +178,13 @@ func TestAResumeOfAJobWhoseSessionHoldsItsBriefTellsNoLeadOfItAgain(t *testing.T
 	}
 }
 
-// A RESUME THAT COULD NOT READ ITS LEADS HANDS ON THE ONES ITS JOB'S BRIEF TOLD.
-// Where the coordinator could not read the run's leads at all, the resume knows
-// the ones the job's brief told by their numbers alone, off the job's record:
-// it hands the runner no lead, every one the row counts as not kept, and those
-// numbers, for a continuation of the job's session to hand on, so the job its
+// A RESUME THAT COULD NOT READ ITS LEADS HANDS ON THE ONES ITS JOB'S BRIEF TOLD,
+// by number off the job's record: no lead to the runner, every one counted as
+// not kept, and the numbers for a continuation to hand on, so the job its
 // launch opens marks them and a later read tells them. Where the leads were
-// read it hands none on by number, since the ones the brief told ride the
-// leads, marked; and a job whose session holds its brief hands none on either
-// way (sandbox.LaunchRecord.ToldLeads).
+// read it hands none on by number (the marked leads carry them), and a job
+// whose session holds its brief hands none either way
+// (sandbox.LaunchRecord.ToldLeads).
 //
 // Mutation: hand the numbers on whatever the read, never, or off the record's
 // marks whatever its session, and a case goes red.
@@ -229,14 +219,13 @@ func TestAResumeThatCouldNotReadItsLeadsHandsOnTheOnesItsJobsBriefTold(t *testin
 	}
 }
 
-// AN ANSWER CARRIED ON IN A CUT-OFF BOX REACHES THE NEXT BRIEF AGAIN, end to end,
-// through the real launcher and the coordination store: a person's answer
-// carries the round on in the asking job's own box, the runner building the
-// relaunch and the launch keeping the lead its brief opened with beside the
-// run's record, marked on the job's; that job is refused on a replaced sign-in
-// before its harness wrote the brief, so the copy in its box may lack the
-// answer, and the relaunch the replaced sign-in drives, read the run's leads,
-// tells it the answer again.
+// AN ANSWER CARRIED ON IN A CUT-OFF BOX REACHES THE NEXT BRIEF AGAIN, end to end
+// through the real launcher and coordination store: a person's answer carries
+// the round on in the asking job's box, and the launch keeps the lead its brief
+// opened with beside the run's record, marked on the job's. That job is refused
+// on a replaced sign-in before its harness wrote the brief, so its box's copy
+// may lack the answer; the next relaunch reads the run's leads and tells it
+// again.
 //
 // Mutation: keep no lead at the launch, or read none at the resume, and the
 // second relaunch is told nothing of the answer.
@@ -286,17 +275,14 @@ func TestAnAnswerCarriedOnInACutOffBoxReachesTheNextBriefAgain(t *testing.T) {
 	}
 }
 
-// A CHAIN OF CUT-OFF SESSIONS OUTLIVES A READ OF ITS LEADS THAT FAILED, end to
-// end, through the real launcher and the coordination store. A person's answer
-// carries the round on in the asking job's own box, whose job marks it. That
-// job, its harness cut off, asks in turn and is answered, and the resume that
-// carries it on cannot read the run's leads: the copy it continues, which may
-// lack the first brief, is told the first answer is not kept, and the job it
-// opens marks that answer all the same, beside its own. Cut off in turn, that
-// job's copy, the first copy carried on and so one that may lack both briefs,
-// is told both answers once the read answers. Marked by the leads a read gave
-// back alone, the first answer would leave the chain there: every later brief
-// to that copy told neither it nor that it is missing.
+// A CHAIN OF CUT-OFF SESSIONS OUTLIVES A FAILED READ OF ITS LEADS, end to end
+// through the real launcher and coordination store. A person's answer carries
+// the round on in the asking job's box, marked by its job. That job, cut off,
+// asks and is answered, and its resume cannot read the run's leads: the copy
+// it continues is told the first answer is not kept, and the job it opens
+// marks that answer beside its own. Cut off in turn, that copy, which may lack
+// both briefs, is told both once the read answers. Marked only by leads a read
+// returned, the first answer would vanish from every later brief, unsaid.
 //
 // Mutation: drop the numbers at the resume, the relaunch or the launch, or
 // leave them unmarked at the take, and the third brief is told nothing of the
@@ -379,14 +365,11 @@ func TestAChainOfCutOffSessionsOutlivesAReadOfItsLeadsThatFailed(t *testing.T) {
 
 // A BASE CONTINUATION REFUSED BEFORE ITS HARNESS WROTE IS TOLD ITS TURN AGAIN,
 // end to end: a turn's first launch continues the session its conversation's
-// last turn left, its brief where the turn begins and the turn's task, and the
-// launch keeps that task beside the run's record as the lead the job's brief
-// opened with. Its sign-in is
-// refused at once, before its harness wrote the brief, so the copy in its box
-// holds the turn before and none of this turn's task: the relaunch carrying the
-// round on in that copy, told only to continue from where it is, would carry
-// the turn before on. It is told the turn's task again, where the turn began,
-// and nothing of the new box that first brief spoke of.
+// last turn left, briefed with the turn's task, and keeps that task beside the
+// run's record as its opening lead. Its sign-in is refused before its harness
+// wrote, so its box's copy holds only the turn before, which a relaunch told
+// only to continue would carry on. It is told the turn's task again, where the
+// turn began, and nothing of the new box the first brief spoke of.
 //
 // Mutation: keep no lead for the base's brief, or hand the resume no base, and
 // the copy is not told where its turn began.
@@ -449,29 +432,17 @@ func TestABaseContinuationRefusedBeforeItsHarnessWroteIsToldItsTurnAgain(t *test
 	}
 }
 
-// A RESUME'S LEADS REACH ITS RELAUNCH'S BRIEF, through the engine's resumer and
-// the runner: the coordinator reads the turn's leads beside the run's record
-// inside the resume's frame (sandbox.ResumeRequest.Leads, which
-// TestAResumeIsHandedTheLeadsBesideItsRowAndEveryOneItCannotRead holds), the
-// engine's resumer hands them to the resumed turn (resumeInput.Leads), and
-// runnerResume opens them for the runner, which tells again the ones the job's
-// brief told to a copy of its session that may lack that brief. So a job whose
-// brief opened with an answer and whose harness was cut off, carried on in its
-// own box by a person's answer to the question it then asked, is told the
-// earlier answer again, and the relaunched job's record marks it told again
-// in turn.
-//
-// THE CASE'S JOB stands for one whose brief continued the turn's session and
-// opened with an answer, a relaunch carrying a round on: a turn's first launch,
-// whose brief is fresh, opens with the turn's task alone. So its attach is
-// made again by the case, through the real take, as such a job's own launch
-// makes it: the row's own box and command, the session its box ran, its brief
-// one that continued, and the answer it opened with. And the resume is the one
-// a person's answer drives, since the copy a job's box holds is continued in
-// place by an answer's relaunch and never by a loss's (runner.Lost).
-//
-// Mutation: drop the leads in the engine's resumer, or hand runnerResume none,
-// and the relaunch is told nothing of the answer.
+// A RESUME'S LEADS REACH ITS RELAUNCH'S BRIEF: the coordinator reads them in
+// the resume's frame (sandbox.ResumeRequest.Leads, held by
+// TestAResumeIsHandedTheLeadsBesideItsRowAndEveryOneItCannotRead), the
+// resumer hands them on (resumeInput.Leads) and runnerResume opens them, so a
+// cut-off job carried on by a person's answer is told its earlier answer
+// again, and the relaunched job's record marks it told. The case re-makes,
+// through the real take, the attach of a job whose brief continued the
+// session and opened with an answer (a first launch's fresh brief opens with
+// the turn's task alone), and drives an answer's resume: only it continues the
+// box's copy in place, never a loss's (runner.Lost). Mutation: drop the leads
+// in the resumer, or hand runnerResume none, and the relaunch is told nothing.
 func TestAResumesLeadsReachItsRelaunchsBrief(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

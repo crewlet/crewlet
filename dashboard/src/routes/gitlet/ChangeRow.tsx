@@ -55,6 +55,7 @@ import type {
   CodeReviewerFace,
 } from "~/protocol/index.ts";
 import { CodeList, type CodeListProps } from "./CodeList.tsx";
+import { namesSaid, ownedPaths } from "./owners.ts";
 import { changeObject, changesHref, repoHref } from "./paths.ts";
 import { preconditionSentence, readinessCount, readinessNext } from "./readinessWords.ts";
 import { BranchChip, Face, ROLLUP_LOOK, useWhoName } from "./ui.tsx";
@@ -177,7 +178,7 @@ export function ReadinessMeter({
 }
 
 /** "First" to "Ninth", then "#12": a place in a queue as a sentence starts it. */
-const ORDINALS = [
+export const ORDINALS = [
   "First",
   "Second",
   "Third",
@@ -188,21 +189,6 @@ const ORDINALS = [
   "Eighth",
   "Ninth",
 ];
-
-/** Names in a sentence, with how many more: "e2e", "e2e and lint", "e2e, lint and 2 more". */
-function namesSaid(names: readonly string[], more = 0): string {
-  const all = more > 0 ? [...names, `${more} more`] : [...names];
-  if (all.length <= 1) return all[0] ?? "";
-  return `${all.slice(0, -1).join(", ")} and ${all[all.length - 1]}`;
-}
-
-/** The paths an owner's ask is for, in a sentence; empty where the facts name none. */
-function ownedPaths(face: CodeReviewerFace): string {
-  return namesSaid(
-    face.owned_paths ?? [],
-    face.owned_paths?.length ? (face.owned_paths_omitted ?? 0) : 0,
-  );
-}
 
 /** What one reviewer's face says: their verdict on a revision, or the ask that waits. */
 export function faceSentence(face: CodeReviewerFace, name: string, you: boolean): string {

@@ -53,9 +53,8 @@ func await[T any](t *testing.T, ch <-chan T, what string) T {
 	return zero
 }
 
-// deferLog is one domain log on a broker of a case's own — the queue beside it
-// holding the dead-letter stream every feed of the case keeps its entries in —
-// and the claims its feeds share, as a fleet's nodes do.
+// deferLog is one domain log on a case's own broker, whose queue holds the
+// dead-letter stream, and the claims its feeds share as a fleet's nodes do.
 type deferLog struct {
 	q      *jetstream.Queue
 	log    *jetstream.DomainLog
@@ -291,16 +290,15 @@ var (
 // ---- the deferral, over the broker ------------------------------------ //
 
 // A FRAME SEALED UNDER A KEY THIS NODE DOES NOT HOLD IS DEFERRED, NEVER ACKED,
-// AND A NODE HOLDING THE KEY DELIVERS ITS WAKE (#838, case 1).
+// AND A NODE HOLDING THE KEY DELIVERS ITS WAKE.
 //
-// The key rotation runbook adds a key on every node before anything is sealed
-// under it, so a node that has not restarted onto it yet meets a record a peer
-// can read. Every node pulls the feed from one durable consumer, so the node
-// without the key hands the record back — at the first delivery's backoff —
-// and the node holding it takes the redelivery and wakes the record's seat.
+// The rotation runbook adds a key on every node before anything is sealed
+// under it, so a node not yet restarted onto it meets a record a peer can
+// read: on the one durable consumer it hands the record back at the first
+// backoff, and the holder takes the redelivery.
 //
-// Mutation: ack a deferral (the adapter's or the feed's), and the node holding
-// the key is never handed the record.
+// Mutation: ack a deferral (the adapter's or the feed's), and the holder is
+// never handed the record.
 func TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt(t *testing.T) {
 	t.Parallel()
 	l := newDeferLog(t)
@@ -330,14 +328,10 @@ func TestAFrameUnderAKeyThisNodeLacksIsDeferredToANodeThatHoldsIt(t *testing.T) 
 }
 
 // AN ENVELOPE A NEWER BUILD WRITES IS DEFERRED, NEVER ACKED, AND A NODE ON THAT
-// BUILD DELIVERS ITS WAKE (#838, case 3).
+// BUILD DELIVERS ITS WAKE: mid-roll, the bytes will not improve on an older
+// node, and will on a newer peer.
 //
-// During a roll the older nodes meet a record they cannot read past its frame;
-// the bytes will not improve on them, and will on a peer on the newer build,
-// which takes the redelivery.
-//
-// Mutation: ack an undecodable envelope, as the adapter did, and the newer
-// node never sees the record.
+// Mutation: ack an undecodable envelope, and the newer node never sees it.
 func TestAnEnvelopeANewerBuildWritesIsDeferredToANodeOnThatBuild(t *testing.T) {
 	t.Parallel()
 	l := newDeferLog(t)
@@ -357,15 +351,14 @@ func TestAnEnvelopeANewerBuildWritesIsDeferredToANodeOnThatBuild(t *testing.T) {
 	}
 }
 
-// A TAMPERED FRAME IS STILL ACKNOWLEDGED, AND WAKES NOBODY (#838, case 2).
+// A TAMPERED FRAME IS STILL ACKNOWLEDGED, AND WAKES NOBODY.
 //
-// A MAC that fails under a key this node holds is not this fleet writing to its
-// log: no node should act on it, so it is not handed back for one — the adapter
-// acknowledges it and goes on to the next record, and the applier is what stops
-// the fleet on it.
+// A MAC failing under a key this node holds is not this fleet's writing, so no
+// node should act on it: the adapter acks it and moves on, and the applier is
+// what stops the fleet on it.
 //
-// Mutation: defer a tampered frame, and the feed is handed it and holds it
-// pending; never ack it, and the consumer holds it pending.
+// Mutation: defer it, and the feed is handed it and holds it pending; never ack
+// it, and the consumer holds it pending.
 func TestATamperedFrameIsStillAcknowledgedAndWakesNobody(t *testing.T) {
 	t.Parallel()
 	l := newDeferLog(t)
@@ -408,19 +401,15 @@ func TestATamperedFrameIsStillAcknowledgedAndWakesNobody(t *testing.T) {
 // A NODE THAT STARTS ABLE TO READ A DEAD LETTER DERIVES ITS WAKE AND DROPS IT;
 // A NODE THAT STILL CANNOT LEAVES IT.
 //
-// A node whose clock says the record is two hours old meets it under a key it
-// does not hold, and dead-letters it — frame and all — rather than hand it
-// back again. A second node without the key starts: its replay reopens the
-// frame, still cannot read it, and leaves it (proved finished by a record
-// committed after the start, whose wake comes only after the replay). A node
-// holding the key starts: its replay reopens the frame through the same
-// verifier a delivery passes, publishes the wake once, and drops the entry.
-// The keyring is read at boot and never changes, so this start is how a key's
-// arrival reaches a dead letter.
+// A node lacking the key, whose clock makes the record two hours old,
+// dead-letters it, frame and all. A second node without the key starts, replays and leaves it (a record committed
+// after the start, woken only after the replay, proves it finished). A node
+// holding the key replays it through a delivery's verifier, publishes the wake
+// once and drops it: the keyring is read at boot, so a start is how a key
+// reaches a dead letter.
 //
-// Mutation: drop a dead letter whatever the replay made of it, and the second
-// node loses the wake; leave one whose wake was published, and it is still
-// held at the end.
+// Mutation: drop whatever the replay made of it, and the second node loses the
+// wake; keep one whose wake was published, and it is still held at the end.
 func TestANodeThatStartsAbleToReadADeadLetterDerivesItsWakeAndDropsIt(t *testing.T) {
 	t.Parallel()
 	l := newDeferLog(t)
@@ -469,10 +458,9 @@ var boxSubject = changefeed.DeadLetterSubject(opWaker{}.Source())
 // boxFeeds is the one feed the cases over a [letterBox] read, by its domain.
 var boxFeeds = map[string]changefeed.Source{"tracker": opWaker{}.Source()}
 
-// letterBox is the dead letters of one subject — the probe feed's, unless
-// subject names another — as a case writes, lags and breaks them, counting
-// every read the alarm's reading makes of it. A listing of any other subject
-// holds nothing.
+// letterBox is the dead letters of one subject (the probe feed's, unless
+// subject names another) as a case writes, lags and breaks them, counting
+// every read the alarm's reading makes. Any other subject lists empty.
 type letterBox struct {
 	mu      sync.Mutex
 	subject string
@@ -615,9 +603,9 @@ func deadLetterAlarm(at time.Time, letters []statelog.FeedDeadLetter) (statelog.
 }
 
 // THE ALARM READS EVERY FEED'S DEAD LETTERS ON EVERY BEAT: raised from the
-// first entry, each entry aged to now — so its count of what expires within a
-// day is the reading's, not the last replay's — a read that failed read as the
-// last listing that answered, and cleared once the entry is gone.
+// first entry, each aged to now (so what expires within a day is the
+// reading's), a failed read read as the last listing that answered, and
+// cleared once the entries are gone.
 //
 // Mutation: hand over the listing as it was taken rather than aged to now, and
 // the hours never move; read a failed marks read as an empty listing, and a
@@ -667,15 +655,13 @@ func TestTheAlarmReadsAFeedsDeadLettersOnEveryBeat(t *testing.T) {
 // A BEAT WHOSE MARKS DID NOT MOVE READS THE MARKS AND NOTHING ELSE — and a keep
 // anywhere moves them.
 //
-// Every data node reads the feeds' dead letters on every beat, and a stalled
-// roll can leave thousands of entries: so a beat asks the broker one question,
-// the marks, and while they stand still the reading is the last listing aged
-// to now, with no listing and never a frame. A keep on another subject — a
-// subscription's poison — moves the last sequence the marks state, and the
-// feed's subject is listed again: a feed's keep could be beside it.
+// A stalled roll can leave thousands of entries, read by every data node every
+// beat, so a beat asks only the marks and, while they stand, ages the last
+// listing, never reading a frame. A keep on another subject (a subscription's
+// poison) moves the last sequence, and the feed's subject is listed again: a
+// feed's keep could be beside it.
 //
-// Mutation: list on every beat, and the unchanged beats list; read a frame,
-// and the reading reads one.
+// Mutation: list on every beat, or read a frame, and the counts show it.
 func TestABeatWhoseMarksDidNotMoveListsNothing(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
@@ -705,16 +691,12 @@ func TestABeatWhoseMarksDidNotMoveListsNothing(t *testing.T) {
 	}
 }
 
-// A KEEP AND AN EXPIRY ON ONE SUBJECT INSIDE ONE BEAT ARE BOTH SEEN.
+// A KEEP AND AN EXPIRY ON ONE SUBJECT INSIDE ONE BEAT ARE BOTH SEEN: the count
+// stands, but the keep moved the last sequence, so the subject is listed
+// again, the new entry reaches the alarm and the expired one is counted.
 //
-// The subject's count is where it was — one entry went, one came — so a
-// reading that listed again only where a count moved would show the alarm the
-// expired entry, aged, and never count its wake as lost. The keep moved the
-// last sequence, so the subject is listed again: the new entry is in the alarm
-// and the expired one is counted.
-//
-// Mutation: list again only the subjects whose count moved, and the alarm keeps
-// the expired entry and nothing is counted.
+// Mutation: relist only where a count moved, and the alarm keeps the expired
+// entry and nothing is counted.
 func TestAKeepAndAnExpiryInOneBeatAreBothSeen(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
@@ -740,16 +722,11 @@ func TestAKeepAndAnExpiryInOneBeatAreBothSeen(t *testing.T) {
 }
 
 // AN ENTRY THAT GOES WHILE NOTHING IS KEPT LEAVES THE READING, AND ONE THAT
-// EXPIRED IS COUNTED.
+// EXPIRED IS COUNTED: a going lowers its subject's count, so the subject is
+// listed again; the expired entry is counted, the one a peer's replay dropped
+// (taking the claim) is not, and neither stays in the alarm.
 //
-// Nothing kept means the last sequence stands still, and an entry that goes
-// lowers its subject's count: the retention's from the front of the subject,
-// a peer's replay from anywhere in it. The count moved, so the subject is
-// listed again — the expired entry counted as the wake it lost, the replayed
-// one, whose claim the peer's drop took, not counted, and neither left in the
-// alarm.
-//
-// Mutation: list again only when the last sequence moves, and both stay in the
+// Mutation: relist only when the last sequence moves, and both stay in the
 // alarm and the expiry is never counted.
 func TestAnEntryThatGoesWhileNothingIsKeptLeavesTheReading(t *testing.T) {
 	t.Parallel()
@@ -785,16 +762,12 @@ func TestAnEntryThatGoesWhileNothingIsKeptLeavesTheReading(t *testing.T) {
 	}
 }
 
-// A LISTING THAT DISAGREES WITH THE MARKS IS LISTED AGAIN ON THE NEXT BEAT.
+// A LISTING THAT DISAGREES WITH THE MARKS IS LISTED AGAIN ON THE NEXT BEAT: a
+// replica's listing can trail the leader's marks; the alarm reads it, but the
+// marks stay unagreed, so the next beat relists and the missing entry arrives.
 //
-// The marks are the broker's leader's and a listing is a replica's, which can
-// be behind it. A listing one entry short of the marks' count is the newest
-// sight there is, so the alarm reads it — but the marks it was taken for are
-// not agreed, so the next beat lists again, though they have not moved, and
-// the entry the replica had not heard of reaches the alarm.
-//
-// Mutation: take a disagreeing listing as agreeing with its marks, and the
-// alarm stays one entry short for good.
+// Mutation: agree on a disagreeing listing, and the alarm stays one entry
+// short for good.
 func TestAListingThatDisagreesWithTheMarksIsListedAgain(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
@@ -824,17 +797,15 @@ func TestAListingThatDisagreesWithTheMarksIsListedAgain(t *testing.T) {
 // AN ENTRY THAT VANISHES AT ITS EXPIRY IS COUNTED ONCE AS A LOST WAKE; ONE A
 // REPLAY DROPPED IS NOT.
 //
-// The broker lets an entry go at its retention without telling anybody, and
-// its wake goes with it, so an entry the reading saw within a beat of its
-// expiry and then no more is counted — once across the fleet, through the claim
-// on its going, since every data node reads the subject. An entry a replay
-// dropped, though as near its expiry, published its wake: the drop took that
-// claim first, so neither the node that dropped it nor a peer that only saw it
-// vanish counts it. One gone long before its expiry was replayed by somebody.
+// An entry seen within a beat of its expiry and then gone is counted once
+// fleet-wide, through the claim on its going. One a replay dropped, as near its
+// expiry, published its wake: the drop took the claim first, so neither the
+// dropping node nor a peer counts it. One gone long before its expiry was
+// replayed by somebody.
 //
-// Mutation: count every entry that vanished, and the replayed entries are
-// counted; let a drop take no claim, and the peer counts the replayed one;
-// count without the claim, and the peer counts the lost one again.
+// Mutation: count every vanished entry, and the replayed ones count; let a
+// drop take no claim, and the peer counts the replayed one; count without the
+// claim, and the peer counts the lost one again.
 func TestAnEntryThatVanishesAtItsExpiryIsCountedOnceAsALostWake(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
@@ -878,16 +849,14 @@ func TestAnEntryThatVanishesAtItsExpiryIsCountedOnceAsALostWake(t *testing.T) {
 }
 
 // AN ENTRY THAT EXPIRES WHILE THIS NODE'S READS FAIL IS STILL COUNTED; ONE THAT
-// WENT BEFORE ITS EXPIRY IS NOT.
+// WENT BEFORE ITS EXPIRY IS NOT: after an outage the next answering listing can
+// be hours late, and an entry whose expiry passed meanwhile was the
+// retention's however long since it was seen; one not yet due went to a
+// replay.
 //
-// The reading judges an entry's going at its next listing that answers, which
-// after a broker outage can be hours after the last one that did. An entry
-// whose expiry passed in between was let go by the retention, however long ago
-// it was last seen, and an entry that is not due yet went to a replay.
-//
-// Mutation: judge an entry only by how near its expiry it was when last seen,
-// and the expiry during the outage is never counted; count every entry that
-// vanished, and the one replayed early is counted too.
+// Mutation: judge only by how near its expiry it was when last seen, and the
+// outage's expiry is never counted; count every vanished entry, and the early
+// replay counts too.
 func TestAnEntryThatExpiresWhileTheListingsFailIsStillCounted(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
@@ -941,19 +910,15 @@ func inboundExpiredCount(rec *metrics.Recorder) uint64 {
 }
 
 // THE ALARM READS THE INBOUND GROUP'S UNHANDLED DELIVERIES BESIDE THE FEEDS'
-// DEAD LETTERS: a delivery the group never handled waits, kept, for a node that
-// reads it, and nothing else names it while it waits — a roll paused for good
-// with no such node running never brings one. So the reading ages each entry
-// to now on every beat and `inbound_dead_lettered` is raised from the first,
-// and an entry the retention let go is counted, once, as the wake it lost; one
-// a replay dropped, taking the claim on its going, is not — though it went
-// within a beat of its expiry, which by its age alone reads as the
-// retention's.
+// DEAD LETTERS: nothing else names one while it waits for a node that reads
+// it, which a roll paused for good may never bring. Each is aged every beat,
+// raising `inbound_dead_lettered`; one the retention let go is counted once as
+// a lost wake, and one a replay dropped with the claim is not, though by age
+// alone it reads as the retention's.
 //
-// Mutation: leave the inbound subject out of the reading, and nothing is
-// raised; count its expiry on the feeds' metric, or not at all, and the lost
-// wake is not counted as the inbound group's; let the replay's drop take no
-// claim, and the entry it delivered is counted as a lost wake.
+// Mutation: leave the inbound subject out, and nothing is raised; count its
+// expiry on the feeds' metric or not at all, and it is not the inbound group's;
+// let the replay's drop take no claim, and its delivered entry counts as lost.
 func TestTheAlarmReadsTheInboundGroupsUnhandledDeliveries(t *testing.T) {
 	t.Parallel()
 	day := 24 * time.Hour
@@ -1006,10 +971,9 @@ func TestTheAlarmReadsTheInboundGroupsUnhandledDeliveries(t *testing.T) {
 	}
 }
 
-// probeSource is the source of the delivery the engine's inbound replay is
-// handed in TestTheInboundReplayDropsThroughTheEnginesLedger, and probeParser
-// the parser that reads it: a delivery that concerns nobody, which the replay
-// handles and drops.
+// probeSource and probeParser are the source and parser of the delivery
+// TestTheInboundReplayDropsThroughTheEnginesLedger replays: it concerns
+// nobody, so the replay handles and drops it.
 const probeSource = "replay-probe"
 
 type probeParser struct{}
@@ -1021,19 +985,14 @@ func (probeParser) Parse(context.Context, types.RawWebhook, *notify.Registry) ([
 }
 
 // THE ENGINE'S INBOUND REPLAY DROPS THROUGH THE LEDGER ITS ALARM READING
-// SHARES.
+// SHARES: only a drop through it takes the claim on the entry's going, without
+// which the reading counts an entry gone within a beat of its expiry as a lost
+// wake (TestTheAlarmReadsTheInboundGroupsUnhandledDeliveries). So the engine's
+// notification service is handed the ledger, and its replay's drop is recorded
+// here and claimed.
 //
-// The reading counts an entry gone from the inbound group's unhandled subject
-// within a beat of its expiry as a wake the retention lost, unless whoever
-// dropped it took the claim on its going first — which only a drop through the
-// engine's ledger does (TestTheAlarmReadsTheInboundGroupsUnhandledDeliveries).
-// So the notification service the engine builds is handed that ledger, and
-// its replay's drop is accounted there: dropped here, and the claim taken.
-// Through the queue behind the ledger's back, a copy a newer node's replay
-// delivered a beat before its expiry was counted, fleet-wide, as a lost wake.
-//
-// Mutation: build the service with no dead letters of the engine's (its
-// queue's own), and the ledger never hears of the drop.
+// Mutation: build the service on its queue's own dead letters, and the ledger
+// never hears of the drop.
 func TestTheInboundReplayDropsThroughTheEnginesLedger(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

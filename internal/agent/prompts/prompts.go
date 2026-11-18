@@ -100,12 +100,10 @@ type Phase string
 // The three passes a prompt is built for. Execute and Review are the turn's
 // own two; Subagent is the short-lived worker one of them spawned.
 //
-// `execute` keeps its wire string although the pass it names now decides as
-// well as acts: it is what operators have written in every tool skill's
-// `phases:` list, and renaming it would silently stop matching every one of
-// them. `plan` is gone from the vocabulary entirely — see
-// [github.com/crewlet/crewlet/internal/agent/skills].ParsePhases, which names
-// the set an unknown value is refused against.
+// `execute` keeps its wire string although the pass also decides: operators
+// wrote it in every tool skill's `phases:` list, and a rename would silently
+// stop matching them. The set an unknown value is refused against is
+// [github.com/crewlet/crewlet/internal/agent/skills].ParsePhases.
 const (
 	PhaseExecute  Phase = "execute"
 	PhaseReview   Phase = "review"
@@ -115,46 +113,34 @@ const (
 // Seat is the narrow, prompt-facing view of the agent a prompt is built for:
 // a chart and a seat within it.
 //
-// Deliberately not the engine's full agent definition (LLM keys, budgets,
-// tool wiring): a prompt builder that could reach those would eventually
-// render one, and the set of things that can change a cached prefix must stay
-// as small as it is readable.
-//
-// Org and Role are both required — a Seat is built from a live chart. A Seat
-// missing either renders its identity sections empty rather than panicking:
-// a malformed seat must not take the whole turn down, and the phase contract
-// on its own is still a usable prompt.
+// Not the full agent definition (LLM keys, budgets, tool wiring): a builder
+// that could reach those would eventually render one, and what can change a
+// cached prefix must stay small. Org and Role are both required; a Seat
+// missing either renders its identity sections empty rather than panicking,
+// since the phase contract alone is still a usable prompt.
 type Seat struct {
 	Org  *org.Organization
 	Role *org.Role
 
 	// Env resolves the ${VAR} references a human teammate's contact
 	// identities may carry. Nil reads the process environment, matching
-	// [org.HumanContact.ResolvedIdentities]. It is a field rather than an
-	// ambient read so a test can render a roster without touching the
-	// environment every other test in the binary shares.
+	// [org.HumanContact.ResolvedIdentities]; a field so a test need not touch
+	// the environment the binary's other tests share.
 	Env org.EnvLookup
 
 	// Withheld reports whether a human seat's contact identities are
-	// withheld — its holder suspended, retired or removed — by the same
-	// reading of the identity directory the party registry was built from
-	// (see turnctx.Turn.Withheld). A withheld seat renders no identity: an
-	// inbound message from that person already resolves to an outside
-	// party, and a roster that still printed their Slack id would have an
-	// agent DMing somebody the company has off-boarded. Nil withholds
-	// nothing.
+	// withheld (holder suspended, retired or removed), by the directory read
+	// the party registry was built from (turnctx.Turn.Withheld). A withheld
+	// seat renders no identity, or an agent would DM somebody the company
+	// off-boarded. Nil withholds nothing.
 	Withheld func(handle string) bool
 
 	// Chatlet says the company runs the engine's own chat
-	// (`chat.backend: chatlet`), where every seat — a person's included —
-	// answers to its HANDLE: `@jane` in a room reaches the person holding
-	// that seat, and `send_dm` opens a conversation with them, with no
-	// vendor account behind either. So on Chatlet a human report with
-	// no contact identity at all is still somebody to @-mention, and a
-	// roster deciding reachability from contact identities alone told a
-	// lead they had nobody to address. A bool rather than the company's
-	// backend, because reachability by handle is the one thing this
-	// package asks of it.
+	// (`chat.backend: chatlet`), where every seat, a person's included,
+	// answers to its HANDLE (`@jane`, `send_dm`) with no vendor account
+	// behind it. So a human report with no contact identity is still
+	// reachable there. A bool, since reachability by handle is all this
+	// package asks of the backend.
 	Chatlet bool
 }
 
@@ -166,8 +152,8 @@ func (s Seat) withholds(handle string) bool {
 // ok reports whether this seat can render identity at all.
 func (s Seat) ok() bool { return s.Org != nil && s.Role != nil }
 
-// manager, reports and unit are the three chart walks every section needs.
-// Each is nil-safe so a caller can render one section without pre-checking.
+// manager, reports and unit are the chart walks the sections need, each
+// nil-safe.
 
 func (s Seat) manager() *org.Role {
 	if !s.ok() {
@@ -190,19 +176,15 @@ func (s Seat) unit() *org.Unit {
 	return s.Org.UnitFor(s.Role)
 }
 
-// Skill is one entry in a phase's tool-skill catalogue.
-//
-// Only the three fields the catalogue renders: the body is deliberately
-// absent, because it is never inlined into a prompt — the model loads it on
-// demand with load_tool_skill.
+// Skill is one entry in a phase's tool-skill catalogue. It has no body: a
+// body is never inlined, the model loads it with load_tool_skill.
 type Skill struct {
 	// Key is what the model passes to load_tool_skill, and the sort key
 	// that fixes catalogue order.
 	Key string
 
-	// Summary is the one-line gloss. May carry ${VAR} references and may
-	// be authored as a multi-line YAML literal; the catalogue renders and
-	// flattens it.
+	// Summary is the one-line gloss. It may carry ${VAR} references and be
+	// a multi-line YAML literal; the catalogue renders and flattens it.
 	Summary string
 
 	// Required marks a skill the engine enforces: calls to the tools its
@@ -212,20 +194,15 @@ type Skill struct {
 }
 
 // Surface is the tool surface a phase will actually have. It scopes which
-// skills the catalogue offers — a skill for a tool this phase cannot call is
-// noise the model has to read past.
+// skills the catalogue offers: a skill for a tool the phase cannot call is
+// noise.
 //
 // MCPServers is the servers the seat's tool registry holds a tool of
-// ([github.com/crewlet/crewlet/internal/tools.Snapshot.MCPServers]), which is
-// what the skill guard arms its server triggers against: the two read one set,
-// so a skill the prompt offers is a skill the guard holds the seat to, and the
-// other way round. NEVER the keys of the seat's mcp_env: a block there says
-// which credentials the seat holds, not which servers it reaches. A shared
-// server reaches every agent with no block at all, a vendor's block is read by
-// the engine with no server behind it, and a server the company turned off
-// keeps its blocks while it reaches nobody, so a catalogue read off the keys
-// offered skills for servers the seat could not call and missed the shared
-// servers it could.
+// ([github.com/crewlet/crewlet/internal/tools.Snapshot.MCPServers]), the set
+// the skill guard arms its server triggers against, so the prompt offers
+// exactly the skills the guard enforces. NEVER the keys of the seat's
+// mcp_env: those name credentials, not reachable servers (a shared server
+// needs no block; a vendor's block or a disabled server's has no server).
 type Surface struct {
 	Tools      []string
 	MCPServers []string
@@ -234,14 +211,9 @@ type Surface struct {
 // SkillCatalogue is the narrow view of the engine's tool-skill registry that
 // prompt assembly needs: which skills fire for a phase's surface, and how a
 // ${VAR} reference inside one renders.
-//
-// Consumer-defined and two methods wide. The registry itself is a live,
-// webhook-updated store of skills sourced from the team knowledge base; none
-// of that reaches here.
 type SkillCatalogue interface {
 	// SkillsFor returns the skills whose trigger fires for surface and
-	// whose phases include phase. Order is not trusted — see
-	// skillCatalogue.
+	// whose phases include phase, in an order skillCatalogue does not trust.
 	SkillsFor(phase Phase, surface Surface) []Skill
 
 	// Render substitutes the registry's ${VAR} variables (operator-defined
@@ -255,9 +227,8 @@ const skillCatalogueHeader = "\n## Tool skills" +
 	"summary is not enough."
 
 // skillCatalogueReviewHeader is the catalogue's header in Review, which has no
-// load_tool_skill: the loading instruction the other phases get would point
-// the reviewer at a tool it does not have, on a surface whose only tool is its
-// submission and whose loop asks again until it makes that call.
+// load_tool_skill: the other phases' loading instruction would point the
+// reviewer at a tool it lacks, on a surface whose only tool is its submission.
 const skillCatalogueReviewHeader = "\n## Tool skills" +
 	"\nHow this company uses specific tools and MCP servers, one line per " +
 	"skill: weigh the work you are reviewing against these conventions."
@@ -269,21 +240,14 @@ const skillCatalogueRequiredNote = "\nThe engine rejects calls to the tools " +
 const requiredMarker = " (required — load before use)"
 
 // skillCatalogue is the one-line-per-skill catalogue section for the active
-// surface, or nil when no skill fires — the section's lines, heading first, for
-// a builder to open as one section of its outline.
+// surface, heading first, or nil when no skill fires. Bodies are never
+// inlined; the model loads one with load_tool_skill.
 //
-// Bodies are NOT inlined: the model sees `key — summary` lines and decides
-// whether to load the full body via load_tool_skill, which is always
-// available to the executor and to a sub-agent.
-//
-// Required skills (the default; advisory skills opt out) carry a visible
-// marker and an enforcement note after the header, so the model learns the
-// contract up front instead of via a blocked tool call — the guard's error
-// message is the recovery path, not the discovery path. Review is the
-// exception: it has no domain tools and no load_tool_skill, so nothing is
-// enforced there and the marker would point at a tool the reviewer does not
-// have. Required skills render unmarked in Review, under a header that asks
-// the reviewer to weigh the work against them rather than to load them.
+// Required skills (the default) carry a marker and an enforcement note, so the
+// model learns the contract up front rather than from a blocked call: the
+// guard's error is the recovery path, not the discovery path. Review enforces
+// nothing and has no loader, so there they render unmarked, under a header
+// asking the reviewer to weigh the work against them.
 func skillCatalogue(cat SkillCatalogue, phase Phase, surface Surface) []string {
 	if cat == nil {
 		return nil
@@ -293,11 +257,8 @@ func skillCatalogue(cat SkillCatalogue, phase Phase, surface Surface) []string {
 		return nil
 	}
 	var parts []string
-	// Sorted here rather than trusted from the catalogue. The registry
-	// contract says key-sorted, but the prompt's byte-stability is this
-	// package's promise to keep: a catalogue that answered in map order
-	// would move the prefix between two builds of one phase and nothing
-	// downstream would report it as anything but a cache-miss bill.
+	// Sorted here, not trusted from the catalogue: byte-stability is this
+	// package's promise (package doc, "Byte-stability across rounds").
 	skills = slices.Clone(skills)
 	slices.SortFunc(skills, func(a, b Skill) int { return strings.Compare(a.Key, b.Key) })
 
@@ -312,11 +273,8 @@ func skillCatalogue(cat SkillCatalogue, phase Phase, surface Surface) []string {
 		parts = append(parts, skillCatalogueRequiredNote)
 	}
 	for _, skill := range skills {
-		// Collapse whitespace in the summary so a multi-line YAML literal
-		// (summary: |) still renders as one catalogue bullet — an embedded
-		// newline breaks the one-skill-per-line format. Render ${var}
-		// references first, so operator-defined facts (a tenant URL, say)
-		// appear substituted in the catalogue rather than as the reference.
+		// Rendered, then whitespace-collapsed, so a multi-line YAML literal
+		// stays one bullet and a ${var} appears substituted.
 		summary := strings.Join(strings.Fields(cat.Render(skill.Summary)), " ")
 		marker := ""
 		if skill.Required && enforceable {

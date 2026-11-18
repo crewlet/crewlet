@@ -15,10 +15,9 @@ import (
 // THE CHECK'S OPERATIONS in an interleaving: damage a previous process left,
 // and a file replaced while the check hashes it.
 
-// heldFile picks a repository the cache holds and one of its incarnation's
-// index files (fileOf), answering the repository, the incarnation's
-// directory and the file's path relative to it, or "" when the cache holds
-// nothing.
+// heldFile picks a held repository and one of its index files (fileOf),
+// answering the repository, its incarnation's directory and the file's path
+// relative to it, or "" when the cache holds nothing.
 func (in *interleaving) heldFile(packs, tags bool) (repo, dir, rel string) {
 	if repo = in.heldRepo(); repo == "" {
 		return "", "", ""
@@ -45,14 +44,12 @@ func (in *interleaving) heldRepo() string {
 	return repos[in.rng.IntN(len(repos))]
 }
 
-// fileOf picks one of the index files of the incarnation at dir — a pack's
-// .idx or .rev, or a derived file: own mode's, or a chained copy's, each of
-// its installed layers' files, its commit-graph layers and its tip, and both
-// chain files — with packs a pack's .pack too, and with tags the tag index,
-// which no git reads — and answers its path relative to dir, or "" when it
-// holds none. A chained copy holds no derived
-// file of own mode's, so a damage drawn over the pack directory alone would
-// never meet a derived file of the copies a publication chained.
+// fileOf picks an index file of the incarnation at dir, answering its path
+// relative to dir or "" when it holds none: a pack's .idx, .rev or .bitmap,
+// the multi-pack-index, a chained copy's layer and chain files, the
+// commit-graph; with packs a .pack too, with tags the tag index. The chained
+// directories are walked because a chained copy holds no own-mode derived
+// file, so drawing from the pack directory alone never damages one.
 func (in *interleaving) fileOf(dir string, packs, tags bool) string {
 	var files []string
 	for _, name := range names(in.t, filepath.Join(dir, "objects", "pack")) {
@@ -84,10 +81,9 @@ func (in *interleaving) fileOf(dir string, packs, tags bool) string {
 }
 
 // damageAndRestart is damage a previous process left: the cache stops, a
-// byte of one index file of a held repository is flipped IN PLACE — its
-// identity kept, as media damage keeps it — and the same directory boots
-// again. The next process vouches for nothing, so its first round of the
-// repository holds the file to its trailer and repairs it before it answers.
+// byte of a held index file is flipped in place (its identity kept, as media
+// damage keeps it), and the directory boots again. The new process vouches for
+// nothing, so its first round must find and repair the file before answering.
 func (in *interleaving) damageAndRestart(string) string {
 	repo, dir, rel := in.heldFile(false, true)
 	in.c.Stop(in.t.Context())
@@ -100,11 +96,10 @@ func (in *interleaving) damageAndRestart(string) string {
 	return detail
 }
 
-// replaceWhileHashed puts one index file of a held repository in again under
-// another identity, its bytes unchanged — so no vouch holds it — and asks for
-// a full round, whose hash of the file is made while another copy is renamed
-// in over it (hashed): that hash gives no verdict and the round repairs
-// nothing, and the next full round hashes the successor.
+// replaceWhileHashed renames a same-bytes copy over a held index file (so no
+// vouch holds it), then runs a full round during whose hash another copy is
+// renamed in (hashed): that hash gives no verdict, the round repairs nothing,
+// and the next full round hashes the successor.
 func (in *interleaving) replaceWhileHashed(string) string {
 	repo, dir, rel := in.heldFile(false, false)
 	if rel == "" {
@@ -124,9 +119,8 @@ func (in *interleaving) replaceWhileHashed(string) string {
 	return fmt.Sprintf("%s of repo-%d", filepath.Base(rel), slices.Index(in.repos, repo)+1)
 }
 
-// hashed is told every piece the cache's check hashes: the file a
-// replaceWhileHashed armed is renamed over, once, while its hash holds it
-// open.
+// hashed is told every piece the check hashes; it renames over the file
+// replaceWhileHashed armed, once, while the hash holds it open.
 func (in *interleaving) hashed(path string, held bool) {
 	in.swapMu.Lock()
 	defer in.swapMu.Unlock()
@@ -136,11 +130,10 @@ func (in *interleaving) hashed(path string, held bool) {
 	}
 }
 
-// noteChecks records the outcomes the cache's checks reached: damage a first
-// round found, a pack reinstalled in place, a derived file dropped by its
-// check — a chained copy's layer file fetched again and its chain file written
-// again among them — and a verdict withheld for a file replaced while it was
-// hashed.
+// noteChecks records the outcomes the checks reached: damage a first round
+// found, a pack reinstalled in place, a derived file dropped, a layer file
+// refetched or a chain file rewritten, and a verdict withheld for a file
+// replaced while hashed.
 func (in *interleaving) noteChecks() {
 	if counterOf(in.w.rec, metrics.CodeCacheChecks, map[string]string{"trigger": "first", "outcome": "damaged"}) > 0 {
 		in.saw("a first round's check found damage")
@@ -163,10 +156,9 @@ func (in *interleaving) noteChecks() {
 	}
 }
 
-// checkSound fails the run when a file of repo's incarnation at dir fails its
-// checksum — a pack, its index, its reverse index or a derived file:
-// whatever damage the run left, the scrub found and the round before it
-// repaired.
+// checkSound fails the run when any file of repo's incarnation at dir fails
+// its checksum: whatever damage the run left, the scrub found and the round
+// before repaired.
 func (in *interleaving) checkSound(step int, repo, dir string) {
 	bad, err := cache.Unsound(dir)
 	if err != nil {
@@ -197,9 +189,9 @@ func counterOf(rec *metrics.Recorder, name string, attrs map[string]string) uint
 	return n
 }
 
-// flipInPlace inverts one byte in the middle of the file at path through its
-// own inode, and puts its mode and modification time back: what a cache
-// vouches for by its identity, it cannot tell was written.
+// flipInPlace inverts a middle byte of the file at path through its own
+// inode and restores its mode and modification time, so a vouch by identity
+// cannot tell it was written.
 func flipInPlace(t interface {
 	Helper()
 	Fatal(...any)

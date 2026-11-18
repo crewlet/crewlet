@@ -6,33 +6,21 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 )
 
-// The round-cap extension judge, wired.
-//
-// [extension.Judge] is an interface, and until this file there was no
-// implementation of it anywhere: every RunnerInput left Judge nil,
-// extension.Consider rescued with "no_judge" on every exhaustion, and the
-// whole mechanism below it — the per-phase ceilings, the round step, the
-// enable switch and the llm_judge model role — was configuration nothing
-// read. A phase that ran out of rounds while making obvious progress was
-// rescued exactly like one that was thrashing.
+// The round-cap extension judge: the one [extension.Judge] implementation,
+// so a phase that runs out of rounds while making progress is told apart
+// from one that is thrashing.
 
 // judgeFor builds this seat's extension judge, or nil.
 //
-// PER TURN, like the budget meter beside it, because the model it asks is
-// resolved from the SEAT's chain: a company can put a cheap judge on one role
-// and none on another, and an engine-wide judge could honour neither.
+// Per turn, because the model it asks comes from the SEAT's chain: a company
+// can put a cheap judge on one role and none on another. Nil (no models for
+// the seat, no epoch) is not a failure: extension.Consider reads it as "do
+// not ask".
 //
-// Nil is an ordinary answer and not a failure — a company with no models
-// configured for the seat, or a turn on a build with no epoch — and
-// extension.Consider already reads a nil judge as "do not ask", which is the
-// same rescue this would otherwise have to invent.
-//
-// use is the turn's attribution, which the judge's evidence rewrites are filed
-// under: the judgement is the turn's, so condensing what it reads is too. The
-// judge's own call is a phase of the turn, metered by the turn's meter — the
-// one use carries ([auxspend.Use.Budget]), which the judge asks once its
-// evidence is rendered, since a rewrite of that evidence can be what fills
-// the window its call would be refused in ([extension.LLMJudge.WithHold]).
+// use is the turn's attribution: the judge's evidence rewrites are filed
+// under it, and its Budget meters the judge's own call, held only after the
+// evidence is rendered, since a rewrite can fill the window the call would be
+// refused in ([extension.LLMJudge.WithHold]).
 func (e *Engine) judgeFor(c *Company, handle string, use auxspend.Use) extension.Judge {
 	if c == nil || c.Org == nil || c.Models == nil {
 		return nil
@@ -41,21 +29,17 @@ func (e *Engine) judgeFor(c *Company, handle string, use auxspend.Use) extension
 	if seat == nil {
 		return nil
 	}
-	// HEAD, not the chain. The judge is an optimisation on a phase that
-	// has already run out of rounds: falling a failed judge call through
-	// to a second model would spend twice to answer a question whose
-	// refusal costs nothing, and Consider turns any error into the rescue
-	// that was already the alternative.
+	// HEAD, not the chain: a failed judge call falling through to a second
+	// model spends twice on a question whose refusal costs nothing, since
+	// Consider turns any error into the rescue anyway.
 	member, err := c.Models.Head(seat, phase.Judge)
 	if err != nil {
 		log.Debug("extension_judge_unavailable", "seat", handle, "error", err.Error())
 		return nil
 	}
-	// NewLLMJudge returns nil for a nil provider, which is what makes the
-	// nil-judge path above and this one the same path.
-	// WITH THE SEAT'S COMPACTOR, so evidence past its budget — a pasted
-	// document in a call, an error page, a long task — is rewritten for
-	// the judge rather than cut or carried whole.
+	// NewLLMJudge returns nil for a nil provider, the same nil-judge path.
+	// The seat's compactor rewrites evidence past its budget for the judge
+	// rather than cutting it or carrying it whole.
 	judge := extension.NewLLMJudge(member.Provider, member.Key).
 		WithCompactor(e.seatCompactor(c, handle, use))
 	if use.Budget != nil {

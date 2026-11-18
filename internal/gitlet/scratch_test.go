@@ -305,12 +305,10 @@ func TestAnExpiryThatLandsFirstAnswersTheHoldDeleted(t *testing.T) {
 }
 
 // THE CUTOFF IS FIXED BEFORE THE HOLDS ARE READ, and it is the expiry's only
-// clock: the pass takes it once, before its page, and every decide judges the
-// repository's idleness by it — never by the deciding node's own clock, which
-// has moved on by the time the decide runs. A repository whose idle time
-// reaches code.scratch.idle_days only after the pass fixed its cutoff is past
-// no in-flight pass's cutoff, which is what lets a hold taken on it then go
-// unrecorded.
+// clock: every decide judges idleness by it, never by the deciding node's own
+// clock, which has moved on. A repository that turns idle only after the
+// cutoff is past no in-flight pass's cutoff, which is what lets a hold taken
+// on it then go unrecorded.
 //
 // Mutation: judge idleness by the decide's own clock — the repository is
 // deleted, red.
@@ -385,18 +383,12 @@ func TestAHoldRecordMovesNoActivity(t *testing.T) {
 	}
 }
 
-// A HOLD RECORD COSTS THE LOG ONE SMALL RECORD — the figure the code log's
-// day weighs a hold's rate by (internal/worklet's codeHoldRecordBytes): a
-// record a turn appends for each idle scratch repository it names, in every
-// turn that names it. What it takes is measured as the day measures a push
-// (BenchmarkPushLogBytes): the log's stream grown by the one record, as the
-// broker counts it against the log's ceiling — its signed frame, its subject
-// and the broker's per-message overhead. Measured as a turn writes it — the
-// turn's run id, which the engine mints as a UUIDv7 and is all a hold's
-// TurnID ever carries, a minted operation id and a short handle — and at the
-// longest the engine writes one: that run id beside an operation id at
-// statelog.MaxCallerOpIDBytes and a seat handle at iam.MaxLogin, at most
-// holdRecordBytes.
+// A HOLD RECORD COSTS THE LOG ONE SMALL RECORD, the figure internal/worklet's
+// codeHoldRecordBytes weighs a hold's rate by. Measured as BenchmarkPushLogBytes
+// measures a push: the stream's growth as the broker counts it against the
+// log's ceiling. The longest hold the engine writes — a UUIDv7 run id (all a
+// TurnID carries), an operation id at statelog.MaxCallerOpIDBytes and a seat
+// handle at iam.MaxLogin — takes at most holdRecordBytes.
 //
 // Mutation: carry the turn id twice in the hold's payload — the longest hold
 // takes past the bound, red.
@@ -439,16 +431,14 @@ func TestAHoldRecordCostsTheLogOneSmallRecord(t *testing.T) {
 	}
 }
 
-// holdRecordBytes is the most one hold record of a scratch repository takes
-// the code log as the engine writes one, the figure internal/worklet's
-// codeHoldRecordBytes weighs such a hold at (a seat branch's is
-// refHoldRecordBytes). 896 BYTES: the longest measures 865 here, at the harness's clock
-// — an authored instant with no fractional second — and the log's first
-// generation, whose envelope carries none; a running node's instant prints up
-// to ten bytes more and a generation printed whole seventeen
-// (BarrierRecordBytes' measure), so 896 bounds both. A node id or a signing
-// key's id longer than the suite's adds a byte a character, as it does to
-// every record.
+// holdRecordBytes is the most one scratch repository hold record takes the
+// code log, the figure internal/worklet's codeHoldRecordBytes weighs it at (a
+// seat branch's is refHoldRecordBytes). 896 BYTES: the longest measures 865
+// here, at the harness's clock (no fractional second) and the first
+// generation (none in the envelope); a running node's instant adds up to ten
+// bytes and a whole generation seventeen (BarrierRecordBytes' measure). A
+// longer node or signing key id adds a byte a character, as to every record.
+// 896 bounds both.
 const holdRecordBytes = 896
 
 // A HOLD IS DECIDED AT THE READ IT ORDERS: it is published at the turn's own

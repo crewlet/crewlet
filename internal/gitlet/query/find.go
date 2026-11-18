@@ -31,8 +31,8 @@ func (r *read) findRead(ctx context.Context, objs found) (gitlet.GitAnswer, erro
 	tree := objs.target.id
 	f := newFinder(fq.Query, fq.Files())
 
-	// THE LISTING'S OWN READ, as an unstamped tree read of the tree's id asks it, so
-	// the same pages; it shares the read's pinned copy and reads no index.
+	// THE LISTING'S OWN READ, asked as an unstamped tree read of the tree's id so
+	// its pages are that read's; it shares the read's pinned copy, reads no index.
 	sub := &read{s: r.s, synced: r.synced, linear: r.linear, indexRead: true, q: gitlet.GitQuery{
 		Kind: gitlet.GitTree, RepoID: r.q.RepoID, Asker: r.q.Asker, Unstamped: true,
 		Tree: &gitlet.TreeQuery{Rev: tree, Recursive: true}}}
@@ -58,8 +58,8 @@ func (r *read) findRead(ctx context.Context, objs found) (gitlet.GitAnswer, erro
 		}
 		next, err := parseCursor(a.Next, gitlet.GitTree, map[byte]int{'e': 1})
 		if err != nil || (a.Next != "" && next.a <= at.a) {
-			// A page that names no later entry is none this build cuts:
-			// the listing runs from it, and stages it again.
+			// A page naming no later entry is none this build cuts: the
+			// listing runs from it and stages it again.
 			break
 		}
 		for _, e := range a.Tree.Entries {
@@ -240,9 +240,9 @@ func newFinder(query string, limit int) *finder {
 	return f
 }
 
-// entry takes one listing entry: a blob (any mode but 160000's commit) whose
+// entry takes one listing entry: a blob (not a 160000 submodule commit) whose
 // path is at most gitlet.MaxGitPathBytes is a file; anything else is passed,
-// a longer path being one no read names back (gitlet.GitPath).
+// since no read names a longer path back (gitlet.GitPath).
 func (f *finder) entry(e gitlet.TreeEntry) {
 	if e.Type != "blob" {
 		return
@@ -267,8 +267,8 @@ func (f *finder) entry(e gitlet.TreeEntry) {
 		}
 		heap.Pop(&f.heap)
 	}
-	// KEPT ON ITS OWN: a page from the memo is one string its entries are
-	// slices of, which a kept slice would hold whole.
+	// CLONED: a memo page is one string its entries slice, which a kept slice
+	// would hold whole.
 	c.raw = strings.Clone(c.raw)
 	c.entry.Path, c.entry.PathB64 = strings.Clone(e.Path), strings.Clone(e.PathB64)
 	c.entry.OID, c.entry.Mode = strings.Clone(e.OID), strings.Clone(e.Mode)
@@ -330,8 +330,8 @@ func rawPath(e gitlet.TreeEntry) string {
 	}
 	raw, err := base64.StdEncoding.DecodeString(e.PathB64)
 	if err != nil {
-		// A listing's own encoding of a path (gitlet.WirePath), which
-		// always decodes: its carried text is then all there is.
+		// The listing's own encoding (gitlet.WirePath) always decodes; if
+		// not, the carried text is all there is.
 		return e.Path
 	}
 	return string(raw)

@@ -15,32 +15,17 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// THE SUGGESTIONS' APPLY: code_apply_suggestions puts findings' suggestions
-// in place of the lines they are anchored to, on the change's source branch,
-// as ONE ENGINE WRITE the repository's Gitlet node builds and lands as one push
-// (gitlet.WriteApplySuggestions, ADR-0092) — each suggestion placed in the
-// head's file by the one rule its finding is shown by (gitlet.Reanchor), all of
-// them or none — and then answers each finding resolved with the commit it
-// made, as a SECOND write, a step of the same operation decided at or past
-// the push's record.
-//
-// # The actor's commit
-//
-// The commit is the caller's (W-M1): its author the seat or the person who
-// applied, its committer the engine, as every engine write's is. So the push
-// that lands it makes the caller an AUTHOR of the change (the push apply's
-// rule D4), whose approval of it then counts for nothing — an applier is
-// writing the change, not judging it.
-//
-// # What it applies
-//
-// The findings the call names, read in the call's one read of the change's
-// conversation: each must still STAND (a dismissed or superseded finding is
-// nobody's to apply), carry a suggestion, and be on the NEW side of its
-// revision's diff — a suggestion replaces lines a head holds, and the old
-// side's are the base's. Its resolution is "resolved", an author's answer,
-// which leaves a blocker standing for its raiser to judge (S40): applying a
-// suggestion answers a finding, it never clears one.
+// code_apply_suggestions puts findings' suggestions in place of their lines on
+// the change's source branch as ONE engine write the Gitlet node lands as one
+// push (gitlet.WriteApplySuggestions, ADR-0092), each placed by the rule its
+// finding is shown by (gitlet.Reanchor), all or none; then it answers each
+// finding resolved with the commit, as a second write: a step of the same
+// operation decided at or past the push's record. The commit's author is the
+// caller (W-M1), its committer the engine, so the push makes the caller an
+// AUTHOR of the change (rule D4), whose approval then counts for nothing. A
+// finding applied must still stand, carry a suggestion and be on the NEW side
+// (a suggestion replaces lines a head holds). "resolved" is an author's
+// answer, leaving a blocker for its raiser to judge (S40).
 
 // CodeApplySuggestionsTool is the tool's name: its authority row's action.
 const CodeApplySuggestionsTool = string(authz.ActionCodeApplySuggestions)
@@ -75,9 +60,8 @@ func (t *codeApplySuggestions) Call(ctx context.Context, args map[string]any) (t
 	return t.CallForTurn(ctx, nil, args)
 }
 
-// codeAppliedAnswer is an apply's answer: the change, what became of its
-// push — its commit and the head it moved — and of its findings' answer: the
-// findings resolved with the commit, or why they were not.
+// codeAppliedAnswer is an apply's answer: the change, its push's commit and
+// the head it moved, and the findings resolved with the commit or why not.
 type codeAppliedAnswer struct {
 	Repo                string           `json:"repo"`
 	RenamedTo           string           `json:"renamed_to,omitempty"`
@@ -143,11 +127,10 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	if err := w.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, cv.g.c.actor, repo.Name, err), nil
 	}
-	// THE SOURCE BRANCH'S HOLD, before the write is sent ([CodeDeps.branch]):
-	// the commit lands on the change's source, which is often a seat's branch,
-	// and an apply that moves nothing — every suggestion outdated — appends no
-	// record a deletion of it would be ordered against. It names the head
-	// (expected_head is required), so it is held as a read is.
+	// THE SOURCE BRANCH'S HOLD before the write ([CodeDeps.branch]): the source
+	// is often a seat's branch, and an apply that moves nothing (every
+	// suggestion outdated) appends no record its deletion is ordered against.
+	// It names the head, so it is held as a read is.
 	if refusal := t.deps.branch(ctx, turn, tool, cv.g.c, repo, true, w.Ref); refusal != nil {
 		return *refusal, nil
 	}
@@ -187,19 +170,16 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 }
 
 // suggestions are the suggestions of the findings ids names, in that order,
-// read from the change's conversation from the call's read of the change: ONE
-// read narrowed to those findings (gitlet.ReadQuery.FindingIDs), each a seek on
-// the node that answers it, never a walk of the change's findings — which are
-// paged by time-ordered id, so the newest review's, the ones an apply names,
-// would be on the last page of a history that only grows — and a page more
-// only where findings at their bounds filled one. Or the refusal of a finding
-// no apply may take: one the change does not hold, one that no longer stands,
-// one that suggests nothing, or one on the old side of its revision's diff.
+// from ONE read narrowed to them (gitlet.ReadQuery.FindingIDs), paging on only
+// where one filled: never a walk of the change's findings, which are paged by
+// time-ordered id, putting the newest review's (the ones an apply names) on
+// the last page of a history that only grows. Or the refusal of a finding no
+// apply takes: not the change's, no longer standing, suggesting nothing, or
+// on its revision's old side.
 func (cv conversing) suggestions(ctx context.Context, ids []string) ([]gitlet.SuggestionOp, *tools.Result) {
 	g := cv.g
-	// EACH ID ASKED ONCE, AND ONLY ONE A FINDING COULD HAVE: one no finding
-	// carries is one the change does not hold, refused below as such rather
-	// than by the read it would make invalid.
+	// EACH ID ASKED ONCE, AND ONLY ONE A FINDING COULD HAVE: any other is
+	// refused below as not the change's, not by the read it would make invalid.
 	want := map[string]*gitlet.FindingRow{}
 	var asked []string
 	for _, id := range ids {
@@ -251,13 +231,12 @@ func (cv conversing) suggestions(ctx context.Context, ids []string) ([]gitlet.Su
 	return out, nil
 }
 
-// resolveApplied makes an apply's second write — every finding it applied
-// answered resolved, with the commit it made — once the commit is landed
-// (applied or pending), as a STEP of the apply's operation decided at or past
-// the push's own record, where the caller is an author of the change: the
-// answer is an author's. Whatever became of it is said on the answer beside
-// the commit, never as the apply's failure: the commit WAS made, and the call
-// made again is the same push, which makes it once.
+// resolveApplied makes an apply's second write, every applied finding answered
+// resolved with the commit, once it landed (applied or pending), as a STEP of
+// the apply's operation decided at or past the push's record, where the
+// caller is an author. Its failure is said beside the commit, never as the
+// apply's: the commit WAS made, and the same call again is the same push,
+// which makes it once.
 func (cv conversing) resolveApplied(ctx context.Context, ids []string, res gitlet.EngineWriteResult,
 	out *codeAppliedAnswer) {
 

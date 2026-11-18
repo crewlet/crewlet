@@ -23,26 +23,22 @@ const unsupportedReason = ""
 
 // runHost runs one command on the engine host and captures it.
 //
-// The command gets its own session for the same reason a launched job does: on
-// a timeout the whole tree is killed, not just the process the engine holds.
-// `docker run` spawning a stuck child is precisely the case — killing the harness
-// alone would leave it behind.
+// The command gets its own session, as a launched job does, so a timeout kills
+// the whole tree: a stuck child of `docker run` outlives a kill of the process
+// the engine holds.
 //
-// ITS OWN TIMEOUT IS AN EXIT, 124, and A CALLER THAT CANCELLED IS AN ERROR
-// carrying that cancellation: the tree is killed either way, but a command
-// the caller gave up on did not run out of anything, and answered as 124 it
-// was told as the box timing out, or as a container image the runtime would
-// not start, about a launch this node had cancelled. A deadline of the
-// caller's is the command not finishing in the time it had, so it is the 124
-// too.
+// ITS OWN TIMEOUT, or the caller's deadline, IS EXIT 124; A CALLER THAT
+// CANCELLED IS AN ERROR wrapping that cancellation. The tree dies either way,
+// but a cancelled command ran out of nothing: as 124 it would read as the box
+// timing out, or an image the runtime would not start, for a launch this node
+// cancelled.
 func runHost(ctx context.Context, cmd hostCommand) (ExecResult, error) {
 	if len(cmd.argv) == 0 {
 		return ExecResult{}, errors.New("sandbox: runHost needs a command")
 	}
 	// A MISSING ENVIRONMENT IS NOT AN EMPTY ONE: os/exec hands a child whose
-	// Env is nil the ENGINE's — its keyring, its Tier A tokens and every
-	// credential it was started with. Every container-runtime call here once
-	// reached the child that way; refused, the next one to forget cannot.
+	// Env is nil the ENGINE's — its keyring, Tier A tokens and every
+	// credential. Refused, so a caller that forgets leaks none of it.
 	if cmd.env == nil {
 		return ExecResult{}, fmt.Errorf("sandbox: %s was about to run with no "+
 			"environment of its own, which os/exec would fill with the engine's; "+
@@ -83,20 +79,15 @@ func runHost(ctx context.Context, cmd hostCommand) (ExecResult, error) {
 		}, exitOnly(err)
 	case <-ctx.Done():
 		logSignal("kill", proc.Process.Pid, procgroup.Kill(proc.Process.Pid))
-		// Reap it, so the pid does not linger as a zombie that the liveness
-		// probe would read as alive. Wait answers the kill's own exit here,
-		// which the timeout below already reports; anything else — the
-		// output copy failing — is not the timeout, and is logged rather
-		// than lost behind it.
+		// Reap it, so the liveness probe does not read a zombie as alive.
+		// Wait answers the kill's own exit, which the timeout reports;
+		// anything else (the output copy failing) is logged, not lost.
 		if err := exitOnly(<-done); err != nil {
 			localLog.Warn("local_sandbox_wait_failed", "pgid", proc.Process.Pid, "error", err.Error())
 		}
-		// THE NOTICE, THEN WHAT IT SAID. Replacing the captured stderr with
-		// the timeout line threw away the only account of what the command
-		// was doing when it hung — a registry auth prompt, a pull stalling,
-		// an image that does not exist — and left the operator "timed out
-		// after 30s" and nothing to act on. stdout was kept on this path all
-		// along; stderr is where a stuck child explains itself.
+		// THE NOTICE, THEN WHAT IT SAID: stderr is where a stuck child
+		// explains itself (a registry auth prompt, a stalled pull, a missing
+		// image), and the timeout line alone leaves nothing to act on.
 		if cancelledBy(caller) {
 			return ExecResult{Stdout: stdout.String(), Stderr: stderr.String()},
 				fmt.Errorf("sandbox: %s was stopped by its caller: %w", cmd.argv[0], caller.Err())
@@ -117,13 +108,11 @@ func runHost(ctx context.Context, cmd hostCommand) (ExecResult, error) {
 // stderr, with a SIGNAL read the way a shell reads one: 128 plus its number,
 // and the signal named after whatever the process printed.
 //
-// os.ProcessState.ExitCode answers -1 for a process a signal ended, and an
-// ExecResult's ExitCode is read everywhere as an exit status: a setup command
-// whose own shell was killed — an OOM kill, or a command that `exec`s into a
-// program that dies of a signal — read "failed (exit -1)", a status no process
-// can exit with, with nothing saying a signal ended it. A child the shell
-// waits on already reads as the shell reports it (137 for a SIGKILL), and so
-// does a container box's command, which `docker exec` reports the same way.
+// os.ProcessState.ExitCode answers -1 for a signalled process, but ExitCode is
+// read everywhere as an exit status: a setup shell killed by OOM would read
+// "failed (exit -1)", a status no process exits with, naming no signal. 128+n
+// matches how a shell reports its child (137 for SIGKILL) and how `docker
+// exec` reports a container box's command.
 func hostExit(state *os.ProcessState, stderr string) (int, string) {
 	status, ok := state.Sys().(syscall.WaitStatus)
 	if !ok || !status.Signaled() {

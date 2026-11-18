@@ -7,10 +7,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// readNodeMemory reads this node's memory: the machine's, from sysctl
-// hw.memsize. Darwin has no cgroups, so nothing below the machine limits a
-// process; a container a Gitlet node runs in on a Mac runs Linux, and reads its
-// limit there.
+// readNodeMemory reads the machine's memory from sysctl hw.memsize. Darwin
+// has no cgroups; a container on a Mac runs Linux and reads its limit there.
 func readNodeMemory() (Memory, error) {
 	n, err := unix.SysctlUint64("hw.memsize")
 	if err != nil {

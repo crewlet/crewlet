@@ -23,10 +23,9 @@ import (
 )
 
 // nativeTools is what registering Worklet, or Doclet, ADDS to a seat's
-// catalogue: the tool names beyond those registered with neither. Counted
-// from the registry rather than written down, because
-// the pages below state the count in words and a count kept by hand is how
-// one page came to say eighteen while listing nineteen.
+// catalogue: the tool names beyond those registered with neither, counted from
+// the registry because the pages below state the count in words and a count
+// kept by hand drifts.
 func nativeTools(t *testing.T) (tracker, pages []string) {
 	t.Helper()
 	full := fullDeps(t)
@@ -94,20 +93,15 @@ func operatorOnlyTools(t *testing.T) []string {
 	return only
 }
 
-// everyOperatorOnlyTool is [operatorOnlyTools] and the operator-only tools
-// that are not the tracker's: answering a parked executor, pausing and
-// resuming a seat, steering a running turn, answering a question from the
-// company's knowledge, who read a unit's repository and a person's own marks
-// on their code inbox — each a person's decision, audit or gesture, served on
-// the operator surface alone —
-// and the chat gestures only a person makes. Counted from the catalogue with
-// every seam wired — the code reads on both sides, so the code reads a seat
-// holds too are not counted — for the pages that count them all.
+// everyOperatorOnlyTool is [operatorOnlyTools] plus the operator-only tools
+// that are not the tracker's — a person's decisions, audits and gestures, and
+// the chat gestures only a person makes — counted from the catalogue with every
+// seam wired; the code reads are wired on both sides, so those a seat holds are
+// not counted.
 //
-// EVERY SEAM, AND CHECKED: the operator surface the fixture builds must serve
-// every tool [builtin.OperatorTools] declares ([operatorCandidates]), or a
-// seam this fixture leaves unwired is a tool counted as served to nobody at
-// all — and the pages' count goes on matching it, one short.
+// EVERY SEAM, AND CHECKED: the fixture's operator surface must serve every tool
+// [builtin.OperatorTools] declares ([operatorCandidates]), or an unwired seam is
+// a tool counted as served to nobody, and the pages' count matches it one short.
 func everyOperatorOnlyTool(t *testing.T) []string {
 	t.Helper()
 	full := fullDeps(t)
@@ -143,10 +137,9 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 			Org: func() *org.Organization { return company }, Actor: actor},
 		Steer:  builtin.SteerDeps{Asker: &fleetAsker{}, Wire: steerWire, Actor: actor},
 		Answer: builtin.AnswerDeps{Models: answers.model, Budget: answers.budget, Actor: actor},
-		// THE CODE READS AS EVERY SURFACE WIRES THEM — Gitlet and
-		// the requester ceiling's halves — or the catalogue serves none of
-		// them, nor the readers audit that stands beside them; AND ITS
-		// WRITES, or neither they nor a person's own code mark are served.
+		// THE CODE READS AS EVERY SURFACE WIRES THEM (Gitlet and the
+		// requester ceiling's halves) AND ITS WRITES, or the catalogue serves
+		// none of them, nor the readers audit or a person's own code mark.
 		Code: builtin.CodeDeps{Code: full.Code.Code, Requesters: full.Code.Requesters, Chart: full.Code.Chart,
 			Writer: full.Code.Writer, Holder: full.Code.Holder, Actor: builtin.PrincipalActor},
 		Readers: builtin.ReadersDeps{Readers: &readersFake{}},
@@ -298,21 +291,15 @@ func readPage(t *testing.T, rel string) string {
 	return strings.Join(strings.Fields(string(raw)), " ")
 }
 
-// EVERY PAGE THAT COUNTS THE NATIVE TOOLS COUNTS WHAT THE REGISTRY HOLDS.
-//
-// The tools guide said "Eighteen more" above a table and a sentence that added
-// up to nineteen, and the stack guide said nineteen: two pages disagreeing
-// about a number the registry answers, because each was kept by hand.
+// EVERY PAGE THAT COUNTS THE NATIVE TOOLS COUNTS WHAT THE REGISTRY HOLDS, not
+// a number each page keeps by hand.
 func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 	t.Parallel()
 	tracker, pages := nativeTools(t)
 	total := len(tracker) + len(pages)
-	// WHAT NO SEAT IS GIVEN, two ways, because the pages count both: the
-	// tracker's own operator-only tools, and the whole catalogue's — those
-	// plus the fleet-record gestures (a parked run, a paused seat, a running
-	// turn, a question answered from the knowledge base). A page that counts
-	// what an operator's assistant gets beyond a seat counts the second; the
-	// tracker's set is held to be inside it.
+	// WHAT NO SEAT IS GIVEN, two ways, as the pages count both: the tracker's
+	// own operator-only tools, and the whole catalogue's (what an operator's
+	// assistant gets beyond a seat), which must hold them.
 	operatorOnly := operatorOnlyTools(t)
 	every := everyOperatorOnlyTool(t)
 	for _, name := range operatorOnly {
@@ -357,8 +344,7 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 		{"docs/guides/worklet.md", readPage(t, "docs/guides/worklet.md"),
 			title(spelled(t, len(tracker))) + " tools, and they are deliberately few"},
 		// THE INDEX'S SUMMARY OF THAT GUIDE, and the quickstart's account of
-		// what an operator's own assistant gets — both hand-kept counts of
-		// the same registry, which is how one page drifts from the rest.
+		// what an operator's own assistant gets.
 		{"docs/index.md", readPage(t, "docs/index.md"),
 			"the " + spelled(t, len(tracker)) + " tools a seat has and the " +
 				spelled(t, len(builtin.WorkWrites())) + " that count as a delivery"},
@@ -439,8 +425,7 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 
 	// AND THE ARTIFACTS SECTION, counted off the two lists the registry adds on
 	// every node that takes artifact uploads, which the operator catalogue
-	// builds from the same sets. Kept by hand, it read "Twelve more" above
-	// nine and four.
+	// builds from the same sets.
 	art, data := len(builtin.ArtifactTools()), len(builtin.ArtifactDataTools())
 	for _, want := range []string{
 		title(spelled(t, art+data)) + " more, registered on every node that takes " +
@@ -457,8 +442,6 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 
 	// AND THE REFERENCE'S LIST of the artifact tools the operator surface
 	// serves beside a seat's: every one of the two lists, in their order.
-	// Kept by hand, it left out list_dashboard_sources and then
-	// get_artifact_format, both served all along.
 	reference := readPage(t, "docs/reference/api-endpoints.md")
 	from := strings.Index(reference, "wherever the node takes artifact uploads,")
 	to := strings.Index(reference, "(see [Artifacts]")

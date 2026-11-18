@@ -10,23 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A SARIF LOG (OASIS SARIF 2.1.0), as a linter or a static analyser writes
-// one: `runs`, each with `results`, each a rule's finding — its rule
-// (`ruleId`), its level, its message and where (`locations[0]
-// .physicalLocation`: the artifact's uri and the region's startLine). A result
-// at level `error` or `warning` — SARIF's default where a result names none —
-// is a failure; `note` and `none` are a tool's remarks, which judge nothing.
-// A location's uri is the path a person opens: a `file://` scheme and the
-// checkout's own directory are taken off where a tool wrote them.
+// A SARIF LOG (OASIS SARIF 2.1.0): `runs`, each with `results`, each a rule's
+// finding (`ruleId`, level, message, and `locations[0].physicalLocation`'s
+// uri and startLine). A result at level `error` or `warning` (SARIF's default
+// where none is named) is a failure; `note` and `none` judge nothing. A uri
+// loses a `file://` scheme and the checkout's own directory, leaving the path
+// a person opens.
 //
-// STREAMED, as a JUnit report is (junit.go): the log's tokens are walked down
-// to `runs[].results[]` and each result decoded alone, into only the fields
-// read, then added and dropped, so the failures an ending keeps and the one
-// result in hand are all it holds. Everything else a log carries — rules,
-// artifacts, taxonomies, some megabytes of them — is walked past token by
-// token, never held. Decoded whole, a log up to sandbox.MaxFileBytes was held
-// as bytes and then as every result's struct, for every failed check ending
-// on a node at once.
+// STREAMED, as a JUnit report is (junit.go): only `runs[].results[]` is
+// decoded, one result at a time into the fields read; everything else (rules,
+// artifacts, taxonomies: megabytes) is skipped token by token. An ending holds
+// its kept failures and one result, never a log of up to sandbox.MaxFileBytes
+// whole, for every failed check ending on a node at once.
 
 // sarifResult is what a SARIF result is read for.
 type sarifResult struct {
@@ -47,11 +42,11 @@ type sarifResult struct {
 	} `json:"locations"`
 }
 
-// readSARIF reads the SARIF log r into fs: every result at level error or
-// warning, a failure, the path in its checkout repo where it names one. A log
-// that is no JSON, or holds no run, is an error naming what is wrong, and fs
-// keeps the failures it named before it, as readJUnit's does; the count of
-// results is the log's only once it was read whole.
+// readSARIF reads the SARIF log r into fs: each error or warning result a
+// failure, with its path in checkout repo where it names one. A log that is no
+// JSON, or holds no run, is an error, and fs keeps the failures read before
+// it, as readJUnit's does; the count of results is the log's only once it was
+// read whole.
 func readSARIF(r io.Reader, repo string, fs *failures) error {
 	d := json.NewDecoder(r)
 	runs, results := 0, 0
@@ -129,8 +124,8 @@ func sarifObject(d *json.Decoder, member func(key string) error) error {
 }
 
 // sarifArray reads the array d is at, calling element with d before each
-// element, which element reads — or a null, which SARIF writes for the
-// results of a run whose tool could not analyse, as an array of none.
+// element, which element reads. A null is an empty array: SARIF writes it for
+// the results of a run whose tool could not analyse.
 func sarifArray(d *json.Decoder, element func() error) error {
 	tok, err := d.Token()
 	if err != nil {
@@ -162,8 +157,7 @@ func delim(d *json.Decoder, want json.Delim) error {
 	return nil
 }
 
-// skipJSON reads past the value d is at, a token at a time, holding none of
-// it.
+// skipJSON reads past the value d is at, a token at a time, holding none of it.
 func skipJSON(d *json.Decoder) error {
 	depth := 0
 	for {
@@ -184,9 +178,9 @@ func skipJSON(d *json.Decoder) error {
 	}
 }
 
-// sarifPath is a result's artifact uri as a path in the checkout: a file
-// scheme taken off, and a leading directory the checkout is in — a tool run
-// from its parent writes `<repo>/…` — taken off too.
+// sarifPath is a result's artifact uri as a path in the checkout, with a file
+// scheme and a leading `<repo>/` (a tool run from the checkout's parent writes
+// one) taken off.
 func sarifPath(uri, repo string) string {
 	p := strings.TrimPrefix(uri, "file://")
 	if rest, ok := strings.CutPrefix(p, repo+"/"); ok {

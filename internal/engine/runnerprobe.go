@@ -14,30 +14,22 @@ import (
 // THE RUNNER PROBE answers, for each executor cell, "can a box start here, on
 // this node, now?" (M13 of the Models design): what the Models page's "where
 // it runs" step disables a cell by, and what a person reads when a run did not
-// start. Each node probes its own cells and publishes the answer on its
-// status record ([coord.NodeStatusRecord.Runners]), because a cell's readiness is a fact
-// of the node: Docker installed on one host and not another, an e2b key set in
-// one node's environment.
+// start. Each node probes its own cells and publishes the answer on its status
+// record ([coord.NodeStatusRecord.Runners]): readiness is a fact of the node
+// (Docker on one host, an e2b key in one node's environment).
 //
-// # When it probes
-//
-// At boot, at every apply (a revision can declare or drop a cell, or point the
-// e2b key at another variable), and every [runnerProbeInterval]. Never on a
-// read: a probe is a daemon round trip and a cloud API call, and a page polled
-// by every open tab must not multiply them.
-//
-// # Who has to agree on it
-//
-// This node alone, in memory: it is re-measured on a timer and lost on
-// restart, which re-measures it at boot.
+// It probes at boot, at every apply (a revision can declare or drop a cell, or
+// repoint the e2b key) and every [runnerProbeInterval], never on a read: a
+// probe is a daemon round trip and a cloud API call, which a page polled by
+// every open tab must not multiply. Who agrees on it: this node alone, in
+// memory, re-probed at boot.
 
-// runnerProbeInterval is how often a node re-probes its cells between applies:
-// FIVE MINUTES. A cell that breaks (a daemon stopped, a key revoked) is said
-// within one period, which is a third of the twenty poll intervals a run's
-// completion is waited on (sandbox.DefaultPollInterval x 20), so a person sees
-// a broken cell well before a run on it would have been given up; and a probe
-// is a few local syscalls, one daemon version read and one API read, so a
-// fleet of nodes probing every five minutes costs the vendor nothing.
+// runnerProbeInterval is how often a node re-probes its cells between applies.
+// Five minutes says a broken cell (a daemon stopped, a key revoked) within a
+// third of the twenty poll intervals a run's completion is waited on
+// (sandbox.DefaultPollInterval x 20), well before a run on it is given up; and
+// a probe (a few syscalls, one daemon version read, one API read) every five
+// minutes per node costs the vendor nothing.
 const runnerProbeInterval = 5 * time.Minute
 
 // runnerProbe is this node's latest cell readiness and the loop that keeps it.

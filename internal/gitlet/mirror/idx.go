@@ -10,11 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// openIdxOIDs is every object id of the pack index at path, as hex lines, an
-// id at a time — what a `cat-file --batch-check` over one output reads as its
-// standard input, so the scratch's alternate, the whole repository, is never
-// listed. The header is read by gitlet.OpenIdx, the one reading of it; nothing
-// is held whole.
+// openIdxOIDs streams every object id of the pack index at path as hex lines,
+// the stdin of a `cat-file --batch-check` over one output, so the scratch's
+// alternate (the whole repository) is never listed. gitlet.OpenIdx reads the
+// header; nothing is held whole.
 func openIdxOIDs(path string) (io.ReadCloser, error) {
 	count, f, err := gitlet.OpenIdx(path)
 	if err != nil {

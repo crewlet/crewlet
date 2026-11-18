@@ -14,7 +14,9 @@ The engine makes, narrows, rotates and deletes those applications, policies and 
 
 Every agent's application is its own, so Scaleway's audit trail names the agent behind each change, and turning one agent off never touches another.
 
-**No level grants**, whatever the level: IAM or Organization writes, billing, Secret Manager, Key Manager, SSH keys, Cockpit token minting, object contents or bucket policies and ACLs, DNS writes, and the all-products bundles. A test holds every level to that list.
+**No level grants**, whatever the level: IAM or Organization writes, billing, Secret Manager, Key Manager, SSH keys, Cockpit token minting, object contents, bucket policies, a bucket's settings and ACL, DNS writes, and the all-products bundles. A test holds every level to that list.
+
+A level is the safe default. When one agent needs one permission set no level holds (a cluster upgrade on `read`, a bucket's ACL), give it that set alone as a **grant** beside its level; see [Giving one agent one more permission](#giving-one-agent-one-more-permission). The agent can ask for one itself when Scaleway refuses it. A bucket's settings and ACL are granted only this way, for one change and a few hours at a time; everything else on the list above is never granted at all.
 
 Two things a `read` agent can see deserve a word:
 
@@ -87,7 +89,7 @@ Each agent seat is turned on or off, and given its level and projects, on the in
 | `enabled` | Whether the agent has a Scaleway application at all. Required in every block. A seat with no block is off, and a new agent seat is off until somebody turns it on. |
 | `level` | `read`, `operate` or `administer`. Unset is `read`. Choosing `administer` needs a fresh sign-in. |
 | `projects` | The Scaleway project IDs its policy grants its level on. Required while the agent is on: an agent in no project can reach nothing. Each must be a project of the Organization. |
-| `grants` | Permission sets its policy holds beside its level ([granting one more permission set](#granting-one-more-permission-set)). Written by the Agents tab and by approving the agent's request, never typed. |
+| `grants` | The permission sets its policy holds beside its level, each `{id, permission, scope, expires_at, granted_by, granted_at, reason, request, target}`. Written by the Agents tab and by approving the agent's request, never typed: the engine writes `id`, `granted_by` and `granted_at`, and copies `target` from the request. See [Giving one agent one more permission](#giving-one-agent-one-more-permission). |
 
 ```yaml
 roles:
@@ -137,19 +139,38 @@ Granting it needs a fresh sign-in. When you move an agent off `administer`, or t
 | Remove it (only while off) | Deletes whatever off left, and stops tracking it. |
 | Rotate its key | Mints a new key, seals it, then deletes the old one. |
 
-### Granting one more permission set
+### Giving one agent one more permission
 
-A level is the safe default. When an agent needs one permission set no level holds, give it that set alone, beside its level, instead of a higher level:
+A grant is one Scaleway permission set in one agent's policy beside its level: the SRE on `read` that has to upgrade a cluster gets KubernetesFullAccess on its own project for four hours, and nobody else's policy changes.
 
-- **On the Agents tab:** open the agent's row, choose **Add grant**, pick the set from the Organization's own list, choose its projects (none is the agent's own projects; an Organization-scoped set takes none), and how long: 4 hours, 24 hours, 7 days, or permanent.
-- **From the agent's request:** when Scaleway refuses a call with `permissions_denied`, the agent asks with `request_access`, naming the set and why. You answer in your Inbox: **Grant for this change** (it lapses after the hours shown), **Add to this agent permanently**, or **Not now**. Either grant shows the exact grant first, and **Grant** approves it: the engine saves it and only then tells the agent yes.
+On the **Agents** tab, each agent's row lists its grants: the set, where it applies, how long it has left (or Permanent), and, on hover, who granted it and why. **Add grant** opens a picker over the Organization's own permission sets, read live from Scaleway (`GET /iam/v1alpha1/permission-sets`), by category, with the projects it applies to (none chosen is the agent's own projects; an Organization set takes none), how long (4 hours, 1 day, 7 days or Permanent; 1 hour or 4 hours for a set [granted for one change](#changing-a-buckets-acl-and-visibility)) and why, which the grant keeps. The remove on a grant's tag takes it off. Both change the tab's draft, so the review shows the steps and **Save and sync** writes one revision of the company document, under the seat's `grants`, and rewrites the agent's policy in place on the next sync (`PUT /iam/v1alpha1/rules`), so its key does not change.
 
-What Crewlet does:
+- **The grant rides the agent's one policy.** A project set joins the level's rule where it applies to the agent's own projects, or gets a rule of its own on the projects it names; an Organization set joins the Organization rule.
+- **Never granted:** the sets on the list under [What agents get](#what-agents-get) other than a bucket's settings: IAM and the Organization's and projects' managers, billing, secrets and keys, SSH keys, Cockpit's full access, object contents (ObjectStorageFullAccess, ObjectStorageReadOnly, ObjectStorageObjectsRead, ObjectStorageObjectsWrite), bucket policies (ObjectStorageBucketPolicyFullAccess), DNS writes, Kubernetes' system:masters and the all-products bundles. Each would outlive the agent's key, let it give itself more, or reach what the levels keep closed. A test holds the list.
+- **A write asks what `administer` asks.** Adding a grant of any set whose name does not end in `Read` or `ReadOnly` asks the person saving for a fresh sign-in, and a machine token cannot save one. Removing or shortening a grant never does.
+- **A grant never outlives its expiry.** It leaves the policy on the pass a minute before it lapses, and the reconcile loop runs that pass at the lapse rather than on its settled interval. A set somebody adds to the policy at Scaleway is taken off and reported, as any other change there is.
+- **A grant Scaleway cannot give** (a set the Organization no longer lists, say) is reported as `unknown_tier` on the agent's row and left off its policy; the rest of the policy still matches its level and its other grants. The provisioner can grant any set the Organization lists, so a grant is short only where its own key is, which `grant_short` reports.
+- **Grants a level already holds add nothing**: the picker says which level holds each, and an agent asking for one is told it already has it.
 
-- **The catalogue is Scaleway's.** It lists every permission set the Organization offers (`GET /iam/v1alpha1/permission-sets`), by category, less the sets no agent is ever given: IAM, billing, the Organization's and projects' managers, secrets and keys, SSH keys, object contents and the all-products bundles. A set a level already holds is shown with that level, so you raise the level instead.
-- **The grant rides the agent's one policy.** A project set joins the level's rule where it applies to the agent's own projects, or gets a rule of its own on the projects it names; an Organization set joins the Organization rule. The rules are rewritten in place (`PUT /iam/v1alpha1/rules`), so the key does not change.
-- **A grant never outlives its expiry.** A pass runs a minute before a grant lapses and rewrites the policy without it, and a set somebody adds to the policy at Scaleway is taken off and reported, as any other change there is.
-- **A set that changes anything needs a fresh sign-in.** Every set whose name does not end in `Read` or `ReadOnly` is a write, as `administer` is.
+A grant is also a seat's own access for the turn: its "Your access" section lists each grant its policy holds, with where and until when, and the next turn after a change is told it.
+
+#### Changing a bucket's ACL and visibility
+
+No level changes a bucket. An agent that has to close a public bucket listing, or change any other setting of a bucket, is granted **ObjectStorageBucketsWrite** for that one change. It is the narrowest set Scaleway offers that allows `PutBucketAcl`, which is what a bucket's visibility is (Public or Private in the console: whether anyone can list its objects). Scaleway grants it whole, so it also allows, in every bucket of the projects it is granted on:
+
+- creating buckets;
+- changing a bucket's CORS, website, versioning and tags;
+- changing its lifecycle rules, which can expire and delete objects;
+- writing any ACL, including `public-read`, which lets anyone list the bucket, and `public-read-write`, which lets anyone, the agent included, write objects into it.
+
+It reads no object, writes no object under the agent's own key, and changes no bucket policy (Scaleway's [S3 and IAM permissions equivalence](https://www.scaleway.com/en/docs/object-storage/reference-content/s3-iam-permissions-equivalence/) lists each action it covers). So Crewlet grants it **for one change only**:
+
+- **At most 4 hours, never permanently.** An agent's request lasts 1 hour unless it asks for up to 4, the Inbox offers no **Add to this agent permanently**, the Agents tab offers 1 hour or 4 hours, and a save of a longer or permanent grant is refused. One stored for good is never applied.
+- **The request names the bucket.** The agent puts the bucket in `target` and the change in `why`; the Inbox asks "Grant SRE ObjectStorageBucketsWrite on the agent's own projects at Scaleway, for one change to user-uploads?" with the agent's words beside it, and says what else the set allows. The grant keeps the target, "Your access" tells the agent it holds the set "for one change to user-uploads", and every `seat_grant_changed` event names it.
+- **The grant still reaches every bucket in its projects.** Scaleway scopes a permission set to projects, never to one bucket, so the target records what the change is for and cannot hold the key to it.
+- **Scaleway cannot say what was done with it.** Scaleway's Audit Trail does not cover Object Storage yet, and a bucket keeps no access log, so no call made under the grant can be recorded. The `seat_grant_changed` events record the grant's request, approval and lapse.
+
+A bucket that has a **bucket policy** answers only the principals that policy names, so the agent's `PutBucketAcl` is refused there whatever its grant (`AccessDenied`), and a listing a policy opens to everyone (`"Principal": "*"`) stays open whatever the ACL says. Bucket policies are never granted to an agent, since one can hand any principal the bucket's objects: a person changes the policy at Scaleway.
 
 ```yaml
 roles:
@@ -161,12 +182,22 @@ roles:
         projects: [aaaaaaaa-0000-4000-8000-000000000001]
         grants:
           - id: g4k2m9q1x7z
-            permission: KubernetesFullAccess
-            expires_at: 2026-11-15T18:00:00Z
+            permission: ObjectStorageBucketsWrite
+            expires_at: 2026-11-15T15:00:00Z
             granted_by: ada@example.com
             granted_at: 2026-11-15T14:00:00Z
-            reason: Upgrade the staging cluster's node pool
+            reason: Make bucket user-uploads private; its object listing is public
+            request: k3m9q2x7za
+            target: user-uploads
 ```
+
+#### An agent asks for one itself
+
+When Scaleway refuses an agent's call for a permission its key lacks (`403` with `permissions_denied` from the API, or `AccessDenied` from Object Storage), the agent asks for that permission set with `request_access`, naming the set as Scaleway names it, its projects (none is its own) and how many hours the change needs (1 to 168, 4 by default; 1 to 4, 1 by default, for a set granted for one change, which also needs `target`), on the work item that needs it and of an administrator. It never asks a person to edit its policy at Scaleway or to run the change by hand: the next pass would undo a policy edit as drift.
+
+The engine checks the request against the Organization's live catalogue, stores it and puts it in that person's Inbox as a decision: **Grant for this change (expires in N hours)**, recommended, **Add to this agent permanently** (never for a set granted for one change), or **Not now**, with the agent's reason and what the set allows beyond its name. Choosing a grant shows the grant built from the stored request; **Grant** answers the question with that option, which is the approval itself: the engine saves the grant from the stored request first and only then posts the answer, so the agent is told yes only once its policy holds the set. It asks for an administrator signed in within the step-up window (and in person, for a set that changes things), the same from the Inbox, from Ask Crewlet and from the API, and an agent can never choose it. **Not now** answers at once. A request nobody answers is dropped after 30 days.
+
+Every grant asked for, granted, declined, removed, lapsed or refused is a `seat_grant_changed` event, naming the agent, the set, its projects and its target, and the person or the engine behind it.
 
 ### Only what the ledger recorded is the engine's
 
@@ -361,7 +392,8 @@ These are Scaleway's, not Crewlet's.
 
 - **Inbound events.** Nothing from Scaleway can wake an agent yet: there is no webhook route for its alerts.
 - **A CLI command.** The integration is set up from the dashboard or the company document; there is no `crewlet scaleway` command.
-- **Secrets, keys and object contents.** No level reaches Secret Manager, Key Manager or the contents of a bucket, and none writes DNS; see [Each agent's access is a level](#each-agents-access-is-a-level).
+- **Secrets, keys and object contents.** No level or grant reaches Secret Manager, Key Manager, the contents of a bucket or its policy, and none writes DNS; see [Each agent's access is a level](#each-agents-access-is-a-level). A bucket's settings and ACL are a grant for [one change](#changing-a-buckets-acl-and-visibility).
+- **A record of the bucket calls made under a grant.** Scaleway's Audit Trail does not cover Object Storage yet, and buckets keep no access log.
 
 ## Troubleshooting
 
@@ -374,7 +406,7 @@ The card's findings, and what clears each:
 | `credential_expiring` | The provisioner key expires within 14 days | Create a new key for the provisioner application and replace it before the date the finding names |
 | `grant_short` | The provisioner application's policies do not grant IAMApplicationManager, IAMPolicyManager or ProjectReadOnly on the Organization, or the rule granting IAMApplicationManager carries a condition on the resource, which refuses the agents' keys | Add the set the finding names to a rule at Organization scope, or remove the condition. A condition on `request.ip` alone is the IP pin, and is fine |
 | `grant_excess` | A note, not a fault: the provisioner holds a set beyond the three it needs, or an agent's application or the Atlas application carries a policy Crewlet did not write, or a key besides its sealed one | Remove what nobody needs at Scaleway. Crewlet never deletes a policy or a key it did not make while the agent is on |
-| `unknown_tier` | A permission set the level an agent is on names is not offered to the Organization (subject `scaleway level read`, `scaleway level operate` or `scaleway level administer`) | Check the Organization can use that product, or move the agents at that level to another one |
+| `unknown_tier` | A permission set the level an agent is on names is not offered to the Organization (subject `scaleway level read`, `scaleway level operate` or `scaleway level administer`), or a grant an agent holds (subject its handle) names a set the Organization does not list, or one granted for one change for longer than its bound, so it is left off the agent's policy | Check the Organization can use that product, or move the agents at that level to another one. For a grant, remove it on the Agents tab and grant one the catalogue offers |
 | `level_unavailable` | A note, not a fault: a level no agent is on names a set the Organization does not offer. The Agents tab offers that level disabled with this reason | Nothing, unless you want the level |
 | `coverage_partial` | A note, not a fault, about [See more in Atlas](#see-more-in-atlas) (subject `integrations.scaleway.atlas`): the Atlas application is not made yet, was deleted at Scaleway, has no key because the Organization caps a key's lifetime below 90 days, lacks a permission set Scaleway does not list, or could not be brought up to date on this check | Usually nothing: the next check finishes it. For a deleted application, switch **See more in Atlas** off and on. For a capped lifetime, raise the cap in the Organization's security settings |
 | `registration_orphaned` | Scaleway holds applications named like this company's agents (`crewlet-<company>-...`), or under the Atlas application's name (`crewlet-atlas-<company>`), that the engine has no record of | Delete the ones nobody uses at Scaleway. Crewlet never deletes an application it did not make |
@@ -382,3 +414,5 @@ The card's findings, and what clears each:
 | `identity_missing` | For up to about a minute after you first connect, "access migration has not finished": the one-time step every per-agent integration passes through | Nothing; it clears by itself |
 
 An agent's own failures are also reported on that agent's row on the **Agents** tab, with the control that answers them.
+
+If an agent is refused changing a bucket's ACL or visibility (`403 AccessDenied` from Object Storage), no level grants it: approve the request it makes with `request_access` for ObjectStorageBucketsWrite, or add that grant on the Agents tab, for the one change. If the call is still refused with the grant in place, or the bucket's listing stays public once its ACL is private, the bucket has a bucket policy: change that policy at Scaleway.

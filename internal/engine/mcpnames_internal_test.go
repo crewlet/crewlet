@@ -35,9 +35,8 @@ func standIn(name, tool string, shared bool) string {
 // server that lists it: refused where no model can be handed the name (a
 // character, the length) or a built-in holds it, and shadowed where another
 // server's tool of the name is offered in its place, on one bridge or against
-// a seat's own child in that seat's surface. Each was a log line nobody
-// reading the server's settings saw; the server that keeps the name says
-// nothing, and the tools still offered are offered.
+// a seat's own child in that seat's surface. The server that keeps the name
+// says nothing, and the tools still offered are offered.
 //
 // Mutation: skip the surface in unfiled, report a same-server entry as a
 // shadow, or let settle drop the counts, and this is red.
@@ -67,8 +66,7 @@ roles:
       seatdocs:
         SEAT_TOKEN: "ceo-token"
 `)
-	// FILED FIRST, as equip files every built-in before an apply starts a
-	// server.
+	// FILED FIRST, as equip files every built-in before an apply starts a server.
 	if err := company.Tools.Register(namedTool("lookup_colleague"), tools.OriginBuiltin); err != nil {
 		t.Fatalf("file the built-in: %v", err)
 	}

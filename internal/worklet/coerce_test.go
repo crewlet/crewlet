@@ -34,14 +34,8 @@ func world() fieldRefs {
 
 func num(v float64) *float64 { return &v }
 
-// THE WHOLE COERCION TABLE, one case per rule, with no database anywhere.
-//
-// It is a table because the RULES are a table: the design states them as one
-// paragraph of nine clauses, and a behaviour discovered from a failing board
-// instead of read from here is a rule nobody re-checks. None of it existed —
-// a number field took "about 7 hours" and stored 7, a checkbox took the string
-// "false" and stored it set, a url took a bare hostname, and a date-only field
-// took a timestamp and kept the time it does not have.
+// THE WHOLE COERCION TABLE, one case per rule, with no database anywhere: a
+// rule read from here is one somebody re-checks, not one a failing board finds.
 func TestTheCoercionTable(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -52,7 +46,7 @@ func TestTheCoercionTable(t *testing.T) {
 		// want is the canonical value, or "" when the case refuses.
 		want string
 		// refused names what the refusal has to say, so a caller's next
-		// attempt is right rather than another guess.
+		// attempt is not another guess.
 		refused []string
 		warns   string
 	}{
@@ -264,15 +258,12 @@ func TestAMultiValuedFieldCoercesEveryMember(t *testing.T) {
 			"the slug a person types is invisible to every filter on the field "+
 			"it just set", got.Value)
 	}
-	// ONE BAD MEMBER REFUSES THE WHOLE LIST, because the alternative is a
-	// partial set nobody asked for: the caller stated four labels and
-	// would be told it worked with three.
+	// ONE BAD MEMBER REFUSES THE WHOLE LIST: a partial set is one nobody
+	// asked for.
 	if _, err := coerceField(field, json.RawMessage(`["api","nope"]`), world()); err == nil {
 		t.Error("a list carrying an option nobody declared was accepted")
 	}
-	// AND A BARE VALUE IS ONE MEMBER, which is how a multi-valued field
-	// carries exactly one — the same reading fieldRows takes, and the two
-	// have to agree or the write and the row disagree about what was set.
+	// AND A BARE VALUE IS ONE MEMBER, the reading fieldRows takes.
 	if got, err := coerceField(field, json.RawMessage(`"api"`), world()); err != nil {
 		t.Errorf("a single value on a multi field was refused: %v", err)
 	} else if string(got.Value) != `"o1"` {
@@ -303,9 +294,8 @@ func TestFieldKeysResolveAndForeignOnesPassThrough(t *testing.T) {
 			"as a foreign value by design, and refusing it here makes a " +
 			"rolling upgrade reject writes it is meant to carry")
 	}
-	// AN ARCHIVED FIELD IS NOT RESOLVABLE BY SLUG, because its values are
-	// hidden from every index: setting one by the spelling a person
-	// remembers writes a value nothing can ever see.
+	// AN ARCHIVED FIELD IS NOT RESOLVABLE BY SLUG: its values are hidden
+	// from every index, so one set by slug is a value nothing can see.
 	declared["f1"] = FieldDef{ID: "f1", Slug: "severity", Type: FieldText, Archived: true}
 	got, _, err = coerceFields(declared, map[string]json.RawMessage{
 		"severity": json.RawMessage(`"high"`),
@@ -318,9 +308,8 @@ func TestFieldKeysResolveAndForeignOnesPassThrough(t *testing.T) {
 	}
 }
 
-// TWO SPELLINGS OF ONE FIELD, DISAGREEING, IS REFUSED rather than resolved in
-// some order: a map has no order to appeal to, and whichever won would
-// silently discard the other.
+// TWO SPELLINGS OF ONE FIELD, DISAGREEING, IS REFUSED: a map has no order to
+// pick a winner by, and the loser would be silently discarded.
 func TestOneFieldSetTwiceUnderTwoSpellingsIsRefused(t *testing.T) {
 	t.Parallel()
 	declared := map[string]FieldDef{
@@ -336,9 +325,7 @@ func TestOneFieldSetTwiceUnderTwoSpellingsIsRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), "severity") {
 		t.Errorf("the refusal is %q and does not name the field", err)
 	}
-	// THE SAME VALUE TWICE IS NOT A CONFLICT, because nothing is
-	// discarded — a caller that sent both spellings of one setting meant
-	// one setting.
+	// THE SAME VALUE TWICE IS NOT A CONFLICT: nothing is discarded.
 	if _, _, err := coerceFields(declared, map[string]json.RawMessage{
 		"severity": json.RawMessage(`"high"`),
 		"Severity": json.RawMessage(`"high"`),
@@ -361,26 +348,15 @@ func TestPrecisionCountsTheDecimalsSomebodyWrote(t *testing.T) {
 	}
 }
 
-// WHATEVER THE WRITE ACCEPTS, THE APPLIER STORES AS THE WRITE MEANT IT — and
-// a multi-valued type decomposes on BOTH sides.
+// WHATEVER THE WRITE ACCEPTS, THE APPLIER STORES AS THE WRITE MEANT IT, and a
+// multi-valued type decomposes on BOTH sides: [MultiValued] (the query's
+// grouping), [fieldRows] (one row per member) and the table must agree.
 //
-// Three places decide what a field value is: [MultiValued], which the query
-// reads to render a grouping; [fieldRows], which the applier uses to write one
-// row per member; and the table here. A rule written independently in the
-// third is how it stops matching the first two, and it did so immediately —
-// gating on `Config.Multi` alone refused a one-element list on a `people`
-// field, which is exactly what this tree already writes and the row layer
-// already accepts.
-//
-// # The one asymmetry, and why it is not a disagreement
-//
-// The write REFUSES a list on a single-valued type and the applier accepts
-// one. That is the salvage contract rather than a mismatch: the applier may
-// not refuse anything — a value it cannot handle would stop that task's every
-// later change on every node — so it stores what arrives, and the check that a
-// `number` holds one number lives at the only place that can make it. What
-// must never differ is the other direction, which is what this asserts: a
-// value the write said yes to has to reach the rows the write intended.
+// The one asymmetry is the salvage contract, not a disagreement: the write
+// REFUSES a list on a single-valued type and the applier accepts one, since it
+// may refuse nothing (that would stop the task's later changes on every node).
+// What must never differ is the direction asserted here: a value the write
+// accepted reaches the rows the write intended.
 func TestTheApplierStoresWhatTheWriteAccepted(t *testing.T) {
 	t.Parallel()
 	options := []Option{
@@ -437,10 +413,9 @@ func listFixture(kind FieldType) string {
 	return `["one","two"]`
 }
 
-// NO ROSTER DEGRADES RATHER THAN REFUSING, which is the rule [Writer.Leads]
-// already states for the other seam of this kind: a build with no chart cannot
-// turn a name into a handle, and failing every write that touches a people
-// field would refuse them for a reason unrelated to what the caller asked.
+// NO ROSTER DEGRADES RATHER THAN REFUSING (see [FieldWorld]): a build with no
+// chart cannot resolve a name, and failing every people write would refuse it
+// for a reason unrelated to the request.
 func TestAPeopleFieldWithoutARosterPassesThrough(t *testing.T) {
 	t.Parallel()
 	field := FieldDef{Slug: "reviewer", Type: FieldPeople}
@@ -451,8 +426,8 @@ func TestAPeopleFieldWithoutARosterPassesThrough(t *testing.T) {
 	if string(got.Value) != `"ana"` {
 		t.Errorf("the value became %s, want what was sent", got.Value)
 	}
-	// AND WITH ONE, IT IS CHECKED — so the degradation is the absence of
-	// a seam rather than the absence of a rule.
+	// AND WITH ONE, IT IS CHECKED: the degradation is a missing seam, not a
+	// missing rule.
 	if _, err := coerceField(field, json.RawMessage(`"whoever"`), world()); err == nil {
 		t.Error("a build WITH a roster accepted a handle nobody has")
 	}
@@ -460,25 +435,15 @@ func TestAPeopleFieldWithoutARosterPassesThrough(t *testing.T) {
 
 // A REFUSAL QUOTES THE WHOLE VALUE, AND THE URL RULE PRESCRIBES A REAL ONE.
 //
-// The quote is the caller's OWN value handed back so it can see what failed to
-// match, and internal/agent/builtin already states the rule for the same
-// gesture: "a shortened echo names a query the model never sent — which is
-// worse than a long line, because the model then retries against the wrong
-// string." At sixty-four bytes that fired on an ordinary URL.
-//
-// coerceURL is where it stopped being merely unhelpful. Its refusal composes
-// the CORRECTION out of the same quote — "write https://<value>" — so a URL
-// past the cap was answered with an instruction to store a truncated address
-// with an ellipsis inside it. That value parses, and lands on the board as a
-// dead link nobody typed. This asserts the whole round trip: take what the
-// refusal told the caller to write, put it back through the same rule, and it
-// has to be accepted as exactly itself.
+// A shortened echo names a value the caller never sent, which it then retries
+// against; and coerceURL composes its CORRECTION ("write https://<value>"), so
+// a cut one parses and lands as a dead link nobody typed. This asserts the
+// round trip: what the refusal says to write is accepted as exactly itself.
 func TestAURLRefusalPrescribesAValueThatIsAccepted(t *testing.T) {
 	t.Parallel()
 	field := FieldDef{Slug: "runbook", Type: FieldURL}
-	// Comfortably past the old sixty-four-byte quote and well inside what
-	// the field itself accepts, which is the size that makes a cut here a
-	// bug rather than a guard.
+	// Longer than an ordinary URL and well inside what the field accepts:
+	// the size at which a cut is a bug rather than a guard.
 	bare := "example.com/runbooks/incident-response/" +
 		strings.Repeat("section-", 12) + "final?revision=7&highlight=rollback"
 
@@ -493,8 +458,8 @@ func TestAURLRefusalPrescribesAValueThatIsAccepted(t *testing.T) {
 			"so a caller cannot match it to what it sent:\n%v", err)
 	}
 
-	// THE PRESCRIPTION, taken literally. Everything after the last
-	// "https://" in the refusal is what a caller is being told to write.
+	// THE PRESCRIPTION, taken literally: everything after the last
+	// "https://" in the refusal.
 	i := strings.LastIndex(err.Error(), "https://")
 	if i < 0 {
 		t.Fatalf("the refusal names no replacement: %v", err)
@@ -524,12 +489,10 @@ func mustJSON(t *testing.T, s string) json.RawMessage {
 	return raw
 }
 
-// AN INSTANT IS THE DAY IT FALLS ON ON THE COMPANY'S CLOCK, not in UTC.
-//
-// Cut in UTC, the evening of the fourth in a company on Pacific time — which
-// is what its writer meant — was stored as the fifth, and a company east of
-// UTC lost the morning of every day the same way. One rule, [coerceDay], for
-// both values that hold a day: a date field, and a project's target date.
+// AN INSTANT IS THE DAY IT FALLS ON ON THE COMPANY'S CLOCK, not in UTC, where
+// the evening of the fourth on Pacific time is the fifth. One rule,
+// [coerceDay], for both values that hold a day: a date field, and a project's
+// target date.
 func TestAnInstantIsTheDayItFallsOnOnTheCompanysClock(t *testing.T) {
 	t.Parallel()
 	pacific, err := time.LoadLocation("America/Los_Angeles")
@@ -587,9 +550,8 @@ func TestAnInstantIsTheDayItFallsOnOnTheCompanysClock(t *testing.T) {
 	}
 }
 
-// A REJECTED VALUE IS QUOTED WHOLE OR NAMED BY ITS SIZE — NEVER A FRAGMENT.
-// A document pasted into a number field used to be quoted back as its first
-// four kilobytes and an ellipsis, which a caller reads as the value it sent.
+// A REJECTED VALUE IS QUOTED WHOLE OR NAMED BY ITS SIZE, NEVER A FRAGMENT,
+// which a caller would read as the value it sent.
 func TestARefusalQuotesWholeOrNamesTheSize(t *testing.T) {
 	t.Parallel()
 	if got := clip("seven"); got != "seven" {

@@ -36,23 +36,37 @@ func OpenAt(ctx context.Context, js jetstream.JetStream, cfg Config, timing jspr
 	return open(ctx, js, cfg, timing)
 }
 
-// MemberWindow, MessageCrossing and PurgeWait are [memberWindow],
-// [messageCrossing] and [purgeWait], for the cases that count what a
-// connection's puts hold out, hold the link's window to the lease, and time
-// what a clean-up may add.
+// MemberWindow, MessageCrossing, LinkHeartbeat and PurgeWait are
+// [memberWindow], [messageCrossing], [linkHeartbeat] and [purgeWait], for the
+// cases that count what a connection's puts hold out, hold a read across a
+// link to its heartbeat, and time what a clean-up may add.
 const (
 	MemberWindow    = memberWindow
 	MessageCrossing = messageCrossing
+	LinkHeartbeat   = linkHeartbeat
 	PurgeWait       = purgeWait
 )
 
-// LinkWindow is [linkWindow]: the window a connection across a link is given
-// for a node renewing its leases every heartbeat.
-func LinkWindow(heartbeat time.Duration) int { return linkWindow(heartbeat) }
+// PieceTake is what a put's message of dataBytes takes of b's window
+// ([Backend.pieceTake]), and PieceBound what a download's pull of a piece of
+// want bytes does ([pieceBound]).
+func PieceTake(b *Backend, dataBytes int) int { return b.pieceTake(dataBytes) }
+func PieceBound(want int) int                 { return pieceBound(want) }
 
-// SetWindow gives b's puts a window of n messages in place of the one Open
-// chose, so a case can make its puts wait their turn for a place.
-func SetWindow(b *Backend, n int) { b.window = newWindow(n) }
+// SetWindow gives b's transfers w in place of the window Open chose, so a
+// case can make them wait their turn.
+func SetWindow(b *Backend, w *jsapi.Window) { b.window = w }
+
+// HeldCap is how long b's transfers across a metered link may hear nothing
+// while it moves ([Backend.heldCap]).
+func HeldCap(b *Backend) time.Duration { return b.heldCap() }
+
+// CaughtUp is a piece read's question to the stream's leader of what follows
+// after on filter ([reading.caughtUp]), as b's gets and walks ask it.
+func CaughtUp(ctx context.Context, b *Backend, filter string, after uint64) (bool, error) {
+	r := &reading{b: b, filter: filter, leader: b.leaderFor(filter), through: everything}
+	return r.caughtUp(ctx, after)
+}
 
 // SetStall shortens how long b's puts wait for an acknowledgement before they
 // end as stalled, so a case sees a stall without waiting [objstore.Stall].

@@ -15,22 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
-// NO SENTENCE NAMING A SERVER CARRIES THE CREDENTIAL ITS URL HOLDS.
-//
-// stream.url goes to the client verbatim, and a NATS URL carries a credential
-// in either half of its userinfo: `user:password@` signs in as a user, and a
-// bare `token@` is a bearer token — the client reads a username with no
-// password as one. Every sentence the backend writes about a server is an
-// operator's to read on a boot's stderr or in a journal, so none may repeat
-// either. Three of them did: a refusal at boot named the server through the
-// client's ConnectedUrlRedacted, which masks a password and prints a token; a
-// dial that failed named stream.url as it was written; and a URL that did not
-// parse came back as the parse's own error, which quotes the whole entry. The
-// reconnect watch's line named the server the first way too.
-//
-// Each row presents a credential and asserts two things of what comes back:
-// that it does not carry the credential, and that it still names the server —
-// the control that keeps an answer naming nothing at all from passing.
+// NO SENTENCE NAMING A SERVER CARRIES THE CREDENTIAL ITS URL HOLDS: not a
+// password, and not a bare `token@`, which the client reads as a bearer token
+// (see serverAddresses). Rows cover a refusal at boot, a failed dial, an
+// address that does not parse and the reconnect watch's line; each asserts the
+// credential is absent and, as the control, that the server is still named.
 //
 // Mutation: name the server through nc.ConnectedUrlRedacted in
 // connectedServer and the refusal and reconnect rows go red; name cfg.URL in
@@ -84,9 +73,8 @@ func TestNoSentenceNamingAServerCarriesTheCredentialItsURLHolds(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
-				// Two members, the second without a scheme, as a list
-				// stream.url may hold: both are named, and neither
-				// credential is.
+				// Two members, the second without a scheme: both are
+				// named, and neither credential is.
 				err := openRefused(t, "nats://"+tc.userinfo+host+", "+tc.userinfo+host)
 				assertNamesWithoutSecret(t, err.Error(),
 					"nats://"+host+",nats://"+host, tc.secret)
@@ -134,14 +122,8 @@ func TestNoSentenceNamingAServerCarriesTheCredentialItsURLHolds(t *testing.T) {
 }
 
 // A LIST IS NAMED ENTRY BY ENTRY, AS THE CLIENT SPLITS IT, by scheme, host and
-// port alone.
-//
-// The client splits stream.url on commas, trims each entry and reads a bare
-// host:port as a `nats://` one — so the list a sentence names is the list it
-// dialled only if the rendering follows the same rules. A bare
-// `token@host:port` in particular does not parse as a URL at all without the
-// scheme, and was a member the client dialled named as one that does not
-// parse.
+// port alone: split on commas, trimmed, and a bare host:port read as a
+// `nats://` one, so the list named is the list dialled.
 //
 // Mutation: drop the scheme serverAddress puts on a bare entry and the bare
 // rows go red; keep a path or a query and the last row does.

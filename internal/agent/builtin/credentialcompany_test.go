@@ -39,15 +39,12 @@ func refusedForACredential(got tools.Result) bool {
 
 // A TURN A CREDENTIAL WOKE READS NO FLEET HEALTH AND NO SERVER (ADR-0109).
 //
-// A token or a service account acting as no seat is somebody of the company
-// for the apps its grants name alone, its reach stated at its pin, and the
-// deployment's health and a server are no app. So in a turn a `[worklet]` CI
-// token's task woke, and in one an `[admin]` token's woke — a credential's
-// requester carries apps and never admin — fleet_health and code_status read
-// nothing of the deployment, ssh_read reaches no server and ssh_operate asks
-// nobody, each refused with the requester ceiling's reason before anything is
-// read, as before a credential was a requester at all. A person's turn is
-// still answered.
+// A credential acting as no seat is of the company only for the apps its grants
+// name, and fleet health and a server are no app. So in a turn a `[worklet]` or
+// an `[admin]` token woke (a credential's requester never carries admin),
+// fleet_health and code_status read nothing of the deployment, ssh_read
+// reaches no server and ssh_operate asks nobody, each refused with the
+// requester ceiling's reason before any read. A person's turn is answered.
 //
 // Mutation: let a credential through companyRequester — the tokens' turns read
 // the deployment and the server; through code_status's forCompany — the tokens'

@@ -157,10 +157,9 @@ func (r *pauseRig) call(t *testing.T, name string, args map[string]any) (tools.R
 
 // A PAUSE IS ONE CHANGE, ANNOUNCED ONCE, AND A SECOND PAUSE IS NONE.
 //
-// The record is compare-and-set, so the caller whose write won is the one that
-// announces — which is what keeps `seat_paused` once per change however many
-// people press the button. A second pause of a paused seat answers `applied`
-// (the seat is in the state asked for) and changes and announces nothing.
+// The record is compare-and-set and only the caller whose write won announces,
+// so `seat_paused` is once per change however many people press the button. A
+// second pause answers `applied` (the seat is as asked) and changes nothing.
 func TestAPauseIsOneChangeAndASecondPauseIsNone(t *testing.T) {
 	t.Parallel()
 	rig := newPauseRig(t, coordmem.NewFleet(), boundTo("jane"))
@@ -168,9 +167,8 @@ func TestAPauseIsOneChangeAndASecondPauseIsNone(t *testing.T) {
 	_, got := rig.call(t, builtin.PauseSeatTool, map[string]any{
 		"handle": "agent-cto", "reason": "looping on one ticket",
 	})
-	// BY THE SEAT SHE IS BOUND TO, kind human, with the credential she
-	// acted through beside it — iam.ActorFor's three halves, as every
-	// other write a person makes records them.
+	// BY THE SEAT SHE IS BOUND TO, kind human, and the credential she
+	// acted through: iam.ActorFor's three halves.
 	if got["outcome"] != "applied" || got["changed"] != true || got["paused_by"] != "jane" ||
 		got["paused_by_kind"] != "human" || got["operator_id"] != "session:jane-1" {
 		t.Fatalf("first pause = %v, want an applied change by jane", got)
@@ -294,11 +292,10 @@ func TestAnUnreadablePauseRecordIsUnavailable(t *testing.T) {
 	}
 }
 
-// WHETHER A SEAT WORKS IS ITS LEAD'S TO DECIDE, or an admin's — and no
-// colleague's. Everybody signed in uses some app, so a rule that asked for one
-// would let anybody on the board stop any seat. And it is decided on the SEAT
-// the handle resolves to, so a lead typing `@agent-cto` is admitted exactly as
-// one typing the handle is.
+// WHETHER A SEAT WORKS IS ITS LEAD'S TO DECIDE, or an admin's, never a
+// colleague's: everybody signed in holds some app grant, so asking for one
+// would let anybody stop any seat. It is decided on the SEAT the handle
+// resolves to, so `@agent-cto` is admitted exactly as `agent-cto` is.
 func TestAPauseIsTheSeatsLeadsOrAnAdmins(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

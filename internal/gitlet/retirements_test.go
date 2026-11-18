@@ -11,15 +11,13 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A SNAPSHOT'S RETIREMENTS, on the whole path: a real broker, store, applier
-// and reader. The retired rows are SEEDED (seedRetiredPacks), each case's at
-// the positions and broker instants it is about, because what the reader
-// serves of them is a question about those two columns and the repository's
-// retired mark — which a real retire_sweep record raises here — and never
-// about the record that retired them.
+// A SNAPSHOT'S RETIREMENTS, on a real broker, store, applier and reader. The
+// retired rows are SEEDED (seedRetiredPacks) at the positions and instants each
+// case is about: what the reader serves turns on those columns and the retired
+// mark (raised here by a real retire_sweep), never on the retiring record.
 
-// snapshotFrom follows a snapshot from the page q asks to its end on one
-// reader, answering every page or the first error a page met.
+// snapshotFrom follows a snapshot from q's page to its end, answering every
+// page or the first error.
 func snapshotFrom(t *testing.T, r *gitlet.Reader, q gitlet.StateQuery) ([]gitlet.RepoSnapshot, error) {
 	t.Helper()
 	var pages []gitlet.RepoSnapshot
@@ -38,8 +36,8 @@ func snapshotFrom(t *testing.T, r *gitlet.Reader, q gitlet.StateQuery) ([]gitlet
 	return nil, nil
 }
 
-// retiredOf is every retirement a snapshot's pages served, in the order they
-// served them, each as "<pack id>@<sequence of the record that retired it>".
+// retiredOf is every retirement the pages served, in order, each as
+// "<pack id>@<retiring record's sequence>".
 func retiredOf(pages []gitlet.RepoSnapshot) []string {
 	var out []string
 	for _, p := range pages {
@@ -59,15 +57,14 @@ func retiredBy(position statelog.Position, packs ...string) []string {
 	return out
 }
 
-// A DELTA FROM BELOW THE RETIRED MARK IS ANSWERED FULL. A sweep removed the
-// rows that told of every retirement at or below the mark, so a delta from
-// below it could no longer state every pack retired since its floor — the
-// cache it answers would keep serving packs no row names — and is answered in
-// full instead, serving no retirement the caller did not ask for. A delta from
-// at the mark is still a delta.
+// A DELTA FROM BELOW THE RETIRED MARK IS ANSWERED FULL. The sweep removed the
+// rows of every retirement at or below the mark, so such a delta could not name
+// every pack retired since its floor, and its cache would keep serving packs no
+// row names. The full answer serves no retirement unasked; a delta from at the
+// mark stays a delta.
 //
-// Mutation: drop the retired mark from page 1's choice, and the delta from
-// below it is a delta that never names the two packs the sweep forgot.
+// Mutation: drop the mark from page 1's choice → the delta never names the
+// two packs the sweep forgot.
 func TestADeltaFromBelowTheRetiredMarkIsAnsweredFull(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -76,12 +73,10 @@ func TestADeltaFromBelowTheRetiredMarkIsAnsweredFull(t *testing.T) {
 	retiring := n.push(id, entry("p2", set("refs/heads/main", oidOf("c1"), oidOf("c2")))).Position
 	n.seedRetiredPacks(id, retiring.Packed(), harnessAt.Add(-gitlet.RetireGrace-time.Hour), "gone-a", "gone-b")
 	n.push(id, entry("p3", set("refs/heads/main", oidOf("c2"), oidOf("c3"))))
-	// ROOM FOR A DELTA: ten more packs, so no delta here outweighs the full
-	// answer and only the mark can make one full.
+	// ROOM FOR A DELTA: ten more packs, so only the mark can make one full.
 	n.seedRefs(id, 0, 10)
 
-	// THE PREMISE: unswept, the retirements are what a delta from below them
-	// serves.
+	// THE PREMISE: unswept, a delta from below serves the retirements.
 	pages := snapshot(t, n.reader, id, below)
 	if pages[0].Full || !slices.Equal(retiredOf(pages), retiredBy(retiring, "gone-a", "gone-b")) {
 		t.Fatalf("the premise: a delta from below two unswept retirements = full %v serving %v",
@@ -112,27 +107,18 @@ func TestADeltaFromBelowTheRetiredMarkIsAnsweredFull(t *testing.T) {
 	}
 }
 
-// A DELTA SERVES ITS RETIREMENTS, AND A FULL ANSWER THOSE ABOVE ITS CALLER.
-//
-// A delta from Since serves, in a retired phase after its refs, every pack a
-// record retired in (Since, its position] — each once across pages of two
-// rows, in (position, pack id, part) order and with RetiredFrom = Since on
-// every page; never one retired AT Since, which the round that synced to Since
-// already learned of, and never one retired after page 1's position while the
-// snapshot is read, which the next delta serves. A full answer serves the
-// retirements above the RetiredSince it is asked with, and says so in
-// RetiredFrom on every page, exactly when it can serve every one of them: a
-// position on this generation, at or past the repository's retired mark, with
-// at most MaxFullRetirements above it — more than the full answer has rows
-// among them. Otherwise it serves none and RetiredFrom is zero.
-//
-// Mutation: serve retirements past page 1's position (a tail) → the late one
-// is served; read the floor inclusively → the one at Since is served; enter
-// the phase on a delta alone → the full answers serve none; honour a
-// RetiredSince below the mark or on another generation → the answer claims a
-// floor its own later pages refuse; honour one past the bound → it claims a
-// floor and serves more than a page of retirements; bound them by the full
-// answer's rows → the twenty-six beside its sixteen rows are refused.
+// A DELTA SERVES ITS RETIREMENTS, AND A FULL ANSWER THOSE ABOVE ITS CALLER. A
+// delta from Since serves, after its refs, each pack retired in (Since, page 1's
+// position] once, in (position, pack id, part) order, RetiredFrom = Since on
+// every page: not one AT Since (already synced), not one after page 1 (the next
+// delta's). A full answer serves those above RetiredSince, with RetiredFrom =
+// RetiredSince, only when it can serve all (same generation, at or past the
+// mark, at most MaxFullRetirements above, which may exceed its rows); else none
+// and RetiredFrom zero. Mutation: serve a tail → the late one; inclusive floor →
+// the one at Since; the phase on deltas only → full answers serve none; honour
+// a RetiredSince below the mark or on another generation → a floor later pages
+// refuse; past the bound → a floor and over a page served; bound by the
+// answer's rows → the twenty-six beside sixteen refused.
 func TestADeltaServesItsRetirementsAndAFullAnswerThoseAboveItsCaller(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -151,9 +137,8 @@ func TestADeltaServesItsRetirementsAndAFullAnswerThoseAboveItsCaller(t *testing.
 	n.seedRetiredPacks(id, p2.Packed(), recent, "c2", "a2", "b2")
 	p3 := n.push(id, entry("p3", set("refs/heads/main", oidOf("c2"), oidOf("c3")))).Position
 	n.seedRetiredPacks(id, p3.Packed(), recent, "b3", "a3")
-	// ROOM FOR A DELTA: ten more packs, so the delta from Since — asked for
-	// no retirements, so its own weigh on its side alone — never outweighs
-	// the full answer's sixteen rows.
+	// ROOM FOR A DELTA: ten more packs, so the delta from Since never
+	// outweighs the full answer's sixteen rows.
 	n.seedRefs(id, 0, 10)
 	gitlet.SetPageLimits(n.reader, 2, gitlet.MaxPageBytes)
 
@@ -177,8 +162,7 @@ func TestADeltaServesItsRetirementsAndAFullAnswerThoseAboveItsCaller(t *testing.
 		}
 		pages = append(pages, got)
 		if page == 0 {
-			// A RETIREMENT AFTER PAGE 1, while the snapshot is read: the
-			// next delta's, as the pushes after it are.
+			// A RETIREMENT AFTER PAGE 1: the next delta's.
 			late = n.push(id, entry("p4", set("refs/heads/main", oidOf("c3"), oidOf("c4")))).Position
 			n.seedRetiredPacks(id, late.Packed(), recent, "late")
 		}
@@ -236,8 +220,7 @@ func TestADeltaServesItsRetirementsAndAFullAnswerThoseAboveItsCaller(t *testing.
 		}
 	}
 
-	// EVERY RETIREMENT ABOVE IT, the late one now among them: the answer is
-	// as of a position past it.
+	// EVERY RETIREMENT ABOVE IT, the late one included: the answer is past it.
 	honoured("from Since", since, slices.Concat(want, retiredBy(late, "late")))
 	// AT THE MARK it is still honoured, and the retirement at Since is above it.
 	honoured("from the mark", marked, slices.Concat(retiredBy(since, "at-since"), want, retiredBy(late, "late")))
@@ -250,8 +233,8 @@ func TestADeltaServesItsRetirementsAndAFullAnswerThoseAboveItsCaller(t *testing.
 	refused("from another generation", elsewhere)
 	refused("from nothing", statelog.Position{})
 
-	// BEYOND THE ANSWER'S OWN ROWS, within the bound: twenty more, so its
-	// sixteen rows stand beside twenty-six retirements, every one served.
+	// BEYOND THE ANSWER'S ROWS, within the bound: twenty-six retirements
+	// beside sixteen rows, all served.
 	numbered := func(from, to int) []string {
 		var out []string
 		for i := from; i < to; i++ {
@@ -269,17 +252,13 @@ func TestADeltaServesItsRetirementsAndAFullAnswerThoseAboveItsCaller(t *testing.
 	refused("past MaxFullRetirements", since)
 }
 
-// A SWEEP UNDER A SNAPSHOT MOVES IT. A retire_sweep that raises the
-// repository's retired mark past a snapshot's retired floor between its pages
-// removed rows the snapshot still had to serve, so its next page answers
-// ErrSnapshotMoved — a delta's floor is its Since, a full answer's the
-// RetiredSince it honoured — and the snapshot asked again decides afresh. A
-// full answer that serves no retirements has nothing a sweep can take, and
-// reads on.
+// A SWEEP UNDER A SNAPSHOT MOVES IT. A retire_sweep raising the mark past the
+// snapshot's retired floor (a delta's Since, a full answer's honoured
+// RetiredSince) between pages removed rows it had to serve, so the next page
+// answers ErrSnapshotMoved. A full answer serving no retirements reads on.
 //
-// Mutation: drop the check, and the delta and the full answer each finish
-// without the retirements the sweep removed under them; check the mark
-// against a zero floor too, and the full answer that serves none is moved.
+// Mutation: drop the check → both finish short of the swept retirements; check
+// a zero floor too → the full answer serving none is moved.
 func TestASweepUnderASnapshotMovesIt(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -289,8 +268,7 @@ func TestASweepUnderASnapshotMovesIt(t *testing.T) {
 	n.seedRetiredPacks(id, first.Packed(), harnessAt.Add(-gitlet.RetireGrace-time.Hour), "first-a", "first-b")
 	second := n.push(id, entry("p3", set("refs/heads/main", oidOf("c2"), oidOf("c3")))).Position
 	n.seedRetiredPacks(id, second.Packed(), harnessAt.Add(-gitlet.RetireGrace+time.Hour), "second")
-	// ROOM FOR A DELTA: ten more packs, so the delta here never outweighs
-	// the full answer.
+	// ROOM FOR A DELTA: ten more packs, so it never outweighs the full answer.
 	n.seedRefs(id, 0, 10)
 	gitlet.SetPageLimits(n.reader, 1, gitlet.MaxPageBytes)
 

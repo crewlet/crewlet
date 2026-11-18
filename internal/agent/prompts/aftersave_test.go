@@ -7,17 +7,15 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// A SESSION IS TOLD WHAT CAME AFTER ITS SAVE WHERE ANYTHING DID. The section a
-// continued session reads of the calls its run made after it was saved is
-// there wherever the run made any: calls its record lists, and calls its record
-// dropped from a long run's middle, which it is told how many of, and then the
-// record's tally of every call it dropped. A tally whose calls were all made
-// before the save says nothing the session lacks, and is not said; and nothing
-// at all after the save is no section.
+// A SESSION IS TOLD WHAT CAME AFTER ITS SAVE WHERE ANYTHING DID: the calls its
+// record lists, then how many it dropped from a long run's middle, then the
+// record's tally of every dropped call. A tally whose calls all came before the
+// save tells the session nothing it lacks and is not said, and nothing after the
+// save is no section.
 //
 // Mutation: say the section only where calls are listed, say the tally without
-// a count of dropped calls after the save, or put the count anywhere but after
-// the listed calls and before the tally, and a row goes red.
+// a count after the save, or move the count from between the listed calls and
+// the tally, and a row goes red.
 func TestASessionIsToldWhatCameAfterItsSaveWhereAnythingDid(t *testing.T) {
 	t.Parallel()
 	const (
@@ -57,18 +55,16 @@ func TestASessionIsToldWhatCameAfterItsSaveWhereAnythingDid(t *testing.T) {
 	}
 }
 
-// A CUT-OFF SESSION IS TOLD ITS CALLS AS ONES IT MAY ALREADY SHOW. A session cut
-// off is told the calls after the newest point its launch is known to hold,
-// not after where it ends (internal/sandbox's savepoint.go), so some of them
-// may be in it: its section never says they are not in it, says a call shown
-// both there and in the session is one call, made once, and counts the calls a
-// long run's record dropped since that point rather than since a save. A
-// session saved where it ends keeps the words that say the calls are not in
-// it.
+// A CUT-OFF SESSION IS TOLD ITS CALLS AS ONES IT MAY ALREADY SHOW. It is told
+// the calls after the newest point its launch is known to hold, not after where
+// it ends (internal/sandbox's savepoint.go), so its section never says they are
+// not in it, says a call shown both there and in the session is one call, made
+// once, and counts dropped calls since that point rather than since a save. A
+// session saved where it ends keeps the words that the calls are not in it.
 //
-// Mutation: tell a cut-off session its calls under the words of one saved
-// where it ends, or its dropped calls in a save's words, and its case goes
-// red; tell every session the cut-off words, and the saved case does.
+// Mutation: tell a cut-off session in a saved session's words, or its dropped
+// calls in a save's words, and its case goes red; tell every session the
+// cut-off words, and the saved case does.
 func TestACutOffSessionIsToldItsCallsAsOnesItMayAlreadyShow(t *testing.T) {
 	t.Parallel()
 	const (
@@ -100,20 +96,16 @@ func TestACutOffSessionIsToldItsCallsAsOnesItMayAlreadyShow(t *testing.T) {
 }
 
 // A LATE CALL IS TOLD UNDER WORDS OF ITS OWN, WHATEVER THE SESSION'S END. A call
-// the record took only after the run that made it was replaced, or one its run
-// gave up on before it returned, is told by no point, so neither heading of the
-// calls after a save is true of it: the session may show it with no outcome, as
-// interrupted or as failed — where it ends, or cut off — and an earlier brief
-// may have told it already. So it is said to be one call, made once, whose
-// outcome here stands, in a section of its own after the calls since the save,
-// under the same words for a session saved where it ends and for one cut off,
-// which say its run gave up on it or was cut off or replaced; alone where
-// nothing came after the save; and a successful submission among such calls is
-// said to be no submission of the work, so the run makes its own.
+// the record took only after its run was replaced, or one its run gave up on
+// before it returned, is told by no point, so neither after-save heading is true
+// of it: the session may show it with no outcome, interrupted or failed, and an
+// earlier brief may have told it. So it is one call, made once, whose outcome
+// here stands, in its own section after the calls since the save (alone where
+// nothing else came after it); a successful submission among such calls is no
+// submission of the work, so the run makes its own.
 //
-// Mutation: tell the late calls under the after-save heading, drop their
-// section where nothing else came after the save, or leave the submission
-// line out, and a case goes red.
+// Mutation: tell the late calls under the after-save heading, drop their section
+// where nothing else came after the save, or drop the submission line: red.
 func TestALateCallIsToldUnderWordsOfItsOwnWhateverTheSessionsEnd(t *testing.T) {
 	t.Parallel()
 	const (
@@ -154,23 +146,15 @@ func TestALateCallIsToldUnderWordsOfItsOwnWhateverTheSessionsEnd(t *testing.T) {
 
 // A CALL WHOSE OUTCOME IS UNKNOWN IS NEVER TOLD IT FINISHED. A call still in
 // flight as its round was read is told among the late calls, failed, its line
-// saying its outcome is unknown and that what it did may have taken effect
-// (internal/agent/runner's UnfinishedNote). The section's words are true of it
-// as of the others: the heading, and the words under it, name a call whose
-// outcome is unknown beside one its run stopped waiting for; they say a call
-// finished only as what it had not done when its run stopped waiting for it;
-// and they say a call marked `→ error` did not take effect only with the
-// exception, in the line's own terms, of one that says its outcome is unknown,
-// which may have, and is to be checked before it is made again. Under words
-// that said the calls finished after their run stopped waiting for them and
-// that every error did not take effect, a run that trusted them made such a
-// call again: the duplicate the section exists to prevent. So are the words a
-// run that starts a session of its own reads them under, carrying the round on
-// ([lateBeforeHeader]).
+// saying it may have taken effect (internal/agent/runner's UnfinishedNote). So
+// the late calls' heading and words, for a continued session and for a run of
+// its own ([lateBeforeHeader]), name a call whose outcome is unknown, say a call
+// finished only as what it had not done, and except it, in the line's own terms,
+// wherever they say an `→ error` call did not take effect. Told otherwise, a run
+// makes the call again: the duplicate the section exists to prevent.
 //
-// Mutation: restore those words, drop the exception, or name only the calls
-// their run stopped waiting for, in the heading or under it, of either
-// section, and its case goes red.
+// Mutation: say the calls finished, drop the exception, or name only the calls
+// their run stopped waiting for, in either section's heading or words: red.
 func TestACallWhoseOutcomeIsUnknownIsNeverToldItFinished(t *testing.T) {
 	t.Parallel()
 	const excepted = "did not take effect, unless it says its outcome is unknown: that one may have, so check" +
@@ -199,32 +183,17 @@ func TestACallWhoseOutcomeIsUnknownIsNeverToldItFinished(t *testing.T) {
 }
 
 // A CALL WHOSE OUTCOME IS UNKNOWN IS NEVER TOLD IT DID NOT TAKE EFFECT, BY ANY
-// RULE IT IS READ BY. Such a call is on its round's record failed, its line
-// saying its outcome is unknown and that what it did may have taken effect
-// (internal/agent/runner's UnfinishedNote), and every reader of that record
-// reads the line under a rule for a call marked `→ error`: the round's reviewer
-// ([ReviewHeader]), every later round's fresh brief over the prior-work ledger
-// ([PriorWorkHeader]), a send-back continuing the session that made it
-// ([ContinuedRoundRules]), and a run carrying the round on, among the late
-// calls ([lateCallsHeader]). Each rule says a failed call did not take effect
-// only with the exception, in the line's own terms, of one that says its
-// outcome is unknown, which may have; and each the executor reads says to
-// check whether it did before making it again, which is the executor's to do,
-// so the reviewer's says only that it may have. Told that every failed call
-// did not take effect, and to retry it, a reviewer would send the round back
-// to make such a call again, and a run would make it again: a second post or
-// delegation. A run that starts a session of its own carrying the round on
-// reads such a call among the late calls too, under words of its own
-// ([lateBeforeHeader]). The rules for the calls after a save, for every call
-// of the round a run of its own is told, and for the reads an earlier message
-// counted without listing them keep no exception ([calledAfterHeader],
-// [calledSinceHeader], [calledBeforeHeader], [owedHeader]), and are true of
-// them: internal/agent/runner's calledAfter tells no call whose outcome is
-// unknown among them.
+// RULE IT IS READ BY: the reviewer's ([ReviewHeader]), a later round's fresh
+// brief's ([PriorWorkHeader]), a send-back's ([ContinuedRoundRules]) and those of
+// a run carrying the round on ([lateCallsHeader], [lateBeforeHeader]). Each
+// excepts, in the line's own terms, one whose outcome is unknown as one that may
+// have; each the executor reads says to check before making it again (checking
+// is the executor's, so the reviewer's does not). Told otherwise, a reviewer
+// sends the round back and a run posts or delegates twice. [calledAfterHeader],
+// [calledSinceHeader], [calledBeforeHeader] and [owedHeader] need no exception:
+// internal/agent/runner's calledAfter tells no such call among them.
 //
-// Mutation: drop the exception from any of the rules, rule a failed call
-// retried before excepting it, or leave out of an executor's rule that the
-// call is checked before it is made again, and a row goes red.
+// Mutation: drop any rule's exception or an executor's check: a row goes red.
 func TestACallWhoseOutcomeIsUnknownIsNeverToldItDidNotTakeEffect(t *testing.T) {
 	t.Parallel()
 	const (
@@ -251,20 +220,16 @@ func TestACallWhoseOutcomeIsUnknownIsNeverToldItDidNotTakeEffect(t *testing.T) {
 	}
 }
 
-// AN EARLIER SUBMISSION IS SAID UNDER THE CALLS IT IS AMONG. Every call a
-// continuation lists after its save, or since the newest point a session cut
-// off is known to hold, was made before the relaunch whose brief lists it, so
-// a successful `submit_work` among them is no submission of the work: the line
-// saying so, and that the run makes its own, follows the list it speaks of,
-// once, before the count of calls dropped after that point and its tally,
-// under either heading. A list holding none is told no such line, and nor is
-// a section that lists no call, whose count and tally name no call it could
-// be among. A late submission beside it keeps its own line, in the late calls'
-// section, so each is said once, in words true of it.
+// AN EARLIER SUBMISSION IS SAID UNDER THE CALLS IT IS AMONG. Every call listed
+// after a save, or since a cut-off session's point, was made before the
+// relaunch whose brief lists it, so a successful `submit_work` among them is no
+// submission of the work: the line saying so, and that the run makes its own,
+// follows that list once, before the dropped count and the tally, under either
+// heading. No line where the list holds none or no call is listed; a late
+// submission keeps its own line in the late calls' section.
 //
-// Mutation: drop the line, say it where no submission is among the calls or
-// where none is listed, put it after the count or the tally, or say it in the
-// late calls' section, and a case goes red.
+// Mutation: drop the line, say it where no submission or no call is listed, put
+// it after the count or the tally, or in the late calls' section: red.
 func TestAnEarlierSubmissionIsSaidUnderTheCallsItIsAmong(t *testing.T) {
 	t.Parallel()
 	const (
@@ -312,18 +277,16 @@ func TestAnEarlierSubmissionIsSaidUnderTheCallsItIsAmong(t *testing.T) {
 }
 
 // A HELD SUBMISSION IS SAID FIRST, WHETHER OR NOT A CALL IS LISTED. A session
-// saved past its own successful `submit_work`, or the copy in its job's box
-// whose harness ended its own run, shows the call answered and lists it
-// nowhere, and it stands no more than a listed one: the line saying so, and
-// that the run makes its own, comes before every section, in words of the
-// session above rather than of a list, once. It is said where no call is
-// listed at all, as to the copy of a job that submitted and then asked, whose
-// brief otherwise is the answer's lead alone; and beside a listed submission
-// and a late one, each keeps its own line under its own list. Without the flag
-// nothing is said of it.
+// saved past its own successful `submit_work`, or a job box's copy whose harness
+// ended its own run, shows the call answered and lists it nowhere, and it stands
+// no more than a listed one: the line saying so comes once, before every
+// section, in words of the session above rather than of a list. It is said
+// where nothing is listed (a job that submitted and then asked, whose brief is
+// otherwise the answer's lead alone), beside listed and late submissions' own
+// lines, and never without the flag.
 //
-// Mutation: drop the line, say it only where a call is listed, say it after
-// the sections, or say it without the flag, and a case goes red.
+// Mutation: drop the line, say it only where a call is listed, after the
+// sections, or without the flag: red.
 func TestAHeldSubmissionIsSaidFirstWhetherOrNotACallIsListed(t *testing.T) {
 	t.Parallel()
 	const (
@@ -379,19 +342,15 @@ func TestAHeldSubmissionIsSaidFirstWhetherOrNotACallIsListed(t *testing.T) {
 	}
 }
 
-// A LATE CALL THE RECORD DROPPED IS COUNTED UNDER THE LATE CALLS' WORDS,
-// whatever the session's save point: a dropped call keeps no mark and no
-// number, and a count under the words of calls after a save would say the
-// session's own run made them after it was saved, which no late call is. So
-// the count follows the late calls in their section, after the line on a late
-// submission, with the record's tally once; alone in that section where the
-// record lists no late call; and beside a count of calls after the save, the
-// tally is told once, after the late count, the last: the count of calls
-// after the save says the tally is below it.
+// A LATE CALL THE RECORD DROPPED IS COUNTED UNDER THE LATE CALLS' WORDS: a
+// dropped call keeps no mark, and counted after a save it would be said made by
+// the session's own run after the save, which no late call is. So the count
+// follows the late calls and a late submission's line, alone in that section
+// where none is listed; the tally is told once, after the late count, last,
+// since the after-save count says the tally is below it.
 //
-// Mutation: leave the count out, tell it under the heading of calls after a
-// save, say the tally in both sections, or say it beside the count of calls
-// after the save, and a case goes red.
+// Mutation: drop the count, tell it under the after-save heading, or say the
+// tally in both sections or beside the after-save count: red.
 func TestALateCallTheRecordDroppedIsCountedUnderTheLateCallsWords(t *testing.T) {
 	t.Parallel()
 	const (
@@ -418,24 +377,18 @@ func TestALateCallTheRecordDroppedIsCountedUnderTheLateCallsWords(t *testing.T) 
 	}
 }
 
-// A FRESH RUN IS TOLD THE ROUND'S CALLS IN ITS OWN WORDS. A run that starts a
-// session of its own carrying a round on remembers none of the round's calls
-// and has no session above to look for them in, so it is told every one of
-// them as calls the runs before it made, in the order they made them, under
-// words that never speak of a session above, a save or a point: the calls its
-// record lists, a successful submission among them said not to stand right
-// after them, then how many more the record kept only in its tally; and, in a
-// section of their own, the late calls and the ones whose outcome is unknown, a
-// late submission said not to stand, and how many such the record dropped; the
-// tally once, beside the last count, which each count says is below it. What
-// only a continued session is told (that it holds a submission, the reads an
-// earlier message counted, that it was cut off) is never said to a run of its
-// own.
+// A FRESH RUN IS TOLD THE ROUND'S CALLS IN ITS OWN WORDS. A run starting a
+// session of its own remembers none of them and has no session above, so it is
+// told every one as calls the runs before it made, in their order, never of a
+// session above, a save or a point: the listed calls, an earlier submission's
+// line, the count the record kept only in its tally; then a section of the late
+// and unknown-outcome calls, a late submission's line and their dropped count;
+// the tally once, after the last count. A continued session's own news (a held
+// submission, owed reads, being cut off) is never said to it.
 //
-// Mutation: tell a run of its own its calls in a continued session's words
-// (CalledBefore delegating to CalledAfter), put the submission line after the
-// count, say the tally twice or beside a count before the last, or drop either
-// section where it alone has something to tell, and a case goes red.
+// Mutation: CalledBefore delegating to CalledAfter, the submission line after
+// the count, the tally twice or early, or a section dropped where it alone has
+// something to tell: red.
 func TestAFreshRunIsToldTheRoundsCallsInItsOwnWords(t *testing.T) {
 	t.Parallel()
 	const (
@@ -487,20 +440,16 @@ func TestAFreshRunIsToldTheRoundsCallsInItsOwnWords(t *testing.T) {
 	}
 }
 
-// THE READS AN EARLIER MESSAGE COUNTED ARE TOLD AS SUCH. A message to a session
-// that told its round's calls under the ledger's read cap counted the reads past
-// it without listing them, so the session holds those reads only as a count; the
-// next message to it lists them, first, as the oldest calls it tells, under
-// words that say an earlier message counted them and that a read is run again
-// for its data, never as calls made after the session was saved, which they
-// are not. A successful submission the session holds is said before them; the
-// reads the record has since dropped are counted under the same words; and the
-// record's tally is said once, beside the last count that needs it, which each
-// count says is below it.
+// THE READS AN EARLIER MESSAGE COUNTED ARE TOLD AS SUCH. A message that told a
+// round's calls under the ledger's read cap counted the reads past it without
+// listing them; the next message lists them first, as the oldest calls, under
+// words that say so and that a read is run again for its data, never as calls
+// after the save, which they are not. A held submission is said before them,
+// reads the record has since dropped are counted under the same words, and the
+// tally is said once, beside the last count.
 //
-// Mutation: tell the owed reads under the heading of calls after a save, after
-// that section, or say the tally beside an earlier count instead or as well,
-// and a case goes red.
+// Mutation: tell the owed reads under the after-save heading or after that
+// section, or say the tally beside an earlier count: red.
 func TestReadsAnEarlierMessageCountedAreToldAsSuch(t *testing.T) {
 	t.Parallel()
 	const (
@@ -543,17 +492,13 @@ func TestReadsAnEarlierMessageCountedAreToldAsSuch(t *testing.T) {
 	}
 }
 
-// EVERY COUNT THAT SAYS THE TALLY IS BELOW HAS IT BELOW. A brief counts the calls
-// the record dropped from its middle in as many as three places, in the order its
-// sections come (the reads an earlier message counted, the calls after the save
-// and the late calls; to a run of its own, the calls the runs before it made and
-// the late ones), and every one of those counts says the record's tally is below
-// it. So the tally is said once, after the last count, whichever counts a brief
-// gives: said beside an earlier one, a later count sends the run looking below it
-// for what a dropped call was, and it finds nothing there.
+// EVERY COUNT THAT SAYS THE TALLY IS BELOW HAS IT BELOW. A brief counts dropped
+// calls in up to three sections (owed reads, after the save, late; to a run of
+// its own, before and late), and each count says the tally is below it. So the
+// tally is said once, after the last count: beside an earlier one, a later
+// count sends the run looking below it, where it finds nothing.
 //
-// Mutation: say the tally beside the first count that needs it, beside every
-// count, or beside none, and a case goes red.
+// Mutation: say the tally beside the first count, every count, or none: red.
 func TestEveryCountThatSaysTheTallyIsBelowHasItBelow(t *testing.T) {
 	t.Parallel()
 	const tally = "- (+9 further call(s) the run made, which its record did not keep: slack_post ×9)"
@@ -584,20 +529,17 @@ func TestEveryCountThatSaysTheTallyIsBelowHasItBelow(t *testing.T) {
 	}
 }
 
-// THE CALLS LISTED AGAIN ARE ONES A TOLD CALL COULD BE TAKEN FOR. A call the
-// session may show that a told call could be taken for is listed again under
-// words that say the session may show it, never that it shows it, since a
-// save point's claim is not what a resumed session reads back, and never that
-// the session lacks it; that say the told call could be taken for it, the one
-// reason true wherever runner lists it, never that their arguments read alike,
-// which is false of a told call in flight or a sealed one; and that the told
-// call is one of its own, made as well. After the calls since the save and
-// before the late calls, the owed reads and the held submission's line before
-// them all; and no section at all where none is listed again.
+// THE CALLS LISTED AGAIN ARE ONES A TOLD CALL COULD BE TAKEN FOR. Their words
+// say the session may show each, never that it does (a save point's claim is
+// not what a resumed session reads back) nor that it lacks it; that the told
+// call could be taken for it, the one reason true wherever runner lists one,
+// never that their arguments read alike, false of a call in flight or sealed;
+// and that the told call is one of its own, made as well. The section comes
+// after the calls since the save and before the late calls, and is absent
+// where nothing is listed again.
 //
-// Mutation: drop the section, place it anywhere else, word it as calls the
-// session may lack, say the session shows each, or say the arguments read
-// alike, and this goes red.
+// Mutation: drop or move the section, word it as calls the session may lack,
+// say the session shows each, or say the arguments read alike: red.
 func TestTheCallsListedAgainAreOnesAToldCallCouldBeTakenFor(t *testing.T) {
 	t.Parallel()
 	const (
@@ -632,14 +574,10 @@ func TestTheCallsListedAgainAreOnesAToldCallCouldBeTakenFor(t *testing.T) {
 }
 
 // AN EARLIER ROUND'S CALL IS SAID TO BE OF AN EARLIER ROUND OF THE TURN, OR OF
-// THE FIRE. A call of the turn's closed rounds that a brief lists again ends its
-// line with a note that says where in the session above it may be: in an
-// earlier round of this turn, or, in a schedule's conversation, whose turns are
-// its fires, of this fire. In parentheses, as the ledger's own marks on a line
-// are, and with no em dash.
+// THE FIRE in a schedule's conversation, whose turns are its fires: a note
+// ending its line, in parentheses as the ledger's own marks are, no em dash.
 //
-// Mutation: say "turn" of a schedule's fire, or "fire" of a conversation's turn,
-// and a row goes red.
+// Mutation: say "turn" of a fire, or "fire" of a turn, and a row goes red.
 func TestAnEarlierRoundsCallIsSaidToBeOfAnEarlierRoundOfTheTurnOrFire(t *testing.T) {
 	t.Parallel()
 	for fire, want := range map[bool]string{
@@ -652,17 +590,16 @@ func TestAnEarlierRoundsCallIsSaidToBeOfAnEarlierRoundOfTheTurnOrFire(t *testing
 	}
 }
 
-// OTHER CALLS ARE SAID TO BE NONE OF THE LISTED ONES. Calls the session may show
-// that no list of the brief names (an earlier turn's, an earlier round's in a
-// summary's words, ones the record no longer lists one by one, a worker's) are
-// told in a section of their own, each part only where it holds, by the tools
-// it names: before every list, right after the held submission, so "below" is
-// every list, and closing with words that say none of them is a listed call.
-// A schedule's conversation says it in a fire's words, and nothing to tell is
-// no section.
+// OTHER CALLS ARE SAID TO BE NONE OF THE LISTED ONES. Calls the session may
+// show that no list names (an earlier turn's, an earlier round's in a summary's
+// words, ones the record no longer lists one by one, a worker's) get their own
+// section, each part only where it holds, by the tools it names: right after
+// the held submission, so "below" is every list, closing with words that none
+// is a listed call. A schedule says it in a fire's words; nothing to tell is no
+// section.
 //
-// Mutation: drop a part, say a turn's words of a fire, or tell the section
-// after the owed reads, and a row goes red.
+// Mutation: drop a part, say a turn's words of a fire, or tell the section after
+// the owed reads: red.
 func TestOtherCallsAreSaidToBeNoneOfTheListedOnes(t *testing.T) {
 	t.Parallel()
 	const (

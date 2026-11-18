@@ -3,6 +3,7 @@ package config_test
 import (
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -10,41 +11,70 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// AN UNSET AVATAR IS THE LOOK EVERY AGENT SEAT HAD BEFORE IT COULD CHOOSE, part
-// by part: the original Crewlet, in purple. A seat that names one part keeps
-// the other's default rather than losing it.
-func TestAnAbsentAvatarPartIsItsDefault(t *testing.T) {
+// AN ABSENT PART IS PICKED FROM THE SEAT'S HANDLE, part by part: a seat that
+// names one part keeps it and takes the other from its handle.
+func TestAnAbsentAvatarPartIsPickedFromTheHandle(t *testing.T) {
 	t.Parallel()
+	const handle = "qa-engineer"
+	picked := config.RoleAvatar{Character: "flasklet", Color: config.AvatarAmber}
 	for _, tc := range []struct {
 		name   string
 		avatar *config.RoleAvatar
 		want   config.RoleAvatar
 	}{
-		{"no avatar", nil, config.RoleAvatar{Character: "crewlet", Color: "purple"}},
-		{"an empty one", &config.RoleAvatar{}, config.RoleAvatar{Character: "crewlet", Color: "purple"}},
-		{"a character alone", &config.RoleAvatar{Character: "hexlet"}, config.RoleAvatar{Character: "hexlet", Color: "purple"}},
-		{"a colour alone", &config.RoleAvatar{Color: "rose"}, config.RoleAvatar{Character: "crewlet", Color: "rose"}},
+		{"no avatar", nil, picked},
+		{"an empty one", &config.RoleAvatar{}, picked},
+		{"a character alone", &config.RoleAvatar{Character: "hexlet"}, config.RoleAvatar{Character: "hexlet", Color: picked.Color}},
+		{"a colour alone", &config.RoleAvatar{Color: "rose"}, config.RoleAvatar{Character: picked.Character, Color: "rose"}},
 		{"both", &config.RoleAvatar{Character: "foxlet", Color: "amber"}, config.RoleAvatar{Character: "foxlet", Color: "amber"}},
 	} {
-		if got := tc.avatar.Resolved(); got != tc.want {
-			t.Errorf("%s: Resolved() = %+v, want %+v", tc.name, got, tc.want)
+		if got := tc.avatar.Resolved(handle); got != tc.want {
+			t.Errorf("%s: Resolved(%q) = %+v, want %+v", tc.name, handle, got, tc.want)
 		}
 	}
 }
 
-// THE CLOSED SETS ARE THE DESIGN SYSTEM'S, and their FIRST entries are the
-// defaults: the dashboard reads an absent part as the first of its list, so
-// the two answers for "what does an unset avatar look like" are one.
-func TestTheAvatarSetsLeadWithTheirDefaults(t *testing.T) {
+// THE PICK IS PINNED: a change to it redraws every agent that chose nothing.
+func TestTheDefaultLookIsPinned(t *testing.T) {
+	t.Parallel()
+	for handle, want := range map[string]config.RoleAvatar{
+		"product-manager":           {Character: "wisplet", Color: config.AvatarGreen},
+		"senior-backend-engineer":   {Character: "sparklet", Color: config.AvatarRose},
+		"qa-engineer":               {Character: "flasklet", Color: config.AvatarAmber},
+		"site-reliability-engineer": {Character: "heartlet", Color: config.AvatarAmber},
+		"security-engineer":         {Character: "heartlet", Color: config.AvatarPurple},
+		"release-manager":           {Character: "flasklet", Color: config.AvatarGreen},
+	} {
+		if got := config.DefaultAvatar(handle); got != want {
+			t.Errorf("DefaultAvatar(%q) = %+v, want %+v", handle, got, want)
+		}
+	}
+}
+
+// AGENTS THAT CHOSE NOTHING ARE TOLD APART: over a company's worth of handles
+// the pick reaches most of the family rather than drawing them as one look.
+func TestTheDefaultLookSpreadsAcrossTheFamily(t *testing.T) {
+	t.Parallel()
+	characters := map[config.AvatarCharacter]bool{}
+	colors := map[config.AvatarColor]bool{}
+	for i := range 60 {
+		look := config.DefaultAvatar("seat-" + strconv.Itoa(i))
+		characters[look.Character] = true
+		colors[look.Color] = true
+		if !look.Character.Valid() || !look.Color.Valid() {
+			t.Fatalf("DefaultAvatar picked %+v, outside the sets", look)
+		}
+	}
+	if len(characters) < 20 || len(colors) != len(config.AvatarColors) {
+		t.Errorf("60 handles drew %d characters and %d colours, want at least 20 and all %d", len(characters), len(colors), len(config.AvatarColors))
+	}
+}
+
+// THE CLOSED SETS ARE THE DESIGN SYSTEM'S, each value once.
+func TestTheAvatarSetsAreClosed(t *testing.T) {
 	t.Parallel()
 	if len(config.AvatarCharacters) != 30 {
 		t.Errorf("%d characters, want the design system's thirty", len(config.AvatarCharacters))
-	}
-	if config.AvatarCharacters[0] != config.DefaultAvatarCharacter {
-		t.Errorf("the first character is %q, want the default %q", config.AvatarCharacters[0], config.DefaultAvatarCharacter)
-	}
-	if config.AvatarColors[0] != config.AvatarPurple {
-		t.Errorf("the first colour is %q, want the default %q", config.AvatarColors[0], config.AvatarPurple)
 	}
 	for _, set := range [][]string{strs(config.AvatarCharacters), strs(config.AvatarColors)} {
 		sorted := slices.Clone(set)

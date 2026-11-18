@@ -26,14 +26,14 @@ import (
 )
 
 // THE SWAP (swap.go): a round that takes a pack out of a copy a reader may
-// hold answers from the copy's NEXT incarnation, built beside it by hard links
-// of what the live rows still name, while the old one stays whole for its
-// readers; a retirement keeps the commit-graph, and a pack no retirement
-// accounts for drops it.
+// hold answers from the copy's NEXT incarnation, hard-linked beside it from
+// what the live rows still name, while the old one stays whole for its
+// readers; a retirement keeps the commit-graph, a pack no retirement accounts
+// for drops it.
 
-// compactable is the setup the cases below start from: a repository of three
-// pushes, synced by a cache over the world and HELD by a reader — the first
-// two the packs a case compacts, the third one no compaction names.
+// compactable is the cases' setup: a repository of three pushes, synced by a
+// cache over the world and HELD by a reader; a case compacts the first two
+// packs, never the third.
 type compactable struct {
 	w    *syncWorld
 	clk  *clock
@@ -131,21 +131,18 @@ func swapLine(t *testing.T, w *syncWorld) map[string]any {
 	return lines[0]
 }
 
-// A SWAP KEEPS EVERY PACK A READER HOLDS. A compaction retires two of a
-// copy's three packs, and the round that learns it — a delta, its retired
-// phase naming them — answers from the copy's NEXT incarnation, which holds
-// the compaction's output and the pack no compaction named, each as the very
-// inode the old one holds it by — linked, never copied — and nothing else:
-// the same image a cache built from nothing at that position holds. The old
-// one, which a reader still holds, keeps every file it had and the output the
-// round installed, so every pack the reader's refs may lead git to stays
-// whole under it; its last release moves it into trash/. The swap is logged
-// and counted once as one with no commit-graph to keep — none, never a graph
-// dropped, since the copy held none.
+// A SWAP KEEPS EVERY PACK A READER HOLDS. When a delta's retired phase names
+// two of a copy's three packs, the round answers from the NEXT incarnation,
+// which holds exactly the compaction's output and the unnamed pack, each
+// linked (the very inode), never copied: the image a cache built from nothing
+// holds there. The old one, still held, keeps every file plus the installed
+// output, so every pack the reader's refs may lead git to stays whole; its
+// last release moves it into trash/. Logged and counted once as a swap with
+// no graph to keep (none, never dropped: the copy held none).
 //
-// Mutations: link the leaving packs into the next incarnation too (the next
-// holds them); take them out of the old one in place (the reader's packs are
-// gone); count a copy with no graph as one whose graph was dropped (swapped).
+// Mutations: link the leaving packs into the next incarnation too; take them
+// out of the old one in place; count a graphless copy as graph dropped
+// (swapped).
 func TestASwapKeepsEveryPackAReaderHolds(t *testing.T) {
 	t.Parallel()
 	k := newCompactable(t, false)
@@ -210,18 +207,17 @@ func TestASwapKeepsEveryPackAReaderHolds(t *testing.T) {
 	}
 }
 
-// A MERGE COMPACTION KEEPS THE COMMIT-GRAPH (X04): a compaction merges packs
-// and drops no commit, so the graph over them names every commit the next
-// incarnation holds — whichever round learns of it: a delta's retired phase,
-// or a full answer's retirements above the copy's position. The next
-// incarnation holds the old one's graph as the same inode, which git verifies
-// there, and records it; the multi-pack-index and its bitmap name the packs
-// that left, so the next one holds neither, and the maintainer writes them
-// again. Counted and logged as a swap that kept the graph.
+// A MERGE COMPACTION KEEPS THE COMMIT-GRAPH (X04): it drops no commit, so the
+// graph names every commit the next incarnation holds, whichever round learns
+// of it (a delta's retired phase, or a full answer's retirements above the
+// copy's position). The next incarnation holds and records the old graph as
+// the same inode, which git verifies; the multi-pack-index and its bitmap
+// name the packs that left, so it holds neither until the maintainer writes
+// them again. Counted and logged as a swap that kept the graph.
 //
-// Mutations: declare the graph dropped on a retirement (OnPackRetired), and
-// the next incarnation holds none; read a full answer's retired strays as
-// packs no row accounts for (packStrays), and the full arm drops it.
+// Mutations: declare the graph dropped on a retirement (OnPackRetired); read
+// a full answer's retired strays as unaccounted (packStrays): the full arm
+// drops it.
 func TestAMergeCompactionKeepsTheCommitGraph(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -279,17 +275,15 @@ func TestAMergeCompactionKeepsTheCommitGraph(t *testing.T) {
 }
 
 // A STRAY NO RETIREMENT ACCOUNTS FOR DROPS THE GRAPH. A pack whose row left
-// the log with no compaction retiring it — a branch deleted and its pack gone
-// with it — may have taken commits with it, so a commit-graph written over it
-// names commits the copy no longer holds: the full round that finds it leaves
-// the copy a reader holds by the swap, and the next incarnation holds neither
-// the graph nor the multi-pack-index, while the old one keeps both and the
-// stray for its reader. Logged and counted as a graph dropped: one the copy
-// held, written again.
+// the log uncompacted (a branch deleted, its pack with it) may have taken
+// commits, so a graph over it may name commits the copy no longer holds: the
+// full round that finds it swaps, the next incarnation holding neither graph
+// nor multi-pack-index while the old one keeps both and the stray for its
+// reader. Logged and counted as a graph dropped.
 //
-// Mutations: read every stray as a retirement (packStrays), and the next
-// incarnation keeps a graph naming a commit that is gone; count a swap that
-// links no graph as one of a copy that held none (swapped).
+// Mutations: read every stray as a retirement (packStrays): the graph names a
+// gone commit; count a swap linking no graph as of a copy with none
+// (swapped).
 func TestAStrayNoRetirementAccountsForDropsTheGraph(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -339,20 +333,17 @@ func TestAStrayNoRetirementAccountsForDropsTheGraph(t *testing.T) {
 }
 
 // A COMPACTION A COPY MISSES UNTIL ITS RETIREMENTS ARE SWEPT DROPS THE GRAPH:
-// the copy of an idle repository — maintained, its commit-graph written, and
-// read by nobody — does not sync across a compaction before the
-// code-retention duty sweeps the compaction's retirements. Its next round,
-// below the sweep, reads it whole, and that answer serves none of them, so
-// the packs the compaction took out are packs no retirement accounts for:
-// they leave the copy a reader holds by the swap, the graph and the
-// multi-pack-index with them, while the old copy keeps everything for its
-// reader. Logged and counted as a graph dropped — the copy held one, and the
-// maintainer writes it again — never as one of a copy with none to keep.
+// an idle, maintained copy does not sync across a compaction before the
+// code-retention duty sweeps its retirements, so its next round, below the
+// sweep, reads it whole and serves none of them: the packs the compaction
+// took out are ones no retirement accounts for, and leave by the swap with
+// the graph and the multi-pack-index, the old copy keeping everything for its
+// reader. Logged and counted as a graph dropped (the copy held one), never as
+// none to keep.
 //
-// Mutations: read the strays of a full answer below the sweep as
-// retirements (packStrays) — the next incarnation keeps the graph; count a
-// swap that links no graph as one of a copy with none (swapped) — the swap
-// is counted none.
+// Mutations: read a below-sweep full answer's strays as retirements
+// (packStrays): the graph is kept; count a swap linking no graph as of a copy
+// with none (swapped).
 func TestACompactionACopyMissesUntilItsRetirementsAreSweptDropsTheGraph(t *testing.T) {
 	t.Parallel()
 	k := newCompactable(t, true)
@@ -384,15 +375,14 @@ func TestACompactionACopyMissesUntilItsRetirementsAreSweptDropsTheGraph(t *testi
 	}
 }
 
-// A LOG GONE BACK DROPS THE GRAPH, whatever a retired phase says. Once the
-// log under a copy is no longer the history it was read from — recreated, or
-// gone back — its positions name other records, so a full answer's
-// retirements above the copy's position say nothing of the files the copy
-// holds: every stray leaves as a pack no row accounts for, and the graph with
-// it — here over a compaction's retirements the full answer does serve.
+// A LOG GONE BACK DROPS THE GRAPH, whatever a retired phase says. A log
+// recreated or gone back names other records at its positions, so a full
+// answer's retirements above the copy's position say nothing of its files:
+// every stray leaves as unaccounted, and the graph with it, even over a
+// compaction's retirements the full answer serves.
 //
-// Mutation: read the strays of a log gone back by the retired phase (apply's
-// history false), and the next incarnation keeps the graph.
+// Mutation: read a gone-back log's strays by the retired phase (apply's
+// history false): the graph is kept.
 func TestALogGoneBackDropsTheGraph(t *testing.T) {
 	t.Parallel()
 	k := newCompactable(t, true)
@@ -416,13 +406,13 @@ func TestALogGoneBackDropsTheGraph(t *testing.T) {
 	}
 }
 
-// A ROUND THAT ADDS ONLY STAYS IN PLACE: a delta adding a pack, one
-// moving a ref and a full round finding no stray each answer the incarnation
-// the reader holds, the multi-pack-index and the graph kept there, with no
-// swap logged or counted.
+// A ROUND THAT ADDS ONLY STAYS IN PLACE: a delta adding a pack, one moving a
+// ref and a full round finding no stray each answer the reader's
+// incarnation, multi-pack-index and graph kept, with no swap logged or
+// counted.
 //
 // Mutation: swap at every round's end (swapLeaving without its leaving
-// guard), and the first delta answers another incarnation.
+// guard): the first delta answers another incarnation.
 func TestARoundThatAddsOnlyStaysInPlace(t *testing.T) {
 	t.Parallel()
 	k := newCompactable(t, true)
@@ -454,19 +444,17 @@ func TestARoundThatAddsOnlyStaysInPlace(t *testing.T) {
 }
 
 // A DELTA RETIRING A PACK IT NEVER HELD CONVERGES IN PLACE. A push another
-// node received, compacted before this node's next round, is in the delta's
-// retired phase though its packs phase never served it — the row left
-// code_packs with the compaction — and no live row of the copy names it: a
-// retirement of nothing the copy holds, which the round skips. The round
-// converges from that ONE delta — no full read, no second read at the log's
-// head — downloading no retired pack and the output once, recording the
-// snapshot's position, and answering in place; a pack the copy does hold,
-// retired by the same compaction, leaves it by the swap as every retirement
-// does, and only that one.
+// node received and compacted before this node's round is in the delta's
+// retired phase though its packs phase never served it (its row left
+// code_packs with the compaction), and no live row of the copy names it: the
+// round skips that retirement. It converges from that ONE delta (no full
+// read, no second read at the log's head), downloads no retired pack and the
+// output once, records the snapshot's position and answers in place; a
+// retired pack the copy does hold leaves by the swap, and only that one.
 //
-// Mutations: take every retired row out as leaving whether the copy held it
-// or not (apply) — the first arm swaps; answer a retired row outside the live
-// set ErrBadSnapshot — both arms read the repository again, whole.
+// Mutations: take every retired row out as leaving (apply): the first arm
+// swaps; answer a retired row outside the live set ErrBadSnapshot: both arms
+// read the repository whole.
 func TestADeltaRetiringAPackItNeverHeldConvergesInPlace(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -526,20 +514,17 @@ func TestADeltaRetiringAPackItNeverHeldConvergesInPlace(t *testing.T) {
 	}
 }
 
-// A SWAP COSTS LINKS, NOT DOWNLOADS: over a copy of fifteen packs whose
-// index of pushes holds runs, the round that learns of a compaction of two of
-// them downloads the output alone and runs no git at all, and its swap makes
-// exactly three links a live pack, one each for HEAD, config and the
-// packed-refs and one a run of the index — the pack count, never the bytes —
-// and writes no file but its state. It syncs each directory it wrote ONCE:
-// objects/pack, crewlet/ (the index's runs) and the staged root, by its
-// state's write, before the rename, and repos/ after it — never scratch/,
-// and never a directory step by step.
+// A SWAP COSTS LINKS, NOT DOWNLOADS: over fifteen packs whose index of pushes
+// holds runs, the round learning of a compaction of two downloads the output
+// alone, runs no git, and makes exactly three links per live pack, one each
+// for HEAD, config and packed-refs and one per index run (the pack count,
+// never the bytes), writing no file but its state. It syncs each directory
+// it wrote ONCE: objects/pack, crewlet/ and the staged root (by the state's
+// write) before the rename, repos/ after; never scratch/, never step by step.
 //
-// Mutations: link the leaving packs too (three links more each); write the
-// round's own multi-pack-index on a delta's swap (a git process); write HEAD
-// and config afresh (two links fewer, two files staged and synced); sync the
-// staged root as the derived files land as well as at the state.
+// Mutations: link the leaving packs too; write the round's own
+// multi-pack-index on a delta's swap (a git process); write HEAD and config
+// afresh; sync the staged root as the derived files land as well.
 func TestASwapCostsLinksNotDownloads(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -608,18 +593,16 @@ func TestASwapCostsLinksNotDownloads(t *testing.T) {
 	}
 }
 
-// A SWAP MOVES THE MEMO WHOLE, as a rebuild does (memo.go's carryMemo). A
-// compaction keeps every object, so the answers of the copy a swap leaves are
-// answers of the next incarnation too, and the memo MOVES into it as it is
-// promoted: one rename of the tree, whatever it holds, never a link an answer,
-// which would cost the round that holds the repository a stat and a link an
-// answer on every Gitlet node holding it, at every compaction. Every answer is
-// served there as it was and counted once, the node's memo bytes unchanged;
-// the copy the swap left, which a reader still holds, answers none from then
-// on; and the move is logged as a rebuild's is.
+// A SWAP MOVES THE MEMO WHOLE, as a rebuild does (memo.go's carryMemo): a
+// compaction keeps every object, so the old copy's answers hold in the next
+// incarnation, and the promote renames the memo tree into it once, never a
+// link per answer (a stat and a link per answer on every Gitlet node holding
+// the repository, at every compaction). Every answer is served there as it
+// was and counted once, the node's memo bytes unchanged; the left copy,
+// still held, answers none; the move is logged as a rebuild's.
 //
-// Mutation: carry no memo at the promote (swap.go's carryMemo call) — the
-// next incarnation holds no memo, and answers none.
+// Mutation: carry no memo at the promote (swap.go's carryMemo call): the
+// next incarnation answers none.
 func TestASwapMovesTheMemoWhole(t *testing.T) {
 	t.Parallel()
 	k := newCompactable(t, false)
@@ -667,16 +650,15 @@ func TestASwapMovesTheMemoWhole(t *testing.T) {
 	}
 }
 
-// A READ OF WHAT A SWAP MOVED REFUSES THE COPY IT REPLACED. A swap carries the
-// live set into the next incarnation and leaves the one a reader still holds
-// none, so a plan read from that copy afterwards would see a repository holding
-// no pack: a compaction planned over nothing, a weekly expunge judging clean a
+// A READ OF WHAT A SWAP MOVED REFUSES THE COPY IT REPLACED. The swap leaves
+// the replaced copy's live set empty, so a plan read from it would see no
+// pack: a compaction planned over nothing, a weekly expunge judging clean a
 // repository it never read. Packs and DroppingPacks of a Synced whose copy a
-// swap replaced answer cache.ErrSuperseded instead, and the copy serving, which
-// the next sync pins, reads what the swap carried.
+// swap replaced answer cache.ErrSuperseded; the copy the next sync pins reads
+// what the swap carried.
 //
-// Mutation: read the replaced copy's live set again (Packs not asking for its
-// successor) → it answers none and no error, red.
+// Mutation: read the replaced copy's live set (Packs not asking for its
+// successor): it answers none and no error.
 func TestAReadOfWhatASwapMovedRefusesTheCopyItReplaced(t *testing.T) {
 	t.Parallel()
 	k := newCompactable(t, false)
@@ -703,17 +685,14 @@ func TestAReadOfWhatASwapMovedRefusesTheCopyItReplaced(t *testing.T) {
 	}
 }
 
-// A SWAPPED COPY'S STATE KEEPS ITS LAST USE. A boot reads a copy's last use
-// from its state's modification time, and a swap writes the next
-// incarnation's state as a round's work, which is no use of the copy: so that
-// state carries the copy's last use as the swap took it, as every state
-// written does (writeState's stampUse), never the moment of the write — and a
-// node that restarts right after a compaction finds the copy used when it
-// was, not when the swap ran.
+// A SWAPPED COPY'S STATE KEEPS ITS LAST USE. A boot reads last use from the
+// state's modification time, and the swap's write of the next incarnation's
+// state is no use of the copy, so it carries the last use as the swap took
+// it (writeState's stampUse), never the write's moment: a node restarting
+// right after a compaction finds the copy used when it was.
 //
-// Mutation: leave the next incarnation's last use unset when the swap writes
-// its state (swap.go's writeState) — the state is stamped with the moment of
-// the write, and the restart reads that back.
+// Mutation: leave the next incarnation's last use unset in swap.go's
+// writeState: the restart reads back the write's moment.
 func TestASwappedCopysStateKeepsItsLastUse(t *testing.T) {
 	t.Parallel()
 	k := newCompactable(t, false)
@@ -741,18 +720,15 @@ func TestASwappedCopysStateKeepsItsLastUse(t *testing.T) {
 	}
 }
 
-// A SWAP TELLS THE BACKFILL. The backfill's schedule places a copy by a look
-// at the incarnation serving it (schedule.go), and a swap makes another
-// incarnation serve it — one whose index of pushes can differ from the old
-// one's: a run of the old index gone from the disk leaves the next one with
-// none (carryIndex). So the promote MARKS the copy, as a rebuild's does, and
-// the next pick looks at it again: a placement made from the old
-// incarnation's index — here by a pick that ran while the swap was staged —
-// is never left standing beside a look that says otherwise.
+// A SWAP TELLS THE BACKFILL. The schedule places a copy by a look at its
+// serving incarnation (schedule.go), and the next incarnation's index of
+// pushes can differ (a run gone from the disk leaves it none: carryIndex).
+// So the promote MARKS the copy, as a rebuild's does, and the next pick looks
+// again: a placement from the old index, here by a pick while the swap was
+// staged, never stands beside a look that says otherwise.
 //
-// Mutation: no mark at the swap's promote (swap.go's backfillDirty) — the
-// schedule keeps the copy due for its history, which the next incarnation's
-// look no longer says.
+// Mutation: no mark at the promote (swap.go's backfillDirty): the schedule
+// keeps the copy due for a history the new look no longer says.
 func TestASwapTellsTheBackfill(t *testing.T) {
 	t.Parallel()
 	faults := &gitletfault.Script{}
@@ -814,10 +790,9 @@ func TestASwapTellsTheBackfill(t *testing.T) {
 }
 
 // copyTree copies the directory src to dst as a crash leaves it on the disk:
-// every directory, every regular file with its bytes and its mode, every
-// symbolic link as one, and every HARD LINK as a link — two names of one inode
-// under src are two names of one inode under dst — so what a boot counts by
-// sole names is what it would count at src.
+// directories, regular files with bytes and mode, symbolic links as such, and
+// HARD LINKS as links (two names of one inode stay so), so what a boot counts
+// by sole names is what it would count at src.
 func copyTree(t *testing.T, src, dst string) {
 	t.Helper()
 	copied := map[[2]uint64]string{}
@@ -881,21 +856,18 @@ func (w *syncWorld) over(t *testing.T, dir string) *syncWorld {
 	return o
 }
 
-// A CRASH BEFORE THE SWAP'S RENAME LEAVES THE OLD INCARNATION — the highest
-// in repos/, its state renamed in by the round, which names the floor the
-// retirements of what is leaving it are above (LeavingSince) — and the next
-// one staged under scratch/, which the boot moves aside. So the boot's first
-// round, full, asks its retirements from that floor rather than from the
-// position the copy holds (at or past which none of them lies), reads the
-// leaving packs as the retirements they are, and keeps the graph IN PLACE —
-// nobody holds a copy before its first round — the very inode, while the
-// multi-pack-index over the retired packs is dropped and the retired packs
-// moved aside: the image a cache built from nothing holds. The node that did
+// A CRASH BEFORE THE SWAP'S RENAME LEAVES THE OLD INCARNATION highest in
+// repos/, its state naming the floor the leaving packs' retirements are
+// above (LeavingSince), and the next one staged under scratch/, which the
+// boot moves aside. The boot's first round, full, asks retirements from that
+// floor, not the copy's position (none lies at or past it), reads the leaving
+// packs as retirements, and keeps the graph IN PLACE, the very inode (nobody
+// holds a copy before its first round), dropping the multi-pack-index and
+// moving the retired packs aside: a fresh cache's image. The node that did
 // not die answers from the old incarnation, its swap failing at the point.
 //
-// Mutation: write no LeavingSince into the state (stateValue), and the boot's
-// round reads the retired packs as packs no row accounts for and drops the
-// graph.
+// Mutation: write no LeavingSince (stateValue): the boot reads the retired
+// packs as unaccounted and drops the graph.
 func TestACrashBeforeTheSwapsRenameLeavesTheOldIncarnation(t *testing.T) {
 	t.Parallel()
 	faults := &gitletfault.Script{}
@@ -979,21 +951,18 @@ func TestACrashBeforeTheSwapsRenameLeavesTheOldIncarnation(t *testing.T) {
 	}
 }
 
-// A FAILED SWAP SERVES THE OLD INCARNATION AND IS RETRIED. The round
-// whose swap fails answers from the copy it applied to, which holds every live
-// pack and the round's refs — the staged directory moved aside, what is
-// leaving kept and its floor written into the state — and the repository's
-// next round, here a delta with nothing new, swaps. A swap that fails because
-// a file it links is gone from the copy itself — a live pack's, or one of
-// the root's (HEAD, config, packed-refs) — marks the copy to be read whole,
-// since every swap of it would link that file again: the next round is full,
-// puts the file back — a pack with one download, a root file anew — and
-// swaps.
+// A FAILED SWAP SERVES THE OLD INCARNATION AND IS RETRIED. The failing round
+// answers from the copy it applied to (every live pack and its refs; the
+// staging moved aside, the leaving packs kept and their floor in the state),
+// and the next round, here an empty delta, swaps. A swap failing because a
+// file it links is gone from the copy (a live pack's, or HEAD, config,
+// packed-refs) marks the copy to be read whole, since every swap would link
+// it again: the next round is full, restores the file (a pack with one
+// download, a root file anew) and swaps.
 //
-// Mutations: forget what is leaving when a swap fails (the next round has
-// nothing to swap); try no swap on a round that applied nothing new; mark no
-// read whole for a pack gone, or for a root file gone (the next round is a
-// delta, and fails again).
+// Mutations: forget the leaving packs on failure; try no swap on a round
+// applying nothing new; mark no full read for a gone pack or root file (the
+// next delta fails again).
 func TestAFailedSwapServesTheOldIncarnationAndIsRetried(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1167,15 +1136,14 @@ func (l *syncLog) swap(w *syncWorld) map[string]int {
 }
 
 // A STOPPED RUN COUNTS FOR THE DUTY CYCLE (M3-O15). The swap stops a
-// maintenance run on the copy it leaves before it links a derived file, and
-// counts the stop as the repository's last run: when it ended, what it had
-// spent its length. So the next run waits its interval from the stop, as it
-// would from a run that ended — a repository compacted more often than its
-// index run lasts has its runs spaced by the duty cycle, rather than each one
-// due again at once, holding a slot of the lane for ever and writing nothing.
+// maintenance run on the copy it leaves before linking a derived file, and
+// records the stop as the repository's last run (its end, its length so
+// far), so the next run waits its interval from the stop: a repository
+// compacted more often than its index run lasts is spaced by the duty cycle,
+// not due again at once, holding a lane slot forever and writing nothing.
 //
-// Mutation: record nothing of the stop (stopRun), and the next pass runs the
-// repository again at once, its last run the one before.
+// Mutation: record nothing of the stop (stopRun): the next pass runs the
+// repository again at once.
 func TestAStoppedRunCountsForTheDutyCycle(t *testing.T) {
 	t.Parallel()
 	var hold atomic.Bool
@@ -1241,19 +1209,15 @@ func TestAStoppedRunCountsForTheDutyCycle(t *testing.T) {
 
 // A SWAP CARRIES EVERY VERDICT OF THE FILES IT LINKS: a linked file is the
 // same inode, its bytes those this process placed, checked or scrubbed. The
-// next incarnation keeps every vouch the old one gave a file it holds — the
-// live packs' indexes, the output's, the commit-graph — and none for a file it
-// does not hold; the last scrub's schedule; and a hint's hash of a live pack.
-// So a full round over it hashes nothing, a hint about the pack the scrub and
-// the hash found whole hashes nothing again, and the scrub is not due before
-// its interval. The case's clock moves on a second between the scrub and the
-// swap, so a schedule the swap stamped afresh reads the swap's instant rather
-// than the scrub's: on a clock unmoved since the scrub, the two were one.
+// next incarnation keeps the vouches for files it holds (live packs'
+// indexes, the output's, the commit-graph) and none other, the last scrub's
+// schedule, and a hint's hash of a live pack: a full round hashes nothing, a
+// hint about the scrubbed pack hashes nothing again, and the scrub waits its
+// interval. The clock moves a second between scrub and swap, so a schedule
+// stamped afresh reads the swap's instant, not the scrub's.
 //
-// Mutations: carry no vouch (the full round hashes every index file again);
-// carry no packChecks (the hint hashes the pack again); carry no scrub
-// schedule (the next incarnation was never scrubbed); stamp the last scrub's
-// end, or its interval's base, at the swap (each reads the swap's instant).
+// Mutations: carry no vouch; carry no packChecks; carry no scrub schedule;
+// stamp the last scrub's end, or its interval's base, at the swap.
 func TestASwapCarriesEveryVerdictOfTheFilesItLinks(t *testing.T) {
 	t.Parallel()
 	var (
@@ -1340,21 +1304,17 @@ func TestASwapCarriesEveryVerdictOfTheFilesItLinks(t *testing.T) {
 	}
 }
 
-// A SCRUB OF A COPY THE SWAP LEAVES LANDS ON THE NEXT INCARNATION: a scrub
-// reading the old incarnation's files when the swap links them reads the next
-// one's bytes, the same inodes, so its verdict — when it ended, that it found
-// nothing — is the next incarnation's, which is then not due again before its
-// interval. Dropped with the old one, a scrub of a repository compacted more
-// often than a scrub of it lasts would never land, and be due again at once,
-// for ever. The case's clock moves on a second after the scrub has begun and
-// again after the swap, so the scrub's start, the next incarnation's and the
-// scrub's end are three instants: on a clock unmoved since the scrub began,
-// a verdict stamped at either earlier one read as its end.
+// A SCRUB OF A COPY THE SWAP LEAVES LANDS ON THE NEXT INCARNATION: the files
+// it reads are the next one's inodes, so its verdict (when it ended, nothing
+// found) is the next incarnation's, not due again before its interval.
+// Dropped with the old one, a scrub of a repository compacted more often
+// than a scrub lasts would never land, and be due again at once forever. The
+// clock moves a second after the scrub begins and again after the swap, so
+// scrub start, swap and scrub end are three instants.
 //
-// Mutations: record the verdict on the incarnation the scrub read (runScrub's
-// serving), and the next incarnation was never scrubbed; stamp the verdict at
-// the instant the scrub began, or its interval's base there (each reads the
-// scrub's start).
+// Mutations: record the verdict on the incarnation the scrub read
+// (runScrub's serving); stamp the verdict, or its interval's base, at the
+// scrub's start.
 func TestAScrubOfACopyTheSwapLeavesLandsOnTheNextIncarnation(t *testing.T) {
 	t.Parallel()
 	hold := newHeldHash()
@@ -1402,20 +1362,17 @@ func TestAScrubOfACopyTheSwapLeavesLandsOnTheNextIncarnation(t *testing.T) {
 }
 
 // A REPORT ABOUT A COPY THE SWAP LEFT REACHES THE COPY SERVING ITS FILES. A
-// clone over the old incarnation outlives the swap that replaced it, and every
-// file the next incarnation kept is the same inode: what the clone's git
-// reports — a pack's damage, a crash, a derived file's — is the evidence of the
-// next one's SCRUB, due at once, and never a drop there (the multi-pack-index a
-// report names never crosses a swap, so a drop would read the copy whole for
-// nothing); one held for the clone's own repair is handed on there with the
-// clone's release. Dropped, as a report about a replaced copy was, a damaged
-// pack both copies share waited for the next day's scrub though git had named
-// it.
+// clone over the old incarnation outlives the swap, and every kept file is
+// the same inode, so what its git reports (a pack's damage, a crash, a
+// derived file's) is evidence for the next one's SCRUB, due at once, never a
+// drop there (a reported multi-pack-index never crosses a swap, so a drop
+// would read the copy whole for nothing); a report held for the clone's own
+// repair is handed on there at its release. Dropped, a damaged pack both
+// copies share would wait for the next day's scrub.
 //
-// Mutations: route a report by the incarnation the run read (observe's at) —
-// every arm is dropped; record a swapped-out copy's derived part as a drop —
-// the derived arm asks a repair round of the copy serving; hand a held report
-// on only from the current copy (handOn) — the held arm is lost.
+// Mutations: route by the run's incarnation (observe's at): all arms drop;
+// record a swapped-out derived part as a drop: a repair round is asked; hand
+// a held report on only from the current copy (handOn): the held arm is lost.
 func TestAReportAboutACopyTheSwapLeftReachesTheCopyServing(t *testing.T) {
 	t.Parallel()
 	packDamage := func(began time.Time) gitproc.Result {
@@ -1471,14 +1428,13 @@ func TestAReportAboutACopyTheSwapLeftReachesTheCopyServing(t *testing.T) {
 }
 
 // A REPORT FROM THE STAGED NEXT INCARNATION IS THE COPY'S. A full round's own
-// index is written in the swap's staged directory (step 5), over the live
-// packs' files — the very inodes the copy holds — so what its git reports is
-// the copy's scrub's evidence: due on the copy the swap leaves while the next
-// one is staged, and carried to it by the promote. A report from a staging no
-// swap of the repository is making goes nowhere.
+// index is written in the swap's staging (step 5) over the copy's very pack
+// inodes, so its git's reports are the copy's scrub evidence: due on the copy
+// the swap leaves while staged, and carried over by the promote. A report
+// from a staging no swap of the repository is making goes nowhere.
 //
-// Mutation: route nothing from a staged directory (observe without swapAt) —
-// the report is dropped and no scrub is due.
+// Mutation: route nothing from a staging (observe without swapAt): the
+// report is dropped and no scrub is due.
 func TestAReportFromTheStagedNextIncarnationIsTheCopys(t *testing.T) {
 	t.Parallel()
 	faults := &gitletfault.Script{}
@@ -1530,18 +1486,15 @@ func TestAReportFromTheStagedNextIncarnationIsTheCopys(t *testing.T) {
 
 // A REQUEST WHOSE COPY THE SWAP REPLACED RUNS ONCE MORE, ITS REPAIR UNSPENT
 // (swappedAnswer). A clone pinned the old incarnation, a compaction swapped
-// it, and the clone's git then failed over the old directory: the swap is a
-// write into the copy after the clone began, and the next incarnation holds
-// the old one's files only where it kept them. So the repair it asks is
-// answered from the copy serving AS IT STANDS — Kind SyncNone, which the host
-// reads as no repair, counted reports{part=pack,outcome=stale} — with nothing
-// repaired and nothing downloaded; and damage the clone's next run meets over
-// that copy, in a pack the two share, is that copy's to repair, in place, with
-// one download.
+// it, and its git then failed there: the swap wrote into the copy after the
+// clone began, and the next incarnation holds only the files it kept. So the
+// repair is answered from the serving copy AS IT STANDS (Kind SyncNone, read
+// by the host as no repair, counted reports{part=pack,outcome=stale}),
+// nothing repaired or downloaded; damage the clone's next run meets there, in
+// a shared pack, is that copy's to repair in place, with one download.
 //
 // Mutation: answer a swapped-out copy by a sync (repairRequest's rebuilt or
-// purged branch) — the answer is a sync's, which the host spends its repair
-// on.
+// purged branch): the host spends its repair on it.
 func TestARequestWhoseCopyTheSwapReplacedRunsOnceMoreItsRepairUnspent(t *testing.T) {
 	t.Parallel()
 	k := newCompactable(t, false)

@@ -12,17 +12,11 @@ import (
 )
 
 // A RESUMED PHASE'S RECORD IS WHOLE, AND SAYS WHICH OF IT IS THIS ATTEMPT'S.
-// An executor's record is its run's calls over the bridge, which the run made
-// before the segment that collects it, or before the run asked the question a
-// continuation carries on with. They lead the record, because the delivery
-// check and the ledger read the whole phase, and are marked as an earlier
-// attempt's, because whether a retry would repeat a write is a question about
-// this attempt alone ([turn.Work.Inherited]): a retried collection collects the
-// same run, and a retried continuation relaunches it, and neither makes those
-// calls again.
-//
-// Each way out is covered: a collection, a continuation that relaunched and
-// parked again, and a continuation whose relaunch was refused.
+// The run's bridged calls, made before this segment, lead the record because
+// the delivery check and ledger read the whole phase, and are marked an
+// earlier attempt's ([turn.Work.Inherited]) because a retry, collecting or
+// relaunching the same run, never makes them again. Covered: a collection, a
+// continuation that parked again, and one whose relaunch was refused.
 //
 // Mutation: leave Inherited at zero on any of them, and the run's post reads as
 // this attempt's.

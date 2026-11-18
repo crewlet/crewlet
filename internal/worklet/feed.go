@@ -9,44 +9,30 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 )
 
-// Source is the notification source name this tracker registers under.
-//
-// BARE: it appears in every log line, every event's source column and every
-// dashboard filter, and a first-party source has nothing to disambiguate
-// itself from.
+// Source is the notification source name this tracker registers under. Bare:
+// it is in every log line, source column and dashboard filter, and a
+// first-party source has nothing to disambiguate itself from.
 const Source = "work"
 
-// FeedGroup is the durable consumer's name, and it is STABLE for the
-// deployment's life.
+// FeedGroup is the durable consumer's group, STABLE for the deployment's life:
+// the name holds the fleet's position. A rename is a fresh consumer starting
+// from the log's first retained record, so every change still held replays as
+// a wake (deduped only within the change feed's claim and wake-id windows) and
+// its acknowledgement floor holds back the log's trim until it catches up.
 //
-// The name is where the fleet's position IS. A rename is a fresh consumer,
-// and a fresh one starts from the log's first retained record rather than its
-// head, so it loses nothing and REPLAYS instead: every change the log still
-// holds comes back as a wake, which only the change feed's claim and wake-id
-// dedupe collapse, and only within their own windows — a company re-woken
-// for work it already handled — and until the new consumer catches up, its
-// acknowledgement floor holds back the log's trim.
-//
-// This is the GROUP, not the broker's consumer name: the durable name is
-// derived from the group and the stream together, so `nats consumer ls
-// CREWLET_TRACKER_LOG` lists it and this string alone finds nothing.
+// The broker's durable name is derived from the group and the stream, so
+// `nats consumer ls CREWLET_TRACKER_LOG` lists it and this string alone finds
+// nothing.
 const FeedGroup = "crewlet-tracker-feed"
 
-// Translator turns one mutation record into the delivery a parser reads.
+// Translator turns one mutation record into the delivery a parser reads. It
+// is the only place that decides whether a change wakes anybody at all; who,
+// and whether they were woken already, belong to the parser and the inbox.
 //
-// # What this contributes, and what it deliberately does not
-//
-// The feed knows how to run a durable consumer exactly once. It knows nothing
-// about what a task is, and this is the only place that decides whether a
-// change should wake anybody at all. Everything else — who, and whether they
-// have been woken already — belongs to the parser and the inbox.
-//
-// # Why the whole record travels in the body
-//
-// The node that WINS a feed message is rarely the node running the seat that
-// gets woken, and is often behind on its own rows. Routing from a local read
-// would either use a stale head or block the feed until it caught up; the
-// record carries its own routing snapshot precisely so neither is necessary.
+// The whole record travels in the body: the node winning a feed message is
+// rarely the woken seat's and is often behind on its rows, so routing from a
+// local read would use a stale head or block the feed. The record carries its
+// own routing snapshot instead.
 type Translator struct{}
 
 // NewTranslator builds the tracker's feed translator.
@@ -60,20 +46,11 @@ func (t *Translator) Source() changefeed.Source {
 // Translate decides whether a record wakes anybody, and hands the parser the
 // whole thing.
 //
-// # The two ways a record wakes nobody, why each is an ACK, and the deferral
-//
-// A record with NO NOTIFICATION is a change nobody asked to hear about — a
-// rank move, a pointer flip, a turn's spend. And a record on a subject that is
-// not an object anybody watches — a barrier, a generation, an eviction — is
-// machinery. Both are DECISIONS, and a decision is handling: they are acked
-// rather than naked, because a record naked for having nothing to say comes
-// back for ever.
-//
-// A record this build cannot decode past its envelope is NOT one: its
-// notification rules are a newer build's, and this node has decided nothing
-// about it. It is deferred to a peer that has them ([changefeed.Defer]), since
-// the feed's consumer is the fleet's and a record acked here is one no peer
-// would ever see (#838).
+// A record with no notification, or on a machinery subject nobody watches, is
+// a decision and is acked: a record naked for having nothing to say comes back
+// for ever. A record this build cannot decode past its envelope is a newer
+// build's, so it is deferred to a peer ([changefeed.Defer]) rather than acked:
+// the consumer is the fleet's, and a record acked here no peer would ever see.
 func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (changefeed.Delivery, bool, error) {
 	envelope, err := DecodeEnvelope(rec.Payload)
 	if err != nil {
@@ -86,13 +63,8 @@ func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (chan
 
 	record, err := Decode(rec.Payload)
 	if err != nil {
-		// A RECORD FROM A NEWER BUILD. Its envelope decoded, so this
-		// node knows what it is about and knows it cannot read the
-		// rules — and waking somebody from a payload it cannot decode
-		// would be inventing a notification. It is DEFERRED to a peer on
-		// the newer build, never answered "no wake": the feed's consumer
-		// is the fleet's, so a record this node acked is one no peer
-		// would ever see (#838).
+		// A newer build's record: deferred, never "no wake" (see the doc
+		// comment), since waking from it would invent a notification.
 		var future *ErrFutureVersion
 		if errors.As(err, &future) {
 			return changefeed.Delivery{}, false, changefeed.Defer(changefeed.DeferNewerRecord, err)
@@ -101,10 +73,8 @@ func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (chan
 			"worklet: read the record on %s: %w", rec.Key, err)
 	}
 	if record.Notify == nil {
-		// A CHANGE NOBODY ASKED TO HEAR ABOUT. The absence is on the
-		// RECORD rather than a parameter to the feed, so a redelivery
-		// months later still knows not to wake anybody — which a
-		// runtime flag could not.
+		// The absence is on the record, not a feed parameter, so a
+		// redelivery months later still wakes nobody.
 		return changefeed.Delivery{}, false, nil
 	}
 
@@ -122,18 +92,15 @@ func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (chan
 // wakesAnybody reports a kind whose records are about an object somebody may
 // be watching.
 //
-// THE MACHINERY KINDS ARE NAMED rather than derived from "has a notification",
-// because the two are different facts: a task record without one is a change
-// somebody chose not to announce, and a barrier can never have one at all.
-// Folding them together would make a missing notification on a task
-// indistinguishable from a record that could not carry one.
+// The machinery kinds are named, not derived from "has a notification": a
+// task record without one is a change somebody chose not to announce, and a
+// barrier can never carry one.
 func wakesAnybody(kind ObjectKind) bool {
 	switch kind {
 	case KindBarrier, KindTrimmed, KindGeneration, KindEviction, KindTurn, KindRankOrder,
 		KindRoster,
-		// A FILE IS READ FROM ITS PROJECT, never woken into anybody's
-		// inbox — see [ObjectKind.Routable]'s own list of the kinds
-		// announced elsewhere.
+		// A file is read from its project, never woken into an inbox
+		// ([ObjectKind.Routable]).
 		KindFile:
 		return false
 	}
@@ -142,10 +109,9 @@ func wakesAnybody(kind ObjectKind) bool {
 
 // recordBody renders a record as the map a parser reads.
 //
-// THROUGH JSON rather than field by field, so the body is exactly the record —
-// including the fields this build carries but does not understand. A parser on
-// a newer node reading a record an older node relayed sees everything the
-// writer wrote.
+// Through JSON rather than field by field, so the body keeps the fields this
+// build carries but does not understand, and a newer parser sees everything
+// the writer wrote.
 func recordBody(record MutationRecord) (map[string]any, error) {
 	data, err := record.Encode()
 	if err != nil {
@@ -160,10 +126,9 @@ func recordBody(record MutationRecord) (map[string]any, error) {
 
 // FeedSource opens the tracker's own durable consumer over its log.
 //
-// IT IS THE DOMAIN'S, not the framework's: a change feed is a SECOND consumer
-// over the same stream the applier reads, at its own position, so that a wake
+// A second consumer over the applier's stream, at its own position, so a wake
 // is derived by something that outlives the writer rather than published by
-// the writer's goroutine as a courtesy.
+// the writer's goroutine.
 type FeedSource struct {
 	Log DomainConsumer
 }

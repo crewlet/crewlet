@@ -9,13 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A MERGE RESOLVES BOTH ENDS AND MOVES THE CHILDREN BY DEFAULT.
-//
-// The fold is a sequence and the tool's half of it is the resolution: a model
-// types the keys it read, and a sequence handed a key writes a parent pointer
-// that resolves to nothing on every node. The default matters as much — a bool
-// argument's zero value is "leave the subtasks under a cancelled parent",
-// which is the orphan this verb exists to prevent.
+// A MERGE RESOLVES BOTH ENDS AND MOVES THE CHILDREN BY DEFAULT: a sequence
+// handed a key writes a parent pointer that resolves to nothing on every node,
+// and a bool's zero default would orphan the subtasks under a cancelled parent.
 func TestAMergeResolvesBothItemsAndMovesTheSubtasks(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -42,9 +38,8 @@ func TestAMergeResolvesBothItemsAndMovesTheSubtasks(t *testing.T) {
 			"nobody asked for that — an absent boolean is the safe outcome " +
 			"here, not the zero one")
 	}
-	// AND THE WAKE DESCRIBES WHAT THE FOLD LEAVES. The close is the last
-	// append, so a snapshot still showing the item open would be the last
-	// word anybody hears about it.
+	// AND THE WAKE DESCRIBES WHAT THE FOLD LEAVES: the close is the last
+	// append, so nothing would correct a snapshot showing the item open.
 	if fold.notify == nil {
 		t.Fatal("the fold told nobody")
 	}
@@ -93,14 +88,10 @@ func TestAMergeRefusesToFoldAnItemIntoItself(t *testing.T) {
 	}
 }
 
-// A BUILD WITH NO MERGE SEQUENCE DOES NOT ADVERTISE THE VERB.
-//
-// [Register]'s own rule: the fold reads a subtree and takes a fleet claim, so
-// a surface holding no replicated estate cannot serve it — and a catalogue
-// offering a tool that always fails is how a model learns to distrust all of
-// them. The dependency ARGUMENTS refuse by name instead, because they are
-// facets of a verb that still works without them; a whole verb has no such
-// remainder.
+// A BUILD WITH NO MERGE SEQUENCE DOES NOT ADVERTISE THE VERB ([Register]'s
+// rule): a surface without the replicated estate cannot serve it, and a tool
+// that always fails teaches a model to distrust them all. Dependency ARGUMENTS
+// refuse by name instead, being facets of a verb that still works without them.
 func TestNoMergeSequenceMeansNoMergeTool(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()

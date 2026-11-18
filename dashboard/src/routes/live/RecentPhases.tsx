@@ -80,7 +80,7 @@ import {
 } from "~/lib/phases.ts";
 import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
 import type { EventRecord, PhasesPage } from "~/protocol/index.ts";
-import { failureWords } from "~/lib/seats.ts";
+import { failureWords, type SeatBadge } from "~/lib/seats.ts";
 
 /**
  * How many phases one page carries — the first and every "older" one.
@@ -117,7 +117,7 @@ export function RecentPhases({
   phase,
   failed,
   runningKeys,
-  nameOf,
+  seatOf,
   now,
 }: {
   /** The seat's handle, or "" for the company. */
@@ -130,8 +130,8 @@ export function RecentPhases({
   failed: boolean;
   /** The phase keys the running-turn rows above are drawing right now. */
   runningKeys: readonly string[];
-  /** A seat's name, from whatever a record names it by. */
-  nameOf: (r: PhaseRecord) => string;
+  /** A record's seat off the chart, from whatever the record names it by. */
+  seatOf: (r: PhaseRecord) => SeatBadge;
   now: number;
 }) {
   const { socket } = useClient();
@@ -214,14 +214,14 @@ export function RecentPhases({
         // seat: a phase is always an agent's model call, so the kind is not a
         // question here.
         cell: (r) => {
-          const name = nameOf(r);
-          return name ? (
-            <TableEntityCell {...plainSeat({ name: name, kind: "agent" })} />
+          const seat = seatOf(r);
+          return seat.name ? (
+            <TableEntityCell {...plainSeat({ ...seat, kind: "agent" })} />
           ) : (
             <EmptyValue label="No seat" />
           );
         },
-        sortValue: (r) => nameOf(r),
+        sortValue: (r) => seatOf(r).name,
       },
       {
         key: "phase",
@@ -323,7 +323,7 @@ export function RecentPhases({
         sortValue: (r) => Date.parse(r.at) || 0,
       },
     ],
-    [nameOf, now],
+    [seatOf, now],
   );
 
   const exhausted = paged.answers.length > 0 && !paged.more;

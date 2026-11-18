@@ -9,12 +9,8 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A SEAT CAN FIND AN ITEM BY WHAT IT SAYS, and until this it could not.
-//
-// The board's `text` is a substring of the key or the title, so every word
-// somebody wrote in a DESCRIPTION was unreachable — while the engine embedded
-// every one of those descriptions on a fleet-singleton duty and stored a
-// replicated vector for each, which nothing ever read.
+// A SEAT CAN FIND AN ITEM BY WHAT ITS DESCRIPTION SAYS, which the board's
+// `text` (a substring of key or title) cannot reach.
 func TestASeatCanSearchWorkItemsByWhatTheySay(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -38,11 +34,8 @@ func TestASeatCanSearchWorkItemsByWhatTheySay(t *testing.T) {
 	}
 }
 
-// A BUILDING INDEX IS NOT AN EMPTY ANSWER.
-//
-// "There is nothing" is what a model acts on by filing a duplicate, which is
-// the one outcome the whole tracker exists to prevent. A node that has not
-// caught up has to say so.
+// A BUILDING INDEX IS NOT AN EMPTY ANSWER: a model acts on "there is nothing"
+// by filing a duplicate, so a node that has not caught up says so.
 func TestASearchOnABuildingIndexSaysSoRatherThanAnsweringEmpty(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -54,10 +47,8 @@ func TestASearchOnABuildingIndexSaysSoRatherThanAnsweringEmpty(t *testing.T) {
 		t.Fatalf("a building index answered %q as though it were a result",
 			got.Output)
 	}
-	// THE TOOL'S OWN SENTENCE, not the sentinel's text wrapped in a generic
-	// read failure: what a model has to be told is that the answer says
-	// NOTHING about whether the work exists, and a failure that merely
-	// quotes "the index is still building" reads as this call being broken.
+	// The tool's own sentence, saying the answer says NOTHING about whether
+	// the work exists, not the sentinel wrapped in a generic read failure.
 	if !strings.Contains(got.Output, "says nothing about whether the work exists") {
 		t.Errorf("the refusal is %q — a model reading a generic read failure "+
 			"here retries the call, where what it needs to know is that the "+
@@ -66,9 +57,8 @@ func TestASearchOnABuildingIndexSaysSoRatherThanAnsweringEmpty(t *testing.T) {
 	}
 }
 
-// A BUILD WITH NO INDEX DOES NOT ADVERTISE THE VERB, on [Register]'s own rule:
-// a company on another tracker has no corpus here, and a catalogue offering a
-// tool that always fails is how a model learns to distrust all of them.
+// A BUILD WITH NO INDEX DOES NOT ADVERTISE THE VERB, on [Register]'s rule: a
+// tool that always fails teaches a model to distrust the catalogue.
 func TestNoIndexMeansNoSearchTool(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -78,12 +68,8 @@ func TestNoIndexMeansNoSearchTool(t *testing.T) {
 	}
 }
 
-// A RANKED ANSWER SAYS WHAT THE RANKING IS.
-//
-// It carried a `score` that could only ever be zero: the fan-out's answer is
-// fused KEYS, best first — the arithmetic that ordered them is finished before
-// a coordinator sees them — so nothing downstream had a score to set. A place
-// is what the answer actually has, and it is what a caller can act on.
+// A RANKED ANSWER SAYS WHAT THE RANKING IS: a place, since the fan-out answers
+// fused keys best first and no score survives to the coordinator.
 func TestARankedAnswerNumbersItsPlaces(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -105,12 +91,8 @@ func TestARankedAnswerNumbersItsPlaces(t *testing.T) {
 	}
 }
 
-// A SEAT'S SEARCH ASKS FOR HYBRID and says when it covered part of the corpus.
-//
-// The partial answer used to be a log line on the node that coordinated it, so
-// a model reading five items out of what should have been eight concluded the
-// other three did not exist. The coverage now rides in the answer, and the
-// tool is the one place a model can be told.
+// A SEAT'S SEARCH ASKS FOR HYBRID and says when it covered part of the corpus,
+// or a model concludes the items it was not shown do not exist.
 func TestAPartialWorkSearchSaysSoToTheSeat(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -141,14 +123,10 @@ func TestAPartialWorkSearchSaysSoToTheSeat(t *testing.T) {
 
 // A SEARCH RANKS THE WAY IT WAS ASKED TO, and says when it could not.
 //
-// The mode is the same three values `search_knowledge` and the dashboard take,
-// passed through rather than fixed: a seat looking for "the item that says
-// ERR_TIMEOUT_42" wants the words alone, and one looking for work described in
-// other words wants meaning alone. A mode the build does not know is refused by
-// name, because answering it as the default answers another question. And a
-// ranking the company cannot serve is SAID — a semantic search on a company
-// with no embeddings ran nothing, and an empty list beside no word about it
-// reads as "no such work".
+// The mode is passed through, not fixed. An unknown mode is refused by name,
+// since the default answers another question, and a ranking the company cannot
+// serve is SAID: a semantic search with no embeddings ran nothing, and an
+// unexplained empty list reads as "no such work".
 func TestAWorkSearchTakesItsModeAndSaysWhenItWasNotServed(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -196,9 +174,7 @@ func TestAWorkSearchTakesItsModeAndSaysWhenItWasNotServed(t *testing.T) {
 }
 
 // A TEXT PAST THE SEARCH'S BOUND IS REFUSED NAMING IT, and never reaches the
-// search — where it would come back as an error the model reads as the
-// tracker failing, rather than as what to send instead. At the bound it is a
-// search.
+// search, whose error reads as the tracker failing. At the bound it is a search.
 func TestALongWorkSearchIsRefusedNotCut(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()

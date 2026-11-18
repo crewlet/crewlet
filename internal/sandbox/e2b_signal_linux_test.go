@@ -5,12 +5,11 @@ import (
 	"testing"
 )
 
-// THE BOX'S SIGNAL NAMES ARE GO'S LINUX ONES, which is what envd — a Go
-// program on Linux — writes into an end event's status. The table is the
-// box's rather than read from syscall because the engine may run on darwin,
-// whose descriptions differ; here, on Linux, the two are held equal, so a Go
-// release that renamed one fails this rather than leaving a signalled command
-// unread.
+// THE BOX'S SIGNAL NAMES ARE GO'S LINUX ONES, as envd (Go on Linux) writes
+// them into an end event's status. boxSignals is a table rather than syscall's
+// names because the engine may run on darwin, whose names differ; on Linux the
+// two are held equal, so a Go release that renamed one fails here rather than
+// leaving a signalled command unread.
 func TestBoxSignalsAreGosLinuxDescriptions(t *testing.T) {
 	t.Parallel()
 	const highest = 31 // SIGSYS; above it Go names a signal by its number

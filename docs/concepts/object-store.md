@@ -121,39 +121,46 @@ logs survive, on the same members:
   beside it.
 - **An object is a run of 128 KiB messages**, closed by one message naming
   them; an upload holds one message's worth of memory at a time.
-- **A node's uploads share one window of messages out.** Every upload a
-  node makes — a person's file, a push's bundle, a seat's file — rides the
-  connection its leases and events ride, so the messages they have sent and
-  the broker has not yet acknowledged are counted for the connection, not
-  for each upload. Across a leaf's link, or to an external cluster, the
-  window **follows the node's lease**: it is as many messages as a link at
-  the floor of thirty seconds a mebibyte carries in one heartbeat of the
-  lease the node holds (the lease TTL in force over three), so a lease
-  renewal queued behind the node's uploads still lands within one heartbeat
-  and the node does not lose its seats to its own uploads. At the default
-  45-second lease that is four messages — half a mebibyte, fifteen seconds
-  at the floor; a lease under 22.5 seconds gets one, and one of three
-  minutes or more the sixteen a data node gets. A shorter lease costs
-  throughput on a fast link: through a leaf on loopback, a window of one
-  carried a lone 16 MiB upload at 47–83 MB/s and eight at once at 56–78
-  together, against 120–139 and 130–135 with four — about half — and on a
-  link with a longer round trip the share lost is larger. A lease under **11.25 seconds** has a
-  heartbeat shorter than even one 128 KiB message takes at the floor, so a
-  renewal behind it lands with less than a heartbeat to spare — and under
-  5.6 seconds, after the lease. No node can hold such a lease:
-  `coordination.lease_ttl_seconds` is refused under 15 seconds, which is
-  over it. On a data node's own client, where
-  no link lies between the upload and the stream, the window is sixteen.
-  An upload waits its turn for a place behind the others, first come
-  first served.
+- **Across a link, a node's transfers share one window, both ways.** A
+  node across a leaf's link, or dialling an external cluster, sends its
+  uploads, downloads, listings and memory replays across one link, beside
+  every lease renewal it makes; a request queued there waits behind what the
+  node has out toward the members and, for its answer, behind what the link
+  is bringing back. Each of those requests is held to a five-second term, so
+  every transfer on the link takes its bytes from **one window**, both
+  directions together: what the floor of thirty seconds a mebibyte carries in
+  four seconds, 139,810 bytes, which is one 128 KiB piece of a file either
+  way. An upload's piece holds its place until the broker acknowledges it, a
+  download's until the piece arrives, a listing's batch of names and a
+  replay's batch of rows until they are in, first come first served, and a
+  transfer waiting its turn is never failed for waiting. A download across a
+  link asks for its pieces one at a time. A request sent behind all of them
+  still has the second its own round trip needs, at every lease TTL
+  ([ADR-0161](../../adr/0161-a-link-carries-one-window-both-ways-sized-to-a-requests-term.md)).
+  The window does not follow the lease, and is not sized by the link's
+  measured rate: after a drop to the floor every request would wait past its
+  term while a window sized for the faster rate drained. What the window
+  costs is throughput on a fast link, since the node's transfers move one
+  piece a round trip between them: through a leaf across 100 ms at 100 Mbit/s
+  a lone download ran at 1.04 MB/s, where four pieces in hand ran at 2.3, and
+  a download and an upload at once at 0.55 each; on loopback a lone transfer
+  ran as fast as before, and two at once at about 80 MB/s each, against 250
+  down and 115 up. Uploads alone are unchanged. Every node across a
+  link pays it: one without `data`, an operator's seat pod among them, and
+  every node on an external broker. On a data node's own client, where no
+  link lies between the upload and the stream, its uploads share a window of
+  sixteen pieces and a download holds four in hand.
 - **A put is paced by the broker's acknowledgements.** An upload ends only
   once the broker has acknowledged nothing for a minute while some of its
-  messages are out — or, waiting for a place, nothing of the node's at all;
-  a put waiting on the person's own slow upload is not waiting on the
-  broker. No message waits behind more than the window, so across a link at
-  the floor each is acknowledged within a heartbeat of the node's lease —
-  fifteen seconds at the default — a leaf's compressed link, which delivers
-  what it flushed as one block, included.
+  messages are out — across a link, a minute in which the link itself
+  carried nothing at the floor, since an acknowledgement queued behind an
+  event of megabytes is held, not lost; a put waiting its turn in the window,
+  or on the person's own slow upload, is not waiting on the broker. No
+  message waits behind more than the window, so across a link at the floor
+  each one's bytes have crossed within four seconds of being sent
+  — a leaf's compressed link, which delivers what it flushed as one block,
+  included — and its acknowledgement follows a round trip later, behind
+  whatever the link is carrying back to the node.
   An upload crossing a slow link is never failed for being slow — the floor
   of thirty seconds a mebibyte included — where the client library's own put
   failed any message the broker had not acknowledged five seconds after it
@@ -183,6 +190,14 @@ logs survive, on the same members:
   which at the slowest rate the store accepts takes fifteen seconds. A
   heartbeat shorter than that replaced such a read's consumer before anything
   arrived, again and again, until the read failed having delivered nothing.
+  Across a link a read asks for one piece at a time, so the broker's
+  heartbeat is one piece's crossing at the floor, 3.75 seconds, and the read
+  makes its consumer again once two go missing **while the link carries
+  nothing**: on a link that is moving the heartbeats are behind the link's
+  other traffic, not lost, and the read waits — making its consumer again
+  only once the link has brought the node one 8 MiB message and a window
+  since the read last heard a word, and failing once a minute passes with no
+  piece and the link still.
 - **On a clustered fleet a read can lose its first request.** The broker can
   answer the creation of a read's consumer before the read's own member has
   learned where to send its requests, and a request sent in that gap is

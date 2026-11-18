@@ -8,13 +8,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE POINT IS THE BOUND'S AND THE WINDOW'S ARITHMETIC: a repository is near
-// the limit when its live refs and the refs it set within RefExpiry together
-// reach MaxRefsPerRepo — at that sum exactly too, since the push decide
-// refuses a create once a repository holds the bound, so a repository AT it
-// with nothing recent already refuses every create — and one ref short of it
-// is not: the alarm borrows both decisions whole and adds no margin of its
-// own.
+// A repository is near the limit when its live refs plus the refs it set
+// within RefExpiry reach MaxRefsPerRepo, at the sum exactly too (the push
+// decide already refuses every create there), and one short is not: the alarm
+// adds no margin of its own.
 //
 // Mutation: compare with > and the sum at the bound is not near — red;
 // compare with >= MaxRefsPerRepo-1 and the sum one short is near — red.
@@ -42,31 +39,17 @@ func TestNearLimitIsTheBoundsArithmetic(t *testing.T) {
 	}
 }
 
-// THE READING COUNTS WHAT THE BOUND AND THE WINDOW SAY, of the active
-// repositories alone and of their live refs alone:
+// The reading counts active repositories and live refs alone (live+recent):
+// alpha 60k+45k counted; bravo 60k+30k not, its 20k recent tombstones being
+// deletions; charlie 1k+1k never a candidate; delta archived (51k+51k), takes
+// no push, not counted; echo 56k+56k counted and the worst; foxtrot exactly
+// MaxRefsPerRepo, none recent, counted at the bound; golf half the bound, all
+// recent, counted only because the cut takes half the bound itself.
 //
-//   - alpha holds 60 000 live refs, 45 000 of them set within RefExpiry:
-//     105 000, past the bound — counted;
-//   - bravo holds 60 000, 30 000 of them recent — 90 000, inside it — and
-//     20 000 tombstones written within the window beside them, which are
-//     deletions, never refs set: counted, they would take it to 110 000;
-//   - charlie holds 1 000, every one recent: never a candidate;
-//   - delta is ARCHIVED with 51 000, every one recent — 102 000 — and takes no
-//     push, so nothing it holds moves towards the bound: not counted;
-//   - echo holds 56 000, every one recent: 112 000, counted, and the worst;
-//   - foxtrot holds MaxRefsPerRepo exactly, none set within the window — a
-//     person's tags, which never expire: it is AT the bound, where the push
-//     decide refuses every create, so it is counted though its rate is nil;
-//   - golf holds half the bound exactly, every one recent: the sum reaches the
-//     bound, so it is counted — and it is a candidate only because the cut
-//     takes half the bound itself.
-//
-// Mutation: drop the empty-target test from the count and bravo's tombstones
-// count — five, red; drop the status from the candidates and the archived
-// delta counts — red; keep the first repository past the point as the worst
-// rather than the one with the most, and alpha is named — red; judge the sum
-// with > and foxtrot and golf drop — red; cut the candidates with > and golf
-// is never read — red.
+// Mutation: drop the empty-target test and bravo counts; drop the status and
+// delta counts; keep the first past the point as worst and alpha is named;
+// judge the sum with > and foxtrot and golf drop; cut the candidates with >
+// and golf is never read — each red.
 func TestRefsNearLimitCountsWhatTheBoundAndTheWindowSay(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

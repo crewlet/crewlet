@@ -8,12 +8,10 @@ import (
 )
 
 // THE PROVIDER-WIDE PAUSE TTL HAS THREE STATES, and a plain Duration has two.
-//
-// A paused box is billed for its snapshot by a remote provider and holds RAM
-// on a local one, so "never pause — tear it down the moment it blocks and
-// re-seed from the pushed branch" is a real instruction an operator gives with
-// 0. Reading that zero as "unset" applied the 1800s default over it, silently,
-// at two separate layers.
+// An explicit 0 means never pause (tear the box down the moment it blocks and
+// re-seed from the pushed branch), a real choice since a paused box is billed
+// for its snapshot remotely and holds RAM locally; read as unset, it would
+// silently take the 1800s default.
 func TestTheEngineWidePauseTTLTellsUnsetFromZero(t *testing.T) {
 	t.Parallel()
 	never := time.Duration(0)

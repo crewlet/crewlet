@@ -10,48 +10,20 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
-// Retrying the seat identities this node could not resolve.
-//
-// # A lookup that failed had nothing that would ever ask again
-//
-// A tracker or code-host webhook names people by ACCOUNT, and nothing in the
-// org model says which account a seat holds — so the engine asks, with the
-// seat's own credential, and registers whatever answers. Each of the three
-// surfaces that does this leaves a seat whose lookup FAILED unresolved rather
-// than failing the boot, on the reasoning that the instance may be briefly
-// down and the next apply retries.
-//
-// The next apply is the problem. Nothing schedules one: an apply happens when
-// a person changes the configuration, so a lookup that failed for a reason
-// that cleared itself a second later stayed failed until somebody edited
-// something unrelated.
-//
-// Measured: a seat's Atlassian token was created and sealed, the tracker
-// checked it one second later, the account was not grantable yet and answered
-// 403 — and the surface held seat_identities=0 with every card reading
-// Connected. Two minutes later it had still not asked again. The same
-// happened on the code host, under the same "every webhook will name a
-// stranger" warning nobody was watching.
-//
-// # The reconcile loop is what asks again, and it already has the cadence
-//
-// This is not a new timer. The integration loop visits each surface on a
-// cadence that follows WHO HAS TO ACT, and an unresolved seat identity is the
-// ENGINE's own work — the 30-seconds-doubling-to-5-minutes row, which is
-// exactly the shape of a lookup that will probably succeed shortly. So the
-// retry is a visit, and what makes the loop keep visiting is that the surface
-// stops reporting itself ready: an unresolved seat is a FINDING now, which is
-// the same change that stops the card claiming Connected over an agent that
-// receives nothing.
+// Retrying the seat identities this node could not resolve. A webhook names
+// people by account, so the engine looks each seat's account up with the
+// seat's own credential; a failed lookup leaves the seat unresolved, and no
+// apply comes along to retry it. The integration loop does: an unresolved
+// seat is a FINDING, which keeps the surface from reporting itself ready, so
+// the loop keeps visiting on the engine-acts cadence (30 s doubling to 5 min)
+// rather than a timer of its own, and the card stops claiming Connected.
 
 // resolveRouting re-resolves this surface's seat identities and reports the
 // ones that still have none.
 //
-// RE-RESOLVING BEFORE REPORTING, in that order, because the report is about
-// what is true after this node has tried again — not about what was true at
-// the last apply. A seat that resolves here is registered into the LIVE
-// registry and starts receiving work immediately, with no config change and
-// nothing for an operator to press.
+// It re-resolves before reporting, so the report says what is true after this
+// retry; a seat that resolves here goes into the LIVE registry and receives
+// work at once, with no config change.
 func (e *Engine) resolveRouting(
 	ctx context.Context, kind integration.Kind, reported map[string]bool,
 ) []integration.Finding {
@@ -68,20 +40,16 @@ func (e *Engine) resolveRouting(
 	case integration.KindGitHub:
 		unresolved = e.rewireGitHub(ctx, company)
 	default:
-		// Every other surface resolves a seat from the document alone —
-		// Slack and Mattermost from an identity their transport learned at
-		// connect, Confluence and Datadog from the handle itself — so
-		// there is no lookup here to have failed.
+		// Every other surface resolves a seat without a lookup (Slack and
+		// Mattermost at connect, Confluence and Datadog from the handle).
 		return nil
 	}
 
 	out := make([]integration.Finding, 0, len(unresolved))
 	for _, handle := range unresolved {
-		// UNLESS THE SURFACE'S OWN PASS ALREADY SAID SO. The two resolve the
-		// same seats with the same credentials against the same instance, so
-		// a seat the pass has reported on does not need a second finding
-		// here — and the second one contradicted the first about who has to
-		// act. See `reported` in integrations.go.
+		// A seat the surface's own pass already reported gets no second
+		// finding, which would contradict the first about who has to act
+		// (`reported` in integrations.go).
 		if reported[handle] {
 			continue
 		}
@@ -106,18 +74,14 @@ func (e *Engine) rewireJira(ctx context.Context, c *Company) []string {
 	env := e.resolver()
 	base := jiraBaseURL(cfg, env)
 	if base == "" {
-		// Nothing to ask. The pass reports the unresolved reference as a
-		// credential finding of its own, and a second one here naming
-		// every seat would bury it.
+		// The pass reports the unresolved reference itself; a finding per
+		// seat here would bury it.
 		return nil
 	}
 	e.notify.jira.resolve(ctx, base, c.Config.Integrations.Atlassian.Declared(), jiraSeatCredentials(c, env))
-	// INTO THE REGISTRY BUILT FOR c, OR NOWHERE. See
-	// [Engine.registryOf]: this pass resolved against c, and an apply
-	// that has since published a newer revision has already registered
-	// what ITS credentials resolve to. Writing into that newer registry
-	// from here would put the previous revision's account back over the
-	// top, and a rotated credential would route to nobody.
+	// Into the registry built for c or nowhere ([Engine.registryOf]): a
+	// newer revision's registry holds its own credentials' accounts, and
+	// writing c's over them would route a rotated credential to nobody.
 	registered, current := e.intoRegistryOf(c, func(reg *notify.Registry) int {
 		return e.notify.jira.register(reg, c, env)
 	})
@@ -129,22 +93,11 @@ func (e *Engine) rewireJira(ctx context.Context, c *Company) []string {
 	return unresolved
 }
 
-// logRewired records a retry that CHANGED something, which is the half the
-// warnings above could never say.
+// logRewired records a retry that resolved seats, so the log does not end on
+// the apply's `*_has_no_seat_identities` warning after routing recovered.
 //
-// A LOOKUP THAT SUCCEEDS USED TO LOG NOTHING AT ALL. The last word in the log
-// was the apply's own `*_wired seat_identities=0` beside
-// `*_has_no_seat_identities` — "every tracker webhook will name a stranger" —
-// and routing then recovered on a later pass in complete silence. Measured:
-// the card read Connected and correct about seventy seconds after the connect,
-// and anyone reading the log concluded the seat was still unrouted, because
-// every line in it said so.
-//
-// ON THE TRANSITION ONLY. This runs on every pass of three surfaces for the
-// life of the deployment, so a line per pass would be the log saying nothing
-// changed, several times a minute, for ever — which is how the lines that DO
-// matter stop being read. The count is what the transition is measured on:
-// the retry exists to move it.
+// Only on a change of the registered count: it runs on every pass of three
+// surfaces, and a line per pass would drown the lines that matter.
 func (e *Engine) logRewired(
 	ctx context.Context, kind integration.Kind, registered int, unresolved []string,
 ) {
@@ -158,11 +111,9 @@ func (e *Engine) logRewired(
 // rewireLog remembers what the last retry resolved, so only a change is
 // logged. The zero value is ready.
 //
-// IN MEMORY AND PER NODE, deliberately: it decides what this process prints,
-// and a node that has just started has printed nothing — so its first pass
-// SHOULD say what it found. A count shared through coordination would make a
-// restarted node silent about the state it came up in, which is the one
-// moment somebody is reading the log.
+// In memory and per node, deliberately: a restarted node's first pass should
+// say what it found, and a count shared through coordination would silence it
+// at the one moment somebody reads the log.
 type rewireLog struct {
 	mu   sync.Mutex
 	last map[integration.Kind]int
@@ -179,10 +130,8 @@ func (r *rewireLog) changed(kind integration.Kind, registered int) bool {
 		r.last = map[integration.Kind]int{}
 	}
 	r.last[kind] = registered
-	// NOTHING RESOLVED IS NOT NEWS. The surface's own pass already reports
-	// an unresolved seat as a finding, and the `*_has_no_seat_identities`
-	// warning is what says it loudly; a line here saying zero again would
-	// only ever repeat them.
+	// Zero is not news: the pass's finding and the
+	// `*_has_no_seat_identities` warning already say it.
 	return registered > 0
 }
 
@@ -194,22 +143,17 @@ func (e *Engine) rewireGitLab(ctx context.Context, c *Company) []string {
 	}
 	env := e.resolver()
 	url := env.Value(cfg.URL)
-	// THE SAME REFUSAL THE START PATH MAKES, through the same function.
-	// Written without it, this resolved seat identities on a config that
-	// can verify no delivery at all — reporting agents wired behind a route
-	// answering 503 to everything, which is the state the refusal exists to
-	// prevent. The surface's own pass reports the unusable secret; a second
-	// finding per seat here would bury it.
+	// The start path's refusal, through the same function: without it this
+	// would report agents wired behind a route answering 503 to every
+	// delivery. The pass reports the unusable secret; a finding per seat
+	// here would bury it.
 	if url == "" || gitlabWirable(cfg, env) != nil {
 		return nil
 	}
 	e.notify.gitlab.resolve(ctx, url, gitlabSeatTokens(c, env))
-	// INTO THE REGISTRY BUILT FOR c, OR NOWHERE. See
-	// [Engine.registryOf]: this pass resolved against c, and an apply
-	// that has since published a newer revision has already registered
-	// what ITS credentials resolve to. Writing into that newer registry
-	// from here would put the previous revision's account back over the
-	// top, and a rotated credential would route to nobody.
+	// Into the registry built for c or nowhere ([Engine.registryOf]): a
+	// newer revision's registry holds its own credentials' accounts, and
+	// writing c's over them would route a rotated credential to nobody.
 	registered, current := e.intoRegistryOf(c, func(reg *notify.Registry) int {
 		return e.notify.gitlab.register(reg, c, env)
 	})
@@ -221,10 +165,9 @@ func (e *Engine) rewireGitLab(ctx context.Context, c *Company) []string {
 	return unresolved
 }
 
-// rewireGitHub is the hosted code host's, and differs in one way that matters:
-// a seat with its own APP needs no lookup at all, because GitHub derives the
-// account from a slug this engine wrote down. Those seats are never
-// unresolved and must never be reported.
+// rewireGitHub is the hosted code host's rewire. A seat with its own app needs
+// no lookup (GitHub derives the account from its slug), so it is never
+// reported unresolved.
 func (e *Engine) rewireGitHub(ctx context.Context, c *Company) []string {
 	cfg := c.Config.Integrations.GitHub
 	if cfg == nil || !cfg.Enabled {
@@ -238,12 +181,9 @@ func (e *Engine) rewireGitHub(ctx context.Context, c *Company) []string {
 		return nil
 	}
 	e.notify.github.resolve(ctx, api, web, github.SeatCredentials(c.Org, env.Value))
-	// INTO THE REGISTRY BUILT FOR c, OR NOWHERE. See
-	// [Engine.registryOf]: this pass resolved against c, and an apply
-	// that has since published a newer revision has already registered
-	// what ITS credentials resolve to. Writing into that newer registry
-	// from here would put the previous revision's account back over the
-	// top, and a rotated credential would route to nobody.
+	// Into the registry built for c or nowhere ([Engine.registryOf]): a
+	// newer revision's registry holds its own credentials' accounts, and
+	// writing c's over them would route a rotated credential to nobody.
 	registered, current := e.intoRegistryOf(c, func(reg *notify.Registry) int {
 		return e.notify.github.register(reg, c, env)
 	})

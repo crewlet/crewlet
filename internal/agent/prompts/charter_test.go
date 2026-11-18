@@ -6,11 +6,10 @@ import (
 )
 
 // NO LINE OF THE CHARTER STANDS ON ITS OWN IN THE PROMPT. A mission or a
-// policy that carries a line break (one a newer build admitted, or one
-// written before the company document refused it) stays on its own line, and
-// a vision written in paragraphs is quoted line by line, so no line the
-// company wrote can begin at the margin and read as the prompt's own, a
-// section heading least of all.
+// policy carrying a line break (which a document another build wrote may hold)
+// stays on its own line, and a vision in paragraphs is quoted line by line, so
+// no line the company wrote begins at the margin and reads as the prompt's own,
+// a section heading least of all.
 func TestNoLineOfTheCharterStandsAloneInThePrompt(t *testing.T) {
 	t.Parallel()
 	o := acme()

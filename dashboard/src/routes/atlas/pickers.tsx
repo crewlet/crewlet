@@ -10,6 +10,7 @@ import type { AtlasKind, AtlasSummary } from "~/contract/atlas.ts";
 import { useOrgIndex } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { KINDS } from "./words.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /** The most entries a picker lists at once: the engine's largest page. */
 const PICKER_ROWS = 500;
@@ -126,6 +127,7 @@ export function OwnerField({
     ...index.seats.map((seat) => ({
       value: `seat:${seat.handle}`,
       label: seat.name || seat.handle,
+      leading: <ChoiceFace seat={seat} />,
       description: seat.handle,
       group: "Seats",
       text: `${seat.name} ${seat.handle}`,

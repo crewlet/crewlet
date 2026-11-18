@@ -19,10 +19,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE CHECKS THAT NEED THE WORLD: a task reference is stored as the task's ID —
-// a key is retired by a move and the record is kept for ever — a page must
-// exist, and a lookup that fails is the node's failure rather than a refusal
-// of the decision.
+// THE CHECKS THAT NEED THE WORLD ([ValidateDecisionAt]): a task reference is
+// stored as the task's ID, a page must exist, and a failed lookup is the node's
+// failure rather than a refusal of the decision.
 func TestValidateDecisionResolvesTasksAndRequiresPages(t *testing.T) {
 	t.Parallel()
 	lookup := fakeEvidence{
@@ -43,8 +42,7 @@ func TestValidateDecisionResolvesTasksAndRequiresPages(t *testing.T) {
 	if got.Evidence[0].Ref != "task-uuid-7" {
 		t.Errorf("the task reference is stored as %q, want the id", got.Evidence[0].Ref)
 	}
-	// A PAGE BY ITS ID TOO: its address is its title, and a rename
-	// retires the title while the decision is kept for ever.
+	// A PAGE BY ITS ID TOO: a rename retires its title-address.
 	if got.Evidence[1].Ref != "page-uuid-1" {
 		t.Errorf("the page reference is stored as %q, want the id", got.Evidence[1].Ref)
 	}
@@ -74,13 +72,10 @@ func TestValidateDecisionResolvesTasksAndRequiresPages(t *testing.T) {
 	}
 }
 
-// A TASK'S LABEL IS WHAT FOLLOWS ITS KEY: the Inbox draws a cited task as its
-// current key and then its label, so a label that repeats the key read it
-// twice ("GP-20 GP-20 sitemap fix"). A former key is the task's too; a key
-// that only starts like it (GP-2 of GP-20, GP-20 of GP-20-b) is the label's
-// own words. The cases are the dashboard's too (`lib/work.ts`'s
-// labelAfterKey draws an evidence label by the same rule), read from one
-// file so the two cannot drift.
+// A TASK'S LABEL IS WHAT FOLLOWS ITS KEY, current or former; a key that only
+// starts like it (GP-2 of GP-20, GP-20 of GP-20-b) is the label's own words.
+// The cases are the dashboard's too (`lib/work.ts`'s labelAfterKey), read from
+// one file so the two cannot drift.
 //
 // Mutation: store the label as written and every stripping case fails.
 func TestATaskEvidenceLabelIsStoredWithoutTheKeyTheLinkSays(t *testing.T) {
@@ -118,9 +113,8 @@ func TestATaskEvidenceLabelIsStoredWithoutTheKeyTheLinkSays(t *testing.T) {
 	}
 }
 
-// A CHOICE MUST NAME AN OPTION OF THE ASK IT ANSWERS — checked in the write's
-// own snapshot against the ask's row, so no caller can land an answer choosing
-// something that was never offered, and one answering a question that offered
+// A CHOICE MUST NAME AN OPTION OF THE ASK IT ANSWERS, checked in the write's
+// own snapshot against the ask's row; one answering a question that offered
 // nothing is told to answer in the body.
 func TestAChoiceMustNameAnOptionOfTheAskItAnswers(t *testing.T) {
 	t.Parallel()
@@ -204,11 +198,9 @@ func TestAChoiceMustNameAnOptionOfTheAskItAnswers(t *testing.T) {
 	}
 }
 
-// A DECISION IS SET ONLY WHEN THE QUESTION IS ASKED — never on a remark, and
-// never changed after, because an answer names an option by id and options
-// edited under it would make that answer mean something else. A decision is
-// written only on the row its post creates: an edit carries the stored one
-// whole, and a post naming a remark already on the thread is answered from
+// A DECISION IS SET ONLY WHEN THE QUESTION IS ASKED, never on a remark and
+// never changed after (decision.go's file comment): an edit carries the stored
+// one whole, and a post naming a remark already on the thread is answered from
 // that row with nothing published, whatever decision it carries.
 func TestADecisionRidesOnlyTheAskAndNeverChanges(t *testing.T) {
 	t.Parallel()
@@ -279,9 +271,8 @@ func TestADecisionRidesOnlyTheAskAndNeverChanges(t *testing.T) {
 }
 
 // AN AGENT'S DECISION NAMES THE OPTION IT RECOMMENDS AND WHY, at the writer
-// every comment passes through (ADR-0100), so no surface that skips the asking
-// tool lands an agent's options with nothing marked Recommended; a person's
-// own may leave it out, since a person asking may have no view.
+// every comment passes through (ADR-0100), so a surface that skips the asking
+// tool is held to it too; a person's may leave it out.
 //
 // Mutation: hold every author to the shape alone in validDecision, and the
 // agent's unrecommended decision lands.
@@ -309,14 +300,11 @@ func TestAnAgentsDecisionRecommendsOneOptionAndSaysWhy(t *testing.T) {
 	}
 }
 
-// A SECOND ANSWER TO ONE ASK IS REFUSED, naming who answered and when.
-//
-// The thread read that routes a wake runs BEFORE the publish, so two answers
-// decided at once both passed it; the applier's `answered_by IS NULL` then
-// kept the first on the ask while the second landed anyway, claiming to answer
-// a question it did not close. The check is in the write's own snapshot now —
-// this writes the second answer straight at the writer, past any thread read,
-// which is exactly the racing answer's position.
+// A SECOND ANSWER TO ONE ASK IS REFUSED, naming who answered and when, in the
+// write's own snapshot: the thread read runs before the publish, so two answers
+// at once both pass it, and the second would land without closing the ask.
+// This writes the second answer straight at the writer, past any thread read,
+// as a racing answer arrives.
 func TestASecondAnswerToOneAskIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -339,8 +327,8 @@ func TestASecondAnswerToOneAskIsRefused(t *testing.T) {
 	if err := answer("op-first", "c-first", answered); err != nil {
 		t.Fatalf("the first answer: %v", err)
 	}
-	// A RETRY OF THE SAME ANSWER is not a second one: its first attempt
-	// landed, and refusing it would report a success as a failure.
+	// A RETRY OF THE SAME ANSWER is not a second one: refusing it would
+	// report a success as a failure.
 	if err := answer("op-first-again", "c-first", answered); err != nil {
 		t.Fatalf("a retried answer was refused as a second one: %v", err)
 	}
@@ -378,9 +366,8 @@ func TestASecondAnswerToOneAskIsRefused(t *testing.T) {
 	}
 }
 
-// THE ANSWER'S CARD LEADS WITH THE CHOICE, by its label: the id alone tells
-// the asker nothing, and cut at the cap a card that led with the body could
-// lose the one thing the asker was waiting for.
+// THE ANSWER'S CARD LEADS WITH THE CHOICE, by its label: the id tells the asker
+// nothing, and a card led by the body could lose the choice at the cap.
 func TestTheAnswerExcerptNamesTheChoice(t *testing.T) {
 	t.Parallel()
 	answers := "c-ask"
@@ -454,6 +441,13 @@ func decisionFixture() *decision.Decision {
 type fakeEvidence struct {
 	tasks map[string]worklet.CitedTask
 	pages map[string]string
+	// own is the addresses this engine handed out, by the artifact each names.
+	own map[string]string
+}
+
+func (f fakeEvidence) OwnArtifact(ref string) (string, bool) {
+	id, ok := f.own[ref]
+	return id, ok
 }
 
 func (f fakeEvidence) Task(_ context.Context, ref string) (worklet.CitedTask, error) {
@@ -471,11 +465,9 @@ func (f fakeEvidence) PageID(_ context.Context, ref string) (string, bool, error
 	return id, ok, nil
 }
 
-// A DECISION'S SHAPE AND ITS EVIDENCE ARE CHECKED IN ONE PASS (ADR-0059). A
-// work item's ask whose decision is malformed and also cites a task that does
-// not exist is told both at once, each named under `decision.` as the ask
-// carries it, and a caller whose arguments carry the decision at their top (an
-// executor's) is told the same faults under no prefix.
+// A DECISION'S SHAPE AND ITS EVIDENCE ARE CHECKED IN ONE PASS (ADR-0059): a
+// malformed decision citing a missing task is told both at once, under
+// `decision.` for a work item's ask and under no prefix for an executor's.
 //
 // Mutation: return on the shape's refusal before the evidence is looked up,
 // and the missing task is not named.
@@ -505,11 +497,10 @@ func TestADecisionsShapeAndEvidenceAreCheckedInOnePass(t *testing.T) {
 	}
 }
 
-// ONLY AN APPROVER CHOOSES AN ACT'S APPROVING OPTION (ADR-0125): an answer
-// choosing the option an engine-set act approves by is refused unless whoever
-// posts it decided that person may approve the act's kind, while choosing its
-// other option, or answering an ask with no act, needs nothing more; and an
-// act naming an option its decision does not offer is refused at the ask.
+// ONLY AN APPROVER CHOOSES AN ACT'S APPROVING OPTION (ADR-0125): that choice is
+// refused unless the poster decided the person may approve the act's kind; the
+// other option, or an ask with no act, needs nothing more; an act naming an
+// option its decision does not offer is refused at the ask.
 //
 // Mutation: drop the check in the answer's settle, and anybody the question
 // reaches approves a production command with one press.
@@ -547,5 +538,34 @@ func TestOnlyAnApproverChoosesAnActsApprovingOption(t *testing.T) {
 			AuthorKind: worklet.AuthorAgent, Body: "run it?", Ask: "ana", Decision: decisionFixture(),
 			Act: &bad, CreatedAt: wednesday}}, worklet.ChangeComment, nil); !errors.Is(err, worklet.ErrInvalid) {
 		t.Fatalf("an act approving by an option its decision does not offer: %v", err)
+	}
+}
+
+// A URL THIS ENGINE HANDED OUT FOR ONE OF ITS ARTIFACTS IS CITED AS THE ARTIFACT
+// (ADR-0160), even over http; any other http address is still refused.
+// Mutation: drop the resolution, and the engine's own link is refused.
+func TestAnArtifactLinkThisEngineHandedOutIsCitedAsTheArtifact(t *testing.T) {
+	t.Parallel()
+	const id = "0f2a6c3e-6b1d-4e0a-9d6f-2b4c8a1e7f30"
+	own := "http://crewlet.test/dashboard#/artifacts/" + id
+	lookup := fakeEvidence{own: map[string]string{own: id}}
+	d := *decisionFixture()
+	d.Evidence = []decision.Evidence{{Kind: decision.EvidenceURL, Ref: own, Label: "version 8"}}
+	got, err := worklet.ValidateDecision(t.Context(), d, worklet.AuthorAgent, lookup)
+	if err != nil {
+		t.Fatalf("a decision citing the engine's own artifact link was refused: %v", err)
+	}
+	if want := (decision.Evidence{Kind: decision.EvidenceArtifact, Ref: id, Label: "version 8"}); got.Evidence[0] != want {
+		t.Errorf("the evidence is stored as %+v, want %+v", got.Evidence[0], want)
+	}
+	if d.Evidence[0].Kind != decision.EvidenceURL {
+		t.Error("ValidateDecision rewrote its caller's evidence in place")
+	}
+
+	d.Evidence = []decision.Evidence{{Kind: decision.EvidenceURL,
+		Ref: "http://elsewhere.test/dashboard#/artifacts/" + id}}
+	if _, err := worklet.ValidateDecision(t.Context(), d, worklet.AuthorAgent, lookup); !errors.Is(err, worklet.ErrInvalid) ||
+		!strings.Contains(err.Error(), "https://") {
+		t.Errorf("another host's http address answered %v, want the https refusal", err)
 	}
 }

@@ -11,30 +11,16 @@ import (
 
 // The engine's own page-subscription list, over the coordination store.
 //
-// # Why the engine keeps one at all
-//
-// A wiki page event names only who edited it, so without a subscription list
-// every change that is not an explicit mention falls all the way through to
-// the space lead — including the follow-up to a page a seat edited five
-// minutes ago, and including the second event on a page a lead deliberately
-// delegated by mentioning somebody. The lead-fallback prompt tells a lead to
-// delegate by mention precisely so the follow-ups stop coming to them, and
-// without this that loop never closes.
-//
-// # Why not Confluence's own watcher list
-//
-// See the rationale in internal/confluence's package doc. In short: it is
-// mostly people, it costs a call per event, and a per-role token frequently
-// cannot read it — so the answer would be "nobody" on the deployments that
-// need it most.
-//
-// # Why the completion Ledger and not a bucket of its own
-//
-// The question is set membership over a scope, tested against a caller-known
-// candidate list — which is exactly [coord.Ledger], down to the failure
-// polarity. Adding a second primitive with the same shape would mean two
-// retention rules, two backends' worth of conformance cases, and eventually
-// a disagreement between them.
+// A wiki page event names only who edited it, so without this list every
+// change that is not an explicit mention falls through to the space lead,
+// including follow-ups on a page a seat just edited or one a lead delegated by
+// mention, which the lead-fallback prompt asks for precisely to stop them.
+// Confluence's own watcher list will not do (internal/confluence's package
+// doc): mostly people, a call per event, and often unreadable by a per-role
+// token. It is a [coord.Ledger] rather than a bucket of its own: set membership
+// over a scope tested against known candidates is exactly the Ledger, failure
+// polarity included, and a second primitive of that shape means two retention
+// rules and two backends' conformance cases.
 
 // pageWatchers subscribes seats to the pages they touch.
 type pageWatchers struct {
@@ -60,10 +46,9 @@ func (w pageWatchers) Watching(ctx context.Context, pageID string, seats []strin
 
 // Watch subscribes one seat, named by its handle, to a page.
 //
-// The DETAIL is what subscribed the seat, which is the only thing an operator
-// reading the coordination store could otherwise not reconstruct: a seat that
-// edited a page and a seat somebody delegated to are subscribed identically
-// and arrived there very differently.
+// The detail records what subscribed the seat, which an operator reading the
+// store could not otherwise tell: an editor and a delegate are subscribed
+// identically.
 func (w pageWatchers) Watch(ctx context.Context, pageID, seat string, at time.Time) error {
 	if w.ledger == nil || strings.TrimSpace(pageID) == "" || strings.TrimSpace(seat) == "" {
 		return nil
@@ -73,11 +58,8 @@ func (w pageWatchers) Watch(ctx context.Context, pageID, seat string, at time.Ti
 
 // confluenceWatchers is the subscription list for this node's Confluence
 // parser, or nil where there is no coordination store.
-//
-// NIL IS A SUPPORTED ANSWER, not a degraded one to work around: a single node
-// with no fleet store routes by mention and space lead alone, which is what
-// this build did before subscriptions existed. The parser documents nil as
-// exactly that.
+// Nil is supported, not degraded: a node with no fleet store routes by mention
+// and space lead alone, as the parser documents.
 func (e *Engine) confluenceWatchers() *pageWatchers {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil
@@ -89,13 +71,8 @@ func (e *Engine) confluenceWatchers() *pageWatchers {
 const confluenceWatchPrefix = "confluence:page:"
 
 // watchersFor converts a possibly-nil *pageWatchers into an interface that is
-// nil when it should be.
-//
-// THE TYPED-NIL TRAP, made impossible at the one call site rather than
-// documented at it: assigning a nil *pageWatchers to an interface field
-// produces a non-nil interface, so every nil check downstream passes and the
-// first call panics. Every consumer of an optional pointer-backed seam in
-// this package goes through a converter like this one.
+// nil when it should be: a nil pointer in an interface field is a non-nil
+// interface, so every nil check downstream passes and the first call panics.
 func watchersFor(w *pageWatchers) confluence.Watchers {
 	if w == nil {
 		return nil

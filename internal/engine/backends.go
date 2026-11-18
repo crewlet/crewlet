@@ -15,6 +15,7 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/learning/memsync"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj"
@@ -114,6 +115,32 @@ type Backends struct {
 	// own operator's to keep alive and whose loss the client reconnects
 	// through.
 	death brokerDeath
+
+	// link is the meter of the link this node's connection to the broker
+	// crosses ([jetstream.Queue.LinkMeter]): a leaf's data link to the
+	// members, or every connection dialled to an external cluster. Nil on a
+	// member, whose connection crosses none, and on backends a caller lent
+	// without one. The memory sync's hydrations read it (memsync.Config.Link),
+	// and so do the object store's transfers (natsobj.Config.Link).
+	link memsync.Link
+
+	// window is the ONE window of that link ([jetstream.Queue.LinkWindow]),
+	// which every bulk transfer across it takes from, both ways: the object
+	// store's puts, downloads and walks (natsobj.Config.Window) and the
+	// memory sync's replay pulls (memsync.Config.Window), so a request a
+	// node sends behind them all is answered inside its term. Nil on a
+	// member, whose connection crosses no link.
+	window *jsapi.Window
+}
+
+// meterOf is q's link meter as the memory sync reads it, and NIL where q has
+// none: a member's queue answers a nil meter, which held in the interface
+// would be a link that is there and panics on its first reading.
+func meterOf(q *jetstream.Queue) memsync.Link {
+	if m := q.LinkMeter(); m != nil {
+		return m
+	}
+	return nil
 }
 
 // Complete reports which of the four a Backends lacks, or nil when it holds
@@ -642,22 +669,22 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 			jsprovision.Clustered(clusteredStream(b)).SequenceBudget())
 		defer cancel()
 		// ACROSS A LINK on every node whose connection is not to its own
-		// member — a leaf's, an external cluster's client — where the
-		// puts' window is sized by the lease renewals queued behind it,
-		// at the heartbeat the node's seat host renews them on: the TTL
-		// IN FORCE — the lease bucket's, which a fleet's first node set
-		// and which `coordination.lease_ttl_seconds` set here may not be
-		// ([effectiveLeaseTTL]) — over seat.HeartbeatRatio, as the host
-		// derives it. Sized against the shipped heartbeat instead, a
-		// 15-second lease (renewed every five) waited 20 s behind the
-		// window at the floor and lapsed.
+		// member — a leaf's, an external cluster's client — where every
+		// request sent behind the node's transfers waits for them, so they
+		// take the link's ONE window, the queue's, beside the memory sync's
+		// replays, and are judged by the link's meter.
 		reservation, explicit := objectsReservation(ctx, b, out.Queue, volumeFree)
-		backend, err := natsobj.Open(openCtx, js, natsobj.Config{
+		cfg := natsobj.Config{
 			Replicas: b.Stream.Replicas, Clustered: clusteredStream(b),
 			MaxBytes: reservation, Explicit: explicit,
-			AcrossLink:     acrossLink(b),
-			LeaseHeartbeat: effectiveLeaseTTL(b, out.Coord) / seat.HeartbeatRatio,
-		})
+		}
+		if acrossLink(b) {
+			cfg.AcrossLink, cfg.Window = true, out.window
+			if out.link != nil {
+				cfg.Link = out.link
+			}
+		}
+		backend, err := natsobj.Open(openCtx, js, cfg)
 		if err != nil {
 			return fmt.Errorf("engine: the object store (store.objects.backend: nats): %w", err)
 		}
@@ -845,7 +872,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 		// and must never take it down. And no `conn` either — the QUEUE
 		// owns this connection, so Close must not close it a second time
 		// underneath the client that is still shutting down.
-		return &Backends{Queue: q}, q.Conn(), nil
+		return &Backends{Queue: q, link: meterOf(q), window: q.LinkWindow()}, q.Conn(), nil
 	}
 
 	server, err := jetstream.StartServer(ctx, cfg)
@@ -859,7 +886,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 		return nil, nil, fmt.Errorf("engine: stream client: %w", err)
 	}
 	out := &Backends{Queue: q, stopServer: server.Shutdown, broker: server,
-		death: server.Death()}
+		death: server.Death(), link: meterOf(q), window: q.LinkWindow()}
 	// WATCHED, through the queue: this connection holds every lease the
 	// node renews, so NATS closing it for good is the node's loss exactly
 	// as the queue's own connection closing is, and the queue reports both
@@ -1064,11 +1091,29 @@ func coordinationStoresOf(b *config.Bootstrap) coordinationStores {
 // JetStream across a LINK — a leaf's link to the members, or a dial to an
 // external cluster — rather than its own member in its own process: the one
 // reading of it the engine hands every store on that connection, the object
-// store's puts' window ([openObjects]), the coordination store's writes
+// store's transfers ([openObjects]), the coordination store's writes
 // ([coordinationReach]) and the memory sync's hydrations (memsync.Config,
 // whose replays ride the coordination connection) alike. The queue reads the
 // same fact off how its own connection was made.
 func acrossLink(b *config.Bootstrap) bool { return b.BrokerKind() != placement.BrokerMember }
+
+// memoryConfig is how a node configured as b reaches the memory changelog
+// over backends' coordination connection (memsync.Config): across a link or
+// not ([acrossLink]), on the stream's topology ([clusteredStream]), with
+// its link's one window (Backends.window), which its replay pulls take from
+// beside the object store's transfers, and reading the meter of its link
+// where it crosses one (Backends.link) — what each of a hydration's requests
+// is given, whether its pulls are windowed (memsync's package doc, "A window
+// across a link"), and what tells a hydration held behind the link's other
+// traffic from one whose copy stopped answering.
+func memoryConfig(b *config.Bootstrap, backends *Backends) memsync.Config {
+	return memsync.Config{
+		AcrossLink: acrossLink(b),
+		Clustered:  clusteredStream(b),
+		Link:       backends.link,
+		Window:     backends.window,
+	}
+}
 
 // coordinationReach is how a node configured as b reaches the coordination
 // store's buckets, which decides how long a write's bytes are given to cross

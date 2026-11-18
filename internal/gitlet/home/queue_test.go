@@ -21,17 +21,13 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE MERGE QUEUE OVER ITS ROWS: one repository's main, its live entries and
-// its live train as the due-queue read answers them (queueRows), each record
-// the worker asks of the repository's committer applied to those rows as the
-// code domain's applier applies it — a candidate puts its entries in its train,
-// testing; an eject takes its entries out and abandons the train it ends; a
-// land moves main to its tip, its entries out — every check it queues held as
-// that commit's latest attempt, and the checks file every commit holds, and
-// every attempt the worker cancels ended cancelled — the read answering, as
-// given up, each attempt the worker queued that has not ended on a commit no
-// train tests or landed; the chains a Gitlet node builds (queueChains), each entry's merge a commit derived
-// from the commit it was built onto; and the work items closed (queueTasks).
+// THE MERGE QUEUE OVER ITS ROWS: queueRows is one repository's main, live
+// entries and live train as the due-queue read answers them, applying each
+// record the worker asks as the code domain's applier does (a candidate puts
+// its entries in its train; an eject takes them out and abandons the train it
+// ends; a land moves main to its tip), each queued check held as its commit's
+// latest attempt and each cancel ended cancelled. queueChains is a Gitlet
+// node's chain builds; queueTasks the work items closed.
 
 const queueMain = "refs/heads/main"
 
@@ -50,15 +46,14 @@ type queueRows struct {
 	queued   []gitlet.CheckQueued
 	records  []gitlet.QueueProposal
 	seq      uint64
-	// refuse, where set, answers a land instead of the rows: the decide's
-	// refusal of entries it would not land.
+	// refuse, where set, answers a land in place of the rows, as the decide
+	// refuses entries it would not land.
 	refuse func(gitlet.Land) *gitlet.QueueResult
-	// epoch is the repository's drop epoch as the rows hold it: a candidate
-	// or a landing stating another is refused expunging, as the decide
-	// refuses it.
+	// epoch is the repository's drop epoch: a candidate or landing stating
+	// another is refused expunging, as the decide does.
 	epoch int64
-	// enqueued is what the rows count of main's enqueues since the instant a
-	// read asks, and since every instant a read asked from.
+	// enqueued is the count of main's enqueues the rows answer since any
+	// instant a read asks; since records each instant asked.
 	enqueued int
 	since    []time.Time
 	// mirrored is the repository a pull mirror, as the read answers it.
@@ -68,19 +63,18 @@ type queueRows struct {
 	landed    map[string]bool
 	cancelled []gitlet.CheckFinished
 	// owed is every landed entry still owing its work item's close, as a
-	// landing's apply leaves it (code_queue.close_op), until a settle
-	// clears it; settles every close a close_settled applied settled, in
-	// order, and settleRecords how many records applied them — kept apart
-	// from records, which are the queue's trains and landings.
+	// landing's apply leaves it (code_queue.close_op), until a settle clears
+	// it; settles every close a close_settled settled, in order, and
+	// settleRecords how many records did, kept apart from records (trains and
+	// landings).
 	owed          []gitlet.QueueWorkEntry
 	settles       []gitlet.SettledClose
 	settleRecords int
 	// pending, where set, answers a land pending: its rows applied, as the
 	// committer's would be, but not yet on the asker's.
 	pending bool
-	// madeFor is whom every entry enqueue adds was enqueued for, as the
-	// entry's row keeps it (gitlet.QueueWorkEntry.WorkingFor): nil for
-	// nobody.
+	// madeFor is whom each entry enqueue adds was enqueued for
+	// (gitlet.QueueWorkEntry.WorkingFor); nil for nobody.
 	madeFor *types.WorkingFor
 }
 
@@ -388,10 +382,9 @@ func (r *queueRows) Change(context.Context, gitlet.ChangeProposal) (gitlet.Chang
 }
 
 // queueChains is a Gitlet node's chain builds: each entry's merge a commit
-// derived from the commit before it, an entry in conflicts skipped as a
-// conflict on the path it names, one in rejected skipped rejected_object, the
-// chain answering its first reach entries alone where reach is set — the
-// rest not reached — and every build and every settle counted.
+// derived from the one before it; an entry in conflicts skipped as a conflict
+// on the path it names, one in rejected skipped rejected_object; where reach
+// is set, only the first reach entries reached; every build and settle counted.
 type queueChains struct {
 	mu        sync.Mutex
 	conflicts map[string]string
@@ -447,7 +440,7 @@ func (c *queueChains) built() int {
 }
 
 // queueTasks is every work item a landing asked closed, in order: closed
-// those it closed, and asked every close asked, fail's included.
+// those it closed, asked every close asked, fail's included.
 type queueTasks struct {
 	mu     sync.Mutex
 	closed []home.TaskClose
@@ -517,21 +510,17 @@ func hexOf(s string) string {
 }
 
 // THE QUEUE LANDS THE LONGEST GREEN PREFIX (M5-D12, M5-D13, M5-D15, M5-D27):
-// six changes waiting at depth 3 and batch 2 are ONE train of three
-// candidates of min(2, ⌈6/3⌉) = 2 changes each, built onto main's tip as one
-// chain and recorded; each candidate's tip is queued the required check under
-// the checks file of the train's BASE — never the one a candidate's own commit
-// holds — for the candidate; and with the first candidate's tip still running,
-// the second's passed and the third's failed, the first two candidates land in
-// ONE land record — the second's tip holds the first's changes, so its pass is
-// theirs — main moving to the second's tip, and every landed entry that asked
-// it has its work item closed as its enqueuer under the landing's step id.
+// six changes at depth 3 and batch 2 are ONE train of three candidates of
+// min(2, ⌈6/3⌉) = 2 changes, built onto main as one chain; each tip is queued
+// the required check under the train BASE's checks file, never its own. With
+// the first tip running, the second passed and the third failed, the first two
+// land in ONE land record (the second's tip holds the first's changes, so its
+// pass is theirs), main moving to the second's tip, and each entry that asked
+// has its work item closed as its enqueuer under the landing's step id.
 //
-// Mutation: take ⌊W/D⌋ rather than ⌈W/D⌉ in BatchOf → candidates of one, red;
-// stop the prefix at the first candidate that passed → only the first, red
-// (it has not passed: nothing lands, red); read the checks file at a
-// candidate's tip → the queued defs are the tip's, red; close a work item as
-// the queue's node rather than the enqueuer → red.
+// Mutation: ⌊W/D⌋ for ⌈W/D⌉ in BatchOf → candidates of one; land only the first
+// candidate → it has not passed, nothing lands; read the checks file at a tip
+// → the tip's defs; close as the queue's node, not the enqueuer → each red.
 func TestTheQueueLandsTheLongestGreenPrefix(t *testing.T) {
 	t.Parallel()
 	base := oid("a")
@@ -623,18 +612,18 @@ func TestTheQueueLandsTheLongestGreenPrefix(t *testing.T) {
 	}
 }
 
-// A RED BATCH IS BISECTED (M5-D13): a train of one candidate of four changes
-// — depth 1, batch 4 — whose tip fails is bisected over its entries' own
-// commits: the commit midway between the base (good) and the tip (red) is
-// queued the failed check for the bisect; it passing, the next probe is
-// midway between it and the tip; that one failing, it is the first red
-// commit after the last good one, and its entry — the culprit, alone — is
-// ejected check_failed naming the check. The eject abandons the train, and the
-// next turn builds the three others onto main again, the culprit out.
+// A RED BATCH IS BISECTED (M5-D13): a lone candidate of four changes (depth 1,
+// batch 4) whose tip fails is bisected over its entries' commits: the commit
+// midway between the base (good) and the tip (red) is queued the failed check;
+// it passing, the next probe is midway between it and the tip; that one
+// failing is the first red commit, and its entry alone is ejected check_failed
+// naming the check and the train (the candidate, its base and the culprit's
+// own commit, not the tip). The eject abandons the train; the next turn
+// rebuilds the other three onto main.
 //
-// Mutation: probe the tip rather than midway → the first probe is the failed
-// tip, red; eject the red commit's successor (or the whole batch) → red;
-// keep the ejected entry in the rebuilt chain → red.
+// Mutation: probe the tip, not midway; eject the red commit's successor or the
+// whole batch; keep the ejected entry in the rebuilt chain; name the tip as
+// the failing commit → each red.
 func TestARedBatchIsBisected(t *testing.T) {
 	t.Parallel()
 	base := oid("b")
@@ -675,6 +664,10 @@ func TestARedBatchIsBisected(t *testing.T) {
 		t.Fatalf("the bisect ended in %+v, want entry 3 alone ejected check_failed naming unit",
 			records[len(records)-1])
 	}
+	want := gitlet.EjectionTrain{CandidateID: train[0].CandidateID, BaseOID: base, CommitOID: commits[2].Commit}
+	if got := eject.Entries[0].TestedIn; got == nil || *got != want {
+		t.Fatalf("the culprit's ejection names the train %+v, want %+v: entry 3's commit, not the tip", got, want)
+	}
 	if train, _ := rows.snapshot(); len(train) != 0 {
 		t.Fatalf("the culprit's eject left the train %+v standing", train)
 	}
@@ -689,16 +682,44 @@ func TestARedBatchIsBisected(t *testing.T) {
 	}
 }
 
-// A NEW HOME RESUMES THE QUEUE FROM ROWS: what a train has reached is its
-// rows' — its candidates and the checks recorded on them — and nothing held by
-// the home that built it, so a second loop over the same rows, as a home that
-// took the repository over has, TESTS the standing train (its checks queued)
-// and lands it, building nothing; and a target a person's push moved under
-// the train abandons it — the next turn builds a new train onto the new tip.
+// A LONE CULPRIT NAMES ITS OWN COMMIT: a candidate of one change whose tip
+// fails is its own culprit, no probe run, ejected check_failed naming the train
+// it failed on, the tip its commit.
 //
-// Mutation: build whenever the worker holds no train of its own (a memory of
-// the last build) → the new home builds, red; drop QueueDue.TrainStands' base
-// check → the train on the old tip is tested on, red.
+// Mutation: eject the culprit naming no train (bisect's TestedIn left out) → red.
+func TestALoneCulpritsEjectionNamesItsTip(t *testing.T) {
+	t.Parallel()
+	base := oid("e")
+	rows := newQueueRows(base, 1, 1)
+	entries := rows.enqueue(t, 1)
+	l := queueLoop(t, rows, &queueChains{}, &queueTasks{})
+
+	turn(t, l, rows)
+	train, _ := rows.snapshot()
+	if len(train) != 1 || len(train[0].Commits) != 1 {
+		t.Fatalf("one change at depth 1 and batch 1 is %+v, want one candidate of one", train)
+	}
+	rows.ended(train[0].TipOID, "unit", gitlet.CheckStateFailed)
+	turn(t, l, rows)
+	records, queued := rows.asked()
+	eject := records[len(records)-1].Eject
+	want := gitlet.EjectionTrain{CandidateID: train[0].CandidateID, BaseOID: base, CommitOID: train[0].TipOID}
+	if len(queued) != 0 || eject == nil || len(eject.Entries) != 1 || eject.Entries[0].EntryID != entries[0].EntryID ||
+		eject.Entries[0].TestedIn == nil || *eject.Entries[0].TestedIn != want {
+		t.Fatalf("a lone red candidate queued %d checks and recorded %+v, want its entry ejected naming %+v and "+
+			"no probe", len(queued), records[len(records)-1], want)
+	}
+}
+
+// A NEW HOME RESUMES THE QUEUE FROM ROWS: a train's progress is its rows (its
+// candidates and their checks), never the home that built it, so a second
+// loop over the same rows, as a home that took the repository over, TESTS the
+// standing train and lands it, building nothing; a person's push moving the
+// target under the train abandons it, and the next turn builds onto the new tip.
+//
+// Mutation: build whenever the worker remembers no train of its own → the new
+// home builds; drop QueueDue.TrainStands' base check → the train on the old
+// tip is tested on; each red.
 func TestANewHomeResumesTheQueueFromRows(t *testing.T) {
 	t.Parallel()
 	base := oid("c")
@@ -750,18 +771,17 @@ func TestANewHomeResumesTheQueueFromRows(t *testing.T) {
 	}
 }
 
-// EJECTING A CULPRIT CANCELS ITS TRAIN'S CHECKS: a train of two candidates
-// (depth 2, batch 1) whose first candidate fails its unit check has its
-// culprit ejected, which gives the train up — and the second candidate's
-// attempts, its unit running and its lint still queued, measure a commit
-// nothing will land while they hold a runner's cells. The turn that builds
-// the next train cancels nothing, since a train built again may test a
-// given-up attempt's commit (its snapshot is read before its candidate is
-// recorded); the turn after cancels exactly those two attempts, `abandoned`,
-// and none of the live train's.
+// EJECTING A CULPRIT CANCELS ITS TRAIN'S CHECKS: of a train of two candidates
+// (depth 2, batch 1), the first failing its unit check has its culprit
+// ejected, giving the train up, and the second's attempts (unit running, lint queued) measure a commit
+// nothing will land while holding a runner's cells. The turn that builds the
+// next train cancels nothing, since a rebuilt train may test a given-up
+// attempt's commit (its snapshot is read before its candidate is recorded);
+// the turn after cancels exactly those two, `abandoned`, none of the live
+// train's.
 //
-// Mutation: drop the cancel → the given-up attempts run on, red; cancel in a
-// turn that recorded a train → the build turn cancels, red.
+// Mutation: drop the cancel → the given-up attempts run on; cancel in a turn
+// that recorded a train → the build turn cancels; each red.
 func TestEjectingACulpritCancelsItsTrainsChecks(t *testing.T) {
 	t.Parallel()
 	base := oid("c")
@@ -813,16 +833,15 @@ func TestEjectingACulpritCancelsItsTrainsChecks(t *testing.T) {
 	}
 }
 
-// A GIVEN-UP RUN IS QUEUED AGAIN FOR THE TRAIN THAT TESTS ITS COMMIT: a
-// train built again from the same rows is the same commits, so the live train
-// may test a commit whose latest attempt a given-up train's cancellation
-// ended — `abandoned`, having measured nothing — and its test queues the next
-// attempt as a requeue, as it does one its runner's infrastructure ended;
-// one cancelled for any other reason is left, as stuck.
+// A GIVEN-UP RUN IS QUEUED AGAIN FOR THE TRAIN THAT TESTS ITS COMMIT: a train
+// rebuilt from the same rows is the same commits, so the live train may test a
+// commit whose latest attempt a given-up train's cancel ended `abandoned`,
+// having measured nothing; its test requeues it, as one its runner's
+// infrastructure ended. One cancelled for any other reason is left, as stuck.
 //
-// Mutation: drop the given-up arm of the landing states → the cancelled
-// attempt reads stuck and nothing is queued, red; requeue any cancellation →
-// the superseded one is queued again, red.
+// Mutation: drop the given-up arm of the landing states → it reads stuck and
+// nothing is queued; requeue any cancellation → the superseded one is queued
+// again; each red.
 func TestAGivenUpRunIsQueuedAgainForTheTrainThatTestsIt(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -858,18 +877,17 @@ func TestAGivenUpRunIsQueuedAgainForTheTrainThatTestsIt(t *testing.T) {
 	}
 }
 
-// THE QUEUE STATES THE DROP EPOCH IT BUILT AND READ AT (M6-D4): on a
-// repository an expunge has begun on (epoch 1), a chain built from a copy
-// still at the epoch before is recorded at that epoch and refused expunging,
-// so no train stands; built again from a copy past the begin, its candidate
-// states the copy's epoch and is recorded. And the landing of that train
-// states the epoch its snapshot read: with another expunge begun after the
-// train stood (epoch 2) — which holds a candidate's tip live — the landing
-// decided from the read at epoch 2 states it and lands main.
+// THE QUEUE STATES THE DROP EPOCH IT BUILT AND READ AT (M6-D4): with an
+// expunge begun (epoch 1), a chain built from a copy still at epoch 0 is
+// proposed at 0 and refused expunging, so no train stands; rebuilt from a copy
+// past the begin, its candidate states that copy's epoch and is recorded. The
+// landing states the epoch its snapshot read: with another expunge begun after
+// the train stood (epoch 2, which holds a candidate's tip live), it states 2
+// and lands main.
 //
-// Mutation: propose the candidate at the snapshot's epoch rather than its
-// chain's → the train built from the stale copy is recorded, red; propose the
-// landing at no epoch → it is refused, and main stays, red.
+// Mutation: propose the candidate at the snapshot's epoch, not its chain's →
+// the stale copy's train is recorded; propose the landing at no epoch → it is
+// refused and main stays; each red.
 func TestTheQueueStatesTheDropEpochItBuiltAndReadAt(t *testing.T) {
 	t.Parallel()
 	base := oid("e")
@@ -911,15 +929,14 @@ func TestTheQueueStatesTheDropEpochItBuiltAndReadAt(t *testing.T) {
 	}
 }
 
-// A CHAIN'S UNBUILDABLE ENTRY IS EJECTED, ITS UNREACHED ONES WAIT: three
-// changes at depth 3 and batch 1, built by a chain that reached only two of
-// them — the second skipped rejected_object — eject the second `conflict`,
-// with no paths, as an entry no train can build; record a train of the first
-// alone; and leave the third waiting in no train, neither ejected nor tested,
-// for the train after this one.
+// A CHAIN'S UNBUILDABLE ENTRY IS EJECTED, ITS UNREACHED ONES WAIT: of three
+// changes at depth 3 and batch 1, built by a chain that reached two, the second
+// skipped rejected_object is ejected `conflict` with no paths, as no train can
+// build it; the first is recorded as a train alone; the third waits in no
+// train, neither ejected nor tested, for the next train.
 //
-// Mutation: leave a rejected_object entry unejected → no eject, red; eject
-// the entries a chain did not reach → the third is gone, red.
+// Mutation: leave a rejected_object entry unejected → no eject; eject the
+// entries a chain did not reach → the third is gone; each red.
 func TestTheQueueEjectsAnUnbuildableEntryAndKeepsTheUnreached(t *testing.T) {
 	t.Parallel()
 	rows := newQueueRows(oid("9"), 3, 1)
@@ -945,30 +962,15 @@ func TestTheQueueEjectsAnUnbuildableEntryAndKeepsTheUnreached(t *testing.T) {
 	}
 }
 
-// THE QUEUE EJECTS WHAT IT CANNOT LAND, each for its own reason and naming
-// what a person reads to mend it: three changes at depth 3 and batch 1, the
-// second's merge conflicting on go.mod, build a train of the two others — the
-// second ejected `conflict` naming the path, in its own record ahead of the
-// train's — and the chain settled applied once its candidate record applied;
-// both candidates green, the landing its decide refuses — the first entry's
-// gate no longer met, the third's head moved — ejects each for its own
-// refusal. And a train whose BASE's checks file defines the required check in
-// no form that runs can never be green, so its entries are ejected
-// `check_failed` naming the check, and nothing is queued on any tip.
+// A PULL MIRROR'S QUEUE IS SHED, NEVER BUILT: nothing merges into a pull
+// mirror (its candidates and landings are refused repo_mirrored), so one that
+// became a mirror with entries queued has every live entry ejected
+// repo_mirrored in one eject record, and no chain built: not for a queue that
+// never had a train, nor for a standing train whose candidates all passed.
 //
-// Mutation: leave a conflicting merge unejected → no eject, red; eject
-// nothing a landing refuses head_moved → red; answer an undefined required
-// check without the eject → red.
-// A PULL MIRROR'S QUEUE IS SHED, NEVER BUILT: a repository that became a pull
-// mirror with entries queued — nothing merges into it, so its candidates and
-// its landings are refused repo_mirrored — has every live entry ejected
-// repo_mirrored in one eject record, and no chain is built for it: not for a
-// queue that never had a train, and not for a standing train whose candidates
-// all passed, which would otherwise land.
-//
-// Mutation: drop the lane's mirrored arm (target) — the first turn builds a
-// chain and records a candidate, the second lands the green train, red; eject
-// with another reason — the record names it, red.
+// Mutation: drop the lane's mirrored arm (target) → the first turn builds and
+// records a candidate, the second lands the green train; eject with another
+// reason → the record names it; each red.
 func TestAPullMirrorsQueueIsShedNeverBuilt(t *testing.T) {
 	t.Parallel()
 	shed := func(t *testing.T, rows *queueRows, chains *queueChains, live []gitlet.QueueWorkEntry, builds int) {
@@ -1031,6 +1033,18 @@ func TestAPullMirrorsQueueIsShedNeverBuilt(t *testing.T) {
 	})
 }
 
+// THE QUEUE EJECTS WHAT IT CANNOT LAND, each for its own reason, naming what a
+// person reads to mend it: of three changes at depth 3 and batch 1, the
+// second, its merge conflicting on go.mod, is ejected `conflict` naming the
+// path, in a record ahead of the train of the other two, and the chain is
+// settled applied once its candidate record applied; both green, the landing
+// its decide refuses (the first's gate no longer met, the third's head moved)
+// ejects each for its refusal. A train whose BASE's checks file defines the
+// required check in no runnable form can never be green: its entries are
+// ejected `check_failed` naming the check and no train, nothing queued.
+//
+// Mutation: leave a conflicting merge unejected; eject nothing refused
+// head_moved; answer an undefined required check without the eject → each red.
 func TestTheQueueEjectsWhatItCannotLand(t *testing.T) {
 	t.Parallel()
 	rows := newQueueRows(oid("e"), 3, 1)
@@ -1090,17 +1104,19 @@ func TestTheQueueEjectsWhatItCannotLand(t *testing.T) {
 	if len(queued) != 0 || eject == nil || len(eject.Entries) != 2 || eject.Entries[0].EntryID != left[0].EntryID ||
 		eject.Entries[1].EntryID != left[1].EntryID ||
 		slices.ContainsFunc(eject.Entries, func(x gitlet.Ejection) bool {
-			return x.Reason != gitlet.EjectCheckFailed || !slices.Equal(x.Checks, []string{"unit"})
+			return x.Reason != gitlet.EjectCheckFailed || !slices.Equal(x.Checks, []string{"unit"}) ||
+				x.TestedIn != nil
 		}) {
 		t.Fatalf("a train whose base defines no unit queued %+v and recorded %+v, want nothing queued and "+
-			"both entries ejected check_failed naming unit", queued, records[len(records)-1])
+			"both entries ejected check_failed naming unit and no train, since nothing ran", queued,
+			records[len(records)-1])
 	}
 }
 
-// landsOne queues one change on rows asking its work item closed, builds its
-// train in a turn of l, passes its tip's check and lands it in the next: the
-// entry, the landing's operation id and the landing turn's error, which a
-// close left owed makes.
+// landsOne queues one change asking its work item closed, builds its train in
+// a turn of l, passes its tip's check and lands it in the next, returning the
+// entry, the landing's operation id and the landing turn's error (a close left
+// owed makes one).
 func landsOne(t *testing.T, rows *queueRows, l *home.Loop) (gitlet.QueueWorkEntry, string, error) {
 	t.Helper()
 	e := rows.enqueue(t, 1)[0]
@@ -1130,15 +1146,13 @@ func landsOne(t *testing.T, rows *queueRows, l *home.Loop) (gitlet.QueueWorkEntr
 }
 
 // A LAND ANSWERED PENDING CLOSES ON THE NEXT TURN (M5-D27): the home closes a
-// landed change's work item only once its landing has APPLIED, so a landing
-// its committer answered pending closes nothing in the turn that asked it —
-// but the landing's apply leaves the close owed on the entry's row, and the
-// next turn reads it there and closes the item as the enqueuer, under the
-// landing's own step (gitlet.CloseWorkItemOpID), and settles it closed.
+// landed change's work item only once its landing APPLIED, so a pending
+// landing closes nothing in its turn; its apply leaves the close owed on the
+// entry's row, and the next turn closes the item as the enqueuer under the
+// landing's step (gitlet.CloseWorkItemOpID) and settles it closed.
 //
-// Mutation: drop the owed closes a due-queue read's first page answers
-// (Work keeps no QueueOwedCloses) — the pending landing's item is never
-// closed, red.
+// Mutation: drop the owed closes a due-queue read's first page answers (Work
+// keeps no QueueOwedCloses) → the item is never closed, red.
 func TestALandAnsweredPendingClosesOnTheNextTurn(t *testing.T) {
 	t.Parallel()
 	rows := newQueueRows(oid("a"), 1, 1)
@@ -1173,15 +1187,14 @@ func TestALandAnsweredPendingClosesOnTheNextTurn(t *testing.T) {
 }
 
 // A FAILED CLOSE IS RETRIED (M5-D27): a close whose end the tracker cannot
-// state — unreachable, its answer unknown — fails the turn and is NOT
-// settled, so the next turn asks the same close again, under the same
-// operation, and settles it once it lands; a close the tracker will never
-// make (home.NotClosed: a vendor's item, an enqueuer who may not) is settled
-// not_closed at once, its sentence on the record, and never asked again.
+// state (unreachable, answer unknown) fails the turn unsettled, so the next
+// turn asks it again under the same operation and settles it once it lands; a
+// close the tracker will never make (home.NotClosed: a vendor's item, an
+// enqueuer who may not) is settled not_closed at once, its sentence on the
+// record, never asked again.
 //
-// Mutations: settle a close whose error is not a NotClosed — it is never
-// asked again, red; settle a NotClosed one closed — its outcome is wrong,
-// red.
+// Mutations: settle a non-NotClosed failure → never asked again; settle a
+// NotClosed one closed → wrong outcome; each red.
 func TestAFailedCloseIsRetried(t *testing.T) {
 	t.Parallel()
 	rows := newQueueRows(oid("a"), 1, 1)
@@ -1241,11 +1254,10 @@ func TestAFailedCloseIsRetried(t *testing.T) {
 }
 
 // A LANDING'S CLOSES ARE SETTLED IN ONE RECORD (M5-D27): a landing of three
-// changes, each asking its work item closed, is three tracker writes, each
-// as its enqueuer under its own step of the landing — and ONE close_settled
-// record of how all three ended, in the landing's order, the one the tracker
-// will not make settled not_closed with its sentence beside the two closed:
-// never a code-log append a change, one after another inside the queue turn.
+// changes asking their work items closed is three tracker writes, each as its
+// enqueuer under its own step of the landing, and ONE close_settled record of
+// how all three ended, in landing order (the one the tracker will not make
+// not_closed with its sentence), never a code-log append per change.
 //
 // Mutation: settle each close in a record of its own → three records, red.
 func TestALandingsClosesAreSettledInOneRecord(t *testing.T) {
@@ -1297,15 +1309,14 @@ func TestALandingsClosesAreSettledInOneRecord(t *testing.T) {
 	}
 }
 
-// A NEW HOME CLOSES WHAT THE OLD ONE OWED (M5-D27): a home that stops between
-// its landing applying and its close — here, one whose tracker could not
-// answer — leaves the close on the rows, not in itself, so the home that
-// takes the repository over closes the item in its first turn, under the
-// landing's step the row names, as the enqueuer, and settles it.
+// A NEW HOME CLOSES WHAT THE OLD ONE OWED (M5-D27): a home stopping between its
+// landing applying and its close (here, its tracker could not answer) leaves
+// the close on the rows, so the home taking the repository over closes the
+// item in its first turn, as the enqueuer under the landing's step the row
+// names, and settles it.
 //
-// Mutation: close an owed item under an operation of the turn's own rather
-// than the row's (TaskClose.OpID not CloseOp) — the new home's close is
-// another write than the old one's, red.
+// Mutation: close under the turn's own operation, not the row's (TaskClose.OpID
+// not CloseOp) → the new home's close is another write, red.
 func TestANewHomeClosesWhatTheOldOneOwed(t *testing.T) {
 	t.Parallel()
 	rows := newQueueRows(oid("a"), 1, 1)
@@ -1329,15 +1340,13 @@ func TestANewHomeClosesWhatTheOldOneOwed(t *testing.T) {
 }
 
 // THE HOME CLOSES AN ENTRY FOR WHOM IT WAS ENQUEUED (ADR-0109, M5-D27): the
-// home hands the close of a landed change's work item whom the entry's enqueue
-// was made for, as its queue work answered it, on both of its paths — a
-// landing applied at once, closed from the entries of the page that landed it,
-// and a close the landing left owed, read on a later turn — so the tracker
-// writes the close for them and decides it within what they may use, never for
-// the enqueuing seat alone, whichever turn makes it.
+// close of a landed change's work item carries whom the enqueue was made for,
+// on both paths (a landing applied at once, closed from the page that landed
+// it; a close left owed, read on a later turn), so the tracker writes it for
+// them, within what they may use, never for the enqueuing seat alone.
 //
-// Mutation: leave the carrier off the close the home hands over — each close
-// is handed over made for nobody, red.
+// Mutation: leave the carrier off the close handed over → each is made for
+// nobody, red.
 func TestTheHomeClosesAnEntryForWhomItWasEnqueued(t *testing.T) {
 	t.Parallel()
 	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}

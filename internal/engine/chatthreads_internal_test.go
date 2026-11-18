@@ -15,9 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// threadAnswerer is a data node's chat reader answering one thread, with whom
-// its messages were written for, and recording what it was asked. Every other
-// read is a case's mistake.
+// threadAnswerer is a data node's chat reader answering one thread and whom its
+// messages were written for, recording what it was asked. Every other read fails.
 type threadAnswerer struct {
 	noReaderViews
 
@@ -28,8 +27,8 @@ type threadAnswerer struct {
 		viewer string
 		query  chatlet.ThreadQuery
 		called bool
-		// plain is that the reader's plain Thread was asked, which the
-		// engine's turn-start read never asks of a node that serves its own.
+		// plain records a plain Thread read, which the turn-start read never
+		// asks of a node that serves its own.
 		plain bool
 	}
 }
@@ -91,13 +90,10 @@ func (*threadAnswerer) At() statelog.Position { return statelog.Position{} }
 
 // A NODE THAT HOLDS NO DATA HANDS ITS SEAT THE THREAD THROUGH THE ROUTER.
 //
-// The Chatlet thread reader reads through the estate's router so that a node
-// holding no copy of chat — a seats-only member of the fleet — hands its woken
-// seats their thread exactly as a data node does. The only engine case read on
-// a data node, so a reader built over this node's own copy would have passed
-// it — and on a seats-only node that reader is no reader at all, every wake
-// rendering the "could not be read" hint. This one has no copy to fall back
-// to: the router is the only way the transcript can arrive.
+// The Chatlet thread reader reads through the estate's router, so a seats-only
+// node hands its woken seats their thread as a data node does. This node has no
+// copy to fall back to, so a reader built over its own copy fails here rather
+// than render the "could not be read" hint on every wake.
 func TestANodeHoldingNoDataReadsTheThreadThroughTheRouter(t *testing.T) {
 	t.Parallel()
 	answerer := &threadAnswerer{thread: chatlet.Thread{
@@ -158,10 +154,9 @@ func TestANodeHoldingNoDataReadsTheThreadThroughTheRouter(t *testing.T) {
 		t.Errorf("the data node was asked (called=%v) as %q for %+v, want the woken "+
 			"seat's own newest-end read of the thread", asked.called, asked.viewer, asked.query)
 	}
-	// THE TURN'S OWN READ, and only it, served by the data node: whom each
-	// message was written for crosses with the thread, and the transcript
-	// says it was read. The plain thread is a fallback a node that serves
-	// the turn's read never sees.
+	// Only the turn's own read: whom each message was written for crosses with
+	// the thread, and the transcript says it was read. The plain thread is a
+	// fallback a node serving it never sees.
 	if asked.plain {
 		t.Error("the data node was asked the plain thread, which the turn's own read never asks " +
 			"of a node that serves it")
@@ -178,9 +173,8 @@ func TestANodeHoldingNoDataReadsTheThreadThroughTheRouter(t *testing.T) {
 	}
 }
 
-// noReaderViews is a chat reader double's reader views when its suite reads
-// none of them: each is refused, so a case that reaches one by mistake fails
-// rather than reading an empty answer as a real one.
+// noReaderViews refuses every reader view of a chat reader double, so a case
+// that reaches one by mistake fails rather than read an empty answer as real.
 type noReaderViews struct{}
 
 var errNoReaderViews = errors.New("this double answers no reader view")

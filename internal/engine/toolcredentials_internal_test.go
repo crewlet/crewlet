@@ -27,19 +27,16 @@ import (
 )
 
 // The rule a tool server is started by when a value it is started with does
-// not resolve (toolcredentials.go): what tells a credential on its way from
-// one nobody will supply, what tells a wait from a wait that never ends, what
-// a key declared optional leaves out, and what starts the server once the
-// credential is there.
+// not resolve (package doc, "Tool server credentials"): a credential on its
+// way told from one nobody will supply, a wait from one that never ends, what
+// an optional key leaves out, and what starts the server once the credential
+// is there.
 
-// mixedDoc is a company that provisions its agents' Atlassian accounts, whose
-// per-role servers point at binaries that do not exist, and whose seats'
-// servers mix what the pass mints with what nothing does: the Atlassian
-// server's site address is a variable nobody sets, and the CTO names one
-// token under two keys. Its
-// servers' own env passes a host setting through by name that no host here
-// sets, the guide's own example of a reference that may resolve to nothing,
-// and declares it optional as the guide does.
+// mixedDoc provisions its agents' Atlassian accounts, and its seats' servers
+// (binaries that do not exist) mix what the pass mints with what nothing does:
+// the Atlassian site address is a variable nobody sets, and the CTO names one
+// token under two keys. Its servers' own env passes through, declared optional
+// as the guide does, a host setting no host here sets.
 const mixedDoc = `
 name: Acme
 seat_access_migrated: [atlassian]
@@ -124,11 +121,9 @@ func missingFor(t *testing.T, c *Company, handle, server string, env *config.Res
 }
 
 // A BLOCK ONE OF WHOSE VARIABLES A PASS MINTS AND ANOTHER NOTHING DOES IS A
-// FAILURE, and its sentence promises no start.
-//
-// The access sync mints the CEO's Atlassian address and token, and nothing
-// mints the site address beside them: waiting for the pass would wait for ever, since
-// the pass never mints the other, behind a screen that says nothing is wrong.
+// FAILURE, and its sentence promises no start: the access sync mints the CEO's
+// Atlassian address and token but never the site address, so a wait would never
+// end, behind a screen saying nothing is wrong.
 func TestABlockMixingAMintedAndAnUnsetVariableIsAFailureNotAWait(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, mixedDoc)
@@ -190,15 +185,11 @@ func TestAVariableSetToNothingIsToldFromOneSetNowhere(t *testing.T) {
 }
 
 // A KEY DECLARED OPTIONAL WHOSE VALUE DOES NOT RESOLVE IS LEFT OUT, WHOLE, and
-// holds nothing back — a seat's child of a per-role template, or a shared
-// server.
-//
-// The guide passes NPM_CONFIG_REGISTRY through by name, unset on most hosts,
-// and declares it optional. Left out is what Kubernetes does with an optional
-// secret reference: the child starts without the variable. Passed on empty, it
-// drew an `empty_env_vars` warning on every start; and a value built around a
-// reference ("Bearer ${TOKEN}") would arrive as half of itself, a credential
-// that looks set.
+// holds nothing back, in a seat's child of a per-role template or a shared
+// server: as Kubernetes does with an optional secret reference. Passed on empty
+// instead, it warns (`empty_env_vars`) on every start, and a value built around
+// a reference ("Bearer ${TOKEN}") arrives as half of itself, a credential that
+// looks set.
 func TestADeclaredOptionalKeyThatDoesNotResolveIsLeftOutWhole(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, mixedDoc)
@@ -241,14 +232,11 @@ func TestADeclaredOptionalKeyThatDoesNotResolveIsLeftOutWhole(t *testing.T) {
 }
 
 // A REFERENCE IN A SERVER'S OWN VALUES THAT IS NOT DECLARED OPTIONAL HOLDS THE
-// SERVER BACK, as one in a seat's block does: the template's env, a shared
-// server's key, an http server's url.
-//
-// They used to be passed on empty, so a shared server whose key was unset
-// started, failed to authenticate and was retried by its bridge for a value
-// nothing was going to supply. The sentence names the variable and both
-// remedies, the declaration naming the KEY and where it goes — except for the
-// url, which has no key and is never optional.
+// SERVER BACK, as one in a seat's block does (the template's env, a shared
+// server's key, an http server's url): passed on empty, the server fails to
+// authenticate and its bridge retries it for a value nothing will supply. The
+// sentence names the variable and both remedies, the declaration naming the KEY,
+// except for the url, which has no key and is never optional.
 func TestAReferenceAServerDoesNotDeclareOptionalHoldsItBack(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, `
@@ -341,15 +329,11 @@ roles:
 	}
 }
 
-// AN HTTP HEADER IS ONE HEADER WHICHEVER WAY IT IS SPELLED.
-//
-// HTTP does not tell `authorization` from `Authorization`. Merged by the key as
-// written, a seat's `authorization` went out beside its template's
-// `Authorization`, the connection set whichever came last out of a map, and
-// the seat's child sent the template's identity on some of its requests; with
-// the seat's key declared optional and unset, it sent the template's on all of
-// them. The seat's key replaces the template's however either is spelled, and
-// `optional_keys` names a header in any case too.
+// AN HTTP HEADER IS ONE HEADER WHICHEVER WAY IT IS SPELLED: merged by the key as
+// written, a seat's `authorization` beside its template's `Authorization` sends
+// the template's identity on some requests (whichever a map yields last), or on
+// all of them when the seat's is optional and unset. The seat's key replaces
+// the template's in any case, and `optional_keys` names a header in any case.
 func TestAHeaderIsOneHeaderWhicheverWayItIsSpelled(t *testing.T) {
 	t.Parallel()
 	server := &config.MCPServer{Name: "code", Transport: config.TransportHTTP,
@@ -380,15 +364,11 @@ func TestAHeaderIsOneHeaderWhicheverWayItIsSpelled(t *testing.T) {
 	}
 }
 
-// THE REMEDY OFFERS EACH VARIABLE WHAT CAN SUPPLY IT, OR LEAVE IT OUT.
-//
-// The integration's provision command seals a seat's bot or account — what a
-// seat's own block holds — and nothing else; offered for a template's site
-// address, it sent somebody to a command that cannot seal it. And the
-// declaration that leaves a key out is offered for the server's own settings,
-// where a host's passthrough is written, and never for a seat's block, which
-// is the identity the seat acts as: started without it, the child acts as
-// nobody, which is what holding it back exists to prevent.
+// THE REMEDY OFFERS EACH VARIABLE WHAT CAN SUPPLY IT, OR LEAVE IT OUT. The
+// integration's provision command seals only what a seat's own block holds,
+// never a template's site address. The declaration that leaves a key out is
+// offered for the server's own settings, never a seat's block: that is the
+// seat's identity, and without it the child acts as nobody.
 func TestTheRemedyOffersEachVariableWhatCanSupplyItOrLeaveItOut(t *testing.T) {
 	t.Parallel()
 	server := &config.MCPServer{Name: "atlassian", Command: "mcp-atlassian",
@@ -424,13 +404,10 @@ func TestTheRemedyOffersEachVariableWhatCanSupplyItOrLeaveItOut(t *testing.T) {
 	}
 }
 
-// A KEY A PASS MINTS FOR THE SEAT IS WAITED FOR, WHATEVER ITS DECLARATION.
-//
-// `optional_keys` is for a value nothing will supply. A token the GitLab pass
-// is about to mint is coming: left out, the seat's child started without its
-// identity and acted as nobody until the seal — the failure the wait exists to
-// prevent, reached by a declaration. A value nothing mints under the same
-// declared key is still left out.
+// A KEY A PASS MINTS FOR THE SEAT IS WAITED FOR, WHATEVER ITS DECLARATION:
+// `optional_keys` is for a value nothing will supply, and a token the GitLab
+// pass is about to mint, left out, starts the child acting as nobody until the
+// seal. A value nothing mints under the same declared key is still left out.
 func TestAKeyAPassMintsIsWaitedForWhateverItsDeclaration(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, provisioningDoc(true)+`
@@ -461,12 +438,10 @@ mcp_servers:
 	}
 }
 
-// A HELD-BACK SERVER'S SENTENCE REACHES THE SCREEN WHOLE.
-//
-// The status record bounds it ([coord.MaxMCPErrorBytes]) and Settings › Tools & MCP
-// reads what survives. At 240 bytes the remedy the guide's own host-setting
-// case needs — the key to declare optional — was always the part cut, and the
-// row ended "…, l…". Asserted on the wire form, as a peer reads it.
+// A HELD-BACK SERVER'S SENTENCE REACHES THE SCREEN WHOLE through the status
+// record's bound ([coord.MaxMCPErrorBytes]), which Settings › Tools & MCP reads:
+// the remedy at its end, the key to declare optional, is what a smaller bound
+// cuts. Asserted on the wire form, as a peer reads it.
 func TestAHeldBackServersSentenceReachesTheScreenWhole(t *testing.T) {
 	t.Parallel()
 	guide := &config.MCPServer{Name: "tavily", Command: "npm",
@@ -517,13 +492,10 @@ func TestAHeldBackServersSentenceReachesTheScreenWhole(t *testing.T) {
 }
 
 // A SEAT'S VALUE THAT RESOLVES TO NOTHING NEVER HANDS THE KEY BACK TO THE
-// TEMPLATE'S.
-//
-// The layers are merged before anything is resolved, so a seat that writes a
-// key owns it: declared optional and unset, the key is left out. Left out
-// before the merge instead, the template's value would stand in — and for a
-// key carrying an identity, the seat's child would act as whoever the template
-// names.
+// TEMPLATE'S: the layers merge before anything resolves, so a seat that writes
+// a key owns it, and declared optional and unset it is left out. Dropped before
+// the merge, the template's value would stand in, and for an identity the
+// seat's child would act as whoever the template names.
 func TestASeatsValueThatResolvesToNothingDoesNotHandBackTheTemplates(t *testing.T) {
 	t.Parallel()
 	server := &config.MCPServer{Name: "code", Transport: config.TransportHTTP,
@@ -550,11 +522,9 @@ func statedAs(kind integration.Kind, findings ...integration.Finding) integratio
 }
 
 // WHETHER A PASS WILL MINT A SEAT'S CREDENTIAL IS READ OFF THE PASS'S OWN LAST
-// CONCLUSION, by the vocabulary it reported in.
-//
-// A child held back for a credential the pass cannot mint until somebody acts
-// waited for ever, reported as nothing being wrong, while the integration's own
-// card said the opposite. Each case is a record a real pass writes.
+// CONCLUSION, by the vocabulary it reported in, so a child is not left waiting
+// for ever, reported as nothing wrong, on a credential the integration's own
+// card says waits on a person. Each case is a record a real pass writes.
 func TestAMintIsStoppedOnlyWhereTheIntegrationsLastPassSaysAPersonMustAct(t *testing.T) {
 	t.Parallel()
 	kind := integration.KindAtlassian
@@ -623,13 +593,10 @@ func TestAMintIsStoppedOnlyWhereTheIntegrationsLastPassSaysAPersonMustAct(t *tes
 }
 
 // A CHILD WAITING FOR A PASS THAT CANNOT MINT IS REPORTED FAILED, from the beat
-// after the integration says so, and waiting again once it no longer does.
-//
-// The claim's pass runs before the integration's first, so all it can say is
-// waiting; only the status record sees the integration's later report. Read once at
-// the claim, a company whose Atlassian organization key nobody set showed every
-// seat's server as waiting for credentials for ever, in a neutral tone, beside
-// an integration card reporting the failure.
+// after the integration says so, and waiting again once it no longer does. The
+// claim's pass runs before the integration's first and can only say waiting;
+// only the status record sees the later report. Read once at the claim, every
+// seat would show waiting for ever beside a card reporting the failure.
 func TestAWaitingChildIsReportedFailedWhileThePassThatMintsItWaitsOnAPerson(t *testing.T) {
 	t.Parallel()
 	fleet := coordmem.NewFleet()
@@ -689,13 +656,9 @@ func TestAWaitingChildIsReportedFailedWhileThePassThatMintsItWaitsOnAPerson(t *t
 }
 
 // A SEAL THAT REFRESHES THIS NODE'S SNAPSHOT STARTS A CHILD WAITING FOR IT,
-// WITH NO APPLY.
-//
-// The re-activation a seal asks for is a write the node may not get — here it
-// has no config surface at all, as on a worker-only node — and a child held
-// back arms no retry. On the node holding the value, the child stayed
-// unstarted, its status saying the integration had yet to mint what the
-// snapshot resolved.
+// WITH NO APPLY: the re-activation a seal asks for is a write the node may not
+// get (here, as on a worker-only node, it has no config surface), and a child
+// held back arms no retry.
 func TestASealThatRefreshesThisNodeStartsTheChildItHeldBackWithNoApply(t *testing.T) {
 	t.Parallel()
 	cipher, err := secrets.NewCipher(secrets.Keyring{
@@ -756,12 +719,9 @@ func (g *lookupGate) Lookup(string) (string, bool) {
 }
 
 // THE SEAL'S APPLY LANDING WHILE THE CLAIM'S PASS IS DECIDING "WAITING" IS
-// FOLDED INTO THE CLAIM.
-//
-// The claim's pass has read a snapshot without the credential; the apply that
-// installs the sealed one asks the seat's runner for a pass while that pass is
-// still deciding. A claim that dropped the ask would end with the child held
-// back, no retry armed and nothing left to start it until some later apply.
+// FOLDED INTO THE CLAIM: the pass has read a snapshot without the credential,
+// and a claim that dropped the apply's ask for a pass would leave the child held
+// back, with no retry armed, until some later apply.
 func TestASealDuringTheClaimsWaitingDecisionStartsTheChild(t *testing.T) {
 	t.Parallel()
 	gate := &lookupGate{entered: make(chan struct{}), released: make(chan struct{})}
@@ -892,11 +852,8 @@ func captureEngineLogs(t *testing.T) *engineLogs {
 }
 
 // WAITING IS WRITTEN AT INFO AND A CREDENTIAL NOTHING MINTS AT ERROR, and each
-// line names only what applies to it.
-//
-// The level is the half of "this is not a failure" an operator watching the
-// log sees: the claim of every first boot under provisioning used to write an
-// error per seat and a retry line per attempt.
+// line names only what applies to it: the level is how an operator watching the
+// log tells a first boot under provisioning from a failure.
 func TestWaitingIsLoggedAtInfoAndAMissingCredentialAtError(t *testing.T) {
 	logs := captureEngineLogs(t)
 	e := &Engine{mcp: mcp.NewBridge(nil, mcp.Supervision{})}
@@ -920,12 +877,10 @@ func TestWaitingIsLoggedAtInfoAndAMissingCredentialAtError(t *testing.T) {
 	}
 }
 
-// A CHILD WHOSE CREDENTIAL STOPS RESOLVING IS STOPPED, AND SAYS SO.
-//
-// A sealed token deleted — by a disconnect that removed the seats' accounts,
-// or by hand — leaves a running child acting on the value it started with.
-// Stopping it is the rule; it was logged as the seat no longer declaring the
-// server, which sent the reader to a configuration that still declares it.
+// A CHILD WHOSE CREDENTIAL STOPS RESOLVING IS STOPPED, AND SAYS SO: a sealed
+// token deleted (by a disconnect or by hand) leaves a running child acting on
+// its old value. The line names the credential, not the seat no longer
+// declaring the server, which sends a reader to a config that still declares it.
 func TestAChildWhoseCredentialStopsResolvingIsRetiredSayingSo(t *testing.T) {
 	logs := captureEngineLogs(t)
 	company, _ := helperCompany(t, false, nil)
@@ -961,15 +916,11 @@ func TestAChildWhoseCredentialStopsResolvingIsRetiredSayingSo(t *testing.T) {
 }
 
 // A VENDOR'S PLAN IS READ IN THIS PACKAGE ONLY THROUGH A PASS'S seatPlan, or by
-// a teardown.
-//
-// The plan is what a seat's child waits for ([Engine.mintedFor]), and a pass
-// that minted by a plan of its own — another gate, a filter — would mint what
-// no child waits for, or leave a child waiting for what it never mints, with
-// every case of the plan's own still green. The Atlassian sealing clock read
-// the vendor's plan directly and called a hand-made account one this engine
-// provisions. A teardown reads the plan because what it removes is what may
-// have been made, whether or not the company still asks for more.
+// a teardown. The plan is what a seat's child waits for ([Engine.mintedFor]),
+// so a pass minting by a plan of its own would mint what no child waits for, or
+// leave a child waiting for what it never mints, with every plan case green. A
+// teardown reads the plan because it removes what may have been made, whatever
+// the company still asks for.
 func TestAVendorPlanIsReadOnlyThroughSeatPlan(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
@@ -1020,11 +971,9 @@ func TestAVendorPlanIsReadOnlyThroughSeatPlan(t *testing.T) {
 }
 
 // THE ATLASSIAN SEALING CLOCK COVERS ONLY THE SEATS THIS ENGINE PROVISIONS, the
-// ones the pass's seat plan names.
-//
-// A company with no `integrations.atlassian` block makes no account, so a
-// refusal minutes after a person sealed a token is the failure it looks like —
-// not Atlassian still applying a grant this engine never made.
+// ones the pass's seat plan names: with no `integrations.atlassian` block no
+// account is made, so a refusal minutes after a person sealed a token is the
+// failure it looks like, not a grant this engine never made still landing.
 func TestTheAtlassianSealingClockCoversOnlySeatsThisEngineProvisions(t *testing.T) {
 	t.Parallel()
 	cipher, err := secrets.NewCipher(secrets.Keyring{
@@ -1045,12 +994,10 @@ func TestTheAtlassianSealingClockCoversOnlySeatsThisEngineProvisions(t *testing.
 }
 
 // A SERVER WITHHELD FROM A CODING BOX SAYS WHETHER A PASS IS MINTING ITS
-// CREDENTIAL, by the rule a seat's own child is judged by.
-//
-// The run goes ahead without the server, so the line is all there is to say
-// why — and a warning telling the operator to store a token the GitLab pass
-// was about to mint into that very name sends them to do the pass's work. The
-// run's own environment is judged by the same rule
+// CREDENTIAL, by the rule a seat's own child is judged by: the run goes ahead
+// without the server, so the line is all that says why, and a warning to store
+// a token the GitLab pass is about to mint sends the operator to do the pass's
+// work. The run's own environment is judged alike
 // (TestARunWaitingForAMintedCredentialIsRefusedSayingWhenItCanRun).
 func TestABoxServerWithheldForAMintedCredentialIsSaidAtInfo(t *testing.T) {
 	logs := captureEngineLogs(t)
@@ -1088,15 +1035,11 @@ func (l *engineLogs) serverRecords(msg, server string) []map[string]any {
 }
 
 // A SHARED SERVER WHOSE KEY DOES NOT RESOLVE IS NOT STARTED, IS NOT RETRIED,
-// AND STARTS ON THE APPLY AFTER THE KEY ARRIVES — and one whose key stops
-// resolving is stopped, saying why.
-//
-// It used to be handed to the shared bridge with the key empty: the vendor's
-// server failed to authenticate (or started as nobody), and the bridge's
-// supervision retried it on the restart schedule for a value nothing was going
-// to supply, with an `empty_env_vars` warning naming the key. Nothing about it
-// changes until the secret snapshot does, and every change to the snapshot is
-// an apply, which reconciles the shared servers.
+// AND STARTS ON THE APPLY AFTER THE KEY ARRIVES, and one whose key stops
+// resolving is stopped, saying why. Handed over with the key empty, it fails to
+// authenticate (or starts as nobody) and is retried for a value nothing will
+// supply; nothing changes until the secret snapshot does, and every change to
+// it is an apply, which reconciles the shared servers.
 func TestASharedServerWhoseKeyDoesNotResolveIsNotStartedUntilItDoes(t *testing.T) {
 	logs := captureEngineLogs(t)
 	ctx := t.Context()
@@ -1173,14 +1116,12 @@ roles:
 }
 
 // A BOX'S SERVER NOTHING WILL SUPPLY IS WITHHELD WITH A WARNING, ONCE, AND A
-// NAME THE COMPANY DECLARES NO SERVER UNDER IS STILL SAID.
-//
-// The run goes ahead without either, so the line is all an operator gets: at
-// info it reads as a wait that ends by itself. A scope may name a server twice,
-// and the run is withheld it once. And a scope naming no server at all is the
-// renderer's to report — a scope is not checked against `mcp_servers` when it
-// is written — so it is left in the scope rather than dropped with nothing
-// said.
+// NAME THE COMPANY DECLARES NO SERVER UNDER IS STILL SAID. The run goes ahead
+// without either, so the line is all an operator gets, and at info it would
+// read as a wait that ends by itself. A server named twice is withheld once; a
+// name no server answers to is the renderer's to report (a scope is not checked
+// against `mcp_servers` when written), so it stays in the scope, never dropped
+// silently.
 func TestABoxServerNothingWillSupplyIsAWarningAndAnUnknownOneIsSaid(t *testing.T) {
 	logs := captureEngineLogs(t)
 	c := specCompany(t, `

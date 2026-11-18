@@ -28,144 +28,16 @@ import (
 
 // A captured session, read back as the transcript a person reads.
 //
-// A collection keeps the archive a run packed when its harness exited
-// ([Runner.OpenCapture]), and that archive is the whole record of what the run
-// read, called and wrote, so a seat's trail reads it. It is read HERE, beside
-// the scripts that pack it, because what it holds is the harness's own record
-// and only the runner knows its layout: Claude Code's archive is a gzipped tar
-// of the session's transcript (`projects/crewlet/<session>.jsonl`, one JSON
-// record a line), its sidecar directory — each subagent's transcript under
-// `subagents/`, and the tool results spilled to files — and its task list
-// ([claudeArchiveFormat]); OpenCode's is the document
-// `opencode session export` prints, gzipped: the session and its settled
-// messages, each one of the kinds OpenCode 2 writes, told apart by its `type`
-// ([openCodeArchiveFormat], [openCodeMessage]). A format this build does not
-// pack is not read ([Carries]).
-//
-// # Entries, in the order the harness recorded them
-//
-// A transcript is an ordered list of entries, each one of [EntryKinds]: what
-// the run was briefed, the notes a person sent it while it worked, what its
-// model wrote, every tool it called and what the tool answered, and the
-// compaction summaries the harness wrote in place of the conversation before
-// them. The run's own conversation comes first and then each subagent's, in
-// the order the archive holds them, every entry of a subagent naming it. What
-// is NOT an entry is the harness's bookkeeping — a session's title, a snapshot
-// of the files it edited, its system notices and the notices it writes into a
-// person's turn, the model's thinking (its working, not what the run did, as
-// the live transcript treats it), and a tool result Claude Code spilled to a
-// file, which the result's own entry names. A part of the record this read
-// could not read is an entry of its own ([EntryUnread]), said where it was — a
-// line that is no record, a record or a message of no shape this read knows, a
-// transcript that is no plain file — so a gap is never read as continuity.
-// Which entries there are, and how many each record makes, is
-// [TranscriptVersion]'s.
-//
-// A NOTE IS KNOWN BY ITS HEADING, wherever the harness filed it. Every note
-// opens with the heading the engine writes ([noteHeadOpen]); OpenCode admits
-// one as a person's message, and Claude Code hands one to its model as a
-// hook's additional context, kept in a record of the harness's own whose shape
-// is the harness's and moves between releases — so every record Claude Code
-// writes for itself is searched for that heading, rather than read by a shape
-// this build would have to pin. A heading is a line's — the engine writes it
-// on a line of its own, after the framing a harness puts before it — so a line
-// holds one at most, and the search reads each line once, whatever the record
-// holds ([noteAt]). The line the run's own hook prints as it hands
-// notes over, which the live transcript shows as `[steer]`, is a note entry
-// too: a release that keeps the line and not the context leaves it the notes'
-// one trace.
-//
-// # Bounded, and redacted at the read
-//
-// Every read is held to [TranscriptReadBounds]: the entries one read hands out
-// and their text together, each entry's text, one line of the record, and the
-// bytes the archive inflates to — and, apart, the bytes the members of a tar
-// hand the reader, since a sparse member hands out bytes the archive does not
-// hold. A read hands out a page — the entries from an ordinal on — and says why
-// it ends where it does ([TranscriptCut]); the next page is read again from the
-// archive's start, so the work one read costs is bounded by the archive rather
-// than by how deep a reader pages. Every entry's text is passed through
-// [redact.Secrets] BEFORE it is cut, whatever the capture did, and what an
-// entry hands out is an OPENING OF WHAT ITS WHOLE TEXT REDACTS TO
-// ([redactedWithin]): a credential that begins inside the bound is read whole,
-// since a key cut in half by a bound is a key the redaction no longer
-// recognises, nothing the read could not settle is handed out, and none of the
-// rest of a long text is scanned, which would be scanned only to be dropped —
-// but by a seat's read for words, which reads every text it searches whole
-// (below). And the size an entry states is its redaction's, never the size as
-// recorded to the byte, which beside a text shown whole said how long each
-// value the redaction took out was ([TranscriptEntry.Bytes]).
-// And a read stops when its caller's context is done, checked a line or a
-// message at a time, and between the notes and the values one line holds.
-//
-// HOW MANY READS RUN AT ONCE is bounded too, for the whole process: at most
-// [TranscriptReadsAtOnce], whichever socket or REST caller asks. A read takes
-// one of those slots before it opens the session's object — so it is handed
-// what opens the archive rather than an archive already open — and gives it
-// back once it has closed the object again; a read past them waits, nothing
-// opened, for as long as its caller does.
-//
-// # A seat's own page: narrower, by kind or by words, and one slot
-//
-// A seat reads its own sessions too ([ReadBySeat]), and every page it reads is
-// input its model pays for on every request after, inside a tool's answer of
-// at most 64 KiB (internal/agent/builtin's ToolAnswerBytes). So its page is
-// held to [SeatTranscriptBounds] — a quarter of a person's entries, a
-// thirty-second of the text and half an entry — and narrowed by a
-// [TranscriptFilter]: to some kinds of entry, or to the entries whose whole
-// text holds every term of a query, each handed out as the window of its text
-// around the earliest ([windowAround]). Every entry counts toward the ordinals
-// whether a filter keeps it or not, so one cursor grammar serves a filtered
-// page and a whole one ([Transcript.Places], [Transcript.Next]); and a part of
-// the record the read could not read ([EntryUnread]) is handed out whatever
-// the filter asks, since nothing can say what kind it was or which words it
-// held — passed over, it read as continuity, and a search past it said it had
-// searched what it never read. And seats' reads take at most
-// [SeatTranscriptReadsAtOnce] of the process's slots between them, so a node
-// whose seats page transcripts still reads a person's.
-//
-// A MATCH IS DECIDED ON WHAT ITS READER IS SHOWN, and on nothing else of the
-// text as the harness recorded it. An entry is redacted WHOLE, and is a hit
-// only where what that redaction shows of the entry's own words — never a
-// marker's ([redact.OwnWords]) — holds every term; its window is cut from that
-// redaction, around the earliest term it shows. Decided on the recorded text,
-// a term found only inside a credential counted toward a hit whenever another
-// term was shown, so whether an entry was a hit confirmed a guess at a value
-// the redaction took out, one call at a time; and a window placed on the
-// earliest term as recorded, where that one was inside a credential, passed
-// the entry over though it showed the word further on. The recorded text is
-// asked one thing first, which costs no redaction: whether its words could hold
-// every term at all ([textindex.Reading.MayHold]), which no entry whose
-// redaction shows them fails, so it decides nothing — only an entry it lets
-// through is redacted. Asked whether the recorded text held every term WHOLE
-// instead, it decided: a word the redaction's marker ends, `deploy` before a
-// token it takes out, is a piece of a longer word as recorded, so the entry
-// was passed over unless a credential the redaction took out held the word
-// whole, and a hit then said what that credential held. And A FULL PAGE STOPS
-// AT A HIT, decided before the page's bound is asked: stopped at an entry the
-// recorded text let through, where the next read starts — and so what a
-// reader is told the page stopped at — said whether a word the redaction took
-// out was there. The recorded text is read whole anyway, so redacting an entry
-// it lets through costs one more pass over it, and the read's budget bounds
-// both.
-//
-// A CALL'S WORDS ARE ITS INPUT'S STRINGS', read through their JSON escapes
-// ([readingOf]): its text is that input as JSON, where a line break or a tab
-// in a string is written `\n` or `\t` glued to the word after it, so read as
-// written, the first word of every line after a command's first, or of a file
-// a call wrote, was in no word of the entry, and a read for it passed the call
-// over — or said no entry held it.
-//
-// # What is the archive's fault, and what is its source's
-//
-// A failure of the source the archive came through — an object the store no
-// longer holds, bytes that do not open, as the object is opened or as it is
-// read — is returned as it came, wrapped, for the caller to tell apart
-// ([sourceReader]). An archive that read whole and is not one its format
-// describes is a [MalformedArchiveError], which says which way in this
-// package's words alone: a box's own agent can rewrite what its run packs
-// before a collection takes it, and a decoder's own message quotes what it
-// read.
+// It is read here, beside the scripts that pack it ([Runner.OpenCapture]),
+// because only the runner knows its harness's layout: Claude Code's archive is
+// a gzipped tar of the session's JSONL transcript, its subagents' and its
+// spilled tool results ([claudeArchiveFormat]); OpenCode's is the gzipped
+// `opencode session export` document ([openCodeArchiveFormat]). A format this
+// build does not pack is not read ([Carries]). Its entries ([EntryKinds],
+// counted by [TranscriptVersion]) run in recorded order, the run's own then
+// each subagent's; bookkeeping and thinking are none, and a part the read could
+// not read is [EntryUnread], so a gap never reads as continuity. Every read is
+// bounded ([Reader.Bounds], [TranscriptReadsAtOnce]) and redacted.
 
 // EntryKind is who one entry of a session's transcript is from: the words a
 // read surface groups and labels a transcript by.
@@ -213,24 +85,15 @@ var EntryKinds = []EntryKind{
 func (k EntryKind) Valid() bool { return slices.Contains(EntryKinds, k) }
 
 // TranscriptVersion is the version of what this build counts as a
-// transcript's entries: which records and parts of a harness's record are
-// entries, and how many entries each makes. An ordinal into a transcript is an
-// ordinal under one version, so a read surface's cursor carries it, and a
-// cursor of another — a page read on a build that counted entries otherwise,
-// which a rolling upgrade serves beside this one — is read again from the start
-// rather than continued at an ordinal that names another entry here.
+// transcript's entries. An ordinal is an ordinal under one version, so a read
+// surface's cursor carries it, and a cursor of another (a build beside this one
+// in a rolling upgrade) is read again from the start rather than continued at
+// an ordinal that names another entry here.
 //
 // RAISED BY ANY CHANGE THAT MOVES AN ORDINAL: a kind added, a record read that
-// was not, one read as more entries or as fewer, one no longer read. At 2, an
-// OpenCode export's messages are read as the kinds OpenCode 2 writes them in,
-// where a build at 1 read every one of them as no entry. At 3, every key a
-// read takes is read exactly as written, as JSON.parse, which both harnesses
-// read their records with, reads it: a Claude Code record's, its message's
-// and its blocks', and an OpenCode message's, its step's items' and a failed
-// call's failure's. A build at 2 matched a key by case and, of a key written
-// twice, kept the last value of its field's kind, or the two objects merged:
-// no record a release writes reads otherwise (no record the probes kept holds
-// either), and one written so reads as more entries or as fewer.
+// was not, one read as more entries or fewer, one no longer read. At 2 an
+// OpenCode export's messages are read as OpenCode 2's kinds; at 3 every key is
+// read exactly as written, as the harnesses' own JSON.parse reads it.
 const TranscriptVersion = 3
 
 // TranscriptEntry is one entry of a session's transcript, as a read surface
@@ -258,21 +121,14 @@ type TranscriptEntry struct {
 	// most [TranscriptBounds.EntryBytes] of it, marked where it was cut.
 	Text string `json:"text" untrusted:"fence"`
 
-	// Bytes is the size of the entry's whole text as its redaction shows
-	// it — what a reader would be shown of it whole, in whose bytes
-	// [EntryPlace.TextFrom] counts — wherever the read redacted all of it:
-	// a match's hit, and every text short enough that the read took it
-	// whole ([redactedWithin]). Of a longer text, whose redaction past its
-	// opening the read never made, it is the size the harness recorded,
-	// rounded up to a whole KiB ([statedSize]). Cut says the text was cut: a
-	// reader says "the first 16 KiB of 2.1 MiB" rather than presenting an
-	// opening as the whole.
-	//
-	// NEVER THE SIZE AS RECORDED TO THE BYTE, which beside a text shown
-	// whole said how long each value its redaction took out was — that size
-	// less the text's, the marker's added back — so two records that redact
-	// alike, a password of seven letters and one of nine, read apart, one
-	// read an entry.
+	// Bytes is the size of the entry's whole text as its redaction shows it (the
+	// bytes [EntryPlace.TextFrom] counts in) wherever the read redacted all of it:
+	// a match's hit, and any text short enough to take whole ([redactedWithin]).
+	// Of a longer text it is the recorded size rounded up to a KiB
+	// ([statedSize]). Cut says the text was cut, so a reader says "the first 16
+	// KiB of 2.1 MiB" rather than presenting an opening as the whole. NEVER THE
+	// RECORDED SIZE TO THE BYTE: beside a text shown whole, that says how long
+	// each value the redaction took out was.
 	Bytes int  `json:"bytes"`
 	Cut   bool `json:"cut,omitempty"`
 }
@@ -330,12 +186,10 @@ type EntryPlace struct {
 	// in a filtered read and a whole one: what a cursor continues from.
 	Ordinal int
 
-	// TextFrom is where the text handed out begins, as a byte offset in what
-	// the entry's whole text redacts to — the text a reader would be shown of
-	// it whole: 0 for an opening, and where a match's window begins
-	// ([windowAround]). In the redaction's bytes, never the record's, because
-	// the window is cut from the redaction, and a credential it replaced has
-	// no length a reader is shown.
+	// TextFrom is where the text handed out begins, as a byte offset in the
+	// entry's whole redaction: 0 for an opening, else where a match's window
+	// begins ([windowAround]). Never the record's bytes: the window is cut from
+	// the redaction, and a credential it replaced has no length a reader is shown.
 	TextFrom int
 }
 
@@ -365,45 +219,36 @@ type TranscriptBounds struct {
 const (
 	// TranscriptMaxEntries is the most entries one read hands out.
 	//
-	// TWO HUNDRED: a run's turn makes tens of tool calls, each a call and a
-	// result, so one page holds an ordinary run whole, and at the median
-	// entry's few hundred bytes it is far inside [TranscriptMaxBytes]. It is
-	// also about as many entries as a person reads down before they would
-	// rather page than scroll.
+	// TWO HUNDRED: a run's turn makes tens of calls and results, so one page
+	// holds an ordinary run whole, far inside [TranscriptMaxBytes] at the median
+	// entry's few hundred bytes, and about as many as a person reads before
+	// paging.
 	TranscriptMaxEntries = 200
 
 	// TranscriptMaxBytes is the most text one read's entries hold together.
 	//
-	// ONE MEBIBYTE: sixty-four entries at [TranscriptEntryMaxBytes], about
-	// fifteen thousand lines of text, and an eighth of the eight mebibytes
-	// the engine lets one reply carry between nodes (queue.MaxPayloadBytes),
-	// so an answer built of it fits every transport the engine has, a
-	// browser's socket included.
+	// ONE MEBIBYTE: sixty-four entries at [TranscriptEntryMaxBytes], and an
+	// eighth of what one reply carries between nodes (queue.MaxPayloadBytes), so
+	// an answer fits every transport the engine has, a browser's socket included.
 	TranscriptMaxBytes = 1 << 20
 
 	// TranscriptEntryMaxBytes is the most of one entry's text a read hands
 	// out, cut on a rune boundary and marked.
 	//
-	// SIXTEEN KIBIBYTES: a model's longest message, a call's input and a
-	// tool result of three hundred lines of code are whole within it. A
-	// whole file read or a build's log is longer, and its opening is what
-	// says which it was; the entry states its whole size beside it.
+	// SIXTEEN KIBIBYTES: a model's longest message, a call's input and a result
+	// of three hundred lines of code are whole within it; a longer text's opening
+	// says what it was, and the entry states its whole size.
 	TranscriptEntryMaxBytes = 16 << 10
 
 	// TranscriptReadBytes is the most bytes one read takes as the archive
 	// inflates, and the most the members of a tar hand the reader.
 	//
-	// TWO HUNDRED AND FIFTY-SIX MEBIBYTES: eight times the most an archive is
-	// stored as (internal/executorkeep's SessionMaxBytes, 32 MiB), which is
-	// gzip's ratio over JSON text, so an ordinary session's archive reads
-	// whole within it — and one that inflates past it, as anything a box
-	// packs can, stops there rather than holding the engine for as long as
-	// it inflates. A tar's members are held to it APART, on what they hand
-	// out: a member's bytes come out of what the archive inflates to, so on
-	// a packed archive they are never more, but a sparse member hands out its
-	// holes without the archive holding them, and unmetered, a member a
-	// kibibyte and a half long holds the read for as long as its declared
-	// size — an exbibyte, as the format allows.
+	// 256 MiB: eight times the most an archive is stored as (internal/executorkeep's
+	// SessionMaxBytes, 32 MiB), gzip's ratio over JSON, so an ordinary archive
+	// reads whole and one that inflates past it stops there. A tar's members are
+	// held to it APART, on what they hand out: a sparse member hands out holes
+	// the archive does not hold, and unmetered, a member of 1.5 KiB could hold the
+	// read for its declared size, up to an exbibyte.
 	TranscriptReadBytes = 256 << 20
 )
 
@@ -417,26 +262,23 @@ func TranscriptReadBounds() TranscriptBounds {
 }
 
 // The bounds a seat's read of its own sessions is held to
-// ([SeatTranscriptBounds]): its line and read bounds are a person's, and the
-// rest is held to what a tool's answer carries — at most 64 KiB, the whole
-// answer, which the seat's model pays for on every request of its session
-// after it (internal/agent/builtin's ToolAnswerBytes).
+// ([SeatTranscriptBounds]): a person's line and read bounds, the rest held to
+// a tool's answer of at most 64 KiB, which the seat's model pays for on every
+// later request (internal/agent/builtin's ToolAnswerBytes).
 const (
 	// SeatTranscriptMaxEntries is the most entries a seat's read hands out.
 	//
-	// FIFTY, a quarter of a person's page: an ordinary run's turn is tens of
-	// calls and their results, so a page is a stretch of what a run did that
-	// a model reads through, and a seat looking for something narrows a page
-	// to some kinds of entry or to its words rather than paging the whole.
+	// FIFTY, a quarter of a person's page: a stretch of a run a model reads
+	// through; a seat looking for something narrows a page by kind or by words
+	// rather than paging the whole.
 	SeatTranscriptMaxEntries = 50
 
 	// SeatTranscriptMaxBytes is the most text a seat's page holds together.
 	//
-	// THIRTY-TWO KIBIBYTES, half a tool's answer: the other half is the
-	// first page's row — its whole ending, about 11 KiB at its bounds — the
-	// fence lines around each entry's text, about 120 bytes an entry, and the
-	// answer's own JSON. A page whose text JSON escapes past the answer's
-	// bound is trimmed by entries by the caller that encodes it.
+	// THIRTY-TWO KIBIBYTES, half a tool's answer: the other half is the first
+	// page's row (about 11 KiB at its bounds), each entry's fence lines (about
+	// 120 bytes) and the answer's JSON. The caller that encodes a page trims it
+	// by entries where JSON escaping takes it past the answer's bound.
 	SeatTranscriptMaxBytes = 32 << 10
 
 	// SeatTranscriptEntryMaxBytes is the most of one entry's text a seat's
@@ -497,19 +339,18 @@ type TranscriptFilter struct {
 	// caller refuses a kind that is not one of [EntryKinds].
 	Kinds []EntryKind
 
-	// Terms keeps only entries whose whole text holds every one of them —
-	// a query's terms as internal/textindex's Terms makes them, matched as it
-	// matches them (textindex.Reading.FindIn), a call's text through its
-	// JSON escapes ([readingOf]) — in what the redaction shows of the entry's
-	// own words, each handed out as the window of that redaction around the
-	// earliest ([windowAround]); none keeps every entry, each as its
-	// opening.
+	// Terms keeps only entries whose whole text holds every one of them, as
+	// internal/textindex makes and matches terms (Terms, Reading.FindIn; a
+	// call's text through its JSON escapes, [readingOf]), in what the
+	// redaction shows of the entry's own words ([transcriptBuilder.add]), each
+	// handed out as the window around the earliest ([windowAround]). None
+	// keeps every entry, each as its opening.
 	Terms []string
 }
 
-// keepsKind reports whether f keeps an entry of kind: one of its kinds, or a
-// part of the record the read could not read ([EntryUnread]), which f keeps
-// whatever it asks.
+// keepsKind reports whether f keeps an entry of kind: one of its kinds, or
+// [EntryUnread] whatever it asks, since nothing can say what kind a gap was,
+// and passed over it would read as continuity.
 func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 	return len(f.Kinds) == 0 || kind == EntryUnread || slices.Contains(f.Kinds, kind)
 }
@@ -517,31 +358,15 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // TranscriptReadsAtOnce is the most transcripts this process decodes at once,
 // whichever socket or REST caller asks for them ([ReadTranscript]).
 //
-// TWO, BY WHAT ONE READ CAN HOLD: a line of the harness's record — or about
-// one message of an export — read whole at the 32 MiB a line may run to
-// ([TranscriptBounds.LineBytes]), the growth of the slice that gathers it, and
-// the copy decoding it makes, on the order of 100 MiB; so the worst case for
-// two reads is about 200 MiB. Nothing else bounds how many run at once: a
-// socket has at most four queries in flight (stream.MaxInFlightQueries), but
-// a node serves every tab open on it, and REST bounds none. One slot would
-// queue every reader behind the longest archive; two let a second reader
-// through while one is read.
-//
-// A SEAT'S READ FOR WORDS holds one more text at its worst: the whole
-// redaction of an entry whose words could hold every term, which is at most a
-// line's, so about a third more, in the one slot seats take between them
-// ([SeatTranscriptReadsAtOnce]). A relaunch's reading of which of its round's
-// calls a kept session holds ([Runner.ReadHoldings]) takes that slot too, and
-// holds no more than a seat's read for words at its worst: 102 MiB held at
-// most, measured (BenchmarkAReadingAtItsBounds), at its worst line, a line at
-// the line's bound of the smallest results a message holds, read beside the
-// model of Claude Code's resume at both its bounds ([threadChain]), its heap
-// peaking at 181 MiB.
-//
-// A READ PAST THEM WAITS for a slot for as long as its caller waits, holding
-// no decoder while it does — and no opened object, whose store connection it
-// would hold — and a slot frees within one bounded read: every read is held
-// to [TranscriptReadBounds], and stops when its caller leaves.
+// TWO, BY WHAT ONE READ CAN HOLD: a line read whole at up to 32 MiB
+// ([TranscriptBounds.LineBytes]), its gathering slice's growth and its decoded
+// copy, about 100 MiB, so about 200 MiB for two. Nothing else bounds this: a
+// node serves every tab open on it, and REST bounds none. One slot would queue
+// every reader behind the longest archive. A seat's read for words holds about
+// a third more, and a relaunch's [Runner.ReadHoldings] no more than that (102
+// MiB measured, BenchmarkAReadingAtItsBounds), both in the seats' one slot
+// ([SeatTranscriptReadsAtOnce]). A read past them waits holding no decoder and
+// no opened object, and a slot frees within one bounded read.
 const TranscriptReadsAtOnce = 2
 
 // transcriptReads holds a slot for each transcript this process is reading,
@@ -553,28 +378,13 @@ var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 // [TranscriptReadsAtOnce] slots seats' reads hold at once: a seat's read takes
 // one of these, and then one of the process's.
 //
-// ONE, INSIDE THE PROCESS'S TWO, never a pool beside them: a pool of its own
-// would double what reads can hold at their worst, about 100 MiB each. A node
-// runs every role in one process by default, so without it a node's seats
-// paging transcripts could fill both slots and queue a person's read behind
-// every one of them; with it, one slot is always a person's to take while a
-// seat reads. A node that runs seats alone serves no person a transcript, and
-// its seats' reads take turns in one slot: each is bounded, and a seat's page
-// is a fraction of a person's.
-//
-// A RELAUNCH'S READING TAKES IT TOO ([Runner.ReadHoldings]): which of its
-// round's calls the cut-off session it continues holds, read off the kept
-// archive before its brief is written, whose worst, 102 MiB held at most
-// ([TranscriptReadsAtOnce]), is within a seat's read for words', which takes
-// this same slot. It waits for the slot inside its own wait, and a reading that
-// waits past it tells its session every call after its save point, which is
-// never wrong. Measured on two cores (BenchmarkAReadingAtItsBounds), an
-// ordinary kept session, a 1.6 MiB archive, reads in about 70 ms, so a burst
-// of 32 relaunches' readings takes the slot for about 2.2 s; 255 MiB of
-// ordinary lines, the plaintext's bound, take it for 2.7 s; a thread at both
-// bounds of the model of the resume, 1.5 s, and its worst line beside it,
-// 1.7 s; and an archive of the slowest lines measured for their size to the
-// plaintext's bound, about 11 s by their rate: each inside its wait.
+// ONE, INSIDE THE PROCESS'S TWO, never a pool beside them, which would double
+// what reads hold at their worst: one slot is always a person's while a seat
+// reads. A relaunch's [Runner.ReadHoldings] takes it too, inside its own wait;
+// one that waits past it tells its session every call after its save point,
+// which is never wrong. Measured on two cores (BenchmarkAReadingAtItsBounds):
+// an ordinary 1.6 MiB archive reads in about 70 ms, 32 relaunches about 2.2 s,
+// 255 MiB of ordinary lines 2.7 s, the slowest lines measured about 11 s.
 const SeatTranscriptReadsAtOnce = 1
 
 // seatTranscriptReads holds a slot for each transcript a seat is reading, at
@@ -644,16 +454,12 @@ var (
 )
 
 // MalformedArchiveError is an archive that read whole from its source and is
-// not one its format describes, and Why says which way, in this package's own
-// words: one of a few sentences this file writes, each naming the layer that
-// found the fault — the compression, or the layout inside it.
+// not one its format describes; Why says which way, in one of this file's own
+// sentences naming the layer at fault, the compression or the layout.
 //
-// NEVER THE DECODER'S WORDS, which quote what they read — a JSON decoder names
-// the token it did not expect, and a token can be a whole string of the
-// archive's — while a box's own agent can write anything into what its run
-// packs. So what the decoder said is kept beneath Why, for errors.Is and
-// errors.As, and Error says Why alone: a failure logged or handed on carries
-// nothing of the archive's.
+// NEVER THE DECODER'S WORDS, which quote what they read, and a box's agent can
+// write anything into what its run packs: the decoder's error is kept beneath
+// Why for errors.Is and errors.As, and Error says Why alone.
 type MalformedArchiveError struct {
 	Why string
 	err error
@@ -750,23 +556,17 @@ func carried(harness string, format int) (carrier, string) {
 }
 
 // ReadTranscript reads the transcript of one session archive harness wrote in
-// format — the bytes a run packed when its harness exited, as a collection
-// keeps them, which open opens — from its entry from on, held to
-// [TranscriptReadBounds]: every entry's text redacted and then cut, the read's
-// page and its cut said ([Transcript.Cut]). It stops where ctx is done, with
-// ctx's error.
+// format, which open opens, from its entry from on, held to
+// [TranscriptReadBounds]: every entry's text redacted and then cut, the
+// page's cut said ([Transcript.Cut]). Each page is read from the archive's
+// start, so a read costs what the archive does, not how deep a reader pages.
+// It stops, with ctx's error, when ctx is done, checked a line at a time.
 //
-// THE READ OPENS THE ARCHIVE AND CLOSES IT, inside one of the process's
-// [TranscriptReadsAtOnce] slots: open is called only once a slot is held — an
-// object opened before then would hold its store's connection while the read
-// waited — and the slot is given back only once the archive is closed, so no
-// read leaves an archive open past its slot. A read whose ctx ends while it
-// waits for one returns ctx's error, having opened nothing.
-//
-// A failure of open, or of the archive as it is read, is returned wrapped, as
-// it came; an archive this build does not read is [ErrUnsupportedArchive],
-// refused before a slot is taken; one that is not what its format describes is
-// a [MalformedArchiveError].
+// open IS CALLED ONLY ONCE A [TranscriptReadsAtOnce] SLOT IS HELD, since an
+// opened object holds its store's connection while it waits, and the slot is
+// given back only once the archive is closed. A failure of open or of the
+// source is returned wrapped; [ErrUnsupportedArchive] is refused before a
+// slot is taken; a malformed archive is a [MalformedArchiveError].
 func ReadTranscript(ctx context.Context, harness string, format int,
 	open func(context.Context) (io.ReadCloser, error), from int) (Transcript, error) {
 	return readTranscript(ctx, harness, format, open, from, ReadByPerson, TranscriptReadBounds(),
@@ -897,27 +697,18 @@ func (b *transcriptBuilder) read(ctx context.Context, c carrier, src io.Reader) 
 	return c.transcript(ctx, b, &b.inflated)
 }
 
-// add counts one entry of the transcript and keeps it where it is on the page,
-// raw its whole text as the harness recorded it — where the filter keeps it.
-// It answers errTranscriptPage once the page holds all it hands out, the cut
-// said, so the read stops there.
+// add counts one entry and keeps it on the page (raw is its recorded text)
+// where the filter keeps it, answering errTranscriptPage, the cut said, once
+// the page is full. An entry before the page is only counted: redaction, the
+// expensive part, is for what a reader is shown.
 //
-// AN ENTRY BEFORE THE PAGE IS COUNTED AND NOTHING MORE: its text is not
-// redacted, which is the expensive part, because nobody is shown it. And one
-// the filter passes over is counted and examined: its kind read, and for a
-// match its whole text searched, which costs no redaction either — only an
-// entry whose words as recorded could hold every term is redacted, whole, to
-// decide whether it is a hit on what its reader is shown (see the file
-// comment), and only an entry the page hands out otherwise.
-//
-// A HIT IS DECIDED BEFORE THE PAGE'S BOUND IS ASKED, so a full page stops at
-// an entry the filter keeps whatever the recorded text holds: one more entry
-// redacted a page, against a stop that said what the redaction took out.
-//
-// A PART OF THE RECORD THE READ COULD NOT READ is kept whatever the filter
-// asks ([TranscriptFilter.keepsKind]) and handed out as its opening, never
-// searched: its text is this package's own account of the gap, which holds no
-// word of what the gap held.
+// A MATCH IS DECIDED ON WHAT ITS READER IS SHOWN: the whole redaction's own
+// words, never a marker's ([redact.OwnWords]), since on the recorded text a
+// term inside a credential confirmed a guess at it. MayHold on the recorded
+// text, costing no redaction and failing no hit, picks what is redacted. A hit
+// is decided before the page's bound, lest a stop say what the redaction took
+// out. [EntryUnread] is kept, never searched: its text is this package's
+// account of the gap.
 func (b *transcriptBuilder) add(e TranscriptEntry, raw string) error {
 	ordinal := b.seen
 	b.seen++
@@ -972,13 +763,11 @@ func (b *transcriptBuilder) add(e TranscriptEntry, raw string) error {
 	return nil
 }
 
-// readingOf is how an entry of kind writes its words, as a read for words reads
-// them: a tool call's text is its input as JSON, which this read writes it as
-// ([compactJSON]), so its words are its strings' — read through their escapes
-// ([textindex.JSON]), where a string's line break written `\n` glued its `n`
-// to the word after it. Every other entry's text is words as the harness, the
-// model or a tool wrote them, read as written ([textindex.Plain]): read as JSON,
-// a Windows path's `\new` would lose its `n` to a line break.
+// readingOf is how an entry of kind writes its words. A tool call's text is its
+// input as JSON ([compactJSON]), read through its escapes ([textindex.JSON]),
+// since read as written a `\n` glues its `n` to the next word; every other text
+// is read as written ([textindex.Plain]), where a Windows path's `\new` would
+// otherwise lose its `n` to a line break.
 func readingOf(kind EntryKind) textindex.Reading {
 	if kind == EntryToolCall {
 		return textindex.JSON
@@ -987,15 +776,9 @@ func readingOf(kind EntryKind) textindex.Reading {
 }
 
 // shape is an entry as it is handed out, its text already cut from its
-// redaction: the size it states ([TranscriptEntry.Bytes]), and its names
-// redacted and bounded.
-//
-// EACH OF ITS OWN BYTES, copied: what the redaction and the cut hand back is,
-// wherever they changed nothing, the very string the entry was read from, and
-// that is a piece of a decoded record of up to a line's 32 MiB — a short note
-// is a substring of the value that carried it. Kept on the page, a few bytes of
-// it held all of it until the answer was sent, so a page of a few KiB could
-// hold the whole read budget.
+// redaction: the size it states ([TranscriptEntry.Bytes]), its names redacted
+// and bounded, and EACH STRING CLONED: an unchanged cut is a substring of a
+// decoded record of up to a line's 32 MiB, which a page would keep alive.
 func shape(e TranscriptEntry, size int) TranscriptEntry {
 	e.Bytes = size
 	e.Thread, _, _ = redactedWithin(e.Thread, transcriptNameMaxBytes)
@@ -1018,45 +801,24 @@ func statedSize(recorded, whole int) int {
 // statedSizeGrain is what the size of a text a read redacted only the opening
 // of is rounded up to ([statedSize]).
 //
-// A KIBIBYTE. Such a text runs past a read's window of it — the entry's bound
-// and twice the longest credential the redaction knows, a private key's block
-// of up to 64 KiB — so past a hundred and thirty KiB, and a reader is told its
-// size as "the first 8 KiB of 2.1 MiB", which a kibibyte moves by under one
-// percent. A value the redaction takes out of its opening — a password, a
-// token, tens of bytes — then moves the size a reader is told only where it
-// carries the text across a kibibyte, never by its own length.
+// A KIBIBYTE: such a text runs past the entry's bound plus twice the longest
+// credential (a private key's block, up to 64 KiB), so a reader's "first 8 KiB
+// of 2.1 MiB" moves under one percent, and a redacted value moves the size
+// only where it carries the text across a kibibyte, never by its own length.
 const statedSizeGrain = 1 << 10
 
-// redactedWithin is text redacted and then cut to at most bound bytes, marked
-// where it was cut, whether it was, and the size of what the whole text redacts
-// to where the read made that redaction — a text the window below takes whole
-// — or -1 where it redacted only an opening: an OPENING OF WHAT THE WHOLE TEXT
-// REDACTS TO, the bytes it hands out ones the whole text's redaction would.
+// redactedWithin is text redacted and then cut to at most bound bytes, whether
+// it was cut, and the size of the whole text's redaction where the read made
+// it, else -1: always an OPENING OF WHAT THE WHOLE TEXT REDACTS TO.
 //
-// WHAT IS REDACTED IS WHAT CAN REACH THE CUT, and [redactContext] past it —
-// the head: a credential that begins inside the bound ends within that much
-// of it, a private key's block being the longest shape the redaction knows,
-// so it is read whole and redacted as one, where a key cut in half by the
-// bound would be one the redaction no longer recognises. And the head is
-// redacted INSIDE A WINDOW [redactContext] LONGER STILL, which settles it: a
-// credential that begins in the head ends in the window, so the window's
-// redaction of the head is the whole text's. The rest of a long text is never
-// scanned: a line of a record may run to [maxLineBytes], and redacting all of
-// it to hand out its first [TranscriptEntryMaxBytes] was the whole cost of a
-// read many times over.
-//
-// ONLY WHAT THE HEAD REDACTS TO IS HANDED OUT, never the window's own end,
-// which the window cut where it ended — a credential begun there is one the
-// redaction did not see whole. Cut by the output's bytes alone, the end came
-// through whenever the redaction shrank what was before it: a head of private
-// keys, each block a marker of twenty-two bytes, left a window of eighty KiB
-// redacted to less than the bound, and the GitHub token the window had cut
-// was handed out as its first twenty characters. So what is handed out is as
-// much of the window's redaction as the head's own redaction agrees with: all
-// of it up to the head's end where nothing runs across that end, and up to
-// where a credential does — which the head alone cuts, and the window reads
-// whole — where something does. Such a credential is not handed out at all;
-// the entry is cut where it begins.
+// A credential beginning inside the bound ends within [redactContext] past it
+// (a private key's block is the longest), so only that head is redacted, inside
+// a window [redactContext] longer still, where any credential begun in the head
+// ends: the window's redaction of the head is the whole text's. The rest, up to
+// [maxLineBytes], is never scanned. ONLY WHAT THE HEAD REDACTS TO IS HANDED
+// OUT, never the window's end, where a credential may be cut and so missed: as
+// much of the window's redaction as the head's own agrees with, so a credential
+// running across the head's end is not handed out at all.
 func redactedWithin(text string, bound int) (string, bool, int) {
 	head := textcut.Bytes(text, bound+redactContext)
 	// AT LEAST redactContext PAST THE HEAD: a cut walks back to a rune's
@@ -1086,20 +848,15 @@ func sharedPrefix(a, b string) int {
 	return n
 }
 
-// windowAround is the window of shown — an entry's whole text as the
-// redaction leaves it — around the byte offset at: at most bound bytes, a third
-// of it before at as textindex.Snippet places a snippet's, marked at its end
-// where shown runs on past it; where in shown it begins; and whether it is less
-// than all of shown.
+// windowAround is the window of shown (an entry's whole redaction) around the
+// byte offset at: at most bound bytes, a third of it before at as
+// textindex.Snippet places one, marked where shown runs on; where it begins;
+// and whether it is less than all of shown.
 //
-// CUT FROM THE WHOLE TEXT'S REDACTION, so neither end can cut a credential in
-// half: every credential the redaction knows is a marker in shown, wherever
-// the window falls. And NEVER A MARKER IN PART, since a marker cut to
-// "ACTED:github-token]" reads as words of the entry's own: a start that would
-// fall inside the markers the redaction wrote moves on past them, and an end
-// back to where they begin ([redact.MarkersAround]) — each away from at, so the
-// window still holds the word it was found by, however long a run of markers
-// it met.
+// Cut from the whole redaction, neither end cuts a credential, and NEVER A
+// MARKER IN PART, which reads as the entry's own words ("ACTED:github-token]"):
+// either end inside markers moves past them, away from at ([redact.MarkersAround]),
+// so the window still holds the word it was found by.
 func windowAround(shown string, at, bound int) (string, int, bool) {
 	if len(shown) <= bound {
 		return shown, 0, false
@@ -1161,12 +918,10 @@ func (b *transcriptBuilder) unread(what string) error {
 	return b.add(TranscriptEntry{Kind: EntryUnread, Thread: b.thread}, what)
 }
 
-// called remembers which tool the call id is of, for its result — but never
-// an id or a tool's name past [transcriptNameMaxBytes], which no harness
-// writes: remembered whole, each held a string of any length a record names,
-// at a thousand calls the read keeps, for as long as their results were to
-// come. Such a call's result names no tool, as one past [maxPendingCalls]
-// does.
+// called remembers which tool the call id is of, for its result, but never an
+// id or a name past [transcriptNameMaxBytes], which no harness writes and which
+// would hold strings of any length until their results came. Such a call's
+// result names no tool, as one past [maxPendingCalls] does.
 func (b *transcriptBuilder) called(id, tool string) {
 	if id == "" || len(id) > transcriptNameMaxBytes || len(tool) > transcriptNameMaxBytes ||
 		len(b.calls) >= maxPendingCalls {
@@ -1186,19 +941,15 @@ func (b *transcriptBuilder) answered(id string) string {
 // ---- notes --------------------------------------------------------------- //
 
 // noteAt is where the first note heading in text at or after from opens, and
-// where the line it is on ends, and false where there is none: the heading's
-// opening, a sender's name, and the rest of the heading closing its line
-// ([noteHeadOpen], [noteHeadClose]).
+// where its line ends, and false where there is none: the heading's opening, a
+// sender's name, and the rest closing its line ([noteHeadOpen],
+// [noteHeadClose]). Every note opens with it wherever a harness filed it, so a
+// note is found by it, never by a record shape a release can move.
 //
-// EACH LINE IS READ ONCE, whatever it holds. Whether an opening is a heading
-// is a matter of how its line ends, which every opening on the line shares: so
-// where the first opening on a line is no heading, none after it on that line
-// is either, and the search goes on from the next line. It used to look for
-// the line's end again from every opening, and a line of a record — which may
-// run to [maxLineBytes] — written as nothing but openings cost the openings
-// times the line, tens of minutes of a core for one line. A heading found, the
-// next is looked for from the end of its line, for the same reason: a line
-// holds one heading at most.
+// EACH LINE IS READ ONCE: whether an opening is a heading depends on how its
+// line ends, so a line whose first opening is none holds none, and a line
+// holds one heading at most. Re-scanning from every opening made a line of
+// [maxLineBytes] openings cost tens of core-minutes.
 func noteAt(text string, from int) (at, end int, ok bool) {
 	for from < len(text) {
 		i := strings.Index(text[from:], noteHeadOpen)
@@ -1282,13 +1033,10 @@ type claudeRecord struct {
 }
 
 // claudeArchive reads the session's transcript and each subagent's, a member
-// at a time, and passes every other member — the tool results spilled to
-// files, the task list — unread.
-//
-// WHAT A MEMBER HANDS OUT IS METERED, apart from what the archive inflates to
-// ([TranscriptReadBytes]); and every member is read a line at a time through
-// ONE buffer, reset for each, since an archive of empty members is allowed
-// hundreds of thousands of them.
+// at a time, passing every other member unread. What a member hands out is
+// metered apart from what the archive inflates to ([TranscriptReadBytes]), and
+// every member is read through ONE buffer, reset for each: an archive may hold
+// hundreds of thousands of empty members.
 func (b *transcriptBuilder) claudeArchive(ctx context.Context, archive io.Reader) error {
 	tr := tar.NewReader(archive)
 	b.handed.r = tr
@@ -1309,10 +1057,9 @@ func (b *transcriptBuilder) claudeArchive(ctx context.Context, archive io.Reader
 		b.thread = thread
 		clear(b.calls)
 		if h.Typeflag != tar.TypeReg {
-			// A TRANSCRIPT THAT IS NO PLAIN FILE — a link, a directory — is
-			// not read through: a link names another member or a path the
-			// archive does not hold, and neither is this record. Said, where
-			// the transcript was.
+			// A TRANSCRIPT THAT IS NO PLAIN FILE (a link, a directory) is not read
+			// through: it names another member or a path outside the archive. Said where
+			// it was.
 			if unreadErr := b.unread("a transcript of the harness's record is not a plain " +
 				"file in the archive, and was not read"); unreadErr != nil {
 				return unreadErr
@@ -1354,20 +1101,17 @@ func (b *transcriptBuilder) claudeLinePastBound(n int64) error {
 		"past the %s one line may hold", humanSize(n), humanSize(int64(b.bounds.LineBytes))))
 }
 
-// claudeLine reads one record: a person's turn of the conversation — the
-// brief, a note, a compaction summary, or the results of the model's tool
-// calls — or the model's own, its text and its calls. Every other record is
-// the harness's own, and no entry but for the notes it carries
-// ([transcriptBuilder.claudeNotes]).
+// claudeLine reads one record: a person's turn (the brief, a note, a
+// compaction summary, or the results of the model's calls) or the model's
+// own. Every other record is the harness's own, an entry only for the notes
+// it carries ([transcriptBuilder.claudeNotes]).
 //
-// A LINE THAT IS NO OBJECT IS NO RECORD, whatever JSON it is: an array or a
-// number decodes into a record as nothing at all, and the line would vanish.
-// Within an object the record is DECODED LOOSELY, as the stream is
-// ([decodeOpenCodeEvent]'s reason): a field whose type a release changed is
-// skipped rather than losing the record. And BY ITS KEYS EXACTLY AS WRITTEN,
-// as Claude Code's own JSON.parse reads them ([threadDecoding]), its message
-// and its blocks as much as the record, so one record is read by one rule,
-// and as the run's event stream reads the same record ([claudeEventWire]).
+// A LINE THAT IS NO OBJECT IS NO RECORD, rather than decoding to nothing and
+// vanishing. A record is decoded loosely, as the stream is
+// ([decodeOpenCodeEvent]): a retyped field is skipped, not the record. It is
+// read by its keys exactly as written ([threadDecoding]), its message and
+// blocks alike, as the run's event stream reads the same record
+// ([claudeEventWire]).
 func (b *transcriptBuilder) claudeLine(ctx context.Context, line []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1394,15 +1138,11 @@ func (b *transcriptBuilder) claudeLine(ctx context.Context, line []byte) error {
 		}
 		return b.claudeMessage(ctx, rec.Message, kind, at)
 	case record == "system":
-		// THE LINE THE RUN'S OWN HOOK PRINTS as it hands the model a note,
-		// which the live transcript shows as `[steer]`: a note in its own
-		// right here, since a release that keeps no hook context leaves it
-		// the note's one trace. ITS OWN LINE, as the harness recorded it, for
-		// the entry to redact, bound and state the size of as every entry's
-		// text is — never the live view's rendering of it, which is cut to a
-		// phase event's line and counts the lines after it in words the
-		// harness never wrote, and was redacted whole for every record of
-		// the kind, those before the page included.
+		// THE LINE THE RUN'S OWN HOOK PRINTS as it hands the model a note (the
+		// live `[steer]`) is a note entry: a release that keeps no hook context
+		// leaves it the note's one trace. Its own line as recorded, never the live
+		// view's rendering, which is cut and counts lines in words the harness
+		// never wrote.
 		if said, ok := claudeSteerSaid(looseString(rec.Subtype), rec.Content); ok {
 			hookLine, _, _ := strings.Cut(strings.TrimSpace(said), "\n")
 			if hookLine = strings.TrimSpace(hookLine); hookLine != "" {
@@ -1427,14 +1167,11 @@ func (b *transcriptBuilder) unshaped() error {
 		"and was not read")
 }
 
-// claudeNotes adds an entry for every note the engine sent the run that a
-// record the harness wrote for itself carries, wherever in the record: the
-// harness hands a note to its model as a hook's additional context, and which
-// record keeps that, under which field, is the harness's own and moves between
-// releases, where the heading every note opens with is the engine's. Read in
-// the record's own order, so one read counts a record's notes as the next one
-// does — and a value at a time, its caller asked at each whether it is still
-// there: a record of a line's mebibytes can hold millions of values.
+// claudeNotes adds an entry for every note a record the harness wrote for
+// itself carries, wherever in it: which record and field keep a hook's
+// additional context moves between releases, while the heading is the
+// engine's. Read in the record's order, so every read counts its notes alike,
+// and a value at a time, checking ctx: a line can hold millions of values.
 func (b *transcriptBuilder) claudeNotes(ctx context.Context, line []byte, at time.Time) error {
 	if !bytes.Contains(line, []byte(noteHeadOpen)) {
 		return nil
@@ -1531,14 +1268,10 @@ func claudeTime(raw string) time.Time {
 	return carriedInstant(at.UTC())
 }
 
-// carriedInstant is at where an answer can carry it — in the years 0 to 9999,
-// all RFC 3339 spells, which is how an answer's JSON writes an instant — and
-// zero otherwise, so the entry is sent with no time.
-//
-// AN INSTANT AN ANSWER CANNOT CARRY FAILS THE PAGE THAT HOLDS IT: encoding the
-// answer fails on it, which REST answers with a 500 and the socket with no
-// answer at all, and every page after it is reached only through that one's
-// cursor. And a box's own agent can write any instant into what its run packs.
+// carriedInstant is at where an answer's RFC 3339 JSON can carry it (the
+// years 0 to 9999), and zero otherwise, so the entry is sent with no time. A
+// box's agent can write any instant, and one the encoding fails on fails its
+// page (a REST 500, no socket answer) and every page reached by its cursor.
 func carriedInstant(at time.Time) time.Time {
 	if year := at.Year(); year < 0 || year > 9999 {
 		return time.Time{}
@@ -1609,22 +1342,16 @@ const (
 	openCodeCallFailed = "error"
 )
 
-// openCodeMessage is one message of an OpenCode export, as far as this
-// package reads one: OpenCode 2's `SessionMessage.Info`, a flat object whose
-// `type` says which kind it is ([openCodeKind]) and whose other fields are that
-// kind's own, each absent from a kind that does not carry it. Decoded loosely
-// ([transcriptBuilder.openCodeNext]), so a field a release retyped reads as
-// its zero and the rest of the message as written.
+// openCodeMessage is one message of an OpenCode export: OpenCode 2's
+// `SessionMessage.Info`, a flat object whose `type` is its kind
+// ([openCodeKind]) and whose other fields are that kind's own. Decoded
+// loosely ([transcriptBuilder.openCodeNext]): a retyped field reads as zero.
 //
-// ONE TYPE FOR EVERY READER OF AN EXPORT: a session's transcript reads who
-// wrote a message, when and what it says ([transcriptBuilder.openCodeMessage]),
-// and the context a session carries what its steps' requests measured and
-// whether each failed ([measuredPrompt]), off an export and off a page of the
-// session's own message list alike, all off this one, so no two readers of the
-// one document disagree about what a message is, its kind or its failure.
-// OpenCode 1.x's `{"info": {"role": …}, "parts": […]}` is no message of this
-// document: every message of a 2.x export read in that shape had no role and
-// no parts, and a transcript showed nothing.
+// ONE TYPE FOR EVERY READER OF AN EXPORT, a session's transcript
+// ([transcriptBuilder.openCodeMessage]) and the context a session carries
+// ([measuredPrompt]) alike, off an export or a page of its message list, so
+// no two readers disagree about a message's kind or failure. OpenCode 1.x's
+// `{"info": …, "parts": …}` is not this document.
 type openCodeMessage struct {
 	// Type is the message's kind.
 	Type openCodeKind `json:"type"`
@@ -1745,18 +1472,15 @@ func (w openCodeItemWire) item() openCodeContent {
 	return item
 }
 
-// eachOpenCodeItem hands each item of a step's content to each, in order, as
-// it reads it, and returns each's first error, as it returned it, having read
-// no item after it. A content that is no list has no items, and one that
-// stops decoding part way has none after the fault, which no content of a
-// message decoded whole can have ([transcriptBuilder.openCodeNext]).
+// eachOpenCodeItem hands each item of a step's content to each, in order, and
+// returns each's first error, reading no item after it. Content that is no
+// list has no items; one that stops decoding part way has none past the fault
+// ([transcriptBuilder.openCodeNext] decoded the message whole).
 //
-// AN ITEM AT A TIME ([eachElement]), each decoded by its keys exactly as
-// written ([threadDecoding]) and loosely by type ([openCodeItemWire.item]),
-// and never the whole list first, which held an item's 160 bytes for every
-// element the list held, however small the element, before any was looked
-// at. An element that is no object is the zero item, as the whole decode left
-// it, so each is handed every element.
+// AN ITEM AT A TIME ([eachElement]), by keys exactly as written
+// ([threadDecoding]) and loosely by type ([openCodeItemWire.item]), never the
+// whole list first, which held 160 bytes per element before any was read. An
+// element that is no object is the zero item, so each is handed every one.
 func eachOpenCodeItem(content json.RawMessage, each func(openCodeContent) error) error {
 	var (
 		wire    openCodeItemWire
@@ -1774,25 +1498,18 @@ func eachOpenCodeItem(content json.RawMessage, each func(openCodeContent) error)
 	return stopped
 }
 
-// openCodeExport reads the export document a message at a time, its other
-// fields (the session's own) passed: `{"info": …, "messages": [{"type":
-// "user", …}, {"type": "assistant", …}, …]}`.
+// openCodeExport reads the export document a message at a time, passing its
+// other fields: `{"info": …, "messages": [{"type": "user", …}, …]}`.
 //
-// ONE MESSAGE IS HELD AT A TIME, to about [TranscriptBounds.LineBytes] — the
-// bound a line of a record is read whole to — counted afresh before every
-// step of the walk, so a message past it is said, and the read stops there: a
-// JSON decoder cannot find where the next value begins without reading the
-// one it is in.
+// ONE MESSAGE IS HELD AT A TIME, to about [TranscriptBounds.LineBytes],
+// counted afresh before every step of the walk; a message past it is said and
+// ends the read, since a JSON decoder cannot find the next value without
+// reading the one it is in.
 //
-// A DOCUMENT THAT ENDS BEFORE IT CLOSES ENDS PART WAY THROUGH, whatever the
-// decoder calls it. Asked whether a list goes on at the input's end, the
-// decoder this module builds with answers that it does and keeps the end as a
-// syntax error — "unexpected end of JSON input", not the io.ErrUnexpectedEOF a
-// value cut short reports — which the next read returns; read as any other
-// syntax error, an export cut between two of its messages was said to hold no
-// export document at all. So a syntax error met once the archive's bytes have
-// all been read, with nothing the decoder has not parsed but separators, is the
-// document's end coming too soon.
+// A DOCUMENT THAT ENDS BEFORE IT CLOSES ENDS PART WAY THROUGH: at the input's
+// end the decoder reports a syntax error ("unexpected end of JSON input"), not
+// io.ErrUnexpectedEOF, so a syntax error once the archive is all read, with
+// only separators unparsed, is the document cut short, not "no export".
 func (b *transcriptBuilder) openCodeExport(ctx context.Context, archive io.Reader) error {
 	held := &heldValue{r: archive, max: b.bounds.LineBytes}
 	dec := json.NewDecoder(held)
@@ -1926,41 +1643,18 @@ func (b *transcriptBuilder) pastHeld(held *heldValue, err error) error {
 	return errTranscriptPage
 }
 
-// openCodeMessage reads one message by its kind. A person's message is the
-// brief — or a note, where it is one: the run's plugin admits a note as a
-// person's message — read by its text alone, as a Claude Code message's text
-// is read and an image beside it is not; an assistant's step is what its model
-// wrote and every tool it called ([transcriptBuilder.openCodeStep]); and a
-// completed compaction is its summary, which the model reads in place of the
-// conversation before it.
+// openCodeMessage reads one message by its kind: a person's is the brief or a
+// note (the run's plugin admits a note as one), by its text alone; an
+// assistant's step is the model's words and calls
+// ([transcriptBuilder.openCodeStep]); a completed compaction is its summary.
 //
-// EVERY OTHER KIND IS OPENCODE'S OWN, and no entry, as the records Claude Code
-// writes for itself are none ([transcriptBuilder.claudeLine]):
-//
-//   - synthetic: a notice OpenCode writes into the person's turn — a
-//     background job's ending, a mode's reminder, an instruction file it
-//     loaded — the counterpart of a record Claude Code marks as its own
-//     (`isMeta`). Never searched for a note: OpenCode files a note as a
-//     person's message, and a notice can carry what a tool printed, which is
-//     never a note;
-//   - system: the run's instructions again, handed to the model as an update
-//     where they changed since the session last read them;
-//   - skill: a skill a person activated, its body handed to the model in a
-//     message of OpenCode's own, as Claude Code hands one in a record of its
-//     own;
-//   - shell: a command a person ran in the session, outside the model, whose
-//     output reaches the model only as a synthetic notice;
-//   - idle, agent-switched, model-switched and location-switched: an
-//     execution's end, and the session's agent, model or directory changed.
-//
-// A compaction still running, or one that failed, is none either: it handed
-// the model no summary.
-//
-// A MESSAGE OF NO KIND THIS READ KNOWS IS SAID, as a message of no shape it
-// knows is. The kinds are the whole of what the releases this build drives
-// write, so one outside them comes from a release this read was not written
-// for, and its words may be what the model read: a gap never read as
-// continuity.
+// EVERY OTHER KIND IS OPENCODE'S OWN and no entry, as Claude Code's own records
+// are none: synthetic notices (never searched for a note: one can carry what a
+// tool printed), system instruction updates, skill bodies, a person's shell
+// commands, idle, and switches of agent, model or location. A compaction
+// running or failed handed the model no summary. A KIND THIS READ DOES NOT KNOW
+// IS SAID ([EntryUnread]): it is from a release this read was not written for,
+// and its words may be what the model read.
 func (b *transcriptBuilder) openCodeMessage(ctx context.Context, m openCodeMessage) error {
 	at := unixMillis(m.Time.Created)
 	switch m.Type {

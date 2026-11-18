@@ -17,17 +17,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The task apply, which is where almost every record lands.
-//
-// # Why a patch is MERGED against the stored document rather than written over
-// it
-//
-// The record carries what changed and the row carries what it was. A patch
-// applied to the decoded document and re-encoded produces the complete new
-// state — including fields THIS BUILD DOES NOT KNOW, which round-trip through
-// the document untouched. Writing the patch's columns straight onto the row
-// would lose them at the first rolling upgrade, permanently, on the node that
-// happened to apply the record.
+// The task apply. A patch is MERGED into the decoded stored document and
+// re-encoded, never written over the row's columns: fields this build does not
+// know round-trip through the document, where a column write would lose them
+// at the first rolling upgrade.
 
 // applyTask writes one task record and everything derived from it.
 func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
@@ -55,21 +48,16 @@ func (a *Applier) applyTaskRecord(ctx context.Context, tx *sql.Tx, c applyContex
 		return 0, err
 	}
 	if held && c.packed <= int64(max(current.Version, current.ScopedThrough)) {
-		// A REDELIVERY OR A REPROCESS, and both are ordinary traffic. The
-		// history row below is still written, because a record that
-		// produced no object change is still something that happened —
-		// and its own guard makes THAT idempotent.
-		// NO COMPARISON: the document this record would have moved is
-		// already its successor's, so what the row says moved is the
-		// writer's own statement — see [statedDeltas].
+		// A redelivery or reprocess. The history row is still written (its
+		// own guard makes it idempotent), with the writer's stated deltas:
+		// the document is already a successor's ([statedDeltas]).
 		history, werr := a.writeHistory(ctx, tx, c,
 			subjectKeys{Project: current.Project, Key: current.Key}, statedDeltas(c))
 		if werr != nil {
 			return 0, werr
 		}
-		// A LATE RECORD STILL MOVES WHEN THE TASK LAST CHANGED: its
-		// history row raised every successor's effective instant, and
-		// the stamp follows the newest of them — see [restampUpdated].
+		// A late record still moves `updated_at`: its history row raised
+		// every successor's effective instant ([restampUpdated]).
 		restamped, rerr := restampUpdated(ctx, tx, id)
 		if rerr != nil {
 			return 0, rerr
@@ -83,14 +71,9 @@ func (a *Applier) applyTaskRecord(ctx context.Context, tx *sql.Tx, c applyContex
 	}
 	next.Version = uint64(c.packed)
 
-	// WHEN THE TASK LAST CHANGED IS THE APPLIER'S, on the rule the finish
-	// stamps below follow: the fleet-agreed instant of the record that
-	// changed it — the same `effective_at` its history row takes in this
-	// apply — and never a writer's clock. It was nobody's: the create stamped
-	// `updated_at` and no later record moved it, so every list's Updated
-	// column and its "recently updated" order read the day a task was FILED,
-	// however much had happened to it since. See [restampUpdated] for the
-	// same rule re-derived over every row.
+	// `updated_at` is the applier's: the fleet-agreed `effective_at` this
+	// record's history row takes, never a writer's clock ([restampUpdated]
+	// re-derives the same rule over every row).
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	updated, err := effectiveAt(ctx, tx, id, c)
 	if err != nil {
@@ -98,25 +81,15 @@ func (a *Applier) applyTaskRecord(ctx context.Context, tx *sql.Tx, c applyContex
 	}
 	next.UpdatedAt = updated
 
-	// THE FINISH STAMPS ARE THE APPLIER'S, derived from the group the
-	// task has just entered rather than carried by the record.
-	//
-	// A writer-supplied instant would be one node's clock on a column
-	// every "recent" filter, every cycle- and lead-time report and every
-	// dependency edge's own clearing time is compared against — and the
-	// dependency edge is the one that matters most, because a blocker
-	// whose finish instant is null clears nothing and every dependent
-	// waits for ever on work that is done.
+	// The finish stamps are derived from the group just entered, never
+	// carried: a writer's instant would be one node's clock, and a blocker
+	// whose finish instant is null clears no dependency edge.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := stampFinish(&next, c); err != nil {
 		return 0, err
 	}
 
-	// AND THE ARCHIVE STAMP, on the same rule and for a column that was
-	// written as NULL on every row: `archived` is a bool the patch
-	// carries, and when and by whom it was set had no writer at all —
-	// so a board filtered to the archive could order it by nothing and
-	// an operator asking who filed something away had no answer.
+	// The archive stamp, on the same rule: the patch carries only the bool.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := stampArchive(&next, current, held, c); err != nil {
 		return 0, err
@@ -127,23 +100,12 @@ func (a *Applier) applyTaskRecord(ctx context.Context, tx *sql.Tx, c applyContex
 		return 0, fmt.Errorf("worklet: encode task %s at %s: %w", id, c.position, err)
 	}
 
-	// THE PROJECT'S FIELD DECLARATIONS, READ ONCE FOR BOTH READERS OF THEM.
-	//
-	// [Applier.explodeFieldValues] needs them to decide which typed column
-	// each value goes in, and [TaskDeltas] needs them to name a value by its
-	// SLUG rather than by the uuid it is keyed under. Two reads of one
-	// document in one transaction is waste, and the two could drift on a
-	// catalogue commit interleaved between them, so the read is hoisted
-	// here and the map is passed down.
-	//
-	// READ ONLY WHEN A SIDE CARRIES VALUES, which is what keeps this off the
-	// hot path: the overwhelming majority of task commits touch no custom
-	// field at all, and a company that declares none never reads a
-	// catalogue here. BOTH sides, because a commit that CLEARED every value
-	// still has to name what it cleared, and `next` alone would answer for
-	// neither. The guard is one line from its consumers so the invariant
-	// they rest on — a nil map means neither side had a value — is checkable
-	// by eye.
+	// The project's field declarations, read once for both readers:
+	// [Applier.explodeFieldValues] (which typed column) and [TaskDeltas]
+	// (name a value by slug), so the two cannot see different catalogues.
+	// Read only when either side carries values, which keeps it off the hot
+	// path; both sides, since a commit that cleared every value still names
+	// what it cleared. Consumers rely on: nil map means neither side had one.
 	var declared map[string]FieldDef
 	if len(current.Fields) > 0 || len(next.Fields) > 0 {
 		if declared, err = declaredFields(ctx, tx, next.Project); err != nil {
@@ -155,8 +117,8 @@ func (a *Applier) applyTaskRecord(ctx context.Context, tx *sql.Tx, c applyContex
 	if err != nil {
 		return 0, err
 	}
-	// THE KEY DIRECTORY MOVES ONLY WITH THE TASK'S KEYS — on its create,
-	// and on a record that re-keys it — see [Applier.maintainKeys].
+	// The key directory moves only on a create or a re-key
+	// ([Applier.maintainKeys]).
 	rekeyed := !held || keysMoved(current, next)
 	children, err := a.explodeTask(ctx, tx, next, declared, rekeyed, c)
 	if err != nil {
@@ -170,9 +132,8 @@ func (a *Applier) applyTaskRecord(ctx context.Context, tx *sql.Tx, c applyContex
 	if err != nil {
 		return 0, err
 	}
-	// WHAT THE APPLY ACTUALLY DID, computed from the two documents this
-	// frame holds — which is the only frame that can, and the one the
-	// history row and the entered stamp below are both derived from.
+	// What the apply actually did, from the two documents only this frame
+	// holds; the history row and the entered stamp both derive from it.
 	before := current
 	if !held {
 		before = Task{}
@@ -184,9 +145,8 @@ func (a *Applier) applyTaskRecord(ctx context.Context, tx *sql.Tx, c applyContex
 		return 0, err
 	}
 	entered := 0
-	// THE STATUS MOVED, not "somebody was told the status moved". Gated on
-	// the notification, a quiet status change left the entered instant
-	// naming an older change than the task had actually last made.
+	// Gated on the status moving, not on a notification: a quiet status
+	// change still moves the entered instant.
 	if _, moved := applied["status"]; moved {
 		if entered, err = a.stampStatusEntered(ctx, tx, id); err != nil {
 			return 0, err
@@ -208,21 +168,12 @@ const unblockedToldStatement = `
 
 // stampUnblocked records that this commit told a dependent it is workable.
 //
-// # Why the applier writes it and not the writer
-//
-// The column is a MAX over every applied commit that named this task as
-// unblocked, which makes it order-independent and identical on every node — a
-// redelivery, a reprocess and a replay all leave the same value, so none of
-// them re-issues a wake somebody already had. A writer-supplied instant could
-// not have that property: it would be one node's clock, and two nodes telling
-// the same dependent would leave two different answers to "have they been
-// told".
-//
-// It is the EFFECTIVE instant, never the authored one, for the reason the
-// dependency edge's own clearing time is: the comparison the repair makes is
-// between two fleet-agreed values, and on authored clocks a sixty-second skew
-// re-issues a late wake for every task cleared inside that window, on every
-// tick.
+// The applier writes it, as a MAX over every applied commit naming the task
+// unblocked: order-independent and identical on every node, so no redelivery,
+// reprocess or replay re-issues a wake. A writer's instant would be one node's
+// clock. It is the EFFECTIVE instant, never the authored one, because the
+// repair compares it with the edge's fleet-agreed clearing time; on authored
+// clocks a skew re-issues a late wake for every task cleared inside it.
 func (a *Applier) stampUnblocked(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	if c.record.Notify == nil || len(c.record.Notify.Snapshot.Unblocked) == 0 {
 		return 0, nil
@@ -232,10 +183,8 @@ func (a *Applier) stampUnblocked(ctx context.Context, tx *sql.Tx, c applyContext
 		if party.Task == "" {
 			continue
 		}
-		// THE DEPENDENT'S OWN EFFECTIVE INSTANT, computed exactly as
-		// every other instant on its row is: a MAX over the records
-		// this node has applied at or below this position, so two nodes
-		// applying in different orders reach the same number.
+		// The dependent's own effective instant: a MAX over the records
+		// applied at or below this position, so apply order cannot move it.
 		effective, err := effectiveAt(ctx, tx, party.Task, c)
 		if err != nil {
 			return 0, err
@@ -258,12 +207,9 @@ func (a *Applier) stampUnblocked(ctx context.Context, tx *sql.Tx, c applyContext
 // stampFinish sets or clears the two finish instants from the group the task
 // is now in.
 //
-// BY GROUP RATHER THAN BY SLUG, because a company renames its statuses and
-// adds its own: `cancelled` and `done` are both the done group, and a report
-// that keyed on the slug would silently stop counting the day somebody added
-// `shipped`. FIRST ENTRY WINS in each group, so a task that goes done, is
-// reopened and goes done again keeps the instant of the state it is in and not
-// of the first time it ever reached it — which is why a reopen CLEARS both.
+// By group, not slug, since companies add and rename statuses. First entry
+// wins within a group, and a reopen clears both, so the stamp is the entry
+// into the state the task is in now, not the first time it ever got there.
 func stampFinish(task *Task, c applyContext) error {
 	at, err := effectiveOf(c)
 	if err != nil {
@@ -283,8 +229,6 @@ func stampFinish(task *Task, c applyContext) error {
 			task.ClosedAt = &at
 		}
 	default:
-		// A REOPEN CLEARS BOTH, so "finished in the last week" agrees
-		// with the task's actual state rather than with a state it left.
 		task.DoneAt, task.ClosedAt = nil, nil
 	}
 	return nil
@@ -292,15 +236,9 @@ func stampFinish(task *Task, c applyContext) error {
 
 // stampArchive records a task being filed away, and by whom.
 //
-// ON THE EDGE, not on every commit: a task that is already archived and is
-// then edited keeps the instant it was archived at, which is what a reader
-// asking "when did this leave the board" means. Un-archiving clears both, on
-// [stampFinish]'s rule — a stamp that outlived the state it describes would
-// make "archived last Tuesday" true of a task sitting on the board.
-//
-// THE AUTHOR COMES FROM THE RECORD and the instant from the broker, which is
-// the same split every other derived stamp here uses: who did it is a fact
-// about the write, and when is a fact about the log.
+// On the edge only: an edit of an archived task keeps its archive instant.
+// Un-archiving clears both, on [stampFinish]'s rule. Who comes from the record
+// and when from the broker, as for every derived stamp.
 func stampArchive(task *Task, current Task, held bool, c applyContext) error {
 	was := held && current.Archived
 	switch {
@@ -318,10 +256,8 @@ func stampArchive(task *Task, current Task, held bool, c applyContext) error {
 
 // effectiveOf is the instant a stamp derived from this record takes.
 //
-// THE BROKER'S, never a clock: the applier reads no clock at all, which is
-// what makes a derived instant byte-identical on every node that applies the
-// same record — taken as the state log hands it, in the store's encoding on
-// every path ([statelog.Record.StoredAt]), so it needs no normalizing here.
+// The broker's, never a clock, so a derived instant is byte-identical on every
+// node; already in the store's encoding ([statelog.Record.StoredAt]).
 func effectiveOf(c applyContext) (time.Time, error) {
 	if c.brokerAt.IsZero() {
 		return time.Time{}, fmt.Errorf("worklet: the record at %s carries no "+
@@ -335,15 +271,11 @@ func effectiveOf(c applyContext) (time.Time, error) {
 // readTaskStatement is [readTask]'s read, named for the plan test.
 const readTaskStatement = `SELECT document, version, scoped_through, rank FROM tracker_tasks WHERE id = ?`
 
-// readTask reads the stored task, reporting whether the row exists — with the
-// rank its ROW holds, which is the task's place on its board.
-//
-// THE RANK IS THE COLUMN'S. After its create a task's place is the ORDER's to
-// write, and [Applier.applyRankOrder] writes it into the task's document and
-// its `rank` column alike ([rewriteOther]); the column is the extracted copy
-// every board reads, and a task write merges against it so it carries the
-// order's key through unchanged. Only a record that MINTS one — a create, a
-// move into another project — changes it.
+// readTask reads the stored task, reporting whether the row exists, with the
+// rank its ROW holds: after the create a task's place is the order's to write
+// ([Applier.applyRankOrder]), so a task write carries the column's rank
+// through and only a record that mints one (a create, a cross-project move)
+// changes it.
 func readTask(ctx context.Context, tx *sql.Tx, id string) (Task, bool, error) {
 	var document []byte
 	var version, scoped int64
@@ -368,35 +300,23 @@ func readTask(ctx context.Context, tx *sql.Tx, id string) (Task, bool, error) {
 
 // mergeTask produces the new state from the stored one and the record.
 //
-// A CREATE CARRIES THE WHOLE TASK and a patch carries only what moved; both
-// end at a complete document, which is what makes a replay's result
-// independent of which records a node happened to have already.
+// A create carries the whole task and a patch what moved; both end at a
+// complete document, so a replay's result does not depend on what a node held.
 func mergeTask(current Task, held bool, c applyContext) (Task, error) {
 	switch c.record.Op {
 	case OpCreate:
-		// A [TaskCreate]: the task, and the question it was filed as —
-		// which is a comment ROW, written by [Applier.writeThread], and
-		// never part of the document this returns.
+		// The question it was filed as is a comment row
+		// ([Applier.writeThread]), never part of the document.
 		var payload TaskCreate
 		if err := decodePayload(c.record.Mutation, &payload); err != nil {
 			return Task{}, fmt.Errorf("worklet: decode the create at %s: %w",
 				c.position, err)
 		}
 		created := payload.Task
-		// A CREATE ON A LIVE ROW IS APPLIED, NOT REFUSED — and the
-		// reason is the rule the whole applier is written to: a record
-		// the broker committed is a record every node must be able to
-		// consume, so a shape this node did not expect raises a flag or
-		// writes what it says, and never stalls the log.
-		//
-		// It cannot arise from an ordinary write path: a create is
-		// published at an expectation of zero and the broker arbitrates
-		// it, so a second one on the same subject loses there. What
-		// reaches here is a REDELIVERY at a position the checkpoint has
-		// already passed — collapsed by the operation ledger on the
-		// ordinary path and, when that ledger has lost the row to its
-		// sweep, by this branch. Applying the payload is correct
-		// because a create carries the COMPLETE state, so the row ends
+		// A create on a live row is applied, not refused: a committed
+		// record never stalls the log. The broker refuses a second create
+		// (expectation zero), so this is a redelivery whose operation-ledger
+		// row was swept, and the complete state it carries ends the row
 		// where the record says either way.
 		created.ID = c.subject().ID
 		_ = held
@@ -408,11 +328,8 @@ func mergeTask(current Task, held bool, c applyContext) (Task, error) {
 				c.position, err)
 		}
 		if !held {
-			// A PATCH FOR A TASK THIS NODE DOES NOT HAVE. Under a strict
-			// replay the create is below this position, so this cannot
-			// happen from the log — it is a gate that dropped the
-			// create, and applying the patch would materialise a task
-			// out of a partial description.
+			// The create is below this position, so a gate dropped it;
+			// applying the patch would build a task from a partial one.
 			return Task{}, fmt.Errorf("worklet: the patch at %s names task %s, "+
 				"which this node does not have; its create was dropped by a "+
 				"gate or never published", c.position, c.subject().ID)
@@ -422,29 +339,18 @@ func mergeTask(current Task, held bool, c applyContext) (Task, error) {
 	return Task{}, fmt.Errorf("worklet: %s is not an operation on a task", c.record.Op)
 }
 
-// Patched is [applyPatch] under an exported name, for the ONE caller outside
-// this package that has to answer the same question: a tool composing the
-// WAKE that announces a write it is about to make.
-//
-// EXPORTED RATHER THAN REIMPLEMENTED, because the second implementation is
-// what this exists to end. The tool kept its own field-by-field copy of this
-// merge, and every field added to [TaskPatch] since had to be remembered in
-// two places — so when the schedule fields arrived, the durable row took them
-// and the wake's snapshot did not. The delta was then computed between a task
-// and itself, and every due date, estimate and size a seat moved reached its
-// notification as a change that changed nothing.
-//
-// The caller still layers what is genuinely ITS own on top: a wake's
-// recipient list reflects the watch gesture in flight, which the durable sets
-// settle later inside the writer's transaction.
+// Patched is [applyPatch] exported for a tool composing the WAKE that
+// announces a write it is about to make. Exported rather than reimplemented,
+// so a field added to [TaskPatch] cannot reach the row and miss the wake's
+// snapshot. The caller layers only its own part on top: the recipients of
+// the watch gesture in flight.
 func Patched(task Task, patch TaskPatch) Task { return applyPatch(task, patch) }
 
 // applyPatch is the pointer-semantics merge.
 //
-// A NIL FIELD IS UNCHANGED and a non-nil one carries its COMPLETE new value —
-// which is what tells "set this to empty" from "leave it alone". Every
-// collection is a pointer to a slice for the same reason: an absent tag list
-// means the write did not touch tags, and an empty one means it cleared them.
+// A nil field is unchanged and a non-nil one carries its complete new value,
+// which tells "set to empty" from "leave alone"; hence a pointer to every
+// collection's slice.
 func applyPatch(task Task, patch TaskPatch) Task {
 	setString(&task.Title, patch.Title)
 	setString(&task.Body, patch.Body)
@@ -453,9 +359,7 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	setString(&task.RoutingUnit, patch.RoutingUnit)
 	setString(&task.Project, patch.Project)
 	if patch.Mint != nil {
-		// THE MINT IS THE AUTHORITY FOR BOTH, derived rather than
-		// carried, so a record cannot claim a key and a rank that
-		// disagree about which counter value it took.
+		// Key and rank both derive from the mint, so they cannot disagree.
 		task.Key = mintedKey(task.Project, patch.Mint.N)
 		if rank, err := IntegerAt(patch.Mint.N); err == nil {
 			task.Rank = rank
@@ -476,10 +380,9 @@ func applyPatch(task Task, patch TaskPatch) Task {
 			task.Parent = &parent
 		}
 	}
-	// A CLEARED DATE IS ITS FLAG, never a value: an absent date means
-	// "leave it alone", and the zero instant is no date a patch carries —
-	// the writer refuses one, and one that both sets and clears a date
-	// ([TaskPatch.CheckDates]) — so a date set here is always a real one.
+	// A cleared date is its flag, never the zero instant, which the writer
+	// refuses, as it does a patch both setting and clearing one
+	// ([TaskPatch.CheckDates]).
 	switch {
 	case patch.ClearStart:
 		task.StartAt = nil
@@ -528,11 +431,8 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	if patch.Merging != nil {
 		task.Merging = *patch.Merging
 		if !task.Merging {
-			// THE INTENT GOES DOWN WITH THE MARKER, whatever this
-			// same patch said about it and in whatever order. It
-			// describes a walk that is running, so "not merging,
-			// but re-parenting" is a state the duty would read as
-			// an instruction with nothing to instruct.
+			// The re-parent intent describes a running walk, so it
+			// goes down with the marker whatever this patch said.
 			task.MergeReparent = false
 		}
 	}
@@ -603,11 +503,8 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 
 	rank := task.Rank
 	if rank == "" {
-		// A ROW WITHOUT A RANK CANNOT EXIST — the column carries a CHECK
-		// — and a task that reached here without one is a writer that
-		// did not mint it. The origin is the honest fallback: it puts
-		// the task somewhere rather than refusing a record the broker
-		// already committed.
+		// The column's CHECK refuses an empty rank, and a committed record
+		// is never refused, so a writer that minted none gets the origin.
 		rank = RankOrigin
 	}
 	res, err := tx.ExecContext(ctx, `
@@ -683,14 +580,10 @@ func childClearStatement(table string) string {
 
 // explodeTask rewrites the child rows a task's collections produce.
 //
-// WHOLESALE PER COLLECTION rather than diffed, because the record carries a
-// touched collection WHOLE: a delete-then-insert of one task's tags is a
-// handful of rows and is a pure function of the document, where a diff would
-// depend on what this node happened to hold.
-//
-// THE KEY DIRECTORY IS THE EXCEPTION, written only when rekeyed — the record
-// is the task's create, or changes the keys it holds — for the reason
-// [Applier.maintainKeys] gives.
+// Wholesale per collection, not diffed: a delete-then-insert is a pure
+// function of the document, where a diff depends on what this node held. The
+// key directory is the exception, written only when rekeyed
+// ([Applier.maintainKeys]).
 func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 	task Task, declared map[string]FieldDef, rekeyed bool, c applyContext) (int, error) {
 
@@ -721,12 +614,9 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 				task.Collaborators, func(h string) []any { return []any{task.ID, h} })
 		}},
 		{"tracker_task_tags", func() (int, error) {
-			// UNDER THE TASK'S CURRENT PROJECT, rewritten with the
-			// task on every apply: a project's tag filter seeks the
-			// slug and the project together ([tagClause]), so a row
-			// left under the project a task moved out of would hide
-			// it from its new project's filter and show it in its old
-			// one's.
+			// Under the task's current project: the tag filter seeks slug
+			// and project together ([tagClause]), so a moved task's row
+			// must move with it.
 			return insertMany(ctx, tx, c.maxVariables,
 				`INSERT INTO tracker_task_tags (task_id, project_key, slug) VALUES`,
 				`(?,?,?)`,
@@ -734,27 +624,14 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 				task.Tags, func(s string) []any { return []any{task.ID, task.Project, s} })
 		}},
 		{"tracker_relations", func() (int, error) {
-			// `one_sided` IS DERIVED HERE AND NEVER CARRIED. Whether a
-			// blocker lists this task among its dependents is a fact
-			// about the OTHER end's rows, so a writer stating it would
-			// be stating something it read in a different transaction
-			// on a different subject — and, until this derivation
-			// existed, every record said nothing and the column was
-			// zero on every row a repair duty was supposed to find.
+			// `one_sided` is derived here, never carried: it is a fact
+			// about the other end's rows. `one_sided_final` stays on the
+			// record: it is the repair duty's decision, which nothing
+			// derives.
 			//
-			// `one_sided_final` is the opposite kind of fact and stays
-			// on the record: it is the duty's DECISION that this edge
-			// will never be mirrored, which no derivation can reach.
-			//
-			// THE SUBQUERY REPEATS PER ROW AND STILL READS WHAT IT
-			// READ BEFORE, which is what makes the multi-row form
-			// safe here. It probes tracker_task_dependents while
-			// this statement writes tracker_relations, so no row of
-			// the batch can change what a later row of the same
-			// batch sees — and the only write to that table in this
-			// apply is the entry BELOW this one in the same loop,
-			// which is still ahead of us whether the rows went out
-			// one at a time or all at once.
+			// The multi-row form is safe: each row's subquery reads
+			// tracker_task_dependents, which this statement does not
+			// write and which the next loop entry writes only after it.
 			return insertMany(ctx, tx, c.maxVariables, relationsInsertPrefix,
 				relationsInsertRow, relationsInsertConflict,
 				task.Relations, func(r Relation) []any {
@@ -766,16 +643,13 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 					return []any{task.ID, r.Other, string(r.Kind),
 						mirrored, r.Other, task.ID,
 						boolInt(r.OneSidedFinal), r.Note,
-						// THE AUTHORED INSTANT, and NOT re-stamped on
-						// conflict: this is what the repair ages on, and
-						// an edge whose clock restarted every time its
-						// task was touched is one the duty would never
-						// reach on a busy task.
+						// The authored instant, never re-stamped on
+						// conflict: the repair ages edges on it.
 						store.EncodeTime(r.CreatedAt)}
 				})
 		}},
 		{"tracker_task_dependents", func() (int, error) {
-			// THE MIRROR AS A ROW, so the derivation above is an
+			// The mirror as a row, so the derivation above is an
 			// indexed probe rather than a document decode per edge.
 			return insertMany(ctx, tx, c.maxVariables, mirrorInsertPrefix,
 				mirrorInsertRow, mirrorInsertConflict,
@@ -784,9 +658,7 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 				})
 		}},
 	} {
-		// The delete and the inserts are one statement list, so a
-		// collection the record cleared ends empty rather than keeping
-		// whatever this node happened to hold.
+		// Cleared first, so a collection the record emptied ends empty.
 		if _, err := tx.ExecContext(ctx,
 			childClearStatement(child.table), task.ID); err != nil {
 			return 0, fmt.Errorf("worklet: clear %s for %s: %w",
@@ -800,12 +672,8 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 		written += n
 	}
 
-	// THE FIELD VALUES ARE THEIR OWN COLLECTION, and they are not in the
-	// loop above because the delete-then-insert there is keyed on task_id
-	// alone while this one needs the DECLARATIONS to decide which typed
-	// column each value goes in — which the loop's shape has no room for,
-	// and which [Applier.applyTask] reads and hands down rather than
-	// re-reading here.
+	// Field values are outside the loop because they need the declarations
+	// (handed down, not re-read) to pick each value's typed column.
 	if _, err := tx.ExecContext(ctx, clearFieldValuesStatement, task.ID); err != nil {
 		return 0, fmt.Errorf("worklet: clear tracker_field_values for %s: %w",
 			task.ID, err)
@@ -864,35 +732,28 @@ const (
 
 // maintainDeps derives the dependency edges from the task's own relations.
 //
-// DERIVED RATHER THAN CARRIED, so the two flags a query reads — is this task
-// blocked, and when was it cleared — are a pure function of the rows present
-// and identical whatever order the records arrived in.
+// Derived rather than carried, so "blocked" and "cleared when" are a pure
+// function of the rows present, whatever order the records arrived in.
 func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
 	c applyContext) (int, error) {
 
 	if _, err := tx.ExecContext(ctx, clearDepsStatement, task.ID); err != nil {
 		return 0, fmt.Errorf("worklet: clear the dependencies of %s: %w", task.ID, err)
 	}
-	// THE WAITING_ON EDGES ARE THE COLLECTION, filtered out of the
-	// relations the record carries, because a task's other relations
-	// (`relates_to`, `duplicates`) are not dependencies and write no row
-	// here.
+	// Only `waiting_on` relations are dependencies.
 	blockers := make([]Relation, 0, len(task.Relations))
 	for _, relation := range task.Relations {
 		if relation.Kind == RelationWaitingOn {
 			blockers = append(blockers, relation)
 		}
 	}
-	// A ROW OF LITERAL SUBQUERIES rather than the INSERT ... SELECT this
-	// was: with no FROM clause the SELECT produced exactly one row, so the
-	// two forms insert the same row from the same four binds — and only
-	// the VALUES form is a row template a multi-row insert can repeat.
-	// Each row's two probes read tracker_tasks while this statement writes
+	// A VALUES row of scalar subqueries, the template a multi-row insert
+	// repeats. Its probes read tracker_tasks while the statement writes
 	// tracker_task_deps, so batching cannot change what any of them sees.
 	written, err := insertMany(ctx, tx, c.maxVariables, depsInsertPrefix,
 		depsInsertRow, depsInsertConflict, blockers, func(r Relation) []any {
-			// A CHANGE IS NO TASK: open until the task records it settled,
-			// and dead at the head the task records nothing moving it at.
+			// A change is no task: open until the task records it settled,
+			// dead at the head the task records nothing moving it at.
 			open, cleared := 1, any(nil)
 			if s, settled := task.Changes[r.Other]; settled {
 				open, cleared = 0, nullableTime(&s.At)
@@ -903,10 +764,8 @@ func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
 		return 0, fmt.Errorf("worklet: write the dependencies of %s: %w",
 			task.ID, err)
 	}
-	// AND THE OTHER DIRECTION: this task finishing clears every edge that
-	// names it as a blocker. It is the same statement on every node,
-	// against the row this transaction has just written, so two nodes
-	// cannot disagree about whether a dependent is still blocked.
+	// The other direction: this task finishing clears every edge naming it
+	// as blocker, from the row this transaction just wrote.
 	res, err := tx.ExecContext(ctx, clearDependentsStatement,
 		string(statusOf(task).Group()), nullableTime(task.FinishedAt()), task.ID)
 	if err != nil {
@@ -918,17 +777,10 @@ func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
 	}
 	written += n
 
-	// AND THE MIRROR FLAG, FROM THIS SIDE. `one_sided` is derived on the
-	// DEPENDENT's apply from whether this blocker listed it; this commit
-	// is the other half — the blocker's own `Dependents` just changed, so
-	// every edge pointing at it is re-judged against the rows this
-	// transaction has written.
-	//
-	// BOTH DIRECTIONS ARE NEEDED and neither is redundant: without this
-	// one a mirror that lands SECOND never clears the flag its own
-	// dependent set while waiting, and the duty repairs an edge that is
-	// already whole — for ever, because its repair writes the mirror that
-	// is already there.
+	// And `one_sided` from the blocker's side: its `Dependents` just
+	// changed, so every edge pointing at it is re-judged. Without this, a
+	// mirror landing second never clears the flag the dependent's apply
+	// set, and the duty repairs an already-whole edge for ever.
 	res, err = tx.ExecContext(ctx, rejudgeEdgesStatement, task.ID, task.ID)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: re-judge the edges waiting on %s: %w",
@@ -950,14 +802,10 @@ var taskKeyPattern = sync.OnceValue(func() *regexp.Regexp {
 
 // taskKeysIn is every distinct key a body names, IN DOCUMENT ORDER.
 //
-// Document order rather than sorted, and the difference is which sixty-four
-// survive the cap: sorting drops the key somebody wrote first in favour of
-// sixty-four that happen to start with an earlier letter. Both are
-// deterministic and therefore both replicate — this one also links what the
-// author was writing about.
-//
-// ONE SCANNER for the applier's rows and the write path's warning, because
-// two would let a body be warned about at one count and capped at another.
+// Document order, not sorted, decides which keys survive the cap: the ones the
+// author wrote first. One scanner serves the applier's rows and the write
+// path's warning, so a body cannot be warned at one count and capped at
+// another.
 func taskKeysIn(body string) []string {
 	found := taskKeyPattern().FindAllString(body, -1)
 	seen := make(map[string]bool, len(found))
@@ -973,16 +821,10 @@ func taskKeysIn(body string) []string {
 
 // maintainReferences derives the mention graph from the task's own body.
 //
-// THE DESCRIPTION ONLY. tracker_references has a from_comment column, and the
-// header of the migration that created it (replicated 0002) says comments are
-// scanned too, but no comment apply writes a row: this is the table's only
-// writer, so from_comment is empty on every row and `references=` lists the
-// tasks whose DESCRIPTION mentions a key.
-//
-// CAPPED AFTER DEDUPE, so a pathological body is a bounded number of lookups
-// on every node rather than one per occurrence — and the cap is on what the
-// body NAMES rather than on what it contains, which is the difference between
-// sixty-four lookups and five thousand.
+// The description only: although replicated 0002's header says comments are
+// scanned, no comment apply writes a row, so from_comment is always empty and
+// `references=` lists tasks whose DESCRIPTION mentions a key. Capped after
+// dedupe, so a pathological body costs a bounded number of lookups per node.
 func (a *Applier) maintainReferences(ctx context.Context, tx *sql.Tx, task Task) (int, error) {
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM tracker_references WHERE from_task = ? AND from_comment = ''`,
@@ -1014,54 +856,25 @@ func (a *Applier) maintainReferences(ctx context.Context, tx *sql.Tx, task Task)
 }
 
 // maintainKeys keeps the key directory, current and former: one row per key,
-// naming the task that claimed it.
+// naming the task that claimed it. A re-key keeps the old key as a FORMER one,
+// so old links resolve; a key another task holds is left alone, or every
+// reference to it would re-point.
 //
-// A KEY CHANGES ONLY WHEN A CROSS-PROJECT MOVE RE-KEYS ITS TASK, and the old
-// one stays as a FORMER key, so every link, chat message and comment that
-// named it still opens the right record. A key another task already holds is
-// LEFT AS IT IS, because taking it would silently re-point every reference
-// anybody ever wrote.
-//
-// # Only the records that change a task's keys run it
-//
-// The claim is FIRST-WRITER-WINS, so who holds a key depends on the order the
-// claims were applied in, and records about different tasks are reordered on
-// a node that retained one of them unless their scopes meet. So the directory
-// is written only by the records that name the keys they move ([keyTerm]): a
-// task's create, a record that re-keys it, and a purge's hand-on. An ordinary
-// edit leaves it alone. It used to re-assert every key on every apply, which
-// let an edit claim a former key nobody held — a duplicate's old key, freed
-// when its claimant was purged — on whichever node applied the edit first,
-// under a scope that named no key at all; the duplicate never held that key,
-// which is why its move's alias claim left it alone ([Writer.claimAlias]).
-//
-// # And the task that could not claim it carries `key_collision`
-//
-// Two tasks holding one key is a shape the broker cannot refuse: the counter
-// and the task are different subjects, so a counter restored beside tasks
-// minted after it mints numbers those tasks already hold, and each create
-// arbitrates only against itself. The applier writes what the record says —
-// refusing would stall the log on every node over one duplicate — and the
-// attention set is where somebody finds it. The flag is DERIVED from the
-// directory rather than carried, re-derived by every record that changes the
-// directory or who holds the key, and every one of those is filed under the
-// key — so it is identical on every node because every claimant states its
-// key, and it follows the claim wherever a purge hands it.
+// The claim is first-writer-wins and records about different tasks reorder
+// unless their scopes meet, so only records naming the keys they move
+// ([keyTerm]) write the directory: a create, a re-key, a purge's hand-on. The
+// broker cannot refuse two tasks holding one key (a restored counter
+// re-mints), so the loser carries `key_collision`, derived from the directory
+// by every record filed under the key, hence identical on every node.
 func (a *Applier) maintainKeys(ctx context.Context, tx *sql.Tx, task Task,
 	c applyContext) (int, error) {
 
 	if task.Key == "" {
 		return 0, nil
 	}
-	// THE CURRENT KEY AND THE FORMER ONES ARE ONE COLLECTION, with the
-	// empty ones dropped rather than skipped mid-loop — a row template
-	// repeats for every element it is given, so the filtering happens here
-	// instead.
-	//
-	// A key that is in both lists — a rename that came back — is two rows
-	// in one statement, and they agree: `current` is computed from the
-	// entry rather than from its position, so the upsert resolves the pair
-	// to the same value whichever of them lands second.
+	// Current and former keys as one collection, empties dropped here
+	// because a row template repeats for every element. A key in both lists
+	// is two agreeing rows: `current` comes from the entry, not its position.
 	entries := make([]string, 0, 1+len(task.FormerKeys))
 	for _, entry := range append([]string{task.Key}, task.FormerKeys...) {
 		if entry != "" {
@@ -1100,8 +913,7 @@ const keyCollisionStatement = `
 // flagKeyCollisions re-derives `key_collision` for every task holding a key:
 // set on each one the directory does not name, clear on the one it does.
 //
-// ONLY THE ROWS WHOSE FLAG DISAGREES ARE WRITTEN, so an ordinary apply of a
-// task that holds its key alone touches no row here and reports none.
+// Only rows whose flag disagrees are written, so the ordinary case writes none.
 func flagKeyCollisions(ctx context.Context, tx *sql.Tx, key string) (int, error) {
 	res, err := tx.ExecContext(ctx, keyCollisionStatement, key)
 	if err != nil {
@@ -1112,18 +924,13 @@ func flagKeyCollisions(ctx context.Context, tx *sql.Tx, key string) (int, error)
 
 // maintainProjectCounts moves the maintained census.
 //
-// MAINTAINED, NEVER SCANNED: an aggregate over every task in every project on
-// every sixty-second poll is half a million index entries at year five, for
-// four numbers a commit already knows how to move. They are a pure function
-// of the applied records, which is what lets the identity assertion recompute
-// them and compare.
+// Maintained, never scanned: a per-poll aggregate is half a million index
+// entries at year five. A pure function of the applied records, so the
+// identity assertion can recompute and compare.
 //
-// TWO MOVES, because the census is two partitions of one set rather than one
-// of four. The three BUCKETS — open, done, closed — are disjoint and cover
-// every task not removed; `active_count` is the part of the open bucket in the
-// `active` group, which is what the answer's `todo` is the remainder of. So a
-// task going todo → in progress moves active and leaves the buckets alone, and
-// one going in progress → done moves both.
+// Two partitions: the disjoint buckets (open, done, closed) cover every task
+// not removed, and `active_count` is the open bucket's `active` group (`todo`
+// is the remainder), so todo → in progress moves only active.
 func (a *Applier) maintainProjectCounts(ctx context.Context, tx *sql.Tx,
 	current, next Task, held bool) (int, error) {
 
@@ -1132,10 +939,7 @@ func (a *Applier) maintainProjectCounts(ctx context.Context, tx *sql.Tx,
 	if held {
 		was, wasActive = bucketOf(current), activeOf(current)
 	}
-	// A CROSS-PROJECT MOVE CHANGES THE PROJECT without changing the
-	// bucket or the group, and the counts are per project — so the task
-	// leaves one project's counts and joins the other's. Only a task that
-	// changed none of the three moves nothing.
+	// Counts are per project, so a cross-project move moves them too.
 	if was == is && wasActive == isActive && current.Project == next.Project {
 		return 0, nil
 	}
@@ -1182,15 +986,9 @@ const censusActive = "active"
 
 // moveProjectCount moves one of the four maintained counters by one.
 //
-// ONE STATEMENT BUILDER FOR THE THREE CALLERS — a task entering a bucket, a
-// task leaving one, and the purge that deletes the row instead of writing one.
-// The counter is always [bucketOf]'s own closed answer or [censusActive] and
-// never a value off the wire, which is what makes interpolating it into the
-// column name safe: a column cannot be a parameter.
-//
-// The decrement CLAMPS AT ZERO. A negative census is a number no screen can
-// render and no repair can interpret, and the clamp costs nothing on the path
-// where the count is right.
+// Interpolating bucket into the column name is safe only because it is always
+// [bucketOf]'s closed answer or [censusActive], never a value off the wire.
+// The decrement clamps at zero: a negative census means nothing to anyone.
 func moveProjectCount(ctx context.Context, tx *sql.Tx, bucket, project string,
 	by int) (int, error) {
 
@@ -1225,101 +1023,42 @@ func bucketOf(task Task) string {
 }
 
 // activeOf is whether a task counts in `active_count`: not removed, and in the
-// `active` status group. THE ONE STATEMENT OF THE RULE, read by the apply and
-// by [rederiveActiveCounts] alike — which reads the `status_group` and
-// `removed_at` columns this apply writes from the same two facts.
+// `active` status group. The one statement of the rule; [rederiveActiveCounts]
+// reads the columns this apply writes from the same two facts.
 func activeOf(task Task) bool {
 	return task.Removed == nil && statusOf(task).Group() == GroupActive
 }
 
-// purgeTask is the one operation that removes rows, and it removes them
-// EVERYWHERE the task is named.
-//
-// Its own rows and its OUTBOUND references go with it; so do the INBOUND ones,
-// with the key directory rows — current and former — that made the key
-// resolvable at all, because a reference to a key nothing resolves is a
-// dangling link a reader cannot tell from a typo. All in one transaction, and
-// the marker it writes is what stops a redelivery months later resurrecting
-// any of it.
-//
-// # Its CHILDREN are re-parented, not destroyed and not orphaned
-//
-// A purge names ONE task. Destroying the subtree under it would destroy work
-// nobody asked about — a purge has no inverse, so "it was under the thing you
-// purged" is not a confirmation anybody gave. Leaving the children alone is
-// worse: each one's `parent_id` would name a row that no longer exists, which
-// no reader can distinguish from a task whose parent is merely on another
-// node, and the next edit to such a child would derive its depth and root from
-// a chain that stops at nothing.
-//
-// So each direct child is moved onto the purged task's OWN parent — the
-// grandparent, or the root when the purged task was one — and its subtree's
-// ancestry is rebuilt. Depth can only fall, so no cap is crossed by the move.
-//
-// # What it writes of OTHER tasks, it writes into their DOCUMENTS
-//
-// A task's derived rows — its parent pointer, its relations, its dependency
-// edges and its mirror of who waits on it — are a pure function of its own
-// document, re-derived wholesale by every record about it. So a purge that
-// fixed only the ROWS was undone by the other task's next edit: a re-parented
-// child's next record put the purged task back as its parent, a dependent's
-// next record put the purged blocker back — OPEN, since a blocker with no row
-// reads as open — and blocked it for ever on a task that no longer existed.
-// Each of those tasks' documents is rewritten here, beside its rows, ONCE
-// however many of the purge's effects reach it ([Applier.rewriteNaming]), and
-// stamped `scoped_through` rather than `version`: a record may move only its
-// own subject's version ([Task]).
-//
-// # It destroys what the task's own records wrote
-//
-// The object tables are the smaller half of what a task leaves: every history
-// row keeps its record's whole mutation, every inbox notice an excerpt, every
-// turn record its spend, and the dependency mirror its edges
-// ([forgetRecords], [purgeDeletes]), and the purge deletes them in the same
-// transaction.
-//
-// Those tasks are named in the purge's SCOPE, which the writer enumerates
-// ([purgeReach]); the list of what a purge writes of another task is the
-// package doc's "What a purge writes beside its own task".
-//
-// AND IT IS DONE IN THE APPLIER RATHER THAN REFUSED AT THE WRITER, because a
-// refusal cannot close the race: a child is created by a write to the CHILD's
-// subject, which does not contend with a write to this one, so a purge decided
-// against a childless snapshot can still land after a child arrives. The
-// applier sees the rows as they are at this position, and every node sees the
-// same ones.
+// purgeTask is the one operation that removes rows, everywhere the task is
+// named, in one transaction; its marker stops a later redelivery resurrecting
+// any of it. Inbound references go with the key rows that resolved them, or
+// they would be dangling links indistinguishable from typos. Direct children
+// move onto the purged task's own parent (destroying loses work nobody named;
+// orphaning leaves pointers to nothing); depth only falls, so no cap breaks.
+// Another task's rows re-derive from its document, so each one the scope names
+// ([purgeReach]; package doc, "What a purge writes beside its own task") is
+// rewritten once ([Applier.rewriteNaming]), stamped `scoped_through`, never
+// `version` ([Task]). Its records' content goes too ([forgetRecords]). Done
+// here, not refused at the writer: a child's create does not contend with this
+// subject, so it can land after a childless decide.
 func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	id := c.subject().ID
-	// The row is read BEFORE it is deleted, because the marker records
-	// what the task WAS: a deletion whose key and project are empty is a
-	// marker nobody can resolve back to anything.
+	// Read before the deletes: the marker records the task's key and project.
 	task, held, err := readTask(ctx, tx, id)
 	if err != nil {
 		return 0, err
 	}
-	// AND SO ARE ITS CHILDREN, for the same reason: after the deletes
-	// below there is nothing left to ask.
+	// And its children, for the same reason.
 	children, err := childrenOf(ctx, tx, id)
 	if err != nil {
 		return 0, err
 	}
 	written := 0
-	// AND THE PROJECT'S CENSUS COMES DOWN WITH THE ROW.
-	//
-	// Every other departure from a bucket is a task RECORD and goes
-	// through [Applier.maintainProjectCounts]; a purge deletes the row
-	// instead of writing one, so nothing lowered the count it was in. A
-	// task purged while it was open left `open_count` one too high on
-	// every node — for ever, because these counts are MAINTAINED and
-	// nothing anywhere aggregates them back into agreement — and a purge
-	// does not require the task to have been removed first, so this is
-	// the ordinary shape rather than a corner of one.
-	//
-	// GATED ON THE ROW HAVING BEEN HERE, because the deletion gate lets
-	// this record's own redelivery through by op id (it is what wrote the
-	// marker) and every statement below is then a no-op. A second
-	// decrement would take the census one BELOW the truth, which is the
-	// half the clamp in [moveProjectCount] cannot see.
+	// The census comes down with the row: a purge writes no record through
+	// [Applier.maintainProjectCounts], and a maintained count never
+	// re-aggregates. Gated on held, because the deletion gate lets this
+	// record's own redelivery through, and a second decrement would go one
+	// below the truth, which [moveProjectCount]'s clamp cannot see.
 	if bucket := bucketOf(task); held && bucket != "" {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		n, err := moveProjectCount(ctx, tx, bucket, task.Project, -1)
@@ -1328,9 +1067,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		}
 		written += n
 	}
-	// AND ITS SHARE OF THE ACTIVE COUNT, on the same gate: a purged task
-	// that was in progress is otherwise counted as somebody's work for
-	// ever.
+	// And its share of the active count, on the same gate.
 	if held && activeOf(task) {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		n, err := moveProjectCount(ctx, tx, censusActive, task.Project, -1)
@@ -1339,8 +1076,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		}
 		written += n
 	}
-	// WHICH OTHER TASKS NAME IT, read while the rows that say so are still
-	// here: each is rewritten below, once.
+	// Which other tasks name it, read while the rows that say so remain.
 	others, err := othersNaming(ctx, tx, id, children)
 	if err != nil {
 		return 0, err
@@ -1378,10 +1114,9 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	// EVERY KEY IT CLAIMED, the former ones included: a task that moved
-	// took its old key along as an alias, and a task minted onto that key
-	// since holds it only as a collision until the claimant is gone. Every
-	// one of them is in the record's scope ([keyTerm]).
+	// Every key it claimed, former ones included: a task minted onto a
+	// moved task's alias holds it only as a collision until the claimant
+	// goes. Each is in the record's scope ([keyTerm]).
 	handed := 0
 	for _, key := range append([]string{task.Key}, task.FormerKeys...) {
 		n, handErr := handOnKey(ctx, tx, key)
@@ -1390,14 +1125,13 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		}
 		handed += n
 	}
-	// A PURGE MOVES NO FIELD — the row is gone, and a delta naming what
-	// it used to hold would be the content the purge exists to destroy.
+	// No deltas: they would be the content the purge exists to destroy.
 	history, err := a.writeHistory(ctx, tx, c,
 		subjectKeys{Project: task.Project, Key: task.Key}, nil)
 	if err != nil {
 		return 0, err
 	}
-	// WHAT ITS OWN RECORDS WROTE — see the doc above.
+	// What its own records wrote ([Applier.forgetRecords]).
 	forgotten, err := a.forgetRecords(ctx, tx, c, id, historyID(c))
 	if err != nil {
 		return 0, fmt.Errorf("worklet: purge %s at %s: %w", id, c.position, err)
@@ -1414,19 +1148,11 @@ const handOnKeyStatement = `
 
 // handOnKey gives a purged task's key to whoever else holds it.
 //
-// A PURGED CLAIMANT WOULD OTHERWISE LEAVE THE KEY UNCLAIMED and the task that
-// collided with it flagged, although it now holds the key alone — for ever,
-// since only a record that re-keys a task writes the directory
-// ([Applier.maintainKeys]). The lowest id among the tasks holding it as their
-// CURRENT key takes it, because every node has to pick the same one without
-// a clock or an arrival order to consult; a task that only held it as a
-// former key never held it at all — it moved off a key another task had
-// claimed — and is not handed it.
-//
-// THE SAME HOLDERS ON EVERY NODE, because every record that changes who holds
-// a key as its current one — a create, a re-key — names the key, and so does
-// the purge ([keyTerm]): on a node that retained one of them, the purge is
-// retained behind it.
+// Otherwise the key stays unclaimed and the collider flagged for ever, since
+// only a re-key writes the directory ([Applier.maintainKeys]). The lowest id
+// holding it as its CURRENT key takes it, a choice every node makes alike; a
+// former-key holder never held it. The holders are the same on every node
+// because every record changing them names the key ([keyTerm]).
 func handOnKey(ctx context.Context, tx *sql.Tx, key string) (int, error) {
 	if key == "" {
 		return 0, nil
@@ -1455,11 +1181,8 @@ type purgeStatement struct {
 // purgeDeletes is every DELETE a purge of id issues against the object tables,
 // in the order it issues them.
 //
-// THE DEPENDENCY MIRROR GOES WITH THE REST, both halves — the purged task's own
-// list of who waits on it, and every blocker's entry naming it — which is this
-// list's half of the same fix [forgetRecords] is: a row keyed on an id nothing
-// resolves any more is a copy of the task's edges nobody can reach and nothing
-// removes.
+// The dependency mirror goes too, both halves: a row keyed on an id nothing
+// resolves is a copy of the task's edges that nothing else removes.
 func purgeDeletes(id string) []purgeStatement {
 	return []purgeStatement{
 		{`DELETE FROM tracker_references WHERE from_task = ? OR to_task = ?`, []any{id, id}},
@@ -1517,54 +1240,17 @@ var (
 		ORDER BY id`
 )
 
-// forgetRecords destroys what a purged task's own records wrote beside its
-// rows: the inbox notices its rows routed and its turn records go, and of its
-// history only a SKELETON stays — every row but the purge's own (keep) that
-// moves a count the flow census walks, with its content taken out.
+// forgetRecords destroys the content a purged task's own records wrote: its
+// inbox notices and turn records go, and of its history only a SKELETON stays.
+// The purge's own row (keep) and its notices stay whole: the lead's `purged`
+// wake reads them.
 //
-// THESE HOLD THE CONTENT, which is what a purge is for. A history row keeps
-// its record's whole mutation in `document` — every title, every body and
-// every comment the task was ever given — plus an excerpt, and an inbox notice
-// keeps an excerpt of its own; the object tables the purge already emptied
-// were the smaller half. Left, a purged task's text stayed readable on every
-// node for the life of the company, while this package's docs and the purge
-// report said it was destroyed.
-//
-// # The skeleton, and why it is not destroyed too
-//
-// The flow census ([Reader.Flow]) answers the past by walking `tracker_history`
-// BACKWARD from today's rows, and its promise is that a purge takes a task out
-// of the census only from the instant it happened: the board two weeks ago
-// held the task, and the series says so. The walk reads exactly the rows
-// [historyMoves] selects — the task's creation, removal and restore, and
-// every change to its status, assignee or project — and of each only its kind,
-// its instant and those three deltas. So those rows stay with nothing else: no
-// excerpt, no comment, an empty document, and a `fields_json` holding the three
-// deltas alone. Deleted with the rest, they took the task out of every day
-// before its purge too, and a quarter's trend chart redrew itself the moment
-// somebody purged a duplicate.
-//
-// THE SAME PREDICATE CHOOSES THEM, as SQL, rather than a Go copy of it: the
-// rows the walk will read are by construction the rows kept. A status, an
-// assignee's handle and a project key are what the census is made of and
-// what the company feed labels a purged task's changes with (it resolves the
-// key through the deletion marker); a title, a body and a comment are what a
-// purge exists to destroy.
-//
-// THE PURGE'S OWN ROW STAYS WHOLE, and the notices it routed: that it
-// happened, to which key, by whom and why is the one account of the task that
-// survives, and the lead's `purged` wake is read through it.
-//
-// AFTER the purge's history row is written, so its effective instant is still
-// the maximum over every row about this subject — the closed form every node
-// computes — rather than over a set this function had already emptied.
-//
-// AND IT SAYS WHOSE INBOX IT EMPTIED. The applier announces, after a committed
-// batch, whose inbox moved ([inbox.Movement]), and a notice taken OUT of
-// somebody's inbox moves it as surely as one put in: without the note an open
-// screen went on listing notices no node held any more until its next poll,
-// and opening one answered that the task does not exist. The recipients are read before the
-// rows go, because afterwards there is nothing left to ask.
+// The skeleton is every row [historyMoves] selects, the same SQL predicate the
+// flow census ([Reader.Flow]) walks, keeping only kind, instant and the status,
+// assignee and project deltas, so the census still counts the task before its
+// purge. Run after the purge's history row, so the effective instant stays a
+// MAX over every row. It notes each emptied inbox ([inbox.Movement]), read
+// before the rows go, so an open screen drops the notices at once.
 func (a *Applier) forgetRecords(ctx context.Context, tx *sql.Tx, c applyContext,
 	id, keep string) (int, error) {
 
@@ -1582,10 +1268,9 @@ func (a *Applier) forgetRecords(ctx context.Context, tx *sql.Tx, c applyContext,
 		written += n
 		return nil
 	}
-	// THE NOTICES FIRST, found through the history rows that routed them: a
-	// notice is keyed on its record, and this is a seek on that key where a
-	// match on its subject would scan every inbox. Every one of them, the
-	// skeleton's included — an excerpt is content.
+	// Notices first, found by their record key through the history rows (a
+	// subject match would scan every inbox); the skeleton's too, since an
+	// excerpt is content.
 	gone, err := forgottenNotices(ctx, tx, id, keep)
 	if err != nil {
 		return 0, err
@@ -1683,8 +1368,7 @@ func censusRows(ctx context.Context, tx *sql.Tx, id, keep string) ([]skeletonRow
 				kept[name] = delta
 			}
 		}
-		// encoding/json SORTS A MAP'S KEYS, so every node writes the same
-		// bytes whatever order the original carried them in.
+		// encoding/json sorts map keys, so every node writes the same bytes.
 		encoded, err := json.Marshal(kept)
 		if err != nil {
 			return nil, err
@@ -1698,14 +1382,9 @@ func censusRows(ctx context.Context, tx *sql.Tx, id, keep string) ([]skeletonRow
 // otherEdit is everything a rewritten purge changes in ONE other task's
 // document.
 //
-// GATHERED PER TASK, because a task can be reached by more than one of the
-// purge's effects — the subtask an epic waits on is both its child and its
-// blocker, a blocker linked to the task that waits on it is both a relation
-// and a mirror — and [rewriteOther] writes a task at most once per record: its
-// guard is what makes the record's own redelivery a no-op, and it cannot tell
-// a second rewrite from the same record from that redelivery. Rewritten effect
-// by effect, the second effect on such a task was silently dropped: the child
-// kept pointing at the purged task while its ancestry was rebuilt without it.
+// Gathered per task, because several effects can reach one task (a child that
+// is also a blocker) and [rewriteOther] writes a task at most once per record:
+// a second rewrite reads as the record's redelivery and is dropped.
 type otherEdit struct {
 	// unrelate drops every relation the task holds to the purged task —
 	// its `waiting_on` edge when it is a dependent.
@@ -1723,8 +1402,7 @@ type otherEdit struct {
 // what it changes in each: the tasks relating to it, the blockers listing it
 // among their dependents, and its direct children.
 //
-// READ BEFORE THE DELETES: the relation rows and the mirror rows are what say
-// which tasks name it, and they are about to go.
+// Read before the deletes remove the rows that say so.
 func othersNaming(ctx context.Context, tx *sql.Tx, id string,
 	children []string) (map[string]otherEdit, error) {
 
@@ -1759,13 +1437,9 @@ func othersNaming(ctx context.Context, tx *sql.Tx, id string,
 // document rewritten ONCE with everything the purge changes in it
 // ([otherEdit]), and then each re-parented child's ancestry rebuilt.
 //
-// IN ID ORDER, so every node issues the same statements in the same order.
-//
-// AFTER THE DELETES, deliberately: [Applier.maintainClosure] walks the parent
-// chain, and run before them it would walk through the row this purge is
-// removing and write an ancestry naming it — and every pointer it walks has to
-// have moved before it does, which is why no closure is rebuilt until every
-// document is written.
+// In id order, so every node issues the same statements. After the deletes,
+// and closures only after every document: [Applier.maintainClosure] walks the
+// parent chain, which must no longer pass through the purged row.
 func (a *Applier) rewriteNaming(ctx context.Context, tx *sql.Tx, id string,
 	parent *string, children []string, edits map[string]otherEdit,
 	c applyContext) (int, error) {
@@ -1817,11 +1491,8 @@ func (a *Applier) rewriteNaming(ctx context.Context, tx *sql.Tx, id string,
 // movedColumns are the row columns a rewrite of ANOTHER task moves beside its
 // document.
 //
-// ONLY THOSE, and never every column the document could derive: the UPDATE
-// states exactly what this record's change is about — a placement moves the
-// rank, a purge's re-parenting the pointer — and leaves every other column as
-// the row holds it, so a rewrite never re-writes a column some other record is
-// the author of.
+// Only those (a placement's rank, a re-parent's pointer), so a rewrite never
+// overwrites a column another record authored.
 type movedColumns struct {
 	parent bool
 	rank   bool
@@ -1846,16 +1517,11 @@ func rewriteOtherStatement(moved movedColumns) string {
 // rewriteOther applies change to ANOTHER task's document, from a record on
 // some other subject, and reports the rows written.
 //
-// `scoped_through` AND NEVER `version`, for the reason [Task] gives: the
-// version is the task's own subject's arbitration anchor, and stamping it from
-// here would make the task's next write form an expectation the broker refuses
-// for ever. A row already at or past this record — this record's own
-// redelivery — is left as it is, which is also why a record rewrites any one
-// task at most once: a second rewrite from the same record reads as that
-// redelivery and writes nothing ([otherEdit]).
-//
-// The columns named in moved are written from the document with it, because
-// the document is what every later record derives them from.
+// Stamps `scoped_through`, never `version` ([Task]): the version is the task's
+// own subject's arbitration anchor. A row at or past this record is its
+// redelivery and is left alone, so a second rewrite from one record writes
+// nothing ([otherEdit]). The moved columns are written from the document,
+// which every later record derives them from.
 func rewriteOther(ctx context.Context, tx *sql.Tx, id string, c applyContext,
 	moved movedColumns, change func(*Task) bool) (int, error) {
 
@@ -1910,9 +1576,8 @@ const childrenStatement = `SELECT id FROM tracker_tasks WHERE parent_id = ? ORDE
 
 // childrenOf reads a task's DIRECT children.
 //
-// From the parent pointers rather than the closure, because what this needs is
-// the tasks whose own `parent_id` would dangle — and the closure holds every
-// descendant, whose pointers name their own parents and are unaffected.
+// From parent pointers, not the closure: only direct children's `parent_id`
+// would dangle.
 func childrenOf(ctx context.Context, tx *sql.Tx, id string) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, childrenStatement, id)
 	if err != nil {
@@ -1969,10 +1634,9 @@ func typeOf(task Task) string {
 // rootOf is the value the object row is CREATED with, before its closure
 // exists.
 //
-// Always the task's own id, and that is not a placeholder: the closure rebuild
-// runs in this same transaction and overwrites it with the real root. Guessing
-// the parent's root here would be a second derivation of the same fact, and the
-// two would disagree the first time a re-parent landed out of order.
+// The task's own id: the closure rebuild in this transaction writes the real
+// root, and a second derivation here would disagree on an out-of-order
+// re-parent.
 func rootOf(task Task) string { return task.ID }
 
 func removedAt(task Task) any {
@@ -1984,8 +1648,8 @@ func removedAt(task Task) any {
 
 // removedWith binds the cascade root into the task's own column, or NULL.
 //
-// DERIVED FROM [removedWithText], which is the delta's form of the same fact,
-// so the column and the history row cannot name two different roots.
+// Derived from [removedWithText], the delta's form, so the column and the
+// history row cannot name different roots.
 func removedWith(task Task) any {
 	with := removedWithText(task.Removed)
 	if with == "" {
@@ -2004,28 +1668,13 @@ func nullableStringPtr(v *string) any {
 // insertMany writes a whole collection as MULTI-ROW INSERTS, chunked to the
 // estate's parameter limit.
 //
-// It used to run one statement per element, on the reasoning that every
-// collection here is capped so the loop is "a handful of statements" and a
-// generated multi-row insert would be a second statement builder to keep
-// correct. Both halves were wrong. The caps are [MaxWatchers]'s 64,
-// [MaxTagsPerTask]'s 40 and [MaxTagsPerProject]'s 512 rather than "small", and
-// every one of those rows cost a statement of its own — the shape
-// BenchmarkLogApplyDrain names "unprepared" and measures as the slowest of the
-// three. And the statement builder is not a second one: it is
-// [store.InsertRows], written once beside the chunker it uses, which is the
-// arrangement [textcut] and [whsec] exist to record the cost of not having.
-//
-// WHAT IS KEPT FROM THE OLD SHAPE is the generic ergonomics: a caller hands a
-// typed slice and a per-item argument builder rather than an index closure, so
-// a call site reads as the collection it writes. What CHANGES is that the
-// statement arrives in three parts — the prefix through VALUES, one
-// parenthesised row template, and the ON CONFLICT clause that follows the
-// value list — because the row template is what gets repeated and the row
-// templates here carry a CASE, a scalar subquery and literals, so no rule that
-// splits a whole statement string on "VALUES" survives them.
-//
-// maxVariables is [applyContext.maxVariables]. Zero degrades to a row per
-// statement, which is exactly the behaviour this replaced.
+// Collections reach hundreds of rows ([MaxTagsPerProject]), and a statement
+// per row is the slow shape BenchmarkLogApplyDrain calls "unprepared". The
+// builder is [store.InsertRows]; this adds a typed slice and a per-item
+// argument builder. The statement comes in three parts (prefix through VALUES,
+// one row template, the ON CONFLICT suffix) because the templates hold CASEs,
+// subqueries and literals that no split on "VALUES" survives. maxVariables is
+// [applyContext.maxVariables]; zero degrades to a row per statement.
 func insertMany[T any](ctx context.Context, tx *sql.Tx, maxVariables int,
 	prefix, row, suffix string, items []T, args func(T) []any) (int, error) {
 
@@ -2073,23 +1722,11 @@ func (a *Applier) explode(ctx context.Context, tx *sql.Tx, subject Subject,
 
 // settleDefaultView makes "one per container can be the default" TRUE.
 //
-// # Why this is the applier's and not the writer's
-//
-// The rule is about the ROWS rather than about any one write. A writer that
-// cleared the previous default with a companion append would leave a window in
-// which two rows claim it, and a reader would then need a tie-break rule
-// nobody wrote down — where the nearest surface, a tab strip, would just draw
-// two active tabs.
-//
-// Here it is one transaction with the view's own row: either the container has
-// exactly one default afterwards or the record did not apply. The fan-out is
-// every OTHER view in the container, which is unbounded in principle — and
-// that is precisely why the record's scope names the CONTAINER rather than
-// enumerating the views, which is [MaxScopeTerms]'s own rule.
-//
-// A view that is NOT the default clears nothing: withdrawing a default is
-// saving that view with the flag off, and doing it by writing some other view
-// as the default is a second gesture the person did not make.
+// The applier's, not the writer's: a companion append would leave a window
+// with two defaults. In one transaction with the view's row, the container
+// ends with exactly one or the record did not apply. The fan-out is unbounded,
+// so the scope names the CONTAINER ([MaxScopeTerms]). A non-default view
+// clears nothing: setting another default is a gesture nobody made.
 func (a *Applier) settleDefaultView(ctx context.Context, tx *sql.Tx, id string,
 	c applyContext) (int, error) {
 
@@ -2114,66 +1751,35 @@ func (a *Applier) settleDefaultView(ctx context.Context, tx *sql.Tx, id string,
 
 // explodeCatalogue settles what a catalogue apply changes about the ROWS.
 //
-// # Why a type catalogue explodes into nothing at all
-//
-// Because nothing seeks a declaration. Every reader of one goes through the
-// DOCUMENT — one row, one decode — since a company has tens of fields rather
-// than thousands and the whole set is wanted at once. The relational copy this
-// used to keep (`tracker_types`, `tracker_fields`, `tracker_field_options`)
-// was a delete-and-rewrite of the entire catalogue per apply, per node, over
-// four maintained indexes, answering no question; migration 0010 drops it.
-// The `shadowed` column is what gave it away: inserted as a literal 0 on every
-// row, and the reader that reports shadowing derives it in Go from the two
-// declaration documents.
-//
-// What a catalogue apply DOES change about rows is the per-task VALUES, which
-// every `f.<ref>` filter seeks — and specifically their visibility.
+// Declarations explode into no rows: nothing seeks one, and every reader
+// decodes the one document (tens of fields, wanted whole). What a field
+// catalogue changes is the visibility of the per-task VALUES every `f.<ref>`
+// filter seeks.
 func (a *Applier) explodeCatalogue(ctx context.Context, tx *sql.Tx, name string,
 	c applyContext) (int, error) {
 
 	if name == CatalogueTypes {
-		// A TYPE CATALOGUE TOUCHES NO ROW. A task's type is a column on
-		// the task itself, written by the task's own commit, so a type
-		// being renamed or archived changes nothing a query reads until
-		// somebody writes the task.
+		// A type catalogue touches no row: a task's type column moves only
+		// with the task's own commit.
 		return 0, nil
 	}
 	var catalogue FieldCatalogue
 	if err := decodePayload(c.record.Mutation, &catalogue); err != nil {
 		return 0, err
 	}
-	// THE VALUES FOLLOW THE DECLARATION'S ARCHIVE, in this same
-	// transaction.
-	//
-	// `hidden` on a value row is the DECLARATION's archived state, and
-	// nothing else propagated it: a task untouched since the archive kept
-	// `hidden = 0` for ever, so the DDL's own rule — "every filter and
-	// total adds `hidden = 0 AND kind <> 'foreign'`" — described a column
-	// that did not carry what it claimed. The filter is shielded anyway,
-	// because an archived field does not RESOLVE, but a row that lies
-	// about its own state is a trap for the next reader of it.
+	// Value rows' `hidden` follows the declaration in this transaction;
+	// nothing else would update a task untouched since the change.
 	return a.settleFieldVisibility(ctx, tx, catalogue.Fields)
 }
 
 // settleFieldVisibility makes every value row agree with its declaration.
 //
-// BOTH DIRECTIONS, because neither fact this column carries is one-way FOR THE
-// COLUMN. An archive is one-way for the DECLARATION and this merely mirrors
-// it, so a field that was never archived must not have hidden rows either, or
-// a value written while a stale declaration was in force would stay out of
-// every filter for ever. `AppliesTo` is not one-way at all: a declaration that
-// adds a type has to bring those tasks' values back into the filterable set.
-//
-// TWO FACTS IN ONE COLUMN, and the statements compute both — a value is hidden
-// when its field is ARCHIVED or when the field's `AppliesTo` excludes the TYPE
-// of the task holding it. The type comparison is case-folded because
-// [appliesTo] decides the same thing at explode time and folds too, and the
-// two disagreeing would make a row's visibility depend on which write happened
-// last.
-//
-// FOREIGN ROWS ARE UNTOUCHED. They are hidden by what they ARE rather than by
-// any declaration, and a declaration arriving for one re-explodes it as native
-// on the task's next write rather than flipping a column here.
+// A value is hidden when its field is archived or its `AppliesTo` excludes the
+// task's type. Both directions: a value written under a stale declaration, or
+// a type added back, must become visible. The type comparison is case-folded
+// as [appliesTo]'s is, or visibility would depend on which write came last.
+// Foreign rows are untouched: they are hidden by kind, and a declaration
+// re-explodes one as native on the task's next write.
 func (a *Applier) settleFieldVisibility(ctx context.Context, tx *sql.Tx,
 	fields []FieldDef) (int, error) {
 
@@ -2211,26 +1817,13 @@ type settleWrite struct {
 // that should be visible — each one only where the declaration can produce
 // such a row, and each named for the plan test.
 //
-// # Why two writes, and why each NAMES its index
-//
-// The settle runs for every field on every catalogue apply, and it was one
-// statement per field — `hidden <> <what the declaration says>` — which no
-// index can serve, since a row on either side of the column may be the one
-// that moves. So every catalogue change read every value row in the company
-// from the heap, once per field the company declares, inside the applier's
-// transaction. Split by the side a row is on, each half has an index that
-// holds exactly that side: the VISIBLE rows are every one of the four value
-// indexes, which are partial on `hidden = 0` and on nothing else — the field's
-// own column's is named, the index its filters read — and the HIDDEN rows are
-// [hiddenFieldValuesIndex]. Named, because the planner reaches a partial index
-// only when it chooses to, and the visible half reaches one of four by its
-// own costing; and the clause is a guard, refusing with `no query solution`
-// a write that stopped stating the side its index holds.
-//
-// So a field with nothing to move costs a seek that finds nothing — an
-// unrestricted field's hidden rows, an archived one's visible rows — and only
-// a field that restricts the types it applies to reads every live value it
-// has, because whether each row should be shown is a fact about its task.
+// Two writes, one per side of `hidden`, because `hidden <> x` no index serves
+// and this runs per field on every catalogue apply. The visible side uses the
+// field type's value index (partial on `hidden = 0`), the hidden side
+// [hiddenFieldValuesIndex]; INDEXED BY because the planner otherwise may skip
+// a partial index, and it refuses (`no query solution`) a write that stops
+// stating its side. A field with nothing to move costs an empty seek; only one
+// restricting its types reads every live value.
 func settleStatements(field FieldDef) []settleWrite {
 	visible := "UPDATE tracker_field_values INDEXED BY " + fieldValueIndex(field.Type) +
 		" SET hidden = 1 WHERE field_id = ? AND kind = ? AND hidden = 0"
@@ -2239,19 +1832,17 @@ func settleStatements(field FieldDef) []settleWrite {
 	bound := []any{field.ID, FieldValueNative}
 	switch {
 	case field.Archived:
-		// AN ARCHIVED FIELD HIDES EVERY VALUE, and has none to show.
+		// An archived field hides every value.
 		return []settleWrite{{visible, bound}}
 	case len(field.AppliesTo) == 0:
-		// AN UNRESTRICTED ONE HIDES NONE, so all it does is show.
+		// An unrestricted one hides none.
 		return []settleWrite{{hidden, bound}}
 	}
 	types := make([]any, 0, len(field.AppliesTo))
 	for _, name := range field.AppliesTo {
 		types = append(types, strings.ToLower(name))
 	}
-	// A ROW WHOSE TASK IS GONE IS HIDDEN, which is what the COALESCE says:
-	// the column is NOT NULL, and a value with no task to be about cannot be
-	// shown to belong to one.
+	// The COALESCE hides a row whose task is gone (the column is NOT NULL).
 	excluded := ` AND COALESCE((SELECT CASE WHEN LOWER(t.type) IN (` +
 		placeholders(len(types)) + `) THEN 0 ELSE 1 END ` +
 		`FROM tracker_tasks t ` +
@@ -2266,20 +1857,10 @@ func settleStatements(field FieldDef) []settleWrite {
 // writeThread writes the rows a record's own payload carries, as against the
 // collections the DOCUMENT carries.
 //
-// # Why these three are not in [explodeTask]
-//
-// Everything exploded there is a collection ON the task document, rebuilt from
-// it on every apply so a reprocess converges. A comment and a body revision
-// are not: they are append-only rows one RECORD produced, and rebuilding them
-// from the document is impossible because the document does not hold them —
-// which is exactly what made them vanish. A task carried its thread on the
-// wire and produced no row, so `get_task(include=comments)` answered an empty
-// thread for every task in the company, `has_open_asks` was false for every
-// one, and `my_work.asked_of_me` could not see a question anybody had asked.
-//
-// The checklists ARE a document collection and are exploded here rather than
-// beside the others only because the same guard covers all three: a redelivery
-// must not write a second copy of an append-only row.
+// Not in [explodeTask], which rebuilds collections ON the document: a comment
+// and a body revision are append-only rows one record produced, absent from
+// the document. Checklists are a document collection, here only because the
+// same guard covers all three: a redelivery must not write a second copy.
 func (a *Applier) writeThread(ctx context.Context, tx *sql.Tx, task Task,
 	c applyContext) (int, error) {
 
@@ -2291,9 +1872,8 @@ func (a *Applier) writeThread(ctx context.Context, tx *sql.Tx, task Task,
 	written += items
 
 	if c.record.Op == OpCreate {
-		// A CREATE CARRIES AT MOST ONE COMMENT — the question the task
-		// was filed as ([TaskCreate]) — and never a body revision, since
-		// there is no earlier body for one to keep.
+		// A create carries at most the question it was filed as
+		// ([TaskCreate]), and no body revision: there is no earlier body.
 		var created TaskCreate
 		if err := decodePayload(c.record.Mutation, &created); err != nil {
 			return 0, fmt.Errorf("worklet: decode the create at %s: %w", c.position, err)
@@ -2308,9 +1888,7 @@ func (a *Applier) writeThread(ctx context.Context, tx *sql.Tx, task Task,
 		return written, nil
 	}
 	if c.record.Op != OpPatch {
-		// ONLY A PATCH OR A CREATE CARRIES ONE. A tombstone carries a
-		// stamp, and decoding it as a patch to look for a comment would
-		// be reading a shape that is not there.
+		// Only a patch or a create carries a thread.
 		return written, nil
 	}
 	var patch TaskPatch
@@ -2337,44 +1915,18 @@ func (a *Applier) writeThread(ctx context.Context, tx *sql.Tx, task Task,
 // writeComment writes what one record says about one comment: a POST creates
 // its row, an EDIT rewrites its words and a RESOLVE marks it resolved.
 //
-// # Each kind writes only what it owns
-//
-// A post owns the row's existence and what the remark is — who wrote it, its
-// words, what it asks and what it answers. An edit owns the words: the body,
-// when they were last changed, and the document that carries both. A resolve
-// owns the resolution: `resolved`, `resolved_by` and `resolved_at`, and the
-// fields of the document that carry them. None owns `answered_by`, which is
-// the ANSWERING remark's: a later record, about another row, stamps it below.
-// So the post is an insert of a row that is not there yet and the edit and the
-// resolve updates of what each owns, and none can reach a column another
-// record put there.
-//
-// It was one upsert of everything the record carried, and the record carries
-// no `answered_by` — so it wrote NULL there on every write. An author
-// correcting the wording of a question somebody had answered reopened it: back
-// in `has_open_asks`, `asked_of=`, `asked_by=`, the answerer's own
-// `my_work.asked_of_me` and the item's `open_asks`, asking somebody again a
-// question they had answered. And a post naming a row that already exists — a
-// re-run of the call that posted it — rewrote it whole, the author's edit
-// since and the answer that closed it included.
-//
-// A REMOVAL OWNS THE TAKING DOWN: the `removed` flag, the blanked words and
-// the document carrying both ([removeComment]). Taken for a post, as a
-// comment under any kind but the edit, the resolve and the removal is, it
-// would make the remark it named up from the removal on a node that did not
-// hold it.
-//
-// `record_id` is the record that POSTED the remark — the id of the history row
-// it wrote ([historyID]), which is what places the remark in the log for
-// [rederiveAnswers] — and an edit leaves it as it is: the row is that record's,
-// and its words are all an edit changes.
+// Each kind writes only what it owns, so none can reach a column another
+// record wrote: a post inserts the row; an edit owns the words; a resolve the
+// resolution; a removal the taking down ([removeComment]), never taken as a
+// post, which would invent the remark on a node not holding it. None owns
+// `answered_by`: the answering remark's post stamps it, and an edit writing
+// it would reopen an answered question. `record_id` is the posting record's
+// history row ([historyID]), placing the remark for [rederiveAnswers].
 func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 	c applyContext) (int, error) {
 
 	if comment.ID == "" {
-		// A COMMENT WITH NO ID IS NOT A ROW. It is dropped rather than
-		// given one here: a minted id would differ on every node, and
-		// two nodes' threads would stop matching.
+		// Dropped, not given an id: one minted here would differ per node.
 		return 0, nil
 	}
 	switch c.record.Kind {
@@ -2391,10 +1943,8 @@ func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 		return 0, fmt.Errorf("worklet: encode comment %s at %s: %w",
 			comment.ID, c.position, err)
 	}
-	// A ROW ALREADY UNDER THIS ID IS LEFT AS IT IS: it was posted by the
-	// record that created it, and whatever has happened to it since — an
-	// edit, an answer — is a later record's to have said. Every node meets
-	// the same row at the same position, so every node leaves it alone.
+	// A row already under this id is left alone: its edits and answer since
+	// are later records' to have written.
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO tracker_comments
 			(id, task_id, author, author_kind, body, reply_to, ask, answers,
@@ -2414,15 +1964,11 @@ func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 		return 0, err
 	}
 	if written == 0 {
-		// NOTHING POSTED, SO NOTHING ANSWERED: a post that found its row
-		// already there closes no ask either, since whatever it answers
-		// was closed — or not — by the record that did post it.
+		// Nothing posted, so nothing answered: the record that did post it
+		// closed the ask, or did not.
 		return 0, nil
 	}
-	// AND AN ANSWER CLOSES THE ASK IT NAMES. The two are separate rows —
-	// a reply is its own comment — so the ask stays open on every board,
-	// in every `has_open_asks` filter and in the answerer's own my_work
-	// until this write lands.
+	// An answer closes the ask it names, a separate row.
 	if comment.Answers != nil && *comment.Answers != "" {
 		res, err := tx.ExecContext(ctx, `
 			UPDATE tracker_comments SET answered_by = ?
@@ -2444,17 +1990,11 @@ func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 // editComment rewrites a stored comment's words: its body, the instant they
 // were changed and the document carrying both.
 //
-// THE STORED COMMENT WITH ITS WORDS REPLACED, rather than the record's whole
-// comment written over it: what a remark asked, the question it answers, the
-// decision it carries and whom it mentioned stay what its post made them,
-// whatever an edit record carries beside its body. The writer forms an edit
-// from the stored row anyway ([Writer.EditComment]); building the document
-// here as well is what keeps the columns and the document one account of the
-// remark rather than two that a record could make disagree.
-//
-// AN EDIT OF A ROW THIS NODE DOES NOT HOLD WRITES NOTHING: the post is below
-// it in the log, so a missing row is a remark nobody posted, and one made up
-// from an edit would be a remark with no post behind it.
+// The stored comment with its words replaced, not the record's comment written
+// over it, so everything else stays what its post made it whatever the record
+// carries ([Writer.EditComment] forms it the same way), and the columns and
+// document stay one account. A row this node does not hold writes nothing: the
+// post is below in the log, so it is a remark nobody posted.
 func editComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 	c applyContext) (int, error) {
 
@@ -2498,21 +2038,11 @@ func editComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 // resolveComment marks a stored comment resolved: who resolved it and when,
 // in its columns and in the document carrying them.
 //
-// THE STORED COMMENT WITH ITS RESOLUTION SET, for [editComment]'s reason: its
-// words, when they last changed, what it asked and answers and the answer that
-// closed it stay what the records that own them made them, whatever a resolve
-// record carries beside its resolution. A question resolved after somebody
-// answered it is still answered, and the answer still says what was decided.
-//
-// THE KIND IS THE GESTURE: a resolve record resolves whatever flag its comment
-// carries, and who resolved it and when are what the record states. A record
-// stating them again is written again, as an edit that changes no word is, so
-// the row holds the newest resolution.
-//
-// A RESOLVE OF A ROW THIS NODE DOES NOT HOLD WRITES NOTHING, for an edit's
-// reason: the post is below it in the log, so a missing row is a remark nobody
-// posted, and one made up from a resolve would be a remark with no post behind
-// it.
+// The stored comment with its resolution set, for [editComment]'s reason: a
+// question resolved after an answer stays answered. The kind is the gesture:
+// it resolves whatever flag the record's comment carries, and a repeat is
+// written again, so the row holds the newest resolution. A row this node does
+// not hold writes nothing, for an edit's reason.
 func resolveComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 	c applyContext) (int, error) {
 
@@ -2534,8 +2064,7 @@ func resolveComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 	}
 	resolved.Resolved = true
 	resolved.ResolvedBy, resolved.ResolvedAt = comment.ResolvedBy, comment.ResolvedAt
-	// A WITHDRAWAL IS KEPT by a later resolve that carries none: resolving a
-	// withdrawn question again does not unsay why it was withdrawn.
+	// A later resolve carrying no withdrawal keeps the stored one.
 	if comment.Withdrawal != nil {
 		resolved.Withdrawal = comment.Withdrawal
 	}
@@ -2560,20 +2089,11 @@ func resolveComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 // removeComment takes a stored comment down: the flag, its words blanked in
 // the column and the document, and the instant it was taken down.
 //
-// THE ROW STAYS, so a reply under it still resolves against something, and
-// everything else about the remark (who wrote it, when, what it mentioned)
-// stays what its post made it, for [editComment]'s reason.
-//
-// AND NOTHING GOES ON QUOTING IT: the history row its post wrote and the inbox
-// notices that post left each carry an excerpt of its words, and a remark
-// taken down that every feed and inbox still quoted would be taken down from
-// one screen only. Both are blanked here, by the comment's id, at the same
-// position on every node. The record that posted it stays in the log, which
-// is the stream's account of what happened; a purge is what forgets.
-//
-// A REMOVAL OF A ROW THIS NODE DOES NOT HOLD WRITES NOTHING, for an edit's
-// reason: the post is below it in the log, so a missing row is a remark nobody
-// posted.
+// The row stays, so a reply under it still resolves, and the rest stays what
+// its post made it ([editComment]). The excerpts in its post's history row and
+// inbox notices are blanked too, or the feed and inbox would go on quoting it;
+// the record stays in the log, and only a purge forgets that. A row this node
+// does not hold writes nothing, for an edit's reason.
 func removeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 	c applyContext) (int, error) {
 
@@ -2653,9 +2173,8 @@ func commentUpdatedAt(comment Comment) time.Time {
 // writeBodyRevision keeps the body a write replaced, and prunes what the
 // record says it pruned.
 //
-// THE PRUNE IS ON THE COMMIT, so every node deletes exactly the same rows at
-// exactly the same position rather than each deciding for itself from a count
-// it read locally.
+// The prune is on the commit, so every node deletes the same rows rather than
+// deciding from a local count.
 func writeBodyRevision(ctx context.Context, tx *sql.Tx, task Task,
 	revision BodyRevision, retires []int) (int, error) {
 
@@ -2698,9 +2217,7 @@ func writeBodyRevision(ctx context.Context, tx *sql.Tx, task Task,
 
 // writeChecklistItems rebuilds a task's sub-items from its document.
 //
-// A CLEAR-AND-REBUILD, like every other document collection here, so a
-// reprocess converges rather than accumulating — and so an item DELETED from a
-// checklist leaves the table, which an upsert-only write would never do.
+// Clear-and-rebuild, so a reprocess converges and a deleted item leaves.
 func writeChecklistItems(ctx context.Context, tx *sql.Tx, task Task,
 	maxVariables int) (int, error) {
 
@@ -2708,12 +2225,8 @@ func writeChecklistItems(ctx context.Context, tx *sql.Tx, task Task,
 		`DELETE FROM tracker_checklist_items WHERE task_id = ?`, task.ID); err != nil {
 		return 0, fmt.Errorf("worklet: clear the checklist of %s: %w", task.ID, err)
 	}
-	// EVERY LIST'S ITEMS ARE ONE COLLECTION, flattened before the write
-	// because a row template repeats over one slice and the nesting here
-	// is a detail of the document rather than of the table: the rows carry
-	// their own `checklist_id`, and `ord` is the item's index WITHIN ITS
-	// OWN LIST, which is why the flattening keeps it rather than using the
-	// flat position.
+	// Flattened, since a row template repeats over one slice; `ord` stays
+	// the index within its own list, not the flat position.
 	type row struct {
 		list string
 		item ChecklistItem

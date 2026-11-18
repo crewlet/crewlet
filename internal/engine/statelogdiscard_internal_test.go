@@ -13,12 +13,11 @@ import (
 
 // A RESTORED REANCHOR OVER RECORDS WRITTEN AFTER THE RESTORE ASKS THE OPERATOR.
 //
-// Followed from its end, the log's records node B wrote after the restore would
-// be applied on no node, and the reanchor used to do exactly that without a
-// word. The status now names the newest of them — B's own last edit — the
-// transition refuses without the operator's word and moves nothing, and with it
-// runs: node A keeps its rows, B's edits are what it discarded, and the
-// generation record says so.
+// Followed from its end, the log's records node B wrote after the restore are
+// applied on no node. The status names the newest of them (B's last edit), the
+// transition refuses without the operator's word and moves nothing, and with
+// it node A keeps its rows, B's edits are discarded, and the generation record
+// says so.
 func TestARestoredReanchorOverRecordsWrittenAfterTheRestoreAsksTheOperator(t *testing.T) {
 	t.Parallel()
 	d := stageDivergedBroker(t)
@@ -87,10 +86,9 @@ func TestARestoredReanchorOverRecordsWrittenAfterTheRestoreAsksTheOperator(t *te
 	}
 }
 
-// appendOwnGeneration appends node A's own record opening the next generation of
-// the tracker's log, exactly as a reanchor's append would, and nothing else —
-// what an attempt that failed after its append leaves behind — and answers the
-// sequence it landed at.
+// appendOwnGeneration appends node A's own record opening the tracker's next
+// generation exactly as a reanchor would, and nothing else (what an attempt
+// that failed after its append leaves), and answers its sequence.
 func appendOwnGeneration(t *testing.T, e *Engine) uint64 {
 	t.Helper()
 	running := e.core.Load().log.Domain(worklet.Domain{}.Name())
@@ -118,16 +116,14 @@ func appendOwnGeneration(t *testing.T, e *Engine) uint64 {
 
 // A RE-RUN OF A RESTORED REANCHOR THAT FAILED AFTER ITS APPEND FINISHES.
 //
-// The first attempt's generation record is on the log and nothing else moved —
-// a harness that gave up after ten seconds while the consumer was being rebuilt is
-// enough. The re-run reads the log's end after that record, and its walk for
-// records written after the restore met the node's own record first: it
-// refused naming it, hiding every real one beneath it, and with the discard
-// flag it put the checkpoint above the record, which was then applied nowhere.
-// Now the walk and the checkpoint stop one below the node's own record: with
-// nothing written after the restore the re-run just finishes, and over records
-// node B wrote it names B's — and, told to discard them, the resumed applier
-// applies the generation record first.
+// The first attempt's generation record is on the log and nothing else moved.
+// The re-run reads the log's end after that record, so its walk for records
+// written after the restore, and its checkpoint, stop one below the node's own
+// record: otherwise the walk refuses naming that record, hiding every real one
+// beneath it, and a discard puts the checkpoint above it, applied nowhere.
+// With nothing written after the restore the re-run just finishes; over node
+// B's records it names B's, and with the discard the resumed applier applies
+// the generation record first.
 func TestARerunOfARestoredReanchorThatFailedAfterItsAppendFinishes(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

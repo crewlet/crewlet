@@ -132,8 +132,7 @@ func notOversubscribed(t *testing.T, p *gitproc.Pool) {
 // A RECEIVE-PACK IS LENT THE READ LANE'S FREE CORES LESS ITS OWN, at most
 // three: on an idle four-core node its index-pack gets four threads — one a
 // core — beside held reads it gets what they leave less the core its own
-// thread needs, and on a one-core node or a full lane it runs on one core
-// exactly as before.
+// thread needs, and on a one-core node or a full lane it runs on one core.
 func TestAReceivePackIsLentFreeCores(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -367,14 +366,12 @@ func TestOnlyAReceivePackIsLent(t *testing.T) {
 	}
 }
 
-// A PUSH'S ADVERTISEMENT IS NEVER LENT. Every push a client makes sends a GET
-// before its POST, and the host answers it with receive-pack
-// --advertise-refs, which writes the refs and exits: no pack arrives, no
-// index-pack runs, no hook reaches a relay. So it carries no Cmd.Indexed,
-// starts at one thread and claims no core — and a push started beside it, as
-// the next client's POST is, is lent everything an idle node lends, where a
-// lent advertisement would hold three cores of four for as long as its client
-// takes to read the refs.
+// A PUSH'S ADVERTISEMENT IS NEVER LENT. Every push sends a GET before its
+// POST, answered with receive-pack --advertise-refs, which writes the refs and
+// exits: no pack, no index-pack, no hook. So it carries no Cmd.Indexed, starts
+// at one thread and claims no core, and a push started beside it is lent all
+// an idle node lends, where a lent advertisement would hold three cores of
+// four while its client reads the refs.
 func TestAnAdvertisementIsNeverLent(t *testing.T) {
 	t.Parallel()
 	p := fakePool(t, loanBody, gitproc.Options{MaxProcesses: 4})
@@ -476,11 +473,10 @@ func TestEveryLoanIsRepaid(t *testing.T) {
 		},
 		"its caller": {
 			body: "sleep 600",
-			// Once the processes gauge counts its process, and so once it
-			// holds its loan, which is made before the process starts — never
-			// on a timer, which a loaded runner can fire before the run is
-			// admitted at all: a run its caller left before its admission is
-			// lent nothing, and the case fails a healthy build.
+			// Once the processes gauge counts its process, so it holds its
+			// loan (made before the process starts); never on a timer, which
+			// can fire before admission, when the run is lent nothing and the
+			// case fails a healthy build.
 			ends: func(t *testing.T, rec *metrics.Recorder, cancel context.CancelFunc) {
 				t.Helper()
 				awaitGauge(t, rec, metrics.CodeGitProcesses, string(gitproc.ClassTransfer), 1)
@@ -577,23 +573,18 @@ func lentAndRepaid(t *testing.T, p *gitproc.Pool, rec *metrics.Recorder) {
 	}
 }
 
-// A HELD READ SLOT IS A READ'S. Pool.HoldRead admits in-process work as a
-// read's run is admitted: with the read lane's one slot held, a read run
-// waits and is refused ErrBusy after SlotWait; a hold released hands its slot
-// to the run queued first, ahead of a hold asked after it; a hold its caller
-// gives up waiting for is that, never a busy node; and the running gauge
-// counts a hold while it is held. So work a request waits on — the cache's
-// hash of a pack a hint names — runs on a core the read lane counts, never
-// beside every read on cores it counts already.
-//
-// Each ordering is waited into the lane's queue (awaitWaiting) before the
-// case lets the slot go or ends a caller, so the release meets the waiters it
-// names and the cancel a hold that is waiting.
+// A HELD READ SLOT IS A READ'S: Pool.HoldRead admits in-process work as a
+// read's run is admitted. With the lane's one slot held, a read run waits and
+// is refused ErrBusy after SlotWait; a released hold hands its slot to the run
+// queued first, ahead of a hold asked after it; a hold whose caller gives up
+// waiting is that, never a busy node; and the running gauge counts a hold. So
+// work a request waits on (the cache's hash of a pack a hint names) runs on a
+// core the read lane counts. Each ordering is waited into the queue
+// (awaitWaiting) before the case releases the slot or ends a caller.
 //
 // Mutations: HoldRead takes no slot — the run is admitted at once; a hold
-// jumps the queue (a waiter queued at the front) — the run queued before it
-// is refused busy; a waiter whose caller went away is answered as a busy node
-// — the hold that gave up is ErrBusy.
+// jumps the queue — the run queued before it is refused busy; a waiter whose
+// caller went away is answered as busy — the hold that gave up is ErrBusy.
 func TestHoldReadIsAReadSlot(t *testing.T) {
 	t.Parallel()
 	rec := newRecorder(t)

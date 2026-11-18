@@ -21,11 +21,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE CODE DOMAIN IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE — the eleventh
-// domain to run it, and the ninth that claims identity: every promise the framework
-// makes about a strict log (stamping, deferral, the gates, the eviction
-// census, the trimmed record) is held here by the cases that hold it for
-// Worklet and Doclet, never by a copy of them.
+// THE CODE DOMAIN IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE: every promise the
+// framework makes about a strict log (stamping, deferral, the gates, the
+// eviction census, the trimmed record) is held by the cases that hold it for
+// every domain, never by a copy of them.
 func TestTheCodeDomainPassesTheStateLogSuite(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
@@ -35,16 +34,15 @@ func TestTheCodeDomainPassesTheStateLogSuite(t *testing.T) {
 			// Migrate is nil: the tables ship in the replicated estate's
 			// own migration, so the suite proves the schema that ships.
 			Encode: encodeSuiteRecord,
-			// EVERY VERSIONED FIELD, each on a record carrying it alone:
-			// whom an agent's write was made for, version 2.
+			// EVERY VERSIONED FIELD, each on a record carrying it alone.
 			Fields:        gitlet.VersionedFields(),
 			Carrying:      carryingSuiteRecord,
 			Kinds:         suiteKinds(),
 			Rows:          gitlet.NewRows,
 			Write:         suiteWrite,
 			EncodeTrimmed: gitlet.EncodeTrimmed,
-			// AND OF ITS READ INDEX'S BARRIER, which the engine registers
-			// for this log: certified to write no row.
+			// AND ITS READ INDEX'S BARRIER, which the engine registers for
+			// this log: certified to write no row.
 			EncodeBarrier: gitlet.EncodeBarrier,
 			EncodeGate:    encodeSuiteGate,
 		}
@@ -55,15 +53,9 @@ func TestTheCodeDomainPassesTheStateLogSuite(t *testing.T) {
 var suiteAt = time.Unix(1_700_000_000, 0).UTC()
 
 // carryingSuiteRecord is a record carrying exactly field, through the
-// production encoder, which stamps it at the field's version: each a seat's
-// write made for the person's seat founder — a routing's beside its agent
-// actor on a dequeue, a push entry's routing's on the change the push merges,
-// an enqueue's own, and a seat's push entry's own; or a revise on its change's
-// subject carrying one of gitlet.OwnedPathsVersion's fields alone. A new op's
-// row is a record of it: founder's viewed marks on their own subject, and a
-// repository's viewed key on its own. And the seat's push as an attempt, its
-// one command refused by a protection, carrying the one commit it offered. And
-// a check's ending on its repository's checks subject carrying one count.
+// production encoder, which stamps it at the field's version. Each case is the
+// smallest real write that carries it, on the subject and scope its writer
+// uses; a new op's field is a record of that op.
 func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	const repo = "0190f3c4-0000-7000-8000-00000000c0de"
 	founder := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "founder"}
@@ -116,8 +108,8 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		revise.Asked = []gitlet.OwnerAsk{{Reviewer: lead, Paths: []string{"upload/**"}}}
 		op, payload = gitlet.OpRevise, revise
 	case "OwnerAsk.PathsOmitted":
-		// A COUNT ALONE, without the globs every ask this build stamps names it beside: carrying exactly
-		// the one field, the record is stamped by its own path.
+		// A COUNT ALONE, without the globs this build always names beside it, so the record is
+		// stamped by this field alone.
 		revise.Asked = []gitlet.OwnerAsk{{Reviewer: lead, PathsOmitted: 1}}
 		op, payload = gitlet.OpRevise, revise
 	case "RecordEnvelope.Op viewed":
@@ -150,6 +142,11 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		}
 		op, payload = gitlet.OpCheckFinished, ended
 		subject, scope = gitlet.ChecksSubject(repo), gitlet.Scope{gitlet.ChecksPath(repo)}
+	case "Ejection.TestedIn":
+		op, payload = gitlet.OpEject, gitlet.Eject{RepoID: repo, Entries: []gitlet.Ejection{{
+			EntryID: "0190f3c4-0000-7000-8000-0000000000e1", Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},
+			TestedIn: &gitlet.EjectionTrain{CandidateID: "0190f3c4-0000-7000-8000-0000000000d1",
+				BaseOID: oidOf("A"), CommitOID: oidOf("M")}}}}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}
@@ -183,34 +180,17 @@ func suiteSettings() gitlet.RepoSettings {
 	}
 }
 
-// suiteWrite is the writes through the domain's own lifecycle store, which
-// reaches the builder every write path shares ([gitlet.Store] and the committer
-// alike) — where the framework's stamp is kept or lost — each decided from the
-// rows the ones before it made, since the suite applies what its publisher
-// appends.
-//
-// THE ACTIVATION'S FENCE, the store's configuration path; its create's stamp
-// is the same builder's, and the round-trip harness publishes and applies it
-// (store_test.go).
-//
-// AND EVERY RECORD A TOOL'S LIFECYCLE MAKES, in the sequence a seat's own
-// scratch repository lives through, each decided by the chart and the policy
-// the store is handed and published by the lifecycle's own builder: its
-// create; its rename, which leaves the old name redirecting; a settings change
-// the tool makes; a live turn's hold on it, every field at its bound — the
-// turn's id at MaxProvenanceBytes, decided at the create's own position, as a
-// turn's hold is decided at its read; and, the store's clock past
-// gitlet.RedirectWindow, the release of the old name the retention pass asks
-// (Store.ReleaseName). Its apply frees nothing here — the suite's broker
-// stamps a record seconds after the rename, and a release frees a name only
-// past the redirect's end by the record's own broker instant — but the record
-// is the builder's, which is what the stamp is certified on. A ref hold is the
-// one hold field left out: it holds a seat's branch, whose row only a push
-// makes, and a push is the committer's write path, whose records the push
-// candidate (suitePush) carries.
-//
-// Every request must be answered applied: a refusal, or one left pending, is a
-// sequence the steps after it would decide from rows that never held it.
+// suiteWrite publishes through the domain's lifecycle store, which reaches the
+// builder every write path shares ([gitlet.Store] and the committer alike),
+// where the framework's stamp is kept or lost: the activation's fence, then a
+// seat's scratch repository's create, rename, settings change, a turn's hold
+// with every field at its bound (Seen at the create, as a turn's is at its
+// read), and, the clock past gitlet.RedirectWindow, the old name's release
+// (Store.ReleaseName). That apply frees nothing, the broker stamping it seconds
+// after the rename, but its stamp is the builder's. A ref hold is left out:
+// only a push makes the branch row it holds, and suitePush carries the
+// committer's records. Each step decides from the rows the ones before made,
+// so every request must be answered applied.
 func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	now := suiteAt
 	s, err := gitlet.NewStore(gitlet.StoreOptions{Publisher: pub, DB: db, NodeID: "suite-node",
@@ -312,19 +292,15 @@ func suitePack(id string) *gitlet.PackRef {
 	}
 }
 
-// suitePush is four pushes of id: a person's of its main branch with its
-// pack, received by git; a seat's of a branch in its namespace, built by the
-// engine, whose run carries every field at its bound; the seat's coding
-// box's of another, received by git, whose run names as well the executor
-// that pushed — its launch's UUID — and its harness at its bound; and the
-// ref lifecycle's expiry of the first seat branch, on the engine's own
-// account, whose row keeps the commit it deleted (its Old). Its
-// committer counted both of the seat's on the company day of the suite's
-// instant — so every column a push row has, and the seat's count of its day
-// (code_seat_days), are ones the suite's replays and identity claims compare,
-// but whom a seat's push was made for: a record carrying it is stamped above
-// the base every ordinary record of the suite is held to, and
-// TestACodeRowKeepsWhomItsWriteWasMadeFor replays the rows that keep it.
+// suitePush is four pushes of id: a person's of main with its pack, by git; a
+// seat's of a branch in its namespace, built by the engine, its run carrying
+// every field at its bound; the seat's coding box's, by git, whose run also
+// names the executor's launch UUID and its harness at its bound; and the ref
+// lifecycle's expiry of the first seat branch, by the system, its row keeping
+// the deleted commit (Old). Both seat pushes count on the suite instant's
+// company day (code_seat_days), so the suite compares every push-row column
+// and that count. Whom a seat's push was made for is left out: it stamps above
+// the suite's base, and TestACodeRowKeepsWhomItsWriteWasMadeFor replays it.
 func suitePush(id string) gitlet.PushBatch {
 	bound := strings.Repeat("r", gitlet.MaxProvenanceBytes)
 	return gitlet.PushBatch{RepoID: id, Pushes: []gitlet.PushEntry{{
@@ -381,13 +357,10 @@ func suitePush(id string) gitlet.PushBatch {
 
 // suitePayload is one valid (subject, op, payload, scope) per kind.
 //
-// # Why the name, the repository and the eviction are the first three kinds
-//
 // The suite publishes the FIRST THREE kinds a candidate declares, twice each,
-// in order, so the declaration order decides what is certified — and these
-// three are a real sequence: a create claims the name and makes the
-// repository whose id the suite hands it, and the push then lands on that
-// repository. A push on a repository no create made would certify a no-op.
+// in order, so name, repository and eviction lead as a real sequence: the
+// create makes the repository the push then lands on, where a push on a
+// repository no create made would certify a no-op.
 func suitePayload(kind gitlet.ObjectKind, id string) (gitlet.Subject, gitlet.OpKind, any, gitlet.Scope) {
 	switch kind {
 	case gitlet.KindName:
@@ -465,9 +438,9 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 }
 
 // THE CODE DOMAIN'S GATE READER KEEPS THE RULE EVERY READER SHARES, certified
-// by the family that certifies the tracker's and the knowledge base's — each
-// reader tested against its own idea of the rule is how one of them came to
-// answer the eviction before the deletion.
+// by the one family that certifies the tracker's and the knowledge base's: a
+// reader tested against its own idea of the rule drifts (one came to answer
+// the eviction before the deletion).
 func TestTheCodeGateReaderKeepsTheSharedRule(t *testing.T) {
 	t.Parallel()
 	statelogtest.RunGates(t, func(t *testing.T) statelogtest.GateCandidate {
