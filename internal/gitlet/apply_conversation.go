@@ -518,11 +518,11 @@ func applyCommentEdit(ctx context.Context, tx *sql.Tx, at applyContext, e Commen
 	case err != nil:
 		return 0, conversationCounts{}, err
 	case !found || c.deleted || by == "" || c.author != by || c.authorKind != kind:
-		n, err := conversationNotApplied(ctx, at, e.RepoID, e.ChangeID, "no comment "+e.CommentID+" its "+
+		n, skipped := conversationNotApplied(ctx, at, e.RepoID, e.ChangeID, "no comment "+e.CommentID+" its "+
 			"editor wrote stands")
-		return n, conversationCounts{}, err
+		return n, conversationCounts{}, skipped
 	}
-	if _, err := tx.ExecContext(ctx, editCommentSQL, e.Body, len(e.Body), at.at(), e.CommentID); err != nil {
+	if _, err = tx.ExecContext(ctx, editCommentSQL, e.Body, len(e.Body), at.at(), e.CommentID); err != nil {
 		return 0, conversationCounts{}, fmt.Errorf("gitlet: edit comment %s at %s: %w", e.CommentID, at.position,
 			err)
 	}
@@ -541,10 +541,10 @@ func (a *Applier) applyCommentDelete(ctx context.Context, tx *sql.Tx, at applyCo
 	case err != nil:
 		return 0, conversationCounts{}, err
 	case !found || c.deleted || by == "":
-		n, err := conversationNotApplied(ctx, at, d.RepoID, d.ChangeID, "no comment "+d.CommentID+" stands")
-		return n, conversationCounts{}, err
+		n, skipped := conversationNotApplied(ctx, at, d.RepoID, d.ChangeID, "no comment "+d.CommentID+" stands")
+		return n, conversationCounts{}, skipped
 	}
-	if _, err := tx.ExecContext(ctx, deleteCommentSQL, at.at(), by, string(kind), d.CommentID); err != nil {
+	if _, err = tx.ExecContext(ctx, deleteCommentSQL, at.at(), by, string(kind), d.CommentID); err != nil {
 		return 0, conversationCounts{}, fmt.Errorf("gitlet: delete comment %s at %s: %w", d.CommentID,
 			at.position, err)
 	}
