@@ -35,7 +35,9 @@ const probeNote = "## A note from ada, sent while this turn was running\n\nTarge
 // probeTake is the take every answer of the probe's inbox names.
 const probeTake = "5e2d1c0b-9a87-4f65-b432-10fedcba9876"
 
-func (i *probeInbox) Take(_ context.Context, event string) string {
+func (i *probeInbox) Cancelled(context.Context, sandbox.NoteCall) {}
+
+func (i *probeInbox) Take(_ context.Context, event string, _ *sandbox.NoteCall) string {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.takes = append(i.takes, event)

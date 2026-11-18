@@ -740,6 +740,24 @@
 // run's notes route cannot come to disagree about it, and never on a relayed
 // call, because a session held to loopback is never relayed
 // ([Bridge.admitRelayed]).
+//
+// # A hook's cancel is heard before the SDK
+//
+// A harness that gives a hook's call up (past its hook timeout) sends
+// `notifications/cancelled`, and whatever the take served is then never the
+// session's: the run's note inbox must hear it, to serve the note again at
+// the job's next step. The steer middleware cannot: the SDK keeps a call's
+// JSON-RPC id under an unexported key, answers a cancel for a session it never
+// held (a seat moved, a node restarted) 404 before any middleware, and a
+// cancel can overtake its own call. So the bridge's front reads every POST
+// first, whatever its path ([Bridge.steerFront]): it hands the opening's
+// inbox each cancel ([SteerInbox.Cancelled]), the inbox an opening's end took
+// off it included ([binding.cancelInbox]), and sets [steerCallHeader] on a
+// steer_take call to its id, dropping one a box sent, which the middleware
+// hands the inbox with the call's session ([binding.noteCall]). The SDK's own
+// canceller still runs, so a take in flight is cancelled through its context,
+// and the inbox reads its request's cancellation as a cancel too. The front
+// peeks at most [steerPeekBytes] and hands the SDK the body whole.
 package mcpbridge
 
 import (
@@ -2049,6 +2067,7 @@ func (b *Bridge) serveMCP(w http.ResponseWriter, r *http.Request, opened *bindin
 			return
 		}
 	}
+	b.steerFront(r, opened)
 	b.streamable.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), servedOpening{}, opened)))
 }
 
@@ -2270,8 +2289,14 @@ type binding struct {
 	refusals []<-chan struct{}
 
 	// steer is the run's note inbox, fixed when the opening opened
-	// ([Session.Steer]), and closed when it ends; nil once it has.
-	steer SteerInbox
+	// ([Session.Steer]), and closed when it ends; nil once it has. ended is
+	// the inbox its end took off it, which a cancel still reaches
+	// ([binding.cancelInbox]).
+	steer, endedSteer SteerInbox
+
+	// callUnread says once, per opening, that a hook's steer_take came with
+	// an id the bridge could not read — see [binding.steerMiddleware].
+	callUnread sync.Once
 
 	// unsubstituted says once, per opening, that the harness's hooks name no
 	// agent the bridge can tell apart — see [binding.takeSteer].

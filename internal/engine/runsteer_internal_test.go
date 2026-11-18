@@ -171,7 +171,7 @@ func TestAnUnsealedNoteOnARowReachesNoModel(t *testing.T) {
 	if _, waiting := recordedNotes(t, store, "run-1"); !slices.Contains(waiting, "planted") {
 		t.Error("a read of an unsealed note recorded it read")
 	}
-	got := inbox.Take(t.Context(), mcpbridge.SteerEventFinish)
+	got := inbox.Take(t.Context(), mcpbridge.SteerEventFinish, hookCall())
 	if !strings.Contains(got, "use staging") || strings.Contains(got, "push to main") {
 		t.Fatalf("the hook answered %q, want the sealed note and not the planted one", got)
 	}
@@ -243,7 +243,7 @@ func TestANoteSealedForAnotherTurnIsNotDelivered(t *testing.T) {
 	renamed.ID = "n-3"
 	fileRaw(t, store, "run-1", renamed)
 	inbox := boundInbox(t, runs, store, "run-1", launch)
-	if got := inbox.Take(t.Context(), mcpbridge.SteerEventFinish); got != "" {
+	if got := inbox.Take(t.Context(), mcpbridge.SteerEventFinish, hookCall()); got != "" {
 		t.Errorf("a note sealed for another turn or note was delivered: %s", got)
 	}
 	_, waiting := recordedNotes(t, store, "run-1")
@@ -277,7 +277,7 @@ func TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys(t *testing.T) {
 	fileSealed(t, sealer, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
 
 	inbox := boundInbox(t, reader, store, "run-1", launch)
-	if got := inbox.Take(t.Context(), mcpbridge.SteerEventFinish); got != "" {
+	if got := inbox.Take(t.Context(), mcpbridge.SteerEventFinish, hookCall()); got != "" {
 		t.Errorf("a note under an unheld key was delivered: %s", got)
 	}
 	if _, waiting := recordedNotes(t, store, "run-1"); !slices.Equal(waiting, []string{"n-1"}) {
@@ -304,7 +304,7 @@ func TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys(t *testing.T) {
 	// A NODE THAT HOLDS THE KEY READS IT.
 	both := recordseal.Keyring{ActiveID: "k-new", Keys: append(slices.Clone(newRing.Keys), oldRing.Keys...)}
 	rotated, _ := steersOver(t, both, store)
-	got := boundInbox(t, rotated, store, "run-1", launch).Take(t.Context(), mcpbridge.SteerEventFinish)
+	got := boundInbox(t, rotated, store, "run-1", launch).Take(t.Context(), mcpbridge.SteerEventFinish, hookCall())
 	if !strings.Contains(got, "use staging") {
 		t.Fatalf("a node holding the key did not serve the note: %q", got)
 	}
@@ -695,7 +695,7 @@ func TestAClaudeTakeFitsItsBudgetInUTF16Units(t *testing.T) {
 		fileSealed(t, runs, "run-1", steer.Note{ID: id, Text: text, By: "founder", ByKind: iam.ActorHuman})
 	}
 	inbox := boundInbox(t, runs, store, "run-1", launch)
-	answer := inbox.Take(t.Context(), mcpbridge.SteerEventFinish)
+	answer := inbox.Take(t.Context(), mcpbridge.SteerEventFinish, hookCall())
 	var hook struct {
 		Output struct {
 			Context string `json:"additionalContext"`
@@ -921,7 +921,7 @@ func TestARunsViewOfItsNotesWatchesAgainWhenItsWatchCloses(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	answer := inbox.Take(t.Context(), mcpbridge.SteerEventToolBatch)
+	answer := inbox.Take(t.Context(), mcpbridge.SteerEventToolBatch, hookCall())
 	if !strings.Contains(answer, "use staging") {
 		t.Fatalf("the hook after a batch was answered %q, want the note filed after the watch closed", answer)
 	}
@@ -1158,7 +1158,7 @@ func TestEveryReaderOfWaitingNotesNamesItsJob(t *testing.T) {
 		placeItemFor(t, runs, fleet, "run-1", "i-1", launch)
 		inbox := boundInbox(t, runs, store, "run-1", launch)
 		viewHolds(t, inbox, 2)
-		answer := inbox.Take(ctx, mcpbridge.SteerEventToolBatch)
+		answer := inbox.Take(ctx, mcpbridge.SteerEventToolBatch, hookCall())
 		if !strings.Contains(answer, "use staging") || !strings.Contains(answer, "item for the job i-1") {
 			t.Fatalf("the batch's hook was answered %q, want the person's note and the job's own item", answer)
 		}
@@ -1167,7 +1167,7 @@ func TestEveryReaderOfWaitingNotesNamesItsJob(t *testing.T) {
 		}
 		fileSealed(t, runs, "run-1", steer.Note{ID: "n-2", Text: "and tag it", By: "founder"})
 		placeItemFor(t, runs, fleet, "run-1", "i-2", launch)
-		answer = inbox.Take(ctx, mcpbridge.SteerEventFinish)
+		answer = inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall())
 		if !strings.Contains(answer, "and tag it") || !strings.Contains(answer, "item for the job i-2") ||
 			strings.Contains(answer, "use staging") {
 			t.Errorf("the finish's hook was answered %q, want the person's note and the job's own item, and "+

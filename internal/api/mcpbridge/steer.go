@@ -1,9 +1,11 @@
 package mcpbridge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A NOTE INBOX: a person's notes to the run's turn, at the run's own steps.
@@ -43,8 +46,14 @@ type SteerInbox interface {
 	// in the shape the harness reads, or empty for nothing. Every note
 	// answered is recorded SERVED to the run's job first, and read only once
 	// the job's session shows it. Never an error: a note that could not be
-	// served waits for the next step.
-	Take(ctx context.Context, event string) string
+	// served waits for the next step. call is the hook's call as the box sent
+	// it, nil where the bridge could not read it; ctx ends with the hook's
+	// request, cancelled where its harness gave the call up.
+	Take(ctx context.Context, event string, call *sandbox.NoteCall) string
+
+	// Cancelled says the box's harness gave up on the hook call named:
+	// whatever it was answered, it never took it. Never blocks on the store.
+	Cancelled(ctx context.Context, call sandbox.NoteCall)
 
 	// Wait is the notes waiting past the cursor after, oldest first, and a
 	// channel closed when the inbox's view of them next changes or the inbox
@@ -421,9 +430,32 @@ func (o *binding) steerMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 			return next(ctx, method, req)
 		}
 		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: o.takeSteer(ctx, call.Params.Arguments)}},
+			Content: []mcp.Content{&mcp.TextContent{Text: o.takeSteer(ctx, call.Params.Arguments,
+				o.noteCall(ctx, call))}},
 		}, nil
 	}
+}
+
+// noteCall is the hook's call as the bridge's front read it off its POST
+// ([Bridge.steerFront]): the MCP session it came on and the id the front set
+// in [steerCallHeader]. Nil where the front read none, said once an opening
+// (mcp_bridge_steer_call_unread): only the job's session then settles what
+// the call is served.
+func (o *binding) noteCall(ctx context.Context, call *mcp.CallToolRequest) *sandbox.NoteCall {
+	var id string
+	if call.Extra != nil {
+		id = call.Extra.Header.Get(steerCallHeader)
+	}
+	if id == "" || call.Session == nil {
+		o.callUnread.Do(func() {
+			log.WarnContext(ctx, "mcp_bridge_steer_call_unread", "run_id", o.session.RunID,
+				"seat", o.session.Handle, "detail", "a hook's steer_take came with a JSON-RPC id the bridge "+
+					"could not read, so a cancel of it cannot be matched: what it is served is settled by the "+
+					"job's session alone, at its collection")
+		})
+		return nil
+	}
+	return &sandbox.NoteCall{Session: call.Session.ID(), ID: id}
 }
 
 // steerArgs is what a hook passes steer_take: the event that fired it and the
@@ -440,7 +472,7 @@ type steerArgs struct {
 // the close while its box still waits for it: a box that gave the call up, or
 // whose connection failed, lets the hold go before any write, and reads no
 // answer.
-func (o *binding) takeSteer(ctx context.Context, raw json.RawMessage) string {
+func (o *binding) takeSteer(ctx context.Context, raw json.RawMessage, call *sandbox.NoteCall) string {
 	inbox := o.holdHook(ctx.Done())
 	if inbox == nil {
 		return ""
@@ -479,5 +511,104 @@ func (o *binding) takeSteer(ctx context.Context, raw json.RawMessage) string {
 	}
 	takeCtx, cancel := context.WithTimeout(ctx, steerTakeBudget)
 	defer cancel()
-	return inbox.Take(takeCtx, args.Event)
+	return inbox.Take(takeCtx, args.Event, call)
+}
+
+// steerCallHeader carries a hook's steer_take call's JSON-RPC id, as canonical
+// JSON text, from the bridge's front to its steer middleware
+// ([Bridge.steerFront], [binding.noteCall]): the middleware cannot learn the
+// id of the call it answers, which the SDK keeps under an unexported key.
+// Always the front's own: a box-sent one is dropped.
+const steerCallHeader = "Crewlet-Steer-Call"
+
+// steerPeekBytes is how much of a POST's body the front reads to tell a hook's
+// call or a cancel: FOUR KIB, past the largest either is (a cancel's id and
+// reason, a steer_take's two short arguments, each well under one KiB), and
+// small beside what the SDK reads of every POST anyway. A longer body is no
+// hook's, and is handed on unread.
+const steerPeekBytes = 4 << 10
+
+// steerFront is what the bridge reads of every POST before the SDK does, the
+// package doc's "A hook's cancel is heard before the SDK": it drops a box-sent
+// [steerCallHeader]; it peeks at most [steerPeekBytes] of the body, handing
+// the SDK those bytes and the rest; and of one JSON-RPC message it sets the
+// header to a steer_take call's id, or hands a cancel to the opening's inbox
+// ([binding.cancelInbox]), which never blocks. Anything else goes straight on.
+func (b *Bridge) steerFront(r *http.Request, opened *binding) {
+	r.Header.Del(steerCallHeader)
+	if r.Method != http.MethodPost || r.Body == nil || r.Body == http.NoBody {
+		return
+	}
+	peek := make([]byte, steerPeekBytes+1)
+	n, err := io.ReadFull(r.Body, peek)
+	peek = peek[:n]
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(peek), r.Body), r.Body}
+	if n > steerPeekBytes || (err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF)) {
+		return
+	}
+	var msg struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
+	}
+	if json.Unmarshal(peek, &msg) != nil {
+		return
+	}
+	switch msg.Method {
+	case "tools/call":
+		var params struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(msg.Params, &params) == nil && params.Name == SteerTool {
+			if id, ok := noteCallID(msg.ID); ok {
+				r.Header.Set(steerCallHeader, id)
+			}
+		}
+	case "notifications/cancelled":
+		var params struct {
+			RequestID json.RawMessage `json:"requestId"`
+		}
+		if json.Unmarshal(msg.Params, &params) != nil {
+			return
+		}
+		id, ok := noteCallID(params.RequestID)
+		session := r.Header.Get(sessionHeader)
+		if !ok || session == "" {
+			return
+		}
+		if inbox := opened.cancelInbox(); inbox != nil {
+			inbox.Cancelled(r.Context(), sandbox.NoteCall{Session: session, ID: id})
+		}
+	}
+}
+
+// noteCallID is a JSON-RPC id as canonical JSON text, where it is one a serve
+// keeps (internal/sandbox's keptCallOf): a JSON integer's text, or a JSON
+// string of letters, digits, `-` and `_`, quoted, at most
+// [sandbox.MaxNoteCallBytes] in all. False for any other, which no real call
+// has.
+func noteCallID(raw json.RawMessage) (string, bool) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || len(raw) > sandbox.MaxNoteCallBytes {
+		return "", false
+	}
+	if raw[0] == '"' {
+		var s string
+		if json.Unmarshal(raw, &s) != nil || s == "" || strings.ContainsFunc(s, func(r rune) bool {
+			return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
+		}) {
+			return "", false
+		}
+		return `"` + s + `"`, true
+	}
+	text := string(raw)
+	digits := strings.TrimPrefix(text, "-")
+	if digits == "" || strings.ContainsFunc(digits, func(r rune) bool { return r < '0' || r > '9' }) ||
+		(len(digits) > 1 && digits[0] == '0') {
+		return "", false
+	}
+	return text, true
 }
