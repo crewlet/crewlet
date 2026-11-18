@@ -136,11 +136,10 @@ func tailOf(a gitlet.GitAnswer) memoTail {
 	return memoTail{}
 }
 
-// A MEMO ENTRY HOLDS EVERY FIELD OF ITS ANSWER. A page of every kind the memo
-// keeps — every field of its answer set, but those Read stamps — is written as
-// a run writes it (encodePage, then its tail) and read back whole: so a field
-// added to an answer and left out of the encoding reads back as nothing,
-// here, rather than vanishing from every page a node answers from its memo.
+// A MEMO ENTRY HOLDS EVERY FIELD OF ITS ANSWER. A page of every memoized
+// kind, every field set but those Read stamps, is written as a run writes it
+// (encodePage, then its tail) and read back whole, so a field left out of the
+// encoding fails here rather than vanishing from every recalled page.
 //
 // Mutation: leave a field out of encodePage (a tree entry's PathB64) — its
 // page reads back without it.
@@ -194,11 +193,10 @@ func TestAMemoEntryHoldsEveryFieldOfItsAnswer(t *testing.T) {
 	}
 }
 
-// shapeOf is the shape of the answer types a page holds — every field's name
-// and type, recursively — as a fingerprint: what memoFormat names. Each type
-// is spelled as the encoding reads it, by its name and never its package's
-// (spell), so a package's move is no reshape: the encoding reads fields, not
-// import paths.
+// shapeOf is the fingerprint of every field's name and type, recursively, of
+// the answer types a page holds: what memoFormat names. Types are spelled
+// without their package (spell), so a package's move is no reshape: the
+// encoding reads fields, not import paths.
 func shapeOf() string {
 	return shapeOfType(reflect.TypeFor[gitlet.GitAnswer](), func(owner reflect.Type, f reflect.StructField) bool {
 		return owner == reflect.TypeFor[gitlet.GitAnswer]() &&
@@ -279,18 +277,16 @@ func spell(ty reflect.Type) string {
 }
 
 // memoShapes is the shape of the answers each memoFormat this build reads was
-// written over: a format names one shape, for ever. page/10 adds a search
-// hit's matches, context lines and file total to page/9's answers.
+// written over: a format names one shape, for ever.
 var memoShapes = map[string]string{
 	"page/10": "98c7992ac3dd8965",
 }
 
-// AN ANSWER'S SHAPE IS ITS MEMO FORMAT. An entry a node keeps outlives the
-// build that wrote it, so an answer type reshaped — a field added, renamed
-// or retyped — under the same memoFormat would have every entry an older
-// build wrote read as a page of the new shape. memoFormat names the shape it
-// was written over, here, so a change to an answer's fields fails until the
-// format moves with it — and the encoding with it (the case above).
+// AN ANSWER'S SHAPE IS ITS MEMO FORMAT. An entry outlives the build that
+// wrote it, so an answer type reshaped under the same memoFormat would have
+// an older build's entries read as pages of the new shape: a change to an
+// answer's fields fails here until the format moves, and the encoding with
+// it (the case above).
 func TestAnAnswersShapeIsItsMemoFormat(t *testing.T) {
 	t.Parallel()
 	if got, want := shapeOf(), memoShapes[memoFormat]; got != want {
@@ -323,11 +319,10 @@ func (fakeCache) CodeIndex(context.Context, cache.Synced) (*cache.CodeIndexView,
 }
 func (fakeCache) Tags(cache.Synced) (*cache.TagIndex, bool) { return nil, false }
 
-// A PAGE FROM THE MEMO FITS WHATEVER IT IS STAMPED WITH. A page carries its
-// budget — the most the fields Read stamps may encode to and the page still
-// fit — and a read whose stamped fields would take more is answered by a cut
-// of its own rather than by the page: here a copy whose position, stamped on
-// every answer, encodes past what the page left.
+// A PAGE FROM THE MEMO FITS WHATEVER IT IS STAMPED WITH. A read whose stamped
+// fields would take more than the page's budget is answered by a cut of its
+// own rather than by the page: here a copy whose position encodes past what
+// the page left.
 //
 // Mutation: answer a hit whatever its budget (recall's budget check) — the
 // page is answered past its bound.
@@ -362,14 +357,12 @@ func TestAPageFromTheMemoFitsWhateverItIsStamped(t *testing.T) {
 }
 
 // A STAT'S RUN HOLDS ONE PAGE'S COUNTS AT A TIME. A stat cuts every page past
-// the asked one before git counts a line, and its counts follow every file:
-// filed under each staged page and held to the run's end, they were some 24
-// bytes for every file of the stat past the asked page, under no bound. So
-// each page's counts are handed on — into its staged entry — as soon as the
-// numstat half has counted past it: here fifty pages of twenty files, each
-// handed once, in order, its own twenty counts, with never more than one
-// page's held; and done hands on what is left, a page the half wrote no count
-// for among it.
+// the asked one before git counts a line, and its counts follow every file,
+// so holding them to the run's end would be unbounded: each page's counts are
+// handed into its staged entry as soon as the numstat half has counted past
+// it. Here fifty pages of twenty files are each handed once, in order, their
+// own twenty counts, never more than one page's held; done hands on the rest,
+// a page the half wrote no count for among it.
 //
 // Mutation: hand nothing on until done (add filing every count) — a thousand
 // counts are held at once.
@@ -418,8 +411,7 @@ func TestAStatsRunHoldsOnePagesCountsAtATime(t *testing.T) {
 }
 
 // tipsShapes is the shape of gitlet.Tip each tipsMemoFormat this build reads
-// was written over: a format names one shape, for ever. tips/2 added each
-// commit's committer and engine mark.
+// was written over: a format names one shape, for ever.
 var tipsShapes = map[string]string{
 	"tips/2": "4d98085adadc82e0",
 }

@@ -11,82 +11,57 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// Domain is the executor log as the state-log framework sees it.
-//
-// A DECLARATION, not a behaviour: every method answers a question the framework
-// asks before it applies anything, and each has a failure mode that is silent if
-// the answer is wrong.
-//
-// THE FRAMEWORK'S TENTH DOMAIN, and its EIGHTH strict, identity-claiming one,
-// after the tracker, the knowledge base, the identity estate, the artifacts,
-// their datastore, the Dashboard Assistant and chat.
+// Domain is the executor log as the state-log framework sees it: a
+// declaration, not a behaviour. Each method answers a question the framework
+// asks before it applies anything, and a wrong answer fails silently.
 type Domain struct{}
 
-// Name is the register key, the manifest key and the operator's column. NEVER
-// renamed. `executor` and not `sessions`, because the identity estate already
-// keeps a person's sign-in SESSIONS (iamdomain's `session` kind), and an
-// operator reading `crewlet retention status` must not have to guess which.
+// Name is the register key, the manifest key and the operator's column: NEVER
+// renamed. Not `sessions`: iamdomain's `session` kind is a person's sign-in,
+// and an operator reading `crewlet retention status` must not guess which.
 func (Domain) Name() string { return "executor" }
 
-// ExecutorLogMaxBytes is the ceiling this domain declares for its log, which is
-// what the framework's own suites provision the stream with.
-//
-// 512 MiB, the Tier A default, and a node does not create the stream at it:
-// every state log's ceiling is a reservation the broker grants in full, so the
-// engine sizes them together from Tier A (`stream.executor_log_max_bytes`,
-// unset taking config.DefaultExecutorLogMaxBytes, scaled down as far as its
-// 64 MiB floor where the broker is short, which states the arithmetic).
+// ExecutorLogMaxBytes is the ceiling this domain declares for its log, which
+// the framework's suites provision the stream with: 512 MiB, the Tier A
+// default. A node does not create the stream at it: every state log's ceiling
+// is a reservation the broker grants in full, so the engine sizes them together
+// from Tier A (`stream.executor_log_max_bytes`, unset taking
+// config.DefaultExecutorLogMaxBytes, scaled down to its 64 MiB floor where the
+// broker is short).
 const ExecutorLogMaxBytes = 512 << 20
 
-// MaxRecordBytes is the largest record this domain publishes.
-//
-// 128 KiB, measured rather than guessed ([TestEveryRecordAtEveryCapFitsTheDeclaredBound]).
-// The largest record is an `end`: its five prose fields at their caps
-// (internal/executorkeep's CompletedWorkMaxBytes, BlockedOnMaxBytes,
-// StopReasonMaxBytes and FailureMaxBytes, and [AskExcerptMaxBytes], eleven
-// KiB between them) encode to about 66 KiB once JSON escapes every `<`, `>` and `&` to six bytes, and the
-// conversation key, the work key, the short fields and the envelope bring the
-// whole to about 74 KiB; a `capture` at its caps, its [MaxAbsorbs] absorbed
-// turns included, is about 21 KiB. The bound
-// keeps the headroom chat's and the assistant's keep over their worst case,
-// and the gate reserve on this log is sized by it, so a declaration far above
-// the records would hold back room no append could use: at 128 KiB the
-// reserve's fleet term is seven 132 KiB appends and a mebibyte, about 1.9 MiB,
-// under the sixteenth of even the 64 MiB floor.
+// MaxRecordBytes is the largest record this domain publishes: 128 KiB, measured
+// ([TestEveryRecordAtEveryCapFitsTheDeclaredBound]). The largest is an `end`,
+// about 74 KiB whole: its five prose fields at their caps (internal/executorkeep's
+// CompletedWorkMaxBytes, BlockedOnMaxBytes, StopReasonMaxBytes and
+// FailureMaxBytes, and [AskExcerptMaxBytes], 11 KiB between them) encode to
+// about 66 KiB once JSON escapes every `<`, `>` and `&` to six bytes. A
+// `capture` at its caps, its [MaxAbsorbs] absorbed turns included, is about
+// 21 KiB. The bound keeps chat's and the assistant's headroom over the worst
+// case. The gate reserve on this log is sized by it, so a bound far above the
+// records holds back room no append can use: at 128 KiB the reserve's fleet
+// term (seven 132 KiB appends and a MiB, about 1.9 MiB) stays under a
+// sixteenth of even the 64 MiB floor.
 const MaxRecordBytes = 128 << 10
 
 // ExecutorLogDuplicates is the window the broker collapses a repeated operation
-// id in: AN OPTIMISATION, NEVER A MECHANISM (the ledger is what makes a retry
-// idempotent). Two minutes, every strict log's window, because it must outlast
-// a publisher's retry budget and no longer.
+// id in: AN OPTIMISATION, NEVER A MECHANISM (the ledger makes a retry
+// idempotent). Two minutes, every strict log's window: it must outlast a
+// publisher's retry budget, and no longer.
 const ExecutorLogDuplicates = 2 * time.Minute
 
 // LinearizableReadsPerSeatDay is this log's READ MODEL: the linearizable reads
-// a day each agent seat's executor launches put on it, which is what
-// `census_drift` holds the log to and the barrier term in its ceiling.
-//
-// A HUNDRED AND FIFTY: thirty turns a seat a day — the reference company's
-// 3 000 over its 100 seats — times the five reads a turn makes at the seat's
-// level. Its DISPATCH reads its conversation's head once ([Reader.Head]); its
-// FIRST launch, where it continues the session that head left, reads the base's
-// row once more ([Reader.Session]), to take it up only while it still names the
-// object the read froze — the launch's own begin, read back on the serving
-// node, says whether the turn's row holds it, so that row is not read again;
-// a RELAUNCH (a send-back, an answered question, a lost job carried on) reads
-// the turn's own row twice, as its runner asks which session it continues and
-// as its launch takes that one up, at the reference company's mean of one
-// relaunch a turn — a send-back or an answered question on about half of
-// turns, and a second on some; and its EXECUTOR reads the seat's own sessions
-// through its session tools (internal/agent/builtin's list_sessions and
-// read_session, each call one read of this log — a page of the seat's rows, a
-// search of them, or one row before its transcript is read), at one call a
-// turn on average: about one turn in five reading a few pages of an earlier
-// session, a judgment made without production data, which this alarm's drift
-// is what corrects. A relaunch of a turn that has kept nothing reads the
-// base's row a third time, and a read of a session whose object failed reads
-// its row once more, which few do. Past twice it, ten reads a turn, seats are
-// relaunching or reading their sessions in a loop, which is the drift worth
-// telling an operator about.
+// a day each agent seat's executor launches put on it, which `census_drift`
+// holds the log to and which sizes the barrier term in its ceiling. 150: thirty
+// turns a seat a day (the reference company's 3 000 over 100 seats) times five
+// reads a turn. A dispatch reads the head ([Reader.Head]); a first launch reads
+// the base's row ([Reader.Session]), to take it up only while it names the
+// object the read froze (its begin's read-back answers for the turn's own row);
+// a relaunch reads the turn's row twice (runner, then launch), at a mean of one
+// a turn; list_sessions and read_session
+// (internal/agent/builtin) average one read a turn, a judgment without
+// production data that this alarm's drift corrects. Past ten a turn, seats are
+// relaunching or reading sessions in a loop: the drift worth telling an operator.
 const LinearizableReadsPerSeatDay = 150
 
 // Stream is the executor log, at the domain's whole budget.
@@ -143,9 +118,9 @@ func frameworkEnvelope(env RecordEnvelope) statelog.Envelope {
 
 // InstallsGate reports a record whose unknown version must STOP the applier: a
 // node's eviction, by its kind, and nothing else. Every other rule a record
-// here installs (a tombstone, an absorption, a release) is about rows inside
-// the scope that record declares, so a node that defers it defers every later
-// record those rows decide too — see the package doc.
+// here installs (a tombstone, an absorption, a release) concerns rows inside
+// its declared scope, so deferring it defers every later record they decide
+// (package doc, "A removed seat stays removed").
 func (Domain) InstallsGate(env statelog.Envelope) bool {
 	return ObjectKind(env.Kind).InstallsGate()
 }
@@ -220,14 +195,12 @@ func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]state
 	return out, nil
 }
 
-// Tables is every durable table this domain writes, with its class.
-//
-// THE SCRUB LIST, THE IDENTITY CLAIM AND THE LOCAL SWEEP ARE ALL DERIVED FROM
-// THIS MAP. Every reproducible table is Replicated: each is written only by
-// applying a record, from the record and same-log rows alone, with broker
-// instants, so two nodes at one checkpoint hold the same bytes. The ledger is
-// Divergent: it travels so an adopter can answer a retry of anything its donor
-// applied, and its `applied_at` is each node's own.
+// Tables is every durable table this domain writes, with its class; the scrub
+// list, the identity claim and the local sweep all derive from it. A Replicated
+// table is written only by applying a record, from the record and same-log rows
+// alone, with broker instants, so two nodes at one checkpoint hold the same
+// bytes. The ledger is Divergent: it travels so an adopter can answer a retry
+// of anything its donor applied, and its `applied_at` is each node's own.
 func (Domain) Tables() map[string]statelog.TableClass {
 	out := make(map[string]statelog.TableClass,
 		len(ReproducibleTables)+len(MachineryTables))
@@ -250,11 +223,10 @@ func (Domain) ScopeIndex() string { return "executor_log_deferred_scope" }
 // OpsTable is the operation ledger: what this node has already applied.
 func (Domain) OpsTable() string { return "executor_ops" }
 
-// GatesSeatAdmission reports that no seat depends on this domain's copy, as
-// none does on the artifacts' or the assistant's: a launch that cannot read
-// this log fails open, to a fresh session with the account of what it could
-// not read, so a stalled executor copy must not stop a node admitting seats.
-// The copy is still judged and goes out of service for its own readers
+// GatesSeatAdmission reports that no seat depends on this domain's copy: a
+// launch that cannot read this log fails open, to a fresh session with the
+// account of what it could not read, so a stalled copy must not stop a node
+// admitting seats. The copy still goes out of service for its own readers
 // (ADR-0079): a stalled strict replay is a fault, and the framework refuses
 // every read of it.
 func (Domain) GatesSeatAdmission() bool { return false }

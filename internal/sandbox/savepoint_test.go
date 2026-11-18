@@ -569,7 +569,7 @@ func TestACaptureIsPlacedByItsLogReadOnlyWhereItsHarnessEndedItsOwnRun(t *testin
 					}
 				}
 				if tc.lost {
-					spooled, _ := rig.coordinator.readLost(t.Context(), rig.get("t1"))
+					spooled, _, _ := rig.coordinator.readLost(t.Context(), rig.get("t1"))
 					rig.coordinator.keepLater(t.Context(), spooled)
 				} else {
 					// COLLECTED, the resume after it refused, so the row stays for

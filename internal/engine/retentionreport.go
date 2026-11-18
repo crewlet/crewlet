@@ -562,6 +562,9 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	if r.feeds != nil {
 		r.feeds(now, &out)
 	}
+	if r.executors != nil {
+		r.executors(ctx, now, &out)
+	}
 	r.refsReading(&out)
 	r.space(&out, now)
 	oldestWindow(now, windows, &out)

@@ -19,190 +19,73 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE COMMITTER: GROUP COMMIT of one repository's pushes.
+// THE COMMITTER: GROUP COMMIT of one repository's pushes, in order, on one
+// goroutine, each record carrying every push already waiting when the last
+// one finished — WITHOUT LINGER (doc.go's "Group commit"; "What a push costs,
+// measured" for why it pays).
 //
-// Every push to a repository is a record on ONE subject, so two pushes
-// committed one record each contend at the broker and pay an append, a
-// compare-and-set round and an apply apiece — and the apply holds the
-// replicated estate's one write lane on every data node. So a committer
-// takes a repository's pushes IN ORDER on one goroutine, and each record
-// carries every push that was waiting when the last one finished: the first
-// push alone, and then — WITHOUT LINGER, only what is already queued — up to
-// MaxPushesPerRecord pushes, MaxRecordBytes of entries and MaxRecordRows of
-// writes. An idle repository commits a record a push and waits for nobody;
-// a busy one amortises the append over everything that arrived during the
-// last one, which is when amortising pays (doc.go's measured section: a
-// group commit of sixty-four small pushes holds the lane 0.16–0.18 ms a push
-// against 3.4–4.8 ms for one alone).
+// A batch is gathered by each push's own bytes and rows, but the rows of the
+// live changes its pushes move (revisions.go) only a snapshot can count. So
+// the decide CARRIES a push whose changes would take the record past
+// MaxRecordRows: it and the pushes behind it lead the next batch in arrival
+// order. Only one whose changes would not fit a record of its own is refused
+// too_many_changes.
+
+// An ok is only ever reported from a row, read once a batch, never from the
+// decision: a record a gate dropped or a round lost to a peer writes no row
+// ([Committer.answers]). A batch runs under the committer's own lifetime, not
+// a caller's: a caller that hangs up stops waiting, and the batch goes on.
 //
-// # A push whose changes do not fit leads the next record
+// A push is decided only while its answer fits its asker's ONE write attempt,
+// whose end a routed proposal carries; past it the router hands the same push
+// id to the runner-up, which would contend with this committer on the subject.
+// It is judged against the deadline itself, never a wait counted from
+// arrival (what the asker spent before the push arrived is its attempt too),
+// both while it waits ([Committer.await]) and as its batch forms
+// ([Committer.admit]). A push is TAKEN or WITHDRAWN, never both ([queued.state]).
+
+// A batch is published with the highest of its pushes' [Proposal.Seen] as its
+// session: the committer may be behind the node that checked a push, and
+// decided from below it the push is told a false definite refusal (stale,
+// repo_deleted) that no compare-and-set catches, since a decision that moves
+// nothing is never put to the broker. Not reached within the publisher's
+// budget, it is refused behind — about this node, so the runner-up decides.
+// The floor is per batch, never kept by the node: it is somebody else's writes.
 //
-// A batch is gathered by what each push may write of its own — its bytes and
-// its rows, bounded before any record exists — but a push record also writes
-// the rows of the live changes its pushes move (revisions.go), which only a
-// snapshot can count. So the decide counts them as it admits each push, and
-// one whose changes' rows would take the record past MaxRecordRows beside the
-// pushes before it is CARRIED rather than refused: nothing of it or of the
-// pushes behind it is decided, and they lead the next batch in the order they
-// arrived, where its rows are the record's first. Only a push whose changes'
-// rows would not fit even a record of its own is refused, too_many_changes.
+// Which code-log refusal is about THIS node, answered [ErrNotServing] so the
+// runner-up commits the push, and which is the client's (not_applied,
+// repo_deleted, unavailable) is [Committer.refused]'s, by the refusal's kind
+// and whether it names the batch's own record, never by its position.
+
+// A node that cannot judge a seat's push decides none and says so about
+// itself, [ErrNotServing]: confirmed behind the company's configuration
+// ([CommitterOptions.Current]) or holding no chart yet
+// ([CommitterOptions.SeatRules]). A person's push reads no chart and is
+// decided in both; a mixed batch decides the persons' and hands the seats' on.
+
+// Every other proposal — a compaction ([Committer.ProposeCompaction]), an
+// expunge's records ([Committer.ProposeExpunge]), a change's lifecycle write
+// ([Committer.ProposeChange]), a merge queue's write ([Committer.ProposeQueue])
+// and a merge ([Committer.ProposeMerge]) — waits in the same ONE queue under
+// the same bounds and deadline rules, and is decided alone, a record of its own
+// op under its own operation id (asked again of the runner-up, the ledger
+// collapses it), answered from the rows it wrote. One queue and one writer a
+// repository is why its proposals land in arrival order and never contend from
+// one node, and why no write lands between the snapshot that proved a merge's
+// gate and the record that moves its target (ADR-0096).
+
+// The node's bounds (CommitterNodeProposals, CommitterNodeBytes) sit beside
+// each queue's (CommitterInbox, CommitterInboxBytes) because a node commits
+// for every repository rendezvous ranks it first for: per-repository bounds
+// alone let a thousand of the largest pushes hold about a gibibyte of entries
+// (EntryRoom each) and as much decoded, and small pushes to a few repositories
+// take more answer slots of the estate's proposal lane than it has, the rest
+// waiting unseen in the broker's buffer rather than refused.
 //
-// # An ok is only ever reported from a row
-//
-// A batch's record is decided inside the publisher's snapshot and is applied
-// on this node before the publish answers applied. Its answers are then READ
-// FROM THE PUSH ROWS — one read for the batch — never from the decision: a
-// record a gate dropped, or a decision that lost a round to a peer, writes
-// no row, and reporting the decision would tell a client ok for a ref that
-// never moved. A push in the record with no row is an error, not an ok; and a
-// push WITH a row is answered from it whichever round of the batch decided
-// the record that wrote it, since the last round to decide is not always the
-// one that landed ([Committer.answers]).
-//
-// # The batch belongs to nobody who asked
-//
-// A batch is every caller's in it and none of theirs, so it runs under the
-// committer's own lifetime — a caller that hangs up stops waiting, and the
-// batch the other callers are in goes on (the push may land: its answer is
-// then the row, which the client's next push collapses onto).
-//
-// # Answered inside the one attempt its asker gives it
-//
-// The estate router gives the node it asks ONE write attempt and carries its
-// end to the serving node as the proposal's deadline; past it the asker hands
-// the same push id to the runner-up — whose committer then contends with this
-// one on the repository's subject. So a push is decided here only while its
-// answer fits that attempt: a batch takes at most a CommitBudget and its
-// answer ReplyMargin more, and a push starts a batch only while both are left
-// before its deadline. It is judged against the DEADLINE ITSELF, never a wait
-// counted from when it arrived, because what the asker spent before the push
-// reached this queue — the request's trip, a wait for an answerer, the
-// serving node's wait for the asker's floor — is the asker's attempt too, and
-// a rule counted from arrival answered up to that much after the asker had
-// stopped waiting. And it is judged WHILE THE PUSH WAITS, not only as a batch
-// forms: the caller's own goroutine withdraws its push the moment too little
-// is left, so a push behind however many slow batches is answered busy inside
-// the attempt rather than left for an asker that has given up. A push is
-// either TAKEN into a batch or WITHDRAWN from the queue, never both
-// ([queued.state]): one taken is answered within its batch's budget, which it
-// had in hand when it was taken; one withdrawn is decided by nobody and
-// appended by nobody. A caller with NO deadline — the in-process path, where
-// nobody asks a runner-up while it runs — may wait in the queue for less than
-// one CommitBudget. One whose caller has already gone is dropped as its batch
-// would start, because its asker may have handed it on and nobody here is
-// waiting for it; a push already in a batch keeps the rule above: the batch
-// goes on without its caller.
-//
-// # Decided at or past what its pushes were checked against
-//
-// A push's commands were formed against the state its receiving node read — a
-// linearizable sync before receive-pack ran — and the committer is usually
-// another node, which may be behind it: one that has just become the
-// repository's committer, or one a few records short of a repository an
-// activation has just created. Decided from below it, the push would be told
-// a definite refusal that is false — a command whose old value the client was
-// shown refused stale, the repository refused deleted — and told it again
-// after the client fetched, until this node caught up; and a decision that
-// moves nothing is never put to the broker, so no compare-and-set would catch
-// it. So a batch is published with the highest of its pushes' [Proposal.Seen]
-// positions as its session: decided from a snapshot that holds them, or —
-// when this node cannot reach them within the publisher's budget — refused
-// behind, which is a refusal about this node, so the runner-up decides it. A
-// per-batch floor, never one this node keeps: it is somebody else's writes.
-//
-// # A refusal before the append moves the push to another node
-//
-// Refusals about THIS node made before anything was appended — evicted,
-// behind, a record it cannot decode, a floor it is below — are answered
-// [ErrNotServing]: the router asks the runner-up with the same push id, which
-// can commit it. So is an eviction found at ANOTHER operation's record: the
-// batch's answer was lost, the newest record on the repository's subject was
-// somebody else's, and this node's eviction is below it — a refusal about this
-// node, whose own append may never have landed and applies nowhere if it did,
-// so the push id has a row on no node and the runner-up commits it. A record
-// of THIS BATCH that landed and a gate drops on every node is not_applied,
-// naming where it landed; a repository that carries a deletion marker is
-// repo_deleted, naming the batch's record only where the marker dropped one;
-// anything else the code log refuses for every node alike is unavailable, and
-// the client runs git push again. Which is which is the refusal's KIND and
-// whether the record it names is the batch's own (statelog.Unavailable.Landed),
-// never whether it names a position: behind, deferred and skew all name one,
-// and so does an eviction found at another operation's record, and none of
-// them is a record of the push.
-//
-// # A seat's push is decided only by a node that can judge it
-//
-// A seat's push is judged from the chart and the calendar of the deciding
-// node's epoch ([SeatRules]): its grant, the protections that take a person's
-// push alone, its share of a repository outside its unit and its company
-// day's quota (decide.go). So a node that cannot judge one decides none, and
-// says so about ITSELF — [ErrNotServing], under which the router asks the
-// repository's runner-up with the same push id — in two states: confirmed
-// behind the company's configuration ([CommitterOptions.Current]: checked as
-// the push is queued and again as its batch forms, since the revision it
-// failed to apply may be the one that revoked the seat), and holding no chart
-// yet ([CommitterOptions.SeatRules], read once a batch). A person's push reads
-// no chart and is decided in both, and a batch of both kinds decides the
-// persons' and hands the seats' on. Never a seat's push judged by a nil chart:
-// let through, it would land unjudged; refused not_permitted, it would record
-// a refusal no chart made.
-//
-// # A compaction waits in the same queue, and is decided alone
-//
-// A repository's COMPACTION — proposed by the Gitlet node that built one
-// ([Committer.ProposeCompaction]) — waits in the repository's ONE queue beside
-// its pushes, in the order they arrived, held to its bounds and the node's like
-// any proposal and to the same deadline rules, and is decided as a batch of its
-// own: one record of its own op, whose operation id is the compaction's own
-// id, so a compaction asked again of the runner-up after a committer went
-// silent is the same compaction, collapsed by the ledger. Its applied answer
-// is read from the rows too — the outputs' rows the record wrote — never from
-// the decision. A committer runs ONE writer a repository, so a compaction and
-// the pushes queued around it can never contend on the repository's subject
-// from the same node. An EXPUNGE'S records — a person's request, and the
-// begin and the commit its maintainer builds ([Committer.ProposeExpunge]) —
-// wait and are decided the same way, each alone under its own operation id;
-// and so does every write of a CHANGE'S LIFECYCLE ([Committer.ProposeChange]):
-// an open, an edit, a draft's state, a retarget, a close and a reopen — so a
-// change's lifecycle and the pushes that move its branches are decided in the
-// order they arrived, by one writer, and contend on one subject. A seat's
-// write of a change is judged from the chart as a seat's push is, and a node
-// that cannot judge one decides none. So does every write of a target's MERGE
-// QUEUE ([Committer.ProposeQueue]): an enqueue, decided by the change's merge
-// gate, and a dequeue — so a change's entry, its lifecycle and the pushes that
-// move its head are decided by one writer. And so does a change's MERGE
-// ([Committer.ProposeMerge]), decided by its merge gate from one snapshot and
-// applied as one record that merges the change and moves its target (ADR-0096)
-// — so no push, change or queue write of the repository lands between the
-// snapshot that proved the gate and the record that moves the branch.
-//
-// # Bounded in count, in bytes and in time
-//
-// A repository's queue holds at most CommitterInbox proposals and
-// CommitterInboxBytes of entries; past either a push is refused busy AT
-// ONCE, never blocked — sixteen full records waiting behind one in flight is
-// a repository taking pushes faster than one node commits them. And the node
-// holds at most CommitterNodeProposals proposals and CommitterNodeBytes of
-// them across every repository, from each one's queueing to its caller's
-// answer: a node commits for every repository rendezvous ranks it first for,
-// and per-repository bounds alone let a thousand of the largest pushes from
-// as many repositories hold about a gibibyte of entries (EntryRoom each), and
-// as much again decoded — and small pushes to a few repositories hold more
-// answer slots of the estate's proposal lane than it has, the rest waiting
-// unseen in the broker's buffer rather than refused. A proposal
-// waits in the queue only while its asker's attempt still holds a batch and
-// its answer — one asked with no deadline, a whole CommitBudget — and is
-// refused busy past it, withdrawn as it waits ([Committer.await]) or refused
-// as its batch forms ([Committer.admit]).
-//
-// A refusal at any of these bounds is a BACKLOG, the one busy that says this
-// committer turns proposals away — the time bound's too, which a committer
-// slower than its pushes meets before its count (busy.go) — so the committer
-// keeps those refusals for [CommitBusyWindow] by repository and the engine
-// reads them into the node's alarm reading ([Committer.AlarmReading]):
-// code_commit_busy stands on the data node whose committer refused them. Only
-// a proposal that ARRIVED with its asker's attempt already spent, refused
-// before it takes a place in the queue, is no backlog of this committer's.
+// Past any bound a proposal is refused busy AT ONCE, never blocked. Every such
+// refusal, the time bound's too, is a BACKLOG kept for [CommitBusyWindow] by
+// repository for code_commit_busy ([Committer.AlarmReading], busy.go), except
+// one that ARRIVED with its asker's attempt already spent.
 
 // CommitterOptions configure a committer.
 type CommitterOptions struct {
@@ -217,47 +100,36 @@ type CommitterOptions struct {
 	Limits func() Limits
 	// Retention is the deciding node's epoch's code.deleted_retention_days:
 	// when a deleted repository's purge may begin, which a push refused
-	// repo_deleted for it is told ([RepoGone]). REQUIRED, like Limits: a
-	// default here would name the wrong instant to every company that set
-	// its own.
+	// repo_deleted is told ([RepoGone]). REQUIRED: a default would name the
+	// wrong instant to every company that set its own.
 	Retention func() time.Duration
 	// SeatRules is the deciding node's epoch's chart and calendar, which a
-	// SEAT'S push is judged by — its grant (decide rule 2b), its share of a
-	// repository outside its unit and its day's quota — read once a batch
-	// that carries one. False where this node has installed no epoch yet
-	// (its boot, before the first): every seat's push of the batch is then
-	// answered [ErrNotServing], a refusal about THIS node, so the router
-	// hands it to the repository's runner-up under the same push id, and a
-	// person's is decided as ever — never a seat's push let through by a nil
-	// roster, nor refused not_permitted by one, which would RECORD a refusal
-	// no chart made. REQUIRED: a seat's push is never decided by a default.
+	// SEAT'S push is judged by (its grant, decide rule 2b; its share of a
+	// repository outside its unit; its day's quota), read once a batch that
+	// carries one. False before this node installs its first epoch: every
+	// seat's push is then answered [ErrNotServing], so the runner-up decides
+	// it, and a person's is decided as ever. A nil roster would let a seat's
+	// push land unjudged, or RECORD a not_permitted no chart made. REQUIRED.
 	SeatRules func() (SeatRules, bool)
-	// Current is whether this node serves the company's configuration: the
-	// engine's posture gate (configplane's Reconciler.Admits), false exactly
-	// while the node is CONFIRMED behind that configuration — shed or stuck,
-	// never lag alone — and nil is current. While it answers false, every
-	// proposal carrying a seat's push is answered [ErrNotServing] — as it is
-	// queued and again as its batch forms, decided by nobody — so the router
-	// hands it to the repository's runner-up under the same push id, as for
-	// a stopping committer. A person's push is decided as ever, since no rule
-	// of a person's reads the chart; like every data operation on such a
-	// node it is asked of this one only after every current data node.
-	// Without the gate, a node that failed to apply a revision revoking a seat
-	// went on landing that seat's pushes on every repository it commits for,
-	// for as long as it stayed stuck.
+	// Current is the engine's posture gate (configplane's Reconciler.Admits):
+	// false exactly while this node is CONFIRMED behind the company's
+	// configuration (shed or stuck, never lag alone); nil is current. While
+	// false, every proposal the chart judges is answered [ErrNotServing] as it
+	// is queued and again as its batch forms, so the runner-up decides it;
+	// without it, a node stuck before a revision revoking a seat would go on
+	// landing that seat's pushes. A person's push reads no chart and is
+	// decided as ever.
 	Current func() bool
 	// Now is the decide's clock — what upload_expired judges a pack's age by,
 	// the company day a seat's push is counted on, a record's authored
 	// instant, and the instant a landed record's announcement carries
 	// (announce.go); nil takes the wall clock in UTC.
 	Now func() time.Time
-	// Events is this node's event stream, which a merge whose record this
-	// committer landed is announced on (`change_merged`), a change it opened
-	// (`change_opened`), and a queue's ejections and broken landings
-	// (`code_queue_ejected`, `code_target_broken`) — by the committer's own
-	// announcer, which NewCommitter starts and Stop ends (announce.go); nil
-	// announces none and starts none — a node with no queue records no event
-	// of any kind.
+	// Events is this node's event stream, on which the committer's own
+	// announcer (announce.go; NewCommitter starts it, Stop ends it) announces
+	// `change_merged`, `change_opened`, `code_queue_ejected` and
+	// `code_target_broken` for the records it landed; nil starts none and
+	// announces none.
 	Events EventPublisher
 	// AgentIDs resolves a seat's handle to the agent id its day is counted
 	// under (ADR-0013), off the node's live epoch — false for a human seat
@@ -316,11 +188,10 @@ type Committer struct {
 	// caller may pin), and a test's own (export_test.go).
 	clock func() time.Time
 	// withdrawAfter, when set, arms a queued push's withdrawal in place of a
-	// timer ([Committer.withdrawal]) — a field so the suite reads what the
-	// withdrawal is armed with and fires it itself (export_test.go): the
-	// moment it fires is the claim, and on the machine's clock a case could
-	// only wait it out, which tells no timer armed a second late from one
-	// armed on time. Nil, as in production, is a timer.
+	// timer ([Committer.withdrawal]), so the suite reads what it is armed with
+	// and fires it itself (export_test.go): the moment it fires is the claim,
+	// and waiting on the machine's clock cannot tell a timer armed late from
+	// one armed on time. Nil, as in production, is a timer.
 	withdrawAfter func(d time.Duration) (fire <-chan time.Time, stop func())
 	// nodeBytes is CommitterNodeBytes, and nodeProposals
 	// CommitterNodeProposals; each a test's smaller value (export_test.go).
@@ -672,16 +543,12 @@ func newCommitter(o CommitterOptions, announcements int) (*Committer, error) {
 }
 
 // Propose decides one push in the next batch of its repository and answers
-// what became of it. A full queue, or a node holding its count or its bytes
-// ([CommitterNodeProposals], [CommitterNodeBytes]), answers busy at once; a
-// push whose caller's
-// DEADLINE leaves too little for a batch and its answer ([CommitBudget] and
-// [ReplyMargin]) answers busy undecided — at once, or the moment that is so
-// while it waits — and one whose caller has no deadline answers busy once it
-// has waited a whole CommitBudget; a stopping committer answers
-// [ErrNotServing], and so does one that cannot judge a seat's push — behind
-// the company's configuration, or holding no chart yet; a proposal that is
-// not one answers [ErrInvalidProposal].
+// what became of it. It answers busy, undecided: at once for a full queue or a
+// node at [CommitterNodeProposals] or [CommitterNodeBytes]; at once or while
+// it waits once its caller's deadline leaves less than [CommitBudget] and
+// [ReplyMargin]; and once a push with no deadline has waited a CommitBudget.
+// A stopping committer, or one that cannot judge a seat's push, answers
+// [ErrNotServing]; a proposal that is not one, [ErrInvalidProposal].
 // ctx bounds only this caller's wait: a push whose caller has gone before its
 // batch starts is never decided, and the batch it joined goes on without it.
 func (c *Committer) Propose(ctx context.Context, p Proposal) (ProposeResult, error) {
@@ -704,11 +571,9 @@ func (c *Committer) queue(ctx context.Context, q *queued) answered {
 		return answered{err: fmt.Errorf("%w: %s", ErrNotServing, why)}
 	}
 	if refusal := q.late(q.arrived); refusal != "" {
-		// TOO LATE BEFORE IT IS QUEUED: answered without taking the place
-		// in the queue a proposal that can still be decided needs. Filed
-		// LATE, the one refusal at the queue's time bound that no backlog
-		// of this committer's made: its asker's attempt was spent before it
-		// arrived (busy.go).
+		// TOO LATE BEFORE IT IS QUEUED, so it takes no place in the queue:
+		// filed busyLate, the one time-bound refusal that is no backlog of
+		// this committer's (busy.go).
 		return c.busy(q, busyLate, refusal)
 	}
 	//nolint:contextcheck // The batch is the committer's, not this caller's: it runs under the committer's own lifetime so a caller that hangs up never cancels the batch other callers are in.
@@ -735,24 +600,16 @@ func (c *Committer) withdrawal(d time.Duration) (<-chan time.Time, func()) {
 	return t.C, func() { t.Stop() }
 }
 
-// await is a queued push's wait for its answer, on its caller's goroutine.
+// await is a queued push's wait for its answer, on its caller's goroutine,
+// which watches the deadline WHILE THE PUSH WAITS: the repository's goroutine
+// sees its queue only between batches, so a push behind long batches would
+// reach the head after its asker had read the silence as a dead committer.
 //
-// THE DEADLINE IS WATCHED WHILE THE PUSH WAITS, here: the repository's
-// goroutine sees its queue only between batches, so a push queued behind
-// batches that ran long reached the head after its asker had stopped waiting
-// — silence, which the asker reads as a dead committer and answers by asking
-// the runner-up.
-//
-// AN ANSWER ALREADY GIVEN WINS over the caller's context ending. A stopping
-// committer hands every queued push back [ErrNotServing] before its Stop
-// returns, and the engine withdraws the estate's serving registration next,
-// which CANCELS the context of every answer in flight — so the answer and the
-// cancellation are both ready by the time a caller's goroutine is scheduled,
-// and a select picks between ready cases at random. Lost to the coin, the
-// refusal that sends the push to the repository's runner-up with the same
-// push id became `context canceled` — a final failure for a push nothing
-// decided — or, sent as the serving node's broker went down, no answer at
-// all, which its asker waited out for a whole write attempt.
+// AN ANSWER ALREADY GIVEN WINS over the caller's context ending: Stop answers
+// every queued push [ErrNotServing], then the engine withdraws the estate's
+// serving registration, cancelling every answer in flight, so both are ready
+// and a select would pick at random — turning the refusal that sends the push
+// to the runner-up into a final `context canceled`, or into no answer at all.
 func (c *Committer) await(ctx context.Context, q *queued) answered {
 	var expire <-chan time.Time
 	if !q.deadline.IsZero() {
@@ -767,10 +624,8 @@ func (c *Committer) await(ctx context.Context, q *queued) answered {
 		case <-expire:
 			expire = nil
 			if q.withdraw() {
-				// THE QUEUE'S TIME BOUND, met behind this repository's
-				// earlier proposals: it queued with time to spare, so
-				// it WAITED out its asker here, a backlog of this
-				// committer's (busy.go).
+				// THE QUEUE'S TIME BOUND: queued with time to spare, it
+				// WAITED out its asker here, a backlog (busy.go).
 				return c.busy(q, busyWaited, q.shortOfTime(q.deadline.Sub(c.clock())))
 			}
 			// A BATCH TOOK IT FIRST, with a whole budget and the margin
@@ -812,12 +667,10 @@ func (c *Committer) busy(q *queued, reason busyReason, refusal string) answered 
 	return answered{res: ProposeResult{Answer: refuseAll(q.p, RefusalBusy, refusal)}}
 }
 
-// countBusy counts n proposals of kind to repoID refused busy for reason —
-// under the `kind` and the `reason` the instrument names, so a repository's
-// pushes refused for a backlog read apart from a compaction that met one, and a
-// backlog apart from a deadline or a lost race — and files them in the window
-// code_commit_busy is read from, writing the lines of any minute that filing
-// closed (busy.go).
+// countBusy counts n proposals of kind to repoID refused busy for reason,
+// under the instrument's `kind` and `reason` so a backlog reads apart from a
+// deadline or a lost race, and files them in the window code_commit_busy is
+// read from, logging any minute that filing closed (busy.go).
 func (c *Committer) countBusy(repoID, kind string, reason busyReason, n int) {
 	if c.metrics != nil {
 		c.metrics.Add(metrics.CodeCommitBusy, uint64(n), metrics.Attrs{"kind": kind, "reason": string(reason)})
@@ -989,20 +842,14 @@ func (c *Committer) run(rc *repoCommitter) {
 }
 
 // gather is first — a push — and every proposal already waiting behind it that
-// fits the record, the carried before the queued — WITHOUT LINGER: a batch is
-// what was waiting, never what might come. A proposal [Committer.admit] turns
-// away is answered and left out; the first that does not fit is carried to
-// lead the next batch, and admitted again then, since that batch is the one it
-// would start in. It answers the batch and what is carried still, in order.
+// fits the record, the carried before the queued, WITHOUT LINGER. One
+// [Committer.admit] turns away is answered and left out; the first that does
+// not fit is carried to lead the next batch, and admitted again there, the
+// batch it would start in. It answers the batch and what is carried still.
 //
-// A COMPACTION, AN EXPUNGE RECORD, A CHANGE'S OR A QUEUE'S WRITE OR A MERGE
-// IS NEVER GATHERED: a record carries one op, and each is a record of its own
-// (OpCompact, OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpExpungeScan, OpImportChunk,
-// OpImportDone, OpMirrorSync, the ops
-// ChangeOps lists, OpEnqueue, OpDequeue and OpMerge). Met behind pushes, it
-// ends the batch and is carried to be decided alone, after them and before
-// anything queued behind it, so a repository's proposals still land in the
-// order they arrived.
+// A proposal [queued.alone] is never gathered: a record carries one op, and
+// each is a record of its own. Met behind pushes, it ends the batch and is
+// carried, so the repository's proposals still land in arrival order.
 func (c *Committer) gather(rc *repoCommitter, first *queued, carried []*queued) ([]*queued, []*queued) {
 	batch := []*queued{first}
 	bytes, rows := recordOverheadBytes+first.bytes, first.rows
@@ -1033,26 +880,15 @@ func (c *Committer) gather(rc *repoCommitter, first *queued, carried []*queued) 
 }
 
 // admit reports whether q may be decided in the batch about to start, and
-// answers it when it may not — judged as the batch forms, because that is
-// when deciding it would begin. A push it judges is TAKEN first, so its
-// caller can no longer withdraw it and nobody else answers it
-// ([queued.take]).
-//
-// A push its caller WITHDREW was answered by its caller. A CALLER THAT HAS
-// GONE is answered to nobody: its asker abandoned the attempt, and may
-// already have handed the same push id to the runner-up, so deciding it here
-// would contend with that node on the repository's subject for a push nobody
-// here is waiting for. A push that is LATE ([queued.late]) is answered busy:
-// a batch started now could answer it only after its asker stopped waiting —
-// and since every push queued with time to spare, it WAITED that time out
-// behind this repository's earlier batches, a backlog of this committer's
-// ([busyWaited]). None is decided, and none appends anything; the client runs
-// git push again.
-//
-// A SEAT'S PUSH IS JUDGED AGAIN HERE against the node's posture: queued while
-// the node served the company's configuration, it may meet its batch after
-// the node was confirmed behind it, and is then answered [ErrNotServing] —
-// decided by nobody, so the runner-up decides it under the same push id.
+// answers it when not — judged as the batch forms, when deciding it would
+// begin. It TAKES a push first ([queued.take]), so its caller can no longer
+// withdraw it. A WITHDRAWN push was answered by its caller. One whose caller
+// has GONE is answered to nobody: its asker may already have handed the push
+// id to the runner-up, and deciding it here would contend with that node. A
+// LATE one ([queued.late]) is answered busy, a backlog ([busyWaited]). A
+// chart-judged one is judged again against the node's posture, which may have
+// turned behind since it queued, and answered [ErrNotServing]. None of these
+// appends anything.
 func (c *Committer) admit(q *queued) bool {
 	if !q.take() {
 		return false
@@ -1089,17 +925,14 @@ func (c *Committer) dequeued(rc *repoCommitter, q *queued) {
 	rc.queued -= q.bytes
 }
 
-// Queued is how many proposals repoID's queue on this node holds now: every
-// one sent to it that the repository's goroutine has not yet taken off, so a
-// batch in flight holds none of its own, and a proposal its caller withdrew
-// counts until the goroutine meets it.
+// Queued is how many proposals repoID's queue on this node holds now: sent and
+// not yet taken off by its goroutine, so a batch in flight holds none and a
+// withdrawn proposal counts until the goroutine meets it.
 //
-// THE ONE READING OF A QUEUE, which a case that holds a batch waits on before
-// it lets the batch go: the next batch takes what is queued when the held one
-// ends and nothing that arrives after it — without linger — so a batch let go
-// before its followers had all queued would carry them in several, and a wait
-// of any length would only make that unlikely. The committer's own suite and
-// internal/gitlet/gitlettest's F19 read it for that.
+// THE ONE READING OF A QUEUE a case waits on before letting a held batch go
+// (the committer's suite, internal/gitlet/gitlettest's F19): the next batch
+// takes only what is queued when it starts, so one let go early would split
+// its followers, and a wait of any length would only make that unlikely.
 func (c *Committer) Queued(repoID string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1175,11 +1008,8 @@ func (c *Committer) commit(repoID string, batch []*queued) []*queued {
 	defer cancel()
 	proposals := make([]Proposal, len(batch))
 	// THE BATCH IS DECIDED AT OR PAST WHAT EVERY PUSH IN IT WAS CHECKED
-	// AGAINST ([Proposal.Seen]): the publisher waits for this node's applier
-	// to reach the highest of them before it takes the snapshot, and a node
-	// that cannot within its budget refuses `behind` — a refusal about this
-	// node, so every push is answered ErrNotServing and the router asks the
-	// runner-up. Validate held every Seen to the code log, so they compare.
+	// AGAINST ([Proposal.Seen]; the file's head says why). Validate held
+	// every Seen to the code log, so they compare.
 	var seen statelog.Position
 	for i, q := range batch {
 		proposals[i] = q.p
@@ -1303,17 +1133,12 @@ func withinRecord(d statelog.Decision, entries []PushEntry, changeRows int) erro
 // answers is every proposal's answer from the publish's result, the push rows
 // a record applied and the last round's decision.
 //
-// # A row is always the answer
-//
-// The last round to run the decide is not always the round whose record
-// landed: a round whose acknowledgement was lost is followed by another that
-// decides again — at a later instant, perhaps from rows that do not hold the
-// first round's record yet — and the publisher may then find the first one in
-// its ledger and answer it, collapsed, without deciding again. Two decisions
-// of one batch differ through the clock (an upload past its bound) and
-// through whatever a peer wrote between them, so once a record applied, every
-// proposal whose push has a row is answered FROM THAT ROW, whichever round
-// wrote it, and the decision answers only a proposal with none.
+// The last round to decide is not always the one whose record landed: after a
+// lost acknowledgement another round decides again, perhaps differently (the
+// clock, a peer's write), and the publisher may find the first in its ledger
+// and answer it, collapsed. So once a record applied, a proposal whose push
+// has a row is answered FROM THAT ROW, whichever round wrote it, and the
+// decision answers only one with none.
 func (c *Committer) answers(ctx context.Context, repoID string, batch []Proposal, last round,
 	res statelog.Result, err error, opID string) []answered {
 
@@ -1633,15 +1458,11 @@ func (c *Committer) refused(ctx context.Context, repoID string, batch []Proposal
 				Answer: refuseAll(p, RefusalRepoDeleted, detail)}
 		}
 	case errors.As(err, &refusal) && refusal.Landed():
-		// THE BATCH'S RECORD LANDED AND APPLIES NOWHERE: a gate drops it at
-		// the position on every node. JUDGED BY THE REFUSAL'S KIND AND BY
-		// WHOSE RECORD IT NAMES, never by its position alone — a refusal
-		// before the append names a position too, and so does an eviction
-		// found at ANOTHER operation's record, newest on the subject when the
-		// batch's answer was lost (statelog.Unavailable.Landed). Answered
-		// here, each told a client its push was durable there and lost, when
-		// nothing of it was known to be on the log and the runner-up could
-		// commit it.
+		// THE BATCH'S RECORD LANDED AND APPLIES NOWHERE: a gate drops it on
+		// every node. Judged by the refusal's kind and whose record it names
+		// (statelog.Unavailable.Landed), never by a position alone: a refusal
+		// before the append names one too, and so does an eviction found at
+		// ANOTHER operation's record — both pushes the runner-up can commit.
 		detail := fmt.Sprintf("the push applies nowhere: its record at %s was durable and "+
 			"the code log's %s gate drops it on every node; run git push again",
 			refusal.Position, refusal.Reason)
@@ -1669,17 +1490,12 @@ func (c *Committer) refused(ctx context.Context, repoID string, batch []Proposal
 }
 
 // purgedDetail is the sentence of a batch the repository's deletion marker
-// refused: [RepoGone]'s purged state, NAMED BY THE MARKER — the row the gate
-// that refused it read, which holds the name for ever — in one point read over
-// its primary key, the decide's own (deletionIn), so one state is one sentence
-// whichever path refused it. Named by the id instead, a client is told of a
-// repository it never typed and to declare "its name" without being told what
-// that is.
-//
-// The id names it only where the read cannot: no marker row (the estate this
-// node holds was replaced since the gate read it), or a read that failed —
-// which leaves the refusal what it is, because the marker answered it and the
-// name is only how the sentence says so.
+// refused: [RepoGone]'s purged state NAMED BY THE MARKER, which holds the name
+// for ever, read over its primary key as the decide reads it (deletionIn), so
+// one state is one sentence whichever path refused it; named by the id, a
+// client would be told of a repository it never typed. The id names it only
+// where the read cannot (no marker row since the estate was replaced, or a
+// failed read), which leaves the refusal what it is: the marker answered it.
 func (c *Committer) purgedDetail(ctx context.Context, repoID, opID string) string {
 	return purgedDetail(ctx, c.db, c.log, repoID, opID)
 }

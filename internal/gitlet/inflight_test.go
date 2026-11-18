@@ -7,24 +7,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A RECONCILE'S DECISIONS IN FLIGHT FIT ONE APPLY TRANSACTION. The records a
-// reconcile holds in flight append together, and the applier commits them as
-// one batch only while their rows fit statelog.ApplyTxRowBudget — so
-// reconcileInFlight is held to the widest record a reconcile writes, measured
-// here as the applier counts it: a create of a repository holding its bound of
-// rules and of path owners, a settings change replacing every one of each, and
-// a restore doing the same, of a repository holding an open change, each
-// under another owner. The settings change is what reconcileRecordRows states,
-// exactly, its change's count moved between two tally rows and the repository
-// between two repository tally rows; the restore one change tally row fewer,
-// since a deleted repository's changes are in no tally; and reconcileInFlight
-// is the most of them one transaction holds.
+// A RECONCILE'S DECISIONS IN FLIGHT FIT ONE APPLY TRANSACTION: the applier
+// commits a reconcile's in-flight records as one batch only within
+// statelog.ApplyTxRowBudget, so reconcileInFlight is the most of the widest
+// record a reconcile writes that fit, counted as the applier counts them: a
+// create, a settings change and a restore at every row-bearing bound, of a
+// repository holding an open change, each under another owner. The settings
+// change touches exactly reconcileRecordRows (its change and the repository
+// each moved between two tally rows), the restore one change tally row fewer.
 //
-// Mutations: thirty-two in flight, the width before the path owners' rows —
-// 8 224 rows, red; leave the path owners out of reconcileRecordRows — the
-// measured records touch more than it states, red; leave the change or the
-// repository tally rows out of it, and the settings change touches more than
-// it states, red.
+// Mutations: thirty-two in flight, red; leave the path owners, or the change
+// or repository tally rows, out of reconcileRecordRows, red.
 func TestAReconcileInFlightFitsOneApplyTransaction(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)

@@ -957,9 +957,17 @@ func taskCensuses() map[string]plannedRead {
 		statement, args := workloadStatement(units, store.EncodeTime(planNow))
 		out["the workload of "+scope] = plannedRead{statement, args}
 	}
+	// AND THE ADVISOR'S READ OF THE OPEN WORK: who holds it, every open
+	// wait, and every open question on an open item.
+	statement, args := openHoldersStatement()
+	out["the open work by holder"] = plannedRead{statement, append(args, MaxOpenRows+1)}
+	statement, args = openEdgesStatement()
+	out["every open wait"] = plannedRead{statement, append(args, MaxOpenRows+1)}
+	statement, args = openQuestionsStatement()
+	out["every open question on open work"] = plannedRead{statement, append(args, MaxOpenRows+1)}
 	// AND THE SEARCH PACKAGE'S: the lexical index's count of the live
 	// tasks, and the window report's read of every live task's text.
-	statement, args := search.TaskCountRead()
+	statement, args = search.TaskCountRead()
 	out["the lexical index's count"] = plannedRead{statement, args}
 	statement, args = search.TaskTextRead()
 	out["the window report's read of every task"] = plannedRead{statement, args}
@@ -1174,10 +1182,14 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 	// AN INBOX PAGE RUNS UP TO TWO STATEMENTS ([inboxStatements]), each
 	// joining a notice's history row by its key: the page's range, and —
 	// under `unread`, once the seen-through position raised the range —
-	// the notices an unread mark names below it.
+	// the notices an unread mark names below it. A read of one record is one.
 	page, _, err := inboxStatements("ana", InboxQuery{}, inboxFilter{scope: inbox.SnoozeInclude}, 50)
 	if err != nil || len(page) != 1 {
 		t.Fatalf("a page of every notice is %d statements, %v; want one", len(page), err)
+	}
+	byRecord, _, err := inboxStatements("ana", InboxQuery{Record: record}, inboxFilter{scope: inbox.SnoozeInclude}, 50)
+	if err != nil || len(byRecord) != 1 {
+		t.Fatalf("a read of one record's notice is %d statements, %v; want one", len(byRecord), err)
 	}
 	unread := inboxFilter{unread: true, scope: inbox.SnoozeInclude, marked: []string{record},
 		seen: inbox.Position{Stream: historyStream, Generation: 1, Seq: 9_000}}
@@ -1194,6 +1206,7 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		"one change's routing":            seek(historyKey, routingRecordStatement, record),
 		"where a change sits":             seek(historyKey, recordPositionStatement, record),
 		"a person's inbox":                seek(historyKey, page[0].sql, page[0].args...),
+		"an inbox's one notice by record": seek(historyKey, byRecord[0].sql, byRecord[0].args...),
 		"an inbox's unread marks below":   seek(historyKey, marked[1].sql, marked[1].args...),
 		"the repair's horizon":            seek(status, unblockHorizonStatement, at(9_000), at(9_000)),
 		"the repair's dependents": seek(status, unblockedDependentsStatement,

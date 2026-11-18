@@ -64,18 +64,15 @@ func (c *steppedClock) setStep(step time.Duration) {
 	c.step = step
 }
 
-// holdMaintainerOff admits a check of the case's repository of its own and
-// holds the maintainer off the repository with it until release, or the case's
-// end: the copy a case checks was just pushed and holds no commit-graph, so
-// the maintainer's graph-first run on it is due at once, and a check's release
-// lets the maintainer back on, whose run takes a maintenance slot at once.
-// Unheld, that slot is the maintainer's as often as the case's next check's —
-// and on a node of two process slots, whose maintenance lane is one, it is the
-// maintainer's every time: the second of two verifies back to back is refused
-// "no slot was free". The held check keeps one slot of the lane, so a case
-// holding it runs with MaxProcesses four (a lane of two on every machine) and
-// its own checks take the other; a maintainer run already in flight is left
-// to finish first. It answers the lane's slot count and the held check's
+// holdMaintainerOff admits a check of the case's repository of its own, which
+// holds the maintainer off it until release or the case's end. A copy just
+// pushed has no commit-graph, so the maintainer's graph-first run is due at
+// once and takes a maintenance slot whenever a check lets go; on a node of two
+// process slots (a lane of one) the second of two verifies back to back is
+// then refused "no slot was free". The held check keeps one slot of the lane,
+// so a case holding it runs with MaxProcesses four (a lane of two on every
+// machine) and its own checks take the other; a maintainer run already in
+// flight finishes first. It answers the lane's slot count and the held check's
 // release, which may be called before the case's end.
 func holdMaintainerOff(t *testing.T, c *gitlettest.Case) (slots int, release func()) {
 	t.Helper()
@@ -101,20 +98,17 @@ func holdMaintainerOff(t *testing.T, c *gitlettest.Case) (slots int, release fun
 }
 
 // A VERIFY NAMES A REPOSITORY THIS NODE HOLDS, AND ANSWERS FOR IT OR SAYS WHY
-// NOT: a repository the node never served is no check — the check would build
-// a copy, a whole download of it — and once a push has given the node a copy,
-// that copy is checked against its rows and found whole, answered through the
-// verification the start handed back. A name no repository is declared under
-// and one the grammar refuses are both not found, a verification of another
-// repository or an id the node never made is none, and a stopped host
-// verifies nothing.
+// NOT: one the node never served is not checked (that would download a whole
+// copy); a copy a push left is checked against its rows and found whole. An
+// undeclared or ungrammatical name is not found, another repository's
+// verification or an id the node never made is none, and a stopped host
+// verifies nothing but keeps what it ended.
 //
-// THE HOST'S CLOCK IS THE CASE'S, a microsecond on at every reading
-// (steppedClock): a verification's end is stamped by a reading made after its
-// start's, so it is the later, with no wall clock between the two.
+// The host's clock is the case's (steppedClock, a microsecond a reading), so a
+// verification's end is stamped after its start with no wall clock between.
 //
-// Mutation: stamp a verification's end with its start's instant — its end
-// not after its start, red.
+// Mutation: stamp a verification's end with its start's instant, and its end
+// is not after its start.
 func TestAVerifyAnswersTheRepositoryItNames(t *testing.T) {
 	c := newCase(t, gitlettest.SoloOptions{}, gitlettest.Settings())
 	h := c.Fleet.Nodes()[0].Host()
@@ -162,13 +156,12 @@ func TestAVerifyAnswersTheRepositoryItNames(t *testing.T) {
 	}
 }
 
-// A VERIFY OUTLIVES ITS REQUEST: the check reads every byte of a repository
-// and a repair rebuilds it, which outlives a balancer's read timeout, whose
-// close ends the request — so the check runs under the host's lifetime and
-// never the request's, and the request that started it ending mid-check ends
-// nothing: the check and its repair complete, and the verification reports
-// both. Meanwhile a second asker of the same check shares it, and one asking
-// for the other is refused naming it.
+// A VERIFY OUTLIVES ITS REQUEST: a check reads every byte and a repair
+// rebuilds the copy, outlasting a balancer's read timeout, so the check runs
+// under the host's lifetime, never the request's: its request ending mid-check
+// ends nothing, and the verification reports the check and its repair. A
+// second asker of the same check shares it; one asking for the other is
+// refused naming it.
 //
 // Mutation: run the check under the request's context, and the verification
 // fails cancelled with nothing repaired.
@@ -241,19 +234,16 @@ func TestAVerifyOutlivesItsRequest(t *testing.T) {
 }
 
 // A VERIFY SAYS WHEN THE NODE ENDS ITS CHECK: while it brings its copy to the
-// rows first it states no deadline — each read of the object store that sync
-// makes is bounded on its own — and once its check pass begins the
-// verification carries the instant the pass's bound ends it by
-// (cache.CheckBudget over what the copy holds), which a caller waits by; an
-// ended verification carries none.
+// rows it states no deadline (each object-store read of that sync is bounded
+// on its own); once its check pass begins it carries the instant the pass's
+// bound (cache.CheckBudget over the copy) ends it by, which a caller waits by;
+// an ended verification carries none.
 //
-// THE HOST'S CLOCK IS THE CASE'S, frozen at one instant (steppedClock, no
-// step): the deadline the host states is that instant plus the pass's bound,
-// held within the bound of a small copy with no wall clock between them.
+// The host's clock is frozen at the case's instant (steppedClock, no step), so
+// the stated deadline is that instant plus the bound, with no wall clock between.
 //
-// Mutation: drop the deadline the check pass is told, and the running
-// check states none; state it off the wall clock rather than the host's, and
-// it is no bound from the check's start.
+// Mutation: drop the deadline the check pass is told, and the running check
+// states none; state it off the wall clock, and it is no bound from its start.
 func TestAVerifySaysWhenItEndsItsCheck(t *testing.T) {
 	var (
 		holding atomic.Bool
@@ -312,18 +302,14 @@ func TestAVerifySaysWhenItEndsItsCheck(t *testing.T) {
 }
 
 // A VERIFY AT ITS CALLER'S FLOOR APPENDS NO BARRIER: named a position on the
-// code log — a listing's, read at the head once for a whole sweep — the
-// repository is resolved and its copy brought to that position, and a copy
-// already there is checked as it is, so nothing of the verify reads at the
-// log's head. Named none, the copy is brought to the head. A floor on another
-// stream is no floor on a repository's rows, and is refused.
+// code log (a listing's, read at the head once for a whole sweep), it resolves
+// the repository and brings the copy to that position, checking one already
+// there as it is, so nothing reads at the log's head. Named none, it brings the
+// copy to the head. A floor on another stream is no floor on a repository's
+// rows, and is refused.
 //
-// THE MAINTAINER IS HELD OFF THE REPOSITORY ([holdMaintainerOff]): the case
-// runs two verifies back to back, and the first one's release let the
-// maintainer's graph-first run take the lane's one slot on a node of two
-// process slots, so the second was refused "no slot was free" there every time.
-// Held off, the maintainer reads nothing either, so every read recorded is a
-// verify's own.
+// The maintainer is held off ([holdMaintainerOff]) for the two verifies back to
+// back, and so reads nothing: every read recorded is a verify's own.
 //
 // Mutation: bring the copy to the head whatever the floor, and the floored
 // verify reads through the barrier.
@@ -376,23 +362,15 @@ func TestAVerifyAtItsCallersFloorAppendsNoBarrier(t *testing.T) {
 	}
 }
 
-// A VERIFY IS AWAITED WHERE IT WAS ASKED: the request that began it may wait
-// for its end — VerifyHold, so a small copy's check is answered in that one
-// request — and is answered it done, with everything the check held already
-// let go: a caller that asks for the next check at once finds the
-// maintenance slot free rather than being told to wait for it. A check that
-// outlasts the wait is answered as it stands, running; an id the node does
-// not keep, or another repository's, is none.
+// A VERIFY IS AWAITED WHERE IT WAS ASKED: its request may wait for its end
+// (VerifyHold, so a small copy's check answers in that one request) and is
+// answered it done with everything the check held let go, so a next check
+// asked at once finds the maintenance slot free. A check outlasting the wait
+// is answered running; an unkept id, or another repository's, is none.
 //
-// THE LANE IS READ WITH THE MAINTAINER HELD OFF, by a check of the case's own
-// admitted across the loop ([holdMaintainerOff], over the cache's
-// holdMaintainer): the maintainer's graph-first run, due at once on a copy
-// just pushed, takes a maintenance slot the moment a check lets go of the
-// repository, so the lane's free count read after an answer was the
-// maintainer's as often as the check's (one run in fifteen failed so). The
-// held check keeps one slot of the lane's two (MaxProcesses four, so the lane
-// is two on any machine), and every check of the loop must leave the other
-// free.
+// The lane is read with the maintainer held off ([holdMaintainerOff]), whose
+// run would take the slot a check lets go of: every check of the loop must
+// leave free the slot the held check does not keep.
 //
 // Mutation: record the end before the check lets go of its slot, and the
 // next check can find the lane still held.
@@ -487,14 +465,13 @@ func damagePack(t *testing.T, path string) {
 	}
 }
 
-// A VERIFY THE HOST'S STOP CUTS SHORT IS ANSWERED STOPPING. Stop ends every
-// verify in flight through the host's lifetime, and what that leaves is the
-// context's own `canceled` — which reads as the caller giving up, while the
-// caller is owed what every request the node stopped serving is told (503,
-// the stop's Retry-After). So a start the stop cut short in its resolve
-// answers ErrStopping, and so does a check the stop cut short, recorded on
-// its verification beside what it had found. A start its OWN caller ended is
-// no stop's, and keeps its error.
+// A VERIFY THE HOST'S STOP CUTS SHORT IS ANSWERED STOPPING: Stop ends every
+// verify in flight through the host's lifetime, leaving the context's
+// `canceled`, which reads as the caller giving up; the caller is owed what any
+// request a stopped node no longer serves is told (503, the stop's
+// Retry-After). So a start cut short in its resolve answers ErrStopping, as
+// does a cut-short check, recorded on its verification beside what it found.
+// A start its OWN caller ended keeps its error.
 //
 // Mutation: return the work's error unwrapped, and the stop's cases go red.
 func TestAVerifyTheStopCutsShortIsAnsweredStopping(t *testing.T) {

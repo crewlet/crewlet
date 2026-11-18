@@ -170,8 +170,9 @@
 // for the few it keeps. A live state asked by when its changes moved
 // ([ChangeSortUpdated]) walks its lifecycle's and its conversations' indexes
 // in step (changesort.go). A listing narrowed by its words takes its candidates
-// from this node's own index of them and judges each in its snapshot
-// (changetext.go, ADR-0156). One change ([ReadChange]) is read by its number on
+// from this node's own index of them and judges each in its snapshot, saying
+// how far back the index reaches while it is first built (changetext.go,
+// ADR-0156). One change ([ReadChange]) is read by its number on
 // its repository, its revisions paged newest first beside it. Both are held to
 // the asker's grant on the change's repository ([JudgeRead]): a listing that
 // names a repository, and a read of one change, are refused whole where the
@@ -852,6 +853,14 @@
 // reads the repository in a turn nobody woke. A person or a stranger as the
 // requester never reaches here: a person maintains every repository, and a
 // stranger reads none, both settled where the turn runs.
+//
+// A PAGE IS HELD TO ITS KIND'S BOUND ([ReadQuery.PageMax]): a read asking past
+// it is refused naming the bound, never clamped, so a caller reading a kind to
+// its end pages at that bound, never at [MaxSnapshotItems], which caps every
+// page the reader serves rather than naming any kind's. A limit the engine
+// chooses is the same on every call, so one past the bound would refuse every
+// call: TestEveryEngineReadAsksAPageItsKindCarries holds each such limit in the
+// module to the bound where it is written.
 //
 // # Every read of the rows seeks a named index
 //

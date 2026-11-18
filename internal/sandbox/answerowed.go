@@ -19,132 +19,15 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// An answer that is RECORDED and still OWED a resume.
-//
-// # Why the answer is recorded before anything is done with it
-//
-// A person's reply used to be held by its inbox delivery until a resume
-// succeeded: a resume that failed handed the MESSAGE back to the queue with a
-// Nak, and on the only broker this engine ships a Nak'd message comes back
-// after its redelivery backoff, BEHIND the conversation's newer mail. So:
-//
-//  1. a run parks with a question in a thread;
-//  2. the reply R1 arrives, the resume fails on something transient, and R1
-//     is handed back;
-//  3. the person's next message R2 arrives during R1's backoff, reaches the
-//     still-waiting run first, and is spliced in as its answer;
-//  4. R1 comes round afterwards and is either spliced into the run as the
-//     answer to whatever it asked NEXT, or run as a turn with no context.
-//
-// Nothing compared a reply with the question it was supposed to answer — the
-// match was positional, "the next inbound on the conversation" — and the
-// in-memory twin replayed a Nak at the head, so every test certified the order
-// production never gave.
-//
-// So receiving an answer and resuming with it are now two steps with two
-// owners. The FIRST QUALIFYING reply — posted at or after the question
-// ([PendingRun.AskedAt]) — is recorded on the row by a compare-and-set
-// ([PendingStore.RecordAnswer]), and its delivery is acknowledged: the answer
-// is durable from that moment and nothing about it depends on the inbox again.
-// Resuming is then the coordinator's: one attempt inline, and every retry on
-// this package's own backoff ([answerRetryDelay]) under the same two bounds a
-// handed-back delivery had ([MaxAnswerAttempts] and [answerWindow]). A later
-// reply finds the question answered and is the ordinary message it looks like.
-//
-// # Why the seat's inbox is held while an answer is owed
-//
-// The resume no longer runs inside the delivery that carried the answer, so
-// nothing about the inbox's own serial dispatch keeps the seat's later mail
-// behind it. The coordinator holds the seat's inbox ([SeatHold], the hold
-// seathold.go keeps for a busy seat too) for as long as any of the seat's
-// answers is owed, and lifts it once the resume has RETURNED and, where the
-// resume ended the run, its ending is finished: the turn's end recorded on the
-// executor log, once every capture of the turn has settled, and the run's
-// record deleted — by this node's retry, off the resume's frame, the answer's
-// series kept until it is ([Coordinator.settleOwed]) — so R2 is worked after
-// R1's resume and after its end, with the run's own replies already in the
-// thread it reads, rather than racing either. A hold rather than a park,
-// because the held mail waits on the broker with its place and its delivery
-// count intact, where a park would republish it in a loop for the whole
-// backoff.
-//
-// # What ends an answer that cannot be resumed
-//
-// The attempt bounds. A run nothing on this node can resume (no runner, a
-// conversation this build cannot decode, a seat the epoch does not hold) gives
-// its answer up after them ([Coordinator.declineAnswer]): the run goes back to
-// waiting on its question, the reply is handed to the seat's ordinary route as
-// the message it looks like, and that reply is declined for this question so
-// it is never recorded against it again. That is exactly where the
-// handed-back delivery used to end up, with the difference that it now gets
-// there EXACTLY ONCE, in order, rather than circling the inbox: the decision
-// and the copies it owes are one write, and the copies are published off the
-// row afterwards under ids derived from the originals, so a crash at any step
-// is finished by the next reader of the row without losing the reply or
-// delivering it twice (see [Coordinator.declineAnswer]). The run itself stays
-// resumable: the seat's next holder, or this node after a restart, is offered
-// the next qualifying reply.
-//
-// A RUN THAT ENDS BEFORE ANY TURN TOOK THE ANSWER lets it go the same way,
-// whoever ends it and on whichever route the answer arrived: the store will not
-// delete a row that still holds a reply no turn took ([ErrAnswerOwed]), so the
-// ending takes the answer off the row and records its copies as owed in one
-// write, and hands them back before it deletes the row ([Coordinator.letGoAnswer],
-// [Coordinator.endRecord]). That covers a retry or an inline attempt whose run
-// turns out to be over, a resume that broke before its turn began, and the seat's
-// next holder reaping a claim whose node stopped before its turn TOOK the answer,
-// once the answer's revivals are spent ([RecordedAnswer.TakenAt],
-// [Coordinator.reapTail]) — the one fact that tells a reply nobody acted on from
-// one a turn has used.
-//
-// # Spent when it leaves
-//
-// A reply that leaves its run — taken by a turn, on the inline attempt as on a
-// retry, or let go of — has the delivery that carried it recorded as worked in
-// the completion ledger at that moment ([CoordinatorOptions.Spent]): at the
-// take, and before the let-go's write. A node that recorded the answer, or took
-// it inline, and stopped before acknowledging the delivery leaves it to come
-// round again, and by then nothing on the run recognises it as the answer it
-// was.
-//
-// # A reply too large to be the answer is recorded as its refusal
-//
-// A reply past what the row carries as an answer ([MaxAnswerBytes]) cannot be
-// recorded, and was once left to go its way as the ordinary message it looked
-// like: the seat answered it knowing nothing of the run, the run kept waiting,
-// and the person's next short message ("any luck?") was the first reply the
-// question could take. So its REFUSAL is the question's outcome instead
-// (ADR-0114): recorded in the answer's place by the same compare-and-set
-// ([PendingStore.RecordRefusal]) — its deliveries, when it was posted and the
-// figures, sealed, none of its words — and resumed as an answer is, through
-// every step above: owed with the seat's inbox held behind it, retried, taken
-// once, revived, or let go of. The resumed run is told the reply did not reach
-// it ([AskedRun.Refused]), its working indicator raised where the reply was
-// posted ([AnswerRefusal.Address]); while the refusal is the run's the question
-// takes nothing written after the record, and a question the run asks again is
-// anchored on its own asking. What the row cannot carry it does not need to:
-// the delivery is kept on the seat's inbox, unspent, until the refusal leaves
-// the run ([AnswerRefused]) — spent once a turn that took it keeps it
-// ([Coordinator.spendRefused]), never at the take, which a turn that broke
-// before it reached anybody gives back, and back to the seat as the ordinary
-// message it is if the refusal is let go of, with nothing to publish from the
-// row. The delivery in hand on the attempt whose turn kept the refusal is
-// spent on that attempt's own account ([Coordinator.attemptOwed]), never on
-// the completion ledger's, which fails open: read there, a miss handed the
-// seat, as a new message, a reply its run had just been told never reached
-// it. A refusal let go of — after its attempts, or a seal that does not open —
-// leaves the run waiting on its question again under the anchor it was asked
-// at, as an answer let go of does: the next qualifying reply answers it, and
-// the let-go is announced ([Coordinator.announceRefusalLetGo]).
-//
-// # A retry the seat's own conditions refuse
-//
-// WAITS FOR WHAT REFUSED IT, rather than re-checking on a timer: every
-// condition a retry is admitted under changes on an event the engine observes
-// or at an instant the refusal names, so the refusal says which
-// ([Refusal]), and the engine re-checks the attempts waiting on it when it
-// happens ([Coordinator.Readmit]). A backstop ([answerWaitBackstop]) re-checks
-// what a missed signal would strand. See [Coordinator.waitOwed].
+// An answer that is recorded and still owed a resume. The first qualifying
+// reply is recorded on the row ([PendingStore.RecordAnswer]) and its delivery
+// acknowledged; resuming is this package's, on its own backoff
+// ([answerRetryDelay], [MaxAnswerAttempts], [answerWindow]), with the seat's
+// inbox held behind it ([SeatHold]). An answer that cannot be resumed is
+// declined ([Coordinator.declineAnswer]) or let go ([Coordinator.letGoAnswer]),
+// exactly once; a reply too large is recorded as its refusal (ADR-0114); a
+// retry the seat's conditions refuse waits for their signal
+// ([Coordinator.Readmit]). See the package doc, "Owed answers".
 
 // answerRetrySeed and answerRetryCeiling space the retries of a recorded
 // answer's resume: the first a second after the failure, each after that twice
@@ -211,6 +94,16 @@ const SeatCoding Condition = "seat_coding"
 // for a seat this node does hold would leave it deaf to it.
 const SeatLost Condition = "seat_lost"
 
+// Draining is a resume refused because this node is draining and starts no turn
+// ([TurnGate]). Nothing signals its end: it ends when the drain hands the seat
+// back ([Coordinator.ReleaseSeat]) or the node stops. So a completion's
+// delivery refused on it is handed on to the seat's next holder, never
+// acknowledged (internal/engine's controlOutcome), as [SeatLost] is, and owes
+// nothing on the job's record ([Coordinator.oweRefused]); this package names it
+// because that decision is its own. An answer waiting on it waits for the
+// release.
+const Draining Condition = "drain"
+
 // seatCoding refuses an owed resume on a seat its executor holds for
 // another turn.
 func (c *Coordinator) seatCoding(handle string) (Refusal, bool) {
@@ -260,22 +153,14 @@ type Refusal struct {
 type Admission func(ctx context.Context, handle string) (refusal Refusal, refused bool)
 
 // answerWaitBackstop is the longest a retry the seat's conditions refused waits
-// for the signal that clears them before it re-checks on its own.
-//
-// A BACKSTOP AND NOT A SCHEDULE. Every condition a refusal can name changes on
-// an event the engine already observes and passes on ([Coordinator.Readmit]) —
-// a person resuming the seat, an apply bringing a model or a ceiling, the
-// posture admitting work again, the seat established or its ownership proven
-// again — or on a clock the refusal itself names
-// ([Refusal.Until]). What this bounds is a signal that never came: a path that
-// moves one of those conditions and was never wired to say so. Five minutes is
-// one admission check (this node's own reads and, at most, one read of the
-// token counters) per refused answer per five minutes while nothing has
-// changed, and it keeps a missed signal's cost — the person's answer resumed
-// late — well inside the 30-minute default `pause_ttl_seconds`, so a missed
-// signal does not also cost the run its paused box. The old answer was to
-// re-check every 30 seconds, which is a poll of conditions that change only on
-// events.
+// for the signal that clears them before it re-checks on its own: a backstop
+// for a signal never wired, not a schedule, since every condition changes on an
+// observed event ([Coordinator.Readmit]) or its [Refusal.Until]. Five minutes
+// is one admission check per refused answer per five minutes, inside the
+// 30-minute default `pause_ttl_seconds`. A kept completion's backstop too
+// ([Coordinator.keepLocked]), matching the waiter's ceiling
+// ([reannounceCeilingPolls]), save ones held until an instant
+// ([Coordinator.keptRefireIn]). See the package doc, "Kept completions".
 const answerWaitBackstop = 5 * time.Minute
 
 // Reply is a delivery offered to a parked run as the answer to its question.
@@ -668,6 +553,30 @@ type answerRetry struct {
 	// ([Coordinator.suspectClaim]). Nil for every other series.
 	revive *revival
 
+	// release is a claim's hand-back the coordination store did not answer
+	// (a collection's, a park's or a resume's, an answer's own included),
+	// which the series' next attempt makes again before anything else,
+	// unless a claim of its job has taken it over or is on its way: the
+	// claim is this node's until the store answers it, and no claim of its
+	// job is made here meanwhile ([Coordinator.oweRelease],
+	// [Coordinator.claimCompletion], claimrelease.go). Nil for every other
+	// series.
+	release *claimRelease
+
+	// unread is a series whose release gave its claim back to running and
+	// has landed, and which has not read the row since ([Coordinator.retryOwed]).
+	// Such a run owes the series no answer, only what a read of it says (a
+	// decline's copies it still owes the seat, say), so a read the store does
+	// not answer is no failed attempt at an answer, and is made again on the
+	// hand-back's spacing until one is answered. Counted, a store that took
+	// the release and answered no read after it ran the series of a
+	// completion's claim through an answer's attempts, each logged as an
+	// answer's failed resume, and gave up as unreadable an answer the run
+	// never had. A release that gave an answer's claim back leaves it false:
+	// that series is the answer's, and from its second read after the release
+	// a read the store does not answer counts as an answer series' reads do.
+	unread bool
+
 	// silent is when this node first asked the box's host of the stopped run
 	// this series ends, under that ending, and heard nothing — by this node's
 	// own clock; zero until then, and cleared where the host answers busy (it
@@ -1035,6 +944,12 @@ func (c *Coordinator) record(ctx context.Context, run PendingRun, words AnswerWo
 	if err != nil {
 		return PendingRun{}, false, err
 	}
+	// OUT OF THE QUESTION SET, once, as the record's answer is taken: nobody is
+	// waited on, and the screening offers this seat's mail to no question that
+	// already has its answer. Recorded before the write, so a recount meanwhile
+	// counts the run as the question it is still counted as (countwrite.go).
+	write := c.writingCount(run, run.Status, StatusAnswered)
+	defer c.settleWrite(write)
 	var recorded PendingRun
 	var won bool
 	if words.Refusal != nil {
@@ -1042,23 +957,23 @@ func (c *Coordinator) record(ctx context.Context, run PendingRun, words AnswerWo
 	} else {
 		recorded, won, err = c.pending.RecordAnswer(ctx, run.TurnID, run.LaunchID, answer, fence)
 	}
-	if err != nil || !won {
-		return PendingRun{}, won, err
-	}
+	landed := err == nil && won
+	c.mu.Lock()
+	moved := c.wroteCountLocked(write, landed)
 	// A NEW ANSWER IS A NEW SERIES. The run's series can still be alive when
 	// this lands — kept to publish what an earlier answer's decline owes the
 	// seat — and its count is that earlier answer's: carried over, it spent
 	// this answer's attempts before this answer had one, and let it go after
 	// a single failed resume.
-	c.mu.Lock()
-	if r := c.retries[recorded.TurnID]; r != nil {
+	if r := c.retries[recorded.TurnID]; landed && r != nil {
 		r.launch, r.failures, r.first = recorded.LaunchID, 0, c.now()
 		r.window = answerWindow(recorded)
 	}
 	c.mu.Unlock()
-	// Out of the question set: nobody is waited on, and the screening
-	// offers this seat's mail to no question that already has its answer.
-	c.moveRun(recorded.AgentHandle, run.Status, StatusAnswered)
+	moved()
+	if !landed {
+		return PendingRun{}, won, err
+	}
 	return recorded, true, nil
 }
 
@@ -1114,6 +1029,14 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) (kept boo
 		c.dropOwed(ctx, run.AgentHandle, run.TurnID)
 		return false
 	}
+	// NO CLAIM WHILE A RELEASE OF THE JOB IS OUT on this node, a park's whose
+	// question the store recorded though it did not answer the write included:
+	// that release names the very claim this would take, and made again over
+	// it, gave it back to running under the turn it resumed. The series that
+	// owes the release makes it first and comes back here (claimrelease.go).
+	if c.leaveToRelease(ctx, run) {
+		return false
+	}
 	// OPENED BEFORE THE CLAIM, and only what the seal carries goes on: the
 	// words the turn is handed and the answerer it and the announcement
 	// name. An answer that does not open is claimed for nothing — it waits
@@ -1167,7 +1090,35 @@ func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *R
 	words AnswerWords, fence Fence, seen map[signal]uint64,
 ) (kept bool) {
 	ctx := adm.ctx
+	// THROUGH THE SEAT'S RECOVERY GATE FIRST ([Coordinator.claimGateLocked]):
+	// while a recovery pass of the seat runs on this node no claim of its runs
+	// is taken, and the answer, still recorded on its run and owed here, is
+	// handed to the pass, which arms its series at once when it is done. Taken
+	// meanwhile, the pass found its own node's live claim resumed and revived
+	// or reaped it under the turn this attempt was resuming. Let through, the
+	// claim is this node's live attempt until this frame returns.
+	c.mu.Lock()
+	done, gated := c.claimGateLocked(run.AgentHandle, run.TurnID)
+	c.mu.Unlock()
+	if gated != nil {
+		log.InfoContext(ctx, "sandbox_answer_recovery_refused",
+			"turn_id", run.TurnID, "agent", run.AgentHandle, "launch_id", run.LaunchID,
+			"detail", "the seat's recovery pass is under way on this node, which claims none of its runs "+
+				"until the pass is done; the answer stays owed, and its next attempt is armed when the pass ends")
+		c.carryPastRecovery(ctx, run.AgentHandle, passCarry{answer: &run})
+		return false
+	}
+	defer done()
+	// INTO THE HOLDING SET, once, as the claim's answer is taken; recorded
+	// before the write, so a recount meanwhile counts the run as the answer it
+	// is still counted as (countwrite.go).
+	write := c.writingCount(run, StatusAnswered, StatusResumed)
+	defer c.settleWrite(write)
 	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, RecordedAnswerTail(run.LaunchID), fence)
+	c.mu.Lock()
+	moved := c.wroteCountLocked(write, err == nil && won)
+	c.mu.Unlock()
+	moved()
 	if err != nil {
 		// THE CLAIM MAY HAVE LANDED, and one that did is a claim nothing on
 		// this node drives: no resume holds it, and no recovery pass comes
@@ -1189,7 +1140,6 @@ func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *R
 		c.settleOwed(ctx, run.AgentHandle, run.TurnID)
 		return false
 	}
-	c.moveRun(claimed.AgentHandle, StatusAnswered, StatusResumed)
 	// RAISED WHERE THE REPLY WAS POSTED: an answer's trigger is the newest of
 	// the deliveries it carries, and a refusal's is rebuilt from the address
 	// it kept, with none of the reply's words ([AnswerRefusal.trigger]).
@@ -1205,7 +1155,7 @@ func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *R
 		CacheWriteTokens: claimed.ParkedCacheWriteTokens,
 		Engine:           parkedEngineSpend(claimed),
 		Asked:            c.askedWith(claimed, words),
-	})
+	}, seen)
 	if disposition == AnswerDeferred {
 		// The claim went back: the run is [StatusAnswered] again with
 		// the same answer on it, owed the same resume.
@@ -1305,7 +1255,16 @@ func (c *Coordinator) dropUnopened(ctx context.Context, run PendingRun, cause er
 		return
 	}
 	refusal, refused := run.Refused()
+	// BACK ON ITS QUESTION, once, as the decline's answer is taken; recorded
+	// before the write, so a recount meanwhile counts the run as the answer it
+	// is still counted as (countwrite.go).
+	write := c.writingCount(run, StatusAnswered, answer.declinedTo())
+	defer c.settleWrite(write)
 	_, let, err := c.pending.DeclineAnswer(ctx, run.TurnID, run.LaunchID, answer.EventIDs, nil, fenceOf(run))
+	c.mu.Lock()
+	moved := c.wroteCountLocked(write, err == nil && let)
+	c.mu.Unlock()
+	moved()
 	if err != nil {
 		// THE WRITE MAY HAVE LANDED: the retry reads the row again, and finds
 		// the run waiting on its question or this answer still on it.
@@ -1320,14 +1279,11 @@ func (c *Coordinator) dropUnopened(ctx context.Context, run PendingRun, cause er
 		c.scheduleOwed(run.TurnID, answerRetryCeiling)
 		return
 	}
-	if let {
-		c.moveRun(run.AgentHandle, StatusAnswered, answer.declinedTo())
-		if refused {
-			// ITS TOO_LARGE RECORD SAID THE RUN WOULD BE TOLD, and it is
-			// waiting on its question again: said, with nobody named, since
-			// nothing on the row about the reply can be attributed.
-			c.announceRefusalLetGo(ctx, run, refusal, answerer{})
-		}
+	if let && refused {
+		// ITS TOO_LARGE RECORD SAID THE RUN WOULD BE TOLD, and it is waiting
+		// on its question again: said, with nobody named, since nothing on
+		// the row about the reply can be attributed.
+		c.announceRefusalLetGo(ctx, run, refusal, answerer{})
 	}
 	c.settleOwed(ctx, run.AgentHandle, run.TurnID)
 }
@@ -1402,10 +1358,21 @@ func (c *Coordinator) scheduleOwed(turnID string, delay time.Duration) {
 // which a refusal and a readmission both have to be, so that a signal landing
 // between "this attempt is waiting on X" and the timer that waits for it can
 // never be overwritten by that timer.
+//
+// A SERIES THAT OWES A CLAIM'S RELEASE IS ARMED NO LATER THAN THE HAND-BACK'S
+// SPACING ([answerRetryCeiling]), whatever its caller asked for: the release
+// is made again before anything else the series does ([Coordinator.retryOwed]),
+// and a longer wait, an answer's for its seat's conditions, held the claim on
+// the store's row, and the seat's mail behind it, past the store's answer. A
+// shorter one stands: it asks the store again sooner, as an answer's backoff
+// after its failed resume does.
 func (c *Coordinator) scheduleOwedLocked(turnID string, delay time.Duration) {
 	r := c.retries[turnID]
 	if r == nil || c.closed {
 		return
+	}
+	if r.release != nil {
+		delay = min(delay, answerRetryCeiling)
 	}
 	if r.stop != nil {
 		if r.stop() {
@@ -1434,11 +1401,13 @@ func (c *Coordinator) retryOwed(turnID string) {
 	var spent bool
 	var kept *ending
 	var revive *revival
+	var release *claimRelease
+	var unread bool
 	if r != nil {
 		r.stop, r.waiting = nil, ""
 		handle, launch = r.handle, r.launch
 		spent = r.spent(c.now())
-		kept, revive = r.ending, r.revive
+		kept, revive, release, unread = r.ending, r.revive, r.release, r.unread
 	}
 	c.mu.Unlock()
 	if r == nil {
@@ -1453,12 +1422,49 @@ func (c *Coordinator) retryOwed(turnID string) {
 		c.dropOwed(ctx, handle, turnID)
 		return
 	}
+	if release != nil {
+		// A claim's release the store did not answer is made again first, with
+		// no read of the row: the release decides on the row as it stands, and
+		// the attempt goes on against what it left (claimrelease.go); settled
+		// at once, the answer would be left with nothing here to resume it. But
+		// not once a claim of its job has taken it over, nor while one is on
+		// its way: it could land after that claim and give it back. The claim
+		// decides first, and a claim that starts from here is refused while the
+		// release stays recorded ([Coordinator.claimCompletion]).
+		c.mu.Lock()
+		out := c.releases[turnID] == release
+		onItsWay := c.claiming[turnID] > 0
+		if series := c.retries[turnID]; !out && series != nil && series.release == release {
+			series.release = nil
+		}
+		c.mu.Unlock()
+		switch {
+		case !out:
+			c.settleOwed(ctx, handle, turnID)
+			return
+		case onItsWay:
+			c.scheduleOwed(turnID, answerRetryCeiling)
+			return
+		}
+		_ = c.unclaimOwing(ctx, release)
+		if c.releasing(turnID, release.run.LaunchID) {
+			return
+		}
+		unread = release.release.To != StatusAnswered
+	}
 	run, found, err := c.pending.Get(ctx, turnID)
+	c.mu.Lock()
+	if series := c.retries[turnID]; series != nil {
+		series.unread = unread && err != nil
+	}
+	c.mu.Unlock()
 	if err != nil {
-		if kept != nil || revive != nil {
-			// A READ IS NOT A RESUME, and neither an ending nor a revival
-			// owes an attempt: the row is read again on the hand-back's
-			// own spacing.
+		if kept != nil || revive != nil || release != nil || unread {
+			// A READ IS NOT A RESUME, and neither an ending, a revival nor
+			// a release just settled owes an attempt, nor does a run a
+			// release put back in running ([answerRetry.unread]), however
+			// many reads after it the store leaves unanswered: the row is
+			// read again on the hand-back's own spacing.
 			c.scheduleOwed(turnID, answerRetryCeiling)
 			return
 		}
@@ -1598,6 +1604,8 @@ func (c *Coordinator) oweEnding(ctx context.Context, run PendingRun, e ending) {
 // oweEndingAfter is [Coordinator.oweEnding] with the first retry after delay:
 // the hand-back's spacing for an ending a step of which did not land, and none
 // for one decided on a frame that may not finish it ([errAskAway]).
+//
+// KEPT, OWED AND ARMED IN ONE STEP ([Coordinator.keepSeriesLocked]).
 func (c *Coordinator) oweEndingAfter(ctx context.Context, run PendingRun, e ending, delay time.Duration) {
 	if run.AgentHandle == "" {
 		return
@@ -1611,9 +1619,9 @@ func (c *Coordinator) oweEndingAfter(ctx context.Context, run PendingRun, e endi
 		c.retries[run.TurnID] = r
 	}
 	r.ending = &e
+	c.keepSeriesLocked(run, delay)
 	c.mu.Unlock()
-	c.owe(ctx, run.AgentHandle, run.TurnID)
-	c.scheduleOwed(run.TurnID, delay)
+	c.reconcileHold(ctx, run.AgentHandle)
 }
 
 // oweRevival keeps a dead claim's revival that did not land
@@ -1637,6 +1645,7 @@ func (c *Coordinator) oweRevival(ctx context.Context, run PendingRun, fence Fenc
 	if run.AgentHandle == "" {
 		return
 	}
+	// KEPT, OWED AND ARMED IN ONE STEP ([Coordinator.keepSeriesLocked]).
 	c.mu.Lock()
 	r := c.retries[run.TurnID]
 	if r == nil {
@@ -1645,9 +1654,9 @@ func (c *Coordinator) oweRevival(ctx context.Context, run PendingRun, fence Fenc
 		c.retries[run.TurnID] = r
 	}
 	r.revive = &revival{fence: fence, lost: true}
+	c.keepSeriesLocked(run, answerRetryCeiling)
 	c.mu.Unlock()
-	c.owe(ctx, run.AgentHandle, run.TurnID)
-	c.scheduleOwed(run.TurnID, answerRetryCeiling)
+	c.reconcileHold(ctx, run.AgentHandle)
 }
 
 // suspectClaim marks an owed answer's series whose claim reported a failure:
@@ -1712,7 +1721,7 @@ func (c *Coordinator) retryRevival(ctx context.Context, run PendingRun, launch s
 			return PendingRun{}, false
 		case reapRevived, reapMoved:
 			run = *moved
-		case reapLeft, reapEnded:
+		case reapLeft, reapEnded, reapLive:
 			c.settleOwed(ctx, handle, run.TurnID)
 			return PendingRun{}, false
 		}
@@ -1948,22 +1957,13 @@ func (c *Coordinator) owedRefused(ctx context.Context, run PendingRun, refusal R
 }
 
 // Readmit re-checks at once every attempt waiting on cond, for the named seats
-// or — named none — every seat: the signal that the condition may have
-// cleared. An attempt waiting on anything else is left waiting, so a signal
-// costs nothing but the attempts it can actually release, and one that turns
-// out not to have released them waits again on whatever refuses it now.
-//
-// The attempts are an owed answer's retry, a completion this node refused on
-// cond, at its gate or held here after its claim ([Coordinator.keepRefused]),
-// which is re-fired at once rather than at the waiter's next announcement of
-// it, and a resume held on cond on its run's row after its run was collected
-// ([PendingRun.HeldFor]), whose hold is lifted so the next poll announces the
-// job again ([Coordinator.liftHoldsLocked]).
-//
-// Safe from any goroutine, and cheap enough to call on every occurrence of the
-// event: with nothing waiting it is one pass over this node's owed answers and
-// refused completions, and one listing of the runs, in the background, for
-// the holds.
+// or, naming none, every seat; an attempt waiting on anything else is left
+// waiting. The attempts are an owed answer's retry, a completion this node
+// refused on cond ([Coordinator.keepRefused]), and a resume held on cond on its
+// row ([PendingRun.HeldFor]), whose hold is lifted and job re-fired
+// ([Coordinator.liftHoldsLocked], [Coordinator.liftAndRefire]). Safe from any
+// goroutine, and cheap enough for every occurrence of the event. See the
+// package doc, "Kept completions".
 func (c *Coordinator) Readmit(cond Condition, handles ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1986,24 +1986,13 @@ func (c *Coordinator) Readmit(cond Condition, handles ...string) {
 }
 
 // liftHoldsLocked lifts, in the background, every hold on cond this node's
-// seats' runs are under ([PendingRun.HeldFor]) — the seats named, or every
-// seat — so the next poll announces those jobs' completions again. The caller
-// holds c.mu.
-//
-// THE ROWS ARE THE RECORD, not a list in memory: a hold is written on the run
-// and survives the node, so a node that took the seat over since lifts what
-// its predecessor held. Only the seats this node holds, because a peer's
-// signal is its own to act on, and a lift is a write under the lease.
-//
-// IN THE BACKGROUND because Readmit is a signal sent from the engine's own
-// event paths and must stay cheap; the listing is one read of the store.
-//
-// NOT FOR [SeatCoding], which no hold names. A hold is a resumed turn refused by
-// its seat's conditions as the engine words them ([HeldError], [TurnRefused]),
-// while SeatCoding is the coordinator's own, asked of an owed answer before its
-// turn is admitted at all. Its signal comes every time a seat's last holding run
-// lets go of it ([Coordinator.seatFreed]), and listing every run the fleet holds
-// on each of those, to find none, cost a read of the whole store per freed seat.
+// seats' runs are under ([PendingRun.HeldFor]), for the seats named or every
+// seat, and re-fires each lifted job this node does not carry already
+// ([Coordinator.refireLifted]). The rows are the record, so a new holder lifts
+// its predecessor's holds; only seats this node holds, as a lift is a write
+// under the lease; in the background, as Readmit must stay cheap. Not for
+// [SeatCoding], which no hold names and whose signal comes at every freed seat.
+// The caller holds c.mu. See the package doc, "Kept completions".
 func (c *Coordinator) liftHoldsLocked(cond Condition, handles []string) {
 	if c.closed || cond == SeatCoding {
 		return
@@ -2034,6 +2023,7 @@ func (c *Coordinator) liftHoldsLocked(cond Condition, handles []string) {
 			case lifted:
 				log.InfoContext(ctx, "sandbox_resume_hold_lifted", "turn_id", run.TurnID,
 					"agent", run.AgentHandle, "condition", string(cond))
+				c.refireLifted(run, cond)
 			}
 		}
 	}()
@@ -2117,8 +2107,17 @@ func (c *Coordinator) declineAnswer(ctx context.Context, run PendingRun, cause e
 	// seat's inbox kept is the reply, and it comes round as the ordinary
 	// message it is once the hold lifts ([AnswerRefused]).
 	c.spend(ctx, run.AgentHandle, *answer)
+	// BACK ON ITS QUESTION, once, as the decline's answer is taken; recorded
+	// before the write, so a recount meanwhile counts the run as the answer it
+	// is still counted as (countwrite.go).
+	write := c.writingCount(run, StatusAnswered, answer.declinedTo())
+	defer c.settleWrite(write)
 	declined, let, err := c.pending.DeclineAnswer(ctx, run.TurnID, run.LaunchID,
 		answer.EventIDs, handBackOf(*answer), fenceOf(run))
+	c.mu.Lock()
+	moved := c.wroteCountLocked(write, err == nil && let)
+	c.mu.Unlock()
+	moved()
 	if err != nil {
 		// THE WRITE MAY HAVE LANDED, and either way nothing has been
 		// published: the retry reads the row and finds the copies owed, or
@@ -2134,7 +2133,6 @@ func (c *Coordinator) declineAnswer(ctx context.Context, run PendingRun, cause e
 		c.settleOwed(ctx, run.AgentHandle, run.TurnID)
 		return
 	}
-	c.moveRun(run.AgentHandle, StatusAnswered, answer.declinedTo())
 	if refusal, refused := run.Refused(); refused {
 		// ITS TOO_LARGE RECORD SAID THE RUN WOULD BE TOLD, and no turn told
 		// it: the let-go is said, by whom the seal names where it opens
@@ -2246,56 +2244,73 @@ func (c *Coordinator) publishCopies(ctx context.Context, run PendingRun, copies 
 
 // queueOwed holds the seat's inbox behind what a run is owed and arms its first
 // attempt at once, through the admission every retry passes
-// ([Coordinator.retryOwed]) rather than inline.
-//
-// Two callers, for one reason: neither runs inside a mailbox delivery the
-// seat's own screening admitted, so neither may start the resumed turn without
-// asking. The seat's preparation takes over what a previous holder left owed
-// on a run (an answer it recorded and did not resume with, or copies a
-// decline it wrote did not publish), and an answer by turn arrives on the
-// seat's control topic, at any moment of the seat's day: while another of its
-// runs holds it, in the middle of one of its turns, or while a person has it
-// paused ([Coordinator.AnswerByTurn]).
+// ([Coordinator.retryOwed]) rather than inline: neither caller runs inside a
+// delivery the seat's screening admitted. The seat's preparation takes over
+// what a previous holder left owed, and an answer by turn arrives on the
+// control topic at any moment of the seat's day ([Coordinator.AnswerByTurn]).
+// Kept, owed and armed in one step ([Coordinator.keepSeriesLocked]).
 func (c *Coordinator) queueOwed(ctx context.Context, run PendingRun) {
 	c.mu.Lock()
 	if _, ok := c.retries[run.TurnID]; !ok {
 		c.retries[run.TurnID] = &answerRetry{handle: run.AgentHandle, launch: run.LaunchID,
 			first: c.now(), window: answerWindow(run)}
 	}
+	c.keepSeriesLocked(run, 0)
 	c.mu.Unlock()
-	c.owe(ctx, run.AgentHandle, run.TurnID)
-	c.scheduleOwed(run.TurnID, 0)
+	c.reconcileHold(ctx, run.AgentHandle)
+}
+
+// keepSeriesLocked owes the seat's run ([Coordinator.oweLocked]) and arms the
+// next attempt of run's series after delay ([Coordinator.scheduleOwedLocked]),
+// in the step of the lock that recorded the series; the caller brings the
+// seat's inbox hold into line ([Coordinator.reconcileHold]) once it lets go of
+// c.mu. In the one step, because a seat's release ([Coordinator.releaseOwed])
+// drops series, attempts and owed runs together, and a run owed after a release
+// would hold the seat's mail with nothing to drive it. See the package doc,
+// "Owed answers".
+func (c *Coordinator) keepSeriesLocked(run PendingRun, delay time.Duration) {
+	c.oweLocked(run.AgentHandle, run.TurnID)
+	c.scheduleOwedLocked(run.TurnID, delay)
 }
 
 // owe records that a seat owes one of its runs an answer's resume, and takes
 // the seat's inbox hold if it is the first thing holding it.
 func (c *Coordinator) owe(ctx context.Context, handle, turnID string) {
 	c.mu.Lock()
+	c.oweLocked(handle, turnID)
+	c.mu.Unlock()
+	c.reconcileHold(ctx, handle)
+}
+
+// oweLocked is [Coordinator.owe]'s record, for a caller holding c.mu, which
+// brings the seat's inbox hold into line ([Coordinator.reconcileHold]) once it
+// has let go of the lock.
+func (c *Coordinator) oweLocked(handle, turnID string) {
 	owed := c.owed[handle]
 	if owed == nil {
 		owed = map[string]struct{}{}
 		c.owed[handle] = owed
 	}
 	owed[turnID] = struct{}{}
-	c.mu.Unlock()
-	c.reconcileHold(ctx, handle)
 }
 
 // settleOwed forgets an owed answer — resumed, declined or moved on — and
 // lifts the seat's inbox hold if nothing else needs it.
 //
-// NOT WHILE THE SERIES STILL OWES THE ROW SOMETHING: an ending it kept, or a
-// claim it suspects ([answerRetry.revive]). Either is a run whose only driver is
+// NOT WHILE THE SERIES STILL OWES THE ROW SOMETHING: an ending it kept, a
+// claim it suspects ([answerRetry.revive]), or a claim's release the store
+// did not answer ([answerRetry.release]). Each is a run whose only driver is
 // this series, and a settle that dropped it — on a refusal that only says the
-// row is not what the settling path expected — left a claim with the person's
-// answer on it that nothing drove. The series stays, with an attempt armed if
-// none is, and the seat's hold with it.
+// row is not what the settling path expected — left a claim, with the
+// person's answer or the job's result on it, that nothing drove. The series
+// stays, with an attempt armed if none is, and the seat's hold with it.
 func (c *Coordinator) settleOwed(ctx context.Context, handle, turnID string) {
 	c.mu.Lock()
-	if r := c.retries[turnID]; r != nil && (r.ending != nil || r.revive != nil) {
+	if r := c.retries[turnID]; r != nil && (r.ending != nil || r.revive != nil || r.release != nil) {
 		// AN ENDING STILL OWES THE SEAT ITS REPLY — kept by the ending this
-		// very attempt made — or A CLAIM IS STILL SUSPECTED, which only this
-		// series will ever look at: the series, and the seat's hold, stay.
+		// very attempt made — or A CLAIM IS STILL SUSPECTED, or ITS RELEASE
+		// IS STILL OWED, which only this series will ever look at: the
+		// series, and the seat's hold, stay.
 		if r.stop == nil {
 			c.scheduleOwedLocked(turnID, answerRetryCeiling)
 		}
@@ -2334,16 +2349,25 @@ func (c *Coordinator) releaseOwed(handle string) {
 		}
 		delete(c.retries, turnID)
 	}
+	// AND THE RELEASES OF ITS CLAIMS THIS NODE WAS GIVING BACK OR OWED: the
+	// successor reaps those claims, and a record of them kept here would
+	// refuse this node every later claim of their jobs. Each one's write in
+	// its run's entry goes with the seat's other writes ([Coordinator.ReleaseSeat]).
+	for turnID, cr := range c.releases {
+		if cr.run.AgentHandle == handle {
+			delete(c.releases, turnID)
+		}
+	}
 	delete(c.owed, handle)
 }
 
 // dropOwed forgets one owed answer's series on a seat this node does not hold,
 // whatever it still owed the row: an ending it kept, a claim it suspects, a
-// revival it was retrying. Each is on the row, and the holder's recovery pass
-// reads the row and finishes, revives or reaps what it finds — where this
-// node's own writes, under a lease the holder has fenced or is about to, would
-// only race it. Unlike [Coordinator.settleOwed], which keeps such a series for
-// the row it alone drives.
+// revival it was retrying, a claim's release it owed. Each is on the row,
+// and the holder's recovery pass reads the row and finishes, revives or reaps
+// what it finds — where this node's own writes, under a lease the holder has
+// fenced or is about to, would only race it. Unlike [Coordinator.settleOwed],
+// which keeps such a series for the row it alone drives.
 func (c *Coordinator) dropOwed(ctx context.Context, handle, turnID string) {
 	c.mu.Lock()
 	if r := c.retries[turnID]; r != nil {
@@ -2351,6 +2375,13 @@ func (c *Coordinator) dropOwed(ctx context.Context, handle, turnID string) {
 			c.inflight.Done()
 		}
 		delete(c.retries, turnID)
+	}
+	if cr := c.releases[turnID]; cr != nil {
+		// ITS WRITE IN THE RUN'S ENTRY GOES WITH IT, answered as one that did
+		// not land: no answer of it is taken here again (countwrite.go). The
+		// seat's inbox hold follows below.
+		delete(c.releases, turnID)
+		_ = c.wroteCountLocked(cr.write, false)
 	}
 	if owed := c.owed[handle]; owed != nil {
 		delete(owed, turnID)

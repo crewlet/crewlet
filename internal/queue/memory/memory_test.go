@@ -457,7 +457,11 @@ func TestABlockedDrainRestoresBeforeAFailureNotBehindIt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("SubscribeBatch: %v", err)
 			}
-			if err := q.PauseTopic(ctx, "topic", "grp", "test"); err != nil {
+			at, err := q.Attachment(ctx, "topic", "grp")
+			if err != nil {
+				t.Fatalf("Attachment: %v", err)
+			}
+			if err := q.PauseTopic(ctx, "topic", "grp", at, "test"); err != nil {
 				t.Fatalf("PauseTopic: %v", err)
 			}
 			base := time.Now().UTC()
@@ -470,7 +474,7 @@ func TestABlockedDrainRestoresBeforeAFailureNotBehindIt(t *testing.T) {
 					t.Fatalf("Publish(%s): %v", label, err)
 				}
 			}
-			if err := q.ResumeTopic(ctx, "topic", "grp", "test"); err != nil {
+			if err := q.ResumeTopic(ctx, "topic", "grp", at, "test"); err != nil {
 				t.Fatalf("ResumeTopic: %v", err)
 			}
 			if got := q.Backlog("topic", "grp"); !slices.EqualFunc(got, []string{"b", "c", "a"},

@@ -19,12 +19,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// ddl opens a store and returns every tracker object's own CREATE statement.
-//
-// READ BACK OUT OF THE DATABASE rather than out of the .sql file, because what
-// these tests are about is what the driver actually created: a clause the file
-// carries and the driver silently ignored would pass a text scan and fail in
-// production.
+// ddl opens a store and returns every tracker object's own CREATE statement,
+// read back out of the database rather than the .sql file: a clause the file
+// carries and the driver silently ignored would pass a text scan.
 func ddl(t *testing.T) map[string]string {
 	t.Helper()
 	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -82,10 +79,8 @@ func tablesIn(schema map[string]string) []string {
 // make one node's delete depend on a pragma the next node might not have set.
 func TestNoForeignKeyInTracker(t *testing.T) {
 	t.Parallel()
-	// The word, not the substring: `tracker_references` is a table whose
-	// NAME contains it, and a plain Contains flagged that table and its
-	// index — a guard that fails on a correct schema is one somebody
-	// deletes rather than fixes.
+	// The word, not the substring: `tracker_references` contains it in its
+	// NAME, and a guard that fails on a correct schema gets deleted.
 	clause := regexp.MustCompile(`(?i)(^|[^A-Za-z_])REFERENCES\s`)
 	for name, statement := range ddl(t) {
 		if clause.MatchString(statement) {
@@ -94,14 +89,10 @@ func TestNoForeignKeyInTracker(t *testing.T) {
 	}
 }
 
-// NO `COLLATE` ANYWHERE, and the reason is the manual order.
-//
-// The default TEXT collation is BINARY, so ORDER BY rank reproduces the Go
-// comparison exactly. The pinned driver ACCEPTS `COLLATE NOCASE` — it is not
-// refused, it is applied — which would silently collapse 'A' and 'a' and
-// destroy the order the whole rank algebra exists to produce. There is no
-// symptom until somebody notices a board that sorts differently from the
-// engine that wrote it.
+// NO `COLLATE` ANYWHERE, because of the manual order. The default TEXT
+// collation is BINARY, so ORDER BY rank reproduces the Go comparison. The
+// pinned driver accepts and applies `COLLATE NOCASE`, which would silently
+// collapse 'A' and 'a' and destroy the order the rank algebra produces.
 func TestNoCollateInTracker(t *testing.T) {
 	t.Parallel()
 	for name, statement := range ddl(t) {
@@ -111,13 +102,10 @@ func TestNoCollateInTracker(t *testing.T) {
 	}
 }
 
-// NO `UNIQUE` OUTSIDE A PRIMARY KEY.
-//
-// A constraint violation inside the apply transaction aborts it
-// deterministically on every node — which turns a rare cosmetic anomaly into a
-// fleet-wide stalled log. The worked example is the task key: a restored
-// counter beside newer tasks flags a collision and keeps serving, where a
-// unique index would wedge every node at once.
+// NO `UNIQUE` OUTSIDE A PRIMARY KEY. A constraint violation inside the apply
+// transaction aborts it on every node, turning a rare cosmetic anomaly into a
+// fleet-wide stalled log: a restored task-key counter beside newer tasks flags
+// a collision and keeps serving, where a unique index would wedge every node.
 func TestNoUniqueOutsideAPrimaryKey(t *testing.T) {
 	t.Parallel()
 	for name, statement := range ddl(t) {
@@ -133,19 +121,12 @@ func TestNoUniqueOutsideAPrimaryKey(t *testing.T) {
 	}
 }
 
-// EVERY INDEX NAMES THE QUERY IT SERVES.
-//
-// Twenty-four indexes on the hottest table is a write cost every commit
-// carries, and an index nobody reads is that cost with no reader. Naming the
-// reader in the DDL is what makes deleting one a decision somebody can check
-// rather than a guess — and it is how two partial indexes with no writer at
-// all survived a design review in the shape this replaces.
-//
-// EVERY LIVE INDEX, WHICHEVER MIGRATION MADE IT. This read 0002 alone, so an
-// index a later migration added was never asked for its reader — and one had
-// none. What it checks now is the schema a database actually ends up with:
-// every tracker index present there is found at the LAST migration that
-// creates it, and that statement must name what reads it.
+// EVERY INDEX NAMES THE QUERY IT SERVES. An index on the hottest table is a
+// write cost every commit carries; naming its reader in the DDL makes deleting
+// one a checkable decision rather than a guess. Every live index is held to
+// it, whichever migration made it: each tracker index in the migrated schema
+// is found at the LAST migration that creates it, and that statement must name
+// what reads it.
 func TestEveryTrackerIndexNamesItsQuery(t *testing.T) {
 	t.Parallel()
 	sources, err := trackerSchemaSources()
@@ -214,23 +195,16 @@ func TestTrackerTasksIndexCount(t *testing.T) {
 		}
 	}
 	// Twenty: three over every row (key resolution, the apply's duplicate
-	// probe and the tree's, replicated 0058 — every read of a task's subtasks,
-	// a root's absent parent included, because this engine's planner reaches
-	// no index partial on `parent_id IS NOT NULL` from `parent_id = ?`), ten
-	// partial on the live side of the tombstone, and seven
-	// partial on something rarer — the trash's two (replicated migration
-	// 0056, one per scope a listing has), the subtree restore's, the
-	// re-spread's, and the abandoned merge's, the abandoned move's (0018) and
-	// the move stragglers' (0041), the last three on a flag a healthy company
-	// holds on no row. Each of the seven is the size of the rows it is about,
-	// so no ordinary commit writes one. EVERY ONE IS REACHED BY A PLAN, which
-	// is what TestEveryIndexServesARegisteredQuery establishes and this count
-	// makes visible — an index added without a reader moves this number
-	// before it moves a benchmark, nine that no plan reached were deleted
-	// along the way, the embed duty's on `embed_rev` went at 0039: a column
-	// nothing wrote, kept by a gate entry for a selection nothing ran, and the
-	// batch filter's on `batch_id` at 0053, for the same reason: a plan
-	// reached it, for a `batch=` that could only ever match nothing.
+	// probe, and the tree's: every subtask read, a root's absent parent
+	// included, since the planner reaches no index partial on
+	// `parent_id IS NOT NULL` from `parent_id = ?`), ten partial on the live
+	// side of the tombstone, and seven partial on something rarer: the
+	// trash's two (one per listing scope), the subtree restore's, the
+	// re-spread's, and the abandoned merge's, abandoned move's and move
+	// stragglers' (the last three on a flag a healthy company holds on no
+	// row). Each of the seven is the size of the rows it is about, so no
+	// ordinary commit writes one. Every one is reached by a plan
+	// (TestEveryIndexServesARegisteredQuery).
 	const want = 20
 	if count != want {
 		t.Fatalf("tracker_tasks carries %d indexes and the enumeration is %d — "+
@@ -240,12 +214,9 @@ func TestTrackerTasksIndexCount(t *testing.T) {
 }
 
 // EVERY REPRODUCIBLE TABLE EXISTS, AND EVERY TRACKER TABLE IS ACCOUNTED FOR.
-//
-// Both directions, because either alone is half a check: a list naming a table
-// the schema does not have is a replay that will fail on a table nobody
-// created, and a schema table missing from the list is durable state no
-// record has to be able to rebuild — which is exactly how a replay ends with a
-// history table and no tasks.
+// Both directions: a listed table the schema lacks fails a replay, and a
+// schema table missing from the list is durable state no record has to
+// rebuild, which is how a replay ends with a history table and no tasks.
 func TestEveryTrackerTableIsAccountedFor(t *testing.T) {
 	t.Parallel()
 	present := tablesIn(ddl(t))
@@ -273,20 +244,12 @@ func TestEveryTrackerTableIsAccountedFor(t *testing.T) {
 }
 
 // EVERY COLUMN OF A REPRODUCIBLE TABLE IS NAMED BY A STATEMENT THIS PACKAGE
-// RUNS.
-//
-// A column no statement here names is one no applier writes and no reader
-// reads: it holds its default on every row of every node, rides every
-// snapshot, and says nothing. Two were found only by reading the code —
-// `embed_rev`, gone at replicated 0039, and `batch_id` on tasks and history,
-// gone at 0053 — because nothing compared the schema with the statements. So
-// the columns are read out of the migrated database, as every case here reads
-// the schema, and each is held to the STRING LITERALS of this package's own
-// source, which is where every statement it runs is written; a comment naming
-// a column does not count, because a comment runs nothing.
-//
-// The log's own machinery tables are not held here: the state-log framework
-// writes them, from its own package.
+// RUNS. A column no statement names is written by no applier and read by no
+// reader: it holds its default everywhere and rides every snapshot. Columns
+// are read out of the migrated database and held to the STRING LITERALS of
+// this package's source, where every statement it runs is written; a comment
+// naming a column does not count. The log's machinery tables belong to the
+// state-log framework and are not held here.
 //
 // Mutation: drop the history half of replicated 0053 and this fails on
 // tracker_history.batch_id.
@@ -373,12 +336,10 @@ func trackerLiterals(t *testing.T) string {
 	return out.String()
 }
 
-// THE SPEND COLUMNS ARE ONE LIST, AND THE DDL IS DRIVEN FROM IT.
-//
-// Ten column names written out in the struct, the DDL and the applier's
-// statement is three chances to add the eleventh to two of them — and the failure
-// is silent: a counter nothing increments reads zero for ever, which looks
-// exactly like a task nobody has worked on.
+// THE SPEND COLUMNS ARE ONE LIST, AND THE DDL IS DRIVEN FROM IT: names written
+// out in the struct, the DDL and the applier's statement are three chances to
+// add a column to only two, and a counter nothing increments silently reads
+// zero for ever, exactly like a task nobody has worked on.
 func TestTheSpendColumnsMatchTheSchema(t *testing.T) {
 	t.Parallel()
 	statement := ddl(t)["table:tracker_tasks"]
@@ -402,11 +363,9 @@ func TestTheSpendColumnsMatchTheSchema(t *testing.T) {
 	}
 }
 
-// THE RANK COLUMN'S ALPHABET IS A CHECK, AND IT IS THE NEGATED FORM.
-//
-// The obvious spelling — GLOB '[0-9A-Za-z]*' — ACCEPTS 'a-0', because it means
-// "one character from the class, then anything". Measured, and the reason the
-// constraint is written the way it is.
+// THE RANK COLUMN'S ALPHABET IS A CHECK, AND IT IS THE NEGATED FORM: the
+// obvious GLOB '[0-9A-Za-z]*' ACCEPTS 'a-0', since it means "one character
+// from the class, then anything".
 func TestTheRankCheckRefusesWhatTheObviousSpellingAccepts(t *testing.T) {
 	t.Parallel()
 	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)

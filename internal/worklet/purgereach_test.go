@@ -15,15 +15,10 @@ import (
 
 // A PURGE IS HELD BACK BY A RECORD DEFERRED ON ANY TASK ITS APPLY REWRITES.
 //
-// A record's scope is the complete set of objects its apply may write, and a
-// purge's apply writes rows keyed on other tasks: its dependents' edges, the
-// mirror its blockers keep, the relations other tasks hold to it, the
-// references to it, and its children's pointers. Its scope named the purged
-// task alone, so a record this node could not decode about any of those tasks
-// — a newer peer's, deferred here until the upgrade reaches this node — did not
-// stop the purge that rewrites that task's rows, and on the node that deferred
-// it the purge was applied first and the deferred record later, over rows the
-// rest of the fleet had changed in the other order.
+// A purge's apply writes rows keyed on other tasks (dependents, blockers'
+// mirrors, relations, references, children), so its scope must name them: a
+// record deferred on one of them would otherwise be overtaken by the purge on
+// the deferring node, applied there in the opposite order to the fleet.
 func TestAPurgeIsHeldBackByARecordDeferredOnATaskItRewrites(t *testing.T) {
 	t.Parallel()
 	for name, stage := range map[string]func(r *roundTrip, purged, other worklet.Task){
@@ -64,8 +59,7 @@ func TestAPurgeIsHeldBackByARecordDeferredOnATaskItRewrites(t *testing.T) {
 			purged := r.createTask("to be purged")
 			other := r.createTask("the other task")
 			if name == "a dependent in another project" {
-				// Filed elsewhere, where its records are filed and where a
-				// scope has to name it.
+				// Filed in another project, where the scope must name it.
 				seedProject(t, r, worklet.Project{Key: "OPS", Name: "Operations"})
 				waiting := newTask("t-waits-from-ops")
 				waiting.Project, waiting.Key, waiting.Title = "OPS", "", "waits across projects"
@@ -93,13 +87,11 @@ func TestAPurgeIsHeldBackByARecordDeferredOnATaskItRewrites(t *testing.T) {
 
 // A PURGE'S EFFECT ON ANOTHER TASK OUTLIVES THAT TASK'S NEXT EDIT.
 //
-// Every task's relations, dependency edges, mirror and parent pointer are
-// derived from its own document on every record about it, and the purge fixed
-// only the rows: the next edit to a dependent put the purged blocker back —
-// OPEN, since a blocker with no row reads as open — and blocked it for ever on
-// a task that no longer existed; the next edit to a child put the purged task
-// back as its parent, a pointer to nothing; and the next edit to a blocker put
-// the purged task back among the tasks it would tell it was unblocked.
+// Every task's derived rows are re-derived from its own document on every
+// record about it, so a purge must fix the documents, not only the rows: else
+// the next edit restores a purged blocker (open for ever, since a blocker
+// with no row reads as open), a parent pointer to nothing, or the purged task
+// among a blocker's dependents.
 func TestAPurgesEffectOnAnotherTaskOutlivesThatTasksNextEdit(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -130,7 +122,7 @@ func TestAPurgesEffectOnAnotherTaskOutlivesThatTasksNextEdit(t *testing.T) {
 	}
 	r.drain()
 
-	// THE NEXT EDIT TO EACH, which is what re-derived the rows before.
+	// The next edit to each re-derives its rows from its document.
 	for _, id := range []string{dependent.ID, blocker.ID, child.ID} {
 		title := "edited after the purge"
 		if _, err := r.writer.UpdateTask(t.Context(), "op-edit-"+id, id, "ENG",
@@ -170,15 +162,10 @@ func TestAPurgesEffectOnAnotherTaskOutlivesThatTasksNextEdit(t *testing.T) {
 
 // A PURGE REWRITES A TASK IT REACHES TWICE ONCE, WITH BOTH EFFECTS.
 //
-// A task can be reached by more than one of a purge's effects: the subtask an
-// epic waits on is both its child and its blocker, a blocker linked to the task
-// that waits on it is both a relation and a mirror. Each rewrite of another
-// task stamps it at the purge's position, and a second rewrite from the same
-// record reads that stamp as the record's own redelivery and writes nothing —
-// so, rewritten effect by effect, the second effect was dropped: the subtask
-// kept pointing at the purged epic while its ancestry was rebuilt without it,
-// and the blocker kept listing the purged task, which its next edit wrote back
-// into the mirror rows.
+// A task can be reached by two effects (a subtask its epic waits on is child
+// and blocker). Each rewrite stamps the task at the purge's position, and a
+// second rewrite from the same record reads that stamp as a redelivery and
+// writes nothing — so rewriting effect by effect drops the second effect.
 func TestAPurgeRewritesATaskItReachesTwiceOnceWithBothEffects(t *testing.T) {
 	t.Parallel()
 	for name, stage := range map[string]func(r *roundTrip, purged, other worklet.Task){
@@ -210,7 +197,7 @@ func TestAPurgeRewritesATaskItReachesTwiceOnceWithBothEffects(t *testing.T) {
 			r.drain()
 			r.assertFreeOf(other.ID, purged.ID, "after the purge")
 
-			// AND AFTER ITS NEXT EDIT, which re-derives every row from
+			// And after its next edit, which re-derives every row from
 			// the document.
 			title := "edited after the purge"
 			if _, err := r.writer.UpdateTask(t.Context(), "op-edit", other.ID, other.Project,
@@ -278,8 +265,7 @@ func (r *roundTrip) assertFreeOf(task, gone, when string) {
 // A PURGE NAMING ANOTHER PROJECT IS REFUSED, AND PURGES NOTHING.
 //
 // Its record is filed and probed under the project the caller named, so a
-// purge naming the wrong one would be written under a container the task is not
-// in: a record deferred on the task's real project would not hold it back.
+// wrong one escapes a record deferred on the task's real project.
 func TestAPurgeNamingAnotherProjectIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -300,22 +286,18 @@ func TestAPurgeNamingAnotherProjectIsRefused(t *testing.T) {
 
 // A PURGE WHOSE REACH GREW AFTER ITS SCOPE WAS READ IS REFUSED, NAMING THE TASK.
 //
-// The scope is read from this node's rows before the request, because the
-// publisher probes the deferral index with it; the decide may run on newer rows
-// — a peer's write on the purged task's own subject is what the broker refuses
-// the first decide over, and the retry decides after this node has applied it.
-// A dependent that arrived in between is a task the apply will rewrite and the
-// request's scope does not name, so a record deferred on it would not hold the
-// purge back. The decide refuses rather than silently widening a scope the
-// publisher already probed with.
+// The scope is read before the request, since the publisher probes with it,
+// but the decide may run on newer rows (the retry after a peer's write on the
+// purged task's subject). A dependent that arrived in between is unnamed, so
+// the decide must refuse rather than widen a scope already probed with.
 func TestAPurgeWhoseReachGrewAfterItsScopeWasReadIsRefused(t *testing.T) {
 	t.Parallel()
 	a := newRoundTrip(t)
 	purged := a.createTask("to be purged")
 	dependent := a.createTask("waits on it")
 
-	// A PEER on the same log, caught up, which makes the dependent wait —
-	// both halves, the second on the purged task's own subject.
+	// A caught-up peer on the same log makes the dependent wait — both
+	// halves, the second on the purged task's own subject.
 	peerDBNode, peerDB := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "peer.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = peerDBNode.Close() })
 	peer := newRoundTripOn(t, a.broker, a.log, peerDBNode, peerDB, "node-b")
@@ -323,7 +305,7 @@ func TestAPurgeWhoseReachGrewAfterItsScopeWasReadIsRefused(t *testing.T) {
 	peer.applyWhileWriting()
 	peer.waitOn(dependent, purged)
 
-	// THIS NODE has not applied it, so its scope names the purged task
+	// This node has not applied it, so its scope names the purged task
 	// alone; its decide waits for the peer's append and then sees it.
 	if got := a.strings(`SELECT task_id FROM tracker_task_deps WHERE blocker_id = ?`,
 		purged.ID); len(got) != 0 {

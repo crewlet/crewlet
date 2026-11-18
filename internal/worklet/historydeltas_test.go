@@ -9,19 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY HISTORY ROW SAYS WHAT MOVED — the round-trip half.
-//
-// The comparisons themselves are pure and are exercised as values in
-// `deltas_test.go`. What these cases hold is the wiring nothing else can see:
-// that the APPLIER runs them, on the record's own subject, against the
-// document this node had stored — and that it does so on the commits that wake
-// nobody, which is every project reconcile, every view save, every catalogue
-// edit and most person writes.
-//
-// Before this, `fields_json` on all five document kinds was the literal `{}`,
-// and a dependency's row was `{}` too: the activity feed of a company on its
-// first day was six rows reading "project created" with a dash where the
-// change belongs.
+// EVERY HISTORY ROW SAYS WHAT MOVED — the round-trip half. The comparisons are
+// pure and tested as values in `deltas_test.go`; these cases hold the wiring
+// nothing else sees: the APPLIER runs them, on the record's own subject,
+// against the document this node had stored, including on the commits that
+// wake nobody (every project reconcile, view save and catalogue edit, and most
+// person writes).
 
 // fieldsFor reads the newest history row's deltas for one kind.
 func (r *roundTrip) fieldsFor(kind worklet.ChangeKind) string {
@@ -46,13 +39,9 @@ func (r *roundTrip) fieldsForSubject(id string) string {
 	return got[0]
 }
 
-// A PROJECT'S OWN ROW SAYS WHAT THE CHART CHANGED.
-//
-// A chart reconcile carries no notification at all — it is the engine keeping
-// a project in step with the config, and nobody is woken for it — so its
-// delta could only ever come from the applier. Until it did, a founder editing
-// a unit's purpose produced a `project_updated` row that named the project and
-// nothing about the change.
+// A PROJECT'S OWN ROW SAYS WHAT THE CHART CHANGED. A chart reconcile carries
+// no notification (nobody is woken for the engine keeping a project in step
+// with the config), so its delta can only come from the applier.
 func TestAProjectReconcileRecordsWhatTheChartMoved(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
@@ -73,10 +62,9 @@ func TestAProjectReconcileRecordsWhatTheChartMoved(t *testing.T) {
 		t.Errorf("a project create recorded %s", got)
 	}
 
-	// AND AN EDIT NAMES ONLY WHAT IT MOVED. The epoch travels with it
-	// because a re-declaration at a new activation is a real fact about the
-	// row — and because without it the reconcile that changes nothing else
-	// would be the empty row again.
+	// AND AN EDIT NAMES ONLY WHAT IT MOVED. The epoch travels with it because a
+	// re-declaration at a new activation is a real fact about the row, and a
+	// reconcile that changes nothing else would otherwise record an empty row.
 	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(200), []worklet.ChartProject{
 		{Key: "ENG", Name: "Engineering", Purpose: "ships it", Unit: "Engineering"},
 	}); err != nil {
@@ -93,13 +81,10 @@ func TestAProjectReconcileRecordsWhatTheChartMoved(t *testing.T) {
 	}
 }
 
-// A SAVED VIEW'S ROW NAMES THE PARAMETERS THAT MOVED, and only those.
-//
-// A saved query is bounded at [worklet.MaxViewParamsBytes], so carrying it
-// whole on both sides would put tens of kilobytes of unchanged predicate into
-// a log line to show that one filter was narrowed. The keys alone would be
-// worse: re-pointing `assignee` changes no key at all, so the commonest edit a
-// view gets would record nothing.
+// A SAVED VIEW'S ROW NAMES THE PARAMETERS THAT MOVED, and only those: a saved
+// query is bounded at [worklet.MaxViewParamsBytes], so carrying it whole would
+// log tens of kilobytes to show one filter narrowed, and the keys alone would
+// miss a re-pointed `assignee`, a view's commonest edit, which moves no key.
 func TestASavedViewRecordsWhichParametersMoved(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -116,9 +101,8 @@ func TestASavedViewRecordsWhichParametersMoved(t *testing.T) {
 	}
 	r.drain()
 
-	// `sort` LEFT, `status` ARRIVED, `assignee` MOVED — three different
-	// pictures, which is exactly what the two sides carrying only the
-	// changed keys buys.
+	// `sort` LEFT, `status` ARRIVED, `assignee` MOVED: three different moves,
+	// which both sides carrying only the changed keys tell apart.
 	if got := r.fieldsFor(worklet.ChangeViewSaved); got != `{"params":{`+
 		`"from":"assignee=ana, sort=-updated",`+
 		`"to":"assignee=bo, status=todo"}}` {
@@ -127,11 +111,9 @@ func TestASavedViewRecordsWhichParametersMoved(t *testing.T) {
 	}
 }
 
-// A PRIORITY LIST'S ROW CARRIES THE ORDER, BEFORE AND AFTER.
-//
-// The order IS the instruction, so a re-ordering with the same members is
-// precisely the change somebody made — which is why this one collection is
-// recorded as it is stored rather than sorted, unlike every set beside it.
+// A PRIORITY LIST'S ROW CARRIES THE ORDER, BEFORE AND AFTER: the order IS the
+// instruction, so this one collection is recorded as stored rather than
+// sorted, unlike every set beside it.
 func TestAPriorityListRecordsTheOrderItMoved(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -150,19 +132,17 @@ func TestAPriorityListRecordsTheOrderItMoved(t *testing.T) {
 	}
 	r.drain()
 
-	// THE EXCERPT ALREADY SAID "put X at position 1"; the delta is what
-	// makes the whole move readable, and it is the only thing that
-	// distinguishes a re-order from a list somebody replaced.
+	// THE EXCERPT ALREADY SAID "put X at position 1"; only the delta tells a
+	// re-order from a list somebody replaced.
 	if got := r.fieldsFor(worklet.ChangePrioritised); got != `{"priorities":{`+
 		`"from":"t-1, t-2","to":"t-2, t-1"}}` {
 
 		t.Errorf("a re-ordered priority list recorded %s", got)
 	}
 
-	// AND THE FIRST WRITE, onto a person with no list at all, has a delta
-	// of its own: the applier compares the stored document with the
-	// record's, so the list arriving is recorded as the move it is rather
-	// than as the bare word "prioritised".
+	// AND THE FIRST WRITE, onto a person with no list, has a delta too: the
+	// applier compares the stored document with the record's, so the list
+	// arriving is a move rather than the bare word "prioritised".
 	first := r.strings(`SELECT fields_json FROM tracker_history
 		WHERE kind = ? ORDER BY log_seq ASC LIMIT 1`, string(worklet.ChangePrioritised))
 	if len(first) == 0 {
@@ -178,13 +158,11 @@ func TestAPriorityListRecordsTheOrderItMoved(t *testing.T) {
 	}
 }
 
-// A DEPENDENCY RECORDS BOTH ENDS, EACH ON ITS OWN SUBJECT.
-//
-// The two halves are separate commits on separate subjects — the authored
-// `waiting_on` on the dependent and the mirrored `Dependents` on the blocker —
-// and [worklet.Wake] cannot see either, because a dependency commit's wake is
-// built with `Before` and `After` set to the SAME task. So the delta had to be
-// the applier's, and without it both rows read as the bare word "relations".
+// A DEPENDENCY RECORDS BOTH ENDS, EACH ON ITS OWN SUBJECT: the authored
+// `waiting_on` on the dependent and the mirrored `Dependents` on the blocker
+// are separate commits, and [worklet.Wake] sees neither, because a dependency
+// commit's wake has `Before` and `After` set to the SAME task. So the delta is
+// the applier's.
 func TestADependencyEdgeRecordsBothEnds(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -206,16 +184,15 @@ func TestADependencyEdgeRecordsBothEnds(t *testing.T) {
 	if got := r.fieldsForSubject("dep"); got != `{"waiting_on":{"from":"","to":"","added":["blk"]}}` {
 		t.Errorf("the dependent's row recorded %s", got)
 	}
-	// AND THE MIRROR names who now waits on the blocker, under the word
-	// this package already uses for that direction.
+	// AND THE MIRROR names who now waits on the blocker, under this package's
+	// word for that direction.
 	if got := r.fieldsForSubject("blk"); got != `{"blocking":{"from":"","to":"","added":["dep"]}}` {
 		t.Errorf("the blocker's row recorded %s", got)
 	}
 
-	// AND A REMOVAL IS THE SAME FACT BACKWARDS. It is the sharpest case
-	// for the rule that the delta is the applier's rather than the wake's:
-	// "an unblock tells nobody", so this commit carries no notification at
-	// all and a delta derived from one would not exist.
+	// AND A REMOVAL IS THE SAME FACT BACKWARDS, the sharpest case for the delta
+	// being the applier's: an unblock tells nobody, so this commit carries no
+	// notification to derive one from.
 	if _, err := r.writer.Depend(t.Context(), "op-undepend", worklet.DependencyChange{
 		Task: "dep", Project: "ENG", WaitingOnRemove: []string{"blk"},
 	}, fixedLeads{project: "eng-lead"}); err != nil {
@@ -230,21 +207,18 @@ func TestADependencyEdgeRecordsBothEnds(t *testing.T) {
 	}
 }
 
-// AN EDGE WHOSE MIRROR NEVER LANDED STILL RECORDS THE AUTHORED SIDE.
-//
-// The authored commit is durable the moment it lands and the mirror is best
-// effort — so the residue of a crashed dependency gesture is a one-sided edge,
-// and the history has to say that the edge was written. A delta that needed
-// both ends would go missing on exactly the commit somebody has to go and
-// repair.
+// AN EDGE WHOSE MIRROR NEVER LANDED STILL RECORDS THE AUTHORED SIDE: the
+// authored commit is durable and the mirror best effort, so a crashed
+// dependency gesture leaves a one-sided edge, and a delta that needed both
+// ends would go missing on exactly the commit somebody has to repair.
 func TestAnUnmirroredEdgeStillRecordsTheAuthoredSide(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	filedTask(t, r, "dep")
 	filedTask(t, r, "blk")
 
-	// THE AUTHORED HALF ALONE, which is exactly the residue a gesture
-	// leaves when its mirror step did not run.
+	// THE AUTHORED HALF ALONE: the residue of a gesture whose mirror step did
+	// not run.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-half", "dep", "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{Relate: &worklet.RelationIntent{
 			Add: []worklet.Relation{{Kind: worklet.RelationWaitingOn, Other: "blk"}},
@@ -256,8 +230,7 @@ func TestAnUnmirroredEdgeStillRecordsTheAuthoredSide(t *testing.T) {
 	if got := r.fieldsForSubject("dep"); got != `{"waiting_on":{"from":"","to":"","added":["blk"]}}` {
 		t.Errorf("a half-written edge recorded %s on the dependent", got)
 	}
-	// AND THE BLOCKER'S OWN HISTORY IS UNTOUCHED, which is the honest
-	// answer: no commit landed on it, so it has no row about this edge.
+	// AND THE BLOCKER'S OWN HISTORY IS UNTOUCHED: no commit landed on it.
 	if rows := r.strings(`SELECT fields_json FROM tracker_history
 		WHERE subject_id = ? AND kind = ?`,
 		"blk", string(worklet.ChangeRelations)); len(rows) != 0 {
@@ -266,15 +239,11 @@ func TestAnUnmirroredEdgeStillRecordsTheAuthoredSide(t *testing.T) {
 	}
 }
 
-// THE TWO QUIETEST DOCUMENTS RECORD WHAT THEY MOVED TOO.
-//
-// A tag set and a workspace catalogue are edited with NO notification at all,
-// deliberately — "a wake per catalogue edit would page the whole company for a
-// renamed dropdown" — while the same comment promises that "the feed still has
-// to be able to say a dropdown was renamed". It could not: both rows stored
-// `{}`. This case is also what holds the applier's per-kind wiring, which the
-// pure comparisons cannot see: an arm that decoded the wrong document would
-// compare two zero values and quietly record nothing.
+// THE TWO QUIETEST DOCUMENTS RECORD WHAT THEY MOVED TOO: a tag set and a
+// workspace catalogue are edited with NO notification, deliberately, yet the
+// feed must still say a dropdown was renamed. The case also holds the
+// applier's per-kind wiring the pure comparisons cannot see: an arm that
+// decoded the wrong document would compare two zero values and record nothing.
 func TestTheQuietDocumentsRecordWhatMoved(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -292,9 +261,8 @@ func TestTheQuietDocumentsRecordWhatMoved(t *testing.T) {
 		t.Errorf("a tag declaration recorded %s", got)
 	}
 
-	// AND A RENAME, which moves no slug at all — the counter beside them
-	// is the only witness that anything happened, which is why it is
-	// recorded rather than left as bookkeeping.
+	// AND A RENAME, which moves no slug: the counter beside them is the only
+	// witness, which is why it is recorded rather than left as bookkeeping.
 	if _, err := r.writer.WriteTags(t.Context(), "op-rename", "ENG",
 		worklet.TagEdit{Rename: map[string]string{"regression": "Regression"}},
 		worklet.TagAuthority{Policy: true}); err != nil {
@@ -334,13 +302,9 @@ func TestTheQuietDocumentsRecordWhatMoved(t *testing.T) {
 }
 
 // THE ANSWER NAMES THE TASKS ITS DELTAS POINT AT, so a page of edges is
-// readable.
-//
-// A delta names the other end of a relation by its ID, because a key is a fact
-// about another task's row and a history row is inside this domain's identity
-// claim and is repaired by nothing. That leaves "Waiting on: — → 0f3c…" on
-// screen, and neither side could fix it alone: the engine may not put a key on
-// the record, and a surface holds no map to resolve one with. So the READ
+// readable. A delta names the other end by ID, because a key is a fact about
+// another task's row and a history row is inside this domain's identity claim,
+// repaired by nothing; a surface holds no map to resolve one. So the READ
 // resolves it, on the answer, where it binds nothing and two nodes may
 // legitimately differ.
 func TestAnActivityAnswerNamesTheTasksItsDeltasPointAt(t *testing.T) {
@@ -362,15 +326,10 @@ func TestAnActivityAnswerNamesTheTasksItsDeltasPointAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Activity: %v", err)
 	}
-	// BOTH ENDS, because both rows name the other by id: the dependent's
-	// `waiting_on` names the blocker and the blocker's `blocking` names
-	// the dependent.
-	//
-	// THE KEY IS READ OFF THE ROW rather than written into this case, and
-	// that is the property: a key is MINTED by the create from the
-	// project's own counter, so what a fixture asked to call a task is not
-	// what it is called — which is the whole reason a writer cannot state
-	// one and the read has to resolve it.
+	// BOTH ENDS, because each row names the other by id. THE KEY IS READ OFF
+	// THE ROW rather than written here: the create MINTS it from the project's
+	// own counter, so a fixture's name for a task is not its key, which is why
+	// a writer cannot state one and the read has to resolve it.
 	for _, id := range []string{"dep", "blk"} {
 		want := r.task(t, id).Task.Key
 		if want == "" {
@@ -382,15 +341,11 @@ func TestAnActivityAnswerNamesTheTasksItsDeltasPointAt(t *testing.T) {
 		}
 	}
 
-	// AND AN ID THIS NODE HOLDS NO ROW FOR IS ABSENT, never an empty
-	// string: a renderer falls back to the id, which is the honest
-	// degradation and the same one it takes past the cap.
-	//
-	// (Which delta fields are ASKED about is a property of the
-	// declaration rather than of any page, and it is asserted as one —
-	// see TestOnlyTheDeltaFieldsThatNameTasksAreResolved. A `page` edge's
-	// id resolves to nothing here whether or not it is excluded, so a
-	// case built on one would pass with the exclusion gone.)
+	// AND AN ID THIS NODE HOLDS NO ROW FOR IS ABSENT, never an empty string: a
+	// renderer falls back to the id, as it does past the cap. Which delta
+	// fields are asked about is asserted on the declaration
+	// (TestOnlyTheDeltaFieldsThatNameTasksAreResolved): a `page` edge's id
+	// resolves to nothing here either way, so it could not test the exclusion.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-ghost", "dep", "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{Relate: &worklet.RelationIntent{
 			Add: []worklet.Relation{
@@ -411,8 +366,7 @@ func TestAnActivityAnswerNamesTheTasksItsDeltasPointAt(t *testing.T) {
 		t.Errorf("the answer resolves no-such-task to %q, and this node holds "+
 			"no row for it", got)
 	}
-	// THE EDGE STILL REACHED THE ROW, or the assertion above passes
-	// because nothing recorded it at all.
+	// THE EDGE STILL REACHED THE ROW, or the assertion above passes vacuously.
 	if got := r.fieldsForSubject("dep"); !strings.Contains(got, "no-such-task") {
 		t.Fatalf("the edge recorded %s, so the assertion above asserts "+
 			"nothing", got)
@@ -435,13 +389,10 @@ func TestAnActivityAnswerNamesTheTasksItsDeltasPointAt(t *testing.T) {
 	}
 }
 
-// A TASK'S OWN DELTA ROW IS WHAT IT ALWAYS WAS.
-//
-// The edges were added to [worklet.TaskDeltas] rather than filed under a
-// change kind of their own, which puts a field move and an edge move in ONE
-// row — and makes this the case that has to hold: a commit that touches no
-// edge must write exactly the bytes it wrote before, because `fields_json` is
-// in the state log's identity claim and every row already in a company's
+// A TASK'S OWN DELTA ROW IS WHAT IT ALWAYS WAS: [worklet.TaskDeltas] puts a
+// field move and an edge move in ONE row, so a commit that touches no edge
+// must write exactly the bytes it wrote before, because `fields_json` is in
+// the state log's identity claim and every existing row in a company's
 // history was written by the old comparison.
 func TestATaskDeltaRowIsUnchangedByTheEdgeFields(t *testing.T) {
 	t.Parallel()
@@ -465,16 +416,11 @@ func TestATaskDeltaRowIsUnchangedByTheEdgeFields(t *testing.T) {
 	}
 }
 
-// AND IT IS STILL WHAT IT ALWAYS WAS AFTER THE TEN FIELDS BELOW ARRIVED.
-//
-// This is [TestATaskDeltaRowIsUnchangedByTheEdgeFields]'s assertion against a
-// task that CARRIES every one of the new fields: a body, a reporter, a
-// watcher, a checklist and a custom value. `fields_json` is inside the state
-// log's identity claim and every row already in a company's history was
-// written by the old comparison, so a commit that moved none of them must
-// still write exactly the bytes it wrote before — a comparison that recorded
-// a field's CURRENT value rather than its move would put all five on every
-// status change in the company for ever.
+// AND IT IS STILL WHAT IT ALWAYS WAS AFTER THE TEN FIELDS BELOW ARRIVED:
+// [TestATaskDeltaRowIsUnchangedByTheEdgeFields]'s assertion against a task
+// that CARRIES a body, a reporter, a watcher, a checklist and a custom value.
+// A comparison that recorded a field's CURRENT value rather than its move
+// would put all five on every status change in the company for ever.
 func TestATaskDeltaRowIsUnchangedByTheNewFields(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -519,14 +465,10 @@ func TestATaskDeltaRowIsUnchangedByTheNewFields(t *testing.T) {
 	}
 }
 
-// A WATCHER ROW NAMES WHO, AND A MUTE SAYS WHO OPTED OUT.
-//
-// A `watchers` commit is the sharpest of the ten: the kind says the watchers
-// changed and the row said nothing else, so the History page and the item's
-// History tab both drew the bare word for the one change whose entire content
-// is a handle. The two fields are separate because [settleWatch] writes both —
-// an unwatch drops a handle from the set AND mutes it — and folding them would
-// make "was never watching" and "chose to stop" the same row.
+// A WATCHER ROW NAMES WHO, AND A MUTE SAYS WHO OPTED OUT. The two fields stay
+// separate because [settleWatch] writes both (an unwatch drops a handle from
+// the set AND mutes it), and folding them would make "was never watching" and
+// "chose to stop" the same row.
 func TestAWatchCommitRecordsTheHandlesThatMoved(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -559,16 +501,11 @@ func TestAWatchCommitRecordsTheHandlesThatMoved(t *testing.T) {
 	}
 }
 
-// A CUSTOM FIELD IS RESOLVED TO ITS SLUG INSIDE THE APPLY.
-//
-// This is the one delta a caller's wake cannot compute, since it holds no
-// catalogue (an update's decide restates its card with one,
-// [worklet.Notify]'s restatement), and the case that holds the applier's
-// wiring for it: values are keyed by field ID, the applier reads the project's
-// declarations to write the value rows, and the same map is what turns the key
-// back into the word somebody typed. Without it the row would have read
-// `f-sev=low → f-sev=high` — and a project declaring its fields with minted
-// uuids would have printed those instead.
+// A CUSTOM FIELD IS RESOLVED TO ITS SLUG INSIDE THE APPLY. A caller's wake
+// holds no catalogue to compute this delta (an update's decide restates its
+// card with one, [worklet.Notify]'s restatement). Values are keyed by field
+// ID, and the declarations the applier reads to write the value rows turn the
+// key back into the slug, not `f-sev=low → f-sev=high` or a minted uuid.
 func TestACustomFieldRowNamesTheFieldBySlug(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -592,9 +529,8 @@ func TestACustomFieldRowNamesTheFieldBySlug(t *testing.T) {
 		t.Fatalf("set the field: %v", err)
 	}
 	r.drain()
-	// THE OPTION'S SLUG, NOT ITS ID. [coerceOption] stores the option id so
-	// a rename never re-points a stored value, and the same catalogue is
-	// what reads it back out.
+	// THE OPTION'S SLUG, NOT ITS ID: [coerceOption] stores the option id so a
+	// rename never re-points a stored value, and the same catalogue reads it.
 	if got := r.fieldsForSubject("t-1"); got != `{"fields":{`+
 		`"from":"","to":"severity=low"}}` {
 
@@ -615,7 +551,7 @@ func TestACustomFieldRowNamesTheFieldBySlug(t *testing.T) {
 	}
 
 	// AND CLEARING IT IS THE SAME FACT BACKWARDS, on a commit whose only
-	// content is the clearing — the row that would otherwise be empty.
+	// content is the clearing, so its row would otherwise be empty.
 	empty := map[string]json.RawMessage{}
 	if _, err := r.writer.UpdateTask(t.Context(), "op-clear", "t-1", "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{Fields: &empty},
@@ -630,12 +566,10 @@ func TestACustomFieldRowNamesTheFieldBySlug(t *testing.T) {
 	}
 }
 
-// A BODY EDIT SAYS THAT ONE HAPPENED AND HOW BIG IT IS, AND NEVER THE PROSE.
-//
-// `update_work_item` carries a whole description, [MaxBody] is 32 KiB and this
-// table is never swept — so a row carrying both sides would be 64 KiB per
-// edit on every node for the life of the company. The mutation is already on
-// this row's own `document` column for anybody who needs the text.
+// A BODY EDIT SAYS THAT ONE HAPPENED AND HOW BIG IT IS, AND NEVER THE PROSE:
+// [MaxBody] is 32 KiB and this table is never swept, so both sides would cost
+// 64 KiB per edit on every node for the company's life. The text is on the
+// row's own `document` column.
 func TestABodyEditRecordsAMarkerRatherThanTheProse(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -652,9 +586,9 @@ func TestABodyEditRecordsAMarkerRatherThanTheProse(t *testing.T) {
 		t.Errorf("writing a body recorded %s", got)
 	}
 
-	// A REWRITE OF THE SAME LENGTH IS STILL A CHANGE. The two markers read
-	// the same, and the key's presence is what says the field moved —
-	// compared on the text, a typo fix would have recorded nothing at all.
+	// A REWRITE OF THE SAME LENGTH IS STILL A CHANGE: the markers read the
+	// same, so the key's presence says the field moved; compared on the
+	// markers, a typo fix would record nothing.
 	fixed := "the original description, at some weight"
 	if _, err := r.writer.UpdateTask(t.Context(), "op-typo", "t-1", "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{Body: &fixed},
@@ -669,21 +603,12 @@ func TestABodyEditRecordsAMarkerRatherThanTheProse(t *testing.T) {
 	}
 }
 
-// A RE-PARENT NAMES BOTH ENDS, BY ID — AND THE ANSWER NAMES THE KEY.
-//
-// `reparented` was one of the kinds whose row read as the bare word: the
-// dashboard's own change table says so, and a person asking "where did this
-// move from" had nothing on the row to answer with. The id rather than the key
-// is `deltas.go`'s rule — a key is a fact about another task's row — and the
-// activity read resolves it against the rows this node holds when it answers.
-//
-// BOTH HALVES IN ONE CASE, because either alone is a uuid on somebody's
-// screen: the row's id is what the applier is free to write, and the key map
-// is the only thing that turns it into "Parent: — → ENG-2". `parent` is a
-// SCALAR delta and the map was built for the edge lists, so nothing but this
-// says the read asks about it — see
-// TestOnlyTheDeltaFieldsThatNameTasksAreResolved for the declaration the field
-// list is held against.
+// A RE-PARENT NAMES BOTH ENDS, BY ID — AND THE ANSWER NAMES THE KEY. The id is
+// `deltas.go`'s rule (a key is a fact about another task's row), and the
+// activity read resolves it. Both halves in one case, because either alone
+// leaves a uuid on screen. `parent` is a SCALAR delta and the key map was
+// built for the edge lists, so nothing but this says the read asks about it
+// (TestOnlyTheDeltaFieldsThatNameTasksAreResolved holds the field list).
 func TestAReparentRecordsBothParentsByID(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -704,9 +629,8 @@ func TestAReparentRecordsBothParentsByID(t *testing.T) {
 		t.Errorf("a re-parent recorded %s", got)
 	}
 
-	// THE KEY IS READ OFF THE ROW rather than written into this case: it is
-	// minted by the create from the project's own counter, so what the
-	// fixture calls the task is not what it is called.
+	// THE KEY IS READ OFF THE ROW: the create mints it, so the fixture's name
+	// for the task is not its key.
 	want := r.task(t, "t-parent").Task.Key
 	if want == "" {
 		t.Fatal("the parent has no key, so this half asserts nothing")

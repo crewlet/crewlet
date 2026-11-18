@@ -68,13 +68,12 @@ func gatedRepo(t *testing.T, n *node, name string) (repo, change string) {
 	return repo, opened.ChangeID
 }
 
-// A DUE HEAD SAYS WHAT ITS DISPATCH OWES: a change whose head is due its
-// dispatch is listed with the names its target's gate requires — main's lint
-// and unit — and with what its head already holds for main: a name queued is
-// HELD, its dispatch queuing nothing of it again, and a name errored at its
-// dispatch for a checks file that did not run is INVALID, as that attempt's
-// key, which a dispatch under a file that runs follows with the next attempt.
-// Its dispatch recorded, it owes nothing.
+// A DUE HEAD SAYS WHAT ITS DISPATCH OWES: a head due its dispatch is listed
+// with the names its target's gate requires (main's lint and unit) and what it
+// already holds for main: a name queued is HELD, never queued again; a name
+// errored at its dispatch for a checks file that did not run is INVALID, as
+// that attempt's key, so a dispatch under a file that runs queues the next
+// attempt. Its dispatch recorded, it owes nothing.
 //
 // Mutation: read an attempt errored at its dispatch as held — the mended
 // file's dispatch never runs lint, red.
@@ -115,10 +114,9 @@ func TestADueHeadSaysWhatItsDispatchOwes(t *testing.T) {
 }
 
 // A DUE HEAD CARRIES ITS RECORDED FACTS: a head owing its dispatch is listed
-// with no facts while its head revision holds none for its target — its
-// dispatch waits — and, once the change work recorded them, with exactly what
-// they say it touches, read in the listing's own snapshot: what a `paths`
-// check is matched against, with no git read of the home's.
+// with no facts while its revision holds none for its target (its dispatch
+// waits), and once recorded with exactly what they say it touches, read in the
+// listing's own snapshot: what a `paths` check matches, with no git read.
 //
 // Mutation: answer every head with no facts — the recorded revision is listed
 // without them, and its dispatch waits for ever, red.
@@ -141,12 +139,11 @@ func TestADueHeadCarriesItsRecordedFacts(t *testing.T) {
 	}
 }
 
-// AN INFRASTRUCTURE'S ERROR IS QUEUED AGAIN BELOW ITS BOUND: a dispatched
-// head's attempt its runner lost lists its change owing the next attempt —
-// for the same target, under the definition it ran under — until that
-// attempt is queued; one its box failed at the second attempt likewise; and
-// at gitlet.AutoRequeueAttempts the home queues it no more: the change owes
-// nothing, and only a rerun runs it again.
+// AN INFRASTRUCTURE'S ERROR IS QUEUED AGAIN BELOW ITS BOUND: an attempt its
+// runner lost, or its box or setup failed, lists its change owing the next
+// attempt (same target, same definition) until that is queued; at
+// gitlet.AutoRequeueAttempts the home queues it no more, and only a rerun runs
+// it again.
 //
 // Mutation: drop the requeue index's attempt bound from the listing — the
 // third attempt's error lists the change again, red.
@@ -235,19 +232,17 @@ func TestAChangesAttemptsAtAHeadItMovedOnFromAreStale(t *testing.T) {
 }
 
 // A FINISHED HEAD CHECK MARKS THE CHANGE DUE: a change whose facts, merge and
-// readiness are recorded owes its home nothing — an attempt at its head for
-// ANOTHER branch moves nothing it reads — until an attempt of its head's
-// checks for its own target is queued, and again once one ends: each moves
-// the head's checks past the position its stored readiness was judged at, so
-// the due listing names it owing a REFRESH, which is RECORDED above the
-// stored row, stamping the new position — never refused superseded, as one
-// judged at the inputs already is — and the change owes nothing more. A
-// refresh asked again with nothing moved is superseded.
+// readiness are recorded owes nothing — an attempt at its head for ANOTHER
+// branch moves nothing it reads — until an attempt of its head's checks for
+// its own target is queued, and again once one ends: each moves the head's
+// checks past the position its readiness was judged at, so it is listed owing
+// a REFRESH, RECORDED above the stored row at the new position (never refused
+// superseded), after which it owes nothing. A refresh asked again with nothing
+// moved is superseded.
 //
 // Mutation: drop the check term from the due listing — the ending lists
-// nothing, red; drop the target from it — release's attempt lists the change,
-// red; drop the checks position from the refresh's guard — the refresh after
-// the ending is refused superseded, red.
+// nothing, red; drop the target — release's attempt lists the change, red;
+// drop the checks position from the refresh's guard — it is refused, red.
 func TestAFinishedHeadCheckMarksTheChangeDue(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

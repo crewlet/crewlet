@@ -2,27 +2,17 @@ package worklet
 
 import "slices"
 
-// The two exported lists a durable-schema test drives.
-//
-// Both exist for the same reason: a fact about the schema that is written
-// twice drifts, and both of these were written three times in the design this
-// replaces — the struct, the DDL and the applier's statement for the first,
-// and the migration, the snapshot's scrub list and the identity claim for the
-// second.
+// The exported lists a durable-schema test drives: a fact about the schema
+// written in more than one place drifts, so each is written once.
 
 // SpendColumns are the counters and the derived sort key, in the order the
 // applier writes them.
 //
-// ONE LIST, read by the struct, the DDL and the applier's own statement. Ten
-// column names typed out three times is three chances to add the eleventh to
-// two of them — and the failure is silent: a counter nothing increments reads
-// zero for ever, which looks exactly like a task nobody has worked on. That is
-// exactly what every one of these read until a turn was actually charged to
-// its task (ADR-0022): the write existed and had no caller.
-//
-// `spend_tokens` is DERIVED — input plus output — rather than transmitted,
-// because it is the sort key and a sort key that can disagree with the columns
-// it summarises is a board that orders by a number nobody can reproduce.
+// One list, read by the struct, the DDL and the applier's statement: a column
+// added to only some of them fails silently, a counter reading zero for ever
+// like a task nobody worked on (ADR-0022). `spend_tokens` is DERIVED (input
+// plus output), not transmitted: a sort key that can disagree with the
+// columns it summarises orders the board by a number nobody can reproduce.
 var SpendColumns = []string{
 	"spend_turns", "spend_rounds", "spend_input", "spend_output",
 	"spend_cache_read", "spend_cache_write", "spend_wall_ms", "spend_tokens",
@@ -31,19 +21,11 @@ var SpendColumns = []string{
 
 // ReproducibleTables is every table a record's payload must be able to rebuild.
 //
-// THE COMPLETENESS AUDIT AS A LIST, so a table added later without a payload
-// field to fill it goes red rather than shipping. It is what a replay from
-// zero into an empty database has to end up with — and the failure it exists
-// to prevent is precise: the design this replaces would have ended a replay
-// with a history table, a notification table and NO TASKS, because every one
-// of its record's caps was a routing cap.
-//
-// THREE TABLES ARE DELIBERATELY ABSENT, and they are the log's own machinery
-// rather than state a record reproduces: the operation ledger, the deferred
-// records and their scope index ([MachineryTables]). The framework's own
-// tables — the checkpoint (`statelog_cursor`), the arbitration anchors
-// (`statelog_anchor`) and the ledger's loss record (`statelog_ops_lost`) — are
-// absent for the same reason and are not this domain's to name.
+// The completeness audit as a list: what a replay from zero into an empty
+// database must end up with, so a table added without a payload field to fill
+// it goes red rather than shipping. The log's own machinery is deliberately
+// absent ([MachineryTables]), as are the framework's tables (`statelog_cursor`,
+// `statelog_anchor`, `statelog_ops_lost`), which are not this domain's to name.
 var ReproducibleTables = []string{
 	// The object tables.
 	"tracker_tasks", "tracker_comments", "tracker_body_revisions",
@@ -53,10 +35,8 @@ var ReproducibleTables = []string{
 	"tracker_persons", "tracker_rank_orders", "tracker_log_generations",
 	"tracker_evictions", "tracker_files", "tracker_rosters",
 
-	// The exploded child tables. Each one exists because a FILTER or a
-	// FIGURE reads it: a collection inside a document cannot be indexed,
-	// and a query that decodes every row's document is a full scan wearing
-	// an index's name.
+	// The exploded child tables, each read by a filter or a figure: a
+	// collection inside a document cannot be indexed.
 	"tracker_task_closure",
 	"tracker_collaborators",
 	"tracker_watchers", "tracker_task_tags", "tracker_field_values",
@@ -69,21 +49,19 @@ var ReproducibleTables = []string{
 	"tracker_history", "tracker_turns",
 	"tracker_notifications",
 
-	// And the deletion marker, which is how a node that was away tells a
-	// task that never existed from one that was deliberately destroyed.
+	// The deletion marker: how a node that was away tells a task that never
+	// existed from one that was deliberately destroyed.
 	"tracker_deletions",
 }
 
 // MachineryTables are the log's own, excluded from the audit and from the
 // identity claim.
 //
-// THEY DO NOT ALL TRAVEL. The deferred record and its scope are this node's
-// own verdict about bytes this build could not decode, and are scrubbed out of
-// every donated snapshot. The operation ledger (tracker_ops) TRAVELS: its rows
-// are what every data node's applier writes from the same records, so the
-// donor's are exactly the ones this node would have written, and an adopter
-// without them cannot tell a first attempt from a retry of anything the donor
-// applied — see [statelog.Domain.OpsTable].
+// They do not all travel. The deferred record and its scope are this node's
+// verdict about bytes this build could not decode, scrubbed from every donated
+// snapshot. The operation ledger (tracker_ops) travels: every node's applier
+// writes the same rows, and an adopter without them cannot tell a first
+// attempt from a retry of what the donor applied ([statelog.Domain.OpsTable]).
 var MachineryTables = []string{
 	"tracker_ops", "tracker_log_deferred", "tracker_log_deferred_scope",
 }

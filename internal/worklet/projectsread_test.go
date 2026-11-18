@@ -34,12 +34,9 @@ func (r *roundTrip) project(q worklet.ProjectDetailQuery) worklet.ProjectDetail 
 	return detail
 }
 
-// filedInto files one plain task into a NAMED project.
-//
-// `filedTask` beside it files into the harness's own ENG, which is all a case
-// about one project needs. An ordering case needs the count columns to
-// disagree with the key order, and those columns only move when a task
-// actually lands in the project.
+// filedInto files one plain task into a NAMED project (`filedTask` files into
+// the harness's own ENG): an ordering case needs the count columns to disagree
+// with the key order, and they move only when a task lands in the project.
 func filedInto(t *testing.T, r *roundTrip, project, id string) {
 	t.Helper()
 	task := newTask(id)
@@ -63,15 +60,9 @@ func seedProject(t *testing.T, r *roundTrip, p worklet.Project) {
 	r.drain()
 }
 
-// THE PROJECT COUNTS ARE READ, NOT AGGREGATED — and until this reader existed
-// nothing read them at all.
-//
-// `tracker_projects.open_count/active_count/done_count/closed_count` are
-// maintained by the task apply on every status-group change and on every
-// arrival and departure, precisely so a sixty-second dashboard poll is four
-// column reads rather than an aggregate over every task in the company. They
-// were maintained and read by nothing: the whole point of the column was
-// unrealised.
+// THE PROJECT COUNTS ARE READ, NOT AGGREGATED: the task apply maintains
+// `tracker_projects.open_count/active_count/done_count/closed_count` so a
+// dashboard poll is four column reads, not an aggregate over every task.
 //
 // AND THE OPEN WORK IS SPLIT: one waiting, one started. A census that said
 // "two open" could not tell a queue from a team at full stretch.
@@ -112,8 +103,8 @@ func TestAProjectListingReadsTheMaintainedCounts(t *testing.T) {
 		t.Fatalf("total=%d truncated=%v, want 1 and false",
 			listing.Total, listing.Truncated)
 	}
-	// AND THE ANSWER CARRIES BOTH VERDICTS. Coverage and freshness are
-	// two facts and the answer never folds one into the other.
+	// AND THE ANSWER CARRIES BOTH VERDICTS: coverage and freshness are two
+	// facts, never folded into one.
 	if listing.Level != statelog.ReadStale || !listing.Complete {
 		t.Fatalf("read_level=%q complete=%v, want stale and complete",
 			listing.Level, listing.Complete)
@@ -122,12 +113,9 @@ func TestAProjectListingReadsTheMaintainedCounts(t *testing.T) {
 
 // THE ARCHIVAL MODE SELECTS A SET, it does not widen one.
 //
-// Each of the three answers a DIFFERENT set and each carries the total of the
-// set it answered. The `bool` this replaced could only exclude or include, so
-// "what did we retire" was a screen's own narrowing over the wider answer —
-// and a narrowing applied to a PAGE of that answer finds no archived row at
-// all once the active projects fill it, which is a company with dozens of
-// retired projects being told it has none.
+// Each mode answers a DIFFERENT set with that set's own total. A screen
+// narrowing a PAGE of a wider answer finds no archived row once the active
+// projects fill it, telling a company with retired projects it has none.
 func TestAProjectListingSelectsOneArchivalSet(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -149,10 +137,9 @@ func TestAProjectListingSelectsOneArchivalSet(t *testing.T) {
 			t.Errorf("archived=%s answers %v, want %v — each mode names one "+
 				"set and the read selects exactly it", c.mode, got, c.want)
 		}
-		// AND `total` IS THE ASKED SET'S OWN COUNT. A total counted over
-		// a wider set than the rows is the number a screen prints beside
-		// them, so "1 of 3 projects" about an archived half is a
-		// sentence comparing two different questions.
+		// AND `total` IS THE ASKED SET'S OWN COUNT: a screen prints it
+		// beside the rows, and one over a wider set makes "1 of 3
+		// projects" compare two different questions.
 		if listing.Total != len(c.want) {
 			t.Errorf("archived=%s answers total=%d, want %d — the total counts "+
 				"the ASKED set", c.mode, listing.Total, len(c.want))
@@ -162,12 +149,10 @@ func TestAProjectListingSelectsOneArchivalSet(t *testing.T) {
 
 // THE ANSWER CARRIES THE CENSUS OF BOTH SETS, whichever one it selected.
 //
-// Selecting one set is what makes the listing honest, and it is also what
-// leaves an empty answer ambiguous: a segmented screen asking for the live
-// projects and getting none cannot tell a company with no projects from one
-// that has archived every one of them, and those are opposite things to tell a
-// reader. The census is the listing's own question minus its archival term, so
-// the screen never has to guess and never has to ask twice.
+// Selecting one set leaves an empty answer ambiguous: a screen asking for the
+// live projects and getting none cannot tell a company with no projects from
+// one that archived them all. The census is the listing's question minus its
+// archival term, so the screen never guesses and never asks twice.
 func TestAProjectListingCarriesTheCensusOfBothSets(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -175,9 +160,8 @@ func TestAProjectListingCarriesTheCensusOfBothSets(t *testing.T) {
 	seedProject(t, r, worklet.Project{Key: "OLD", Name: "Retired", Archived: true})
 	seedProject(t, r, worklet.Project{Key: "GON", Name: "Wound down", Archived: true})
 
-	// THE SAME CENSUS UNDER EVERY MODE, because it describes the company
-	// rather than the answer: a screen on the Archived segment needs the
-	// active count to know the company is not empty.
+	// THE SAME CENSUS UNDER EVERY MODE: it describes the company, not the
+	// answer, and the Archived segment needs the active count.
 	for _, mode := range worklet.ArchivedModes {
 		listing := r.projects(worklet.ProjectQuery{Archived: mode})
 		if listing.Census.Active != 2 || listing.Census.Archived != 2 {
@@ -185,8 +169,8 @@ func TestAProjectListingCarriesTheCensusOfBothSets(t *testing.T) {
 				"archived — the census is the same company whichever set was "+
 				"selected", mode, listing.Census)
 		}
-		// AND `total` IS THE CENSUS'S OWN ARITHMETIC. Counted separately
-		// it is a number that can disagree with the two beside it.
+		// AND `total` IS THE CENSUS'S OWN ARITHMETIC: counted separately it
+		// could disagree with the two beside it.
 		if want := listing.Census.Count(mode); listing.Total != want {
 			t.Errorf("archived=%s answers total=%d and a census counting %d",
 				mode, listing.Total, want)
@@ -194,12 +178,9 @@ func TestAProjectListingCarriesTheCensusOfBothSets(t *testing.T) {
 	}
 }
 
-// AND IT IS NARROWED BY THE SAME `q` AND `unit` THE LISTING IS.
-//
-// The census is the listing's question MINUS the archival term, not a count of
-// the whole company: a directory narrowed to one unit that reported the
-// company's archived total would offer a reader a segment that is empty under
-// the filter they are looking through.
+// AND IT IS NARROWED BY THE SAME `q` AND `unit` THE LISTING IS: a directory
+// narrowed to one unit that reported the company's archived total would offer
+// a segment empty under the reader's own filter.
 func TestTheProjectCensusIsNarrowedWithTheListing(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -207,13 +188,12 @@ func TestTheProjectCensusIsNarrowedWithTheListing(t *testing.T) {
 		Purpose: "keep the lights on", Unit: "plat"})
 	seedProject(t, r, worklet.Project{Key: "OLD", Name: "Retired",
 		Unit: "plat", Archived: true})
-	// OUTSIDE THE UNIT, and archived — so a census that ignored `unit`
-	// would report two archived where the filtered question has one.
+	// OUTSIDE THE UNIT, and archived: a census ignoring `unit` would
+	// report two archived where the filtered question has one.
 	seedProject(t, r, worklet.Project{Key: "GON", Name: "Gone",
 		Unit: "dissolved", Archived: true})
-	// THE CHART THE SPELLING CASES BELOW RESOLVE THROUGH: one team whose
-	// id is `plat`, which is what these rows hold, and whose name is
-	// `platform`.
+	// THE CHART THE SPELLING CASES RESOLVE THROUGH: one team, id `plat`
+	// (what the rows hold), name `platform`.
 	platform := chart{{Key: "plat", Name: "platform"}}
 
 	for _, c := range []struct {
@@ -245,13 +225,13 @@ func TestTheProjectCensusIsNarrowedWithTheListing(t *testing.T) {
 	}
 }
 
-// AND A COMPANY WITH NOTHING FILED CENSUSES AT ZERO, which is the one reading
-// a screen acts on by going and looking at its configuration.
+// AND A COMPANY WITH NOTHING FILED CENSUSES AT ZERO, the reading a screen
+// answers by pointing at the configuration.
 func TestAProjectCensusIsZeroOnACompanyWithNoProjects(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	// The harness's own ENG is the only project, so narrowing past it is
-	// how this suite reaches the empty company without a second harness.
+	// Narrowing past the harness's own ENG reaches the empty company
+	// without a second harness.
 	listing := r.projects(worklet.ProjectQuery{
 		Archived: worklet.ArchivedExclude, Q: "no such project",
 	})
@@ -275,8 +255,8 @@ func TestAProjectListingFilters(t *testing.T) {
 		t.Fatalf("the default listing is %v, want [ENG OPS] — ordered by key, "+
 			"with the archived project excluded", live)
 	}
-	// THE PURPOSE IS SEARCHED TOO, because a filter box is typed into by
-	// somebody who remembers one of the three columns.
+	// THE PURPOSE IS SEARCHED TOO: a searcher remembers any one of the
+	// three columns.
 	if got := keys(r.projects(worklet.ProjectQuery{Archived: worklet.ArchivedExclude, Q: "lights"})); len(got) != 1 ||
 		got[0] != "OPS" {
 		t.Fatalf("q=lights answers %v, want [OPS] — the purpose is searched", got)
@@ -290,8 +270,8 @@ func TestAProjectListingFilters(t *testing.T) {
 		got[0] != "OPS" {
 		t.Fatalf("unit=platform answers %v, want [OPS]", got)
 	}
-	// A WILDCARD SOMEBODY TYPED IS A LITERAL. Unescaped, `%` matches
-	// everything and a filter box silently stops filtering.
+	// A TYPED WILDCARD IS A LITERAL: unescaped, `%` matches everything and
+	// the filter box silently stops filtering.
 	if got := keys(r.projects(worklet.ProjectQuery{Archived: worklet.ArchivedExclude, Q: "%"})); len(got) != 0 {
 		t.Fatalf("q=%%%% answers %v, want nothing — a caller's own wildcard is "+
 			"escaped", got)
@@ -300,13 +280,11 @@ func TestAProjectListingFilters(t *testing.T) {
 
 // EVERY ORDERING ORDERS THE WHOLE ASKED SET, and the key breaks every tie.
 //
-// The ordering is the ENGINE's because the listing is a PAGE: an ordering
-// applied after the cap orders the rows that survived the key order, so
+// The ENGINE orders because the listing is a PAGE: ordered after the cap,
 // `-todo` would answer "the most waiting work among the projects whose keys
-// sort first". Seeding past the cap is unnecessary to prove that — what the cap
-// takes is a PREFIX of this ordering, so an ordering that is right over the
-// whole set is right over the page, and an ordering that is not is wrong here
-// too.
+// sort first". The cap takes a PREFIX of this ordering, so an ordering right
+// over the whole set is right over the page and no seeding past the cap is
+// needed.
 func TestAProjectListingOrdersTheWholeSet(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -314,10 +292,9 @@ func TestAProjectListingOrdersTheWholeSet(t *testing.T) {
 	seedProject(t, r, worklet.Project{Key: "OPS", Name: "operations",
 		Unit: "zebra"})
 	seedProject(t, r, worklet.Project{Key: "AAA", Name: "Zulu", Unit: "alpha"})
-	// TWO WAITING ON OPS AND ONE ON AAA, so the count columns and the key
-	// order disagree — an ordering that quietly fell back to the key would
-	// otherwise pass every case here. And AAA's one is STARTED, so `todo`
-	// and `active` order the three differently from each other.
+	// TWO WAITING ON OPS, so the counts disagree with the key order and a
+	// silent fallback to the key fails here. AAA's one task is STARTED, so
+	// `todo` and `active` order the three differently.
 	filedInto(t, r, "OPS", "ops-1")
 	filedInto(t, r, "OPS", "ops-2")
 	filedInto(t, r, "OPS", "ops-3")
@@ -340,8 +317,8 @@ func TestAProjectListingOrdersTheWholeSet(t *testing.T) {
 	}{
 		{"key", worklet.ProjectSortKey, false, []string{"AAA", "ENG", "OPS"}},
 		{"-key", worklet.ProjectSortKey, true, []string{"OPS", "ENG", "AAA"}},
-		// LOWERED, so `Zulu` does not sort before `operations` the way
-		// this store's BINARY collation would have it.
+		// LOWERED, or the store's BINARY collation sorts `Zulu` before
+		// `operations`.
 		{"name", worklet.ProjectSortName, false, []string{"ENG", "OPS", "AAA"}},
 		// OPS waits on two, AAA and ENG on none — the key breaks that tie.
 		{"-todo", worklet.ProjectSortTodo, true, []string{"OPS", "AAA", "ENG"}},
@@ -349,8 +326,8 @@ func TestAProjectListingOrdersTheWholeSet(t *testing.T) {
 		// One started on each of OPS and AAA, none on ENG.
 		{"-active", worklet.ProjectSortActive, true, []string{"AAA", "OPS", "ENG"}},
 		{"active", worklet.ProjectSortActive, false, []string{"ENG", "AAA", "OPS"}},
-		// ENG NAMES NO UNIT, and an empty string is a value here: it
-		// sorts first ascending rather than being dropped.
+		// ENG NAMES NO UNIT, and the empty string is a value: it sorts
+		// first ascending rather than being dropped.
 		{"unit", worklet.ProjectSortUnit, false, []string{"ENG", "AAA", "OPS"}},
 	} {
 		got := keys(r.projects(worklet.ProjectQuery{
@@ -362,9 +339,8 @@ func TestAProjectListingOrdersTheWholeSet(t *testing.T) {
 		}
 	}
 
-	// THE TIEBREAK IS THE KEY. `done` is zero on all three, so without it
-	// the planner's walk decides and the directory reshuffles its equal
-	// rows between two identical polls.
+	// THE TIEBREAK IS THE KEY. `done` is zero on all three; without it the
+	// planner's walk reshuffles equal rows between two identical polls.
 	for _, descending := range []bool{false, true} {
 		got := keys(r.projects(worklet.ProjectQuery{
 			Archived: worklet.ArchivedExclude,
@@ -377,8 +353,7 @@ func TestAProjectListingOrdersTheWholeSet(t *testing.T) {
 		}
 	}
 
-	// AN ABSENT ORDERING IS THE KEY, which is the order this listing has
-	// always had.
+	// AN ABSENT ORDERING IS THE KEY.
 	got := keys(r.projects(worklet.ProjectQuery{Archived: worklet.ArchivedExclude}))
 	if want := []string{"AAA", "ENG", "OPS"}; !slices.Equal(got, want) {
 		t.Fatalf("an unsorted listing answers %v, want %v", got, want)
@@ -388,9 +363,9 @@ func TestAProjectListingOrdersTheWholeSet(t *testing.T) {
 // AN ABSENT INSTANT SORTS LAST IN BOTH DIRECTIONS.
 //
 // SQLite orders NULL first ascending and last descending, so a newest-first
-// directory would open with every project nothing has ever been filed into.
-// "Nothing recorded" is not the smallest value — it is not a value — and it is
-// the rule the grid drawing this column already states.
+// directory would open with every project nothing was ever filed into.
+// "Nothing recorded" is not a value, and the grid drawing this column already
+// sorts it last.
 func TestAProjectListingSortsAnAbsentLastChangeLast(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -412,12 +387,9 @@ func TestAProjectListingSortsAnAbsentLastChangeLast(t *testing.T) {
 	}
 }
 
-// THE READ REFUSES A QUERY THAT NAMES NO ARCHIVAL SET, by name.
-//
-// The membership of the answer turns on it and this struct is built as a
-// literal at every call site, so a default applied inside the read would be
-// one no caller chose and none could see — which is exactly what the `bool`
-// this replaced did.
+// THE READ REFUSES A QUERY THAT NAMES NO ARCHIVAL SET, by name: the answer's
+// membership turns on it and every call site builds the query as a literal,
+// so a default inside the read would be one no caller chose or could see.
 func TestAProjectReadRefusesAnUnsetArchivalSet(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -434,8 +406,8 @@ func TestAProjectReadRefusesAnUnsetArchivalSet(t *testing.T) {
 		t.Errorf("the refusal is %q, want the parameter and the accepted "+
 			"values named", err)
 	}
-	// AND SO IS A SORT KEY THAT IS NOT ONE, rather than silently falling
-	// back to the key order and answering a different question.
+	// AND SO IS A SORT KEY THAT IS NOT ONE, rather than a silent fallback
+	// to the key order answering a different question.
 	_, err = r.reader.Projects(t.Context(), worklet.ProjectQuery{
 		Level: statelog.ReadStale, Archived: worklet.ArchivedExclude,
 		Sort: worklet.ProjectSort("lead"),
@@ -451,9 +423,8 @@ func TestAProjectReadRefusesAnUnsetArchivalSet(t *testing.T) {
 func TestParseProjectQuery(t *testing.T) {
 	t.Parallel()
 
-	// AN ABSENT `archived` IS THE SURFACE'S DEFAULT and it is resolved
-	// HERE, which is what lets the read refuse a query that reaches it
-	// without one.
+	// AN ABSENT `archived` IS THE SURFACE'S DEFAULT, resolved HERE so the
+	// read can refuse a query that reaches it without one.
 	q, err := worklet.ParseProjectQuery(worklet.MapParams{})
 	if err != nil {
 		t.Fatalf("an empty bag: %v", err)
@@ -487,8 +458,7 @@ func TestParseProjectQuery(t *testing.T) {
 	}
 
 	// A VALUE THAT IS NOT ONE IS REFUSED BY NAME, never read as the
-	// default: a filter silently ignored is a screen showing a set nobody
-	// asked for.
+	// default: a silently ignored filter shows a set nobody asked for.
 	for _, c := range []struct{ key, value string }{
 		{"archived", "yes"},
 		{"archived", "active"},
@@ -535,9 +505,8 @@ func TestAProjectsUnitIsResolvedAgainstTheChart(t *testing.T) {
 			"a project orphaned from the chart is the finding, not an absence",
 			got)
 	}
-	// AND NAMING NO UNIT IS RESOLVED, because it is a valid state:
-	// conflating it with an orphan would report every unfiled project as
-	// a finding.
+	// AND NAMING NO UNIT IS RESOLVED, a valid state: as an orphan, every
+	// unfiled project would be a finding.
 	if got := rows["ENG"].Unit; !got.Resolved || got.Key != "" {
 		t.Fatalf("ENG's unit is %+v, want empty and resolved", got)
 	}
@@ -578,24 +547,22 @@ func TestDescribingAProjectCarriesTheVocabulary(t *testing.T) {
 			"statuses exist and not which types would file work that is " +
 			"refused on the next breath")
 	}
-	// AND THE MAINTAINED COUNTS, because a lead reading this is asking how
-	// much is in the project as well as what its vocabulary is.
+	// AND THE MAINTAINED COUNTS: a lead reading this asks how much is in
+	// the project as well as its vocabulary.
 	if detail.Counts.Todo != 1 || detail.Counts.Active != 0 {
 		t.Fatalf("the description counts %+v, want the one waiting item filed "+
 			"into it", detail.Counts)
 	}
 }
 
-// AN UNKNOWN PROJECT IS REFUSED NAMING THE NEAREST, never answered empty.
-//
-// A reader that answered an empty description would tell a model the project
-// is empty when what actually happened is that it typed the key wrong.
+// AN UNKNOWN PROJECT IS REFUSED NAMING THE NEAREST, never answered empty:
+// an empty description tells a model the project is empty when it mistyped
+// the key.
 func TestDescribingAnUnknownProjectNamesTheNearest(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	// FOUR DECOYS THAT SORT ABOVE ENG, so a refusal that merely listed the
-	// first three keys alphabetically would name none of them — the
-	// nearest has to be nearest to what was TYPED.
+	// FOUR DECOYS THAT SORT ABOVE ENG, so a refusal listing the first
+	// three keys would miss it: the nearest is nearest to what was TYPED.
 	for _, key := range []string{"AAA", "BBB", "CCC", "OPS"} {
 		seedProject(t, r, worklet.Project{Key: key, Name: key})
 	}
@@ -663,8 +630,7 @@ func TestADescriptionGroupsFieldsAndNamesTheShadowed(t *testing.T) {
 	}
 
 	// AND `for_type` NARROWS TO ONE TYPE while keeping the fields that
-	// apply to every one — filtering those would hide exactly the fields
-	// a caller filing that type must carry.
+	// apply to every type, which a caller filing that type must carry too.
 	narrowed := r.project(worklet.ProjectDetailQuery{Project: "ENG", ForType: "bug"})
 	seen := map[string]bool{}
 	for _, g := range narrowed.Fields {
@@ -683,9 +649,9 @@ func TestADescriptionGroupsFieldsAndNamesTheShadowed(t *testing.T) {
 	case err == nil:
 		t.Fatal("an unknown for_type answered — the refusal lists the types")
 	case errors.Is(err, worklet.ErrNoProject):
-		// THE PROJECT EXISTS. Classed as a missing project, every
-		// reader told its caller ENG was gone — a 404 on the query
-		// surface — when the argument to fix was the type.
+		// THE PROJECT EXISTS: classed as missing, a reader tells its
+		// caller ENG is gone (a 404 on the query surface) when the
+		// argument to fix is the type.
 		t.Fatalf("an unknown for_type was refused as a missing project: %v", err)
 	case !errors.Is(err, worklet.ErrNoType):
 		t.Fatalf("an unknown for_type refused with %v, want worklet.ErrNoType", err)
@@ -693,11 +659,10 @@ func TestADescriptionGroupsFieldsAndNamesTheShadowed(t *testing.T) {
 }
 
 // TestADescriptionServesTheProjectsOwnDeclarationsWhole is the read a `fields`
-// write needs: that write REPLACES the project's own declarations, so a
-// reader editing them has to be handed exactly that set, archived ones and
-// all, and never the effective one the form files against. Sending the
-// effective set back copied every workspace field into the project as a
-// shadow, and leaving the archived ones out dropped their declarations.
+// write needs: that write REPLACES the project's own declarations, so an
+// editor gets exactly that set, archived ones included, never the effective
+// one. Sent back, the effective set copies every workspace field in as a
+// shadow, and a set missing the archived ones drops their declarations.
 //
 // AND THE ARCHIVED LABELS beside the live ones, which a create refuses and a
 // lead still reads: the tasks filed under one keep it.
@@ -756,11 +721,9 @@ func TestADescriptionServesTheProjectsOwnDeclarationsWhole(t *testing.T) {
 	}
 }
 
-// chart is a test Units: the org this reader deliberately does not hold.
-//
-// IT ANSWERS EITHER SPELLING, folded, because that is the seam's contract —
-// a fake matching only the key would certify readers against a chart the
-// engine does not have.
+// chart is a test Units: the org this reader deliberately does not hold. IT
+// ANSWERS EITHER SPELLING, folded, as the seam's contract does: a fake matching
+// only the key would certify readers against a chart the engine lacks.
 type chart []worklet.ChartUnit
 
 func (c chart) ResolveUnit(ref string) (worklet.ChartUnit, bool) {

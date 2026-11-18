@@ -40,19 +40,25 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CHANGE_PART_PAGE } from "~/contract/code.ts";
+import { latestAttempts } from "~/lib/checks.ts";
+import { changeLive } from "~/lib/code.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { CHECKS_POLL_MS } from "../checks/CheckList.tsx";
 import { usePaged, type Paged } from "~/lib/usePaged.ts";
 import {
   isAbort,
   QueryError,
   type CodeChangeAnswer,
+  type CodeCheckRow,
   type CodeChangeDetail,
   type CodeCommentRow,
   type CodeExcerpt,
+  type CodeFindingPathRow,
   type CodeFindingRow,
   type CodeReviewRow,
   type CodeReviewerRow,
   type CodeRevisionRow,
+  type CodeViewedRow,
   type LogRefusal,
   type QueryRefusal,
 } from "~/protocol/index.ts";
@@ -66,7 +72,16 @@ import {
 export const CHANGE_POLL_MS = 60_000;
 /** A part of a change, as the page asks for it. */
 export type ChangePartName =
-  "reviewers" | "comments" | "reviews" | "findings" | "excerpts" | "standing" | "files" | "diff";
+  | "reviewers"
+  | "comments"
+  | "reviews"
+  | "findings"
+  | "excerpts"
+  | "standing"
+  | "files"
+  | "diff"
+  | "finding_paths"
+  | "viewed";
 
 /** What a part's question is asked with: the change, the part, its page's bound where it lists, and `extra`. */
 export function changePartParams(
@@ -106,9 +121,12 @@ export function changePartParams(
  */
 export function partMovedBy(change: CodeChangeDetail, part: ChangePartName | "said"): string {
   if (part === "files" || part === "diff") return String(change.version);
+  // THE READER'S OWN MARKS move with the change's state alone: an ended change keeps none.
+  if (part === "viewed") return change.state;
   const conversation = change.conversation;
-  // A FINDING ROW is raised or superseded by a review and moved by an answer: each speaks.
-  if (part === "said") {
+  // A FINDING ROW is raised or superseded by a review and moved by an answer: each
+  // speaks, and the findings counted by path move with them.
+  if (part === "said" || part === "finding_paths") {
     const { spoken_at = "", reviews = 0, open_findings = 0 } = conversation ?? {};
     return `${spoken_at}/${reviews}/${open_findings}`;
   }
@@ -138,13 +156,58 @@ export function revisionInputs(revisions: readonly CodeRevisionRow[], n: number)
  * every page the reader holds again, since a diff whose inputs moved is a
  * different diff on every page.
  */
-export function useAskAgainWhenMoved(moved: string, enabled: boolean, again: () => void) {
+export function useAskAgainWhenMoved(
+  moved: string | undefined,
+  enabled: boolean,
+  again: () => void,
+) {
+  // UNDEFINED UNTIL ITS SUBJECT IS READ: the first value met is the one asked.
   const askedAt = useRef(moved);
   useEffect(() => {
-    if (askedAt.current === moved) return;
+    if (moved === undefined || askedAt.current === moved) return;
+    const first = askedAt.current === undefined;
     askedAt.current = moved;
-    if (enabled) again();
+    if (enabled && !first) again();
   }, [moved, enabled, again]);
+}
+
+/** A change's latest checks: `rows` null until answered, `refused` the engine's sentence ("" for none). */
+export interface LatestChecks {
+  rows: CodeCheckRow[] | null;
+  refused: string | null;
+  loading: boolean;
+}
+
+/** Each check's latest attempt, the required ones first, then by name. */
+function byRequiredThenName(rows: readonly CodeCheckRow[]): CodeCheckRow[] {
+  return latestAttempts(rows).sort(
+    (a, b) =>
+      Number(b.required ?? false) - Number(a.required ?? false) || a.name.localeCompare(b.name),
+  );
+}
+
+/**
+ * The head's latest attempt of each check for its target, one page, read once
+ * a page: polled while the change is live, asked again when its head moves.
+ */
+export function useLatestChecks(change: CodeChangeDetail | undefined): LatestChecks {
+  const repo = change?.repo ?? "";
+  const number = change?.number ?? 0;
+  const params = useMemo(() => ({ repo, change: number, latest: "true" }), [repo, number]);
+  const live = change !== undefined && changeLive(change.state);
+  const read = useCodeQuery("code_checks", params, {
+    enabled: change !== undefined,
+    ...(live ? { pollMs: CHECKS_POLL_MS } : {}),
+  });
+  useAskAgainWhenMoved(change?.head, true, read.refetch);
+  const answered = read.data?.checks;
+  const said = partRefusal({ error: read.error, refusal: read.refusal, items: answered ?? [] });
+  const refused = said === "" ? (read.detail ?? "") : said;
+  const rows = useMemo(
+    () => (answered === undefined ? null : byRequiredThenName(answered)),
+    [answered],
+  );
+  return { rows, refused, loading: read.loading && rows === null };
 }
 
 /**
@@ -171,6 +234,8 @@ const commentsOf = (a: CodeChangeAnswer) => a.comments ?? [];
 const findingsOf = (a: CodeChangeAnswer) => a.findings ?? [];
 const reviewersOf = (a: CodeChangeAnswer) => a.reviewers ?? [];
 const excerptsOf = (a: CodeChangeAnswer) => Object.values(a.excerpts ?? {});
+const findingPathsOf = (a: CodeChangeAnswer) => a.finding_paths ?? [];
+const findingPathId = (row: CodeFindingPathRow) => `${row.path}\n${row.state}\n${row.revision}`;
 const rowId = (row: { id: string }) => row.id;
 // A REVIEWER IS ASKED ONCE A CHANGE: the engine keys its row by the handle.
 const reviewerId = (row: CodeReviewerRow) => `${row.kind}:${row.reviewer}`;
@@ -187,7 +252,7 @@ const partNext = (a: CodeChangeAnswer) => a.next ?? "";
  */
 function usePagedPart<T>(
   change: CodeChangeDetail,
-  part: "reviews" | "comments" | "findings" | "excerpts" | "reviewers",
+  part: "reviews" | "comments" | "findings" | "excerpts" | "reviewers" | "finding_paths" | "viewed",
   pick: (a: CodeChangeAnswer) => readonly T[],
   idOf: (row: T) => string,
   extra: Readonly<Record<string, string | number | undefined>>,
@@ -252,6 +317,50 @@ export function usePagedFindings(
   moved: string,
 ): Paged<CodeFindingRow, CodeChangeAnswer> {
   return usePagedPart(change, "findings", findingsOf, rowId, { revision }, moved);
+}
+
+/** A change's findings counted by path, state and revision, followed to its last page as it
+ *  arrives: its rows are few, and a badge from a partial read would undercount without saying
+ *  so. */
+export function usePagedFindingPaths(
+  change: CodeChangeDetail,
+): Paged<CodeFindingPathRow, CodeChangeAnswer> {
+  const paged = usePagedPart(
+    change,
+    "finding_paths",
+    findingPathsOf,
+    findingPathId,
+    {},
+    partMovedBy(change, "finding_paths"),
+  );
+  const { more, paging, pageError, next } = paged;
+  useEffect(() => {
+    if (more && !paging && pageError === null) next();
+  }, [more, paging, pageError, next]);
+  return paged;
+}
+
+/** The engine's own page of viewed marks (`gitlet.defaultViewedLimit`). */
+const VIEWED_PAGE = 500;
+const viewedOf = (a: CodeChangeAnswer) => a.viewed ?? [];
+const viewedId = (row: CodeViewedRow) => row.path_digest;
+
+/** The reader's viewed marks on a change, followed to their last page: a partial read would
+ *  call a viewed file unviewed without saying so. */
+export function usePagedViewed(change: CodeChangeDetail): Paged<CodeViewedRow, CodeChangeAnswer> {
+  const paged = usePagedPart(
+    change,
+    "viewed",
+    viewedOf,
+    viewedId,
+    { limit: VIEWED_PAGE },
+    partMovedBy(change, "viewed"),
+  );
+  const { more, paging, pageError, next } = paged;
+  useEffect(() => {
+    if (more && !paging && pageError === null) next();
+  }, [more, paging, pageError, next]);
+  return paged;
 }
 
 /**

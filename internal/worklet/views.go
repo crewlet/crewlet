@@ -13,74 +13,31 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// Saved views: the write, and the one invariant a container has.
+// Saved views. A view is a query with a name, a rendering and a place in a
+// container's tab strip; everything it holds is expressible in the query grammar.
 //
-// A view is a QUERY WITH A SHAPE, kept where a person will look for it again.
-// Everything it holds is already expressible in the query grammar — what it
-// adds is a name, a rendering and a place in a container's tab strip.
+// A save parses its params with [ParseQuery] ([checkView]), so a view that cannot
+// run is refused at the write, naming the key, rather than found weeks later.
 //
-// # Why the params are PARSED at save and not merely stored
-//
-// A saved view that cannot be run is discovered by whoever opens it, weeks
-// later, with no way to tell a typo from a grammar change. So a save runs the
-// view's own parameters through [ParseQuery] and refuses the ones that do not
-// parse, naming the key — which is the same refusal the caller would have got
-// had they run the query instead of saving it.
-//
-// It is parsed against UTC rather than the company's zone deliberately: the
-// date tokens (`today`, `this_week`) PARSE identically in every zone and only
-// RESOLVE differently, and the resolved query is thrown away. A validator that
-// needed the company's clock would be a validator that could answer differently
-// on two nodes.
-//
-// # ONE DEFAULT PER CONTAINER, and why the applier is what makes that true
-//
-// The rule is about the ROWS rather than about any one write: "one per
-// container can be the default" is false the moment two views say they are.
-// The alternative — a companion append clearing the previous default — has a
-// crash window in which both rows claim it, and a reader would then have to
-// break the tie with a rule nobody wrote down.
-//
-// So a default-setting record declares its CONTAINER in its scope, and the
-// applier clears the container's other defaults in the same transaction. The
-// fan-out is unbounded in principle (a container may hold any number of views)
-// which is exactly why the term is a container rather than an enumeration —
-// [MaxScopeTerms]'s own rule.
-//
-// The container term rides a DEFAULT-SETTING write and nothing else, which is
-// [Writer.UpdateTask]'s own rule for a project move: a scope states what the
-// apply will write, and every other view save writes one row. Declaring the
-// container on all of them would make an ordinary rename defer every write in
-// the project behind it.
+// One default per container is the applier's to keep: a default-setting record
+// declares its container in its scope, and the apply clears the container's other
+// defaults in the same transaction (a companion append clearing the old default
+// has a crash window in which two rows claim it); a term, not an enumeration of
+// the unbounded siblings ([MaxScopeTerms]). Only a default-setting save declares
+// it ([Writer.UpdateTask]'s rule), so a rename does not defer the project's writes.
 
-// ViewPrior is the stored view a save was DECIDED against: whether a view was
-// held under the id, and — when it was — whose it was and which strip it lived
-// in.
+// ViewPrior is the stored view a save or delete was decided against: whether a
+// view was held under the id and, if so, its owner and container.
 //
-// # Why a save carries what it replaced
+// A save replaces a view whole, by id, so its authority is decided over the
+// stored owner and container as well as the new ones; otherwise anyone who may
+// write a view of their own could overwrite any id. The decide refuses a save
+// whose stored view no longer matches, as [Writer.UpdateTask]'s If-Match does.
 //
-// A save replaces a view WHOLE, by id, so who may make one is a question about
-// two views: the one the caller is writing and the one it overwrites. Decided
-// on the arguments alone, a caller who could write a view of their own could
-// overwrite ANY id with one — a project's shared tab taken over by somebody
-// who does not lead the project, a colleague's personal view rewritten as the
-// caller's. So the caller reads this with [Writer.ViewPrior], decides its
-// authority over the stored owner and container as well as the new ones, and
-// hands the value back here — and the decide REFUSES a save whose stored view
-// is no longer the one the authority was decided on. That is the pairing
-// [Writer.UpdateTask]'s If-Match makes for a task, stated for the two facts a
-// view's authority turns on.
-//
-// # A zero prior is a create
-//
-// A save that names no stored view is a CREATE, and its id is the one the
-// caller derived from the create's own operation as the work began (the
-// builtin refuses a save naming an id no view holds, and mints the id of a new
-// one). So a view the decide finds already under that id is this create, made
-// before — a rebased re-run, whose operation is new to the ledger (ADR-0029) —
-// and is answered from its row with nothing published. Refused as a view
-// "saved while this one was being decided", the re-run was told to read again
-// and decide again about the view it had itself saved.
+// A zero prior is a create, under an id the caller derived from the create's
+// operation. A view the decide finds under that id is this create made before (a
+// rebased re-run, new to the ledger, ADR-0029), answered from its row with
+// nothing published rather than refused as a conflict.
 type ViewPrior struct {
 	// Held says a view existed under the id when the caller read it.
 	Held bool
@@ -90,14 +47,10 @@ type ViewPrior struct {
 	Container Container
 }
 
-// ViewPrior reads what a save of view id would replace, for the caller to
-// decide its authority on and to pass back to [Writer.WriteView].
-//
-// OUTSIDE THE SNAPSHOT, and [Writer.db]'s own rule is why that is safe: nothing
-// decided from this read is paired with a broker expectation, and the decide
-// verifies it in its own snapshot and refuses a save whose stored view moved,
-// changed hands or appeared since. It is also where the save's scope comes
-// from — see [Writer.WriteView] — so one read serves both.
+// ViewPrior reads what a save or delete of view id would replace, for the caller
+// to decide its authority on and pass back. It reads outside the snapshot, safe
+// by [Writer.db]'s rule because the decide re-verifies it in its own; the save's
+// scope is formed from it too ([Writer.WriteView]).
 func (w *Writer) ViewPrior(ctx context.Context, id string) (ViewPrior, error) {
 	if w.db.IsZero() {
 		return ViewPrior{}, fmt.Errorf("worklet: this writer has no store, so it "+
@@ -118,8 +71,8 @@ func (w *Writer) ViewPrior(ctx context.Context, id string) (ViewPrior, error) {
 		return ViewPrior{}, fmt.Errorf("worklet: read what saving view %s would "+
 			"replace: %w", id, err)
 	}
-	// A DELETED VIEW IS NO VIEW to replace or to delete again: its row
-	// stays only to guard its version ([Writer.DeleteView]).
+	// A deleted view is no view to replace or delete again: its row stays only
+	// to guard its version ([Writer.DeleteView]).
 	if deleted.Valid {
 		return ViewPrior{}, nil
 	}
@@ -156,19 +109,12 @@ func ownerOrShared(owner string) string {
 	return owner
 }
 
-// WriteView saves a view, creating it or replacing it whole.
-//
-// WHOLE POST-STATE, like every other document object here: the record carries
-// the view as it should be, and the applier's row is that document. A patch
-// shape would need a merge rule per field, and a saved query is small enough
-// that re-stating it costs nothing.
-//
-// The CALLER mints the id, which is what makes a retry idempotent: a verb that
-// minted one would write a second view every time an `unknown` outcome was
-// retried.
-//
-// prior is what the caller read with [Writer.ViewPrior] and decided its
-// authority on; a save whose stored view is no longer that one is refused.
+// WriteView saves a view, creating it or replacing it whole: the record carries
+// the whole post-state, since a saved query is too small to need a per-field
+// merge rule. The caller mints the id, so a retry after an `unknown` outcome
+// rewrites the same view rather than saving a second. prior is what the caller
+// read with [Writer.ViewPrior] and decided its authority on; a save whose stored
+// view is no longer that one is refused.
 func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 	prior ViewPrior) (WriteResult, error) {
 
@@ -177,14 +123,10 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 	}
 	subject := ViewSubject(view.ID)
 	home := containerScope(view.Container)
-	// WHERE THE VIEW LIVES NOW, so a MOVE states both ends. A save may
-	// change the container, and then the apply writes a row OUT of one
-	// strip and INTO another — a scope naming only the destination would
-	// let a write into the strip it left slip past a deferral that covers
-	// it, which is [Writer.UpdateTask]'s own rule for a project move said
-	// about a view. Taken from the PRIOR, which the decide verifies, so a
-	// scope formed from it is never an under-declaration that went
-	// unchecked.
+	// A move states both ends ([Writer.UpdateTask]'s rule for a project move):
+	// naming only the destination would let a write into the strip the view
+	// leaves slip past a deferral covering it. Taken from the prior, which the
+	// decide verifies, so the scope is never an unchecked under-declaration.
 	var from string
 	var moved bool
 	if prior.Held {
@@ -194,10 +136,9 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 	scope := ScopeSet{Subject: true, Container: home}
 	switch {
 	case view.Default:
-		// A DEFAULT-SETTING APPLY CLEARS THE CONTAINER'S OTHERS, so it
-		// states the container — see the file's head. Every sibling's
-		// own path nests under this term by construction, because they
-		// share a container and therefore share [containerScope].
+		// A default-setting apply clears the container's other defaults, so it
+		// declares the container (the file's head); every sibling shares
+		// [containerScope], so its path nests under this term.
 		terms := []ScopeTerm{{Kind: TermContainer, ID: home}}
 		if moved {
 			terms = append(terms, ScopeTerm{Kind: TermContainer, ID: from})
@@ -222,24 +163,19 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 				return statelog.Decision{}, err
 			}
 			if held && !prior.Held {
-				// THE CREATE, MADE BEFORE — see [ViewPrior], "A zero
-				// prior is a create" — answered from its row, deleted
-				// since or not: a re-run of a create brings back no
-				// view somebody deleted.
+				// The create, made before ([ViewPrior], "A zero prior is a create"),
+				// answered from its row even if deleted since: a re-run of a create
+				// brings back no view somebody deleted.
 				return statelog.Decision{Version: int64(current.Version)}, nil
 			}
-			// A VIEW DELETED SINCE THE PRIOR WAS READ IS GONE to a save,
-			// which [ViewPrior.matches] refuses as a view that went away:
-			// replaced here, the save would bring it back.
+			// A view deleted since the prior was read is gone to a save, which
+			// [ViewPrior.matches] refuses: replaced, it would come back.
 			held = held && !current.Deleted()
-			// THE VIEW THE AUTHORITY WAS DECIDED ON IS STILL THE ONE
-			// BEING REPLACED — and, because the scope was formed from the
-			// same prior, the scope still names the strip it leaves. A
-			// view that moved, changed hands or went away under this write
-			// is refused rather than published: an UNDER-declared scope is
-			// the one thing a record may never carry, and a save decided
-			// on somebody else's view is the takeover the prior exists to
-			// stop. The caller's retry re-reads.
+			// Refused unless the view the authority was decided on is still the one
+			// replaced, so the scope formed from the same prior still names the strip
+			// it leaves: a record may never carry an under-declared scope, and a save
+			// decided on somebody else's view is the takeover the prior stops. The
+			// caller's retry re-reads.
 			if err := prior.matches(view.ID, current, held); err != nil {
 				return statelog.Decision{}, err
 			}
@@ -256,16 +192,10 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 					post.Rank = rank
 				}
 			default:
-				// A PROTECTED VIEW IS ITS OWNER'S, and that is the
-				// whole of what "protected" means here: it stops a
-				// shared board being rearranged under everybody,
-				// which is a thing that happens rather than a
-				// permission scheme this tracker deliberately does
-				// not have.
-				//
-				// AGAINST THE ACTOR, which is the one name a person
-				// saves under: bound to a seat they write AS it
-				// (iam.ActorFor), whatever credential they held.
+				// A protected view is its owner's: it stops a shared board being
+				// rearranged under everybody, and is not a permission scheme. Checked
+				// against the actor, the one name a person saves under (iam.ActorFor),
+				// whatever credential they held.
 				if current.Protected && current.Owner != "" &&
 					current.Owner != w.Actor {
 					return statelog.Decision{}, forbidden("view %s is "+
@@ -273,10 +203,8 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 						"or save your own copy", view.ID,
 						current.Owner)
 				}
-				// THE CREATION FACTS ARE THE STORED ROW'S, never the
-				// caller's. A save that carried them would let a
-				// second writer re-attribute a view somebody else
-				// made, and nothing downstream could tell.
+				// The creation facts are the stored row's, never the caller's, or a
+				// second writer could silently re-attribute somebody else's view.
 				post.V = DocumentVersion
 				post.CreatedAt, post.CreatedBy = current.CreatedAt, current.CreatedBy
 				if post.Rank == "" {
@@ -290,35 +218,22 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 }
 
 // ErrNoView reports a view this node holds no live row for: never saved, or
-// deleted. Its own sentinel for [ErrNoFile]'s reason, so a tool says "no such
-// view" and an API answers 404.
+// deleted. Its own sentinel, as [ErrNoFile] is, so a tool says "no such view"
+// and an API answers 404.
 var ErrNoView = errors.New("worklet: no such view")
 
 // DeleteView takes a saved view out of every strip, listing and run.
 //
-// # A delete is a stamp, and the row stays
+// The delete is a stamp and the row stays, as a file removal does (files.go):
+// every view upsert is version-guarded, so without the row a redelivered save
+// would bring the view back. The record is the post-state with [View.DeletedAt]
+// and [View.DeletedBy] set and the default cleared, and every read of the views
+// leaves it out: [savedViews], [everySavedView], a run by `view=`, [Writer.ViewPrior].
 //
-// For a removed file's reason (files.go, "A removal is a stamp"): every view
-// upsert is guarded by its record's version and SKIPS an older one, and a
-// guard needs a row to compare against. Deleted outright, the row would let a
-// redelivered save bring the view back. So the record is the view's whole
-// post-state with [View.DeletedAt] and [View.DeletedBy] set and its default
-// flag cleared, and every read of the views leaves such a row out: the strip
-// ([savedViews]), the inventory ([everySavedView]), a run by `view=` and the
-// prior a save or another delete is decided on ([Writer.ViewPrior]).
-//
-// # Decided like the save that would replace it
-//
-// prior is what the caller read with [Writer.ViewPrior] and decided its
-// authority on (the same action a save of the view asks, on the stored owner
-// and container), and the decide refuses a view that moved, changed hands or
-// went away since, exactly as [Writer.WriteView] does. A protected view is its
-// owner's to delete, as it is theirs to change.
-//
-// A VIEW DELETED BY THE TIME THE DECIDE READS IT is answered from its row with
-// nothing published: what the caller asked for holds, and the one way to reach
-// it with a live prior is this delete made before (a rebased re-run, new to
-// the ledger) or somebody else's in the same instant.
+// It is decided like a save: a prior that moved, changed hands or went away is
+// refused as [Writer.WriteView] refuses it, and a protected view is its owner's
+// to delete. A view already deleted when the decide reads it is answered from
+// its row with nothing published (this delete re-run, or a concurrent one).
 func (w *Writer) DeleteView(ctx context.Context, opID, id string,
 	prior ViewPrior) (WriteResult, error) {
 
@@ -326,10 +241,9 @@ func (w *Writer) DeleteView(ctx context.Context, opID, id string,
 		return WriteResult{}, fmt.Errorf("%w: %s", ErrNoView, id)
 	}
 	subject := ViewSubject(id)
-	// ONE ROW, IN THE STRIP IT IS IN. The default flag it clears is its
-	// own, so no sibling is written ([settleDefaultView] clears others
-	// only for a view that sets the flag), and the container is the
-	// prior's, which the decide verifies.
+	// One row, in its strip: the default it clears is its own, so no sibling is
+	// written ([settleDefaultView]); the container is the prior's, verified by
+	// the decide.
 	scope := ScopeSet{Subject: true, Container: containerScope(prior.Container)}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
@@ -348,8 +262,7 @@ func (w *Writer) DeleteView(ctx context.Context, opID, id string,
 			if err := prior.matches(id, current, held); err != nil {
 				return statelog.Decision{}, err
 			}
-			// A PROTECTED VIEW IS ITS OWNER'S, to delete as to change:
-			// [Writer.WriteView]'s rule, against the same actor.
+			// A protected view is its owner's to delete: [Writer.WriteView]'s rule.
 			if current.Protected && current.Owner != "" && current.Owner != w.Actor {
 				return statelog.Decision{}, forbidden("view %s is protected and "+
 					"belongs to %s: ask them to delete it", id, current.Owner)
@@ -386,10 +299,8 @@ func checkView(view *View) error {
 			"to — the four are %s, %s, %s and %s", view.Container.Kind,
 			ContainerWorkspace, ContainerProject, ContainerUnit, ContainerPerson)
 	case view.Container.Kind == ContainerWorkspace && view.Container.ID != "":
-		// THE WORKSPACE IS THE ONE CONTAINER WITH NO ID, exactly as it
-		// has none in the scope grammar. An id here would make two
-		// spellings of the top of the company, and a strip read with
-		// the other spelling would come back empty.
+		// The workspace carries no id, as in the scope grammar: two spellings of
+		// the top of the company would leave a strip read under the other empty.
 		return invalid("view %s names workspace container %q — the "+
 			"workspace is the top of the company and carries no id",
 			view.ID, view.Container.ID)
@@ -398,43 +309,35 @@ func checkView(view *View) error {
 			"a view belongs to one project, unit or person, and one belonging "+
 			"to nothing appears in no strip", view.ID, view.Container.Kind)
 	case view.Default && view.Owner != "":
-		// THE DEFAULT IS THE CONTAINER'S LANDING TAB, FOR EVERYBODY, and a
-		// personal view is in nobody's strip but its owner's. Accepted,
-		// the apply cleared the container's shared default — every other
-		// reader lost their landing tab to a row they cannot see — on
-		// the authority of a caller who needed no more than their own
-		// record to save it. Where a person wants their own view first,
-		// that is a PIN, which is theirs alone.
+		// The default is the container's landing tab for everybody, and a personal
+		// view is in no strip but its owner's: accepted, the apply would clear the
+		// shared default on the authority of a caller who needed only their own
+		// record. A person's own view first is a pin.
 		return invalidSaying(caveat.ViewPersonalDefault(), "view %s is personal (%s's) and cannot be "+
 			"its container's default: the default is the landing tab for "+
 			"everybody, and nobody else sees a personal view. Share it to "+
 			"make it the default, or pin it to put it first for its owner",
 			view.ID, view.Owner)
 	case view.DeletedAt != nil || view.DeletedBy != "":
-		// A SAVE NEVER DELETES: the stamp is [Writer.DeleteView]'s own,
-		// from its clock in its decide, and a save carrying one would
-		// hide a view under an instant and a name its caller chose.
+		// A save never deletes: the stamp is [Writer.DeleteView]'s, from its own
+		// clock, not an instant and a name the caller chose.
 		return invalid("view %s carries a deletion, which a save cannot: "+
 			"delete it with %s", view.ID, DeleteWorkViewTool)
 	case len(view.Params) > MaxViewParamKeys:
-		// A GUARD ON THE MAP'S SIZE. What refuses a key that is not a
-		// filter is [ParseQuery] below, which rejects an unknown
-		// parameter rather than ignoring it.
+		// Bounds the map's size; [ParseQuery] below refuses a key that is not a
+		// filter.
 		return invalidSaying(caveat.ViewFiltersTooLarge(), "view %s carries %d query parameters and "+
 			"the maximum is %d", view.ID, len(view.Params), MaxViewParamKeys)
 	case paramsBytes(view.Params) > MaxViewParamsBytes:
-		// AND ONE ON ITS WEIGHT, because thirty-two keys say nothing
-		// about the size of a `q` or an `any` branch: one record with a
-		// megabyte of saved query is a record every data node stores,
-		// ships in every snapshot and re-reads on every replay.
+		// And its weight: a `q` or `any` branch can be large under few keys, and
+		// every data node stores, snapshots and replays the record.
 		return invalidSaying(caveat.ViewFiltersTooLarge(), "view %s's query is %d bytes and the "+
 			"maximum is %d — a saved view is a filter, not a document",
 			view.ID, paramsBytes(view.Params), MaxViewParamsBytes)
 	}
-	// AND A VIEW MAY NOT CARRY A KEY THAT EXPANDS OR PAGES. `view` would
-	// expand into itself, `cursor` would resume a page nobody asked for,
-	// and a stored `read_level` would let a board silently downgrade a
-	// seat's own read — see [expansionRefused].
+	// No key that expands or pages: `view` would expand into itself, `cursor`
+	// resume a page nobody asked for, and a stored `read_level` silently
+	// downgrade a seat's own read ([expansionRefused]).
 	for _, key := range expansionRefused {
 		if _, held := view.Params[key]; held {
 			return invalid("view %s carries %q, which a saved view "+
@@ -443,9 +346,10 @@ func checkView(view *View) error {
 				"than about the rows", view.ID, key)
 		}
 	}
-	// THE PARAMS ARE THE QUERY, so they are parsed rather than measured.
-	// The instant is this parse's own and is thrown away with the query:
-	// what is being established is that the grammar accepts every key.
+	// Parsed, not measured: the grammar must accept every key. Against UTC, not
+	// the company's zone: date tokens parse alike in every zone and only resolve
+	// differently, the resolved query is discarded, and a validator needing the
+	// company's clock could answer differently on two nodes.
 	params := make(MapParams, len(view.Params))
 	for key, value := range view.Params {
 		params[key] = value
@@ -457,11 +361,9 @@ func checkView(view *View) error {
 	return nil
 }
 
-// Valid reports whether this is one of the shapes [ViewTypes] names.
-//
-// A CLOSED SET, and the type's own comment says there are no others: a
-// rendering that list does not name is a screen that does not exist, so a view
-// naming one is refused at the write rather than rendered as a blank tab.
+// Valid reports whether this is one of the shapes [ViewTypes] names. The set is
+// closed: a view naming another shape is refused at the write rather than
+// rendered as a blank tab.
 func (t ViewType) Valid() bool { return slices.Contains(ViewTypes, t) }
 
 // ViewTypeNames is [ViewTypes] as the strings a schema enum and a refusal use.
@@ -479,11 +381,9 @@ func readView(ctx context.Context, tx *sql.Tx, id string) (View, bool, error) {
 		func(v *View, version uint64) { v.Version = version })
 }
 
-// nextViewRank mints a rank after the container's last view.
-//
-// AFTER, so a new view lands at the end of the strip rather than in front of
-// whatever the person arranged. An empty container starts at [RankOrigin],
-// which is the same origin every other order in this package starts from.
+// nextViewRank mints a rank after the container's last view, so a new view lands
+// at the end of the strip rather than in front of what the person arranged. An
+// empty container starts at [RankOrigin].
 func nextViewRank(ctx context.Context, tx *sql.Tx, container Container) (Rank, error) {
 	var last sql.NullString
 	if err := tx.QueryRowContext(ctx, `
@@ -503,14 +403,11 @@ func nextViewRank(ctx context.Context, tx *sql.Tx, container Container) (Rank, e
 	return rank, nil
 }
 
-// containerScope is where a view's container sits in the scope alphabet.
-//
-// A PROJECT RESOLVES TO ITS OWN TERM and everything else to the workspace's,
-// because the alphabet's container term is a project key or the workspace — a
-// unit or a person is not one. It is the write's half of the rule [viewScope]
-// states for the read, and the two MUST agree: a record filed under a path no
-// probe reaches is a deferral a read never waits for, and such a read reports
-// itself complete while missing the write.
+// containerScope is where a view's container sits in the scope alphabet: a
+// project's own term, else the workspace's (a unit or a person is no container
+// term). [viewScope] MUST agree for the read: a record filed under a path no
+// probe reaches is a deferral no read waits for, so the read reports itself
+// complete while missing the write.
 func containerScope(container Container) string {
 	if container.Kind == ContainerProject && container.ID != "" {
 		return container.ID
@@ -518,10 +415,8 @@ func containerScope(container Container) string {
 	return WorkspaceContainer
 }
 
-// paramsBytes is what a saved query weighs, keys included.
-//
-// THE KEYS COUNT because a caller stuffing thirty-two long keys with empty
-// values writes exactly as much as one stuffing the values.
+// paramsBytes is what a saved query weighs, keys included: long keys with empty
+// values write as much as long values.
 func paramsBytes(params map[string]string) int {
 	total := 0
 	for key, value := range params {

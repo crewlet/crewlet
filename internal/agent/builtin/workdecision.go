@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/colleague"
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/org"
@@ -100,13 +101,14 @@ func choiceProperties() map[string]any {
 				"enum": []any{
 					string(decision.EvidenceTask), string(decision.EvidencePage),
 					string(decision.EvidenceTurn), string(decision.EvidenceRun),
-					string(decision.EvidenceURL),
+					string(decision.EvidenceArtifact), string(decision.EvidenceURL),
 				},
 			},
 			"ref": map[string]any{
 				"type": "string",
 				"description": "A work item, a page's id or CONTAINER/Title, " +
-					"a turn or run id, or an https:// URL. For a work item: " +
+					"a turn, run or artifact id, or an https:// URL (an artifact's " +
+					"`url` from a tool's answer is read as the artifact). For a work item: " +
 					itemRef,
 			},
 			"label": map[string]any{
@@ -383,6 +385,27 @@ type evidenceLookup struct {
 }
 
 var _ worklet.EvidenceLookup = evidenceLookup{}
+
+// OwnArtifact is ref's artifact where ref is exactly the address this engine
+// hands out for it, so no other host or path is read as one.
+func (l evidenceLookup) OwnArtifact(ref string) (string, bool) {
+	if l.work.ArtifactLink == nil {
+		return "", false
+	}
+	ref = strings.TrimSpace(ref)
+	i := strings.LastIndex(ref, artifactAddress)
+	if i < 0 {
+		return "", false
+	}
+	id, err := artifacts.ParseID(ref[i+len(artifactAddress):])
+	if err != nil {
+		return "", false
+	}
+	if link := l.work.ArtifactLink(id); link == "" || link != ref {
+		return "", false
+	}
+	return id.String(), true
+}
 
 // Task resolves a key or an id through the same point read every other
 // reference in these tools takes.

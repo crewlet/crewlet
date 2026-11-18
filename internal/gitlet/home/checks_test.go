@@ -18,23 +18,20 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE CHECK WORK OVER STAND-INS: one repository's changes owing their checks
-// work, its targets due a reading of their checks file and its protected
-// targets owing tip work, as the `checks_due` listing answers them
-// (checkEstate.due, .targets, .tips) — each head with what its recorded facts
-// say it touches — the checks file each commit holds, as a Gitlet node answers
-// it, and no other git read: the work reads none — and every write the
-// worker asks of the repository's checks writer and of its committer, in the
-// order it asks them.
+// THE CHECK WORK OVER STAND-INS: one repository's changes owing check work,
+// its targets due a reading of their checks file and its protected targets
+// owing tip work, as the `checks_due` listing answers them (due, targets,
+// tips), each head with what its recorded facts say it touches; the checks
+// file each commit holds, the work's only git read; and every write the worker
+// asks of the repository's checks writer and committer, in order.
 type checkEstate struct {
 	mu      sync.Mutex
 	due     []gitlet.ChangeDue
 	targets []gitlet.CheckTargetDue
 	tips    []gitlet.TipDue
-	// tipsPerPage, where set, pages tips as the listing pages a repository's
-	// tip work whose windows fill its pages: that many a page, each page
-	// naming the target it ended at (gitlet.ReadAnswer.TipsNext) and the next
-	// going on after it (gitlet.ChecksDueQuery.TipsAfter), before any head.
+	// tipsPerPage, where set, pages tips as the listing does: that many a page,
+	// each naming the target it ended at (gitlet.ReadAnswer.TipsNext) and the
+	// next going on after it (gitlet.ChecksDueQuery.TipsAfter), before any head.
 	tipsPerPage int
 	// logs, where set, is what a loop over the estate logs to.
 	logs    *lines
@@ -162,9 +159,8 @@ func checkLoop(t *testing.T, e *checkEstate) *home.Loop {
 	return l
 }
 
-// owing is change n of repoA, its head head and its target main at tip,
-// owing w — where w owes a dispatch and names no facts, its head revision's
-// facts recorded touching README.md alone.
+// owing is change n of repoA, its head head and its target main at tip, owing
+// w; a w owing a dispatch with no facts gets facts touching README.md alone.
 func owing(n int64, head, tip string, w gitlet.CheckWork) gitlet.ChangeDue {
 	if w.Dispatch && w.Facts == nil {
 		w.Facts = &gitlet.TouchedPaths{Touched: []string{"README.md"}}
@@ -174,9 +170,8 @@ func owing(n int64, head, tip string, w gitlet.CheckWork) gitlet.ChangeDue {
 		TipPosition: statelog.Position{Stream: topics.CodeLogStream, Seq: 30}, Checks: &w}
 }
 
-// checksFile is a checks file defining each of defs, a line of YAML each
-// beside the name: `run: make <name>` and a timeout, then what the entry
-// adds.
+// checksFile is a checks file defining each of defs, a name and an optional
+// line of YAML: `run: make <name>` and a timeout, then that line.
 func checksFile(defs ...string) string {
 	var b strings.Builder
 	b.WriteString("checks:\n")
@@ -405,20 +400,18 @@ func TestASupersededHeadsChecksAreCancelled(t *testing.T) {
 	}
 }
 
-// A REQUIRED CHECK ADDED AT THE TARGET REACHES A WAITING HEAD: a change
-// dispatched while its target's gate requires lint and its target's checks
-// file defines no lint queues the checks the file defines and records its
-// dispatch under that file, lint left to the gate to wait on. Once the target
-// moved to a tip whose file defines lint, the target's READING is due: the
-// turn reads the file at the new tip and records it, naming no head; and the
-// head — whose dispatch now names another file than its target's reading —
-// is listed again owing its dispatch, which queues lint Required under the
-// new tip's file, nothing the head holds already, and records the head under
-// the new file.
+// A REQUIRED CHECK ADDED AT THE TARGET REACHES A WAITING HEAD: a head
+// dispatched while its target's gate requires lint and its target's file
+// defines none queues what the file defines and records its dispatch under it,
+// lint left to the gate to wait on. Once the target moves to a tip whose file defines
+// lint, the target's READING is due: the turn reads the file at the new tip
+// and records it, naming no head; and the head, its dispatch now naming
+// another file than the reading, is listed again owing its dispatch, which
+// queues lint Required under the new file, nothing the head holds already,
+// and records the head under it.
 //
-// Mutation: record a due target's reading without reading its file at the
-// new tip — the reading keeps the old file, and the waiting head is never
-// due again, red.
+// Mutation: record a due reading without reading the file at the new tip —
+// the reading keeps the old file and the head is never due again, red.
 func TestARequiredCheckAddedAtTheTargetReachesAWaitingHead(t *testing.T) {
 	t.Parallel()
 	head, before, after := oid("1"), oid("2"), oid("6")
@@ -550,8 +543,8 @@ func TestAMendedChecksFileReachesTheHeadsItErrored(t *testing.T) {
 // a check: the queues and the row that takes the head off its home's list
 // land together, in one append.
 //
-// Mutation: queue each attempt in a write of its own before the dispatch, as
-// the home once did — four writes, red.
+// Mutation: queue each attempt in a write of its own before the dispatch —
+// four writes, red.
 func TestAHeadsDispatchLandsInOneRecord(t *testing.T) {
 	t.Parallel()
 	head, tip := oid("1"), oid("2")

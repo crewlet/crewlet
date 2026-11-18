@@ -4726,7 +4726,10 @@ var ACTIONS = {
 		args: [
 			"repo",
 			"change",
-			"all_failed"
+			"all_failed",
+			"sha",
+			"checked_for",
+			"checks"
 		],
 		domain: "code",
 		apps: ["gitlet"],
@@ -4769,6 +4772,19 @@ var ACTIONS = {
 			"findings",
 			"resolution",
 			"note"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_mark_viewed: {
+		args: [
+			"repo",
+			"change",
+			"viewed",
+			"unviewed",
+			"seen"
 		],
 		domain: "code",
 		apps: ["gitlet"],

@@ -19,28 +19,23 @@ import (
 
 // THE EXPUNGE CASES (F48–F50): a person's purge of a repository's unreachable
 // objects, served by its maintainer's expunge loop (internal/gitlet/compact's
-// expunge.go) — a begin that leaves dropping what no ref reached at its scan
-// and moves the repository's drop epoch, a rescue of what a ref reaches again
-// at a sync of its own, and a commit that retires the dropping packs — RACED
-// by a push checked before the begin, STARVED of nothing by a push every
-// 100 ms, and OUTLIVED by its retired packs for their grace. The purge is
-// asked through the fleet (Fleet.Expunge), as code_purge_unreachable asks
-// one, and every Gitlet node's compactor — built as the engine builds it and
-// never started — is driven pass by pass until the repository owes nothing.
-// Each case is written once, over an expungeScene, so Run's fleet of its own
-// and RunFleet's shared cluster run the same body.
+// expunge.go: begin, rescue, commit), raced by a push checked before the
+// begin, under a push every 100 ms, and outlived by its retired packs for
+// their grace. The purge is asked through Fleet.Expunge, as
+// code_purge_unreachable asks one, and every Gitlet node's compactor, built as
+// the engine builds it and never started, is driven pass by pass until the
+// repository owes nothing. Each case is written once, over an expungeScene, so
+// Run and RunFleet run the same body.
 
-// expungePushEvery is F49's push rate: a push to main every 100 ms, ten a
-// second into one repository — past what an agent fleet sustains into one
-// repository on code.limits' daily quota, so a cycle that a busy repository
-// would starve is starved here.
+// expungePushEvery is F49's push rate: ten a second into one repository, past
+// what an agent fleet sustains on code.limits' daily quota, so a cycle a busy
+// repository would starve is starved here.
 const expungePushEvery = 100 * time.Millisecond
 
-// expungeScene is one expunge case's repository on its fleet: the case's
-// test, fleet and context (c, which the compaction cases' helpers take), the
-// repository's name and id, and its URL through the Gitlet node the case's
-// pushes are received by — read again at every call, since a restarted node
-// listens on a new one.
+// expungeScene is one expunge case's repository on its fleet. c carries the
+// test, fleet and context the compaction cases' helpers take; url, through
+// the node receiving the case's pushes, is read at every call, since a
+// restarted node listens on a new one.
 type expungeScene struct {
 	c    *Case
 	name string
@@ -48,16 +43,16 @@ type expungeScene struct {
 	url  func() string
 }
 
-// sceneOf is Run's case c as an expunge scene: RepoName, its pushes received
-// by the first Gitlet node.
+// sceneOf is Run's case c as an expunge scene: RepoName, pushed to the first
+// Gitlet node.
 func sceneOf(c *Case) *expungeScene {
 	c.T.Helper()
 	return &expungeScene{c: c, name: RepoName, id: c.Rows().Repo.ID, url: func() string { return c.URL(0) }}
 }
 
-// fleetSceneOf is RunFleet's repository rc as an expunge scene, its pushes
-// received by a member that is not its committer, so each is decided on
-// another node than the one that checked it.
+// fleetSceneOf is RunFleet's repository rc as an expunge scene, pushed to a
+// member other than its committer, so each push is decided on another node
+// than the one that checked it.
 func fleetSceneOf(rc *repoCase) *expungeScene {
 	rc.t.Helper()
 	member := rc.other(rc.committer())
@@ -75,16 +70,15 @@ func (s *expungeScene) rows() Rows {
 	return rows
 }
 
-// expungeRow is a repository's expunges as its row records them — the one
-// open, the purge asked of it and not yet served, and its last commit's
-// instant (gitlet.ExpungeState) — and the drop epoch every begin moves.
+// expungeRow is a repository's expunge state as its row records it
+// (gitlet.ExpungeState) and the drop epoch every begin moves.
 type expungeRow struct {
 	gitlet.ExpungeState
 	epoch int64
 }
 
-// state is the repository's expungeRow, its detail read linearizable through
-// the first Gitlet node.
+// state is the repository's expungeRow, read linearizable through the first
+// Gitlet node.
 func (s *expungeScene) state() expungeRow {
 	s.c.T.Helper()
 	n := s.c.Fleet.Nodes()[0]
@@ -106,9 +100,9 @@ func (s *expungeScene) mustPush(p *Person, dir string, refspecs ...string) {
 	}
 }
 
-// branchGone makes a commit on a branch of its own off main, pushes the
-// branch and deletes it — a commit no ref reaches, which a purge drops — and
-// answers the commit, the work tree left on main.
+// branchGone pushes a commit on a branch of its own off main and deletes the
+// branch, leaving a commit no ref reaches for a purge to drop; it answers the
+// commit, the work tree back on main.
 func (s *expungeScene) branchGone(p *Person, work, branch string) string {
 	s.c.T.Helper()
 	p.Git().Run(s.c.T, work, "checkout", "--quiet", "-B", branch, "main")
@@ -120,8 +114,7 @@ func (s *expungeScene) branchGone(p *Person, work, branch string) string {
 }
 
 // purge asks a person's purge of the repository through the fleet, as
-// code_purge_unreachable asks one, and fails the case unless its record
-// applied.
+// code_purge_unreachable does, and fails the case unless its record applied.
 func (s *expungeScene) purge() gitlet.ExpungeResult {
 	s.c.T.Helper()
 	res, err := s.c.Fleet.Expunge(s.c.Ctx, gitlet.ExpungeProposal{Request: &gitlet.ExpungeRequest{RepoID: s.id,
@@ -135,9 +128,9 @@ func (s *expungeScene) purge() gitlet.ExpungeResult {
 	return res
 }
 
-// owed is whether the repository owes an expunge — one open, or a purge
-// requested — as the expunge listing through the first Gitlet node names it,
-// read linearizable.
+// owed is whether the repository owes an expunge (one open, or a purge
+// requested), per the expunge listing through the first Gitlet node, read
+// linearizable.
 func (s *expungeScene) owed(ctx context.Context) (bool, error) {
 	n := s.c.Fleet.Nodes()[0]
 	q := gitlet.ReadQuery{Kind: gitlet.ReadExpungeDue, Fresh: Linearizable}
@@ -156,21 +149,18 @@ func (s *expungeScene) owed(ctx context.Context) (bool, error) {
 	}
 }
 
-// tryServed runs every Gitlet node's expunge pass in turn — a node that does not
-// maintain the repository skipping it — until the repository owes no
-// expunge, and answers what the passes did between them; a pass that refused
-// or failed an expunge, a listing that failed, and a minute of passes that
-// never served the purge are its error. Under ctx alone, never the case's
-// test, so a case runs it on a goroutine while a fault holds the cycle.
+// tryServed runs every Gitlet node's expunge pass in turn (a node that does
+// not maintain the repository skips it) until the repository owes no expunge,
+// and answers what the passes did; a refused or failed expunge, a failed
+// listing, or a minute without serving the purge is its error. It runs under
+// ctx, never the case's test, so a case can run it on a goroutine while a
+// fault holds the cycle.
 //
-// HOW MANY PASSES IT TOOK IS NONE OF ITS ANSWER: a cycle whose rescue meets a
-// busy answer — the copy's objects/ still holding its begin's inputs, its
-// copy replaced by a swap, the maintenance lane busy — leaves its expunge
-// open, and the next pass finishes it from the rows (internal/gitlet/compact's
-// package doc): on a loaded runner, a pass after the one that began it
-// (#994). What a case judges of the cycles is what the fleet records: the
-// repository's row ([expungeScene.state]) and the counts of
-// crewlet.code.expunge.runs ([expungesAnswered]).
+// HOW MANY PASSES IT TOOK DECIDES NOTHING: a rescue that meets a busy answer
+// leaves its expunge open for the next pass to finish from the rows
+// (internal/gitlet/compact's package doc). A case judges what the fleet
+// records: the row ([expungeScene.state]) and crewlet.code.expunge.runs
+// ([expungesAnswered]).
 func (s *expungeScene) tryServed(ctx context.Context) expungeServed {
 	var o expungeServed
 	deadline := time.Now().Add(time.Minute)
@@ -230,8 +220,8 @@ type expungeServed struct {
 }
 
 // hold arms point to block once, and answers the channel closed when the
-// cycle reaches it and the function that lets it go — run by the case's own
-// defer too, so a case that fails early never leaves the cycle held.
+// cycle reaches it and the function that lets it go, also run at the case's
+// cleanup so a case that fails early never leaves the cycle held.
 func (s *expungeScene) hold(point gitletfault.Point) (reached <-chan struct{}, release func()) {
 	s.c.T.Helper()
 	held, at := make(chan struct{}), make(chan struct{})
@@ -252,10 +242,9 @@ func (s *expungeScene) reach(reached <-chan struct{}, done <-chan expungeServed,
 	}
 }
 
-// dropped fails the case unless no Gitlet node's copy of the repository, synced
-// linearizable once the commit has landed, holds oid — in objects/ or a
-// dropping view, of which none is left: what the expunge took out is out of
-// every copy.
+// dropped fails the case unless no Gitlet node's copy, synced linearizable
+// after the commit, holds oid or names a dropping view: what the expunge took
+// out is out of every copy.
 func (s *expungeScene) dropped(p *Person, oid string) {
 	t := s.c.T
 	t.Helper()
@@ -274,9 +263,9 @@ func (s *expungeScene) dropped(p *Person, oid string) {
 	}
 }
 
-// expungesAnswered is how many expunge cycles every Gitlet node of f has
-// answered outcome — each compactor's crewlet.code.expunge.runs, counted
-// for its node's life.
+// expungesAnswered is how many expunge cycles f's Gitlet nodes have answered
+// outcome: each compactor's crewlet.code.expunge.runs, counted for its node's
+// life.
 func expungesAnswered(f Fleet, outcome compact.Outcome) uint64 {
 	var total uint64
 	for _, n := range f.Nodes() {
@@ -294,23 +283,18 @@ func (s *expungeScene) converged() {
 	}
 }
 
-// F48: an expunge raced by a write it must refuse and one it must keep.
-//
-// A PUSH CHECKED BEFORE THE BEGIN and decided after it is refused
-// `expunging`, whole, naming the epochs: its receiver checked it against a
-// copy that held, live, the commit it builds on — topic's tip, advertised
-// when it was made, so its pack carries its own commit alone — and topic,
-// deleted under it, left that commit to the purge, so landed it would name an
-// object the commit retires. Run again, as its refusal says, it lands,
-// carrying the commit it leaned on. A BRANCH REVIVED between the scan and the
-// begin at a commit the scan found unreachable — an engine write creating a
-// branch at an old commit — is kept by the rescue. Once the commit has
-// landed every copy passes git fsck (I1) and none holds the commit nothing
-// revived.
+// F48: an expunge raced by a write it must refuse and one it must keep. A PUSH
+// CHECKED BEFORE THE BEGIN and decided after it is refused `expunging`, whole,
+// naming the epochs: its pack carries its commit alone, on topic's tip (live
+// where checked), which topic's deletion under it left to the purge, so landed
+// it would name a retired object; run again, it lands, carrying that tip. A
+// BRANCH REVIVED by an engine write between the scan and the begin, at a
+// commit the scan found unreachable, is kept by the rescue. After the commit
+// every copy passes git fsck (I1) and none holds the commit nothing revived.
 //
 // Mutation: drop the drop-epoch comparison from the push's decide, and the
-// held push lands between the rescue's read of the refs and the commit,
-// which retires the commit its branch names: git fsck fails (I1).
+// held push lands after the rescue read the refs; the commit retires what its
+// branch names, and git fsck fails (I1).
 func (s *expungeScene) vsAPushCheckedBeforeIt() {
 	t := s.c.T
 	p := NewPerson(t, s.c.Fleet, "ceo")
@@ -340,9 +324,8 @@ func (s *expungeScene) vsAPushCheckedBeforeIt() {
 		t.Fatalf("topic's deletion under the held push: %s", res)
 	}
 
-	// THE PURGE, its cycle held after its build — its scan has read the
-	// refs — and after its rescue's upload — its begin has applied, and its
-	// rescue has read the refs at a sync of its own.
+	// THE PURGE, held after its build (its scan has read the refs) and after
+	// its rescue's upload (its begin has applied, its rescue read the refs).
 	s.purge()
 	built, letBuild := s.hold(gitletfault.ExpungeAfterBuild)
 	rescued, letRescue := s.hold(gitletfault.ExpungeAfterRescueUpload)
@@ -391,43 +374,18 @@ func (s *expungeScene) vsAPushCheckedBeforeIt() {
 	s.converged()
 }
 
-// F49: an expunge under a push to main every 100 ms is served in ONE CYCLE —
-// one begin and its commit, neither refused: a begin's decide reads its
-// inputs and the epoch, a commit's its open expunge alone, and no push moves
-// either. The cycle is held after its build and after its rescue's upload,
-// each until two more pushes have landed — the second begun, checked and
-// decided while the cycle was held — so its begin is decided over refs that
-// moved since its scan, and its commit over refs that moved since its rescue
-// read them. Every push lands, one checked before the begin and decided after
-// it run again once it is refused `expunging`, and every copy passes git
-// fsck.
+// F49: an expunge under a push to main every 100 ms is served in ONE CYCLE:
+// a begin decides on its inputs and the epoch, a commit on its open expunge
+// alone, and no push moves either. Held after its build and its rescue's
+// upload, each until two more pushes land, the cycle decides over refs moved
+// since it read them. Every push lands (one refused `expunging` runs again)
+// and every copy passes git fsck. The row holds the purge's begin while the
+// commit is held and its commit after, at one drop epoch: no other expunge
+// began. Every node's crewlet.code.expunge.runs{outcome=stale} stays as before
+// the purge: a pass's report misses a stale commit the next pass finishes.
 //
-// THE BEGIN AND ITS COMMIT ARE THE ROW'S: while the commit is held, the
-// repository's row names the purge's own begin — an expunge open, serving
-// the purge's request, at the drop epoch it moved the repository to — and
-// once the passes are done, its commit — none open, the purge served, the
-// commit's instant recorded — at that epoch still, which every begin moves,
-// so no other expunge began.
-//
-// ONE CYCLE IS COUNTED ON EVERY NODE, never inferred from the cycle that
-// committed: a commit refused stale leaves its expunge open, and the next
-// pass finishes it from the rows — a second cycle the pass's own report
-// counts nowhere, since it counts what expunged, was refused or failed, and
-// after which the row reads as after one — so the case holds every node's
-// crewlet.code.expunge.runs{outcome=stale} to what it was before the purge.
-//
-// WHICHEVER PASS COMMITS IT: a cycle whose rescue meets a busy answer leaves
-// its expunge open for the next pass to finish from the rows, as compact's
-// own TestAnExpungeBusyPastItsBeginIsFinishedByTheNextAsk holds — on a
-// loaded runner, under this push rate, a pass after the one that began it
-// (#994). Passes run an ExpungePoll apart in production, so such a commit
-// lands a poll late there; how many passes the case's took is the runner's,
-// and decides nothing.
-//
-// Mutations: have the commit's decide refuse stale once a push landed since
-// the rescue's sync, and the cycle is answered stale: red; have the commit's
-// apply keep the repository's last commit instant, and the row records no
-// commit of the purge's expunge: red.
+// Mutations: refuse the commit stale once a push landed since the rescue's
+// sync, or keep the row's last commit instant on the commit's apply: red.
 func (s *expungeScene) underAPushEvery100ms() {
 	t := s.c.T
 	p := NewPerson(t, s.c.Fleet, "ceo")
@@ -501,10 +459,9 @@ func (s *expungeScene) underAPushEvery100ms() {
 	s.converged()
 }
 
-// mainPusher is F49's pusher: a commit to main every expungePushEvery, from a
-// goroutine of its own, each pushed until it lands — a push refused
-// `expunging`, checked before a begin and decided after it, run again as its
-// refusal says — and any other answer ending it, said.
+// mainPusher is F49's pusher: a commit to main every expungePushEvery from a
+// goroutine of its own, each pushed until it lands (a refusal `expunging` is
+// run again, as it says), any other answer ending it, said.
 type mainPusher struct {
 	ctx           context.Context
 	p             *Person
@@ -516,9 +473,9 @@ type mainPusher struct {
 	got pushedSoFar
 }
 
-// pushedSoFar is what a mainPusher has done: the pushes landed, those refused
-// `expunging` and run again, the last commit landed, and why it ended, if it
-// ended of its own.
+// pushedSoFar is what a mainPusher has done: pushes landed, pushes refused
+// `expunging` and run again, the last commit landed, and why it ended of its
+// own, if it did.
 type pushedSoFar struct {
 	landed, refused int
 	head, failed    string
@@ -595,16 +552,15 @@ func (m *mainPusher) push(i int) bool {
 	}
 }
 
-// outlives is F50: an expunge's retirements — its begin's inputs and the
-// dropping packs its commit retires — keep their objects from the collector
+// outlives is F50: an expunge's retirements (its begin's inputs and the
+// dropping packs its commit retires) keep their objects from the collector
 // for gitlet.RetireGrace, as a compaction's inputs do (C4): a retention pass
-// 23 h after the commit sweeps none of them and a collection past every
-// upload's own grace (collect.PendingGrace) deletes none, while the rows
-// still serve them; once a retention pass past the grace has swept them, the
-// next collection deletes them all, the packs the expunge kept untouched
-// throughout. The fleet's clocks move for every repository it holds, so each
-// count is the repository's own but the first pass's, which no repository's
-// rows are old enough to meet.
+// 23 h after the commit sweeps none and a collection past
+// collect.PendingGrace deletes none while the rows still serve them; once a
+// retention pass past the grace sweeps them, the next collection deletes them
+// all, the kept packs untouched throughout. The fleet's clocks move for every
+// repository it holds, so each count is this repository's own but the first
+// pass's, which no repository's rows are old enough to meet.
 func (s *expungeScene) outlives() error {
 	t := s.c.T
 	t.Helper()
@@ -730,8 +686,8 @@ func expungeUnderAPushEvery100msOnAFleet(t *testing.T, c Cluster) {
 }
 
 // F50 on a fleet: LAST of RunFleet's cases, since its passes move the
-// retention's and the collector's clocks a day on for every repository the
-// shared cluster holds.
+// retention's and collector's clocks a day on for every repository the shared
+// cluster holds.
 func expungeRetiredPackOutlivesItsLongestReadOnAFleet(t *testing.T, c Cluster) {
 	if err := fleetSceneOf(newRepoCase(t, c, "fleet-f50")).outlives(); err != nil {
 		t.Error(err)

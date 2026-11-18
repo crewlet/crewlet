@@ -12,12 +12,10 @@ import (
 
 // A PURGE'S SCOPE NAMES ITS WHOLE REACH AND STAYS UNDER THE TERM CAP.
 //
-// The cap is the design's universal batch, and a writer whose reach is larger
-// states the smallest covering term instead — a purged epic's hundred children
-// are one project's container, not a refused purge and not a scope the
-// framework rejects. A reach spread over more projects than the cap, or naming
-// a task this node holds no row of, is the domain: the one term that certainly
-// covers it.
+// A reach past the cap states the smallest covering term instead — an epic's
+// hundred children are one project's container, not a refused purge. A reach
+// over more projects than the cap, or naming a task this node holds no row of,
+// is the domain.
 func TestAPurgesScopeNamesItsWholeReachUnderTheCap(t *testing.T) {
 	t.Parallel()
 	epic := purgeReach{}
@@ -55,8 +53,7 @@ func TestAPurgesScopeNamesItsWholeReachUnderTheCap(t *testing.T) {
 			if got := len(scope.Terms); got != tc.terms {
 				t.Errorf("the scope has %d terms, want %d: %+v", got, tc.terms, scope.Terms)
 			}
-			// THE PURGED TASK ITSELF, which a scope built from terms
-			// carries no sentinel for.
+			// The purged task itself: a term-built scope has no Subject.
 			self := scope.coversReach(purgeReach{"purged": "ENG"})
 			if self != nil && !scope.Subject {
 				t.Errorf("the scope does not name the purged task itself: %v", self)
@@ -77,9 +74,9 @@ func reachInENG(n int) purgeReach {
 // A SCOPE THAT DOES NOT NAME A TASK IN THE REACH, OR NAMES IT WHERE IT IS NOT
 // FILED, IS REFUSED NAMING THE TASK.
 //
-// The request's scope is what the publisher probed the deferral index with, so
-// a decide that found a task the scope misses must refuse rather than widen it:
-// a record deferred under that task was never asked about.
+// The publisher probed the deferral index with the request's scope, so a
+// decide must refuse rather than widen it: a record deferred under the missed
+// task was never asked about.
 func TestAScopeShortOfThePurgesReachIsRefusedNamingTheTask(t *testing.T) {
 	t.Parallel()
 	named := purgeScope("purged", "ENG", purgeReach{"a": "ENG"}, nil)
@@ -123,14 +120,11 @@ func TestAScopeShortOfThePurgesReachIsRefusedNamingTheTask(t *testing.T) {
 
 // A PURGE'S SCOPE NAMES EVERY KEY IT HANDS ON, EACH UNDER ITS OWN PROJECT.
 //
-// The apply releases the purged task's claim on its current key and on every
-// former one and hands each to a task still holding it, which is decided by
-// the records filed under that key — a create of a duplicate, a move onto it.
-// A scope naming the task alone let the purge overtake such a record on the
-// node that retained it, and hand the key to another task there than on
-// every other node. A former key sits under the project that minted it, which
-// a move has left, so the purged task's own project does not cover it; and
-// under the cap the keys fold with the tasks into their project's container.
+// The apply hands each current and former key on, which records filed under
+// that key decide; a scope naming the task alone lets the purge overtake such
+// a record on the node deferring it, handing the key to a different task
+// there. A former key sits under the project that minted it, not the task's
+// own; under the cap keys fold with tasks into their project's container.
 func TestAPurgesScopeNamesEveryKeyItHandsOn(t *testing.T) {
 	t.Parallel()
 	keys := []string{"OPS-3", "ENG-7", "WEB-2"}
@@ -156,7 +150,7 @@ func TestAPurgesScopeNamesEveryKeyItHandsOn(t *testing.T) {
 		t.Errorf("the scope does not name the purged task itself: %v", self)
 	}
 
-	// UNDER THE CAP, the keys fold with the tasks of their project.
+	// Past the cap, the keys fold with the tasks of their project.
 	epic := reachInENG(MaxScopeTerms)
 	folded := purgeScope("purged", "ENG", epic, []string{"ENG-7", "OPS-1"})
 	if err := folded.Validate(); err != nil {
@@ -177,8 +171,8 @@ func TestAPurgesScopeNamesEveryKeyItHandsOn(t *testing.T) {
 // A SCOPE SHORT OF A KEY THE WRITE MOVES IS REFUSED NAMING THE KEY.
 //
 // The keys are read before the request, so a task re-keyed in between holds
-// one the request never probed; the decide refuses rather than publishing a
-// record filed where no deferral under that key is looked for.
+// one the request never probed; the decide must refuse rather than publish a
+// record no deferral under that key was probed for.
 func TestAScopeShortOfAKeyIsRefusedNamingTheKey(t *testing.T) {
 	t.Parallel()
 	named := purgeScope("purged", "ENG", nil, []string{"ENG-7"})
@@ -226,12 +220,10 @@ func TestAScopeShortOfAKeyIsRefusedNamingTheKey(t *testing.T) {
 
 // AN ENUMERATION PAST THE CAP FOLDS, NEVER FAILS.
 //
-// Each widening a writer makes is bounded on its own — sixty-four dependents,
-// a task's keys, a purge's reach — and their sum is not: a blocker somebody
-// filled has sixty-four dependents and its own term besides, and the scope
-// [ScopeSet.Validate] refused was refused inside the decide of every write to
-// it, for ever. The fold is the cap's own rule: the largest container first,
-// the domain when the containers alone are too many.
+// Each widening is bounded alone (dependents, keys, reach) but their sum is
+// not: a full blocker's [MaxDependents] plus its own term would be refused by
+// [ScopeSet.Validate] on every write to it, for ever. The fold takes the
+// largest container first, the domain when containers alone are too many.
 func TestAnEnumerationPastTheCapFolds(t *testing.T) {
 	t.Parallel()
 	full := ScopeSet{Subject: true, Container: "ENG"}

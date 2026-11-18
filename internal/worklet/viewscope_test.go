@@ -9,11 +9,10 @@ import (
 // A STRIP WITH A VIEWER READS THEIR PINS, SO ITS CLOSURE HOLDS THEIR RECORD.
 //
 // The pins that order a strip are read from the viewer's person record in the
-// strip's own transaction. The closure was the container alone, so a node
-// holding a deferred record on somebody's pins served a strip ordered by the
-// pins before it — and reported that strip complete. A strip with COUNTS runs
-// task queries whose closures are only known inside the transaction, so it
-// declares the domain.
+// strip's own transaction; a closure of the container alone would let a node
+// holding a deferred record on those pins serve, as complete, a strip ordered
+// by the pins before it. A strip with COUNTS runs task queries whose closures
+// are known only inside the transaction, so it declares the domain.
 func TestAStripsClosureHoldsEverythingItReads(t *testing.T) {
 	t.Parallel()
 	eng := Container{Kind: ContainerProject, ID: "ENG"}

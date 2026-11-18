@@ -26,7 +26,7 @@ import type { IssueReportsAnswer } from "./issueReports.ts";
 import type { GoLiveReviewAnswer } from "./goLive.ts";
 import type { TurnOutcomesAnswer } from "./turnOutcomes.ts";
 import type { InsightsAnswer } from "./insights.ts";
-import type { AccessFixAnswer, AdvisorAnswer } from "./advisor.ts";
+import type { AccessFixAnswer, AdvisorAnalysisAnswer, AdvisorAnswer } from "./advisor.ts";
 import type {
   ModelCheck,
   ModelDevice,
@@ -5661,7 +5661,7 @@ export interface WorkDecisionOption {
 /** One thing a decision cites. A task's `ref` is its id — resolved at write,
  *  because a key moves with the task — and a url's is https. */
 export interface WorkDecisionEvidence {
-  kind: "task" | "page" | "turn" | "run" | "url";
+  kind: "task" | "page" | "turn" | "run" | "artifact" | "url";
   ref: string;
   label?: string;
 }
@@ -8258,6 +8258,7 @@ export interface QueryMap {
   turn_outcomes: TurnOutcomesAnswer;
   diagnostics_insights: InsightsAnswer;
   advisor: AdvisorAnswer;
+  advisor_analysis: AdvisorAnalysisAnswer;
   advisor_access: AccessFixAnswer;
   /** The administrator's reading, or a member's: narrow on `reading`. */
   mcp_servers_status: McpServersStatusAnswer | McpMemberServersStatusAnswer;
@@ -8875,6 +8876,8 @@ export interface CodeChangeCard {
 export interface CodeChangesText {
   /** The answering node's index of changes' words was behind its rows: a match may be missing. */
   building?: boolean;
+  /** While the answering node's index is first built, newest first: changes opened at or before this instant may be missing. */
+  indexed_back_to?: string;
   /** More changes may hold the words than one search reads: the page is drawn from the newest. */
   truncated?: boolean;
 }

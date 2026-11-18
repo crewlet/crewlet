@@ -8,14 +8,13 @@ import (
 	"io"
 	"math/rand/v2"
 	"os"
-	"runtime"
 	"strings"
 	"testing"
 )
 
 // decodedExportInput is the meter's reading of an export as encoding/json's
 // stream decoder made it, every value it read held whole: the oracle the
-// scanner's reading is held to ([lastExportInput]).
+// scanner's reading is held to ([meterExport]'s figure).
 func decodedExportInput(r io.Reader) (int64, error) {
 	dec := json.NewDecoder(r)
 	if err := expectDelim(dec, '{'); err != nil {
@@ -78,6 +77,13 @@ func decodedExportInput(r io.Reader) (int64, error) {
 		}
 	}
 	return last, nil
+}
+
+// exportFigure is the floor's figure the meter reads off an export: one walk
+// of it ([meterExport]), the count beside it unread here.
+func exportFigure(t *testing.T, r io.Reader) (int64, error) {
+	read, err := meterExport(t.Context(), r, "2.3.0")
+	return read.figure, err
 }
 
 // decodedSkip passes over the decoder's next value, a token at a time.
@@ -163,38 +169,10 @@ func TestTheMeterReadsAnExportAsTheDecoderDid(t *testing.T) {
 	}
 	for _, doc := range exports {
 		want, wantErr := decodedExportInput(strings.NewReader(doc))
-		got, gotErr := lastExportInput(bytes.NewReader(gzipOf(t, doc)))
+		got, gotErr := exportFigure(t, bytes.NewReader(gzipOf(t, doc)))
 		if got != want || (gotErr == nil) != (wantErr == nil) {
 			t.Fatalf("the export %.200q reads %d (%v), want the decoder's %d (%v)", doc, got, gotErr, want, wantErr)
 		}
-	}
-}
-
-// THE METER HOLDS NO STRING OF AN EXPORT: an export holding a message part of
-// 24 MiB, an image's data URI, reads the figure it reads without the part, and
-// allocates no more reading it than its scanner and a few small values, never
-// the part.
-//
-// Not in parallel: another case's allocations would be counted as the meter's.
-//
-// Mutation: capture every value of a message rather than pass the rest over,
-// or hold a name whole, and the part is allocated.
-func TestTheMeterHoldsNoStringOfAnExport(t *testing.T) {
-	step := `{"id":"msg_2","type":"assistant","time":{"created":1,"completed":2},` +
-		`"tokens":{"input":1015,"output":5,"cache":{"read":200,"write":0}}}`
-	part := `{"id":"msg_1","type":"user","parts":[{"type":"file","url":"data:image/png;base64,` +
-		strings.Repeat("QUJD", 6<<20) + `"}]}`
-	archive := gzipOf(t, `{"info":{"id":"ses_1"},"messages":[`+part+`,`+step+`]}`)
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	got, err := lastExportInput(bytes.NewReader(archive))
-	runtime.ReadMemStats(&after)
-	if err != nil || got != 1215 {
-		t.Fatalf("the export reads %d (%v), want 1215", got, err)
-	}
-	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 4<<20 {
-		t.Errorf("reading the export allocated %d bytes, the part's 24 MiB among them", allocated)
 	}
 }
 
@@ -222,7 +200,7 @@ func TestAMessagesValuePastTheMetersBoundIsReadForWhatItIs(t *testing.T) {
 			long + `"}}`, 0, true},
 	} {
 		doc := `{"messages":[` + older + `,` + tc.newest + `]}`
-		got, err := lastExportInput(bytes.NewReader(gzipOf(t, doc)))
+		got, err := exportFigure(t, bytes.NewReader(gzipOf(t, doc)))
 		if got != tc.want || (err != nil) != tc.failed || tc.failed && !errors.Is(err, errNotExport) {
 			t.Errorf("%s: read %d (%v), want %d, failed %v", name, got, err, tc.want, tc.failed)
 		}

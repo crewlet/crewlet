@@ -54,18 +54,15 @@ func refsOf(served []servedChange) []string {
 type partRow struct{ id, cursor string }
 
 // A PAGE KEPT SHORTER THAN IT WAS SERVED RESUMES AFTER ITS LAST ROW: every
-// row a read of changes serves names the cursor that resumes after it — a
-// listed change by the walk its listing takes (gitlet.ReadQuery.ChangesCursor),
-// a revision, a reviewer, a comment, a review and a finding by its own — so a
-// reader that keeps any first rows of a page and resumes after the last it
-// kept reads every row after it once, in order: whichever index a listing
-// walks, and whichever half of what waits on the asker the row came from; and
-// a page's own cursor is its last row's.
+// row a read of changes serves names the cursor resuming after it (a listed
+// change by its listing's walk, gitlet.ReadQuery.ChangesCursor; a part's row by
+// its own), so a reader keeping any first rows of a page reads every later row
+// once, in order, whichever index or needs=me half served it; a page's own
+// cursor is its last row's.
 //
 // Mutations: ChangesCursor spelled by another walk than the reader's (a
-// repository's listing by its opening), the second half of needs=me resumed
-// without its prefix, a comment's cursor without its thread, a review's by
-// its id → red.
+// repository's listing by its opening), needs=me's second half resumed without
+// its prefix, a comment's cursor without its thread, a review's by its id → red.
 func TestAPageResumesAfterAnyRowItServed(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -101,10 +98,9 @@ func TestAPageResumesAfterAnyRowItServed(t *testing.T) {
 	converse(asking(app, app2.ChangeID, cto, "dev", "plat-lead"))
 	converse(asking(web, web1.ChangeID, cto, "plat-lead", "founder"))
 	converse(asking(app, app1.ChangeID, cto, "plat-lead"))
-	// AND ONE MORE ASK OF PLAT-LEAD ON APP, left waiting: their review of
-	// app1 below answers that ask, and a reviewer's listing walks only the
-	// asks still waiting, so app2's alone would leave nothing to resume
-	// between.
+	// ONE MORE ASK OF PLAT-LEAD ON APP, left waiting: their review of app1
+	// answers that ask and a listing walks only waiting asks, so app2's
+	// alone would leave nothing to resume between.
 	converse(asking(app, app3.ChangeID, cto, "plat-lead"))
 	converse(reviewing(web, web1.ChangeID, platLead, 3, gitlet.VerdictRequestChanges, nil,
 		raising(gitlet.SeverityBlocker, 1, "Retries forever"), raising(gitlet.SeverityMinor, 2, "A long line"),

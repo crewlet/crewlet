@@ -124,7 +124,8 @@
 // options, and the engine enforces exactly its shape, that the choice names an
 // option of the ask it answers, and that a promised inform is kept — never an
 // approval chain, a quorum or a state machine. decision.go holds the type and
-// the rules; the ADR says why the engine stops there.
+// the rules; the ADR says why the engine stops there. ADR-0160: a url this
+// engine handed out for one of its artifacts is cited as the artifact.
 //
 // # A question and a review say whom they wait on
 //
@@ -132,6 +133,12 @@
 // covers it ([Withdrawal]), an item in review its holder submitted itself is
 // held by a question to its reviewer or comes back to it, and `holding_up`
 // counts the agent work waiting on a person through what they hold or are asked.
+//
+// # Urgent ready work comes first
+//
+// ADR-0159 is the record: in a seat's ready work ([orderReady]) an urgent item
+// comes before every item that is not, started work included; below urgent,
+// and among urgent items, started work still comes first.
 //
 // # What a day costs the log, measured
 //
@@ -183,6 +190,54 @@
 // not read the atlas ([TaskDetail.WithoutEntries]); the work on each entry is
 // read from the tracker's own rows ([Reader.EntryMarks], [Reader.EntryWork]).
 // ADR-0140 records the decision.
+//
+// # What a history row's delta carries
+//
+// The delta is the applier's, computed in the apply's own transaction from the
+// object as this node stored it and the object the record says it should be
+// ([Applier.writeHistory]). A wake's Fields is never a second producer: a
+// quiet commit has no wake yet still happened, and a wake is built from a
+// snapshot read outside the write's transaction, so it can name a move another
+// writer already made. Its fields are read only where the apply has nothing to
+// compare, a record the version guard skipped ([statedDeltas]). So every
+// history row says what changed, not only those somebody was notified about.
+//
+// The comparisons are pure over two values, as coerce.go and
+// [internal/textindex] are, because a rule reachable only through a database is
+// one nobody re-measures; only [documentDeltas] reads.
+//
+// A side is the log's own text, never a rendering: a history row is one of the
+// state log's N identical copies, so it may not depend on live configuration,
+// a reader's time zone or a row its subject does not own. A relation names the
+// other task by its ID, since a key is a fact about another task's row, and a
+// node that had not applied that task would store a different string forever
+// in a table nothing rewrites. The surface resolves the ID.
+//
+// Nothing is cut. The table is never swept, so every byte stays on every node
+// for the company's life, and a cut keeps an opening a reader takes for the
+// whole value, or loses from a set exactly the member the commit added:
+//   - a set records what it gained and lost, as whole members, sorted
+//     ([deltaSet.set]);
+//   - an ordered list (a person's queue, their pinned views, a task's
+//     checklists) carries both sides whole, since its order is its content and
+//     each is capped in the tens where it is written;
+//   - free text is whole up to [MaxDeltaValue] and past it is its size
+//     ([proseText]), which nobody mistakes for the text, kept whole in the
+//     row's mutation; one member of a list of values does the same at
+//     [MaxDeltaElement];
+//   - an identifier (a handle, ID, slug or path) is whole: each is bounded where
+//     it is written, and a size cannot stand in for a name.
+//
+// # Every statement that reads a task's tables is registered and planned
+//
+// TestEveryIndexServesARegisteredQuery plans each registered statement over a
+// task's own tables (the task, its tags, its dependency edges and their
+// mirror, its relations, its field values) and the history, and holds the set
+// complete: an SQL literal anywhere in the module's non-test source that reads
+// one of them and is no registered statement fails it. So a read added here or
+// in another package (internal/search exports its statements for this) is
+// registered and planned, because an unplanned one sorted every live task per
+// batch while nobody looked.
 package worklet
 
 import (
@@ -200,21 +255,18 @@ import (
 
 // ObjectKind is what an object on the mutation log is.
 //
-// A NAMED STRING TYPE whose Valid is false for a kind this build has never
-// heard of — and the literal is RETAINED either way. A newer peer publishes a
-// kind this build does not know, and the deferral this build files it under
-// forms a family term out of that literal: replacing it with a sentinel would
-// make the writer's own deferral probe miss the record it is meant to see.
+// Valid is false for a kind this build does not know, and the literal is
+// kept either way: a newer peer's unknown kind is deferred under a family
+// term formed from that literal, and a sentinel would make the writer's own
+// deferral probe miss the record.
 type ObjectKind string
 
 // The kinds.
 //
-// EXPORTED AND ENUMERATED because four readers that cannot see each other all
-// compare against them: the publisher builds the subject, the wake feed's
-// filter includes or excludes the kind, the applier's dispatch switches on it,
-// and the domain's own Tables declaration must classify every one. A kind
-// added to three of the four is a record that publishes, is delivered, wakes
-// nobody and writes nothing.
+// Exported because four readers compare against them: the publisher's
+// subject, the wake feed's filter, the applier's dispatch and the domain's
+// Tables declaration. A kind added to three of the four publishes, is
+// delivered, wakes nobody and writes nothing.
 const (
 	// KindTask is one work item, and the overwhelming majority of records.
 	KindTask ObjectKind = "task"
@@ -223,11 +275,8 @@ const (
 	// default assignee and its archived flag.
 	KindProject ObjectKind = "project"
 
-	// KindCounter is a project's key sequence.
-	//
-	// ITS OWN SUBJECT, for the reason the bucket design already gave:
-	// putting the counter on the project object would make every key mint
-	// contend with every edit to that project's settings.
+	// KindCounter is a project's key sequence, on its own subject so a key
+	// mint never contends with an edit to the project's settings.
 	KindCounter ObjectKind = "counter"
 
 	// KindTags is a project's tag set.
@@ -258,43 +307,31 @@ const (
 
 	// KindEviction is a node's eviction or its readmission.
 	//
-	// ONE OF THE TWO KINDS THAT INSTALL A GATE, which is why its version
-	// is pinned at 1 for ever: a node that deferred an eviction would
-	// leave its own gate table empty and go on applying every record the
-	// evicted node appends, and there is no inverse that repairs it.
+	// It installs a gate, so its version is pinned at 1 for ever: a node that
+	// deferred an eviction would leave its gate table empty and keep applying
+	// the evicted node's records, with no inverse to repair it.
 	KindEviction ObjectKind = "eviction"
 
-	// KindRankOrder is a project's manual order.
-	//
-	// Its own kind because the object a drag mutates is the project's
-	// ORDER — a total order over its tasks that no single task owns and
-	// no single task's version can protect.
+	// KindRankOrder is a project's manual order: a drag mutates a total order
+	// over the project's tasks that no single task's version can protect.
 	KindRankOrder ObjectKind = "rankorder"
 
-	// KindBarrier is the read index's payload-free append, on ONE subject
-	// for the whole domain.
-	//
-	// One of the two kinds that write no row of this domain's on any node —
-	// the other is [KindTrimmed] — and the applier has a case for it all the
-	// same: a kind with no case faults (TestAKindNobodyDeclaredFaults), so a
-	// barrier is applied as nothing on purpose rather than by omission.
+	// KindBarrier is the read index's payload-free append, on ONE subject for
+	// the whole domain. Like [KindTrimmed] it writes no row of this domain's,
+	// and the applier has a case for it all the same: a kind with no case
+	// faults (TestAKindNobodyDeclaredFaults).
 	KindBarrier ObjectKind = "barrier"
 
-	// KindFile is one file in a project: where it lives, what it is and
-	// which object of the object store holds it. The bytes are NOT here —
-	// see internal/objstore and ADR-0026 — and neither is anything that
-	// would need them: the record names the object, and the name is what
-	// keeps the object alive.
+	// KindFile is one file in a project: where it lives, what it is and which
+	// object-store object holds it (internal/objstore, ADR-0026). The record
+	// names the object, which keeps it alive, and never carries the bytes.
 	//
-	// ITS SUBJECT IS ITS ADDRESS — the project and a token of the path —
-	// rather than a uuid, which is what makes a path one file: two writers
-	// putting the same path contend on one subject and exactly one wins,
-	// with no claim table and no second append. A move is a put at the new
-	// address and a removal at the old one — and it UPLOADS THE BYTES AGAIN,
-	// because an object is named only by the write that uploaded it
-	// (ADR-0027): a put naming the old address's object would be a second
-	// write naming one key, which is the race the collector's lock-free
-	// deletion rests on there being none of.
+	// Its subject is its address (the project and a token of the path), so two
+	// writers of one path contend on one subject and exactly one wins, with no
+	// claim table. A move is a put at the new address and a removal at the old,
+	// and it uploads the bytes again: an object is named only by the write that
+	// uploaded it (ADR-0027), and the collector's lock-free deletion rests on no
+	// second write ever naming one key.
 	KindFile ObjectKind = "file"
 
 	// KindRoster is the order of the org chart's seats by their names, on
@@ -303,25 +340,22 @@ const (
 	// `tracker_seat_places`. Machinery: no audience and no history row.
 	KindRoster ObjectKind = "roster"
 
-	// KindTrimmed is the trim's record that removes the arbitration
-	// anchors below what the log no longer holds — [statelog.TrimmedKind],
-	// ADR-0080 — on one subject per floor, which the subject's id names.
-	//
-	// THE FRAMEWORK REMOVES THE ANCHORS, in the transaction that applies
-	// the record; this domain writes nothing for it, and has the case
-	// that says so, for the barrier's reason.
+	// KindTrimmed is the trim's record that removes the arbitration anchors
+	// below what the log no longer holds ([statelog.TrimmedKind], ADR-0080), on
+	// one subject per floor, which the subject's id names. The framework
+	// removes the anchors in the applying transaction; this domain writes
+	// nothing and has a case saying so, as for [KindBarrier].
 	KindTrimmed ObjectKind = statelog.TrimmedKind
 )
 
 // ObjectKinds are every kind this build writes, in the order they are
 // documented.
 //
-// A KIND IS NEVER DROPPED FROM THIS LIST OUTRIGHT by the build that stops
-// writing it. This build's records of it stay in the log through the
-// successor's rolling upgrade, at a version the successor reads, so the
-// successor's applier meets them with no case to dispatch them to and faults
-// ([Applier.apply]); a successor that removes a kind reads its records past
-// under an apply gate of its own instead.
+// A kind is never dropped from this list by the build that stops writing
+// it: its records stay in the log through the successor's rolling upgrade,
+// and a successor with no case for them faults ([Applier.apply]). A
+// successor that removes a kind reads its records past under an apply gate
+// of its own.
 var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindCounter, KindTags,
 	KindCatalogue, KindView, KindPerson, KindAlias,
@@ -335,14 +369,12 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// EVERY KIND BUT THREE DOES. A turn is ADDITIVE — it records spend that
-// happened and races nobody — and a barrier is arbitrated by nothing at all:
-// every barrier shares one subject, so an expectation there would serialise the
-// whole company's linearizable reads behind one another and write an anchor
-// row per read into the transaction holding this store's only writer. A
-// trimmed record REMOVES anchors, and identical ones are each meant to land, so
-// an expectation would refuse every one after the first and an anchor of its
-// own would be the one row it exists not to leave behind.
+// All but three do. A turn is additive and races nobody. Every barrier
+// shares one subject, so an expectation would serialise the company's
+// linearizable reads and write an anchor row per read under the store's
+// only writer. A trimmed record removes anchors and identical ones must each
+// land, so an expectation would refuse all but the first, and its own
+// anchor would be the row it exists not to leave.
 func (k ObjectKind) Arbitrated() bool {
 	switch k {
 	case KindTurn, KindBarrier, KindTrimmed:
@@ -353,14 +385,12 @@ func (k ObjectKind) Arbitrated() bool {
 
 // InstallsGate reports whether a record on this kind installs an apply gate.
 //
-// Answered from the KIND ALONE, because it has to be answerable by a node
-// that cannot decode the payload: it is what turns an unknown version into a
-// STOP rather than a deferral.
+// Answered from the kind alone, so a node that cannot decode the payload
+// still turns an unknown version into a STOP rather than a deferral.
 func (k ObjectKind) InstallsGate() bool { return k == KindEviction }
 
-// CatalogueTypes and CatalogueFields are the two catalogue objects. The
-// catalogue kind is the one kind with a closed, tiny id set, and naming them
-// is what stops a third appearing by typo.
+// CatalogueTypes and CatalogueFields are the two catalogue objects, named so
+// a third cannot appear by typo.
 const (
 	CatalogueTypes  = "types"
 	CatalogueFields = "fields"
@@ -368,78 +398,64 @@ const (
 
 // Subject is one object on the mutation log.
 //
-// ITS WIRE NAMES ARE LOWERCASE AND ITS ID IS NEVER OMITTED. Both are format
-// decisions rather than style: the field names are inside every record on the
-// log for the life of the deployment, and the empty id is what makes the
-// barrier's own record byte-identical whatever a build's struct tags happen to
-// do — which matters because the barrier's size is the figure the read
-// index's whole cost model is derived from.
+// Its wire names are lowercase and its id is never omitted: the names are in
+// every record for the life of the deployment, and an always-present id
+// keeps the barrier's record byte-identical across builds, which matters
+// because the barrier's size drives the read index's cost model.
 type Subject struct {
 	Kind ObjectKind `json:"kind"`
 	ID   string     `json:"id"`
 }
 
-// The subject constructors, ONE PER KIND rather than a single
-// Subject{Kind, ID} literal at every call site, because half the ids are
-// composed — an alias claim's is "<KEY>.<n>" — and a composition written twice
-// is a subject two writers disagree about.
+// One constructor per kind rather than a Subject literal at each call site:
+// half the ids are composed (an alias claim's is "<KEY>.<n>"), and a
+// composition written twice is a subject two writers disagree about.
 
-// TaskSubject names one work item by its id. It is the subject every change to
-// that task is published on, so two writers racing on one task contend at the
-// broker and writers on different tasks never contend at all.
+// TaskSubject names one work item by its id: writers racing on one task
+// contend at the broker, and writers on different tasks never contend.
 func TaskSubject(id string) Subject { return Subject{Kind: KindTask, ID: id} }
 
 // IsTaskID reports whether s is spelled as every task id the engine mints:
-// a uuid in its canonical form, lowercase with its four dashes, which is how
-// create_work_item derives one from its operation and how a task's row, its
-// subject and every item a change carries (`native:<id>`) spell it.
+// a canonical uuid (lowercase, four dashes), as a task's row, its subject
+// and its items (`native:<id>`) spell it.
 //
-// NO KEY TAKES THIS FORM, current or former: a key is a project key, one
-// dash and a number (`[A-Z][A-Z0-9]{1,9}-[0-9]+`, [taskKeyPattern]), and a
-// canonical uuid holds four dashes. So a caller that holds the identity of an
-// item and needs no proof the task still exists — a listing of what carries
-// the item, which a purged task's rows still carry — may take it as named,
-// and only a key needs [Reader.Task]'s resolution.
-//
-// THE CANONICAL FORM ONLY, not whatever uuid.Parse accepts: braces, a `urn:`
-// prefix, uppercase or no dashes parse to the same uuid and match no row,
-// since [resolveTaskID] compares the id byte for byte. Such a spelling is no
-// id here, and a caller resolves it as it would a key, which refuses it.
-// A task some other writer filed under an id of another shape is resolved
-// the same way, and is found.
+// No key takes this form ([taskKeyPattern] has one dash), so a caller that
+// needs no proof the task still exists (a listing of what carries the item,
+// which a purged task's rows still carry) may take it as named; only a key
+// needs [Reader.Task]'s resolution. Only the canonical form counts: braces,
+// `urn:`, uppercase or no dashes parse to the same uuid but match no row,
+// since [resolveTaskID] compares bytes, so such a spelling is resolved as a
+// key, which refuses it. A task filed under an id of another shape is found
+// the same way.
 func IsTaskID(s string) bool {
 	u, err := uuid.Parse(s)
 	return err == nil && u.String() == s
 }
 
-// ProjectSubject names one project's settings by its key. Deliberately NOT the
-// subject its key counter mints on — see [CounterSubject].
+// ProjectSubject names one project's settings by its key; its key counter
+// mints on another subject ([CounterSubject]).
 func ProjectSubject(key string) Subject { return Subject{Kind: KindProject, ID: key} }
 
-// CounterSubject names one project's key sequence by its key. Its own subject
-// so that minting "<KEY>-<n>" contends only with other mints in that project,
-// never with an edit to the project's settings.
+// CounterSubject names one project's key sequence by its key, so minting
+// "<KEY>-<n>" contends only with other mints in that project.
 func CounterSubject(key string) Subject { return Subject{Kind: KindCounter, ID: key} }
 
-// TagsSubject names one project's tag declarations by its key. A subject of
-// its own, so declaring a tag and editing the project's settings are two
-// writes that never contend.
+// TagsSubject names one project's tag declarations by its key, so declaring
+// a tag never contends with an edit to the project's settings.
 func TagsSubject(key string) Subject { return Subject{Kind: KindTags, ID: key} }
 
 // ViewSubject names one saved view by its id.
 func ViewSubject(id string) Subject { return Subject{Kind: KindView, ID: id} }
 
-// PersonSubject names one person's inbox, priorities and pins — keyed on the
-// seat's handle (ADR-0013) rather than on a uuid: every caller that reaches
-// this record holds that handle. A name no seat answers to — a person's login —
-// is its own key.
+// PersonSubject names one person's inbox, priorities and pins, keyed on the
+// seat's handle (ADR-0013), which every caller reaching it holds. A name no
+// seat answers to, such as a person's login, is its own key.
 func PersonSubject(handle string) Subject {
 	return Subject{Kind: KindPerson, ID: handle}
 }
 
-// RankOrderSubject names one project's manual order by its key. The object a
-// drag mutates is the order itself, which no single task owns and no single
-// task's version can protect — see [KindRankOrder].
+// RankOrderSubject names one project's manual order by its key
+// ([KindRankOrder]).
 func RankOrderSubject(key string) Subject {
 	return Subject{Kind: KindRankOrder, ID: key}
 }
@@ -447,26 +463,22 @@ func RankOrderSubject(key string) Subject {
 // RosterSubject names the org chart's seat order, the one object of its kind.
 func RosterSubject() Subject { return Subject{Kind: KindRoster, ID: "seats"} }
 
-// EvictionSubject names one node's eviction or readmission by its node id.
-// A record here installs an apply gate, which is why it is addressed to the
-// node rather than to anything the node wrote.
+// EvictionSubject names one node's eviction or readmission by its node id:
+// the record installs an apply gate on that node's records, so it is
+// addressed to the node rather than to anything the node wrote.
 func EvictionSubject(nodeID string) Subject {
 	return Subject{Kind: KindEviction, ID: nodeID}
 }
 
-// TurnSubject names a turn's spend by the TASK it was spent on — never by the
-// turn's own id, which the payload carries — because that is what puts it
-// under the task's deletion marker ([markedTask]): a turn is a record about
-// its task. The one ADDITIVE kind: it carries no expectation and bumps no
-// object's version, so writers here never contend — see
-// [ObjectKind.Arbitrated].
+// TurnSubject names a turn's spend by the task it was spent on, never by
+// the turn's own id (the payload carries that), so it falls under the
+// task's deletion marker ([markedTask]). Turns are additive, so writers
+// here never contend ([ObjectKind.Arbitrated]).
 func TurnSubject(task string) Subject { return Subject{Kind: KindTurn, ID: task} }
 
-// AliasSubject names a cross-project move's create-only claim on a former key.
-//
-// The attempt NUMBER is part of the id because the claim is create-only: a
-// second move of the same key is a second claim, and re-using the first
-// subject would make it a lost race rather than a new fact.
+// AliasSubject names a cross-project move's create-only claim on a former
+// key. The attempt number is in the id so a second move of the same key is
+// a new claim rather than a lost race on the first.
 func AliasSubject(formerKey string, attempt int) Subject {
 	return Subject{Kind: KindAlias, ID: fmt.Sprintf("%s.%d", formerKey, attempt)}
 }
@@ -491,31 +503,29 @@ func TrimmedSubject(floor statelog.Position) Subject {
 	return Subject{Kind: KindTrimmed, ID: statelog.TrimmedSubject(floor).ID}
 }
 
-// FileSubject names one file by its address: the project it is in and the
-// path it has there, which is what two writers of one path contend on.
+// FileSubject names one file by its address, the project and its path
+// there, which is what two writers of one path contend on.
 //
-// THE PATH IS A TOKEN, for the reason a page title is one: a subject is a
-// broker path and may carry no space, `*` or `>`, and a scope id may carry no
-// `/`, while a file path routinely carries all of them. The record carries
-// the path itself, the applier recomputes the token from it, and a record
-// whose path and subject disagree is refused rather than applied. The path is
-// NORMALISED first ([NormalizeFilePath]), so one file has one token however a
-// caller spelled it.
+// The path is a token, as a page title is: a subject may carry no space,
+// `*` or `>` and a scope id no `/`, which paths routinely carry. The record
+// carries the path, and the applier recomputes the token and refuses a
+// record whose path and subject disagree. The path is normalised first
+// ([NormalizeFilePath]), so one file has one token.
 func FileSubject(project, path string) Subject {
 	return Subject{Kind: KindFile, ID: ProjectKey(project) + "." + FileToken(path)}
 }
 
-// FileToken is the address a path is arbitrated on: the first sixteen bytes of
-// SHA-256 over the normalised path, in lower-case hex. internal/doclet's
-// TitleToken made the same trade for a title, and prices the collision.
+// FileToken is the address a path is arbitrated on: the first sixteen bytes
+// of SHA-256 over the normalised path, in lower-case hex (internal/doclet's
+// TitleToken makes the same trade and prices the collision).
 func FileToken(path string) string {
 	sum := sha256.Sum256([]byte(path))
 	return hex.EncodeToString(sum[:16])
 }
 
-// isFileToken reports whether id has a [FileToken]'s shape — thirty-two
-// lower-case hex digits — which is what tells a file's object term from every
-// other object's: a task's and a view's ids are hyphenated uuids.
+// isFileToken reports whether id has a [FileToken]'s shape, thirty-two
+// lower-case hex digits, which tells a file's object term from a task's or
+// a view's hyphenated uuid.
 func isFileToken(id string) bool {
 	if len(id) != hex.EncodedLen(sha256.Size/2) {
 		return false
@@ -550,10 +560,9 @@ func (s Subject) Wire() string {
 
 // Validate refuses a subject that cannot address an object.
 //
-// A KIND THIS BUILD DOES NOT KNOW IS NOT REFUSED HERE. It is refused where a
-// record is WRITTEN and accepted where one is READ, which is the asymmetry
-// the whole two-pass decode exists for: this build must be able to hold a
-// newer peer's record under its own subject without being able to act on it.
+// An unknown kind is not refused here: it is refused where a record is
+// written and accepted where one is read (package doc, "Why the record
+// decodes in two passes").
 func (s Subject) Validate() error {
 	if s.Kind == "" {
 		return fmt.Errorf("worklet: a subject with no kind addresses the log's " +
@@ -585,27 +594,16 @@ func ParseSubject(wire string) (Subject, bool) {
 	return Subject{Kind: ObjectKind(kind), ID: id}, true
 }
 
-// HomedInAProject reports a kind whose scope path is qualified by a project it
-// does not name itself.
+// HomedInAProject reports a kind whose scope path is qualified by a project
+// it does not name itself.
 //
-// # The three, and why they are the three
-//
-// A scope path is a containment hierarchy, so an object's own path sits under
-// its container's — which is what makes a project-wide deferral cover its
-// tasks. Most kinds derive that container from their own subject: a project,
-// counter, tag set or rank order IS a container key; an alias carries the
-// project in its id; a catalogue and a person live in a family;
-// and the three fleet-wide kinds are about the whole domain.
-//
-// These three do not. A task's subject is a uuid and its project is a mutable
-// column, and a turn's subject is the task it is about — so for both the
-// container is a fact only the writer holds. A view may live in a project or
-// at the top of the company, so its container is a choice rather than a
-// lookup.
-//
-// [KindTask] and [KindTurn] additionally REQUIRE one: there is no such thing
-// as a task outside a project, so an empty container there is a writer that
-// forgot rather than a workspace-homed object.
+// A scope path is a containment hierarchy, which is what makes a
+// project-wide deferral cover its tasks. Other kinds derive their container
+// from their own subject; these three cannot. A task's project is a mutable
+// column and a turn's subject is its task, so only the writer holds the
+// container; a view's container is a choice, a project or the company's
+// top. A task and a turn must have one: an empty container there is a
+// writer that forgot, not a workspace-homed object.
 func (k ObjectKind) HomedInAProject() bool {
 	switch k {
 	case KindTask, KindTurn, KindView:
@@ -616,22 +614,13 @@ func (k ObjectKind) HomedInAProject() bool {
 
 // Routable reports an object kind whose records can wake somebody.
 //
-// TWO, and the one beyond a task is there because its wake is about a PERSON
-// rather than about a row: one person hears that somebody else wrote their
-// priority list. That is not reachable from a task's own routing — an
-// assignee, a watcher, a dependent — which is why the parser used to drop it
-// and why it arrives under its own reason instead.
-//
-// EVERY OTHER KIND IS MACHINERY OR IS ANNOUNCED ELSEWHERE. A counter, an alias
-// and a rank order have no audience at all; a catalogue, a view, a tag set and
-// a project's settings are read from their own surfaces rather than woken into
-// somebody's inbox, and a wake per catalogue edit would page the whole company
-// for a renamed dropdown.
-//
-// A CLOSED SET RATHER THAN A NEGATIVE ONE, so a kind added later is silently
-// unroutable rather than silently routed: the failure of a missing wake is one
-// person not hearing something, and the failure of an unintended one is every
-// seat in the company woken by a bookkeeping append.
+// A task, and a person, whose wake is about the person rather than a row
+// (somebody else wrote their priority list), which no task's routing
+// reaches. Every other kind is machinery or read from its own surface, and a
+// wake per catalogue edit would page the company for a renamed dropdown. A
+// closed set, so a later kind is silently unroutable rather than silently
+// routed: a missed wake costs one person, an unintended one wakes every seat
+// for a bookkeeping append.
 func (k ObjectKind) Routable() bool {
 	switch k {
 	case KindTask, KindPerson:
@@ -642,25 +631,13 @@ func (k ObjectKind) Routable() bool {
 
 // RecordsHistory reports a kind whose apply writes a `tracker_history` row.
 //
-// # Why it is a closed set and why it is here rather than in the applier
-//
-// It is the rule that decides which records must STATE what they did. A
-// history row's `kind` is what every feed filter, every report window and the
-// unblocked repair's own scan select on, so a record that produces one and
-// names no kind leaves that column to be guessed — and the guess used to be
-// made from the OPERATION, which is a different vocabulary: a quiet catalogue
-// edit filed as `patch`, a purge as `purge` rather than `purged`, and neither
-// is a [ChangeKind] any filter can name.
-//
-// The document kinds, the file and the task are exactly the kinds [Applier.apply]
-// routes to a path that writes one. Everything else — a barrier, a turn, an
-// eviction, a generation, an alias, a rank order, a counter — is machinery
-// with no audience and no entry in anybody's account of what happened, so a
-// change kind on one of those would be a word about a record nobody reads.
-//
-// A CLOSED SET, for [ObjectKind.Routable]'s reason turned around: a kind added
-// later must fail the writer's own check rather than silently publish a record
-// whose history row is filed under a guess.
+// Such records must state their [ChangeKind]: every feed filter, report
+// window and the unblocked repair's scan select on the row's `kind`, and one
+// guessed from the operation is a different vocabulary no filter names.
+// These are exactly the kinds [Applier.apply] routes to a path that writes a
+// row; the rest are machinery with no audience. A closed set, for
+// [ObjectKind.Routable]'s reason turned around: a later kind fails the
+// writer's own check rather than publishing history filed under a guess.
 func (k ObjectKind) RecordsHistory() bool {
 	switch k {
 	case KindTask, KindProject, KindTags, KindCatalogue,
@@ -675,27 +652,23 @@ func (k ObjectKind) RequiresAProject() bool {
 	return k == KindTask || k == KindTurn || k == KindFile
 }
 
-// GatedByPurge reports a kind whose subject id is a TASK id, so a purge of
-// that task's marker gates every record of it: the task's own, and the turns
-// charged to it.
+// GatedByPurge reports a kind whose subject id is a task id, so a purge of
+// that task's marker gates every record of it: the task's own and the
+// turns charged to it.
 //
-// ONE PREDICATE for both statements of the deletion gate — the applier's
-// ([Applier.Gated]) and the publisher's outcome resolution
-// ([Gates.GatedAt]) — because the two answer one question and a kind added to
-// one of them would drop a record on every node while its writer was told it
-// had applied.
+// One predicate for both statements of the deletion gate ([Applier.Gated]
+// and [Gates.GatedAt]): a kind added to one alone would drop a record on
+// every node while its writer was told it applied.
 func (k ObjectKind) GatedByPurge() bool {
 	return k == KindTask || k == KindTurn
 }
 
 // ProjectKey normalises what somebody typed into what the column stores.
 //
-// ONE SPELLING of a rule three parsers already carried separately: a project
-// key is minted upper-case, every comparison against `project_key` is exact,
-// and a caller who pastes `eng` gets an EMPTY answer rather than a refusal —
-// the one failure shape a person acts on, by filing the duplicate or
-// concluding the migration lost their work. Lower-casing the column instead
-// would defeat every index that leads with it.
+// Keys are minted upper-case and every `project_key` comparison is exact,
+// so `eng` would get an empty answer rather than a refusal, which a person
+// acts on wrongly (filing a duplicate, concluding their work was lost).
+// Lower-casing the column instead would defeat every index leading with it.
 func ProjectKey(raw string) string {
 	return strings.ToUpper(strings.TrimSpace(raw))
 }

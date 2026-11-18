@@ -7,19 +7,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// EVERY SURFACE HAS A DECIDED LEVEL, and this is the test whose absence let
-// twenty-one call sites drift.
-//
-// The literals were each plausible alone: a seat tool passing `session` reads
-// as "the caller sees its own writes", which is what a tool wants. What it
-// actually produced was a read that waited for NOTHING — nothing populated the
-// session's high-water mark at a seat call site, so the target was the zero
-// position — served this node's committed prefix, and labelled the answer
-// `session`. The spec says a seat's every read is `linearizable`, in five
-// independent places.
-//
-// So the table is the decision and this walks it: a surface added without a
-// row fails here rather than inheriting whatever the last author typed.
+// EVERY SURFACE HAS A DECIDED LEVEL: the table is the decision, and a surface
+// added without a row fails here rather than inheriting whatever the last
+// author typed, as a literal `session` at a seat once did (it waited for a
+// zero high-water mark and served this node's committed prefix).
 func TestEverySurfaceHasAReadLevelDefault(t *testing.T) {
 	t.Parallel()
 	defaults := statelog.ReadLevelDefaults()
@@ -34,10 +25,8 @@ func TestEverySurfaceHasAReadLevelDefault(t *testing.T) {
 		if !level.Valid() {
 			t.Errorf("%q defaults to %q, which is not a read level", surface, level)
 		}
-		// NO SURFACE DEFAULTS TO consistent_prefix. It is weaker than
-		// session in a way that is INVISIBLE in the answer, so a default
-		// would silently downgrade every reader that did not know to
-		// ask for more.
+		// No consistent_prefix default: it is weaker than session in a
+		// way the answer does not show.
 		if level == statelog.ReadConsistentPrefix {
 			t.Errorf("%q defaults to consistent_prefix, which no surface may "+
 				"default to: it is weaker than session in a way the answer "+
@@ -51,10 +40,9 @@ func TestEverySurfaceHasAReadLevelDefault(t *testing.T) {
 	}
 }
 
-// A SEAT AND AN OPERATOR READ ALIKE, and it is asserted rather than left to
-// two rows that happen to match: the operator MCP serves a seat's own tool
-// implementations, so its level is INHERITED, and an inherited value is
-// exactly the kind that drifts when somebody edits the other one.
+// A SEAT AND AN OPERATOR READ ALIKE, asserted rather than left to two rows
+// that happen to match: the operator MCP serves a seat's own tools, so its
+// level is inherited and would drift when the other is edited.
 func TestASeatAndAnOperatorReadAtTheSameLevel(t *testing.T) {
 	t.Parallel()
 	seat := statelog.DefaultReadLevel(statelog.SurfaceSeat)
@@ -73,20 +61,11 @@ func TestASeatAndAnOperatorReadAtTheSameLevel(t *testing.T) {
 }
 
 // AN ANSWER ABOUT REPLICATION IS `stale` ON EVERY SURFACE, including the
-// operator's — and WEAKER STILL when this node could not measure its own lag.
-//
-// `linearizable` means "every mutation committed anywhere before this read was
-// issued is in the answer", established by appending a barrier and waiting
-// through its position. The question these answers ask is how far behind that
-// same log this node is: the barrier is the instrument and its health is the
-// subject, so the stronger level is not a better answer costing more — it is
-// one that cannot be served, refusing in exactly the incident somebody opened
-// the page for.
-//
-// And `stale` is a claim about AGE, which an answer assembled while the lag
-// could not be read cannot make. That is the ordinary signature of the outage
-// being diagnosed, so the resolution weakens one step and NAMES it rather than
-// delivering the weaker answer under the stronger name.
+// operator's, and `consistent_prefix` when this node could not measure its
+// lag: `linearizable` needs the barrier whose health is the subject, and
+// `stale` claims an age an unmeasured lag cannot give, so the weaker level is
+// named rather than served under the stronger name
+// ([statelog.SurfaceReplication], [statelog.ResolveReplicationLevel]).
 func TestAReplicationAnswerIsStaleAndWeakerWhenTheLagIsUnknown(t *testing.T) {
 	t.Parallel()
 	if got := statelog.DefaultReadLevel(statelog.SurfaceReplication); got != statelog.ReadStale {
@@ -101,8 +80,7 @@ func TestAReplicationAnswerIsStaleAndWeakerWhenTheLagIsUnknown(t *testing.T) {
 		t.Errorf("an unmeasurable lag resolved to %q — `stale` is a claim "+
 			"about age and there is no age to claim", got)
 	}
-	// AND NO CALLER MAY ASK FOR ANYTHING. The level is DERIVED from a
-	// fact about the moment, so it is not a preference anybody holds.
+	// No caller may ask: the level is derived from a fact about the moment.
 	if levels := statelog.SettableLevels(statelog.SurfaceReplication); len(levels) != 0 {
 		t.Errorf("a replication answer offers %v — an operator surface where "+
 			"the caller chooses how stale its evidence may be is not an audit "+
@@ -110,9 +88,8 @@ func TestAReplicationAnswerIsStaleAndWeakerWhenTheLagIsUnknown(t *testing.T) {
 	}
 }
 
-// A LEVEL IS NOT A MODEL'S TO PICK. A tool argument for it would be a model
-// trading correctness for latency it cannot perceive — so a seat's and an
-// operator's asks are ignored, and only a dashboard chooses.
+// A LEVEL IS NOT A MODEL'S TO PICK: a seat's and an operator's asks are
+// ignored, and only a dashboard chooses.
 func TestOnlyTheDashboardChoosesItsLevel(t *testing.T) {
 	t.Parallel()
 	for _, surface := range statelog.Surfaces {
@@ -122,9 +99,8 @@ func TestOnlyTheDashboardChoosesItsLevel(t *testing.T) {
 			t.Errorf("SettableLevels(%q) = %v, want a choice: %v",
 				surface, settable, want)
 		}
-		// EVERY LEVEL, not just the interesting one: a surface that
-		// honoured three asks and ignored the fourth would pass a test
-		// that named only the fourth.
+		// Every level: a surface that honoured three asks and ignored the
+		// fourth would pass a test naming only the fourth.
 		for _, asked := range statelog.ReadLevels {
 			got := statelog.LevelFor(surface, asked)
 			if slices.Contains(settable, asked) {
@@ -138,17 +114,13 @@ func TestOnlyTheDashboardChoosesItsLevel(t *testing.T) {
 					surface, asked, got)
 			}
 		}
-		// AND ONLY THE SCREEN OFFERS `session`, on which see
-		// [statelog.SettableLevels]: it waits for a position the caller
-		// has to supply, the screen's grammar is the one that carries
-		// it (`min_position`, required beside the level), and a seat's
-		// tools carry none.
+		// Only the screen offers `session`: only its grammar carries the
+		// position it waits for ([statelog.SettableLevels]).
 		if got := slices.Contains(settable, statelog.ReadSession); got != want {
 			t.Errorf("%q offers session: %v, want %v — the level is honest "+
 				"exactly where the caller can name the position it waits "+
 				"for, and a wrong label everywhere else", surface, got, want)
 		}
-		// AND A LEVEL OFFERED IS A LEVEL THAT EXISTS.
 		for _, offered := range settable {
 			if !offered.Valid() {
 				t.Errorf("%q offers %q, which is not a read level",
@@ -169,9 +141,7 @@ func TestAnUnknownAskFallsToTheDefault(t *testing.T) {
 			t.Errorf("asking for %q gave %q rather than the default", asked, got)
 		}
 	}
-	// AND AN UNKNOWN SURFACE READS linearizable, which is the fail-safe
-	// direction: the strongest answer is the one that is never wrong,
-	// only slower.
+	// An unknown surface reads linearizable, the fail-safe direction.
 	if got := statelog.DefaultReadLevel(statelog.Surface("invented")); got !=
 		statelog.ReadLinearizable {
 

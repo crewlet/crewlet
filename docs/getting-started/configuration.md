@@ -107,6 +107,12 @@ atlas:                                  # optional: the atlas, the map of what t
                                         #   wake an entry a day; false wakes nobody.
 assistant: {...}                        # optional, Ask Crewlet; off unless enabled
                                         #   (see "Ask Crewlet" below)
+advisor:                                # optional, the setup advisor's analyst; off unless llm
+  analyst:                              #   names a model (see guides/advisor.md, "Found by the analyst")
+    llm: [assistant]                    #   providers.llm keys, held to Ask Crewlet's member rules
+    cadence: daily                      #   daily (default), weekly (Mondays) or off; Run now always runs
+    hour: 6                             #   company-clock hour a scheduled run starts, 0..23 (default 6)
+    max_tokens: 200000                  #   one run's token ceiling, at least 20000 (default 200000)
 
 turn_engine:                            # optional — executor/reviewer turn config
   max_iterations: 3                     # hard cap on self_iterate loops per turn
@@ -1982,9 +1988,9 @@ therefore publishes its posture on its presence lease, and the fleet view
 deployment's identity estate is empty, so a Tier A token is what puts the
 first person in it — invited onto, or created on, the human seat the company
 declares for them: from that seat's page or panel in **Company › Structure**, or with
-`crewlet iam invite <address> -seat <handle>` (`crewlet iam create -email
-<address> -seat <handle>` creates them instead and prints their first password
-link). Every person holds a human seat, so a company has to declare one before
+`crewlet iam invite <address> -seat <handle>` (`crewlet iam create
+-email <address> -seat <handle>` creates them instead and prints their first
+password link). Every person holds a human seat, so a company has to declare one before
 anybody can join it. An invitation or a create confers only what its issuer
 holds, so the token that brings them in has to hold `admin` — `grants:
 [admin]` — on a node that serves it. On a running deployment it is the way back

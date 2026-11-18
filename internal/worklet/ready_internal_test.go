@@ -17,7 +17,7 @@ import (
 // names. A value that does not decode, or decodes to nothing, names nobody
 // this build can place, so its pickup is held to a stranger's ceiling — no
 // app — rather than to the writing agent's every app. A row with no carrier
-// reads as its writer, as before.
+// reads as its writer.
 //
 // Mutation: read an undecodable carrier as the writer, or as nil, and a row
 // goes red.
@@ -69,10 +69,9 @@ func TestOnlyAnAgentsRowIsReadForWhomItWasWrittenFor(t *testing.T) {
 }
 
 // THE SEAT'S OWN CREATION COUNTS ONLY AS AN AGENT'S ROW THAT CARRIES WHOM ITS
-// TURN WORKED FOR, which is the rule whomFor believes a carrier by. Seeded rows
-// rather than written ones, because no writer of this build lets a person's
-// row carry anybody: the arm must still keep out the seat's own row of another
-// kind, a newer build's or a damaged one.
+// TURN WORKED FOR (whomFor's rule). The rows are seeded, since no writer of
+// this build lets a person's row carry anybody, yet the arm must still keep
+// out the seat's own row of another kind, a newer build's or a damaged one.
 //
 // Mutation: admit the seat's own carried creation whatever its kind, and the
 // person's row is read.

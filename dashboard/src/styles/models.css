@@ -574,3 +574,30 @@
 .models-review-head__names {
   min-width: 0;
 }
+
+/* The usage limits cell: a link to the model's page, its bars the column's width. */
+.models-limits {
+  display: block;
+  inline-size: 100%;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.models-limits:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.models-limits-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.models-limits-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  max-inline-size: 36rem;
+}

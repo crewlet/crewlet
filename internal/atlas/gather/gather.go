@@ -171,10 +171,6 @@ func hostsCode(c *config.Company) bool {
 	return c != nil && c.CodeBackendFor() == config.CodeGitlet
 }
 
-// maxRepoPage is the page a repository listing is read in: Gitlet's own
-// largest, so a company of a few hundred repositories is read in one or two.
-const maxRepoPage = 500
-
 // ErrNoSource is a source this node does not serve or the reader may not read.
 var ErrNoSource = errors.New("not served here, or not readable by this reader")
 
@@ -266,7 +262,7 @@ func readGitlet(ctx context.Context, reads GitletReads, s derive.Settings, req R
 	var summaries []gitlet.RepoSummary
 	for cursor := ""; ; {
 		page, err := reads.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadRepos, Asker: req.Asker, Fresh: req.Fresh,
-			Cursor: cursor, Limit: maxRepoPage})
+			Cursor: cursor, Limit: gitlet.MaxReposPerPage})
 		if err != nil {
 			cov.Reason = fmt.Sprintf("listing repositories: %v", err)
 			return nil, nil, cov

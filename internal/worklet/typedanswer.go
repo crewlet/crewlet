@@ -13,40 +13,31 @@ import (
 )
 
 // A TYPED ANSWER to a work item is a record the engine can act on (ADR-0122):
-// a change to one of the item's fields (its status, its assignee, its content,
-// its relations, a wait until a date), or a comment that puts a question to
-// somebody with `ask`. A comment that asks nothing, its edit, resolution or
-// removal, and a change of who watches and nothing else are words or nothing:
-// the engine cannot tell when the condition such words describe is met. A
-// watch written beside a change of the item is that change, whatever kind its
-// row names ([movedBeyondWatch], #953).
+// a change to one of its fields, or a comment that asks somebody with `ask`.
+// Other comment rows and a watch-only change are words or nothing; a watch
+// written beside a change is that change, whatever its kind ([movedBeyondWatch]).
 //
-// WHOSE ROWS ANSWER: the seat's own on the item since its pickup's turn began,
-// whichever turn or none wrote them. A merge queue closes an item as the seat
-// that enqueued the change, outside any turn, and that close answers the
-// pickup as surely as the seat's own status change.
-//
-// AN ITEM THAT LEFT THE SEAT owes it nothing: removed, finished or held by
-// somebody else since, by another's change, the pickup is moot, and on an item
-// in the trash nothing could be written at all.
+// The seat's own rows on the item since its pickup's turn began answer it,
+// whichever turn or none wrote them: a merge queue closes an item as the
+// enqueuing seat, outside any turn. An item removed, finished or reassigned by
+// somebody else since makes the pickup moot.
 
 // conversationKinds is [ChangeKind.Conversation]'s set, as SQL.
 const conversationKinds = `('` + string(ChangeComment) + `', '` + string(ChangeCommentEdited) +
 	`', '` + string(ChangeCommentResolved) + `', '` + string(ChangeCommentRemoved) + `')`
 
 // movedBeyondWatch is whether a history row `h`'s deltas name a field beyond
-// who watches the item and who of them is muted: the SQL form of what
-// [Notify.watchOnly] asks of a record's card, for the reads that decide on the
-// row itself. Read off the deltas and never the kind, because
-// `update_work_item` files a watch written beside a priority, a date or a
-// custom value under `watchers` wherever nothing else named a kind.
+// who watches the item and who of them is muted: the SQL form of
+// [Notify.watchOnly]. Read off the deltas, never the kind, because
+// `update_work_item` files a watch beside a priority, a date or a custom value
+// under `watchers` when nothing else named a kind.
 const movedBeyondWatch = `json_remove(h.fields_json, '$.` + watchersField + `', '$.` +
 	mutedField + `') <> '{}'`
 
 // typedWrite is whether a history row `h` is a typed answer to its item, an
-// ask found by the record that wrote it (the row's id): the ONE EXPRESSION a
-// pickup's answer is decided by ([Reader.PickupAnswer]), for the delivery
-// checks and for the turn's outcome in the advisor's ledger alike.
+// ask found by the record that wrote it (the row's id): the ONE EXPRESSION
+// that decides a pickup's answer ([Reader.PickupAnswer]), for the delivery
+// checks and the advisor's ledger alike.
 const typedWrite = `(h.kind NOT IN ` + conversationKinds + ` AND ` + movedBeyondWatch + `
 	OR h.kind = '` + string(ChangeComment) + `' AND EXISTS (SELECT 1 FROM tracker_comments c
 		WHERE c.task_id = h.subject_id AND c.ask <> '' AND c.record_id = h.id))`

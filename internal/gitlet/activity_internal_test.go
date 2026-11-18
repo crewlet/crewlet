@@ -659,11 +659,11 @@ func TestAPurgePartTakesTheActivityLeftOnceItsPushesAreGone(t *testing.T) {
 }
 
 // THE PUSH ACTIVITY IS THE PUSH ROWS: random records, attempts among them, leave both tables what the
-// oracle counts after each one, through a clock that jumps past the history and steps back, a re-derivation midway, a replay
-// from zero, a re-derivation of the end, an older build's final purge and seeded drift.
-// Mutation: drop a horizon's or a part's move, count an expiry or a merger, floor by the hour, skip the
-// prune, count a redelivery, walk only code_repos in the re-derivation, or re-derive only the days
-// whose total moved, and one differs.
+// oracle counts after each one, through a clock that jumps past the history and steps back, a
+// re-derivation midway, a replay from zero, a re-derivation of the end, an older build's final purge
+// and seeded drift. Mutation: drop a horizon's or a part's move, count an expiry or a merger, floor by
+// the hour, skip the prune, count a redelivery, walk only code_repos in the re-derivation, or re-derive
+// only the days whose total moved, and one differs.
 func TestThePushActivityIsThePushRows(t *testing.T) {
 	t.Parallel()
 	applied := map[string]bool{}
@@ -831,8 +831,8 @@ func activityOps() []activityOp {
 	)
 }
 
-// tick moves the clock before a step: by minutes mostly, by hours or days at times, past the push
-// history about once in 25 steps, and back by up to an hour, as a leader change does, once in 30.
+// tick moves the clock before a step: by minutes mostly, hours or days at times, past the push
+// history about once in 25 steps, and back by up to an hour (a leader change) once in 30.
 func (w *activityWorld) tick() {
 	switch n := w.rng.IntN(150); {
 	case n < 6:

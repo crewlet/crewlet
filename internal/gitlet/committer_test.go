@@ -101,9 +101,8 @@ func repoOn(t testing.TB, n *node, name string) string {
 	return repo
 }
 
-// proposal is one push to repo of undecided commands, with no pack, made for
-// nobody but its pusher — stated, so the seat's a case puts in its place
-// (seatProposal) states it too.
+// proposal is one push to repo of undecided commands, with no pack, written
+// for nobody but its pusher — stated, so seatProposal's states it too.
 func proposal(repo string, cmds ...gitlet.Command) gitlet.Proposal {
 	return gitlet.Proposal{
 		PushID: uuid.Must(uuid.NewV7()).String(), RepoID: repo,
@@ -274,12 +273,11 @@ func TestAnOkComesOnlyFromARow(t *testing.T) {
 	}
 }
 
-// lostAcknowledgement publishes a batch for real at the early instant — its
-// record lands and applies — then decides it AGAIN at the late instant from a
-// peer's rows that do not hold that record yet, as a round after a lost
-// acknowledgement does, and answers the first round's record as the ledger
-// finds it: applied, collapsed. The committer's last decision is then not the
-// one that landed.
+// lostAcknowledgement publishes a batch for real at the early instant, then
+// decides it AGAIN at the late instant from a peer's rows that lack that
+// record, as a round after a lost acknowledgement does, and answers the first
+// record as the ledger finds it: applied, collapsed. The committer's last
+// decision is not the one that landed.
 type lostAcknowledgement struct {
 	n, peer *node
 	clock   *fakeClock
@@ -485,10 +483,9 @@ func roundsSeen(c *gitlet.Committer) func() []int {
 }
 
 // A FIRST ROUND FORMS NO VERDICT INSIDE ITS SNAPSHOT: the verdicts are formed
-// before the publish, holding no connection of the reader pool, and a round
-// whose snapshot holds the rules they were formed under only reads — at the
-// costliest rules a repository may carry, forming them is seconds of a core,
-// and inside the snapshot each batch held a reader for all of it.
+// before the publish, holding no reader, and a round whose snapshot holds the
+// rules they were formed under only reads them — at the costliest rules,
+// forming them is seconds of a core that a snapshot would hold a reader for.
 func TestAFirstRoundFormsNoVerdictInsideItsSnapshot(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -641,9 +638,8 @@ func TestAFullInboxIsBusyNotBlocked(t *testing.T) {
 		t.Fatalf("the proposal past the queue answered %+v, want busy", busy.Answer)
 	}
 	requireOnePlacement(t, busy.Answer)
-	// ANSWERED WHILE THE BATCH IS STILL HELD: the gate has let nothing
-	// through, so an answer that waited on the queue could not have come —
-	// which a deadline would only approximate, and flake on a loaded runner.
+	// ANSWERED WHILE THE BATCH IS STILL HELD, so it did not wait on the queue:
+	// a deadline would only approximate that, and flake on a loaded runner.
 	if got := gate.calls.Load(); got != 1 {
 		t.Fatalf("%d publishes reached the gate before the busy answer, want the held one", got)
 	}
@@ -705,12 +701,11 @@ func TestAnInboxFullOfBytesIsBusy(t *testing.T) {
 }
 
 // A NODE FULL OF BYTES IS BUSY, whichever repository the next push is for:
-// each repository's queue is bounded on its own, and the node bounds them
-// together — from each push's queueing to its caller's answer, its batch
-// included — because a node commits for every repository rendezvous ranks it
-// first for, and a thousand of the largest pushes from as many
-// repositories, each under its own repository's bound, held about a gibibyte
-// of entries. Every push it held is released once its caller has its answer.
+// the node bounds its repositories' queues together, from each push's queueing
+// to its caller's answer, because it commits for every repository rendezvous
+// ranks it first for, and a thousand of the largest pushes, each under its own
+// repository's bound, hold about a gibibyte. Every push is released once its
+// caller has its answer.
 func TestANodeFullOfBytesIsBusy(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -806,10 +801,9 @@ func TestANodeFullOfBytesIsBusy(t *testing.T) {
 // A NODE FULL OF PROPOSALS IS BUSY, whichever repository the next push is
 // for: small pushes never meet the node's bytes, and each repository's queue
 // holds CommitterInbox of them, so the node bounds their COUNT across its
-// repositories too — the committer's share of the estate's proposal lane,
-// which the lane is sized by — refusing busy at once past it, the refusal
-// saying the node is full rather than the repository; and every push it held
-// is released as its caller leaves.
+// repositories too (the committer's share of the estate's proposal lane, which
+// sizes the lane), refusing busy at once and saying the node is full; every
+// push is released as its caller leaves.
 //
 // Mutation: drop the node's count, and the push past it queues behind the
 // held batch.
@@ -876,12 +870,11 @@ func (f *fakeClock) advance(d time.Duration) {
 }
 
 // A QUEUED PUSH IS NEVER DECIDED PAST ONE BUDGET: a deep queue's tail, asked
-// with no deadline — the in-process path — and still waiting a whole
-// CommitBudget after it arrived, behind a batch in flight and a full one after
-// it, is answered busy, decided by nobody and appended by nobody: a push waits
-// at most a budget before its own record is written. The full batch ahead of
-// it, which waited half a budget, is committed. (A caller WITH a deadline is
-// judged by it instead: TestAPushIsJudgedByItsCallersDeadline.)
+// with no deadline (the in-process path) and still waiting a whole
+// CommitBudget behind a batch in flight and a full one, is answered busy,
+// decided and appended by nobody; the full batch, which waited half a budget,
+// commits. A caller WITH a deadline is judged by it instead
+// (TestAPushIsJudgedByItsCallersDeadline).
 func TestAQueuedPushIsNeverDecidedPastOneBudget(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -999,11 +992,10 @@ func requireBusyUndecided(t *testing.T, n *node, a answer, pushID, says string) 
 }
 
 // A PUSH ITS ASKER CANNOT WAIT FOR IS BUSY AT ONCE: a caller whose deadline is
-// nearer than a batch and its answer may take — a routed proposal whose
-// asker's attempt was mostly spent before it arrived — is answered busy
-// without taking a place in the queue, decided by nobody and appended by
-// nobody, because any answer a batch gave it would come after the asker had
-// handed the push to the runner-up.
+// nearer than a batch and its answer (a routed proposal whose asker's attempt
+// was mostly spent) is answered busy without queueing, decided and appended by
+// nobody: any batch's answer would come after the asker handed the push to the
+// runner-up.
 func TestAPushItsAskerCannotWaitForIsBusyAtOnce(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1037,24 +1029,18 @@ func TestAPushItsAskerCannotWaitForIsBusyAtOnce(t *testing.T) {
 	}
 }
 
-// A QUEUED PUSH IS ANSWERED BEFORE ITS ASKER GIVES UP: a push waiting behind a
-// batch that runs long — a broker election holding the record ahead of it —
-// is answered busy WHILE IT WAITS, the moment its caller's deadline leaves no
-// more than a batch and its answer, rather than reaching the head of the queue
-// after its asker had stopped waiting and taken the silence for a dead
-// committer. It is withdrawn undecided: when the batch ahead of it ends, it is
-// neither decided nor appended.
-//
-// THE MOMENT IS THE WITHDRAWAL'S ARMED INSTANT, read off what the committer
-// arms it with (gitlet.SetCommitterWithdrawal) on its own clock, frozen where
-// the asker's deadline is reckoned from: exactly that deadline less a batch
-// (gitlet.CommitBudget) and its answer (gitlet.ReplyMargin). The case then
-// fires it. A withdrawal armed a margin late answers inside any wall-clock
-// wait the case could make, so only the instant tells it (#1027).
+// A QUEUED PUSH IS ANSWERED BEFORE ITS ASKER GIVES UP: a push behind a long
+// batch (a broker election holding the record ahead) is answered busy WHILE IT
+// WAITS, once its caller's deadline leaves no more than a batch and its
+// answer, rather than after its asker took the silence for a dead committer;
+// it is withdrawn, neither decided nor appended. The case reads the instant
+// the withdrawal is armed for (gitlet.SetCommitterWithdrawal) on a frozen
+// clock, exactly the deadline less CommitBudget and ReplyMargin, then fires
+// it: a withdrawal armed a margin late answers inside any wall-clock wait the
+// case could make, so only the instant tells it.
 //
 // Mutations: arm it at the deadline less the batch alone, or at the deadline
-// itself — the instant is off by the margin, or by the margin and the batch:
-// red.
+// itself: red.
 func TestAQueuedPushIsAnsweredBeforeItsAskerGivesUp(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1122,12 +1108,10 @@ func TestAQueuedPushIsAnsweredBeforeItsAskerGivesUp(t *testing.T) {
 	}
 }
 
-// A PUSH IS JUDGED BY ITS CALLER'S DEADLINE, NEVER BY ITS WAIT: one that
-// reaches its batch with too little of its asker's attempt left is answered
-// busy undecided whatever it waited, and one whose asker gave it more than a
-// whole budget's wait is decided — the asker's attempt is the bound, and a
-// wait counted from arrival forgot whatever the asker spent before the push
-// arrived.
+// A PUSH IS JUDGED BY ITS CALLER'S DEADLINE, NEVER BY ITS WAIT: one reaching
+// its batch with too little of its asker's attempt left is busy undecided, and
+// one whose asker allows more than a budget's wait is decided. A wait counted
+// from arrival misses what the asker spent before the push arrived.
 func TestAPushIsJudgedByItsCallersDeadline(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1171,15 +1155,12 @@ func TestAPushIsJudgedByItsCallersDeadline(t *testing.T) {
 	}
 }
 
-// A BATCH IS DECIDED PAST WHAT ITS PUSHES WERE CHECKED AGAINST: the receiving
-// node formed a push's commands against the state its own sync read, and the
-// repository's committer — another node — may be behind it. Decided from below
-// it, a command whose old value the client was shown is refused stale and a
-// repository it was shown is refused deleted: definite refusals that are
-// false, and an empty decision the broker never arbitrates. So the committer
-// reaches the push's Seen position before it decides — and, where it cannot
-// within its budget, runs nothing (ErrNotServing), so the router asks the
-// runner-up.
+// A BATCH IS DECIDED PAST WHAT ITS PUSHES WERE CHECKED AGAINST: the receiver
+// formed the commands against its own rows, and the committer (another node)
+// may be behind it; decided from below, a shown old value is refused stale and
+// a shown repository deleted, false definite refusals the broker never
+// arbitrates. So the committer reaches the push's Seen first, and where it
+// cannot within its budget runs nothing (ErrNotServing) for the runner-up.
 func TestABatchIsDecidedPastWhatItsPushesWereCheckedAgainst(t *testing.T) {
 	t.Parallel()
 	t.Run("a ref the receiver saw move", func(t *testing.T) {
@@ -1340,11 +1321,10 @@ func TestAPushAnsweredWithNoRecordWritesNothing(t *testing.T) {
 
 // A PUSH IS REFUSED WHOLE FOR WHAT ITS PACK OR ITS REPOSITORY IS: a pack
 // named too long ago, one past the repository's limit, and a repository
-// archived or deleted — the deleted one told, through the committer's own
-// Retention, when its purge may begin: the deletion's instant on the rows
-// plus the deciding epoch's code.deleted_retention_days, which this case sets
-// to something other than the default so that a committer deciding with any
-// other retention names the wrong instant and fails it.
+// archived or deleted. The deleted one is told when its purge may begin: the
+// deletion's instant plus the committer's own Retention (the deciding epoch's
+// code.deleted_retention_days), set off the default so a committer deciding
+// with any other retention fails the case.
 func TestAPushIsRefusedForItsPackOrItsRepository(t *testing.T) {
 	t.Parallel()
 	size := 32 + gitlet.IndexBytesFor(1) + gitlet.ReverseBytesFor(1)
@@ -1494,33 +1474,18 @@ func (r refusing) Publish(context.Context, statelog.Request) (statelog.Result, e
 	return statelog.Result{}, r.err
 }
 
-// A REFUSAL BEFORE THE APPEND IS NOT SERVING: a refusal about this node moves
-// the push to another node with the same id; one about every node, or a
-// record of the batch that landed and applies nowhere, is the push's answer.
-//
-// EVERY SHAPE IS ONE THE PUBLISHER FORMS, positions included: `behind` names
-// the point it needs this node to have applied, `deferred` the record this
-// node cannot decode, `skew` the sequence the broker answered and `op_reused`
-// the record the id already names — none of them a record of this push, so a
-// committer that read a position as "landed" told the client its push was
-// durable and lost when nothing was sent and the runner-up could commit it.
-//
-// AND A GATE'S REFUSAL AT ANOTHER OPERATION'S RECORD: the batch's answer was
-// lost and the newest record on the repository's subject was somebody else's,
-// at which this node's eviction — or the repository's marker — holds it. The
-// record there may be a healthy peer's, and the batch's own append may never
-// have landed: an eviction there is about this node, and the runner-up
-// commits the push under the same id (no node holds a row of it); a marker
-// there is the repository's deletion, naming no record of the push.
-//
-// A MARKER'S REFUSAL NAMES THE REPOSITORY BY THE MARKER'S NAME: the marker
-// cases run against a repository a retention pass purged, so the marker is
-// the one the applier wrote, and a client is told "repository web was
-// purged" — the sentence the decide forms for the same state — rather than an
-// id it never typed; only where this node holds no marker to read (its
-// estate replaced since the gate read one) does the id name it. Mutation:
-// drop the committer's read of the marker and the three cases with one name
-// the id and fail.
+// A REFUSAL BEFORE THE APPEND IS NOT SERVING: one about this node moves the
+// push to another node under the same id; one about every node, or a landed
+// record of the batch that applies nowhere, is the push's answer. Each shape
+// is one the publisher forms, positions included: behind, deferred, skew and
+// op_reused name no record of this push, so reading one as "landed" would
+// call a push durable that the runner-up could still commit. A gate's refusal
+// at ANOTHER operation's record (the batch's answer lost) is not serving for
+// an eviction, and the repository's deletion for a marker. A marker's refusal
+// names the repository by the marker's name ("repository web was purged", as
+// the decide says), the id only where this node holds no marker. Mutation:
+// drop the committer's read of the marker and the three marker cases with a
+// name fail.
 func TestARefusalBeforeTheAppendIsNotServing(t *testing.T) {
 	t.Parallel()
 	at := statelog.Position{Stream: gitlet.Domain{}.Stream().Name, Generation: 1, Seq: 42}
@@ -1599,10 +1564,8 @@ func TestARefusalBeforeTheAppendIsNotServing(t *testing.T) {
 				!strings.Contains(res.Answer.Detail, tc.position.String()) {
 				t.Fatalf("the detail %q does not name where the record landed", res.Answer.Detail)
 			}
-			// A DELETION MARKER IS A PURGE THAT COMPLETED, which nothing
-			// undoes: told to declare the repository again to restore it,
-			// a client is told the one remedy false here — and told it of
-			// the repository by the name the marker holds.
+			// A DELETION MARKER IS A COMPLETED PURGE, which nothing undoes, so
+			// the detail offers no restore, and names the marker's name.
 			named := "repository " + repo + " was purged"
 			if tc.purged {
 				named = "repository web was purged"
@@ -1712,17 +1675,12 @@ func TestAStoppingCommitterAnswersNotServing(t *testing.T) {
 }
 
 // A PUSH A STOPPING COMMITTER HANDED BACK IS ANSWERED NOT SERVING, even when
-// its caller's context ends before the caller reads the answer.
-//
-// That is the order a node stops in: the committer first, which hands every
-// queued push back before its Stop returns, then the estate's serving
-// registration, whose withdrawal cancels the context of every answer in
-// flight — so by the time a caller's goroutine runs, its answer and its
-// cancellation are both there. A select between them picks at random, and the
-// cancellation won half the time: the refusal that sends the push to its
-// repository's runner-up under the same push id was answered `context
-// canceled` instead, a final failure for a push nothing decided. Run many
-// times, because a coin that lands right once proves nothing.
+// its caller's context ends before the caller reads the answer: a node stops
+// the committer (handing every queued push back) and then its serving
+// registration (cancelling every answer in flight), so a caller sees both at
+// once. A select between them picking the cancellation turns the refusal that
+// sends the push to the runner-up into a final `context canceled` for a push
+// nothing decided. Run many times: a coin that lands right once proves nothing.
 func TestAPushHandedBackIsAnsweredWhenItsCallerHasGone(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

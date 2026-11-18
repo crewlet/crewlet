@@ -11,15 +11,12 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A PROTECTION RULE'S MERGE GATE: what a merge into the refs the rule matches
-// needs — who may merge it, the approvals it waits for and the paths only a
-// person approves, the checks that must pass, how a queue lands it — recorded
-// on the rule it belongs to. Why it is one value, and how two of them are
-// compared, is the package doc's "A protection rule's merge gate rides it
-// whole".
+// A protection rule's merge gate, recorded on its rule: why it is one value
+// and how two compare is the package doc's "A protection rule's merge gate
+// rides it whole".
 
-// MergeBy is who may merge into a gated ref: the standing on the repository
-// a merge's principal holds ([GrantOf]), or a person.
+// MergeBy is who may merge into a gated ref: the repository standing of a
+// merge's principal ([GrantOf]), or a person.
 type MergeBy string
 
 const (
@@ -27,7 +24,7 @@ const (
 	MergeByWriters MergeBy = "writers"
 	// MergeByMaintainers lets only those who maintain the repository merge.
 	MergeByMaintainers MergeBy = "maintainers"
-	// MergeByPersons lets only a person merge — never a seat, a unit's lead
+	// MergeByPersons lets only a person merge, never a seat, a unit's lead
 	// included.
 	MergeByPersons MergeBy = "persons"
 )
@@ -35,13 +32,13 @@ const (
 // MergeBys is the closed set, loosest first: the order [MergeBy.Rank] reads.
 func MergeBys() []MergeBy { return []MergeBy{MergeByWriters, MergeByMaintainers, MergeByPersons} }
 
-// Valid reports a value this build knows. EMPTY IS NOT ONE: a record carries
-// a gate whole, its writer having resolved every default ([MergeGate]).
+// Valid reports a value this build knows. Empty is not one: a record's
+// writer resolves every default ([MergeGate]).
 func (m MergeBy) Valid() bool { return slices.Contains(MergeBys(), m) }
 
-// Rank is how strict m is: its place in [MergeBys] — and past every value this
-// build knows for one it does not, so an authority it cannot read is never
-// taken as looser than one it can.
+// Rank is how strict m is: its place in [MergeBys], or past every known
+// value for an unknown one, so an authority this build cannot read never
+// ranks looser than one it can.
 func (m MergeBy) Rank() int {
 	if i := slices.Index(MergeBys(), m); i >= 0 {
 		return i
@@ -50,8 +47,7 @@ func (m MergeBy) Rank() int {
 }
 
 // Stricter is the stricter of m and o: what a merge is held to where both
-// hold — two rules matching one ref, or a rule and the company's floor
-// (code.merge_by_floor).
+// hold (two rules matching one ref, or a rule and code.merge_by_floor).
 func (m MergeBy) Stricter(o MergeBy) MergeBy {
 	if o.Rank() > m.Rank() {
 		return o
@@ -95,111 +91,92 @@ func DeleteSources() []DeleteSource { return []DeleteSource{DeleteSeats, DeleteN
 // [MergeBy].
 func (d DeleteSource) Valid() bool { return slices.Contains(DeleteSources(), d) }
 
-// The merge gate's bounds, each config's ([config.CodeMaxHumanPaths] and the
-// rest), which a configuration is validated against with the same value.
+// The merge gate's bounds are config's, so a configuration is validated
+// against the same values.
 const (
-	// MaxHumanPaths is config.CodeMaxHumanPaths: the human paths one gate
-	// names.
+	// MaxHumanPaths is the human paths one gate may name.
 	MaxHumanPaths = config.CodeMaxHumanPaths
-	// MaxRequiredChecks is config.CodeMaxRequiredChecks: the checks one gate
-	// requires.
+	// MaxRequiredChecks is the checks one gate may require.
 	MaxRequiredChecks = config.CodeMaxRequiredChecks
-	// MaxGateBytes is config.CodeMaxGateBytes: what one gate weighs as a
-	// record carries it, its canonical JSON.
+	// MaxGateBytes is what one gate may weigh as its canonical JSON.
 	MaxGateBytes = config.CodeMaxGateBytes
-	// MaxQueueDepth is config.CodeMaxQueueDepth: the candidates a target's
-	// queue tests at once.
+	// MaxQueueDepth is the candidates a target's queue tests at once.
 	MaxQueueDepth = config.CodeMaxQueueDepth
-	// MaxQueueBatch is config.CodeMaxQueueBatch: the changes one candidate
-	// takes.
+	// MaxQueueBatch is the changes one candidate takes.
 	MaxQueueBatch = config.CodeMaxQueueBatch
 )
 
 // MergeGate is what a merge into the refs its rule matches needs, carried
-// whole on the rule ([Protection.Gate]): EVERY FIELD EXPLICIT, its writer
-// having resolved each default — as a repository's settings carry its
-// visibility — because a record that left one out would be a reader's guess
-// at which it meant, and the configuration's defaults are the configuration's
-// to change. Its lists are in the one order [CanonicalGate] forms, which
-// [RepoSettings.Validate] holds a record to.
+// whole on the rule ([Protection.Gate]). Every field is explicit, its writer
+// having resolved each default: an omitted one would be the reader's guess,
+// and the defaults are the configuration's to change. Its lists are in the
+// order [CanonicalGate] forms, which [RepoSettings.Validate] enforces.
 //
-// BASE FORMAT ([RecordVersion]): the domain landed on main with this type, so
-// every build that meets a record carrying a gate reads it.
+// Base format ([RecordVersion]): the domain landed on main with this type, so
+// every build reads a record carrying one.
 type MergeGate struct {
 	// MergeBy is who may merge.
 	MergeBy MergeBy `json:"merge_by"`
 	// Approvals is how many counted approvals a merge waits for.
 	Approvals Approvals `json:"approvals"`
-	// ApprovalsUnless are the PATH classes that exempt a change from those
-	// approvals: one whose every touched path is of a class listed here
-	// waits for none. Path classes only ([PathClasses]) — an approval already
-	// carries across a revision that changed nothing, so no_code_change has
-	// nothing to exempt — sorted and each once.
+	// ApprovalsUnless are the path classes ([PathClasses], never
+	// no_code_change: [classInvalid]) that exempt a change whose every touched
+	// path is of one from those approvals; sorted, each once.
 	ApprovalsUnless []ChangeClass `json:"approvals_unless,omitempty"`
-	// HumanPaths are the paths a change touching which waits for a PERSON's
+	// HumanPaths are the paths a change touching which waits for a person's
 	// approval, whatever else approved it: at most [MaxHumanPaths], sorted by
-	// glob and each glob once.
+	// glob, each once.
 	HumanPaths []HumanPath `json:"human_paths,omitempty"`
-	// Checks are the checks a merge waits for, by the name a checks file
-	// gives each ([config.ValidCodeCheckName], the one rule both read): at
-	// most [MaxRequiredChecks], sorted and each once.
+	// Checks are the checks a merge waits for, named as a checks file names
+	// them ([config.ValidCodeCheckName]): at most [MaxRequiredChecks], sorted,
+	// each once.
 	Checks []string `json:"checks,omitempty"`
 	// Landing is how the target's queue lands a change.
 	Landing Landing `json:"landing"`
-	// OwnersApprove makes the repository's path owners gating: a change waits
-	// for ONE counted approval from someone eligible for every owned glob its
-	// paths touch.
+	// OwnersApprove makes the path owners gating: a change waits for one
+	// counted approval from someone eligible for every owned glob it touches.
 	OwnersApprove bool `json:"owners_approve,omitempty"`
 	// DeleteSource is whether a merge deletes its source branch in the same
 	// record.
 	DeleteSource DeleteSource `json:"delete_source"`
-	// AgentsEditChecks lets a change to `.crewlet/**` — where a repository's
-	// checks are defined ([ChecksDirGlob]) — merge on a seat's approval where
-	// the rule requires checks, which otherwise waits for a person's: a rule
-	// with Checks and without it holds that glob as a human path its record
-	// never lists, added where the gate is combined ([GateRulesOf], U44).
-	// Turning it on is a loosening ([MergeGate.LoosenedBy]).
+	// AgentsEditChecks lets a change to the checks' own `.crewlet/**`
+	// ([ChecksDirGlob]) merge on a seat's approval where the rule requires
+	// checks; without it such a rule holds that glob as an unlisted human
+	// path, added where the gate is combined ([GateRulesOf], U44). Turning it
+	// on is a loosening ([MergeGate.LoosenedBy]).
 	AgentsEditChecks bool `json:"agents_edit_checks,omitempty"`
 }
 
-// HumanPath is one glob of a repository's tree a change touching which waits
-// for a person's approval ([gitref.ParsePathGlob]), unless every path of the
-// change the glob matched is of a class Unless names: path classes only,
-// sorted and each once.
+// HumanPath is one glob ([gitref.ParsePathGlob]) a change touching which
+// waits for a person's approval, unless every path of it the glob matches is
+// of a class Unless names: path classes only, sorted, each once.
 type HumanPath struct {
 	Glob   string        `json:"glob"`
 	Unless []ChangeClass `json:"unless,omitempty"`
 }
 
-// Landing is how a gated target's queue lands a change — every change tested
-// merged on the target before it lands: how many candidates it tests at once
-// (1..[MaxQueueDepth]) and how many changes one candidate takes
-// (1..[MaxQueueBatch]).
+// Landing is how a gated target's queue lands a change, each tested merged on
+// the target first: candidates tested at once (1..[MaxQueueDepth]) and
+// changes one candidate takes (1..[MaxQueueBatch]).
 type Landing struct {
 	Depth int `json:"depth"`
 	Batch int `json:"batch"`
 }
 
-// RuleGate is one branch rule's merge gate, named by the rule's pattern: how
-// one repository's detail answers its rules' gates to a read that asks for
-// them ([ReadQuery.Gates], [RepoDetail.Gates]), beside the rules as a push is
-// judged by them, which the repository's row answers ([RepoRef.Protections]).
-// Never on that row: every git request's admission, every page of a Gitlet node's
-// sync and the cache's state file read it, and no gate changes a thing about
-// any of them.
+// RuleGate is one branch rule's merge gate, named by its pattern: what a
+// repository's detail answers a read that asks ([ReadQuery.Gates],
+// [RepoDetail.Gates]). Never on the repository's row ([RepoRef.Protections]):
+// the package doc's "A protection rule's merge gate rides it whole" says why.
 type RuleGate struct {
 	Pattern string    `json:"pattern"`
 	Gate    MergeGate `json:"gate"`
 }
 
-// Equal reports two rules the same: their push rules, and their gates BY
-// VALUE.
-//
-// NEVER slices.Equal OVER RULES: a gate is a pointer, and two reads of one
-// rule are two pointers, so a comparison of rules by == finds every gated
-// rule changed — every reconcile of an unchanged declaration would write a
-// settings record for it, and a lifecycle request that changes nothing would
-// write one too. The push half compares by ==: a [PushRule] holds no pointer.
+// Equal reports two rules the same: their push rules by == (a [PushRule]
+// holds no pointer), their gates by value. Never slices.Equal over rules: two
+// reads of one rule hold two gate pointers, so every gated rule would compare
+// changed, and every reconcile or no-op lifecycle request would write a
+// settings record.
 func (p Protection) Equal(o Protection) bool {
 	if p.PushRule != o.PushRule {
 		return false
@@ -210,9 +187,9 @@ func (p Protection) Equal(o Protection) bool {
 	return p.Gate.Equal(*o.Gate)
 }
 
-// Equal reports two gates the same, field by field — their lists as lists,
-// so a gate whose lists hold the same values in another order is another
-// gate, which [RepoSettings.Validate] refuses to record.
+// Equal reports two gates the same field by field, lists in order: the same
+// values in another order are another gate, which [RepoSettings.Validate]
+// refuses to record.
 func (g MergeGate) Equal(o MergeGate) bool {
 	return g.MergeBy == o.MergeBy && g.Approvals == o.Approvals &&
 		slices.Equal(g.ApprovalsUnless, o.ApprovalsUnless) &&
@@ -226,13 +203,11 @@ func (h HumanPath) Equal(o HumanPath) bool {
 	return h.Glob == o.Glob && slices.Equal(h.Unless, o.Unless)
 }
 
-// CanonicalGate is g in the ONE FORM a record carries it in: its exempting
-// classes sorted, its human paths sorted by glob — each one's classes sorted
-// — and its checks sorted; a copy, leaving g as it was. THE ONE PLACE the
-// order is formed, read by the engine's reconcile for a declaration, so every
-// node deciding one declaration forms byte-identical records. It removes
-// nothing: a value named twice is the caller's to refuse, and
-// [RepoSettings.Validate] refuses it.
+// CanonicalGate is a copy of g in the one form a record carries: every list
+// sorted, human paths by glob, each one's classes too. It is the one place
+// that order is formed (the engine's reconcile reads it), so every node
+// deciding one declaration forms byte-identical records. It removes nothing:
+// a duplicate is the caller's to refuse, as [RepoSettings.Validate] does.
 func CanonicalGate(g MergeGate) MergeGate {
 	out := g
 	out.ApprovalsUnless = sortedClasses(g.ApprovalsUnless)
@@ -249,8 +224,8 @@ func CanonicalGate(g MergeGate) MergeGate {
 	return out
 }
 
-// sortedClasses is classes sorted, a copy; nil stays nil, so a gate that
-// names none encodes as it did.
+// sortedClasses is a sorted copy of classes; nil stays nil, so a gate that
+// names none encodes unchanged.
 func sortedClasses(classes []ChangeClass) []ChangeClass {
 	if classes == nil {
 		return nil
@@ -258,11 +233,10 @@ func sortedClasses(classes []ChangeClass) []ChangeClass {
 	return slices.Sorted(slices.Values(classes))
 }
 
-// invalid is where g is no gate a record may carry and why — field a path
-// below the gate, "" for the gate whole — or two empty strings: every field
-// one a record may carry ([MergeGate.fieldsInvalid]), and the whole at most
-// [MaxGateBytes] as a record encodes it — judged last, since a gate refused
-// for a field is refused for what that field says.
+// invalid is where g is no gate a record may carry and why (field a path
+// below the gate, "" for the whole), or two empty strings: its fields
+// ([MergeGate.fieldsInvalid]), then its weight against [MaxGateBytes], last
+// so a gate bad in a field is refused for what that field says.
 func (g MergeGate) invalid() (field, why string) {
 	if field, why := g.fieldsInvalid(); why != "" {
 		return field, why
@@ -275,12 +249,10 @@ func (g MergeGate) invalid() (field, why string) {
 }
 
 // fieldsInvalid is where a field of g is none a record may carry and why, or
-// two empty strings: every enum one this build knows, every list in its one
-// order ([CanonicalGate]) and inside its bound, every glob gitref reads and
-// every check a name. Everything [MergeGate.invalid] judges but the gate's
-// whole weight, which a protect request's own validation cannot judge: what
-// its change keeps of the rule's gate is the decide's to read
-// ([GateChange.invalid]).
+// two empty strings: every enum known, every list in [CanonicalGate] order
+// and bound, every glob one gitref reads, every check a name. It leaves out
+// the whole weight, which a protect request cannot judge: what its change
+// keeps of the rule's gate is the decide's to read ([GateChange.invalid]).
 func (g MergeGate) fieldsInvalid() (field, why string) {
 	switch {
 	case !g.MergeBy.Valid():
@@ -327,10 +299,9 @@ func (g MergeGate) fieldsInvalid() (field, why string) {
 	return "", ""
 }
 
-// classesInvalid is where list, the field at, is no list of the classes that
-// exempt a change in the form a gate carries one and why, or two empty
-// strings: each a PATH class — no_code_change named for why it is none —
-// sorted and each once.
+// classesInvalid is where list, the field at, is no list of exempting classes
+// and why, or two empty strings: each a path class ([classInvalid]), sorted,
+// each once.
 func classesInvalid(at string, list []ChangeClass) (field, why string) {
 	for k, c := range list {
 		field := fmt.Sprintf("%s[%d]", at, k)
@@ -345,8 +316,8 @@ func classesInvalid(at string, list []ChangeClass) (field, why string) {
 	return "", ""
 }
 
-// classInvalid is why c is no class that exempts a change, or "": a PATH
-// class, no_code_change named for why it is none.
+// classInvalid is why c is no class that exempts a change, or "": only a
+// path class does, and no_code_change's refusal says why it is none.
 func classInvalid(c ChangeClass) string {
 	switch {
 	case c == ChangeClassNoCodeChange:
@@ -367,39 +338,18 @@ func checkInvalid(name string) string {
 		"'.', '_' and '-'", name, MaxCheckNameBytes-1)
 }
 
-// LoosenedBy is every way g — the gate a protect request leaves a rule with —
-// LOOSENS old, the gate the rule held: lets through a merge old held back, or
-// lets it through on less. Each is the phrase a refusal names it by, which
-// names its field; nil where g holds every merge to all old did. THE ONE
-// JUDGEMENT of a gate's loosening, read by the lifecycle decide
-// ([loosenings]), which leaves a loosening to a person (ADR-0088) — field by
-// field, so a change that tightens one field and opens another loosens by the
-// one it opens:
-//
-//   - merge_by and approvals loosen LOWERED. FAIL CLOSED, as a rule's
-//     direct_push is judged: a value this build does not know ranks above
-//     every value it does, so a move away from one is a lowering, and a move
-//     to one is judged a loosening, since nothing here says what it lets
-//     through ([lowered]);
-//   - approvals_unless loosens by each class it adds: one more kind of
-//     change that merges with no approval;
-//   - human_paths loosens by each glob it drops and by each class it adds to
-//     the unless of a glob it keeps. An entry is KEPT only by the same glob
-//     with an unless naming nothing the old one did not: a broader glob put
-//     in a narrower one's place is the narrower one dropped, since whether one
-//     glob matches everything another does is no judgement made here — and one
-//     that erred would make a loosening a seat may make;
-//   - checks loosens by each required check it drops;
-//   - owners_approve loosens turned off, as a merge then waits for no path
-//     owner; and agents_edit_checks turned on, as a seat's approval then
-//     stands for a change to the checks themselves;
-//   - landing.depth, landing.batch and delete_source are NEUTRAL: how fast a
-//     queue lands and what a merge tidies after it, never what a merge is held
-//     to.
-//
-// A field a later milestone adds to [MergeGate] is judged here or named
-// neutral: TestEveryGateFieldIsJudged holds this method to the struct's own
-// fields by reflection, and to every pair of each ranked field's closed set.
+// LoosenedBy is every way g, the gate a protect request leaves a rule with,
+// loosens old, each the phrase a refusal names it by; nil where g holds every
+// merge to all old did. The one judgement of a loosening, read by the
+// lifecycle decide ([loosenings]), which leaves one to a person (ADR-0088),
+// field by field, so tightening one field never hides opening another:
+// merge_by and approvals by lowering, failing closed ([lowered]);
+// approvals_unless by each class added; human_paths by each glob dropped and
+// each class added to a kept glob's unless (a broader glob replacing a
+// narrower one drops it: containment is never judged, lest a misjudgement be
+// a loosening a seat may make); checks by each dropped; owners_approve off;
+// agents_edit_checks on. Landing and delete_source are neutral. Every field
+// and ranked pair is held here by TestEveryGateFieldIsJudged.
 func (g MergeGate) LoosenedBy(old MergeGate) []string {
 	var opens []string
 	if lowered(MergeBys(), old.MergeBy, g.MergeBy) {
@@ -438,12 +388,10 @@ func (g MergeGate) LoosenedBy(old MergeGate) []string {
 	return opens
 }
 
-// lowered reports whether a ranked field moved from from to to is LOWERED —
-// order is its closed set, the loosest first: to ranks below from, or to is a
-// value this build does not know, which is judged a lowering whatever it
-// replaces. A value from that this build does not know ranks above every value
-// it does, so any move away from one is a lowering: a newer build's value may
-// hold more than any this one knows. FAIL CLOSED both ways.
+// lowered reports whether a ranked field moved from from to to is lowered,
+// order being its closed set, loosest first. Fail closed both ways: an
+// unknown to is a lowering whatever it replaces, and an unknown from ranks
+// above every known value, since a newer build's value may hold more.
 func lowered[T comparable](order []T, from, to T) bool {
 	if from == to {
 		return false
@@ -468,11 +416,10 @@ func notIn[T comparable](list, of []T) []T {
 	return out
 }
 
-// defaultGate is the gate a rule with none takes where a protect request's
-// change names some of a gate's fields ([GateChange]): every other field its
-// default — writers, none, a queue at depth 4 and batch 2, seats — each read
-// from the ONE PLACE config applies it ([config.CodeProtection.Gate]), so a
-// gate a tool forms and a gate a declaration forms default alike.
+// defaultGate is the gate a rule with none takes under a [GateChange]: each
+// field config's default, read from where config applies it
+// ([config.CodeProtection.Gate]), so a tool's gate and a declaration's
+// default alike.
 func defaultGate() MergeGate {
 	landing := config.CodeLanding{}.Resolved()
 	return MergeGate{
@@ -483,36 +430,25 @@ func defaultGate() MergeGate {
 	}
 }
 
-// GateChange is a protect request's change to the merge gate of the rule it
-// sets, which the deciding node RESOLVES against the gate that rule carries
-// in the rows its own snapshot read ([ProtectChange]) — never a gate whole,
-// which a caller could form only from a read made in another transaction: two
-// requests changing two fields of one gate at once would each send the
-// other's field as it had read it, and the later record would undo the
-// earlier change — an approval it required, a check it added — unseen. Each
-// scalar it names REPLACES that field; each LIST it names is changed item by
-// item ([ListChange], [HumanPathsChange]), for the same reason one level down:
-// requiring one more check is the commonest edit a gate takes, and a list
-// sent whole is one formed from a read made elsewhere, so two requests each
-// adding a check would each drop the other's — silently for a person, and as
-// a refused "drops" for a seat that only added. Every field it leaves nil is
-// kept as the rule's gate has it, or takes its default where the rule has
-// none ([defaultGate]), so naming one field forms a gate, as a declaration
-// naming one does. Remove takes the gate away and names no field.
+// GateChange is a protect request's change to its rule's merge gate, which
+// the deciding node resolves against the gate its own snapshot holds
+// ([ProtectChange]). Never a gate or a list whole: either is formed from a
+// read made elsewhere, so two concurrent requests (two each adding a check)
+// would each undo the other's change unseen. A scalar it names replaces the
+// field, a list it names changes item by item ([ListChange],
+// [HumanPathsChange]), and a nil field is kept, or defaulted where the rule
+// has no gate ([defaultGate]). Remove takes the gate away and names no field.
 //
-// A REQUEST IS NO RECORD, so this type takes no versionedFields row: the
-// record a protect request leads to carries the repository's settings whole,
-// in the base format ([MergeGate]). It crosses the estate's wire to whichever
-// data node decides it, and every node asked it reads it: the domain landed on
-// main with it ([RecordVersion]).
+// A request is no record, so this type takes no versionedFields row: the
+// record it leads to carries the settings whole in the base format
+// ([MergeGate]), and every data node reads it ([RecordVersion]).
 type GateChange struct {
 	// Remove takes the rule's gate away.
 	Remove    bool       `json:"remove,omitempty"`
 	MergeBy   *MergeBy   `json:"merge_by,omitempty"`
 	Approvals *Approvals `json:"approvals,omitempty"`
-	// ApprovalsUnless, HumanPaths and Checks each change the field's list
-	// item by item; the resolution puts what it leaves in the one order a
-	// record carries ([CanonicalGate]).
+	// ApprovalsUnless, HumanPaths and Checks each change their list item by
+	// item; the resolution puts what is left in [CanonicalGate] order.
 	ApprovalsUnless *ListChange[ChangeClass] `json:"approvals_unless,omitempty"`
 	HumanPaths      *HumanPathsChange        `json:"human_paths,omitempty"`
 	Checks          *ListChange[string]      `json:"checks,omitempty"`
@@ -523,22 +459,19 @@ type GateChange struct {
 	AgentsEditChecks *bool          `json:"agents_edit_checks,omitempty"`
 }
 
-// ListChange is a gate change's change to one of the gate's lists of values —
-// its exempting classes or its required checks: values ADDED beside those it
-// holds and values REMOVED from them, applied by the decide to the list its
-// snapshot holds ([ListChange.applyTo]), so a value added that the list holds
-// already is added as nothing and one removed that it does not hold is
-// removed as nothing.
+// ListChange is a gate change's change to one of the gate's value lists (its
+// exempting classes or its checks): values added and removed, applied to the
+// list the decide's snapshot holds ([ListChange.applyTo]), so adding a held
+// value or removing an absent one does nothing.
 type ListChange[T ~string] struct {
 	Add    []T `json:"add,omitempty"`
 	Remove []T `json:"remove,omitempty"`
 }
 
 // invalid is where c, the gate's field at, is no change and why, or two empty
-// strings: a value at least, at most limit in each list — a list longer than
-// the field may hold adds or removes nothing a record could carry — each a
-// value valid holds of the field (its why, or ""), each once in its list, and
-// none both added and removed, which is two requests rather than one.
+// strings: a value at least, at most limit per list (more forms nothing a
+// record carries), each passing valid (its why, or ""), each once, and none
+// both added and removed, which is two requests.
 func (c ListChange[T]) invalid(at string, limit int, valid func(T) string) (field, why string) {
 	if len(c.Add) == 0 && len(c.Remove) == 0 {
 		return at, "a change adds or removes one at least"
@@ -566,9 +499,9 @@ func (c ListChange[T]) invalid(at string, limit int, valid func(T) string) (fiel
 	return "", ""
 }
 
-// applyTo is list — the field as the gate holds it — with c applied: a copy,
-// never list's own array, which is the snapshot's row; nil where nothing is
-// left, as a gate that names none encodes it.
+// applyTo is list with c applied: a copy, never list's own array, which is
+// the snapshot's row; nil where nothing is left, as a gate naming none
+// encodes it.
 func (c ListChange[T]) applyTo(list []T) []T {
 	out := slices.DeleteFunc(slices.Clone(list), func(v T) bool { return slices.Contains(c.Remove, v) })
 	for _, v := range c.Add {
@@ -583,19 +516,16 @@ func (c ListChange[T]) applyTo(list []T) []T {
 }
 
 // HumanPathsChange is a gate change's change to its human paths, keyed by
-// glob: each entry Put sets that glob's entry — added, or its unless replaced
-// where the gate has the glob — and each glob Remove names is taken away,
-// applied by the decide to the human paths its snapshot holds
-// ([HumanPathsChange.applyTo]).
+// glob: each Put entry adds its glob or replaces its unless, and each Remove
+// glob is taken away ([HumanPathsChange.applyTo]).
 type HumanPathsChange struct {
 	Put    []HumanPath `json:"put,omitempty"`
 	Remove []string    `json:"remove,omitempty"`
 }
 
 // invalid is where c is no change and why, or two empty strings: an entry at
-// least, at most [MaxHumanPaths] in each list, every glob one gitref reads and
-// each once, every unless of path classes each once, and no glob both put and
-// removed.
+// least, at most [MaxHumanPaths] per list, every glob one gitref reads and
+// each once, every unless of path classes each once, no glob put and removed.
 func (c HumanPathsChange) invalid() (field, why string) {
 	if len(c.Put) == 0 && len(c.Remove) == 0 {
 		return "human_paths", "a change puts or removes a glob at least"
@@ -641,8 +571,8 @@ func (c HumanPathsChange) invalid() (field, why string) {
 	return "", ""
 }
 
-// applyTo is paths — the gate's, as its snapshot holds them — with c applied:
-// a copy, nil where nothing is left.
+// applyTo is paths, the snapshot's, with c applied: a copy, nil where
+// nothing is left.
 func (c HumanPathsChange) applyTo(paths []HumanPath) []HumanPath {
 	out := slices.DeleteFunc(slices.Clone(paths), func(h HumanPath) bool {
 		return slices.Contains(c.Remove, h.Glob) ||
@@ -671,8 +601,8 @@ type gateChangeField struct {
 	set  bool
 }
 
-// fields is every field c may name besides its removal, in [MergeGate]'s
-// order — THE ONE LIST, read by [GateChangeFields] and by what c names.
+// fields is every field c may name but Remove, in [MergeGate]'s order: the
+// one list [GateChangeFields] and [GateChange.named] read.
 func (c GateChange) fields() []gateChangeField {
 	return []gateChangeField{
 		{"merge_by", c.MergeBy != nil}, {"approvals", c.Approvals != nil},
@@ -683,10 +613,9 @@ func (c GateChange) fields() []gateChangeField {
 	}
 }
 
-// GateChangeFields is every field a [GateChange] may name besides its
-// removal, by the name a request spells it — the gate's own — in
-// [MergeGate]'s order: what a tool takes for a rule's gate.
-// TestAGateChangeNamesEveryGateField holds it to both types.
+// GateChangeFields is every field a [GateChange] may name but Remove, spelled
+// as the gate's own, in [MergeGate]'s order: what a tool takes for a rule's
+// gate. TestAGateChangeNamesEveryGateField holds it to both types.
 func GateChangeFields() []string {
 	fields := GateChange{}.fields()
 	out := make([]string, len(fields))
@@ -707,16 +636,13 @@ func (c GateChange) named() []string {
 	return out
 }
 
-// invalid is where c is no change a request may carry and why — field a path
-// below the request's gate, "" for the change whole — or two empty strings: a
-// removal naming no field, or a change naming one at least, a landing's
-// change one of its own at least, each list's change an item at least, each
-// item a value the list may hold and named once ([ListChange.invalid],
-// [HumanPathsChange.invalid]); and each field it names one a record may
-// carry, judged on the gate it forms on a rule with none ([defaultGate]),
-// since a field refused there is refused whatever gate it changes. A list's
-// length and the gate's whole weight are left to the decide, which alone
-// reads what the change keeps of the rule's gate.
+// invalid is where c is no change a request may carry and why (field a path
+// below the gate, "" for the whole), or two empty strings: a removal names no
+// field, any other change one at least, each list's change valid on its own
+// ([ListChange.invalid], [HumanPathsChange.invalid]), and each field named
+// valid on the gate it forms on a rule with none ([defaultGate]), since one
+// refused there is refused on any gate. A list's length and the whole weight
+// are the decide's, which alone reads what the change keeps.
 func (c GateChange) invalid() (field, why string) {
 	named := c.named()
 	switch {
@@ -730,9 +656,8 @@ func (c GateChange) invalid() (field, why string) {
 	case c.Landing != nil && *c.Landing == (LandingChange{}):
 		return "landing", "a change of the landing names its depth or batch at least"
 	}
-	// EACH LIST'S CHANGE ON ITS OWN, naming the item its caller sent: the
-	// gate a change forms on a rule with none holds what it adds, and nothing
-	// of what it removes.
+	// Each list's change on its own, so a refusal names the item sent: the
+	// default gate below holds what it adds and none of what it removes.
 	if l := c.ApprovalsUnless; l != nil {
 		if field, why := l.invalid("approvals_unless", len(PathClasses()), classInvalid); why != "" {
 			return field, why
@@ -751,10 +676,8 @@ func (c GateChange) invalid() (field, why string) {
 	return c.applyTo(defaultGate()).fieldsInvalid()
 }
 
-// applyTo is base with every field c names put in it — a scalar replaced, a
-// list changed item by item — in the one form a record carries a gate in
-// ([CanonicalGate]), sharing no array with base. Remove is its caller's to
-// read.
+// applyTo is base with every field c names put in it, in [CanonicalGate]
+// form, sharing no array with base. Remove is its caller's to read.
 func (c GateChange) applyTo(base MergeGate) MergeGate {
 	g := base
 	if c.MergeBy != nil {
@@ -792,10 +715,9 @@ func (c GateChange) applyTo(base MergeGate) MergeGate {
 	return CanonicalGate(g)
 }
 
-// resolve is the gate c leaves a rule with that held held — nil for none —
-// RESOLVED as the decide resolves it: held as it stands where c is nil, none
-// where c removes it, and otherwise held with c's fields put in it, or the
-// defaults with them where the rule held none.
+// resolve is the gate c leaves a rule that held held (nil for none), as the
+// decide resolves it: held where c is nil, none where c removes it, else c
+// applied to held, or to the defaults where the rule held none.
 func (c *GateChange) resolve(held *MergeGate) *MergeGate {
 	switch {
 	case c == nil:

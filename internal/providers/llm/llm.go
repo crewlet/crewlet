@@ -352,9 +352,9 @@ const (
 	// can run it.
 	KindRateLimit
 
-	// KindAuth is a login the harness reports expired or missing. Retryable
-	// across the chain, so a seat keeps working while somebody signs the
-	// harness in again.
+	// KindAuth is a login the harness reports expired, missing or not entitled
+	// to the harness. Retryable across the chain, so a seat keeps working while
+	// somebody signs the harness in again or changes what its account allows.
 	KindAuth
 
 	// KindTimeout is a call that ran out of time — the harness's own wall-clock
@@ -484,6 +484,45 @@ var LimitWindows = []LimitWindow{LimitSession, LimitWeekly, LimitModel, LimitUnk
 
 // Valid reports whether w is one of [LimitWindows].
 func (w LimitWindow) Valid() bool { return slices.Contains(LimitWindows, w) }
+
+// LimitState is where a vendor says one of its windows stands.
+type LimitState string
+
+const (
+	// LimitOK is a window with room left.
+	LimitOK LimitState = "ok"
+	// LimitWarning is a window the vendor says is close to its limit.
+	LimitWarning LimitState = "warning"
+	// LimitReached is a window at its limit: the vendor refuses calls on it.
+	LimitReached LimitState = "reached"
+)
+
+// LimitStates is the closed set, in escalating order.
+var LimitStates = []LimitState{LimitOK, LimitWarning, LimitReached}
+
+// Valid reports whether s is one of [LimitStates].
+func (s LimitState) Valid() bool { return slices.Contains(LimitStates, s) }
+
+// LimitReading is what a vendor said of one of its limit windows on a call,
+// in the engine's words.
+type LimitReading struct {
+	Window LimitWindow
+	// Hours is the window's length as the vendor names it (5, 168), 0 where
+	// it names none.
+	Hours int
+	// Model is the model family a [LimitModel] window is of ("opus"), "" for
+	// a window of the whole plan.
+	Model string
+	State LimitState
+	// Used is the fraction of the window used, nil where the vendor did not
+	// say. It may pass 1: a vendor lets some work run past a window's cap.
+	Used *float64
+	// ResetsAt is when the window turns over, zero where the vendor did not say.
+	ResetsAt time.Time
+}
+
+// Key is what tells two of a plan's windows apart.
+func (r LimitReading) Key() string { return string(r.Window) + "/" + r.Model }
 
 // LimitedUntil reports whether err is a rate limit, and when the entry that
 // refused it is tried again and when its vendor said the limit lifts (either

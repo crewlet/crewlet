@@ -20,9 +20,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ENGINE WRITE'S CASES (ADR-0092): a commit a seat or a person makes
-// through a tool, built on the repository's Gitlet node and landed as a push —
-// asked through Fleet.Write, as the tools ask it.
+// The engine write's cases (ADR-0092; package doc, "An engine write is a
+// seat's commit, and lands as a push"), asked through Fleet.Write as the tools
+// ask it.
 
 // newOp is an operation id as a turn or a keyed request mints one: a UUIDv7,
 // whose instant is the commit's author date.
@@ -171,13 +171,13 @@ func anEngineCommitLands(t *testing.T, newFleet NewFleet) {
 }
 
 // F33: one write asked again is one push: asked while the first is still
-// landing (the Gitlet node's in-flight join), after it landed, and after another
-// push moved the branch on — every answer applied with the one commit, one
-// push row, and nothing built twice.
+// landing (the Gitlet node's in-flight join), after it landed, and after
+// another push moved the branch on, every answer is applied with the one
+// commit, one push row, and nothing built twice.
 //
-// Mutation: drop the in-flight join (host's joinWrite always leads) — the
-// second ask builds a scratch of its own for the push id, which is refused,
-// and is answered before it ever joins: red.
+// Red when the in-flight join is dropped (host's joinWrite always leads): the
+// second ask builds its own scratch for the push id, is refused, and is
+// answered before it joins.
 func anEngineWriteRetriedIsOnePush(t *testing.T, newFleet NewFleet) {
 	c, p, work, head := seeded(t, newFleet, Shape{}, map[string]string{"README.md": "one\n"})
 	repo := c.Rows().Repo.ID
@@ -206,11 +206,10 @@ func anEngineWriteRetriedIsOnePush(t *testing.T, newFleet NewFleet) {
 		res, err := c.Fleet.Write(c.Ctx, w)
 		second <- answer{res, err}
 	}()
-	// THE SECOND ASK JOINS THE FIRST on the Gitlet node building it — the
-	// write's one scratch is the first's, and a scratch of its own for the
-	// same push id would be refused — and the first is let go only once it
-	// has: let go sooner, a second ask that reached the node after the first
-	// landed would be answered from the push's row, the join never asked.
+	// The second ask joins the first on the node building it (its own scratch
+	// for the same push id would be refused). The first is let go only once
+	// it has: sooner, an ask reaching the node after the first landed is
+	// answered from the push's row and never joins.
 	select {
 	case <-joined:
 	case b := <-second:
@@ -395,10 +394,10 @@ func anEngineWriteCrashedAtEveryPointIsOnePush(t *testing.T, newFleet NewFleet) 
 	}
 }
 
-// writeCrashAt is F38 at one point: A CRASH, never a Block, as F21's is. The
-// ask the crash held is a caller whose node died under it: it is answered
-// nothing — the hold ends only at the teardown (gitletfault.Script.ReleaseCrashes)
-// — and the case asks the write again as that caller's retry would.
+// writeCrashAt is F38 at one point, a Crash, never a Block, as F21's is. The
+// held ask is a caller whose node died under it, answered nothing until the
+// teardown (gitletfault.Script.ReleaseCrashes), so the case asks again as its
+// retry would.
 func writeCrashAt(t *testing.T, newFleet NewFleet, point gitletfault.Point) {
 	c, _, _, head := seeded(t, newFleet, Shape{}, map[string]string{"README.md": "one\n"})
 	repo := c.Rows().Repo.ID
@@ -418,7 +417,7 @@ func writeCrashAt(t *testing.T, newFleet NewFleet, point gitletfault.Point) {
 	case err := <-done:
 		t.Fatalf("the write ended before it reached %s: %v", point, err)
 	}
-	// THE NODE BUILDING IT is the one holding the write's scratch.
+	// The node building the write holds its scratch.
 	var killed string
 	for _, n := range c.Fleet.Nodes() {
 		if _, err := os.Stat(filepath.Join(n.CacheDir(), "scratch", pushID+".git")); err == nil {

@@ -74,10 +74,9 @@ func TestTheActivityFeedCarriesQuietCommits(t *testing.T) {
 			"built from one cannot survive a reanchor",
 			first.LogStream, first.LogGeneration, first.LogSeq)
 	}
-	// BOTH INSTANTS. The authored one is what a person typed and what a
-	// card renders; the effective one is what every duration is measured
-	// on. A surface carrying one of them silently answers a different
-	// question than it looks like.
+	// BOTH INSTANTS: the authored one is what a card renders, the effective
+	// one what every duration is measured on; carrying only one silently
+	// answers another question.
 	if first.At.IsZero() || first.EffectiveAt.IsZero() {
 		t.Errorf("the record carries at=%v effective_at=%v, want both",
 			first.At, first.EffectiveAt)
@@ -85,12 +84,8 @@ func TestTheActivityFeedCarriesQuietCommits(t *testing.T) {
 }
 
 // A TEXT SEARCH IS GATED ON WHAT IT WOULD SCAN, never on which keys were
-// named.
-//
-// Written as "requires a task, a container or a since bound" the gate was one
-// a caller satisfied in one attempt and learned nothing from:
-// `container=workspace&q=` names a container and an unbounded `since:` names a
-// bound, and both run the full scan the gate exists to stop.
+// named: `container=workspace&q=` names a container and an unbounded `since:`
+// a bound, and both run the full scan the gate exists to stop.
 func TestAnActivitySearchIsRefusedByWhatItWouldScan(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -111,8 +106,7 @@ func TestAnActivitySearchIsRefusedByWhatItWouldScan(t *testing.T) {
 		}
 	}
 
-	// (b) A PROJECT WITH NO WINDOW is refused too, which is the half the
-	// name-shaped gate let through.
+	// (b) A PROJECT WITH NO WINDOW is refused too.
 	if _, err := r.reader.Activity(t.Context(), worklet.ActivityQuery{
 		Q: "deploy", Project: "ENG", Level: statelog.ReadStale,
 	}, wednesday); err == nil {
@@ -120,8 +114,8 @@ func TestAnActivitySearchIsRefusedByWhatItWouldScan(t *testing.T) {
 			"reads the project's whole history")
 	}
 
-	// (c) AND A WINDOW WIDER THAN THE SPAN, which is the other half: a
-	// five-year `since:` satisfies "a since bound" and narrows nothing.
+	// (c) AND A WINDOW WIDER THAN THE SPAN: a five-year `since:` narrows
+	// nothing.
 	_, err = r.reader.Activity(t.Context(), worklet.ActivityQuery{
 		Q: "deploy", Project: "ENG", Level: statelog.ReadStale,
 		SinceAt: wednesday.AddDate(-5, 0, 0),
@@ -150,18 +144,14 @@ func TestAnActivitySearchIsRefusedByWhatItWouldScan(t *testing.T) {
 // A FEED'S POSITIONS ARE THE CALLER'S TO GET RIGHT, AND A MISTAKE IN ONE IS
 // REFUSED AS THE REQUEST'S.
 //
-// Both feeds take two positions from their caller — the cursor they resume
-// from and a `since` bound — and compare each against `log_seq`, a packed
-// column carrying no stream. A position from another domain's log answered a
-// page of THIS feed chosen by a number from that one, with nothing to say so;
-// a cursor that was not a position at all was parsed inside the read's
-// transaction and failed the way a store does, which every surface answered as
-// a fault of the node. Each is now refused before a row is read, with
-// [worklet.ErrBadQuery] (the one sentinel a surface answers as a bad request),
-// and a foreign one with [statelog.ErrForeignPosition] beside it. None of them
-// is a state-log refusal. The activity gate and an unknown inbox reason are
-// the same kind of refusal and carry the same sentinel. The control is the
-// cursor the feed itself handed out, which pages.
+// Both feeds compare their cursor and `since` against `log_seq`, a packed
+// column carrying no stream, so a position from another domain's log would
+// silently pick a page, and an unparsable cursor would fail inside the read's
+// transaction like a node fault. Each is refused before a row is read with
+// [worklet.ErrBadQuery], the sentinel a surface answers as a bad request (a
+// foreign one also with [statelog.ErrForeignPosition]), never as a state-log
+// refusal; so are the activity gate and an unknown inbox reason. The control
+// is the feed's own cursor, which pages.
 func TestAFeedRefusesAPositionItCannotUseAsTheRequestsMistake(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -307,9 +297,8 @@ func TestTheActivityFiltersNarrow(t *testing.T) {
 			t.Fatalf("task=t-2 answers a record about %s", record.SubjectID)
 		}
 	}
-	// A KEY RESOLVES, AND IN ANY CASE. The history is the one place a
-	// renamed task is most likely to be looked up from, and a key is what
-	// somebody pastes out of a chat message rather than a uuid.
+	// A KEY RESOLVES, IN ANY CASE: a key, not a uuid, is what somebody
+	// pastes out of a chat message.
 	key := byTask.Records[0].SubjectKey
 	if key == "" {
 		t.Fatal("the feed names no key for a task, so this case tests nothing")
@@ -342,11 +331,9 @@ func TestTheActivityFiltersNarrow(t *testing.T) {
 }
 
 // A KIND THAT NAMES A FIELD KEEPS EVERY CHANGE THAT MOVED THE FIELD, whatever
-// kind its record ended with (#930). A record carries one kind, so a write that
-// moves two fields in one call is filed under one of them, and the feed asked
-// for the other answered as though it had not happened. Each case moves its
-// field under another kind, and the feed asked for the field's kind keeps that
-// change; a change that moved none of the field is not kept.
+// kind its record was filed under: a record carries one kind, so a write moving
+// two fields is filed under one of them. Each case moves its field under
+// another kind; a change that moved none of the field is not kept.
 //
 // Mutation: filter on `h.kind IN (…)` alone, and no case keeps its change.
 func TestAKindThatNamesAFieldKeepsEveryChangeThatMovedIt(t *testing.T) {
@@ -411,18 +398,12 @@ func TestAKindThatNamesAFieldKeepsEveryChangeThatMovedIt(t *testing.T) {
 }
 
 // THE FEED NARROWS TO WHO WAS WRITING, which is a different question from
-// which handle.
-//
-// `actor` is a name and the two name spaces are DISJOINT: an `operator` commit
-// carries the token's own label and an `agent` one carries a seat handle. So
-// "what did the operators of this company do to it" — the whole of the audit
-// screen — cannot be asked as a set of handles. That set is the roster, it
-// changes, and a commit by somebody who has left would silently drop out of an
-// audit assembled from it.
-//
-// BOTH DIRECTIONS, because a filter that narrowed to nothing and one that
-// narrowed to everything both look like a working screen: the first reads as a
-// quiet company and the second as one with no seats.
+// which handle. Actor names are disjoint per kind (an operator commit carries
+// the token's label, an agent one a seat handle), so the audit screen's "what
+// did the operators do" cannot be a set of handles: that is the roster, which
+// changes and would drop a commit by somebody who has left. Both directions,
+// because narrowing to nothing reads as a quiet company and narrowing to
+// everything as one with no seats.
 func TestTheFeedNarrowsToWhoWasWriting(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -471,10 +452,9 @@ func TestTheFeedNarrowsToWhoWasWriting(t *testing.T) {
 			len(both.Records), len(all.Records))
 	}
 
-	// AND A KIND NOBODY WROTE UNDER ANSWERS NOTHING rather than falling
-	// through to every commit — which is what an ignored filter does, and
-	// on an audit surface an ignored filter is a wider answer wearing the
-	// shape of the narrow one.
+	// AND A KIND NOBODY WROTE UNDER ANSWERS NOTHING, not every commit: on an
+	// audit surface an ignored filter is a wider answer shaped like the
+	// narrow one.
 	if got := r.activity(worklet.ActivityQuery{
 		Workspace: true, ActorKinds: []worklet.AuthorKind{worklet.AuthorSystem},
 	}); len(got.Records) != 0 {
@@ -483,14 +463,11 @@ func TestTheFeedNarrowsToWhoWasWriting(t *testing.T) {
 	}
 }
 
-// AN AUDIT OF SEVERAL KINDS IS ONE FEED, PAGED IN THE LOG'S ORDER.
-//
-// Each author kind is read as its own arm and the arms are merged, so the
-// claim is about the merge: across pages, every commit of every kind named
-// comes back exactly once, newest first, with the kinds interleaved as the log
-// interleaved them — never one kind's page and then the other's, which is what
-// a merge that dropped its own ORDER BY or LIMIT would answer — and a kind
-// named twice is read once.
+// AN AUDIT OF SEVERAL KINDS IS ONE FEED, PAGED IN THE LOG'S ORDER. Each author
+// kind is its own arm and the arms are merged, so across pages every commit of
+// every named kind comes back once, newest first, interleaved as the log made
+// them (a merge dropping its ORDER BY or LIMIT answers one kind's page, then
+// the other's), and a kind named twice is read once.
 func TestAnAuditOfSeveralKindsIsOneFeedInTheLogsOrder(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -540,13 +517,11 @@ func TestAnAuditOfSeveralKindsIsOneFeedInTheLogsOrder(t *testing.T) {
 
 // A TASK'S ACTIVITY IS ITS WHOLE HISTORY, AND THE CONTAINER BESIDE IT A CHECK.
 //
-// Every history row carries the project it was WRITTEN in, so a container read
-// as a row filter beside a task hid every change the task had before it moved
-// — its creation among them — from anybody asking about it in the project it
-// is in now. A tracker holder reads the whole tracker, so the container keeps
-// no row out that the reader is not owed; it is a check that the task is filed
-// there, and one it is not filed in is refused naming the one it is, rather
-// than answered with nothing, which reads as a task nothing ever happened to.
+// A history row carries the project it was WRITTEN in, so a container used as
+// a row filter would hide every change before the task moved, its creation
+// among them. A tracker holder reads the whole tracker, so the container only
+// checks the task is filed there; a wrong one is refused naming the right one,
+// never answered with nothing, which reads as a task nothing happened to.
 func TestATasksActivityIsItsWholeHistoryInItsContainer(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t)
@@ -589,14 +564,10 @@ func TestATasksActivityIsItsWholeHistoryInItsContainer(t *testing.T) {
 }
 
 // A KIND THE FEED HAS NO ROWS OF IS REFUSED NAMING THE SET, never answered with
-// an empty page.
-//
-// A filter matching nothing answers exactly like a quiet project. The query
-// surface refused a mistyped kind by name while a seat's `task_activity` built
-// a kind from any string it was handed, so a model asking for `status_changed`
-// was told nothing had happened. The read itself refuses it now, as
-// [worklet.ErrBadQuery], so every surface inherits one answer, and the
-// control, a kind the feed does have, still pages.
+// an empty page, which reads exactly like a quiet project. The read itself
+// refuses it, as [worklet.ErrBadQuery], so every surface (a seat's
+// `task_activity` too) answers alike; the control, a kind the feed has, still
+// pages.
 //
 // Mutation: drop activityFilters from Activity and both refusals read an empty
 // page instead.
@@ -635,16 +606,11 @@ func TestAnActivityFilterOnAKindThisBuildDoesNotHaveIsRefused(t *testing.T) {
 }
 
 // THE FEED SAYS WHERE ITS NODE IS ON THE LOG, and how much of it produced its
-// rows. The audit names a tracker answer whose node is behind by these two
-// numbers alone, so they are the whole of what it can say: a node holding a
-// record it cannot decode moves its checkpoint past that record, reads exactly
-// like one at the head of the log by its position, and only the applied prefix
-// stopping below the record says otherwise. A retained record ABOVE the
-// checkpoint holds nothing back that the checkpoint has passed, so the prefix
-// is the checkpoint — never a position beyond it, which an applied prefix
-// cannot be. It is the framework's one rule ([statelog.PrefixIn]), which
-// this package once kept a copy of, and the copy answered that last case with
-// a prefix past the checkpoint.
+// rows: the audit tells a node is behind by these two numbers alone. A node
+// retaining a record it cannot decode moves its checkpoint past it, so only the
+// applied prefix stopping below the record shows it; a record retained ABOVE
+// the checkpoint holds nothing back, so the prefix is the checkpoint, never
+// beyond it. The rule is [statelog.PrefixIn]'s.
 func TestTheFeedReportsItsPositionAndAppliedPrefix(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -723,13 +689,11 @@ func (r *roundTrip) clearRetained() {
 	}
 }
 
-// A PERSON'S OWN BOOKKEEPING IS NOT IN THE COMPANY'S HISTORY.
-//
-// Every pin, inbox mark and snooze writes a `person_updated` row on that
-// person's record. A feed of what the company did listed them between the real
-// changes, each with no item and a phrase that said nothing ("changed their own
-// bookkeeping"), and told every reader when a colleague marked their inbox
-// read. The rows are still recorded, and naming the kind still reads them.
+// A PERSON'S OWN BOOKKEEPING IS NOT IN THE COMPANY'S HISTORY: every pin, inbox
+// mark and snooze writes a `person_updated` row on that person's record, which
+// in the feed says nothing about the work and tells every reader when a
+// colleague marked their inbox read. The rows are still recorded, and naming
+// the kind still reads them.
 func TestAPersonsOwnBookkeepingIsNotTheCompanysHistory(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

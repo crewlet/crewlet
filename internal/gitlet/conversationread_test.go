@@ -34,9 +34,9 @@ func newestFirst(refs map[string]string, ids ...string) []string {
 // listing naming a reviewer reads their standing asks, newest change first and
 // a page at a time, across repositories — a withdrawn ask is none, and a
 // closed change's ask stands until its home settles it (the case below);
-// needs=review keeps the live changes alone,
-// the asker's own where it names no reviewer, a person's by the human seat
-// they hold; and every other filter is tested on the rows a page read.
+// needs=review keeps the live changes alone, the asker's own where it names no
+// reviewer, a person's by the human seat they hold; and every other filter is
+// tested on the rows a page read.
 //
 // Mutations: read the withdrawn asks too → app!1 is listed for plat-lead;
 // drop the live test → web!1, closed, waits on plat-lead's review; walk the
@@ -129,22 +129,17 @@ func (n *node) askSettles(repo string) []gitlet.AskDue {
 }
 
 // THE CHANGES WAITING ON A REVIEWER ARE READ FROM THE ASKS STILL WAITING: a
-// review answers its reviewer's own ask, and a change's end ends the asks
-// still waiting on it once its home settles them — so a reviewer whose every
-// other ask is answered or ended finds their one live, unanswered ask, the
-// OLDEST of them all, on the first page of pages of one, where the walk used
-// to read every newer settled ask first and come back empty; reviewer= names
-// none of the settled. The ended change is due its settling — its repository
-// listed, the change named — until the settling lands, and not after; the
-// settling's decide holds the direction to the change's state, a live
-// change's end and an ended change's ask again superseded; and once the
-// change is reopened its ended ask is due the other way, settled, and waits
-// again.
+// review answers its reviewer's ask and a change's end ends its asks once its
+// home settles them, so a reviewer whose every other ask is answered or ended
+// finds their one live ask, the OLDEST, on the first page of pages of one;
+// reviewer= names none of the settled. An ended change is due its settling
+// (repository listed, change named) until it lands; the decide holds the
+// direction to the change's state (a live change's end, an ended change's ask:
+// superseded); reopened, its ask is due back, settled, and waits again.
 //
-// Mutations: drop the review's settling of its own ask → the reviewed change
-// is read first and the first page comes back empty; drop applyAsks's move →
-// the closed change stays listed under reviewer= and stays due; drop the
-// ended listing → the closed change is never named due.
+// Mutations: drop the review's settling of its own ask → the first page comes
+// back empty; drop applyAsks's move → the closed change stays listed under
+// reviewer= and stays due; drop the ended listing → it is never named due.
 func TestAReviewersListingWalksOnlyTheAsksStillWaiting(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -657,18 +652,16 @@ func TestTheStandingPartIsTheAskersOwnStandingFindingsWhole(t *testing.T) {
 }
 
 // WHAT WAITS ON AN OWNER'S FIX IS WHAT THEIR CHANGES' COUNTERS ASK: needs=fix
-// lists an owner's live changes — the asker's own where it names none — whose
-// reviewer's standing verdict asks for changes or whose finding nobody has
-// answered, newest first, in the state it names, open where it names none;
-// an author's answer to the last open finding takes a change off it; and
-// needs=me is what waits on the asker, the changes asking its review and then
-// its own awaiting a fix, a change of both listed once. A need is refused in a
-// state that is not live, beside a reviewer or an owner it does not take, and
-// for a credential bound to no seat.
+// lists an owner's (default the asker's) live changes whose standing verdict
+// asks for changes or whose finding nobody answered, newest first, in the state
+// named (default open); an author's answer to the last open finding takes one
+// off. needs=me is the changes asking the asker's review, then its own awaiting
+// a fix, a change of both listed once. A need is refused in a state not live,
+// beside a reviewer or owner it does not take, and for a seatless credential.
 //
-// Mutations: drop the fix test on the rows, and dev's approved change is
-// listed as awaiting a fix; drop the second half's leaving out of the asks,
-// and the founder's own change asked of them is listed twice.
+// Mutations: drop the fix test on the rows → dev's approved change is listed;
+// drop the second half's leaving out of the asks → the founder's own change
+// asked of them is listed twice.
 func TestWhatWaitsOnAnOwnersFixIsWhatTheirCountersAsk(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

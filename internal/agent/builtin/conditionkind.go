@@ -2,8 +2,10 @@ package builtin
 
 import (
 	"errors"
+	"strings"
 	"syscall"
 
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -11,8 +13,16 @@ import (
 // the environment's, never the engine's own defect. A coding sandbox's class is
 // [SandboxKindPrefix] and the class, a deadline `timeout` and an abandoned wait
 // `canceled`, the provider layer's own words for the two.
+//
+// THE STATE LOG HAS TWO: [KindStateLogUnavailable] for the log, the node or the
+// broker refusing, which another node or a later attempt gets past, and
+// [KindStateLogWriteRefused] for a write refused for what it is or names
+// ([statelog.Reason.RefusesTheWrite]), which every node meets alike; one kind
+// for both put a write no node could make beside an outage (the package doc's
+// "Whose failure a condition is").
 const (
 	KindStateLogUnavailable     = "state_log_unavailable"
+	KindStateLogWriteRefused    = "state_log_write_refused"
 	KindFileStoreFull           = "file_store_full"
 	KindFileStoreUnavailable    = "file_store_unavailable"
 	KindCoordinationUnavailable = "coordination_unavailable"
@@ -34,10 +44,117 @@ const (
 // classed: `sandbox_` and the class ([sandbox.Why]).
 const SandboxKindPrefix = "sandbox_"
 
+// InfrastructureKind reports whether kind ([ConditionKind]) is a condition of
+// the infrastructure the engine runs on, counted as the failing node's and
+// never the work's: a seat's mail that failed on one is handed back as the
+// node's own (internal/engine's nakFailure). False for the kinds a piece of
+// work can cause (a write refused for what it is, `timeout`, `canceled`) and
+// for anything that is no kind. A coding sandbox's class is sided class by
+// class ([sandboxClassIsTheNodes]), never as a block. Every declared kind and
+// every sandbox class is named here on one side, so a new one lands where its
+// author chose rather than on a default, as
+// TestEveryConditionKindIsTheNodesOrTheWorks holds; the argument is the
+// package doc's "Whose failure a condition is".
+func InfrastructureKind(kind string) bool {
+	if class, ok := strings.CutPrefix(kind, SandboxKindPrefix); ok {
+		return sandboxClassIsTheNodes(sandbox.Why(class))
+	}
+	switch kind {
+	case KindStateLogUnavailable, KindFileStoreFull, KindFileStoreUnavailable,
+		KindCoordinationUnavailable, KindNoDataNode, KindEstateClosed,
+		KindStoreBusy, KindQueueNotLive, KindQueueUnavailable,
+		KindExecutorUnanswered, KindFleetKeysDiffer, KindFleetBuildsDiffer,
+		KindDiskFull, KindDiskReadOnly, KindDiskFailed, KindOpenFilesExhausted:
+		return true
+	case KindStateLogWriteRefused:
+		// THE WORK'S: no node can make the write it asked for, and no wait
+		// lets one; a different write (a split change, a fresh operation, an
+		// object not deleted) is what gets past it.
+		return false
+	}
+	return false
+}
+
+// OperatorKind reports whether kind ([ConditionKind]) is a condition of the
+// infrastructure that only an operator clears: this node's disk full, mounted
+// read-only or failing to read or write, its limit of open files reached, or
+// the fleet's nodes holding different keys or running different builds. Each
+// is [InfrastructureKind] besides, and no wait clears one. A finished job
+// whose resume fails on one waits for the operator, and its node says so for
+// `executor_resume_blocked` (the package doc's "Whose failure a condition
+// is"). False for every other kind, one that clears when a store, a log or a
+// broker answers again included, and for anything that is no kind.
+func OperatorKind(kind string) bool {
+	switch kind {
+	case KindDiskFull, KindDiskReadOnly, KindDiskFailed, KindOpenFilesExhausted,
+		KindFleetKeysDiffer, KindFleetBuildsDiffer:
+		return true
+	}
+	return false
+}
+
+// sandboxClassIsTheNodes reports whether a coding sandbox's class is a
+// condition of the infrastructure rather than something a mail can cause.
+// Every class a turn or a resume fails on is met where the engine starts a
+// box for the seat (the provider's create, the company's setup recipe, the
+// engine's probes of the box, a relaunch): every request and command there is
+// the deployment's or the engine's own, and a command the seat's executor runs
+// in its box ends with its own exit status (a timeout's 124, a signal's), never
+// with a class (internal/sandbox's e2b.go). False for a class this build does
+// not name.
+func sandboxClassIsTheNodes(why sandbox.Why) bool {
+	switch why {
+	case sandbox.WhyProviderUnavailable:
+		// THE NODE'S: the provider, or the box it runs, did not answer or
+		// failed on its side, or the way to it did; it clears when the
+		// provider answers again, whatever the mail asked.
+		return true
+	case sandbox.WhySetupUnavailable:
+		// THE NODE'S: a download the company's setup recipe makes is failing
+		// on the far side (its command exited 75); the recipe is the
+		// deployment's, and it clears when that service answers again.
+		return true
+	case sandbox.WhyProviderLimit:
+		// THE NODE'S: the company's account with the provider is at a limit
+		// (too many boxes, too many requests), set by the account and spent
+		// by every seat alike; it clears when a box ends or the window passes.
+		return true
+	case sandbox.WhyProviderBilling:
+		// THE NODE'S: the provider wants the company's account paid for
+		// before it starts anything, a billing state a person settles.
+		return true
+	case sandbox.WhyConfiguration:
+		// THE NODE'S: the deployment's configuration cannot start the run
+		// (this node with no sandbox runtime for the company or no tool
+		// bridge its box can dial, a cell no backend serves, an executor
+		// chain with no member a box runs, the company's setup step exiting,
+		// a template or image the provider or the runtime refuses), which a
+		// person's edit changes and nothing in a mail reaches.
+		return true
+	case sandbox.WhyProviderRefused:
+		// THE NODE'S: the provider's control plane refused the company's
+		// credentials (a 401 or 403 from it, whose requests name the
+		// deployment's template, timeout and run environment or a box, and
+		// carry nothing of a mail's); a box's own agent answering one gets
+		// no class at all. A person changes the key, as with billing and a
+		// configuration. Counted as the mail's, its first failure marked a
+		// healthy message failed, so an outage that spent the message's
+		// budget later sent it to the poison.
+		return true
+	}
+	return false
+}
+
 // ConditionKind is the kind a failed phase or turn records err under when err
 // is a condition of the environment ([Condition]), and false for a fault. The
 // same classification the tools and the API answer a condition by, so a
-// record's kind and a refusal's words cannot disagree about what failed.
+// record's kind and a refusal's words cannot disagree about what failed; and
+// the one a seat's mail that failed is told the failing node's or the work's
+// by ([InfrastructureKind]). That reads the failure itself, and a record's
+// kind does not always: a provider's failure that wraps a condition (a
+// harness whose prompt a full disk could not take) is recorded under the
+// provider's own kind (internal/agent/runner's ErrorKind), while its mail is
+// handed back as the node's.
 func ConditionKind(err error) (string, bool) {
 	said, ok := condition(err)
 	return said.kind, ok

@@ -12,39 +12,22 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// What a project carries that a TOOL may write, and who may write each.
-//
-// A project has four kinds of state and only one of them is here:
-//
-//   - CHART-OWNED — its name, purpose and owning unit. Written by
-//     [Writer.ApplyChart] and by nothing else, because they are facts a founder
-//     wrote in the config: a tool that could set them would let a model rename
-//     the company's projects out from under the file they came from.
-//   - ITS TAG SET — its own object on its own subject, so that every seat's add
-//     never contends with a lead's policy edit. [Writer.WriteTags].
-//   - ITS POLICY — the field declarations, the default assignee, the target
-//     date and the archived flag. Those are here.
-//
-// # Why the policy facets are one verb and the tags are not
-//
-// Because they share an authority and a contention profile. All four below are
-// a LEAD's decision about how their project runs, edited a handful of times a
-// quarter; a tag is every seat's, several times a day. One verb over them
-// costs nothing and keeps "may you set your project's policy" a single
-// question; folding the tags in would make every tag add contend with them.
+// What a tool may write on a project. Its name, purpose and owning unit are
+// the chart's ([Writer.ApplyChart] only), so a model cannot rename a project out
+// from under the config. Its tag set is its own object on its own subject
+// ([Writer.WriteTags]). Its policy is here: field declarations, default
+// assignee, target date and archived flag — one verb, because all four are a
+// lead's rare decision, while a tag is every seat's, several times a day, and
+// folding tags in would make every tag add contend with a policy edit.
 
 // ProjectEdit is one change to a project's own policy.
 //
-// EVERY FACET IS A POINTER, because the zero value of two of them is a
-// meaningful SETTING: no fields declared and no default assignee are each a
-// state a project is deliberately left in, and a struct that could not tell
-// "leave this alone" from "set it to nothing" would clear a project's field
-// list every time somebody set its default assignee.
+// EVERY FACET IS A POINTER: an empty field list and no default assignee are
+// real settings, so nil ("leave alone") must differ from "set to nothing".
 type ProjectEdit struct {
-	// Fields replaces the project's own field declarations. WHOLE
-	// POST-STATE, like the workspace catalogue's, and for the same reason:
-	// a patch shape would need a merge rule per field, and the list is
-	// small, read on every create and edited rarely.
+	// Fields replaces the project's own field declarations: WHOLE
+	// POST-STATE, like the workspace catalogue's, since a patch would need a
+	// merge rule per field and the list is small and rarely edited.
 	Fields *[]FieldDef
 
 	// DefaultAssignee is who unassigned work in this project lands on. The
@@ -52,18 +35,13 @@ type ProjectEdit struct {
 	DefaultAssignee *string
 
 	// TargetDate is when the lead means the project to be finished: a
-	// calendar date, or an instant, which is stored as the day it falls on
-	// on the company's clock and says so ([coerceDay]). The empty string
-	// clears it — "no target" is a real setting.
-	//
-	// THE LEAD'S, like the two above, and NOT the chart's: a target is how
-	// the team plans, re-set when the plan moves, where the chart holds
-	// what a founder wrote in the config.
+	// calendar date, or an instant stored as its day on the company's clock,
+	// with a caveat ([coerceDay]). The empty string clears it. The lead's,
+	// not the chart's: it is re-set whenever the plan moves.
 	TargetDate *string
 
-	// Archived stops the project taking new work. An OPERATOR's, not a
-	// lead's — a project holds the company's tasks, and taking one out of
-	// circulation is a decision about the company.
+	// Archived stops the project taking new work. It takes a person, never an
+	// agent ([ProjectAuthority.Archive]): it is a decision about the company.
 	Archived *bool
 }
 
@@ -75,21 +53,12 @@ func (e ProjectEdit) Empty() bool {
 
 // ProjectAuthority is what a caller may do to a project's policy.
 //
-// A VALUE RATHER THAN A BOOL on the writer, because "may I archive this
-// project" is a question about a PAIR — who is asking and about which
-// project — and the answer for one pair says nothing about another.
-//
-// # It states the DECISION, not its inputs
-//
-// Both fields used to be inputs — `Lead` from an org-chart lookup and
-// `Operator` from "the actor is not a seat" — and every caller re-derived the
-// policy `Lead || Operator` for itself. That is two answers to one question,
-// which is what internal/authz exists to remove: an admin was refused here
-// while every HTTP route allowed, because this package's copy consulted no
-// permission at all. Now the caller asks
-// [authz.ActionProjectPolicy] and [authz.ActionProjectArchive] and states what
-// came back, and this package enforces only which FACET each answer unlocks —
-// which is the half a chart cannot know.
+// A value per call rather than a bool on the writer: the answer is about a
+// pair, who asks and about which project. It states the DECISION, not its
+// inputs: the caller asks [authz.ActionProjectPolicy] and
+// [authz.ActionProjectArchive] and states the answers, so the policy lives
+// once, in internal/authz; this package enforces only which facet each
+// answer unlocks.
 type ProjectAuthority struct {
 	// Policy reports a caller authorized to declare this project's
 	// fields, its default assignee and its target date: its lead, or an
@@ -97,10 +66,8 @@ type ProjectAuthority struct {
 	Policy bool
 
 	// Archive reports a caller authorized to take the project out of
-	// circulation, which takes the same relation AND a principal that is
-	// not an agent. SEPARATE FROM Policy because a lead who is refused
-	// here did have authority over the other two facets, and the useful
-	// answer is which facet rather than "no".
+	// circulation: the same relation AND a principal that is not an agent.
+	// Separate from Policy so a refusal can name the facet, not just "no".
 	Archive bool
 }
 
@@ -113,8 +80,7 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 	case key == "":
 		return WriteResult{}, invalid("a project edit names no project")
 	case edit.Empty():
-		// THE ARGUMENT THAT ADDS A TAG BY ITS OWN NAME: it said
-		// "write_project(tags.add)", an argument nothing reads.
+		// Names the tool that adds a tag, for a caller who sent one here.
 		return WriteResult{}, invalid("a project edit of %s sets nothing. Its "+
 			"name, purpose and owning unit come from the org chart, and a tag "+
 			"is added with `tags_add`", key)
@@ -124,9 +90,7 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 			"they decide how everybody's work in it is filed and when it is "+
 			"due, which is not a call anybody else makes for the team", key)
 	case edit.Archived != nil && !authority.Archive:
-		// NAMED SEPARATELY FROM THE LEAD GATE, because a lead who hit
-		// this one did have authority over the other facets and
-		// the useful answer is which facet, not "no".
+		// Separate from the lead gate: this refusal names the facet.
 		return WriteResult{}, forbidden("archiving %s takes the project's "+
 			"lead or an admin, acting as a person rather than as an agent — a "+
 			"project holds the company's tasks, and putting one out of "+
@@ -134,18 +98,14 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 			"its work is filed", key)
 	}
 	if edit.Fields != nil {
-		// BEFORE THE SNAPSHOT, because it is a property of the argument:
-		// a malformed declaration is malformed whatever the project
-		// currently holds, and refusing it here keeps a doomed edit off
-		// the log entirely.
+		// Before the snapshot: a malformed declaration is malformed whatever
+		// the project holds, and refusing it here keeps it off the log.
 		if err := checkFields(*edit.Fields); err != nil {
 			return WriteResult{}, err
 		}
 	}
-	// THE TARGET DATE IS COERCED HERE, for the same reason: what a
-	// spelling means does not depend on the project, and the edit the
-	// decide applies carries the canonical day. A COPY of the edit, so
-	// the caller's own value is not rewritten under it.
+	// The target date is coerced here for the same reason, so the decide
+	// applies the canonical day; on a copy, leaving the caller's value alone.
 	var caveats []caveat.Caveat
 	if edit.TargetDate != nil {
 		target := strings.TrimSpace(*edit.TargetDate)
@@ -163,9 +123,8 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 		edit.TargetDate = &target
 	}
 	subject := ProjectSubject(key)
-	// THE CONTAINER, not just the subject: a field declaration and an
-	// archive both change what every read of every task in this project
-	// answers, so a deferred record here concerns the whole project.
+	// The container too: field declarations and an archive change what every
+	// read of every task in this project answers.
 	scope := ScopeSet{Subject: true, Container: key}
 	at := w.Now()
 	result, err := w.published(ctx, statelog.Request{
@@ -209,28 +168,23 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 
 // applyProjectEdit is the whole rule, as a pure function over one project.
 //
-// PURE for [applyTagEdit]'s reason: the one refusal a lead actually meets — an
-// un-archive of a field — is a comparison between two lists, and a rule only
-// reachable through a published record is a rule nobody re-measures.
+// Pure for [applyTagEdit]'s reason: the refusal a lead meets (un-archiving a
+// field) is a comparison of two lists, testable without a published record.
 func applyProjectEdit(current Project, edit ProjectEdit, actor string,
 	at time.Time) (Project, bool, error) {
 
 	next := current
 	changed := false
-	// POLICY MOVES ON A FIELDS EDIT and on nothing else, which is what
-	// [Project.PolicyVersion] records having been validated against: a
-	// default assignee is not something a task is checked against, and an
-	// archive does not change what a task must carry.
+	// Only a fields edit moves [Project.PolicyVersion]: it is what a task is
+	// validated against, and neither an assignee nor an archive changes that.
 	policy := false
 
 	if edit.Fields != nil {
 		if err := archiveIsOneWay(current.Fields, *edit.Fields); err != nil {
 			return Project{}, false, err
 		}
-		// STAMPED BEFORE THE COMPARISON, or a form that resubmits the
-		// declarations unchanged would differ from the stored ones by
-		// exactly the two facts a caller never sends, and write a record
-		// that says nothing.
+		// Stamped before the comparison, or an unchanged resubmission would
+		// differ by the two facts a caller never sends and write an empty record.
 		stamped := stampFields(current.Fields, *edit.Fields, actor, at)
 		if !sameFields(current.Fields, stamped) {
 			next.Fields = stamped
@@ -253,9 +207,7 @@ func applyProjectEdit(current Project, edit ProjectEdit, actor string,
 		changed = true
 	}
 	if !changed {
-		// NOTHING TO SAY. Setting a field list to what it already is is
-		// the ordinary outcome of a form that submits every control, and
-		// an empty decision is a legitimate outcome.
+		// A form that submits every control lands here; no record is right.
 		return current, false, nil
 	}
 	if policy {
@@ -268,10 +220,7 @@ func applyProjectEdit(current Project, edit ProjectEdit, actor string,
 // sameFields reports a facet that would be written back as what it already
 // is.
 //
-// DEEP EQUALITY OVER THE WHOLE VALUE rather than an enumeration of the fields
-// that matter, and the reason is what an enumeration does when somebody adds a
-// field: it keeps compiling, keeps passing, and silently stops noticing the new
-// one — so a project's policy version would stop moving for a change that is
-// exactly what the version records. A comparison that is total by construction
-// has no such day.
+// Deep equality rather than a list of fields that matter: a list would
+// silently miss a newly added field, and the policy version would stop moving
+// for exactly the change it records.
 func sameFields(a, b []FieldDef) bool { return reflect.DeepEqual(a, b) }

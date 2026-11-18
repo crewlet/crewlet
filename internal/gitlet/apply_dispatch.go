@@ -9,12 +9,10 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A HEAD'S DISPATCH, APPLIED: the join of a check_dispatched record into its
-// target's reading and its heads' dispatches, and a purge part's removal of
-// both — the applier's writes of code_check_targets and code_check_dispatches,
-// and no other code's (the replicated estate is written by its log's applier
-// alone). checksdispatch.go has the record, its decide and why the home's work
-// list is these rows.
+// A HEAD'S DISPATCH, APPLIED: a check_dispatched record joined into its
+// target's reading and its heads' dispatches (code_check_targets,
+// code_check_dispatches), and a purge part's removal of both. checksdispatch.go
+// has the record, its decide and why the home's work list is these rows.
 
 // laterReading reports whether a record that read a target's tip at the
 // position tip, itself at position at, is kept over the one a row holds

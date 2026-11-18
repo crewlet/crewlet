@@ -30,15 +30,9 @@ import (
 )
 
 // THE WHOLE WRITE PATH: a directory record reaches the broker, the applier and
-// the rows.
-//
-// Everything below it has its own tests over fakes, and every one of them can
-// be individually right while the composition is wrong. But in THIS domain the
-// harness earns its cost for a sharper reason than the others: uniqueness here
-// is not an index, it is two writes on the directory subject contending at the
-// broker and the loser deciding again from rows that hold the winner — so "two
-// people cannot hold one address" is a claim about a broker, and nothing but a
-// broker can settle it.
+// the rows. Uniqueness here is no index but two writes on the directory subject
+// contending at the broker, the loser deciding again from rows that hold the
+// winner, so only a real broker can settle it.
 
 var brokerAt = time.Unix(1_700_000_000, 0).UTC()
 
@@ -60,32 +54,30 @@ type writeRig struct {
 	movedMu   sync.Mutex
 	moved     []iamdomain.Moved
 
-	// sealer is what this node seals and opens somebody's values with,
-	// over [testKeyring] — held so a case can open what a row carries.
+	// sealer seals and opens somebody's values over [testKeyring], so a case
+	// can open what a row carries.
 	sealer *iamdomain.Sealer
 
 	// publisher is the rig's one, for a case that needs a second writer
 	// over the same log with a different seam.
 	publisher *statelog.Publisher
 
-	// seats is the organisation the rig's writers check a seat bind
-	// against: the running company's seats, by handle and kind.
+	// seats is the running company's seats, by handle and kind, that the rig's
+	// writers check a seat bind against.
 	seats *rigSeats
 
-	// node is the rig's NODE writer, built as `internal/engine` builds a
-	// running node's own — see [nodeWriter] — and nodeDeps what it was
-	// built from, so a case can build another at a clock of its own rather
-	// than moving this one's under a case running beside it.
+	// node is the rig's NODE writer, built as `internal/engine` builds a node's
+	// own (see [nodeWriter]); nodeDeps lets a case build another at its own
+	// clock rather than move this one's under a case running beside it.
 	node     *iamdomain.Writer
 	nodeDeps iamdomain.WriterDeps
 
 	drainMu sync.Mutex
 }
 
-// principalNamed is a principal a case's writer acts as: one called name — its
-// login, or a seat's handle for a seat — of the kind given, holding the grants
-// given, with an id derived from its name so two cases naming one party name
-// one principal.
+// principalNamed is a principal of kind called name (its login, or a seat's
+// handle), holding grants, with an id derived from the name so two cases naming
+// one party name one principal.
 func principalNamed(name string, kind iam.Kind, grants []iam.Grant) iam.Principal {
 	p := iam.Principal{
 		ID:   uuid.NewSHA1(uuid.NameSpaceOID, []byte("principal:"+name)),
@@ -110,11 +102,9 @@ func newWriteRigWith(t *testing.T,
 	wrap func(statelog.Appender) statelog.Appender) *writeRig {
 
 	t.Helper()
-	// THE BROKER DECLARES ITS SIZE, for brokertest's reason: left to derive
-	// its cap from the runner's free space it takes three quarters of it,
-	// and would refuse even this log's sixty-four mebibytes on a runner with
-	// less than a third more than that free, whatever the case under it
-	// does.
+	// THE BROKER DECLARES ITS SIZE (brokertest): left to derive it, it takes
+	// three quarters of the runner's free disk and could refuse even this log's
+	// 64 MiB.
 	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
@@ -126,12 +116,10 @@ func newWriteRigWith(t *testing.T,
 		}
 	})
 	spec := iamdomain.Domain{}.Stream()
-	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES, and it is the
-	// floor Tier A holds stream.iam_log_max_bytes to: the smallest log any
-	// node runs, which is the one the gate reserve takes the largest share
-	// of, so every write here is admitted against the tightest ordinary
-	// ceiling a production log has. Everything else is the domain's own
-	// declaration, its largest record included.
+	// THE CEILING IS THE ONE FIELD OVERRIDDEN: Tier A's floor for
+	// stream.iam_log_max_bytes, the smallest log any node runs and the one the
+	// gate reserve takes the largest share of, so every write is admitted
+	// against the tightest production ceiling.
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: config.IamLogMaxBytesFloor,
 		MaxMessageBytes: spec.MaxAppendBytes(), Duplicates: spec.Duplicates,
@@ -149,23 +137,19 @@ func newWriteRigWith(t *testing.T,
 		t.Fatalf("build the read seam: %v", err)
 	}
 	fence := iamdomain.NewFence(db.Reader(), "node-a")
-	// The published trim floor is zero on a fleet that has never trimmed,
-	// which is the state every new company is in — and the state in which
-	// an absent anchor really does mean an unclaimed address. The log's own
-	// first sequence is the fence's other bound and its last the check that
-	// this node is on this log at all, both read from the stream the way the
-	// engine reads them.
+	// A trim floor of zero is a fleet that never trimmed, every new company's
+	// state, where an absent anchor really is an unclaimed address. The log's
+	// first sequence (the fence's other bound) and last (proof this node is on
+	// this log) are read from the stream as the engine reads them.
 	fence.Floor = func(context.Context, uint32) (uint64, error) { return 0, nil }
 	fence.Ends = func(ctx context.Context) (statelog.LogEnds, error) {
 		first, last, err := log.Bounds(ctx)
 		return statelog.LogEnds{First: first, Last: last}, err
 	}
-	// AT THE STREAM'S ORIGIN, as the framework's own applier starts: a
-	// waiter at the zero position names no stream, so a gesture's second
-	// step compared its own position against it and failed on the
-	// comparison — an error a case asserting only "not refused" read as
-	// success, which is how one of them passed without its gesture ever
-	// landing.
+	// AT THE STREAM'S ORIGIN, as the framework's applier starts: a waiter at
+	// the zero position names no stream, so a gesture's second step fails
+	// comparing against it, which a case asserting only "not refused" reads as
+	// success.
 	waiter := &rigWaiter{at: statelog.Position{
 		Stream: iamdomain.Domain{}.Stream().Name}}
 	fence.Committed = waiter.Committed
@@ -173,10 +157,9 @@ func newWriteRigWith(t *testing.T,
 	if wrap != nil {
 		appender = wrap(log)
 	}
-	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
-	// engine's does, so every write here is admitted as a production one is:
-	// this log claims identity, and the framework refuses a publisher over
-	// one without it.
+	// THE LOG'S GATE RESERVE, reading usage from the stream as the engine does:
+	// this log claims identity, and the framework refuses a publisher over one
+	// without it.
 	reserve, err := statelog.NewReserve(spec,
 		func(ctx context.Context) (statelog.Usage, error) {
 			stats, err := log.Stats(ctx)
@@ -189,21 +172,18 @@ func newWriteRigWith(t *testing.T,
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: iamdomain.Domain{}, Spec: spec, Log: appender, Rows: rows,
 		Fence: fence, Signer: testSigner(t),
-		// THE SAME LOG READ BY POSITION, through this node's verifier, as
-		// the engine hands it: a resolution that finds a record it did not
-		// put there asks that record who wrote it.
+		// THE SAME LOG READ BY POSITION through this node's verifier, as the
+		// engine hands it: a resolution asks a record it did not put there who
+		// wrote it.
 		Records: statelog.VerifiedLog{Log: log, Verifier: verifier},
 		Gates:   iamdomain.NewGates(db.Reader()),
 		Waiter:  waiter, Voids: waiter, Identity: waiter, Admission: reserve,
 		NodeID:     "node-a",
 		Generation: func() uint32 { return 0 },
-		// THE PRODUCTION BUDGET, and not a shorter one to save a case's
-		// seconds: this rig's applier is a polling loop that re-reads every
-		// bucketed row around each record, and under the race detector with
-		// the suite running in parallel it fell more than two seconds
-		// behind — a write then met its own previous record unapplied and
-		// was refused `behind`, which is the framework's honest answer to a
-		// node that slow and a failure of no case's subject.
+		// THE PRODUCTION BUDGET, not a shorter one: this rig's polling applier
+		// re-reads every bucketed row around each record and, under -race with
+		// the suite in parallel, falls seconds behind, so a shorter budget
+		// refuses a write `behind` for no case's reason.
 		ResolveBudget: statelog.DefaultResolveBudget,
 	})
 	if err != nil {
@@ -224,21 +204,18 @@ func newWriteRigWith(t *testing.T,
 		Publisher: publisher, DB: db.Reader(), Blinds: blinder, Sealer: sealer,
 		Seats:  seats,
 		Events: announced, Actor: "ana.admin", ActorKind: iam.KindPerson,
-		// THE RIG'S PARTY AUTHORS EVERYTHING — and holds every
-		// permission, because an enrolment may confer only what its
-		// writer holds — so every case here is about the rule it names
-		// rather than about the permission gate. A case about that gate
-		// narrows it with [iamdomain.Writer.As].
+		// THE RIG'S PARTY HOLDS EVERY PERMISSION, since an enrolment confers
+		// only what its writer holds, so each case is about its own rule; a
+		// case about the permission gate narrows it with [iamdomain.Writer.As].
 		Grants: iam.AllGrants,
 		Now:    func() time.Time { return brokerAt },
 	})
 	if err != nil {
 		t.Fatalf("build the writer: %v", err)
 	}
-	// THE NODE'S OWN WRITER, BUILT AS THE ENGINE BUILDS IT — from NewWriter,
-	// never derived with As — because the two differ in more than their
-	// grants: a party derived from a principal carries that principal's
-	// credential, and the node acts on nobody's.
+	// THE NODE'S OWN WRITER, from NewWriter as the engine builds it, never
+	// derived with As: a party derived from a principal carries its credential,
+	// and the node acts on nobody's.
 	nodeDeps := iamdomain.WriterDeps{
 		Publisher: publisher, DB: db.Reader(), Blinds: blinder, Sealer: sealer,
 		Seats:  seats,
@@ -257,9 +234,8 @@ func newWriteRigWith(t *testing.T,
 		verifier: verifier,
 		sealer:   sealer, publisher: publisher, node: node, nodeDeps: nodeDeps,
 	}
-	// WHAT EACH COMMITTED BATCH MOVED IS KEPT, so a case can say which
-	// records told this node its seats' standing may have moved, and whose
-	// credentials they told it about.
+	// WHAT EACH COMMITTED BATCH MOVED IS KEPT, so a case can say which records
+	// told this node its seats' standing may have moved, and whose credentials.
 	rig.applier = iamdomain.NewApplier("node-a", func(m iamdomain.Moved) {
 		if m.Seats {
 			rig.directory.Add(1)
@@ -298,10 +274,9 @@ func (r *writeRig) drain() {
 	}
 }
 
-// drainTo is [writeRig.drain] REPORTING rather than failing, for the one case
-// that drains from a second goroutine: t.Fatalf there stops that goroutine and
-// lets the test go on believing it is still consuming, so the racing case's
-// loser would never see the winner's record.
+// drainTo is [writeRig.drain] reporting rather than failing, for the case that
+// drains from a second goroutine: t.Fatalf there stops only that goroutine, and
+// the racing loser would never see the winner's record.
 func (r *writeRig) drainTo() error {
 	r.drainMu.Lock()
 	defer r.drainMu.Unlock()
@@ -311,13 +286,10 @@ func (r *writeRig) drainTo() error {
 	return err
 }
 
-// applyLog applies every record past `from` into one node's estate, exactly as
-// the framework's own loop does, and reports how far it got.
-//
-// A FUNCTION OVER THE NODE rather than a method on the rig, because a second
-// node applying the SAME log into its OWN store is what a determinism case is
-// made of — and `now` is that node's batch clock, the one per-node instant an
-// apply is handed.
+// applyLog applies every record past `from` into one node's estate, as the
+// framework's loop does, and reports how far it got. A function, not a rig
+// method, because a determinism case applies the SAME log into a second node's
+// OWN store; `now` is that node's batch clock.
 func applyLog(t *testing.T, log *js.DomainLog, verifier *recordseal.Verifier,
 	db store.ReplicatedHandle, applier *iamdomain.Applier, from uint64, now time.Time,
 	reached func(statelog.Position)) (uint64, error) {
@@ -385,11 +357,10 @@ func applyLog(t *testing.T, log *js.DomainLog, verifier *recordseal.Verifier,
 			if err := withinScope(env, before, after); err != nil {
 				return fmt.Errorf("record %d: %w", seq, err)
 			}
-			// THE LEDGER ROW THE FRAMEWORK'S OWN RUNNER WRITES, column for
-			// column: the subject under the log's prefix — which is what the
-			// publisher compares a held operation's against before it
-			// answers a retry from it — and the applying record's broker
-			// instant beside this node's.
+			// THE LEDGER ROW THE FRAMEWORK'S RUNNER WRITES, column for column:
+			// the subject under the log's prefix (the publisher compares a held
+			// operation's against it before answering a retry) and the record's
+			// broker instant beside this node's.
 			if _, err := tx.ExecContext(t.Context(), `
 				INSERT INTO iam_ops
 					(op_id, subject, position, applied_at, stored_at)
@@ -432,16 +403,12 @@ func applyLog(t *testing.T, log *js.DomainLog, verifier *recordseal.Verifier,
 
 // EVERY ROW AN APPLY WRITES IS IN A BUCKET ITS RECORD DECLARED.
 //
-// A record's scope is the complete set of buckets its apply may write, and it
-// is what a node that could not apply an EARLIER record in one of those
-// buckets holds this one back by. An apply that writes outside it is applied
-// ahead of the record it should have waited for, and when that record is
-// reprocessed it writes over the later one's work on that node alone — a
-// removal's erasure undone by the invitation it erased, an invitation spent
-// and then written back unspent — so the node's rows differ from every peer's
-// for good. So the rig asks it of EVERY record every case here applies, rather
-// than of the two that were found: a row inserted, changed or deleted by the
-// apply must carry a bucket the record named.
+// A record's scope is every bucket its apply may write, and what a node holding
+// back an EARLIER record in one of them holds it back by. An apply writing
+// outside it runs ahead of that record, whose reprocessing overwrites the later
+// work on that node alone (a removal's erasure undone, a spent invitation
+// written back unspent), so its rows differ from every peer's for good. So
+// [withinScope] holds EVERY record every case here applies to it.
 
 // bucketedRows is every row of every identity table that carries a bucket, as
 // the row's whole content keyed to its bucket.
@@ -564,9 +531,8 @@ func (r *writeRig) create(in iamdomain.Creation) (iamdomain.Created, error) {
 	return created, err
 }
 
-// firstLinkExpiry is when a person the rig creates stops being able to spend
-// their first password link: the lifetime a surface gives it, from the rig
-// writer's clock.
+// firstLinkExpiry is when a person the rig creates can no longer spend their
+// first password link, by the rig writer's clock.
 var firstLinkExpiry = brokerAt.Add(credential.EnrolmentLinkLifetime)
 
 // vacantSeat puts one HUMAN seat in the running company and answers its handle:
@@ -620,9 +586,8 @@ func (r *writeRig) rename(person, login, opID string) error {
 // draining runs one gesture with this rig's consumer alongside it.
 func (r *writeRig) draining(gesture func() error) error {
 	r.t.Helper()
-	// THE CONSUMER RUNS ALONGSIDE, because every write waits for this
-	// node's applier to reach its own record, so a rig that drained only
-	// afterwards would deadlock on the write.
+	// THE CONSUMER RUNS ALONGSIDE: every write waits for this node's applier to
+	// reach its record, so draining only afterwards deadlocks.
 	return r.during(gesture)
 }
 
@@ -651,16 +616,12 @@ func (r *writeRig) during(gesture func() error) error {
 	return err
 }
 
-// reader builds this rig's read side over the same estate its writer writes.
-//
-// THE RIG'S OWN WAITER is the committed position, so a read's level means what
-// it says: the reader and the publisher agree about how far this node has got,
-// which is the property a reader built over a separate notion of position
-// silently would not have.
+// reader builds this rig's read side over its writer's estate, positioned by
+// the rig's own waiter, which moves as the rig drains: a read reports the
+// position its rows were derived through, and the reader and the publisher
+// agree how far this node has got.
 func (r *writeRig) reader(t *testing.T) *iamdomain.Reader {
 	t.Helper()
-	// OVER A WAITER WHOSE POSITION MOVES as the rig drains, so the position
-	// a read reports is the one the rows it served were derived through.
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
 		DB: r.db.Reader(), Reached: r.waiter.Reached,
 	})
@@ -739,9 +700,8 @@ func (w *rigWaiter) WaitReached(ctx context.Context, p statelog.Position) error 
 	}
 }
 
-// WaitApplied is WaitReached here, and the harness is why: this rig applies
-// every record inline in its own drain, so "committed" and "applied" are one
-// position rather than two.
+// WaitApplied is WaitReached: this rig applies every record inline in its
+// drain, so committed and applied are one position.
 func (w *rigWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet,
 	p statelog.Position) error {
 
@@ -800,17 +760,15 @@ func (r *writeRig) anybody(t *testing.T) (bool, error) {
 	return r.reader(t).AnyPerson(t.Context(), end)
 }
 
-// behind is the log's end as a node that has not applied its tail sees it —
-// the state every node is in for a moment after it boots: records past what
-// this rig drained.
+// behind is the log's end as a node that has not applied its tail sees it, as
+// every node does for a moment after boot.
 func (r *writeRig) behind(ctx context.Context) (uint64, error) {
 	end, err := r.log.End(ctx)
 	return end + 3, err
 }
 
-// openNodeEstate opens one node's store with its replicated estate beside it
-// — the one file every state log here applies into — closed with the test,
-// and answers the handle a holder of that estate keeps. what names the node in
+// openNodeEstate opens one node's store with its replicated estate beside it,
+// closed with the test, and answers the estate's handle; what names the node in
 // a failure.
 func openNodeEstate(t *testing.T, what string) store.ReplicatedHandle {
 	t.Helper()
@@ -846,13 +804,11 @@ func testVerifier(t *testing.T) *recordseal.Verifier {
 
 // TWO ENROLMENTS ON ONE ADDRESS YIELD EXACTLY ONE WINNER.
 //
-// THE case this domain exists to settle, and the one nothing below a broker
-// can. There is no unique index on `iam_people.email_blind` and there cannot
-// be one — a constraint violation inside an apply transaction stalls every
-// node's log at once — so what keeps two people off one address is that both
-// enrolments publish on the DIRECTORY subject at the anchor their snapshot
-// read: the broker accepts one, and the other decides again from rows that
-// hold the winner and is refused naming them.
+// There is no unique index on `iam_people.email_blind` and cannot be: a
+// constraint violation inside an apply stalls every node's log. Both enrolments
+// publish on the DIRECTORY subject at the anchor their snapshot read; the
+// broker accepts one, and the other decides again from rows holding the winner
+// and is refused naming them.
 //
 // Mutation: drop the address check from the enrolment's decide, and both land.
 func TestTwoEnrolmentsOnOneAddressYieldOneWinner(t *testing.T) {
@@ -906,8 +862,7 @@ func TestTwoEnrolmentsOnOneAddressYieldOneWinner(t *testing.T) {
 		t.Fatalf("the loser was refused with %v, want the address taken", refusal)
 	}
 
-	// AND THE ROWS AGREE. Exactly one person holds the address, whatever
-	// the two goroutines did.
+	// AND THE ROWS AGREE: exactly one person holds the address.
 	holders := rig.column(
 		`SELECT id FROM iam_people WHERE email_blind <> '' ORDER BY id`)
 	if len(holders) != 1 {
@@ -915,11 +870,9 @@ func TestTwoEnrolmentsOnOneAddressYieldOneWinner(t *testing.T) {
 	}
 }
 
-// AND TAKING A HELD ADDRESS NAMES WHO HOLDS IT.
-//
-// "That address is taken" is a support ticket; "that address belongs to person
-// X" is an answer — and it is the directory's own decide that refuses, in the
-// snapshot the broker arbitrates, so the person it names is the holder.
+// AND TAKING A HELD ADDRESS NAMES WHO HOLDS IT: the directory's own decide
+// refuses, in the snapshot the broker arbitrates, so the person it names is the
+// holder.
 func TestTakingAHeldAddressNamesWhoHoldsIt(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -974,9 +927,8 @@ func TestAnEnrolmentWritesOnePersonWhoseValuesAreSealed(t *testing.T) {
 	if got := rig.column(`SELECT id FROM iam_people`); len(got) != 1 || got[0] != id {
 		t.Fatalf("the estate holds %v, want exactly %q", got, id)
 	}
-	// THE CLEARTEXT IS NOWHERE. Not in the sealed columns, not in the
-	// document, and — the one that matters most — not in any subject, which
-	// is a broker path in every delivery.
+	// THE CLEARTEXT IS NOWHERE: not in the sealed columns, the document, or any
+	// subject, which is a broker path in every delivery.
 	for _, column := range []string{"name_sealed", "email_sealed", "document"} {
 		for _, value := range rig.column(
 			`SELECT CAST(` + column + ` AS TEXT) FROM iam_people`) {
@@ -1034,10 +986,8 @@ func TestARemovalLeavesATombstone(t *testing.T) {
 	if len(tombstone) != 1 {
 		t.Fatalf("the removal left %d tombstones, want 1", len(tombstone))
 	}
-	// THE TOMBSTONE CARRIES THE BLINDS AND NOT THE ADDRESS. It is the one
-	// row designed to outlive the person, so writing an address into it
-	// would be the removal's own promise broken by the mechanism that
-	// makes it.
+	// THE TOMBSTONE CARRIES THE BLINDS, NOT THE ADDRESS: it is the one row
+	// built to outlive the person.
 	for _, fragment := range []string{"sarah.chen@", "example.com"} {
 		if contains(tombstone[0], fragment) {
 			t.Errorf("the tombstone %q carries the address it is meant to make "+
@@ -1070,11 +1020,9 @@ func indexOf(haystack, needle string) int {
 
 // THE FLEET-WIDE GENERATION MOVES ONE ROW AND NOBODY'S EPOCH.
 //
-// That separation is the whole reason the counter exists. Bumping every
-// person's revocation epoch instead is a write per person inside a transaction
-// the framework bounds by a row budget, so a company that had outgrown one
-// transaction would end SOME of its sessions — and the operator would have no
-// way to tell which.
+// Bumping every person's revocation epoch instead is a write per person in a
+// transaction the framework bounds by a row budget, so a company past one
+// transaction would end SOME of its sessions, with no way to tell which.
 func TestInvalidatingEverySessionMovesOneRowAndNobodysEpoch(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -1114,9 +1062,8 @@ func TestInvalidatingEverySessionMovesOneRowAndNobodysEpoch(t *testing.T) {
 			"invalidation that wrote per-person rows would be bounded by the "+
 			"apply transaction's row budget", before, after)
 	}
-	// AND IT IS ON THE TRAIL, in the horizon that keeps things: ending
-	// every session in the company is exactly the gesture somebody comes
-	// back to an audit a year later for.
+	// AND IT IS ON THE TRAIL, in the horizon that keeps things: ending every
+	// session is a gesture an audit comes back to.
 	if got := rig.column(
 		`SELECT class FROM iam_history WHERE op = 'invalidate'`); len(got) != 1 ||
 		got[0] != string(iamdomain.ClassChange) {
@@ -1125,19 +1072,15 @@ func TestInvalidatingEverySessionMovesOneRowAndNobodysEpoch(t *testing.T) {
 	}
 }
 
-// AN OLDER INVALIDATION ARRIVING AFTER A NEWER ONE MUST NOT PULL THE
-// GENERATION BACK.
+// AN OLDER INVALIDATION ARRIVING AFTER A NEWER ONE MUST NOT PULL THE GENERATION
+// BACK.
 //
-// A REDELIVERY ALONE COULD NOT SHOW THIS, and stating why is half the case:
-// the new generation is STATED on the record, so delivering one record twice
-// writes the value it already holds whatever the guard says, and an in-order
-// replay of two records ends on the higher one either way. What the monotone
-// guard defends is OUT-OF-ORDER arrival — a reordered fetch, a recovery, a
-// node catching up — so this applies the two records back to front, which is
-// the only arrangement in which an unguarded upsert is visible.
-//
-// Ungarded it un-ends every session the second bump ended, on one node, with
-// nothing that ever corrects it.
+// The generation is STATED on the record, so a redelivery or an in-order replay
+// ends on the higher one whatever the guard does. The monotone guard defends
+// OUT-OF-ORDER arrival (a reordered fetch, a recovery, a node catching up), so
+// this applies the two back to front, the only order an unguarded upsert shows
+// in. Unguarded, it un-ends every session the second bump ended, on one node,
+// for good.
 func TestAnOlderInvalidationDoesNotPullTheGenerationBack(t *testing.T) {
 	t.Parallel()
 	rig := &sweepRigT{writeRig: newWriteRig(t)}
@@ -1192,10 +1135,9 @@ func invalidationRecord(t *testing.T, generation, seq uint64) statelog.Record {
 
 // TWO OPERATORS INVALIDATING AT ONCE CONTEND, AND THE SECOND SEES THE FIRST.
 //
-// The singleton subject is what buys it. On two subjects neither would
-// contend, both would read the same current generation, both would write the
-// same new one — and every cookie minted between them would survive a gesture
-// whose whole promise is that nothing issued before it does.
+// The singleton subject buys it: on two subjects both would read the same
+// generation and write the same next one, and every cookie minted between them
+// would survive.
 func TestTwoInvalidationsContendAndLandAsTwoIncrements(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -1216,11 +1158,10 @@ func TestTwoInvalidationsContendAndLandAsTwoIncrements(t *testing.T) {
 
 // AN INVALIDATION NEEDS THE ADMINISTRATIVE GRANT, UNLIKE A REVOCATION.
 //
-// The asymmetry is the blast radius: revoking is something a person does to
-// themselves and something the engine does on their behalf the moment somebody
-// else has their cookie, so gating it would make the fastest response to a
-// compromise the one that needs an administrator. Ending EVERYBODY's sessions
-// has no self-service reading at all.
+// Revoking is self-service, and what the engine does the moment somebody else
+// has a person's cookie: gating it would make the fastest response to a
+// compromise need an administrator. Ending EVERYBODY's sessions has no
+// self-service reading.
 func TestInvalidatingEverySessionIsRefusedWithoutTheGrant(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -1337,19 +1278,14 @@ func (s *rigSeats) Seat(_ context.Context, handle string) (session.Seat, bool, e
 
 // AN ADMINISTRATIVE RECORD IS NEVER WRITTEN THROUGH A MACHINE TOKEN.
 //
-// A token may carry admin — what a pipeline may do is its owner's to choose —
-// so the guarantee that no token ever writes the directory no longer rests on
-// a permission it cannot hold: it rests on this, and on the authority table's
-// presence rows. Walked over EVERY record [iamdomain.Writer.mayAdminister]
-// guards — enrolling, redeeming, inviting, cancelling an invitation, editing,
-// changing a login or a seat, a stage, a removal, ending everybody's sessions
-// — with a party holding admin acting through a machine token: each is
-// refused [iamdomain.ErrTokenRefused] (which wraps [iamdomain.ErrRefused]),
-// before anything is read or published. The CONTROLS: an operator id that is a
-// Tier A token's own login (`token:<id>`, the deployment's credential, which
-// IS its principal) is no machine token and is admitted, and an id whose class
-// is a machine token's is refused even when this build cannot parse the rest
-// of it. Mutation: check admin before the token and every case is admitted.
+// A token may carry admin, so that no token writes the directory rests on this
+// check and the authority table's presence rows, not on a permission. Over
+// every record [administrativeGestures] lists, a party holding admin acting
+// through a machine token is refused [iamdomain.ErrTokenRefused] (wrapping
+// [iamdomain.ErrRefused]) before anything is read or published, even when this
+// build cannot parse the id past its class. The CONTROL: a Tier A token's own
+// login (`token:<id>`), which IS its principal, is no machine token and is
+// admitted. Mutation: check admin before the token and every case is admitted.
 func TestAnAdministrativeRecordIsNeverWrittenThroughAMachineToken(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -1385,10 +1321,8 @@ func TestAnAdministrativeRecordIsNeverWrittenThroughAMachineToken(t *testing.T) 
 }
 
 // administrativeGestures is every record [iamdomain.Writer.mayAdminister]
-// guards, each a call a party may try: enrolling, redeeming, inviting,
-// cancelling an invitation, editing, changing a login or a seat, a stage, a
-// removal, and ending everybody's sessions. The ones about an existing person
-// name person, whom a refused gesture never reaches.
+// guards, each a call a party may try; those about an existing person name
+// person, whom a refused gesture never reaches.
 func administrativeGestures(ctx context.Context,
 	person string) map[string]func(w *iamdomain.Writer) error {
 
@@ -1454,22 +1388,18 @@ func administrativeGestures(ctx context.Context,
 	}
 }
 
-// THE ASSISTANT WRITES AN ADMINISTRATIVE RECORD ONLY WHERE NO CEREMONY IS IN IT.
+// THE ASSISTANT WRITES AN ADMINISTRATIVE RECORD ONLY WHERE NO CEREMONY IS IN
+// IT.
 //
-// A request the Dashboard Assistant makes is its person's own, so an
-// administrator's assistant is composed holding admin, and the one it sends a
-// write through is an exec grant carrying a request the administrator
-// approved (ADR-0051). The record keeps the sign-in ceremonies from it for the
-// machine token's reason, whatever authority reached it: an enrolment (a
-// first password link, or a redemption), an invitation (a link) and ending
-// every session are refused [iamdomain.ErrAssistRefused], wrapping
-// [iamdomain.ErrRefused] and never read as a token, and so is an operator id of
-// the assistant's class this build cannot parse. Every other administrative
-// record (an edit, a login or seat move, a stage, a removal, an invitation
-// withdrawn) is the administrator's own, decided past the lock by its own
-// rules. The refused set is exactly the intended one, so a record that slips
-// on or off it is a red build. Mutation: drop the lock and the ceremonies are
-// admitted; widen it to every record and the edits are refused.
+// An administrator's Dashboard Assistant holds admin and writes through an exec
+// grant carrying a request the administrator approved (ADR-0051). The sign-in
+// ceremonies are kept from it for the machine token's reason, whatever authority
+// reached it: an enrolment or redemption, an invitation and ending every session
+// are refused [iamdomain.ErrAssistRefused], wrapping [iamdomain.ErrRefused] and
+// never read as a token, as is an id of the assistant's class this build cannot
+// parse. Every other administrative record is the administrator's own.
+// Mutation: drop the lock and the ceremonies are admitted; widen it to every
+// record and the edits are refused.
 func TestTheAssistantWritesNoSignInCeremony(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -1544,15 +1474,13 @@ func TestAnAdministrativeRecordNeedsAdmin(t *testing.T) {
 // AN UNKNOWN PERMISSION MAY BE REMOVED, AND KEPT, BUT NEVER ADDED.
 //
 // A name this build does not know arrives in a row from a newer peer. Keeping
-// it is no addition — the row already holds it — and taking it away is always
-// allowed, since nobody escalates by narrowing; adding one is refused even to
-// an administrator, because nothing here can say what it would open on a peer
-// that reads it. And comparisons run through [iam.Expand]: an app spelled out
-// beside admin adds nothing. Held on [iamdomain.Writer.MayConfer] — the rule
-// every enrolment, invitation, edit and mint asks — and through an edit's own
-// record, which publishes nothing on the refusal. Mutation: judge additions
-// against the raw row rather than its expansion and the admin-implied app is
-// refused.
+// it adds nothing and narrowing never escalates; adding one is refused even to
+// an administrator, since nothing here can say what it opens on a peer that
+// reads it. Comparisons run through [iam.Expand], so an app spelled out beside
+// admin adds nothing. Held on [iamdomain.Writer.MayConfer], which every
+// enrolment, invitation, edit and mint asks, and through an edit's record,
+// which publishes nothing on refusal. Mutation: judge additions against the raw
+// row, not its expansion, and the admin-implied app is refused.
 func TestAnUnknownGrantMayBeRemovedButNotAdded(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -1625,11 +1553,8 @@ func TestAnUnknownGrantMayBeRemovedButNotAdded(t *testing.T) {
 }
 
 // AN INVITATION IS A DIRECTORY RECORD, so two administrators inviting one
-// person produce ONE invitation and one refusal naming what is already there.
-//
-// The obvious subject — the invitation's own fresh id — would make both
-// succeed, and the company would hold two links either of which creates the
-// same person.
+// person produce ONE invitation and one refusal naming it; on the invitation's
+// own fresh id both would land, two links each creating the same person.
 //
 // Mutation: drop the open-invitation check from Invite's decide, and both land.
 func TestTwoInvitationsToOneAddressYieldOneWinner(t *testing.T) {
@@ -1666,11 +1591,9 @@ func TestTwoInvitationsToOneAddressYieldOneWinner(t *testing.T) {
 	}
 }
 
-// AND TWO INVITATIONS ONTO ONE SEAT YIELD ONE WINNER, for the address's reason:
-// a seat is held by the invitation on its way to it, so two administrators
-// inviting two people onto one seat produce one invitation and one refusal
-// naming it — never two links whose second redemption is refused at the last
-// step for a seat the first one took.
+// AND TWO INVITATIONS ONTO ONE SEAT YIELD ONE WINNER: the invitation on its way
+// to a seat holds it, so a second is refused naming the first, never two links
+// whose second redemption fails at the last step.
 //
 // Mutation: drop the seat's open-invitation check from Invite's decide, and
 // both land.
@@ -1707,12 +1630,10 @@ func TestTwoInvitationsToOneSeatYieldOneWinner(t *testing.T) {
 	}
 }
 
-// AN INVITATION NEEDS AN EXPIRY, because one read as `never` is a superuser
-// claim that stays live in somebody's mailbox for the life of the company.
-//
-// It names a seat, so the expiry is the one thing missing and the refusal is
-// asserted on its sentinel: asserting only that SOMETHING refused it passed
-// on any refusal at all, the seat's included.
+// AN INVITATION NEEDS AN EXPIRY: one read as `never` is a superuser claim live
+// in somebody's mailbox for the life of the company. It names a seat, so the
+// expiry is all that is missing, and the refusal is asserted on its sentinel,
+// since any refusal at all, the seat's included, would otherwise pass.
 func TestAnInvitationWithNoExpiryIsRefused(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -1733,19 +1654,15 @@ func TestAnInvitationWithNoExpiryIsRefused(t *testing.T) {
 
 // A MACHINE IDENTITY ENROLS WITH NO ADDRESS, AND A PERSON MAY NOT.
 //
-// `svc:ci` has no login page and no mailbox — it proves itself with a token —
-// so requiring an address would mean inventing one, and a row that is neither
-// addressable nor named is a credential holder nobody can list, revoke or
-// audit. A PERSON is the opposite case: the address IS the interactive login
-// key, so one without it could never sign in.
-//
-// This was refused outright until the rule was split, which meant a company
-// could not declare a service account at all.
+// `svc:ci` has no login page and no mailbox (it proves itself with a token), so
+// requiring an address would mean inventing one; but a row neither addressable
+// nor named is a credential holder nobody can list, revoke or audit. A PERSON's
+// address IS their interactive login key, so one without it could never sign
+// in.
 func TestAMachineEnrolsWithNoAddressAndAPersonMayNot(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	// WITH NO SEAT EITHER, which is a service account's to leave out: it
-	// acts as itself.
+	// WITH NO SEAT EITHER, a service account's to leave out: it acts as itself.
 	if err := rig.enrol(iamdomain.Creation{
 		PersonID: "018f3a9c-0000-7000-8000-0000000000f1",
 		Kind:     iam.KindMachine, Stage: iam.StageActive,
@@ -1760,22 +1677,20 @@ func TestAMachineEnrolsWithNoAddressAndAPersonMayNot(t *testing.T) {
 		got[0] != "svc:ci" {
 		t.Errorf("the address-less rows are %v, want exactly [svc:ci]", got)
 	}
-	// AND IT IS STILL SEALED. A machine's NAME is a person's words —
-	// "Release pipeline, raised by Dana" — so it is kept exactly as
-	// anybody else's is, and a removal erases it the same way.
+	// AND IT IS STILL SEALED: a machine's name is a person's words ("Release
+	// pipeline, raised by Dana"), kept and erased as anybody's are.
 	if got := rig.column(
 		`SELECT length(name_sealed) FROM iam_people WHERE login = 'svc:ci'`); //
 	len(got) != 1 || got[0] == "0" {
 		t.Errorf("the machine's name_sealed is %v, want ciphertext", got)
 	}
 
-	// THE REFUSALS ARE ASSERTED ON THE SENTINEL and never on "an error
-	// happened": an enrolment that reaches the publisher fails for
-	// unrelated reasons in a rig that is not draining, which would make
-	// both of these pass whatever the rule said.
+	// THE REFUSALS ARE ASSERTED ON THE SENTINEL, never on "an error happened":
+	// in a rig not draining, an enrolment reaching the publisher fails for
+	// unrelated reasons.
 	//
-	// A PERSON MISSING THEIR SEAT AS WELL is told about the address first:
-	// it is the more specific thing they left out.
+	// A PERSON ALSO MISSING THEIR SEAT is told about the address first, the
+	// more specific omission.
 	if _, err := rig.writer.Create(rig.t.Context(), iamdomain.Creation{
 		PersonID: "018f3a9c-0000-7000-8000-0000000000f2",
 		Kind:     iam.KindPerson, Stage: iam.StageActive,
@@ -1785,11 +1700,10 @@ func TestAMachineEnrolsWithNoAddressAndAPersonMayNot(t *testing.T) {
 			"nothing they hold is an interactive login key, so they can "+
 			"never sign in", err, iamdomain.ErrNotFindable)
 	}
-	// AN ADDRESS OF NOTHING BUT WHITESPACE IS NO ADDRESS, judged on what it
-	// folds to — for a person, a service account that names one, and an
-	// invitation alike. Judged raw it passed the check for an empty address
-	// and failed at the blind, unclassified: a 500 for a value the caller
-	// typed.
+	// AN ADDRESS OF ONLY WHITESPACE IS NO ADDRESS, judged on what it folds to,
+	// for a person, a service account and an invitation alike: judged raw it
+	// passes the empty check and fails at the blind unclassified, a 500 for a
+	// value the caller typed.
 	blank := []struct {
 		name  string
 		write func() error
@@ -1842,9 +1756,9 @@ func TestAMachineEnrolsWithNoAddressAndAPersonMayNot(t *testing.T) {
 
 // AN ENROLMENT OUT OF BOUNDS PUBLISHES NOTHING.
 //
-// The refusal is asserted on the SENTINEL, which a surface answers 400, and on
-// the ESTATE, which must be untouched — so the corrected retry takes the
-// address and the login with nothing of the refused one in its way.
+// Asserted on the SENTINEL, which a surface answers 400, and on the untouched
+// ESTATE, so the corrected retry takes the address and the login with nothing
+// of the refused one in its way.
 func TestAnEnrolmentOutOfBoundsPublishesNothing(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

@@ -63,12 +63,9 @@ func stripKeys(l worklet.ViewListing) []string {
 	return out
 }
 
-// A SAVED VIEW THAT CANNOT BE RUN IS REFUSED AT THE SAVE.
-//
-// Every one of these is discovered by whoever opens the view otherwise —
-// weeks later, with no way to tell a typo from a grammar change — and the
-// refusal a caller would have got for running the query is the refusal they
-// get for saving it.
+// A SAVED VIEW THAT CANNOT BE RUN IS REFUSED AT THE SAVE, with the refusal
+// running it would get: otherwise whoever opens it finds out weeks later, with
+// no way to tell a typo from a grammar change.
 func TestAViewThatCouldNotBeRunIsRefusedAtTheSave(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -106,14 +103,11 @@ func TestAViewThatCouldNotBeRunIsRefusedAtTheSave(t *testing.T) {
 		{"a parameter nothing parses", func(v *worklet.View) {
 			v.Params = map[string]string{"asignee": "ana"}
 		}, "does not parse"},
-		// A VIEW'S PARAMS ARE QUERY KEYS AND NOTHING ELSE, which is
-		// what lets a client spread them straight onto the wire. The
-		// dashboard keeps its own DISPLAY keys on the same address —
-		// `cols`, and `cols.list` / `cols.table` for the two column
-		// sets the one grid has — and reads a saved view's params
-		// beside them; a view that could carry one would take the
-		// board down with a refusal the moment somebody opened it.
-		// Neither is in QueryKeys, so neither can be saved.
+		// A VIEW'S PARAMS ARE QUERY KEYS AND NOTHING ELSE, so a client
+		// can spread them straight onto the wire. The dashboard's DISPLAY
+		// keys (`cols`, `cols.list`, `cols.table`) share the address, and
+		// a view carrying one would take the board down with a refusal
+		// when opened; none is in QueryKeys, so none can be saved.
 		{"a display key, unqualified", func(v *worklet.View) {
 			v.Params = map[string]string{"cols": "key,title"}
 		}, "does not parse"},
@@ -273,13 +267,10 @@ func TestAProtectedViewRefusesEveryoneButItsOwner(t *testing.T) {
 	}
 }
 
-// EVERY CONTAINER HAS ITS VIEWS WITHOUT ANYBODY SAVING ONE.
+// EVERY CONTAINER HAS ITS VIEWS WITHOUT ANYBODY SAVING ONE, so a fresh project
+// needs no setup gesture and nothing guards the last view against deletion.
 //
-// That is what makes "required views" moot: a fresh project needs no setup
-// gesture and nothing has to guard against somebody deleting the last view.
-//
-// THE SET IN ORDER, never its size — see [TestEveryImplicitViewsQueryParses],
-// which was a count and reported adding a view as "has 6, want 5".
+// THE SET IN ORDER, never its size — see [TestEveryImplicitViewsQueryParses].
 func TestAContainerHasItsViewsBeforeAnybodySavesOne(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -313,15 +304,11 @@ func TestAContainerHasItsViewsBeforeAnybodySavesOne(t *testing.T) {
 // EVERY IMPLICIT VIEW'S OWN PARAMETERS PARSE.
 //
 // They are rendered from this package rather than saved, so [checkView] never
-// sees them — which is exactly why they need their own case: a tab that opens
-// on a parse error is the failure the save-time parse exists to prevent, and
-// the implicit ones are the tabs every company meets first.
+// sees them, and they are the tabs every company meets first: a tab that opens
+// on a parse error is what the save-time parse exists to prevent.
 //
-// THE SET RATHER THAN THE COUNT, because a count says nothing about WHICH: a
-// view renamed, dropped and replaced by another passes a count check, and a
-// view added is a failure whose message names a number rather than a tab. This
-// was a count, and adding the timeline turned it into "has 6 views, want 5" —
-// a red build whose message named nothing anybody could act on.
+// THE SET RATHER THAN THE COUNT: a view renamed, dropped and replaced passes a
+// count check, and a view added fails with a number rather than a tab's name.
 func TestEveryImplicitViewsQueryParses(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -530,11 +517,10 @@ func TestAViewReadRefusesTheSpellingsTheWriteRefuses(t *testing.T) {
 // A SAVE IS REFUSED WHEN THE VIEW IT REPLACES IS NOT THE ONE IT WAS DECIDED ON.
 //
 // A save replaces a view whole, by id, so its authority is decided on the view
-// it overwrites as well as on the one it writes — and a decision taken on a
-// read is only worth something if the write refuses when the read no longer
-// holds. Here the view changes hands between the read and the save, which is
-// refused with a conflict the caller re-reads on; the control is the same save
-// against a fresh read.
+// it overwrites too, and that decision holds only if the write refuses once the
+// read is stale. Here the view changes hands between the read and the save,
+// which is refused with a conflict the caller re-reads on; the control is the
+// same save against a fresh read.
 func TestASaveDecidedOnAViewThatChangedIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -572,10 +558,9 @@ func TestASaveDecidedOnAViewThatChangedIsRefused(t *testing.T) {
 // A PERSONAL VIEW IS NEVER ITS CONTAINER'S DEFAULT.
 //
 // The default is the landing tab for EVERYBODY, and a personal view is in
-// nobody's strip but its owner's — so accepting one cleared the container's
-// shared default for every other reader, on the authority of a caller who
-// needed no more than their own record to save it. A pin is how a person puts
-// their own view first.
+// nobody's strip but its owner's — so accepting one would clear the shared
+// default for every other reader, on the authority of a caller who needs only
+// their own record to save it. A pin is how a person puts their own view first.
 func TestAPersonalViewCannotBeTheDefault(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -612,10 +597,10 @@ func containsString(list []string, want string) bool {
 
 // A VIEW THAT MOVES NAMES THE STRIP IT LEAVES.
 //
-// A save may change a view's container, and then the apply writes the row OUT
-// of one strip and INTO another. A scope naming only the destination let a
-// write into the strip it left slip past a deferral that covers it — the rule
-// Writer.UpdateTask states verbatim for a project move, said about a view.
+// A save that changes a view's container writes the row OUT of one strip and
+// INTO another; a scope naming only the destination would let the write slip
+// past a deferral on the strip it left — Writer.UpdateTask's rule for a project
+// move, applied to a view.
 func TestAViewThatMovesNamesBothStrips(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -775,10 +760,9 @@ func TestPinnedViewCountsAreTheViewsOwnTotal(t *testing.T) {
 // Every surface that runs a view runs it FLAT — the dashboard's shapes send
 // `subtasks=separate` and `list_work_items` overrules to it — so the grammar's
 // default, a predicate on the ROOT whose subtree rides along unfiltered, is an
-// answer nobody who presses the pin is shown. Counted in that default, an
-// open-work view counted the finished subtasks of every open epic: measured on
-// a seeded company, 39 beside a pin whose list said 36 items, including a view
-// SAVED with the tree mode, which is still run flat.
+// answer nobody who presses the pin is shown: counted that way, an open-work
+// view counts the finished subtasks of every open epic. A view SAVED with the
+// tree mode is still run flat.
 func TestAPinnedViewCountsTheListItOpens(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -876,14 +860,12 @@ func TestAPinnedViewCountsTheListItOpens(t *testing.T) {
 // A PINNED VIEW IS COUNTED AS THE PERSON WHO OPENS IT, and the count is the
 // board's total whatever the view names about its reader.
 //
-// Three views, each of which reads its viewer a different way: a saved
-// `f.reviewers=me`, which means whoever opens it; `asked_by=` the viewer's own
-// seat, which is the author of every question they put whatever credential
-// they put it through (iam.ActorFor); and a view saved against a PERSON, which
-// a board runs as saved. The
-// count and the board share one expansion ([Reader.Expand]) — and a saved
-// `me` was once resolved by neither, so the count and the board refused it
-// alike, or, while the count carried a merge of its own, disagreed.
+// Three views each read their viewer a different way: a saved
+// `f.reviewers=me`, meaning whoever opens it; `asked_by=` the viewer's own
+// seat, the author of every question they put through any credential
+// (iam.ActorFor); and a view saved against a PERSON, which a board runs as
+// saved. The count and the board share one expansion ([Reader.Expand]); a
+// merge of the count's own would let them disagree.
 func TestAPinnedViewCountsAsTheViewerWhoOpensIt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -1018,12 +1000,11 @@ func TestAPinnedViewCountsAsTheViewerWhoOpensIt(t *testing.T) {
 
 // EVERY VIEW A PERSON CAN SEE IS LISTED, WHATEVER CONTAINER IT LIVES IN.
 //
-// The inventory and the sidebar's pins read the workspace strip, so a view
-// saved with a project board's "+ View" appeared in neither — it could be
-// pinned from nowhere, and a pin set another way never reached the sidebar. A
-// project view pinned by its viewer is listed first, carries its container,
-// and is counted IN THAT CONTAINER, which is what opening it runs; somebody
-// else's personal view is in nobody else's listing.
+// A view saved with a project board's "+ View" must reach the inventory and the
+// sidebar's pins, though no workspace strip holds it. A project view pinned by
+// its viewer is listed first, carries its container, and is counted IN THAT
+// CONTAINER, which is what opening it runs; somebody else's personal view is
+// in nobody else's listing.
 func TestEveryViewListsAPinnedProjectViewAndCountsItInItsProject(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -1053,8 +1034,7 @@ func TestEveryViewListsAPinnedProjectViewAndCountsItInItsProject(t *testing.T) {
 	}
 	r.drain()
 
-	// THE FIXTURE BITES: the workspace strip — what both surfaces read —
-	// does not hold the project view at all.
+	// THE FIXTURE BITES: the workspace strip does not hold the project view.
 	for _, row := range r.strip(worklet.Container{Kind: worklet.ContainerWorkspace}, "ana").Views {
 		if row.ID == "v-eng" {
 			t.Fatal("the fixture is wrong: the workspace strip already lists the project view")
@@ -1095,13 +1075,12 @@ func TestEveryViewListsAPinnedProjectViewAndCountsItInItsProject(t *testing.T) {
 
 // A VIEW'S CREATE MADE AGAIN IS ANSWERED BY THE VIEW IT SAVED.
 //
-// A save decided on no stored view is a create, and its id is the one the
-// caller derived from the create as the work began — so a rebased re-run, whose
-// operation the ledger does not hold, names the view its first attempt saved.
-// It is answered from that row, with nothing published and nothing about the
-// view changed, whatever has happened to it since: refused as a view "saved
-// while this one was being decided", the re-run was told to decide again about
-// its own view.
+// A save decided on no stored view is a create, whose id the caller derived as
+// the work began — so a rebased re-run, whose operation the ledger does not
+// hold, names the view its first attempt saved. It is answered from that row,
+// publishing and changing nothing, whatever has happened to the view since;
+// refusing it as a view "saved while this one was being decided" would tell the
+// re-run to decide again about its own view.
 func TestAViewsCreateMadeAgainIsAnsweredByItsView(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

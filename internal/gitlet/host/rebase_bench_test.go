@@ -18,19 +18,14 @@ import (
 )
 
 // BenchmarkEngineRebase measures what gitlet.RebaseBuildDeadline is read
-// against: the build of a rebase_change — its listing, its commits read, and
-// one merge-tree and one commit-tree a replayed commit — of a change of
-// commits=10, 100 and gitlet.MaxRebaseCommits commits, each touching a file of
-// its own, onto a target that moved by one commit, over a tree of files=1 000
-// files and — with CREWLET_GIT_LARGE=1 (gittest.LargeEnv) — 100 000. Each
-// iteration moves the target again and rebases the change's head anew, so
-// every one replays the whole change; ms/build is the host's own `build`
-// stage, the figure the deadline bounds, and ms/write the whole write.
-//
-// MEASURED (git 2.56.0 on two E-cores of a Core Ultra 7 265U, the machine
-// loaded beside another session, -benchtime 1x and one count — ONE rebase an
-// arm, the bound of this machine's validation, so the figure is one sample
-// and no percentile): see internal/gitlet/host's doc.go, "What a rebase costs".
+// against: a rebase_change's build (its listing, its commits read, one
+// merge-tree and one commit-tree a replayed commit) of commits=10, 100 and
+// gitlet.MaxRebaseCommits commits, each touching its own file, onto a target
+// moved by one commit, over files=1 000 files and, with CREWLET_GIT_LARGE=1
+// (gittest.LargeEnv), 100 000. Each iteration moves the target again, so every
+// one replays the whole change. ms/build is the host's `build` stage, the
+// figure the deadline bounds; ms/write the whole write. Figures: package doc,
+// "Measured" (WHAT A REBASE COSTS).
 func BenchmarkEngineRebase(b *testing.B) {
 	gitlettest.Quiet(b)
 	for _, files := range []int{rebaseTreeFiles, rebaseTreeFilesLarge} {
@@ -75,9 +70,9 @@ const (
 	rebaseTreeFilesLarge = 100_000
 )
 
-// rebaseRig is one arm's fixture: one Gitlet node holding a repository whose main
-// holds a tree of the arm's files, and a change from feature of the arm's
-// commits on it, opened by pat.
+// rebaseRig is one arm's fixture: one Gitlet node holding a repository whose
+// main holds the arm's tree, and pat's change from feature of the arm's
+// commits on it.
 type rebaseRig struct {
 	f      *gitlettest.SoloFleet
 	fig    *writeFigures
@@ -152,8 +147,7 @@ func (r *rebaseRig) moveMain(b *testing.B) {
 	mustPush(b, r.p, r.work, repoURL(r.f.Nodes()[0]), "main")
 }
 
-// medianMillis is the median of samples in milliseconds — one sample at the
-// bound this machine runs an arm at.
+// medianMillis is the median of samples in milliseconds.
 func medianMillis(samples []time.Duration) float64 {
 	sorted := slices.Clone(samples)
 	slices.Sort(sorted)

@@ -18,174 +18,89 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE READS OF CHANGES: a listing of them ([ReadChanges]) and one in detail
-// ([ReadChange]), each served inside the one transaction [Reader.Read] hands
-// it, from the rows the records on the change's REPOSITORY'S subject wrote
-// (replicated 0086 and 0094) — and each held to the asker's grant on that
-// repository ([JudgeRead]), and to the grant of the seat it reads for, as a
-// read of the repository's own rows is: a change is the repository's
-// contents, and a `visibility: unit` repository's changes are no more a seat
-// outside the unit's to read than its push history is.
-//
-// # A listing walks the one index its filters lead
-//
-// Every listing names a repository, a work item, a state, a reviewer, what
-// its changes wait on or a window they moved in ([ReadQuery.State] says why), and walks ONE index,
-// chosen by its filters in this order ([walkOf]):
-//
-//   - a need of a person: code_mergeability_waits_idx (replicated 0106), the
-//     changes whose stored readiness waits on a person, each kept only where
-//     the readiness the read judges still does (conversationread.go);
-//   - a readiness of ready, where no reviewer or need leads and no sort by
-//     update is asked: code_mergeability_ready_idx, the changes whose stored
-//     readiness is ready, each kept only where the bucket the read judges is
-//     still ready (changereadiness.go);
-//   - a reviewer, or a need of a review: code_reviewers_reviewer_idx
-//     (replicated 0100), the changes whose ask of that reviewer stands —
-//     the set a reviewer is asked to work through, newest change first
-//     (conversationread.go);
-//   - a live state asked by when its changes moved ([ChangeSortUpdated]):
-//     code_changes_live_updated_idx, or code_changes_repo_live_updated_idx
-//     where a repository is named, in step with the conversations
-//     (changesort.go);
-//   - a work item named: code_changes_work_idx (recreated in its order by
-//     replicated 0097), the item's changes — the narrowest set a listing
-//     names, and still paged, since a recurring item gathers a change every
-//     time it is worked;
-//   - an owner and a state — or a need of a fix, an owner's in one live
-//     state (conversationread.go): code_changes_owner_idx, the owner's
-//     changes in that state;
-//   - a repository and a state: code_changes_repo_state_idx (replicated
-//     0097), the repository's changes in that state;
-//   - a repository: code_changes_number_idx, the repository's changes;
-//   - a window beside no state or a terminal one (merged, closed):
-//     code_changes_updated_idx and code_conversations_updated_idx
-//     (replicated 0147) walked in step, the changes that moved within it,
-//     each once at its last move (changewindow.go);
-//   - a state: code_changes_state_idx, the company's changes in that state
-//     — a live state's (draft, open) ahead of a window, which is then tested
-//     on each row, since the state's index holds the live set alone where
-//     the window's hold every change that moved, the merged among them.
-//
-// NEWEST FIRST, always: a repository's walks by number, which is the order the
-// code log opened its changes in (a number is the apply's); a reviewer's and a
-// person's by the change's id, a UUIDv7 minted when it was opened; a window's
-// walk, and a live state's asked by when its changes moved, by each change's
-// last move and then its id; every other, a live state's in a window among
-// them, by the position of the record that opened each change and then its
-// id, since one record can open several. A filter the walked index does not seek — a repository beside
-// a work item, an owner or a reviewer, a state beside a work item or a
-// reviewer, an owner beside a repository's, a work item's or a reviewer's
-// walk, a work item beside a reviewer's, and whether a change awaits its
-// owner's fix, which its conversation's counters say — is tested on each row
-// the page read, never written into the statement: a test inside a statement
-// that no index serves reads every row it rejects before its LIMIT fills,
-// without bound, where a page that reads LIMIT rows and keeps what passes reads
-// what its limit says. So a page is the rows it READ, its cursor the last of
-// them, and it may be short, or empty with a cursor, as a seat's listing of
-// repositories is; a client pages until no cursor comes back. The bucket a
-// change's judged readiness stands in ([ReadQuery.Readiness]) is tested on each
-// row the same way, once the page's readiness is judged.
-//
-// # Held to the grant
-//
-// A listing that NAMES its repository is that repository's: judged once,
-// before any change is read, and refused whole where the asker — or the seat
-// it reads for — may not read the repository ([ErrNotPermitted],
-// [ErrAboveCeiling]), as its push history is; it lists the repository's
-// changes whatever the repository's state, a deleted one's among them, since
-// it was named. A listing that names NONE lists the changes of every
-// repository both may read — the repositories its page's changes name read
-// in one statement, each judged once a page by the one chart the read holds —
-// and of an active or archived one only, as a listing of repositories leaves
-// out a deleted one unless asked for it: a deleted repository's changes are no
-// work anybody can do until it is restored. One change ([Reader.change]) is
-// read only from a repository the asker may read: that a change of a
-// repository the grant guards exists is never answered, and its number is not
-// a way to learn it ([ErrChangeNotFound] is about a repository the asker
-// reads).
-//
-// # One change
-//
-// A change is read by its NUMBER on its repository, web!42, which is how a
-// person and a seat name one: its row, its description and its authors on a
-// first page, beside its revisions newest first, a page at a time; a later
-// page, after the cursor of the one before — a revision's number — carries
-// its revisions alone, judged against the grant again from the repository's
-// row, as every page of a refs listing is. The detail rides beside a page's
-// rows in the half of the estate reply [MaxPageBytes] leaves free, as a refs
-// listing's first page carries its repository's: its description is at most
-// [MaxChangeBodyBytes], and its authors are whoever pushed its source branch
-// as themselves, each a seat or a person of the company, some thirty
-// thousand of whom would fit.
-//
-// # Its readiness
-//
-// A live change's READINESS rides it — on one change's detail and on every
-// row of a listing ([ChangeSummary.Readiness]) — its target's merge gate
-// judged in the read's own transaction against the read's one chart
-// ([JudgeGate], gatejudge.go), the merge authority for the read's asker, the
-// rows of a whole page read a kind at a time ([gateFactsIn]), never the answer
-// the change's last mergeability stored: a read answers as of its snapshot. So
-// a read of changes is judged by a chart whoever asks — an approver's
-// eligibility is the chart's — and a reader that holds none refuses one about
-// itself ([Reader.chartFor]).
-//
-// # A page kept shorter than it was served
-//
-// Every row a page serves names the cursor that resumes after it — a
-// revision, a reviewer, a comment, a review and a finding by its own
-// ([RevisionRow.Cursor] and its kin), a change of a listing by the walk the
-// listing takes ([ReadQuery.ChangesCursor]) — and a page's own cursor is its
-// last row's, read through the same function. So a caller whose answer is
-// smaller than the estate's reply — a code tool's, one tool answer, which a
-// page of four mebibytes is many of — keeps a page's first rows and resumes
-// after the last it kept, never re-deriving how a walk spells its cursor: a
-// listing's rows the page read past it and did not keep are read again by
-// the next page, and kept or left as they were.
+// THE READS OF CHANGES: a listing ([ReadChanges]) and one in detail
+// ([ReadChange]), each inside the one transaction [Reader.Read] hands it, from
+// the rows the records on the change's REPOSITORY'S subject wrote, and each
+// held to the grant of the asker and of the seat it reads for on that
+// repository ([JudgeRead]): a change is the repository's contents, so a
+// `visibility: unit` repository's changes are no more readable outside the
+// unit than its push history.
+
+// A listing walks ONE index, the one its filters lead ([walkOf]), newest first
+// in the walk's order ([changeOrder]). A filter that index does not seek is
+// tested on each row the page read ([changeWalk.keeps]), never written into
+// the statement: a test no index serves reads every row it rejects before its
+// LIMIT fills, without bound. So a page is the rows it READ, its cursor the
+// last of them, and it may be short, or empty with a cursor; a client pages
+// until no cursor comes back. The readiness bucket ([ReadQuery.Readiness]) is
+// tested on each row the same way, once the page's readiness is judged.
+
+// HELD TO THE GRANT: a listing that names its repository is judged once,
+// before any change is read, and refused whole where the asker or its seat may
+// not read it ([ErrNotPermitted], [ErrAboveCeiling]); it lists that
+// repository's changes whatever its state, since it was named. A listing that
+// names none serves only repositories both may read and that are in use, judged
+// once a page ([listedReposIn]): a deleted repository's changes are no work
+// anybody can do until it is restored. One change ([Reader.change]) is read
+// only from a repository the asker may read, so its number never reveals that
+// a guarded repository's change exists ([ErrChangeNotFound]).
+
+// ONE CHANGE is read by its number on its repository (web!42): a first page
+// carries its row, description and authors beside its newest revisions; a
+// later page, after a revision's number, its revisions alone, judged against
+// the grant again as every page of a refs listing is. The detail fits the half
+// of the estate reply [MaxPageBytes] leaves free: its description is at most
+// [MaxChangeBodyBytes], and some thirty thousand authors would fit.
+
+// ITS READINESS ([ChangeSummary.Readiness]), on a live change's detail and
+// every listed row, is its target's merge gate judged ([JudgeGate]) in the
+// read's transaction against the read's one chart, a page's rows read a kind
+// at a time ([gateFactsIn]), never the mergeability last stored: a read answers
+// as of its snapshot. So a reader holding no chart refuses ([Reader.chartFor]).
+
+// A PAGE KEPT SHORTER THAN SERVED: every row names the cursor that resumes
+// after it ([RevisionRow.Cursor], [ReadQuery.ChangesCursor] and kin), and a
+// page's own cursor is its last row's, by the same function. So a caller whose
+// answer is smaller than the estate's reply (a code tool's) keeps a page's
+// first rows and resumes after the last it kept without learning how a walk
+// spells a cursor; rows read past it are read again by the next page.
 
 // changeOrder is the order a listing of changes walks in, which its cursor is
 // spelled in.
 type changeOrder int
 
 const (
-	// byNumber is one repository's changes, newest first by number; its
-	// cursor is the last number a page read.
+	// byNumber is one repository's changes, newest first by number (the
+	// apply's, so the code log's opening order); its cursor is the last number.
 	byNumber changeOrder = iota
 	// byOpening is changes across repositories, newest first by the position
-	// of the record that opened each and then by id; its cursor is a
-	// [logCursor] of the two.
+	// of the record that opened each, then by id since one record can open
+	// several; its cursor is a [logCursor] of the two.
 	byOpening
 	// byID is the changes a reviewer is asked to review, or whose stored
-	// readiness waits on a person or is ready, newest first by the change's id; its
-	// cursor is the last id a page read.
+	// readiness waits on a person or is ready, newest first by id (a UUIDv7
+	// minted at opening); its cursor is the last id.
 	byID
 	// byMove is the changes that moved within a window, or a live state's
-	// asked by when they moved, newest first by their last move and then by
-	// id ([windowWalk], [changeWalk.liveMovedWalk]); its cursor is a
-	// [logCursor] of the two.
+	// asked by when they moved, newest first by last move, then id
+	// ([windowWalk], [changeWalk.liveMovedWalk]); its cursor is a [logCursor].
 	byMove
 )
 
-// changeWalk is the one index a listing of changes walks, as its filters
-// choose it ([walkOf]).
+// changeWalk is the one index a listing of changes walks ([walkOf]).
 type changeWalk struct {
-	// index is the index it walks, which its statements name and the plan
-	// tests hold them to ([changeWalk.read] issues them).
+	// index is the index its statements name, which the plan tests hold them to.
 	index string
-	// keys are the values its statements' equalities bind, in their order,
-	// before a page's cursor and its limit.
+	// keys are what its statements' equalities bind, in order, before a page's
+	// cursor and its limit.
 	keys  []any
 	order changeOrder
-	// repo, state, owner and work are the filters its index does not seek,
-	// which a page tests on each row it read ([changeWalk.keeps]); live
-	// keeps a draft or open change alone, for a listing of what a live
-	// change waits on; fix keeps a change awaiting its owner's fix alone,
-	// which its conversation's counters say ([needingFixIn]); person keeps
-	// a change whose readiness, as the read judges it, waits on a person
-	// ([Readiness.WaitsPerson]). window keeps a change that moved at or
-	// after since, the start of the window the listing names, as a broker
-	// instant (store.EncodeTime) — what a window's own walk seeks too.
+	// The filters its index does not seek, tested on each row a page read
+	// ([changeWalk.keeps]): repo, state, owner and work; live keeps a draft or
+	// open change; fix one awaiting its owner's fix ([needingFixIn]); person
+	// one whose judged readiness waits on a person ([Readiness.WaitsPerson]);
+	// window one that moved at or after since, a broker instant
+	// (store.EncodeTime) — what a window's own walk seeks too.
 	repo, state, owner, work, live, fix, person, window bool
 	since                                               int64
 	// scan bounds a live state's conversation side ([MaxSpokenScanned]).
@@ -193,11 +108,9 @@ type changeWalk struct {
 }
 
 // walkOf is the walk q's filters choose, repoID the id of the repository q
-// names — "" where it names none — and since the start of the window q names
-// as a broker instant (store.EncodeTime), 0 where it names none. q is a
-// listing [ReadQuery.validate] passed, a need of a fix read as
-// [ReadQuery.fixing] reads it: it names a repository, a work item, a state, a
-// reviewer, a need or a window.
+// names ("" for none) and since the start of its window as a broker instant
+// (store.EncodeTime; 0 for none). q passed [ReadQuery.validate], a need of a
+// fix already read by [ReadQuery.fixing].
 func walkOf(q ReadQuery, repoID string, since int64) changeWalk {
 	w := walkLedBy(q, repoID)
 	if q.Window != "" {
@@ -240,28 +153,21 @@ func walkLedBy(q ReadQuery, repoID string) changeWalk {
 	case named:
 		return changeWalk{index: changesNumberKey, keys: []any{repoID}, order: byNumber, owner: q.Owner != ""}
 	case q.Window != "" && !q.State.Live():
-		// A WINDOW LEADS where no repository, work item, reviewer, need or
-		// LIVE state does — ahead of a terminal state, whose index holds
-		// every change that ever merged or closed, where the window's hold
-		// what moved lately: a state and an owner are tested on the rows it
-		// read. A live state leads instead, below, and the window is tested
-		// on its rows: its index holds the live set alone, which a company
-		// keeps bounded, where the window's hold every change that moved
-		// lately — and a merge moves its change, so in a company that merges
-		// far more than it keeps open the window's walk would read mostly
-		// merged changes to keep the few open ones.
+		// A WINDOW LEADS ahead of a terminal state, whose index holds every
+		// change that ever merged or closed. A LIVE state leads instead (below)
+		// and the window is tested on its rows: its index holds the bounded
+		// live set, where a window's walk would read mostly merged changes to
+		// keep the few open ones (TestAWindowLeadsNoLiveState).
 		return changeWalk{index: changesMovedKey, order: byMove, state: q.State != "", owner: q.Owner != ""}
 	}
 	return changeWalk{index: changesStateKey, keys: []any{string(q.State)}, order: byOpening}
 }
 
-// ChangesCursor is the cursor that resumes q — a `changes` listing — after s,
-// a change a page of it served: what a caller that keeps fewer of a page's
-// changes than it was served hands back as the next page's cursor. It is
-// spelled by the walk q's filters choose ([walkOf]), as the page's own cursor
-// is — for a need of a fix, its owner's walk; for what waits on the asker,
-// the walk of the half the page was read from, the second half's behind
-// [fixHalf] — so a caller never learns how a walk spells one.
+// ChangesCursor is the cursor that resumes q, a `changes` listing, after s, a
+// change a page of it served: what a caller keeping fewer of a page's changes
+// than it was served hands back. It is spelled by the walk the page was read
+// by ([walkOf]) — a need of a fix's owner walk, or the half of what waits on
+// the asker the page came from, the second behind [fixHalf].
 func (q ReadQuery) ChangesCursor(s ChangeSummary) string {
 	q = q.readying()
 	prefix := ""
@@ -275,8 +181,7 @@ func (q ReadQuery) ChangesCursor(s ChangeSummary) string {
 	case NeedFix:
 		q = q.fixing()
 	}
-	// THE REPOSITORY A LISTING NAMES is the one its every row is of, so the
-	// row's own id stands for it: the walk reads only whether one is named.
+	// Every row of a listing naming a repository is of it, so the row's id stands in.
 	repoID := ""
 	if q.Repo != "" {
 		repoID = s.RepoID
@@ -309,7 +214,7 @@ func (w changeWalk) resume(cursor string) ([]any, bool) {
 	case byID:
 		return []any{cursor}, bareUUIDv7("cursor", cursor) == nil
 	}
-	// THE >= BESIDE THE OR keeps the index's range seek, which a bare OR
+	// THE <= BESIDE THE OR keeps the index's range seek, which a bare OR
 	// of the two terms would give up (planner.go).
 	position, id, ok := cutLogCursor(cursor)
 	return []any{position, position, id}, ok
@@ -323,12 +228,9 @@ func (w changeWalk) keeps(row changeRow, q ReadQuery, repoID string) bool {
 		(!w.live || row.state.Live()) && (!w.window || row.moved >= w.since)
 }
 
-// read is one page of the walk's rows — at most limit, after cursor where it
-// is set: every row the statements answered, kept or not, each with what its
-// conversation says of it ([withConversations]) — and the cursor of the page
-// after it, "" where the walk is read to its end. A walk of one index pages
-// after its page's last row where the page was full; a window's walks two
-// ([windowWalk]).
+// read is one page of the walk's rows, at most limit after cursor: every row
+// the statements answered, kept or not, with its conversation's word on it
+// ([withConversations]), and the next page's cursor, "" at the walk's end.
 func (w changeWalk) read(ctx context.Context, tx *sql.Tx, cursor string, limit int) ([]changeRow, string,
 	error) {
 
@@ -351,9 +253,9 @@ func (w changeWalk) read(ctx context.Context, tx *sql.Tx, cursor string, limit i
 	return rows, "", nil
 }
 
-// readIndex is [changeWalk.read] over the one index the walk leads, by its two
-// statements, each handed on as the constant it is, so the read gate follows
-// every text this issues to the plan it registers (readindex_test.go).
+// readIndex is [changeWalk.read] over the walk's one index, each statement
+// passed as its constant so the read gate traces it to its registered plan
+// (readindex_test.go).
 func (w changeWalk) readIndex(ctx context.Context, tx *sql.Tx, cursor string, limit int) ([]changeRow, error) {
 	switch w.index {
 	case reviewerAsksKey:
@@ -377,9 +279,9 @@ func (w changeWalk) readIndex(ctx context.Context, tx *sql.Tx, cursor string, li
 	return nil, fmt.Errorf("gitlet: no listing of changes walks %s", w.index)
 }
 
-// readBy is [changeWalk.read] by first, a first page's statement, binding the
-// walk's keys and the page's limit, and after, a page's after a cursor,
-// binding its keys, the cursor's values ([changeWalk.resume]) and the limit.
+// readBy is [changeWalk.read] by first, a first page's statement binding the
+// keys and the limit, or after, binding also the cursor's values
+// ([changeWalk.resume]).
 func (w changeWalk) readBy(ctx context.Context, tx *sql.Tx, first, after, cursor string, limit int) (
 	[]changeRow, error) {
 
@@ -414,19 +316,17 @@ type listedRepo struct {
 	access Access
 }
 
-// summary is row as a listing of changes renders it, from repository l: what
-// its conversation says of it where a read set that on the row — a listing's
-// by [withConversations], a change read's from the conversation row its detail
-// reads — and its lifecycle's last move alone where none did.
+// summary is row as a read renders it, from repository l, moved by its
+// conversation where the read set that on the row ([withConversations], or the
+// detail's conversation row), else by its lifecycle alone.
 func (l listedRepo) summary(row changeRow) ChangeSummary {
 	return ChangeSummary{ChangeRow: row.wire(), Repo: l.ref.Name, Ref: ChangeRef(l.ref.Name, row.number),
 		Access: l.access.String(), OpenFindings: row.openFindings,
 		UpdatedAt: store.DecodeTime(max(row.moved, row.updatedAt))}
 }
 
-// readableIn is the repository name names in tx as a read of its changes
-// serves it — refused [ErrRepoNotFound] where nothing holds the name, and the
-// asker's or its ceiling's refusal where either may not read it ([JudgeRead]).
+// readableIn is the repository name names in tx, refused [ErrRepoNotFound]
+// where nothing holds the name, or by [JudgeRead] for the asker or its ceiling.
 func readableIn(ctx context.Context, tx *sql.Tx, name string, asker Principal, ceilingSeat string,
 	chart Roster) (listedRepo, error) {
 
@@ -448,13 +348,11 @@ func readableIn(ctx context.Context, tx *sql.Tx, name string, asker Principal, c
 	return listedRepo{ref: ref, access: g.Access}, nil
 }
 
-// resolvingIn is the repository q names as a read of its changes or its checks
-// serves it ([readableIn]) — and, where q resolves it ([ReadQuery.Resolve]),
-// read as a `repo` read resolves a name ([namedIn]): its row whole at the
-// checkpoint cp, judged on it, and answered as out.Resolved. Three statements
-// in place of readableIn's two, so a call's first read is its resolution too
-// and pays the code log one barrier where a `repo` read before it paid a
-// second.
+// resolvingIn is the repository q names as a read of its changes or checks
+// serves it ([readableIn]), or, where q resolves it ([ReadQuery.Resolve]), its
+// whole row at checkpoint cp ([namedIn]), judged and answered as out.Resolved:
+// one more statement, so a call's first read is its resolution and pays the
+// code log one barrier, not a separate `repo` read's second.
 func resolvingIn(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
 	out *ReadAnswer) (listedRepo, error) {
 
@@ -477,12 +375,9 @@ func resolvingIn(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp 
 	return listedRepo{ref: v.ref, access: g.Access}, nil
 }
 
-// changes serves one page of a listing of changes: the walk q's filters
-// choose ([walkOf]), the rows it read tested against the filters its index
-// does not seek and held to the grant — see the file's doc — and a listing of
-// what waits on the asker a page of one of its two halves
-// ([Reader.changesWaitingOnMe]). A listing that resolves the repository it
-// names answers it beside the page ([resolvingIn]), at the checkpoint cp.
+// changes serves one page of a listing of changes (the file's doc): what waits
+// on the asker a page of one of its two halves ([Reader.changesWaitingOnMe]),
+// and the repository a listing resolves answered beside it at cp ([resolvingIn]).
 func (r *Reader) changes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
 	out *ReadAnswer) error {
 
@@ -500,10 +395,9 @@ func (r *Reader) changes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Ros
 	return r.listChanges(ctx, tx, q, chart, cp, out, "")
 }
 
-// listChanges is [Reader.changes] over one walk, leaving out — of a walk of
-// the changes awaiting a fix — those whose ask of asked stands, where asked
-// names a reviewer: the first half of a listing of what waits on asked lists
-// those.
+// listChanges is [Reader.changes] over one walk. Where asked names a reviewer,
+// a walk of changes awaiting a fix leaves out those whose ask of asked stands:
+// the first half of what waits on asked lists them.
 func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
 	out *ReadAnswer, asked string) error {
 
@@ -545,17 +439,15 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 			kept = append(kept, row)
 		}
 	}
-	// A LISTING NARROWED BY ITS WORDS that another walk leads keeps the rows holding them.
+	// A listing narrowed by words that another walk leads keeps the rows holding them.
 	if q.Text != "" {
 		if kept, err = holdingWords(ctx, tx, kept, textindex.Terms(q.Text)); err != nil {
 			return err
 		}
 		out.ChangesText = &ChangesText{}
 	}
-	// EVERY KEPT CHANGE'S READINESS, judged in this transaction against
-	// this read's one chart — the rows of all of them read a kind at a time
-	// ([gateFactsIn]) — before the page is cut, since what waits on a
-	// person, and the bucket a change stands in, are filters of what is judged.
+	// Readiness is judged before the page is cut: waiting on a person and the
+	// bucket are filters of what is judged.
 	readiness, err := readinessIn(ctx, tx, kept, repos, chart, q.Asker, r.limits().MergeByFloor)
 	if err != nil {
 		return err
@@ -567,7 +459,7 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 			listed = append(listed, row)
 		}
 	}
-	// THE CARDS ([ReadQuery.Cards]) are read for the rows the page lists, and weigh in its cut.
+	// The cards ([ReadQuery.Cards]) are read for the listed rows, and weigh in the cut.
 	var cards map[string]*ChangeCard
 	if q.Cards {
 		if cards, err = r.changeCardsIn(ctx, tx, listed); err != nil {
@@ -588,11 +480,11 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 	return nil
 }
 
-// readinessIn is the readiness of each LIVE change of rows, by id — its target's
-// merge gate judged ([JudgeGate]) in tx against chart, every repository a row
-// names in repos, the merge authority judged for asker, who reads, under
-// floor, code.merge_by_floor on the serving node's epoch — and none for a
-// change no longer live, which merges nothing.
+// readinessIn is the readiness of each LIVE change of rows, by id: its
+// target's merge gate judged ([JudgeGate]) in tx against chart, every row's
+// repository in repos, the merge authority judged for asker under floor
+// (code.merge_by_floor on the serving node's epoch). A change no longer live
+// merges nothing, so has none.
 func readinessIn(ctx context.Context, tx *sql.Tx, rows []changeRow, repos map[string]listedRepo,
 	chart Roster, asker Principal, floor MergeBy) (map[string]*Readiness, error) {
 
@@ -620,11 +512,8 @@ func readinessIn(ctx context.Context, tx *sql.Tx, rows []changeRow, repos map[st
 	return out, nil
 }
 
-// listedReposIn is every repository a page of changes across repositories
-// names whose changes the listing serves, by id: in use (importing, active or
-// archived), and read by both asker and the seat it reads for ([JudgeRead]),
-// each read in ONE statement over the page's repositories, and judged once a
-// page.
+// listedReposIn is [listedReposAmong] over the repositories a page of changes
+// names.
 func listedReposIn(ctx context.Context, tx *sql.Tx, scanned []changeRow, asker Principal, ceilingSeat string,
 	chart Roster) (map[string]listedRepo, error) {
 
@@ -635,12 +524,11 @@ func listedReposIn(ctx context.Context, tx *sql.Tx, scanned []changeRow, asker P
 	return listedReposAmong(ctx, tx, ids, asker, ceilingSeat, chart, "a page of changes")
 }
 
-// listedReposAmong is every repository of ids — each named once however often
-// it is named, in any order — whose rows a listing across repositories serves,
-// by id: in use (importing, active or archived), and read by both asker and
-// the seat it reads for ([JudgeRead]), each read in ONE statement over the
-// page's repositories, and judged once a page. what names the page in a
-// failure's sentence.
+// listedReposAmong is every repository of ids (in any order, repeats allowed)
+// whose rows a listing across repositories serves, by id: in use (importing,
+// active or archived) and readable by both asker and the seat it reads for
+// ([JudgeRead]), read in ONE statement and judged once a page. what names the
+// page in an error.
 func listedReposAmong(ctx context.Context, tx *sql.Tx, ids []string, asker Principal, ceilingSeat string,
 	chart Roster, what string) (map[string]listedRepo, error) {
 
@@ -684,15 +572,12 @@ func listedReposAmong(ctx context.Context, tx *sql.Tx, ids []string, asker Princ
 	return listed, rows.Err()
 }
 
-// change serves one change by its number: on a first page of its revisions
-// its detail beside them, and on a later page, after the number of the last
-// revision the page before served, its revisions alone; its detail with no
-// revision for a read asking it alone ([ReadQuery.DetailOnly]); and a page of
-// the part of its conversation the read names ([ReadQuery.Part]) — every page
-// judged against the grant from the repository's row ([resolvingIn]), which a
-// read that resolves the repository answers beside it, at the checkpoint cp.
-// A first page read in brief ([ReadQuery.Brief]) answers the change's row in
-// place of its detail, and reads nothing else of it.
+// change serves one change by its number (the file's doc): a page of its
+// revisions, its detail beside the first; its detail alone
+// ([ReadQuery.DetailOnly]); its row alone in place of the detail
+// ([ReadQuery.Brief]); or a page of the conversation part the read names
+// ([ReadQuery.Part]) — every page judged against the grant from the
+// repository's row ([resolvingIn]), at checkpoint cp.
 func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
 	out *ReadAnswer) error {
 	repo, err := resolvingIn(ctx, tx, q, chart, cp, out)
@@ -728,14 +613,12 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	var rows *sql.Rows
 	switch {
 	case q.Brief:
-		// IN BRIEF: the change's own row, read above by its number, and
-		// nothing its detail reads besides — no body on rows of its own, no
-		// authors, conversation or mergeability, no readiness judged.
+		// IN BRIEF: the row read above and nothing else — no body, authors,
+		// conversation, mergeability or readiness.
 		brief := repo.summary(row)
 		out.ChangeBrief = &brief
 		if q.DetailOnly {
-			// THE ROW ALONE: its asker reads no revision either
-			// ([ReadQuery.DetailOnly]), so the read is the one seek of
+			// No revision either: the read is the one seek of
 			// code_changes_number_idx above.
 			return nil
 		}
@@ -761,10 +644,8 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if participantsErr != nil {
 			return participantsErr
 		}
-		// WHAT ITS CONVERSATION SAYS OF IT, from the row just read: the
-		// detail is the most re-read question of a change, so it pays no
-		// second statement for what [withConversations] would read of the
-		// same row.
+		// From the conversation row just read: the detail is a change's most
+		// re-read question, so it pays no second statement to [withConversations].
 		row.moved = max(row.updatedAt, spoken)
 		if conversation != nil {
 			row.openFindings = conversation.OpenFindings
@@ -778,8 +659,7 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 			Conversation: conversation, Mergeability: merge, Participants: participants}
 		out.Change.Readiness = readiness[row.id]
 		if q.DetailOnly {
-			// THE DETAIL ALONE: its asker reads no revision, so none is
-			// read, encoded or shipped ([ReadQuery.DetailOnly]).
+			// No revision is read, encoded or shipped ([ReadQuery.DetailOnly]).
 			return nil
 		}
 		rows, err = tx.QueryContext(ctx, revisionsSQL, row.id, limit)
@@ -884,9 +764,8 @@ func (r changeRow) wire() ChangeRow {
 	return out
 }
 
-// factsScan is one revision's facts as a read joining the revisions to them
-// scans them ([revisionFactsColumns]): every column nullable, since a revision
-// the home has recorded no facts of joins none.
+// factsScan is one revision's facts ([revisionFactsColumns]) as a join scans
+// them: every column nullable, since a revision with no facts recorded joins none.
 type factsScan struct {
 	n                                               sql.NullInt64
 	targetRef, targetOID, base, patch, node, digest sql.NullString
@@ -943,13 +822,10 @@ func (s *factsScan) row() (*RevisionFactsRow, error) {
 	return f, nil
 }
 
-// validateChanges is [ReadQuery.validate] for a `changes` listing: it names a
-// repository, a work item, a state, a reviewer or a need — what the indexes it
-// walks are led by ([walkOf]) — each a value one could be, an owner and a
-// reviewer by a seat's handle; and a need in a live state, whose one it waits
-// on it names or its asker's seat is — a reviewer for a review, an owner for
-// a fix, and for what waits on the asker neither, as that is the asker's own.
-// A bucket ([ReadQuery.Readiness]) names the open state, empty read as open.
+// validateChanges is [ReadQuery.validate] for a `changes` listing: it names
+// something an index it walks is led by ([walkOf]), each a valid value; a need
+// is in a live state and names whom it waits on or is the asker seat's own; a
+// bucket ([ReadQuery.Readiness]) is of the open state, empty read as open.
 func (q ReadQuery) validateChanges() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
@@ -1018,8 +894,7 @@ func (q ReadQuery) validateChanges() error {
 }
 
 // cutWork reads a work item's identity across trackers, `<backend>:<id>`
-// ([types.WorkItem.Ref]) — a backend this build knows and an id a change's row
-// may hold ([workItemProblem]) — or says why it is none.
+// ([types.WorkItem.Ref]), as [workItemProblem] admits it, or says why it is none.
 func cutWork(ref string) (types.WorkBackend, string, string) {
 	backend, id, ok := strings.Cut(ref, ":")
 	if !ok {
@@ -1032,9 +907,8 @@ func cutWork(ref string) (types.WorkBackend, string, string) {
 	return w.Backend, w.ID, ""
 }
 
-// The keys of the change listings' indexes, each named by its statements —
-// a GUARD as planner.go says, which a schema change that renames one fails at
-// its first run — and held by plan_test.go to the seek each is written for.
+// The keys of the change listings' indexes, named by their statements as a
+// GUARD (planner.go) and held by plan_test.go to the seek each is written for.
 const (
 	// changesRepoStateKey is code_changes_repo_state_idx, (repo_id, state,
 	// number) (replicated 0097).
@@ -1050,14 +924,9 @@ const (
 	changesWorkKey = "code_changes_work_idx"
 )
 
-// The reads of changes, each registered in plan_test.go so the pinned driver's
-// planner is held to the index each is written for, and to reading in its
-// order: every walk's first page and its page after a cursor, newest first —
-// a repository's by number, below the cursor's; every other by the opening
-// record's position and then the id, with the <= beside the OR that keeps the
-// range seek (planner.go) — one change by its number, its authors by their
-// key, its revisions newest first by theirs, and the repositories a page of
-// changes across repositories names, driven from their list.
+// The reads of changes, each registered in plan_test.go so the pinned planner
+// is held to its index and its order. A page after a cursor by opening
+// position puts <= beside the OR to keep the range seek (planner.go).
 const (
 	changesOfRepoSQL = `SELECT ` + changeColumns + ` FROM code_changes INDEXED BY ` + changesNumberKey + `
 		WHERE repo_id = ? ORDER BY number DESC LIMIT ?`
@@ -1077,9 +946,8 @@ const (
 	changesOfOwnerAfterSQL = `SELECT ` + changeColumns + ` FROM code_changes INDEXED BY ` + changesOwnerKey + `
 		WHERE owner = ? AND state = ? AND opened_position <= ? AND (opened_position < ? OR id < ?)
 		ORDER BY opened_position DESC, id DESC LIMIT ?`
-	// A WORK ITEM'S, its index's partial predicate repeated verbatim: the
-	// pinned planner uses a partial index only for a statement that implies
-	// it in its own words.
+	// A work item's repeats its index's partial predicate verbatim: the pinned
+	// planner uses a partial index only for a statement implying it in its own words.
 	changesOfWorkSQL = `SELECT ` + changeColumns + ` FROM code_changes INDEXED BY ` + changesWorkKey + `
 		WHERE work_backend = ? AND work_id = ? AND work_id != ''
 		ORDER BY opened_position DESC, id DESC LIMIT ?`
@@ -1091,9 +959,8 @@ const (
 		WHERE repo_id = ? AND number = ?`
 	changeAuthorsSQL = `SELECT author, author_kind, first_revision, position FROM code_change_authors
 		WHERE change_id = ? ORDER BY author`
-	// A PAGE OF REVISIONS WITH THE FACTS RECORDED OF EACH, each revision's by
-	// the facts' key beside its own — a revision of none reads a NULL key —
-	// newest first in the revisions' key's order.
+	// Revisions with their facts, joined by key (a revision of none reads
+	// NULLs), newest first in the revisions' key order.
 	revisionsSQL = `SELECT r.n, r.head_oid, r.pusher, r.pusher_kind, r.push_id, r.position, r.at, ` +
 		revisionFactsColumns + ` FROM code_revisions AS r LEFT JOIN code_revision_facts AS f
 			ON f.change_id = r.change_id AND f.n = r.n

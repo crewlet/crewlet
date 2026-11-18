@@ -102,6 +102,14 @@
 // holds their mail. Nothing can be signalled out of that, because the code
 // that would handle the signal is the code that is stuck. [Watchdog] converts
 // it into "gone";
+//
+// # A refusal to start reaches the sandbox's claims through a gate of its own
+//
+// [Host.MayStart] refuses a turn on a seat still establishing, and that
+// refusal carries to every claim of the seat's runs the sandbox coordinator
+// makes, an apply's recovery and a deadline's claim included, which do not
+// ask MayStart: they pass a gate of their own that keeps a seat's recovery
+// exclusive with every claim of its runs (internal/sandbox's recoverygate.go).
 package seat
 
 import (

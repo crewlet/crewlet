@@ -94,9 +94,9 @@ type node struct {
 // openLog stands up a broker and the assistant log on it.
 func openLog(t *testing.T) *js.DomainLog {
 	t.Helper()
-	// THE BROKER DECLARES ITS SIZE, for brokertest's reason: left to derive
-	// its cap from the runner's free space it takes three quarters of it, a
-	// fact about the machine rather than about the case.
+	// THE BROKER DECLARES ITS SIZE (brokertest's reason): undeclared, it
+	// takes three quarters of the runner's free disk, a fact about the machine
+	// rather than the case.
 	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
@@ -210,8 +210,8 @@ func newNode(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle, nodeID 
 	return n
 }
 
-// drain consumes every record the broker holds beyond what this node has
-// applied, exactly as the framework's loop does.
+// drain applies every record the broker holds past what this node has
+// applied, as the framework's loop does.
 func (n *node) drain() {
 	n.t.Helper()
 	n.mu.Lock()

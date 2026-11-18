@@ -184,9 +184,14 @@ describe("the table", () => {
 
   // GO TO FILE IS A BARE t ON A PAGE WITH TABS, a key only where the company hosts code; a
   // focused chat message's t is apart from it. Mutation: scope it to the frame, and this fails.
-  test("t is Go to file on a page with tabs, Gitlet's alone", () => {
+  test("t is Go to file on a repository's page and a change's files, Gitlet's alone", () => {
     const row = keyRow("code.find");
-    expect([row.presses, row.scope, row.service]).toEqual([[{ key: "t" }], "object", "code"]);
+    expect([row.presses, row.scope, row.service, row.does]).toEqual([
+      [{ key: "t" }],
+      "object",
+      "code",
+      "Go to a file",
+    ]);
     const bare = KEYMAP.filter((r) =>
       r.presses.some((p) => p.key === "t" && !p.after && !p.mod && !p.alt && !p.shift),
     );

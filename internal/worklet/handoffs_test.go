@@ -29,13 +29,11 @@ func handOffsOnHistory(t *testing.T, r *roundTrip, id string) (assignee []int, a
 	return assignee, all
 }
 
-// AN ASSIGNEE HISTORY ROW CARRIES THE HAND-OFF COUNT THE CHANGE LEFT.
-//
-// The task row holds the counter NOW; the history row is the only place "this
-// was hand-off 2 of 8" can live, and it is derived from the records in log
-// order — what a record states, or what the row before it left — so a person's
-// reset shows on the row that did it and the next agent hand-off starts again
-// from one.
+// AN ASSIGNEE HISTORY ROW CARRIES THE HAND-OFF COUNT THE CHANGE LEFT: the task
+// row holds only the current count, so "hand-off 2 of 8" lives on the history
+// row, derived in log order from what a record states or the row before it
+// left. A person's reset shows on the row that did it, and the next agent
+// hand-off starts again from one.
 func TestAssigneeHistoryCarriesReassignmentsAfter(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -78,9 +76,8 @@ func TestAssigneeHistoryCarriesReassignmentsAfter(t *testing.T) {
 		}
 	}
 
-	// THE BACKFILL EQUALS THE REPLAY: a node whose checkpoint's rule set
-	// differs (a reanchored cursor, or a later rule set) re-derives exactly
-	// what the apply maintained.
+	// THE BACKFILL EQUALS THE REPLAY: a node whose checkpoint's rule set differs
+	// (a reanchored cursor, a later rule set) re-derives what the apply kept.
 	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(),
 			`UPDATE tracker_history SET reassignments = NULL`); err != nil {
@@ -100,14 +97,10 @@ func TestAssigneeHistoryCarriesReassignmentsAfter(t *testing.T) {
 }
 
 // THE RE-DERIVATION WALKS EACH TASK WHOLE, whatever order the log interleaved
-// them in.
-//
-// A row whose record states no count CARRIES the one the row before it left,
-// so the walk is right only while each task's rows arrive together and in log
-// order: a run of one task's rows read on its own starts from zero, and a
-// carrying row in it takes the zero. One task cannot tell, and neither can
-// rows that each state their own count. Two tasks whose hand-offs and quiet
-// edits alternate in the log can.
+// them in: a row whose record states no count CARRIES the one before it, so
+// the walk needs each task's rows together and in log order; a run of one
+// task's rows read on its own starts from zero, and a carrying row takes it. Only tasks whose hand-offs and quiet edits alternate in the
+// log can tell; one task, or rows that each state a count, cannot.
 func TestTheHandOffRederivationWalksEachTaskWhole(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -127,8 +120,8 @@ func TestTheHandOffRederivationWalksEachTaskWhole(t *testing.T) {
 		t.Helper()
 		write(opID, id, worklet.TaskPatch{Assignee: &to}, worklet.ChangeAssignee)
 	}
-	// AN AGENT'S EDIT OF ANYTHING ELSE states no count — only a person's
-	// touch resets one — so its row carries the hand-off before it.
+	// AN AGENT'S EDIT OF ANYTHING ELSE states no count (only a person's touch
+	// resets one), so its row carries the hand-off before it.
 	edit := func(opID, id string) {
 		t.Helper()
 		write(opID, id, worklet.TaskPatch{Title: ptr(opID)}, worklet.ChangeFields)

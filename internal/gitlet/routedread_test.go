@@ -41,20 +41,15 @@ func recipientsOf(r gitlet.RoutedRecord) []string {
 	return out
 }
 
-// THE WOKE ANSWER TELLS SWEPT FROM NOBODY. A change whose records list nobody
-// is one of two facts with two remedies — its routings resolved to nobody, or
-// its notices were swept past their horizon — and the answer tells them apart
-// by the change's opening against the instant from which every notice is
-// kept: a change opened ten days ago that concerned nobody but its opener
-// reached NOBODY, every notice it could have written still kept; one opened
-// forty days ago with no notice listed is SWEPT, a seat's notice of it gone
-// with the turn detail it named. And a forty-day-old record that mentioned a
-// person and a seat lists the person alone, older than the page's horizon —
-// what that horizon tells a reader of the record.
+// THE WOKE ANSWER TELLS SWEPT FROM NOBODY, by the change's opening against
+// the instant from which every notice is kept: one opened ten days ago that
+// concerned only its opener reached NOBODY; one opened forty days ago with no
+// notice listed is SWEPT. A forty-day-old record that named a person and a
+// seat lists the person alone, older than the page's horizon.
 //
-// Mutation: date the answer by a person's horizon (the company's year) rather
-// than a seat's thirty days → the forty-day change reached "nobody", red; drop
-// the horizon from the evidence → both empty answers are "unknown", red.
+// Mutation: date by a person's horizon (the company's year) rather than a
+// seat's thirty days → the forty-day change reached "nobody", red; drop the
+// horizon from the evidence → both empty answers are "unknown", red.
 func TestTheWokeAnswerTellsSweptFromNobody(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -113,10 +108,9 @@ func TestTheWokeAnswerTellsSweptFromNobody(t *testing.T) {
 	}
 }
 
-// A CHANGE'S ROUTING IS READ A WHOLE RECORD AT A TIME, newest first: every
-// recipient of one record on one page, in the order a reader scans them —
-// addressed first, each group by handle — a page closing only between two
-// records, and every later page `reached`, since its first listed one.
+// A CHANGE'S ROUTING IS READ A WHOLE RECORD AT A TIME, newest first: a
+// record's recipients on one page, addressed first, each group by handle; a
+// page closes only between records, and every later page is `reached`.
 //
 // Mutation: close a page by rows rather than records → a page of one splits
 // the open's two recipients, red; order the records oldest first → the first
@@ -174,10 +168,9 @@ func TestAChangesRoutingIsReadAWholeRecordAtATime(t *testing.T) {
 }
 
 // A REVIEWER FINDS THE REVIEWS THEY GAVE, newest first, across repositories,
-// each naming the change it judged — and only those of repositories the asker
-// may read: a seat outside a `visibility: unit` repository's unit is listed
-// the review of the company's repository alone, an empty page standing for the
-// review it may not read, never the listing's end; a person is listed both.
+// each naming its change — only in repositories the asker may read: a seat
+// outside a `visibility: unit` repository's unit gets an empty page for that
+// review, never the listing's end; a person is listed both.
 //
 // Mutation: list every review the index holds, unjudged → vp-sales is listed
 // the unit repository's review, red; take the cursor from the kept rows → the
@@ -242,9 +235,8 @@ func TestAReviewerFindsTheReviewsTheyGave(t *testing.T) {
 	}
 }
 
-// A PERSON'S NOTICE IS KEPT AT LEAST AS LONG AS A SEAT'S, which is what lets a
-// change's routing date every notice by one horizon: the shortest inbox the
-// company may keep is no shorter than a seat's notice is kept.
+// A PERSON'S NOTICE IS KEPT AT LEAST AS LONG AS A SEAT'S, which lets a
+// change's routing date every notice by the seat's horizon.
 //
 // Mutation: lower config.MinInboxRetentionDays below thirty → red.
 func TestEveryNoticeIsKeptAtLeastAsLongAsASeats(t *testing.T) {

@@ -16,47 +16,24 @@ import (
 )
 
 // THE SESSION CASES: a begin, a capture, an end and a retention delete on a
-// conversation's subject, and a seat's removal and the retention of that
-// removal on the seat's.
+// conversation's subject, and a seat's removal and its retention on the seat's.
+// Each reads its rows IN THIS TRANSACTION through the decide's own helpers
+// ([readSession], [readTomb], [readRemoval], [seatPlan], [expiredIn],
+// [baseStands], [held]), so both hold one rule: the decide refuses what it can
+// see, and the apply repeats every deterministic guard for what changed since.
 //
-// Each reads the rows it decides from IN THIS TRANSACTION, by the same helpers
-// the writer's decide reads them through ([readSession], [readTomb],
-// [readRemoval], [seatPlan], [expiredIn], [baseStands], [held]), so the decide
-// and the apply hold one rule rather than two spellings of it: the decide
-// refuses what it can see is wrong, and the apply repeats every deterministic
-// guard for what changed between the two.
-//
-// # A held base is released by nothing
-//
-// A turn's first read freezes the conversation's head as the BASE its launches
-// are to continue while the turn has kept no session of its own, and its
-// `begin` writes the turn's row naming it ([Begin]). While that row is live and
-// has landed no capture, it HOLDS the base: the seat budget's release, an end's
-// absorption and its work-key dedupe, and the retention's delete each skip a
-// held row. Each decides it here, in log order, rather than through a subquery
-// of the statement that releases, so no statement gives the planner a
-// correlated subquery to rewrite into a read of the whole table
-// (storetest.Decorrelated): an end's absorption and dedupe and the retention's
-// delete ask about each row before they take it ([held]), and the budget's
-// release, which walks the seat's ended sessions in order, reads the seat's
-// holds once before it walks ([heldBases]). A skipped row stays an ordinary
-// ended row: the holder was handed it, so the holder's own end absorbs it once
-// the hold has lifted, and so does the next end whose read showed it.
-//
-// EVERY STATEMENT IS NAMED, here and in the reader, so the plan gate plans the
-// statements this package runs rather than copies of them
+// Every release skips a held row (package doc, "A turn's first read holds its
+// base"), asked per row ([held], [heldBases]) rather than in a subquery the
+// planner rewrites into a read of the whole table (storetest.Decorrelated).
+// Every statement is named, so the plan gate plans these very statements
 // (TestTheExecutorStatementsArePlanned).
 
 // THE INDEX A STATEMENT WAS WRITTEN FOR, which it names with `INDEXED BY`.
 // Every index on executor_sessions leads with the seat's handle, and the
-// planner, which keeps no statistics, sought these statements unhinted on the
-// handle alone through whichever such index it took — a turn's row through
-// the page's index, a conversation's head through the budget's — reading every
-// row the seat holds to answer a question about one turn or one conversation,
-// and inside an apply that holds the store's one writer. The hint is the
-// statement saying which index it was written for, and a guard: a schema
-// change that drops the index fails the statement loudly rather than slowing
-// it, as chatlet's mention probes do.
+// planner, which keeps no statistics, otherwise seeks on the handle alone
+// through whichever such index it takes, reading every row of the seat inside
+// an apply that holds the store's one writer. The hint also makes a schema
+// change that drops the index fail the statement loudly rather than slow it.
 const (
 	// sessionKey is the index executor_sessions' primary key (agent_handle,
 	// turn_id) builds: one turn's row.
@@ -134,8 +111,7 @@ const (
 		  AND base_turn <> '' AND turn_id <> ? LIMIT 1`
 
 	// heldBasesStatement is every base the seat's live turns other than one
-	// hold: what the budget's release, which walks the seat's ended sessions
-	// in order, reads once before it walks rather than once per row.
+	// hold, read once before the budget's release walks rather than per row.
 	heldBasesStatement = `
 		SELECT base_turn FROM executor_sessions INDEXED BY ` + heldIdx + `
 		WHERE agent_handle = ? AND end_seq IS NULL AND launch_seq = 0
@@ -171,9 +147,8 @@ const (
 		ON CONFLICT (agent_handle, turn_id) DO NOTHING`
 
 	// updateCaptureStatement is a later capture of a live turn, or its first
-	// onto the row its begin wrote: every value is the one [applyCapture]
-	// decided, the turn's first read and its work key included, so the
-	// statement itself decides nothing. It leaves the row's base as the
+	// onto the row its begin wrote: every value, first read and work key
+	// included, is the one [applyCapture] decided. It leaves the base as the
 	// begin wrote it; the capture's own launch_seq is what lifts the hold.
 	updateCaptureStatement = `
 		UPDATE executor_sessions INDEXED BY ` + sessionKey + ` SET work_key = ?, harness = ?, harness_version = ?,
@@ -195,9 +170,7 @@ const (
 	// updateBeginStatement is a begin landing on the row a capture of the
 	// turn wrote first with no read: the read and the base the row names
 	// from then on. It holds nothing, the row having landed a capture. Every
-	// value is the one [applyBegin] decided, from the row — that it holds no
-	// read yet, since a turn's first read stands, included — so the
-	// statement itself decides nothing.
+	// value is the one [applyBegin] decided from the row.
 	updateBeginStatement = `
 		UPDATE executor_sessions INDEXED BY ` + sessionKey + ` SET work_key = ?, read_through = ?,
 			absorbs = ?, base_turn = ?, version = ?
@@ -373,10 +346,9 @@ func sameWork(rowKey, recordKey string) bool {
 }
 
 // nameable reports whether a capture names an object every reader of the row
-// can parse: a key in the store's canonical spelling and a SHA-256 digest. The
-// collector, its audit, the backup and every head and page read of the seat
-// parse both, so a row naming anything else would fail all of them, on every
-// node, for as long as the row stays.
+// can parse: a key in the store's canonical spelling and a SHA-256 digest. A row
+// naming anything else would fail the collector, its audit, the backup and every
+// head and page read of the seat, on every node, for as long as it stays.
 func nameable(object, hash string) bool {
 	_, keyErr := objstore.ParseKey(object)
 	_, hashErr := objstore.ParseHash(hash)
@@ -426,22 +398,14 @@ func splitAbsorbs(column string) []string {
 // seatPlan is which ended turns' sessions a capture of size bytes on turn must
 // release for the seat to hold budget, and whether it fits at all.
 //
-// THE OLDEST ENDINGS GO FIRST, by the position each ended at, and never a live
-// turn's session or this turn's own: a live turn's is the one its next launch
-// continues, and this turn's is being replaced. NOR A BASE ANOTHER LIVE TURN
-// HOLDS ([heldBases], read once for the whole walk): that turn's relaunch is
-// to continue it. A base THIS turn holds is released like any ended session,
-// because this capture is the turn's first landed one and lifts the hold in
-// the same apply: from it on, the turn's launches continue its own session,
-// which holds everything the base did, so releasing the base loses nothing —
-// what keeps a seat at its budget's floor able to take a continued turn's
-// first capture at all.
-//
-// The release is a total order of the rows (an end's position is unique among
-// them), so every node releases the same sessions. Nothing is chosen when even
-// every releasable session released would not make room: the seat's live turns
-// and the bases they hold already fill the budget, and the capture is refused
-// whole rather than releasing what does not help.
+// THE OLDEST ENDINGS GO FIRST, never a live turn's session (its next launch
+// continues it), this turn's own (being replaced) or a base another live turn
+// holds ([heldBases]). A base THIS turn holds is released: this capture is the
+// turn's first landed one and lifts the hold, its own session now holding all
+// the base did, which is what lets a seat at its budget's floor take a
+// continued turn's first capture at all. An end's position is unique, so every
+// node releases the same sessions. When even every releasable session would not
+// make room, nothing is chosen and the capture is refused whole.
 func seatPlan(ctx context.Context, tx *sql.Tx, handle, turn string, size, budget int64) (
 	[]string, bool, error) {
 
@@ -453,10 +417,8 @@ func seatPlan(ctx context.Context, tx *sql.Tx, handle, turn string, size, budget
 	if need <= budget {
 		return nil, true, nil
 	}
-	// THE HOLDS ARE READ WHOLE BEFORE THE WALK, which reads the seat's ended
-	// sessions in their release order and stops once the capture fits: the
-	// bases the seat's live turns hold are a handful, and no statement runs
-	// while the walk's rows are open.
+	// The holds (a handful) are read whole first, so no statement runs while
+	// the walk's rows are open.
 	holds, err := heldBases(ctx, tx, handle, turn)
 	if err != nil {
 		return nil, false, err
@@ -524,14 +486,13 @@ func heldBases(ctx context.Context, tx *sql.Tx, handle, except string) (map[stri
 
 // baseStands is why a begin's base cannot be held, or "" where it can: the base
 // turn's row is still there, ended at or before the read that saw it, in the
-// begin's conversation, and naming the very session that read saw. What the
-// apply decides the row's base by, and the writer reads back to say why a
-// begin holds nothing.
+// begin's conversation, and naming the very session that read saw. The apply
+// decides the row's base by it, and the writer says by it why a begin holds
+// nothing.
 //
-// ANYTHING ELSE IS A BASE THAT MOVED between the read and the record: an end
-// ordered before the begin absorbed or deduped it, a capture released it past
-// the seat's budget, the retention deleted it, or the seat was removed. The
-// begin then holds nothing rather than a row naming another session, or none.
+// Anything else is a base that moved between the read and the record (absorbed,
+// deduped, released past the budget, deleted by the retention, or its seat
+// removed), so the begin holds nothing rather than a row naming another session.
 func baseStands(ctx context.Context, tx *sql.Tx, handle, conversationKey string,
 	readThrough int64, baseTurn, object, hash string) (string, error) {
 
@@ -558,15 +519,10 @@ func baseStands(ctx context.Context, tx *sql.Tx, handle, conversationKey string,
 // stores one): what a retention delete removes, decided by the writer and again
 // by the applier.
 //
-// A TURN THAT NEVER ENDED IS TAKEN TOO. The retention duty never nominates a
-// turn whose run the fleet still holds, so a row with no end and no run is one
-// whose end was lost, and the retention is what bounds it; a rule that kept it
-// would keep it for ever.
-//
-// A ROW A LIVE TURN HOLDS AS ITS BASE IS NOT TAKEN, however old ([held]): that
-// turn's relaunch continues it. The hold lasts until the holder lands a capture
-// or ends, and a holder whose run was lost is ended within [LostAfter], so the
-// row is taken on a pass after that.
+// A TURN THAT NEVER ENDED IS TAKEN TOO: the duty never nominates a turn whose
+// run the fleet still holds, so such a row lost its end, and only the retention
+// bounds it. A ROW A LIVE TURN HOLDS AS ITS BASE IS NOT, however old ([held]); a
+// lost holder is ended within [LostAfter], so a later pass takes the row.
 func expiredIn(ctx context.Context, tx *sql.Tx, handle, conversationKey, turn string,
 	cutoff int64) (bool, error) {
 
@@ -634,11 +590,9 @@ func (c applyContext) on(subject Subject) bool { return c.record.Subject == subj
 // applyCapture names a new object for a live turn, releasing the seat's
 // oldest ended sessions first where its budget needs the room.
 //
-// A CAPTURE THAT WOULD NAME WHAT NO READER CAN PARSE WRITES NOTHING: an object
-// key or digest the store does not spell, or a list of absorbed turns that is
-// not one ([absorbsOf]). The writer refuses both; this is the applier holding a
-// record that skipped it to the rule, rather than a row that fails the
-// collector, the audit, the backup and every read of the seat on every node.
+// A CAPTURE NAMING WHAT NO READER CAN PARSE WRITES NOTHING ([nameable],
+// [absorbsOf]): the writer refuses it too, and the applier holds a record that
+// skipped the writer to the rule rather than write a row every reader fails on.
 func applyCapture(ctx context.Context, tx *sql.Tx, c applyContext, p Capture) (int, error) {
 	absorbs, wellFormed := absorbsOf(p.Absorbs, p.Turn, p.ReadThrough)
 	if !present(p.Handle) || !present(p.Turn) || p.ObjectSize <= 0 || p.SeatBudget <= 0 ||
@@ -673,9 +627,8 @@ func applyCapture(ctx context.Context, tx *sql.Tx, c applyContext, p Capture) (i
 	}
 	written := 0
 	for _, turn := range release {
-		// THE OBJECT GOES AND THE ENDING STAYS: the ending is the account
-		// of the turn a transcript cannot carry, and what the budget bounds
-		// is bytes in the object store, which the row's naming holds.
+		// THE OBJECT GOES AND THE ENDING STAYS: the budget bounds bytes in
+		// the object store, and the ending is the account no transcript carries.
 		res, releaseErr := tx.ExecContext(ctx, releaseStatement, c.packed, p.Handle, turn)
 		if releaseErr != nil {
 			return written, fmt.Errorf("executordomain: release %s's session of turn %s "+
@@ -683,11 +636,9 @@ func applyCapture(ctx context.Context, tx *sql.Tx, c applyContext, p Capture) (i
 		}
 		written += affected(res)
 	}
-	// THE TURN'S FIRST READ AND ITS WORK STAY WHAT THEY WERE, decided here
-	// from the row rather than inside the statement: the read is the turn's
-	// first launch's (a relaunch reads the turn's own row, not the head), and
-	// the work key is the first non-empty one any record about the turn
-	// carried.
+	// THE TURN'S FIRST READ AND ITS WORK KEY STAND, decided here from the
+	// row: a relaunch reads the turn's own row, not the head, and the work key
+	// is the first non-empty one any record about the turn carried.
 	readThrough, absorbed, work := p.ReadThrough, strings.Join(absorbs, ","), p.WorkKey
 	var res sql.Result
 	if found {
@@ -717,29 +668,17 @@ func applyCapture(ctx context.Context, tx *sql.Tx, c applyContext, p Capture) (i
 }
 
 // applyBegin records a turn's first read of its conversation and the base that
-// read froze, which the turn's row then holds while it is live and has landed
-// no capture.
+// read froze, which the row holds while it is live and has landed no capture.
+// It repeats the decide's guards ([Writer.Begin]) in log order:
+//   - the shape: a read, its turns as [absorbsOf] holds them, and a base among
+//     them naming a parseable session ([Begin.baseShaped]), or none;
+//   - no seat removal newer than the decide saw, and no tombstone of the turn;
+//   - no row, or a live one of the same conversation and work with no read
+//     yet: a turn's FIRST READ STANDS, so a retried or late begin writes nothing;
+//   - a base held only where [baseStands], else written as none.
 //
-// EVERY GUARD IS THE DECIDE'S ([Writer.Begin]), repeated in log order:
-//
-//   - THE SHAPE: a read (a position, and the turns it handed out as
-//     [absorbsOf] holds them), on a conversation, and a base that is one of
-//     those turns, not the beginning turn itself, naming a session every
-//     reader can parse — or no base at all;
-//   - THE SEAT AND THE TURN: no removal of the seat newer than the one the
-//     decide saw, and no tombstone of the turn;
-//   - THE TURN'S ROW: none, or a live one of the same conversation and unit of
-//     work that holds no read yet. A turn's FIRST READ STANDS, whichever of
-//     its records carried it first, so a begin landing after it — retried,
-//     or late — writes nothing;
-//   - THE BASE: held only where its row still names the session the read saw
-//     ([baseStands]); a base that moved since is written as none, so the
-//     begin still records the read and holds nothing.
-//
-// A begin and every end, lost end and retention delete of the conversation are
-// arbitrated on one subject, so whichever the log ordered first decides: an end
-// first leaves no base to hold, and a begin first holds the base against the
-// end ([held]).
+// Begins, ends and retention deletes share one subject, so the log's first
+// decides: an end first leaves no base, a begin first holds it ([held]).
 func applyBegin(ctx context.Context, tx *sql.Tx, c applyContext, p Begin) (int, error) {
 	absorbs, wellFormed := absorbsOf(p.Absorbs, p.Turn, p.ReadThrough)
 	if !present(p.Handle) || !present(p.Turn) || p.ConversationKey == "" ||
@@ -797,10 +736,9 @@ func applyBegin(ctx context.Context, tx *sql.Tx, c applyContext, p Begin) (int, 
 }
 
 // baseShaped reports a begin's base as a read hands one out: none at all, or one
-// of absorbs — the turns the read handed out, as [absorbsOf] checked them —
-// naming a session every reader can parse ([nameable]). Every turn absorbsOf
-// passes is a canonical turn id other than the beginning turn's own, so a base
-// among them is one too, and neither needs a test of its own.
+// of absorbs naming a session every reader can parse ([nameable]). [absorbsOf]
+// passes only canonical turn ids other than the beginning turn's, so a base
+// among them needs no test of either.
 func (p Begin) baseShaped(absorbs []string) bool {
 	if p.BaseTurn == "" {
 		return p.BaseObject == "" && p.BaseHash == ""
@@ -818,18 +756,14 @@ type endBody struct {
 // applyEnd stamps how a turn ended and tombstones it; with a row it absorbs
 // what the turn's first launch was handed and dedupes on the work key.
 //
-// THE END IS AUTHORITATIVE FOR THE TURN'S WORK KEY: a row a capture wrote with
-// no key takes the end's, so the next attempt at the same unit of work finds
-// this one to dedupe whether or not its captures carried the key; an end
-// naming another key than the row's writes nothing, as the decide refuses it.
+// THE END IS AUTHORITATIVE FOR THE WORK KEY: a keyless row takes the end's, so
+// the next attempt at the work finds this one to dedupe; an end naming another
+// key than the row's writes nothing, as the decide refuses it.
 //
-// AN END'S RULE IS ITS STAMP'S. Where the turn's newest capture was not kept and
-// the row names an older one, an end stamped [wentOnVersion] or above keeps that
-// session and absorbs and dedupes as any turn that landed a capture does, its
-// ending saying the turn went on past the session; one stamped below releases
-// the session and absorbs nothing, as the builds that write such ends apply
-// them. Decided on the stamp rather than on whether the ending carries went_on,
-// so a record means one thing on every node, whichever build applies it.
+// AN END'S RULE IS ITS STAMP'S, never whether its ending carries went_on, so a
+// record means one thing on every node. Where the row names an older capture
+// than the turn's unkept newest, an end stamped [wentOnVersion] or above keeps
+// that session and absorbs and dedupes; one below releases it, absorbing nothing.
 func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, error) {
 	if !present(p.Handle) || !present(p.Turn) || !p.Ending.Within() ||
 		len(p.AskExcerpt) > AskExcerptMaxBytes {
@@ -847,12 +781,10 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 		return 0, nil
 	}
 	if !found {
-		// A TURN THE SEAT'S REMOVAL CANNOT HAVE SEEN: it had no row to
-		// tombstone, so its end, decided before a removal it did not see,
-		// would write an ending for a seat that is gone. A turn with a row
-		// needs no such check: the removal deleted every row the seat held,
-		// so a row now is one a capture or a begin of the seat's next tenure
-		// wrote, each held to the removal it saw.
+		// A TURN WITH NO ROW HAD NOTHING FOR A REMOVAL TO TOMBSTONE, so its
+		// end is held to the removal it saw. A row needs no such check: the
+		// removal deleted every row, so one now is the seat's next tenure's,
+		// written by a record already held to the removal it saw.
 		removal, removalErr := readRemoval(ctx, tx, p.Handle)
 		if removalErr != nil {
 			return 0, removalErr
@@ -871,14 +803,11 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 	}
 	delivered := p.Ending.Delivered
 	written := 0
-	// BY THE RULE OF THE END'S OWN STAMP ([wentOnVersion]). An end stamped below
-	// it keeps the rule it was written under: the turn's last attempt was not
-	// kept, so the older capture the row names goes below — decided on the row's
-	// own place, in log order, so a capture of that attempt that landed after all
-	// is the row's place, and is kept. An end stamped at it or above never takes
-	// the row's session off for an attempt that was not kept: the session holds
-	// what the turn did up to it, and the end says the turn went on past it
-	// ([executorkeep.Ending.WentOn]), which the row keeps for its readers.
+	// BY THE END'S OWN STAMP ([applyEnd]). Below [wentOnVersion], the older
+	// capture the row names is released below, judged on the row's place in log
+	// order, so a capture of the unkept attempt that landed after all is kept.
+	// At or above, the session stays: it holds the turn up to it, and the
+	// ending says the turn went on past it ([executorkeep.Ending.WentOn]).
 	stale := false
 	if u := p.Ending.Unkept; found && row.hasObject && u != nil && c.record.V < wentOnVersion {
 		stale = unkeptSupersedes(*u, row.launchSeq, row.captureSeq)
@@ -900,11 +829,9 @@ func applyEnd(ctx context.Context, tx *sql.Tx, c applyContext, p End) (int, erro
 			work, c.at(), c.packed, string(p.Ending.Outcome), flag(delivered),
 			string(body.Ending), p.AskExcerpt, c.at(), c.packed, p.Handle, p.Turn)
 	} else {
-		// NOTHING WAS CAPTURED AND NOTHING BEGUN: an ended row naming no
-		// object, which holds the ending alone, so the conversation's next
-		// turn is still told how this one ended. It absorbs nothing: it
-		// read nothing it could stand in for. A turn whose begin wrote its
-		// row ends on that row instead, above, and absorbs nothing either.
+		// NOTHING WAS CAPTURED OR BEGUN: an ended row naming no object keeps
+		// the ending alone for the conversation's next turn. It absorbs
+		// nothing, having read nothing to stand in for.
 		res, err = tx.ExecContext(ctx, insertEndingStatement,
 			p.Handle, p.Turn, p.ConversationKey, work, c.at(), c.packed,
 			string(p.Ending.Outcome), flag(delivered), string(body.Ending), p.AskExcerpt,
@@ -953,30 +880,17 @@ func retireExhausted(ctx context.Context, tx *sql.Tx, c applyContext, p End) (in
 }
 
 // absorb deletes the conversation's ended rows the ending turn stands in for,
-// and reports whether an older attempt at its work delivered the work's reply.
+// and reports whether an older attempt at its work delivered the work's reply:
+//   - exactly the turns its first read handed out ([Capture.Absorbs]) that
+//     ended at or before that read; one the read left out (past [MaxEndings],
+//     or ended later) stays for the next read to show, never gone untold;
+//   - every older attempt at the same work, shown or not, its `delivered`
+//     merged even where held. AN EMPTY WORK KEY NEVER DEDUPES (ADR-0017), or
+//     every keyless turn would erase its keyless siblings.
 //
-// EXACTLY THE TURNS ITS FIRST READ HANDED OUT ([Capture.Absorbs]), each only
-// where it ended at or before that read: the head the launch continued, the
-// endings it was told and the siblings it was offered are held by this turn's
-// own session and account now. A turn the read left out — past [MaxEndings],
-// or ended after it — was never shown to this one, so it stays for the next
-// turn's read to show; absorbed blind, its ending and its session would be
-// gone with nobody ever told of them.
-//
-// AND EVERY OLDER ATTEMPT AT THE SAME UNIT OF WORK, shown or not, whose
-// `delivered` it reports so the surviving row says the work's reply went out:
-// an attempt the work was dispatched again over is superseded by the attempt
-// that ended after it. AN EMPTY WORK KEY NEVER DEDUPES: it is the honest
-// default of a turn with no unit of work to collapse on (ADR-0017), and
-// matching on it would let every keyless turn erase its keyless siblings.
-//
-// NEITHER TAKES A ROW A LIVE TURN HOLDS AS ITS BASE ([held]), asked of each
-// row before it is deleted: that turn's relaunch continues it. What an attempt
-// delivered is merged whether it is deleted or held. A held row stays an
-// ordinary ended row, which its holder's own end absorbs in its turn.
-//
-// Each deleted row's tombstone was written by its own `end`, so nothing
-// recreates it.
+// Neither takes a row a live turn holds as its base ([held]); its holder's own
+// end absorbs it later. A deleted row's tombstone is its own `end`'s, so
+// nothing recreates it.
 func absorb(ctx context.Context, tx *sql.Tx, c applyContext, p End, work string,
 	row sessionRow) (int, bool, error) {
 
@@ -1089,16 +1003,12 @@ func applyDelete(ctx context.Context, tx *sql.Tx, c applyContext, p Delete) (int
 
 // removeTurn deletes one turn's row and its tombstone.
 //
-// THE TOMBSTONE GOES WITH THE ROW, which is a departure from the rule that a
-// delete leaves one, and deliberately: a tombstone refuses a record DECIDED
-// before the row went, and by the retention none can still land. The term is at
-// least a day past the row's own last instant, so every capture is past the
-// objstore.RecordWithin bound its object has to be named inside, and the duty
-// never nominates a turn whose run is still live, which is what writes a turn's
-// records. What can still arrive is an `end` a run's own retry publishes late;
-// it writes an ending-only row, which the retention takes in its turn. A
-// tombstone kept instead would itself be a row the retention had to take a
-// second time, a term later, for nothing.
+// THE TOMBSTONE GOES TOO, unlike any other delete's: it refuses a record
+// decided before the row went, and past the retention none can land. The term
+// is at least a day past the row's last instant, beyond objstore.RecordWithin
+// for any capture, and the duty never nominates a live run's turn. A run's
+// late-retried `end` writes an ending-only row the retention takes in its
+// turn; a kept tombstone would only be one more row to take a term later.
 func removeTurn(ctx context.Context, tx *sql.Tx, c applyContext, handle, turn string) (int, error) {
 	written := 0
 	for _, statement := range []string{deleteSessionStatement, deleteTombStatement} {
@@ -1140,13 +1050,11 @@ func applySeat(ctx context.Context, tx *sql.Tx, c applyContext, payload any) (in
 // removeSeat removes every row a removed seat holds, tombstoning the turns that
 // had not ended, and records the position it applied at.
 //
-// THE TOMBSTONES AND THE RECORD OF THE REMOVAL GUARD TWO DIFFERENT TURNS. A
-// turn with a live row is tombstoned, so a later capture of it is refused as
-// any ended turn's is; an ended turn's tombstone is its own `end`'s. A turn
-// that had no row yet — its first capture, or the end of a turn that captured
-// nothing, decided before the removal and landing after it — has nothing to
-// tombstone, and is refused by the removal's position instead, which every
-// capture and end carries the one its decide saw ([Capture.SeenRemoval]).
+// A TURN WITH A LIVE ROW IS TOMBSTONED, so a later capture is refused as any
+// ended turn's is. A turn with no row yet (a first capture or a captureless
+// end, decided before the removal and landing after) has nothing to tombstone
+// and is refused by the removal's position, which every capture and end
+// carries as its decide saw it ([Capture.SeenRemoval]).
 func removeSeat(ctx context.Context, tx *sql.Tx, c applyContext, handle string) (int, error) {
 	type live struct{ turn, conversationKey string }
 	var open []live

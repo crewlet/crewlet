@@ -8,9 +8,9 @@ import (
 )
 
 var (
-	// ErrOptions is an Options value Open refuses — a Layout already opened
-	// or released among them — or a directory Prepare cannot take: wrapped
-	// with the field or the setting to change.
+	// ErrOptions is an Options value Open refuses (a Layout already opened or
+	// released among them) or a directory Prepare cannot take, wrapped with
+	// the field or setting to change.
 	ErrOptions = errors.New("cache: refused options")
 
 	// ErrNotACache is a directory that is not a crewlet git cache: Prepare's
@@ -18,14 +18,14 @@ var (
 	// Open's of a Layout Prepare did not return.
 	ErrNotACache = errors.New("cache: not a git cache directory")
 
-	// ErrCacheInUse is a cache directory another process holds — or a
-	// Layout or a Cache of this one, until it is released or stopped: two
-	// nodes pointed at one gitlet.cache_dir.
+	// ErrCacheInUse is a cache directory another process holds, or a Layout
+	// or Cache of this one until released or stopped: two nodes pointed at
+	// one gitlet.cache_dir.
 	ErrCacheInUse = errors.New("cache: another process holds this cache directory")
 
-	// ErrStopped is work asked of a cache that has been stopped: a sync, a
-	// scratch, an adoption, a check of missing objects. What lets go of
-	// something — a Release, a scratch's Remove — stays safe after Stop.
+	// ErrStopped is work asked of a stopped cache: a sync, a scratch, an
+	// adoption, a check of missing objects. What lets go of something (a
+	// Release, a scratch's Remove) stays safe after Stop.
 	ErrStopped = errors.New("cache: stopped")
 
 	// ErrInvalid is an argument a cache refuses, wrapped with the argument
@@ -36,77 +36,65 @@ var (
 	ErrInvalid = errors.New("cache: refused")
 
 	// ErrBadSnapshot is a snapshot row this build cannot install: a ref or
-	// a default branch the grammar refuses — a ref is written into a file
-	// git parses line by line, so a newline or a space in one would corrupt
-	// packed-refs for every reader — an object id that is not one, a pack
-	// part this build does not split, a pack whose sizes lay out no bundle.
-	// Wrapped naming the page and the row. Never retried: the rows say it,
-	// and asking again reads the same rows.
+	// default branch the grammar refuses (a newline or space would corrupt
+	// packed-refs, which git parses line by line, for every reader), an
+	// object id that is not one, a pack part this build does not split, a
+	// pack whose sizes lay out no bundle. Wrapped naming the page and the
+	// row. Never retried: asking again reads the same rows.
 	ErrBadSnapshot = errors.New("cache: a snapshot this build cannot install")
 
 	// ErrLogRead is the code log failing a sync's read of a repository's
-	// rows — no quorum for a linearizable read (on a log one member
-	// stores, that member's stalled write), a copy out of service or
-	// behind, no data node answering — wrapped with the estate's own
-	// error. The one failure of a sync that is the code log's: the host
-	// answers it as that, and nothing else as that. (A repository the
-	// rows do not hold is gitlet.ErrRepoNotFound, an answer, which a sync
-	// reads at the log's head before concluding anything from.)
+	// rows (no quorum for a linearizable read, or on a one-member log its
+	// stalled write; a copy out of service or behind; no data node
+	// answering), wrapped with the estate's error. It is the one sync failure
+	// the host answers as the code log's. A repository the rows do not hold
+	// is gitlet.ErrRepoNotFound, an answer a sync reads at the log's head.
 	ErrLogRead = errors.New("cache: the code log could not be read")
 
 	// ErrStoreRead is the object store failing to hand a pack over for a
-	// reason that is no answer about the pack — a timeout, a throttle past
-	// its retries, the store unreachable — wrapped naming the pack and the
-	// store's own error. A definite answer about the pack is an
-	// *ErrPackMissing instead.
+	// reason that is no answer about the pack (a timeout, a throttle past its
+	// retries, the store unreachable), wrapped naming the pack and the
+	// store's error. A definite answer about the pack is an *ErrPackMissing.
 	ErrStoreRead = errors.New("cache: the object store could not be read")
 
 	// ErrRebuildRefused is a rebuild that could not end the failure it was
 	// asked for: of an incarnation holding exactly what a rebuild that did
-	// not end it read, less than a day ago, or within the window after the
+	// not end it read less than a day ago, or within the window after the
 	// repository's last attempt (Cache.Rebuild). Wrapped naming the
 	// repository and `crewlet gitlet verify`, which says what a rebuild could
 	// not repair. The host answers it 503.
 	ErrRebuildRefused = errors.New("cache: a rebuild would not end the failure")
 
-	// ErrNoMemory is a git process a caller asked for — Verify's
-	// connectivity check of a whole repository, a person's, a compaction's
-	// build over the packs it merges (Cache.AdmitCompaction) or a
-	// publication's (Cache.AdmitPublication) — whose charge alone is more
-	// than this node can give its background work: the node's memory, less
-	// what it keeps for its git lanes, the store, the broker and the engine
-	// (memory.go). Definite for this node AT THIS MEMORY: a node with more
-	// memory can run it, and so can this one once its memory is raised in
-	// place, which the budget reads again at every maintainer pass — so a
-	// caller asks again later rather than remembering the refusal. Wrapped
-	// naming the repository, the charge and the budget. The maintainer's own
-	// steps are never an error: they are refused and said so (the
-	// code_maintenance_refused alarm).
+	// ErrNoMemory is a git process a caller asked for (Verify's connectivity
+	// check of a whole repository, a person's, a compaction's build
+	// (Cache.AdmitCompaction), a publication's (Cache.AdmitPublication))
+	// whose charge alone exceeds what this node can give background work
+	// (memory.go). Definite only AT THIS MEMORY: the budget is read again at
+	// every maintainer pass, so a caller asks again later rather than
+	// remembering the refusal. Wrapped naming the repository, the charge and
+	// the budget. The maintainer's own steps are refused without an error
+	// (the code_maintenance_refused alarm).
 	ErrNoMemory = errors.New("cache: this node's memory cannot hold it")
 
-	// ErrNotHeld is a check asked of a repository this node holds no copy
-	// of: it never served it here, or evicted it. Nothing was read or
-	// downloaded, and nothing is: a check builds no copy, since building one
-	// is a whole download of the repository from the object store into a
-	// cache that would then keep it and evict a warm repository to do so
-	// (verify.go). Definite for this node now; a Gitlet node that serves the
-	// repository holds one. The API answers it 404.
+	// ErrNotHeld is a check asked of a repository this node holds no copy of
+	// (never served here, or evicted). A check builds no copy: that would be
+	// a whole download the cache then keeps, evicting a warm repository
+	// (verify.go). A node that serves the repository holds one. The API
+	// answers it 404.
 	ErrNotHeld = errors.New("cache: this node holds no copy of the repository")
 
-	// ErrPastBound is a check of a repository's copy that ran past the bound
-	// what the copy holds gives it (CheckBudget) and was ended there: a disk
-	// or a node far slower than the bound allows for, or a check wedged on
-	// one. Never a finding about the copy — what the check found before it
-	// was ended is in its report — and the check is had again by asking
-	// again. Wrapped naming the bound and the bytes it was over.
+	// ErrPastBound is a check of a copy that ran past the bound its size
+	// gives it (CheckBudget) and was ended: a disk or node far slower than
+	// the bound allows, or a wedged check. Never a finding about the copy
+	// (what it found is in its report); asking again checks again. Wrapped
+	// naming the bound and the bytes it was over.
 	ErrPastBound = errors.New("cache: the check ran past its bound")
 )
 
-// ErrPackMissing is a pack a row names that the object store could not hand
-// over, definitively: absent (objstore.ErrNotFound), or Damaged — bytes that
+// ErrPackMissing is a pack a row names that the object store definitively
+// could not hand over: absent (objstore.ErrNotFound), or Damaged, bytes that
 // are not the row's (objstore.ErrCorrupt). The host answers 503 naming the
-// pack; the collector's daily audit raises objects_missing for the same
-// object, which is the alarm.
+// pack; the alarm is the collector's daily audit's objects_missing.
 type ErrPackMissing struct {
 	Repo    string
 	Pack    gitlet.PackRow
@@ -129,9 +117,9 @@ func (e *ErrPackMissing) Unwrap() error { return e.Err }
 
 // ErrCorruptPack is a pack whose verified bytes are not the bundle its row
 // describes (gitlet.CheckBundle: a section's head, count, size or pack
-// checksum disagrees). The store's SHA-256 has just said these ARE the bytes
-// the receiver stored, so the row or the uploader is wrong, and no retry
-// fixes either.
+// checksum disagrees). The store's SHA-256 says these ARE the bytes the
+// receiver stored, so the row or the uploader is wrong, and no retry fixes
+// either.
 type ErrCorruptPack struct {
 	Repo string
 	Pack gitlet.PackRow

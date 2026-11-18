@@ -15,25 +15,16 @@ import (
 
 // A REFUSAL IS TOLD WITHOUT THE IDS A PERSON NEVER CHOSE, AND LOGGED WITH THEM.
 //
-// The identity directory's surface and the sign-in surface answer a refusal's
-// sentence as the detail a person reads, and the sentences named what they
-// refused by id: "invitation 0192f… has already been used", "session 4c1e…
-// belongs to person 0192a…, not 0192b…", "0192c… is a person, so only they can
-// create…", "request 0192d… already sent invitation 0192e…", the token a
-// request came through by its credential id — and a set of permissions as Go
-// prints a slice, "[worklet doclet]". The ids now ride
-// [iamdomain.Refusal.About], which [iamdomain.Refusal.Error] — what a log line
-// prints — carries and [iamdomain.Sentence] does not; a reused key's ids are
-// the key itself and what it derives, which the answer and its log carry as
-// the op id. And the class word in front of a refusal ("not allowed: ") and of
-// a value's refusal ("invalid login: ") is cut.
+// The ids a refusal is about (an invitation, a session's lineage and person,
+// a token's credential) ride [iamdomain.Refusal.About], which
+// [iamdomain.Refusal.Error] carries for the log and [iamdomain.Sentence] does
+// not; a reused key's ids are the op id the answer already carries. A grant
+// set reads as words, not a Go slice, and the class word is cut.
 //
-// Walked through the real writer and applier, one row per refusal that named
-// an id. Mutations: write any of the ids back into its sentence and that row
-// goes red on the sentence; drop About from Error and every row naming ids
-// for the log goes red; print a grant set with %v again and the two
-// permission rows do; stop Sentence cutting the class word and every refusal
-// row does.
+// Walked through the real writer and applier, one row per refusal. Mutations:
+// write an id back into its sentence, drop About from Error, print a grant set
+// with %v, or stop Sentence cutting the class word, and the rows it touches
+// go red.
 func TestARefusalTellsAPersonNoIdAndTheLogEveryOne(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -80,8 +71,8 @@ func TestARefusalTellsAPersonNoIdAndTheLogEveryOne(t *testing.T) {
 	rig.drain()
 	secondKey := operationKey()
 
-	// THE TWO GESTURES THAT DRAIN, made here rather than in the table, so
-	// each runs with the test's own context in view.
+	// THE TWO GESTURES THAT DRAIN run here, not in the table, under the
+	// test's own context.
 	otherSession := rig.draining(func() error {
 		_, err := rig.writer.CloseSession(ctx, lineage, other, "signed out",
 			operationKey())
@@ -222,12 +213,9 @@ func TestARefusalTellsAPersonNoIdAndTheLogEveryOne(t *testing.T) {
 	}
 }
 
-// A VALUE'S REFUSAL IS TOLD WITHOUT ITS SENTINEL.
-//
-// A surface answers [iamdomain.ErrInvalidLogin], [iamdomain.ErrInvalid],
-// [iamdomain.ErrInvalidToken] and [iamdomain.ErrNotFindable] 400 with the
-// sentence after the sentinel; the sentinel's words are what errors.Is finds.
-// Mutation: drop a sentinel from the cut list and its row goes red.
+// A VALUE'S REFUSAL IS TOLD WITHOUT ITS SENTINEL: a surface answers each 400
+// with the sentence after it. Mutation: drop a sentinel from the cut list and
+// its row goes red.
 func TestAValuesRefusalIsToldWithoutItsSentinel(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

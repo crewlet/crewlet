@@ -184,7 +184,7 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
     screen: ["routes/gitlet/change/ChangePage.tsx"],
     why: "a change's title and description being edited, fields of the change page's one draft",
   },
-  "routes/gitlet/change/Files.tsx": {
+  "routes/gitlet/change/StackNotes.tsx": {
     screen: ["routes/gitlet/change/ChangePage.tsx"],
     why: "a finding written on picked lines and each finding's reply box, fields of the change page's one draft",
   },
@@ -235,10 +235,10 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/chatlet/Attach.tsx":
     "modal: a search for a task, page or artifact to link, in its dialog",
   "routes/gitlet/commit/ComparePage.tsx": "modal: opening a change of a branch, in its dialog",
+  "routes/gitlet/change/AskDialog.tsx": "modal: the note asking reviewers, in its dialog",
   "routes/gitlet/change/Merge.tsx": "modal: an override's reason, in its dialog",
+  "routes/gitlet/change/ReviewDialog.tsx": "modal: a review's summary, in its dialog",
   "routes/gitlet/ImportRepo.tsx": "modal: a repository to import, in its dialog",
-  "routes/gitlet/Search.tsx":
-    "not an editor: its path and ref filters narrow a code search, and change nothing",
   "routes/chatlet/Dialogs.tsx":
     "modal: a new room, a room's topic or description, people to add, in their dialogs",
   "routes/inbox/NoticeActions.tsx": "modal: a snooze's time",

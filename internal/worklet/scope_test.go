@@ -9,24 +9,14 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY OP DECLARES WHAT IT WRITES.
-//
-// # The failure this exists to catch
-//
-// A record's declared scope is what makes "a record this build cannot decode
-// blocks the objects it touched" true rather than "blocks the object it
-// names". Nine operations in this design write rows for an object other than
-// their subject's — a status change rewrites two columns on every dependent, a
-// rank move writes every task it placed — and every one of them has to say so.
-//
-// An op added later that writes a neighbour's row WITHOUT naming it is silent:
-// the record applies, the rows land, and the writer's own step-0 probe reports
-// the neighbour as clean. A writer then takes the retry-at-zero branch and
-// overwrites a mutation no later reprocess can recover. Nothing raises,
-// nothing logs, and the only symptom is a row that quietly went backwards.
-//
-// So this walks the apply cases, runs each against a fixture, and asserts that
-// every object row the apply MOVED is one the record's own scope covers.
+// EVERY OP DECLARES WHAT IT WRITES: a record's declared scope is what makes an
+// undecodable record block the objects it touched, not only the one it names.
+// An op writing a neighbour's row (a status change rewrites every dependent, a
+// rank move every task it placed) WITHOUT naming it is silent: the writer's
+// step-0 probe reports the neighbour clean, takes the retry-at-zero branch and
+// overwrites a mutation no later reprocess can recover. So this runs each
+// apply case against a fixture and asserts every object row the apply MOVED is
+// one the record's own scope covers.
 func TestEveryOpDeclaresItsScope(t *testing.T) {
 	t.Parallel()
 
@@ -69,11 +59,9 @@ func TestEveryOpDeclaresItsScope(t *testing.T) {
 						Subject: worklet.RankOrderSubject("ENG"),
 						Op:      worklet.OpPatch, Writer: "node-a",
 						// THE COVERING TERM, not an enumeration: a
-						// drag's affected set is the tasks it names
-						// PLUS up to a re-spread's worth of
-						// neighbours, which is why it states the
-						// project rather than a list it could
-						// overflow.
+						// drag also moves up to a re-spread's worth
+						// of neighbours, so it states the project
+						// rather than a list it could overflow.
 						Scope: worklet.ScopeSet{Terms: []worklet.ScopeTerm{
 							{Kind: worklet.TermContainer, ID: "ENG"},
 						}},
@@ -125,13 +113,10 @@ func TestEveryOpDeclaresItsScope(t *testing.T) {
 	}
 }
 
-// movedAt is every task row this position wrote, by either of the two columns
-// a write may stamp.
-//
-// BOTH COLUMNS, because that is the distinction the scope rule turns on: a
-// record bumps `version` only on its own subject and stamps `scoped_through`
-// on every other row it writes, so reading one of them would miss exactly the
-// neighbours this test exists to find.
+// movedAt is every task row this position wrote, by either column a write may
+// stamp: a record bumps `version` only on its own subject and stamps
+// `scoped_through` on every other row it writes, so reading one would miss
+// exactly the neighbours this test exists to find.
 func (h *applyHarness) movedAt(packed int64) []string {
 	h.t.Helper()
 	var out []string

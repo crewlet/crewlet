@@ -206,13 +206,11 @@ func TestACodeMarkNamesOnlyTheirNotices(t *testing.T) {
 }
 
 // THE CODE INBOX FILTERS IN THE SCAN: with the three newest of six notices
-// snoozed, the first page of three is the three that are not — a full page,
-// never an empty one with a cursor behind it — the snoozed scope lists exactly
-// the three put off, and `unread` past a read-through position lists only what
-// sits above it, every page carrying its cursor where more remain — and, with
-// the oldest notice marked unread again, that notice too, in its place below
-// the four above the position, on the next page when a page of four holds
-// those.
+// snoozed, the first page of three is the three awake (a full page, never an
+// empty one with a cursor), the snoozed scope lists the three put off, and
+// `unread` past a read-through position lists only what sits above it — plus
+// the oldest notice once marked unread again, in its place below those four,
+// on the next page when a page of four holds them.
 //
 // Mutation: filter the page after the scan — the first page reads none of the
 // snoozed three and answers empty, red; seek no unread mark below the
@@ -306,14 +304,11 @@ func TestReadThroughIsAPositionOnTheCodeLog(t *testing.T) {
 	}
 }
 
-// A CODE MARK WAITS FOR THE ASKER'S FLOOR: a mark is asked of whichever data
-// node the router reaches, and the inbox page that showed the notice may have
-// been read from a peer ahead of it. Asked of a node that has not applied the
-// notice's record, a mark with no floor finds no row for it and is refused as
-// naming none of founder's notices; the same gesture carrying the position the
-// asker read (the notice's own) waits for the node to reach it and lands. A
-// node that cannot reach the floor within the write budget answers
-// ErrNotServing — the router asks the next data node — and appends nothing,
+// A CODE MARK WAITS FOR THE ASKER'S FLOOR (gitlet.MarkWrite's Seen): on a node
+// that has not applied the notice's record, a mark with no floor is refused as
+// naming none of founder's notices, and the same gesture carrying the notice's
+// position waits for the node to reach it and lands. A node that cannot reach
+// the floor within the write budget answers ErrNotServing and appends nothing,
 // never the false "not one of their notices".
 //
 // Mutation: publish the mark without the asker's floor (drop `Session:

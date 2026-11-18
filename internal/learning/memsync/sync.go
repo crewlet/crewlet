@@ -113,9 +113,11 @@ type Syncer struct {
 	// ([Config.AcrossLink]): each hydration request's term for its bytes.
 	pace time.Duration
 
-	// window is what a replay pull carries at most across a link
-	// ([pullWindow], [Syncer.pullBound]), and 0 in a member's own process.
-	window int
+	// window is the ONE window of the link this node's connection crosses
+	// ([Config.Window]), which every replay pull takes from before it is
+	// asked and which bounds what it carries ([Syncer.pullBound]); nil in a
+	// member's own process.
+	window *jsapi.Window
 
 	// link is the meter of the link this node's connection crosses
 	// ([Config.Link]), and nil where it crosses none or nobody meters it.
@@ -150,21 +152,26 @@ func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Config) (
 	}
 	s := &Syncer{db: db, js: js, agentID: agentID, marks: map[markKey]int64{},
 		holdings: map[string]*seatHolding{}, timing: jsprovision.Clustered(cfg.Clustered).Timing()}
-	if cfg.AcrossLink {
-		s.pace, s.window, s.link = objstore.MiBPace, pullWindow, cfg.Link
-	} else if cfg.Link != nil {
+	switch {
+	case cfg.AcrossLink && cfg.Window == nil:
 		return nil, errors.New("memsync: a node whose connection reaches the memory changelog " +
-			"in its own process crosses no link, so it has none to meter (Config.Link is set " +
-			"without Config.AcrossLink)")
+			"across a link pulls inside its link's one window, and none was handed it " +
+			"(Config.AcrossLink is set without Config.Window)")
+	case cfg.AcrossLink:
+		s.pace, s.window, s.link = objstore.MiBPace, cfg.Window, cfg.Link
+	case cfg.Link != nil || cfg.Window != nil:
+		return nil, errors.New("memsync: a node whose connection reaches the memory changelog " +
+			"in its own process crosses no link, so it has none to meter or window " +
+			"(Config.Link or Config.Window is set without Config.AcrossLink)")
 	}
 	return s, nil
 }
 
-// Window is the most a replay pull carries across this node's link
-// ([pullWindow]), or 0 where [Config.AcrossLink] said the connection crosses
-// none and a pull carries the connection's own bound ([Syncer.pullBytes]). The
-// engine's test of its choice, by broker kind, reads it here.
-func (s *Syncer) Window() int { return s.window }
+// Window is the link's window every replay pull takes from ([Config.Window]),
+// or nil where [Config.AcrossLink] said the connection crosses none and a pull
+// carries the connection's own bound ([Syncer.pullBytes]). The engine's test
+// of its wiring reads it here.
+func (s *Syncer) Window() *jsapi.Window { return s.window }
 
 // info logs one of a hydration's lines at info, and hands it to the said seam
 // where a case set one.

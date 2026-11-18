@@ -15,146 +15,102 @@ import (
 )
 
 // A HEAD'S DISPATCH IS A ROW, SO THE HOME'S WORK LIST CONVERGES ON WHAT IT
-// DECIDED.
-//
-// A repository's home dispatches a change head's checks from its TARGET's
-// checks file — the governing file is the target tip's, never the head's, so
-// no change narrows the checks that judge it: it reads .crewlet/checks.yaml at
-// the target's tip, and RECORDS THE DISPATCH WITH WHAT IT QUEUES — a
-// check_dispatched record on the repository's checks subject naming the
-// target, the tip it read, the blob it found there (none, where the tip holds
-// no checks file), the heads it dispatched under it, and each check the file
-// defines queued at those heads for that target (or recorded skipped). The
-// attempts are rows of code_checks, as a check_queued record's are; two
-// tables keep what the dispatch says beside them:
-//
-//   - code_check_targets: per repository and target branch, the checks file
-//     the branch's tip held when the home last read it — its blob, or none —
-//     with that tip, the position of the record that moved the branch there,
-//     and the instant the reading was recorded;
-//   - code_check_dispatches: per repository, head commit and target branch,
-//     the checks file the head was dispatched under.
-//
-// The home's due listing ([ReadChecksDue], checksread.go) is then a function
-// of the rows alone: a live change's head is due while no dispatch of it FOR
-// ITS TARGET names the checks file the target's row holds — a head never
-// dispatched, a change retargeted, a target whose checks file changed since —
-// and a target is due a reading of its checks file again where its branch has
-// moved past the tip its row was read at and the row is older than the home's
-// refresh ([ChecksDueQuery.RefreshBefore]). A head whose target defines no
-// checks leaves the listing after one record, as one whose target defines
-// many does, and a check a target's file gains reaches the heads waiting on
-// it.
-//
-// REJECTED: listing a head while its commit holds no attempt of any check.
-// A target with no checks file is every repository that has not adopted
-// checks, and none of its heads ever holds an attempt — no writer records an
-// attempt without the definition it runs — so each stayed listed for ever,
-// read on every pass of every home, its absent file read again each time; and
-// a check a target's file gained never reached a head that held an attempt of
-// the old file's. REJECTED too: a dispatch row naming the target's TIP, the
-// listing comparing it with the branch's — every push to a busy target made
-// every head waiting on it due again, a record each, for a file that seldom
-// changes. The target's row is refreshed at the home's pace instead, one
-// record a target, and the heads follow only a file that changed.
-//
+// DECIDED. The home dispatches a change head's checks from its TARGET tip's
+// .crewlet/checks.yaml, never the head's, so no change narrows the checks that
+// judge it, and records it as a check_dispatched: the target, the tip read,
+// the blob found there (none where the tip holds no file), the heads and each
+// attempt queued or skipped. code_check_targets keeps, per target branch, the
+// file its tip held when last read, with that tip, its position and instant;
+// code_check_dispatches, per head commit and target, the file the head was
+// dispatched under. [ReadChecksDue] is then a function of the rows: a head is
+// due while no dispatch of it for its target names the file the target's row
+// holds, and a target is due a re-read once its branch has moved past the tip
+// read and the row is older than [ChecksDueQuery.RefreshBefore].
+
+// REJECTED: listing a head while its commit holds no attempt. No writer
+// records an attempt without its definition, so every head of a repository
+// with no checks file stayed listed for ever, its absent file read again every
+// pass, and a check a target's file gained never reached a head holding an
+// attempt of the old file's. REJECTED too: a dispatch row naming the target's
+// tip — every push to a busy target made every head waiting on it due again,
+// for a file that seldom changes. The target's row is refreshed at the home's
+// pace instead, and the heads follow only a file that changed.
+
 // # Additive, so the apply is a join
 //
 // The subject carries no expectation, so a home's record and a failover's
-// second one's land in either order. Each row keeps the record that read the
-// LATER tip — the higher tip position — and of two that read one tip, the
-// later record: a total order, so either order leaves one row byte for byte.
-//
+// second one land in either order. Each row keeps the record that read the
+// later tip (the higher tip position), and of two at one tip the later record:
+// a total order, so either order leaves one row byte for byte.
+
 // # What a head owes, and the `checks_due` listing that says so
 //
-// A LIVE change of an ACTIVE repository, its target a live branch, owes its
-// home ([CheckWork]) — internal/gitlet/home's checks worker works it:
-//
-//   - its DISPATCH, while no dispatch of its head for its target names the
-//     checks file its target's row holds. The worker first ends the change's
-//     attempts still queued or running at a head it moved on from, or for a
-//     target it was retargeted from — cancelled, superseded — but those a
-//     live change into the attempt's target heads, which shares them; then,
-//     once the change's head revision's FACTS are recorded for its target
-//     ([CheckWork.Facts]) — what a `paths` check is matched against, read in
-//     the listing's own snapshot, and the home's word that the head is not
-//     in its target, since a head its target holds records no facts and is
-//     landed instead — it queues every check the file at the target's tip
-//     defines that the head holds no attempt of for its target, or records
-//     it skipped, a name the target's merge gate requires marked required;
-//     a check whose latest attempt there was errored at an earlier dispatch
-//     for a file that did not run ([CheckReasonDefsInvalid]) is queued as
-//     its NEXT attempt, so a target whose broken file is mended reaches the
-//     heads it errored; where the file is none that runs, every name the
-//     gate requires the head holds no attempt of is recorded errored
-//     defs_invalid ([CheckQueued.Invalid]), a gate waiting on a check nobody
-//     can run saying so on the change rather than in silence. Those attempts
-//     ride the dispatch record itself ([CheckDispatched.Attempts]), so they
-//     and the head's dispatch row land in one append.
-//   - a REQUEUE, where the latest attempt of a check at its head for its
-//     target ended errored for its infrastructure ([CheckReason.Requeued])
-//     below [AutoRequeueAttempts]: the same check queued again as the next
-//     attempt, under the definition it ran under.
-//
-// Each is taken off the list by the home's own records — the dispatch's row,
-// the next attempt's row — and the listing asks both in SQL, over every live
-// change: the dispatch by the two keys above, the requeue by
-// code_checks_requeue_idx, which holds only the attempts their
-// infrastructure ended. A name the target's gate requires that its file does
-// not define leaves the gate waiting on it, and reaches the head once the
-// file defines it, by the target's reading: REJECTED, a term listing a head
-// while a required name lacks an attempt — a target whose rule requires a
-// check its file has not defined yet kept every change into it its home's
-// work at every pass, its file read again each time, for as long as the file
-// stayed as it was.
-//
+// A live change of an active repository, its target a live branch, owes its
+// home ([CheckWork], internal/gitlet/home's checks worker) its DISPATCH while
+// no dispatch of its head for its target names the file its target's row
+// holds. The worker first cancels superseded the change's live attempts at a
+// head or target it moved on from, but those a live change into that target
+// heads, which shares them. Once the head revision's facts are recorded
+// ([CheckWork.Facts]; a head its target holds records none and is landed
+// instead), it queues each check the file defines that the head holds no
+// attempt of, or records it skipped by its paths, marked required where the
+// target's merge gate requires the name.
+
+// A check whose latest attempt errored for a file that did not run
+// ([CheckReasonDefsInvalid]) is queued as its next attempt, so a mended file
+// reaches the heads it errored. Where no file runs, each required name the head
+// holds no attempt of is recorded errored defs_invalid ([CheckQueued.Invalid]):
+// a gate waiting on a check nobody can run says so on the change. The attempts
+// ride the dispatch record ([CheckDispatched.Attempts]), so they and the head's
+// dispatch row land in one append. The head also owes a REQUEUE of each check
+// whose latest attempt its infrastructure ended ([CheckReason.Requeued]) below
+// [AutoRequeueAttempts]: the next attempt, under the definition it ran under.
+
+// The home's own records take each off the list (the dispatch's row, the next
+// attempt's row), and the listing asks both in SQL over every live change, the
+// requeue by code_checks_requeue_idx, which holds only the attempts their
+// infrastructure ended. REJECTED: listing a head while a required name lacks
+// an attempt — a rule requiring a check its file did not define yet kept every
+// change into the target its home's work at every pass. The gate waits on such
+// a name, and the head gets it once the file defines it, by the target's
+// re-read.
+
 // # Their lifetime
 //
-// A dispatch row is one a head and a target — a few dozen bytes, beside the
-// revision row its head already is, which the repository keeps as long — and
-// a target row one a branch the repository's changes have targeted. Both go
-// with the repository's purge.
+// A dispatch row is one a head and a target, a few dozen bytes beside the
+// head's revision row, and a target row one a branch the repository's changes
+// have targeted; both go with the repository's purge.
 //
 // # Base format
 //
 // The op and its payload are in the base format, as the checks subject is
 // (checks.go).
 
-// MaxDispatchRows is the most rows one check_dispatched record names, its
-// heads and its attempts together: 500, an eighth of MaxRecordRows — the
-// share a check record's horizon takes — so a record's rows, one a head and
-// one an attempt beside its target's, stay far inside what one record may
-// touch. A home dispatching more of one target's tip records them in more
-// records.
+// MaxDispatchRows is the most rows one check_dispatched record names, heads
+// and attempts together: 500, an eighth of MaxRecordRows (the share a check
+// record's horizon takes), so a record stays far inside what one may touch. A
+// home dispatching more of one target's tip records them in more records.
 const MaxDispatchRows = MaxRecordRows / 8
 
 // MaxDispatchBytes is the most one check_dispatched record's payload encodes
-// to: HALF of MaxRecordBytes, 522 240 bytes. The record's own frame — its
-// subject, operation id and actor, a few hundred bytes, and its scope, which
-// names each head's change and is at most MaxScopePaths paths, about 22 KB —
-// leaves a payload this size forming a record well inside MaxRecordBytes; and
-// ONE HEAD'S WHOLE DISPATCH ALWAYS FITS IT, so a head is never split between
-// records: its attempts' definitions are its target's checks file, at most
-// MaxChecksFileBytes (64 KiB) of YAML, which JSON writes in at most six bytes
-// a byte (`<` as <) — and a file of MaxChecksPerFile checks whose every
-// byte JSON writes six-fold encodes, with each attempt's own fields, well
-// within it (TestTheWidestHeadsDispatchFitsOneRecord measures one). A home
-// whose heads weigh more records them in more records.
+// to: HALF of MaxRecordBytes, 522 240 bytes, leaving room for the record's
+// frame, chiefly its scope (at most MaxScopePaths paths, about 22 KB). ONE
+// HEAD'S WHOLE DISPATCH ALWAYS FITS, so a head is never split between records:
+// its definitions are at most MaxChecksFileBytes (64 KiB) of YAML, which JSON
+// writes at most six-fold (`<` as \u003c), and that fits with each attempt's
+// own fields (TestTheWidestHeadsDispatchFitsOneRecord). A home whose heads
+// weigh more records them in more records.
 const MaxDispatchBytes = MaxRecordBytes / 2
 
-// CheckDispatched records a repository's home's reading of a target branch's
-// checks file at its tip and the change heads it dispatched under it
-// ([OpCheckDispatched]), WITH THE ATTEMPTS THE DISPATCH QUEUES at those
-// heads — each check the file defines queued at a head for the target,
-// recorded skipped by its paths, or errored for a file that does not run —
-// decided in the one snapshot of the record's decide and applied in its one
-// transaction, each attempt's row a join as a check_queued record's is
-// (M5-D18). Every attempt is at a head the record names, so a head's dispatch
-// lands whole — its attempts and the row that takes it off its home's list,
-// never one without the other — and the home's dispatch of a head costs it one
-// append, not one an attempt. With no heads it is a refresh of the target's
-// reading alone. Every field is in the base format, as the checks subject is
-// (checks.go).
+// CheckDispatched records a home's reading of a target branch's checks file
+// at its tip and the change heads it dispatched under it ([OpCheckDispatched]),
+// WITH THE ATTEMPTS THE DISPATCH QUEUES at those heads (queued, skipped by
+// paths, or errored for a file that does not run), decided in one snapshot
+// and applied in one transaction, each attempt's row a join as a
+// check_queued's is (M5-D18). Every attempt is at a head the record names, so
+// a head's attempts and the row taking it off its home's list land together,
+// in one append. With no heads it only refreshes the target's reading. Base
+// format, as the checks subject is (checks.go).
 type CheckDispatched struct {
 	RepoID string `json:"repo_id"`
 	// Target is the branch, as a ref.
@@ -168,12 +124,9 @@ type CheckDispatched struct {
 	DefsOID string `json:"defs_oid,omitempty"`
 	// Heads are the change heads dispatched under it, none for a refresh.
 	Heads []DispatchedHead `json:"heads,omitempty"`
-	// Attempts are the attempts the dispatch queues at its heads, each a
-	// change head's attempt for Target under DefsOID at one of Heads, by the
-	// home's dispatch, one a check of a commit. With Heads, at most
-	// [MaxDispatchRows].
-	//
-	// BASE FORMAT, as the checks subject is (checks.go).
+	// Attempts are the dispatch's attempts, each one of Heads' for Target under
+	// DefsOID, one a check of a commit; with Heads at most [MaxDispatchRows].
+	// Base format (checks.go).
 	Attempts []CheckQueued `json:"attempts,omitempty"`
 	// DispatchedAt is the home's instant.
 	DispatchedAt time.Time `json:"dispatched_at"`
@@ -229,10 +182,9 @@ func (d CheckDispatched) Validate() error {
 	attempts := make(map[CheckKey]bool, len(d.Attempts))
 	for i, a := range d.Attempts {
 		field := fmt.Sprintf("attempts[%d]", i)
-		// AN ATTEMPT PAST THE LAST is judged against the rows, as a
-		// check_queued's is ([ChecksRequest.Validate]): its asker formed it
-		// from the attempts it read, and the decide refuses it
-		// attempts_exhausted.
+		// AN ATTEMPT PAST THE LAST is the decide's to refuse
+		// attempts_exhausted, against the rows, as a check_queued's is
+		// ([ChecksRequest.Validate]).
 		held := a
 		held.Attempt = min(held.Attempt, MaxCheckAttempts)
 		if err := held.Validate(); err != nil {
@@ -263,16 +215,12 @@ func (d CheckDispatched) Validate() error {
 }
 
 // decideDispatched is the checks writer's decide of a dispatch. Each attempt
-// it carries is decided as a check_queued of it would be ([decideQueued]) in
-// the same snapshot: one the rows already hold queued, or refuse — the
-// check's attempts moved past it, exhausted, a genuine ending a dispatch does
-// not follow — is DROPPED from the record, its reason kept for the writer's
-// log, as the home's write of it alone was answered and its dispatch went on.
-// The dispatch is then answered from the rows, unchanged, where they hold all
-// of it already — no attempt left to queue, the target's reading at this tip
-// or a later one naming this file, and every head's dispatch for the target
-// at this tip or a later one naming it — and appended otherwise, carrying the
-// attempts left.
+// is decided as a check_queued of it would be ([decideQueued]) in the same
+// snapshot; one the rows already hold or refuse (moved past, exhausted, a
+// genuine ending a dispatch does not follow) is DROPPED, its reason kept for
+// the writer's log, and the dispatch goes on. It is answered unchanged where
+// no attempt is left and the target's reading and every head's dispatch
+// already name this file at this tip or a later one, and appended otherwise.
 func decideDispatched(ctx context.Context, tx *sql.Tx, d CheckDispatched, out checksDecision,
 	named func(CheckKey) string) (checksDecision, error) {
 
@@ -344,60 +292,52 @@ const (
 )
 
 // CheckWork is what a `checks_due` read says a change's head owes its checks
-// (the file's head says how each is owed and what takes it off the list): the
-// change named by the [ChangeDue] it rides. AN ESTATE ANSWER'S FIELD, NOT A
-// RECORD'S, so it takes no versionedFields row; the domain landed on main with
-// it ([RecordVersion]).
+// (this file's head comment says how each is owed and what clears it), for the
+// change the [ChangeDue] it rides names. An estate answer's field, not a
+// record's, so it takes no versionedFields row.
 type CheckWork struct {
 	// Dispatch is a head no dispatch of which for its target names the
 	// checks file its target's row holds.
 	Dispatch bool `json:"dispatch,omitempty"`
-	// Held is, for a head owing its dispatch, every check name an attempt of
-	// which the head commit holds for its target, sorted: the checks its
-	// dispatch queues nothing of — but a name whose latest attempt was
-	// errored at its dispatch for a checks file that did not run, which is in
-	// Invalid.
+	// Held is, for a head owing its dispatch, each check name the head holds
+	// an attempt of for its target, sorted, but those in Invalid: its
+	// dispatch queues none of them.
 	Held []string `json:"held,omitempty"`
-	// Invalid is, for a head owing its dispatch, each check whose latest
-	// attempt at the head for its target was errored at its dispatch
-	// ([CheckReasonDefsInvalid]), as that attempt's key: a dispatch under a
-	// file defining the check in a form that runs queues the next attempt.
+	// Invalid is, for a head owing its dispatch, the latest attempt's key of
+	// each check errored at its dispatch ([CheckReasonDefsInvalid]): a
+	// dispatch under a file defining it in a form that runs queues the next.
 	Invalid []CheckKey `json:"invalid,omitempty"`
 	// Required is, for a head owing its dispatch, every check name its
 	// target's merge gate requires ([GateRules.Checks]), sorted.
 	Required []string `json:"required,omitempty"`
 	// Stale is, for a head owing its dispatch, the change's attempts still
-	// queued or running at a head it moved on from, or for a target it was
-	// retargeted from: each one its home cancels superseded before it
-	// dispatches the head.
+	// queued or running at a head or target it moved on from, which its home
+	// cancels superseded before dispatching the head.
 	Stale []CheckKey `json:"stale,omitempty"`
-	// Requeue is each check of the head for its target whose latest attempt
-	// its infrastructure ended below AutoRequeueAttempts, as the next attempt
-	// its home queues: that attempt's queue, under the definition it ran
-	// under, its reason requeue — all but the instant, which the home's is.
+	// Requeue is the next attempt of each check of the head for its target
+	// whose latest its infrastructure ended below AutoRequeueAttempts: that
+	// attempt's queue, under the definition it ran under, its reason requeue,
+	// all but the instant, which is the home's.
 	Requeue []CheckQueued `json:"requeue,omitempty"`
-	// Facts is, for a head owing its dispatch, what the change's head
-	// revision touches against its target as its facts RECORD it
-	// (code_revision_facts, the change work's own record of the revision) —
-	// nil where none are recorded for the target yet, and then the head's
-	// dispatch waits for them, whatever its checks file defines.
+	// Facts is, for a head owing its dispatch, what its head revision touches
+	// against its target as code_revision_facts records it; nil until
+	// recorded, and the dispatch waits for them whatever the file defines.
 	Facts *TouchedPaths `json:"facts,omitempty"`
 }
 
 // TouchedPaths is what a change's head revision touches against its target, as
-// its recorded facts say it ([Revise]'s Touched and TouchesAll): the paths a
-// `paths` check's globs are matched against — every check run where the
-// revision touches more than a list holds.
+// its recorded facts say ([Revise]'s Touched and TouchesAll): what a `paths`
+// check's globs are matched against, every check running where the revision
+// touches more than a list holds.
 type TouchedPaths struct {
 	Touched    []string `json:"touched,omitempty"`
 	TouchesAll bool     `json:"touches_all,omitempty"`
 }
 
 // requiredChecks is a repository's rules as a `checks_due` page judges its
-// changes' targets by: each target's required checks as ITS MERGE GATE reads
-// them ([GateRulesOf]'s Checks) — one derivation, so a head's attempts are
-// marked required by exactly the names its gate judges — a target judged
-// once a page.
+// changes' targets: each target's required checks as ITS MERGE GATE reads
+// them ([GateRulesOf]'s Checks), one derivation so a head's attempts are
+// marked required by exactly the names its gate judges, once a page.
 type requiredChecks struct {
 	rules    []Protection
 	byTarget map[string][]string
@@ -414,7 +354,7 @@ func requiredIn(ctx context.Context, tx *sql.Tx, repoID string) (*requiredChecks
 
 // of is every check name target's gate requires, sorted and each once; nil
 // for none. A rule whose pattern this build does not read is refused, as the
-// gate refuses it: a requirement read as absent is a check the gate waits for
+// gate refuses it: read as absent, its check would be one the gate waits for
 // that nobody marks required.
 func (r *requiredChecks) of(target string) ([]string, error) {
 	if out, ok := r.byTarget[target]; ok {
@@ -435,9 +375,9 @@ type checkHead struct {
 	dispatch, requeue bool
 }
 
-// dueCheckHeadsIn is a page of repoID's live changes owing their checks work,
-// by source branch after cursor — read whole before any change's work is, so
-// no other statement runs beside the listing's.
+// dueCheckHeadsIn is a page of repoID's live changes owing checks work, by
+// source branch after cursor, read whole before any change's work so no other
+// statement runs beside the listing's.
 func dueCheckHeadsIn(ctx context.Context, tx *sql.Tx, repoID, cursor string, limit int) ([]checkHead, error) {
 	rows, err := tx.QueryContext(ctx, dueCheckChangesSQL, repoID, cursor, limit, AutoRequeueAttempts)
 	if err != nil {
@@ -460,10 +400,8 @@ func dueCheckHeadsIn(ctx context.Context, tx *sql.Tx, repoID, cursor string, lim
 	return out, rows.Err()
 }
 
-// checkWorkOf is what h owes its checks: where its dispatch is owed, the
-// names its head holds for its target and those an earlier dispatch errored,
-// the names its target's gate requires and the attempts it moved on from;
-// and where a requeue is, the next attempt of each check it is owed of.
+// checkWorkOf is what h owes its checks, each [CheckWork] field read only
+// where its dispatch or a requeue is owed.
 func checkWorkOf(ctx context.Context, tx *sql.Tx, repoID string, h checkHead, required *requiredChecks) (
 	CheckWork, error) {
 
@@ -491,11 +429,9 @@ func checkWorkOf(ctx context.Context, tx *sql.Tx, repoID string, h checkHead, re
 	return w, nil
 }
 
-// headAttemptsIn is what commit oid holds of each check for target — a range
-// of code_checks' key on the commit and the target, at most MaxChecksPerFile
-// checks of MaxCheckAttempts attempts each — as a dispatch reads it: every
-// name held, sorted, but those whose latest attempt was errored at its
-// dispatch, which are answered as that attempt's key.
+// headAttemptsIn is what commit oid holds of each check for target, as
+// [CheckWork]'s Held and Invalid: a range of code_checks' key, at most
+// MaxChecksPerFile checks of MaxCheckAttempts attempts each.
 func headAttemptsIn(ctx context.Context, tx *sql.Tx, repoID, oid, target string) ([]string, []CheckKey, error) {
 	rows, err := tx.QueryContext(ctx, headAttemptsSQL, repoID, oid, target)
 	if err != nil {
@@ -542,10 +478,9 @@ func headAttemptsIn(ctx context.Context, tx *sql.Tx, repoID, oid, target string)
 	return held, invalid, nil
 }
 
-// touchedPathsIn is what revision n of changeID touches against target, as its
-// recorded facts say it — one seek of code_revision_facts' key — and nil where
-// the revision holds no facts for target: none read yet, or read against the
-// target the change was retargeted from.
+// touchedPathsIn is what revision n of changeID touches against target, one
+// seek of code_revision_facts' key; nil where the revision holds no facts for
+// target: none read yet, or read against a target it was retargeted from.
 func touchedPathsIn(ctx context.Context, tx *sql.Tx, changeID string, n int64, target string) (*TouchedPaths, error) {
 	var (
 		f       TouchedPaths
@@ -563,11 +498,9 @@ func touchedPathsIn(ctx context.Context, tx *sql.Tx, changeID string, n int64, t
 	return &f, nil
 }
 
-// staleChecksIn is changeID's attempts still queued or running at a commit or
-// for a target other than its head's — the head it moved on from, the target
-// it was retargeted from — by code_checks_live_idx, which holds only a change
-// head's attempts not yet ended; each kept where no live change into the
-// attempt's target heads its commit, which shares it.
+// staleChecksIn is [CheckWork.Stale]: changeID's attempts not yet ended at a
+// commit or target other than its head's, by code_checks_live_idx, each kept
+// where no live change into the attempt's target heads its commit.
 func staleChecksIn(ctx context.Context, tx *sql.Tx, repoID, changeID, head, target string) ([]CheckKey, error) {
 	rows, err := tx.QueryContext(ctx, staleChecksSQL, changeID, head, target, repoID)
 	if err != nil {
@@ -585,9 +518,7 @@ func staleChecksIn(ctx context.Context, tx *sql.Tx, repoID, changeID, head, targ
 	return out, rows.Err()
 }
 
-// requeuesIn is the next attempt of each check of commit oid for target whose
-// latest attempt its infrastructure ended below AutoRequeueAttempts: that
-// attempt's queue, its definition among it, as a requeue.
+// requeuesIn is [CheckWork.Requeue] for commit oid and target.
 func requeuesIn(ctx context.Context, tx *sql.Tx, repoID, oid, target string) ([]CheckQueued, error) {
 	rows, err := tx.QueryContext(ctx, requeuesSQL, repoID, oid, target, AutoRequeueAttempts)
 	if err != nil {
@@ -620,16 +551,13 @@ func requeuesIn(ctx context.Context, tx *sql.Tx, repoID, oid, target string) ([]
 	return out, rows.Err()
 }
 
-// The work's statements, each registered in plan_test.go. A head revision's
-// facts are one seek of code_revision_facts' key (change_id, n), its target
-// tested on the row; a head's attempts for its target are a range of
-// code_checks' key; the change's attempts not
-// yet ended are code_checks_live_idx's (replicated 0116), its predicate spelled
-// as the index declares it, each kept where no live change into its target
-// heads its commit — code_changes_target_idx, whose predicate liveChanges
-// spells; and a requeue reads code_checks_requeue_idx (replicated 0116), its
-// predicate spelled as the index declares it (requeuedRows), then the next
-// attempt's absence by code_checks' key.
+// The work's statements, each registered in plan_test.go. Facts are one seek
+// of code_revision_facts' key (change_id, n), the target tested on the row;
+// stale attempts read code_checks_live_idx (replicated 0116) and the sharing
+// change code_changes_target_idx (liveChanges); a requeue reads
+// code_checks_requeue_idx (replicated 0116), then the next attempt's absence
+// by code_checks' key. Each partial index's predicate is spelled as the index
+// declares it.
 const (
 	touchedPathsSQL = `SELECT touches_all, touched FROM code_revision_facts
 		WHERE change_id = ? AND n = ? AND target_ref = ?`
@@ -652,8 +580,7 @@ const (
 				WHERE n.repo_id = k.repo_id AND n.commit_oid = k.commit_oid AND n.target_ref = k.target_ref
 					AND n.name = k.name AND n.attempt = k.attempt + 1)
 		ORDER BY k.name`
-	// requeuedRows is code_checks_requeue_idx's predicate, spelled as the
-	// index declares it, on the alias k: an attempt its infrastructure ended
-	// ([CheckReason.Requeued]).
+	// requeuedRows is code_checks_requeue_idx's predicate on the alias k: an
+	// attempt its infrastructure ended ([CheckReason.Requeued]).
 	requeuedRows = `k.state = 'errored' AND k.reason IN ('runner_lost', 'box_failed', 'setup_failed')`
 )

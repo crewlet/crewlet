@@ -19,24 +19,20 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE INSTALLER'S TRIES (layers.go): when a repository's next try is due,
-// what a try that failed waits, and what decides a layer refused — each held
-// on a case's own clock, the installer's passes run one at a time by the case
-// (cache.InstallPass).
+// THE INSTALLER'S TRIES (layers.go): when a repository's next try is due, what
+// a failed try waits, and what decides a layer refused, each on a case's own
+// clock, the passes run one at a time (cache.InstallPass).
 
 // A MISSING LAYER THE LOG'S HEAD CANNOT DECIDE WAITS AS A STORE FAILURE DOES: a
-// part the object store holds nothing for is refused only once a read at the
-// log's head says the rows still name the layer, and while that read fails
-// nothing is decided — so the try is one that may pass, and the repository
-// waits installRetryBase before the store is asked again, rather than being
-// taken up by the very next pass: a GET, a staging and a failed round of the
-// repository at every pass for as long as the head cannot be read, the whole
-// window after a restore. Logged code_layer_install_failed with its outcome and
-// its wait. Once the head answers, the layer is refused missing.
+// part the store lacks is refused only once a read at the log's head says the
+// rows still name the layer. While that read fails the try may pass, so the
+// repository waits installRetryBase (logged code_layer_install_failed with its
+// outcome and wait) rather than a GET, a staging and a failed round at every
+// pass for the whole window after a restore. Once the head answers, the layer is
+// refused missing.
 //
-// Mutation: settle a miss the head did not decide as a decided one
-// (settleInstall's undecided case dropped) — the second pass at the same
-// instant asks the store again, and no wait is recorded.
+// Mutation: settle an undecided miss as decided (settleInstall's undecided case
+// dropped): the second pass at the same instant asks the store again.
 func TestAMissingLayerTheHeadCannotDecideWaits(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -96,15 +92,14 @@ func TestAMissingLayerTheHeadCannotDecideWaits(t *testing.T) {
 	}
 }
 
-// A LAYER INSTALL THAT FAILED IS COUNTED: a try of a layer the store failed to
-// answer — a full round's, which answers without the layer and leaves it to
-// the installer, and the installer's, which waits and tries again — is
-// crewlet.code.cache.layers{outcome=failed}, once a try, beside its
-// code_layer_install_failed line: the count an operator reads an object store
-// failing the installer by.
+// A LAYER INSTALL THAT FAILED IS COUNTED: each try the store failed (a full
+// round's, which leaves the layer to the installer, and each of the installer's)
+// is crewlet.code.cache.layers{outcome=failed} once, beside its
+// code_layer_install_failed line: the count an operator reads a failing object
+// store by.
 //
-// Mutation: count no failed try (the countLayers of settleInstall's and
-// roundLayerFailed's failure dropped) — the counter stays at zero.
+// Mutation: drop the countLayers of settleInstall's and roundLayerFailed's
+// failure: the counter stays at zero.
 func TestAFailedLayerInstallIsCounted(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -132,18 +127,16 @@ func TestAFailedLayerInstallIsCounted(t *testing.T) {
 }
 
 // THE LAYERS A FAILED SWAP WAS TO PLACE ARE COUNTED: a placement on a copy a
-// reader may hold is a swap's layer step, and a swap that fails at a step — a
-// write this node's disk failed, here at the rename's fault point — places
-// none of the layers it was to: a try that may pass, the installer's to try
-// again, counted crewlet.code.cache.layers{outcome=failed} once whoever's the
-// placement was. "a full round's": a retirement sweep's full round, whose swap
-// was to place the chain, answers from the copy as it was and leaves the chain
-// to the installer, which places it. "the installer's": counted once, never
-// twice.
+// reader may hold is a swap's layer step, and a swap failing at a step (here the
+// rename's fault point) places none of its layers: a try that may pass, left to
+// the installer, counted crewlet.code.cache.layers{outcome=failed} once whoever's
+// placement it was. "a full round's": a retirement sweep's full round, whose swap
+// was to place the chain, answers from the copy as it was, and the installer
+// places the chain after. "the installer's": counted once, never twice.
 //
 // Mutations, each seen red: count only the installer's (the swap's count
-// dropped, installRepo's back) — "a full round's" counts nothing; count both —
-// "the installer's" counts two.
+// dropped, installRepo's back): "a full round's" counts nothing; count both: "the
+// installer's" counts two.
 func TestTheLayersAFailedSwapWasToPlaceAreCounted(t *testing.T) {
 	t.Parallel()
 	// open is a copy synced cold, its chain published since and not read
@@ -202,9 +195,8 @@ func TestTheLayersAFailedSwapWasToPlaceAreCounted(t *testing.T) {
 	})
 }
 
-// refuseParts makes the world's store refuse every part of chain with an
-// error that may pass — a bucket slowing its callers down — and answers the
-// call that makes it answer again.
+// refuseParts makes the world's store refuse every part of chain with an error
+// that may pass (a bucket's SlowDown), and answers the call that ends it.
 func (w *syncWorld) refuseParts(chain ...gitlet.LayerRef) func() {
 	parts := partsOf(chain...)
 	slowDown := errors.New("SlowDown: please reduce your request rate")
@@ -224,29 +216,21 @@ func (w *syncWorld) refuseParts(chain ...gitlet.LayerRef) func() {
 }
 
 // A STALE LAYER'S WAIT IS ITS OWN EPISODE'S: a layer the rows no longer name
-// keeps serving, its packs held, while its replacement cannot be placed, and is
-// cut once IT has stood in for installRetryCap — never by the clock of an
-// earlier episode. Here a repacking publication's layer is refused by the
-// store, so the layer it replaces stands in; a full round then places the
-// replacement itself, the store answering again — an end the installer never
-// sees. Two hours on, the next repacking publication's layer is refused too:
-// its first failed fetch keeps the layer it replaces, which has stood in for no
-// time at all, and the cut lands exactly at installRetryCap of its own, the
-// pack only it held leaving with it. And an install that finds nothing due —
-// the installer waking once the first episode's wait ended — forgets the
-// repository's wait.
+// serves while its replacement cannot be placed, and is cut once IT has stood in
+// for installRetryCap, never by an earlier episode's clock. Here a refused
+// replacement lets the old layer stand in until a full round places it, unseen by
+// the installer; two hours on the next replacement is refused too, and the cut
+// lands at its own installRetryCap, taking the pack only it held. An install that
+// finds nothing due forgets the repository's wait.
 //
-// Mutations: key the stale clock to the repository alone (stuckFor matching
-// any layer recorded stale) — "unobserved" cuts at the first failed fetch;
-// keep a repository's wait through an install that found nothing due
-// (installRepo's forget dropped) — "observed" still waits out the old
-// episode's failure.
+// Mutations: stuckFor matching any stale layer of the repository: "unobserved"
+// cuts at the first failed fetch; installRepo's forget dropped: "observed" still
+// waits out the old episode's failure.
 func TestAStaleLayersWaitIsItsOwnEpisodes(t *testing.T) {
 	t.Parallel()
-	// resolved is a copy whose stale layer stood in while the store refused
-	// its replacement, until a full round placed the replacement itself: its
-	// world, cache and clock, the repository, its pushes, and the chain and
-	// its one pack the copy holds now.
+	// resolved is a copy whose stale layer stood in while the store refused its
+	// replacement, until a full round placed it: the copy now holds chain and its
+	// one pack, merged.
 	type resolved struct {
 		w      *syncWorld
 		c      *cache.Cache
@@ -335,21 +319,17 @@ func TestAStaleLayersWaitIsItsOwnEpisodes(t *testing.T) {
 	})
 }
 
-// AN INSTALLER PASS COSTS WHAT IT TAKES UP, NOT WHAT THE INSTALLER HOLDS: a
-// node catching up after a restore, or after a burst of publications, holds
-// thousands of repositories — due a try, or waiting out the backoff a store's
-// outage gave them — and a pass runs at every kick: every task's end, and every
-// round of a repository the installer holds, one waiting included. Draining
-// 10 000 repositories due a try takes each in hand once, to start it; kicking
-// a thousand of those waiting takes none of them in hand while their waits
-// hold; and once the waits end each is taken in hand twice — moved among the
-// due, then started — never once a pass for every repository held: about Q²/32
-// at Q held and sixteen tasks a pass, some six million at 10 000, all of it
-// under the lock every round's kick, every task's end and every full round's
-// install waits on.
+// AN INSTALLER PASS COSTS WHAT IT TAKES UP, NOT WHAT THE INSTALLER HOLDS: after a
+// restore or a burst of publications it holds thousands of repositories, due or
+// waiting out a backoff, and a pass runs at every kick (every task's end, every
+// round of a held repository). Draining 10 000 due takes each in hand once; a
+// thousand kicks of waiting ones take none while their waits hold; once the waits
+// end each is taken twice (moved among the due, then started). Scanning every
+// held repository a pass costs about Q²/32 at Q held and sixteen tasks a pass,
+// some six million at 10 000, all under the lock every kick, task end and full
+// round's install waits on.
 //
-// Mutation: walk every repository held at every pass (installPass scanning
-// the whole queue, as it did) — draining takes millions in hand.
+// Mutation: installPass scanning the whole queue: draining takes millions in hand.
 func TestAnInstallPassCostsWhatItTakesUp(t *testing.T) {
 	t.Parallel()
 	clk := newClock()
@@ -399,19 +379,15 @@ func TestAnInstallPassCostsWhatItTakesUp(t *testing.T) {
 	}
 }
 
-// A KICK WHILE A TASK RUNS THE REPOSITORY HOLDS IT ONCE MORE: a round that
-// brings new rows while the installer is trying the repository — between the
-// try's end and its settling — is not lost to a task already done with the
-// rows before them. The repository is held once more as the task ends, its
-// wait ended where the round served the chain, and the next pass installs
-// what the round brought: after a try that placed the chain it had ("done"),
-// and after one the store failed ("failed").
+// A KICK WHILE A TASK RUNS THE REPOSITORY HOLDS IT ONCE MORE: a round bringing new
+// rows between a try's end and its settling is not lost to a task already done
+// with the older rows. The repository is held once more as the task ends, its
+// wait ended, and the next pass installs what the round brought, after a try that
+// placed its chain ("done") or one the store failed ("failed").
 //
-// Mutations: let a kick of a running repository say nothing (kickInstall's
-// running case dropped) — "done" lets the repository go and the new chain
-// waits for its next round; let a fresh kick of a running repository end no
-// wait (settleInstall's againFresh dropped) — "failed" holds the new chain
-// for the old one's failure.
+// Mutations: kickInstall's running case dropped: "done" lets the repository go
+// and the new chain waits for its next round; settleInstall's againFresh dropped:
+// "failed" holds the new chain for the old one's failure.
 func TestAKickWhileATaskRunsTheRepositoryHoldsItOnceMore(t *testing.T) {
 	t.Parallel()
 	for _, failed := range []bool{false, true} {
@@ -464,15 +440,14 @@ func TestAKickWhileATaskRunsTheRepositoryHoldsItOnceMore(t *testing.T) {
 	}
 }
 
-// THE INSTALLER WAITS OUT A STORE THAT FAILS: each try of a repository the
-// store fails to answer waits installRetryBase, doubled after each failure in a
-// row and never past installRetryCap — 1, 2, 4, 8, 16 and then 30 minutes, at
-// most one try of the repository a node every half hour while it keeps
-// failing — logged code_layer_install_failed with that wait (retry_in); a pass
-// before the wait ends asks the store nothing, and one at its end tries again.
+// THE INSTALLER WAITS OUT A STORE THAT FAILS: each failed try of a repository
+// waits installRetryBase, doubled per failure in a row up to installRetryCap (1,
+// 2, 4, 8, 16, then 30 minutes: at most one try a node every half hour), logged
+// code_layer_install_failed with retry_in; a pass before the wait ends asks the
+// store nothing, and one at its end tries again.
 //
-// Mutations: an uncapped window (installWindow without its cap) — the sixth
-// wait is 32 minutes; a window that does not double — the second is a minute.
+// Mutations: installWindow without its cap: the sixth wait is 32 minutes; a
+// window that does not double: the second is a minute.
 func TestTheInstallerWaitsOutAStoreThatFails(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -518,14 +493,11 @@ func TestTheInstallerWaitsOutAStoreThatFails(t *testing.T) {
 }
 
 // A ROUND THAT SERVES THE CHAIN ENDS THE INSTALLER'S WAIT: a new publication
-// reaches the node as new rows through a delta, which is a new try of the
-// repository — the installer takes it up at once, whatever its wait after
-// failures of the chain before — rather than through the retry the wait holds
-// back.
+// arriving as rows through a delta is a new try, taken up at once whatever wait
+// the previous chain's failures left.
 //
-// Mutation: drop the wait's end at a round that serves the chain
-// (kickInstall's fresh) — the pass at the delta's instant asks the store
-// nothing, and the new chain waits out the old one's failures.
+// Mutation: kickInstall's fresh dropped: the pass at the delta's instant asks the
+// store nothing, and the new chain waits out the old one's failures.
 func TestARoundThatServesTheChainEndsTheInstallersWait(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -567,14 +539,13 @@ func TestARoundThatServesTheChainEndsTheInstallersWait(t *testing.T) {
 	}
 }
 
-// THE INSTALLER WAKES WHEN ITS EARLIEST WAIT ENDS: the loop Start begins runs
-// a pass at every kick, and between kicks sleeps until the earliest wait of a
-// repository it holds ends — told to its wake (here the case's, in place of a
-// timer) — and retries then, with no kick: a store failing a layer is asked
-// again a minute later, and the layer placed once it answers.
+// THE INSTALLER WAKES WHEN ITS EARLIEST WAIT ENDS: between kicks Start's loop
+// sleeps until the earliest wait of a held repository ends (told to its wake,
+// here the case's clock in place of a timer) and retries with no kick: a failed
+// layer is asked again a minute later, and placed once the store answers.
 //
-// Mutation: sleep until a kick alone (runInstaller's wake left nil) — the loop
-// asks to be woken at nothing, and the layer is never retried.
+// Mutation: runInstaller's wake left nil: the loop asks to be woken at nothing,
+// and the layer is never retried.
 func TestTheInstallerWakesWhenItsEarliestWaitEnds(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -605,10 +576,9 @@ func TestTheInstallerWakesWhenItsEarliestWaitEnds(t *testing.T) {
 		return slices.ContainsFunc(asked, due.Equal)
 	})
 	answer()
-	// The clock reaching the wait's end is what wakes the loop, as its timer
-	// would — never a send the case makes, which a loop that passed again
-	// meanwhile (a task's kick) and found the wait ended at the clock's new
-	// time, retrying then and arming no wake, never takes.
+	// The clock reaching the wait's end wakes the loop, as its timer would. A send
+	// from the case could go untaken: a loop that passed again meanwhile (a task's
+	// kick) finds the wait ended, retries, and arms no wake.
 	clk.Set(due)
 	eventually(t, "the layer placed by the retry the wake made", func() bool {
 		return slices.Equal(layerIDs(cache.Installed(c, repo)), layerIDs(chain))
@@ -616,30 +586,16 @@ func TestTheInstallerWakesWhenItsEarliestWaitEnds(t *testing.T) {
 }
 
 // THE INSTALLER HOLDS ONE SLOT OF THE READ LANE FOR ITS CHECKS AND ONE FOR ITS
-// CANARIES: a layer's check hashes its files a piece at a time in a slot of
-// the read lane, and a placement's canary is a git read there — the lane a
-// core a slot for the work requests wait on. The installer runs sixteen tasks
-// to keep sixteen GETs in flight, not to hash on sixteen cores: here sixteen
-// repositories' layers land together, and every piece of every check takes
-// the installer's one share for checks in turn, as the scrub, the cache's
-// other work behind the serving, holds one slot; and every canary takes the
-// one share for canaries (TestAnInstallersCanaryWaitsBehindNoCheck holds why
-// it is a share of its own). Each holder of a share keeps it for
-// pastEveryTimer of a synctest bubble's clock, which moves only once every
-// other goroutine of the case is durably blocked — so any other task's work of
-// the kind its share let through meanwhile is seen beside it, however late
-// that task ran, and so is work that would go ahead without the share once a
-// wait on that clock of its own had passed. Nothing the case runs on a
-// healthy build waits on that clock meanwhile: the world's read lane has two
-// slots, one for the one piece and one for the one canary the shares let in,
-// so no admission to it waits out its bound; and a canary's git deadline runs
-// only while its process does, when the clock cannot move.
-//
-// Mutations, each seen red: the shares as wide as the tasks
-// (installReadSlots 16) — each kind holds many at once; the canary outside a
-// share, or told as a check's — no canary takes the canaries' share; a task
-// that waits for its share a minute at most and then reads without it — it
-// reads beside the holder once the hold outlasts the minute.
+// CANARIES: its sixteen tasks keep sixteen GETs in flight, not sixteen cores
+// hashing, so each check piece takes the checks' one share in turn (as the scrub
+// holds one slot) and each canary the canaries' one (see
+// TestAnInstallersCanaryWaitsBehindNoCheck). A holder keeps its share for
+// pastEveryTimer of the bubble's clock, which moves only once all else is durably
+// blocked, so a second holder, or a task reading without its share after a timed
+// wait, is seen beside it. On a healthy build nothing waits on that clock: the
+// world's lane has a slot for each share's one holder, so no admission waits out
+// its bound, and a canary's git deadline runs only with its process. Mutations, each seen red: installReadSlots 16; a canary outside a
+// share or told as a check's; a task reading without its share after a minute.
 func TestTheInstallerHoldsOneReadSlotForItsChecksAndOneForItsCanaries(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -662,15 +618,11 @@ func TestTheInstallerHoldsOneReadSlotForItsChecksAndOneForItsCanaries(t *testing
 			s.holds++
 			s.most = max(s.most, s.now)
 			mu.Unlock()
-			// Held by a sleep, never by synctest.Wait: the checks' share and
-			// the canaries' are two, so on a healthy build a holder of each
-			// can be here at once, and Wait must not be called by two
-			// goroutines of one bubble at once (testing/synctest). A sleep in
-			// a bubble ends only once every other goroutine is durably blocked
-			// and the clock has reached its end, so it holds the share at
-			// least until the case is idle — any length would do that — and
-			// pastEveryTimer long, so a task that waits for the share only so
-			// long before reading without it reads beside this holder.
+			// Held by a sleep, never synctest.Wait: a checks' holder and a canaries' holder
+			// may be here at once, and two goroutines of one bubble must not call Wait at
+			// once. A bubble's sleep ends only once all else is durably blocked and the clock
+			// reaches its end, so it holds the share past idle and past any timed wait a
+			// task might make before reading without the share.
 			time.Sleep(pastEveryTimer)
 		}))
 		const repos = cache.FetchConcurrency
@@ -718,26 +670,22 @@ func TestTheInstallerHoldsOneReadSlotForItsChecksAndOneForItsCanaries(t *testing
 	})
 }
 
-// AN INSTALLER'S CANARY WAITS BEHIND NO CHECK: a placement's canary runs
-// inside its swap, under the repository's write lock, which every round of the
-// repository waits for — so it takes the installer's share of the read lane
-// for canaries, never the share its checks' pieces take in turn, where it
-// waited behind up to fifteen other tasks' pieces with that lock held. Here
-// one repository's check holds the checks' share, a piece of it held there,
-// while another repository's placement — of a layer its maintainer adopted,
-// which the installer checks no piece of — reads its chain through the bitmap
+// AN INSTALLER'S CANARY WAITS BEHIND NO CHECK: a canary runs inside its swap,
+// under the repository's write lock every round waits for, so it takes the
+// canaries' share of the read lane, never the checks', where it would wait behind
+// up to fifteen other tasks' pieces with that lock held. Here one repository's
+// check piece holds the checks' share while another's placement, of a layer its
+// maintainer adopted (so no piece is checked), reads its chain through the bitmap
 // and is made.
 //
-// Mutation: take a canary's share from the checks' (takeInstallRead's
-// semaphore for a canary in.checks) — the adopted layer's placement waits for
-// the held piece, and is not made while it is held.
+// Mutation: takeInstallRead's semaphore for a canary in.checks: the adopted
+// layer's placement waits for the held piece.
 func TestAnInstallersCanaryWaitsBehindNoCheck(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
 	checked, adopted := w.repo(t, 1), w.repo(t, 2)
 	pc, pa := w.pushN(t, checked, 2), w.pushN(t, adopted, 2)
-	// The first piece the installer's check takes its share for is held
-	// there, the share with it, until the case lets it go.
+	// The check's first piece holds the checks' share until the case lets it go.
 	piece, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	c := w.open(t, cache.InstallReadingWith(func(canary, held bool) {
@@ -794,10 +742,9 @@ func TestAnInstallersCanaryWaitsBehindNoCheck(t *testing.T) {
 	}
 }
 
-// holdFirst holds the first read of key in the world's store until the answer
-// is called, and refuses the first read of it that is not held — one a case
-// makes while the held one waits — with an error that may pass; every other
-// read of it is answered.
+// holdFirst holds the first read of key in the world's store until the answer is
+// called, refuses (with an error that may pass) the first read made while it is
+// held, and answers every other.
 func (w *syncWorld) holdFirst(key objstore.Key) func() {
 	held, refused := make(chan struct{}), errors.New("SlowDown: please reduce your request rate")
 	var holds, fails atomic.Int32
@@ -820,31 +767,18 @@ func (w *syncWorld) holdFirst(key objstore.Key) func() {
 	return sync.OnceFunc(func() { close(held) })
 }
 
-// THE INSTALLER DOWNLOADS A LAYER ONCE, WHATEVER MOVES UNDER IT: a placement
-// that finds the copy or its chain moved since its plan places nothing, and
-// the next plan installs the same layers over the same base — so the layers
-// it fetched are held for that plan, which claims each it still wants rather
-// than downloading it again (a root layer of the largest repository the
-// defaults admit is some 2.6 GB), and a round that serves the very chain the
-// plan was made over is no move at all.
+// THE INSTALLER DOWNLOADS A LAYER ONCE, WHATEVER MOVES UNDER IT: a placement that
+// finds the copy or chain moved since its plan places nothing, so what it fetched
+// is held for the next plan to claim rather than download again (a root layer of
+// the largest repository the defaults admit is some 2.6 GB), and a round serving
+// the very chain the plan was made over is no move. Mid-download, "a swap" merges
+// the tail (next pass places it, no second GET, tmp/ empty); "a publication past
+// it" replaces the layer (the plan that no longer wants it drops it from tmp/,
+// not the janitor 12 hours on); "a full round" serves the same chain, its own
+// fetch refused (the placement lands in that pass).
 //
-//   - "a swap": the tail's packs merged and leaving by a swap while the
-//     installer downloads the layer — the next pass places it with no second
-//     GET, and nothing of it is left in tmp/;
-//   - "a publication past it": a publication replacing the layer while the
-//     installer downloads it — the moved placement stages it, and the next
-//     plan, which no longer wants it, takes it out of tmp/ at once rather
-//     than the janitor twelve hours on;
-//   - "a full round": a retirement sweep's full round while the installer
-//     downloads, serving the same chain, whose own fetch of the layer the
-//     store refuses — the installer's placement is made in the same pass.
-//
-// Mutations, each seen red: drop what a moved placement fetched
-// (installRepo's holdFetched) — "a swap" downloads the layer twice; drop no
-// staged fetch a plan does not want (installRepo's dropFetched) — "a
-// publication past it" leaves it in tmp/; count every chain a round reads as
-// a move (setChain's chainGen without its sameRows) — "a full round" places
-// nothing in the pass.
+// Mutations: installRepo without holdFetched ("a swap" downloads twice) or
+// dropFetched (tmp/ keeps it); chainGen without sameRows ("a full round" fails).
 func TestTheInstallerDownloadsALayerOnceWhateverMovesUnderIt(t *testing.T) {
 	t.Parallel()
 	// begin publishes a one-layer chain over a copy that holds its packs, has

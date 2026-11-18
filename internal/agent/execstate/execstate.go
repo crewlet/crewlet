@@ -28,7 +28,10 @@
 // So it carries an explicit Version, and decoding an unknown one is a LOUD
 // REFUSAL that leaves the row untouched rather than a best-effort read: a
 // resumed turn acting on a half-understood state is worse than a run that
-// waits for a node which understands it.
+// waits for a node which understands it. [VersionOf] reads the version alone,
+// as [Decode] reads it first and with nothing else of the state built, for a
+// caller that asks only which build may read a row (internal/engine's resume
+// give-up, on every failure another node or build may get past).
 //
 // Evolution is additive WITHIN a version — new fields get defaults, nothing is
 // removed or repurposed — and a shape that cannot be read that way takes a new
@@ -462,27 +465,15 @@ func Encode(s State) (json.RawMessage, error) {
 // a crash between launching the job and persisting the park — and the caller
 // settles it rather than treating it as a broken store.
 func Decode(blob json.RawMessage) (State, bool, error) {
-	if len(blob) == 0 {
-		return State{}, false, nil
-	}
 	// The version FIRST, off the raw blob, because which shape to decode
 	// into is exactly what it answers. Decoding into the current State and
 	// checking afterwards would silently zero every field another format
 	// spells differently before the version was ever looked at.
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(blob, &fields); err != nil {
-		return State{}, false, fmt.Errorf("execstate: decode: %w", err)
+	version, parked, err := VersionOf(blob)
+	if err != nil || !parked {
+		return State{}, false, err
 	}
-	if len(fields) == 0 {
-		return State{}, false, nil
-	}
-	var version float64
-	if raw, ok := fields["version"]; ok {
-		// A version that is not a number leaves zero, which no build has
-		// ever written and which therefore takes the refusal below.
-		_ = json.Unmarshal(raw, &version)
-	}
-	switch int(version) {
+	switch version {
 	case Version:
 		var s State
 		if err := unmarshalExact(blob, &s); err != nil {
@@ -497,8 +488,52 @@ func Decode(blob json.RawMessage) (State, bool, error) {
 		// format it does not know would act on a half-understood state;
 		// a newer one waits for a node that reads it, and a retired one is
 		// settled by the engine once no live node does ([ErrRetired]).
-		return State{}, false, &VersionError{Found: int(version)}
+		return State{}, false, &VersionError{Found: version}
 	}
+}
+
+// VersionOf reads the version a state was written at, and nothing else of it:
+// the step [Decode] takes first, for a caller that asks only which build may
+// read a state (internal/engine's parkedStateVersion, on every resume failure
+// another node or build may get past, which would otherwise decode a state
+// that may be large once more beside the resume's own). parked is false for no
+// state at all, as Decode reads one: no bytes, a JSON null or an object with no
+// keys. An object is the version it names, and zero where it names none or
+// names it as no number, which no build has ever written. Any other bytes,
+// JSON that is no object or no JSON at all, are an error. A state whose body
+// this build would refuse still names its version here.
+func VersionOf(blob json.RawMessage) (version int, parked bool, err error) {
+	if len(blob) == 0 {
+		return 0, false, nil
+	}
+	// ONE FIELD, and every other skipped unread: the scan still checks the
+	// whole blob is JSON, but builds nothing of the state.
+	var probe struct {
+		Version json.RawMessage `json:"version"`
+	}
+	if err := json.Unmarshal(blob, &probe); err != nil {
+		return 0, false, fmt.Errorf("execstate: decode: %w", err)
+	}
+	if probe.Version == nil {
+		return 0, !emptyObject(blob), nil
+	}
+	// A version that is not a number leaves zero, which no build has ever
+	// written and which therefore takes Decode's refusal.
+	var named float64
+	_ = json.Unmarshal(probe.Version, &named)
+	return int(named), true, nil
+}
+
+// emptyObject reports whether blob, valid JSON that decodes into an object, is
+// one with no keys or a JSON null: no state ([VersionOf]). It reads the first
+// two tokens alone.
+func emptyObject(blob json.RawMessage) bool {
+	dec := json.NewDecoder(bytes.NewReader(blob))
+	open, err := dec.Token()
+	if err != nil || open == nil {
+		return err == nil
+	}
+	return !dec.More()
 }
 
 // unmarshalExact decodes with every number kept as the digits it was written

@@ -680,7 +680,12 @@ the last word anybody said about that item.
   refuse its next launch, and the node neither shedding nor draining. All of
   that must hold on two passes in a row, so the writes of the turn that just
   ended are on the node's copy first: a seat is handed its next item within
-  about two minutes of going idle. The same pass ends a parked run nobody can
+  about two minutes of going idle. **Urgent work does not wait for idle:** a
+  seat whose first ready item is urgent is handed it while a turn or its
+  executor's run is in flight, while mail waits in its inbox or before its
+  settle, on the inbox's priority lane, so its next turn takes it ahead of the
+  background wakes queued before it; every other condition still holds it
+  back, a run waiting on a person's answer among them. The same pass ends a parked run nobody can
   continue any more: one whose Worklet item was finished or removed while it
   waited (`executor_failed`, reason `item_finished`) and one whose saved state
   no live build reads (`state_retired`); its question is withdrawn and a reply
@@ -702,11 +707,14 @@ the last word anybody said about that item.
   date comes ([ADR-0122](../../adr/0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)).
   And one wait on a blocker is ready: a **dead wait**, an item whose every open
   blocker is a pull request nothing is moving (below).
-- **Next** is work the seat already started first, then the reviews it holds,
+- **Next** is urgent work first, then the rest
+  ([ADR-0159](../../adr/0159-urgent-ready-work-comes-before-started-work.md)),
+  each in this order: work the seat already started, then the reviews it holds,
   then its own items in review nobody reviews, then its waits on a person
   nobody asked, then its dead waits, then its priority list in the order its
   lead set, then the rest by priority and due date, the order `my_work` lists
-  them in.
+  them in. So an urgent item comes before started work that is not urgent, and
+  below urgent a seat finishes what it started before it starts anything else.
 - **Once per item version.** A pickup is made once per seat, item, last change
   to the item that would have woken the seat, status and, for started work, the
   seat's own last progress on it other than a comment. That change is the

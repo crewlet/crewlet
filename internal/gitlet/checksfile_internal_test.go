@@ -10,19 +10,16 @@ import (
 )
 
 // A DEFINITION'S LIST PAST ITS BOUND IS JUDGED BY ITS COUNT ALONE: a queued
-// check's record carries its definition, and every writer and every reader of
-// one holds it to the rules a file is held to (CheckDef.Validate) — so a list
-// longer than its bound is ONE fault, at the list, the count rule's own, and no
-// item of it is judged or compared with another, however many it holds; one
-// within its bound has each item judged, and an item repeated named against
-// its first.
+// check's record carries its definition, held by CheckDef.Validate to a file's
+// rules, so a list past its bound is ONE fault, at the list, and no item of it is
+// judged or compared, however many it holds; within its bound each item is
+// judged, and a repeat named against its first.
 //
-// Mutation: judge a list's items past its count, and each list here draws a
-// fault an item beside its count's — red.
+// Mutation: judge a list's items past its count — each list draws a fault an
+// item beside its count's, red.
 func TestADefinitionPastItsListsIsJudgedByItsCount(t *testing.T) {
 	t.Parallel()
-	// ELEVEN THOUSAND ITEMS, about what one list of a 64 KiB file holds, and
-	// every one of them a fault were it judged.
+	// About what one list of a 64 KiB file holds, every item a fault were it judged.
 	const many = 11_000
 	def := CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 60,
 		Paths: make([]string, many), Env: make([]string, many),

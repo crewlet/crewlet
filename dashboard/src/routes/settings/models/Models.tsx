@@ -16,7 +16,7 @@ import { EmptyState, Skeleton, Tabs, useToast } from "@crewlethq/ui";
 import { CpuGlyph } from "@crewlethq/icons/glyphs";
 import { PageLenses } from "~/app/frame/PageActions.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { useModelsData, type ModelView } from "./data.ts";
+import { MODELS_POLL_MS, useModelsData, type ModelView } from "./data.ts";
 import { QueryState } from "~/components/common.tsx";
 import { EntryPage } from "./EntryPage.tsx";
 import { Overview } from "./Overview.tsx";
@@ -36,6 +36,8 @@ export function Models({ id }: { id?: string }) {
   const data = useModelsData();
   const nav = useNavigator();
   const [view, setView] = useParam("view", "", "section");
+  // A model the wizard has just added, which the engine's reading may not hold yet.
+  const [added, setAdded] = useParam("added", "");
   const flow = useFlow(id);
   const open: OnFlow = (next, key, at) => {
     // A HOST SIGN-IN CHANGES NOTHING in the model, so it never opens the
@@ -60,6 +62,9 @@ export function Models({ id }: { id?: string }) {
     [data.models, flow.entry],
   );
   const misfit = useMisfit(data, flow, model);
+  const addressed = id ? (data.models.find((m) => m.key === id) ?? null) : null;
+  const adding = !!id && !addressed && added === id;
+  useAddedMark(adding, !!addressed && added !== "", () => setAdded(""));
 
   if (data.loading) return <Skeleton variant="text" rows={8} label="Loading models" />;
   // A FAILED READ IS THE SHARED FAILED-READ STATE, with its Try again: it
@@ -91,8 +96,6 @@ export function Models({ id }: { id?: string }) {
     );
   }
 
-  const addressed = id ? (data.models.find((m) => m.key === id) ?? null) : null;
-
   return (
     <>
       {!id ? (
@@ -111,7 +114,8 @@ export function Models({ id }: { id?: string }) {
       ) : null}
 
       {id && addressed ? <EntryPage model={addressed} data={data} onFlow={open} /> : null}
-      {id && !addressed ? (
+      {adding ? <Skeleton variant="text" rows={6} label={`Adding ${id}`} /> : null}
+      {id && !addressed && !adding ? (
         <EmptyState
           icon={<CpuGlyph size="xl" />}
           title={`No model called ${id}`}
@@ -149,6 +153,21 @@ export function Models({ id }: { id?: string }) {
       ) : null}
     </>
   );
+}
+
+/**
+ * Clears the just-added mark once the reading holds the model, or after two
+ * polls, past which a model still missing is said to be missing.
+ */
+function useAddedMark(adding: boolean, held: boolean, clear: () => void) {
+  useEffect(() => {
+    if (held) clear();
+    if (!adding) return;
+    const t = setTimeout(clear, 2 * MODELS_POLL_MS);
+    return () => clearTimeout(t);
+    // `clear` writes the address, the same every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adding, held]);
 }
 
 /** The dialog flows, which each act on one model and are opened by the address. */

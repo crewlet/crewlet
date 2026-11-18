@@ -51,9 +51,9 @@ type joinHarness struct {
 	closes   atomic.Int64
 	reopens  atomic.Int64
 
-	// holdErr is what every hold reports instead of pinning, nil by
-	// default — a register this node cannot write to. holdAsks counts every
-	// attempt, a refused one included, which is one per offer adopted.
+	// holdErr, nil by default, is what every hold reports instead of
+	// pinning: a register this node cannot write to. holdAsks counts every
+	// attempt, a refused one included: one per offer adopted.
 	holdErr  error
 	holdAsks atomic.Int64
 
@@ -73,10 +73,9 @@ type joinHarness struct {
 	// the last moment before the install, which is where a case stages
 	// an interruption the rename must survive.
 	onClose func()
-	// closeErr is what step 9's close reports AFTER it has closed the live
-	// database, nil by default — which is the engine's close exactly: it
-	// takes the handle out of service before it closes it, so a failure
-	// there still leaves nothing open.
+	// closeErr, nil by default, is what step 9's close reports AFTER it has
+	// closed the live database, as the engine's close does: it takes the
+	// handle out of service first, so a failure still leaves nothing open.
 	closeErr error
 	// reopenErr is what every reopen reports instead of opening anything,
 	// nil by default.
@@ -287,12 +286,9 @@ func (h *joinHarness) debris(t *testing.T) []string {
 }
 
 // A NODE BELOW THE FLOOR ADOPTS A PEER'S SNAPSHOT WHOLESALE, and every claim
-// the artefact makes is checked before it is installed.
-//
-// A node that has fallen below the trim floor cannot replay its way back: the
-// records it is missing are gone. The transfer is what replaces the replay,
-// and the verifications are what make accepting somebody else's database file
-// safe at all.
+// the artefact makes is checked before it is installed: the records it would
+// replay are trimmed, and the verifications are what make accepting somebody
+// else's database file safe at all.
 func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 	t.Parallel()
 	h := newJoinHarness(t)
@@ -308,9 +304,8 @@ func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 		t.Fatalf("adopted an artefact from %q, want the donor's", m.NodeID)
 	}
 
-	// ONE LINE SAYS SO, naming which artefact: the engine wrote a second
-	// `statelog_adopted` carrying the checksum and the instant, and one
-	// adoption read as two. The adopter's line carries both now.
+	// ONE LINE SAYS SO, naming the artefact by checksum and instant: one
+	// adoption is one statelog_adopted line.
 	adopted := logRecords(t, logs.Bytes(), "statelog_adopted")
 	if len(adopted) != 1 {
 		t.Fatalf("%d statelog_adopted lines for one adoption, want one", len(adopted))
@@ -344,11 +339,9 @@ func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 			rows, seq)
 	}
 
-	// THE DONOR'S OPERATION LEDGER CAME WITH IT, and lost nothing on the
-	// way: its rows are what this node's own applier would have written
-	// from the same records, so a retry of anything the donor applied is
-	// answered from them here — and an operation neither ledger holds is
-	// one that never applied, which this node may decide like any other.
+	// THE DONOR'S OPERATION LEDGER CAME WITH IT, losing nothing: a retry of
+	// anything the donor applied is answered from it here, and an operation
+	// neither ledger holds never applied.
 	if ops := h.joinerOps(t); ops != 1 {
 		t.Fatalf("the adopted ledger holds %d row(s), want the donor's one — "+
 			"without it this node cannot tell a first attempt from a retry of "+
@@ -410,12 +403,10 @@ func TestANodeBelowTheFloorAdoptsAVerifiedArtefact(t *testing.T) {
 
 // A JOIN LISTS THE DONORS IT EXPECTS WHILE THEIR OFFERS ARRIVE, NOT BEFORE.
 //
-// The listing is a coordination read, and a joining node refuses every read
-// and write until its join ends: listed first, a store slow to answer held the
-// node for the whole listing and then the whole offer window after it. Here
-// the listing answers only once the joiner's ask is on the wire — which a join
-// that listed first never sends — and with its answer in, the collection ends
-// as soon as the donor it names has offered rather than at the window.
+// The listing is a coordination read, which a joining node refuses until its
+// join ends, so listing first holds the node for the listing and then the whole
+// offer window. Here the listing answers only once the joiner's ask is on the
+// wire, and its answer ends the collection as soon as the named donor offers.
 func TestAJoinListsItsDonorsWhileTheirOffersArrive(t *testing.T) {
 	t.Parallel()
 	h := newJoinHarness(t)
@@ -441,9 +432,8 @@ func TestAJoinListsItsDonorsWhileTheirOffersArrive(t *testing.T) {
 	if _, err := h.adopter(t).Join(ctx); err != nil {
 		t.Fatalf("Join: %v", err)
 	}
-	// THE INSTANT THE ADOPTION BEGAN is when the collection ended, and
-	// half the window separates a collection that ended on its listing
-	// from one that waited the window out.
+	// THE INSTANT THE ADOPTION BEGAN is when the collection ended: under half
+	// the window means it ended on the listing, not the window.
 	if len(h.began) == 0 {
 		t.Fatal("the join recorded no adoption")
 	}
@@ -453,16 +443,14 @@ func TestAJoinListsItsDonorsWhileTheirOffersArrive(t *testing.T) {
 	}
 }
 
-// A CORRUPTED TRANSFER IS REFUSED AND NOTHING IS INSTALLED.
-//
-// A transfer that dropped or reordered a chunk arrives looking exactly like
-// one that did not, so the checksum is the only thing between that and an
-// installed database with a hole in it.
+// A CORRUPTED TRANSFER IS REFUSED AND NOTHING IS INSTALLED. A dropped or
+// reordered chunk looks like a good transfer, so the checksum is all that
+// stands between it and an installed database with a hole in it.
 func TestACorruptedArtefactIsRefusedAndTheLiveDatabaseSurvives(t *testing.T) {
 	t.Parallel()
 	h := newJoinHarness(t)
-	// The manifest claims a checksum the bytes do not have, which is what
-	// a corrupted transfer looks like from the recipient's side.
+	// A checksum the bytes do not have: a corrupted transfer, as the
+	// recipient sees it.
 	h.manifest.SHA256 = strings.Repeat("0", 64)
 
 	_, err := h.adopter(t).Join(t.Context())
@@ -492,25 +480,21 @@ func TestACorruptedArtefactIsRefusedAndTheLiveDatabaseSurvives(t *testing.T) {
 
 // A JOIN ABANDONED MID-ADOPTION SAYS SO, and is never "nobody could donate".
 //
-// [statelog.ErrNoOffer] is a statement about the fleet, and the engine acts
-// on it: a boot comes up on the history it has and logs that no peer could
-// donate, a rejoin schedules its next attempt. A cancellation filed among the
-// refusals came back as exactly that — every remaining offer ended the same
-// way, each donor was logged as refused, and a node being stopped reported a
-// fleet with nothing to give.
+// [statelog.ErrNoOffer] is a statement about the fleet that the engine acts on
+// (a boot comes up on its own history, a rejoin schedules its next attempt), so
+// a cancellation filed among the refusals reports a node being stopped as a
+// fleet with nothing to give, each donor logged as refused.
 //
-// The cancellation lands at step 7's re-check, the last check of the file
-// before the stamp and the install: late enough that a transfer really
-// happened, early enough that the live database was never touched.
+// The cancellation lands at step 7's re-check: after a real transfer, before
+// the stamp, the install, or any touch of the live database.
 func TestAJoinAbandonedMidAdoptionIsNotAnEmptyFleet(t *testing.T) {
 	t.Parallel()
 	h := newJoinHarness(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	h.stillUsable = func(joinCtx context.Context, _ statelog.Manifest) error {
-		// The engine's own re-check reads the broker under the join's
-		// context, and a read under a cancelled one fails with the
-		// cancellation.
+		// The engine's re-check reads the broker under the join's context,
+		// so a cancelled one fails it with the cancellation.
 		cancel()
 		return joinCtx.Err()
 	}
@@ -536,13 +520,12 @@ func TestAJoinAbandonedMidAdoptionIsNotAnEmptyFleet(t *testing.T) {
 
 // AN INSTALL INTERRUPTED BEFORE ITS RENAME PUTS THE LIVE DATABASE BACK.
 //
-// Step 9 closes the live database and then runs the install, and when the
-// install fails the live file is still the live file, so reopening it is the
-// recovery. It is a ROLLBACK, and the failure it undoes is routinely the
-// cancellation itself: a Stop or a signal landing while the install
-// checkpoints. Reopened under the join's own context it failed alongside, and
-// a node whose install never happened was left with no replicated estate open
-// — every read [store.ErrNoEstate] — with nothing in the error to say so.
+// Step 9 closes the live database and runs the install; when the install fails
+// the live file is still live, so reopening it is the recovery. It is a
+// ROLLBACK, and the failure it undoes is routinely the cancellation itself (a
+// Stop or a signal during the install's checkpoint), so the reopen must not
+// run under the join's own context: it would fail too, leaving every read
+// [store.ErrNoEstate].
 func TestAnInterruptedInstallReopensTheLiveDatabase(t *testing.T) {
 	t.Parallel()
 	h := newJoinHarness(t)
@@ -573,23 +556,16 @@ func TestAnInterruptedInstallReopensTheLiveDatabase(t *testing.T) {
 
 // A LIVE DATABASE THAT DID NOT COME BACK IS NEVER "NOBODY COULD DONATE".
 //
-// Every way a join can close the live database and then fail to open one
-// again ends in the same state: no replicated estate open at all, every read
-// and every applier answering ErrNoEstate. [statelog.ErrNoOffer] is the one
-// thing that must not say so, because the engine answers it by carrying on
-// without a snapshot — a boot comes up with nothing open to come up on, and a
-// rejoin waits out a widening interval before anything reopens it. So the join
-// comes back as [statelog.ErrEstateNotRestored], carrying the failure that
-// closed the estate AND the reopen's own, and it stops at that offer: every
-// later one would be installed through a bracket around an estate that is not
-// there, and each donor logged as refusing a node that could take nothing.
-//
-// Four doors reach the state, and each is staged with the reopen failing: an
-// install that failed while its caller still waited, one the caller's own
-// cancellation interrupted, a close that failed after it took the database out
-// of service, and an artefact installed and then not opened. A second donor
-// offers the same artefact in every case, so a join that moved on would be
-// seen closing the live database a second time.
+// A join that closed the live database and failed to reopen one leaves no
+// replicated estate open. [statelog.ErrNoOffer] would have the engine carry on
+// as if no snapshot existed, with nothing open, so the join returns
+// [statelog.ErrEstateNotRestored], carrying the failure that closed the estate
+// AND the reopen's, and stops at that offer: a later one would install around
+// an estate that is not there. The four doors to that state, each staged with
+// the reopen failing: a failed install, one the caller's cancellation
+// interrupted, a close that failed after taking the database out of service,
+// and an installed artefact that did not open. A second donor offers the same
+// artefact, so a join that moved on is seen closing the live database twice.
 func TestALiveDatabaseThatDidNotComeBackIsNeverAnEmptyFleet(t *testing.T) {
 	t.Parallel()
 	reopenFailed := errors.New("the disk under the live database is gone")
@@ -682,10 +658,9 @@ func TestALiveDatabaseThatDidNotComeBackIsNeverAnEmptyFleet(t *testing.T) {
 			if n := h.reopens.Load(); n != 1 {
 				t.Fatalf("the live database was reopened %d time(s), want once", n)
 			}
-			// A ROLLBACK REOPENS WITH THE ARTEFACT ALREADY GONE: a whole
-			// copy of the estate on the live file's volume competes with
-			// the reopen for the room a full disk has run out of, and is
-			// deleted a moment later on the way out anyway.
+			// A ROLLBACK REOPENS WITH THE ARTEFACT ALREADY GONE: a whole copy
+			// of the estate on the live file's volume competes with the reopen
+			// for the room a full disk has run out of.
 			if !c.installed && len(h.debrisAtReopen) != 0 {
 				t.Fatalf("the rollback reopened the live database beside %v — "+
 					"an artefact nothing will install, holding the room the "+
@@ -695,9 +670,8 @@ func TestALiveDatabaseThatDidNotComeBackIsNeverAnEmptyFleet(t *testing.T) {
 				t.Fatalf("the join left %v beside the live database", left)
 			}
 			// AN INSTALLED ARTEFACT IS AN ADOPTION, open or not: its manifest
-			// and its pin go to the caller, since whatever opens the estate
-			// next opens the artefact and replays its tail. One never
-			// installed keeps no pin.
+			// and pin go to the caller, since whatever opens the estate next
+			// replays its tail. One never installed keeps no pin.
 			if c.installed {
 				if adoption.Manifest.SHA256 != h.manifest.SHA256 || adoption.Release == nil ||
 					h.released.Load() != 0 {
@@ -717,19 +691,15 @@ func TestALiveDatabaseThatDidNotComeBackIsNeverAnEmptyFleet(t *testing.T) {
 
 // AN INSTALL IS AN ADOPTION, WHATEVER FAILS AFTER IT.
 //
-// The rename is the join's point of no return: from it the artefact is the
-// live database, and once it is open every applier resumes from its
-// checkpoint. What comes after is this node's own HISTORY row of the adoption,
-// in the node estate — a separate file whose write can be refused for reasons
-// of its own. Filed as the donor's refusal, that refusal sent the join on to
-// the next offer, which it fetched and installed OVER the artefact already
-// live — a second transfer landing on an artefact no newer than the first —
-// and with no offer left it reported that nobody could donate while a donor's
-// database was live, so a running node skipped everything an adoption owes.
+// The rename is the point of no return: from it the artefact is the live
+// database. The node-estate history row written after it can fail on its own,
+// and filed as the donor's refusal it would send the join on to install the
+// next offer over the live artefact, then report that nobody could donate
+// while a donor's database was live, skipping all an adoption owes.
 //
 // A second donor offers the same artefact, so a join that moved on is seen
-// closing the live database twice; and the write is refused at that phase on
-// every attempt, which is what a store fault looks like.
+// closing the live database twice; the write is refused at that phase on every
+// attempt, as a store fault would be.
 func TestAnInstallWhoseRecordFailsIsStillAnAdoption(t *testing.T) {
 	t.Parallel()
 	for _, phase := range []statelog.AdoptionPhase{
@@ -815,14 +785,12 @@ func TestAnInstallWhoseRecordFailsIsStillAnAdoption(t *testing.T) {
 
 // A FAULT OF THIS NODE'S OWN ENDS THE JOIN, AND BLAMES NO DONOR.
 //
-// Everything a join can fail on before the install is either about the OFFER
-// — its transfer, its bytes, its schema, its positions — or about THIS NODE:
-// the hold register it pins through, its own store, its own disk. Filed as the
-// donor's refusal, the second kind was logged against a peer whose artefact
-// was fine, and every remaining offer was then fetched in full only to meet
-// the same fault — ending in "nobody could donate" for a fleet that donated
-// perfectly well. A second donor offers the same artefact in every case, so a
-// join that moved on is seen holding the tail a second time.
+// Before the install a join fails on the OFFER (its transfer, bytes, schema,
+// positions) or on THIS NODE (its hold register, store, disk). Filed as a
+// donor's refusal, the second blames a peer whose artefact was fine and fetches
+// every remaining offer only to meet the same fault. A second donor offers the
+// same artefact in every case, so a join that moved on is seen holding the
+// tail a second time.
 func TestAFaultOfThisNodesOwnEndsTheJoin(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -865,10 +833,9 @@ func TestAFaultOfThisNodesOwnEndsTheJoin(t *testing.T) {
 		{
 			name: "its own disk refuses the stamp that names the copy",
 			stage: func(t *testing.T, h *joinHarness) {
-				// THE COPY GONE FROM UNDER THE STAMP, a directory in its
-				// place, as the install's case below stages the rename's:
-				// the stamp opens this node's own file, and nothing about
-				// the offer is wrong.
+				// THE COPY GONE FROM UNDER THE STAMP, a directory in its place:
+				// the stamp opens this node's own file, and nothing about the
+				// offer is wrong.
 				h.stillUsable = func(context.Context, statelog.Manifest) error {
 					part := h.joinPath + statelog.AdoptPartSuffix
 					if err := os.Remove(part); err != nil {
@@ -917,10 +884,9 @@ func TestAFaultOfThisNodesOwnEndsTheJoin(t *testing.T) {
 			if err == nil {
 				t.Fatal("a join whose node failed it reported an adoption")
 			}
-			// THE ONE ANSWER A CALLER BRANCHES ON: the engine comes up
-			// behind on it, as it does when nobody could donate, rather
-			// than stopping the boot or telling every listener the rows
-			// were replaced.
+			// THE ONE ANSWER A CALLER BRANCHES ON: the engine comes up behind
+			// on it, as when nobody could donate, rather than stopping the
+			// boot or announcing the rows replaced.
 			if !errors.Is(err, statelog.ErrJoinerFault) {
 				t.Fatalf("Join = %v, want ErrJoinerFault — a caller cannot tell "+
 					"this node's own fault from any other failure", err)
@@ -962,13 +928,9 @@ func TestAFaultOfThisNodesOwnEndsTheJoin(t *testing.T) {
 	}
 }
 
-// A DONOR'S OWN WATERMARK TRAVELS WITH ITS LEDGER.
-//
-// The donor's sweep deleted every row it applied more than the ledger's
-// retention ago, and recorded how far back. Those rows are missing from the
-// artefact too, so an adopter that took the ledger without the watermark
-// would read their absence as conclusive and decide a retry of any of them
-// again.
+// A DONOR'S OWN WATERMARK TRAVELS WITH ITS LEDGER. The rows the donor's sweep
+// deleted are missing from the artefact too, so an adopter without the
+// watermark would read their absence as conclusive and decide a retry again.
 func TestADonorsWatermarkTravelsWithItsLedger(t *testing.T) {
 	t.Parallel()
 	swept := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
@@ -1065,12 +1027,9 @@ func (h *joinHarness) addDonor(t *testing.T, nodeID string) {
 	t.Fatalf("%s never answered beside the harness's donor", nodeID)
 }
 
-// AN ARTEFACT WHOSE MANIFEST DOES NOT MATCH THE FILE IS REFUSED.
-//
-// The checkpoint commits in the same transaction as the rows, so the position
-// inside the file is the only one that describes the file — a manifest naming
-// a different one is describing a different artefact, and adopting it would
-// leave this node resuming above rows it does not have.
+// AN ARTEFACT WHOSE MANIFEST DOES NOT MATCH THE FILE IS REFUSED. The
+// checkpoint commits with the rows, so only the position inside the file
+// describes it; adopting under another would resume above rows it lacks.
 func TestAManifestTheFileDoesNotKeepIsACorruptSnapshot(t *testing.T) {
 	t.Parallel()
 	h := newJoinHarness(t)
@@ -1091,11 +1050,9 @@ func TestAManifestTheFileDoesNotKeepIsACorruptSnapshot(t *testing.T) {
 	}
 }
 
-// A DONOR THAT CLAIMS A SCRUB IT DID NOT DO IS REFUSED.
-//
-// The safety argument for accepting somebody else's database file at all is
-// that everything still in it is fleet-visible. A claim nobody checks is a
-// claim.
+// A DONOR THAT CLAIMS A SCRUB IT DID NOT DO IS REFUSED: accepting somebody
+// else's database file is safe only because everything left in it is
+// fleet-visible, and a claim nobody checks is only a claim.
 func TestADonorsScrubClaimIsCheckedRatherThanTrusted(t *testing.T) {
 	t.Parallel()
 	h := newJoinHarness(t)
@@ -1114,19 +1071,12 @@ func TestADonorsScrubClaimIsCheckedRatherThanTrusted(t *testing.T) {
 // THE FETCHED ARTEFACT LANDS BESIDE THE LIVE FILE, NOT IN A TEMPORARY
 // DIRECTORY.
 //
-// The install is a rename, and a rename is atomic only WITHIN one filesystem.
-// An artefact fetched to /tmp on a host whose data volume is a separate mount
-// would have to be copied across at the end — and that copy is the one moment
-// an interrupted adoption can leave a mixture, which is the single thing this
-// whole sequence is arranged to make impossible.
-//
-// It is asserted rather than left structural because the failure has no
-// symptom on a developer's machine, where /tmp and the working tree are the
-// same filesystem and the rename succeeds every time.
-//
-// The observation is taken at step 7's re-check, which is the one moment the
-// artefact is on disk under its own name: before it the transfer has not
-// finished, and after it the install has moved or removed it.
+// The install is a rename, atomic only within one filesystem: fetched to a
+// separate /tmp mount, the artefact is copied across at the end, the one
+// moment an interrupted adoption can leave a mixture. Asserted, not left
+// structural, because a machine whose /tmp shares the filesystem shows no
+// symptom. Observed at step 7's re-check, the one moment the artefact is on
+// disk under its own name.
 func TestTheFetchedArtefactLandsBesideTheLiveFile(t *testing.T) {
 	t.Parallel()
 	h := newJoinHarness(t)
@@ -1157,16 +1107,12 @@ func TestTheFetchedArtefactLandsBesideTheLiveFile(t *testing.T) {
 
 // AN EARLIER ATTEMPT'S DEBRIS IS CLEARED BEFORE THE FETCH, SIDECARS AND ALL.
 //
-// Opening a database grows files beside it, so what an interrupted attempt
-// leaves at the part path is a SET: the part file, and whatever its opener
-// left beside it. Clearing the part file alone was the old shape, and a -wal
-// left beside the next attempt's fresh artefact is applied to it the moment
-// step 4 opens it — pages of a database that is gone, read as though they
-// were the donor's. The case plants exactly that: a truncated transfer, and a
-// -wal holding pages written by the last thing that had a database open at
-// that path. The artefact beside it is genuine, so a join that kept the -wal
-// refuses a good snapshot as corrupt; one that cleared the set adopts it and
-// leaves nothing behind.
+// Opening a database grows files beside it, so an interrupted attempt leaves
+// a SET at the part path, and a -wal left there is applied to the next
+// attempt's artefact the moment step 4 opens it. The case plants a truncated
+// transfer and a -wal of pages from an earlier database at that path: a join
+// that kept the -wal refuses the genuine snapshot as corrupt; one that cleared
+// the set adopts it and leaves nothing behind.
 func TestAnEarlierAttemptsDebrisIsClearedBeforeTheFetch(t *testing.T) {
 	t.Parallel()
 	h := newJoinHarness(t)
@@ -1215,18 +1161,14 @@ func TestAnEarlierAttemptsDebrisIsClearedBeforeTheFetch(t *testing.T) {
 
 // AN ADOPTED ESTATE IS NAMED A NEW COPY, BEFORE IT IS IN PLACE.
 //
-// What a node derives from the replicated rows by a forward walk — the chat
-// keyword index — cannot see a row below its watermark being replaced, and the
-// engine's signal that one was is held in memory, so a restart between the
-// install and the next sweep lost it. What survives the restart is the file's
-// own name for itself, [statelog.EstateInstance]: minted afresh by the adopter,
-// so it is neither the joiner's old copy nor the donor's — a node adopting twice
-// from one donor must not come back to an instance a reader already recorded —
-// and stamped before the rename, so the file is never at the live path under a
-// name it does not own. The donor's copy carries a name of its own, as one a
-// join installed would, so the artefact arrives naming something; and the
-// joiner adopts the same artefact twice, which a name fixed per build or
-// derived from the artefact would answer with the same name both times.
+// What a node derives from the rows by a forward walk (the chat keyword index)
+// cannot see rows below its watermark replaced, and across a restart only the
+// file's own name, [statelog.EstateInstance], tells it. The adopter mints that
+// afresh, neither the joiner's old copy's nor the donor's nor an earlier
+// adoption's from the same donor, and stamps it before the rename, so the file
+// is never live under a name it does not own. The donor's copy carries a name
+// of its own, and the joiner adopts the same artefact twice, which a name
+// fixed per build or derived from the artefact answers the same way twice.
 func TestAnAdoptedEstateIsNamedANewCopy(t *testing.T) {
 	t.Parallel()
 	const donorsOwn = "the-donors-own-copy"

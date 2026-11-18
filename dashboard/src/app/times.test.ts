@@ -46,9 +46,21 @@ const EXCEPTIONS: Record<string, { form: Form; why: string }> = {
     form: "words",
     why: "the header sentence's time, after its verb, in a time element of its own",
   },
+  "routes/gitlet/checks/marks.tsx#EndedAgo": {
+    form: "words",
+    why: "a check's or queue's time after its state word, which arrives as a prop",
+  },
+  "routes/gitlet/change/Merge.tsx#measured": {
+    form: "words",
+    why: "the Merges sentence's time, after its commit, in a time element of its own",
+  },
   "routes/gitlet/change/Timeline.tsx#Said": {
     form: "words",
     why: "a byline whose face is on the timeline's rail: the verb arrives as a prop",
+  },
+  "routes/gitlet/commit/Provenance.tsx#Row": {
+    form: "words",
+    why: "a provenance row's time at its end, the close of the row's sentence",
   },
   "routes/gitlet/repo/Branches.tsx#MovedBy": {
     form: "words",

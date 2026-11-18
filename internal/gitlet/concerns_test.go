@@ -38,25 +38,18 @@ func heard(concerns []gitlet.Concern) []string {
 	return out
 }
 
-// THE CODE REASONS ARE IN PRECEDENCE ORDER — the order D11 decided, written
-// once as the list [gitlet.Concerns] offers them in — and the candidates come
-// back in it: a routing with a handle of its own in every role names each in
-// the list's order, one handle in every role hears under the first reason
-// alone; across the routings of one record (a push's) a handle hears about
-// EACH change they name, under that change's strongest reason; and two
-// routings of one change — a push that opens it and a later push of the
-// record that merges it — tell a handle about it once, under the stronger.
-// Addressed is the nine asks and re_review; the default primary reasons are
-// another list. The gate's own reasons sit where M5-D26 puts them — a failed
-// check after a request for changes, a broken target right after it, a
-// removal from the queue after a conflict — each naming the handles the gate
-// adds: an enqueuer, the owning unit's lead.
+// THE CODE REASONS ARE IN PRECEDENCE ORDER — D11's, written once as the list
+// [gitlet.Concerns] offers them in — and the candidates come back in it: a
+// handle per role is named in that order; one handle in every role hears once,
+// under the first reason; across one record's routings (a push's) a handle
+// hears of EACH change under its strongest reason, and of one change two
+// routings name, once, under the stronger. Addressed is the nine asks and
+// re_review; default primary reasons are another list; the gate's sit where
+// M5-D26 puts them, adding an enqueuer and the owning unit's lead.
 //
-// Mutation: swap two reasons in gitlet.Reasons, or offer a role under another
-// reason, and the order or the reason a handle hears under is wrong; offer a
-// record's routings to one builder, and the handle hears of one change alone;
-// give each routing a builder of its own, and the change two routings name
-// tells the handle twice.
+// Mutation: swap two reasons in gitlet.Reasons, or offer a role under
+// another, and an order or a reason is wrong; one builder for a record's
+// routings tells of one change alone; a builder per routing tells it twice.
 func TestTheCodeReasonsAreInPrecedenceOrder(t *testing.T) {
 	t.Parallel()
 	want := []gitlet.Reason{"mention", "review_requested", "changes_requested", "checks_failed", "target_broken",
@@ -178,26 +171,18 @@ func TestTheCodeReasonsAreInPrecedenceOrder(t *testing.T) {
 	}
 }
 
-// EVERY CHANGE RECORD CARRIES ITS ROUTING: an open, an ask for review, a
-// comment, a revision's facts, a review, an answer to findings, a close and a
-// reopen each land with the snapshot of whom they concern, naming their
-// change — the open by the number its apply gave it — and the audience its op
-// routes by: the open's mentions held to the chart, which says who is a
-// person; the reviewers newly asked; a comment's mentions, who join the
-// change's participants; the authors a review tells, by its verdict; the
-// raiser an answer replies to; and the participants a close tells. Nobody hears
-// of their own write.
+// EVERY CHANGE RECORD CARRIES ITS ROUTING: an open, ask, comment, revision's
+// facts, review, answer, close and reopen each name their change (the open by
+// its applied number) and their op's audience — the open's mentions held to the
+// chart, the newly asked, a comment's mentions (who join the participants), the
+// authors by verdict, the raiser answered, a close's participants; nobody hears
+// of their own write. ONLY A RECORD WITH AN AUDIENCE carries one: facts asking
+// nobody, and an unthreaded comment naming only handles the chart lacks, carry
+// no routing or mention and write no notice; the routing is mentions' ONE copy.
 //
-// AND ONLY A RECORD WITH AN AUDIENCE: a revision's facts that ask nobody, and
-// a comment that mentions only a handle the chart does not hold, outside any
-// thread, concern nobody — so each carries no routing at all, and no mention
-// beside it, and its apply writes no notice. The routing is the ONE copy of a
-// record's mentions: every record here carries none of its asker's.
-//
-// Mutation: stamp no routing on one of the decides, or read the watchers off
-// another role, and the walk fails at that record; stamp a routing whatever
-// the audience, and the facts carry one, red; keep the asker's mentions on the
-// record, and the comment carries them, red.
+// Mutation: no routing on a decide, or watchers off another role → that record
+// fails; a routing whatever the audience → the facts carry one; the asker's
+// mentions kept on the record → the comment carries them.
 func TestEveryChangeRecordCarriesItsRouting(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -342,28 +327,18 @@ func TestAPushThatMovesNoChangeConcernsNobody(t *testing.T) {
 	}
 }
 
-// A LANDING IS MADE BY THE PUSH THAT BROUGHT ITS HEAD IN: a change whose
-// target is moved PAST its head — an author's merge commit pushed onto it,
-// the common agent flow — is merged by no push's own apply, since the target
-// is not at the head; its home finds the head in the tip, walks the target's
-// moves for the push after which the target held it, and records the landing
-// naming that push. Its pusher is the landing's actor: a seat that merged its
-// own change hears nothing of it while the change's other author is told
-// `merged`, and a person who merged it is named among the routing's persons —
-// and that holds when somebody else pushed on top of the merge before the
-// home read the target, in the merge's own group-commit record or in a later
-// one, so the push that moved the target LAST merged nothing. The committer
-// holds the push named to the rows: one whose applied command moved no
-// target, one recorded before the change's head revision (whose head no
-// earlier move brought in as this change's), or none at all names nobody,
-// and every author is told.
+// A LANDING IS MADE BY THE PUSH THAT BROUGHT ITS HEAD IN: a target moved PAST a
+// change's head (an author's merge commit, the common agent flow) merges it in
+// no push's own apply, so its home walks the target's moves for the push after
+// which it held the head. That pusher is the actor — a seat merging its own
+// change hears nothing while its co-author is told `merged`; a person is among
+// the persons — even if somebody pushed on top before the home read the target,
+// in that record or later. The committer holds the named push to the rows; one
+// moving no target applied, or before the head revision, or none: all are told.
 //
-// Mutation: name the pusher of the push that set the target to the tip the
-// landing found (the record the target's row says last moved it, matching
-// `c.New == tip`) → both pushed-on cases name cto, and dev is told of its own
-// merge; drop the check that the push moved the target applied → the cases
-// naming a push of another branch and a refused push name cto; drop the
-// revision's bound → the merge before the revision names dev.
+// Mutation: name the push that last set the target to the tip (`c.New == tip`)
+// → the pushed-on cases name cto; drop the applied-move check → the other-branch
+// and refused cases do; drop the revision's bound → the earlier merge names dev.
 func TestALandingIsMadeByThePushThatBroughtItsHeadIn(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -548,23 +523,18 @@ func TestALandingNamingAPushIsHeldToItsShape(t *testing.T) {
 	}
 }
 
-// READY TO MERGE IS ANNOUNCED ONLY BY A MERGEABILITY RECORD: a draft change
-// whose facts and clean merge are recorded becomes ready the moment its draft
-// is undone and an eligible reviewer approves it — two records on two
-// subjects, the repository's and the change's, either of which may complete
-// it. Neither announces it, whichever lands last: decided from two snapshots,
-// a pair that land at once each see the other unapplied, so a transition both
-// complete would be seen by neither. Nor does a check of its head that
-// passes, on a third subject, the repository's checks (M5-D26). The home's
-// refresh that follows stores the answer going from not ready to ready, and
-// its record alone tells whoever may merge it — dev, its author, under a gate
-// any writer merges by; a merge of a later tip that finds it ready still
-// tells nobody.
+// READY TO MERGE IS ANNOUNCED ONLY BY A MERGEABILITY RECORD: a draft with its
+// facts and clean merge recorded is ready once undrafted and approved — two
+// records on two subjects, either last. Neither announces it: decided from two
+// snapshots, a pair landing at once each see the other unapplied, so neither
+// would see the transition. Nor does a passing check (a third subject, M5-D26).
+// The home's next refresh stores not ready → ready and alone tells whoever may
+// merge (dev, its author, under a gate any writer merges by); a merge of a
+// later tip that finds it ready still tells nobody.
 //
-// Mutation: announce from a review that completes the readiness (judge it in
-// decideReview) → the first case's review carries ready_for; from a lifecycle
-// record → the second case's undraft does; from a passing check's ending →
-// the check's record does.
+// Mutation: announce from a review completing readiness (judge it in
+// decideReview) → the review carries ready_for; from a lifecycle record → the
+// undraft does; from a passing check's ending → the check's record does.
 func TestReadyToMergeIsAnnouncedOnlyByAMergeabilityRecord(t *testing.T) {
 	t.Parallel()
 	for _, approvalLast := range []bool{true, false} {

@@ -848,10 +848,9 @@ export const ACTIONS = {
     scope: "person",
   },
   code_rerun_checks: {
-    // RE-RUN CHECKS: every check of the change's head whose latest attempt
-    // did not pass, each at its next attempt (`all_failed`), on the checks
-    // log the change's checks tab reads.
-    args: ["repo", "change", "all_failed"],
+    // RE-RUN CHECKS: a change's failed ones (`change`, `all_failed`), or one
+    // run of a commit's check (`sha`, `checked_for`, `checks`).
+    args: ["repo", "change", "all_failed", "sha", "checked_for", "checks"],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],
@@ -886,6 +885,15 @@ export const ACTIONS = {
   // author's resolved, won't fix or disputed, or a dismissal, with a note.
   code_resolve_finding: {
     args: ["repo", "change", "findings", "resolution", "note"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  // A FILE MARKED VIEWED (`routes/gitlet/change/Viewed.tsx`): the person's own
+  // mark of one file at the state shown, or its take-back.
+  code_mark_viewed: {
+    args: ["repo", "change", "viewed", "unviewed", "seen"],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],

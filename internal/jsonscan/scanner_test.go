@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -231,6 +232,117 @@ func TestEscapesAndInvalidBytesDecodeAsBothDecodersDecodeThem(t *testing.T) {
 					err, c.text)
 			}
 		}
+	}
+}
+
+// INVALIDUTF8 SAYS WHERE A TEXT AS WRITTEN WAS NO UTF-8, WHICH ITS DECODED TEXT CANNOT: a byte that begins
+// no character reads as U+FFFD exactly as a U+FFFD written as such does and as an escape that stands for
+// one does, a lone surrogate's included, and only the first is a byte no UTF-8 holds. It speaks of what Read
+// has handed of the current token's text, so a text passed over unread, every token after the one that held
+// the byte, and the part of a text read before the byte all answer false, whatever the buffer and the p.
+//
+// Mutation: set it on an escape's U+FFFD or on any byte past ASCII, or keep it past its token, and this
+// fails naming the case.
+func TestInvalidUTF8SaysWhereTheTextWasNoUTF8(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		json    string
+		invalid bool
+	}{
+		{`"plain"`, false},
+		{"\"caf\xc3\xa9 \xf0\x9f\x98\x80\x7f\"", false},
+		{"\"\xef\xbf\xbd\"", false},
+		{`"\ufffd"`, false},
+		{`"\ud800"`, false},
+		{`"\udc00\ud800x"`, false},
+		{`"\ud83d\ude00"`, false},
+		{"\"\xff\"", true},
+		{"\"a\x80b\"", true},
+		{"\"\xe2\x82\"", true},
+		{"\"\xe2\x82x\"", true},
+		{"\"\xed\xa0\x80\"", true},
+		{"\"\xc0\x80\"", true},
+		{"\"\xf4\x90\x80\x80\"", true},
+		{"\"\xf0\x9f\x98\"", true},
+		{"\"\\ud800\xff\"", true},
+	} {
+		if utf8.Valid([]byte(c.json)) == c.invalid {
+			t.Fatalf("the case %q claims utf8.Valid answers %v of it", c.json, !c.invalid)
+		}
+		for _, buffer := range []int{jsonscan.MinBufferSize, jsonscan.ReadBufferSize} {
+			for _, chunk := range []int{1, 3, 64} {
+				s := jsonscan.NewSized(strings.NewReader(c.json), buffer)
+				if k, err := s.Next(); err != nil || k != jsonscan.String {
+					t.Fatalf("%q begins with %q (%v)", c.json, k, err)
+				}
+				if _, err := readAll(t, s, make([]byte, chunk)); err != nil {
+					t.Fatalf("reading %q: %v", c.json, err)
+				}
+				if got := s.InvalidUTF8(); got != c.invalid {
+					t.Errorf("read %d at a time with a %d-byte buffer, %q says InvalidUTF8 %v, want %v", chunk,
+						buffer, c.json, got, c.invalid)
+				}
+			}
+		}
+	}
+
+	// Token by token: a name and a string that hold such a byte say so, each once read, and no token before
+	// or after either does.
+	text := "{\"\xff\":\"ok\",\"b\":[\"\xfe\",\"\xef\xbf\xbd\",2,true],\"c\":{}}"
+	want := []bool{false, true, false, false, false, true, false, false, false, false, false, false, false,
+		false}
+	for _, buffer := range []int{jsonscan.MinBufferSize, jsonscan.ReadBufferSize} {
+		s := jsonscan.NewSized(strings.NewReader(text), buffer)
+		var got []bool
+		for {
+			k, err := s.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("reading %q: %v", text, err)
+			}
+			if hasText(k) {
+				if _, err := readAll(t, s, make([]byte, 64)); err != nil {
+					t.Fatalf("reading %q: %v", text, err)
+				}
+			}
+			got = append(got, s.InvalidUTF8())
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("with a %d-byte buffer, %q's tokens say InvalidUTF8 %v, want %v", buffer, text, got, want)
+		}
+	}
+
+	// Passed over unread, a text says nothing; read up to its byte, nothing yet; read past it, so.
+	s := jsonscan.New(strings.NewReader("[\"\xff\",\"ab\xffc\"]"))
+	for range 2 {
+		if _, err := s.Next(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.InvalidUTF8() {
+		t.Fatal("a string not yet read says it held a byte that is no UTF-8")
+	}
+	if k, err := s.Next(); err != nil || k != jsonscan.String {
+		t.Fatalf("the array's second element is %q (%v)", k, err)
+	}
+	if s.InvalidUTF8() {
+		t.Fatal("past a string passed over unread, the next says it held a byte that is no UTF-8")
+	}
+	p := make([]byte, 2)
+	if n, err := s.Read(p); n != 2 || err != nil || s.InvalidUTF8() {
+		t.Fatalf("a read of the text's first %d bytes answers %d and %v, and InvalidUTF8 %v", len(p), n, err,
+			s.InvalidUTF8())
+	}
+	if rest, err := readAll(t, s, make([]byte, 64)); err != nil || rest != "\uFFFDc" || !s.InvalidUTF8() {
+		t.Fatalf("the rest of the text reads %q (%v), and InvalidUTF8 %v", rest, err, s.InvalidUTF8())
+	}
+	if err := s.Skip(); err != nil || !s.InvalidUTF8() {
+		t.Fatalf("a Skip of the text read to its end answers %v, and InvalidUTF8 %v", err, s.InvalidUTF8())
+	}
+	if k, err := s.Next(); err != nil || k != jsonscan.ArrayEnd || s.InvalidUTF8() {
+		t.Fatalf("the array's end is %q (%v), and InvalidUTF8 %v", k, err, s.InvalidUTF8())
 	}
 }
 

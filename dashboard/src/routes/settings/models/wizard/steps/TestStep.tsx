@@ -118,7 +118,7 @@ export function TestStep({
           <Callout variant="warning" title="Not yet">
             {signsInLater
               ? "Expected: this model signs in after it is saved."
-              : `${test.message} Fix what failed, or save it anyway and test it later.`}
+              : `${test.message} Fix what failed and test again: Finish and save needs a passing test.`}
           </Callout>
           {test.check ? <DoctorLines lines={test.check.lines} signIn={signIn} /> : null}
         </>

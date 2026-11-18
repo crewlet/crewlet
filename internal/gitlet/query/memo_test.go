@@ -41,11 +41,10 @@ func unstamped(a gitlet.GitAnswer) gitlet.GitAnswer {
 	return a
 }
 
-// settle wants node i's history of repo read and waits until its index holds
-// all of it with no gap, so what every read of it stamps stays the same from
-// then on: a page the memo kept is answered, rather than cut again for a
-// stamp the backfill grew past what the page left of its room (memo.go's
-// budget) — what a case asserting hits holds still.
+// settle wants node i's history of repo and waits until its index holds all
+// of it with no gap, so every later read's stamp stays the same: a stamp the
+// backfill grows past a memoized page's room (memo.go's budget) cuts the page
+// again, which a case asserting hits must not see.
 func (x *fixture) settle(i int, repo string) {
 	x.t.Helper()
 	c := x.f.Nodes()[i].Cache()
@@ -95,15 +94,13 @@ func kinds(r *recording, from int) []string {
 	return out
 }
 
-// A PAGED ANSWER RUNS ITS GIT ONCE. A read paged through — a recursive
-// listing, a file (with a line longer than a page, served in pieces), a
-// file's line range, a diff's stat, the same stat filtered by a path (whose
-// counts diff-pairs takes after the walk) and one file's patch, each some
-// twenty pages at a small bound — runs the kind's git once, for its first
-// page: that run cuts every page after it, and every page read after it — the
-// first again among them — is answered from the memo, with no git process at
-// all and saying so. Each memoized page is exactly the page a read from its
-// cursor cuts, which a server with no memo answers.
+// A PAGED ANSWER RUNS ITS GIT ONCE. A read paged through (a recursive
+// listing, a file with a line longer than a page, a line range, a diff's stat,
+// that stat filtered by a path, one file's patch) runs the kind's git once,
+// for its first page: that run cuts every page after it, and every page read
+// after, the first again among them, is answered from the memo with no git
+// process and saying so. Each memoized page is exactly the page a server with
+// no memo cuts from its cursor.
 //
 // Mutation: memoize only the asked page (memoRun's pages past it not cut) —
 // every page past the first runs the kind's git again.
@@ -196,10 +193,8 @@ func TestAPagedAnswerRunsItsGitOnce(t *testing.T) {
 	}
 }
 
-// A COMPARISON IS MEMOIZED WHOLE: it is one page — the two commits' merge
-// base, which contains which, what each has that the other lacks, and the
-// first page of what head changed since — so a second read of it runs none
-// of its three processes, answering the same.
+// A COMPARISON IS MEMOIZED WHOLE: it is one page, so a second read of it runs
+// none of its three processes, answering the same.
 //
 // Mutation: memoize no comparison (compareRead's put) — the second read runs
 // them again.
@@ -257,9 +252,8 @@ func TestAMemoHitHoldsNoShare(t *testing.T) {
 
 // AN ABBREVIATION IS ANSWERED FROM THE MEMO ONCE EXPANDED. What an
 // abbreviation names can change as the copy gains objects, what a whole id
-// names never, so a read naming one asks the memo only once its expansion —
-// from the objects — and its check have run: by the whole id, which a read of
-// the whole id memoized. The kind's own git does not run.
+// names never, so a read naming one asks the memo only after its expansion
+// and check, by the whole id; the kind's own git does not run.
 func TestAnAbbreviationIsAnsweredFromTheMemoOnceExpanded(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -341,11 +335,10 @@ func (h *held) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
 
 // TWO READS OF ONE PAGE NO MEMO HOLDS RUN ONE GIT. A read that misses a page
 // another read of the node is cutting waits for that read's run and is
-// answered from the memo it filled — the same page — rather than run the same
-// git beside it: so the seats a push's review fans out to, asking one page
-// at once, cost the node one process, one write of the page's files and one
-// unit of its share. The first read's listing is held until the second waits,
-// so the two overlap whatever the machine's speed.
+// answered the same page from the memo it filled, rather than run the same git
+// beside it, so the seats a push's review fans one page out to cost the node
+// one process. The first read's listing is held until the second waits, so the
+// two overlap whatever the machine's speed.
 //
 // Mutation: lead every miss (await answering at once) — the second read runs
 // its own ls-tree beside the held one, and waits on nothing.

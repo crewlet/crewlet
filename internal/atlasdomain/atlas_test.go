@@ -113,8 +113,7 @@ func TestAValueShapedLikeACredentialIsRefusedAtTheWriter(t *testing.T) {
 
 // A KEY SHAPED LIKE A CREDENTIAL IS REFUSED AT THE WRITER, the entry's own and
 // another entry's a claim names, though the key's grammar admits it, and the
-// refusal repeats neither: a key the vocabulary reads is not yet a key a writer
-// may record.
+// refusal repeats neither.
 //
 // Mutation: drop the claim's Recordable check in Writer.Record and the
 // relation to the token-keyed host lands.

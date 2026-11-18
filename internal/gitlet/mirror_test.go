@@ -33,20 +33,17 @@ var (
 )
 
 // A PERSON'S MIRROR OR IMPORT NAMES A CREDENTIAL code.remote_credentials
-// DECLARES FOR ITS HOST: a person — who may create any project and set any
-// mirror — asking to create a repository importing from, or mirroring, a
-// remote with a variable the table does not declare (the node's own object
-// store key, say), or with a declared variable toward a host it is not
-// declared for, or setting either mirror of a repository so, is refused
-// not_permitted naming the table and the host, the credential never quoted,
-// and nothing is appended; the deciding node reads the table of its epoch at
-// the request, so declaring the variable for that host lets the same request
-// land. A mirror removed names no remote, and is never refused for it.
+// DECLARES FOR ITS HOST: a person, who may set any mirror, asking to create a
+// repository importing from or mirroring a remote, or to set either mirror,
+// with an undeclared variable (the node's object store key, say) or a declared
+// one toward another host, is refused not_permitted naming the table and the
+// host, never quoting the credential, nothing appended. The table is the
+// deciding node's epoch's at the request, so declaring it lets the same
+// request land. A mirror removed names no remote and is never refused for it.
 //
-// Mutation: drop remoteCredentialRefusal's call from lifecycleCreate — the
-// creates land, red; from decideOnRepo — the settings changes land, red.
-// Read only the create's import in remoteCredentialRefusal — the mirrors'
-// creates land, red.
+// Mutation: drop remoteCredentialRefusal's call from lifecycleCreate (the
+// creates land) or decideOnRepo (the settings changes land), or read only the
+// create's import in it (the mirrors' creates land): red.
 func TestAPersonsRemoteCredentialIsOneDeclaredForItsHost(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -102,13 +99,12 @@ func TestAPersonsRemoteCredentialIsOneDeclaredForItsHost(t *testing.T) {
 	n.lands(lcSettings(lcPerson, id, gitlet.RepoChange{MirrorFrom: &gitlet.MirrorSource{}}))
 }
 
-// A MIRROR AND AN IMPORT ARE A PERSON'S (U49 a): a seat — its unit's lead at
-// full_access, which may make, change and delete the project — asking to create
-// one with a pull mirror, a push mirror or an import, or to set or remove
-// either mirror of one, is refused not_permitted naming the rule, and nothing
-// is appended; a person asking the same is answered applied, and the rows say
-// it. The seat's other settings change still lands, so the refusal is the
-// mirror's and not the lead's grant.
+// A MIRROR AND AN IMPORT ARE A PERSON'S (U49 a): a seat, even its unit's lead
+// at full_access, asking to create a repository with a pull mirror, a push
+// mirror or an import, or to set or remove either mirror, is refused
+// not_permitted naming the rule, nothing appended; a person is answered
+// applied, and the rows say it. The seat's other settings change still lands,
+// so the refusal is the mirror's, not the lead's grant.
 //
 // Mutation: drop the mirrorsAsked arm from lifecycleRefusal — the lead's
 // creates and changes land, red.
@@ -187,13 +183,12 @@ func withCreate(req gitlet.LifecycleRequest, edit func(*gitlet.LifecycleRequest)
 	return req
 }
 
-// A CREDENTIAL IS A REFERENCE, NEVER A VALUE: every credential a mirror or an
-// import names is one whole ${VAR} — a token written in its place, or a
-// reference with anything around it, is refused as invalid wherever it is
-// asked (a person's create, a person's settings change, a declaration) and
-// the refusal never quotes it; and what a record carries, and its row keeps,
-// is the reference as it was written, never what it resolves to — this domain
-// resolves nothing.
+// A CREDENTIAL IS A REFERENCE, NEVER A VALUE: a mirror's or an import's
+// credential is one whole ${VAR}; a token in its place, or a reference with
+// anything around it, is refused invalid wherever asked (a person's create or
+// settings change, a declaration), never quoted. A record and its row carry
+// the reference as written, never what it resolves to: this domain resolves
+// nothing.
 //
 // Mutation: accept any non-empty credential in remoteInvalid — every literal
 // below is recorded, red.
@@ -329,24 +324,17 @@ func TestAPullMirrorTakesNoChange(t *testing.T) {
 }
 
 // A REPOSITORY BEING IMPORTED STAYS IMPORTING, AND A PULL MIRROR STAYS ONE ITS
-// SOURCE CAN MOVE: whatever a person asks of either, nothing leaves an import
-// half done for good, or a mirror no sync reaches.
+// SOURCE CAN MOVE, whatever a person asks. An archive of one being imported is
+// refused not_permitted naming the import (importing is the status an archive
+// would take); a settings change, or a delete then a restore (resuming what
+// landed), leaves it importing; a pull mirror's archive, import done, is
+// refused naming the mirror: an archive takes no sync. A push mirror's seat
+// reads what it publishes: on a create or a settings change moving that, a
+// seat outside a `visibility: unit` repo's owning unit is refused mirror_to.as.
 //
-//   - An archive of a repository being imported is refused not_permitted,
-//     naming the import, and nothing is appended — the status that says it is
-//     importing is the one an archive would take.
-//   - A settings change of one lands and leaves it importing, and so does a
-//     delete followed by a restore: the import resumes from what of it landed.
-//   - Once its import is done, an archive of a pull mirror is refused,
-//     naming the mirror — an archived repository takes no sync.
-//   - A push mirror's seat reads what it publishes, judged on a person's
-//     create and on a settings change that moves the judgement: a seat outside
-//     the owning unit of a `visibility: unit` repository is refused
-//     not_permitted naming mirror_to.as.
-//
-// Mutation: drop either arm of archiveRefusal, red at its archive; settle a
-// settings change's status, or a restore's, from the settings alone, red at
-// the importing row; drop either MirrorSeatRefusal call, red at its request.
+// Mutation: drop either arm of archiveRefusal (red at its archive), settle a
+// settings change's or a restore's status from the settings alone (red at the
+// importing row), or drop either MirrorSeatRefusal call (red at its request).
 func TestAnImportAndAPullMirrorKeepWhatTheyFollow(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -408,22 +396,17 @@ func TestAnImportAndAPullMirrorKeepWhatTheyFollow(t *testing.T) {
 }
 
 // A PULL MIRROR IS IMPORTED FIRST, WHENEVER IT BECOMES ONE (M6-D16): an
-// ACTIVE repository a settings change makes a pull mirror — a declaration's,
-// or a person's through a tool — is importing from the mirror's own source,
-// its import begun afresh (no chunk landed, no end, no error), so the
-// source's history arrives in an import's resumable chunks rather than in one
-// sync; and so is a pull mirror moved to ANOTHER source, its import counted
-// from the first chunk again, which the next chunk 1 proves by landing. A
-// credential changed alone is the same source, and the mirror stays active;
-// a repository already being imported keeps the source its import fetches.
-// Each status a settle or a tool answers is the one its apply wrote.
+// ACTIVE repository a settings change makes a pull mirror (a declaration's or
+// a person's) is importing afresh from the mirror's source, so its history
+// arrives in resumable chunks rather than one sync; so is a mirror moved to
+// ANOTHER source, counted from chunk 1 again. A credential changed alone keeps
+// the source and the mirror active; a repository already importing keeps its
+// import's source. A settle's or a tool's status is the one its apply wrote.
 //
-// Mutation: drop mirrorImportSQL's statement from applySettings — every
-// repository stays active, red; start the import on any settings record that
-// names a pull mirror (compare no URL) — the credential change imports, red;
-// leave import_seq as the last import left it — the new import's chunk 1 is
-// refused stale, red; answer the settle's status from the settings alone —
-// Ensured says active, red.
+// Mutation: drop mirrorImportSQL's statement from applySettings (all stay
+// active); import on any settings record naming a pull mirror (the credential
+// change imports); keep import_seq from the last import (chunk 1 refused
+// stale); answer the settle's status from the settings alone: each red.
 func TestAPullMirrorIsImportedFirstWheneverItBecomesOne(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -538,25 +521,18 @@ func endImportShort(t *testing.T, n *node, c *gitlet.Committer, repo string, seq
 	requireSynced(t, "the import's end short", res, err)
 }
 
-// NOTHING MERGES INTO A PULL MIRROR OR A REPOSITORY BEING IMPORTED: a merge
-// moves its target, and a pull mirror moves only by its syncs from its
-// source, so a merge of a change that meets its gate is refused repo_mirrored,
-// and so is each of a queue's steps toward one — an enqueue, a train's
-// candidate, a landing of a train built before the repository became a mirror
-// — in the domain's one sentence for a pull mirror, nothing appended; an EJECT
-// repo_mirrored still lands, moving no ref, so a repository that became a
-// mirror sheds its queue — and is refused stale, nothing appended, on one that
-// follows no source; its queue work says which it is (QueueDue.Mirrored), what
-// its home sheds the queue by. A repository being imported takes no write at
-// all: the same merge and enqueue are refused repo_importing.
+// NOTHING MERGES INTO A PULL MIRROR OR A REPOSITORY BEING IMPORTED: a pull
+// mirror moves only by its syncs, so a gated merge, an enqueue, a train's
+// candidate and a landing of a train built before it became a mirror are each
+// refused repo_mirrored in the domain's one pull-mirror sentence, nothing
+// appended. An EJECT repo_mirrored still lands, moving no ref, so the mirror
+// sheds its queue; on a repository following no source it is refused stale.
+// Its home tells which by QueueDue.Mirrored. One being imported takes no
+// write: the same merge and enqueue are refused repo_importing.
 //
-// Mutation: drop the mirror arm from decideMerge — the merge lands, red; drop
-// the enqueue, the candidate or the landing from decideQueue's — that record
-// lands or is refused for another reason, red; refuse every queue record on a
-// mirror — the queue can never be shed, red; drop decideEject's guard on the
-// reason — the eject of a repository that is no mirror lands, red; answer the
-// queue work's Mirrored false, or true, red at its read; drop either
-// importing arm, red at its write.
+// Mutation: drop decideMerge's mirror arm, decideQueue's enqueue, candidate or
+// landing arm, decideEject's reason guard, or an importing arm; refuse every
+// queue record on a mirror; answer Mirrored wrongly: each red.
 func TestNothingMergesIntoAPullMirror(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -646,16 +622,14 @@ func TestNothingMergesIntoAPullMirror(t *testing.T) {
 	requireQueueRefused(t, n, before, queued, err, gitlet.MergeRefusalRepoImporting, gitlet.ImportingDetail("api"))
 }
 
-// A PUSH MIRROR PUSHES AS A PERSON ONLY WHERE THEY USE GITLET (ADR-0110).
-//
-// A push mirror publishes only what the seat it pushes as reads, and a person
-// reads only through Gitlet, so a person's create, and a person's settings
-// change, that sets a push mirror pushing as the founder's seat is refused
-// not_permitted naming the seat and the permission while the identity
-// directory says the founder is not given Gitlet — nothing appended, the
-// directory asked about that seat alone — and lands once they are. An owner
-// change under a mirror already set asks the directory nothing: it moves no
-// person's app, and the push asks again before every push.
+// A PUSH MIRROR PUSHES AS A PERSON ONLY WHERE THEY USE GITLET (ADR-0110): it
+// publishes only what its seat reads, and a person reads only through Gitlet,
+// so a person's create or settings change setting a push mirror as the
+// founder's seat is refused not_permitted naming the seat and the permission
+// while the identity directory says the founder is not given Gitlet (nothing
+// appended, the directory asked about that seat alone), and lands once they
+// are. An owner change under a set mirror asks nothing: it moves no person's
+// app, and the push asks again before every push.
 //
 // Mutation: hand MirrorSeatRefusal false whatever the directory says — the
 // founder's mirror lands without Gitlet, red.

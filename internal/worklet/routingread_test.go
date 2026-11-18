@@ -15,9 +15,8 @@ func (r *roundTrip) routing(q worklet.RoutingQuery) worklet.RoutingAnswer {
 		q.Level = statelog.ReadStale
 	}
 	if q.Retention == 0 {
-		// EVERY CASE STATES A HORIZON, because a query that does not
-		// can only answer `unknown` — the one case that wants none says
-		// so by calling the reader directly.
+		// EVERY CASE STATES A HORIZON, or the answer can only be
+		// `unknown`; the case that wants none calls the reader directly.
 		q.Retention = 365 * 24 * time.Hour
 	}
 	answer, err := r.reader.Routing(r.t.Context(), q, wednesday)
@@ -28,7 +27,7 @@ func (r *roundTrip) routing(q worklet.RoutingQuery) worklet.RoutingAnswer {
 }
 
 // recordOf is the change id a case reads the routing of, taken from the
-// recipient's own inbox — which is where every real caller gets one too.
+// recipient's inbox, as a real caller gets one.
 func recordOf(t *testing.T, r *roundTrip, handle string) string {
 	t.Helper()
 	inbox := r.inbox(worklet.InboxQuery{Handle: handle})
@@ -38,10 +37,9 @@ func recordOf(t *testing.T, r *roundTrip, handle string) string {
 	return inbox.Notices[0].RecordID
 }
 
-// THE OTHER AXIS OF THE SAME ROWS. `tracker_notifications` has always been
-// readable by recipient and never by record, so "did my comment reach the
-// person I meant" had exactly one answer in the whole product — the history
-// row's `notified` boolean, which says that somebody, somewhere, was told.
+// THE OTHER AXIS OF THE SAME ROWS: `tracker_notifications` read by record
+// answers "did my comment reach the person I meant" — who, under which
+// reason, and whether it asked something of them.
 func TestOneChangeSaysWhoItWokeAndWhy(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -75,10 +73,9 @@ func TestOneChangeSaysWhoItWokeAndWhy(t *testing.T) {
 	}
 }
 
-// A RECORD ID THAT NAMES NOTHING IS NOT AN ERROR. A link from an old page, or
-// a reanchor that has not replayed this far, is an ordinary thing for a caller
-// to hold — and the two states have different remedies, so they are two
-// answers rather than one empty list.
+// A RECORD ID THAT NAMES NOTHING IS NOT AN ERROR (an old link, an unreplayed
+// reanchor), and it is a different answer from a change that woke nobody,
+// since the remedies differ.
 func TestAChangeNobodyWroteIsHeldFalseRatherThanAFailure(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -96,11 +93,9 @@ func TestAChangeNobodyWroteIsHeldFalseRatherThanAFailure(t *testing.T) {
 	}
 }
 
-// AN ANNOUNCED CHANGE THAT REACHED NOBODY says so, and says it INSIDE the
-// retention window — which is what makes it a statement about the routing
-// rather than about the sweep. `notified` is set (the commit carried a
-// notification) and no recipient row exists, and the horizon is what tells
-// that from a set retention took.
+// AN ANNOUNCED CHANGE THAT REACHED NOBODY says so INSIDE the retention
+// window: `notified` set and no recipient row, and the horizon is what tells
+// that from a set the sweep took.
 func TestAnAnnouncedChangeInsideTheWindowThatReachedNobodySaysSo(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -131,15 +126,11 @@ func TestAnAnnouncedChangeInsideTheWindowThatReachedNobodySaysSo(t *testing.T) {
 	}
 }
 
-// THE ANSWER IS ORDERED FOR A READER, not for the primary key. A person
-// scanning who a change reached is looking for who has to ACT, and the
-// watchers — reached for context — are the ones they care about least.
+// THE ANSWER IS ORDERED FOR A READER, not for the primary key: who has to ACT
+// comes before the watchers.
 //
-// THE HANDLES ARE CHOSEN SO THAT ALPHABETICAL ORDER IS THE WRONG ANSWER: the
-// assignee is `zoe` and the watcher is `bob`, so a query that sorted only by
-// recipient would put the watcher first and pass a test written the other way
-// round. It did — the first draft of this case used `bob` as the assignee and
-// stayed green with the `addressed DESC` clause deleted.
+// THE HANDLES MAKE ALPHABETICAL ORDER THE WRONG ANSWER (assignee `zoe`, watcher
+// `bob`), so the case fails with the `addressed DESC` clause deleted.
 func TestTheAddressedRecipientsComeFirst(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -170,8 +161,7 @@ func TestTheAddressedRecipientsComeFirst(t *testing.T) {
 	if got.Recipients[0].Handle != "zoe" {
 		t.Fatalf("the watcher sorts above the assignee: %+v", got.Recipients)
 	}
-	// AND EVERY ADDRESSED ROW IS ABOVE EVERY UNADDRESSED ONE, which is the
-	// ordering itself rather than this one pair.
+	// AND EVERY ADDRESSED ROW IS ABOVE EVERY UNADDRESSED ONE.
 	seenUnaddressed := false
 	for _, recipient := range got.Recipients {
 		if !recipient.Addressed {
@@ -185,18 +175,14 @@ func TestTheAddressedRecipientsComeFirst(t *testing.T) {
 	}
 }
 
-// THE BOUND IS ARITHMETIC, and it has to stay that way: every source of a
-// recipient is capped at the write, so a literal here would silently start
-// truncating the day one of those caps moved.
+// THE BOUND IS THE SUM OF THE WRITE CAPS, so a cap raised without the bound
+// fails here rather than silently truncating.
 func TestTheRoutingBoundIsTheSumOfTheWriteCaps(t *testing.T) {
 	t.Parallel()
 	if worklet.MaxRoutingRows <= worklet.MaxWatchers {
 		t.Fatalf("MaxRoutingRows is %d and one change may name %d watchers "+
 			"alone", worklet.MaxRoutingRows, worklet.MaxWatchers)
 	}
-	// The sum of every capped source, restated here so that raising a cap
-	// without carrying it into the bound is a failure rather than a quiet
-	// truncation.
 	want := worklet.MaxWatchers + worklet.MaxWatchers + worklet.MaxCollaborators +
 		worklet.MaxDependents + worklet.MaxDependents +
 		worklet.MaxThreadParticipants + worklet.MaxChecklists +
@@ -208,8 +194,7 @@ func TestTheRoutingBoundIsTheSumOfTheWriteCaps(t *testing.T) {
 	}
 }
 
-// A READ NAMING NEITHER A RECORD NOR A LEVEL IS REFUSED, in the shape every
-// other reader here refuses: the message names what to pass.
+// A READ NAMING NO RECORD, OR NO LEVEL, IS REFUSED.
 func TestARoutingReadStatesWhatItIsMissing(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -226,10 +211,8 @@ func TestARoutingReadStatesWhatItIsMissing(t *testing.T) {
 	}
 }
 
-// A CALLER THAT STATES NO HORIZON GETS `unknown`, never a guess. It is the
-// whole reason the horizon is on the query: a reader outlives the epoch, so
-// one holding a retention nobody is running would date an absent set against
-// a number from last week and report it gone.
+// A CALLER THAT STATES NO HORIZON GETS `unknown`, never an absent set dated
+// against a retention nobody stated ([worklet.RoutingQuery.Retention]).
 func TestWithNoHorizonAnAbsentSetIsUnknownRatherThanAGuess(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

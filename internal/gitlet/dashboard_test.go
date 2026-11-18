@@ -16,14 +16,10 @@ import (
 )
 
 // THE DASHBOARD KNOWS EVERY STATE A REPOSITORY CAN BE IN, in the engine's
-// order, and no other.
-//
-// The Gitlet workspace's listing offers `REPO_STATUSES` (`contract/code.ts`) as
-// the `status` it asks for and marks each row by it: a state the engine grew
-// that the list lacks is one nobody can filter to and one a row draws as its
-// raw word, and a state the list keeps that the engine dropped is a choice
-// every listing refuses `bad_params`. Read from the client's own source, both
-// ways, in order.
+// order, and no other: the Gitlet listing filters and marks rows by
+// `REPO_STATUSES` (`contract/code.ts`). A state it lacks cannot be filtered
+// to and draws as its raw word; one the engine dropped is refused
+// `bad_params`.
 //
 // Mutation: drop a state from either side, or reorder the dashboard's, and
 // this fails.
@@ -47,13 +43,9 @@ func TestTheDashboardKnowsEveryRepositoryState(t *testing.T) {
 }
 
 // THE DASHBOARD OFFERS EVERY SEARCH MODE OF A REPOSITORY, in the engine's
-// order, and no other.
-//
-// A repository's Settings tab sets its search mode from `REPO_SEARCH_MODES`
-// (`contract/code.ts`), one button a mode, as code_update_repo's `search`: a
-// mode the engine grew that the list lacks is one nobody can set from it, and
-// a mode the list keeps that the engine dropped is a press every repository
-// refuses. Read from the client's own source, both ways, in order.
+// order, and no other: a repository's Settings tab sends `REPO_SEARCH_MODES`
+// (`contract/code.ts`) as code_update_repo's `search`. A mode it lacks cannot
+// be set; one the engine dropped is refused on every press.
 //
 // Mutation: drop a mode from either side, or reorder the dashboard's, and
 // this fails.
@@ -77,12 +69,10 @@ func TestTheDashboardOffersEverySearchModeOfARepository(t *testing.T) {
 }
 
 // THE DASHBOARD OFFERS EVERY PATH CLASS A GATE EXEMPTS, in the engine's
-// order, and no other.
-//
-// A protection rule's form offers its approvals' exemptions and each human
-// path's from `CODE_PATH_CLASSES` (`contract/code.ts`), one checkbox a class:
-// a class the engine grew is one nobody can choose, and one the list keeps
-// that the engine dropped is a press every protect call refuses.
+// order, and no other: a protection rule's form offers `CODE_PATH_CLASSES`
+// (`contract/code.ts`) as its approvals' and human paths' exemptions. A class
+// it lacks cannot be chosen; one the engine dropped is refused by every
+// protect call.
 //
 // Mutation: drop a class from either side, or reorder the dashboard's, and
 // this fails.
@@ -106,15 +96,12 @@ func TestTheDashboardOffersEveryPathClassAGateExempts(t *testing.T) {
 }
 
 // THE DASHBOARD BOUNDS A LANDING AS THE ENGINE DOES, and starts a new one at
-// the engine's defaults.
-//
-// A protection rule's form bounds its queue's depth and batch by
-// `CODE_MAX_QUEUE_DEPTH` and `CODE_MAX_QUEUE_BATCH` (`contract/code.ts`): a
-// bound above the engine's offers a value every protect call refuses, and one
-// below it hides values a rule may hold. A new gate's fields start at
-// `CODE_DEFAULT_QUEUE_DEPTH` and `CODE_DEFAULT_QUEUE_BATCH`, and the form sends
-// only a value moved from them: a default copied wrong would send a landing
-// nobody chose.
+// the engine's defaults. A protection rule's form bounds queue depth and
+// batch by `CODE_MAX_QUEUE_DEPTH` and `CODE_MAX_QUEUE_BATCH`
+// (`contract/code.ts`): above the engine's offers values every protect call
+// refuses, below hides values a rule may hold. The form sends only a value
+// moved from `CODE_DEFAULT_QUEUE_DEPTH` and `CODE_DEFAULT_QUEUE_BATCH`, so a
+// wrong default sends a landing nobody chose.
 //
 // Mutation: change any of the four on either side, and this fails.
 func TestTheDashboardBoundsALandingAsTheEngineDoes(t *testing.T) {
@@ -139,18 +126,13 @@ func TestTheDashboardBoundsALandingAsTheEngineDoes(t *testing.T) {
 }
 
 // THE DASHBOARD KNOWS EVERY OUTCOME OF A COMMAND, in the engine's order, and
-// no other.
+// no other: a push read in brief counts its omitted commands by outcome
+// (`PushRow.Omitted`, keyed by CommandCounts' JSON keys), and the workspace
+// words each count by `COMMAND_OUTCOMES` (`contract/code.ts`). An outcome it
+// lacks is said as the raw key; one the engine dropped is never counted.
 //
-// A push read in brief counts the commands it leaves out by what became of
-// each (`PushRow.Omitted`), keyed by the outcome's word, and the Gitlet
-// workspace says each count by `COMMAND_OUTCOMES` (`contract/code.ts`) — the
-// words its rows say of each ref. An outcome the engine grew that the list
-// lacks is a count said in the engine's raw key; one the list keeps that the
-// engine dropped is a word no push is ever counted by. Read from the client's
-// own source and from CommandCounts' JSON keys, both ways, in order.
-//
-// Mutation: drop an outcome from either side, or reorder the dashboard's,
-// and this fails.
+// Mutation: drop an outcome from either side, or reorder the dashboard's, and
+// this fails.
 func TestTheDashboardKnowsEveryOutcomeOfACommand(t *testing.T) {
 	t.Parallel()
 	body, err := clientsource.Literal(clientsource.Tree(t), "COMMAND_OUTCOMES")
@@ -172,24 +154,18 @@ func TestTheDashboardKnowsEveryOutcomeOfACommand(t *testing.T) {
 	}
 }
 
-// THE DASHBOARD NAMES A REPOSITORY BY THE ENGINE'S GRAMMAR, name for name.
-//
-// The Gitlet workspace holds the repository an address names (`repo=` on its
-// Pushes section) to `REPO_NAME` and `REPO_NAME_MAX_BYTES` (`contract/code.ts`)
-// before it asks anything about it, so a name no repository can have is said
-// where the reader is, as one, rather than sent to the engine and answered as
-// its refusal of the request. Held by BEHAVIOUR rather than by spelling: the
-// pattern is compiled here and a corpus run through it and the length bound,
-// as `lib/code.ts`'s isRepoName applies them, and through [gitlet.ValidName], the
-// one reading of a name every read and every push takes — a project's one
-// label and a seat's scratch repository's `<handle>.<slug>` alike — so a change
-// to either side that answers any name below differently fails, and a pattern
-// that compiles to nothing fails on the corpus's controls, which the engine
-// admits.
+// THE DASHBOARD NAMES A REPOSITORY BY THE ENGINE'S GRAMMAR, name for name:
+// the workspace checks a `repo=` address against `REPO_NAME` and
+// `REPO_NAME_MAX_BYTES` (`contract/code.ts`) before asking, so an impossible
+// name is refused where the reader is. Held by behaviour, not spelling: a
+// corpus runs through the compiled pattern and bound (as `lib/code.ts`'s
+// isRepoName applies them) and [gitlet.ValidName], project labels and
+// scratch `<handle>.<slug>` names alike; the controls the engine admits fail
+// a pattern that matches nothing.
 //
 // Mutation: raise REPO_NAME_MAX_BYTES to 64, let a label begin with a hyphen,
-// take an underscore or a second dot, or admit the slug `git`, and a name below
-// fails.
+// take an underscore or a second dot, or admit the slug `git`, and a name
+// below fails.
 func TestTheDashboardNamesARepositoryByTheEnginesGrammar(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)
@@ -244,9 +220,8 @@ func TestTheDashboardNamesARepositoryByTheEnginesGrammar(t *testing.T) {
 	}
 }
 
-// theDashboardsList is the list of strings the dashboard declares under name,
-// read from its own source — failed where it reads as empty, since a list
-// read as nothing certifies nothing.
+// theDashboardsList is the list of strings the dashboard's source declares
+// under name, failed when it reads as empty: an empty list certifies nothing.
 func theDashboardsList(t *testing.T, name string) []string {
 	t.Helper()
 	body, err := clientsource.Literal(clientsource.Tree(t), name)
@@ -270,14 +245,9 @@ func spelledOut[S ~string](set []S) []string {
 }
 
 // THE DASHBOARD KNOWS EVERY STATE A CHANGE CAN BE IN, in the engine's order,
-// and no other.
-//
-// Gitlet › Changes offers `CHANGE_STATES` (`contract/code.ts`) as the `state`
-// its listing asks for — a listing names a state, a repository or a work
-// item, and the engine refuses one naming none — and marks each row by it. A
-// state the engine grew that the list lacks is one nobody can list and a row
-// whose state reads as its raw word; one the list keeps that the engine
-// dropped is a choice every listing refuses `bad_params`.
+// and no other: Gitlet › Changes lists by and marks rows by `CHANGE_STATES`
+// (`contract/code.ts`). A state it lacks cannot be listed and reads as its
+// raw word; one the engine dropped is refused `bad_params`.
 //
 // Mutation: drop a state from either side, or reorder the dashboard's, and
 // this fails.
@@ -290,13 +260,10 @@ func TestTheDashboardKnowsEveryStateOfAChange(t *testing.T) {
 }
 
 // THE DASHBOARD ASKS WHAT A CHANGE WAITS ON IN THE ENGINE'S WORDS, every one
-// of them.
-//
-// Gitlet › Changes offers `CHANGE_NEEDS` (`contract/code.ts`) as the `needs` its
-// listing narrows to — waiting on me, on a review, on a fix, on a person —
-// and its Waiting on you box asks me, or person for a reader bound to no seat. A need the engine grew that
-// the list lacks is a listing nobody can ask for; one the list keeps that the
-// engine dropped is a choice refused `bad_params` on every press.
+// of them: Gitlet › Changes narrows its listing by `CHANGE_NEEDS`
+// (`contract/code.ts`), and its Waiting on you box asks me, or person for a
+// reader bound to no seat. A need it lacks cannot be asked for; one the
+// engine dropped is refused `bad_params`.
 //
 // Mutation: drop a need from either side, or reorder the dashboard's, and
 // this fails.
@@ -309,13 +276,9 @@ func TestTheDashboardKnowsEveryNeedOfAListingOfChanges(t *testing.T) {
 }
 
 // THE DASHBOARD NARROWS A LISTING OF CHANGES TO A WINDOW IN THE ENGINE'S
-// WORDS, every one of them.
-//
-// Gitlet › Changes offers `CHANGE_WINDOWS` (`contract/code.ts`) as the `window`
-// its listing narrows to — the changes that moved within the last day, week or
-// month. A window the engine grew that the list lacks is a listing nobody can
-// ask for; one the list keeps that the engine dropped is a choice refused
-// `bad_params` on every press.
+// WORDS, every one of them: Gitlet › Changes narrows by `CHANGE_WINDOWS`
+// (`contract/code.ts`). A window it lacks cannot be asked for; one the engine
+// dropped is refused `bad_params`.
 //
 // Mutation: drop a window from either side, or reorder the dashboard's, and
 // this fails.
@@ -338,16 +301,22 @@ func TestTheDashboardKnowsEverySortOfAListingOfChanges(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD NARROWS A LISTING OF CHANGES BY READINESS IN THE ENGINE'S WORDS (`READINESS_BUCKETS`).
+// Mutation: drop a bucket from either side, or reorder the dashboard's, and this fails.
+func TestTheDashboardKnowsEveryReadinessBucket(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "READINESS_BUCKETS"), spelledOut(gitlet.ReadinessBuckets())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's READINESS_BUCKETS is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
 // THE DASHBOARD KNOWS EVERY PRECONDITION A CHANGE'S READINESS JUDGES, in the
-// engine's order, and every state one stands in.
-//
-// A change's readiness is its preconditions, one a kind, in the order a
-// change moves through them ([gitlet.PreconditionKinds]); a change row's
-// segmented meter draws them and a change's readiness names each, in words keyed on
-// `PRECONDITION_KINDS` and `PRECONDITION_STATES` (`contract/code.ts`). A kind
-// the engine grew — the merge gate adds its own — that the list lacks is a
-// precondition drawn as its raw word; one the list keeps that the engine
-// dropped is words for a precondition nothing judges. Both ways, in order.
+// engine's order, and every state one stands in: a change row's meter and
+// its readiness word each by `PRECONDITION_KINDS` and `PRECONDITION_STATES`
+// (`contract/code.ts`), in [gitlet.PreconditionKinds]' order. A kind it lacks
+// (the merge gate adds its own) draws as its raw word; one the engine dropped
+// is words for nothing judged.
 //
 // Mutation: drop a kind or a state from either side, or reorder the
 // dashboard's, and this fails.
@@ -396,15 +365,11 @@ func TestTheDashboardSortsRepositoriesAsTheEngineDoes(t *testing.T) {
 	}
 }
 
-// THE DASHBOARD RAISES FINDINGS IN THE ENGINE'S WORDS: the weights and the
-// subjects a change page's finding composer offers, which its review sends
-// back as code_review_change's `severity` and `category`, in the engine's
-// order.
-//
-// A weight or a subject the engine grew that `FINDING_SEVERITIES` or
-// `FINDING_CATEGORIES` (`contract/code.ts`) lacks is one no reviewer on the
-// dashboard can give; one they keep that the engine dropped is a review the
-// tool refuses on every press — every finding of it lost with the one word.
+// THE DASHBOARD RAISES FINDINGS IN THE ENGINE'S WORDS, in its order: a change
+// page's finding composer offers `FINDING_SEVERITIES` and `FINDING_CATEGORIES`
+// (`contract/code.ts`), sent as code_review_change's `severity` and
+// `category`. A value they lack cannot be given; one the engine dropped gets
+// the whole review refused, every finding in it lost.
 //
 // Mutation: drop a value from either side, or reorder the dashboard's, and
 // this fails.
@@ -420,16 +385,14 @@ func TestTheDashboardRaisesFindingsInTheEnginesWords(t *testing.T) {
 	}
 }
 
-// EVERY CODE REASON HAS ENGLISH ON THE OTHER SIDE, in both voices.
+// EVERY CODE REASON HAS ENGLISH ON THE OTHER SIDE, in all three voices.
 //
-// The applier records, per record and per recipient, the ONE reason of
-// [gitlet.Reasons] a handle heard about a change under (code_notifications), and
-// a change's Woke tab lists them; a reason the client has no phrase for
-// renders as its own snake_case value. `CODE_PHRASES` (`contract/code.ts`) is
-// read from its own source, as the tracker's `PHRASES` gate reads its table,
-// so the gate cannot drift towards claiming the pair agree — and a phrase for
-// a reason nothing records is checked too, which is how a rename leaves a dead
-// entry behind and a live one missing. Each phrase carries all three voices.
+// A change's Woke tab lists the one reason of [gitlet.Reasons] each recipient
+// heard of it under (code_notifications); a reason without a `CODE_PHRASES`
+// (`contract/code.ts`) phrase renders as its snake_case value. The table is
+// read from the client's own source, as the tracker's `PHRASES` gate reads
+// its, both ways: a phrase for a reason nothing records is how a rename
+// leaves a dead entry behind.
 //
 // Mutation: drop a reason's phrase, add one for a reason nothing records, or
 // leave a voice empty, and this fails.
@@ -471,16 +434,12 @@ func TestEveryCodeReasonReadsAsEnglishOnTheClient(t *testing.T) {
 	}
 }
 
-// THE DASHBOARD KNOWS EVERY ALARM GITLET RAISES, and no other.
-//
-// Settings › Gitlet lists, of each node's alarms (the fleet's node rows), the
-// ones `CODE_ALARM_KINDS` (`contract/code.ts`) names: a kind Gitlet
-// grew that the list lacks is an alarm that page never shows an
-// administrator, and one the list keeps that the table dropped is a filter
-// for nothing. Gitlet's kinds are the table's `code_` block, which
-// statelog declares under one heading ("Gitlet's"); read from the
-// client's own source, both ways, in `statelog.Kinds()`' sorted order, so a
-// kind added on one side lands at the one place the other is checked for it.
+// THE DASHBOARD KNOWS EVERY ALARM GITLET RAISES, and no other: Settings ›
+// Gitlet shows the node alarms `CODE_ALARM_KINDS` (`contract/code.ts`) names.
+// A kind it lacks is an alarm administrators never see; one the table dropped
+// is a filter for nothing. Gitlet's kinds are statelog's `code_` block
+// ("Gitlet's"), compared in `statelog.Kinds()`' sorted order so a kind added
+// on one side is checked at one place on the other.
 //
 // Mutation: drop a kind from either side, or reorder the dashboard's, and
 // this fails.
@@ -507,12 +466,9 @@ func TestTheDashboardKnowsEveryCodeAlarm(t *testing.T) {
 }
 
 // THE DASHBOARD BLAMES NO WIDER A RANGE THAN THE ENGINE ANSWERS, and no
-// narrower.
-//
-// The Files tab asks a blame's lines a range at a time, each range
-// `CODE_MAX_BLAME_LINES` (`contract/code.ts`) wide, forward and back: a range
-// wider than [gitlet.MaxBlameLines] is refused by every blame it asks, and a
-// narrower one asks the engine more often than a file's lines need.
+// narrower: the Files tab pages a blame `CODE_MAX_BLAME_LINES`
+// (`contract/code.ts`) lines at a time. Wider than [gitlet.MaxBlameLines] is
+// refused on every blame; narrower costs needless round trips.
 //
 // Mutation: change the bound on either side, and this fails.
 func TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers(t *testing.T) {
@@ -527,11 +483,10 @@ func TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers(t *testing.T) {
 }
 
 // THE DASHBOARD READS A CHANGE'S CONVERSATION A PAGE OF THE ENGINE'S BOUND AT
-// A TIME: one page size for every part it lists (`CHANGE_PART_PAGE`,
-// `contract/code.ts`), which is the comments', reviews' and findings' (the
-// standing ones' too) own most and within the reviewers'. A page past a
-// part's bound is refused, and every page of that part with it; a smaller one
-// reads a long conversation in more round trips than it needs.
+// A TIME: `CHANGE_PART_PAGE` (`contract/code.ts`) pages every part, so it
+// equals the comments', reviews' and findings' (standing ones too) bounds and
+// stays within the reviewers'. Past a part's bound every page of it is
+// refused; smaller costs needless round trips.
 //
 // Mutation: move CHANGE_PART_PAGE, or any one part's bound, and this fails.
 func TestTheDashboardReadsAChangesConversationAtTheEnginesPage(t *testing.T) {
@@ -560,12 +515,11 @@ func TestTheDashboardReadsAChangesConversationAtTheEnginesPage(t *testing.T) {
 	}
 }
 
-// THE DASHBOARD NAMES AN OBJECT AS THE ENGINE'S REPOSITORIES DO: a commit's
-// page is addressed by a whole id of [gitref.OIDHexLen] digits and git's null
-// id is that many zeros, and a row prints the fewest digits the engine takes
-// back ([gitlet.MinAbbrevDigits]), so what a person copies out of a row is an id
-// a tool resolves. A width moved on one side alone is a commit page no address
-// reaches, or a printed id the engine refuses.
+// THE DASHBOARD NAMES AN OBJECT AS THE ENGINE'S REPOSITORIES DO: a commit
+// page's address is a whole id of [gitref.OIDHexLen] digits (git's null id is
+// that many zeros), and a row prints [gitlet.MinAbbrevDigits], the fewest the
+// engine resolves, so a copied id works in a tool. A width moved on one side
+// alone strands a commit page or prints ids the engine refuses.
 //
 // Mutation: move either figure on either side and this fails.
 func TestTheDashboardNamesAnObjectAsTheEnginesRepositoriesDo(t *testing.T) {
@@ -587,29 +541,18 @@ func TestTheDashboardNamesAnObjectAsTheEnginesRepositoriesDo(t *testing.T) {
 }
 
 // THE DASHBOARD KNOWS EVERY STATE OF A CHECK, and every purpose one checks a
-// commit for, in the engine's order.
+// commit for, in the engine's order: the Checks section's state tabs and the
+// checks tabs key on `CHECK_STATES` and `CHECK_PURPOSES` (`contract/checks.ts`).
+// A state they lack cannot be narrowed to; one the engine dropped is refused
+// as an unknown `state` ([gitlet.CheckState.Valid]).
 //
-// The Checks section's facets, its histogram's bars and every checks tab key
-// on `CHECK_STATES`, `CHECK_ENDED_STATES` and `CHECK_PURPOSES`
-// (`contract/checks.ts`): a state the engine grew that the list lacks is an
-// attempt no facet can narrow to, and one the list keeps that the engine
-// dropped is a facet the engine refuses as a `state` it does not know
-// ([gitlet.CheckState.Valid]) — or, among the endings the window's chips
-// offer, one the window refuses as never ending in it
-// ([gitlet.CheckState.Ended]). Both ways, in order.
-//
-// Mutation: drop a state or a purpose from either side, list `running` among
-// the endings, or reorder the dashboard's, and this fails.
+// Mutation: drop a state or a purpose from either side, or reorder the
+// dashboard's, and this fails.
 func TestTheDashboardKnowsEveryStateOfACheck(t *testing.T) {
 	t.Parallel()
 	got, want := theDashboardsList(t, "CHECK_STATES"), spelledOut(gitlet.CheckStates())
 	if !slices.Equal(got, want) {
 		t.Errorf("the dashboard's CHECK_STATES is %v, want the engine's, in order: %v", got, want)
-	}
-	ended := slices.DeleteFunc(gitlet.CheckStates(), func(s gitlet.CheckState) bool { return !s.Ended() })
-	got, want = theDashboardsList(t, "CHECK_ENDED_STATES"), spelledOut(ended)
-	if !slices.Equal(got, want) {
-		t.Errorf("the dashboard's CHECK_ENDED_STATES is %v, want the engine's endings, in order: %v", got, want)
 	}
 	got, want = theDashboardsList(t, "CHECK_PURPOSES"), spelledOut(gitlet.CheckPurposes())
 	if !slices.Equal(got, want) {
@@ -617,12 +560,10 @@ func TestTheDashboardKnowsEveryStateOfACheck(t *testing.T) {
 	}
 }
 
-// THE DASHBOARD KNOWS EVERY STATE OF A QUEUE'S ENTRY, in the engine's order.
-//
-// The Queue section draws an entry's state in words keyed on `QUEUE_STATES`
-// (`contract/checks.ts`): a state the engine grew that the list lacks is
-// drawn as its raw word, and one the list keeps that the engine dropped is
-// words for nothing it records. Both ways, in order.
+// THE DASHBOARD KNOWS EVERY STATE OF A QUEUE'S ENTRY, in the engine's order:
+// the Queue section words an entry's state by `QUEUE_STATES`
+// (`contract/checks.ts`). A state it lacks draws as its raw word; one the
+// engine dropped is words for nothing recorded.
 //
 // Mutation: drop a state from either side, or reorder the dashboard's, and
 // this fails.
@@ -635,17 +576,12 @@ func TestTheDashboardKnowsEveryStateOfAQueue(t *testing.T) {
 }
 
 // THE DASHBOARD KNOWS EVERY MERGE REFUSAL, in the engine's order, and no
-// other.
-//
-// A change page's merge controls answer a refused merge, enqueue or override
-// in words of their own, keyed on Gitlet's word the act route names
-// beside the class (`refusal`, builtin.HostRefusal) and listed in
+// other: a change page's merge controls word a refused merge, enqueue or
+// override by the `refusal` the act route names (builtin.HostRefusal), from
 // `MERGE_REFUSALS` (`contract/merge.ts`), whose sentences the compiler holds
-// complete over that list. A refusal the engine grew that the list lacks is
-// one the controls answer only in its class's general words — "changed by
-// somebody else" for a target that is still moving — and one the list keeps
-// that the engine dropped is a sentence nobody will ever read. Both ways, in
-// order.
+// complete. A refusal it lacks gets only its class's general words ("changed
+// by somebody else" for a still-moving target); one the engine dropped is a
+// sentence nobody reads.
 //
 // Mutation: drop a refusal from either side, or reorder the dashboard's, and
 // this fails.
@@ -667,13 +603,10 @@ func TestTheDashboardKnowsEveryMergeRefusal(t *testing.T) {
 }
 
 // THE DASHBOARD OFFERS EVERY WAY A CHANGE MERGES, in the engine's order, and
-// no other.
-//
-// The merge controls' method choice is `MERGE_METHODS` (`contract/merge.ts`),
-// sent as code_merge_change's `method`: a method the engine grew that the
-// list lacks is one no person can choose, and one the list keeps that the
-// engine dropped is a merge refused `invalid` on every press. Both ways, in
-// order — the first is the engine's default, which the controls open on.
+// no other: the merge controls offer `MERGE_METHODS` (`contract/merge.ts`) as
+// code_merge_change's `method`, opening on the first, the engine's default. A
+// method it lacks cannot be chosen; one the engine dropped is refused
+// `invalid` on every press.
 //
 // Mutation: drop a method from either side, or reorder the dashboard's, and
 // this fails.

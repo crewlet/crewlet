@@ -3,7 +3,9 @@ package sandboxtest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -30,6 +32,8 @@ var stagedLogCases = []struct {
 		testAnApprovedCallReachesItsRoundsLogPastAnAppendThatFailed},
 	{"AnEndingReadsTheTurnsCallsPastAnOpeningThatFailed",
 		testAnEndingReadsTheTurnsCallsPastAnOpeningThatFailed},
+	{"ABeginLaunchThatMayHaveWrittenNamesItsLaunch",
+		testABeginLaunchThatMayHaveWrittenNamesItsLaunch},
 }
 
 // stagedRuns is a coordination store's run records with the next write of a
@@ -44,15 +48,49 @@ type stagedRuns struct {
 	before func(ctx context.Context)
 	fail   error
 
+	// createFail and rowFail are what the next create of a run's record, and
+	// the next read-decide-write of one, answer instead of landing.
+	createFail, rowFail error
+
 	rowAsks atomic.Int64
 }
 
+// failNext arms the next create of a run's record to answer create, and the
+// next read-decide-write of one to answer row, neither landing; nil leaves
+// that write alone.
+func (r *stagedRuns) failNext(create, row error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.createFail, r.rowFail = create, row
+}
+
+// CreateSandboxRun answers an armed failure ([stagedRuns.failNext]), and
+// creates the record as the records would otherwise.
+func (r *stagedRuns) CreateSandboxRun(ctx context.Context, turnID string, value []byte) (bool, error) {
+	r.mu.Lock()
+	fail := r.createFail
+	r.createFail = nil
+	r.mu.Unlock()
+	if fail != nil {
+		return false, fail
+	}
+	return r.records.CreateSandboxRun(ctx, turnID, value)
+}
+
 // MutateSandboxRun counts each read-decide-write of a run's record
-// ([stagedRuns.rowAsks]) and makes it as the records would.
+// ([stagedRuns.rowAsks]), answers an armed failure ([stagedRuns.failNext]),
+// and makes it as the records would otherwise.
 func (r *stagedRuns) MutateSandboxRun(ctx context.Context, turnID string,
 	decide func(coord.Record) (coord.SandboxRunChange, error)) (coord.Record, bool, error) {
 
 	r.rowAsks.Add(1)
+	r.mu.Lock()
+	fail := r.rowFail
+	r.rowFail = nil
+	r.mu.Unlock()
+	if fail != nil {
+		return coord.Record{}, false, fail
+	}
 	return r.records.MutateSandboxRun(ctx, turnID, decide)
 }
 
@@ -349,5 +387,85 @@ func testAnEndingReadsTheTurnsCallsPastAnOpeningThatFailed(t *testing.T, runs *s
 					"or the turn's earlier ones (a new round)", log)
 			}
 		})
+	}
+}
+
+// A BEGIN LAUNCH THAT MAY HAVE WRITTEN NAMES ITS LAUNCH. A create, a reset or a
+// log's opening the store did not answer may have landed, and a row that
+// names the job with no log opened to it is a launching run nothing polls or
+// claims: the error wraps [sandbox.UnopenedLaunchError] with the job's name, the
+// one the row names where the write landed, so the launch can end that job
+// alone. A refusal the store answered wrote nothing, and wraps none.
+//
+// Mutation: return the bare error from any of the four writes, and its shape
+// names no launch; wrap a refusal, and that shape names one.
+func testABeginLaunchThatMayHaveWrittenNamesItsLaunch(t *testing.T, runs *stagedRuns,
+	s sandbox.PendingStore,
+) {
+	down := errors.New("the coordination store did not answer")
+	for _, tc := range []struct {
+		name     string
+		relaunch bool // the run has a row before this launch
+		arm      func()
+		landed   bool // the write naming the job landed
+	}{
+		{"create", false, func() { runs.failNext(down, nil) }, false},
+		{"created, its opening", false, func() { runs.stage(nil, down) }, true},
+		{"reset", true, func() { runs.failNext(nil, down) }, false},
+		{"reset, its opening", true, func() { runs.stage(nil, down) }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			turn := "t-unopened-" + strings.ReplaceAll(tc.name, " ", "-")
+			if tc.relaunch {
+				mustLaunched(t, s, run(turn))
+			}
+			tc.arm()
+			_, err := s.BeginLaunch(ctx, run(turn), sandbox.Fence{})
+			unopened, ok := errors.AsType[*sandbox.UnopenedLaunchError](err)
+			if !ok || !errors.Is(err, down) || unopened.LaunchID == "" {
+				t.Fatalf("a launch whose write was not answered = %v, want the store's error naming "+
+					"the launch", err)
+			}
+			row, found, err := s.Get(ctx, turn)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if names := found && row.LaunchID == unopened.LaunchID; names != tc.landed {
+				t.Fatalf("the row names the launch the error names (%q): %v, want %v", unopened.LaunchID,
+					names, tc.landed)
+			}
+		})
+	}
+
+	ctx := t.Context()
+	mustLaunched(t, s, run("t-refused"))
+	if _, err := s.ClaimOwnership(ctx, "t-refused", "node-b:1", 5); err != nil {
+		t.Fatalf("ClaimOwnership: %v", err)
+	}
+	over := run("t-refused")
+	for i := range sandbox.MaxCodeHolds + 1 {
+		over.CodeHolds = append(over.CodeHolds, fmt.Sprintf("repo-%04d", i))
+	}
+	newer := sandbox.Fence{Owner: "node-b:1", Epoch: 5}
+	for _, tc := range []struct {
+		name   string
+		run    sandbox.PendingRun
+		fence  sandbox.Fence
+		ending bool // the run's ending is decided first
+		want   error
+	}{
+		{"seat not held", run("t-refused"), sandbox.Fence{Owner: "node-a:1", Epoch: 3}, false,
+			sandbox.ErrSeatNotHeld},
+		{"holds full", over, newer, false, sandbox.ErrCodeHoldsFull},
+		{"ending decided", run("t-refused"), newer, true, sandbox.ErrRunEnding},
+	} {
+		if tc.ending {
+			decide(t, s, "t-refused", everyJob(sandbox.Fence{}, sandbox.Active))
+		}
+		_, err := s.BeginLaunch(ctx, tc.run, tc.fence)
+		if _, named := errors.AsType[*sandbox.UnopenedLaunchError](err); !errors.Is(err, tc.want) || named {
+			t.Errorf("a launch refused (%s) = %v, want %v naming no launch", tc.name, err, tc.want)
+		}
 	}
 }

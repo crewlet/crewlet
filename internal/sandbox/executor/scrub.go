@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -76,6 +77,10 @@ var errScrubBound = errors.New("executor: the session is past the bounds a kept 
 type scrubBounds struct {
 	// plain is the most plaintext one reading of the archive yields.
 	plain int64
+	// gate is what the scrub holds while it holds a piece past
+	// [collectionBaseLineBytes] ([scrubBounds.gatedBy]); its hold is nil
+	// where no slot gates the scrub's pieces.
+	gate pieceGate
 }
 
 // boundsFor is the scrub of an archive of at most archiveMax bytes.
@@ -83,15 +88,35 @@ func boundsFor(archiveMax int64) scrubBounds {
 	return scrubBounds{plain: scrubExpansion * archiveMax}
 }
 
+// gatedBy is b with every piece past the base held under large's one slot
+// while the scrub holds it, waited for within ctx: a take's scrub, one pass
+// with its meter (the package doc's "A collection's read of a thread").
+func (b scrubBounds) gatedBy(ctx context.Context, large *passBudget) scrubBounds {
+	b.gate = large.gate(ctx)
+	return b
+}
+
+// pieces is src beneath a scrub's reader: a piece past the base holds g's slot
+// before its bytes are handed on, until the reader above is done with it
+// ([lineRun]), a piece each line where lines is set and else the whole of src;
+// done drops what it still holds. A PIECE IS WHAT THE SCRUB REDACTS AS ONE
+// TEXT, whose redaction may hold up to its length (the package doc's "The
+// scrub's bounds, and what it holds").
+func (g pieceGate) pieces(src io.Reader, lines bool) (r io.Reader, done func()) {
+	if g.hold == nil {
+		return src, func() {}
+	}
+	run := &lineRun{r: src, gate: g, whole: !lines}
+	return run, run.done
+}
+
 // The figures [scrubHeldBytes] adds up, each the most one part of the scrub
 // holds.
 const (
 	// streamHeldBytes is one redact.Stream: its stages' windows, at most
-	// about 21 MiB of text and as much again of what they keep beside it,
-	// as redact's package doc states and its own test holds, but for the two
-	// texts that doc names, which hold a run and which no credential's
-	// format writes.
-	streamHeldBytes = 42 << 20
+	// about 21 MiB of text and 24 MiB of what they keep beside it, as
+	// redact's package doc states and its own test holds.
+	streamHeldBytes = 46 << 20
 	// scannerHeldBytes is one jsonscan.Scanner: its read buffer and its
 	// struct, the open containers' bits among it, as jsonscan's package doc
 	// states and its own test holds. The scrub never captures a value, so
@@ -680,7 +705,7 @@ func rewriteExport(src io.Reader, dst io.Writer, s scrubber, b scrubBounds) erro
 	if err != nil {
 		return fmt.Errorf("executor: the session's export is not gzip: %w", err)
 	}
-	return rewriteDocument(dst, boundedPlain(zr, b.plain), s)
+	return rewriteDocument(dst, boundedPlain(zr, b.plain), s, b.gate)
 }
 
 // scrubTar streams a gzipped tar with every regular file rewritten
@@ -696,11 +721,12 @@ func rewriteExport(src io.Reader, dst io.Writer, s scrubber, b scrubBounds) erro
 func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writer, s scrubber,
 	b scrubBounds) error {
 
-	plan := &tarPlan{}
+	plan := &tarPlan{gate: b.gate}
+	defer plan.letGo()
 	err := eachMember(first, b, func(h *tar.Header, body io.Reader) error {
 		plan.members.putByte(h.Typeflag)
 		if h.Typeflag != tar.TypeReg {
-			return nil
+			return plan.holdPast()
 		}
 		from := plan.lines.count()
 		size, text, err := measureFile(h.Name, body, s, plan)
@@ -710,7 +736,7 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 		plan.members.putNumber(uint64(size))
 		plan.members.put(text)
 		plan.members.putNumber(uint64(plan.lines.count() - from))
-		return nil
+		return plan.holdPast()
 	})
 	if err != nil {
 		return err
@@ -878,14 +904,18 @@ func measureFile(name string, body io.Reader, s scrubber, plan *tarPlan) (size i
 	case ".json":
 	default:
 		n := &counted{}
-		err = rewriteText(n, body, s)
+		err = rewriteText(n, body, s, plan.gate)
 		return n.n, false, err
 	}
+	// ONE PIECE, THE WHOLE FILE: its text is redacted as one, so the
+	// document's strings within it need no gate of their own.
+	body, done := plan.gate.pieces(body, false)
+	defer done()
 	asText := &counted{}
 	textual := s.text(asText)
 	tee := &teeRead{r: body, w: textual}
 	asDocument := &counted{}
-	documentErr := rewriteDocument(asDocument, tee, s)
+	documentErr := rewriteDocument(asDocument, tee, s, pieceGate{})
 	// THE REST IS THE TEXT'S ALONE: a document the rewrite stopped reading
 	// is read on to its end, for its text.
 	if _, err = io.Copy(io.Discard, tee); err == nil {
@@ -943,7 +973,7 @@ func rewriteMember(name string, text bool, plan *tarPlan, end int, dst io.Writer
 	s scrubber) error {
 
 	if text {
-		return rewriteText(dst, src, s)
+		return rewriteText(dst, src, s, plan.gate)
 	}
 	return rewriteFile(name, plan, end, dst, src, s)
 }
@@ -955,9 +985,9 @@ func rewriteFile(name string, plan *tarPlan, end int, dst io.Writer, src io.Read
 	case ".jsonl":
 		return writeLines(dst, src, s, plan, end)
 	case ".json":
-		return rewriteDocument(dst, src, s)
+		return rewriteDocument(dst, src, s, plan.gate)
 	}
-	return rewriteText(dst, src, s)
+	return rewriteText(dst, src, s, plan.gate)
 }
 
 // tarPlan is how the first reading of a tar decided to write it, which the
@@ -983,6 +1013,35 @@ type tarPlan struct {
 	next    definitionCut
 	nextAt  int
 	pending bool
+	// gate is the scrub's way to the large slot ([scrubBounds.gate]), which
+	// the plan holds once it is past the base ([tarPlan.holdPast]); held
+	// says it does.
+	gate pieceGate
+	held bool
+}
+
+// holdPast holds the large slot once the plan is past [collectionBaseLineBytes]
+// of bits, to the take's end ([tarPlan.letGo]): THE ONE THING THE SCRUB HOLDS
+// ACROSS PIECES, which only a box's archive of millions of short lines or
+// members brings there.
+func (p *tarPlan) holdPast() error {
+	bits := p.members.count() + p.lines.count() + p.cuts.count()
+	if p.held || p.gate.hold == nil || bits/8 <= collectionBaseLineBytes {
+		return nil
+	}
+	if err := p.gate.hold(); err != nil {
+		return err
+	}
+	p.held = true
+	return nil
+}
+
+// letGo drops the slot the plan holds, once the take is done with it.
+func (p *tarPlan) letGo() {
+	if p.held {
+		p.gate.drop()
+		p.held = false
+	}
 }
 
 // addCut plans the cut of the line at index, as lines' bits count it, of list:
@@ -1153,6 +1212,8 @@ func (l *lineReader) rest() error {
 // line is: what the second reading writes, a line of each written exactly as
 // the scrub of that line whole writes it.
 func measureLines(src io.Reader, s scrubber, plan *tarPlan) (int64, error) {
+	src, done := plan.gate.pieces(src, true)
+	defer done()
 	l := newLineReader(src, s)
 	defs := &definitionsReading{}
 	var asJSON rewriteOut
@@ -1196,6 +1257,9 @@ func measureLines(src io.Reader, s scrubber, plan *tarPlan) (int64, error) {
 		if l.ended {
 			size++
 		}
+		if err = plan.holdPast(); err != nil {
+			return 0, err
+		}
 	}
 }
 
@@ -1225,6 +1289,8 @@ func lineKeptAs(short bool, jsonErr, textErr error) (text bool, err error) {
 // first reading planned it ([measureLines]), its lines' bits those of plan's
 // up to end.
 func writeLines(dst io.Writer, src io.Reader, s scrubber, plan *tarPlan, end int) error {
+	src, done := plan.gate.pieces(src, true)
+	defer done()
 	l := newLineReader(src, s)
 	w := bufio.NewWriterSize(dst, 64<<10)
 	var out rewriteOut
@@ -1326,18 +1392,20 @@ func providerToolName(name string) bool {
 // every string value and every key scrubbed and redacted, and a value under a
 // credential's key taken out whole ([jsonRewrite]). A text that is no one JSON
 // value ends it on the scanner's *jsonscan.Error: more than one value, one
-// cut short, or one nested past jsonscan.MaxDepth.
+// cut short, or one nested past jsonscan.MaxDepth. A name or a string past
+// the base holds gate's slot while it is scrubbed ([jsonRewrite.text]).
 //
 // BUT A DOCUMENT OF BLANKS ALONE, or of nothing, holds no value a harness
 // reads, and is written as nothing rather than refused as no JSON, as
 // encoding/json's decoder answers such a text with its end. A transcript's
 // line of blanks is kept as its blanks ([measureLines]).
-func rewriteDocument(dst io.Writer, src io.Reader, s scrubber) error {
+func rewriteDocument(dst io.Writer, src io.Reader, s scrubber, gate pieceGate) error {
 	w := bufio.NewWriterSize(dst, 64<<10)
 	var out rewriteOut
 	out.reset(w, false)
 	j := newJSONRewrite(s)
 	j.reset(jsonscan.New(src), &out, nil, nil)
+	j.gate = gate
 	var fault *jsonscan.Error
 	if err := j.run(); err != nil && (!errors.As(err, &fault) || fault.Fault != jsonscan.FaultNoValue) {
 		return err
@@ -1359,8 +1427,11 @@ func keptString(scrub scrubber, s string) string {
 // rewriteText streams text scrubbed by value and redacted by shape as it
 // arrives ([scrubber.text]): what it writes is exactly redact.Secrets of the
 // whole text with every value taken out, held to the redaction's own windows
-// rather than to a line or a stretch of it.
-func rewriteText(dst io.Writer, src io.Reader, s scrubber) error {
+// rather than to a line or a stretch of it, and to gate's slot once the text
+// is past the base ([pieceGate.pieces]).
+func rewriteText(dst io.Writer, src io.Reader, s scrubber, gate pieceGate) error {
+	src, done := gate.pieces(src, false)
+	defer done()
 	w := bufio.NewWriterSize(dst, 64<<10)
 	text := s.text(w)
 	if _, err := io.Copy(text, src); err != nil {

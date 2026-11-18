@@ -11,18 +11,14 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A SEAT'S OWN OPEN ASKS TO ONE PERSON: the questions it put to somebody that
-// still wait on them, read for the turn that seat holds with that person, so
-// "consider anything you have open with me" is answerable from the turn's
-// own context, and an ask other work now covers is withdrawn rather than left
-// waiting in the person's Inbox.
+// A SEAT'S OWN OPEN ASKS TO ONE PERSON, read into the turn it holds with that
+// person, so "anything you have open with me" is answerable from the turn's own
+// context and an ask other work now covers is withdrawn, not left in the Inbox.
 
 // MaxOwnAsks bounds one page of a seat's own open asks to one person.
 //
-// TEN, [MaxDecisions]'s fifth: the page is read into a turn's prompt, where
-// each row is a line the seat acts on with its own tools, and a seat with more
-// open questions to one person than this has a queue the total beside the
-// page names.
+// TEN, [MaxDecisions]'s fifth: each row is a prompt line the seat acts on, and
+// a longer queue is named by the total beside the page.
 const MaxOwnAsks = 10
 
 // OwnAsksQuery asks for one seat's open asks to one person.

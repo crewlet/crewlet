@@ -29,47 +29,30 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// THE PUBLISHED LAYERS, MEASURED: what git costs a
-// repository's maintainer to publish its bitmapped multi-pack-index as
-// layers, what a Gitlet node pays to install and serve them, and what each of
-// the cache's own-mode writes costs beside them — the figures the constants
-// of internal/gitlet/cache and internal/gitlet/compact are re-derived from on
-// every pin, old value and new in the commit that moves one.
+// THE PUBLISHED LAYERS, MEASURED: what git costs a maintainer to publish a
+// repository's bitmapped multi-pack-index as layers, what a node pays to install
+// and serve them, and each own-mode write beside them. The constants of cache and
+// compact are re-derived from these figures on every pin.
 //
-// EVERY STEP IS THE PRODUCTION COMMAND, run by a pool as the node runs it —
-// its pack.threads at one, its serve configuration — over files laid out as
-// the node lays them out: a SCRATCH of hard links of a synced copy's packs,
-// where git writes layers and chain files exactly as it writes them in an
-// incarnation or a publication's scratch. Own mode's writes and the node's
-// tip are the declarations' own argument lists (cache.DerivedFiles), so a
-// write's flags cannot drift from what a node runs; the publisher's are
-// copied from internal/gitlet/compact's writeLayerIn and pack, argument for
-// argument, so a change to either is made to both. A scratch is
-// linked again for every run of a step that writes, so a run never meets
-// what the one before it wrote — a write is a new file or a rename over one,
-// never an edit in place, so a scratch's writes leave the files it links as
-// they were.
-//
-// Each step reports its seconds a run (s/op) and, where Linux's /proc says,
-// the most ANONYMOUS memory its one git process held (gittest.PeakAnon, the
-// method of every per-object figure): in MiB, over the repository's objects
-// (B/obj-repo) — what a charge by the repository's objects must hold — and
-// over the objects the step adds (B/obj-new) — what it would charge if it
-// followed them.
+// Each step is the production command on a pool run as the node's (pack.threads
+// at one, its serve configuration), over a scratch of hard links to a synced
+// copy's packs, relinked for every run of a writing step; git only creates or
+// renames files, so the linked originals stay intact. Own mode's and the tip's
+// arguments are cache.DerivedFiles'; the publisher's copy compact's writeLayerIn
+// and pack, so change both together. Figures: s/op and, where /proc allows, the
+// git's peak anonymous memory (gittest.PeakAnon) in MiB, B/obj-repo and B/obj-new.
 
-// gitletNodeFloor names the arms that run the node floor's own build
-// (gittest.NodeFloor) beside the pin: the one way a figure runs a git other
-// than the pin, so an operator on the floor reads what publishing costs
+// gitPin and gitFloor name an arm's git: the pin, or the node floor's build
+// (gittest.NodeFloor), so an operator on the floor reads what publishing costs
 // there.
 const (
 	gitPin   = "pin"
 	gitFloor = "floor"
 )
 
-// bigNodeEnv is the variable that, set to 1 beside gittest.LargeEnv, runs
-// BenchmarkBigNode's 12 GB arm: a fixture that takes hours to build and a
-// machine of at least 64 GB of memory to hold its bitmap beside the
-// in-memory store, which no default run and no CI job has.
+// bigNodeEnv set to 1 beside gittest.LargeEnv runs BenchmarkBigNode's 12 GB
+// arm: its fixture builds for hours and needs 64 GB of memory to hold its bitmap
+// beside the in-memory store, which no default run or CI job has.
 const bigNodeEnv = "CREWLET_BENCH_BIGNODE"
 
 // steps is an arm's runs of one git step: how many, their wall clock, and
@@ -157,10 +140,9 @@ func declaredArgs(b *testing.B, step cache.Step, trigger cache.Trigger) []string
 	return nil
 }
 
-// tipGraphArgs is the node's tip as the cache declares it — every filter its
-// commits lack — or, at filters of 0 or more, bounded to that many new
-// changed-path filters (--max-new-filters before its last argument), the
-// bounds the declaration's every-filter write is measured against.
+// tipGraphArgs is the node's declared tip write (every filter its commits lack)
+// or, at filters >= 0, the same bounded to that many new filters
+// (--max-new-filters), to measure the declared write against.
 func tipGraphArgs(b *testing.B, filters int) []string {
 	b.Helper()
 	declared := declaredArgs(b, cache.StepTipGraph, cache.TriggerMaintainer)
@@ -182,11 +164,10 @@ func packList(packs []string, ext string) string {
 	return out.String()
 }
 
-// midxLayerCmd is the publisher's multi-pack-index layer over packs in dir —
-// internal/gitlet/compact's writeLayerIn: incremental, with its bitmap and the
-// bitmap's lookup table (or plain, the node-local tip step=tip-plain weighs), over
-// exactly the packs on standard input, no chain file written, over base
-// ("none" for a root, which the chain file in dir must name otherwise).
+// midxLayerCmd is the publisher's multi-pack-index layer (compact's writeLayerIn)
+// over exactly packs in dir: incremental, with its bitmap and lookup table (or
+// none, for step=tip-plain), no chain file written, over base ("none" for a
+// root; otherwise dir's chain file must name it).
 func midxLayerCmd(dir string, packs []string, base string, bitmap bool) gitproc.Cmd {
 	args := []string{"multi-pack-index", "write", "--incremental", "--bitmap", "--stdin-packs",
 		"--no-write-chain-file", "--base=" + base, "--no-progress"}
@@ -351,11 +332,10 @@ type layered struct {
 	dir, layer, graph string
 }
 
-// publishRoot writes the maintainer's ROOT publication over packs in the
-// repository at dir — its multi-pack-index layer over no base, the chain
-// file naming it, and its commit-graph layer — main at tip, the newest commit
-// the packs hold, while git writes it (a bitmap's commits are the refs' it
-// reaches), and answers the layer.
+// publishRoot writes the maintainer's ROOT publication over packs in dir (the
+// multi-pack-index layer over no base, its chain file, its commit-graph layer)
+// and answers it. main is set to tip, the packs' newest commit, first: a bitmap
+// covers the commits the refs reach.
 func publishRoot(b *testing.B, pool *gitproc.Pool, dir, tip string, packs []string) layered {
 	b.Helper()
 	setMain(b, dir, tip)
@@ -385,12 +365,10 @@ type tailPush struct {
 	objects      int64
 }
 
-// layerArms is BenchmarkMidx's arms of the published layers over one
-// history: its 64 packs as the synced copy holds them, the source they were
-// pushed from, and the fixtures the arms share, each built by the first arm
-// that needs it — so a -bench pattern that selects none of them builds none —
-// under a directory the size's benchmark holds, so it outlives the arm that
-// built it.
+// layerArms is BenchmarkMidx's published-layer arms over one history: its 64
+// packs as synced, their source, and the shared fixtures, each built by the first
+// arm needing it (a -bench pattern selecting none builds none) under a directory
+// the size's benchmark holds, so it outlives that arm.
 type layerArms struct {
 	w       *syncWorld
 	c       *cache.Cache
@@ -405,9 +383,8 @@ type layerArms struct {
 	// first is the index into commits of each push's oldest commit.
 	first []int
 	root  string
-	// packs is a scratch holding the history's packs, linked when the size
-	// begins: every fixture links them from here, since the synced copy's
-	// incarnation is replaced by the arms after these.
+	// packs is a scratch of the history's packs, linked when the size begins:
+	// fixtures link from here, since later arms replace the synced incarnation.
 	packs string
 
 	chained   *layered
@@ -480,13 +457,11 @@ func (p *layerArms) poolOf(b *testing.B, git string) *gitproc.Pool {
 	return p.w.pool
 }
 
-// chain is THE PUBLISHED FIXTURE: the history's packs under the maintainer's
-// root publication, and a tail of pushes outside it — what a Gitlet node holds
-// between two publications of a repository pushed to since the last. The
-// tail is slices.Max(staleArms) pushes of stalePushBytes each on top of the
-// history, made on a branch of the source of their own and packed alone, as
-// a push's pack is; the step= arms take the first compact.PublishPacks of
-// them, the tail at which a publication falls due by its packs.
+// chain is THE PUBLISHED FIXTURE: the history under the maintainer's root
+// publication plus a tail of pushes outside it, as a node holds a repository
+// between two publications. The tail is slices.Max(staleArms) pushes of
+// stalePushBytes on a branch of their own, each packed alone as a push is; the
+// step= arms take the first compact.PublishPacks, where a publication falls due.
 func (p *layerArms) chain(b *testing.B) *layered {
 	b.Helper()
 	if p.chained != nil {
@@ -499,10 +474,9 @@ func (p *layerArms) chain(b *testing.B) *layered {
 	return p.chained
 }
 
-// tailPushes lands n pushes on the history in src, on a branch of their own
-// — each a commit adding one file of stalePushBytes seeded random bytes, as
-// the stale arms' pushes do — and packs each alone into the repository at
-// dir.
+// tailPushes lands n pushes on the history in src on a branch of their own, each
+// one file of stalePushBytes seeded random bytes as the stale arms' are, and
+// packs each alone into dir.
 func (p *layerArms) tailPushes(b *testing.B, dir string, n int) []tailPush {
 	b.Helper()
 	const branch = "refs/heads/layer-tail"
@@ -579,14 +553,12 @@ func (p *layerArms) run(b *testing.B) {
 	}
 }
 
-// whole is OWN MODE'S WHOLE REWRITE after the tail's compact.PublishPacks
-// pushes — a rewrite paid for the new pushes alone: the maintainer's
-// multi-pack-index with its bitmap, without one, and its commit-graph with
-// changed-path filters, each over every pack, as cache.DerivedFiles declares
-// them. B/obj-repo decides cache.BitmapBytesPerObject, IndexBytesPerObject
-// and GraphBytesPerObject; s/op, bitmap and graph together a run's,
-// MidxMinInterval and MidxDutyCycle; and B/obj-new is what step=tip is read
-// against.
+// whole is OWN MODE'S WHOLE REWRITE after compact.PublishPacks tail pushes, as
+// cache.DerivedFiles declares it: the multi-pack-index with and without its
+// bitmap, and the commit-graph with changed-path filters, each over every pack.
+// B/obj-repo decides cache.BitmapBytesPerObject, IndexBytesPerObject and
+// GraphBytesPerObject; bitmap's and graph's s/op together, MidxMinInterval and
+// MidxDutyCycle; B/obj-new is what step=tip is read against.
 func (p *layerArms) whole(b *testing.B) {
 	k := compact.PublishPacks
 	for _, step := range []cache.Step{cache.StepBitmap, cache.StepIndex, cache.StepGraph} {
@@ -608,12 +580,10 @@ func (p *layerArms) whole(b *testing.B) {
 	}
 }
 
-// tip is a node-local BITMAPPED TIP LAYER over the tail on the published
-// chain — what no node writes (the cache's package doc says why): its
-// memory growing with the history rather than its few new objects, and its
-// time near step=whole's, is the pathology that rules it out. A pin under
-// which its peak-MiB holds still across the sizes re-decides that rule
-// (CONTRIBUTING's pin checklist).
+// tip is a node-local BITMAPPED TIP LAYER over the tail, which no node writes
+// (the package doc says why): its memory grows with the history, not its new
+// objects, and its time nears step=whole's. A pin under which its peak-MiB holds
+// still across sizes re-decides that (CONTRIBUTING's pin checklist).
 func (p *layerArms) tip(b *testing.B) {
 	k := compact.PublishPacks
 	var s steps
@@ -629,11 +599,10 @@ func (p *layerArms) tip(b *testing.B) {
 	s.report(b, "", p.objectsOf(p.hist)+p.objectsOf(p.tailPacks(k)), p.objectsOf(p.tailPacks(k)))
 }
 
-// tipPlain is the same tip WITHOUT a bitmap: op=write follows its new
-// objects, and op=count — a walk of every object through the chain, the
-// canary's read — runs with no bitmap at all once the tip tops the chain,
-// since git opens a layer's bitmap only with every layer above it bitmapped
-// too: what rules out the cheap tip as well.
+// tipPlain is the tip WITHOUT a bitmap: op=write follows its new objects, but
+// op=count (the canary's walk of every object) then runs with no bitmap, since
+// git opens a layer's bitmap only when every layer above has one, which rules
+// out the cheap tip too.
 func (p *layerArms) tipPlain(b *testing.B) {
 	k := compact.PublishPacks
 	b.Run("op=write", func(b *testing.B) {
@@ -665,24 +634,17 @@ func (p *layerArms) tipPlain(b *testing.B) {
 	})
 }
 
-// publish is ONE PUBLICATION'S BUILD, in the two shapes a maintainer meets —
-// each step its own figure: part=repack, the non-full packs merged first (more
-// than compact.LayerRepackPacks of them) by internal/gitlet/compact's
-// pack-objects over a store of exactly them, which cache.CompactBytesPerObject
-// charges by its inputs; part=midx, the layer and its bitmap over the output,
-// which cache.PublishBytesPerObject charges by the repository's objects;
-// part=graph, its commit-graph layer with every changed-path filter, which
-// cache.GraphLayerBytesPerObject charges by the layer's.
+// publish is ONE PUBLICATION'S BUILD, each part its own figure: part=repack
+// merges the non-full packs (over compact.LayerRepackPacks) as compact does,
+// charged by its inputs (cache.CompactBytesPerObject); part=midx, the layer and
+// bitmap, by the repository's objects (cache.PublishBytesPerObject); part=graph,
+// the graph layer with every filter, by the layer's (GraphLayerBytesPerObject).
 //
-//   - layer=root is a repository's FIRST publication: every one of the
-//     history's pushes merged, and the layer a root over the output — the
-//     publication whose graph layer and repack cover the whole history,
-//     which their per-object figures are read from. git=floor runs it on the
-//     node floor's own git too, so the floor's figures stand beside the pin's.
-//   - layer=tail is every later one, at its due by packs: the tail of
-//     compact.PublishPacks pushes merged, and the layer over the output on
-//     the published chain — whose bitmap still walks the whole history, and
-//     whose part=midx B/obj-repo decides cache.PublishTailBytesPerObject.
+//   - layer=root, the FIRST publication, merges the whole history under a root
+//     layer: the graph's and repack's per-object figures. git=floor runs it too.
+//   - layer=tail, every later one at its due by packs, merges compact.PublishPacks
+//     tail pushes onto the chain; its bitmap still walks the whole history, and
+//     its part=midx B/obj-repo decides cache.PublishTailBytesPerObject.
 func (p *layerArms) publish(b *testing.B) {
 	for _, git := range []string{gitPin, gitFloor} {
 		b.Run("layer=root/git="+git, func(b *testing.B) {
@@ -700,10 +662,9 @@ func (p *layerArms) publish(b *testing.B) {
 	})
 }
 
-// published runs one publication shape on git's pool: inputs merged, then
-// the layer and its graph over the output, in the scratch fixture makes — a
-// repository holding every pack the plan was made over — over the base it
-// names, main at tip.
+// published runs one publication shape on git's pool: inputs merged, then the
+// layer and its graph over the output, in fixture's scratch (every pack the plan
+// was made over) on the base it names, main at tip.
 func (p *layerArms) published(b *testing.B, git string, inputs []string, fixture func(*testing.B) (string, string),
 	tip string) {
 
@@ -755,13 +716,11 @@ func (p *layerArms) published(b *testing.B, git string, inputs []string, fixture
 	graph.report(b, "graph-", repo, outObjects)
 }
 
-// tipGraph is THE NODE'S TIP COMMIT-GRAPH over the tail of
-// compact.PublishPacks pushes, on the published graph layer — the
-// declaration's own write, every filter (filters=all), beside the same write
-// bounded to 100 and 1 024 new filters: a small tail's figure is the write's
-// fixed part, which cache.GraphBaseBytes charges beside the tail= arms' slope
-// with the delta base cache's cap (internal/gitlet/query's tree=deep arms
-// measure it filled).
+// tipGraph is THE NODE'S TIP COMMIT-GRAPH over compact.PublishPacks tail pushes
+// on the published graph layer: the declared write (filters=all) beside it
+// bounded to 100 and 1 024 new filters. A small tail's figure is the write's
+// fixed part, cache.GraphBaseBytes, charged beside the tail= arms' slope with the
+// delta base cache's cap (internal/gitlet/query's tree=deep arms measure it filled).
 func (p *layerArms) tipGraph(b *testing.B) {
 	k := compact.PublishPacks
 	for _, filters := range []int{100, 1024, -1} {
@@ -818,18 +777,16 @@ func (p *layerArms) mergeFixture(b *testing.B) *mergeChain {
 	return m
 }
 
-// merge weighs how two published layers are merged — internal/gitlet/compact
-// writes a layer over exactly its base and never runs `multi-pack-index
-// compact`. merge=root-compact is git's own `multi-pack-index compact` of L1
-// and L2 from the root, which reuses their bitmaps; merge=root-write is a
-// direct write of their 56 packs as a root layer, what a publication writes;
-// merge=stacked (100 MB, the pin and the floor) is a write over L1 of L2's
-// and L3's packs with L2 and L3 still in the chain file — what the publisher's
-// scratch, whose chain files name exactly its base, exists to never run —
-// capped at ten times root-write's own time and reported pathological=1 when
-// it reaches the cap. root-compact cheaper than root-write by more than the
-// tail write it cannot skip, or stacked no longer pathological, re-decides
-// the publisher's rule (CONTRIBUTING's pin checklist).
+// merge weighs merging two published layers; compact writes a layer over exactly
+// its base and never runs `multi-pack-index compact`. merge=root-compact is git's
+// compact of L1 and L2 from the root, reusing their bitmaps; merge=root-write
+// writes their 56 packs as a root layer, as a publication does; merge=stacked
+// (100 MB, pin and floor) writes L2's and L3's packs over L1 with L2 and L3 still
+// in the chain file, which the publisher's scratch (chain files naming exactly
+// its base) exists to avoid, capped at ten times root-write and reported
+// pathological=1 at the cap. root-compact beating root-write by more than the
+// tail write it cannot skip, or stacked no longer pathological, re-decides the
+// publisher's rule (CONTRIBUTING's pin checklist).
 func (p *layerArms) merge(b *testing.B) {
 	b.Run("merge=root-compact", func(b *testing.B) {
 		m := p.mergeFixture(b)
@@ -903,10 +860,9 @@ func (p *layerArms) stacked(b *testing.B, git string) {
 		b.StartTimer()
 		res, err := s.try(b, pool, cmd)
 		b.StopTimer()
-		// AN IF, NEVER A SWITCH ON A CALL, in a b.Loop body: Go 1.27.2's
-		// b.Loop pass (cmd/compile/internal/bloop) treats a case clause's
-		// expressions as statements and rewrites a call there into an
-		// assignment, and the compiler then fails with an internal error.
+		// AN IF, NEVER A SWITCH ON A CALL, in a b.Loop body: Go 1.27.2's b.Loop
+		// pass (cmd/compile/internal/bloop) rewrites a call in a case clause
+		// into an assignment, and the compiler fails with an internal error.
 		if errors.Is(err, gitproc.ErrDeadline) {
 			pathological = 1
 		} else if err != nil {
@@ -920,13 +876,12 @@ func (p *layerArms) stacked(b *testing.B, git string) {
 	b.ReportMetric(limit.Seconds(), "cap-s")
 }
 
-// closure is the closure git holds a bitmap to, on the pin and on the
-// floor: a bitmapped layer over every
-// pack of the history but its first, which leaves the layer's commits
-// reaching objects outside it — refused by git ("Packfile doesn't have full
-// closure"), nothing written, which is why a published layer covers EVERY
-// live pack its base does not (compact's planLayer, decide rule 6d). A git
-// that writes it re-decides that rule, and the arm fails saying so.
+// closure is the closure git holds a bitmap to, on the pin and the floor: a
+// bitmapped layer over every history pack but the first leaves its commits
+// reaching objects outside it, so git refuses it ("Packfile doesn't have full
+// closure"). That is why a published layer covers EVERY live pack its base does
+// not (compact's planLayer, decide rule 6d); a git that writes it re-decides
+// that rule and fails the arm.
 func (p *layerArms) closure(b *testing.B) {
 	for _, git := range []string{gitPin, gitFloor} {
 		b.Run("git="+git, func(b *testing.B) {
@@ -955,11 +910,10 @@ func (p *layerArms) closure(b *testing.B) {
 	}
 }
 
-// staleChained is the stale arms over the PUBLISHED chain — k pushes outside
-// it, read through the root layer's bitmap: op=count counts main's objects,
-// the walk the chain leaves a clone, and op=clone is the pack a clone of main
-// is served — the price compact.PublishPacks weighs against a publication's
-// build, as the own-mode arms price cache.MidxPacks against a run.
+// staleChained is the stale arms over the PUBLISHED chain, k pushes outside it
+// read through the root layer's bitmap: op=count counts main's objects (a
+// clone's walk), op=clone serves main's clone. compact.PublishPacks weighs this
+// price against a build, as the own-mode arms price cache.MidxPacks.
 func (p *layerArms) staleChained(b *testing.B, k int) {
 	dir := p.tailed(b, "stale", k, true)
 	defer removeAll(b, dir)
@@ -988,11 +942,9 @@ var shareArms = []struct {
 }{{"0", 0}, {"1of64", 1}, {"1of16", 4}, {"1of4", 16}}
 
 // shares is the SHARE of a repository's objects its tail may hold before a
-// publication is due (compact.PublishShare): a root layer over the history's
-// packs but its last n, those n outside it, and the requests that walk them —
-// op=clone, a clone of main, and op=fetch, a fetch of main's newest commit.
-// The largest share whose clone is at most a tenth past share=0's decides
-// PublishShare.
+// publication is due (compact.PublishShare): a root layer over all but the last
+// n packs, walked by op=clone (main) and op=fetch (main's newest commit). The
+// largest share whose clone is at most a tenth past share=0's decides it.
 func (p *layerArms) shares(b *testing.B) {
 	for _, arm := range shareArms {
 		b.Run("share="+arm.name, func(b *testing.B) {
@@ -1025,20 +977,17 @@ var tailArms = []struct {
 	factor float64
 }{{"0.25x", 0.25}, {"1x", 1}, {"4x", 4}}
 
-// tails is THE TAIL IN OBJECTS (1 GB and 5 GB): that many objects of the
-// history outside the published chain, whatever the repository's size — a
-// root layer and its graph layer over the rest — and every request and write
-// that walks them: op=clone, op=fetch (main's newest commit), op=canary
-// (every object through the chain, the installer's read) and op=tip-graph
-// (the node's tip over them: filters=all the declaration's own write, and
-// filters=100 the same bounded to 100 new filters). walk-us/object is
-// the canary's and the clone's seconds over the tail's objects:
-// compact.PublishTailObjects is a second of it at gitproc.WalkPerObject, and
-// is re-derived where the canary walks slower; filters=100's B/obj-new across
-// the three tails is cache.TipGraphBytesPerObject's slope — the bound keeps
-// the delta base cache's part small, which filters=all fills toward its cap
-// and cache.GraphBaseBytes charges — and its figure over a small tail
-// (step=tip-graph) the write's own fixed part.
+// tails is THE TAIL IN OBJECTS (1 GB and 5 GB): that many history objects
+// outside a root layer and graph layer over the rest, whatever the repository's
+// size, and what walks them: op=clone, op=fetch (main's newest commit),
+// op=canary (every object through the chain, the installer's read) and
+// op=tip-graph (the node's tip: filters=all the declared write, filters=100 it
+// bounded). walk-us/object is the canary's and clone's seconds per tail object:
+// compact.PublishTailObjects is a second of it at gitproc.WalkPerObject, and is
+// re-derived where the canary walks slower. filters=100's B/obj-new across the
+// tails is cache.TipGraphBytesPerObject's slope: the bound keeps the delta base
+// cache's part small, which filters=all fills toward its cap and
+// cache.GraphBaseBytes charges; step=tip-graph gives the write's fixed part.
 func (p *layerArms) tails(b *testing.B) {
 	for _, arm := range tailArms {
 		b.Run("tail="+arm.name, func(b *testing.B) {
@@ -1096,12 +1045,10 @@ func copyRefs(b *testing.B, from, to string) {
 	write(b, filepath.Join(to, "packed-refs"), read(b, filepath.Join(from, "packed-refs")))
 }
 
-// tailFixture is a scratch whose published chain covers the history but its
-// newest objects — about want of them, at a commit's grain — and answers it
-// with how many objects lie outside: the pushes wholly in the tail as the
-// history pushed them, the push the cut falls in split at its commit by two
-// packs of their own, and a root layer and its graph layer over everything
-// before the cut.
+// tailFixture is a scratch whose published chain covers all but about want of
+// the history's newest objects, at a commit's grain, and answers how many lie
+// outside: the pushes wholly in the tail as pushed, the push the cut falls in
+// split at its commit into two packs, and a root and graph layer before the cut.
 func (p *layerArms) tailFixture(b *testing.B, want int64) (string, int64) {
 	b.Helper()
 	j, rest := len(p.hist)-1, want
@@ -1142,33 +1089,17 @@ func (p *layerArms) tailFixture(b *testing.B, want int64) (string, int64) {
 	return dir, tail
 }
 
-// BenchmarkBigNode is the BIG-NODE comparison over the large reference
-// model's monorepo — a 12 GB source repository's history, gittest.History's
-// composition in its 64 pushes — over 5 GB wherever gittest.LargeEnv is set,
-// and over a gigabyte in every run: what one Gitlet node pays to give the whole
-// fleet the repository's bitmap, against every node writing its own.
-//
-//   - node=own is an OWN-MODE node's whole multi-pack-index and its bitmap
-//     over every pack — what every Gitlet node serving the repository would
-//     write without a publication: its minutes and peak memory.
-//   - node=publish is the maintainer's ROOT publication over the same packs:
-//     its multi-pack-index layer with the bitmap (midx-) and its commit-graph
-//     layer with every changed-path filter (graph-), once for the fleet.
-//   - node=install is a Gitlet node installing that chain: a cold sync of the
-//     repository with the layer published, which installs the chain before it
-//     answers — the GETs it makes of packs and parts, what the sync's own
-//     code allocated beside the store's copies (installed's own-alloc-MiB:
-//     the downloads' and the installer's buffers, no git process), and the
-//     seconds from its answer to its first count of every object through the
-//     bitmap and its first clone.
-//
-// size=1GB is the largest a default run builds, BenchmarkMidx's largest
-// default history too, and the size whose figures the docs carry wherever no
-// larger arm has run. size=12GB builds for hours and holds its bitmap beside
-// the in-memory store, so it runs only where bigNodeEnv is 1 too, on a
-// machine of at least 64 GB; no constant waits on it: scaling.md states the
-// 12 GB figure as the extrapolation of the sizes measured, labelled so, until
-// a run of this arm replaces it.
+// BenchmarkBigNode weighs one node giving the fleet a repository's bitmap against
+// every node writing its own, over the large reference model's monorepo
+// (gittest.History's composition, 64 pushes): 1 GB always, 5 GB under
+// gittest.LargeEnv, 12 GB under bigNodeEnv too. node=own is an own-mode node's
+// whole bitmapped multi-pack-index over every pack; node=publish the root
+// publication, its layer and bitmap (midx-) and graph layer with every filter
+// (graph-); node=install a cold sync installing that chain before it answers:
+// its GETs of packs and parts, own-alloc-MiB (installed), and the seconds to its
+// first bitmapped count and clone. 1 GB is the largest default size, whose
+// figures the docs carry where no larger arm ran. No constant waits on 12 GB:
+// scaling.md labels its figure an extrapolation until a run replaces it.
 func BenchmarkBigNode(b *testing.B) {
 	quiet(b)
 	for _, arm := range []struct {
@@ -1321,18 +1252,14 @@ func (n *bigNode) install(b *testing.B) {
 	installed(b, n.w, n.repo, cache.FetchConcurrency, *n.layer)
 }
 
-// installed is a cold sync of repo by a fresh cache over w — the published
-// chain installed by its full round before it answers — then the copy's
-// first count of every object through the bitmap and its first clone of
-// main: gets/op and parts/op the GETs it made of packs and of the chain's
-// parts, count-s and clone-s the two requests after its answer, and —
-// where w's store is the in-memory one — own-alloc-MiB, every byte the
-// process's heap allocated while the sync ran less the bytes the store
-// served: the in-memory store copies each object it serves once, so what is
-// left is what the sync's own code allocated, the installer's buffers among
-// it — a bound on what it held at once, which a heap's growth is not, since
-// that is the store's copies until the collector runs. Over the S3 fake the
-// client's own buffers are no copy a byte, and the figure is not reported.
+// installed is a cold sync of repo by a fresh cache over w, which installs the
+// published chain by its full round before it answers, then the copy's first
+// bitmapped count of every object and first clone of main. It reports packs/op
+// and parts/op (its GETs), count-s and clone-s, and on the in-memory store
+// own-alloc-MiB: heap allocations during the sync less the bytes the store
+// served (it copies each object once), bounding what the sync's own code held at
+// once, which heap growth (the store's copies until a collection) does not. Over
+// the S3 fake the client's buffers are no copy a byte, so it is not reported.
 func installed(b *testing.B, w *syncWorld, repo string, fetch int, chain ...gitlet.LayerRef) {
 	b.Helper()
 	parts := map[objstore.Key]bool{}
@@ -1447,11 +1374,10 @@ func heapAllocs() int64 {
 	return int64(s[0].Value.Uint64())
 }
 
-// chainOver writes a published chain of layers over the packs of repo's copy
-// in a fresh cache over w — the first layer over the first cut packs, each
-// next over the packs to its own cut, its graph layer beside it — stores
-// every part and publishes the chain on w's log, and answers it. tips is the
-// newest commit each cut's packs hold.
+// chainOver writes a chain over the packs of repo's copy in a fresh cache over
+// w (each layer, with its graph layer, over the packs from the last cut to its
+// own), stores every part, publishes the chain on w's log and answers it. tips is
+// each cut's newest commit.
 func chainOver(b *testing.B, w *syncWorld, repo string, rows []gitlet.PackRow, cuts []int, tips []string) []gitlet.LayerRef {
 	b.Helper()
 	c, drop := w.coldCache(b, b.TempDir(), 0, cache.FetchConcurrency)
@@ -1491,19 +1417,15 @@ func chainOver(b *testing.B, w *syncWorld, repo string, rows []gitlet.PackRow, c
 	return refs
 }
 
-// coldLayered is BenchmarkColdSync's arms of a PUBLISHED repository: its
-// packs under a published chain — layers=chain one root layer
-// over them all, layers=chain21 twenty-one, the chain the default
-// repo_max_bytes reaches, over the same packs, the first over all but the
-// last twenty and each next over one — read by a fresh cache fetching fetch
-// bundles at once, which installs the chain before it answers: what a cold
-// sync's parts add to its GETs and its time beside the same shape's arm with
-// no layers, and that its first count and its first clone read the bitmap.
-// The S3 fake answers the fixture's writes at once, and every read of the
-// arm at firstByte.
-//
-// rows are the repository's packs, one a push, oldest first, and tips each
-// push's commit.
+// coldLayered is BenchmarkColdSync's arms of a PUBLISHED repository: its packs
+// under one root layer (layers=chain) or twenty-one (layers=chain21, the chain
+// the default repo_max_bytes reaches: the first over all but the last twenty,
+// each next over one), read by a fresh cache fetching fetch bundles at once that
+// installs the chain before it answers. It weighs what the parts add to a cold
+// sync's GETs and time beside the same arm with no layers, and that its first
+// count and clone read the bitmap. The S3 fake answers the fixture's writes at
+// once and the arm's reads at firstByte. rows are the packs, one a push, oldest
+// first; tips each push's commit.
 func coldLayered(b *testing.B, w *syncWorld, repo string, rows []gitlet.PackRow, tips []string,
 	firstByte time.Duration, layers, fetch int) {
 
@@ -1519,15 +1441,12 @@ func coldLayered(b *testing.B, w *syncWorld, repo string, rows []gitlet.PackRow,
 	installed(b, w, repo, fetch, chain...)
 }
 
-// catchUp is install=catchup (a restore's catch-up): repos
-// repositories of one small pack each, every copy synced WITHOUT a chain on
-// one node, then one one-part layer published on each, which each copy's
-// delta hands to the node's installer — and the installer's passes, timed,
-// until every layer is placed: within repos × (the first byte + a placement)
-// ÷ cache.FetchConcurrency, give or take a tenth, its GETs at the share it
-// keeps in flight across repositories. getbound-s is the GETs' own part,
-// repos × firstByte ÷ FetchConcurrency, and placement-ms what the rest comes
-// to a repository at that width.
+// catchUp is install=catchup (a restore's catch-up): repos one-small-pack
+// repositories synced on one node WITHOUT a chain, then a one-part layer
+// published on each, which each copy's delta hands to the installer, whose
+// passes are timed until every layer is placed: within a tenth of repos × (first
+// byte + placement) ÷ cache.FetchConcurrency. getbound-s is the GETs' part,
+// repos × firstByte ÷ FetchConcurrency; placement-ms the rest per repository.
 func catchUp(b *testing.B, firstByte time.Duration, repos int) {
 	b.Helper()
 	w := coldWorld(b, "fake", 0)
@@ -1589,20 +1508,17 @@ func catchUp(b *testing.B, firstByte time.Duration, repos int) {
 	b.ReportMetric((took-bound)*float64(cache.FetchConcurrency)/float64(repos)*1e3, "placement-ms")
 }
 
-// layerLookups are BenchmarkPackLookup's layers= arms: one chain each, of
-// that many layers over the same history — the twenty-one the default
-// repo_max_bytes' chain reaches (gitlet.MaxPublishedLayers' reason), the bound,
-// and twice it.
+// layerLookups are BenchmarkPackLookup's layers= arms, a chain of that many
+// layers over the same history each: among them 21, the default repo_max_bytes'
+// chain (gitlet.MaxPublishedLayers' reason), the bound, and twice it.
 var layerLookups = []int{1, 8, 21, 32, 64}
 
-// geometricLayers is how a chain of layers layers cuts a history of commits
-// commits, ROOT FIRST, each layer's count of commits: shaped as compact's
-// planner keeps a chain — every layer compact.LayerSplitFactor times the one
-// above it, the top one a single commit, and the root over the rest, at
-// least half the history. A history doubles to only so many layers inside
-// its half; a chain deeper than that stacks one-commit layers on its top, as
-// a publisher whose every publication is small leaves them before its top
-// layers merge.
+// geometricLayers is each layer's count of commits, ROOT FIRST, when a chain of
+// layers layers cuts commits commits as compact's planner keeps one: each layer
+// compact.LayerSplitFactor times the one above, the top a single commit, the
+// root the rest (at least half). Layers past the doublings that fit in half the
+// history are one-commit layers on top, as a publisher of only small
+// publications leaves them before its top layers merge.
 func geometricLayers(commits, layers int) []int {
 	doubling, sum := 0, 0
 	for size := 1; doubling < layers-1 && sum+size <= commits/2; size *= compact.LayerSplitFactor {
@@ -1624,21 +1540,15 @@ func geometricLayers(commits, layers int) []int {
 }
 
 // layerLookupArms is BenchmarkPackLookup's layers= arms over the history of
-// commits in src: a chain of that many bitmapped layers cut as
-// geometricLayers cuts it, each layer one pack of its commits' objects
-// packed into a scratch of its own, and a lookup through it — op=lookup is
-// cat-file --batch-check of lookupIDs ids drawn from every object the
-// history holds (ns/lookup each), op=count a count of main's objects through
-// the chain's bitmaps. git looks an object up from the TOP layer down
-// (bsearch_midx), so an id the root holds is looked for in every layer — as
-// at least half of them are here (root-share), and as most are in a
-// geometric chain: an arm of equal layers looks the average id up through
-// half of them, and understates what depth costs.
-// gitlet.MaxPublishedLayers stays unless 32 layers cost more than twice one per
-// lookup; then it is the longest chain that does not.
-//
-// The ids are drawn by the first arm that runs, so a pattern that selects no
-// arm draws none.
+// commits in src: a chain of that many bitmapped layers cut by geometricLayers,
+// each one pack of its commits' objects. op=lookup is cat-file --batch-check of
+// lookupIDs' ids (ns/lookup), op=count a count of main through the bitmaps. git
+// looks an object up from the TOP layer down (bsearch_midx), so a root-held id
+// passes every layer, as at least half do here (root-share) and most do in a
+// geometric chain; equal layers would understate what depth costs.
+// gitlet.MaxPublishedLayers stays unless 32 layers cost over twice one per
+// lookup; then it is the longest chain that does not. The first arm that runs
+// draws the ids, so a pattern selecting no arm draws none.
 func (w *syncWorld) layerLookupArms(b *testing.B, src string, commits []string) {
 	b.Helper()
 	root := b.TempDir()

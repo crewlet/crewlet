@@ -13,10 +13,9 @@ import (
 )
 
 // WHAT GIT IS TOLD A PUSH DID: `ok` for a ref ONLY from the push's own applied
-// row. A proposal answered `pending` is durable and not yet applied here, and
-// a durable record a gate then drops on every node is not a push that landed
-// — so pending is waited on, at most Timing.PendingGrace, and never reported
-// as ok (ADR-0084).
+// row; `pending` is waited on, at most Timing.PendingGrace, and never reported
+// as ok (package doc, "A push is committed by a record, and git is told so
+// only from its row"; ADR-0084).
 
 // answered is one command as git is told it.
 type answered struct {
@@ -30,15 +29,13 @@ type answered struct {
 // <sentence>`, the sentence the command's Detail where one was formed and
 // `<code>: <the code's sentence>` otherwise.
 //
-// THE LINE FITS ONE PKT-LINE with the newline the report adds (receive-pack's
-// own report adds it to what the hook answers): the ref WHOLE, because git
-// matches a status to its command by the ref's name, and the sentence cut to
-// the room the ref leaves. A ref is read off a command line that held both ids
-// beside it, so it is at most maxPktPayload less 82 bytes and that room is
-// never under 77 — but a ref past gitlet.MaxRefNameBytes is a command (refused
-// bad_ref), and the longest a pkt-line carries left a full sentence a line a
-// few bytes past git's largest, which git refuses to read: the push's whole
-// report lost to a protocol error rather than one sentence cut.
+// THE LINE FITS ONE PKT-LINE with the newline receive-pack adds: the ref
+// WHOLE, because git matches a status to its command by the ref's name, and
+// the sentence cut to the room left. A ref, even one past
+// gitlet.MaxRefNameBytes (refused bad_ref), came off a command line beside both
+// ids, so it is at most maxPktPayload less 82 bytes and the room never under
+// 77. A line past git's largest loses the push's whole report to a protocol
+// error, not one sentence.
 func (a answered) line() string {
 	if a.OK {
 		return "ok " + a.Ref
@@ -48,7 +45,7 @@ func (a answered) line() string {
 	case a.Reason == "":
 		// A REFUSAL ONLY THE RECEIVER NAMES — a command list past what one
 		// push may carry — has no code of the domain's. A token bound to
-		// nobody is no such refusal: its grant answers not_permitted.
+		// nobody is not one: its grant answers not_permitted.
 		words = a.Detail
 	case a.Detail == "":
 		words = string(a.Reason) + ": " + a.Reason.Sentence()

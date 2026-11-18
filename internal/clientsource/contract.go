@@ -304,6 +304,7 @@ var contract = []Entry{
 	{"DEVICE_SIGN_IN_ENDED", ReadLiteral, "internal/coord.TestTheModelsScreenNamesEveryDeviceSignInStatus"},
 	{"ModelSignInRoute", ReadUnion, "internal/providers/llm/harness.TestTheModelsScreenNamesTheEnginesSignIns"},
 	{"ModelLimitWindow", ReadUnion, "internal/providers/llm/harness.TestTheModelsScreenNamesTheEnginesSignIns"},
+	{"ModelLimitState", ReadUnion, "internal/providers/llm/harness.TestTheModelsScreenNamesTheEnginesSignIns"},
 	{"ModelCheckName", ReadUnion, "internal/providers/llm/harness.TestTheModelsScreenNamesTheEnginesSignIns"},
 	{"ModelCheckState", ReadUnion, "internal/api/queries.TestTheModelsScreenNamesEveryCheckState"},
 	{"MODEL_CREDENTIAL_BUDGET_SECONDS", ReadScalar, "internal/api/llmapi.TestTheModelsScreenWaitsAsLongAsTheEngineWorks"},
@@ -510,6 +511,7 @@ var contract = []Entry{
 	{"CHANGE_NEEDS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryNeedOfAListingOfChanges"},
 	{"CHANGE_WINDOWS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryWindowOfAListingOfChanges"},
 	{"CHANGE_SORTS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEverySortOfAListingOfChanges"},
+	{"READINESS_BUCKETS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryReadinessBucket"},
 	{"PRECONDITION_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryPreconditionOfAChange"},
 	{"PRECONDITION_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryPreconditionOfAChange"},
 	{"PUSHER_KINDS", ReadLiteral, "internal/gitlet.TestTheDashboardCountsEveryPusherKind"},
@@ -520,7 +522,6 @@ var contract = []Entry{
 	{"CODE_MAX_BLAME_LINES", ReadScalar, "internal/gitlet.TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers"},
 	{"CHANGE_PART_PAGE", ReadScalar, "internal/gitlet.TestTheDashboardReadsAChangesConversationAtTheEnginesPage"},
 	{"CHECK_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfACheck"},
-	{"CHECK_ENDED_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfACheck"},
 	{"CHECK_PURPOSES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfACheck"},
 	{"QUEUE_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfAQueue"},
 	{"CodeSearchAnswer", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
@@ -577,6 +578,9 @@ var contract = []Entry{
 	{"MAX_ARTIFACT_ROOMS", ReadScalar, "internal/api/stream.TestTheDashboardJoinsNoMoreRoomsThanTheEngineHolds"},
 	{"SeatActivity", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
 	{"StoppedReason", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
+
+	// activity.ts
+	{"ACTIVITY_TAGS", ReadLiteral, "internal/activityline.TestTheDashboardReadsEveryTag"},
 
 	// steer.ts
 	{"STEER_NOTE_MAX_RUNES", ReadScalar, "internal/agent/steer.TestTheDashboardBoundsANoteAtTheEnginesCap"},

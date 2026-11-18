@@ -14,132 +14,80 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A CHAIN OF MERGES, BUILT IN ONE SCRATCH ON A REPOSITORY'S HOME (M5-D12,
-// M5-D13; internal/gitlet/host's Server.BuildChain): the queue's candidates are
-// not built a merge at a time, each its own scratch, pack and upload, but as
-// ONE CHAIN — each entry merged by a merge_change's own build onto the commit
-// the entry before it made, the first onto the target's tip the chain was
-// asked against — so a candidate's train is one scratch, one pack and one
-// stored bundle, as a group commit is one record (PLAN: "chains merge-tree
-// results in one scratch").
-//
-// # What a chain is built from
-//
-// A chain is a pure function of what it is asked ([ChainBuild]) and of the
-// objects its copy holds: the target's tip it builds onto, each entry's head
-// and method, the change's words its commit carries ([ChainChange]), and who
-// enqueued it — the merger a merge commit is authored by (U43 a) — and each
-// entry's own instant, its author date: the instant its enqueue was minted at
-// ([QueueEntryID] keeps it), so a chain built again from the same rows is the
-// same chain, byte for byte, whichever Gitlet node builds it and however often
-// (a bisect builds the same prefix twice). Nothing it carries is read from a
-// row by the build: the caller formed it from the rows it decided on, and its
-// record's decide holds those rows again.
-//
-// # What a chain answers
-//
-// One [ChainCommit] an entry it reached, in order: the commit the entry
-// became — a fast-forward's is its own head, which the copy already holds —
-// or the refusal that skipped it, the chain building on without it: a
-// conflict with its paths, a fast-forward the target's history refuses, a
-// head the chain already holds, a merge past a merge_change's own budget, or
-// whose objects pack past a merge_change's own bound or hold more than
-// [MaxChainObjectBytes] uncompressed (too_large), or an object git's own
-// check refuses (rejected_object). A skipped entry leaves
-// nothing behind it in the scratch. Then the chain's one pack, stored as one
-// bundle — nil where no entry made an object — and its tip. The pack enters
-// the building node's cache only once the record naming it has applied
-// ([ChainResult.Settle]): a pack linked in before it would be objects no row
-// names.
-//
-// # Never refused whole
-//
-// Every refusal names the ONE entry it is about, so a chain always decides
-// at least its first entry and its caller always has an entry to eject or a
-// prefix to land: a chain refused whole would be built again, entry for
-// entry, by the next turn, and refused again, wedging its target's queue.
-// What could sink a chain whole is bounded per entry instead: each entry's
-// objects to a merge_change's own [MaxWritePackBytes] packed and to
-// [MaxChainObjectBytes] uncompressed, the chain's objects together to
-// [MaxChainObjectBytes] (so its pack is made within [ChainPackDeadline]), an
-// object git's check refuses to the entry that wrote it, and the chain's time
-// to [ChainBuildDeadline]. The entries a chain did not reach within its
-// bytes or its time are left out of its answer — a prefix of the entries,
-// neither built nor skipped — for the next chain.
-//
-// # In process, never a record
-//
-// These are the home's call of its own Gitlet node's builder, through the
-// consumer interface the engine wires: no field here is ever encoded onto a
-// log, so none is held to the code domain's record format. The record the
-// chain's caller publishes — its candidate — names its commits and its pack,
-// and carries that format's condition itself.
+// A CHAIN OF MERGES, built in one scratch on a repository's home
+// (internal/gitlet/host's Server.BuildChain): a queue candidate's entries are
+// merged in order, each by a merge_change's own build onto the commit the one
+// before it made, so a train is one scratch, one pack and one stored bundle,
+// as a group commit is one record. A chain is a pure function of [ChainBuild]
+// and its copy's objects (an entry's author date is its enqueue's instant,
+// [QueueEntryID]), so a rebuild on any Gitlet node, or a bisect's second
+// build of a prefix, is the same chain byte for byte. The build reads no row:
+// the caller formed it from the rows it decided on, and its record's decide
+// holds them again. These types are in-process only, never encoded onto a
+// log; the candidate record its caller publishes carries the code domain's
+// format.
 
-// MaxChainEntries is the most entries one chain merges: SIXTY-FOUR,
-// [MaxPushesPerRecord]. A candidate's green prefix is landed by ONE record
-// that names one push row an entry (the landing's `via queue` rows), so a
-// chain longer than one record could hold could never land whole; and a
-// candidate's train, at the queue's greatest depth and batch (8 × 8), is the
-// same sixty-four.
+// A chain is never refused whole: every refusal names ONE entry, so it always
+// decides at least its first and its caller has an entry to eject or a prefix
+// to land, where a whole refusal would be rebuilt and refused by every turn,
+// wedging the target's queue. What could sink it whole is bounded per entry
+// instead ([MaxWritePackBytes] packed, [MaxChainObjectBytes] uncompressed, an
+// object git's check refuses, each skipping that entry) and per chain
+// ([MaxChainObjectBytes], [ChainBuildDeadline]), entries past those left out
+// for the next chain ([ChainResult]). A skipped entry leaves nothing in the
+// scratch, and the pack enters the building node's cache only once the record
+// naming it has applied ([ChainResult.Settle]): before, it would be objects no
+// row names.
+
+// MaxChainEntries is the most entries one chain merges: [MaxPushesPerRecord],
+// sixty-four. A candidate's green prefix lands by ONE record naming a push row
+// an entry, so a longer chain could never land whole; the queue's greatest
+// depth and batch (8 × 8) is the same sixty-four.
 const MaxChainEntries = MaxPushesPerRecord
 
 // MaxChainObjectBytes is the most bytes, UNCOMPRESSED, the objects one chain
-// writes may hold — every entry's merge commit, the trees above the paths
-// both sides changed and the blobs merge-tree merged — and so the most its
-// one pack deflates, deltas and checks: SIXTEEN MIB, four
-// [MaxWritePackBytes]. What a pack costs follows the bytes it is made of,
-// not the bytes it stores, and it was MEASURED (internal/gitlet/host's
-// BenchmarkBuildChain, its doc.go's WHAT A CHAIN COSTS): 314 MiB of
-// sixty-four merged files of random text took 51 s to pack and check, 6.2
-// MiB a second, while sixty-four merges whose objects hold just under
-// sixteen took 2.1 s, inside [ChainPackDeadline] 4.8 times over. An entry
-// whose merge holds more
-// alone is skipped too_large; one that would take the chain past it is left
-// for the next chain, as an entry its time cannot hold is
-// (internal/gitlet/host's chain.go). So the bound shortens the trains of
-// merges that rewrite large files and leaves the common train — sixty-four
-// merges of a few kilobytes each — whole.
+// writes may hold (merge commits, the trees above paths both sides changed,
+// merged blobs), and so the most its one pack deflates, deltas and checks:
+// 16 MiB, four [MaxWritePackBytes]. A pack's cost follows its raw bytes, not
+// its stored ones. MEASURED (internal/gitlet/host's BenchmarkBuildChain, its
+// doc.go's WHAT A CHAIN COSTS): 314 MiB took 51 s to pack and check, while
+// sixty-four merges just under this bound took 2.1 s, inside
+// [ChainPackDeadline] 4.8 times over. An entry past it alone is skipped
+// too_large; one that would take the chain past it waits for the next chain.
+// The common train, sixty-four merges of a few kilobytes, stays whole.
 const MaxChainObjectBytes = 4 * MaxWritePackBytes
 
-// ChainPackPerObjectByte is how many bytes of pack a chain may store for
-// each byte its objects hold uncompressed: TWO, BY CONSTRUCTION — a pack
-// holds each object deflated, or as a delta no larger, and adds to it a
-// header and deflate's framing of some twenty bytes, against at least the
-// twenty-eight of the tree entry that names it in the merge that wrote it (a
-// commit, the one object no tree names, holds more than a hundred). The
-// builder checks its pack against it all the same, and answers a pack past
-// it as an error of its own, never a refusal of the chain.
+// ChainPackPerObjectByte is how many bytes of pack a chain may store for each
+// byte its objects hold uncompressed: TWO, BY CONSTRUCTION. A pack holds each
+// object deflated or as a delta no larger, plus some twenty bytes of header
+// and framing, against at least the twenty-eight of the tree entry naming it
+// (a commit, which no tree names, holds over a hundred). The builder checks
+// its pack against it anyway, a pack past it being its own error, never a
+// refusal of the chain.
 const ChainPackPerObjectByte = 2
 
 // MaxChainPackBytes bounds the one pack a chain stores:
 // [ChainPackPerObjectByte] × [MaxChainObjectBytes], 32 MiB.
 const MaxChainPackBytes = ChainPackPerObjectByte * MaxChainObjectBytes
 
-// ChainPackDeadline is the git run time a chain's one pack is given — its
-// `pack-objects` and its `index-pack --strict` together, and the pack made
-// again after an entry whose object git's check refused is dropped: TEN
-// SECONDS. MEASURED (internal/gitlet/host's BenchmarkBuildChain, its doc.go's
-// WHAT A CHAIN COSTS): the largest pack a chain makes, of sixty-four merges
-// whose objects hold just under [MaxChainObjectBytes], took 2.1 s, so ten
-// hold it 4.8 times over — the margin for a node whose two cores are shared
-// and for a second pack after an entry git's check refused. A pack past it
-// is the node failing (unready), never a chain too large. PROVISIONAL as
-// every build deadline is: what moves it is a production pack whose p99
-// nears it.
+// ChainPackDeadline is the git run time a chain's one pack is given (its
+// `pack-objects` and `index-pack --strict`, and the repack after an entry
+// git's check refused is dropped): TEN SECONDS. MEASURED (as
+// [MaxChainObjectBytes]): the largest pack took 2.1 s, and the 4.8× margin
+// covers a node's two shared cores and that repack. A pack past it is the
+// node failing (unready), never a chain too large. PROVISIONAL as every build
+// deadline is: a production pack whose p99 nears it moves it.
 const ChainPackDeadline = 10 * time.Second
 
-// ChainBuildDeadline is a chain's whole git: its merges, given ONE merge's
-// [MergeBuildDeadline] together — the first entry it reaches all of it, as a
-// merge_change of it alone is given, so every chain decides at least one
-// entry; each later one what is left of it, in run time and in time since
-// the merges began, whichever is less, so a chain whose git waits for its
-// slots stops as surely as one whose git runs slowly — and its pack
-// [ChainPackDeadline]: FORTY SECONDS. A chain is built in its home's turn,
-// one internal/gitlet/home Backstop (a minute; its TestATurnHoldsAWholeChain
-// holds the two together), and the twenty seconds the turn has past the
-// chain are its reads before it, the bundle's store and the candidate record
-// after it. An entry the merges' share cannot hold is left for the next
-// chain, never a reason to refuse this one.
+// ChainBuildDeadline is a chain's whole git: FORTY SECONDS, ONE merge's
+// [MergeBuildDeadline] shared by its merges plus [ChainPackDeadline]. The
+// first entry gets all of the merges' share, as a lone merge_change would, so
+// every chain decides one entry; each later one what is left, by run time or
+// by time since the merges began, whichever is less, so a chain waiting on
+// git slots stops as surely as a slow one. It fits one internal/gitlet/home
+// Backstop (a minute; TestATurnHoldsAWholeChain), leaving twenty seconds for
+// the reads before and the bundle store and candidate record after. An entry
+// the share cannot hold is left for the next chain, never refuses this one.
 const ChainBuildDeadline = MergeBuildDeadline + ChainPackDeadline
 
 // ChainBuild is one chain a repository's home asks its Gitlet node to build:
@@ -148,16 +96,14 @@ const ChainBuildDeadline = MergeBuildDeadline + ChainPackDeadline
 type ChainBuild struct {
 	RepoID string
 	// ChainID names the chain's scratch and its stored bundle: a canonical
-	// UUIDv7, derived by the caller from what the chain is — its
-	// candidate's id — so a chain built again is the same scratch name and
-	// the same pack id.
+	// UUIDv7 the caller derives from its candidate's id, so a rebuild has the
+	// same scratch name and pack id.
 	ChainID   string
 	TargetRef string
 	// Base is the target's tip the first entry is merged onto.
 	Base string
-	// Seen is the code log's position the caller read the queue's rows at:
-	// the copy is synced to it before anything is built, so every head and
-	// the base are in it.
+	// Seen is the code log position the caller read the queue's rows at; the
+	// copy syncs to it before building, so every head and the base are in it.
 	Seen    statelog.Position
 	Entries []ChainEntry
 }
@@ -215,41 +161,31 @@ type ChainCommit struct {
 	ConflictsOmitted int
 }
 
-// ChainResult is a built chain: one [ChainCommit] an entry it reached, in
-// order — a PREFIX of its entries, at least the first: an entry its
-// [ChainBuildDeadline] or its [MaxChainObjectBytes] could not hold and every
-// entry after it, and every entry after one whose object git's check
-// refused, are left out, neither built nor skipped, for its
-// caller to leave queued; Tip the commit the last entry that was not skipped
-// became — Base where every entry was — and Pack the one stored bundle of
-// every object the chain made, nil where it made none (every entry a
-// fast-forward, or skipped). A chain is never refused whole for what it
-// built. Or Status, nothing built and nothing stored: the repository's row,
-// as the copy the chain was to be built over holds it, refuses every merge —
-// repo_deleted, repo_archived, repo_importing or repo_mirrored, in the
-// domain's one sentence for the state (Detail) — which the candidate's decide
-// would refuse from the same row once its scratch, its share unit and its
-// pack were spent.
-//
-// Settle ends the chain's hold on its scratch, once: applied — the record
-// naming the pack has applied, as its caller read it — adopts the pack into
-// the building node's cache first. It is never nil on a chain that answers no
-// error, and its every call after the first does nothing. A chain never
-// settled holds its scratch until the node's next boot empties scratch/.
-//
-// DropEpoch is the repository's drop epoch as the copy the chain was built
-// from held it (internal/gitlet/cache's Synced.DropEpoch): the epoch the
-// candidate record naming its pack states ([QueueProposal.DropEpoch]), so
-// a chain built over objects an expunge begun since left dropping is refused
-// `expunging` and built again.
+// ChainResult is a built chain: Commits, one an entry it reached in order, a
+// PREFIX of at least the first (every entry from one its [ChainBuildDeadline]
+// or [MaxChainObjectBytes] could not hold, or after one whose object git's
+// check refused, is neither built nor skipped, left queued); Tip, the last
+// unskipped entry's commit, or Base; Pack, the one stored bundle, nil where no
+// entry made an object. Or Status (Detail the domain's sentence), nothing
+// built or stored: the copy's repository row refuses every merge
+// (repo_deleted, repo_archived, repo_importing or repo_mirrored), as the
+// candidate's decide would once the scratch, share unit and pack were spent.
 type ChainResult struct {
-	Commits   []ChainCommit
-	Pack      *PackRef
-	Tip       string
+	Commits []ChainCommit
+	Pack    *PackRef
+	Tip     string
+	// DropEpoch is the repository's drop epoch in the copy the chain was
+	// built from (internal/gitlet/cache's Synced.DropEpoch), which the
+	// candidate record states ([QueueProposal.DropEpoch]), so a chain built
+	// over objects an expunge has since begun dropping is refused `expunging`.
 	DropEpoch int64
 	Status    MergeRefusal
 	Detail    string
-	Settle    func(ctx context.Context, applied bool) error
+	// Settle ends the chain's hold on its scratch; applied (the record naming
+	// the pack has applied) adopts the pack into the building node's cache
+	// first. Never nil without an error; calls after the first do nothing. An
+	// unsettled chain holds its scratch until the next boot empties scratch/.
+	Settle func(ctx context.Context, applied bool) error
 }
 
 // Validate refuses a chain no Gitlet node may build ([ErrInvalid], naming the

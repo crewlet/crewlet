@@ -129,8 +129,12 @@ func (f meteredFleet) client(t *testing.T) jetstream.JetStream {
 func (f meteredFleet) syncer(t *testing.T) *Syncer {
 	t.Helper()
 	s := mustNew(openStore(t), f.client(t), func(string) string { return seat.AgentID },
-		Config{AcrossLink: true, Clustered: true, Link: f.meter})
-	s.pace, s.window = meteredPace, meteredWindow
+		Config{AcrossLink: true, Clustered: true, Link: f.meter, Window: jsapi.NewLinkWindow()})
+	window, err := jsapi.NewWindow(meteredWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.pace, s.window = meteredPace, window
 	return s
 }
 

@@ -10,12 +10,8 @@ func numPtr(v float64) *float64 { return &v }
 // A NAME IS A RESOLUTION KEY, and two that differ only in case are two rows
 // one lookup cannot tell apart.
 //
-// The schema has carried `name_norm` and an index annotated "the
-// case-insensitive collision rule" from the first migration, and the rule was
-// never written. The sharpest case is an OPTION: [OptionIDs] maps a lowercased
-// name to an id, so two options named "High" and "high" collapsed to one entry
-// there — and the survivor was whichever came last in the slice, so a value
-// written by name resolved differently after somebody reordered the list.
+// The sharpest case is an option: [OptionIDs] maps a lowercased name to an
+// id, so "High" and "high" would collapse to whichever came last in the slice.
 func TestANameCollidesCaseInsensitively(t *testing.T) {
 	t.Parallel()
 	t.Run("types", func(t *testing.T) {
@@ -71,9 +67,6 @@ func TestANameCollidesCaseInsensitively(t *testing.T) {
 
 // A KNOB ITS TYPE CANNOT READ IS A SETTING STORED, REPLICATED AND APPLIED BY
 // NOTHING — and the caller believes they configured something.
-//
-// The options check already refused its own version of this. Every other knob
-// on FieldConfig was accepted on every type.
 func TestAConfigKnobIsRefusedOnATypeThatHasNone(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -169,11 +162,9 @@ func TestTheRollupSetsAndTheirPairings(t *testing.T) {
 			Config: FieldConfig{Rollup: &Rollup{Source: source, Field: field, Op: op}},
 		}})
 	}
-	// A WELL-FORMED ROLLUP IS STILL REFUSED, and that is the point: this
-	// build gathers nothing, so a field naming itself gathered would hold
-	// whatever somebody last typed under a name that says otherwise. The
-	// pairing rules below run FIRST, so an operator dropping the block is
-	// told about their other mistakes in the same pass.
+	// A WELL-FORMED ROLLUP IS STILL REFUSED: this build gathers nothing
+	// (checkRollup). The pairing rules run first, so an operator learns
+	// every other mistake in the same pass.
 	if err := rollup("children", "points", "sum"); err == nil {
 		t.Fatal("a rollup was accepted and nothing computes one")
 	} else if !strings.Contains(err.Error(), "gathers nothing") {
@@ -205,13 +196,9 @@ func TestTheRollupSetsAndTheirPairings(t *testing.T) {
 	}
 }
 
-// AN AUTOMATIC PROGRESS FIELD IS REFUSED, because nothing fills one.
-//
-// The value would be whatever somebody last typed into it under a name that
-// says it keeps itself up to date — which is worse than a manual field,
-// because nobody knows to maintain it. The sources it WOULD count are still a
-// closed set, so an operator who names one this build does not have is told
-// which mistake they made first.
+// AN AUTOMATIC PROGRESS FIELD IS REFUSED, because nothing fills one
+// (checkProgress). The sources it would count are still a closed set, checked
+// first.
 func TestAnAutomaticProgressFieldIsRefusedWhileNothingFillsOne(t *testing.T) {
 	t.Parallel()
 	err := checkFields([]FieldDef{{
@@ -224,8 +211,7 @@ func TestAnAutomaticProgressFieldIsRefusedWhileNothingFillsOne(t *testing.T) {
 	if !strings.Contains(err.Error(), "computes no automatic progress") {
 		t.Errorf("the refusal is %q and does not say why", err)
 	}
-	// A MANUAL ONE STILL LANDS: the field type works, and it is the
-	// AUTOMATIC setting that promises what this build does not do.
+	// A MANUAL ONE STILL LANDS: only the automatic setting is refused.
 	if err := checkFields([]FieldDef{{
 		ID: "f1", Slug: "done", Name: "Done", Type: FieldProgress,
 		Config: FieldConfig{Progress: "manual"},
@@ -240,14 +226,8 @@ func TestAnAutomaticProgressFieldIsRefusedWhileNothingFillsOne(t *testing.T) {
 	}
 }
 
-// AND A TRACKING LIST IS REFUSED ON ITS OWN TYPE, which is the half the type
-// check could not see.
-//
-// `tracking` names what an AUTOMATIC progress field counts, and the only mode
-// that would ever read it is refused above — so a list beside `progress:
-// manual` passed every check this file makes and counted nothing. An operator
-// who set the mode to `manual` to get past the refusal above was told their
-// field was declared, under a name that says the sources are being counted.
+// AND A TRACKING LIST IS REFUSED ON ITS OWN TYPE: only the refused automatic
+// mode reads it, so beside `progress: manual` it counts nothing.
 func TestATrackingListIsRefusedWhileNothingCountsIt(t *testing.T) {
 	t.Parallel()
 	err := checkFields([]FieldDef{{
@@ -263,26 +243,23 @@ func TestATrackingListIsRefusedWhileNothingCountsIt(t *testing.T) {
 			t.Errorf("the refusal is %q and does not name %q", err, want)
 		}
 	}
-	// A LIST WITH NO MODE AT ALL IS THE SAME FACT, and the default mode
-	// reads it no better than `manual` does.
+	// A LIST WITH NO MODE AT ALL IS THE SAME FACT: the default reads it no
+	// better.
 	if err := checkFields([]FieldDef{{
 		ID: "f1", Slug: "done", Name: "Done", Type: FieldProgress,
 		Config: FieldConfig{Tracking: []string{"checklists"}},
 	}}); err == nil {
 		t.Error("a tracking list with no mode was accepted")
 	}
-	// AND THE FIELD WITHOUT ONE STILL LANDS: what is refused is the
-	// setting that promises a count, never the progress field itself.
+	// AND THE FIELD WITHOUT ONE STILL LANDS: only the list is refused.
 	if err := checkFields([]FieldDef{{
 		ID: "f1", Slug: "done", Name: "Done", Type: FieldProgress,
 		Config: FieldConfig{Progress: "manual"},
 	}}); err != nil {
 		t.Errorf("a manual progress field carrying no tracking was refused: %v", err)
 	}
-	// THE SOURCE NAMES ARE STILL CHECKED FIRST, so an operator who names a
-	// source this build does not have is told about that mistake rather
-	// than about the list — the ordering checkRollup states for the same
-	// shape.
+	// THE SOURCE NAMES ARE STILL CHECKED FIRST, so an unknown source is
+	// reported rather than the list.
 	err = checkFields([]FieldDef{{
 		ID: "f1", Slug: "done", Name: "Done", Type: FieldProgress,
 		Config: FieldConfig{Progress: "manual", Tracking: []string{"vibes"}},
@@ -292,12 +269,8 @@ func TestATrackingListIsRefusedWhileNothingCountsIt(t *testing.T) {
 	}
 }
 
-// THE APPLIER AND THE CHECK NORMALISE A NAME THE SAME WAY.
-//
-// The applier writes `name_norm` for types, for fields and for options — three
-// inline copies of one rule, and this check would have been a fourth. A rule
-// that normalises one way and a column that normalises another is a collision
-// the write admits and the index then treats as a duplicate.
+// THE APPLIER AND THE CHECK NORMALISE A NAME THE SAME WAY, or a collision the
+// write admits is one the `name_norm` index then treats as a duplicate.
 func TestOneNormalisationForEveryNameColumn(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct{ in, want string }{
@@ -313,18 +286,16 @@ func TestOneNormalisationForEveryNameColumn(t *testing.T) {
 }
 
 // THE NAME RULE COVERS THE BUILTINS TOO, because what resolves is the
-// EFFECTIVE set: a catalogue ADDS to the shipped types, so a company declaring
-// `defect` named "Bug" collides with the `bug` this build ships — and checking
-// only its own declarations would be the same hole one level up.
+// effective set: a catalogue adds to the shipped types, so `defect` named
+// "Bug" collides with the shipped `bug`.
 func TestATypeNameCollidesWithABuiltinToo(t *testing.T) {
 	t.Parallel()
 	if _, err := checkTypes([]TaskType{{Slug: "defect", Name: "Bug"}}); err == nil {
 		t.Fatal("a declared type took the name of a builtin, so resolving " +
 			"\"Bug\" picks whichever row was read first")
 	}
-	// AND RENAMING A BUILTIN IS STILL FREE, which is the whole point of
-	// the override: a declared type carrying a builtin's SLUG replaces it
-	// rather than joining it.
+	// AND RENAMING A BUILTIN IS STILL FREE: a declared type carrying a
+	// builtin's slug replaces it rather than joining it.
 	if _, err := checkTypes([]TaskType{{Slug: "bug", Name: "Defect"}}); err != nil {
 		t.Errorf("renaming a builtin was refused: %v — a company's own word "+
 			"for `bug` is exactly what the override is for", err)

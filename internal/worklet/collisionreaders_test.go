@@ -13,18 +13,15 @@ import (
 // EVERY READER THAT NAMES A TASK BY ITS KEY SAYS WHEN THE KEY OPENS ANOTHER.
 //
 // A key two tasks hold resolves to the one that claimed it, so a duplicate is
-// reached only by its id — and the readers a task page, the company feed and a
-// person's open questions are drawn from each hand a task onward by its key.
+// reached only by its id.
 // [TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask] holds the
-// board, the item, the inbox and a person's own work to it; this holds the
-// rest: a task page's neighbours (`around=`), the task a child is filed under,
-// the company feed's rows, and the asks a decision screen lists with the call
-// that answers each.
+// board, the item, the inbox and a person's own work to it; this holds a task
+// page's neighbours (`around=`), the task a child is filed under, the company
+// feed's rows, and the asks a decision screen lists with each one's call.
 //
 // Mutation: read a neighbour's bare key in [segmentFirst] or [aroundListed],
-// drop `key_collision` from the parent, the feed or the decisions page, or
-// hand an ask's answer call the key — and the duplicate is reached as the
-// claimant.
+// drop `key_collision` from the parent, the feed or the decisions page, or hand
+// an ask's answer call the key: the duplicate is reached as the claimant.
 func TestEveryNewReaderSaysWhenAKeyOpensAnotherTask(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)

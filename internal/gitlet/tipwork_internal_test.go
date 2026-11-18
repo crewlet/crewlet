@@ -6,19 +6,16 @@ import (
 )
 
 // THE TWO REPOSITORY LISTINGS WALK AS ONE (mergeRepoPages): a `checks_due`
-// listing of repositories is two keyset pages after one cursor — the
-// repositories owing their changes check work and those owing tip work — and
-// merging them must lose no repository whichever of them a bound cut: walked
-// page by page from the cursor each merge answers, it names every repository
-// of the union exactly once, in order, and stops. Each case is a pair of whole
-// listings, each paged after the cursor at the limit as its own statement
-// pages it: either cut at the limit while the other is short, the union cut
-// while both are short, both cut, ids the two share, and none at all.
+// listing of repositories is two keyset pages after one cursor (those owing
+// their changes check work, and those owing tip work); walked page by page
+// from each merge's cursor, it names every repository of the union exactly
+// once, in order, and stops, whichever page a bound cut. Each case pages two
+// whole listings as their statements do: either cut while the other is short,
+// the union cut while both are short, both cut, shared ids, and none at all.
 //
-// Mutation: end the walk wherever the union holds all both pages read,
-// whether or not a page was cut at its bound — the repositories past a cut
-// page are never listed, red; or set no cursor where only the union was cut
-// — the same, red.
+// Mutation: end the walk wherever the union holds all both pages read, cut or
+// not, or set no cursor where only the union was cut: the repositories past a
+// cut are never listed, red.
 func TestTwoRepositoryListingsWalkAsOne(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

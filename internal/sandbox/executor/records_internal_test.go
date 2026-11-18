@@ -36,7 +36,7 @@ func recordsEntries(b *transcriptBuilder) string {
 // [recordsOpening], as text: its transcript, every token its model calls
 // reported, and the run's own spend its results stated.
 func readClaudeStream(_ *testing.T, line string) string {
-	d := &claudeEvents{tools: map[string]string{}}
+	d := &claudeEvents{}
 	d.Line([]byte(recordsOpening))
 	d.Line([]byte(line))
 	own, stated := d.runSpend()
@@ -350,7 +350,7 @@ func TestARunsSpendIsUnreadWhereAResultNamesMoreModelsThanAResultIsReadFor(t *te
 		"a result naming one model more, then one that states its spend": {lines: []string{past, recordsEnding},
 			want: fmt.Sprintf("%q, %s", failed+"\n"+failed, unread)},
 	} {
-		d := &claudeEvents{tools: map[string]string{}}
+		d := &claudeEvents{}
 		for _, line := range tc.lines {
 			d.Line([]byte(line))
 		}
@@ -390,7 +390,7 @@ func TestARunsSpendIsUnreadWhereAResultStatesItAsNoObject(t *testing.T) {
 			"after a result that states its spend":  {recordsEnding, other},
 			"before a result that states its spend": {other, recordsEnding},
 		} {
-			d := &claudeEvents{tools: map[string]string{}}
+			d := &claudeEvents{}
 			for _, line := range lines {
 				d.Line([]byte(line))
 			}
@@ -401,7 +401,7 @@ func TestARunsSpendIsUnreadWhereAResultStatesItAsNoObject(t *testing.T) {
 			}
 		}
 	}
-	d := &claudeEvents{tools: map[string]string{}}
+	d := &claudeEvents{}
 	d.Line([]byte(recordsEnding))
 	d.Line([]byte(ctReplace(t, recordsEnding, ","+spent, "")))
 	own, stated := d.runSpend()
@@ -477,7 +477,7 @@ func TestAResultsSpendModelByModelCostsItsReaderAModelAtATime(t *testing.T) {
 	// reader is handed a line it did not copy.
 	stream := func(line string) func() {
 		raw := []byte(line)
-		return func() { (&claudeEvents{tools: map[string]string{}}).Line(raw) }
+		return func() { (&claudeEvents{}).Line(raw) }
 	}
 	const (
 		head = `{"type":"result","subtype":"success","is_error":false,"result":"done",` +

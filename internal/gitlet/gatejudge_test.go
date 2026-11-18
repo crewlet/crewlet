@@ -9,10 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// THE MERGE GATE, JUDGED — gitlet.JudgeGate over facts a case builds by hand,
-// one snapshot's rows and one epoch's chart, so each case holds the judgment
-// alone; the reads that gather the facts from the rows are held by the
-// readiness cases, which read a change through the shipped reader.
+// THE MERGE GATE, JUDGED: gitlet.JudgeGate over facts a case builds by hand
+// (one snapshot's rows, one epoch's chart), so each case holds the judgment
+// alone; the readiness cases hold the reads that gather the facts.
 
 // gateChart is an organization two teams deep under one lead:
 //
@@ -20,9 +19,9 @@ import (
 //	  Web (id web, lead web-lead)
 //	  Data (id data, lead data-lead)
 //
-// with dev in Web, a seat that only reads (reader, in Web) and the person
-// founder — so a repository Engineering owns is reviewed by both teams'
-// leads (they write it, their tier reviews) and maintained by the cto.
+// with dev and the read-only reader in Web and the person founder, so a
+// repository Engineering owns is reviewed by both teams' leads and maintained
+// by the cto.
 func gateChart() chart {
 	seat := func(handle string, tier gitlet.Tier, unit string) gitlet.RosterSeat {
 		return gitlet.RosterSeat{Handle: handle, Tier: tier, Unit: unit}
@@ -52,12 +51,10 @@ var (
 	gateDataLd  = gitlet.Party{Handle: "data-lead", Kind: gitlet.PartyAgent}
 )
 
-// gateCase is dev's change web!42, from its own branch into main on platform,
-// a repository Engineering owns, at revision 2: its facts against main
-// recorded, touching touched — matched against the owners and the human
-// paths the snapshot's repository row digests — merging cleanly, and
-// nobody's approval yet, under the chart gateChart draws. Which human paths
-// hold it is its home's match, which a case makes with matchedBy.
+// gateCase is dev's change web!42 from its own branch into main on platform
+// (owned by Engineering) at revision 2: facts recorded, touching touched under
+// the snapshot's owner and human-path digests, merging cleanly, approved by
+// nobody, under gateChart. A case matches its human paths with matchedBy.
 func gateCase(touched ...string) gitlet.GateFacts {
 	return gitlet.GateFacts{
 		Rows: gitlet.ReadinessRows{
@@ -81,8 +78,8 @@ func gateCase(touched ...string) gitlet.GateFacts {
 }
 
 // matchedBy is f with its head revision's human paths matched as its home
-// matches them (gitlet.MatchHumanPaths): touched, the paths it touches, against
-// the human paths rules hold its target to, classed by f's classes.
+// matches them (gitlet.MatchHumanPaths): touched against rules' human paths,
+// classed by f's classes.
 func matchedBy(f gitlet.GateFacts, rules gitlet.GateRules, touched ...string) gitlet.GateFacts {
 	f.Head.HumanPaths = gitlet.MatchHumanPaths(rules.HumanPaths, touched, f.Head.TouchesAll, f.Head.Classes)
 	return f
@@ -110,15 +107,15 @@ func gated(t *testing.T, gate gitlet.MergeGate) gitlet.GateRules {
 	return r
 }
 
-// bareGate is a gate holding nothing but its defaults — writers, no
-// approval, a queue at 4/4, seats — which a case sets a term of.
+// bareGate is a gate of defaults only (writers, no approval, a queue at
+// 4/4, seats), which a case sets a term of.
 func bareGate() gitlet.MergeGate {
 	return gitlet.MergeGate{MergeBy: gitlet.MergeByWriters, Approvals: gitlet.ApprovalsNone,
 		Landing: gitlet.Landing{Depth: 4, Batch: 4}, DeleteSource: gitlet.DeleteSeats}
 }
 
-// judgedAs fails t unless r's precondition of kind is in state, its sentence
-// holding says.
+// judgedAs fails t unless r's precondition of kind is in state and its
+// sentence holds says.
 func judgedAs(t *testing.T, r gitlet.Readiness, kind gitlet.PreconditionKind, state gitlet.PreconditionState,
 	says string) gitlet.Precondition {
 
@@ -134,12 +131,11 @@ func judgedAs(t *testing.T, r gitlet.Readiness, kind gitlet.PreconditionKind, st
 	return p
 }
 
-// OWNERS_APPROVE NEEDS ONE COMMON APPROVER: a change touching the paths of
-// two owners, Web and Data, waits for ONE counted approval from somebody
-// eligible for both — a lead on both teams' lead chains (the cto) or a
-// person. Web's lead and Data's lead each approving, each eligible for one of
-// them alone, is no such approval, and the term waits on the cto; the cto's
-// approval meets it, and so does a person's.
+// OWNERS_APPROVE NEEDS ONE COMMON APPROVER: a change touching Web's and
+// Data's paths waits for ONE approval from somebody eligible for both (a lead
+// on both lead chains, the cto, or a person). Each team's lead approving is
+// no such approval, and the term waits on the cto; the cto's or a person's
+// meets it.
 //
 // Mutation: count an approval eligible for any one touched owner (any
 // approver per glob) — the two leads meet the term, red.
@@ -163,8 +159,8 @@ func TestOwnersApproveNeedsOneCommonApprover(t *testing.T) {
 		gitlet.PreconditionMet, `seat "cto"'s approval counts for every path owner`)
 	judgedAs(t, gitlet.JudgeGate(approving(f, gateFounder, 2), rules), gitlet.PreconditionOwnersApproval,
 		gitlet.PreconditionMet, `person "founder"'s approval counts`)
-	// A SEAT OWNER's chain is the seat and its unit's leads: reader's own
-	// path and Web's share Web's lead and the cto.
+	// A SEAT OWNER's chain is the seat and its unit's leads, so reader and
+	// Web share Web's lead.
 	f.Head.RequestedOwners = []gitlet.TouchedOwner{touchedOwner(gitlet.OwnerSeat, "reader"),
 		touchedOwner(gitlet.OwnerUnit, "Web")}
 	judgedAs(t, gitlet.JudgeGate(approving(f, gateWebLead, 2), rules), gitlet.PreconditionOwnersApproval,
@@ -172,12 +168,10 @@ func TestOwnersApproveNeedsOneCommonApprover(t *testing.T) {
 }
 
 // AN OWNER ROW CHANGE LEAVES OWNERS_APPROVE COMPUTING: the head revision's
-// facts recorded the owners its home matched under one digest of the
-// repository's owner rows, and the snapshot holds rows of another — owners
-// added or removed since, which the home has not matched yet. Judged on the
-// stale match, the removed owner would still hold the change and an added one
-// never; so the term waits, computing, for the home's next revise — and the
-// same facts under their own digest are judged.
+// facts matched owners under one digest of the owner rows and the snapshot
+// holds another. Judged on the stale match, a removed owner would still hold
+// the change and an added one never, so the term waits for the home's next
+// revise; the same facts under their own digest are judged.
 //
 // Mutation: judge the recorded match whatever the snapshot's digest — the
 // first readiness reads met, red.
@@ -200,11 +194,10 @@ func TestAnOwnerRowChangeLeavesOwnersApproveComputing(t *testing.T) {
 		`seat "web-lead"'s approval counts`)
 }
 
-// A STALE APPROVAL DOES NOT COUNT: the founder approved revision 1, and
-// revision 2 holds other code and another diff — so neither the gate's
-// approval, nor its person's, nor its owners' counts that approval, each
-// counted by M4's one rule. Revision 2 carrying revision 1's diff unchanged
-// (equal patch ids) carries it to all three.
+// A STALE APPROVAL DOES NOT COUNT: the founder approved revision 1 and
+// revision 2 holds another diff, so none of the gate's approval, its person's
+// or its owners' counts it (M4's one rule). Revision 2 carrying revision 1's
+// diff unchanged (equal patch ids) carries it to all three.
 //
 // Mutation: count an approval of any revision of the change — revision 2
 // reads approved by the founder, red.
@@ -230,12 +223,10 @@ func TestAStaleApprovalDoesNotCount(t *testing.T) {
 }
 
 // AN UNLESS CLASS WAIVES ONLY ITS ENTRY: docs/** is a person's unless every
-// path it matched is comment_only, deploy/** a person's always. A change
-// whose docs paths are all comment-only is held by deploy/** alone; one
-// touching docs alone, comment-only, is held by none — a whitespace_only path
-// counting as comment_only, the narrower class — and one docs path of real
-// code holds it by docs/** again, its comment-only neighbour waiving nothing
-// for it.
+// path it matched is comment_only, deploy/** always. All-comment-only docs
+// paths leave deploy/** alone holding; docs alone, comment-only, is held by
+// none (whitespace_only, the narrower class, counts as comment_only); one docs
+// path of real code holds it by docs/** again.
 //
 // Mutation: waive an entry where ANY path it matched is of a class its unless
 // names — the last change reads met, red.
@@ -269,8 +260,7 @@ func TestAnUnlessClassWaivesOnlyItsEntry(t *testing.T) {
 	judgedAs(t, gitlet.JudgeGate(f, rules), gitlet.PreconditionHumanApproval, gitlet.PreconditionUnmet,
 		`touches "docs/**"`)
 
-	// A REVISION THAT TOUCHES ALL is held by every entry, which no class
-	// waives.
+	// A REVISION THAT TOUCHES ALL is held by every entry; no class waives it.
 	f = gateCase()
 	f.Head.TouchesAll = true
 	f = matchedBy(f, rules)
@@ -282,15 +272,12 @@ func TestAnUnlessClassWaivesOnlyItsEntry(t *testing.T) {
 }
 
 // A HUMAN PATH CHANGE LEAVES HUMAN_APPROVAL COMPUTING: the head revision's
-// facts recorded which human paths hold it as its home matched them, under
-// one digest of the repository's rules' human paths, and the snapshot's
-// repository row digests them to another — a human path added or removed
-// since, which the home has not matched yet. Judged on the stale match, a
-// removed path would still hold the change and an added one never, and its
-// places name entries of a list that is not the gate's; so the term waits,
-// computing, for the home's next revise — and the same facts under their own
-// digest are judged. A match naming a place past the gate's human paths is
-// read as no match of this gate's either.
+// facts matched human paths under one digest of the rules' human paths and
+// the snapshot's repository row holds another. Judged on the stale match, a
+// removed path would still hold the change, an added one never, and its
+// places would index another list, so the term waits for the home's next
+// revise; the same facts under their own digest are judged. A match naming a
+// place past the gate's human paths is likewise no match of this gate's.
 //
 // Mutation: judge the recorded match whatever the snapshot's digest — the
 // first readiness reads unmet, red.
@@ -315,14 +302,12 @@ func TestAHumanPathChangeLeavesHumanApprovalComputing(t *testing.T) {
 		"human paths changed since")
 }
 
-// AN APPROVALS_UNLESS CLASS EXEMPTS ONLY A WHOLLY CLASSED REVISION: the gate
-// asks an approval unless every path is comment_only, and a revision is
-// exempt only where its classification is complete and every path it touches
-// is listed under a class it names — a whitespace_only change counting as a
-// comment_only one — which the gate counts, reading how many paths it
-// touches, never the paths. One path of no class, an incomplete
-// classification, or a comment_only path under a gate exempting
-// whitespace_only alone each leave the approval asked.
+// AN APPROVALS_UNLESS CLASS EXEMPTS ONLY A WHOLLY CLASSED REVISION: exempt
+// only when its classification is complete and every touched path is under a
+// named class (whitespace_only counting as comment_only), counted against how
+// many paths it touches, never the paths. One unclassed path, an incomplete
+// classification, or a comment_only path under a whitespace_only exemption
+// each leave the approval asked.
 //
 // Mutation: exempt a revision whose classed paths are fewer than its touched
 // paths — the second revision reads met, red.
@@ -350,11 +335,9 @@ func TestAnApprovalsUnlessClassExemptsOnlyAWhollyClassedRevision(t *testing.T) {
 }
 
 // AN EXTERNAL CHECK WAITS ON ITS REPORT: a required check with no attempt on
-// the head commit — one the target's checks file defines, which the home
-// queues, or one it does not, which a person's CI reports — is computing,
-// waiting on nobody; a report of it running is computing still; a report that
-// it passed meets the term, and one that it failed leaves it unmet, waiting on
-// the change's owner.
+// the head commit (queued by the home, or reported by a person's CI) is
+// computing, waiting on nobody, and so is one reported running; passed meets
+// the term, failed leaves it unmet, waiting on the change's owner.
 //
 // Mutation: read a required check with no attempt as met — the first
 // readiness is ready, red.
@@ -387,14 +370,12 @@ func TestAnExternalCheckWaitsOnItsReport(t *testing.T) {
 	}
 }
 
-// THE GATE NAMES EVERY UNMET TERM: a change that meets none of its target's
-// gate — no approval, a human path touched with no person asked, two owners
-// touched, a check failed, and a merger that only writes where maintainers
-// merge — lists every term unmet, each naming whom it waits on (a merge only
-// a maintainer or a person makes, the maintaining seat), in the order a
-// change moves through; its first sentence is its earliest; and a gate that
-// asks a term of nothing lists it not at all: an ungated branch asks no
-// approval.
+// THE GATE NAMES EVERY UNMET TERM: a change meeting none of its gate (no
+// approval, a human path, two owners, a failed check, a writer merging where
+// maintainers merge) lists every term unmet, in the order a change moves
+// through, each naming whom it waits on (a maintainer's merge, the maintaining
+// seat); the first sentence is the earliest; and an ungated branch asks no
+// approval, owner or check.
 //
 // Mutation: leave a term out of JudgeGate — the case's list of unmet terms
 // is short of it, red.
@@ -456,10 +437,10 @@ func TestTheGateNamesEveryUnmetTerm(t *testing.T) {
 }
 
 // THE MERGE AUTHORITY IS THE STRICTEST RULE AND THE FLOOR: a person merges
-// anything; a seat that writes merges where every rule matching the branch
-// and the company's floor let writers; a second rule on the branch, or the
-// floor, asking maintainers holds it to the maintainer; a floor reaches no
-// branch no rule protects, where a merge is whoever may push the branch.
+// anything; a writing seat merges where every matching rule and the company's
+// floor let writers; a second rule or the floor asking maintainers holds it to
+// the maintainer; the floor reaches no unprotected branch, where whoever may
+// push it merges.
 //
 // Mutation: hold a merge to the first matching rule alone — the second rule's
 // maintainers is never met, red.
@@ -506,12 +487,11 @@ func TestTheMergeAuthorityIsTheStrictestRuleAndTheFloor(t *testing.T) {
 	}
 }
 
-// A GATE THAT KEEPS A SEAT'S BRANCH WINS: a merge deletes a source in a
-// seat's namespace unless a gate matching its target keeps it — the one of
-// the two answers no later write undoes — so one rule saying `none` keeps it
-// whatever another says, a value this build does not know keeps it, and a
-// target no gate matches keeps nothing (its merge's caller deletes the seat's
-// branch).
+// A GATE THAT KEEPS A SEAT'S BRANCH WINS: a merge deletes a seat's source
+// branch unless a gate matching its target keeps it, keeping being the answer
+// no later write undoes: one rule saying `none` keeps it whatever another
+// says, an unknown value keeps it, and an ungated target keeps nothing (its
+// merge's caller deletes the branch).
 //
 // Mutation: KeepsSource ORed with `false` → the none and unknown cases, red.
 func TestAGateThatKeepsASeatsBranchWins(t *testing.T) {
@@ -547,16 +527,13 @@ func TestAGateThatKeepsASeatsBranchWins(t *testing.T) {
 }
 
 // A CHECKS FILE CHANGE NEEDS A PERSON (U44): a rule requiring checks holds a
-// change touching gitlet.ChecksDirGlob — the directory its checks file lives in
-// — to a PERSON'S approval, as a human path its record never names: a seat's
-// counted approval leaves the term unmet, naming the glob and waiting on the
-// change's owner to ask a person, and a person's meets it. The combined gate
-// names it among its human paths — what decides that a snapshot reads the
-// change's touched paths at all — though no rule's record lists it.
-// agents_edit_checks opts the rule out; a rule requiring no check names it
-// not at all; a change touching nothing under it is met; and the opt-out is
-// the RULE'S: a second rule requiring checks without it still holds the
-// change.
+// change touching gitlet.ChecksDirGlob to a PERSON'S approval, a human path the
+// combined gate names (so a snapshot reads the touched paths) though no rule's
+// record lists it. A seat's approval leaves it unmet, naming the glob and
+// waiting on the owner to ask a person; a person's meets it.
+// agents_edit_checks opts the rule out, a rule requiring no check names it not
+// at all, a change touching nothing under it is met, and the opt-out is the
+// RULE'S: a second rule requiring checks without it still holds the change.
 //
 // Mutation: drop the default from GateRulesOf — a seat's approval of a
 // checks file change reads met (no human_approval term at all), red.
@@ -608,8 +585,8 @@ func TestAChecksFileChangeNeedsAPerson(t *testing.T) {
 		}
 	}
 
-	// THE OPT-OUT IS THE RULE'S: a second rule matching main that requires
-	// checks without it holds the change, the strictest of the two.
+	// THE OPT-OUT IS THE RULE'S: a second rule on main requiring checks
+	// without it holds the change.
 	rule := func(pattern string, g gitlet.MergeGate) gitlet.Protection {
 		return gitlet.Protection{PushRule: gitlet.PushRule{Pattern: pattern, DirectPush: gitlet.DirectPersons}, Gate: &g}
 	}
@@ -622,10 +599,9 @@ func TestAChecksFileChangeNeedsAPerson(t *testing.T) {
 }
 
 // THE OWNERS' APPROVAL NAMES THE GLOBS EACH OWNER TOUCHES: its sentence names
-// each touched owner with the first glob of its the revision touched and how
-// many more, as the facts keep them, and at most eight owners, the rest
-// counted. Owners the facts keep with no glob read today's unmet words
-// exactly, and the met sentence's list after a colon.
+// each touched owner with the first of its globs the revision touched and how
+// many more, at most eight owners, the rest counted. Owners kept with no glob
+// read the globless sentences exactly.
 //
 // Mutations: drop the globs from ownersNamed (the first sentence names none,
 // red); drop maxOwnersNamed (ten owners named, red).
@@ -647,7 +623,7 @@ func TestTheOwnersApprovalNamesTheGlobsEachOwnerTouches(t *testing.T) {
 	judgedAs(t, gitlet.JudgeGate(approving(both, gateCTO, 2), rules), gitlet.PreconditionOwnersApproval,
 		gitlet.PreconditionMet, `seat "cto"'s approval counts for every path owner revision 2 touches: `+named)
 
-	// KEPT WITH NO GLOB, as facts recorded before gitlet.OwnedPathsVersion keep them.
+	// KEPT WITH NO GLOB, as facts below gitlet.OwnedPathsVersion keep them.
 	exactly := func(r gitlet.Readiness, want string) {
 		t.Helper()
 		i := slices.IndexFunc(r.Preconditions, func(p gitlet.Precondition) bool {

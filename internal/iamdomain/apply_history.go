@@ -11,21 +11,13 @@ import (
 // THE AUTHENTICATION TRAIL: one row per record that changes who somebody is or
 // whether they are signed in.
 //
-// # The class is DERIVED, never carried
+// THE CLASS IS DERIVED from the op through one table beside the enum, never
+// carried: a writer stating its own could file a suspension in the short
+// horizon, gone when somebody looked. An unclassified op fails the build.
 //
-// A writer that stated its own class could file a suspension in the short
-// horizon, and the row would simply be gone when somebody went looking. So the
-// op decides, through one table beside the enum, and an op with no
-// classification is a build failure rather than a record that quietly writes
-// no trail.
-//
-// # Why the row's id is a digest and not a uuid
-//
-// The applier is a PURE FUNCTION of the log: a uuid minted here would differ
-// on every data node, in a table that claims byte-identical state. So the id is
-// a digest of the record's own operation id and the position it applied at —
-// both of which every node sees identically — which also makes the row
-// naturally idempotent under redelivery.
+// THE ROW'S ID IS A DIGEST of the record's op id and position, not a uuid,
+// which would differ per node in a table claiming byte-identical state; it is
+// also idempotent under redelivery.
 
 // writeHistory writes the trail row for one record, if its op has one.
 func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
@@ -40,16 +32,13 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, at applyContext)
 	}
 	summary := at.record.Reason
 	if len(summary) > MaxReason {
-		// CUT RATHER THAN REFUSED, and only here. Every other value in
-		// this domain is refused past its cap naming the field, because
-		// a caller can fix what it sent; this one arrives on a record
-		// the broker has already committed, and refusing it would stall
-		// the log over a long sentence.
+		// CUT, NOT REFUSED, here alone: every other value is refused past its
+		// cap so the caller can fix it, but this record is already committed,
+		// and refusing it would stall the log over a long sentence.
 		summary = summary[:MaxReason]
 	}
-	// THE OBJECT IS WHAT THE RECORD WAS ABOUT: its subject, or — for a
-	// directory record, whose subject names nobody — the person or the
-	// address it concerned ([applyContext.aboutKind]).
+	// THE OBJECT IS WHAT THE RECORD WAS ABOUT: its subject, or for a
+	// directory record the person or address ([applyContext.aboutKind]).
 	objectKind, objectID := string(at.record.Subject.Kind), at.record.Subject.ID
 	if at.aboutKind != "" {
 		objectKind, objectID = at.aboutKind, at.aboutID
@@ -74,15 +63,9 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, at applyContext)
 	return int(written), nil
 }
 
-// historyID is the trail row's own id: a digest every node computes the same
-// way.
-//
-// THE OPERATION ID AND THE POSITION, both. The op id alone would collide
-// across a republish, which is exactly what a reanchor performs — the same
-// operation, at a new position, legitimately producing a second row that says
-// when this fleet applied it. The position alone would collide with nothing
-// and say nothing, and would change under a republish that must not rewrite
-// history.
+// historyID is the trail row's id, a digest every node computes alike of the
+// op id AND the position: the op id alone collides across a republish, which a
+// reanchor performs, legitimately adding a row for when this fleet applied it.
 func historyID(at applyContext) string {
 	digest := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d",
 		at.record.OpID, at.packed)))

@@ -11,92 +11,41 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// Who one change woke, and under which reason.
+// Who one change woke, and why: per recipient, the ONE reason that reached
+// them, whether it asks something of them and whether they were only a
+// fallback, where `tracker_history.notified` says only that the commit
+// carried a notification ([ActivityRecord.Notified]).
 //
-// # The fact no other tracker records
+// It reads `tracker_notifications` by RECORD, [Reader.Inbox] by recipient; the
+// key `(record_id, recipient)` makes this a prefix scan with no index of its own.
 //
-// Every work tracker can tell you that somebody was notified. This one records,
-// per change and per recipient, the ONE reason of eighteen that reached them,
-// whether it ASKS something of them, and whether they were reached only because
-// nobody better was found. The applier has written exactly that set since the
-// domain landed — it is what [Candidates] resolved — and its only trace on any
-// surface was `tracker_history.notified`: a single boolean saying that
-// somebody, somewhere, was told.
-//
-// That boolean is the whole reason this reader exists. "Did my comment reach
-// the person I meant?" is the question a person actually has, and a company
-// whose answer is `true` has no answer at all.
-//
-// # It is the OTHER axis of the same rows
-//
-// [Reader.Inbox] reads `tracker_notifications` by RECIPIENT: one person, every
-// change. This reads the same table by RECORD: one change, every person. The
-// table's primary key is `(record_id, recipient)`, so this direction is a
-// primary-key prefix scan and needs no index of its own — the two readers are
-// the two orders the key was already written in.
-//
-// # An absent set is three facts, not one
-//
-// `tracker_history.notified` does NOT mean somebody was woken. It means the
-// commit CARRIED a notification — see [ActivityRecord.Notified], which says so
-// explicitly, because the applier deliberately does not hold the roster [Route]
-// would need. So a change with `notified = 1` and no recipient rows is
-// genuinely ambiguous between three things:
-//
-//   - the routing resolved to NOBODY: every candidate was the actor, or has
-//     left the company;
-//   - the rows were SWEPT, because the notification rows are cleared on the
-//     inbox retention horizon and the history rows never are;
-//   - and neither can be told from the other, which is its own answer.
-//
-// Collapsing those into a boolean is the exact failure this reader exists to
-// end one level up, so [RoutingAnswer.Delivery] is a value: "announced and
-// reached nobody" sends a reader to look at who has left, and "swept" sends
-// them to look at a retention horizon. They are not the same errand. The rule
-// that tells them apart is [routing.DeliveryOf], every native domain's, and
-// what this reader adds is the evidence it decides on: the history row's
-// `notified`, the notification rows it found, and the caller's horizon.
-//
-// They are separated by the HORIZON, which the caller states: a change older
-// than `inbox.retention_days` is one whose rows the sweep is entitled to have
-// taken and the applier is entitled never to have written, so their absence
-// is not evidence. A change newer than it would still have its rows, so their
-// absence IS evidence — nobody was reached.
-//
-// The horizon travels on the QUERY rather than on the reader, for the reason
-// `now` does: it is a company setting, the epoch moves under a reader that
-// outlives it, and a reader holding a stale horizon would date a set against a
-// retention nobody is running. A caller that states none gets `unknown`, which
-// is the honest answer to "is this gone?" from somebody who does not know how
-// long anything is kept.
+// An empty set means the routing reached nobody, the inbox retention swept the
+// rows (history rows are never swept), or neither can be told:
+// [routing.DeliveryOf] decides from `notified`, the rows and the retention
+// horizon the caller states ([RoutingQuery.Retention]).
 
 // RoutingRecipient is one person a change reached, and why.
 type RoutingRecipient struct {
 	// Handle is whose inbox the row landed in.
 	Handle string `json:"handle"`
 
-	// Reason is the ONE reason this handle heard under — the first in
-	// [Reasons] that named them. See [Candidates]: the resolution is
-	// ordered and a handle appears once, so this is a value rather than
-	// a set.
+	// Reason is the ONE reason this handle heard under: the first in
+	// [Reasons] that named them ([Candidates] lists a handle once).
 	Reason Reason `json:"reason"`
 
-	// Addressed marks a notice that ASKS something rather than informing.
-	// It is the property that decides whether a wake obliges a seat to
-	// answer — see [Reason.Addressed] — and it is the column a person
-	// scanning this list is actually looking for.
+	// Addressed marks a notice that ASKS something rather than informing,
+	// which decides whether a wake obliges a seat to answer
+	// ([Reason.Addressed]).
 	Addressed bool `json:"addressed"`
 
 	// Fallback marks a recipient reached only because nobody better was
-	// found: a lead who hears about their report's task because the
-	// report has left. Rank orders the fallbacks among themselves, so a
-	// surface can say WHICH substitute this was rather than only that it
-	// was one.
+	// found (a lead, because the report has left); FallbackRank says WHICH
+	// substitute this was.
 	Fallback     bool `json:"fallback,omitempty"`
 	FallbackRank int  `json:"fallback_rank,omitempty"`
 
-	// Excerpt is what the row carried into their inbox, which can differ
-	// per recipient: a mention's excerpt is the sentence naming them.
+	// Excerpt is what the row carried into their inbox; it differs per
+	// recipient (a mention's is the sentence naming them).
 	Excerpt string `json:"excerpt,omitempty"`
 }
 
@@ -104,53 +53,46 @@ type RoutingRecipient struct {
 type RoutingAnswer struct {
 	RecordID string `json:"record_id"`
 
-	// Held is false when no history row with this id exists — a record id
-	// from another company, a typo, or one a reanchor has not replayed
-	// yet. It is NOT the same as a change that woke nobody, and the two
-	// have different remedies.
+	// Held is false when no history row has this id (another company's, a
+	// typo, or one a reanchor has not replayed yet): NOT a change that woke
+	// nobody, which has a different remedy.
 	Held bool `json:"held"`
 
 	Kind       ChangeKind `json:"kind,omitempty"`
 	SubjectID  string     `json:"subject_id,omitempty"`
 	SubjectKey string     `json:"subject_key,omitempty"`
 
-	// Actor is who made the change, and At the AUTHORED instant — the
-	// same instant the inbox renders, so a card and this page agree.
+	// Actor is who made the change, and At the AUTHORED instant the inbox
+	// renders, so a card and this page agree.
 	Actor     string     `json:"actor,omitempty"`
 	ActorKind AuthorKind `json:"actor_kind,omitempty"`
 	At        time.Time  `json:"at,omitzero"`
 
-	// Notified is the history row's own flag: what the applier concluded
-	// at the time it routed. It is what [Recipients] replaces, and it is
-	// kept because the two disagreeing is meaningful — see Swept.
+	// Notified is the history row's own flag, kept beside [Recipients]
+	// because the two disagreeing is evidence for Delivery.
 	Notified bool `json:"notified"`
 
-	// Recipients is everybody the change reached, ordered as a reader
-	// wants them rather than as the key stores them: addressed first,
-	// then fallbacks last, each group by handle.
+	// Recipients is everybody the change reached, ordered for a reader
+	// rather than by the key: addressed first, fallbacks last, each group
+	// by handle.
 	Recipients []RoutingRecipient `json:"recipients"`
 
 	// Delivery is what this node can honestly say about who the change
-	// reached — see the file head. It is the value a surface renders when
-	// [Recipients] is empty, and the three empty states it distinguishes
-	// send a reader to three different places.
+	// reached: what a surface renders when [Recipients] is empty, whose
+	// states send a reader to different places.
 	Delivery routing.Delivery `json:"delivery"`
 
-	// RetainedFrom is the instant the stated horizon falls on — the
-	// sweep's own cutoff — and it is what Delivery is decided against.
-	// Zero when the caller stated no horizon, which is what makes
-	// `unknown` reachable.
+	// RetainedFrom is the stated horizon's instant, the sweep's cutoff
+	// Delivery is decided against; zero, and Delivery `unknown`, when the
+	// caller stated none.
 	RetainedFrom time.Time `json:"retained_from,omitzero"`
 
-	// Truncated says the recipient list was cut at [MaxRoutingRows].
-	// It cannot happen for a record this build wrote — every source of a
-	// recipient is capped at the write and the bound is their sum — so it
-	// means a peer wrote a larger set, and a reader must be told rather
-	// than shown a short list that looks complete.
+	// Truncated says the list was cut at [MaxRoutingRows], which only a
+	// peer writing a larger set can cause; a short list must not look
+	// complete.
 	Truncated bool `json:"truncated,omitempty"`
 
-	// Addressed and Fallback are counts over the returned list, which is
-	// the whole list unless Truncated says otherwise.
+	// Addressed and Fallback count the returned list.
 	Addressed int `json:"addressed"`
 	Fallback  int `json:"fallback"`
 
@@ -164,16 +106,11 @@ type RoutingAnswer struct {
 
 // MaxRoutingRows bounds one change's recipient list.
 //
-// DERIVED, NEVER CHOSEN. Every source a routing snapshot can name is capped at
-// the WRITE — see `Notify.checkSnapshot`, which refuses rather than trims — so
-// the recipient set is bounded before it is stored and this is their sum, plus
-// a slack term for the role handles no cap governs (assignee, reporter, lead,
-// the container's owner: a fixed handful that would have to be counted by hand
-// and would drift the day one is added).
-//
-// Written as the arithmetic rather than as a number so that raising any one of
-// those caps raises this with it. A literal here would silently start
-// truncating the day somebody doubled [MaxWatchers].
+// DERIVED, NEVER CHOSEN: every source a snapshot names is capped at the WRITE
+// (`Notify.checkSnapshot` refuses rather than trims), so this is their sum,
+// plus slack for the uncapped role handles (assignee, reporter, lead, the
+// container's owner). Written as arithmetic so raising a cap raises it; a
+// literal would silently truncate.
 const MaxRoutingRows = MaxWatchers + // watchers
 	MaxWatchers + // removed_watchers
 	MaxCollaborators +
@@ -186,15 +123,14 @@ const MaxRoutingRows = MaxWatchers + // watchers
 
 // RoutingQuery asks who one change woke.
 type RoutingQuery struct {
-	// RecordID is the history row, which is what every surface already
-	// holds: an activity card, an item's own feed and an inbox notice all
-	// carry it.
+	// RecordID is the history row, which an activity card, an item's feed
+	// and an inbox notice all carry.
 	RecordID string
 
-	// Retention is the company's `inbox.retention_days` as the caller is
-	// currently running it — see the file head. Zero states none, and an
-	// absent recipient set is then `unknown` rather than dated against a
-	// horizon nobody is keeping.
+	// Retention is the company's `inbox.retention_days` as the caller runs
+	// it, on the query rather than the reader because the setting moves
+	// under a reader that outlives it. Zero states none, and an absent set
+	// is then `unknown`.
 	Retention time.Duration
 
 	Level     statelog.ReadLevel
@@ -206,10 +142,8 @@ type RoutingQuery struct {
 
 // Routing answers who one change woke, and under which reason.
 //
-// THERE IS NO CURSOR, and that is a property of the data rather than an
-// omission: the set is bounded at the write by [MaxRoutingRows] and read by a
-// primary-key prefix, so the whole of it is one page. A cursor would be a
-// second thing to keep correct for a list that cannot have a second page.
+// THERE IS NO CURSOR: the set is bounded at the write by [MaxRoutingRows], so
+// it is always one page.
 func (r *Reader) Routing(ctx context.Context, q RoutingQuery, now time.Time) (
 	RoutingAnswer, error) {
 
@@ -228,10 +162,9 @@ func (r *Reader) Routing(ctx context.Context, q RoutingQuery, now time.Time) (
 	answer := RoutingAnswer{RecordID: record}
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level: q.Level,
-		// BOTH FAMILIES, for [Reader.Inbox]'s own reason: this answer is
-		// composed of the history row and the notification rows, and a
-		// closure naming one family would certify it complete while a
-		// deferred record in the other was still holding the rest.
+		// BOTH FAMILIES ([Reader.Inbox]'s reason): one family's closure
+		// would certify the answer complete while a deferred record in
+		// the other still held the rest.
 		Scope:     routingScope(),
 		Session:   q.Session,
 		Floors:    q.Floors,
@@ -270,9 +203,8 @@ func (r *Reader) Routing(ctx context.Context, q RoutingQuery, now time.Time) (
 	if q.Retention > 0 {
 		answer.RetainedFrom = now.Add(-q.Retention)
 	}
-	// THE HISTORY ROW'S `notified` IS THE ANNOUNCEMENT, never "somebody was
-	// woken" — see [ActivityRecord.Notified] — and a record id naming no
-	// row is not held: the two facts the rule needs besides the rows.
+	// `notified` IS THE ANNOUNCEMENT, never "somebody was woken"
+	// ([ActivityRecord.Notified]).
 	answer.Delivery = routing.DeliveryOf(routing.Evidence{
 		Held:         answer.Held,
 		Announced:    answer.Notified,
@@ -290,8 +222,8 @@ func (r *Reader) Routing(ctx context.Context, q RoutingQuery, now time.Time) (
 	return answer, nil
 }
 
-// routingScope is the whole domain, because the two halves live in different
-// families — see [Reader.Routing].
+// routingScope is the whole domain: the answer's two halves live in
+// different families ([Reader.Routing]).
 func routingScope() statelog.ScopeSet {
 	return statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised()
 }
@@ -303,13 +235,9 @@ const routingRecordStatement = `
 		  FROM tracker_history
 		 WHERE id = ?`
 
-// readRoutingRecord fills in the change's own facts.
-//
-// A MISSING ROW IS NOT AN ERROR. A record id that names nothing is an ordinary
-// thing for a caller to hold — a link from an old page, a reanchor that has
-// not replayed this far — and the answer says `held: false` rather than
-// failing, which is the same shape [Reader.Person] gives a person nobody has
-// written.
+// readRoutingRecord fills in the change's own facts. A MISSING ROW IS NOT AN
+// ERROR but `held: false` (an old link, an unreplayed reanchor), the shape
+// [Reader.Person] gives a person nobody has written.
 func readRoutingRecord(ctx context.Context, tx *sql.Tx, answer *RoutingAnswer) error {
 	var kind, actor, actorKind string
 	var createdAt int64
@@ -332,10 +260,8 @@ func readRoutingRecord(ctx context.Context, tx *sql.Tx, answer *RoutingAnswer) e
 
 // readRoutingRecipients reads the notification rows for one change.
 //
-// THE SUBJECT KEY COMES FROM HERE rather than from the history row, because
-// the applier resolved it at the write and it is the value the recipient's own
-// inbox shows. Reading it from the task row instead would show a key that has
-// since been renamed, which is a different fact from what the person was told.
+// THE SUBJECT KEY COMES FROM HERE: resolved at the write, it is what the
+// recipient's inbox shows; the task row may hold a key renamed since.
 func readRoutingRecipients(ctx context.Context, tx *sql.Tx, record string) (
 	recipients []RoutingRecipient, subjectKey string, truncated bool, err error) {
 
@@ -356,8 +282,7 @@ func readRoutingRecipients(ctx context.Context, tx *sql.Tx, record string) (
 	out := make([]RoutingRecipient, 0, 8)
 	for rows.Next() {
 		if len(out) == MaxRoutingRows {
-			// THE EXTRA ROW IS EVIDENCE, never an answer — the page
-			// stays at the bound and the caller is told it was cut.
+			// THE EXTRA ROW IS EVIDENCE, never an answer.
 			truncated = true
 			break
 		}
@@ -370,8 +295,7 @@ func readRoutingRecipients(ctx context.Context, tx *sql.Tx, record string) (
 			return nil, "", false, fmt.Errorf("worklet: scan the routing of %s: %w",
 				record, err)
 		}
-		// EVERY ROW CARRIES THE SAME KEY — the applier resolves it once
-		// per commit — so the first non-empty one is the change's.
+		// EVERY ROW CARRIES THE SAME KEY, resolved once per commit.
 		if subjectKey == "" {
 			subjectKey = key
 		}
@@ -379,9 +303,8 @@ func readRoutingRecipients(ctx context.Context, tx *sql.Tx, record string) (
 		recipient.Addressed = addressed != 0
 		recipient.Fallback = fallback != 0
 		if !recipient.Fallback {
-			// A RANK WITHOUT A FALLBACK IS NOISE: the column is zero
-			// on every non-fallback row today, and a surface reading
-			// it would render "1st substitute" beside an assignee.
+			// A RANK WITHOUT A FALLBACK IS NOISE a surface would
+			// render as "1st substitute" beside an assignee.
 			recipient.FallbackRank = 0
 		}
 		out = append(out, recipient)

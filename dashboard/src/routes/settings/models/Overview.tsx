@@ -39,6 +39,7 @@ import { HarnessMark, MARK_SIZE } from "./HarnessMark.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
 import { JobGlyph, type Job } from "./JobGlyph.tsx";
 import { EntryMenu, HealthLine, SignInLine, type OnFlow } from "./parts.tsx";
+import { UsageLimitsCell } from "./UsageLimits.tsx";
 import { ASSISTANT_USE, CATEGORY_WORDS, EVERYTHING, ROUTE, product } from "./words.ts";
 
 /** One use of a model in Used by: the job, its words, and the seats on it. */
@@ -374,6 +375,13 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
                 // Worst first: a model that cannot answer leads an ascending sort.
                 sortValue: (m) => HEALTH_ORDER.indexOf(m.entry.health),
                 cell: (m) => <HealthLine model={m} compact />,
+              },
+              {
+                key: "limits",
+                header: "Usage limits",
+                // Never gives way: on a phone it stacks into the row's card.
+                floor: "13rem",
+                cell: (m) => <UsageLimitsCell model={m} />,
               },
               ...(admin
                 ? [

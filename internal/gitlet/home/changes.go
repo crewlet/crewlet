@@ -16,19 +16,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// Estate is the code log and the git reads as the home's work reaches them —
-// the router's code seam satisfies it (estate.CodeSeam): the change and check
-// work's due listings (Read), the merge queue's own, read whole or refused
-// (QueueDue, since the queue carries every entry it reads into the record it
-// asks next), a revision's facts and a commit's checks file (GitRead, asked of
-// the repository's Gitlet nodes, its home first), a record of a revision's
-// facts, of a change's mergeability or of its readiness on the change
-// (Converse, asked of the repository's committing data node's change writer),
-// a landing (Change, asked of its committer), a record of its checks (Checks,
-// asked of the same node's checks writer) and a protected target's green or
-// broken record and the queue's records (Queue, asked of its committer). Each
-// write raises this node's floors past what it landed, so the next listing
-// reads it wherever it is answered.
+// Estate is the code log and the git reads the home's work uses; the router's
+// code seam (estate.CodeSeam) satisfies it. Read answers the change and check
+// work's listings; QueueDue the merge queue's, read whole or refused, since
+// the queue carries every entry it reads into its next record. GitRead asks
+// the repository's Gitlet nodes, its home first; Converse its committing data
+// node's change writer; Checks that node's checks writer; Change and Queue its
+// committer. Each write raises this node's floors past what it landed, so the
+// next listing reads it wherever it is answered.
 type Estate interface {
 	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
 	QueueDue(ctx context.Context, q gitlet.QueueDueQuery) (gitlet.QueueDueAnswer, error)
@@ -39,12 +34,10 @@ type Estate interface {
 	Queue(ctx context.Context, p gitlet.QueueProposal) (gitlet.QueueResult, error)
 }
 
-// Cache is this node's git cache as the home's merges reach it —
-// internal/gitlet/cache's *Cache satisfies it: a copy of a repository synced
-// to a floor and pinned while a merge runs over it (Sync), a scratch beside
-// it the merge writes in (NewScratch), and — for a merge preview, which only
-// the walk's home fills a copy for — whether it holds or is filling one
-// (Holds).
+// Cache is this node's git cache (internal/gitlet/cache's *Cache): Sync pins
+// a copy at a floor while a merge runs over it, NewScratch makes the scratch
+// the merge writes in, and Holds (whether it holds or is filling a copy)
+// serves merge previews, which only the walk's home fills a copy for.
 type Cache interface {
 	Holds(repoID string) bool
 	Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error)
@@ -60,16 +53,11 @@ type Pool interface {
 // crewlet.code.home.passes counts its turns.
 const WorkerChanges = "changes"
 
-// changes is the home's CHANGE WORK, the worker every loop is built with: for
-// each live change of a repository, its head revision's facts read and
-// recorded on the change and its merge into its target's tip recorded beside
-// them, or the change landed where its target holds its head; its readiness
-// recorded again, merging nothing, where what it reads moved since its merge
-// judged it — a review, an ask, an answer to findings, facts, its own row, its
-// head's checks, or the chart this node holds, a later one than judged it —
-// and, a moved target's changes merged again at the refresh, within a pass's
-// budget; and, for a change live or ended, its asks for review settled with
-// its lifecycle where they no longer match it ([changes.settle]).
+// changes is the home's CHANGE WORK, the worker every loop is built with
+// (package doc, "What a turn of the changes worker does"). A change's
+// readiness is recorded again, merging nothing, where what it reads moved since
+// its merge judged it, a later chart among them; its asks for review are
+// settled with its lifecycle, live or ended ([changes.settle]).
 type changes struct {
 	estate Estate
 	cache  Cache
@@ -84,12 +72,11 @@ type changes struct {
 	// rechecks is each repository's share of a pass's merges of moved
 	// targets ([MergeabilityPerPass]).
 	rechecks *recheckBudget
-	// factsRecorded is told each revision's facts this worker recorded: the
-	// repository and the position their record landed at. The record is on
-	// the CHANGE's subject, which the loop's watch does not see, and a head's
-	// checks are dispatched only once its facts are recorded — so the loop
-	// schedules the repository's check work there ([Loop.follow]) rather
-	// than leave the dispatch to its backstop, a minute later.
+	// factsRecorded is told the repository and position of each facts record
+	// this worker lands. The record is on the change's subject, which the
+	// loop's watch does not see, and a head's checks dispatch only once its
+	// facts are recorded, so [Loop.follow] schedules the check work there
+	// rather than leave it to the backstop, a minute later.
 	factsRecorded func(repoID string, at statelog.Position)
 }
 
@@ -108,14 +95,11 @@ func (c *changes) Due(ctx context.Context, floor statelog.Position, cursor strin
 	return a.DueRepos, a.Next, nil
 }
 
-// Work is one repository's due changes: first the asks its first page names
-// due a settling ([changes.settle]), then every page's changes, each worked in
-// the order the listing names them ([changes.change]) — a failure of one left
-// for the next pass while the others are worked — and then the merges its moved
-// targets ask again, the oldest first and no more than what is left of the
-// repository's share of this pass ([recheckBudget]), until they are done or
-// the turn's context ends. A change a step of this turn landed is merged
-// again by none.
+// Work is one repository's due changes: the first page's ask settlings
+// ([changes.settle]), every page's changes in listing order ([changes.change],
+// one's failure left for the next pass), then the merges its moved targets
+// ask again, oldest first, within the repository's share of this pass
+// ([recheckBudget]). A change this turn landed is not merged again.
 func (c *changes) Work(ctx context.Context, repoID string, floor statelog.Position) error {
 	q := gitlet.ReadQuery{Kind: gitlet.ReadChangesDue, Fresh: freshAt(floor),
 		ChangesDue: &gitlet.ChangesDueQuery{RepoID: repoID, RecheckBefore: c.now().Add(-MergeabilityRefresh),
@@ -175,27 +159,16 @@ func (c *changes) Work(ctx context.Context, repoID string, floor statelog.Positi
 	return errors.Join(failed...)
 }
 
-// change is one due change: its head revision's FACTS where it owes them —
-// read against its target's tip as the listing read it, asked at the
-// listing's position, so the Gitlet node that answers holds both commits — the
-// change LANDED where its target holds its head, through its merge step
-// ([changes.merge]), whose ancestry over this node's own copy finds it so and
-// whose walk of the target's moves names the push that merged it; and the
-// facts RECORDED otherwise, the path owners and the human paths its target's gate names
-// matched against the touched paths here, on the home (gitlet.MatchOwners,
-// gitlet.MatchTargetHumanPaths), beside the digests of the owners and the rules
-// the listing read;
-// then its MERGE where it owes one ([changes.merge]), whatever became of its
-// facts, since the merge reads none of them; and where it owes no merge, a
-// REFRESH of its readiness ([changes.refresh]) where it owes one, or where
-// this turn recorded facts its stored readiness was judged before. A merge
-// records the readiness itself, judged with its own snapshot, so a change
-// merged this turn owes no refresh. It answers whether the change was found
-// landed — its head inside its target's tip, which this turn does no more
-// work on whatever its landing answered — and every step's failure, A
-// LANDING THAT DECIDED NOTHING among them ([undecidedLandings]): a committer
-// that keeps refusing a landing busy, or a Change call that keeps failing,
-// is a turn that failed, never one that worked.
+// change is one due change: its FACTS where owed ([changes.facts]), a head
+// already in its target LANDED through [changes.merge]; then its MERGE where
+// owed, whatever became of the facts, since the merge reads none; else a
+// REFRESH of its readiness ([changes.refresh]) where owed or where this turn
+// recorded facts newer than the stored readiness. A merge records readiness
+// itself, so a change merged this turn owes no refresh. It answers whether the
+// change was found landed (no more work this turn, whatever the landing
+// answered) and every step's failure, an undecided landing
+// ([undecidedLandings]) among them: a committer that keeps refusing busy is a
+// turn that failed, never one that worked.
 func (c *changes) change(ctx context.Context, repoID string, due gitlet.ChangeDue, rules against,
 	at statelog.Position) (bool, error) {
 
@@ -204,13 +177,10 @@ func (c *changes) change(ctx context.Context, repoID string, due gitlet.ChangeDu
 	if due.FactsDue {
 		in, recorded, err := c.facts(ctx, repoID, due, rules, at)
 		if in {
-			// THE MERGE STEP LANDS IT, its ancestry asked again over this
-			// node's own copy: the landing names the push that merged the
-			// change, which only a walk of the target's moves through git can
-			// tell, and the merge step holds the copy and the scratch that
-			// walk runs in. Its ancestry agrees with the Gitlet node's, which
-			// read the same two commits; where it did not land the change it
-			// recorded its merge, and this turn does no more of it.
+			// The merge step lands it: naming the merging push takes a git
+			// walk of the target's moves over the copy and scratch the merge
+			// step holds. Its ancestry agrees with the Gitlet node's (same
+			// two commits); either way this turn does no more of it.
 			return c.merge(ctx, repoID, due, at)
 		}
 		revised = recorded
@@ -235,11 +205,11 @@ func (c *changes) change(ctx context.Context, repoID string, due gitlet.ChangeDu
 	return false, errors.Join(failed...)
 }
 
-// facts is a due change's facts read, then its facts recorded where its head
-// is not in its target ([changes.change]): whether its head is in its target,
-// which its merge step lands, and whether its facts were recorded. Facts the
-// Gitlet node left short for time are no facts to keep
-// (gitlet.RevisionFactsAnswer.Final): the turn's failure, the change still due.
+// facts reads a due change's facts, asked at the listing's position so the
+// answering Gitlet node holds both commits, and records them where its head is
+// not in its target: whether the head is in its target (the merge step lands
+// it) and whether the facts were recorded. Facts left short for time
+// (gitlet.RevisionFactsAnswer.Final) are the turn's failure, the change still due.
 func (c *changes) facts(ctx context.Context, repoID string, due gitlet.ChangeDue, rules against,
 	at statelog.Position) (bool, bool, error) {
 
@@ -266,12 +236,10 @@ func (c *changes) facts(ctx context.Context, repoID string, due gitlet.ChangeDue
 		return true, false, nil
 	}
 	if !f.Final() {
-		// FACTS LEFT SHORT FOR TIME are the Gitlet node's moment, never the
-		// commits': recorded, they would hold for good — a revise takes
-		// facts of a revision and a tip once — and an id omitted for a slow
-		// node would carry no approval across the revision. The change stays
-		// due its facts, so the next pass asks again, of whichever Gitlet node
-		// the walk reaches then.
+		// Facts short for time are the Gitlet node's moment, not the
+		// commits': recorded, they would hold for good (a revise takes a
+		// revision's facts against a tip once), and a patch id omitted for
+		// a slow node would carry no approval across the revision.
 		return false, false, fmt.Errorf("home: the facts of revision %d of change %d of repository %s ran out "+
 			"the Gitlet node's budget before their patch id (%q) or their classes (%q) were whole; the next pass "+
 			"asks again", due.Revision, due.Number, repoID, f.PatchIDOmission, f.ClassesOmission)
@@ -288,29 +256,18 @@ const (
 	mergeFailed = "failed"
 )
 
-// merge is a due change's MERGE on this node — the repository's home — and
-// whether it landed the change: this node's copy synced to the listing's
-// position at, so it holds both commits, and pinned; a scratch beside it
-// ([MergeScratchID]), removed after; the change's ANCESTRY first — its head
-// inside its target's tip is a change merged, whatever push moved the target
-// there, which is LANDED rather than merged again (D7b), naming the push the
-// walk of the target's moves over the same scratch finds merged it
-// ([changes.land]) — and otherwise the
-// merge ([mergeIn]), in the maintenance lane within [MergeabilityDeadline],
-// recorded on the change as its MERGEABILITY. A refusal that the rows moved
-// since is the next pass's to read; one that decided nothing for a reason of
-// the log's is this turn's failure.
-//
-// crewlet.code.home.merge.duration TIMES THE MERGE ALONE — the sync, the
-// scratch, the ancestry and the merge-tree — observed the moment the ancestry
-// or the merge answers, BEFORE the landing or the record is asked: those are
-// a committer's proposal and a change writer's record through the router,
-// another node's work counted by its own instruments
-// (crewlet.code.change.proposals, crewlet.code.conversation.writes), so a
-// slow change writer never reads as slow merges on the home, and a merge
-// whose record failed still counts as the merge it was.
-// `failed` is a merge that could not run: a copy that would not sync, a
-// scratch that could not be made, git's ancestry or merge failing.
+// merge is a due change's MERGE on its home, and whether it landed the change,
+// over this node's copy synced and pinned at the listing's position at (so it
+// holds both commits) in a scratch ([MergeScratchID]). ANCESTRY first: a head
+// inside its target's tip is LANDED, not merged again (D7b; [changes.land]).
+// Otherwise [mergeIn] runs in the maintenance lane within
+// [MergeabilityDeadline], recorded by [changes.mergeability].
+// crewlet.code.home.merge.duration times the sync, scratch, ancestry and
+// merge-tree alone, observed before the landing or record is asked: those are
+// other nodes' work (crewlet.code.change.proposals,
+// crewlet.code.conversation.writes), so a slow writer never reads as slow
+// merges here and a merge whose record failed still counts. `failed` is a
+// merge that could not run.
 func (c *changes) merge(ctx context.Context, repoID string, due gitlet.ChangeDue, at statelog.Position) (bool,
 	error) {
 
@@ -334,9 +291,7 @@ func (c *changes) merge(ctx context.Context, repoID string, due gitlet.ChangeDue
 			err)
 	}
 	defer sc.Remove()
-	// ANCESTRY FIRST, as a read of the scratch: the one question a moved
-	// target asks before its merge — a target that came to hold the head is
-	// the change merged.
+	// Ancestry first: a target that came to hold the head is the change merged.
 	res, err := c.git.Run(ctx, gitproc.Cmd{Dir: sc.Dir, Alternate: sc.Alternate,
 		Args:  []string{"merge-base", "--is-ancestor", due.Head, due.Tip},
 		Class: gitproc.ClassMaintenance, Deadline: gitproc.ReadDeadline, Answers: []int{1}})
@@ -366,10 +321,8 @@ const (
 )
 
 // mergeability asks the repository's change writer to record m, the merge of
-// due's head revision into its target's tip: an answer that the rows moved
-// since — superseded, the change closed or merged — is the next pass's to
-// read; one that decided nothing for a reason of the log's is this turn's
-// failure.
+// due's head revision into its target's tip. A refusal that decided nothing
+// ([undecidedFacts]) is this turn's failure; any other is the next pass's to read.
 func (c *changes) mergeability(ctx context.Context, repoID string, due gitlet.ChangeDue, m merged,
 	at statelog.Position) error {
 
@@ -395,12 +348,10 @@ func (c *changes) mergeability(ctx context.Context, repoID string, due gitlet.Ch
 }
 
 // land asks the repository's committer to record due's change merged at the
-// tip the home found its head in, decided against the change's head and that
-// tip, naming the push that merged it as the walk of the target's moves over
-// sc finds it ([changes.merger]): an answer that the rows moved since — stale,
-// the change closed — or that it is merged already is the next pass's to
-// read; one that decided nothing for a reason of the log's is this turn's
-// failure, and so is a walk that could not be read.
+// tip the home found its head in, decided against its head and that tip,
+// naming the push [changes.merger] finds over sc. A refusal that decided nothing ([undecidedLandings]) or a walk that
+// could not be read is this turn's failure; any other refusal is the next
+// pass's to read.
 func (c *changes) land(ctx context.Context, repoID string, due gitlet.ChangeDue, sc *cache.Scratch,
 	at statelog.Position) error {
 
@@ -430,62 +381,42 @@ func (c *changes) land(ctx context.Context, repoID string, due gitlet.ChangeDue,
 	return nil
 }
 
-// The landing walk's bounds ([changes.merger]).
-//
-// landingWalkPage is the most pushes one read of the walk asks for: one
-// group-commit record's worth (gitlet.MaxPushesPerRecord), so the common walk —
-// the merge in the tip's own record or the one before it — is one read.
-//
-// landingWalkPushes is the most pushes the walk reads, newest first from the
-// tip, before it names nobody: FOUR FULL RECORDS. The walk spans the pushes
-// landed between the merge and the tip the home's pass read, and a pass
-// follows a push on the repository's subject within the loop's nudge — a
-// sync, a listing and a git process, seconds — so even a target every seat
-// pushes to has moved a handful of times since the merge, against the 256
-// pushes of four records written back to back at group commit's widest. Each
-// push on the target costs one `merge-base --is-ancestor` in the maintenance
-// lane, so the bound is also the walk's git: at most 256 reads of a few
-// milliseconds over a warm copy, once a change. A walk cut there names nobody,
-// which tells every author the change merged, its merger among them: one
-// wake too many, never a wrong name.
+// The landing walk's bounds ([changes.merger]). landingWalkPage is one
+// group-commit record's worth (gitlet.MaxPushesPerRecord), so the common walk
+// (the merge in the tip's record or the one before) is one read.
+// landingWalkPushes, the most it reads before naming nobody, is FOUR FULL
+// RECORDS: the walk spans the pushes between
+// the merge and the tip the pass read, which a pass follows within the loop's
+// nudge (seconds), so even a busy target has moved a handful of times, against
+// 256. Each push costs one `merge-base --is-ancestor`, so the bound also caps
+// the walk's git at 256 reads of milliseconds over a warm copy, once a change.
+// A walk cut there names nobody, which tells every author the change merged:
+// one wake too many, never a wrong name.
 const (
 	landingWalkPage   = gitlet.MaxPushesPerRecord
 	landingWalkPushes = 4 * gitlet.MaxPushesPerRecord
 )
 
-// merger is the push that MERGED due's change — brought its head into its
-// target: the latest move of the target, at or below the tip the home found
-// the head in, whose OLD commit did not hold the head, so the target held it
-// at every move from that one through the tip — its id and the position of
-// its record; none where no move the walk read is that one.
-//
-// WHY A WALK, AND WHY BACKWARDS: the push that moved the target LAST is not
-// the merger whenever the target moved again before this pass read it —
-// somebody's push on top, in the merge's own group-commit record or a later
-// one — and naming it would tell the merger `merged` of their own merge and
-// tell every other author that somebody else merged it. Whether a commit
-// holds another is git's to say, so the home asks: from the tip down, each
-// move's new commit is known to hold the head (the tip does; each older
-// move's new commit is the old one of the move after it), and the first move
-// whose old commit does not hold it is the merger. A target forced back
-// behind the head and pushed past it again names the move that brought it
-// back, which is the merge that stands. The walk costs the moves since the
-// merge, never the target's history, and stops at [landingWalkPushes].
-//
-// It names nobody where the moves do not chain (a push row between them gone
-// past the history's horizon or purged), where the rows run out with every
-// old commit holding the head (the head was in the target before every move
-// they keep), and past the bound. The committer holds what it names to the
-// rows (internal/gitlet's landingPusher).
+// merger is the push that MERGED due's change, its id and record position:
+// the latest move of the target at or below the tip the head was found in
+// whose OLD commit did not hold the head. The target's last push is not it
+// whenever the target moved again before this pass, and naming that would
+// misattribute the merge. So it walks back from the tip: each move's new
+// commit holds the head (each older move's new is the next one's old), git is
+// asked of each old commit, and the first not holding it is the merger; a
+// target forced back and pushed past the head again names the move that
+// stands. It names nobody where the moves do not chain (a push row past the
+// horizon or purged), where every old commit holds the head, or past
+// [landingWalkPushes]. The committer holds what it names to the rows
+// (internal/gitlet's landingPusher).
 func (c *changes) merger(ctx context.Context, repoID string, due gitlet.ChangeDue, sc *cache.Scratch,
 	at statelog.Position) (string, statelog.Position, error) {
 
 	if due.TipPosition.IsZero() {
 		return "", statelog.Position{}, nil
 	}
-	// BELOW THE NEXT SEQUENCE: the introduced read's descending page is the
-	// pushes strictly below its bound, and the tip's own record is the first
-	// the walk needs.
+	// The descending read is strictly below its bound, and the walk starts
+	// at the tip's own record.
 	before := due.TipPosition
 	before.Seq++
 	q := gitlet.ReadQuery{Kind: gitlet.ReadIntroduced, Fresh: freshAt(at),
@@ -552,14 +483,12 @@ type against struct {
 	gates  []gitlet.RuleGate
 }
 
-// revise asks the repository's change writer to record due's revision's facts
-// f — its trees and its classes with the rest, as the Gitlet node read them —
-// its touched paths matched against rules' path owners, each owner with its
-// globs that matched, and against the human paths rules' gates hold its target
-// to, measured now to the microsecond, and answers whether they were
-// recorded: an answer that the rows moved since — superseded, the change
-// closed or merged — is the next pass's to read; one that decided nothing for
-// a reason of the log's is this turn's failure.
+// revise asks the repository's change writer to record f, due's revision's
+// facts as the Gitlet node read them, its touched paths matched here against
+// rules' path owners and the human paths rules' gates hold its target to,
+// measured now to the microsecond, and answers whether they were recorded. A
+// refusal that decided nothing ([undecidedFacts]) is this turn's failure; any
+// other is the next pass's to read.
 func (c *changes) revise(ctx context.Context, repoID string, due gitlet.ChangeDue, f *gitlet.RevisionFactsAnswer,
 	rules against, at statelog.Position) (bool, error) {
 
@@ -601,13 +530,11 @@ func (c *changes) revise(ctx context.Context, repoID string, due gitlet.ChangeDu
 }
 
 // refresh asks the repository's change writer to record due's readiness again
-// over the merge its row holds — a mergeability that MERGES NOTHING
-// (gitlet.Mergeability.Refresh): no copy synced, no scratch, no git — naming the
-// head revision, its head and its target, the writer stamping the merge from
-// the row and the readiness from its own snapshot. An answer that the rows
-// moved since — superseded: the row's answer judged at the inputs already, a
-// merge owed first, the change closed or merged — is the next pass's to read;
-// one that decided nothing for a reason of the log's is this turn's failure.
+// over the merge its row holds: a mergeability that MERGES NOTHING
+// (gitlet.Mergeability.Refresh), no copy, scratch or git, the writer stamping
+// the merge from the row and the readiness from its own snapshot. A refusal
+// that decided nothing ([undecidedFacts]) is this turn's failure; any other
+// is the next pass's to read.
 func (c *changes) refresh(ctx context.Context, repoID string, due gitlet.ChangeDue, at statelog.Position) error {
 	res, err := c.estate.Converse(ctx, gitlet.ConversationWrite{OpID: statelog.NewOpID(c.now(), ""), Seen: at,
 		Mergeability: &gitlet.Mergeability{RepoID: repoID, ChangeID: due.ID, Revision: due.Revision,
@@ -629,12 +556,10 @@ func (c *changes) refresh(ctx context.Context, repoID string, due gitlet.ChangeD
 }
 
 // settle asks the repository's change writer to settle due's asks for review
-// with its change's lifecycle (gitlet.AskSettle): those still waiting on a change
-// that closed or merged ended, those its end left on a change reopened since
-// asked again — the writer stamping the asks it moves from its own snapshot.
-// An answer that the rows moved since — superseded: the change reopened or
-// ended again, or holding no such ask — is the next pass's to read; one that
-// decided nothing for a reason of the log's is this turn's failure.
+// with its change's lifecycle (gitlet.AskSettle): asks waiting on a closed or
+// merged change end, and those its end left on a change reopened since are
+// asked again. A refusal that decided nothing ([undecidedFacts]) is this
+// turn's failure; any other is the next pass's to read.
 func (c *changes) settle(ctx context.Context, repoID string, due gitlet.AskDue, at statelog.Position) error {
 	res, err := c.estate.Converse(ctx, gitlet.ConversationWrite{OpID: statelog.NewOpID(c.now(), ""), Seen: at,
 		Asks: &gitlet.AskSettle{RepoID: repoID, ChangeID: due.ChangeID, State: due.State}})
@@ -654,12 +579,11 @@ func (c *changes) settle(ctx context.Context, repoID string, due gitlet.AskDue, 
 	return nil
 }
 
-// undecidedLandings and undecidedFacts are every refusal of a landing and of a
-// record of facts or a mergeability that decided NOTHING for a reason of the
-// writer's or of the log's — busy, the log refusing the record or dropping it
-// everywhere — which a turn counts as failed, its change listed again by the
-// next pass; every other refusal is the rows answering, which the next pass
-// reads again.
+// undecidedLandings and undecidedFacts are the refusals of a landing and of a
+// facts or mergeability record that decided NOTHING for the writer's or the
+// log's reason (busy, the record refused or dropped everywhere): the turn
+// fails and the next pass lists the change again. Every other refusal is the
+// rows answering, which the next pass reads.
 var (
 	undecidedLandings = []gitlet.ChangeRefusal{gitlet.ChangeRefusalBusy, gitlet.ChangeRefusalNotApplied,
 		gitlet.ChangeRefusalUnavailable}
@@ -668,32 +592,20 @@ var (
 )
 
 // recheckBudget is each repository's share of a PASS's merges of its moved
-// targets on this node: at most [MergeabilityPerPass] between two of the
-// loop's paced passes — the backstop's ticks, which renew every repository's
-// share at once ([recheckBudget.newPass]) — whichever turns, the pass's own
-// or a nudge's, run them.
-//
-// A PASS, NEVER A CLOCK WINDOW: a window opened at a repository's first
-// recheck and ended one backstop later is ended by a moment no pass keeps,
-// since a pass's turn starts after its listing, its placement read and a
-// free turn — a delay that varies pass to pass — so a pass whose turn came
-// sooner than the last one's found the window still open and its share
-// spent, and a quiet target's backlog drained at half the share. Renewed by
-// the ticker that paces the passes, every pass's turns find the whole share.
-// A pass a watch's gap asks early renews nothing: a gap is no tick, and a
-// node whose watch keeps losing its consumer would otherwise merge without
-// bound.
-//
-// A count and never a list: the rows say which changes are due, and the share
-// only how many of them a pass may merge, so a node that restarts or a home
-// that moves begins with the whole share, a pass's merges early at the most.
+// targets on this node: at most [MergeabilityPerPass] between two paced passes,
+// renewed for every repository at once by the backstop's tick
+// ([recheckBudget.newPass]), whichever turns run them. A pass, never a clock
+// window: a pass's turn starts after a delay that varies, so a window could
+// still be open, its share spent, at a sooner next turn. A pass a watch's gap
+// asks early renews nothing, or a node whose watch keeps losing its consumer
+// would merge without bound. A count, never a list: the rows say which changes
+// are due, so a restarted node or moved home begins with the whole share, a
+// pass's merges early at most.
 type recheckBudget struct {
 	mu sync.Mutex
-	// perPass is the merges one repository's share holds,
-	// [MergeabilityPerPass] — a suite's own (export_test.go) — and used each
-	// repository's merges since the last paced pass, forgotten whole at the
-	// next, so a node home to many repositories holds those that rechecked
-	// this pass alone.
+	// perPass is [MergeabilityPerPass] (a suite sets its own, export_test.go);
+	// used counts each repository's merges since the last paced pass, cleared
+	// whole at the next, so it holds only this pass's repositories.
 	perPass int
 	used    map[string]int
 }

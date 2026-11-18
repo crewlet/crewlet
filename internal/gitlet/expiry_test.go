@@ -19,12 +19,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE REF LIFECYCLE (M3-decisions M3-O54, M3-O62, M3-O64): a seat's branch
-// nobody has set for gitlet.RefExpiry is deleted by the code-retention pass,
-// through a push on the engine's own account to its repository's committer —
-// unless a live turn holds it, or its committer finds it no longer idle. Each
-// case runs the real committer and applier of the harness's node, its pass at
-// the harness's clock.
+// THE REF LIFECYCLE (M3-decisions M3-O54, M3-O62, M3-O64): the code-retention
+// pass deletes a seat's branch nobody has set for gitlet.RefExpiry, by a push on
+// the engine's own account to its repository's committer, unless a live turn
+// holds it or the committer finds it no longer idle. Each case runs the harness
+// node's real committer and applier, its pass at the harness's clock.
 
 // idleSince is when a case's idle seat branches were set: a day past
 // gitlet.RefExpiry before the pass's clock.
@@ -63,7 +62,7 @@ func expiryOf(repo string, seen statelog.Position, cmds ...gitlet.Command) gitle
 }
 
 // listed is the position of the expiry's first page over n at the pass's
-// clock: what every proposal formed from it carries as its Seen.
+// clock: the Seen of every proposal formed from it.
 func (n *node) listed() statelog.Position {
 	n.t.Helper()
 	_, seen, err := gitlet.ExpiryPage(n.t.Context(), n.reader, harnessAt.Add(-gitlet.RefExpiry))
@@ -88,10 +87,10 @@ func (n *node) targetOf(id, ref string) string {
 }
 
 // AN EXPIRY PROPOSAL IS VALIDATED AS ONE: the engine's own account and the
-// expiry pair both ways; and the push deletes seats' branches and nothing
-// else — no create, no other ref, nothing decided by anybody but its
-// committer, no pack, no introduced commit, no --atomic, no change — naming
-// the page it was listed from. Each refused naming its field.
+// expiry pair both ways, and the push only deletes seats' branches (no create,
+// no other ref, nothing decided but by its committer, no pack, no introduced
+// commit, no --atomic, no change) and names the page it was listed from. Each
+// refusal names its field.
 //
 // Mutation: accept a create in an expiry → the create row passes, red.
 func TestAnExpiryProposalIsValidatedAsOne(t *testing.T) {
@@ -143,29 +142,18 @@ func TestAnExpiryProposalIsValidatedAsOne(t *testing.T) {
 	}
 }
 
-// THE DECIDE KEEPS A BRANCH THAT IS NO LONGER IDLE (rule 4b), answering each
-// command stale with the reason, and deletes the one that still is:
+// THE DECIDE KEEPS A BRANCH NO LONGER IDLE (rule 4b), answering it stale with
+// the reason, and deletes one still idle. Kept: pushed since its page (rule 4's
+// "fetch first", as 4b runs after it); set within gitlet.RefExpiry; force-pushed
+// back by a person (same target, no seat set it last); held by a turn RECORDED
+// after its page (one recorded before is deleted: the pass's read of the holds
+// answered it, M3-O61); the default branch (M3-O62; that name is deleted where
+// main is the default); under any protection, which refuses the engine
+// protected_direct (direct_push takes only a person's) before allow_delete.
 //
-//   - pushed again since its page — rule 4's own answer, "fetch first", since
-//     rule 4b runs after it;
-//   - set within gitlet.RefExpiry by the pass's clock;
-//   - force-pushed away and back by a person: its target is the same, and no
-//     seat set it last;
-//   - held by a live turn RECORDED after its page — and one recorded before
-//     the page is deleted, the pass's own read of the holds having answered it
-//     (M3-decisions M3-O61);
-//   - its repository's default branch (M3-decisions M3-O62), and the same
-//     branch of a repository whose default is main deleted;
-//   - under any protection that matches it: every rule refuses the engine's
-//     push protected_direct (direct_push persons takes a person's alone, none
-//     nobody's), so allow_delete never comes to be asked.
-//
-// Mutations: drop ExpiryRule's held term → the held branch is deleted, red;
-// compare it with >= → the branch held before its page is kept, red; drop the
-// default term → the default branch is deleted, red; run 4b before rule 4 →
-// the moved branch is answered with 4b's sentence, red; skip 4b → the
-// person's branch is deleted, red. A live change's branches are
-// TestTheDecideKeepsAnOpenChangesBranch's.
+// Mutations, each red: drop ExpiryRule's held or default term; compare held
+// with >= (keeps the one held before its page); run 4b before rule 4; skip 4b.
+// A live change's branches are TestTheDecideKeepsAnOpenChangesBranch's.
 func TestTheDecideKeepsABranchThatIsNoLongerIdle(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -257,8 +245,7 @@ const (
 // openChangesOn sets the open-change cases' seat branches on repo, idle, and
 // opens on them, as dev: web!1 from openSource and web!2, a draft, from
 // draftSource, both into main; web!3 from closedSource, then closed; and web!4
-// from feature into changeInto. Each change is asked of the repository's
-// committer and applied by the node's applier.
+// from feature into changeInto.
 func openChangesOn(t *testing.T, n *node, c *gitlet.Committer, repo string) {
 	t.Helper()
 	ctx := t.Context()
@@ -283,21 +270,18 @@ func openChangesOn(t *testing.T, n *node, c *gitlet.Committer, repo string) {
 	}
 }
 
-// AN OPEN CHANGE'S SOURCE BRANCH NEVER EXPIRES (M4-D32): the decide keeps a
-// seat branch idle past gitlet.RefExpiry that a live change is proposed from —
-// an open change's and a draft's — answering stale with a sentence NAMING the
-// change, so whoever reads why the branch outlived the fortnight reads which
-// review holds it; and the branch a live change is proposed into, since
-// deleting it strands the change. Once a change is closed, its source is a
-// seat's idle branch like any other, and is deleted. Every change here is
-// opened AFTER the page was read, so the listing's own skip
-// (TestTheListingSkipsAnOpenChangesBranch) had no say: the decide's term alone
-// keeps each branch, as it must for a review opened while a pass runs.
+// AN OPEN CHANGE'S SOURCE BRANCH NEVER EXPIRES (M4-D32): the decide keeps an
+// idle seat branch a live change (open or draft) is proposed from, answering
+// stale with a sentence NAMING the change so a reader learns which review holds
+// it, and the branch a live change is proposed into, whose deletion strands it.
+// A closed change's source is deleted like any idle branch. Every change opens
+// AFTER the page is read, so the listing's skip
+// (TestTheListingSkipsAnOpenChangesBranch) has no say: the decide's term alone
+// keeps each branch, as it must for a review opened mid-pass.
 //
-// Mutations: drop ExpiryRule's open-change term → the open and the draft
-// sources are deleted, red; drop its target term → the branch web!4 merges
-// into is deleted, red; read the live change's number by repository alone in
-// expiryRefsSQL → the sentence names another change, red.
+// Mutations: drop ExpiryRule's open-change term → the open and draft sources are
+// deleted, red; drop its target term → web!4's target is deleted, red; read the
+// live change's number by repository alone in expiryRefsSQL → wrong change, red.
 func TestTheDecideKeepsAnOpenChangesBranch(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -337,19 +321,16 @@ func TestTheDecideKeepsAnOpenChangesBranch(t *testing.T) {
 	}
 }
 
-// THE LISTING SKIPS A LIVE CHANGE'S BRANCHES (M4-D32): the pass's page of
-// idle seat branches leaves out the source of an open change and of a draft,
-// and the branch a live change is proposed into — branches the decide keeps
-// whatever their age, which a pass would otherwise propose, and its committer
-// refuse, on every pass for as long as the review lasted — and still lists a
-// closed change's source and a branch no change names. The skip is the
-// change's REPOSITORY's: the same branch names in another repository, where
-// no change names them, are listed.
+// THE LISTING SKIPS A LIVE CHANGE'S BRANCHES (M4-D32): the pass's page leaves
+// out an open change's and a draft's source and a live change's target
+// (branches the decide keeps at any age, which a pass would otherwise propose
+// and see refused on every pass the review lasts), yet lists a closed change's
+// source and a branch no change names. The skip is per REPOSITORY: the same
+// names in another repository are listed.
 //
-// Mutations: drop the listing's source term → the open and the draft sources
-// are listed, red; drop its target term → the branch web!4 merges into is
-// listed, red; correlate either on the ref alone → the other repository's
-// same-named branch is skipped, red.
+// Mutations: drop the listing's source term → the open and draft sources are
+// listed, red; drop its target term → web!4's target is listed, red; correlate
+// either on the ref alone → the other repository's branch is skipped, red.
 func TestTheListingSkipsAnOpenChangesBranch(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -377,13 +358,12 @@ func TestTheListingSkipsAnOpenChangesBranch(t *testing.T) {
 	}
 }
 
-// AN IDLE SEAT BRANCH EXPIRES THROUGH ITS PUSH ROW: the deletion is a push on
-// the engine's own account — via expiry, actor_kind system, no actor, no seat,
-// no run — whose command keeps the commit the branch was at, which is what a
-// restore reads; the ref is a tombstone; and the repository's last push and
-// idle clock stay where the seat's last push left them (M3-decisions M3-O54):
-// the engine's housekeeping is not anybody working there. The pushes ever and
-// the version move as for every record.
+// AN IDLE SEAT BRANCH EXPIRES THROUGH ITS PUSH ROW: a push on the engine's own
+// account (via expiry, actor_kind system, no actor, seat or run) whose command
+// keeps the commit the branch was at, which a restore reads; the ref becomes a
+// tombstone; the repository's last push and idle clock stay at the seat's last
+// push (M3-decisions M3-O54), housekeeping being nobody's work there. The
+// pushes ever and the version move as for every record.
 //
 // Mutation: drop the CASE from the counters' statement → the clocks move to
 // the expiry's instant, red.
@@ -424,10 +404,10 @@ func TestAnIdleSeatBranchExpires(t *testing.T) {
 	}
 }
 
-// AN EXPIRY DOES NOT MOVE A REPOSITORY'S ACTIVITY — but only a record whose
-// every entry is one (M3-decisions M3-O54): the committer batches an expiry
-// with whatever else is queued, and a record carrying a person's push beside
-// it moves both clocks to its instant, as any push does.
+// AN EXPIRY DOES NOT MOVE A REPOSITORY'S ACTIVITY when its record holds only
+// expiries (M3-decisions M3-O54): the committer batches an expiry with whatever
+// is queued, and a person's push beside it moves both clocks to the record's
+// instant, as any push does.
 //
 // Mutations: drop the CASE → the expiry alone moves the clocks, red; condition
 // it on "any expiry entry in the record" → the mixed record keeps them, red.
@@ -500,19 +480,17 @@ func expiryPass(n *node, props *proposals, h func(context.Context, []string) (ma
 	return r
 }
 
-// THE RETENTION PASS EXPIRES IDLE SEAT BRANCHES, and only those no live turn
-// holds: a seat branch idle past gitlet.RefExpiry is deleted by a push of the
-// engine's own; one set within the window is kept; a branch a person set in
-// the namespace, a tag the seat pushed and main are never listed; a branch a
-// live turn holds is kept and counted held — and deleted by the next pass once
-// nobody holds it; an archived repository's branch is kept and proposed
-// nothing, and so is a repository's default branch. Every proposal passes
-// Proposal.Validate.
+// THE RETENTION PASS EXPIRES IDLE SEAT BRANCHES no live turn holds: one idle
+// past gitlet.RefExpiry is deleted by the engine's own push; one set within the
+// window is kept; a person's branch in the namespace, a tag the seat pushed and
+// main are never listed; a held one is kept and counted held, then deleted by
+// the next pass once released; an archived repository's branch and a default
+// branch are kept and proposed nothing. Every proposal passes Proposal.Validate.
 //
-// Mutations: ignore what the holds answer → the held branch is deleted, red;
-// skip the default-branch filter → the default is proposed (and kept by
-// ExpiryRule, so the assertion of no proposal turns red); drop the status
-// filter → the archived repository is proposed, red.
+// Mutations: ignore the holds' answer → the held branch is deleted, red; skip
+// the default-branch filter → the default is proposed (ExpiryRule keeps it, but
+// the no-proposal assertion turns red); drop the status filter → the archived
+// repository is proposed, red.
 func TestRetentionExpiresIdleSeatBranches(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -735,11 +713,10 @@ func TestAPageOfArchivedBranchesAsksNoHolds(t *testing.T) {
 }
 
 // A REF HOLD TAKEN DURING A PASS IS NEVER LOST: the pass reads the holds after
-// its page, so a turn that holds the branch after that read records its hold
-// on the repository's subject past the page — and the decide keeps the branch
-// stale. And an archive in between changes nothing: a hold on an archived
-// repository's branch is recorded all the same, so the branch is kept once it
-// is unarchived before the proposal.
+// its page, so a hold taken after that read is recorded on the repository's
+// subject past the page and the decide keeps the branch stale. An archive in
+// between changes nothing: the hold is recorded all the same, so the branch is
+// kept once unarchived before the proposal.
 //
 // Mutations: drop ExpiryRule's held term → the branch is deleted, red; read the
 // holds before the page → the record lands below the page's position and the

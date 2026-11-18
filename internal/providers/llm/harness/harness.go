@@ -787,6 +787,7 @@ func (p *Provider) callEnv() map[string]string {
 func (p *Provider) completion(
 	ctx context.Context, sent string, res *rawResult, usageDoc string,
 ) (*llm.Completion, error) {
+	p.observeLimits(res.stdout, p.now())
 	if res.timedOut {
 		return nil, p.fail(llm.KindTimeout, fmt.Errorf(
 			"the harness did not answer within %s — raise timeout_seconds if this model "+

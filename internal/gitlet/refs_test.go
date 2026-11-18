@@ -110,16 +110,13 @@ func TestARefsListingPagesByName(t *testing.T) {
 }
 
 // RESOLVEREF PREFERS HEADS, THEN TAGS, AND ANSWERS EVERY NAME IN ONE READ: a
-// short name is a branch where one is live, else a tag — a branch deleted
-// falls through to a tag of its name — and a whole ref is itself, every name
-// of the query answered in its order at the one checkpoint the read was at,
-// with where its ref last moved: the position of the push that set it, never
-// a later one's or the checkpoint's. A name none of them hold is answered as
-// such — naming every ref tried, refused ErrRefNotFound by its Err — beside
-// the names that resolved, never failing them. A query naming no ref, more
-// than MaxRefsPerQuery, or any name no ref can have, no level, no asker and a
-// deleted repository are refused whole, the last in the sentence Gitlet's
-// admission says.
+// short name is a live branch, else a tag (a deleted branch falls through to a
+// tag of its name), a whole ref is itself, each answered in order at the read's
+// one checkpoint with the position of the push that last set it, never a later
+// one's or the checkpoint's. A name none holds is answered missing, naming
+// every ref tried (ErrRefNotFound by its Err), beside the names that resolved.
+// No ref, more than MaxRefsPerQuery, a name no ref can have, no level, no asker
+// and a deleted repository are refused whole, the last in admission's sentence.
 //
 // Mutation: the tags tried before the heads → v1 resolves to the tag; the
 // answer's Moved the checkpoint → v1 moved at the read; a missing name

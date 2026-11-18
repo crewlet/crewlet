@@ -26,19 +26,13 @@ func standingAt(p statelog.Position) func() statelog.Position {
 
 // THE FENCE CLEARS AN EXPECTATION OF ZERO ONLY WHERE NOTHING THIS NODE MISSED
 // CAN BE GONE — below the HIGHER of the published floor and the log's own
-// first surviving sequence.
-//
-// Everything below either may have been removed, so a node that has consumed
-// through the one before the higher holds everything that may be gone and an
-// absent anchor really does mean an unclaimed address. One record short of it,
-// the anchor may be a claim trimmed beneath this node, and publishing at zero
-// takes an address somebody already holds. Each bound alone clears a node the
-// other refuses: the floor is zero on a blocked trim and a stale first
-// sequence trails a purge the floor already licensed. An unreadable bound refuses: failing open here is a
-// lost update, which nothing recovers. And the REASON is the log's first
-// sequence's to pick: a node whose next record the log still holds is
-// replaying up to the floor and is `behind`; one whose next record is gone is
-// `below_floor`.
+// first surviving sequence. One record short of it, an absent anchor may be a
+// claim trimmed beneath this node, and publishing at zero takes a held address.
+// Each bound alone clears a node the other refuses: the floor is zero on a
+// blocked trim, and a stale first sequence trails a purge the floor licensed.
+// An unreadable bound refuses: failing open is a lost update nothing recovers.
+// The REASON is the first sequence's to pick: a node whose next record the log
+// still holds is `behind`; one whose next record is gone is `below_floor`.
 func TestTheFenceClearsZeroOnlyAtOrPastTheHigherBound(t *testing.T) {
 	t.Parallel()
 	db := openFenceStore(t)
@@ -83,21 +77,12 @@ func TestTheFenceClearsZeroOnlyAtOrPastTheHigherBound(t *testing.T) {
 	}
 }
 
-// EVERY REFUSAL THE FENCE MAKES NAMES ITS OWN REASON, and none of them is a
-// conflict.
-//
-// # What it answered before
-//
-// An evicted node was refused with statelog.ErrConflict, which a writer
-// translates into a conflict and a caller into "somebody else is changing
-// this — read it again", so a model on a node the fleet had
-// removed was sent round a loop that could never land. A node below the floor
-// was refused with ErrUnavailable wrapped in prose, so `below_floor` and `floor_unknown` — declared, documented reasons —
-// were produced by nothing, and the publisher's refusal counter recorded every
-// one of them as `error`. And a node whose checkpoint was past the log's end
-// was not refused at all: its cursor cleared every bound because it was past
-// all of them, so a retry at zero landed on a log that appends it at a
-// sequence this node's applier has already passed.
+// EVERY REFUSAL THE FENCE MAKES NAMES ITS OWN REASON, and none is a conflict,
+// which a caller reads as "read it again": a loop an evicted node never lands.
+// `below_floor` and `floor_unknown` are produced, so the publisher's refusal
+// counter records them rather than `error`; and a node whose checkpoint is past
+// the log's end is refused, since a write at zero would append at a sequence
+// its applier has already passed.
 func TestEveryZeroFenceRefusalNamesItsReason(t *testing.T) {
 	t.Parallel()
 	cursor := statelog.Position{Stream: fenceStream, Generation: 1, Seq: 100}
@@ -226,9 +211,9 @@ func TestACheckpointAtTheLogsEndIsNotPastIt(t *testing.T) {
 }
 
 // A FENCE BUILT WITHOUT ANY ONE OF ITS READS REFUSES rather than clearing on
-// the ones it has: wiring only the floor is the shape that cleared a node below
-// the log whenever the trim was blocked, and a fence with no checkpoint cannot
-// say whether this node is on the log at all.
+// the ones it has: the floor alone clears a node below the log whenever the
+// trim is blocked, and a fence with no checkpoint cannot say whether this node
+// is on the log at all.
 func TestAFenceMissingABoundRefusesZero(t *testing.T) {
 	t.Parallel()
 	db := openFenceStore(t)

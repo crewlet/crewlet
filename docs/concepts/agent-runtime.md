@@ -61,7 +61,7 @@ The four reasons a seat is `stopped`, in the order they are stated when more tha
 Beside the state, the projection holds **the turn the seat is on** and **the last turn it ended**. Both are on every seat row of the `agents` push:
 
 - `turn` is `{turn_id, work_item, work_item_basis, started_at, stage, node}`. `stage` is one of three values. `context` means the turn has started and is assembling what it knows. `phase` means a phase is running. `parked` means the turn launched its [executor](code-sandbox.md) in its box and is suspended until the launch is collected. The launch is collected later, possibly on another node or after a restart, and the same turn resumes then. A parked turn therefore stays the seat's turn, and it is not reported as an end. Only the turn's own phases move it on: a worker the executor delegated to finishes while the turn is parked, and each launch's own record (`executor_collected`, no phase) is published as the launch is collected, before the turn resumes, so the seat still reads as parked on its executor through both. The suspension publishes a turn completion with `suspended: true`, and the projection used to read that completion as the end of the turn, so the seat said it was idle while its work ran on in a box. When a parked turn resumes, its `started_at` is still the turn's first start and not the segment's. `node` is the node that published the turn's newest event. A turn whose executor's launch is ended as failed (`executor_failed`) has nothing left to resume it, so the failure ends that turn; a launch lost with its host — killed by its engine's restart, its box gone — resumes its turn instead, to carry the round on in a fresh launch ([Code Sandbox](code-sandbox.md#durability-completion-and-observability)).
-- `last_turn` is `{turn_id, ended_at, outcome}`. `outcome` is `completed` or `failed`, and a turn is `failed` when any of its events was a failure. That is the same rule the turn list applies, so a seat seeded from the store and a seat watched live report the same outcome. `ended_at` is the turn's newest event: its completion, or the reflection pass that runs after the completion.
+- `last_turn` is `{turn_id, ended_at, outcome}`. `outcome` is `completed`, `failed`, or `stopped` where a person ended it, and a turn is `failed` when any of its own events was a failure. A worker's or a round-cap judge's record, nested under the phase that called it, fails only itself: that phase reads the failure as an answer, so it is never the seat's `last_error` either. That is the same rule the turn list applies, so a seat seeded from the store and a seat watched live report the same outcome. `ended_at` is the turn's newest event: its completion, or the reflection pass that runs after the completion.
 
 A third key says whether a person has **paused** the seat: `paused` is `{by, by_kind, operator_id, at, reason, stop_running}` — who paused it (`by`: the seat of the person who did, or of a token or service account the identity directory binds to one, and otherwise the whole login of the credential bound to no seat; `by_kind` says which, `human` or `operator`, and `operator_id` is the credential they came through, such as `session:<lineage>` or `pat:<id>`, absent when none made it), when, why, and whether the pause also ended the seat's running work (`stop_running`: the turn it was on, and its executor in its box) — and `null` while nobody has. It is an input to the seat's state: a paused seat reads `stopped` with `stopped_reason: "paused"` once it is not working. See [Pausing a seat](#pausing-a-seat).
 
@@ -521,14 +521,16 @@ stateDiagram-v2
   relaunch that [continues the turn's
   session](code-sandbox.md#what-a-continued-launch-costs) the session's context
   with its brief where that is the larger, its reason then reading `… below
-  the 62000 an executor launch that continues its session needs (its last
-  request carried 60000 tokens and its brief about 2000;
+  the 62000 an executor launch that continues its session needs (its session
+  sends 60000 tokens before its brief, which is about 2000;
   turn_engine.executor_min_budget_tokens is 25000); resets …`.
 - **Released.** At the reset, or at once when a published company changes the
   ceilings of either scope or the company's clock (which moves every window's
   end) — the apply of the revision that changed them — the hold
   is lifted, `seat_budget_park_released` is logged, and the held mail is
-  delivered again, the seat's priority lane first, and asked again. A change that lowers a ceiling
+  delivered again, the seat's priority lane first, and asked again. A park
+  taken while the release was in flight holds the seat again, and the
+  release's line then says so (`held_again=true`): its inbox stays held. A change that lowers a ceiling
   parks it again at the cost of one delivery. A delivery whose launch was
   refused below a floor above the static one waits one turnover for that
   floor at most: the park keeps, on this node, the window that delivery
@@ -657,8 +659,9 @@ stateDiagram-v2
   (`paused_by`, `paused_by_kind`) and the credential they came through
   (`operator_id`).
 - **Every node carries it out from its own copy.** Each node watches the
-  records and, the moment a pause lands, takes a pause hold (`seat_paused`) on
-  the seat's inbox; the resume lifts it and the mail that waited is delivered.
+  records and, the moment a pause lands, the node holding the seat takes a
+  pause hold (`seat_paused`) on the seat's inbox, for the attachment of the
+  inbox it holds; the resume lifts it and the mail that waited is delivered.
   A node that acquires a paused seat — placement moved it, or its holder
   restarted — takes the hold **before** attaching the seat's mailbox, so the
   mail it has been holding is never the first thing the new holder runs. A
@@ -732,9 +735,11 @@ answered. The turn's own record says what became of it (`agent_turn_steered`:
 `delivered` where it was read — the round, or the kind of step inside the launch —
 and where a later launch's brief told it again after a step that took it never
 handed it over; `expired` when the turn ended first; `missed` where a step took
-it for a reader that never had it and no later launch whose job started told
-it; or `unconfirmed`
-where the executor was handed it and never confirmed reading it). See [Turn
+it for a reader that never had it, or every serve of it to a Claude Code
+hook was lost and a serve's session proves it absent, and no later launch
+whose job started told it; or `unconfirmed` where the executor was handed it
+and never confirmed reading it, a hook's note confirmed only by the job's own
+session, and a note whose every lost serve its harness gave up). See [Turn
 Engine § Steering a running turn](turn-engine.md#steering-a-running-turn).
 
 ### Graceful shutdown

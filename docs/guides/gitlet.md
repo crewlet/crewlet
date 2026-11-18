@@ -157,8 +157,10 @@ ref moved, as you:
 - **Branches**: **New branch** at a branch, a tag or a commit
   (`code_create_branch`), and **Delete** at the head the row shows
   (`code_delete_branch`), after a confirmation;
-- a commit's page: **Revert** and **Cherry-pick** onto a branch you choose
-  (`code_revert`, `code_cherry_pick`); a conflict commits nothing.
+- a commit's page bar: **Browse files**, **Revert** and **Cherry-pick** onto
+  a branch you choose (`code_revert`, `code_cherry_pick`); a conflict commits
+  nothing. A commit's page says how it was pushed and how it landed, with the
+  gate it merged through.
 
 Its protection rules are set on its **Settings** tab ([Protecting a
 branch](#protecting-a-branch)), and it is deleted and restored there too
@@ -488,9 +490,11 @@ change's **conversation** ([Reviews and
 findings](../concepts/gitlet.md#reviews-and-findings)), and each record
 tells the seats and people it concerns.
 
-**Find what waits on you.** **Gitlet › Changes** lists the open changes, and
-**Waiting on** narrows them to the ones waiting on you, on a review, on a fix
-or on a person. **Waiting on you**, above the list, names each change that waits on
+**Find what waits on you.** **Gitlet › Changes** lists the open changes.
+**Search changes**, at its top, finds changes by the words of their title and description,
+narrowed by qualifiers such as `is:draft`, `author:@me` or `waiting-on:review`; **Readiness**
+lists the open changes ready to merge or waiting on a review, on checks, on findings or on a
+person. **Waiting on you**, above the list, names each change that waits on
 your review or your fix and why, with **Review** opening its files. A record that concerns you leaves a notice in your
 **Inbox** — the change, why you hear of it ("asked for your review", "asked
 to look again") and where its merge stands — whose **Open the diff** opens the
@@ -498,7 +502,8 @@ change's page on its files. A seat is woken instead, told the change, why it
 hears and the tool that answers ([Who a change
 wakes](../concepts/gitlet.md#who-a-change-wakes)).
 
-**Ask for a review.** **Request review**, in the change page's **Review** menu, names
+**Ask for a review.** **Request review**, in the change page's **Review** menu or as
+**Request** at the head of its rail's Reviewers, names
 reviewers by handle, with a note; a seat or your assistant asks with
 `code_request_review`, which also withdraws an ask. An author of the change,
 anybody who reviews the repository and any person may ask, at most 32
@@ -514,12 +519,13 @@ owners](../concepts/gitlet.md#path-owners)).
 
 **Read it.** **Conversation** is the change's timeline: its description, then
 every revision, review, ask for review and thread in the order its records landed,
-then its merge box (every condition to merge with where it stands, and the merge
-controls), beside a rail of whom it asked
-for a review and where each stands; **Revisions** lists its revisions,
-**Checks** the checks that judge it, and **Files changed** is a revision's
-diff — the head unless you pick another, or what changed since an earlier
-revision — with each finding under the lines it points at, and one whose
+then its merge box (a section per condition to merge with where it stands, and the merge
+controls) and a comment box (markdown, **Mod+Enter** sends), beside a rail of whom it
+asked for a review and where each stands, its readiness, branches, checks, participants
+and whether it notified you; **Revisions** lists its revisions,
+**Checks** the checks that judge it, and **Files changed** is every file a
+revision changes on one page, beside its tree (the head unless you pick
+another, or what changed since an earlier revision), with each finding under the lines it points at, and one whose
 lines have changed since drawn above the diff, never dropped; **More** is where
 it came from and whom it notified. A seat reads the
 same with `code_get_change`, a part at a time ([Reading a
@@ -532,10 +538,13 @@ description; a seat or your assistant does the same with `code_update_change`.
 finding under them: how much it weighs (`blocker`, `major`, `minor`, `nit`),
 what it is about, a title, a body and, on the new side, the lines you suggest
 in their place. Drafts stay in the browser tab until **Approve**, **Request
-changes** or **Comment** sends them all as ONE review with your summary — a
+changes** or **Comment** (the page bar's **Review**, or **Finish review** on
+Files changed) sends them all as ONE review with your summary: a
 review and every finding it raises are one record, never half there. A seat
 reviews with `code_review_change`. Anybody who reviews the repository, and
-any person, may review — never an author of the change.
+any person, may review, never an author of the change. Edit a draft where it stands; filter the files by name, extension or findings,
+and press `t` to go to a file. Mark a file **Viewed** to fold it until a revision changes it,
+and filter to the Unviewed ones.
 
 - **A request for changes stands until its reviewer reviews again.** A push
   answers none: the reviewer's next review, approving or asking again, does.
@@ -666,30 +675,32 @@ A live change's page (**Gitlet › Changes**, then the change) carries the same
 call in its **Conversation**'s merge box, after its timeline, each control
 made as you and never ahead of the engine's answer:
 
-- **Where its gate stands** — how many of its conditions are met, each
-  condition with where it stands, and the first one that is not, judged with
-  *you* as the merger, so a reader without the authority to merge into the
-  target is told so before pressing anything.
+- **Where its gate stands**: a section for its reviews, its checks (each check's
+  latest attempt, how long it ran and whether it is required, with **Details**),
+  its findings, its facts and whether it merges, each judged with *you* as the
+  merger, then the count and what it still waits on. **Re-request** in the reviews
+  section asks again everyone whose review is not an approval of the head.
 - **Merge**, or **Add to queue** where the target's gate requires a check, with
   how it merges (**Merge commit**, **Squash** or **Fast-forward**), **Delete
   its branch** — left unticked, the rule above decides — and **Close ENG-42
   once it merges** where the change names a work item. It sends the head the
   page shows as `expected_head`, so a push that landed since you opened the
   page is refused rather than merged unseen. While the gate is unmet the
-  button is held with the gate's own sentence.
+  button is held with the gate's own sentence, and a line beside it says what
+  the press will do.
 - **Override**, a person's alone: a dialog that asks your reason, says what
   the gate still waits on, and merges directly past it — even into a branch
   whose merges land through its queue. The reason is kept with the merge
   (the change's More tab shows it) and the override is audited.
-- **Re-run checks** — every check of the change's head whose latest attempt
-  did not pass, each at its next attempt (`code_rerun_checks` with
-  `all_failed`).
-- **Rebase**: the change's commits replayed onto its target's tip
+- **Re-run failed checks**, in the checks section where one failed: every check
+  of the change's head whose latest attempt did not pass, each at its next
+  attempt (`code_rerun_checks` with `all_failed`).
+- **Rebase**, in the merges section: the change's commits replayed onto its target's tip
   ([Rebasing a change](#rebasing-a-change)), after a confirmation that says
   its branch moves by one forced push from the head the page shows.
-- **Take out of the queue**: a queued change leaves its target's merge queue
-  and stays open (`code_dequeue_change`), after a confirmation; held while
-  the change is not queued. **Gitlet › Queue** offers the same on each entry.
+- **Take out of the queue**, in the queue's section while the change is queued:
+  it leaves its target's merge queue and stays open (`code_dequeue_change`),
+  after a confirmation. **Gitlet › Queue** offers the same on each entry.
 
 A merged change shows **Revert** in their place ([Reverting a
 change](#reverting-a-change)): a confirmation that says what it opens, with a
@@ -1024,43 +1035,45 @@ The dashboard's Gitlet workspace draws both in sections of their own, each over
 the same questions a seat's tools ask.
 
 **Gitlet › Queue** (`#/gitlet/queue`) is the merge queues of your gated branches:
-a band per repository and branch, its entries in the order the queue lands
-them — the place, the change, who enqueued it and where it stands (`waiting`
-for a candidate, or `testing` in one). Choose a repository (`?repo=web`) and
-each entry also shows the **train base** it is tested on, a meter of the
-**required checks** of what it is tested in, each at its latest attempt —
-passed, failed and running, the rest not yet a verdict — and how long it has
-been queued against the slowest of those checks' declared `timeout_seconds`,
-since the queue waits for its slowest required check. Under each of its
-bands, in the danger tone, is what the queue **put out in the last day**: the
-change, why (`a required check failed`, `its merge conflicted`, `it no longer
-met the branch's gate`, `its head moved`, `the branch moved under the queue`)
-and the required checks that
-failed on what it was tested in or the paths its merge conflicted on. A branch
-with nothing queued and nothing put out lately draws no band, and a company
+a box per repository and branch with its train base and its entries in landing
+order, each with its change's title, who enqueued it, where it stands and a
+meter of its train's **required checks** with how long they have run against
+the slowest declared `timeout_seconds`, since the queue waits for its slowest
+required check. Under each box, in the danger tone, is what the queue **put
+out in the last day**: the change, why (`a required check failed`, `its merge
+conflicted`, `it no longer met the branch's gate`, `its head moved`, `the
+branch moved under the queue`) and the required checks that failed on what it
+was tested in or the paths its merge conflicted on. **View the run** opens the
+check that failed on the train, and **Re-queue** adds the change again as it
+was to land. A branch
+with nothing queued and nothing put out lately draws no box, and a company
 with nothing queued says so. The queues are read fifty entries at a time;
 **Load more** reads the next fifty.
 
-**Gitlet › Checks** (`#/gitlet/checks`) is every repository's attempts that
-ended in a window — a day by default, at most the thirty days an ended
-attempt is kept — newest ended first, with a chart of when they ended (the
-failed ones the foot of each bar) and chips that narrow the listing by the
-state an attempt ended in and by a check's name; the engine narrows them, and
-the chart and the chips
-count the attempts loaded, as each says. A repository's page has its own
+**Gitlet › Checks** (`#/gitlet/checks`) is where every check stands: each
+check's latest run on a live change, a queue's candidate or a protected
+branch's tip, over the last day, week or month, with tabs counting each state
+and failing runs first (or **Newest first**), narrowed by a check's name and a
+repository. Press a run to open it beside the list; the address keeps it, so
+a link or a reload reopens it. A repository's page has its own
 **Checks** tab, every attempt it keeps with no window, and a change's page
 has one too: the attempts that judge it, its head's, checked for its target.
 
-Press an attempt to open it: what it was checking (a change's head, a queue's
-candidate, a branch's tip, a landing bisected), the commit and branch, how
-long it ran, its exit code and why it ended; its **failures**, each
+Press an attempt to open it: how many of its tests failed of how many ran,
+and its exit code; what it was checking (a change's head, a queue's
+candidate merged onto its branch, a branch's tip, a landing bisected), the
+commit and branch, how long it ran and why it ended; **Re-run**, which runs
+that one check again once it has ended; **Open in CI** for a run another CI
+reported; its **failures**, each
 `path:line` a link into the diff it was checked on — the comparison of its
 base and its commit, opened on that file with the failing line marked and
 scrolled to, however long the file's patch is: the page reads the patch on
 to the page that holds the line, and no further (where the line is outside
 what the diff changes, the page says so as soon as the patch reaches past
 it, and offers the file at the attempt's commit, opened on that line; an
-attempt that records no base opens the file there directly); its **tail**; and **Read its log**,
+attempt that records no base opens the file there directly); **the end of
+its output**, numbered from its place in the whole output, its failing lines
+marked; and **Read its log**,
 which reads the log a failed run kept a page at a time, only when you ask. A
 check measures durations and exit codes, never tokens: it runs no model.
 
@@ -1151,10 +1164,14 @@ that fill the answer, not every one — so narrow the search with `repo:` or
 
 **Searching from the dashboard.** **Gitlet › Search** (`#/gitlet/search`) takes
 the search as written above, with its mode, a repository, a path and a ref
-as controls beside it, and draws the lines by repository and file, each line
-opening its file at the commit it was searched at; what was not searched is
-said above them on every answer. In ⌘K, the **Code** tab searches the same
-way and lists the first eight lines.
+as controls beside it, and draws each file's matching lines with the lines
+around them, the matches marked, by repository and file, each line opening its
+file at the commit it was searched at; facets narrow it by repository or
+directory, and **Show N more** reads the rest of a file's matching lines. What
+was not searched is said above them on every answer. A repository searched
+only with git grep is named with `repo:` to search it, as the line above the
+results says. In ⌘K, the **Code** tab searches the same way and lists the
+first eight lines.
 
 **Searching from a script.** The same search is the question `code_search`,
 on [`GET /gitlet/search`](../reference/api-endpoints.md#get-gitletsearch):
@@ -1430,6 +1447,10 @@ landed a commit](../concepts/gitlet.md#which-push-landed-a-commit)).
 On a repository's **Commits** tab the dashboard narrows the history to one
 seat's pushes and to recent days, and searches commit messages; each commit
 shows its checks and the change it landed with.
+
+**Gitlet › Pushes** (`#/gitlet/pushes?repo=web`) reads a repository's pushes as sentences by
+day, each day saying how many of its pushes are shown; narrow it by who pushed and when, and its
+rail shows who pushes there and the branches' protection.
 
 ### Working in a clone
 

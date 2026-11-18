@@ -23,6 +23,11 @@ const DECLARED: Declared[] = [
     why: "The rail sits under the control it narrows, which names the dimension.",
   },
   {
+    where: "routes/gitlet/queue/Box.tsx",
+    element: "Meter",
+    why: "The elapsed words beside the bar say how long the checks have run and of what.",
+  },
+  {
     where: "routes/home/Kpis.tsx",
     element: "Meter",
     why: "The tile's label and figure head the bar, and its caption says what it is out of.",
@@ -121,6 +126,11 @@ const DECLARED: Declared[] = [
     where: "routes/settings/integrations/access/Dialogs.tsx",
     element: "FormField",
     why: "Drawn alone; beside other scopes the section heading names it.",
+  },
+  {
+    where: "routes/gitlet/change/Viewed.tsx",
+    element: "Meter",
+    why: "The words beside the bar say how many files are viewed of how many.",
   },
 ];
 

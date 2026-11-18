@@ -31,6 +31,7 @@ import (
 func (p *Provider) toolCompletion(
 	ctx context.Context, res *rawResult, usageDoc string, t *toolRun, connected bool,
 ) (*llm.Completion, error) {
+	p.observeLimits(res.stdout, p.now())
 	out, read := t.reader.stdoutResult()
 	if !read {
 		out = extract(p.profile.Routed(), res.stdout)

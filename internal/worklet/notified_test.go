@@ -9,27 +9,18 @@ import (
 
 // AN ANNOUNCED CHANGE THAT NAMES NOBODY IS STILL `notified`.
 //
-// This is the assertion whose absence let four doc comments drift to the
-// stronger claim — "whether anybody was told", "a commit that woke nobody",
-// and the dashboard's own "(quiet)" label. The column does not mean that and
-// the applier could not answer it: who was actually told is [Route]'s answer,
-// and Route needs the company's CURRENT roster, which the applier deliberately
-// does not hold — two nodes briefly on different epochs would then write
-// different rows for one record, and `tracker_history` claims identity.
-//
-// So `notified` is the ANNOUNCEMENT distinction, exactly as the schema comment
-// and the spec define it, and this pins the direction somebody would otherwise
-// "fix": a record carrying a Notify that routes to nobody still writes
-// notified=1, and writes zero notification rows.
+// `notified` is the ANNOUNCEMENT distinction, not "somebody was told": who was
+// told is [Route]'s answer, which needs the CURRENT roster the applier
+// deliberately does not hold (two nodes on different epochs would write
+// different `tracker_history` rows for one record). A Notify that routes to
+// nobody still writes notified=1 and zero notification rows.
 func TestAnAnnouncedChangeThatNamesNobodyIsStillNotified(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	task := r.createTask("A task")
 
-	// A NOTIFICATION NAMING NOBODY. Every routing arm reads a snapshot
-	// field, and this one leaves all of them empty — which is reachable in
-	// production: an unwatched, unassigned task whose only watcher just
-	// removed themselves.
+	// A NOTIFICATION NAMING NOBODY: every routing field empty, as for an
+	// unassigned task whose only watcher just left.
 	empty := &worklet.Notify{Kind: worklet.ChangeFields}
 	if got := worklet.Candidates(empty); len(got) != 0 {
 		t.Fatalf("the fixture names %v, so it does not test what it says", got)
@@ -52,8 +43,7 @@ func TestAnAnnouncedChangeThatNamesNobodyIsStillNotified(t *testing.T) {
 			"announced nothing — `notified` is the ANNOUNCEMENT distinction, " +
 			"not a claim that somebody was woken")
 	}
-	// AND NOBODY WAS TOLD, which is the other half: the two facts are
-	// different and the row records the first one.
+	// AND NOBODY WAS TOLD: a different fact from the row's.
 	if n := r.notificationRows(newest.ID); n != 0 {
 		t.Errorf("%d notification rows for a change that named nobody", n)
 	}

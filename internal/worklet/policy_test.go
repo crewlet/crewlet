@@ -8,12 +8,8 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY STATUS HAS A GROUP, A LABEL AND A DESCRIPTION.
-//
-// The group is COPIED onto every record that names a status, so a record is
-// self-describing without a catalogue read; the description is what an agent
-// chooses by, and a status with none is chosen by spelling — which is how a
-// model picks "done" for work awaiting a colleague's check.
+// EVERY STATUS HAS A GROUP, A LABEL AND A DESCRIPTION: records carry the
+// group, and an agent chooses by the description ([worklet.Status.Group]).
 func TestEveryStatusIsFullyDescribed(t *testing.T) {
 	t.Parallel()
 	if len(worklet.Statuses) != 6 {
@@ -37,13 +33,7 @@ func TestEveryStatusIsFullyDescribed(t *testing.T) {
 }
 
 // EXACTLY ONE STATUS IS CLOSED, AND CANCELLED IS FINISHED WITHOUT BEING
-// DELIVERED.
-//
-// Delivered is THE measurement predicate — cycle time and
-// children_done both read it. No bit is stamped
-// anywhere: the status IS the verdict, which is what lets a duplicate closed
-// by a merge and a task somebody cancelled both write "cancelled" and vanish
-// from a delivery count without a second field.
+// DELIVERED, so [worklet.Delivered] leaves it out of a delivery count.
 func TestDeliveredIsTheOneMeasurementPredicate(t *testing.T) {
 	t.Parallel()
 	closed := 0
@@ -84,12 +74,9 @@ func TestTheGroupsPartitionCleanly(t *testing.T) {
 	}
 }
 
-// THE THREE RESOLUTION TIERS, AND THE ORDER IS THE WHOLE RULE.
-//
-// A query that IS somebody's slug must never be fuzzy-matched against
-// everybody else's label — which is how "api" resolves to "apis" on a company
-// that has both, and why an exact match at an earlier tier settles it whatever
-// the later tiers hold.
+// THE THREE RESOLUTION TIERS, AND THE ORDER IS THE WHOLE RULE: a query that IS
+// somebody's slug is never fuzzy-matched against another's label ("api" must
+// not resolve to "apis").
 func TestResolveShortCircuitsAtTheEarliestTier(t *testing.T) {
 	t.Parallel()
 	candidates := []named{
@@ -115,10 +102,8 @@ func TestResolveShortCircuitsAtTheEarliestTier(t *testing.T) {
 	}
 }
 
-// TWO MATCHES AT ONE TIER IS AMBIGUOUS, AND THE REFUSAL NAMES BOTH.
-//
-// The caller is usually a model with one round left: "ambiguous" sends it
-// guessing, and naming both is something it can act on.
+// TWO MATCHES AT ONE TIER IS AMBIGUOUS, AND THE REFUSAL NAMES BOTH, so the
+// model calling can act on it ([worklet.ErrAmbiguous]).
 func TestAmbiguityNamesBothCandidates(t *testing.T) {
 	t.Parallel()
 	_, err := worklet.Resolve("Billing", []named{
@@ -136,12 +121,8 @@ func TestAmbiguityNamesBothCandidates(t *testing.T) {
 	}
 }
 
-// THE TWO SLUG GRAMMARS ARE DIFFERENT ON PURPOSE.
-//
-// A status, a type and a field are identifiers a tool argument names, so they
-// take underscores; a tag is a label people write in prose, so it takes
-// hyphens and digits at the front. Merging them means accepting "in-progress"
-// as a status or refusing "v2-api" as a tag, and both have been asked for.
+// THE TWO SLUG GRAMMARS ARE DIFFERENT ON PURPOSE: "in-progress" is no status
+// slug, and "v2-api" is a tag slug ([worklet.ValidSlug]).
 func TestTheTwoSlugGrammarsStayApart(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

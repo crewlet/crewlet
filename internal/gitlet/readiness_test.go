@@ -22,9 +22,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CHANGE'S MERGE READINESS, judged by the reads from the rows the shipped
-// committer's and change writer's records wrote on a real embedded broker —
-// and stored on the change's mergeability by the records its home asks for.
+// A CHANGE'S MERGE READINESS, read from the rows the shipped committer and
+// change writer wrote on a real embedded broker, and stored on the change's
+// mergeability by the records its home asks for.
 
 // patched is the home's write of revision rev's facts on change — its head
 // head against main — naming patch as its diff's patch id.
@@ -79,17 +79,14 @@ func converse(t testing.TB, w *gitlet.ChangeWriter, cw gitlet.ConversationWrite)
 	return res
 }
 
-// AN APPROVAL CARRIES ONLY TO AN EQUAL PATCH ID (X02): an eligible reviewer's
-// approval of revision 1 counts on revision 1; a rebase that pushes revision 2
-// — another head, the same diff, its recorded patch id equal to revision 1's —
-// carries it, the detail saying so; and revision 3, whose diff is another
-// (its patch id differs), carries nothing, so the approval precondition is
-// unmet again, waiting on the change's owner to ask a reviewer, since nobody
-// who may approve it is asked.
+// AN APPROVAL CARRIES ONLY TO AN EQUAL PATCH ID (X02): plat-lead's approval of
+// revision 1 carries to revision 2, a rebase onto another head with an equal
+// patch id, the detail saying so, and not to revision 3, whose diff differs;
+// the unmet approval then waits on the owner, since nobody who may approve is
+// asked.
 //
-// Mutation: carry an approval by comparing the revisions' heads rather than
-// their patch ids → revision 2, a rebase onto another head, carries nothing,
-// and the case goes red at its second readiness.
+// Mutation: compare the heads rather than the patch ids → revision 2 carries
+// nothing, red at the second readiness.
 func TestAnApprovalCarriesOnlyToAnEqualPatchID(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -117,9 +114,9 @@ func TestAnApprovalCarriesOnlyToAnEqualPatchID(t *testing.T) {
 	}
 }
 
-// omitting is the home's write of revision rev's facts on change — its head
-// head against main — holding the code named held, its diff past the bound
-// on one a patch id is taken of, so its id is omitted.
+// omitting is the home's write of revision rev's facts on change (head head
+// against main) holding the code named held, its patch id omitted: its diff is
+// past the bound a patch id is taken within.
 func (n *node) omitting(repo, change string, rev int64, head, held string) gitlet.ConversationWrite {
 	n.t.Helper()
 	w := codeOf(n.revising(repo, change, rev, oidOf(head), mainRef, nil), held)
@@ -127,17 +124,14 @@ func (n *node) omitting(repo, change string, rev int64, head, held string) gitle
 	return w
 }
 
-// A NO-CODE-CHANGE CARRIES AN APPROVAL PAST AN OMITTED PATCH ID. A change
-// whose diff passes the bound on one a patch id is taken of — a vendored
-// tree — has its id omitted on every revision, and an omitted id equals
-// nothing, so no approval carries by its diff. But a revision whose base and
-// head trees are the approved revision's — a message amended, commits
-// squashed — holds the very code that was approved, byte for byte, and the
-// approval carries to it by its code, the detail naming the kind that
-// carried (no_code_change). A revision whose code moved carries nothing.
+// A NO-CODE-CHANGE CARRIES AN APPROVAL PAST AN OMITTED PATCH ID. A diff past
+// the patch-id bound (a vendored tree) has its id omitted, and an omitted id
+// equals nothing; but a revision whose base and head trees are the approved
+// revision's (a message amended, commits squashed) holds the approved code
+// byte for byte, so the approval carries by its code, the detail naming
+// no_code_change. A revision whose code moved carries nothing.
 //
-// Mutation: drop the code's arm of the carry — revision 2's approval is
-// unmet, red.
+// Mutation: drop the code's arm of the carry → revision 2's approval is unmet.
 func TestANoCodeChangeCarriesAnApprovalPastAnOmittedPatchID(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -158,17 +152,12 @@ func TestANoCodeChangeCarriesAnApprovalPastAnOmittedPatchID(t *testing.T) {
 		"no approval counts on revision 3")
 }
 
-// NO CODE CHANGE IS REVISION TO REVISION: what carries an approval by its code
-// is the head revision holding the APPROVED revision's base and head trees —
-// never a diff that is empty against its own base, which changes nothing and
-// holds other code than the approver read — and it holds across a revision
-// of other code between the two: a head whose code returns to the approved
-// code byte for byte holds what the approver read, as an equal patch id
-// carries across one.
+// NO CODE CHANGE IS REVISION TO REVISION: the head carries an approval by its
+// code when it holds the APPROVED revision's base and head trees, never when
+// its own diff is empty (other code than the approver read), and it carries
+// across an intervening revision of other code, as an equal patch id does.
 //
-// Mutation: carry by the head's own diff being empty (its base tree its head
-// tree) rather than by the approved revision's trees — revision 2 carries,
-// red.
+// Mutation: carry by the head's own diff being empty → revision 2 carries.
 func TestNoCodeChangeIsRevisionToRevision(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -195,14 +184,12 @@ func TestNoCodeChangeIsRevisionToRevision(t *testing.T) {
 			`trees of revision 1`)
 }
 
-// AN APPROVAL WAITS FOR FACTS: an approval of an earlier revision is judged by
-// both revisions' recorded patch ids, so while the head revision's facts
-// against its target are unrecorded the approval precondition is COMPUTING —
-// the engine owes them, and it waits on nobody — and it is met the moment
-// they are recorded equal. But an approval of a revision whose own facts were
-// never recorded NEVER carries: its home measured only the head, and a head
-// that has moved on is measured no more, so that approval is unmet rather
-// than computing for ever.
+// AN APPROVAL WAITS FOR FACTS: an earlier revision's approval is judged by both
+// revisions' patch ids, so while the head revision's facts are unrecorded it
+// is COMPUTING, waiting on nobody but the engine, and met once they are
+// recorded equal. An approval of a revision whose own facts were never
+// recorded NEVER carries: its home measures only the head, so it is unmet
+// rather than computing for ever.
 //
 // Mutations: judge a head with no facts unmet → the first readiness reads
 // unmet; judge an approved revision with no facts computing → the second
@@ -231,8 +218,8 @@ func TestAnApprovalWaitsForFacts(t *testing.T) {
 	requireState(t, readinessOf(t, n, 1), gitlet.PreconditionApproval, gitlet.PreconditionMet,
 		"carries the diff")
 
-	// AN APPROVAL OF A REVISION NEVER MEASURED: web!2's first revision is
-	// approved before its home read its facts, and a push moves on.
+	// AN APPROVAL OF A REVISION NEVER MEASURED: web!2's revision 1 is approved
+	// before its home read its facts, and a push moves on.
 	c, _ := committerOn(t, n, n.pub)
 	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/second", gitlet.ZeroOID, oidOf("S"))))
 	second, err := c.ProposeChange(t.Context(), opening(repo, "refs/heads/second", mainRef, dev))
@@ -245,15 +232,13 @@ func TestAnApprovalWaitsForFacts(t *testing.T) {
 		"no approval counts on revision 2")
 }
 
-// AN AUTHOR'S APPROVAL NEVER COUNTS: a reviewer who approved a revision and
-// then pushed the change's branch is an author of it, whose review of their
-// own change counts for nothing — so their approval stops counting, however
-// equal the next revision's patch id, and the unmet approval waits on nobody
-// the chart names but the owner, since the only reviewer asked is now that
-// author.
+// AN AUTHOR'S APPROVAL NEVER COUNTS: a reviewer who approved and then pushed
+// the change's branch is its author, so their approval stops counting however
+// equal the next patch id, and the unmet approval waits on the owner alone,
+// the only asked reviewer now being that author.
 //
 // Mutation: drop the author term from the approval's count → cto's approval
-// carries to revision 2, and the case goes red.
+// carries to revision 2.
 func TestAnAuthorsApprovalNeverCounts(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -278,16 +263,13 @@ func TestAnAuthorsApprovalNeverCounts(t *testing.T) {
 }
 
 // A LATER REQUEST FOR CHANGES WITHDRAWS ONLY THAT APPROVAL: a reviewer's
-// standing verdict is their latest review that judges, so plat-lead asking for
-// changes after approving withdraws plat-lead's approval and nothing else —
-// cto's still counts, and no precondition holds the change back for the
-// request itself (P8 decisions[13]: a merge counts approvals and standing
-// blockers). With cto's withdrawn too, the approval is unmet, and still
-// nothing else is.
+// standing verdict is their latest judging review, so plat-lead's request
+// withdraws plat-lead's approval alone; cto's still counts, and the request
+// holds nothing else back (P8 decisions[13]: a merge counts approvals and
+// standing blockers). With cto's withdrawn too, only the approval is unmet.
 //
-// Mutation: count every approving review of the revision rather than each
-// reviewer's standing verdict → plat-lead's withdrawn approval still counts,
-// and the last readiness reads met.
+// Mutation: count every approving review rather than each reviewer's standing
+// verdict → the last readiness reads met.
 func TestALaterRequestForChangesWithdrawsOnlyThatApproval(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -319,13 +301,12 @@ func TestALaterRequestForChangesWithdrawsOnlyThatApproval(t *testing.T) {
 	}
 }
 
-// THE READINESS NAMES WHO CAN CLEAR EACH BLOCKER (S40): every standing blocker
-// is named, the oldest raised first, with its raiser, the seats that maintain
-// the repository on the chart — Engineering's effective lead, cto — and any
-// person; an open one waits on the change's owner, and one an author answered
-// (disputed) on its raiser, who judges the answer. A blocker cleared by its
-// dismissal leaves the list; and a repository whose owning seat's tier lets it
-// review and no more names no maintainer, only persons beside the raiser.
+// THE READINESS NAMES WHO CAN CLEAR EACH BLOCKER (S40): each standing blocker,
+// oldest first, with its raiser, the repository's maintainers on the chart
+// (Engineering's effective lead, cto) and any person; an open one waits on
+// the owner, a disputed one on its raiser, who judges the answer. A dismissed
+// blocker leaves the list, and a repository whose owning seat's tier only
+// reviews names no maintainer.
 //
 // Mutations: name the owner unit's effective lead whatever its tier → the
 // Platform-owned repository names plat-lead; let a disputed blocker wait on
@@ -379,8 +360,8 @@ func TestReadinessNamesWhoCanClearEachBlocker(t *testing.T) {
 		t.Fatalf("after a maintainer's dismissal the blockers are %+v, want ada's alone", p.Blockers)
 	}
 
-	// WHO MAINTAINS IS THE CHART'S: a repository Platform owns is led by
-	// plat-lead, whose tier reviews and no more.
+	// WHO MAINTAINS IS THE CHART'S: a Platform-owned repository's lead,
+	// plat-lead, only reviews.
 	rows := gitlet.ReadinessRows{Repo: gitlet.RepoRef{ID: "id-platform", Name: "platform",
 		Owner: gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Platform"}, Visibility: gitlet.VisibilityCompany},
 		Change: gitlet.ChangeRow{Number: 1, State: gitlet.ChangeStateOpen, Revision: 1, Head: oidOf("B"),
@@ -395,13 +376,10 @@ func TestReadinessNamesWhoCanClearEachBlocker(t *testing.T) {
 	}
 }
 
-// A READINESS IS READ FROM ONE SNAPSHOT: a listing judges every change it
-// serves — the readiness each row carries is the one a read of that change
-// answers at the same position — against ONE chart for the whole read,
-// asked of the reader once however many changes the page judges; and the
-// readiness a read answers agrees with the rows its own answer carries, the
-// conversation's standing blockers and the change's mergeability among them,
-// since both are read in the read's one transaction.
+// A READINESS IS READ FROM ONE SNAPSHOT: a listing judges each change as a read
+// of it at the same position does, against ONE chart asked of the reader once
+// per read; and a read's readiness agrees with the rows its answer carries
+// (standing blockers, mergeability), both read in one transaction.
 //
 // Mutation: ask the reader's chart again within one read → the listing asks
 // it twice.
@@ -465,20 +443,16 @@ func TestReadinessIsReadFromOneSnapshot(t *testing.T) {
 	}
 }
 
-// A REVIEW IS FOLLOWED BY A REFRESH: a change's home records its merge with
-// the readiness judged beside it — not ready, nobody having approved — and
-// the change owes it nothing more; an approval then moves what the readiness
-// reads, so the due listing names the change owing a REFRESH, which the home
-// records over the merge the row holds, merging nothing: the stored answer is
-// ready, judged at the inputs' new versions, while the merge's own instant —
-// what a moved target's recheck is paced by — stays the merge's. Asked again
-// with nothing moved, a refresh is superseded and appends nothing; and the
-// change is due nothing more.
+// A REVIEW IS FOLLOWED BY A REFRESH: a merge recorded not ready leaves the
+// change owing nothing; an approval moves the readiness, so the due listing
+// names the change owing a REFRESH, which the home records over the stored
+// merge without merging: the answer becomes ready at the inputs' new versions,
+// while the merge's instant (which paces a moved target's recheck) stays. A
+// repeat refresh with nothing moved is superseded and appends nothing.
 //
-// Mutations: let a review leave the conversation's readiness version → the
-// approval lists nothing due; drop the refresh term from the due listing →
-// the change is never listed; move the row's instant on a refresh → the
-// merge's instant moves.
+// Mutations: let a review leave the conversation's readiness version → nothing
+// is due; drop the refresh term from the due listing → never listed; move the
+// row's instant on a refresh → the merge's instant moves.
 func TestAReviewIsFollowedByARefresh(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -565,11 +539,10 @@ func (n *node) storedReadiness(change string) heldReadiness {
 
 // WHAT WAITS ON A PERSON IS LISTED FOR EVERYONE: a change whose first unmet
 // precondition is an approval asked of a person alone stores that it waits on
-// one when its home records its merge, and needs=person lists it — to a
-// person, and to a seat, whose own asks it is not; once the person approves,
-// the readiness the listing judges no longer waits on anybody, so the change
-// is left out even before its home refreshes what it stored. A change whose
-// approval waits on a seat as well as a person waits on no person alone.
+// one, and needs=person lists it to any person and to a seat it does not ask.
+// Once the person approves, the listing's own judgement waits on nobody, so
+// the change drops out before its home refreshes the stored answer. An
+// approval a seat may give too waits on no person alone.
 //
 // Mutation: list the stored answer without judging it again → the approved
 // change is still listed.
@@ -614,12 +587,11 @@ func TestNeedsPersonListsWhatWaitsOnAPerson(t *testing.T) {
 	}
 }
 
-// A REFRESH IS NO MERGE'S RECORD: it names the revision, the head and the
-// target whose merge it refreshes and nothing of the merge — the writer stamps
-// the tip, its position and the state from the change's row — and no write
-// names the readiness or the versions the writer stamps; and a refresh of a
-// change whose row holds no merge of its head revision is superseded, its
-// home merging first.
+// A REFRESH IS NO MERGE'S RECORD: it names the revision, head and target it
+// refreshes and nothing of the merge (the writer stamps tip, position and
+// state from the row); no write names the readiness or versions the writer
+// stamps; and a refresh where the row holds no merge of the head revision is
+// superseded, its home merging first.
 func TestARefreshNamesTheMergeItRefreshesAndNothingMore(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -666,14 +638,12 @@ func (n *node) mergingWith(repo, change string, set func(*gitlet.Mergeability)) 
 	return w
 }
 
-// THE GATE READS NO DECISION: a merge counts the change's own review objects
-// — its reviews' verdicts, its findings and its checks — and never a decision
-// Worklet records (ADR-0023's asks), so no file of Gitlet imports
-// Worklet or spells one of its tables: neither M4's readiness nor the
-// merge gate that widens it (gatejudge.go), nor any decide that will judge a
-// merge by it. A decision a seat asked for on a task is an answer about the
-// task, and a change gated by one would merge on a word nobody gave about its
-// code.
+// THE GATE READS NO DECISION: a merge counts the change's own reviews,
+// findings and checks, never a Worklet decision (ADR-0023's asks), so no
+// Gitlet file imports Worklet or spells its tables: not the readiness, the
+// merge gate (gatejudge.go), nor any decide judging a merge by them. A
+// decision answers about the task; a change gated by one would merge on a
+// word nobody gave about its code.
 //
 // Mutation: import internal/worklet in gatejudge.go, or read
 // `tracker_comments` there → red.
@@ -719,8 +689,8 @@ func TestTheGateReadsNoDecision(t *testing.T) {
 	}
 }
 
-// stringLiterals is every string literal f spells, unquoted: the statements a
-// file reads, among them.
+// stringLiterals is every string literal f spells, unquoted, its SQL among
+// them.
 func stringLiterals(f *ast.File) []string {
 	var out []string
 	ast.Inspect(f, func(node ast.Node) bool {
@@ -734,14 +704,13 @@ func stringLiterals(f *ast.File) []string {
 	return out
 }
 
-// AN ENDED CHANGE WAITS ON NOBODY: a change whose stored readiness waits on a
-// person — founder alone is asked — leaves code_mergeability_waits_idx in the
-// same apply as the record that ends it, whichever that is: a close, its home's
-// landing, a push that sets its target to its head, a push that deletes its
-// source; and a mergeability decided while it was live that lands after its
-// close stores no answer either. So the index holds the changes waiting now,
-// and needs=person reads one page and finds nothing, rather than walking every
-// change that ever ended while waiting, each read and dropped.
+// AN ENDED CHANGE WAITS ON NOBODY: a change waiting on a person leaves
+// code_mergeability_waits_idx in the same apply as whatever record ends it (a
+// close, its home's landing, a push setting its target to its head, a push
+// deleting its source), and a mergeability decided while it was live that
+// lands after its close stores no answer. So the index holds only changes
+// waiting now, and needs=person finds nothing on one page rather than walking
+// every change that ever ended while waiting.
 //
 // Mutations: leave the close's clear out of applyChangeWrite → the closed and
 // landed cases keep their row; leave it out of the push book → the push cases
@@ -784,8 +753,7 @@ func TestAnEndedChangeWaitsOnNobody(t *testing.T) {
 			t.Helper()
 			closeIt(t, n, repo, change)
 			// THE HOME'S RECORD, decided over the live change and appended
-			// after its close: the two are on two subjects, which no
-			// arbitration orders against each other.
+			// after its close: two subjects, which no arbitration orders.
 			late := *n.merging(repo, change, 1, oidOf("B"), mainRef, gitlet.MergeClean).Mergeability
 			late.ChangeVersion, late.ReadinessVersion, late.WaitsPerson = 1, 3, true
 			if _, err := n.publish(gitlet.ChangeSubject(change), gitlet.OpMergeability,
@@ -829,23 +797,17 @@ func TestAnEndedChangeWaitsOnNobody(t *testing.T) {
 }
 
 // A CHART CHANGE ALONE MAKES A CHANGE DUE A REFRESH (M4-D24's fourth input):
-// web!1, asked of plat-lead and of founder, is approved by plat-lead, whose
-// review tier counts; merged clean by a writer on the chart of activation e1,
-// its stored answer is ready, waits on nobody and names e1. No record moves
-// when a configuration lowers plat-lead to read_only (activation e2), yet the
-// approval no longer counts and the first unmet precondition waits on
-// founder, a person, alone. A home holding e1 finds the change due nothing;
-// one holding e2 finds it due a refresh, the listing of repositories naming
-// web, and a writer on e2 records it: the stored answer waits on a person,
-// the record names e2, and needs=person lists the change. A writer still on
-// e1, asked the same refresh, is superseded and records nothing — with
-// nothing else moved, an older chart does not overwrite a later one's
-// answer — and the home on e2 finds the change due nothing more.
+// web!1, asked of plat-lead and founder, approved by plat-lead and merged
+// clean on chart e1, is stored ready. Lowering plat-lead to read_only (e2)
+// moves no record, yet the approval stops counting and the change waits on
+// founder alone. A home on e1 finds nothing due; one on e2 finds a refresh due
+// (web listed among the repositories), which a writer on e2 records: waiting
+// on a person, stamped e2, listed by needs=person. A writer still on e1 is
+// superseded, since an older chart never overwrites a later one's answer.
 //
-// Mutations: drop the chart term from refreshDue → the home on e2 finds
-// nothing due; leave the chart out of the decide's guard → the writer on e1
-// overwrites the answer; stamp no chart on the record → the change stays due
-// at e2 after its refresh.
+// Mutations: drop the chart term from refreshDue → nothing due on e2; leave
+// the chart out of the decide's guard → the e1 writer overwrites the answer;
+// stamp no chart on the record → the change stays due at e2 after its refresh.
 func TestAChartChangeAloneMakesAChangeDueARefresh(t *testing.T) {
 	t.Parallel()
 	const e1, e2 = int64(1_762_000_000_000), int64(1_762_000_060_000)
@@ -926,17 +888,13 @@ func TestAChartChangeAloneMakesAChangeDueARefresh(t *testing.T) {
 	}
 }
 
-// A CHART CHANGE THAT KEEPS THE ANSWER STILL MOVES THE STORED CHART: web!1,
-// approved by plat-lead and merged clean on the chart of activation e1, is
-// stored ready. A configuration apply that changes nothing the readiness
-// reads (activation e2, the same seats) makes it due a refresh at e2 all the
-// same, and the refresh on e2 judges it ready again — the row's outcome, so
-// the writer records a mergeability_kept rather than the whole record. That
-// record names the chart alongside the versions, its apply moves the row's
-// chart to e2, the answer stays ready, and the home on e2 finds the change
-// due nothing more: a kept refresh that left the chart behind would leave
-// the change due at every pass, and one that carried the chart alone would
-// name no judgement the apply could move.
+// A CHART CHANGE THAT KEEPS THE ANSWER STILL MOVES THE STORED CHART: an apply
+// at e2 changing nothing the readiness reads still makes web!1 (ready on e1)
+// due a refresh; on e2 it judges ready again, the row's outcome, so the writer
+// records a mergeability_kept naming the chart beside the versions (the chart
+// alone would name no judgement to move), and its apply moves the row's chart
+// to e2, leaving nothing due. A kept refresh that left the chart behind would
+// be due at every pass.
 //
 // Mutations: stamp no chart on the kept record → its apply writes the row's
 // chart as none, and the change stays due at e2; leave chart_epoch out of the
@@ -994,20 +952,17 @@ func TestAChartChangeThatKeepsTheAnswerMovesTheStoredChart(t *testing.T) {
 	}
 }
 
-// A KEPT JUDGEMENT ON A CHART BEHIND THE ROW'S STILL APPLIES: web!1, approved
-// and merged ready on the chart of activation e1, refreshed and kept on e2,
-// is asked of cto. A writer still on e1 — a node that has not taken the
-// activation yet — refreshes it: its versions moved, so the decide judges it,
-// and the answer is the row's, so it records a mergeability_kept naming the
-// later versions and e1. Its apply writes both, as a refresh's full record
-// writes an earlier chart beside moved versions: the change is due no
-// refresh at e1, and due one at e2 again, whose writer moves the chart
-// forward. A guard holding the chart forward would apply the record as
-// nothing, leaving the versions behind and the change due a refresh at every
-// chart and every pass, until the writer's node took e2.
+// A KEPT JUDGEMENT ON A CHART BEHIND THE ROW'S STILL APPLIES: web!1, kept on
+// e2, is then asked of cto, and a writer still on e1 (its node has not taken
+// the activation) refreshes it: the versions moved, the answer is the row's,
+// so it records a mergeability_kept naming the later versions and e1. Its
+// apply writes both, as a full refresh record writes an earlier chart beside
+// moved versions: nothing is due at e1, a refresh is due at e2 again. A guard
+// holding the chart forward would apply it as nothing, leaving the versions
+// behind and the change due at every chart and pass until the node took e2.
 //
 // Mutation: hold the kept apply's chart forward (chart_epoch <= ?11 in its
-// guard) → the refresh on e1 applies as nothing — red.
+// guard) → the refresh on e1 applies as nothing.
 func TestAKeptJudgementOnAChartBehindTheRowsStillApplies(t *testing.T) {
 	t.Parallel()
 	const e1, e2 = int64(1_762_000_000_000), int64(1_762_000_060_000)

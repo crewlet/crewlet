@@ -32,10 +32,10 @@ var claudeRunStream = []string{
 	`{"type":"assistant","message":{"id":"msg_01","type":"message","role":"assistant",` +
 		`"content":[{"type":"tool_use","id":"toolu_01","name":"Bash",` +
 		`"input":{"command":"go test ./...","description":"Run the test suite"}}]},` +
-		`"parent_tool_use_id":null,"session_id":"sess-1"}`,
+		`"parent_tool_use_id":null,"session_id":"sess-1","timestamp":"2026-11-02T10:00:01.000Z"}`,
 	`{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_01",` +
 		`"type":"tool_result","content":"ok  \tgithub.com/acme/api\t0.412s\nTHE-SUITE-PRINTED-THIS",` +
-		`"is_error":false}]},"parent_tool_use_id":null,"session_id":"sess-1",` +
+		`"is_error":false}]},"parent_tool_use_id":null,"session_id":"sess-1","timestamp":"2026-11-02T10:00:03.400Z",` +
 		`"tool_use_result":{"stdout":"ok  \tgithub.com/acme/api\t0.412s\nTHE-SUITE-PRINTED-THIS",` +
 		`"stderr":"","interrupted":false}}`,
 	`{"type":"assistant","message":{"id":"msg_02","type":"message","role":"assistant",` +
@@ -50,11 +50,11 @@ var claudeRunStream = []string{
 	`{"type":"assistant","message":{"id":"msg_03","type":"message","role":"assistant",` +
 		`"content":[{"type":"tool_use","id":"toolu_03","name":"Bash",` +
 		`"input":{"command":"go test -run TestFlaky -count=20 ./..."}}]},` +
-		`"parent_tool_use_id":null,"session_id":"sess-1"}`,
+		`"parent_tool_use_id":null,"session_id":"sess-1","timestamp":"2026-11-02T10:00:05.000Z"}`,
 	`{"type":"tool_progress","tool_use_id":"toolu_03","tool_name":"Bash","elapsed_time_seconds":3}`,
 	`{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_03",` +
 		`"type":"tool_result","content":"exit status 1\n--- FAIL: TestFlaky (0.01s)","is_error":true}]},` +
-		`"parent_tool_use_id":null,"session_id":"sess-1"}`,
+		`"parent_tool_use_id":null,"session_id":"sess-1","timestamp":"2026-11-02T10:00:06.250Z"}`,
 	`{"type":"assistant","message":{"id":"msg_04","type":"message","role":"assistant",` +
 		`"content":[{"type":"text","text":"Fixed the race and opened https://github.com/acme/api/pull/9"}],` +
 		`"stop_reason":"end_turn"},"parent_tool_use_id":null,"session_id":"sess-1"}`,
@@ -68,10 +68,12 @@ var claudeRunStream = []string{
 
 // claudeTranscript is what claudeRunStream says the run did.
 const claudeTranscript = "I'll run the suite first.\n" +
-	"[tool] Bash: go test ./...\n" +
-	"[tool] Read: /home/user/repo/flaky_test.go\n" +
-	"[tool] Bash: go test -run TestFlaky -count=20 ./...\n" +
-	"[tool] Bash → error: exit status 1 (+1 more line(s))\n" +
+	"[tool 1] Bash: go test ./...\n" +
+	"[ok 1 2400ms]\n" +
+	"[tool 2] Read: /home/user/repo/flaky_test.go\n" +
+	"[ok 2]\n" +
+	"[tool 3] Bash: go test -run TestFlaky -count=20 ./...\n" +
+	"[failed 3 1250ms] exit status 1 (+1 more line(s))\n" +
 	"Fixed the race and opened https://github.com/acme/api/pull/9"
 
 func decodeClaude(lines ...string) string {
@@ -82,8 +84,9 @@ func decodeClaude(lines ...string) string {
 	return dec.Result().Transcript
 }
 
-// THE STREAM IS READ INTO WHAT THE RUN DID: what the agent said, one line per
-// tool call naming the tool and its subject, and a failed call marked as one.
+// THE STREAM IS READ INTO WHAT THE RUN DID: what the agent said, each call
+// numbered with its tool and subject, and its result, timed where both lines
+// carry a timestamp.
 func TestTheClaudeStreamBecomesATranscriptOfWhatTheRunDid(t *testing.T) {
 	t.Parallel()
 	if got := decodeClaude(claudeRunStream...); got != claudeTranscript {
@@ -104,20 +107,18 @@ func TestAClaudeToolResultsBodyNeverReachesTheTranscript(t *testing.T) {
 	}
 }
 
-// A FAILED CALL NAMES ITS TOOL AND THE FIRST LINE OF WHY — the tool from the
-// call the result answers, or a plain "tool" for a result whose call this
-// decoder was never fed (a live reading begins part-way through a long
-// stream).
+// A FAILED CALL'S RESULT NAMES ITS CALL'S NUMBER AND THE FIRST LINE OF WHY, or
+// no number for a result whose call this decoder was never fed.
 func TestAFailedClaudeToolCallIsMarked(t *testing.T) {
 	t.Parallel()
 	failed := `{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_09",` +
 		`"type":"tool_result","content":[{"type":"text","text":"Error: file not found\nat line 3"}],"is_error":true}]}}`
-	if got := decodeClaude(failed); got != "[tool] tool → error: Error: file not found (+1 more line(s))" {
+	if got := decodeClaude(failed); got != "[failed] Error: file not found (+1 more line(s))" {
 		t.Errorf("a failure whose call was not read = %q", got)
 	}
 	call := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_09","name":"Edit",` +
 		`"input":{"file_path":"/repo/main.go","old_string":"a","new_string":"b"}}]}}`
-	want := "[tool] Edit: /repo/main.go\n[tool] Edit → error: Error: file not found (+1 more line(s))"
+	want := "[tool 1] Edit: /repo/main.go\n[failed 1] Error: file not found (+1 more line(s))"
 	if got := decodeClaude(call, failed); got != want {
 		t.Errorf("a failure after its call =\n%s\nwant\n%s", got, want)
 	}
@@ -261,7 +262,7 @@ func TestARunWhoseWrapperDiedIsReadFromItsStream(t *testing.T) {
 				!strings.Contains(res.Error, "stopped before it reported how its run ended") {
 				t.Errorf("success %v, error %q; want a run that stopped before its result", res.Success, res.Error)
 			}
-			if res.Transcript != "[tool] Bash: git push origin feature" {
+			if res.Transcript != "[tool 1] Bash: git push origin feature" {
 				t.Errorf("transcript = %q; want what it did", res.Transcript)
 			}
 		}},
@@ -404,5 +405,44 @@ func TestAClaudeRunInARealBoxIsCollectedFromItsStream(t *testing.T) {
 	if res.Text != "Fixed the race and opened https://github.com/acme/api/pull/9" ||
 		res.InputTokens != 30+2400+51200 || res.CostUSD != 0.1834 {
 		t.Errorf("result text %q, input %d, cost %v; want the result line's", res.Text, res.InputTokens, res.CostUSD)
+	}
+}
+
+// A CALL'S WHOLE SUBJECT RIDES BENEATH ITS PREVIEW where the preview cuts it (a
+// heredoc), and a tool with no subject field of its own (an MCP server's) is
+// named by its arguments: what a reader expands to see what ran.
+func TestAClaudeCallKeepsItsWholeSubjectBeneathItsPreview(t *testing.T) {
+	t.Parallel()
+	heredoc := "python3 - <<'EOF'\\nimport json\\nprint(json.dumps({}))\\nEOF"
+	got := decodeClaude(
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash",`+
+			`"input":{"command":"`+heredoc+`"}}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_2",`+
+			`"name":"mcp__crewlet__get_work_item","input":{"item":"ENG-12"}}]}}`)
+	want := "[tool 1] Bash: python3 - <<'EOF' (+3 more line(s))\n" +
+		"[input 1] python3 - <<'EOF'\n[input 1] import json\n[input 1] print(json.dumps({}))\n[input 1] EOF\n" +
+		`[tool 2] mcp__crewlet__get_work_item: {"item":"ENG-12"}`
+	if got != want {
+		t.Errorf("transcript =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A RUN'S LAST LIMIT REPORT RIDES ITS RESULT, answered or not, so the engine
+// reads where the plan's windows stood (harness.Provider.RunEnded).
+func TestARunsLastLimitReportRidesItsResult(t *testing.T) {
+	t.Parallel()
+	first := `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","utilization":0.1}}`
+	last := `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day","utilization":0.8}}`
+	runner := executor.NewClaudeCode()
+	b := box(t, runner)
+	stream := append([]string{first}, claudeRunStream...)
+	stream = append(stream[:len(stream)-1], last, stream[len(stream)-1])
+	b.Put(paths(b).Stream(), strings.Join(stream, "\n")+"\n")
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !res.Success || res.Limits != last {
+		t.Errorf("success %v, limits %q; want the run's last report %q", res.Success, res.Limits, last)
 	}
 }

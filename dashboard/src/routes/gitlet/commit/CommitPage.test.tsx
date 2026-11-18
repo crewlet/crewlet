@@ -25,6 +25,7 @@ import { load } from "~/lib/syntax/index.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { blobAnswer, inkedLine, type StubBlob } from "~/test/codeScreens.tsx";
+import { NearBy } from "~/test/nearBy.ts";
 import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { CommitPage } from "./CommitPage.tsx";
@@ -33,6 +34,7 @@ import { ComparePage } from "./ComparePage.tsx";
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   location.hash = "";
 });
 
@@ -45,7 +47,10 @@ const TURN = "6f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f";
 
 const ORG = withDerived({
   name: "Acme",
-  roles: [{ name: "CTO", handle: "cto" }],
+  roles: [
+    { name: "CTO", handle: "cto" },
+    { name: "Code Reviewer", handle: "reviewer" },
+  ],
   units: [{ id: "engineering", name: "Engineering", roles: [] }],
   services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
 }) as unknown as OrgProjection;
@@ -126,6 +131,38 @@ function commit(extra: Record<string, unknown> = {}, commitExtra: Record<string,
   };
 }
 
+/** A listed file the engine writes a patch for: not binary, with lines changed. */
+const patched = (f: Record<string, unknown>) =>
+  !f.binary && Number(f.added ?? 0) + Number(f.deleted ?? 0) > 0;
+
+/** The walk of every patch as the engine pages it: the first file's patch a page at a time, every
+ *  other file's whole on the last page. */
+function walkOf(files: readonly (readonly Record<string, unknown>[])[], patch: readonly string[]) {
+  const listed = files.flat();
+  const first = listed[0];
+  const pages = patch.map((text, n) =>
+    first && patched(first)
+      ? [
+          {
+            file: 0,
+            path: first.path,
+            status: first.status,
+            patch: text,
+            continues: n + 1 < patch.length,
+          },
+        ]
+      : [],
+  );
+  listed.forEach((f, i) => {
+    if (i > 0 && patched(f)) {
+      pages
+        .at(-1)!
+        .push({ file: i, path: f.path, status: f.status, patch: patch.join(""), continues: false });
+    }
+  });
+  return pages;
+}
+
 interface Acted {
   tool: string;
   args: Record<string, unknown>;
@@ -139,6 +176,8 @@ function stubEngine({
   patch = [PATCH],
   files = [[{ path: "app.go", status: "M", added: 1, deleted: 1 }]],
   blobs = {},
+  walk,
+  totals = { added: 1, deleted: 1 },
 }: {
   commitAnswer?: unknown;
   compare?: Record<string, unknown>;
@@ -149,6 +188,10 @@ function stubEngine({
   files?: readonly (readonly Record<string, unknown>[])[];
   /** Each side's blob by its whole id, read with no path. */
   blobs?: Readonly<Record<string, StubBlob>>;
+  /** The walk's pages of fragments (cursor `w:<n>`), or refused as an older fleet does. */
+  walk?: readonly (readonly Record<string, unknown>[])[] | "refused";
+  /** The lines the diff adds and deletes, as each answer totals them. */
+  totals?: { added: number; deleted: number };
 } = {}) {
   const asked: URL[] = [];
   const acted: Acted[] = [];
@@ -203,6 +246,26 @@ function stubEngine({
         case "/query/code_blob":
           return blobAnswer(url, blobs);
         case "/query/code_diff": {
+          if (p.get("patches") === "true") {
+            if (walk === "refused") {
+              return json({ error: "bad_params", detail: "unknown key patches" }, 400);
+            }
+            const pages = walk ?? walkOf(files, patch);
+            const at = Number((p.get("cursor") ?? "w:0").slice(2));
+            return json({
+              repo: "web",
+              kind: "diff",
+              ...(at + 1 < pages.length ? { next: `w:${at + 1}` } : {}),
+              diff: {
+                base: p.get("base"),
+                head: p.get("head"),
+                files: [],
+                total: files.flat().length,
+                ...totals,
+                patches: pages[at],
+              },
+            });
+          }
           const file = p.get("file");
           const page = Number((p.get("cursor") ?? "p:0").slice(2));
           const pages = file !== null ? patch.length : files.length;
@@ -217,8 +280,7 @@ function stubEngine({
               // is; a listing with its page of files.
               files: file !== null ? files.flat().filter((f) => f.path === file) : files[page],
               total: files.flat().length,
-              added: 1,
-              deleted: 1,
+              ...totals,
               ...(file !== null ? { patch: patch[page] } : {}),
             },
           });
@@ -276,35 +338,87 @@ function mount(ui: ReactElement, hash: string, viewer: unknown = VIEWER) {
 
 const reads = (asked: URL[], what: string) => asked.filter((u) => u.pathname === `/query/${what}`);
 
-// WHO PUSHED IT IS THE ENGINE'S RECORD: the seat, its turn, its executor
-// and its work item from the push that introduced the commit, never the
-// author line; and the change it heads a revision of links its page. The
-// executor is linked by its turn, which is what the executors board is keyed
-// by. Mutation: name the pusher from the author, drop the executor, or link
-// it by its job id, and this fails.
+/** A file's section of the stack, named by its head's path. */
+const section = (path: string) => screen.findByRole("region", { name: path });
+
+/** Sections come near only when a case says so (`NearBy.near`). */
+function holdSectionsFar() {
+  NearBy.made = [];
+  vi.stubGlobal("IntersectionObserver", NearBy);
+}
+
+/** An element's words without the faces beside its names. */
+function wordsOf(el: Element): string {
+  const copy = el.cloneNode(true) as Element;
+  for (const face of copy.querySelectorAll('[aria-hidden="true"], .crewlet-avatar, svg')) {
+    face.remove();
+  }
+  return (copy.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
+/** The provenance card's rows: each sentence, its second line and its time, in words. */
+async function provenance() {
+  const card = await screen.findByRole("region", { name: "Provenance" });
+  return [...card.querySelectorAll(".code-prov__row")].map((row) => ({
+    row: row as HTMLElement,
+    sentence: wordsOf(row.querySelector(".code-prov__sentence")!),
+    more: row.querySelector(".code-prov__more")
+      ? wordsOf(row.querySelector(".code-prov__more")!)
+      : "",
+    time: row.querySelector("time"),
+  }));
+}
+
+const MERGE = "c71d0e9a2b4f68135ea0d7c2b9f4e61a3d8c5b02";
+const TIP = "9a8b7c6d5e4f30211f2e3d4c5b6a79881a2b3c4d";
+
+/** web!41 merged direct by CTO, approved by Code Reviewer, its 2 required checks passed. */
+const landing = (extra: Record<string, unknown> = {}, gate: Record<string, unknown> = {}) => ({
+  repo: "web",
+  ref: "web!41",
+  title: "Cache the badge",
+  state: "merged",
+  merge_oid: MERGE,
+  merged_at: "2026-10-20T12:00:00Z",
+  merged_via: "direct",
+  merged_by: "cto",
+  merged_by_kind: "agent",
+  gate: {
+    approvals: [{ handle: "reviewer", kind: "agent", revision: 1 }],
+    checks_on: SHA,
+    checks: { state: "passed", counts: { passed: 2 }, required: 2, required_passed: 2 },
+    ...gate,
+  },
+  ...extra,
+});
+
+// WHO PUSHED IT IS THE ENGINE'S RECORD: the seat, its run linking its turn, and
+// its executor linked by turn. Mutation: name the pusher from the author line,
+// or link the executor by its job id.
 test("a commit's page says who pushed it, from which turn and run, and its changes", async () => {
   stubEngine();
   mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
 
-  const pushed = await screen.findByRole("region", { name: "Pushed" });
-  expect(within(pushed).getByText("CTO")).toBeTruthy();
-  expect(within(pushed).getByRole("link", { name: TURN }).getAttribute("href")).toBe(
-    `#/live/turns/${TURN}`,
-  );
-  expect(within(pushed).getByRole("link", { name: RUN }).getAttribute("href")).toBe(
+  const [push, revision] = await provenance();
+  expect(push!.sentence).toBe("Pushed by CTO, a run for ENG-42, with git");
+  expect(push!.more).toBe(`A git push · which refs it moved is no longer kept · executor ${RUN}`);
+  expect(
+    within(push!.row).getByRole("link", { name: "a run for ENG-42" }).getAttribute("href"),
+  ).toBe(`#/live/turns/${TURN}`);
+  expect(within(push!.row).getByRole("link", { name: RUN }).getAttribute("href")).toBe(
     `#/live/executors/${TURN}`,
   );
-  expect(within(pushed).getByText("ENG-42")).toBeTruthy();
-  const changes = screen.getByRole("region", { name: "Changes" });
-  expect(within(changes).getByRole("link", { name: "web!7" }).getAttribute("href")).toBe(
+  expect(revision!.sentence).toBe("Revision 2 of web!7 Merged");
+  expect(revision!.more).toBe("How it landed is unavailable on this fleet yet.");
+  expect(within(revision!.row).getByRole("link", { name: "web!7" }).getAttribute("href")).toBe(
     "#/gitlet/repos/web/changes/7",
   );
   expect(screen.getByText("Retry the flaky upload")).toBeTruthy();
 });
 
-// THE CHANGES CARD WEARS EACH CHANGE'S STATE PILL, and "Refs it moved" draws a
-// branch as its chip with its glyph and a tag as its name, a comma between.
-// Mutation: drop the comma, draw the tag as a chip, or the chip without its glyph.
+// A CHANGE WEARS ITS STATE PILL, and the refs a push moved are said after
+// "to", a branch as its chip with its glyph and a tag as its name. Mutation:
+// draw the tag as a chip, or the refused command as moved.
 test("a commit's changes wear their state pill, and the refs it moved a branch chip", async () => {
   const command = (ref: string, result = "ok") => ({ ref, old: PARENT, new: SHA, result });
   stubEngine({
@@ -320,41 +434,191 @@ test("a commit's changes wear their state pill, and the refs it moved a branch c
   });
   mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
 
-  const changes = await screen.findByRole("region", { name: "Changes" });
-  const pill = within(changes).getByText("Merged").closest<HTMLElement>(".code-state");
+  const [push, revision] = await provenance();
+  const pill = within(revision!.row).getByText("Merged").closest<HTMLElement>(".code-state");
   expect(pill?.dataset.state).toBe("merged");
-  const pushed = screen.getByRole("region", { name: "Pushed" });
-  const value = within(pushed).getByText("v1.2").parentElement!;
-  expect(value.textContent).toBe("main, v1.2");
-  const chips = [...value.querySelectorAll(".code-branch-chip")];
+  expect(push!.sentence).toBe("Pushed by CTO, a run for ENG-42, with git, to main, v1.2");
+  expect(push!.more.startsWith("A git push · it moved 2 refs")).toBe(true);
+  const chips = [...push!.row.querySelectorAll(".code-branch-chip")];
   expect(chips.map((c) => c.textContent)).toEqual(["main"]);
   expect(chips[0]!.querySelector("svg")).not.toBeNull();
-  const tag = within(pushed).getByText("v1.2");
+  const tag = within(push!.row).getByText("v1.2");
   expect(tag.classList.contains("code-branch-chip")).toBe(false);
-  expect(tag.querySelector("svg")).toBeNull();
+});
+
+// A DIRECT MERGE'S LANDING IS SAID WITH ITS GATE: the merge commit, the merger,
+// approvals, checks and when, titled with the date. Mutation: name the merge
+// commit's author as the merger.
+test("a direct merge's landing is said in sentences with its gate", async () => {
+  stubEngine({ commitAnswer: commit({ revisions: [{ change: landing(), n: 1 }] }) });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
+
+  const [, landed] = await provenance();
+  expect(landed!.sentence).toBe("Landed with web!41 Merged in merge commit c71d0e9 by Gitlet");
+  expect(landed!.more).toBe(
+    "CTO merged it through its gate: approved by Code Reviewer; 2 of 2 required checks passed.",
+  );
+  expect(within(landed!.row).getByRole("link", { name: "c71d0e9" }).getAttribute("href")).toBe(
+    `#/gitlet/repos/web/commits/${MERGE}`,
+  );
+  expect(landed!.time?.getAttribute("dateTime")).toBe("2026-10-20T12:00:00Z");
+  expect(landed!.time?.getAttribute("title")).toBeTruthy();
+  expect(landed!.time?.textContent).toMatch(/ago|at /);
+});
+
+// A QUEUE LANDING NAMES THE TRAIN'S CHECKS by the commit they ran on, which
+// links its page. Mutation: draw the merged head's checks for a queue landing.
+test("a queue landing names the train's checks by the commit they ran on", async () => {
+  stubEngine({
+    commitAnswer: commit({
+      revisions: [{ change: landing({ merged_via: "queue" }, { checks_on: TIP }), n: 1 }],
+    }),
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
+
+  const [, landed] = await provenance();
+  expect(landed!.more).toBe(
+    "CTO added it to the merge queue, and it landed through its gate: approved by Code Reviewer; the train's checks on 9a8b7c6 2 of 2 required checks passed.",
+  );
+  expect(within(landed!.row).getByRole("link", { name: "9a8b7c6" }).getAttribute("href")).toBe(
+    `#/gitlet/repos/web/commits/${TIP}`,
+  );
+});
+
+// THE MERGE COMMIT SAYS GITLET MERGED THE CHANGE into the branch its push
+// moved, for the merger, and draws no push row beside it. Mutation: draw
+// the push row too.
+test("the merge commit says Gitlet merged the change into its branch for the merger", async () => {
+  stubEngine({
+    commitAnswer: commit({
+      pushed_by: {
+        push_id: "p2",
+        position: POSITION,
+        at: "2026-10-20T12:00:00Z",
+        principal: { kind: "agent", seat: "cto" },
+        via: "merge",
+      },
+      push: { commands: [{ ref: "refs/heads/main", old: PARENT, new: SHA, result: "ok" }] },
+      merged: [landing({ merge_oid: SHA })],
+      revisions: [],
+    }),
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
+
+  const rows = await provenance();
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.sentence).toBe("Gitlet merged web!41 Merged into main for CTO");
+  expect(rows[0]!.more).toBe(
+    "CTO merged it through its gate: approved by Code Reviewer; 2 of 2 required checks passed.",
+  );
+});
+
+// A SEAT'S PUSH THROUGH THE ENGINE is one sentence with its run and branch.
+test("a seat's push through the engine says its run, its branch and that it moved one branch", async () => {
+  stubEngine({
+    commitAnswer: commit({
+      pushed_by: { ...commit().pushed_by, via: "engine" },
+      push: { commands: [{ ref: "refs/heads/retry", old: PARENT, new: SHA, result: "ok" }] },
+    }),
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
+
+  const [push] = await provenance();
+  expect(push!.sentence).toBe("Pushed by CTO, a run for ENG-42, via the engine, to retry");
+  expect(push!.more).toBe(
+    `A commit the engine built from a tool's call · it moved one branch · executor ${RUN}`,
+  );
+});
+
+// THE GATE'S OTHER WORDS, each as the rows keep them, never a guess.
+test.each([
+  [
+    "failing checks are named",
+    landing(
+      {},
+      {
+        checks: {
+          state: "failing",
+          counts: { failed: 1, passed: 1 },
+          required: 2,
+          required_passed: 1,
+          failing: [{ name: "unit", state: "failed", required: true }],
+        },
+      },
+    ),
+    "CTO merged it through its gate: approved by Code Reviewer; unit failed.",
+  ],
+  [
+    "checks past retention are no longer kept",
+    landing({}, { checks: undefined, checks_on: undefined, gone: true }),
+    "CTO merged it through its gate: approved by Code Reviewer; its checks are no longer kept.",
+  ],
+  [
+    "no check ran",
+    landing({}, { checks: undefined, checks_on: undefined }),
+    "CTO merged it through its gate: approved by Code Reviewer; no check ran on what it merged.",
+  ],
+  [
+    "no approval",
+    landing({}, { approvals: undefined }),
+    "CTO merged it through its gate: with no approval; 2 of 2 required checks passed.",
+  ],
+  [
+    "an override",
+    landing({ override_reason: "hotfix" }),
+    "CTO merged it past its gate: “hotfix”. As it stood: approved by Code Reviewer; 2 of 2 required checks passed.",
+  ],
+  [
+    "a push merge",
+    landing({ merged_via: "push" }),
+    "It merged when its head was pushed to its branch.",
+  ],
+] as const)("the gate's words: %s", async (_what, change, said) => {
+  stubEngine({ commitAnswer: commit({ revisions: [{ change, n: 1 }] }) });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
+
+  const [, landed] = await provenance();
+  expect(landed!.more).toBe(said);
+});
+
+// A LIVE CHANGE'S REVISION reads as its revision, with no gate and no time.
+// Mutation: draw a live revision as landed.
+test("a live change's revision head reads as its revision", async () => {
+  stubEngine({
+    commitAnswer: commit({
+      revisions: [{ change: { repo: "web", ref: "web!42", title: "Next", state: "open" }, n: 3 }],
+    }),
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
+
+  const [, revision] = await provenance();
+  expect(revision!.sentence).toBe("Revision 3 of web!42 Open");
+  expect(revision!.more).toBe("");
+  expect(revision!.time).toBeNull();
 });
 
 // A COMMIT'S DIFF IS AGAINST ITS FIRST PARENT, read by both whole ids, and
-// its first file's patch is drawn in the one DiffView. Mutation: diff against
-// the default branch, or against the commit itself, and this fails.
-test("a commit's diff is against its first parent, its patch drawn", async () => {
+// every file's patch by the one walk. Mutation: diff against the default
+// branch, or against the commit itself, and this fails.
+test("a commit's diff is against its first parent, its patches walked", async () => {
   const { asked } = stubEngine();
   mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
 
   expect(await screen.findByText("new")).toBeTruthy();
-  const stat = reads(asked, "code_diff").find((u) => !u.searchParams.has("file"));
-  expect(stat?.searchParams.get("base")).toBe(PARENT);
-  expect(stat?.searchParams.get("head")).toBe(SHA);
-  const patch = reads(asked, "code_diff").find((u) => u.searchParams.get("file") === "app.go");
-  expect(patch?.searchParams.get("base")).toBe(PARENT);
+  for (const u of reads(asked, "code_diff")) {
+    expect(u.searchParams.get("base")).toBe(PARENT);
+    expect(u.searchParams.get("head")).toBe(SHA);
+  }
+  expect(reads(asked, "code_diff").some((u) => u.searchParams.get("patches") === "true")).toBe(
+    true,
+  );
 });
 
-// A FILE'S PATCH IS READ WHOLE, A PAGE AT A TIME: the engine cuts a patch
-// past one answer's bound at a line, and the page after it is asked from the
-// cursor the page before ended at, its hunks drawn under the first's — never
-// a first page drawn as the file's whole change. Mutation: ask the next page
-// without its cursor, or draw the first page's text alone, and this fails.
-test("a patch past one page draws the rest of its hunks when the reader asks", async () => {
+// THE WALK IS READ A PAGE AT A TIME, the page after asked from the cursor
+// the page before ended at, its hunks drawn under the first's. Mutation: ask
+// the next page without its cursor, or draw the first page alone.
+test("a patch past one page of the walk draws the rest of its hunks when the reader asks", async () => {
+  holdSectionsFar();
   const { asked } = stubEngine({
     patch: [
       `${["--- a/app.go", "+++ b/app.go", "@@ -1,2 +1,2 @@", " keep", "-old", "+new"].join("\n")}\n`,
@@ -370,17 +634,15 @@ test("a patch past one page draws the rest of its hunks when the reader asks", a
   expect(await screen.findByText("omega")).toBeTruthy();
   expect(screen.getByText("new")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Load more lines" })).toBeNull();
-  const second = reads(asked, "code_diff").find((u) => u.searchParams.get("cursor") === "p:1");
-  expect(second?.searchParams.get("file")).toBe("app.go");
+  const second = reads(asked, "code_diff").find((u) => u.searchParams.get("cursor") === "w:1");
+  expect(second?.searchParams.get("patches")).toBe("true");
   expect(second?.searchParams.get("head")).toBe(SHA);
+  expect(reads(asked, "code_diff").some((u) => u.searchParams.has("file"))).toBe(false);
 });
 
-// THE FILE THE ADDRESS NAMES IS OPENED WHEREVER IT IS LISTED: a diff's files
-// are a page at a time, and a link or a reload naming a file past the first
-// page reads its patch all the same, the file described by that patch's own
-// answer — a binary one said as binary, with no line drawn. Mutation: open
-// only a file the loaded pages list, or take a file's kind from the listing
-// alone, and this fails.
+// THE FILE THE ADDRESS NAMES IS OPENED WHEREVER IT IS LISTED: past the first
+// page it is asked alone and the pages read on to it; a binary one is said as
+// binary. Mutation: open only a file the loaded pages list.
 test.each([
   ["its patch", { path: "z.go", status: "A", added: 2, deleted: 0 }, "new"],
   [
@@ -394,9 +656,11 @@ test.each([
   });
   mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}?file=z.go`);
 
-  const region = await screen.findByRole("region", { name: "Changes to z.go" });
+  const region = await section("z.go");
   expect(await within(region).findByText(drawn)).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Load more files" })).toBeTruthy();
+  // THE PAGES ARE READ ON TO LIST IT, once the engine says the diff changes it.
+  const list = screen.getByRole("tree", { name: "Files changed" });
+  expect(within(list).getByRole("treeitem", { name: /z\.go/ })).toBeTruthy();
   expect(reads(asked, "code_diff").some((u) => u.searchParams.get("file") === "z.go")).toBe(true);
 });
 
@@ -413,7 +677,7 @@ test("a line the address names is marked in its file's patch", async () => {
     `#/gitlet/repos/web/commits/${SHA}?file=app.go&line=2`,
   );
 
-  const region = await screen.findByRole("region", { name: "Changes to app.go" });
+  const region = await section("app.go");
   await within(region).findByText("new");
   const marked = region.querySelectorAll(".crewlet-diff-view__line--picked");
   expect(marked.length).toBe(1);
@@ -428,7 +692,7 @@ test("a line the patch does not draw offers the file at the head on that line", 
     `#/gitlet/repos/web/commits/${SHA}?file=app.go&line=40`,
   );
 
-  const region = await screen.findByRole("region", { name: "Changes to app.go" });
+  const region = await section("app.go");
   const open = await within(region).findByRole("link", { name: "Open app.go at line 40" });
   const target = new URL(open.getAttribute("href")!, "http://x");
   expect(target.hash).toContain("/gitlet/repos/web");
@@ -459,7 +723,7 @@ test("a line on a later page of the patch is read to and marked with no press", 
     `#/gitlet/repos/web/commits/${SHA}?file=app.go&line=41`,
   );
 
-  const region = await screen.findByRole("region", { name: "Changes to app.go" });
+  const region = await section("app.go");
   expect(await within(region).findByText("omega")).toBeTruthy();
   const marked = region.querySelectorAll(".crewlet-diff-view__line--picked");
   expect(marked.length).toBe(1);
@@ -478,7 +742,7 @@ test("a line between two hunks is outside the diff once a hunk past it is read",
     `#/gitlet/repos/web/commits/${SHA}?file=app.go&line=20`,
   );
 
-  const region = await screen.findByRole("region", { name: "Changes to app.go" });
+  const region = await section("app.go");
   expect(await within(region).findByRole("link", { name: "Open app.go at line 20" })).toBeTruthy();
   expect(within(region).getByText("omega")).toBeTruthy();
   expect(within(region).queryByText("gamma")).toBeNull();
@@ -507,11 +771,11 @@ test("opening another file drops the line the address named", async () => {
     `#/gitlet/repos/web/commits/${SHA}?file=app.go&line=2`,
   );
 
-  await screen.findByRole("region", { name: "Changes to app.go" });
-  const list = screen.getByRole("list", { name: "Files changed" });
-  fireEvent.click(within(list).getByRole("button", { name: /z\.go/ }));
+  await section("app.go");
+  const list = screen.getByRole("tree", { name: "Files changed" });
+  fireEvent.click(within(list).getByRole("treeitem", { name: /z\.go/ }));
 
-  const region = await screen.findByRole("region", { name: "Changes to z.go" });
+  const region = await section("z.go");
   await within(region).findByText("new");
   const query = new URLSearchParams(location.hash.split("?")[1] ?? "");
   expect(query.get("file")).toBe("z.go");
@@ -526,8 +790,16 @@ test("a root commit's diff is from git's empty tree", async () => {
   const { asked } = stubEngine({ commitAnswer: commit({}, { parents: undefined }) });
   mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
 
-  await waitFor(() => expect(reads(asked, "code_diff").length).toBeGreaterThan(0));
-  expect(reads(asked, "code_diff")[0]?.searchParams.get("base")).toBe(EMPTY_TREE);
+  await waitFor(() => expect(reads(asked, "code_diff").length).toBeGreaterThan(1));
+  for (const u of reads(asked, "code_diff")) {
+    expect(u.searchParams.get("base")).toBe(EMPTY_TREE);
+  }
+  expect(reads(asked, "code_diff").some((u) => u.searchParams.get("patches") === "true")).toBe(
+    true,
+  );
+  // Mutation: drop the host's words from the toolbar.
+  const words = await screen.findByText(/^Showing/);
+  expect(words.textContent).toMatch(/of a root commit, every file it holds$/);
 });
 
 // A COMPARISON'S FILES ARE WHAT HEAD CHANGED SINCE THE MERGE BASE, read by
@@ -672,6 +944,36 @@ test.each([
   expect(acted).toHaveLength(0);
 });
 
+// THE PAGE BAR HOLDS BROWSE FILES, REVERT AND CHERRY-PICK, the writes drawn
+// for every reader and held with the reason. Mutation: draw Revert under the
+// header, outside the page bar.
+test.each([
+  [
+    "an anonymous reader",
+    { login: "", grants: [], handle: "", owner: "", name: "", acts: [], anonymous: true },
+    WRITE_REASONS.anonymous,
+  ],
+  ["a person the engine does not serve", { ...VIEWER, acts: [] }, WRITE_REASONS.not_served],
+])(
+  "the page bar holds Browse files, Revert and Cherry-pick, held for %s",
+  async (_who, viewer, reason) => {
+    const { acted } = stubEngine();
+    mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`, viewer);
+
+    const browse = await screen.findByRole("link", { name: "Browse the files at 0123456" });
+    expect(browse.getAttribute("href")).toBe(`#/gitlet/repos/web?ref=${SHA}`);
+    const bar = browse.closest<HTMLElement>(".page-actions")!;
+    expect(bar).not.toBeNull();
+    for (const name of ["Revert", "Cherry-pick"]) {
+      const write = within(bar).getByRole("button", { name });
+      await waitFor(() => expect(write.getAttribute("title")).toBe(reason));
+      fireEvent.click(write);
+    }
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(acted).toHaveLength(0);
+  },
+);
+
 // A COMMIT IS REVERTED ON A BRANCH CHOSEN, at the head that branch's listing
 // showed: one code_revert, the commit whole, nothing on the first press.
 // Mutation: drop expected_head, send the short id, or send before the dialog's
@@ -724,6 +1026,174 @@ test("a commit is picked onto another branch at that branch's head", async () =>
     tool: "code_cherry_pick",
     args: { repo: "web", branch: "retry", expected_head: SHA, commit: SHA },
   });
+});
+
+// ---- Every changed file on one page ---------------------------------------------
+
+const THREE = [
+  [
+    { path: "cmd/app.go", status: "M", added: 1, deleted: 1 },
+    { path: "cmd/b.go", status: "M", added: 1, deleted: 1 },
+    { path: "web/c.go", status: "M", added: 1, deleted: 1 },
+  ],
+];
+const COMMIT_PAGE = `#/gitlet/repos/web/commits/${SHA}`;
+const sectionPaths = () =>
+  screen
+    .getAllByRole("region")
+    .filter((r) => r.classList.contains("code-file"))
+    .map((r) => r.getAttribute("data-path"));
+
+// EVERY CHANGED FILE IS A SECTION OF ONE STACK, read by the walk of code_diff
+// and never file by file. Mutation: read each file alone.
+test("every changed file is a section of one stack read by the walk of code_diff", async () => {
+  const { asked } = stubEngine({ files: THREE });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_PAGE);
+
+  const c = await section("web/c.go");
+  await within(c).findByText("new");
+  expect(sectionPaths()).toEqual(["cmd/app.go", "cmd/b.go", "web/c.go"]);
+  const walks = reads(asked, "code_diff").filter((u) => u.searchParams.get("patches") === "true");
+  expect(walks).toHaveLength(1);
+  expect(walks[0]!.searchParams.get("base")).toBe(PARENT);
+  expect(walks[0]!.searchParams.get("head")).toBe(SHA);
+  expect(reads(asked, "code_diff").some((u) => u.searchParams.has("file"))).toBe(false);
+});
+
+// A FILE THE ADDRESS NAMES OPENS THE STACK AT IT: its head takes the focus and
+// its line is marked and scrolled to. Mutation: drop the arrival's jump, or
+// drop the target from reveal.
+test("a file the address names opens the stack at it, its line marked", async () => {
+  const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+  stubEngine({ files: THREE });
+  mount(<CommitPage repo="web" sha={SHA} />, `${COMMIT_PAGE}?file=web/c.go&line=2`);
+
+  const c = await section("web/c.go");
+  await within(c).findByText("new");
+  expect(document.activeElement).toBe(within(c).getByRole("heading", { level: 3 }));
+  const marked = c.querySelectorAll(".crewlet-diff-view__line--picked");
+  expect(marked).toHaveLength(1);
+  expect(marked[0]?.textContent).toContain("new");
+  await waitFor(() => expect(scrolled.mock.contexts).toContain(marked[0]));
+  const app = await section("cmd/app.go");
+  expect(app.querySelectorAll(".crewlet-diff-view__line--picked")).toHaveLength(0);
+});
+
+// THE TOOLBAR SAYS THE DIFF'S TOTALS, not the page of files listed, and
+// Split draws every section split. Mutation: count the listed page.
+test("the toolbar says the diff's totals, and Split draws every file split", async () => {
+  stubEngine({ files: [[THREE[0]![0]!], [THREE[0]![1]!]] });
+  mount(<CommitPage repo="web" sha={SHA} />, `${COMMIT_PAGE}?layout=split`);
+
+  const words = await screen.findByText(/^Showing/);
+  expect(words.textContent).toBe("Showing 2 changed files with 1 addition and 1 deletion");
+  expect(within(words).getByText("1 addition").className).toBe("code-diffstat__added");
+  expect(within(words).getByText("1 deletion").className).toBe("code-diffstat__removed");
+  const app = await section("cmd/app.go");
+  await within(app).findByText("new");
+  expect(app.querySelector(".crewlet-diff-view--split")).not.toBeNull();
+  expect(screen.getByRole("radio", { name: "Split" }).getAttribute("aria-checked")).toBe("true");
+});
+
+// LARGE TOTALS ARE SHORT FIGURES, as the diffstat writes them. Mutation: write
+// the whole figure.
+test("the toolbar writes a total of ten thousand or more as a short figure", async () => {
+  stubEngine({ files: THREE, totals: { added: 12_345, deleted: 1 } });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_PAGE);
+
+  const words = await screen.findByText(/^Showing/);
+  expect(words.textContent).toBe("Showing 3 changed files with 12.3k additions and 1 deletion");
+});
+
+// A MERGE IS SAID AGAINST ITS FIRST PARENT, linked. Mutation: drop the host's
+// words from the toolbar.
+test("a merge's toolbar says it is against its first parent", async () => {
+  stubEngine({ commitAnswer: commit({}, { parents: [PARENT, MAIN] }), files: THREE });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_PAGE);
+
+  const words = await screen.findByText(/^Showing/);
+  expect(words.textContent).toMatch(/ against its first parent 89abcde$/);
+  expect(within(words).getByRole("link", { name: "89abcde" }).getAttribute("href")).toBe(
+    `#/gitlet/repos/web/commits/${PARENT}`,
+  );
+});
+
+// A PATH THE DIFF DOES NOT CHANGE is said at the stack's lead, never opened.
+// Mutation: turn the unchanged sentence off.
+test("a file the address names that the diff does not change is said so", async () => {
+  stubEngine({ files: [[THREE[0]![0]!], [THREE[0]![1]!]] });
+  mount(<CommitPage repo="web" sha={SHA} />, `${COMMIT_PAGE}?file=docs/README.md`);
+
+  expect(
+    await screen.findByText(
+      "The two revisions hold the same docs/README.md: this diff does not change it.",
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "docs/README.md" })).toBeNull();
+});
+
+// FILTER FILES NARROWS THE TREE AND THE STACK alike. Mutation: filter the
+// tree only, and the stack keeps three sections.
+test("Filter files narrows the tree and the stack", async () => {
+  stubEngine({ files: THREE });
+  mount(<CommitPage repo="web" sha={SHA} />, `${COMMIT_PAGE}?q=cmd`);
+
+  await section("cmd/b.go");
+  expect(sectionPaths()).toEqual(["cmd/app.go", "cmd/b.go"]);
+  const tree = screen.getByRole("tree", { name: "Files changed" });
+  expect(within(tree).queryByRole("treeitem", { name: /c\.go/ })).toBeNull();
+  expect(screen.getAllByText("Showing 2 of 3 files").length).toBeGreaterThan(0);
+  fireEvent.click(screen.getAllByRole("button", { name: "Clear filter" })[0]!);
+  expect(await section("web/c.go")).toBeTruthy();
+});
+
+// A COMMIT ASKS NOTHING OF A CHANGE and draws no finding on its lines.
+// Mutation: hand the stack the change's lines.
+test("a commit's page asks nothing of a change and draws no finding card", async () => {
+  const { asked } = stubEngine({ files: THREE });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_PAGE);
+
+  const c = await section("web/c.go");
+  await within(c).findByText("new");
+  expect(reads(asked, "code_change")).toHaveLength(0);
+  expect(document.querySelector(".code-finding")).toBeNull();
+});
+
+// AN OLDER FLEET REFUSES THE WALK: said once, and each file read when asked.
+// Mutation: say it on every section, or read every file alone unasked.
+test("a walk an older fleet refuses is said once, each file read when asked", async () => {
+  const { asked } = stubEngine({ files: THREE, walk: "refused" });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_PAGE);
+
+  expect(
+    await screen.findAllByText(/Every file's patch on one page is unavailable on this fleet yet/),
+  ).toHaveLength(1);
+  expect(reads(asked, "code_diff").some((u) => u.searchParams.has("file"))).toBe(false);
+  const b = await section("cmd/b.go");
+  fireEvent.click(within(b).getByRole("button", { name: "Show its changes" }));
+  await within(b).findByText("new");
+  const alone = reads(asked, "code_diff").filter((u) => u.searchParams.has("file"));
+  expect(alone.map((u) => u.searchParams.get("file"))).toEqual(["cmd/b.go"]);
+});
+
+// A COMPARISON DRAWS THE SAME TOOLBAR, TREE AND STACK, compared with its
+// merge base. Mutation: draw a commit's words on a comparison.
+test("a comparison draws the same toolbar, tree and stack as a commit", async () => {
+  const { asked } = stubEngine({ files: THREE });
+  mount(<ComparePage repo="web" />, "#/gitlet/repos/web/compare?head=retry");
+
+  const c = await section("web/c.go");
+  await within(c).findByText("new");
+  expect((await screen.findByText(/^Showing/)).textContent).toBe(
+    "Showing 3 changed files with 1 addition and 1 deletion",
+  );
+  const pane = screen.getByRole("complementary", { name: "Files changed" });
+  expect(within(pane).getByText(/Compared with the merge base at/).textContent).toBe(
+    "Compared with the merge base at 89abcde",
+  );
+  const walk = reads(asked, "code_diff").find((u) => u.searchParams.get("patches") === "true");
+  expect(walk?.searchParams.get("base")).toBe(PARENT);
+  expect(walk?.searchParams.get("head")).toBe(SHA);
 });
 
 // ---- Code coloured by kind in a diff ------------------------------------------
@@ -970,7 +1440,9 @@ test.each([
     await waitFor(() => expect(document.querySelector(".code-syn-keyword")).not.toBeNull());
   } else {
     const said =
-      "binary" in file ? "A binary file: git draws no lines of it." : "No line of it changed.";
+      "binary" in file
+        ? "A binary file: git draws no lines of it."
+        : "Renamed from old.go, its lines unchanged.";
     expect(await screen.findByText(said)).toBeTruthy();
     await new Promise((resolve) => setTimeout(resolve, 50));
   }

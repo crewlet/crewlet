@@ -54,7 +54,7 @@ func seatOf(handle string) *types.WorkingFor {
 // Agent b hands c an item with a status-and-assignee update in a turn somebody
 // woke: c's pickup works for that somebody — a seat, a credential with the apps
 // the writing turn used, a stranger — never for b, which holds every app. A
-// hand-off made in a turn nobody woke works for b, as before.
+// hand-off made in a turn nobody woke works for b.
 //
 // Mutation: read the history row's writer and never its carrier, and the R, L
 // and stranger rows read b.
@@ -114,7 +114,7 @@ func TestWorkASeatFiledForSomebodyIsTheirs(t *testing.T) {
 
 // A TAKE MADE FOR SOMEBODY IS WORKED FOR THEM. c takes an item pm filed in a
 // turn for r: its pickup works for r. A take in a turn nobody woke reads the
-// filer, as before. And the seat's own moves away from itself are never read:
+// filer. And the seat's own moves away from itself are never read:
 // c, in a turn for w, unassigns the item or hands it to d, then takes it back
 // in a turn nobody woke — the pickup reads pm, who assigned it, never w, for
 // whom c only let it go.
@@ -170,7 +170,7 @@ func TestWorkHandedBackToTheSeatItWasDoneForIsItsOwn(t *testing.T) {
 	}
 }
 
-// A REVIEW IS WORKED FOR WHOM ITS ASSIGNMENT WAS MADE FOR (#891). x, in a
+// A REVIEW IS WORKED FOR WHOM ITS ASSIGNMENT WAS MADE FOR. x, in a
 // turn for r1, assigns the item to c; d, in a turn for r2, moves it into
 // review. The move into review says who asked for the review, never whom the
 // work is for: c's review pickup works for r1.

@@ -36,7 +36,7 @@ import { SYNTAX_MAX_BYTES, load } from "~/lib/syntax/index.ts";
 import { forgetDownloadProbes } from "./downloads.ts";
 import { forgetTreeChoice } from "./FileView.tsx";
 import { forgetTrees } from "./tree.ts";
-import { sinceOf } from "./History.tsx";
+import { sinceOf } from "../when.ts";
 import { RepositoryPage } from "./RepositoryPage.tsx";
 
 beforeEach(() => {
@@ -861,6 +861,7 @@ test("j and k walk a directory's entries and Enter opens one", async () => {
   const table = await screen.findByRole("table", { name: "Files in main" });
   const src = await within(table).findByRole("link", { name: "src" });
   const readme = within(table).getByRole("link", { name: "README.md" });
+  await afterMicrotasks();
   fireEvent.keyDown(window, { key: "j" });
   expect(document.activeElement).toBe(src);
   fireEvent.keyDown(window, { key: "j" });
@@ -2444,6 +2445,7 @@ test("j opens the history's commits from the keyboard", async () => {
   mount("#/gitlet/repos/web?tab=commits");
   const history = await screen.findByRole("group", { name: /History of/ });
   await within(history).findByText("Start the storefront");
+  await afterMicrotasks();
   fireEvent.keyDown(window, { key: "j" });
   const link = within(history).getByRole("link", { name: "Start the storefront" });
   expect(document.activeElement).toBe(link);
@@ -3137,6 +3139,7 @@ test("j walks a box's branches", async () => {
   stubEngine();
   mount("#/gitlet/repos/web?tab=branches&view=all");
   const all = await screen.findByRole("table", { name: /^All branches/ });
+  await afterMicrotasks();
   fireEvent.keyDown(window, { key: "j" });
   const link = within(all).getByRole("link", { name: "feature" });
   expect(document.activeElement).toBe(link);
@@ -4172,6 +4175,41 @@ test("the Checks tab is marked by the default branch's head: a dot when it passe
   mount("#/gitlet/repos/web?tab=pushes");
   await afterMicrotasks();
   expect(checksTab().textContent).toBe("Checks");
+});
+
+// THE PUSHES TAB IS THE FEED AND ITS FILTERS; the page's rail is the Code root's.
+// Mutation: draw the section's Protection rail here, and the tab holds a second rail.
+test("the Pushes tab draws the feed of sentences and its filters, and no Protection rail", async () => {
+  const asked = stubAnswering("code_pushes", () =>
+    json({
+      pushes: [
+        {
+          push_id: "p1",
+          position: POSITION,
+          at: "2026-10-22T10:00:00Z",
+          actor: "cto",
+          actor_kind: "agent",
+          actor_seat: "cto",
+          via: "git",
+          commands: [{ ref: "refs/heads/main", old: HEAD, new: OTHER, result: "ok" }],
+          introduced_count: 2,
+        },
+      ],
+      position: POSITION,
+      level: "session",
+    }),
+  );
+  mount("#/gitlet/repos/web?tab=pushes");
+  const feed = await screen.findByRole("group", { name: "Pushes to web" });
+  expect(feed.querySelector(".code-push-sentence")?.textContent).toBe(
+    "CTO pushed 2 commits to main",
+  );
+  expect(screen.getByRole("button", { name: "Pushed by" })).toBeTruthy();
+  expect(screen.getByRole("combobox", { name: "Pushed" })).toBeTruthy();
+  expect(reads(asked, "code_repo").some((u) => u.searchParams.get("repo_facts") === "true")).toBe(
+    true,
+  );
+  expect(screen.queryByRole("heading", { name: "Protection" })).toBeNull();
 });
 
 // THE BAR'S COUNTS LEAD TO THEIR LISTS: Branches to the branches, Tags to the tags' view.

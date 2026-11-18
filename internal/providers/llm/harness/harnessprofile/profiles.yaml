@@ -464,23 +464,28 @@ claude-code:
       said_path: ["result"]
       reset_separator: "resets "
       reset_unit: clock
-  # WHEN AND WHICH, IN FIELDS. Every run writes a rate_limit_event, an allowed
-  # one too (`status: allowed` or `allowed_warning`), so only a rejected one
-  # dates the limit a run reported: its `resetsAt` is the reset in epoch
-  # seconds and its `rateLimitType` the window. The sentence above is read
-  # only where no such event came.
-  limit_reset_events:
-    - match:
-        - {path: ["type"], equals: "rate_limit_event"}
-        - {path: ["rate_limit_info", "status"], equals: "rejected"}
-      resets_at: {path: ["rate_limit_info", "resetsAt"], unit: epoch}
+  # Every run writes a rate_limit_event (measured on 2.1.325); the last rejected
+  # one dates a limit. `unifiedWindows` holds every subscription window but the
+  # CLI tags it @internal, so it is optional.
+  limit_reports:
+    - match: [{path: ["type"], equals: "rate_limit_event"}]
+      state:
+        path: ["rate_limit_info", "status"]
+        map: {allowed: ok, allowed_warning: warning, rejected: reached}
       window:
         path: ["rate_limit_info", "rateLimitType"]
         map:
-          five_hour: session
-          seven_day: weekly
-          seven_day_opus: model
-          seven_day_sonnet: model
+          five_hour: {window: session, hours: 5}
+          seven_day: {window: weekly, hours: 168}
+          seven_day_opus: {window: model, hours: 168, model: opus}
+          seven_day_sonnet: {window: model, hours: 168, model: sonnet}
+      used: ["rate_limit_info", "utilization"]
+      resets_at: {path: ["rate_limit_info", "resetsAt"], unit: epoch}
+      windows:
+        path: ["rate_limit_info", "unifiedWindows"]
+        state: ["status"]
+        used: ["utilization"]
+        resets_at: {path: ["resetsAt"], unit: epoch}
   limit_windows:
     - {contains: "session limit", window: session}
     - {contains: "5-hour limit", window: session}
@@ -490,12 +495,18 @@ claude-code:
   # A REFUSED SIGN-IN IS RECOGNISED BY ITS STATUS FIRST, as a spent plan is:
   # a refused key or token ends in a result event with `api_error_status:
   # 401`, and a refused token is first retried with a `system` `api_retry`
-  # event naming `authentication_failed` (both measured on 2.1.312).
+  # event naming `authentication_failed` (both measured on 2.1.312). A 403 is
+  # a login its account does not entitle, which no retry cures either.
   auth_events:
     - match:
         - {path: ["type"], equals: "result"}
         - {path: ["is_error"], equals: true}
         - {path: ["api_error_status"], equals: 401}
+      said_path: ["result"]
+    - match:
+        - {path: ["type"], equals: "result"}
+        - {path: ["is_error"], equals: true}
+        - {path: ["api_error_status"], equals: 403}
       said_path: ["result"]
     - match:
         - {path: ["type"], equals: "system"}

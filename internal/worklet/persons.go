@@ -16,12 +16,9 @@ type PersonSeat struct {
 
 // PersonsNamed is the handles of the persons text names: by `@handle`, in any
 // case, or by the name the chart gives them as a whole phrase in the case the
-// chart writes it. THE ONE MATCHER the wait tool refuses by and the ready read
-// hands a wait back by, so the two cannot disagree.
-//
-// NEVER BY A BARE HANDLE, nor by a name in another case: handles and one-word
-// names are often common words (`will`, `may`, `max`), and "the release will
-// be cut Friday" waits on nobody.
+// chart writes it. THE ONE MATCHER of the wait tool's refusal and the ready
+// read's hand-back, so the two cannot disagree. NEVER BY A BARE HANDLE, nor a
+// name in another case: those are often common words (`will`, `may`).
 func PersonsNamed(text string, people []PersonSeat) []string {
 	lower := strings.ToLower(text)
 	var out []string

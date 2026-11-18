@@ -39,20 +39,19 @@ var found = sync.OnceValues(func() (onPath, error) {
 	return onPath{git: git, version: v}, err
 })
 
-// Require is a CLIENT's git — what every test drives as a person, a CI
-// runner or the author of a fixture: exec.LookPath("git"), read once per test
-// binary, held to gitproc.ClientMinVersion, the client floor. Absent,
-// unreadable or older, it FAILS t — never skips.
+// Require is a CLIENT's git (what a test drives as a person, a CI runner or a
+// fixture's author): the git on PATH, read once per test binary, held to
+// gitproc.ClientMinVersion. Absent, unreadable or older, it FAILS t, never skips.
 func Require(t testing.TB) string {
 	t.Helper()
 	return onFloor(t, gitproc.FloorClient)
 }
 
-// RequireNode is the git every POOL a test builds runs — the same PATH git,
-// held to gitproc.NodeMinVersion, the node floor gitproc.New refuses below.
-// It FAILS t, never skips, and a test calls it BEFORE it builds a pool or
-// boots an engine with the gitlet role, so a machine below the floor reads what
-// to run rather than the refusal an operator would.
+// RequireNode is the git every POOL a test builds runs: the PATH git, held to
+// gitproc.NodeMinVersion, below which gitproc.New refuses. It FAILS t, never
+// skips; a test calls it BEFORE it builds a pool or boots an engine with the
+// gitlet role, so a machine below the floor reads what to run rather than the
+// refusal an operator would.
 func RequireNode(t testing.TB) string {
 	t.Helper()
 	return onFloor(t, gitproc.FloorNode)
@@ -72,10 +71,9 @@ func onFloor(t testing.TB, floor gitproc.Floor) string {
 }
 
 // remedy is what a contributor runs when the git on PATH cannot stand for
-// floor's — the suite's own gits, never the machine's (CONTRIBUTING.md,
-// Development setup). Two statements for the one-package loop, because a
-// failed recipe in `PATH="$(scripts/git.sh node):$PATH"` leaves the machine's
-// git first and says nothing.
+// floor's: the suite's own gits (CONTRIBUTING.md, Development setup). The
+// one-package loop is two statements because a failed recipe inside
+// `PATH="$(scripts/git.sh node):$PATH"` leaves the machine's git first, silently.
 func remedy(floor gitproc.Floor) string {
 	return fmt.Sprintf("Gitlet's tests run real git, and %s needs git %s or newer (the %s floor): "+
 		"run the suite through `make test`, which builds the pinned gits (`make git`) and puts the node pin "+
@@ -91,11 +89,10 @@ func whose(floor gitproc.Floor) string {
 	return "a client of Gitlet"
 }
 
-// floorProblem is why a git of version found cannot stand for floor's — ""
-// when it can. series also holds it to the floor's own SERIES (the floor's
-// major and minor): a floor's build is the newest patch of the series the
-// floor names, so a git of a later series named as the floor's is a floor
-// nothing is testing.
+// floorProblem is why a git of version found cannot stand for floor's, ""
+// when it can. series also holds it to the floor's SERIES (major and minor):
+// a floor's build is that series' newest patch, so a later series named as the
+// floor's would leave the floor untested.
 func floorProblem(found gitproc.Version, floor gitproc.Floor, series bool) string {
 	low := floor.Min()
 	switch {
@@ -109,39 +106,35 @@ func floorProblem(found gitproc.Version, floor gitproc.Floor, series bool) strin
 	return ""
 }
 
-// NodeFloor is the node floor's own git — the build CREWLET_TEST_GIT_NODE_FLOOR
-// names (`scripts/git.sh node-floor`'s, the newest patch of
-// gitproc.NodeMinVersion's series) — which the floors' arm of Gitlet's
-// suite runs every pool on. See [ClientFloor] for what it holds the variable
-// to.
+// NodeFloor is the node floor's own git, the build CREWLET_TEST_GIT_NODE_FLOOR
+// names (`scripts/git.sh node-floor`, the newest patch of
+// gitproc.NodeMinVersion's series), which the floors' arm of Gitlet's suite
+// runs every pool on. [ClientFloor] says what it holds the variable to.
 func NodeFloor(t testing.TB) string {
 	t.Helper()
 	return floorGit(t, gitproc.FloorNode, nodeFloorEnv, "node-floor")
 }
 
-// ClientFloor is the client floor's own git — the build
-// CREWLET_TEST_GIT_CLIENT_FLOOR names (`scripts/git.sh client-floor`'s, the
-// newest patch of gitproc.ClientMinVersion's series) — which the floors' arm
+// ClientFloor is the client floor's own git, the build
+// CREWLET_TEST_GIT_CLIENT_FLOOR names (`scripts/git.sh client-floor`, the
+// newest patch of gitproc.ClientMinVersion's series), which the floors' arm
 // runs every person's git on.
 //
-// Named, the variable must be an absolute path to an executable file whose
-// `git version` is of the floor's series and at or above the floor, or t FAILS
-// naming the variable. UNSET, it is a missing prerequisite by
-// internal/prereqtest's one rule: t fails under the make targets that run the
-// suite, which require every prerequisite (CREWLET_REQUIRE_PREREQUISITES=1) as
-// they name the two floors, and is otherwise SKIPPED naming `make git` — the
-// one environment skip of the suite's gits, so a bare `go test` of one package
-// still runs everything else, and one internal/skipgate never judges, since
-// every target it runs under fails it instead.
+// Named, the variable must be an absolute path to an executable whose `git
+// version` is of the floor's series and at or above it, or t FAILS naming it.
+// UNSET, it is a missing prerequisite (internal/prereqtest): t fails under the
+// make targets, which set CREWLET_REQUIRE_PREREQUISITES=1, and is otherwise
+// SKIPPED naming `make git`, so a bare `go test` of one package runs the rest;
+// internal/skipgate never sees that skip, since under every target it judges t
+// fails instead.
 func ClientFloor(t testing.TB) string {
 	t.Helper()
 	return floorGit(t, gitproc.FloorClient, clientFloorEnv, "client-floor")
 }
 
 // floorGit is the git env names for floor, held to it; pin is the name
-// scripts/git.sh builds it under. Whether it is named at all is
-// prereqtest.Named's to judge, by the suite's one rule for a prerequisite;
-// whether it can stand for the floor is this package's.
+// scripts/git.sh builds it under. prereqtest.Named judges whether it is named
+// at all; this package, whether it can stand for the floor.
 func floorGit(t testing.TB, floor gitproc.Floor, env, pin string) string {
 	t.Helper()
 	git := prereqtest.Named(t, env, fmt.Sprintf("the %s floor's own git, which this arm runs", floor),

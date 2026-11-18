@@ -14,87 +14,25 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CHECK'S BOX'S ADMISSION: a box running one attempt of one check of one
-// commit reaches Gitlet on two routes — its git under /box/git/,
-// admitted by admitCheck once admitBox has read its check's token, to fetch
-// its commit; and the API's /box/gitlet/, whose reads of that commit by object
-// id the API answers once AdmitCheck has admitted it — by the same steps, its
-// credential its check's token and its authority the attempt's ROW.
-//
-// # In order, each refusal its own answer
-//
-//  1. NAME and 2. CREDENTIAL — admitBox's: git's Basic, user name
-//     [gitlet.CheckUser], the check's token ([CheckTokens]) as the password.
-//  3. A FETCH, OVER PROTOCOL v2 — on its git: a push is refused (a check
-//     measures its commit and changes nothing), and so is a request in
-//     protocol v0, whose fetch serves only what an advertisement named,
-//     where a check's box is shown no ref (below) — the box's git, 2.40 or
-//     later, speaks v2 by default. On /box/gitlet/, an executor's token is
-//     refused: the API answers a check's box alone, a coding box reading its
-//     repositories through its clone and its tools. On its git, then, its
-//     PLACE IN FLIGHT: at most MaxRunRequests of the attempt's requests at
-//     once on this node, past them 503 run_busy, as an executor's
-//     (boxlimit.go). A /box/gitlet/ read holds none here: AdmitCheck admits it
-//     and returns, and the read runs on the repository's home Gitlet node,
-//     whose second look at the log's head draws on the same attempt's
-//     re-syncs there.
-//  4. THE NAME GIVEN — before any read of the code log: the URL's name must
-//     be the one the token names, the name the box was given. A box is
-//     untrusted traffic running a repository's own checks file, and a
-//     refusal decided against the code log costs a barrier on it (step 6):
-//     matched first, a box probing names costs the log nothing, as a coding
-//     box's probe costs nothing past the names its run was given.
-//  5. THE ATTEMPT — its row ([gitlet.ReadCheckBox]), THE AUTHORITY: read STALE,
-//     and again LINEARIZABLE where the stale copy holds no such attempt — a
-//     copy behind the log may not have applied its queue yet — so no attempt
-//     is called unknown on a stale read while the check's re-syncs last
-//     (gitlet.CheckKey.Resyncs, boxlimit.go; past them it is, saying so). A row
-//     that has ENDED is refused at
-//     once, read however stale: a check's state only rises (the join of its
-//     records), so an ending a copy holds is the attempt's for good, and a
-//     box still running past its attempt's end — the runner lost, the box
-//     orphaned — appends no barrier however often it asks. A queued or
-//     running row admits; the token is only its backstop
-//     (gitlet.CheckBoxGrace). Unreadable is 503 and never 401.
-//  6. THE REPOSITORY — resolved at the check's session (step 7), and again
-//     LINEARIZABLE where that answer would refuse — not found, gone, or
-//     ANOTHER repository under the name — as a coding box's is, while its
-//     re-syncs last: a name a
-//     rename left redirecting is answered for the repository it redirects to,
-//     under its current name; one now naming another repository than the
-//     attempt's is refused as not given.
-//  7. FRESHNESS — every read of the request at the check's SESSION: the
-//     position its attempt was queued at, which the commit's own push
-//     precedes, so the copy serving the box holds its commit. LINEARIZABLE
-//     for a row naming none, a re-sync its bucket pays for.
-//
-// # What the box is shown, and charged as
-//
-// NO REF: its advertisement is protocol v2's, which names none, and an
-// `ls-refs` is answered empty (fetch.go), so a check's box learns no branch
-// and reads at no ref's level — it fetches its one commit BY ID, which
-// protocol v2 serves of any object the repository holds, and a clone's
-// recipe asks (sandbox's single-sha CloneRecipe). Its transfers are a RUN's
-// (gitproc.ShareRun) — the class every box shares, at most half the lane —
-// keyed by its REPOSITORY, `check:<id>`: one push fans out a check per name
-// its file defines, and keyed per attempt a repository's dozen checks took a
-// dozen turns of the class against one executor's one. Its spool is every
-// box's ONE credential (boxSpool). It acts as NOBODY (admission.principal):
-// the engine runs its repository's own checks file, so its fetch of a
-// `visibility: unit` repository is no read of a principal's — its attempt's
-// row, naming the change and who queued it, is its record — and its API's
-// reads are the engine's own (gitlet.GitQuery.Check).
-//
-// Every refusal from step 3 on takes a token the fleet signed: logged
-// code_box_refused at INFO, a 503 code_box_unavailable at WARN, each naming
-// the attempt and the repository — never the token.
+// A CHECK'S BOX'S ADMISSION, on its git under /box/git/ (admitCheck, its token
+// read by admitBox) and the API's /box/gitlet/ (AdmitCheck), by the same steps,
+// each refusal its own answer (package doc, "A check's box is admitted by its
+// attempt's row"):
+//  1. name and 2. credential: git's Basic, [gitlet.CheckUser], [CheckTokens];
+//  3. on git, a fetch over protocol v2 holding a place in flight; on the API,
+//     no executor's token;
+//  4. the URL's name is the token's, matched before any code-log read;
+//  5. the attempt's row, the authority (checkRow); 6. the repository; and
+//  7. freshness, every read at the check's session (checkAdmitted).
+// From step 3 on, refusals log code_box_refused (INFO) and 503s
+// code_box_unavailable (WARN), naming attempt and repository, never the token.
 
-// AdmitCheck admits a CHECK'S BOX'S request of the API's /box/gitlet/ — a read of
-// its commit by object id, which the API asks of the code domain's git reads
-// once admitted — by the steps above: the repository's name from the route's
-// {repo}, its check's token as git's Basic password, the attempt's row and the
-// repository. A request it refuses it answers itself, in the one line of
-// text the box's git is answered in — one admission, one set of words — and
+// AdmitCheck admits a CHECK'S BOX'S request of the API's /box/gitlet/, a read
+// of its commit by object id, by the steps above: the name from {repo}, the
+// check's token as git's Basic password, the attempt's row and the repository.
+// It holds no place in flight: the read runs on the repository's home Gitlet
+// node, whose look at the log's head draws on the same attempt's re-syncs. A
+// request it refuses it answers itself, in the words the box's git gets, and
 // reports false.
 func (s *Server) AdmitCheck(ctx context.Context, w http.ResponseWriter, r *http.Request) (CheckAdmitted, bool) {
 	ctx, end, ok := s.begin(ctx, w)
@@ -172,14 +110,19 @@ func (s *Server) admitCheck(ctx context.Context, w http.ResponseWriter, r *http.
 // checkAdmitted is steps 4 to 7, the two routes' own: the admission of a
 // check's box whose token named ref, to the repository its URL names name.
 func (s *Server) checkAdmitted(ctx context.Context, b boxRefusal, name string, ref CheckRunRef) (admission, bool) {
-	// 4 THE NAME GIVEN, before the code log.
+	// 4 THE NAME GIVEN, before the code log: a box runs untrusted code, and a
+	// refusal decided against the log can cost a barrier, so probing names
+	// costs the log nothing.
 	if name != ref.Repo {
 		b.refuse("not_granted", fmt.Sprintf("this check's box was given %s: its token admits it to no other "+
 			"repository", strconv.Quote(ref.Repo)))
 		return admission{}, false
 	}
 
-	// 5 THE ATTEMPT.
+	// 5 THE ATTEMPT, the authority, its token only a backstop
+	// (gitlet.CheckBoxGrace). An ended row is refused however stale, since a
+	// check's state only rises, so an orphaned box appends no barrier.
+	// Unreadable is 503, never 401.
 	key := ref.Attempt
 	row, found, spent, err := s.checkRow(ctx, key)
 	switch {
@@ -238,13 +181,12 @@ func (s *Server) checkAdmitted(ctx context.Context, b boxRefusal, name string, r
 }
 
 // checkRow is the attempt key names as its row stands (step 5), read STALE
-// and, where the stale copy holds no such attempt, LINEARIZABLE while the
-// check's re-syncs last (boxlimit.go): found false only once the barrier's
-// copy holds none either — or, the re-syncs spent, the stale copy's none,
-// answered with the refusal that spent them. A box whose attempt was swept
-// asked in a loop, one barrier a request, until they were bounded. An ending
-// read stale is not read again — the caller refuses it, and an ending is for
-// good.
+// and, where that copy holds no such attempt (it may not have applied the
+// queue yet), LINEARIZABLE while the check's re-syncs last (boxlimit.go), so a
+// swept attempt's box asking in a loop pays bounded barriers. found is false
+// once the barrier's copy holds none, or, re-syncs spent, the stale copy's
+// none with the refusal that spent them. An ending read stale is not read
+// again: an ending is for good.
 func (s *Server) checkRow(ctx context.Context, key gitlet.CheckKey) (gitlet.CheckRow, bool, *costlimit.Refusal,
 	error) {
 

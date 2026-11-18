@@ -12,19 +12,12 @@ import (
 // refusal's sentence without its class word or what it was about, and a
 // value's refusal without the sentinel it opens with.
 //
-// A REFUSAL READS "not allowed: <sentence> (<about>)" in a log, and the two
-// halves around the sentence are for the log alone: the class word is what
-// errors.Is finds and the status already says, and [Refusal.About] names the
-// ids an operator needs and the person never chose. A value's refusal opens
-// with its sentinel ("invalid login: \"Jane\" isn't a valid person login"),
-// which says what [errors.Is] finds and nothing a reader acts on. Both go,
-// wherever they sit, and every word after them stays.
-//
-// THE ONE PLACE THESE WORDS ARE CUT, beside the sentinels, as
-// internal/artifactsdomain cuts its own: the identity directory's surface and
-// the sign-in surface each answered err.Error(), which put the class word in
-// front of every refusal and, before [Refusal.About], an invitation's id, a
-// session's lineage or a person's id in the middle of it.
+// In "not allowed: <sentence> (<about>)" the class word is what errors.Is
+// finds and the status already says, and [Refusal.About] names ids for an
+// operator that the person never chose; a value refusal's sentinel ("invalid
+// login: ...") likewise says nothing a reader acts on. Both go, wherever they
+// sit, and every word after them stays. This is the one place the iam
+// surfaces cut them, beside the sentinels, as internal/artifactsdomain does.
 func Sentence(err error) string {
 	text := err.Error()
 	var refused *Refusal
@@ -44,10 +37,8 @@ var sentenceCuts = []string{
 	ErrInvalidToken.Error() + ": ", ErrNotFindable.Error() + ": ",
 }
 
-// grantWords is the permissions a party holds as a sentence lists them
-// ("tracker" and "knowledge"), and "no permission" for none: the one
-// difference from [words.And], since "a party holding none" reads as a party
-// holding nothing at all.
+// grantWords lists a party's permissions for a sentence, and "no
+// permission" for none: [words.And]'s "none" would read as holding nothing.
 func grantWords(grants []iam.Grant) string {
 	if len(grants) == 0 {
 		return "no permission"

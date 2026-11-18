@@ -71,6 +71,7 @@ import { deliveredLine, outcomeWords, rounds, type PhaseRecord } from "~/lib/pha
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { argumentsInPlace, SEALED_RESULT } from "~/lib/withheld.ts";
 import { useLiveTail, type LiveView } from "~/lib/useLiveTail.ts";
+import { ActivityLog } from "~/components/ActivityLog.tsx";
 import { EXECUTOR_TAIL_POLL_MS } from "~/contract/executor.ts";
 import { STEER_BOUNDARIES, STEER_OUTCOMES } from "~/contract/steer.ts";
 import {
@@ -117,12 +118,15 @@ function outcomeOf(raw: unknown): SteerOutcome | "unknown" {
 
 /**
  * What the bar's badge says of each outcome that names a step: the note was
- * read there, taken there and never handed over, or handed over there and never
- * confirmed. An expired note names no step, so no bar carries it.
+ * read there, taken there and never reached its reader (a review's take whose
+ * answer was lost, or a hook's serves all lost, a serve's session proving it
+ * absent), or handed over there and never confirmed (a note whose every lost
+ * serve its harness gave up among them). An expired note names no step, so no
+ * bar carries it.
  */
 const MARKED_AT: Record<Exclude<SteerOutcome, "expired">, string> = {
   delivered: "Your note was read here",
-  missed: "Your note was taken here but never handed over",
+  missed: "Your note was taken here and never reached its reader",
   unconfirmed: "Your note was handed over here and never confirmed",
 };
 
@@ -264,7 +268,7 @@ export function Waterfall({
   const { from, to, spans, untimed } = model;
   const open = spans.find((s) => s.id === selected) ?? null;
   // EACH BAR'S BADGE SAYS WHAT BECAME OF THE NOTES AT ITS STEP: read there,
-  // taken there and never handed over, handed over there and never confirmed,
+  // taken there and never reaching its reader, handed over there and never confirmed,
   // every one said, where notes with different ends share a step.
   const marked = useMemo(() => {
     const at = new Map<string, string[]>();
@@ -540,15 +544,21 @@ function readAt(m: SteerMark): string {
 /**
  * Where a missed note was taken, in words: at a round of a phase, for the
  * executor at a step of its own, or, for a step this build cannot name, by the
- * turn in that phase; and that its reader never had it.
+ * turn in that phase; and that its reader never had it. The executor's is said
+ * as never reaching it: its hook's serves were answered and all lost, a serve's
+ * session proving it absent; a note a serve's session was not shown to hold,
+ * or whose every lost serve its harness gave up, is unconfirmed ([handedTo]).
+ * A round's, a review's take whose answer was lost, keeps "never handed over".
+ * An unknown step's says only what `missed` records, as the badge does: a
+ * newer build's step may be one that handed the note over.
  */
 function takenAt(m: SteerMark): string {
   const phase = phaseOf(m);
   if (m.boundary === "unknown" || m.boundary === "")
-    return `taken by the turn${phase ? ` in ${phase}` : ""} but never handed over`;
+    return `taken by the turn${phase ? ` in ${phase}` : ""}, but it never reached its reader`;
   if (m.boundary === "round")
     return `taken at round ${m.round}${phase ? ` of ${phase}` : ""} but never handed over`;
-  return `taken for the executor${phase ? ` in ${phase},` : ""} ${READ_AT[m.boundary].words}, but never handed to it`;
+  return `taken for the executor${phase ? ` in ${phase},` : ""} ${READ_AT[m.boundary].words}, but it never reached it`;
 }
 
 /** The job an unconfirmed note was handed to, in words: the executor, at its step. */
@@ -895,13 +905,7 @@ function RunDetail({
       ) : span.open ? (
         <NoJobCaption />
       ) : record?.transcript ? (
-        <CodeBlock
-          plain
-          selectable
-          copyable
-          label="What the executor did"
-          code={record.transcript}
-        />
+        <ActivityLog label="What the executor did" text={record.transcript} />
       ) : (
         <span className="t-caption">The launch&rsquo;s record carries no transcript.</span>
       )}
@@ -933,7 +937,8 @@ export function NoJobCaption() {
  * newest line is the one that answers "what is it doing now" — unless the
  * reader has scrolled up, in which case the text they are reading stays where
  * it is. And it says what it does not hold, from the answer and from what it
- * dropped, rather than spelling a bound of its own.
+ * dropped, rather than spelling a bound of its own. The transcript reads as
+ * calls and words ([ActivityLog]); an error stream stays the text it is.
  *
  * A `replaced` answer is reported through `onReplaced`, for a screen that names
  * the launch by the executor's current one: the executor's page reads the board
@@ -961,6 +966,8 @@ export function LiveOutput({
   const following = useRef(true);
   // The block is drawn once there is text; its scroll is listened to from then.
   const showing = tail.text !== "";
+  const out = answer?.output;
+  const stderr = out?.source === "stderr";
   // THE READER'S SCROLL DECIDES. At the bottom (within a line of it), the
   // block follows the end; anywhere else, it stays where they put it.
   useEffect(() => {
@@ -971,7 +978,7 @@ export function LiveOutput({
     };
     pre.addEventListener("scroll", onScroll);
     return () => pre.removeEventListener("scroll", onScroll);
-  }, [showing]);
+  }, [showing, stderr]);
   useLayoutEffect(() => {
     const pre = frame.current?.querySelector("pre");
     if (pre && following.current) pre.scrollTop = pre.scrollHeight;
@@ -1019,7 +1026,6 @@ export function LiveOutput({
   } else if (tail.text === "") {
     notice = <span className="t-caption">No output yet.</span>;
   }
-  const out = answer?.output;
   // WHAT IS ANNOUNCED IS THE OUTCOME, never the output. The whole block was a
   // polite live region, re-rendered every poll: the "read 4s ago" caption,
   // each new line of output and the busy flag changed every three seconds, so
@@ -1029,30 +1035,41 @@ export function LiveOutput({
   // there to be read at the reader's own pace.
   const state = liveState(answer, !!tail.error);
   const holding = holdingLine(tail);
+  const caption = out && (
+    <>
+      {holding ? `${holding} · ` : ""}read {ago(out.as_of, now)}
+      {answer?.node ? ` on ${answer.node}` : ""}
+      {out.finished ? " · finished, waiting to be collected" : ""}
+    </>
+  );
   return (
     <div className="col gap-2 live-output">
-      <span className="row gap-2 baseline">
-        <SquareTerminalGlyph size="sm" />
-        <span className="t-label">Live output</span>
-        {out && (
-          <span className="t-caption">
-            {holding ? `${holding} · ` : ""}read {ago(out.as_of, now)}
-            {answer?.node ? ` on ${answer.node}` : ""}
-            {out.finished ? " · finished, waiting to be collected" : ""}
-          </span>
-        )}
-      </span>
+      {showing && !stderr ? (
+        <ActivityLog
+          label="Live output"
+          text={tail.text}
+          live={!tail.final && !out?.finished}
+          base={tail.dropped}
+          caption={caption}
+        />
+      ) : (
+        <span className="row gap-2 baseline">
+          <SquareTerminalGlyph size="sm" />
+          <span className="t-label">Live output</span>
+          {caption && <span className="t-caption">{caption}</span>}
+        </span>
+      )}
       <span className="sr-only" role="status">
         {state}
       </span>
       {notice}
-      {showing && (
+      {showing && stderr && (
         <div ref={frame}>
           <CodeBlock
             plain
             selectable
             copyable
-            label={out?.source === "stderr" ? "Live output (its error stream)" : "Live output"}
+            label="Live output (its error stream)"
             code={tail.text}
           />
         </div>

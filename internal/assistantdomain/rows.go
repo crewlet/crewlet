@@ -22,10 +22,9 @@ func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows
 // marker (permanent) and a guarding row (what still says an object exists once
 // the record that created it has been trimmed off the log).
 //
-// THREE KINDS HAVE THEM: a conversation (its row and its marker) and a turn and
-// a proposal (their rows and their conversation's marker). An owner's subject
-// is never created, only arbitrated on, and the framework's kinds are created
-// by their first record and removed by nothing.
+// Only a conversation, a turn and a proposal have them (the latter two under
+// their conversation's marker): an owner's subject is never created, and the
+// framework's kinds are created by their first record and removed by nothing.
 func guards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (deleted, guard bool, err error) {
 	var table string
 	switch ObjectKind(subj.Kind) {
@@ -64,9 +63,9 @@ type Fence struct {
 	db     store.ReplicatedReader
 	nodeID string
 
-	// Floor is the fleet's published trim floor at a generation, Ends the
-	// log's two ends read live, and Committed this node's applier's live
-	// checkpoint: the reads [statelog.ZeroFence] takes.
+	// Floor, Ends and Committed are the live reads [statelog.ZeroFence] takes:
+	// the fleet's trim floor at a generation, the log's two ends, and this
+	// node's applier checkpoint.
 	Floor     func(ctx context.Context, generation uint32) (uint64, error)
 	Ends      func(ctx context.Context) (statelog.LogEnds, error)
 	Committed func() statelog.Position
@@ -121,12 +120,11 @@ type Gates struct{ db store.ReplicatedReader }
 func NewGates(db store.ReplicatedReader) *Gates { return &Gates{db: db} }
 
 // GatedAt reports whether a record at p applies nowhere, and the gate that
-// answers for it: THE DELETION GATES FIRST (facts about the object, holding for
-// every writer for ever), over the subjects the applier's own gate covers
-// ([gatedConversation]), with the purge's own record exempt by its operation
-// id, and the erasure gate where the record's own body names its owner; then
-// the writer's eviction window. One transaction for every half, through the
-// handle, so the answer describes one committed state.
+// answers for it: the deletion gates first (permanent facts about the object),
+// over the subjects [gatedConversation] covers, exempting the purge's own
+// record by its operation id, and the erasure gate where the body names its
+// owner; then the writer's eviction window. One transaction, so the answer
+// describes one committed state.
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	writer, opID string, p statelog.Position, body []byte) (statelog.Reason, bool, error) {
 

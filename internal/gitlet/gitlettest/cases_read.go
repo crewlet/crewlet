@@ -14,19 +14,17 @@ import (
 // The reads of a repository by object id through a fleet's routing — asked of
 // the repository's home Gitlet node (ADR-0089) — as a seat's tool asks them.
 
-// homeWait is how long a case waits for a read through the fleet's routing to
-// be answered by the node it expects: a home asked to fill a copy answers
-// `syncing` until its download lands, and the walk meanwhile asks the other
-// Gitlet nodes, so the case asks again until the copy is warm. A minute is far
-// past a small repository's cold sync on a loaded runner (a second or two)
-// and well inside a case's own deadline.
+// homeWait bounds a case's wait for the node it expects to answer a read: a
+// home filling its copy answers `syncing` and the walk asks the others, so the
+// case asks again until the copy is warm. A minute is far past a small
+// repository's cold sync on a loaded runner (a second or two) and well inside
+// a case's own deadline.
 const homeWait = time.Minute
 
-// readsServed is how many reads node's query server has run its git for: every
-// unit of its seat git-work share a read took (metrics.CodeSeatworkWaits,
-// outcome granted, work read), which only a read that found its objects takes
-// — never one answered unready, whose wait the share times too, or refused,
-// and never an engine write's build, which takes its unit of the same share.
+// readsServed is how many reads n's query server ran git for: its granted
+// seat git-work units of work read (metrics.CodeSeatworkWaits), which only a
+// read that found its objects takes — not one answered unready or refused,
+// whose waits the share times too, nor an engine write's build.
 func readsServed(n Node) uint64 {
 	var total uint64
 	for _, s := range n.Metrics().Read() {
@@ -48,14 +46,11 @@ func lists(a gitlet.GitAnswer, path string) bool {
 	return a.Tree != nil && slices.ContainsFunc(a.Tree.Entries, func(e gitlet.TreeEntry) bool { return e.Path == path })
 }
 
-// F26: A READ IS ANSWERED BY THE HOME (ADR-0089). A read of a repository by
-// object id through the fleet's routing is asked of the repository's home Gitlet
-// node — the first of rendezvous.Order(repository, every Gitlet node) — and once
-// the home's copy is warm it is the node that answers: a fleet of three Gitlet
-// nodes, a push through the first, and the home whichever node the order puts
-// first. Meanwhile the walk may be answered by the node the push filled, which
-// holds a copy whatever its place; and the third node — neither the home nor
-// the pusher — holds no copy after, since only the walk's effective home is
+// F26: A READ IS ANSWERED BY THE HOME (ADR-0089). A read by object id through
+// the fleet's routing is asked of the repository's home, the first of
+// rendezvous.Order over the Gitlet nodes, which answers once its copy is warm.
+// Meanwhile the node the push filled may answer; the third node, neither home
+// nor pusher, holds no copy after, since only the walk's effective home is
 // ever asked to fill one.
 func aReadIsAnsweredByTheHome(t *testing.T, newFleet NewFleet) {
 	c := newCase(t, newFleet, Shape{GitletNodes: 3}, Settings())
@@ -100,20 +95,16 @@ func aReadIsAnsweredByTheHome(t *testing.T, newFleet NewFleet) {
 }
 
 // F27: A HOME'S DEATH FILLS ONE COPY (ADR-0089). A repository only its home
-// holds — pushed through that member alone — is read, once the home is
-// KILLED, through each other member until one serves it. The walks that meet
-// the dead home ask its runner-up and the third member with their reads not
-// stamped home, and neither starts a download for a read it was not asked to
-// fill; once a router asks the silent home last, the runner-up is its walk's
-// first node, stamped, and fills. So exactly one other member holds the
-// repository after — its runner-up — where every member a walk reached once
-// started a whole download of it, for a read one node answers.
+// holds is read, the home KILLED, through each other member until one serves
+// it. Walks meeting the dead home ask the runner-up and the third member
+// unstamped, and neither downloads for a read it was not asked to fill; once a
+// router asks the silent home last, the runner-up is first, stamped, and
+// fills. So the runner-up alone holds a copy after, not every member reached.
 //
-// THE DOWNLOADS ARE HELD while the runner-up fills, so its copy answers
-// `syncing` and every walk goes on past it to the third member: a small
-// repository's cold sync is faster than a read's two-second wait, so unheld,
-// the runner-up would answer every walk itself and the third would never be
-// asked a read it could wrongly fill.
+// THE DOWNLOADS ARE HELD while the runner-up fills, so it answers `syncing`
+// and walks go on to the third member: a small repository's cold sync beats a
+// read's two-second wait, so unheld the third would never be asked a read it
+// could wrongly fill.
 func aHomesDeathFillsOneCopy(t *testing.T, c Cluster) {
 	rc := newRepoCase(t, c, "home-death")
 	order := rendezvous.Order(rc.id, c.DataNodes())
@@ -141,7 +132,7 @@ func aHomesDeathFillsOneCopy(t *testing.T, c Cluster) {
 
 	c.Kill(t, home)
 	defer c.Restart(t, home)
-	// RELEASED BEFORE THE RESTART, which the deferred calls run after, and
+	// RELEASED BEFORE THE RESTART (deferred calls run last-in first-out) and
 	// on every way out: a held download holds its round for the cache's
 	// lifetime.
 	held := make(chan struct{})

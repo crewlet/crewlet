@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/activityline"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api"
@@ -102,13 +103,14 @@ providers:
         FAKE_AGENT_VERSION: "${FAKE_AGENT_VERSION}"
         FAKE_AGENT_TOKEN: "${FAKE_AGENT_TOKEN}"
         FAKE_AGENT_PUSH_LOG: "${FAKE_AGENT_PUSH_LOG}"
-      # Only the cases that read the argv, hold the run, run an older release
-      # or keep what a push run's git saw (its token, its log) set these
-      # five. Declared optional, a case that sets none runs without them;
-      # undeclared, every such run starts without what it never needed and
-      # logs the gap.
+        FAKE_AGENT_CANCEL_TAKE: "${FAKE_AGENT_CANCEL_TAKE}"
+      # Only the cases that read the argv, hold the run, run an older release,
+      # keep what a push run's git saw (its token, its log) or give a hook's
+      # call up set these six. Declared optional, a case that sets none runs
+      # without them; undeclared, every such run starts without what it never
+      # needed and logs the gap.
       optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE, FAKE_AGENT_VERSION, FAKE_AGENT_TOKEN,
-        FAKE_AGENT_PUSH_LOG]
+        FAKE_AGENT_PUSH_LOG, FAKE_AGENT_CANCEL_TAKE]
   - name: Founder
     kind: human
     contact:
@@ -358,8 +360,12 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 		}
 		return false
 	})
-	submitted := "[tool] mcp__" + config.ToolServerName + "__" + runner.SubmitWorkTool
-	if transcript, _ := record["activity_transcript"].(string); !strings.Contains(transcript, submitted) {
+	submitted := "mcp__" + config.ToolServerName + "__" + runner.SubmitWorkTool
+	transcript, _ := record["activity_transcript"].(string)
+	if !slices.ContainsFunc(strings.Split(transcript, "\n"), func(line string) bool {
+		call := activityline.Parse(line)
+		return call.Tag == activityline.TagCall && call.Tool == submitted
+	}) {
 		t.Errorf("the run's transcript is %q; want the bridged call its stream made, %q",
 			transcript, submitted)
 	}

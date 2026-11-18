@@ -12,22 +12,13 @@ import (
 
 // A CHANGE NOBODY IS TOLD ABOUT STILL NAMES WHAT IT WAS.
 //
-// This is the whole finding as one case. `tracker_history.kind` is what the
-// activity feed's `kinds=` filter, every report window and the unblocked
-// repair's own scan select on — and it used to be read off the NOTIFICATION,
-// so a record that carried none had its kind guessed from the OPERATION
-// instead. The file that writes the row opens by stating the principle that
-// breaks: the feed is "a complete account of what HAPPENED rather than an
-// account of what was ANNOUNCED, and `notified` is how a reader tells
-// 'nothing was announced' from 'nothing happened'".
-//
-// A CATALOGUE EDIT AND A VIEW SAVE ARE THE SHARPEST INSTANCES, because they
-// are quiet BY DESIGN and on every path: a wake per catalogue edit would page
-// the whole company for a renamed dropdown, and a saved view is read from its
-// own strip rather than woken into anybody's inbox. Both therefore reached the
-// feed as `patch`, which is a [worklet.OpKind], not a [worklet.ChangeKind],
-// so `kinds=catalogue_updated` and `kinds=view_saved` found nothing at all
-// while the rows sat there.
+// `tracker_history.kind` is what the feed's `kinds=` filter, every report
+// window and the unblocked repair select on, so it is not read off the
+// notification: the feed accounts for what HAPPENED, and `notified` says
+// separately whether it was announced. A catalogue edit and a view save are
+// quiet BY DESIGN on every path, so they are the sharpest case: filed under
+// the operation (`patch`, an [worklet.OpKind]), `kinds=catalogue_updated` and
+// `kinds=view_saved` would find nothing.
 func TestAQuietChangeStillNamesWhatItWas(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -56,8 +47,8 @@ func TestAQuietChangeStillNamesWhatItWas(t *testing.T) {
 				"which is not the same as nothing having happened",
 				tc.subject, got, tc.want)
 		}
-		// AND IT IS STILL MARKED AS ANNOUNCED TO NOBODY, so the two
-		// facts stay separate: `kind` says what, `notified` says whether.
+		// AND IT IS STILL ANNOUNCED TO NOBODY: `kind` says what, `notified`
+		// whether.
 		if notified := historyNotified(t, r, tc.subject, tc.id); notified {
 			t.Errorf("the %s edit reports itself notified — it carries no "+
 				"notification at all", tc.subject)
@@ -67,13 +58,10 @@ func TestAQuietChangeStillNamesWhatItWas(t *testing.T) {
 
 // EVERY HISTORY ROW NAMES A KIND THIS BUILD KNOWS.
 //
-// The fallback used to end at `ChangeKind(op)` — the OPERATION, cast — and
-// most of the [worklet.OpKind]s are not [worklet.ChangeKind]s at all.
-// Three are near-misses of one: a quiet removal filed as `tombstone` while the
-// filter spells it `removed`, a restore as `restore` against `restored`, a
-// purge as `purge` against `purged`. A word one letter from the right one is
-// the worst possible value here, because it reads correct in a database dump
-// and matches nothing.
+// Most [worklet.OpKind]s are not [worklet.ChangeKind]s, and three are
+// near-misses of one (`tombstone` for `removed`, `restore` for `restored`,
+// `purge` for `purged`): the operation cast to a kind reads correct in a
+// database dump and matches no filter.
 func TestEveryHistoryRowNamesAKindThisBuildKnows(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -109,7 +97,7 @@ func TestEveryHistoryRowNamesAKindThisBuildKnows(t *testing.T) {
 				"can ever find", got)
 		}
 	}
-	// AND THE TWO THAT USED TO BE NEAR-MISSES ARE THE RIGHT WORDS.
+	// AND THE TWO NEAR-MISSES ARE THE RIGHT WORDS.
 	for _, want := range []worklet.ChangeKind{
 		worklet.ChangeRemoved, worklet.ChangeRestored,
 	} {
@@ -124,11 +112,9 @@ func TestEveryHistoryRowNamesAKindThisBuildKnows(t *testing.T) {
 // A RECORD THAT WRITES A HISTORY ROW IS REFUSED WITHOUT A KIND, and one that
 // writes none is refused WITH one.
 //
-// Both halves, because the rule is a partition rather than a requirement: a
-// barrier, a turn, a rank move and an alias produce no row for a kind to
-// describe, and a change kind on one of those would be a word about a record
-// nobody reads. The guard is what makes a kind added later fail the writer
-// rather than publish a row filed under a guess.
+// Both halves, because the rule is a partition: a barrier, a turn, a rank move
+// and an alias write no row for a kind to describe. The guard makes a kind
+// added later fail the writer rather than publish a row filed under a guess.
 func TestARecordStatesItsKindExactlyWhenItWritesOne(t *testing.T) {
 	t.Parallel()
 	for _, kind := range worklet.ObjectKinds {
@@ -149,9 +135,9 @@ func TestARecordStatesItsKindExactlyWhenItWritesOne(t *testing.T) {
 	}
 }
 
-// THE KIND AND THE NOTIFICATION MUST AGREE, because they are one fact with two
-// carriers — and a disagreement is invisible: the feed files the row under one
-// word while the card renders the other, and nothing compares them.
+// THE KIND AND THE NOTIFICATION MUST AGREE: one fact with two carriers, and a
+// disagreement is invisible, the feed filing one word and the card rendering
+// the other.
 func TestARecordCannotSayOneThingAndAnnounceAnother(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -177,14 +163,9 @@ func TestARecordCannotSayOneThingAndAnnounceAnother(t *testing.T) {
 	}
 }
 
-// THE ONE IRREVERSIBLE OPERATION TELLS THE PROJECT LEAD.
-//
-// It told nobody. Every purge published with a nil notification, while
-// [worklet.Candidates] carried a `purged` branch and `ReasonPurged` sat in the
-// reason list — dead code on one side and silence on the other, each looking
-// like the other's explanation. A task and every comment, revision, history
-// row and turn record on it were destroyed and the only person accountable for
-// that project heard nothing.
+// THE ONE IRREVERSIBLE OPERATION TELLS THE PROJECT LEAD: a purge destroys a
+// task and every comment, revision, history row and turn record on it, and the
+// person accountable for the project has to hear of it.
 func TestAPurgeTellsTheProjectLead(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -211,10 +192,9 @@ func TestAPurgeTellsTheProjectLead(t *testing.T) {
 	}
 }
 
-// THE EXCERPT NAMES THE KEY AND NOT THE CONTENT, which is the one rule a purge
-// notification has that no other does: an excerpt quoting the title or the
-// body would keep a copy of exactly what the purge destroyed, on the log, for
-// its whole retention window.
+// THE EXCERPT NAMES THE KEY AND NOT THE CONTENT, a rule only a purge's
+// notification has: quoting the title or body would keep a copy of what the
+// purge destroyed on the log for its whole retention window.
 func TestAPurgeExcerptKeepsNoCopyOfWhatItDestroyed(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -251,11 +231,10 @@ func TestAPurgeExcerptKeepsNoCopyOfWhatItDestroyed(t *testing.T) {
 
 // AN UNBLOCKED NOTICE WITH NOBODY TO TELL IS REFUSED, never published.
 //
-// The assignee is the whole recipient list, so such a notice reaches nobody —
-// and it does not merely waste a record: the apply stamps `unblocked_told_at`
-// from it, and [worklet.ScanUnblocked] selects on that column being older than
-// the clearing instant. A notice nobody received would mark the task TOLD and
-// the repair would never look at it again.
+// The assignee is the whole recipient list, so it reaches nobody, yet the
+// apply stamps `unblocked_told_at` from it, and [worklet.ScanUnblocked] selects
+// on that column being older than the clearing instant: a notice nobody
+// received would mark the task TOLD and the repair would never look again.
 func TestAnUnblockedNoticeWithNobodyToTellIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -272,8 +251,7 @@ func TestAnUnblockedNoticeWithNobodyToTellIsRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), "assignee") {
 		t.Errorf("the refusal does not name the missing assignee: %v", err)
 	}
-	// AND THE NOTICE STILL WORKS WITH ONE, so this refuses a case rather
-	// than the verb.
+	// AND IT WORKS WITH ONE: this refuses a case, not the verb.
 	if _, err := r.writer.TellUnblocked(t.Context(), "op-tell-2", worklet.Unblock{
 		Task: "t-1", Key: "ENG-1", Project: "ENG", Assignee: "ana",
 	}); err != nil && !errors.Is(err, statelog.ErrConflict) {
@@ -344,28 +322,16 @@ func historyNotified(t *testing.T, r *roundTrip, kind, id string) bool {
 // EVERY ROUTABLE CHANGE KIND RENDERS A "What happened" LINE.
 //
 // `changeLead` is a switch with no default, so a kind it does not name renders
-// an EMPTY string and `promptHeader` silently omits the line. The reader then
-// gets an opener, a key and a **By:** with nothing between them saying what
-// the person did — which is the one thing the wake exists to carry.
-//
-// `changeLead` names twenty of the twenty-seven kinds and nothing connected
-// the two lists, so the gap was invisible from both ends. The seven it does
-// not name never reach it — `Prompt.Build` dispatches on [MetaObject] first,
-// so the two person-subject kinds render through [buildObjectPrompt], and the
-// project, policy, view and catalogue kinds are not routable at all.
-// The one that DID reach it and rendered nothing was `purged`: task-subject,
-// routable, and silent for the one operation in this engine that cannot be
-// undone, which is the case this test was written for.
-//
-// THE WALK IS OVER [worklet.ChangeKinds] rather than a list here, so a kind
-// added later is covered without anybody remembering to — which is the half
-// that was missing rather than the case itself.
+// an EMPTY string, `promptHeader` omits the line, and the wake loses the one
+// thing it exists to carry: what the person did. Kinds it need not name never
+// reach it: `Prompt.Build` dispatches on [MetaObject] first, so person-subject
+// kinds render through [buildObjectPrompt], and the project, policy, view and
+// catalogue kinds are not routable. THE WALK IS OVER [worklet.ChangeKinds],
+// so a kind added later is covered without anybody remembering to.
 func TestEveryRoutableChangeKindRendersWhatHappened(t *testing.T) {
 	t.Parallel()
-	// The kinds whose wake is a TASK wake, which are the ones that reach
-	// changeLead. Everything else renders through the object prompt or is
-	// not routed at all; both are asserted below so this list cannot
-	// quietly shrink.
+	// The kinds whose wake is a TASK wake, the ones that reach changeLead;
+	// the rest render through the object prompt or are not routed.
 	throughTheTaskPrompt := map[worklet.ChangeKind]bool{
 		worklet.ChangeCreated: true, worklet.ChangeFields: true,
 		worklet.ChangeStatus: true, worklet.ChangeAssignee: true,
@@ -404,12 +370,10 @@ func TestEveryRoutableChangeKindRendersWhatHappened(t *testing.T) {
 
 // AND A PURGE DOES NOT READ AS AN ORDINARY EDIT.
 //
-// Three separate places in the prompt assume the task still exists: the
-// opener says it "changed", the context block sends the reader to
-// `get_work_item`, and the handling block describes deciding whether to act on
-// it. For a purge all three are wrong — and the third is worse than wrong,
-// because a removal's block offers a restore that a purge has no equivalent
-// of.
+// Three places in the prompt assume the task still exists: the opener says it
+// "changed", the context block sends the reader to `get_work_item`, and the
+// handling block weighs acting on it. For a purge all three are wrong, and a
+// removal's block offers a restore a purge has no equivalent of.
 func TestAPurgeWakeDoesNotSendAnybodyToReadTheTask(t *testing.T) {
 	t.Parallel()
 	got := worklet.Prompt{}.Build(notify.Inbound{
@@ -438,9 +402,8 @@ func TestAPurgeWakeDoesNotSendAnybodyToReadTheTask(t *testing.T) {
 				"in this engine with no inverse:\n%s", want, got)
 		}
 	}
-	// AND IT DOES NOT OFFER THE REMOVAL'S OWN REMEDY, which is the sharp
-	// edge: a removed task is in the trash and comes back, a purged one
-	// does not exist anywhere.
+	// AND NO REMOVAL'S REMEDY: a removed task comes back from the trash, a
+	// purged one exists nowhere.
 	if strings.Contains(got, worklet.RestoreWorkItemTool) {
 		t.Errorf("a purge wake offers a restore:\n%s", got)
 	}

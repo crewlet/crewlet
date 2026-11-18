@@ -75,19 +75,19 @@ var readings = []reading{
 // FuzzTheScannerReadsWhatBothDecodersRead: FOR EVERY INPUT, THE SCANNER ACCEPTS EXACTLY WHAT json.Valid AND
 // jsontext (UNDER THE THREAD LAYER'S OPTIONS) ACCEPT, AND WHERE IT ACCEPTS, ITS TOKENS ARE THEIRS: each kind
 // in order, each name's and string's decoded text and each number's literal equal jsontext's tokens, each
-// at the offset jsontext reads it at, and the value they make equals what encoding/json's Decode
-// (UseNumber) makes. Where it refuses, the thread layer would class its fault as it classes the line today
-// (refusedFault), so moving the layer onto it changes no line's reading. The two decoders are held to each
-// other first, so a release that parts them fails here naming the input, and the package doc's account of
-// their agreement is rewritten in that change.
+// at jsontext's offset, the value they make equals encoding/json's Decode (UseNumber), and each token's
+// InvalidUTF8, asked once its text is read, is false exactly where utf8.Valid takes its bytes as jsontext
+// delimits them, and false wherever its text is passed over. Where it refuses, the thread layer would class
+// its fault as it classes the line today (refusedFault). The two decoders are held to each other first, so
+// a release that parts them fails here naming the input, and the package doc is rewritten in that change.
 //
-// THE ANSWER DOES NOT DEPEND ON HOW THE TEXT IS READ: handed over whole, a byte at a time or in halves, with
-// the buffer's edge at every byte, its texts read through a p of every size from one byte to 64 and one that
-// holds the longest text whole, passed over by Next unread, skipped whole or captured, a scan ends alike.
+// THE ANSWER DOES NOT DEPEND ON HOW THE TEXT IS READ: whole, a byte at a time or in halves, the buffer's
+// edge at every byte, its texts read through a p of every size from one byte to 64 and one that holds the
+// longest whole, passed over by Next unread, skipped whole or captured, a scan ends alike.
 //
-// Mutation: decode `\n` as `n`, pair a high half with any escape after it, take a 10,001st container,
-// accept a byte after the value, take a raw control byte in a string, end a number at a cut exponent, or
-// set a number's offset at its second byte, and the seed corpus alone fails naming the input.
+// Mutation: decode `\n` as `n`, pair a high half with any escape after it, take a 10,001st container, accept
+// a byte after the value or a raw control byte in a string, end a number at a cut exponent, offset it at its
+// second byte, read a lone surrogate's escape as invalid UTF-8, or keep a text past its token: seeds fail.
 func FuzzTheScannerReadsWhatBothDecodersRead(f *testing.F) {
 	for _, seed := range seeds {
 		f.Add([]byte(seed))
@@ -141,12 +141,19 @@ func assertReadsAlike(t *testing.T, data []byte, want scanned, how reading, text
 	got := scan(t, data, how)
 	if !texts {
 		// A reading that reads no text has every token Next answers, the one whose text holds the fault
-		// included, which a reading of that text never finishes; its texts are the baseline's.
+		// included, which a reading of that text never finishes; its texts are the baseline's, and none of
+		// them, passed over unread, says it held a byte that is no UTF-8.
 		if n := len(want.tokens); want.err != nil && len(got.tokens) == n+1 && hasText(got.tokens[n].Kind) {
 			got.tokens, got.offsets = got.tokens[:n], got.offsets[:n]
 		}
+		for i := range got.tokens {
+			if got.tokens[i].Invalid {
+				t.Fatalf("%s, the %s at byte %d of %q, passed over unread, says it held a byte that is no UTF-8",
+					how.name, got.tokens[i].Kind, got.offsets[i], data)
+			}
+		}
 		for i := range min(len(got.tokens), len(want.tokens)) {
-			got.tokens[i].Text = want.tokens[i].Text
+			got.tokens[i].Text, got.tokens[i].Invalid = want.tokens[i].Text, want.tokens[i].Invalid
 		}
 	}
 	if !slices.Equal(got.tokens, want.tokens) || !slices.Equal(got.offsets, want.offsets) || !sameEnd(got.err, want.err) {

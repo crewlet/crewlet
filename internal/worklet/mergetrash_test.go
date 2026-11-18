@@ -16,11 +16,9 @@ import (
 // A MERGE INTO AN ITEM IN THE TRASH IS REFUSED BEFORE THE MARK, WHICHEVER WAY
 // THE SUBTASKS GO.
 //
-// Moving them, every re-parent is refused on its own subject — a parent in
-// the trash takes no new child — so the mark was one nothing could finish: the
-// duplicate stayed `merging` and the duty ran the same refusal on every tick.
-// Leaving them, the one live copy of the work was cancelled in favour of one
-// nobody can see. Both used to be accepted.
+// Moving them, every re-parent is refused (a parent in the trash takes no new
+// child), so nothing could finish the mark. Leaving them, the one live copy of
+// the work would be cancelled in favour of one nobody can see.
 func TestAMergeIntoAnItemInTheTrashIsRefusedBeforeTheMark(t *testing.T) {
 	t.Parallel()
 	for _, reparent := range []bool{true, false} {
@@ -71,10 +69,9 @@ func TestAMergeIntoAnItemInTheTrashIsRefusedBeforeTheMark(t *testing.T) {
 
 // A MERGE THAT MOVES THE SUBTASKS IS NOT MADE INTO ONE OF THEM.
 //
-// The subtask the survivor sits under would be re-parented onto the survivor
-// itself — a cycle, which a re-parent now refuses — so the mark would stand
-// with nothing to finish it. Left where they are, nothing moves and the fold
-// is ordinary.
+// The subtask the survivor sits under would be re-parented onto the survivor,
+// a cycle a re-parent refuses, so the mark could never finish. Left where they
+// are, the fold is ordinary.
 func TestAMergeCannotMoveTheSubtasksOntoOneOfThem(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -111,11 +108,10 @@ func TestAMergeCannotMoveTheSubtasksOntoOneOfThem(t *testing.T) {
 
 // A TASK IS NEVER FILED UNDER ITSELF OR ITS OWN SUBTREE.
 //
-// The applier cannot refuse a committed record, so it applies the cycle and
-// flags it — and the subtree drops off every board, because a board draws
-// roots and a cycle has none. Two concurrent re-parents on two subjects can
-// still form one no single write sees; ONE write forming it was simply a write
-// nobody refused.
+// The applier cannot refuse a committed record, so a cycle it applies drops
+// the subtree off every board (a board draws roots, a cycle has none). Two
+// concurrent re-parents can still form one no single write sees; one write
+// forming it must be refused.
 func TestATaskIsNeverFiledUnderItsOwnSubtree(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -158,11 +154,10 @@ func TestATaskIsNeverFiledUnderItsOwnSubtree(t *testing.T) {
 // A PURGED PARENT IS REFUSED, NOT WAITED FOR — and one this node has never
 // heard of IS waited for.
 //
-// The two absences are different facts. A purge leaves a marker that outlives
-// the row, so a task carrying one is gone on every data node and for good; it
-// was answered "not on this node", which told a caller to come back to a task
-// that will never return. Only a task with no row and no marker may be one
-// this node has not applied yet.
+// A purge leaves a marker that outlives the row, so a task carrying one is
+// gone everywhere for good and the retryable "not on this node" would be
+// false. Only a task with no row and no marker may be one this node has not
+// applied yet.
 func TestAPurgedParentIsRefusedAndAnUnknownOneIsWaitedFor(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -201,12 +196,9 @@ func TestAPurgedParentIsRefusedAndAnUnknownOneIsWaitedFor(t *testing.T) {
 // EVERY WRITE THAT NAMES A TASK TELLS A PURGED ONE FROM ONE THIS NODE HAS NOT
 // APPLIED — the parent's rule, on every other path.
 //
-// An update, a removal, a restore, a second purge and a dependency answered a
-// task with no row "not on this node", which is the retryable answer: a
-// caller, a duty or an HTTP client was told to come back to a task a purge
-// destroyed for good. And a dependency ON such a task answered the opposite
-// for the other absence — "there is no task", never to be retried — to a
-// create this node simply had not applied yet.
+// A purged task gets a final refusal, never the retryable "not on this node";
+// a task with no row or marker gets the retryable one, never "there is no
+// task", since it may be a create this node has not applied.
 func TestEveryTaskWriteTellsAPurgedTaskFromAnUnappliedOne(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -273,9 +265,8 @@ func TestEveryTaskWriteTellsAPurgedTaskFromAnUnappliedOne(t *testing.T) {
 
 // A CHILD IN THE TRASH STAYS WHERE IT IS, AND THE MERGE STILL FINISHES.
 //
-// A tombstoned task is frozen, so a re-parent of one is refused on its own
-// subject — and the walk used to select it, fail on it, and leave the
-// duplicate marked for a duty that would fail on it again every tick.
+// A tombstoned task is frozen, so a walk that selected it would fail on it,
+// leaving the duplicate marked for a duty that fails on it every tick.
 func TestAMergeLeavesASubtaskInTheTrashWhereItIs(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -320,10 +311,9 @@ func TestAMergeLeavesASubtaskInTheTrashWhereItIs(t *testing.T) {
 // BEHIND IT FINISHES.
 //
 // The survivor went to the trash after the mark, which no pre-flight can
-// prevent. The duty ran that merge's refusal every tick and RETURNED on it, in
-// id order — so every abandoned merge sorting after it waited on a restore
-// nobody knew to make. Now it is named on every tick and does not stand in the
-// way; restoring its survivor is what lets it finish.
+// prevent. Returning on that refusal would starve every merge sorting after it,
+// so it is named on every tick and stepped over; restoring the survivor lets
+// it finish.
 func TestTheDutyReportsAMergeWaitingOnTheTrashAndFinishesTheRest(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -383,11 +373,9 @@ func TestTheDutyReportsAMergeWaitingOnTheTrashAndFinishesTheRest(t *testing.T) {
 
 // A MERGE WHOSE SURVIVOR WAS PURGED HAS NO TARGET, AND ITS MARK IS CLEARED.
 //
-// Nothing can be moved onto, or merged into, a task a purge destroyed — and
-// the duty read the survivor off the duplicate's own document, which a purge
-// of the other task never rewrites, so it asked the store for a task that
-// would never return and was told "not on this node" on every tick. The merge
-// did not happen, so the duplicate is left open.
+// The duplicate's own document still names the survivor, since a purge of
+// the other task never rewrites it, so the duty must treat the purge as final.
+// The merge did not happen, so the duplicate is left open.
 func TestTheDutyClearsAMergeWhoseSurvivorWasPurged(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -418,12 +406,9 @@ func TestTheDutyClearsAMergeWhoseSurvivorWasPurged(t *testing.T) {
 // A DUPLICATE PUT IN THE TRASH AFTER ITS MARK WAITS, NAMED, UNTIL IT IS
 // RESTORED — and then the merge finishes.
 //
-// A tombstone is a freeze: the close that finishes a merge is a write on the
-// duplicate, and so is clearing a mark with no target, and a task in the trash
-// takes neither. Nothing stops a person trashing an item a merge is folding
-// away, so the duty ran that refusal on every tick — moving the subtasks
-// first, onto a survivor, on behalf of an item somebody had since thrown out.
-// Now nothing moves, the tick is not a failure, and every tick names it.
+// A tombstone is a freeze: the close and clearing a mark are both writes on
+// the duplicate. Nothing stops a person trashing an item mid-merge, so the
+// duty moves nothing for it, does not fail the tick, and names it every tick.
 func TestTheDutyWaitsOnADuplicateInTheTrashUntilItIsRestored(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -483,10 +468,8 @@ func TestTheDutyWaitsOnADuplicateInTheTrashUntilItIsRestored(t *testing.T) {
 
 // AND A DUPLICATE IN THE TRASH WAITS EVEN WHEN ITS SURVIVOR IS GONE.
 //
-// With the survivor purged the repair is to clear the mark and leave the
-// duplicate open — but clearing it is a write on the duplicate, which the
-// trash refuses, so that repair failed on every tick too. The trash is what
-// is in the way, and a restore is what lets the mark be cleared.
+// With the survivor purged the repair is to clear the mark, but that is a
+// write on the duplicate, which the trash refuses; a restore lets it happen.
 func TestADuplicateInTheTrashWaitsEvenWhenItsSurvivorIsPurged(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -532,10 +515,9 @@ func TestADuplicateInTheTrashWaitsEvenWhenItsSurvivorIsPurged(t *testing.T) {
 // A SURVIVOR FILED UNDER THE DUPLICATE AFTER THE MARK WAITS, NAMED, UNTIL IT
 // IS FILED ELSEWHERE.
 //
-// The mark's own pre-flight refuses a merge that would move the subtasks onto
-// one of them, and nothing stops the survivor being filed under one
-// afterwards — so the subtask it sits under would move onto it, which a
-// re-parent refuses as a cycle, on every tick.
+// The mark's pre-flight refuses that cycle, but nothing stops the survivor
+// being filed under a subtask afterwards; moving that subtask onto it would
+// be refused as a cycle on every tick.
 func TestTheDutyWaitsOnASurvivorFiledUnderTheDuplicate(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

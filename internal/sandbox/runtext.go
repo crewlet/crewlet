@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/activityline"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -271,6 +272,9 @@ func boundBox(result Result) Result {
 		// reader it has classifies a decoded document or nothing.
 		result.Event = ""
 	}
+	if len(result.Limits) > MaxRunEventBytes {
+		result.Limits = ""
+	}
 	return result
 }
 
@@ -470,8 +474,9 @@ func elidedNote(whole, partial, bytes int) string {
 	default:
 		what = fmt.Sprintf("%d line(s) and part of %d more, %s in all,", whole, partial, kib(bytes))
 	}
-	return fmt.Sprintf("(%s left out here: a run's record keeps the first %d KiB and the last %d KiB "+
-		"of its transcript, in whole lines)\n", what, transcriptHeadBytes>>10, transcriptTailBytes>>10)
+	return activityline.Words(activityline.TagNote, fmt.Sprintf("%s left out here: a run's record keeps the "+
+		"first %d KiB and the last %d KiB of its transcript, in whole lines", what, transcriptHeadBytes>>10,
+		transcriptTailBytes>>10)) + "\n"
 }
 
 // KeepEnd is the end of text in WHOLE LINES, at most keep bytes, and the offset

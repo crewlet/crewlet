@@ -70,8 +70,8 @@ func (e *estate) apply(body []byte, at time.Time) statelog.Reason {
 	return reason
 }
 
-// claim encodes one person's claim as the writer would, under opID, on its
-// entry's own subject.
+// claimRecord encodes one person's claim as the writer would, under opID, on
+// its entry's own subject.
 func claimRecord(t *testing.T, opID string, c atlas.Claim) []byte {
 	t.Helper()
 	body, err := rawRecord(atlasdomain.EntrySubject(c.Subject), "node-a", opID, atlasdomain.OpClaim,

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -92,6 +93,53 @@ func (s *suite) runLane(t *testing.T) {
 		})
 	})
 
+	t.Run("a_priority_event_published_mid_drain_is_the_next_partition", func(t *testing.T) {
+		t.Parallel()
+		// A priority event that lands while a drain's first partition runs
+		// is the next partition, ahead of the rest of the drain, which still
+		// runs once each.
+		q := s.start(ctx, t)
+		topic := inbox()
+		queueBacklog(ctx, t, q, topic, "g", backlog(5)...)
+		batches := newBatchJournal()
+		var once sync.Once
+		handler := func(ctx context.Context, evs []*events.Event) queue.Result {
+			first := false
+			once.Do(func() { first = true })
+			if first {
+				if err := q.Publish(ctx, topic, person()); err != nil {
+					t.Errorf("publish the person's message mid-drain: %v", err)
+				}
+				// SEEN BY THE BROKER before this turn ends, as a message
+				// published a turn's length earlier is. Off the test's
+				// goroutine, so a stall is an Errorf, never a Fatalf.
+				deadline := time.Now().Add(stallFor)
+				for {
+					if w, err := q.Waiting(ctx, topic, "g"); err == nil && w.Priority == 1 {
+						break
+					}
+					if time.Until(deadline) <= 0 { //fixedwait:measure a poll's own deadline
+						t.Errorf("the person's message never reached the lane")
+						break
+					}
+					time.Sleep(2 * time.Millisecond) //fixedwait:liveness
+				}
+			}
+			batches.record(evs)
+			return queue.Ack()
+		}
+		subscribeBatch(ctx, t, q, topic, "g", handler, queue.NewBatchOptions(0, 10))
+		batches.await(t, "every event settled exactly once", func(got [][]string) bool {
+			return equalStrings(settled(got), slices.DeleteFunc(everyLabel(5),
+				func(l string) bool { return l == "followup" }))
+		})
+		got := batches.all()
+		if !equalStrings(got[0], []string{"background-0"}) || !equalStrings(got[1], []string{"person"}) {
+			t.Fatalf("deliveries %v, want background-0 and then the person's message, ahead "+
+				"of the four partitions the drain still held", got)
+		}
+	})
+
 	t.Run("a_partition_wake_deeper_than_the_drain_runs_once_in_its_own_turn", func(t *testing.T) {
 		t.Parallel()
 		// THE DRAIN WINDOW IS THE BOUND of what one turn is handed. The
@@ -165,7 +213,7 @@ func (s *suite) runLane(t *testing.T) {
 				t.Errorf("the person's first delivery was %v, want the follow-up the drain "+
 					"took with it", labelsOf(evs))
 			}
-			if err := q.PauseTopic(ctx, topic, "g", holdReason); err != nil {
+			if err := q.PauseTopic(ctx, topic, "g", attachmentOf(ctx, t, q, topic, "g"), holdReason); err != nil {
 				t.Errorf("PauseTopic: %v", err)
 				return queue.Nak(err)
 			}
@@ -184,7 +232,7 @@ func (s *suite) runLane(t *testing.T) {
 		// the drain after the hold will see, and the first half of the
 		// claim, since a follow-up requeued apart would wait on the topic.
 		waitingIs(t, q, topic, queue.Waiting{Priority: 2, Background: 5})
-		if err := q.ResumeTopic(ctx, topic, "g", holdReason); err != nil {
+		if err := q.ResumeTopic(ctx, topic, "g", attachmentOf(ctx, t, q, topic, "g"), holdReason); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		batches.await(t, "every event settled exactly once", func(got [][]string) bool {
@@ -229,7 +277,7 @@ func (s *suite) runLane(t *testing.T) {
 		if _, err := q.EnsureSubscription(ctx, topic, "g"); err != nil {
 			t.Fatalf("EnsureSubscription: %v", err)
 		}
-		if err := q.PauseTopic(ctx, topic, "g", holdReason); err != nil {
+		if err := q.PauseTopic(ctx, topic, "g", attachmentOf(ctx, t, q, topic, "g"), holdReason); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		started := make(chan struct{})
@@ -248,7 +296,7 @@ func (s *suite) runLane(t *testing.T) {
 			publish(ctx, t, q, topic, ev)
 		}
 		go func() {
-			if err := q.ResumeTopic(context.WithoutCancel(ctx), topic, "g", holdReason); err != nil {
+			if err := q.ResumeTopic(context.WithoutCancel(ctx), topic, "g", attachmentOf(context.WithoutCancel(ctx), t, q, topic, "g"), holdReason); err != nil {
 				t.Errorf("ResumeTopic: %v", err)
 			}
 		}()
@@ -277,7 +325,7 @@ func (s *suite) runLane(t *testing.T) {
 		// consumed past the hold would start a turn on a stopped seat.
 		q := s.start(ctx, t)
 		topic := inbox()
-		if err := q.PauseTopic(ctx, topic, "g", holdReason); err != nil {
+		if err := q.PauseTopic(ctx, topic, "g", attachmentOf(ctx, t, q, topic, "g"), holdReason); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		batches := newBatchJournal()
@@ -285,7 +333,7 @@ func (s *suite) runLane(t *testing.T) {
 			queue.DefaultBatchOptions())
 		publish(ctx, t, q, topic, person())
 		batches.staysAt(ctx, t, 0, "a priority event delivered past its topic's hold")
-		if err := q.ResumeTopic(ctx, topic, "g", holdReason); err != nil {
+		if err := q.ResumeTopic(ctx, topic, "g", attachmentOf(ctx, t, q, topic, "g"), holdReason); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		batches.await(t, "the held message after the hold lifts", func(got [][]string) bool {

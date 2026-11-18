@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/seataccess/seataccesstest"
 )
 
 func policyMember(name, path string) string {
@@ -182,3 +183,26 @@ func TestTheGrantCatalogueOffersAWSManagedPolicies(t *testing.T) {
 		t.Fatalf("an older stack: %+v %v, want nothing offered", entries, err)
 	}
 }
+
+// EVERY POLICY THE CATALOGUE OFFERS CAN BE ASKED FOR, each at its longest,
+// one named at IAM's longest policy name ([seataccesstest.AskFaults]).
+func TestEveryPolicyTheCatalogueOffersCanBeAsked(t *testing.T) {
+	t.Parallel()
+	f := &fakeIAM{answer: func(url.Values) (int, string) {
+		return iamOK("ListPolicies", "<IsTruncated>false</IsTruncated><Policies>"+
+			policyMember("AmazonS3FullAccess", "/")+policyMember("ViewOnlyAccess", "/job-function/")+
+			policyMember(strings.Repeat("P", maxPolicyName), "/")+"</Policies>")
+	}}
+	s := &accessSession{client: f.client(t)}
+	entries, scope, err := s.GrantCatalogue(t.Context(), seataccess.LaneAWS)
+	if err != nil || len(entries) != 3 {
+		t.Fatalf("%+v %v", entries, err)
+	}
+	opts := seataccess.Options{Lane: seataccess.LaneAWS, Grants: entries, GrantScope: scope}
+	for _, fault := range seataccesstest.AskFaults(opts) {
+		t.Error(fault)
+	}
+}
+
+// maxPolicyName is the longest name IAM gives a policy.
+const maxPolicyName = 128

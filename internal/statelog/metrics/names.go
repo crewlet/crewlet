@@ -1,19 +1,9 @@
 package metrics
 
-// THE INSTRUMENT NAMES, as constants.
-//
-// # Why a name is a constant and not a literal at its call site
-//
-// Every instrument is named in at least two places — the catalogue that
-// declares it, which is what docs/reference/metrics.md is generated from, and
-// the code that records into it — and several are named in a third, the code
-// that reads a percentile back to evaluate an alarm. A recorder rejects a name
-// it has no instrument for, so a typo at a WRITE site is caught immediately;
-// a typo at a READ site is not caught at all. It silently reads no series,
-// which renders as a healthy zero.
-//
-// So the name exists once and every site refers to it. The catalogue below is
-// the declaration; these are its identifiers.
+// THE INSTRUMENT NAMES, as constants, so every site refers to one spelling.
+// The recorder drops a name it has no instrument for, catching a typo at a
+// write site, but a typo at a read site (an alarm reading a percentile) reads
+// no series, which renders as a healthy zero.
 const (
 	AlarmActive                      = "crewlet.alarm.active"
 	AlarmTransitions                 = "crewlet.alarm.transitions"
@@ -162,12 +152,11 @@ const (
 	TrackerVectorCoverage            = "crewlet.tracker.vector.coverage"
 )
 
-// THE ARTIFACTS INSTRUMENTS, named here before their recording sites exist so
-// every package that records one and every reader that alarms on one spells it
-// the same. Each is CATALOGUED by the package that records it, beside its
-// first recording site, because a catalogued instrument with no recording site
-// fails the build (an instrument nobody records reads as a healthy zero). Until
-// then a name here is declared and published nowhere.
+// THE ARTIFACTS INSTRUMENTS, named before their recording sites exist. Each is
+// catalogued by the package that records it, beside its first recording site,
+// since a catalogued instrument nobody records fails
+// TestEveryCatalogedInstrumentHasARecordingSite; until then a name here is
+// published nowhere.
 const (
 	// The object store's own ceiling, recorded by internal/objstore.
 	ObjectsBucketBytes    = "crewlet.objects.bucket.bytes"

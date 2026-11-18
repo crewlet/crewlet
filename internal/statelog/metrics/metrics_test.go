@@ -8,11 +8,7 @@ import (
 )
 
 // THE CATALOGUE IS COMPLETE, and every entry says which failure it makes
-// visible.
-//
-// The last field is the one that matters: an instrument with no reason is a
-// number on a page, which is exactly what this catalogue replaces. A test
-// that only checked names and units would let one in.
+// visible: an instrument with no reason is just a number on a page.
 func TestEveryInstrumentInTheCatalogueIsRegistered(t *testing.T) {
 	t.Parallel()
 	entries := Catalogue()
@@ -73,7 +69,7 @@ func TestAttributeCardinalityIsClosed(t *testing.T) {
 	}
 	r.Add(StatelogReadServed, 1, Attrs{
 		"domain": "tracker", "level": "linearizable",
-		// The one that must not survive.
+		// Undeclared, so dropped.
 		"task_key": "ENG-1",
 	})
 	got := r.Read()
@@ -106,8 +102,7 @@ func TestAnUnknownInstrumentIsDropped(t *testing.T) {
 func TestQuantileIsAnUpperBound(t *testing.T) {
 	t.Parallel()
 	r, _ := New()
-	// 99 fast observations and one slow one, so p95 must land on the fast
-	// side and p99+ must see the slow one.
+	// p95 must land on the fast side and p100 must see the slow one.
 	for range 99 {
 		r.Observe(StatelogBarrierDuration, 2*time.Millisecond, Attrs{"domain": "d"})
 	}
@@ -177,15 +172,10 @@ func TestAWindowedValueForgetsAfter24Hours(t *testing.T) {
 	}
 }
 
-// AN EVENT IS FILED AT THE HOUR IT HAPPENED, when the count names one.
-//
-// A barrier applied from a log is counted when the applier reaches it and was
-// committed when the broker stored it, and a node replaying a backlog reaches
-// days of them in minutes. Filed at the hour they were counted, those days read
-// as one — a company several times past its census for the next day, on reads
-// never made in it. So an instant older than the window counts toward nothing,
-// one inside it lands in its own hour and leaves the window with that hour, and
-// one ahead of this clock lands in the current hour rather than nowhere.
+// AN EVENT IS FILED AT THE HOUR IT HAPPENED, when the count names one, so a
+// node replaying days of barriers in minutes does not read them as one day.
+// An instant older than the window counts toward nothing, one inside it leaves
+// with its own hour, and one ahead of this clock lands in the current hour.
 //
 // Mutation: AddAt filing at the current hour, and the replayed three days count.
 func TestAnEventIsFiledAtTheHourItHappened(t *testing.T) {
@@ -205,8 +195,7 @@ func TestAnEventIsFiledAtTheHourItHappened(t *testing.T) {
 		t.Fatalf("events inside the window and one ahead of this clock count %d, want 6", got)
 	}
 
-	// FIVE HOURS ON the one from twenty hours earlier has left with its
-	// own hour; the rest are still inside.
+	// Five hours on, the one from twenty hours earlier has left.
 	at = at.Add(5 * time.Hour)
 	if got := w.Total("barriers"); got != 3 {
 		t.Errorf("five hours on the window counts %d, want 3: an event leaves "+
@@ -237,14 +226,9 @@ func TestAYoungWindowIsLabelledPartial(t *testing.T) {
 	}
 }
 
-// EVERY INSTRUMENT HAS ITS OWN NAME, and nothing else asserted it.
-//
-// Two entries for one measurement is not a tidiness problem: the catalogue is
-// what the reference page and the recorder are both derived from, so a
-// duplicate ships as two rows an operator has to choose between and two series
-// that each carry half the events. It happened — `apply.tx.aborts` and
-// `apply.tx_aborts` were one measurement under two spellings, differing only
-// in a separator — and nothing here noticed.
+// EVERY INSTRUMENT HAS ITS OWN NAME. A duplicate ships as two reference rows
+// an operator must choose between and two series each carrying half the
+// events.
 func TestNoTwoInstrumentsShareAName(t *testing.T) {
 	t.Parallel()
 	seen := map[string]string{}
@@ -256,9 +240,8 @@ func TestNoTwoInstrumentsShareAName(t *testing.T) {
 		seen[inst.Name] = inst.Shows
 	}
 
-	// AND NO TWO NAMES DIFFER ONLY IN A SEPARATOR, which is how the
-	// duplicate above got in: `a.b.c` and `a.b_c` are one name to a reader
-	// and two to every collector.
+	// AND NO TWO NAMES DIFFER ONLY IN A SEPARATOR: `a.b.c` and `a.b_c` are
+	// one name to a reader and two to every collector.
 	flat := map[string]string{}
 	for name := range seen {
 		key := strings.ReplaceAll(name, "_", ".")
@@ -270,16 +253,11 @@ func TestNoTwoInstrumentsShareAName(t *testing.T) {
 	}
 }
 
-// AN ALARM MUST BE ABLE TO GO OUT, and against a cumulative counter it cannot.
-//
-// This is the defect the window was written for and then never wired to.
-// `search_degraded` fires on a fraction being above zero; computed from
-// [Recorder.Read]'s monotone totals, one degraded search after boot lights it
-// for the life of the process, because the numerator can only grow. Computed
-// from [Recorder.ReadWindow] it clears once the hour holding it rolls out.
-//
-// `crewlet retention status` derives its exit code from these alarms, so an
-// alarm that cannot clear is a cron that fires for ever.
+// AN ALARM MUST BE ABLE TO GO OUT, and against a cumulative counter it cannot:
+// from [Recorder.Read]'s totals one degraded search lights `search_degraded`
+// for the life of the process; from [Recorder.ReadWindow] it clears once its
+// hour rolls out. `crewlet retention status` exits on these alarms, so one that
+// cannot clear is a cron that fires for ever.
 func TestAWindowedCounterFallsBackToZeroAndACumulativeOneNever(t *testing.T) {
 	t.Parallel()
 
@@ -308,8 +286,7 @@ func TestAWindowedCounterFallsBackToZeroAndACumulativeOneNever(t *testing.T) {
 		t.Fatalf("cumulative total right after the event = %d, want 1", got)
 	}
 
-	// A DAY LATER, WITH NOTHING SINCE. The window has rolled the hour that
-	// held it out; the cumulative series never will.
+	// A day later, with nothing since.
 	at = at.Add(Buckets*time.Hour + time.Hour)
 	if got := total(r.ReadWindow); got != 0 {
 		t.Errorf("windowed total a day later = %d, want 0 — an alarm built on "+
@@ -321,11 +298,8 @@ func TestAWindowedCounterFallsBackToZeroAndACumulativeOneNever(t *testing.T) {
 	}
 }
 
-// A WINDOWED QUANTILE IS A QUANTILE, not the window's maximum.
-//
-// The p95 alarms compare against a budget, and a maximum is above the p95 by
-// construction — so substituting one would fire every such alarm on the single
-// worst observation in the window rather than on a distribution that moved.
+// A WINDOWED QUANTILE IS A QUANTILE, not the window's maximum, which would
+// fire every p95 alarm on the single worst observation.
 func TestTheWindowKeepsADistributionRatherThanAPeak(t *testing.T) {
 	t.Parallel()
 
@@ -336,7 +310,6 @@ func TestTheWindowKeepsADistributionRatherThanAPeak(t *testing.T) {
 	}
 	r = r.WithClock(func() time.Time { return at })
 
-	// Ninety-nine fast barriers and one very slow one.
 	for range 99 {
 		r.Observe(StatelogBarrierDuration, time.Millisecond, Attrs{"domain": "tracker"})
 	}
@@ -365,14 +338,9 @@ func TestTheWindowKeepsADistributionRatherThanAPeak(t *testing.T) {
 	}
 }
 
-// AN UNSET GAUGE IS ABSENT FROM BOTH READERS, and only a gauge can be unset.
-//
-// A gauge holds its last write, so a measurement that became UNKNOWN — a log
-// re-anchored under a running fleet, a corpus that could not be scanned — went
-// on exporting the old figure while every other surface reading the same
-// measurement showed it as absent. Unset is how the gauge follows the
-// reading. A counter is a history rather than a reading, and withdrawing one
-// would rewrite what already happened.
+// AN UNSET GAUGE IS ABSENT FROM BOTH READERS, and only a gauge can be unset
+// ([Recorder.Unset]): a measurement that became unknown must not keep
+// exporting its last figure, and a counter is a history.
 func TestAnUnsetGaugeIsAbsentFromBothReaders(t *testing.T) {
 	t.Parallel()
 	rec, err := New()
@@ -420,7 +388,7 @@ func TestAnUnsetGaugeIsAbsentFromBothReaders(t *testing.T) {
 }
 
 // A node run without metrics holds a nil Recorder, and every write to it is a
-// no-op: an unguarded write site (a pickup pass) once panicked the node.
+// no-op rather than a panic at an unguarded write site.
 func TestANilRecorderRecordsNothing(t *testing.T) {
 	t.Parallel()
 	var r *Recorder

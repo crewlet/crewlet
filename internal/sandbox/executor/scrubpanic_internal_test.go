@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/panics"
-	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A PANIC WHILE A `.json` FILE IS READ IS THE TAKE'S, AND LEAVES NOTHING OF THE
@@ -89,7 +88,7 @@ func TestAMeterThatPanicsMeasuresNothingAndTheTakeGoesOn(t *testing.T) {
 		}
 	})
 	defer stop()
-	m := startMeter(t.Context(), func(r io.Reader) (int64, *sandbox.ResumedCount, error) {
+	m := startMeter(t.Context(), func(r io.Reader) (meterReading, error) {
 		var head [16]byte
 		_, _ = io.ReadFull(r, head[:])
 		panic(planted)

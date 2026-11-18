@@ -44,18 +44,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// GITLET'S REQUEST PATHS, MEASURED END TO END: a person's git against
-// the real handlers, the real cache and a real code log on one data node
-// (gitlettest.SoloNode), with the timer around what the person waits for and
-// every fixture built with it stopped. The pools and the client run the git
-// on PATH, which `make bench` makes the node pin — the git the engine image
-// builds (scripts/git-pin.env). Every arm logs the pool's git version, and
-// doc.go's measured section names it beside each figure.
+// GITLET'S REQUEST PATHS, MEASURED END TO END: a person's git against the
+// real handlers, cache and code log on one data node (gitlettest.SoloNode),
+// timing what the person waits for, every fixture built with the timer
+// stopped. The pools and the client run the git on PATH, which `make bench`
+// makes the node pin (scripts/git-pin.env); every arm logs the pool's git
+// version, which the package doc's "Measured" names beside each figure.
 
-// benchFirstByte is how long the S3 fake waits before it answers each request
-// of an `s3fake` arm: 100 ms, the lower end of the 100–200 ms AWS documents
-// for S3's first byte. On loopback the fake answers in microseconds, and a
-// figure taken there would price the SDK rather than the bucket.
+// benchFirstByte is how long the S3 fake waits before answering each request
+// of an `s3fake` arm: 100 ms, the low end of the 100–200 ms AWS documents for
+// S3's first byte. On loopback the fake answers in microseconds, which would
+// price the SDK rather than the bucket.
 const benchFirstByte = 100 * time.Millisecond
 
 // benchConnBytes is the most a second the S3 fake sends one connection: 80
@@ -90,11 +89,9 @@ const benchCacheBytes = 4 << 30
 
 // benchLogBytes is every benchmark fleet's code log ceiling: 128 MiB admits
 // about 74 MB of records beside its gate reserve (statelog.Reservation's
-// fleet term, some 57 MiB), where a solo node's own 64 MiB admits about
-// 7 MB — which the gigabyte arm of BenchmarkPushSmall filled at 31 000 of
-// the hundred thousand refs its refs arms build (7.26 MB with its history's
-// pushes, on the node pin), refused log_full. Its hundred thousand refs and
-// everything before them take some 25 MB at that rate, a third of the room.
+// fleet term, some 57 MiB). A solo node's own 64 MiB admits about 7 MB, which
+// the hundred thousand refs and the history of BenchmarkPushSmall's gigabyte
+// arm (some 25 MB, a third of this ceiling's room) overrun, refused log_full.
 const benchLogBytes = 128 << 20
 
 // coldCloners is how many people clone a cold node at once in
@@ -104,11 +101,10 @@ const coldCloners = 8
 // cloner is the i-th of the people a cold node's clones come from.
 func cloner(i int) string { return fmt.Sprintf("cloner%d", i) }
 
-// benchFleet is a solo fleet of gitletNodes over objects, its pools running the
-// git on PATH and its broker fsyncing every write as a deployment's does
-// (stream.sync's default), its code log benchLogBytes, with RepoName
-// declared, and the person who pushes to it; the coldCloners people beside
-// them have a token each.
+// benchFleet is a solo fleet of gitletNodes over objects (the git on PATH,
+// the broker fsyncing every write as stream.sync's default does, a code log
+// of benchLogBytes, RepoName declared) and the person who pushes to it; the
+// coldCloners people have a token each.
 func benchFleet(b *testing.B, objects objstore.Backend, gitletNodes int) (*gitlettest.SoloFleet, *gitlettest.Person) {
 	b.Helper()
 	people := []string{"ceo"}
@@ -144,19 +140,16 @@ func pushSessions(b *testing.B, p *gitlettest.Person, src, url string, commits [
 }
 
 // addRefsBusyTries is how many times addRefs proposes one push answered busy:
-// a committer busy that often with nothing else queued is a fixture that
-// cannot be built, which fails the arm with the committer's reason rather
-// than waiting on it for ever.
+// a committer busy that often with nothing else queued fails the arm with its
+// reason rather than being waited on for ever.
 const addRefsBusyTries = 5
 
 // addRefs creates the live refs numbered from to to (excluded) beside main in
 // repo, all at tip, in pushes of gitlet.MaxCommandsPerPush proposed to the data
-// node's committer — records like any push's, with no pack, since every ref
-// names a commit the repository holds. Not through a person's git: its push
-// matches each of a thousand refspecs against every ref the remote
-// advertised, so a push of a thousand against 46 000 refs spent twenty
-// seconds in the client alone, and the hundred-thousand-ref fixture an hour
-// of every count.
+// node's committer: records like any push's, with no pack, since every ref
+// names a commit the repository holds. Not through a person's git, whose push
+// matches every refspec against every advertised ref: a thousand against
+// 46 000 refs is twenty seconds in the client alone.
 //
 // A proposal answered busy is proposed again, at most addRefsBusyTries times
 // in all, each try logged with the committer's reason.
@@ -174,10 +167,9 @@ func addRefs(b *testing.B, f *gitlettest.SoloFleet, repo, tip string, from, to i
 		}
 		res, err := f.Data().Served().Propose(b.Context(), p)
 		for try := 1; err == nil && res.Answer.Refused == gitlet.RefusalBusy && try < addRefsBusyTries; try++ {
-			// BUSY IS THE COMMITTER'S "AGAIN", answered with nothing decided,
-			// which a person's git meets as a push to run again: the fixture
-			// does what that person does, and says so, since a committer
-			// busy with nothing else queued is a figure in itself.
+			// BUSY IS THE COMMITTER'S "AGAIN", nothing decided: the fixture
+			// proposes again as a person's git would push again, and logs it,
+			// since a busy committer with nothing else queued is a figure itself.
 			b.Logf("a push of %d refs at %d live refs answered busy (%s); proposing it again", len(cmds), lo,
 				res.Answer.Detail)
 			res, err = f.Data().Served().Propose(b.Context(), p)
@@ -273,62 +265,18 @@ func firstByteMillis(b *testing.B, backend objstore.Backend, rows gitlettest.Row
 	return quantile(took, 0.5)
 }
 
-// BenchmarkPushSmall is ONE PERSON'S PUSH OF ONE NEW COMMIT — one 4 KiB file
-// — to main, end to end through the HTTP handler, as the person waits for it:
-// the advertisement, receive-pack, the bundle's put, the proposal, the commit
-// chain and the wait for the push's row, with git's client process included.
-//
-//   - objects=mem|s3fake|real/history=small/refs=1 is the object store the
-//     bundle is put to, on a small repository: the push's one request that
-//     waits on S3 is its put.
-//   - objects=mem/history=small|1GB is a repository of that history —
-//     gittest.History's composition pushed as gittest.HistorySessions pushes,
-//     a megabyte or a gigabyte — built ONCE for every arm under it (1GB
-//     only under CREWLET_BENCH_LARGE), each arm taking it as the one before
-//     left it:
-//   - graph=no|yes/clock=normal|skewed: pushes to the fleet's SECOND Gitlet
-//     node, emptied and synced whole first: graph=no with every slot of its
-//     maintenance lane held, so it has no commit-graph and no index — a copy
-//     a node just read whole, before its maintainer reached it — and
-//     graph=yes once its maintainer has indexed every pack it holds and
-//     written both (warmIndex). clock=normal dates
-//     each commit after its parent (gittest.After), clock=skewed before the
-//     whole history (gittest.Skewed): a person's clock that is behind, which
-//     git's walks by date read as a reason to walk every commit.
-//   - step=force|introduced|path|connectivity/graph=no|yes/tip=normal|
-//     skewed: each walk a push makes over the history, alone, on the same
-//     copy — the force check's merge-base, the listing of what a push
-//     introduces, the search for a blob's path, and receive-pack's own
-//     connectivity check as git spells it (connected.c) — from a tip dated
-//     after its parent or before the history, reporting ns/commit and
-//     ns/object of the history (gitproc.WalkPerObject's figures); and
-//     step=graph-write, a commit-graph written over the history from main's
-//     tip, ns/commit — the write the maintainer's graph-first run makes,
-//     which is how long the window in which every walk goes by date lasts.
-//   - refs=1000|10000|100000: pushes with that many live refs, main among
-//     them, created beforehand by pushes of gitlet.MaxCommandsPerPush proposed
-//     to the committer (addRefs) — the refs only grow, so each arm adds what
-//     the one before left short; 100000 only under CREWLET_BENCH_LARGE. Each
-//     pushes to the second Gitlet node EMPTIED, synced whole and indexed whole
-//     again first (coldNode, warmIndex), so it measures the refs and never
-//     the packs the arms before it left outside an index: a repository the
-//     maintainer cannot index again for MidxMinInterval gathers every push
-//     of a busy ten minutes outside its index, as the arms before would.
-//
-// Every arm but graph=no pushes onto a copy its receiving node has indexed
-// whole before it (warmIndex), the arm's own pushes gathering outside the
-// index as a repository's do between its maintainer's runs.
-//
-// Each push arm reports, a push: server-ms, the receiving node's own
-// crewlet.code.push.duration for the push applied; adv-ms, the push's
-// advertisement (`info/refs?service=git-receive-pack`) timed alone after it;
-// sync-ms, the OTHER Gitlet node's delta sync of the push
-// (crewlet.code.cache.sync.duration), which is the packed-refs merge every
-// node pays; and transfer-cpu-ms and read-cpu-ms, the CPU of the receiving
-// node's git processes by lane (crewlet.code.git.cpu) — receive-pack and its
-// index-pack, and the push's scans; and packs-outside, the mean count of the
-// receiving copy's packs outside its index, as each push landed. The real arm
-// also reports first-byte-ms (firstByteMillis).
+// BenchmarkPushSmall is ONE PERSON'S PUSH OF ONE NEW 4 KiB COMMIT to main, end
+// to end through the HTTP handler, git's client included (pushRig.pushes
+// reports the figures; objects=real adds first-byte-ms). objects=mem|s3fake|
+// real is the store the bundle is put to, the push's one wait on S3.
+// history=small|1GB is one gittest.History built for the arms under it, each
+// taking it as the one before left it: graph=no|yes pushes to the second node
+// synced whole, before (coldHeld) and after (warmIndex) its maintainer writes
+// the commit-graph and index, clock= dating commits as pushRig.dated says;
+// step= times each walk alone (pushRig.walks); refs= pushes among that many
+// live refs (addRefs) to the second node emptied and indexed whole again, so
+// the figure is the refs' and not earlier arms' packs. Every arm but graph=no
+// pushes onto a copy indexed whole. 1GB, refs=100000: CREWLET_BENCH_LARGE.
 func BenchmarkPushSmall(b *testing.B) {
 	gitlettest.Quiet(b)
 	for _, objects := range []string{"mem", "s3fake", "real"} {
@@ -460,7 +408,10 @@ func (r *pushRig) syncWhole(b *testing.B, node gitlettest.Node) {
 // after is the date of the rig's n-th commit dated after its parent.
 func (r *pushRig) after(n int) string { return gittest.After(r.commits, n) }
 
-// dated is the date a clock= arm's n-th commit is made at.
+// dated is the date a clock= arm's n-th commit is made at: normal, after its
+// parent (gittest.After); skewed, before the whole history (gittest.Skewed), a
+// person's clock that is behind, which git's walks by date read as a reason
+// to walk every commit.
 func (r *pushRig) dated(clock string) func(int) string {
 	if clock == "skewed" {
 		return func(int) string { return gittest.Skewed() }
@@ -468,10 +419,13 @@ func (r *pushRig) dated(clock string) func(int) string {
 	return r.after
 }
 
-// pushes is one push arm: per iteration, one commit of one 4 KiB file made
-// with the timer stopped, dated date(n), then its push of main to receiver
-// timed; with the timer stopped again, the push's advertisement alone and
-// other's delta sync of it.
+// pushes is one push arm: per iteration, one commit of one 4 KiB file dated
+// date(n), made untimed, then its push of main to receiver, timed. Reports a
+// push's server-ms (receiver's crewlet.code.push.duration, applied), adv-ms
+// (its advertisement, timed alone after it), sync-ms (other's delta sync of
+// it, the packed-refs merge every node pays), transfer-cpu-ms and read-cpu-ms
+// (receiver's git CPU by lane) and packs-outside (receiver's packs outside its
+// index as each push landed).
 func (r *pushRig) pushes(b *testing.B, receiver, other gitlettest.Node, date func(n int) string) {
 	b.Helper()
 	url := repoURL(receiver)
@@ -525,11 +479,13 @@ func (r *pushRig) pushes(b *testing.B, receiver, other gitlettest.Node, date fun
 	b.ReportMetric(float64(outside)/float64(pushed), "packs-outside")
 }
 
-// walks is the step= arms on node, its copy's commit-graph graph: a scratch
-// over the copy, as a push of one commit on top of main is received in, with
-// two commits on main's tip written into it — one dated after its parent,
-// one before the whole history — and each walk a push makes, timed alone
-// from each.
+// walks is the step= arms on node, whose copy has commit-graph graph: in a
+// scratch over the copy, as a push of one commit is received, two commits on
+// main's tip, one dated after its parent and one before the whole history,
+// and from each, each walk a push makes, timed alone: the force check's
+// merge-base, the listing of what it introduces, a blob's path search and
+// receive-pack's connectivity check. Each reports ns/commit and ns/object of
+// the history (gitproc.WalkPerObject's figures).
 func (r *pushRig) walks(b *testing.B, node gitlettest.Node, graph string) {
 	b.Helper()
 	s, err := node.Cache().Sync(b.Context(), r.repo, gitlettest.Linearizable)
@@ -602,10 +558,9 @@ func (r *pushRig) walks(b *testing.B, node gitlettest.Node, graph string) {
 	if graph != "no" {
 		return
 	}
-	// THE GRAPH'S OWN WRITE over the history, as the maintainer's
-	// graph-first run writes it: what the window in which every walk above
-	// goes by date lasts once a slot is free. Into the scratch, from main's
-	// tip, so the copy the arms after it read is left as it was.
+	// THE GRAPH'S OWN WRITE over the history, as the maintainer's graph-first
+	// run makes it: how long every walk above goes by date once a slot is free.
+	// Into the scratch, so the copy later arms read is left as it was.
 	b.Run("step=graph-write", func(b *testing.B) {
 		written := filepath.Join(sc.Dir, "objects", "info", "commit-graph")
 		for b.Loop() {
@@ -650,29 +605,17 @@ func coldHeld(b *testing.B, f *gitlettest.SoloFleet) (gitlettest.Node, func()) {
 }
 
 // BenchmarkFetchWarm is what a CI fleet polling a repository costs a Gitlet
-// node: every one of clients clients fetches main into a clone of its own, at
-// once, under protocol v2 — ls-refs (a linearizable advertisement, a barrier
-// on the code log) and a fetch of the one commit a writer pushed since — from
-// the node the writer pushes to, whose cache is warm and whose maintainer runs
-// as in production. packs is how many pushes built the repository, ALL OF
-// THEM inside the maintainer's index with its bitmap before the first fetch
-// (warmIndex); each iteration's push then adds a pack outside it, as a
-// repository's pushes do between the maintainer's runs — which at one push an
-// iteration never stand still for MidxDebounce, so the index is not written
-// again inside an arm. What a pack count costs a LOOKUP, with and without an
-// index, is BenchmarkPackLookup's (internal/gitlet/cache); this is the request
-// path a client hits beside the maintainer.
-//
-// mode is which index the node serves the fetches from (modes): own, the
-// maintainer's own whole index with its bitmap; chain, the repository's
-// published layers, installed after one publication of every pack it holds
-// (publishChain) — so each iteration's push lands outside the chain, in the
-// tail a chained repository serves between its publications.
-//
-// Each reports fetches a second, the p50 and p99 of one fetch, cpu-ms/fetch,
-// the serving node's git CPU (serverCPU) a fetch, and packs-outside, the mean
-// count of packs outside the index (or the chain) while the arm's fetches
-// were served.
+// node: each of clients clients fetches main at once under protocol v2 —
+// ls-refs (a linearizable advertisement, a barrier on the code log) and the
+// one commit pushed since — from the warm node the writer pushes to, its
+// maintainer running. packs pushes build the repository, all indexed before
+// the first fetch (warmIndex); each iteration's push adds one outside, and at
+// one push an iteration MidxDebounce never passes, so no arm rewrites the
+// index. mode= is the index served (modes); under chain, each push lands in
+// the chain's tail. A lookup's cost by pack count is BenchmarkPackLookup's
+// (internal/gitlet/cache). Reports fetches/s, the p50 and p99 of one fetch,
+// cpu-ms/fetch (serverCPU) and packs-outside, the mean count outside the index
+// or chain while the fetches were served.
 func BenchmarkFetchWarm(b *testing.B) {
 	gitlettest.Quiet(b)
 	for _, mode := range modes {
@@ -770,13 +713,12 @@ const (
 // chain arms run on the fixture its own arms served, published between them.
 var modes = []string{modeOwn, modeChain}
 
-// publishChain is one publication of the repository by node, its
-// maintainer as the only Gitlet node of f — the unit of the maintainer's pass,
-// driven here because a fleet's compactors are never started (Node.Compactor)
-// — asked again while it answers busy or waiting, for two minutes at the
-// most. The candidate is the one the publication due listing names, or the
-// rows' own where it names none yet (its debounce not run out), which is the
-// shape a repair publication is planned from.
+// publishChain is one publication of the repository by node, the maintainer as
+// f's only Gitlet node (the maintainer pass's unit, driven here because a
+// fleet's compactors never start, Node.Compactor), asked again while busy or
+// waiting, for two minutes at most. The candidate is the one the
+// publication-due listing names, else the rows' own (its debounce not run
+// out), the shape a repair publication is planned from.
 func publishChain(b *testing.B, f *gitlettest.SoloFleet, node gitlettest.Node) {
 	b.Helper()
 	deadline := time.Now().Add(2 * time.Minute)
@@ -811,12 +753,10 @@ func publishChain(b *testing.B, f *gitlettest.SoloFleet, node gitlettest.Node) {
 	}
 }
 
-// warmChain waits until node's copy of the repository has installed every
-// layer of its published chain — what a chained copy serves from once the
-// installer has placed the publication's layers — and logs how many of the
-// packs it holds the chain covers: a publication leaves outside its chain
-// whatever it did not take in (its tail), which a chained repository serves
-// beside the chain until the next one.
+// warmChain waits until node's copy has installed every layer of the
+// repository's published chain, and logs how many of its packs the chain
+// covers: a publication's tail, what it did not take in, is served beside the
+// chain until the next one.
 func warmChain(b *testing.B, node gitlettest.Node, repoID string) {
 	b.Helper()
 	deadline := time.Now().Add(5 * time.Minute)
@@ -890,11 +830,9 @@ func incarnationNumber(dir string) int {
 }
 
 // indexedPacks is how many packs node's copy of the repository holds and how
-// many of them its multi-pack-index covers: the count its header states
-// (git's format — "MIDX", version, hash version, chunk count, base count, then
-// the packs as a four-byte count) — summed over every layer its chain file
-// names where the copy holds an installed chain and no whole index, since
-// each layer's header counts only the packs it adds — and none without either.
+// many its multi-pack-index covers (midxPacks): the whole index's count, else
+// the sum over every layer its installed chain names, since each layer counts
+// only the packs it adds; none without either.
 func indexedPacks(b *testing.B, node gitlettest.Node, repoID string) (indexed, packs int) {
 	b.Helper()
 	dir := filepath.Join(incarnation(b, node, repoID), "objects", "pack")
@@ -919,10 +857,11 @@ func indexedPacks(b *testing.B, node gitlettest.Node, repoID string) (indexed, p
 	return indexed, len(held)
 }
 
-// midxPacks is the pack count a multi-pack-index file's header states — a
-// whole index's or one layer's. A file gone between the listing and the read
-// (the installer's swap took the incarnation's layer) counts none, so the
-// caller's poll looks again.
+// midxPacks is the pack count a multi-pack-index file's header states (git's
+// format: "MIDX", version, hash version, chunk count, base count, then a
+// four-byte pack count), a whole index's or one layer's. A file gone between
+// the listing and the read (the installer swapped the layer) counts none, so
+// the caller's poll looks again.
 func midxPacks(b *testing.B, node gitlettest.Node, path string) int {
 	b.Helper()
 	head := make([]byte, 12)
@@ -952,11 +891,10 @@ const (
 )
 
 // treeFixture is a repository built by packs pushes to url, each one commit
-// adding treeFilesPerPush files to a REAL TREE — packs × treeFilesPerPush
-// files in directories of treeDirFiles, file f in directory f mod D, so every
-// push touches fifty directories as a commit to a real repository does — and
-// answers its commits and the CONE a sparse checkout takes: the first tenth
-// of the directories.
+// adding treeFilesPerPush files to a REAL TREE of directories of treeDirFiles
+// (file f in directory f mod D, so every push touches fifty directories as a
+// real commit does); it answers the commits and the CONE a sparse checkout
+// takes, the first tenth of the directories.
 func treeFixture(b *testing.B, p *gitlettest.Person, url string, packs int) (commits, cone []string) {
 	b.Helper()
 	dirs := packs * treeFilesPerPush / treeDirFiles
@@ -1063,13 +1001,11 @@ func packBytes(b *testing.B, dir string) int64 {
 	return total
 }
 
-// requestCounter is a reverse proxy in front of a Gitlet node that counts what
-// every upload-pack request it forwards carried, decoded — the bytes a
-// request is held to on the node (the spool's threshold and the repository's
-// bound are on decoded bytes), whatever compression git sent them under —
-// and the requests the node SERVED: each upload-pack POST, and each fetch's
-// advertisement (GET info/refs?service=git-upload-pack), each of them an
-// upload-pack the node ran in its transfer lane.
+// requestCounter is a reverse proxy before a Gitlet node counting the decoded
+// bytes of every upload-pack request (the spool's threshold and the
+// repository's bound are on decoded bytes, whatever git compressed them with)
+// and the requests the node SERVED, each an upload-pack in its transfer lane:
+// the POSTs and the advertisements (GET info/refs?service=git-upload-pack).
 type requestCounter struct {
 	srv     *httptest.Server
 	decoded atomic.Int64
@@ -1144,36 +1080,18 @@ func coldNode(b *testing.B, f *gitlettest.SoloFleet) gitlettest.Node {
 	return g.Node()
 }
 
-// BenchmarkCloneCold is the FIRST CLONE ON A GITLET NODE THAT HAS NEVER SERVED
-// THE REPOSITORY — one that just joined, or whose budget evicted it: the cold
-// sync (a GET a push, FetchConcurrency at once), the round's index past
-// MidxRoundPacks packs and the first upload-pack, in series before the
-// clone's first byte, and then the transfer. The repository is a tree
-// fixture (treeFixture) of packs pushes through the fleet's first Gitlet node;
-// every iteration clones from its second, emptied first (coldNode).
-//
-//   - packs=200|2000 is 10 000 or 100 000 files; 2000 runs only under
-//     CREWLET_BENCH_LARGE.
-//   - objects=s3fake|real is the store the cold sync reads (benchObjects).
-//   - shape is the clone (cloneShapes); clients is how many identical clones
-//     start at once on the cold node, sharing its one sync.
-//
-// Each reports, a clone: the p50 and p99 of one clone; server-cpu-ms, the
-// cold node's git CPU (serverCPU) — its upload-packs, and the sync's own peel
-// and round index; sync-ms, the cold sync's duration; bytes, every pack byte
-// the clone stored; and for blobless+checkout, lazy-request-bytes, what the
-// checkout's lazy fetch asked for, decoded (requestCounter) — past 1 MiB a
-// request is spooled. Every arm of a real bucket also reports first-byte-ms,
-// measured once for the bucket.
-//
-// op=blob is one lazy fetch of one blob into a blobless clone, from the first
-// node — warm, its maintainer's bitmap written — as every file a blobless
-// checkout reads for the first time costs, timed with its server-cpu-ms.
-//
-// op=round-index, on a repository of cache.MidxRoundPacks packs or more, is
-// the index the cold sync's round writes over them before it answers, timed
-// alone (roundIndex) — so an arm's sync-ms splits into the GETs and that
-// index, which is what the round's share of a cold request is.
+// BenchmarkCloneCold is the FIRST CLONE ON A GITLET NODE THAT NEVER SERVED THE
+// REPOSITORY (just joined, or evicted): the cold sync (a GET a push,
+// FetchConcurrency at once), the round's index past MidxRoundPacks packs and
+// the first upload-pack, in series before the first byte, then the transfer.
+// The repository is a treeFixture of packs=200|2000 pushes (2000 under
+// CREWLET_BENCH_LARGE) through the first node, objects= the store the sync
+// reads; each iteration's clients clones of shape (cloneShapes) start at once
+// on the second node, emptied, sharing its one sync (coldClones reports).
+// op=blob is one lazy fetch of one blob from the warm first node, what each
+// file a blobless checkout first reads costs (lazyBlobs); op=round-index
+// times the cold round's index alone (roundIndex), splitting an arm's sync-ms
+// into its GETs and that index.
 func BenchmarkCloneCold(b *testing.B) {
 	gitlettest.Quiet(b)
 	for _, packs := range []int{200, 2000} {
@@ -1217,14 +1135,13 @@ func BenchmarkCloneCold(b *testing.B) {
 	}
 }
 
-// roundIndex is the op=round-index arm: `multi-pack-index write
-// --stdin-packs` over every pack of the repository, in the read lane with the
-// serve configuration — the index a cold sync's round writes past
-// cache.MidxRoundPacks packs, as the round runs it — timed alone, the index
-// removed between iterations with the timer stopped. In a scratch over the
-// first node's copy with every pack hard-linked into it, so no node's cache
-// is written, once that node's maintainer has written its bitmap (warmBitmap),
-// so no run of its own goes on beside it. Reports packs, the count indexed.
+// roundIndex is the op=round-index arm: `multi-pack-index write --stdin-packs`
+// over every pack, in the read lane with the serve configuration, as a cold
+// sync's round writes it past cache.MidxRoundPacks packs, the index removed
+// between iterations untimed. It runs in a scratch over the first node's copy
+// with every pack hard-linked in, so no cache is written, once the maintainer
+// has written its bitmap (warmBitmap), so no run of its own goes on beside it.
+// Reports packs, the count indexed.
 func roundIndex(b *testing.B, f *gitlettest.SoloFleet) {
 	b.Helper()
 	node := f.Nodes()[0]
@@ -1281,13 +1198,16 @@ func roundIndex(b *testing.B, f *gitlettest.SoloFleet) {
 }
 
 // coldClones is one BenchmarkCloneCold arm: per iteration, the second node
-// emptied with the timer stopped, then one clone of shape from it by each of
-// people at once. People, not one token, because the arm is of eight clones
-// by eight people: one token's quarter of the spool (256 MiB on a lane of
-// sixteen) holds all eight lazy fetches of the 100 000-file tree, 40 MB, so
-// under one token they would not queue either, and a token's wider bursts are
-// TestACredentialsEndedSpoolsOutlastingTheWait's (doc.go says what the
-// quarter costs).
+// emptied untimed, then one clone of shape from it by each of people at once.
+// People, not one token, as the arm is eight people's clones: under one token
+// they would not queue either, its quarter of the spool (256 MiB on a lane of
+// sixteen; the package doc prices it) holding all eight lazy fetches of the
+// 100 000-file tree, 40 MB, and a token's wider bursts are
+// TestACredentialsEndedSpoolsOutlastingTheWait's.
+// Reports a clone's p50 and p99, server-cpu-ms (serverCPU, the sync's peel and
+// round index included), sync-ms, bytes (pack bytes stored), for
+// blobless+checkout lazy-request-bytes (decoded, requestCounter; past 1 MiB a
+// request is spooled) and on a real bucket first-byte-ms.
 func coldClones(b *testing.B, f *gitlettest.SoloFleet, people []*gitlettest.Person, shape int, cone []string,
 	firstByte float64) {
 
@@ -1458,16 +1378,12 @@ func blameHistory(b *testing.B, p *gitlettest.Person) string {
 }
 
 // BenchmarkLazyBlame is ONE `git blame` IN A BLOBLESS CLONE of a file
-// blameCommits commits rewrote, by a token bound to nobody — a CI job's, or a
-// box's answering a history question with its own git — and what it costs
-// the Gitlet node it lazily fetches from: each fetch is an advertisement and an
-// upload-pack, both runs of the transfer lane charged to the token's share
-// (gitproc's fair share), and the figures are what the share bounds in place
-// of a lazy-fetch limiter of the host's own (gitlet.md, "Fair share"):
-// fetches and advertisements a blame, the bytes they bring, and the server
-// CPU they spend. Each operation is a fresh clone made with the timer
-// stopped, from a warm node whose maintainer has written the repository's
-// bitmap (warmBitmap), through a proxy that counts the requests
+// blameCommits commits rewrote, by a token bound to nobody (a CI job's, or a
+// box's own git), and what its lazy fetches cost the Gitlet node: each an
+// advertisement and an upload-pack in the transfer lane, charged to the
+// token's fair share, which bounds them in place of a lazy-fetch limiter of
+// the host's own (gitlet.md, "Fair share"). Each operation is a fresh clone
+// made untimed from a warm node (warmBitmap) through a counting proxy
 // (requestCounter).
 func BenchmarkLazyBlame(b *testing.B) {
 	f, p := benchFleet(b, memobj.New(), 1)
@@ -1514,32 +1430,18 @@ func BenchmarkLazyBlame(b *testing.B) {
 	b.ReportMetric(cpu/n, "server-cpu-ms/blame")
 }
 
-// BenchmarkCloneWarm is IDENTICAL CLONES OF ONE SHA AT ONCE FROM A WARM
-// CACHE — a CI fleet, or a run of boxes for one change — each its own
-// upload-pack counting and packing the same objects: what a response cache
-// for identical requests would save is this figure's to decide. The node's
-// maintainer has written the repository's bitmap (warmBitmap), and every
-// push was received as a person's git pushes — thin, completed by
-// receive-pack with the whole bases it borrowed — so what a clone is sent
-// follows cache.ServeConfig's pack.allowPackReuse (cache's
-// BenchmarkPackReuse holds both values side by side over the same layout).
-//
-//   - history=tree is the 200-push tree fixture (treeFixture): every push
-//     ADDS fifty files.
-//   - history=edits is gittest.History's seeded history of edits — every
-//     commit four files of one directory, each version a window of its file
-//     rewritten — pushed as 200 pushes (pushEdits), so every push edits
-//     files an earlier one wrote, as a team's pushes do.
-//   - mode=own serves from the node's own whole index and bitmap; mode=chain
-//     from the repository's published chain, installed after ONE publication
-//     of the same fixture once the own arms have run (publishChain), so the
-//     two modes clone one history and the chain arms differ by the index:
-//     the chain, and whatever the publication left outside it, which
-//     warmChain logs.
-//
-// Each reports the p50 and p99 of one clone, the serving node's git CPU
-// (serverCPU) a round of clients clones and a clone, and bytes, every pack
-// byte a clone stored.
+// BenchmarkCloneWarm is IDENTICAL CLONES OF ONE SHA AT ONCE FROM A WARM CACHE
+// (a CI fleet, or boxes for one change), each upload-pack counting and packing
+// the same objects: what a response cache for identical requests would save.
+// Every push was received thin, completed with the bases it borrowed, so what
+// a clone is sent follows cache.ServeConfig's pack.allowPackReuse (cache's
+// BenchmarkPackReuse compares both values). history=tree is the 200-push
+// treeFixture, each push ADDING fifty files; history=edits is pushEdits, each
+// push editing files an earlier one wrote, as a team's do. mode=own serves the
+// node's own index and bitmap (warmBitmap); mode=chain the chain installed by
+// ONE publication of the same fixture after the own arms (publishChain,
+// warmChain), so the modes differ only by the index. Reports a clone's p50 and
+// p99, serverCPU a round and a clone, and bytes, the pack bytes it stored.
 func BenchmarkCloneWarm(b *testing.B) {
 	gitlettest.Quiet(b)
 	for _, history := range []string{"tree", "edits"} {

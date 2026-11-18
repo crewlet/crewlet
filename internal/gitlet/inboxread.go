@@ -21,85 +21,43 @@ import (
 )
 
 // ONE PERSON'S CODE INBOX — the `inbox` read: the notices the applier wrote
-// for them, one row per record and change that reached them
-// (code_notifications, apply_notices.go), newest first on the code log, a page
-// never closing inside one record's notices, read beside their own
-// marks (code_person_marks, marks.go) in ONE snapshot, each notice marked by
-// internal/inbox's one rule and carrying what its change says.
-//
-// # Every narrowing is in the scan
-//
-// The snooze scope, `unread`, the reasons and `primary_only` are predicates
-// on the one index range the read walks — code_notifications_inbox_idx,
-// (recipient, log_seq DESC) — each bound from the person's own record, which
-// the same transaction read first: so a page holds `limit` notices whenever
-// the table holds them, and its cursor means what it says. Filtered on the
-// page after it was read, a person with sixty snoozed notices among their
-// newest fifty would open an inbox of nothing (the tracker's own lesson,
-// internal/worklet's inboxread.go). Every set it binds is the Classifier's
-// ([inbox.Classifier]), the lookups the page is then marked by, so a notice
-// the scan hides is exactly one the page would have marked. ONE RANGE
-// STATEMENT whatever is asked: a filter not asked is bound to say so ([inboxScanSQL]),
-// never left out of a statement built per call. Under `unread` the range
-// starts at the person's seen-through position, and the few notices below it
-// an unread mark brings back are sought by their key beside it ([inboxScan]):
-// what the person has read through is never walked.
-//
-// # Held to the repository's grant
-//
-// A notice is about a change on a repository, and is answered only where its
-// asker may read that repository ([JudgeRead]) — a person reads every one
-// (ADR-0088); a seat leading the person reads by its own grant. That is the
-// one narrowing the scan cannot state, since the grant is the chart's: a page
-// leaves out a notice its asker may not read, and its cursor is still the
-// last notice it scanned, as every listing across repositories pages
-// ([Reader.repos]).
-//
-// # What a notice carries of its change, and what its card reads
-//
-// A notice carries its change's title, its state and the work item it
-// implements — its row's own columns, read for the page's changes in the same
-// snapshot by one statement — which is every word a count, a badge or a row
-// of a list is drawn from. What a person decides a notice by without opening
-// the change — the first [MaxNoticeBody] bytes of its description, the agent
-// findings standing open on it by severity and, while it is live, where its
-// merge stands — is its CARD, which a `notice_cards` read answers
-// ([ReadNoticeCards], [Reader.noticeCards]) and an `inbox` read never does.
-//
-// A CARD IS READ ONLY WHERE ONE IS DRAWN. The busiest reads of an inbox draw
-// none: the frame's count of what waits on a person asks a page of fifty
-// every minute and on every push of their inbox, behind every screen of every
-// tab they have open, and Home's Updates and the Snoozed link's count do the
-// same; each reads only how many notices came back and their titles. Judged
-// on every one of them, a page's readiness alone was ten statements or more
-// and a merge-gate judgment per live change, for an answer nobody drew.
-//
-// AND ONLY FOR THE NOTICES THE DRAWN PAGE KEEPS. A composed inbox asks each
-// domain for the page's whole limit and cuts the merge back to it
-// (internal/inbox's Compose), so Gitlet's page holds notices that the
-// tracker's newer ones push off the page; their cards would be judged for
-// nothing. So the composition asks for the cards of the code notices it
-// took, after the cut ([inbox.Carded]), floored at the position
-// Gitlet's page was read at — a card never describes its change as it stood
-// before the notice it is drawn beside.
-//
-// The readiness is JUDGED in the card read, as a listing of changes judges
-// it ([readinessIn]: [ReadinessOf] over that read's transaction and its one
-// chart), never the `ready` a change's last mergeability record stored: that
-// is a refresh's input, current only as of the home's last pass, and a card
-// that read it would say "ready" past a review that just asked for changes.
-// A card carries the judgment's counts and its first sentence and not its
-// preconditions: fifty cards a page, each with up to [MaxReadinessBlockers]
-// blockers named, would be a page of what the change's own page reads in
-// full, one change at a time.
-//
-// Measured on this tree (BenchmarkACodeInbox, -benchtime 20x -count 1 on two
-// pinned cores of a shared machine, one repository of 50 live changes behind
-// one merge gate, every change with a notice to one person): an `inbox` read
-// of the fifty is 3.9 ms; the same read beside the `notice_cards` read of
-// their fifty changes is 8.7 ms — the cards alone 4.8 ms, 1.2 times what the
-// list read costs, which every count of what waits and every Home poll no
-// longer pays.
+// for them (code_notifications, apply_notices.go), newest first on the code
+// log, read beside their marks (code_person_marks, marks.go) in ONE snapshot,
+// each marked by internal/inbox's one rule and carrying its change's title,
+// state and work item, read in the same snapshot by one statement.
+
+// EVERY NARROWING IS IN THE SCAN: the snooze scope, `unread`, the reasons and
+// `primary_only` are predicates on the one range of code_notifications_inbox_idx
+// (recipient, log_seq DESC), bound from the Classifier's own sets
+// ([inbox.Classifier]), so a page holds `limit` notices whenever the table does
+// and its cursor means what it says; filtered after the read, sixty snoozed
+// notices among the newest fifty would open an empty inbox. ONE statement
+// whatever is asked ([inboxScanSQL]); `unread` walks nothing the person has read
+// through ([inboxScan]). A `record` read is one seek of that notice's key
+// instead, under the same filters ([inboxRecordSQL]).
+
+// HELD TO THE REPOSITORY'S GRANT: a notice is answered only where its asker may
+// read its repository ([JudgeRead]; a person reads every one, ADR-0088). The
+// grant is the chart's, which the scan cannot state, so a page leaves such a
+// notice out and its cursor is still the last notice scanned, as every listing
+// across repositories pages ([Reader.repos]).
+
+// A CARD IS READ ONLY WHERE ONE IS DRAWN, AND ONLY FOR THE NOTICES THE DRAWN
+// PAGE KEEPS. A card — the first [MaxNoticeBody] bytes of the description, the
+// open agent findings by severity and a live change's readiness — is a
+// `notice_cards` read's ([ReadNoticeCards], [Reader.noticeCards]), never an
+// `inbox` read's: the busiest reads (the count of what waits, polled every
+// minute and on every push, Home's Updates, the Snoozed count) draw only counts
+// and titles, and cards cost 1.2 times the list read (BenchmarkACodeInbox). A
+// composed inbox asks for cards after its cut ([inbox.Carded]), floored at the
+// position Gitlet's page was read at, so a card never describes its change as
+// it stood before the notice it is drawn beside.
+
+// The readiness is JUDGED in the card read ([readinessIn]: [ReadinessOf] over
+// its transaction and one chart), never the `ready` the last mergeability record
+// stored: that is a refresh's input, and would say "ready" past a review that
+// just asked for changes. A card carries the judgment's counts and first
+// sentence, not its preconditions, which the change's own page reads.
 
 // MaxNoticeBody is how much of a change's description a card carries: ONE
 // KIBIBYTE, cut at a character — a card's worth of the intent behind the
@@ -128,6 +86,10 @@ type InboxQuery struct {
 	// REQUIRED, one of [inbox.SnoozeScopes] — a surface resolves an absent
 	// one to [inbox.SnoozeExclude] before it reads.
 	Snoozed inbox.SnoozeScope `json:"snoozed"`
+
+	// Record narrows the read to the one notice of that [NoticeID], sought by
+	// its key; every other narrowing still applies. Empty narrows nothing.
+	Record string `json:"record,omitempty"`
 
 	// Now is the instant a snooze is judged live at, the asking node's —
 	// zero takes the serving node's clock.
@@ -289,14 +251,11 @@ func (r *Reader) inbox(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	if err != nil {
 		return err
 	}
-	// THE CURSOR IS THE LAST NOTICE SCANNED, whatever the grant keeps of
-	// the page — this file's head — and A PAGE CLOSES BETWEEN TWO RECORDS:
-	// the cursor is a position on the code log, which every notice of one
-	// record shares, so a page that ended inside a record told one person
-	// about several changes would leave the rest of it behind a cursor that
-	// resumes below it. The rest of the last record's notices are read by the
-	// same statement narrowed to its one position — at most [MaxRecordRows]
-	// of them, since every notice is a row of its record.
+	// THE CURSOR IS THE LAST NOTICE SCANNED, whatever the grant keeps (this
+	// file's head), and A PAGE CLOSES BETWEEN TWO RECORDS: every notice of one
+	// record shares its position, so a page ending inside one would leave the
+	// rest behind a cursor that resumes below it. The rest is the same scan
+	// narrowed to that one position, at most [MaxRecordRows] rows.
 	if len(scanned) == limit {
 		last := scanned[len(scanned)-1]
 		at := statelog.Position{Stream: last.LogStream, Generation: last.LogGeneration, Seq: last.LogSeq}
@@ -361,19 +320,13 @@ func (r *Reader) inbox(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 // set ONE JSON array — the Classifier's, so the scan and the page's marks are
 // one rule.
 //
-// # `unread` reads nothing the person has read through
-//
-// Under `unread`, a notice at or below the seen-through position is read
-// unless an unread mark names it ([inbox.Classifier.Classify]), so the rows
-// such a page can hold are those above the position and the ones the unread
-// list names. The scan reads exactly those: the range of the person's notices
-// starts at the position ([inboxScan.floor]), and the notices the unread list
-// names below it — at most [inbox.MaxEntries] — are looked up by their key
-// ([inboxMarkedSQL]) and merged in. Bounded only by a predicate on each row,
-// a person who had marked everything read walked every notice they hold, the
-// whole of `inbox.retention_days`, to answer nothing — on every badge poll.
-// The position bounds the range only ON THE CODE LOG'S STREAM, as it covers a
-// notice only there; every notice the applier writes is on it.
+// Under `unread` a notice at or below the seen-through position is read unless
+// an unread mark names it ([inbox.Classifier.Classify]), so the range starts at
+// the position ([inboxScan.floor]) and the notices the unread list names below
+// it, at most [inbox.MaxEntries], are sought by key ([inboxMarkedSQL]) and
+// merged in: an all-read inbox walks nothing on a badge poll. The position
+// bounds the range only on the code log's stream, the only one it covers and
+// the one every notice is written on.
 type inboxScan struct {
 	handle        string
 	before, after int64
@@ -391,6 +344,10 @@ type inboxScan struct {
 
 	scope  string
 	asleep string
+
+	// record and change are the one notice's key a `record` read seeks
+	// ([inboxRecordSQL]), empty for a range.
+	record, change string
 }
 
 // floor is the range's exclusive lower bound: the caller's `since`, raised
@@ -411,6 +368,11 @@ func (s inboxScan) run(ctx context.Context, tx *sql.Tx, limit int) ([]InboxNotic
 			return 1
 		}
 		return 0
+	}
+	if s.record != "" {
+		return scanInbox(ctx, tx, s.handle, inboxRecordSQL, s.record, s.change, s.handle, s.before, s.after,
+			flag(s.restricted), s.reasons, flag(s.unread), s.unreadMarks, s.readMarks, s.seenStream, s.seenAt,
+			s.scope, s.asleep, s.asleep)
 	}
 	floor := s.floor()
 	out, err := scanInbox(ctx, tx, s.handle, inboxScanSQL, s.handle, s.before, floor, flag(s.restricted),
@@ -482,6 +444,12 @@ func inboxScanOf(q ReadQuery, marks inbox.Classifier, now time.Time) (inboxScan,
 	}
 	if !in.Since.IsZero() {
 		s.after = in.Since.Packed()
+	}
+	if in.Record != "" {
+		var ok bool
+		if s.record, s.change, ok = splitNoticeID(in.Record); !ok {
+			return inboxScan{}, false, nil
+		}
 	}
 	var reasons []string
 	for _, reason := range Reasons() {
@@ -601,7 +569,7 @@ func (r *Reader) noticeCards(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 		return err
 	}
 	// IN THE QUERY'S ORDER, never the map's: the readiness reads its rows a
-	// kind at a time over these, in one order whatever a map hands back.
+	// kind at a time over these, in one order.
 	named := make([]changeRow, 0, len(held))
 	for _, id := range q.NoticeCards {
 		row, found := held[id]
@@ -686,35 +654,14 @@ func noticeCardsIn(ctx context.Context, tx *sql.Tx, rows []changeRow, repos map[
 }
 
 // The inbox's statements, each registered in plan_test.go.
-//
-// inboxScanSQL is ONE range of code_notifications_inbox_idx — the person's
-// notices below the cursor and above `since`, newest first — with every
-// filter bound, and a filter not asked bound to pass: the reasons (a flag and
-// the set), `unread` by internal/inbox's rule as SQL — an unread mark outranks
-// everything, otherwise a notice is read when the read list names it or the
-// seen-through position covers it ON THE SAME STREAM, compared packed — and
-// the snooze scope, `exclude` hiding the live snoozes and `only` keeping
-// nothing else. Each set is ONE JSON array parameter, the tracker's reason
-// (its idList): the lists are the person's own, each at most inbox.MaxEntries.
-// A mark names a notice by its [NoticeID], the record's id and the change's
-// joined by "/", which the statement spells from the two columns. Under
-// `unread` its range starts at the seen-through position ([inboxScan]).
-//
-// inboxMarkedSQL is the notices an unread `unread` scan reads below that
-// position: those the person's unread list names, one seek of the notice
-// table's key a [record, change] pair — at most inbox.MaxEntries — each held
-// to the read's bounds, reasons and snooze scope. No order and no limit: the
-// read merges them into the range's page.
-//
-// noticeBodiesSQL reads each change's description by its key, for a card: the
-// change's row is changesByIDSQL's, which the readiness judges too, so a card
-// read reads code_changes once; noticeFindingsSQL reads each change's open agent
-// findings' severities by one covering seek of code_findings_open_agent_idx,
-// which holds those alone (replicated 0137) — never the change's every
-// finding of every revision, superseded and dismissed ones included — counted
-// here rather than grouped by the statement, the rows being a page's changes'
-// open agent findings.
 const (
+	// inboxScanSQL is ONE range of code_notifications_inbox_idx, newest first,
+	// every filter bound and one not asked bound to pass: the reasons (a flag
+	// and the set), `unread` as internal/inbox's rule in SQL — an unread mark
+	// outranks everything, else a notice is read when the read list names it or
+	// the seen-through position covers it on the SAME stream, compared packed —
+	// and the snooze scope. Each set is one JSON array of the person's own, at
+	// most inbox.MaxEntries; a mark's [NoticeID] is spelled from the two columns.
 	inboxScanSQL = `SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation, n.created_at, n.reason,
 			n.addressed, n.fallback_only, n.repo_id, n.change_id, n.change_ref, n.excerpt
 		FROM code_notifications AS n INDEXED BY code_notifications_inbox_idx
@@ -727,6 +674,10 @@ const (
 				WHEN 'only' THEN n.record_id || '/' || n.change_id IN (SELECT value FROM json_each(?)) ELSE 1 END
 		ORDER BY n.log_seq DESC
 		LIMIT ?`
+	// inboxMarkedSQL is the notices the unread list names below an `unread`
+	// scan's floor ([inboxScan]): one key seek a [record, change] pair, held to
+	// the read's bounds, reasons and snooze scope; no order and no limit, since
+	// the read merges them into the range's page.
 	inboxMarkedSQL = `SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation, n.created_at, n.reason,
 			n.addressed, n.fallback_only, n.repo_id, n.change_id, n.change_ref, n.excerpt
 		FROM json_each(?) AS j CROSS JOIN code_notifications AS n INDEXED BY sqlite_autoindex_code_notifications_1
@@ -735,9 +686,28 @@ const (
 			AND (NOT ? OR n.reason IN (SELECT value FROM json_each(?)))
 			AND CASE ? WHEN 'exclude' THEN n.record_id || '/' || n.change_id NOT IN (SELECT value FROM json_each(?))
 				WHEN 'only' THEN n.record_id || '/' || n.change_id IN (SELECT value FROM json_each(?)) ELSE 1 END`
+	// inboxRecordSQL is the one notice a `record` read names, one seek of its
+	// key, held to every filter [inboxScanSQL] binds; under `unread` the whole
+	// rule is stated here, so no floor is needed.
+	inboxRecordSQL = `SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation, n.created_at, n.reason,
+			n.addressed, n.fallback_only, n.repo_id, n.change_id, n.change_ref, n.excerpt
+		FROM code_notifications AS n INDEXED BY sqlite_autoindex_code_notifications_1
+		WHERE n.record_id = ? AND n.change_id = ? AND n.recipient = ? AND n.log_seq < ? AND n.log_seq > ?
+			AND (NOT ? OR n.reason IN (SELECT value FROM json_each(?)))
+			AND (NOT ? OR n.record_id || '/' || n.change_id IN (SELECT value FROM json_each(?))
+				OR (n.record_id || '/' || n.change_id NOT IN (SELECT value FROM json_each(?))
+					AND NOT (n.log_stream = ? AND n.log_seq <= ?)))
+			AND CASE ? WHEN 'exclude' THEN n.record_id || '/' || n.change_id NOT IN (SELECT value FROM json_each(?))
+				WHEN 'only' THEN n.record_id || '/' || n.change_id IN (SELECT value FROM json_each(?)) ELSE 1 END`
+	// noticeBodiesSQL reads each change's description by its key; the change's
+	// row is changesByIDSQL's, shared with the readiness, so a card read reads
+	// code_changes once.
 	noticeBodiesSQL = `SELECT b.change_id, b.body
 		FROM json_each(?) AS j CROSS JOIN code_change_bodies AS b INDEXED BY sqlite_autoindex_code_change_bodies_1
 		WHERE b.change_id = CAST(j.value AS TEXT)`
+	// noticeFindingsSQL is each change's open agent findings' severities, one
+	// covering seek of [openAgentFindingsKey] — never every finding of every
+	// revision — counted by the caller rather than grouped here.
 	noticeFindingsSQL = `SELECT f.change_id, f.severity
 		FROM json_each(?) AS j CROSS JOIN code_findings AS f INDEXED BY ` + openAgentFindingsKey + `
 		WHERE f.change_id = CAST(j.value AS TEXT) AND ` + openAgentFindings

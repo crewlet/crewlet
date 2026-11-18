@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"cmp"
 	"crypto/rand"
 	"maps"
 	"slices"
@@ -131,9 +132,33 @@ type Plan struct {
 	// refused sign-in, or a harness that could not be started
 	// ([Provider.remember]). A limit is the sit-out's, not this.
 	lastFailure *Failure
+	// limits are the vendor's windows as the sign-in's calls last reported
+	// them, by [llm.LimitReading.Key] ([Plan.Observe]).
+	limits map[string]Limit
 }
 
-func newPlan() *Plan { return &Plan{scoped: map[string]*bench{}} }
+func newPlan() *Plan { return &Plan{scoped: map[string]*bench{}, limits: map[string]Limit{}} }
+
+// Limit is one of a sign-in's windows as its calls last reported it.
+type Limit struct {
+	llm.LimitReading
+	// Seen is when the run that reported it was read.
+	Seen time.Time
+}
+
+// Observe keeps what a run read at `at` reported of the sign-in's windows: a
+// window's reading replaces an older one, never a newer, so a run collected
+// late does not undo what a later call heard.
+func (pl *Plan) Observe(readings []llm.LimitReading, at time.Time) {
+	pl.mu.Lock()
+	defer pl.mu.Unlock()
+	for _, r := range readings {
+		if held, ok := pl.limits[r.Key()]; ok && held.Seen.After(at) {
+			continue
+		}
+		pl.limits[r.Key()] = Limit{LimitReading: r, Seen: at.UTC()}
+	}
+}
 
 // MaxSaid bounds the vendor's sentence a [Failure] or a [SitOut] carries. The
 // useful part is its head ("You've hit your session limit · resets 4:30pm
@@ -175,6 +200,9 @@ type PlanState struct {
 	LastAnswer time.Time
 	// LastFailure is the last failure worth naming, nil for none.
 	LastFailure *Failure
+	// Limits are the vendor's windows as the sign-in's calls last reported
+	// them, in the order a person reads them.
+	Limits []Limit
 }
 
 // State reads the plan at now.
@@ -193,6 +221,13 @@ func (pl *Plan) State(now time.Time) PlanState {
 		}
 	}
 	state.LastAnswer = pl.lastAnswer
+	for _, l := range pl.limits {
+		state.Limits = append(state.Limits, l)
+	}
+	slices.SortFunc(state.Limits, func(a, b Limit) int {
+		return cmp.Or(cmp.Compare(slices.Index(llm.LimitWindows, a.Window), slices.Index(llm.LimitWindows, b.Window)),
+			cmp.Compare(a.Model, b.Model))
+	})
 	if pl.lastFailure != nil {
 		f := *pl.lastFailure
 		state.LastFailure = &f

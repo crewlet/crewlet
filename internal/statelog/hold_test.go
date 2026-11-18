@@ -17,7 +17,7 @@ import (
 // heldStream is the one log every case here pins.
 const heldStream = "CREWLET_TRACKER_LOG"
 
-// stepClock is a clock a case moves by hand, read by the holder on every put.
+// stepClock is a clock a case moves by hand; the holder reads it on every put.
 type stepClock struct {
 	mu  sync.Mutex
 	now time.Time
@@ -36,9 +36,9 @@ func (c *stepClock) advance(d time.Duration) time.Time {
 	return c.now
 }
 
-// countedHolds is a register that counts what a pin does to it, refuses
-// renewals while refuse is set, and — as a real store's request does — fails
-// under a context that has ended, which the in-memory twin does not.
+// countedHolds counts a pin's writes, refuses renewals while refuse is set,
+// and fails under an ended context as a real store does (the in-memory twin
+// does not).
 type countedHolds struct {
 	coord.HoldRegister
 	puts, releases atomic.Int64
@@ -85,8 +85,7 @@ func pinAt(ctx context.Context, t *testing.T, register statelog.HoldWriter, cloc
 	return pin
 }
 
-// renewedAt waits until the register holds the pin stamped at least at, which
-// is a renewal that happened after the clock reached it, and returns what the
+// renewedAt waits for a renewal stamped at or after at, and returns what the
 // trim reads of the register then.
 func renewedAt(t *testing.T, register coord.HoldRegister, at time.Time) []statelog.Hold {
 	t.Helper()
@@ -113,15 +112,11 @@ func renewedAt(t *testing.T, register coord.HoldRegister, at time.Time) []statel
 
 // A PIN ON THE REPLAY TAIL RENEWS ITSELF UNTIL IT IS RELEASED, AND NOT AFTER.
 //
-// The trim ignores a hold older than [statelog.TrimHoldStale], which is what
-// stops a crashed holder pinning the log for ever — and reads a pin nobody
-// renews exactly as a crashed holder. A join's pin was put once and never
-// renewed, so a minute into any transfer the trim could pass the very tail the
-// transfer was fetching. Here the holder's clock runs past the stale bound and
-// the register must hold a renewal stamped after it; what the trim makes of
-// such a pin is [TestTrimRacesATransfer]'s second arm. And once released it is
-// gone and stays gone: a renewal still running after the release would put it
-// back for a whole stale window.
+// The trim reads a pin older than [statelog.TrimHoldStale] as a crashed
+// holder's, so the holder's clock runs past that bound and the register must
+// hold a renewal stamped after it ([TestTrimRacesATransfer]'s second arm
+// covers the trim's side). Once released the pin stays gone: a renewal
+// outliving the release would put it back for a whole stale window.
 func TestATailPinRenewsItselfUntilReleased(t *testing.T) {
 	t.Parallel()
 	clock := &stepClock{now: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
@@ -147,11 +142,10 @@ func TestATailPinRenewsItselfUntilReleased(t *testing.T) {
 
 // A RELEASE IS WRITTEN ONCE, AND OUTLIVES THE CONTEXT THE PIN WAS TAKEN UNDER.
 //
-// The failure a release undoes is often the cancellation itself, and a release
-// under that dead context would leave the pin standing for its whole stale
-// window. And a pin may be released from more than one place — a join's is
-// released by the publish that counts it, or by the stop — so only the first
-// call may do anything.
+// The failure a release undoes is often the cancellation itself; under that
+// dead context the pin would stand for its whole stale window. A join's pin is
+// released by the publish that counts it or by the stop, so only the first
+// call may act.
 func TestATailPinIsReleasedOnceWhateverItsContextSays(t *testing.T) {
 	t.Parallel()
 	clock := &stepClock{now: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
@@ -174,9 +168,8 @@ func TestATailPinIsReleasedOnceWhateverItsContextSays(t *testing.T) {
 
 // A RENEWAL THE REGISTER REFUSES IS SAID AND CARRIED; THE FIRST PUT IS NOT.
 //
-// A missed beat is survivable — the stale bound allows three — so the holder
-// says so and keeps beating, and its next renewal lands. A holder that cannot
-// pin the log at all holds nothing, and is told.
+// A missed beat is survivable (the stale bound allows three), so the holder
+// logs it and its next renewal lands. A holder that cannot pin at all is told.
 func TestATailPinSaysAMissedRenewalAndKeepsRenewing(t *testing.T) {
 	t.Parallel()
 	clock := &stepClock{now: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}

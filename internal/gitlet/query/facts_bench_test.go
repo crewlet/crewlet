@@ -14,21 +14,17 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/query"
 )
 
-// BenchmarkRevisionFacts is a revision's facts, timed whole through a Gitlet
-// node's query server — the check of its two commits, its unit of the share,
-// the merge base, the walk of the paths it touches, its patch written into a
-// spool and `git patch-id` reading it back — over a change whose cumulative
-// patch is diff= bytes: text files of 256 KiB, every fourth line of which the
-// change rewrites, so its hunks run into one per file and its patch is every
-// line of each, a quarter of them twice — a formatter's run over a tree, the
-// widest diff a change of text carries for its size. The arm at the bound,
-// MaxPatchIDDiffBytes, runs only under CREWLET_BENCH_LARGE.
+// BenchmarkRevisionFacts times a revision's facts whole through a Gitlet
+// node's query server, over a change whose cumulative patch is diff= bytes:
+// text files of 256 KiB with every fourth line rewritten, so each file's hunks
+// run into one and its patch is every line, a quarter of them twice (a
+// formatter's run, the widest diff a text change carries for its size). The
+// arm at MaxPatchIDDiffBytes runs only under CREWLET_BENCH_LARGE.
 //
-// Each arm reports the p50, p95 and p99 of one read, and the patch's MB/s at
-// the p50; it fails a read whose id was omitted. The figures decide
-// MaxPatchIDDiffBytes — the bound's p99 inside the one budget a read's own
-// git has, gitproc.ReadDeadline, with room for a node at its share — and so
-// that a revision's facts need no deadline of their own.
+// Each arm reports the p50, p95 and p99 of one read and the patch's MB/s at
+// the p50, and fails a read whose id was omitted. The figures decide
+// MaxPatchIDDiffBytes: the bound's p99 inside gitproc.ReadDeadline with room
+// for a node at its share, so the facts need no deadline of their own.
 func BenchmarkRevisionFacts(b *testing.B) {
 	gitlettest.Quiet(b)
 	for _, arm := range factsArms {
@@ -104,8 +100,7 @@ func newFactsRig(b *testing.B, files int) *factsRig {
 		}
 		return fmt.Sprintf("%05d %05d the quick brown fox jumps over the dog\n", f, i)
 	}
-	// ONE SESSION, two commits on main: the second takes the first as its
-	// parent, as a session's commits to one branch do.
+	// One session, two commits on main, the second the first's child.
 	gittest.FastImport(b, c, src, func(w *bufio.Writer) error {
 		for n, edited := range []bool{false, true} {
 			msg := []string{"base\n", "the change\n"}[n]

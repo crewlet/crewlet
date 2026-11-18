@@ -559,6 +559,11 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-tag__label",
+    why: "uilet's Tag writes it on a chip's words, and ChipField draws its chips as Tags with no monospace option. styles/frame.css sets Gitlet › Changes' query bar chips (`.code-query__field`) in the mono face, since each is a qualifier the reader types; the shell's sheet, since a lazy one may carry no kit rule. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-popover",
     why: "uilet's Popover writes it on its panel, and caps the panel at 360px with a scroll. styles/screens.css raises that cap for Company › Budgets' ceiling editor (`.ceiling-pop`, the Popover's `className`), whose check can answer a paragraph of the engine's own warning, under the kit's cap it scrolled Save anyway below the fold of the panel. Paired with the kit's class so it wins whichever stylesheet a lazy chunk loads last. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
@@ -596,6 +601,11 @@ const ALLOWED: Allowed[] = [
   {
     name: "crewlet-app-shell__main",
     why: "uilet's AppShell writes it on the page column's one scroller. styles/frame.css turns smooth scrolling off on it (the router restores a position per history entry, and a smooth restore animates every Back) and publishes `--sticky-top` from it when a screen draws a toolbar. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-diff-view__body",
+    why: "uilet's DiffView writes it on the box its lines sit in. styles/frame.css drops its border and rounding where a change's file card holds the diff (`.code-file__diff`, the DiffView's `className`), so the lines run flush under the file's head; the shell's sheet, since a lazy one may carry no kit rule. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {

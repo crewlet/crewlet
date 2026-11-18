@@ -298,9 +298,74 @@ func TestAMemberReadsNoCredentialAccountOrSentence(t *testing.T) {
 		t.Errorf("reading %v alarms %v, want member and null", out["reading"], out["alarms"])
 	}
 	for _, want := range []string{`"health":"sitting_out"`, `"route":"token"`, `"window":"session"`,
-		`"used_by"`} {
+		`"used_by"`, `"limits":[{"window":"session"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("a member's reading lacks %s: %s", want, body)
+		}
+	}
+}
+
+// AN ENTRY'S LIMIT WINDOWS ARE ONE READING OF THE FLEET: newest report per window,
+// a warning from 80%, cleared once turned over, stale past 30 minutes, and the
+// sit-out marked reached (added where no report named it).
+func TestAnEntrysLimitWindowsAreOneReadingOfTheFleet(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	used := func(f float64) *float64 { return &f }
+	week := pinned.Add(72 * time.Hour)
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{Models: []coord.ModelStatus{
+		{Key: "default", SignIn: "token", Resolves: true, Limits: []coord.ModelLimit{
+			{Window: "session", Hours: 5, State: "ok", Used: used(0.3), ResetsAt: pinned.Add(2 * time.Hour),
+				Seen: pinned.Add(-10 * time.Minute)},
+			{Window: "weekly", Hours: 168, State: "ok", Used: used(0.85), ResetsAt: week, Seen: pinned.Add(-5 * time.Minute)},
+			{Window: "model", Hours: 168, Model: "opus", State: "warning", Used: used(0.9), ResetsAt: week,
+				Seen: pinned.Add(-2 * time.Hour)},
+			{Window: "fortnight", State: "ok", Seen: pinned},
+		}},
+		{Key: "codex-review", SignIn: "none", Limits: []coord.ModelLimit{
+			{Window: "weekly", Hours: 168, State: "reached", Used: used(1), ResetsAt: pinned.Add(-time.Minute),
+				Seen: pinned.Add(-time.Hour)},
+		}, SittingOut: &coord.ModelSitOut{Until: pinned.Add(time.Hour), Since: pinned.Add(-time.Minute), Window: "session"}},
+	}})
+	presentNode(t, backend, "node-b", &coord.NodeStatusRecord{Models: []coord.ModelStatus{
+		{Key: "default", SignIn: "token", Resolves: true, Limits: []coord.ModelLimit{
+			{Window: "session", Hours: 5, State: "ok", Used: used(0.4), Seen: pinned.Add(-time.Minute)},
+		}, SittingOut: &coord.ModelSitOut{Until: pinned.Add(time.Hour), ResetsAt: week,
+			Since: pinned.Add(-time.Minute), Window: "model"}},
+	}})
+	s := modelSources(t, backend)
+	s.Now = func() time.Time { return pinned }
+	got := answer(t, s, "llm_entries", nil).(queries.ModelEntriesAnswer)
+
+	type window struct {
+		window, model, state string
+		used                 float64
+		until, stale         bool
+	}
+	read := func(key string) []window {
+		var out []window
+		for _, l := range entryOf(t, got, key).Limits {
+			w := window{window: l.Window, model: l.Model, state: l.State, used: -1, until: l.Until != nil, stale: l.Stale}
+			if l.Used != nil {
+				w.used = *l.Used
+			}
+			out = append(out, w)
+		}
+		return out
+	}
+	for key, want := range map[string][]window{
+		"default": {
+			{window: "session", state: "ok", used: 0.4},
+			{window: "weekly", state: "warning", used: 0.85},
+			{window: "model", model: "opus", state: "reached", used: 0.9, until: true},
+		},
+		"codex-review": {
+			{window: "session", state: "reached", used: -1, until: true},
+			{window: "weekly", state: "ok", used: -1, stale: true},
+		},
+	} {
+		if have := read(key); !slices.Equal(have, want) {
+			t.Errorf("%s limits = %+v, want %+v", key, have, want)
 		}
 	}
 }

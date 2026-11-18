@@ -18,14 +18,12 @@ import (
 )
 
 // PackConfig is the configuration a compaction's pack-objects runs under,
-// beside the pool's base: every output a bundle in the stored format — its
-// index version 2 and its reverse index written beside it, which the bundle's
-// seal holds it to (gitlet.CheckBundle) — and the delta window held to what the
-// cache's serve configuration bounds a clone's pack-objects to, twice the
-// epoch's max_blob_bytes. A PER-THREAD bound, which the pool's pack.threads=1
-// makes the build's whole window — and a bound on the window alone: the build
-// held 5.4 of the largest blobs around it where its search met them, which is
-// what its memory charge counts (cache.CompactWindowBytes, six of them).
+// beside the pool's base: index version 2 and a reverse index, the stored
+// format the bundle's seal holds an output to (gitlet.CheckBundle), and the
+// delta window held to twice the epoch's max_blob_bytes, as the serve
+// configuration bounds a clone's. The bound is per thread (the pool's
+// pack.threads=1 makes it the whole build's) and on the window alone; the
+// memory charge counts six largest blobs (cache.CompactWindowBytes).
 func PackConfig(maxBlob int64) []gitproc.KV {
 	return []gitproc.KV{
 		{Key: "pack.indexVersion", Value: "2"},
@@ -35,16 +33,13 @@ func PackConfig(maxBlob int64) []gitproc.KV {
 }
 
 // cutFor is the --max-pack-size a build of p cuts its outputs at: the nominal
-// cut, unless the inputs are dense enough that an output cut there could be a
-// BUNDLE past the bound every stored pack is held to — an index costs 32 bytes
-// an object (a version-2 .idx's 28 and a .rev's 4), so an output of some 8.39
-// million objects under its 1 GiB cut, a stretch of small deltas, is a bundle
-// past gitlet.MaxPackBytes, which its committer would refuse pack_too_large.
-// Where the indexes of every object the inputs hold could pass the room the
-// bound leaves beside a full cut, the cut is scaled down by the inputs'
-// AGGREGATE bundle-to-pack ratio — their bundles' bytes over their pack
-// sections' — so an output's bundle lands near the nominal cut. In aggregate,
-// so one tiny pack's fixed index header never sets it (M3-decisions M3-O28).
+// cut, unless the indexes of every object the inputs hold (32 bytes an object:
+// a version-2 .idx's 28 and a .rev's 4) could pass the room
+// gitlet.MaxPackBytes leaves beside a full cut, where an output's bundle could
+// be refused pack_too_large. Then the cut is scaled down by the inputs'
+// AGGREGATE bundle-to-pack ratio, so an output's bundle lands near the nominal
+// cut; aggregate, so one tiny pack's fixed index header never sets it
+// (M3-decisions M3-O28).
 func (b bounds) cutFor(p planned) int64 {
 	objects := p.objects()
 	if gitlet.IndexBytesFor(objects)+gitlet.ReverseBytesFor(objects) <= b.maxBundle-b.cut {
@@ -71,39 +66,16 @@ type output struct {
 }
 
 // pack runs ONE pack-objects over p's inputs in the admission's reserved slot,
-// in the scratch sc — a merge's, a compaction's or a publication's repack —
-// every input read through the scratch's one alternate, a store holding
-// EXACTLY the inputs, hard links of the packs of the incarnation the plan was
-// made over (cache.Cache.NewMergeScratch), so the scratch holds no input and
-// the build writes into nothing but the scratch — cut at cut, and answers the
-// checksums it printed, one an output, in the order it wrote them: the order
-// their ids are derived in.
+// in a merge's scratch sc, cut at cut, and answers the checksums it printed in
+// the order it wrote them: the order their ids are derived in. The scratch's
+// one alternate is a store of EXACTLY the inputs (cache.Cache.NewMergeScratch)
+// and no pack is excluded with a `^` line, so every input object is rewritten
+// (ADR-0090) and the walk ends at the inputs' edge, not the whole history
+// (package doc, "A merge makes no reachability judgement").
 //
-// NO EXCLUDED PACK: the inputs are listed and nothing is excluded with a `^`
-// line, so every object an input holds is in the outputs — an object it shares
-// with a pack that is no input is written again rather than left to that pack,
-// because two compactions decided from different snapshots may each retire the
-// pack the other relied on (ADR-0090).
-//
-// AND NOTHING BUT THE INPUTS IN REACH, for a compaction and a publication's
-// repack alike: to fill in the name hash its delta search sorts by,
-// `--stdin-packs` walks from every commit its inputs hold through every tree
-// and blob it can reach, and only an excluded pack stops it — so over the
-// whole incarnation, or a publication's scratch of links, a roll of a few small
-// packs walked the repository's history, its cost and its memory following
-// the history while its charge and its deadline follow the roll (measured at
-// review, about 3.5 µs an object of a 400 032-object history on the node pin,
-// and for a roll of eight 451 ms and 100.8 MiB beside the 100 MB source history
-// in BenchmarkCompact's roll arm: past the deadline of a roll of small pushes
-// from a few million objects, a gigabyte or two of a source repository, so
-// every such roll was killed and the repository went on to refuse pushes
-// compaction_behind). Over a store of the inputs alone the walk ends at their
-// edge, as git walks with ignore_missing_links, and writes the same packs.
-//
-// The build names no Repairer: the compactor repairs nothing itself, so what
-// the build reports of an input — the store's links are the incarnation's own
-// files — reaches the cache's observer as it arrives, and the build fails; the
-// next poll plans again over the copy the cache repairs.
+// It names no Repairer: the compactor repairs nothing, so a fault in an input
+// (the store links the incarnation's own files) reaches the cache's observer
+// and fails the build; the next poll plans over the copy the cache repairs.
 func (c *Compactor) pack(ctx context.Context, adm *cache.Admission, sc *cache.Scratch, p planned, cut int64,
 	limits gitlet.Limits) ([]string, error) {
 
@@ -140,13 +112,11 @@ func (c *Compactor) pack(ctx context.Context, adm *cache.Admission, sc *cache.Sc
 	return printed, nil
 }
 
-// lay lays out every output the build printed, in the order it printed them,
-// under the compaction cid's derived ids — a compaction's, or the publication's
-// whose repack it is: each output's sections' sizes from its files and its
-// object count from its index (gitlet.LayBundle). The scratch — a merge's, which
-// holds no pack of its own before its build — must hold exactly the packs the
-// build printed: a pack it printed and did not write, or one it wrote and did
-// not print, is a build no row could describe.
+// lay lays out every output the build printed, in printed order, under the
+// derived ids of cid (a compaction's, or the publication's whose repack it is)
+// with gitlet.LayBundle. The scratch, a merge's that held no pack before its
+// build, must hold exactly the packs printed: one printed and not written, or
+// written and not printed, is a build no row could describe.
 func lay(sc *cache.Scratch, cid string, printed []string) ([]output, error) {
 	held, err := sc.Packs()
 	if err != nil {
@@ -171,9 +141,8 @@ func lay(sc *cache.Scratch, cid string, printed []string) ([]output, error) {
 	return outs, nil
 }
 
-// pastBound is the bundle-to-pack ratio of the densest output whose bundle is
-// past bound — the ratio a rebuild cuts by — or 0 when every output is within
-// it.
+// pastBound is the bundle-to-pack ratio a rebuild cuts by: the densest
+// output's whose bundle is past bound, or 0 when every output is within it.
 func pastBound(outs []output, bound int64) float64 {
 	var worst float64
 	for _, o := range outs {

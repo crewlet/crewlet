@@ -19,9 +19,8 @@ import (
 // not there (an added or a deleted file).
 type excerptPair struct{ old, new string }
 
-// excerptsRead answers an excerpts read: its anchors' pairs found, ONE diff-pairs over every
-// distinct pair, each window cut from its pair's whole-file hunk as it streams, and the
-// excerpts paged whole from the cursor's anchor, every page staged for the memo.
+// excerptsRead answers an excerpts read as above, paging its excerpts whole from the cursor's
+// anchor and staging every page for the memo.
 func (r *read) excerptsRead(ctx context.Context, objs found, at cursor, m *memoRun) (gitlet.GitAnswer, error) {
 	q := r.q.Excerpts
 	for i, a := range q.Anchors {

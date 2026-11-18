@@ -16,82 +16,31 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree/decltype"
 )
 
-// THE READ GATE'S WALK: every statement text this package's source spells that
-// reads a code table, and every function that assembles one at run time —
-// what TestEveryCodeReadSeeksANamedIndex holds to the plans plan_test.go
-// registers (readindex_test.go says why the rule is held at all).
+// COVERAGE BOUNDARY. Read: every non-test file of the package, wherever it is
+// built, and the declarations its values are typed by (this module's and
+// [sqlPackage]'s). Not seen, of statements another package issues over this
+// package's declarations: objstore's builders over [PackReferences],
+// [RetiredPackReferences] and [LayerReferences], which [planShapes] answers for
+// (holdReferences); and internal/statelog's own over code_ops,
+// code_log_deferred and code_log_deferred_scope ([Domain.OpsTable],
+// [Domain.DeferredTable], [Domain.ScopeIndex]), the framework's to plan, which
+// no test holds (statelog's TestEveryAnchorStatementSeeksItsKey plans only its
+// anchors'). Nor seen: a statement method reached through reflection or on a
+// value only an unread package could type (database/sql/driver's), and another
+// package's constant, so a text built with one reads as its fragments.
+
+// readWalk is the read gate's walk: every statement text this package's source
+// spells that reads a code table, and every function that assembles one at run
+// time, which TestEveryCodeReadSeeksANamedIndex holds to the plans plan_test.go
+// registers (readindex_test.go says why).
 //
-// # What a text is
-//
-// A text is a MAXIMAL CONSTANT STRING EXPRESSION: a literal, a constant, or +
-// over them, wherever it is written — a constant's declaration, a statement's
-// argument, a slice of statements — evaluated whole, so a statement built of
-// constants (`SELECT ` + pushColumns + ` FROM code_pushes …`, `INDEXED BY ` +
-// refsKey) is judged as the text the driver is handed rather than as its
-// pieces. A bare reference to a constant spells nothing new: the constant's
-// declaration is where its text is counted, and the reference is a USE of it,
-// which says which function the text serves.
-//
-// # What reading is
-//
-// A text READS a table its FROM clause, a JOIN or an UPDATE names — what a
-// SELECT answers from, and what an UPDATE or a DELETE finds the rows it writes
-// by, which a scan finds as slowly as it finds a SELECT's. A table an INSERT or
-// a REPLACE only writes is not read: VALUES locates no row, and an upsert's
-// conflict is found by the very key it conflicts on. Read lexically
-// ([codeReads]) — a comment, a string literal, an index INDEXED BY names and a
-// column a table qualifies are none of them — and only a code_* table counts:
-// this package's statements are the code tables', and json_each, a statement's
-// own list, is a function rather than a table.
-//
-// # What a builder is
-//
-// A STATEMENT SITE is a call of a method named as one of database/sql's
-// statement methods ([statementMethods]) whose declaration takes a text where
-// those take theirs ([takesText]) — typed through
-// internal/sourcetree/decltype, by declaration, database/sql's own read from
-// the toolchain beside this module's. So a *sql.Tx's, a *sql.DB's and a
-// *sql.Conn's are sites, however the walk came by the handle; a *sql.Stmt's
-// Exec and Query, which take the arguments of the statement it was prepared
-// from and no text, are none, since its Prepare is the site that names the
-// text; statelog.Freshness.Query, which builds a read rather than issuing
-// one, is none; and a statement method on a value the walk cannot type is
-// reported rather than passed. A site's text is FOLLOWED: a constant; a local
-// variable every write of which is followed (an assignment, a declaration, a
-// range over a literal of them); a parameter of an unexported function every
-// call of which hands it a text followed in turn. A text the walk cannot
-// follow out of a function — a concatenation with something only the run
-// knows, a call's result, a field, a package-level variable, an exported
-// function's parameter, a closure's — makes THAT function a builder: it
-// issues a statement no constant spells whole, which only the shapes it is
-// registered with ([planShapes]) can be planned by.
-//
-// # Coverage boundary
-//
-// Read: every non-test file of the package, wherever it is built, and the
-// declarations its values are typed by — this module's and database/sql's
-// ([sqlPackage]). Not seen: a statement another package issues from text it
-// assembles over this package's declarations, of which there are two kinds.
-// One is objstore's builders over [PackReferences], [RetiredPackReferences]
-// and [LayerReferences], which [planShapes] answers for (holdReferences).
-// The other is the state log's own statements over the domain's machinery
-// tables, which internal/statelog assembles for every domain alike from
-// [Domain.OpsTable], [Domain.DeferredTable] and [Domain.ScopeIndex]: over
-// code_ops, the ledger's sweep and its lookups of an applied operation; over
-// code_log_deferred and code_log_deferred_scope, the coverage probes the
-// applier, a write's step 0 and a read make, the reprocess's pages and
-// releases, the check for a retained record, and the reads of the oldest one
-// and of a record's scope. They run on the applier's lane and in a write's
-// step 0 as surely as any statement here, and this gate plans none of them:
-// they are the framework's, written once over the shape replicated 0001
-// documents for those tables, so their plans are the framework's to hold —
-// and no test holds them, statelog's one plan gate
-// (TestEveryAnchorStatementSeeksItsKey) planning only its anchors', which
-// read no table of this domain's. Nor seen: a statement method reached
-// through reflection; one called on a value only a package the walk does not
-// read could type — a driver's own interfaces (database/sql/driver) among
-// them; and a constant of another package, which is not evaluated, so a text
-// built with one is read as the fragments around it.
+// A text is a MAXIMAL CONSTANT STRING EXPRESSION (a literal, a constant, or +
+// over them), evaluated whole, so `SELECT ` + pushColumns + ` FROM …` is judged
+// as the text the driver is handed, not as its pieces. A bare reference to a
+// constant is a USE, naming the function the text serves; its text is counted
+// at the declaration. [codeReads] decides what a text reads,
+// [readWalker.statementCall] which calls are statements, and [readWalker.site]
+// what makes a builder.
 type readWalk struct {
 	// files is how many non-test files the walk read, and sites how many
 	// statement sites it judged.
@@ -100,8 +49,7 @@ type readWalk struct {
 	// the text.
 	spelled map[string]*spelling
 	// builders is every function a site's text cannot be followed out of, by
-	// the name the walk gives a function ("" for a package-level
-	// declaration), with each place and why.
+	// the walk's name for it ("" at package level), with each place and why.
 	builders map[string][]string
 	// declared is every function the package declares, by that name.
 	declared map[string]bool
@@ -118,10 +66,9 @@ type spelling struct {
 	// at is every place it is spelled, file:line, and names every constant
 	// it is declared as.
 	at, names []string
-	// users is every function that uses the text: the one an inline text is
-	// written in, and each that names a constant it is declared as — ""
-	// for a package-level declaration. A text only builders use may be a
-	// FRAGMENT of what they assemble, which no plan can be read of alone.
+	// users is every function that uses the text (written inline in it, or
+	// naming a constant it is declared as; "" at package level). A text only
+	// builders use may be a FRAGMENT, which no plan can be read of alone.
 	users map[string]bool
 	// folded reports a constant it is declared as that another text names
 	// inside itself: its text is then judged in that one's too.
@@ -151,10 +98,8 @@ var statementMethods = map[string]int{
 }
 
 // sqlPackage is the one package outside the module the walk reads, from the
-// toolchain the module builds with: what declares a statement handle's
-// methods, and the results that hand one on — a connection DB.Conn opens, a
-// statement Tx.PrepareContext prepares — so each is judged by its own
-// declaration rather than by the package it came from.
+// module's toolchain, so a handle it hands on (DB.Conn's connection,
+// Tx.PrepareContext's statement) is judged by its own declaration.
 const sqlPackage = "database/sql"
 
 // codeDir is the package the gate judges, relative to the module root.
@@ -167,8 +112,8 @@ const modulePath = "github.com/crewlet/crewlet"
 // root.
 func walkForReads(t *testing.T, root, module string) readWalk {
 	t.Helper()
-	// The toolchain's database/sql is the one the module builds against, so
-	// it is located from the module's own root, whatever tree is judged.
+	// Located from the module's own root, whatever tree is judged: that is
+	// the toolchain the module builds against.
 	dirs, err := decltype.Locate(t.Context(), sourcetree.Root(t), sqlPackage)
 	if err != nil {
 		t.Fatal(err)
@@ -223,10 +168,9 @@ func walkForReads(t *testing.T, root, module string) readWalk {
 			}
 		}
 	}
-	// EVERY FILE THE WALK COULD NOT PARSE, asked once the judging is done:
-	// a package a value is typed by — database/sql's, the module's others —
-	// is read when the walk first meets such a value, and a file of one it
-	// could not parse is a file whose declarations typed nothing.
+	// Parse errors are asked for only after judging: a package a value is
+	// typed by is read when the walk first meets such a value, and a file it
+	// could not parse typed nothing.
 	for _, err := range rw.w.Errors() {
 		rw.report("%v", err)
 	}
@@ -254,9 +198,8 @@ type readWalker struct {
 	uses  map[constKey]map[string]bool
 	folds map[constKey]bool
 	// locals and params are what a variable and a parameter were followed
-	// to — nil while the walk is following one, since a cycle hands on no
-	// text the rest of the cycle does not — and refs every reference to a
-	// function.
+	// to, nil while it is being followed (a cycle hands on no text the rest
+	// of it does not); refs is every reference to a function.
 	locals localOrigins
 	params map[paramKey]*origin
 	refs   map[*funcDecl][]funcRef
@@ -653,8 +596,14 @@ const (
 	untyped
 )
 
-// site judges a call: a statement site's text is followed, and the function
-// it cannot be followed out of is a builder.
+// site judges a call. A STATEMENT SITE is a call of a [statementMethods] name
+// that [readWalker.statementCall] judges a statement. Its text is FOLLOWED: a
+// constant; a local every write of which is followed; a parameter of an
+// unexported function every call of which hands it a followed text. A text the
+// walk cannot follow out of a function (concatenated with a run-time value, a
+// call's result, a field, a package-level variable, an exported function's or a
+// closure's parameter) makes THAT function a builder, which only the shapes it
+// is registered with ([planShapes]) can plan.
 func (rw *readWalker) site(sc scope, call *ast.CallExpr) {
 	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
 	if !ok {
@@ -683,17 +632,17 @@ func (rw *readWalker) site(sc scope, call *ast.CallExpr) {
 }
 
 // statementCall judges whether a selector of a statement method's name is a
-// statement: a method whose declaration — database/sql's or this module's —
-// takes a text where database/sql's Tx, DB and Conn take theirs, or not.
+// statement: a method whose declaration (database/sql's or this module's,
+// typed through internal/sourcetree/decltype) takes a text where database/sql's
+// Tx, DB and Conn take theirs ([takesText]). A value it cannot type is
+// [untyped], reported rather than passed.
 //
-// BY THE DECLARATION, NEVER BY THE PACKAGE A VALUE CAME FROM: database/sql
-// hands on a *sql.Conn from DB.Conn and a *sql.Stmt from a Prepare alike, and
-// only the first is a handle — a statement's runs, Exec(args ...any) and the
-// rest, are no site, since what they run is the text its Prepare named, which
-// is judged at the Prepare. A walk that took every value database/sql handed
-// on for a handle took each run of a statement prepared once for a second
-// site and the argument at its text's place for SQL, and so refused the
-// prepare-once, run-per-item shape a hot loop wants.
+// BY THE DECLARATION, NEVER BY THE PACKAGE A VALUE CAME FROM: a *sql.Conn from
+// DB.Conn is a handle, but a *sql.Stmt's Exec and Query run the text its
+// Prepare named, judged there; taking them for sites would read their first
+// argument as SQL and refuse the prepare-once, run-per-item shape a hot loop
+// wants. Nor is statelog.Freshness.Query, which builds a read rather than
+// issuing one.
 func (rw *readWalker) statementCall(f *decltype.File, sel *ast.SelectorExpr) siteVerdict {
 	if _, isPkg := rw.w.PackageNamed(sel.X, f); isPkg {
 		// A package's function that shares the name, not a method.
@@ -707,9 +656,8 @@ func (rw *readWalker) statementCall(f *decltype.File, sel *ast.SelectorExpr) sit
 		}
 		return notSite
 	case decltype.Field, decltype.FromUnread, decltype.Beyond:
-		// A field; and a member of a value only a package the walk does
-		// not read could type or hold, whose methods issue none of this
-		// package's statements (the coverage boundary).
+		// A field, or a member of a value only an unread package could
+		// type: outside the coverage boundary (above [readWalk]).
 		return notSite
 	}
 	return untyped
@@ -1107,10 +1055,12 @@ func wordStart(c byte) bool {
 func wordPart(c byte) bool { return wordStart(c) || c >= '0' && c <= '9' || c == '$' }
 
 // codeReads is every code_* table a statement reads, in the order it names
-// them: each a FROM clause, a JOIN, a comma of a FROM list or an UPDATE names
-// as its table — never one an INSERT or a REPLACE only writes INTO, a function
-// a FROM clause calls (json_each), an index INDEXED BY names, or a column a
-// table qualifies.
+// them, read lexically: each a FROM clause, a JOIN, a comma of a FROM list or
+// an UPDATE names, since an UPDATE or a DELETE finds the rows it writes as
+// slowly as a SELECT does. Never one an INSERT or a REPLACE only writes INTO
+// (VALUES locates no row, and an upsert's conflict is found by the very key it
+// conflicts on), a function a FROM clause calls (json_each), an index INDEXED
+// BY names, or a column a table qualifies.
 func codeReads(text string) []string {
 	toks := lexSQL(text)
 	word := func(i int) string {

@@ -11,21 +11,15 @@ import (
 	"github.com/crewlet/crewlet/internal/inbox"
 )
 
-// The comparisons, exercised as VALUES.
-//
-// IN-PACKAGE, and not only because the document comparisons are unexported:
-// they are pure over two documents, which is the property `deltas.go` claims
-// for them, and a rule only reachable through a database is a rule nobody
-// re-measures. The applier's own wiring — that each kind reaches the right
-// comparison against the right stored row — is `historydeltas_test.go`.
+// The comparisons, exercised as values: in-package because they are pure over
+// two documents, as `deltas.go` claims. The applier's wiring (each kind
+// reaching the right comparison against the right stored row) is
+// `historydeltas_test.go`.
 
-// AN EDGE SET IS A SET, so its delta is about membership and not about order.
-//
-// [RelationIntent.resolve] appends what a gesture adds, so two writers adding
-// the same two edges in opposite orders leave the same set in two orders. A
-// delta joined in document order would then record a change on the second
-// write that nothing made — in a table that is part of the state log's
-// identity claim and that nothing ever rewrites.
+// An edge set is a set, so its delta is about membership, not order:
+// [RelationIntent.resolve] appends, so two writers adding the same edges in
+// opposite orders leave one set in two orders, and a delta in document order
+// would record a change nothing made, in a table nothing rewrites.
 func TestAnEdgeDeltaIsAboutMembershipRatherThanOrder(t *testing.T) {
 	t.Parallel()
 	one := Task{Relations: []Relation{
@@ -40,8 +34,8 @@ func TestAnEdgeDeltaIsAboutMembershipRatherThanOrder(t *testing.T) {
 		t.Errorf("re-stating one edge set in another order recorded %v, and "+
 			"nothing about the task changed", moved)
 	}
-	// AND A REAL MEMBERSHIP CHANGE IS RECORDED, or the assertion above
-	// would pass for a comparison that answers nothing at all.
+	// And a real membership change is recorded, or the assertion above
+	// would pass for a comparison that answers nothing.
 	grew := Task{Relations: append([]Relation{{Kind: RelationWaitingOn, Other: "c"}},
 		other.Relations...)}
 	if got := TaskDeltas(other, grew, nil)["waiting_on"]; !sameDelta(got, moves([]string{"c"}, nil)) {
@@ -49,9 +43,8 @@ func TestAnEdgeDeltaIsAboutMembershipRatherThanOrder(t *testing.T) {
 	}
 }
 
-// A WAIT'S REASON IS A DELTA OF ITS OWN: restating a wait on the same date with
-// another reason moves no date, and a row recording only the date recorded
-// nothing at all, so the write read as no change of the item.
+// A wait's reason is a delta of its own: restating a wait on the same date with
+// another reason moves no date, so a row recording only the date says nothing.
 //
 // Mutation: drop `wait_reason` from TaskDeltas, and the restated reason
 // records nil.
@@ -67,13 +60,10 @@ func TestARestatedWaitReasonIsRecorded(t *testing.T) {
 	}
 }
 
-// EVERY RELATION KIND IS ITS OWN FIELD, derived from [RelationKinds].
-//
-// The kinds are unrelated facts — `waiting_on` is work somebody has to clear
-// and `page` is a link to a wiki page — so one field holding all of them would
-// make adding a link read as a change to what the task is waiting for. The
-// loop over the declared set is also what makes a fifth kind recorded with no
-// second edit, which is the reason that slice exists.
+// Every relation kind is its own field, derived from [RelationKinds]: the kinds
+// are unrelated facts (`waiting_on` is work to clear, `page` a wiki link), so
+// one field would make adding a link read as a change to what the task waits
+// on, and the derivation records a new kind with no second edit.
 func TestEveryRelationKindGetsItsOwnDeltaField(t *testing.T) {
 	t.Parallel()
 	before := Task{}
@@ -100,24 +90,17 @@ func TestEveryRelationKindGetsItsOwnDeltaField(t *testing.T) {
 			t.Errorf("the %s field recorded %+v", kind, got)
 		}
 	}
-	// AND THE MIRROR IS ITS OWN FIELD, under the word this package uses
-	// for that direction everywhere else. It is not a fifth relation kind
-	// because it is not an authored edge: it is the copy a blocker carries
-	// so a close can name who it unblocks.
+	// And the mirror is its own field, `blocking`: not a relation kind,
+	// because it is not an authored edge but the copy a blocker carries so a
+	// close can name whom it unblocks.
 	mirrored := TaskDeltas(Task{}, Task{Dependents: []string{"dep-2", "dep-1"}}, nil)
 	if got := mirrored["blocking"]; !sameDelta(got, moves([]string{"dep-1", "dep-2"}, nil)) {
 		t.Errorf("the mirror recorded %+v", got)
 	}
 }
 
-// A SET RECORDS WHAT MOVED, WHOLE, HOWEVER LARGE THE SET.
-//
-// Both sides used to be carried, joined and cut to six hundred bytes with a
-// "+N more" count — so on a task waiting on many others, the one edge a
-// commit added was off the end of BOTH sides, and the row recorded two lists
-// that differed only in their counts, which a renderer diffing them read as a
-// member called "+19 more" joining. What a commit changed in a set is what
-// joined and what left it.
+// A set records what moved, whole, however large the set: both sides cut to fit
+// would drop exactly the member a commit added.
 func TestASetRecordsWhatMovedHoweverLargeTheSet(t *testing.T) {
 	t.Parallel()
 	before := Task{}
@@ -134,19 +117,15 @@ func TestASetRecordsWhatMovedHoweverLargeTheSet(t *testing.T) {
 		t.Errorf("adding one edge to a set of %d recorded %+v, want only the "+
 			"edge it added", len(before.Relations), got)
 	}
-	// AND AN ORDERED LIST IS WHOLE, both sides: its order is its content,
-	// and it is capped in the tens where it is written.
+	// And an ordered list is whole, both sides: its order is its content.
 	if got := listText([]string{"a", "b", "c"}); got != "a, b, c" {
 		t.Errorf("listText = %q", got)
 	}
 }
 
-// FREE TEXT PAST THE BUDGET IS DESCRIBED BY ITS SIZE, NEVER CUT.
-//
-// A cut kept an opening, which a reader takes for the value; a size is not a
-// fragment anybody can mistake for the text, and the text is the mutation, on
-// the row's document column. Two long texts of one size still record that
-// they moved, because the move is established from the values.
+// Free text past the budget is described by its size, never cut: an opening
+// reads as the value, a size cannot. Two long texts of one size still record
+// that they moved, because the move is established from the values.
 func TestALongFreeTextIsDescribedBySizeNotCut(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("p", MaxDeltaValue+1)
@@ -162,13 +141,10 @@ func TestALongFreeTextIsDescribedBySizeNotCut(t *testing.T) {
 	}
 }
 
-// A SAVED VIEW'S PARAMETER DELTA NAMES WHAT MOVED AND NOTHING ELSE.
-//
-// Three edits are three different pictures — a key that arrived shows on the
-// `to` side alone, one that left on the `from` side alone, and one re-pointed
-// on both — and an unchanged parameter appears on neither, because a saved
-// query is bounded at [MaxViewParamsBytes] and carrying it whole twice would
-// put the whole predicate in a log line to show that one filter moved.
+// A saved view's parameter delta names what moved and nothing else: an arrival
+// shows on `to` alone, a departure on `from` alone, a re-point on both, and an
+// unchanged parameter on neither, since the whole query (up to
+// [MaxViewParamsBytes]) does not belong in a log line twice.
 func TestAViewsParameterDeltaNamesOnlyWhatMoved(t *testing.T) {
 	t.Parallel()
 	before := View{Params: map[string]string{
@@ -182,20 +158,15 @@ func TestAViewsParameterDeltaNamesOnlyWhatMoved(t *testing.T) {
 		t.Errorf("the parameter delta recorded %+v — `sort` did not move and "+
 			"belongs on neither side", got)
 	}
-	// AND A SAVE THAT CHANGED NO PARAMETER RECORDS NO PARAMETER FIELD.
+	// And a save that changed no parameter records no parameter field.
 	if _, recorded := viewDeltas(before, before)["params"]; recorded {
 		t.Error("a re-save with the same query recorded a parameter move")
 	}
 }
 
-// A PERSON'S INBOX IS COUNTED RATHER THAN LISTED, and their queue is not.
-//
-// Each inbox list holds up to [inbox.MaxEntries] entries, and every entry is a
-// record id and a log position — neither of which anybody reads. What a reader
-// of the row wants to know is that an item was marked read, which the counts
-// say because every gesture that writes these lists MOVES an entry between
-// them. The priority list is the opposite: the order IS the instruction, so it
-// is recorded as it is stored.
+// A person's inbox is counted rather than listed, and their queue is not
+// ([personDeltas]): an inbox gesture moves an entry between lists, which the
+// counts show, while the queue's order is the instruction.
 func TestAPersonsInboxIsCountedAndTheirQueueIsOrdered(t *testing.T) {
 	t.Parallel()
 	before := Person{
@@ -223,9 +194,8 @@ func TestAPersonsInboxIsCountedAndTheirQueueIsOrdered(t *testing.T) {
 		t.Errorf("the queue recorded %+v, and a re-ordering with the same "+
 			"members is exactly the change somebody made", got)
 	}
-	// WHEN IS NOT RECORDED, ONLY WHO. The row's own instant already says
-	// when, and a stamp that moves on every write would make a lead
-	// re-stating an unchanged list look like a change.
+	// When is not recorded, only who: the row's own instant says when, and a
+	// moving stamp would make re-stating an unchanged list a change.
 	restated := after
 	restated.PrioritiesSetAt = restated.PrioritiesSetAt.AddDate(0, 0, 1)
 	if moved := personDeltas(after, restated); moved != nil {
@@ -233,21 +203,15 @@ func TestAPersonsInboxIsCountedAndTheirQueueIsOrdered(t *testing.T) {
 	}
 }
 
-// ONLY THE DELTA FIELDS WHOSE MEMBERS ARE TASK IDS ARE RESOLVED.
+// Only the delta fields whose members are task ids are resolved.
 //
-// [counterpartyDeltaFields] is what an activity answer's key map is built
-// from, and it is DERIVED from [RelationKinds] so a fifth kind of edge is
-// resolved with no second edit. [RelationPage] and [RelationEntry] are the
-// exclusions, and each is a fact about the type rather than about any row: a
-// `page` edge names a knowledge-base page and an `atlas_entry` edge an entry
-// of the atlas, so asking `tracker_tasks` about one is asking whether it is a
-// task.
-//
-// A DECLARATION HELD AGAINST THE RULE, in the `internal/solo` roster
-// tradition, because the runtime cannot show it: a page id resolves to nothing
-// whether or not it is excluded, so a round-trip case built on one passes with
-// the exclusion gone. This fails in BOTH directions — a kind that stopped
-// being derived, and `page` creeping in.
+// [counterpartyDeltaFields] builds an activity answer's key map and is derived
+// from [RelationKinds], so a new edge kind resolves with no second edit;
+// [RelationPage] and [RelationEntry] are excluded because their edges name a
+// knowledge-base page and an atlas entry, never a task. A declaration held
+// against the rule (the `internal/solo` roster tradition), because the runtime
+// cannot show it: a page id resolves to nothing either way. It fails in both
+// directions: a kind no longer derived, and `page` creeping in.
 func TestOnlyTheDeltaFieldsThatNameTasksAreResolved(t *testing.T) {
 	t.Parallel()
 	named := make(map[string]bool, len(counterpartyDeltaFields))
@@ -264,13 +228,10 @@ func TestOnlyTheDeltaFieldsThatNameTasksAreResolved(t *testing.T) {
 				kind, RelationPage, RelationEntry)
 		}
 	}
-	// AND THE FOUR BEYOND THE EDGES: the mirror a blocker carries, a
-	// person's own queue — an ordered list of task ids that renders on the
-	// same page — the parent a reparent moves a task between, and the root a
-	// cascade removed it with. The last two are scalars and are resolved all
-	// the same: [TaskDeltas] records them by ID like every relation, so
-	// leaving them out is what makes a reparent and a cascade removal the
-	// two rows on an item's History tab still rendering a uuid.
+	// And the four beyond the edges: the blocker's mirror, a person's queue
+	// (task ids on the same page), and the scalars `parent` and
+	// `removed_with`, which [TaskDeltas] records by ID like every relation;
+	// left out, a reparent and a cascade removal would render a uuid.
 	for _, field := range []string{
 		"blocking", "priorities", "parent", "removed_with",
 	} {
@@ -284,13 +245,8 @@ func TestOnlyTheDeltaFieldsThatNameTasksAreResolved(t *testing.T) {
 	}
 }
 
-// A DOCUMENT THAT DID NOT MOVE RECORDS NOTHING, AS NIL.
-//
-// [Applier.writeHistory] reads the length of what it is handed and falls
-// through to the notification when it is empty; a NIL map is what keeps the
-// column to one spelling of "nothing moved", because `jsonOf` is
-// `json.Marshal` and a nil map marshals to the literal `null` where every
-// other row stores `{}`.
+// A document that did not move records nothing, as nil: the one spelling of
+// "nothing moved" the column takes ([deltaSet.done]).
 func TestAnUnmovedDocumentRecordsNothing(t *testing.T) {
 	t.Parallel()
 	project := Project{Key: "ENG", Name: "Engineering", Purpose: "builds it"}
@@ -314,8 +270,8 @@ func TestAnUnmovedDocumentRecordsNothing(t *testing.T) {
 				name, got)
 		}
 	}
-	// AND A REAL MOVE IS RECORDED, so the loop above cannot be passing
-	// because these functions answer nothing at all.
+	// And a real move is recorded, so the loop above cannot pass because
+	// these functions answer nothing at all.
 	moved := project
 	moved.Purpose = "ships it"
 	if got := projectDeltas(project, moved)["purpose"]; !sameDelta(got,
@@ -325,12 +281,8 @@ func TestAnUnmovedDocumentRecordsNothing(t *testing.T) {
 	}
 }
 
-// A TARGET-ONLY EDIT RECORDS WHAT MOVED.
-//
-// The target date is a lead-owned policy facet like the default assignee, and
-// a lead's edit that set nothing else would otherwise write a
-// `project_updated` history row with no delta at all — the empty row
-// [projectDeltas] exists to end.
+// A target-only edit records what moved, or a lead's edit setting nothing else
+// would write a `project_updated` row with no delta ([projectDeltas]).
 func TestATargetDateEditRecordsItsDelta(t *testing.T) {
 	t.Parallel()
 	before := Project{Key: "ENG", Name: "Engineering", TargetDate: "2026-12-18"}
@@ -343,14 +295,10 @@ func TestATargetDateEditRecordsItsDelta(t *testing.T) {
 	}
 }
 
-// A PEOPLE SET IS A SET, so its delta is about membership and not about order.
-//
-// The three handle collections on a task are assembled rather than arranged:
-// [settleWatch] rebuilds the watcher list by removing a handle and appending
-// it, and a caller may state a whole set it read in any order. Recorded in
-// document order, every re-statement that moved nobody would write a change
-// into a table nothing rewrites — which is the same failure the edge sets are
-// sorted to avoid, one collection along.
+// A people set is a set, so its delta is about membership, not order: the
+// three handle collections are assembled ([settleWatch] removes and appends; a
+// caller may state a set in any order), so recording document order would
+// write changes nobody made, as for the edge sets.
 func TestThePeopleSetsRecordMembershipRatherThanOrder(t *testing.T) {
 	t.Parallel()
 	one := Task{
@@ -367,8 +315,8 @@ func TestThePeopleSetsRecordMembershipRatherThanOrder(t *testing.T) {
 		t.Errorf("re-stating three sets in another order recorded %v, and "+
 			"nothing about the task changed", moved)
 	}
-	// AND A REAL MEMBERSHIP CHANGE IS RECORDED, or the assertion above
-	// would pass for a comparison that answers nothing at all.
+	// And a real membership change is recorded, or the assertion above
+	// would pass for a comparison that answers nothing.
 	grew := other
 	grew.Watchers = []string{"ana", "bo", "zed"}
 	grew.Collaborators = nil
@@ -381,13 +329,10 @@ func TestThePeopleSetsRecordMembershipRatherThanOrder(t *testing.T) {
 	}
 }
 
-// A MUTE IS ITS OWN FIELD RATHER THAN A SUBTRACTION FROM THE WATCHERS.
-//
-// [Wake.snapshot] subtracts the muted from the watchers because it is building
-// a ROUTING list and the feed must never have to remember to. A DELTA records
-// what the document holds, and folding the two here would make "was never
-// watching" and "chose to stop" the same row — the one distinction those two
-// fields exist to keep, and the one an unwatch is entirely about.
+// A mute is its own field rather than a subtraction from the watchers:
+// [Wake.snapshot] subtracts for a routing list, but a delta records what the
+// document holds, and folding them would make "was never watching" and "chose
+// to stop" the same row.
 func TestAMuteIsRecordedApartFromTheWatcherSet(t *testing.T) {
 	t.Parallel()
 	// What [settleWatch] leaves behind for an unwatch: out of the set AND
@@ -402,9 +347,8 @@ func TestAMuteIsRecordedApartFromTheWatcherSet(t *testing.T) {
 		t.Errorf("the mute recorded %+v — a watcher row that did not say who "+
 			"opted out is the row this field exists to complete", got)
 	}
-	// AND A MUTE WITH THE WATCH INTACT IS THE OTHER HALF: somebody still
-	// on the list who has asked not to hear. Only `muted` moves, so a
-	// delta that had folded the two would record nothing at all.
+	// And a mute with the watch intact: only `muted` moves, so a delta that
+	// folded the two would record nothing.
 	muted := Task{Watchers: []string{"ana", "bo"}, Muted: []string{"ana"}}
 	if moved := TaskDeltas(before, muted, nil); len(moved) != 1 {
 		t.Errorf("muting a watcher who stays on the list recorded %v, and it "+
@@ -412,12 +356,8 @@ func TestAMuteIsRecordedApartFromTheWatcherSet(t *testing.T) {
 	}
 }
 
-// A BODY DELTA IS A MARKER AND NEVER THE PROSE.
-//
-// [MaxBody] is 32 KiB and `tracker_history` is never swept, so carrying both
-// sides would put 64 KiB on one log line on every node for the life of the
-// company — while the mutation the row already stores holds the text for
-// anybody who needs it.
+// A body delta is a size, never the prose: [MaxBody] is 32 KiB,
+// `tracker_history` is never swept, and the row's mutation holds the text.
 func TestABodyDeltaCarriesASizeAndNotTheText(t *testing.T) {
 	t.Parallel()
 	prose := "the quick brown fox"
@@ -433,10 +373,9 @@ func TestABodyDeltaCarriesASizeAndNotTheText(t *testing.T) {
 	if !sameDelta(cleared, Delta{From: "19 bytes", To: ""}) {
 		t.Errorf("clearing a body recorded %+v", cleared)
 	}
-	// AND A REWRITE OF THE SAME LENGTH IS STILL A CHANGE, which is the
-	// whole reason [deltaSet.mark] exists: the two markers read the same,
-	// and the KEY's presence is what says the field moved. Compared on the
-	// text, as `add` does, a typo fix would have recorded nothing.
+	// And a rewrite of the same length is still a change ([deltaSet.mark]):
+	// the two sizes read the same and the key's presence says it moved.
+	// Compared on the text, as `add` does, a typo fix would record nothing.
 	same := TaskDeltas(Task{Body: prose}, Task{Body: "the quick brown cat"}, nil)
 	if got, held := same["body"]; !held || !sameDelta(got, Delta{From: "19 bytes", To: "19 bytes"}) {
 		t.Errorf("an edit that kept the length recorded %+v (held=%v)", got, held)
@@ -447,11 +386,8 @@ func TestABodyDeltaCarriesASizeAndNotTheText(t *testing.T) {
 	}
 }
 
-// A CHECKLIST DELTA IS COUNTS PER NAMED LIST.
-//
-// A task carries [MaxChecklists] lists holding [MaxChecklistItemsTotal] items
-// between them, so the items themselves cannot ride a log line — and a count
-// is what a reader of a change wants from a checklist anyway.
+// A checklist delta is counts per named list: [MaxChecklists] lists holding
+// [MaxChecklistItemsTotal] items cannot ride a log line.
 func TestAChecklistDeltaCountsItemsPerNamedList(t *testing.T) {
 	t.Parallel()
 	before := Task{Checklists: []Checklist{{
@@ -475,8 +411,8 @@ func TestAChecklistDeltaCountsItemsPerNamedList(t *testing.T) {
 		t.Errorf("the checklist delta carried an item's text: %+v", got)
 	}
 
-	// A SECOND LIST IS NAMED BY BEING THERE on one side only, which is how
-	// an addition and a removal read as two different pictures.
+	// A second list appears on one side only, so an addition and a removal
+	// read differently.
 	added := done
 	added.Checklists = []Checklist{
 		done.Checklists[0],
@@ -495,14 +431,10 @@ func TestAChecklistDeltaCountsItemsPerNamedList(t *testing.T) {
 	}
 }
 
-// A CUSTOM FIELD IS NAMED BY ITS SLUG, WHICH TAKES THE CATALOGUE.
-//
-// Values are keyed by field ID precisely so a rename never re-points one, and
-// an id is a uuid — so the declarations in hand are what turn the key back
-// into the word somebody typed, and a choice's stored option id back into the
-// option they picked. Without them the comparison is SKIPPED rather than
-// keyed by uuid, because `0f3c…=3 → 0f3c…=5` is worse on every surface than
-// no delta at all.
+// A custom field is named by its slug, which takes the catalogue: values are
+// keyed by field ID, a uuid, so the declarations turn the key back into its
+// slug and a choice's option id into the option. Without them the comparison
+// is skipped, since `0f3c…=3 → 0f3c…=5` is worse than no delta.
 func TestACustomFieldDeltaIsNamedBySlugOrNotAtAll(t *testing.T) {
 	t.Parallel()
 	declared := map[string]FieldDef{
@@ -525,8 +457,8 @@ func TestACustomFieldDeltaIsNamedBySlugOrNotAtAll(t *testing.T) {
 		"f-eta": json.RawMessage(`3`),
 	}}
 	got := TaskDeltas(before, after, declared)["fields"]
-	// ORDERED BY SLUG, both sides, and `eta_days` did not move so it is on
-	// neither — [paramsText]'s rule, for [paramsText]'s reason.
+	// Ordered by slug, both sides; `eta_days` did not move so it is on
+	// neither ([paramsText]'s rule).
 	if !sameDelta(got, Delta{
 		From: "environment=staging, severity=low",
 		To:   "environment=production, severity=high",
@@ -534,15 +466,14 @@ func TestACustomFieldDeltaIsNamedBySlugOrNotAtAll(t *testing.T) {
 		t.Errorf("two moved fields recorded %+v", got)
 	}
 
-	// THE WRITER'S FRAME HOLDS NO CATALOGUE, so it records no `fields` at
-	// all rather than a pair of uuids.
+	// The writer's frame holds no catalogue, so it records no `fields`
+	// rather than a pair of uuids.
 	if _, held := TaskDeltas(before, after, nil)["fields"]; held {
 		t.Error("a comparison with no catalogue named a field by its id")
 	}
 
-	// A FIELD NOBODY DECLARES IS COUNTED. There is no slug to name it
-	// with, and dropping it in silence would make a commit that moved only
-	// such a value read as a commit that moved nothing.
+	// A field nobody declares is counted: it has no slug, and dropping it
+	// would make a commit that moved only it read as moving nothing.
 	foreign := Task{Fields: map[string]json.RawMessage{
 		"f-sev": json.RawMessage(`"low"`),
 		"f-env": json.RawMessage(`"o-1"`),
@@ -554,18 +485,16 @@ func TestACustomFieldDeltaIsNamedBySlugOrNotAtAll(t *testing.T) {
 
 		t.Errorf("a value for an undeclared field recorded %+v", got)
 	}
-	// AND NOTHING MOVING RECORDS NOTHING, or every commit on a task with
+	// And nothing moving records nothing, or every commit on a task with
 	// custom values would carry an empty pair.
 	if moved := TaskDeltas(before, before, declared); moved != nil {
 		t.Errorf("an untouched field map recorded %v", moved)
 	}
 }
 
-// A MULTI-VALUED FIELD KEEPS ITS MEMBERS APART FROM ITS NEIGHBOURS.
-//
-// ", " separates one FIELD from the next on a delta side, so the members of
-// one field cannot use it: a labels field holding two options would otherwise
-// read as two fields, one of them nameless.
+// A multi-valued field keeps its members apart from its neighbours: ", "
+// separates one field from the next, so a labels field's two options joined by
+// it would read as two fields, one nameless.
 func TestAMultiValuedFieldSeparatesItsOwnMembers(t *testing.T) {
 	t.Parallel()
 	declared := map[string]FieldDef{
@@ -583,12 +512,10 @@ func TestAMultiValuedFieldSeparatesItsOwnMembers(t *testing.T) {
 	}
 }
 
-// THE FOUR SCALARS RECORD THEIR MOVES, and the two ids stay ids.
-//
-// `parent` and `removed_with` name ANOTHER TASK'S ROW, so they carry its id
-// and never its key: `tracker_history` is inside this domain's identity claim
-// and is repaired by nothing, so a node that had not applied that task would
-// store a different string there for ever. The activity read resolves them.
+// The four scalars record their moves, and the two ids stay ids: `parent` and
+// `removed_with` name another task's row, and a key there would differ on a
+// node that had not applied that task, in a table nothing repairs. The
+// activity read resolves them.
 func TestTheScalarTaskFieldsRecordWhatMoved(t *testing.T) {
 	t.Parallel()
 	oldParent, newParent, root := "t-1", "t-2", "t-root"
@@ -605,40 +532,33 @@ func TestTheScalarTaskFieldsRecordWhatMoved(t *testing.T) {
 		"reporter":     {From: "ana", To: "bo"},
 		"routing_unit": {From: "Engineering", To: "Platform"},
 		"parent":       {From: "t-1", To: "t-2"},
-		// BOTH STATES PRESENT for a flag, which is [boolText]'s rule:
-		// "— → true" would read as a field that had no value before.
+		// Both states present for a flag ([boolText]).
 		"archived": {From: "false", To: "true"},
-		// THE ONE THING A TOMBSTONE HOLDS that the history row's own
-		// actor, actor_kind and created_at do not already carry.
+		// The one thing a tombstone holds that the row's own actor,
+		// actor_kind and created_at do not.
 		"removed_with": {From: "", To: "t-root"},
 	} {
 		if got := moved[field]; !sameDelta(got, want) {
 			t.Errorf("%s = %+v, want %+v", field, got, want)
 		}
 	}
-	// A ROOT HAS NO PARENT, and losing one is a move like any other.
+	// Losing a parent is a move like any other.
 	orphaned := TaskDeltas(Task{Parent: &oldParent}, Task{}, nil)["parent"]
 	if !sameDelta(orphaned, Delta{From: "t-1", To: ""}) {
 		t.Errorf("clearing a parent recorded %+v", orphaned)
 	}
-	// AND AN ORDINARY REMOVAL WENT WITH NOTHING, so it records nothing
-	// here: `removed_with` answers "was this a cascade", and a task
-	// somebody removed on purpose is not one.
+	// And an ordinary removal records no `removed_with`, which answers
+	// "was this a cascade".
 	alone := TaskDeltas(Task{}, Task{Removed: &Tombstone{By: "bo"}}, nil)
 	if _, held := alone["removed_with"]; held {
 		t.Errorf("a removal that took nothing with it recorded %v", alone)
 	}
 }
 
-// WHAT A CARD CARRIES AND WHAT A HISTORY ROW CARRIES DIFFER IN EXACTLY ONE
-// FIELD.
-//
-// [TaskDeltas] is exported so that the two frames cannot disagree about what
-// moved, and this is the whole of the one split that remains: the APPLIER
-// holds the project's catalogue and the WRITER does not, so a custom-field
-// move is history-only. Everything else a task can move reaches both, and a
-// field held back from the notification "because a card is one line" would be
-// that disagreement re-introduced by hand.
+// What a card carries and what a history row carries differ in exactly one
+// field: only the applier holds the project's catalogue, so a custom-field move
+// is history-only. [TaskDeltas] answers both frames, so holding any other field
+// back from the card would reintroduce the disagreement it prevents.
 func TestACardCarriesEveryDeltaButTheCatalogueOne(t *testing.T) {
 	t.Parallel()
 	declared := map[string]FieldDef{
@@ -666,9 +586,8 @@ func TestACardCarriesEveryDeltaButTheCatalogueOne(t *testing.T) {
 			"no catalogue, so it could only have named it by uuid", got)
 	}
 
-	// AND THE APPLIER'S OWN ANSWER IS THE SAME SET PLUS THAT ONE FIELD, so
-	// the history row is a superset of the card rather than a second
-	// opinion about it.
+	// And the applier's answer is the same set plus that one field: a
+	// superset of the card, not a second opinion.
 	row := TaskDeltas(before, after, declared)
 	for name, got := range card.Fields {
 		if !sameDelta(row[name], got) {
@@ -685,13 +604,9 @@ func TestACardCarriesEveryDeltaButTheCatalogueOne(t *testing.T) {
 	}
 }
 
-// MAKING A DUE DATE ALL-DAY IS A CHANGE THE INSTANT CANNOT SHOW.
-//
-// An all-day date is stored as the company's own midnight, so the gesture that
-// turns a midnight due date into an all-day one moves the flag and leaves the
-// instant exactly where it was. Compared on `due` alone that is a row saying
-// the schedule changed and naming nothing — the same failure the schedule
-// fields were added to these deltas to end, one field along.
+// Making a due date all-day is a change the instant cannot show: an all-day
+// date is stored as the company's midnight, so turning a midnight due date
+// all-day moves only the flag, and comparing `due` alone records nothing.
 func TestMakingADueDateAllDayIsRecorded(t *testing.T) {
 	t.Parallel()
 	midnight := time.Date(2031, 4, 16, 0, 0, 0, 0, time.UTC)
@@ -705,8 +620,8 @@ func TestMakingADueDateAllDayIsRecorded(t *testing.T) {
 	if _, held := moved["due"]; held {
 		t.Error("the instant did not move and is in the deltas")
 	}
-	// AND A TASK WITH NO ALL-DAY DATE ON EITHER SIDE RECORDS NOTHING, or
-	// every commit in the company would carry the flag.
+	// And no all-day date on either side records nothing, or every commit
+	// would carry the flag.
 	if moved := TaskDeltas(timed, timed, nil); moved != nil {
 		t.Errorf("an untouched schedule recorded %v", moved)
 	}
@@ -721,10 +636,8 @@ func sameDelta(a, b Delta) bool {
 // moves is a set's delta: what it gained and what it lost.
 func moves(added, removed []string) Delta { return Delta{Added: added, Removed: removed} }
 
-// A CARD SHOWS AT MOST MaxDeltas FIELDS AND SAYS HOW MANY IT LEFT OFF — and
-// the history row is never trimmed. The applier's set used to be cut to the
-// first thirty-two by field name, for the row as well as the card, so a commit
-// moving more recorded only those and said nothing about the rest.
+// A card shows at most MaxDeltas fields and says how many it left off, and the
+// history row is never trimmed.
 func TestACardTrimsToTheDisplayLimitAndCountsTheRest(t *testing.T) {
 	t.Parallel()
 	all := deltaSet{}

@@ -14,10 +14,10 @@ import (
 )
 
 // THE WORK THAT NAMES AN ATLAS ENTRY. A task names the entries it touches as
-// `atlas_entry` relations on its own record (ADR-0140), so "what is being
-// worked on" is the tracker's question to answer, from its own rows: how many
-// open tasks name each entry, and one entry's open and recently closed tasks.
-// Who may ask is the caller's to decide; this reads for a Worklet reader.
+// `atlas_entry` relations on its own record (ADR-0140), so the tracker answers
+// from its own rows how many open tasks name each entry, and one entry's open
+// and recently closed tasks. Who may ask is the caller's to decide; this
+// reads for a Worklet reader.
 
 const (
 	// MaxEntryWork is one page of the tasks naming an entry: fifty, a

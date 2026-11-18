@@ -73,21 +73,17 @@ func (n *node) readRef(name, ref string) (gitlet.ResolvedRef, statelog.Position)
 }
 
 // A REF HOLD MOVES NO CLOCK. A hold record on a seat's branch moves the ref's
-// held_position and the repository's version — the per-ref mark a deletion
-// listed before the turn's read is ordered by, and the replay guard every
-// record moves — and leaves the ref's own `at` (its idle clock), its
-// `position` (the cursor every cache's delta reads), its seat and its target,
-// and the repository's last push and idle clock, as they were: a snapshot
-// delta from before the hold names no ref. A hold on a ref no seat set is
-// answered applied with NO record — such a ref is no seat's to lose — and one
-// in an ARCHIVED repository is a record moving the mark and the version alike,
-// because an archive can be undone between a deletion's listing and its
-// decide.
+// held_position (the mark a deletion listed before the turn's read is ordered
+// by) and the repository's version (the replay guard), and nothing else: not
+// the ref's `at` (idle clock), `position` (every cache's delta cursor), seat or
+// target, nor the repository's last push and idle clock, so a delta from before
+// the hold names no ref. A hold on a ref no seat set applies with NO record (no
+// seat's to lose); one in an ARCHIVED repository is recorded, since an archive
+// can be undone between a deletion's listing and its decide.
 //
-// Mutations: write `at` in the hold's apply → red; write `position` → the delta
-// names the ref, red; record a hold on a seat-less ref → a record is appended,
-// red; apply the version only WHERE status = 'active' → the archived
-// repository's held_position and version stay, red.
+// Mutations: write `at` in the apply → red; write `position` → the delta names
+// the ref, red; record a seat-less ref's hold → a record is appended, red; apply
+// the version only WHERE status = 'active' → the archived one's stay, red.
 func TestARefHoldMovesNoClock(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

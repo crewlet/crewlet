@@ -213,3 +213,21 @@ test("a flow the model does not fit is dropped from the address with its reason,
   await mountAt({ hash: "#/settings/models?flow=retry&entry=default" });
   expect(screen.getByRole("dialog")).toBeTruthy();
 });
+
+// A MODEL JUST ADDED IS BEING ADDED, never missing: the wizard opens its page
+// before the engine's reading holds it, and the mark clears once it does.
+test("a model just added reads as being added until the reading holds it", async () => {
+  current = company(true);
+  await mountAt({ hash: "#/settings/models/fresh?added=fresh", id: "fresh" });
+  expect(screen.getByText("Adding fresh")).toBeTruthy();
+  expect(screen.queryByText("No model called fresh")).toBeNull();
+  cleanup();
+
+  await mountAt({ hash: "#/settings/models/fresh", id: "fresh" });
+  expect(screen.getByText("No model called fresh")).toBeTruthy();
+  cleanup();
+
+  current = modelsData({ admin: true, entries: [modelEntry({ key: "fresh" })] });
+  await mountAt({ hash: "#/settings/models/fresh?added=fresh", id: "fresh" });
+  expect(location.hash).not.toContain("added=");
+});

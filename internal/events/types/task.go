@@ -182,11 +182,15 @@ func (d DeadChange) line() string {
 type PickupWhy string
 
 const (
+	// PickupUrgent is an urgent item the seat has not started, which comes
+	// before every item that is not urgent, started work included (ADR-0159).
+	PickupUrgent PickupWhy = "urgent"
 	// PickupInProgress is an item the seat already started, which comes
-	// before any it has not.
+	// before any it has not that is not urgent.
 	PickupInProgress PickupWhy = "in_progress"
 	// PickupReview is an item in review that somebody else moved there and
-	// the seat holds: its review, which comes before work it has not started.
+	// the seat holds: its review, which comes before work it has not started
+	// that is not urgent.
 	PickupReview PickupWhy = "review"
 	// PickupUnreviewed is an item in review that the seat moved there itself
 	// and nobody reviews: no reviewer holds it and no question of the seat's
@@ -210,8 +214,8 @@ const (
 // Valid reports whether a reason off the wire is one this build knows.
 func (w PickupWhy) Valid() bool {
 	switch w {
-	case PickupInProgress, PickupReview, PickupUnreviewed, PickupWaitsOnPerson, PickupDeadWait,
-		PickupPriorityList, PickupQueue:
+	case PickupUrgent, PickupInProgress, PickupReview, PickupUnreviewed, PickupWaitsOnPerson,
+		PickupDeadWait, PickupPriorityList, PickupQueue:
 		return true
 	}
 	return false
@@ -220,10 +224,14 @@ func (w PickupWhy) Valid() bool {
 // sentence is the reason as the brief says it.
 func (w PickupWhy) sentence() string {
 	switch w {
+	case PickupUrgent:
+		return "It is urgent, so it comes before every item that is not, work you already started included."
 	case PickupInProgress:
-		return "It is in progress and nothing is working on it now, so it comes before work you have not started."
+		return "It is in progress and nothing is working on it now, so it comes before work you have not " +
+			"started, unless that work is urgent."
 	case PickupReview:
-		return "It is in review and yours to review: somebody else asked for it, so it comes before work you have not started."
+		return "It is in review and yours to review: somebody else asked for it, so it comes before work " +
+			"you have not started, unless that work is urgent."
 	case PickupUnreviewed:
 		return "It is in review, but you moved it there yourself and nobody is reviewing it: no " +
 			"reviewer holds it and no question of yours waits on one. Act on the review it was " +

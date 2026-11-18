@@ -7,17 +7,13 @@ import (
 	"fmt"
 )
 
-// THE APPLY OF AN IMPORT'S AND A PULL MIRROR'S RECORDS ([ImportChunk],
-// [ImportDone], [MirrorSync]), in the one transaction the framework holds a
-// record's apply to, PURE IN THE RECORD, ITS POSITION AND ITS INSTANT. The
-// decide held the repository importing at the chunk's turn, or active and
-// following a source at the sync's epoch, and every command's old value; the
-// broker's arbitration on the repository's subject guarantees the record
-// applies against the rows that decide read. So every guard here is a SKIP,
-// never a refusal, which would stop the log on every node: a record that
-// finds the repository otherwise applies as NOTHING, whole, logged
-// (code_remote_not_applied) — no correct log carries one but a record the
-// ledger would have collapsed, met again.
+// The applies of an import's and a pull mirror's records ([ImportChunk],
+// [ImportDone], [MirrorSync]), each pure in the record, its position and its
+// instant. The decide held the repository importing at the chunk's turn, or
+// active and following a source at the sync's epoch, and every command's old
+// value; every guard is a skip (apply.go's head, rule 3): a record finding the
+// repository otherwise applies as nothing, logged (code_remote_not_applied),
+// and only a redelivered record the ledger would have collapsed does.
 
 // remoteState is what an import's or a mirror's apply reads of its
 // repository's row: its status, how many of its import's chunks have landed,
@@ -44,11 +40,10 @@ func remoteStateIn(ctx context.Context, tx *sql.Tx, at applyContext, repoID stri
 }
 
 // applyImportChunk lands one chunk of an import: the repository's import_seq
-// moved to its Seq first — the repository's row, which the push's counters
-// share — and then ITS PUSH, through the one apply every push takes
-// ([Applier.landPushes]): its refs, its packs kind import, its push row `via
-// import` by the engine's own account, a drop for every command that leaves
-// an object, and the horizons with what the record's rows leave them.
+// moved to its Seq first, on the row the push's counters share, then its push
+// through [Applier.landPushes]: its packs kind import, its push row `via
+// import` by the engine's own account, a drop for every command that leaves an
+// object, and the horizons with what the record's rows leave them.
 func (a *Applier) applyImportChunk(ctx context.Context, tx *sql.Tx, at applyContext, c ImportChunk) (int, error) {
 	s, err := remoteStateIn(ctx, tx, at, c.RepoID)
 	if err != nil {
@@ -74,14 +69,12 @@ func (a *Applier) applyImportChunk(ctx context.Context, tx *sql.Tx, at applyCont
 	return 1 + pushed, nil
 }
 
-// applyImportDone ends an import: the repository active, imported_at the
-// record's instant, import_error its Error and, where it names one, its
-// default branch moved — one write of the repository's row. A PULL MIRROR'S
-// import that landed whole also moves mirror_synced_at to that instant: its
-// first fill is its import's, so it is level with its source from there, and
-// `mirrors_due` lists it once that is MirrorInterval old rather than at once,
-// as never synced. One that ended short keeps zero, so its first sync comes
-// at the next pass.
+// applyImportDone ends an import in one write of the repository's row: active,
+// imported_at the record's instant, import_error its Error and the default
+// branch it names, if any. A pull mirror's import that landed whole also moves
+// mirror_synced_at to that instant, since it is level with its source there,
+// so `mirrors_due` lists it after MirrorInterval rather than at once; one that
+// ended short keeps zero, so its first sync comes at the next pass.
 func (a *Applier) applyImportDone(ctx context.Context, tx *sql.Tx, at applyContext, d ImportDone) (int, error) {
 	s, err := remoteStateIn(ctx, tx, at, d.RepoID)
 	if err != nil {
@@ -110,11 +103,10 @@ func (a *Applier) applyImportDone(ctx context.Context, tx *sql.Tx, at applyConte
 }
 
 // applyMirrorSync lands one sync of a pull mirror: the repository's
-// mirror_synced_at moved to the record's instant first, then ITS PUSH, as a
-// chunk's — its packs kind mirror, its push row `via mirror`. A sync that
-// moves nothing ([MirrorSync.Current]) writes that one row and no push: no
-// push row of nothing, which every listing of the repository's pushes would
-// show four times an hour.
+// mirror_synced_at moved to the record's instant first, then its push, as a
+// chunk's, with packs kind mirror and a push row `via mirror`. A sync that
+// moves nothing ([MirrorSync.Current]) writes no push, so the repository's
+// push listings do not show an empty push every sync.
 func (a *Applier) applyMirrorSync(ctx context.Context, tx *sql.Tx, at applyContext, m MirrorSync) (int, error) {
 	s, err := remoteStateIn(ctx, tx, at, m.RepoID)
 	if err != nil {
@@ -140,8 +132,7 @@ func (a *Applier) applyMirrorSync(ctx context.Context, tx *sql.Tx, at applyConte
 }
 
 // remoteNotApplied logs an import or mirror record that applies as nothing
-// because its repository is not as its decide held it, and answers that it
-// wrote no row.
+// because its repository is not as its decide held it, and answers no rows.
 func remoteNotApplied(ctx context.Context, at applyContext, repoID, why string) (int, error) {
 	applyLog.WarnContext(ctx, "code_remote_not_applied", "repo", repoID, "op", string(at.record.Op),
 		"op_id", at.record.OpID, "position", at.position.String(), "why", why)
@@ -153,9 +144,8 @@ func remoteNotApplied(ctx context.Context, at applyContext, repoID, why string) 
 const (
 	remoteStateSQL = `SELECT status, import_seq, mirror_from != '' FROM code_repos WHERE id = ?`
 	importSeqSQL   = `UPDATE code_repos SET import_seq = ? WHERE id = ?`
-	// importDoneSQL keeps the default branch an end names none of, and
-	// moves a pull mirror's last sync to the end of an import that landed
-	// whole.
+	// importDoneSQL keeps the default branch where the end names none, and
+	// moves a pull mirror's last sync to an import's end that landed whole.
 	importDoneSQL = `UPDATE code_repos SET status = 'active', imported_at = ?, import_error = ?,
 		default_branch = CASE WHEN ? = '' THEN default_branch ELSE ? END,
 		mirror_synced_at = CASE WHEN mirror_from != '' AND ? = '' THEN ? ELSE mirror_synced_at END,

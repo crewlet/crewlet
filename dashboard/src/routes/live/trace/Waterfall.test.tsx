@@ -324,16 +324,16 @@ describe("an executor's live output from its box", () => {
     expect(await screen.findByText("No output yet.")).toBeTruthy();
   });
 
-  // IT HOLDS WHAT IT IS SENT AND FOLLOWS THE END. Each answer adds what was
-  // written since; the block keeps the newest line in view — the one that
-  // says what the executor is doing now — until the reader scrolls up, after which
-  // the text they are reading stays where it is.
-  //
-  // Mutation: drop the follow, and the block stays at its top; follow
-  // regardless of the reader, and their scroll is taken away.
+  // IT HOLDS WHAT IT IS SENT AND FOLLOWS THE END until the reader scrolls up,
+  // when their place holds and Jump to latest takes them back. Mutation: drop
+  // the follow, or follow regardless of the reader, and it goes red.
   test("accumulates what it is sent and follows the end until the reader scrolls up", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
-    const lines = ["[tool] bash: go build\n", "[tool] bash: go vet\n", "[tool] bash: go test\n"];
+    const lines = [
+      "[tool 1] bash: go build\n",
+      "[tool 2] bash: go vet\n",
+      "[tool 3] bash: go test\n",
+    ];
     let end = 0;
     const answer = (n: number): ExecutorTailAnswer => {
       const text = lines[Math.min(n, lines.length) - 1]!;
@@ -360,16 +360,16 @@ describe("an executor's live output from its box", () => {
     };
     const { asked } = mount(PARKED, answer, { selected: "run:L1" });
     await flush();
-    const pre = document.querySelector(".live-output pre") as HTMLElement;
-    expect(pre.textContent).toContain("go build");
-    Object.defineProperty(pre, "scrollHeight", { configurable: true, value: 1_000 });
-    Object.defineProperty(pre, "clientHeight", { configurable: true, value: 100 });
+    const log = document.querySelector(".live-output [role='log']") as HTMLElement;
+    expect(log.textContent).toContain("go build");
+    Object.defineProperty(log, "scrollHeight", { configurable: true, value: 1_000 });
+    Object.defineProperty(log, "clientHeight", { configurable: true, value: 100 });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS);
     });
-    expect(pre.textContent).toContain("go build");
-    expect(pre.textContent).toContain("go vet");
+    expect(log.textContent).toContain("go build");
+    expect(log.textContent).toContain("go vet");
     expect(asked[1]).toEqual({
       turn_id: "turn-1",
       launch_id: "L1",
@@ -377,15 +377,16 @@ describe("an executor's live output from its box", () => {
       after: lines[0]!.length,
       digest: `d${lines[0]!.length}`,
     });
-    expect(pre.scrollTop).toBe(1_000);
+    expect(log.scrollTop).toBe(900);
 
-    pre.scrollTop = 200;
-    fireEvent.scroll(pre);
+    log.scrollTop = 200;
+    fireEvent.scroll(log);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS);
     });
-    expect(pre.textContent).toContain("go test");
-    expect(pre.scrollTop).toBe(200);
+    expect(log.textContent).toContain("go test");
+    expect(log.scrollTop).toBe(200);
+    expect(screen.getByRole("button", { name: /Jump to latest/ })).toBeTruthy();
   });
 
   // A LAUNCH STILL BEING SET UP IS ASKED ABOUT AGAIN, and is not called stopped.
@@ -578,13 +579,14 @@ describe("a person's note", () => {
   });
 
   // EVERY END THE RECORD KNOWS, said as it is and drawn at its step: a note a
-  // step took for a reader that never had it is MISSED there; one handed to the
-  // executor that never confirmed it is UNCONFIRMED at that job, its session
-  // maybe holding it; one a later launch's brief told again is DELIVERED at
-  // that brief, said as told again after a step that never handed it over;
-  // and an outcome this build cannot name is said as that, drawn nowhere,
-  // never as expired, which said the turn finished before reading a note a
-  // newer step may have read. No end says more than its record does.
+  // step took for a reader that never had it is MISSED there, said as never
+  // reaching its reader and, for a review's round, as never handed over; one
+  // handed to the executor that never confirmed it is UNCONFIRMED at that job,
+  // its session maybe holding it; one a later launch's brief told again is
+  // DELIVERED at that brief, said as told again after a step that never handed
+  // it over; and an outcome this build cannot name is said as that, drawn
+  // nowhere, never as expired, which said the turn finished before reading a
+  // note a newer step may have read. No end says more than its record does.
   test("a missed, an unconfirmed, a retold and an unknown end are each said as what the record knows", async () => {
     const end = (note_id: string, ms: number, fields: Record<string, unknown>) =>
       event("agent_turn_steered", ms, { note_id, note: `note ${note_id}`, ...fields });
@@ -643,7 +645,7 @@ describe("a person's note", () => {
     mount(events, RUNNING);
     await flush();
     for (const words of [
-      "taken for the executor in Execute, after a tool batch, but never handed to it",
+      "taken for the executor in Execute, after a tool batch, but it never reached it",
       "taken at round 2 of Review but never handed over",
       "handed to the executor in Execute, at its next step, which never confirmed reading it " +
         "\\(its session may hold it\\)",
@@ -660,8 +662,75 @@ describe("a person's note", () => {
     // THE LAUNCH'S BADGE SAYS EVERY END AT ITS STEPS.
     const badge = within(screen.getByRole("button", { name: /^Launch/ })).getByText("note");
     expect(badge.getAttribute("title")).toBe(
-      "Your note was taken here but never handed over; Your note was handed over here and never confirmed; " +
+      "Your note was taken here and never reached its reader; Your note was handed over here and never confirmed; " +
         "Your note was read here",
+    );
+  });
+
+  // A HOOK'S SERVE ITS JOB'S WHOLE SESSION PROVES IT NEVER TOOK IS MISSED AT
+  // ITS TOOL BATCH: the hook's answer carried the note, so it was handed over,
+  // and the model it was for never had it. The badge and the line say that it
+  // never reached its reader, never that it was not handed over, which said
+  // the hook's answer carried nothing.
+  test("a hook's serve its job's whole session proves it never took is said as never reaching its reader", async () => {
+    const events = [
+      ...PARKED,
+      event("agent_turn_steered", 2_000, {
+        note_id: "h",
+        outcome: "missed",
+        phase: "execute",
+        iteration: 1,
+        round: 1,
+        boundary: "tool_batch",
+        launch_id: "L1",
+        note: "note h",
+      }),
+    ];
+    mount(events, RUNNING);
+    await flush();
+    expect(
+      screen.getByText(
+        /taken for the executor in Execute, after a tool batch, but it never reached it/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/never handed/)).toBeNull();
+    const badge = within(screen.getByRole("button", { name: /^Launch/ })).getByText("note");
+    expect(badge.getAttribute("title")).toBe(
+      "Your note was taken here and never reached its reader",
+    );
+  });
+
+  // A NOTE MISSED AT A STEP THIS BUILD CANNOT NAME says only what `missed`
+  // records, that its reader never had it, as the badge on the launch's bar
+  // beside it does: a newer build's step may be one that handed it over, as a
+  // hook's serve is, so "never handed over" would say more than the record.
+  test("a note missed at a step this build cannot name is said as never reaching its reader", async () => {
+    const events = [
+      ...PARKED,
+      event("agent_turn_steered", 2_000, {
+        note_id: "n",
+        outcome: "missed",
+        phase: "execute",
+        iteration: 1,
+        round: 1,
+        boundary: "prompt_submit",
+        launch_id: "L1",
+        note: "note n",
+      }),
+    ];
+    const marks = steerMarks(events, "turn-1");
+    expect(marks.map((m) => [m.noteId, m.outcome, m.boundary, m.spanId])).toEqual([
+      ["n", "missed", "unknown", "run:L1"],
+    ]);
+    mount(events, RUNNING);
+    await flush();
+    expect(
+      screen.getByText(/taken by the turn in Execute, but it never reached its reader/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/never handed/)).toBeNull();
+    const badge = within(screen.getByRole("button", { name: /^Launch/ })).getByText("note");
+    expect(badge.getAttribute("title")).toBe(
+      "Your note was taken here and never reached its reader",
     );
   });
 
@@ -821,14 +890,20 @@ describe("a live tail's announcements", () => {
     vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
     mount(PARKED, RUNNING, { selected: "run:L1" });
     await flush();
-    const live = document.querySelectorAll("[aria-live], [role='status']");
-    expect(live).toHaveLength(1);
-    expect(live[0]!.textContent).toBe("Showing the executor's live output.");
-    expect(live[0]!.contains(screen.getByText("running go test ./..."))).toBe(false);
+    // The copy action's region speaks only once something is copied.
+    const live = [
+      ...document.querySelectorAll("[aria-live]:not([aria-live='off']), [role='status']"),
+    ];
+    const state = live.filter((region) => region.textContent !== "");
+    expect(state).toHaveLength(1);
+    expect(state[0]!.textContent).toBe("Showing the executor's live output.");
+    expect(live.some((region) => region.contains(screen.getByText("running go test ./...")))).toBe(
+      false,
+    );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS);
     });
-    expect(document.querySelector("[role='status']")!.textContent).toBe(
+    expect(document.querySelector(".live-output > [role='status']")!.textContent).toBe(
       "Showing the executor's live output.",
     );
   });

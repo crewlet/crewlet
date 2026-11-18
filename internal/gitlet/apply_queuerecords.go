@@ -11,42 +11,35 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE QUEUE'S OWN RECORDS' APPLIES (queuerecords.go) — each in the one
-// transaction the framework holds a record's apply to, PURE IN THE RECORD, ITS
-// POSITION AND ITS INSTANT, as an enqueue's is (apply_queue.go): the decide
-// held its entries live, its target at its base and its landing's every gate
-// met; the broker's arbitration on the repository's subject guarantees the
-// record applies against the rows that decide read. So every guard here is a
-// SKIP, never a refusal, which would stop the log on every node: a record that
-// finds its rows not as its decide held them applies as NOTHING, whole,
-// logged (code_queue_not_applied).
-//
-// EVERY RECORD MOVES THE REPOSITORY'S VERSION, so the version guard every
-// record on its subject meets skips it when it is met again — a landing's
+// The queue's own records' applies (queuerecords.go), each pure in the record,
+// its position and its instant, as an enqueue's is (apply_queue.go). The
+// decide held the entries live, the target at its base and every gate met, and
+// every guard is a skip (apply.go's head, rule 3): a record finding its rows
+// not as its decide held them applies as nothing, logged
+// (code_queue_not_applied). Every record moves the repository's version, so
+// the version guard skips it when it is met again; a landing's moves it
 // through the counters of the pushes it lands.
-//
+
 // # A train is abandoned whole
 //
-// A target holds one train at most, and a train is valid only while every
-// entry it tests is live in it: so a candidate ABANDONS the target's earlier
-// train, and an eject, a dequeue and a landing of an entry a train tests end
-// that train's claim on the rest — its candidates removed (a train that ends
-// removes them, so a read of the target's trains names its live one alone)
-// and its other entries waiting again, for its home's next candidate.
-// Records of a change's own that end a testing entry — a close, a draft, a
-// retarget, a push to its head — leave the train naming an entry no longer
-// live, which no landing of it then lands (its decide refuses a train whose
-// entries are not live) and the home's next candidate abandons.
-//
+// A target holds one train at most, valid only while every entry it tests is
+// live in it: a candidate abandons the target's earlier train, and an eject, a
+// dequeue or a landing of an entry a train tests ends that train's claim on
+// the rest, its candidates removed (so a read of the target's trains names its
+// live one alone) and its other entries waiting for the home's next candidate.
+// A change's own records that end a testing entry (a close, a draft, a
+// retarget, a push to its head) leave the train naming a dead entry, which no
+// landing lands (its decide refuses a train whose entries are not live) and
+// the home's next candidate abandons.
+
 // # The queue's history keeps pace with its records
 //
 // Each candidate, eject and land removes its repository's queue history past
-// [QueueHistory] — its ended entries, then its targets' landings below their
-// green rows, oldest first — at most [queueHorizonRows] a record, as many as a
-// landing ends and lands, and its ejections only until they weigh
-// [queueHorizonBytes], as much as one record adds, so a working queue keeps
-// its own thirty days; an idle repository's history is the retention duty's
-// ([Store.QueueSweep]).
+// [QueueHistory] (ended entries, then landings below their target's green row,
+// oldest first): at most [queueHorizonRows] a record, as many as a landing
+// ends and lands, and ejections only until they weigh [queueHorizonBytes], as
+// much as one record adds, so a working queue keeps its own thirty days. An
+// idle repository's history is the retention duty's ([Store.QueueSweep]).
 
 // candidateTesting is a candidate's state while its train tests it — the one
 // a candidate row holds, since a train that ends removes its rows.
@@ -195,29 +188,18 @@ func (a *Applier) applyEject(ctx context.Context, tx *sql.Tx, at applyContext, e
 	return rows + 1 + swept, nil
 }
 
-// applyLand lands a queue's entries as one record — see queuerecords.go's head:
-//
-//  1. EACH CHANGE MERGED FIRST — `merged_via` queue, at the commit
-//     the queue built of it, merged by its ENQUEUER — so that the pushes this
-//     record lands find it merged, as a merge's push finds its change
-//     ([Applier.applyMerge]): a push setting a target to a live change's head
-//     would otherwise merge it, and one deleting its source close it.
-//  2. Each entry landed, at its commit; its train's landed candidates
-//     removed, its candidates after them testing on.
-//  3. The target's landing rows in chain order, one an entry, each GREEN —
-//     the decide proved every required check on the tip — and its green row
-//     moved to the tip.
-//  4. The queue's history past its horizon — before the pushes, whose own
-//     horizons take what the record's rows leave.
-//  5. THE PUSHES, one an entry, through the one apply every push takes
-//     ([Applier.landPushes]): the target moved from what the entry before it
-//     left onto its commit, its source deleted where the decide stamped it,
-//     a push row `via queue` naming its enqueuer, whom its enqueue was made
-//     for — read off the entry's row in this apply, which the land record
-//     does not carry ([Land.pushes]) — and what it introduced, the
-//     repository's counters, and the horizons.
-//  6. Their merges counted in the repository's changes by state and their
-//     tally ([countChanges]), after the pushes, as a merge's is.
+// applyLand lands a queue's entries as one record (queuerecords.go's head):
+//  1. each change merged first by its enqueuer, `merged_via` queue at its
+//     commit, so the pushes find it merged, as a merge's do
+//     ([Applier.applyMerge]), rather than merging or closing it;
+//  2. each entry landed at its commit, its train's landed candidates removed;
+//  3. the landing rows in chain order, each green (the decide proved every
+//     required check on the tip), and the green row moved to the tip;
+//  4. the queue's history past its horizon, before the pushes' own horizons;
+//  5. the pushes, one an entry, through [Applier.landPushes], `via queue` naming
+//     the enqueuer and whom it was made for, read off the entry's row since
+//     the record does not carry it ([Land.pushes]);
+//  6. their merges counted ([countChanges]), after the pushes, as a merge's.
 func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l Land) (int, error) {
 	named := make([]string, len(l.Entries))
 	for i, e := range l.Entries {
@@ -227,7 +209,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 	if err != nil {
 		return 0, err
 	}
-	// EVERY CHANGE IN ONE READ, driven from the list of them.
+	// Every change in one read, driven from the list.
 	ids := make([]string, len(l.Entries))
 	for i, e := range l.Entries {
 		ids[i] = e.ChangeID
@@ -261,7 +243,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 			"built onto "+short(l.BaseOID))
 	}
 	pushes := l.pushes(entries, changes)
-	// ITS PUSHES LAND WHOLE WITH IT OR NOT AT ALL, as a merge's does.
+	// Its pushes land whole with it or not at all, as a merge's do.
 	landed, err := pushesApplied(ctx, tx, []string{pushes[0].PushID})
 	if err != nil {
 		return 0, fmt.Errorf("gitlet: read whether the landing at %s landed its pushes: %w", at.position, err)
@@ -271,8 +253,8 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 			"history already")
 	}
 
-	// 1 EVERY CHANGE MERGED FIRST, by its enqueuer — the queue never acts on
-	// its own account — one version more each at the record's position.
+	// 1 Every change merged first, by its enqueuer: the queue never acts on
+	// its own account.
 	merged := make([]*changeRow, len(changes))
 	for i, row := range changes {
 		entry := entries[l.Entries[i].EntryID]
@@ -290,24 +272,24 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 		return 0, fmt.Errorf("gitlet: merge the changes the landing at %s lands: %w", at.position, err)
 	}
 	rows := len(merged)
-	// AND THEIR STORED READINESS CLEARED, one statement for them all: a
-	// merged change waits on nobody ([clearReadiness]).
+	// Their stored readiness cleared in one statement: a merged change waits
+	// on nobody ([clearReadiness]).
 	cleared, err := clearReadiness(ctx, tx, ids)
 	if err != nil {
 		return 0, fmt.Errorf("%w (the landing at %s)", err, at.position)
 	}
 	rows += cleared
 
-	// 2 EVERY ENTRY LANDED, and a train's landed candidates removed.
+	// 2 Every entry landed, and the train's landed candidates removed.
 	ended := make([]entryRow, len(l.Entries))
 	for i, e := range l.Entries {
 		next := entries[e.EntryID]
 		next.State, next.EndedAt, next.EndedPosition, next.EndReason, next.CommitOID = QueueLanded, at.at(),
 			at.packed, "", e.Commit
-		// THE CLOSE IT OWES, where its enqueue asked it of a change carrying
-		// a work item (M5-D27): its home closes the item as its enqueuer and
-		// settles the ask (close_settled), on whichever turn and home reaches
-		// it first — never only the turn that asked the landing.
+		// The close it owes where its enqueue asked one of a change carrying a
+		// work item (M5-D27): whichever home and turn reaches it first closes
+		// the item as its enqueuer and settles it (close_settled), never only
+		// the landing's turn.
 		ended[i] = entryRow{queueEntry: next, closeOp: closeOpOf(at, next, changes[i])}
 	}
 	if err = writeEntries(ctx, tx, at.maxVariables, entryLanded, ended); err != nil {
@@ -320,7 +302,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 	}
 	rows += dropped
 
-	// 3 THE LANDINGS, in chain order, and the green row.
+	// 3 The landings, in chain order, and the green row.
 	landings := make([]landing, len(l.Entries))
 	from := l.BaseOID
 	for i, e := range l.Entries {
@@ -340,7 +322,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 	}
 	rows += moved
 
-	// 4 THE QUEUE'S HISTORY, before the pushes' own horizons.
+	// 4 The queue's history, before the pushes' own horizons.
 	swept, err := sweepQueueHistory(ctx, tx, l.RepoID, store.EncodeTime(at.brokerAt.Add(-QueueHistory)),
 		queueHorizonRows, queueHorizonBytes)
 	if err != nil {
@@ -348,13 +330,13 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 	}
 	rows += swept
 
-	// 5 THE PUSHES, with what the rows above leave the record's horizons.
+	// 5 The pushes, their horizons given what the rows above leave.
 	pushed, err := a.landPushes(ctx, tx, at, PushBatch{RepoID: l.RepoID, Pushes: pushes}, recordPacks{}, rows)
 	if err != nil {
 		return 0, err
 	}
 
-	// 6 THEIR MERGES COUNTED.
+	// 6 Their merges counted.
 	var landedCounts ChangeCounts
 	for _, row := range changes {
 		landedCounts.move(row.state, ChangeStateMerged)
@@ -367,9 +349,8 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 }
 
 // closeOpOf is the operation a landed entry's work item is closed under
-// (code_queue.close_op): [CloseWorkItemOpID] of the landing's own operation,
-// where entry asked its close of a change carrying a work item, and "" —
-// owing none — otherwise.
+// (code_queue.close_op): [CloseWorkItemOpID] of the landing's operation where
+// entry asked a close of a change carrying a work item, else "" (owing none).
 func closeOpOf(at applyContext, entry queueEntry, change changeRow) string {
 	if !entry.CloseTask || change.work.ID == "" {
 		return ""
@@ -378,21 +359,20 @@ func closeOpOf(at applyContext, entry queueEntry, change changeRow) string {
 }
 
 // CloseWorkItemOpID is the operation a landed entry's work item is closed
-// under — step 2 of a queued merge (M5-D27), a step of its LANDING's
-// operation, as a direct merge's close is a step of the merge's: whichever
-// home asks it, on whichever turn, it is the same tracker write, which the
-// tracker's ledger answers once. Recorded on the entry's row as the landing
-// applies, since nothing else the row holds names the landing's operation.
+// under (M5-D27): a step of its landing's operation, as a direct merge's close
+// is of the merge's, so whichever home asks it on whichever turn it is one
+// tracker write, which the tracker's ledger answers once. It is recorded on
+// the entry's row as the landing applies, since nothing else there names the
+// landing's operation.
 func CloseWorkItemOpID(landOpID, entryID string) string {
 	return statelog.StepOpID(landOpID, "close-work-item", entryID)
 }
 
 // applyCloseSettled clears the closes landed entries owed their work items
-// (code_queue.close_op), out of every home's queue work, in ONE statement
-// for every close the record settles: an entry owing none — another settle
-// reached it first — is passed over, and a record that clears none writes
-// nothing. Its notices, its not_closed closes', are the caller's
-// ([Applier.noticed]).
+// (code_queue.close_op), out of every home's queue work, in one statement: an
+// entry owing none (another settle reached it first) is passed over, and a
+// record that clears none writes nothing. The notices of its not_closed
+// closes are the caller's ([Applier.noticed]).
 func (a *Applier) applyCloseSettled(ctx context.Context, tx *sql.Tx, at applyContext, c CloseSettled) (int,
 	error) {
 
@@ -427,13 +407,12 @@ func (a *Applier) applyCloseSettled(ctx context.Context, tx *sql.Tx, at applyCon
 	return closeSettledRows(len(settling)), nil
 }
 
-// applyGreen moves the target's green row onto the landing record at Through —
-// its position the landing's, so a read of the target's landings above its
-// green lists what came after it, and every landing up to it is green by its
-// position — and settles the target's tip work against what lies above it.
-// THREE ROWS WHATEVER LIES BENEATH: the green row, the target's row of tip
-// work and the repository's version, never one a landing, so no backlog of
-// unproven landings, however long, makes a green past a record.
+// applyGreen moves the target's green row onto the landing record at Through,
+// taking the landing's position so every landing up to it is green by
+// position, and settles the target's tip work against what lies above it. It
+// writes three rows whatever lies beneath (the green row, the tip work, the
+// version), never one a landing, so no backlog of unproven landings makes a
+// green outgrow a record.
 func (a *Applier) applyGreen(ctx context.Context, tx *sql.Tx, at applyContext, g Green) (int, error) {
 	green, held, err := greenIn(ctx, tx, g.RepoID, g.TargetRef)
 	if err != nil {
@@ -468,10 +447,10 @@ func (a *Applier) applyGreen(ctx context.Context, tx *sql.Tx, at applyContext, g
 	return 2 + settled, nil
 }
 
-// applyBroken marks the landing the record names broken, and settles its
+// applyBroken marks the landing the record names broken and settles its
 // target's tip work: a target whose only landings above its green row are
-// broken owes its home nothing until the next one lands. Its target's green
-// row stays where it is: it only ever advances on green.
+// broken owes its home nothing until the next lands. The green row stays: it
+// only ever advances on green.
 func (a *Applier) applyBroken(ctx context.Context, tx *sql.Tx, at applyContext, b Broken) (int, error) {
 	landing, found, err := landingAt(ctx, tx, b.RepoID, b.TargetRef, b.Position.Packed(), b.Ordinal)
 	if err != nil {
@@ -505,9 +484,8 @@ func (a *Applier) applyBroken(ctx context.Context, tx *sql.Tx, at applyContext, 
 }
 
 // applyQueueSweep removes the repository's queue history from before Through,
-// oldest first, at most [QueueSweepRows] and its ejections within
-// [QueueSweepBytes] — what its decide counted from the same rows — and moves
-// its version.
+// oldest first, within [QueueSweepRows] and [QueueSweepBytes] of ejections, as
+// its decide counted from the same rows, and moves its version.
 func (a *Applier) applyQueueSweep(ctx context.Context, tx *sql.Tx, at applyContext, s QueueSweep) (int, error) {
 	swept, err := sweepQueueHistory(ctx, tx, s.RepoID, store.EncodeTime(s.Through), QueueSweepRows,
 		QueueSweepBytes)
@@ -520,9 +498,9 @@ func (a *Applier) applyQueueSweep(ctx context.Context, tx *sql.Tx, at applyConte
 	return swept + 1, nil
 }
 
-// abandonTrainOn abandons target's live train on repoID, if it holds one: its
-// testing entries waiting again, naming no train, and its candidates removed.
-// It answers the rows it wrote.
+// abandonTrainOn abandons target's live train on repoID, if any: its testing
+// entries waiting again, naming no train, and its candidates removed. It
+// answers the rows it wrote.
 func abandonTrainOn(ctx context.Context, tx *sql.Tx, repoID, target string) (int, error) {
 	reset, err := tx.ExecContext(ctx, resetTrainSQL, repoID, target)
 	if err != nil {
@@ -537,10 +515,9 @@ func abandonTrainOn(ctx context.Context, tx *sql.Tx, repoID, target string) (int
 	return int(r + d), nil
 }
 
-// dropLandedCandidates removes the candidates of l's train the landing
-// landed — those up to the one whose tip is the landing's — and answers how
-// many. The train's later candidates test on: each was built on the one
-// before, whose tip the target now holds.
+// dropLandedCandidates removes l's train's candidates up to the one whose tip
+// is the landing's, and answers how many. The later ones test on: each was
+// built on the one before, whose tip the target now holds.
 func dropLandedCandidates(ctx context.Context, tx *sql.Tx, l Land) (int, error) {
 	train, err := trainsOf(ctx, tx, l.RepoID, l.TargetRef)
 	if err != nil {
@@ -558,10 +535,9 @@ func dropLandedCandidates(ctx context.Context, tx *sql.Tx, l Land) (int, error) 
 	return int(n), nil
 }
 
-// addQueuePack writes a queue record's pack — a train's, of kind candidate —
-// as a live pack of the repository, its counters moved with it and its version
-// to the record's position; a record with no pack moves the version alone. It
-// answers the rows it wrote.
+// addQueuePack writes a queue record's pack (a train's, of kind candidate) as
+// a live pack of the repository, moving its counters and its version; a record
+// with no pack moves the version alone. It answers the rows it wrote.
 func addQueuePack(ctx context.Context, tx *sql.Tx, at applyContext, repoID string, pack *PackRef,
 	kind PackKind) (int, error) {
 
@@ -571,9 +547,8 @@ func addQueuePack(ctx context.Context, tx *sql.Tx, at applyContext, repoID strin
 		}
 		return 1, nil
 	}
-	// ITS CONTENT DATES FROM ITS OWN POSITION, and arrived at its own broker
-	// instant, as a push's pack's does: what it brings reaches the repository
-	// here.
+	// Its content dates from this record's position and broker instant, as a
+	// push's pack's does: what it brings reaches the repository here.
 	res, err := tx.ExecContext(ctx, addQueuePackSQL, repoID, pack.PackID, pack.Object.String(), string(pack.Hash),
 		pack.Size, pack.IndexBytes, pack.ReverseBytes, pack.GitChecksum, pack.Objects, string(kind), at.packed,
 		at.packed, at.at())
@@ -588,12 +563,10 @@ func addQueuePack(ctx context.Context, tx *sql.Tx, at applyContext, repoID strin
 	return 2, nil
 }
 
-// sweepQueueHistory removes repoID's queue history from before cutoff (a
-// store.EncodeTime instant), oldest first, at most rows rows and its
-// ejections only until they weigh bytes — its ended entries first, then each
-// target's landings below its green row — and answers how many it removed:
-// exactly what [queueHistoryIn] counts in the same rows, each removal a range
-// of a key up to the last row the walk took.
+// sweepQueueHistory removes the cut [queueHistoryIn] takes of repoID's queue
+// history before cutoff (a store.EncodeTime instant) within rows and bytes,
+// each removal a key range up to the last row the walk took, so it removes
+// exactly what that counts in the same rows. It answers how many it removed.
 func sweepQueueHistory(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64, rows int,
 	bytes int64) (int, error) {
 
@@ -622,10 +595,9 @@ func sweepQueueHistory(ctx context.Context, tx *sql.Tx, repoID string, cutoff in
 }
 
 // historyCut is what of a repository's queue history lies past a cutoff within
-// a budget: how many of its ended entries, the key of the last of them — when
-// it ended and its id, every entry before it in that order going too — and
-// what their ejections weigh; and for each target the last landing below its
-// green row that does, every one before it doing too.
+// a budget: how many ended entries, the key of the last (every entry before it
+// in key order goes too) and what their ejections weigh; and for each target
+// the last landing below its green row that goes, every one before it too.
 type historyCut struct {
 	entries  int
 	endedAt  int64
@@ -652,29 +624,18 @@ func (h historyCut) rows() int {
 	return n
 }
 
-// queueHistoryIn is what of repoID's queue history lies before cutoff — ended
-// entries oldest first by their key over code_queue_ended_idx, then each
-// target's landings below its green row in the order they landed, stopping at
-// the first that does not, since a later landing is no older — within budget
-// rows, its ended entries weighed until their ejections reach bytes, and
-// whether more lies past it.
+// queueHistoryIn is what of repoID's queue history lies before cutoff within
+// budget rows, and whether more lies past it: ended entries oldest first over
+// code_queue_ended_idx, weighed as a purge part is ([PurgePartBytes]) by
+// ejected_bytes from the index alone, taken while those before weigh under
+// bytes; then, only if neither bound stopped them, each target's landings
+// below its green row, stopping at the first inside the history.
 //
-// WEIGHED, AS A PURGE PART IS ([PurgePartBytes]): an ended entry is taken
-// while what the entries before it weigh is under bytes — the first whatever
-// it weighs, and at most one past — each by its ejected_bytes, read from the
-// index alone, so weighing an ejection never reads it. A walk whose entries
-// stopped at either bound takes no landing: the next record or step does.
-//
-// THE CUT NAMES ITS LAST ENTRY BY ITS KEY, (ended_at, entry_id), the index's
-// order, and the apply removes the range up to it: at a tie of instants — a
-// landing ends up to [MaxLandEntries] entries at one — "the first n" would be
-// whichever the engine's row order put first, which a copy of the file need
-// not share, and the copies would differ by which rows each removed.
-//
-// THE WALK STOPS AT THE FIRST LANDING INSIDE THE HISTORY, and that stop is
-// SAFE, never exact, as a retired-pack sweep's is (sweepThrough): positions
-// are only nearly monotone in instants, so a landing behind a later-stamped
-// one waits for the next record — at most the members' skew past its history.
+// The cut names its last entry by its key (ended_at, entry_id): a landing ends
+// up to [MaxLandEntries] entries at one instant, and "the first n" of a tie
+// would follow the engine's row order, which copies need not share. The
+// landing stop is safe, not exact, as sweepThrough's is: positions are only
+// nearly monotone in instants, so a landing may wait a record, by member skew.
 func queueHistoryIn(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64, budget int,
 	bytes int64) (historyCut, bool, error) {
 
@@ -736,10 +697,9 @@ func queueHistoryIn(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64
 	return cut, more, nil
 }
 
-// endedWithin walks repoID's ended entries from before cutoff into cut,
-// oldest first by their key: at most budget of them, and none once what the
-// entries taken weigh reaches bytes. It answers whether an entry past the cut
-// is left.
+// endedWithin walks repoID's ended entries from before cutoff into cut, oldest
+// first by key: at most budget, and none more once those taken weigh bytes. It
+// answers whether an entry past the cut is left.
 func endedWithin(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64, budget int, bytes int64,
 	cut *historyCut) (bool, error) {
 
@@ -787,9 +747,9 @@ func greenRowsIn(ctx context.Context, tx *sql.Tx, repoID string) ([]GreenRow, er
 	return out, rows.Err()
 }
 
-// moveGreen moves target's green row on repoID to commit at position — the
-// landing record whose tip it is — at the record's instant ([advanceGreen]'s
-// upsert, its position the landing's).
+// moveGreen moves target's green row on repoID to commit at position, the
+// landing record whose tip it is, at the record's instant ([advanceGreen]'s
+// upsert).
 func moveGreen(ctx context.Context, tx store.Execer, at applyContext, repoID, target, commit string,
 	position int64) error {
 
@@ -801,21 +761,20 @@ func moveGreen(ctx context.Context, tx store.Execer, at applyContext, repoID, ta
 }
 
 // entryRow is a queue entry as a queue record writes it back: its row, the
-// ejection's JSON an eject keeps on it ("" for any other write), and whether
-// a landing leaves it owing its work item's close (code_queue.close_op,
-// which only a land sets and only a close_settled clears).
+// ejection's JSON an eject keeps ("" otherwise), and the close a landing
+// leaves it owing (code_queue.close_op: only a land sets it, only a
+// close_settled clears it).
 type entryRow struct {
 	queueEntry
 	ejected string
 	closeOp string
 }
 
-// entryWrite is what a queue record did to its entries: the conflict clause
-// of their upsert, naming only the columns that write moves, since the driver
-// rewrites a row's entry in every index whose key or predicate holds a
-// column a write names, whatever the value — an entry put in a candidate
-// stays in the live index's entry it holds, and only an ending moves it into
-// the ended one.
+// entryWrite is the conflict clause of a queue record's upsert of its entries,
+// naming only the columns that write moves: the driver rewrites a row's entry
+// in every index whose key or predicate holds a named column, whatever the
+// value, so an entry put in a candidate keeps its live-index entry and only an
+// ending moves it into the ended index.
 type entryWrite string
 
 // The writes of a queue record's entries.
@@ -830,15 +789,12 @@ const (
 		commit_oid = excluded.commit_oid, close_op = excluded.close_op`
 )
 
-// writeEntries writes a queue record's entries back over their rows by w —
-// up to [MaxLandEntries] of them, the rows the record read — in as few
-// statements as the engine's parameters allow ([store.InsertRows]), each an
-// upsert whose conflict is the entry's own key, as [writeChanges] writes a
-// record's changes: written a statement an entry, a landing of
-// [MaxLandEntries] prepared and ran sixty-four of each kind on every data
-// node's one write lane, in the queue's hottest record; written so, that
-// record holds the lane 33 ms (BenchmarkApplyALandRecord). Every entry is one
-// the record read live, so the insert half never takes.
+// writeEntries writes a queue record's entries (up to [MaxLandEntries], the
+// rows the record read) back over their rows by w, in as few upserts on the
+// entry's key as the engine's parameters allow ([store.InsertRows]), as
+// [writeChanges] does: a statement an entry would hold every data node's one
+// write lane through the queue's hottest record (BenchmarkApplyALandRecord).
+// Every entry is one the record read live, so the insert half never takes.
 func writeEntries(ctx context.Context, tx store.Execer, maxVariables int, w entryWrite, rows []entryRow) error {
 	_, err := store.InsertRows(ctx, tx, maxVariables, insertEntriesSQL, entryValuesSQL, string(w), len(rows),
 		func(i int) []any {
@@ -852,23 +808,15 @@ func writeEntries(ctx context.Context, tx store.Execer, maxVariables int, w entr
 }
 
 // The queue's own records' writes, each registered in plan_test.go but the
-// entries' upserts, whose conflict is found by the key it is on: a target's
-// train abandoned — its testing entries over code_queue_live_idx with its
-// partial predicate spelled as the index declares it, and its candidates over
-// code_candidates_train_idx — and a train's landed candidates; a train's pack
-// and its counters; a landing broken by its key; and the queue's history —
-// ended entries over
-// code_queue_ended_idx, its predicate spelled as declared, walked oldest first
-// in its key's order and weighed from the index alone, and removed over the
-// same key's range up to the last one walked; and a target's landings below
-// its green row by the key's range, walked oldest first and removed up to the
-// last one past the history.
+// entries' upserts, whose conflict is found by their key. A partial index's
+// predicate is spelled as the index declares it, and the history is walked
+// oldest first in its key's order and removed over that key's range up to the
+// last row walked.
 const (
 	// insertEntriesSQL and entryValuesSQL are entry rows as [writeEntries]
-	// writes them: every column [entryColumns] reads — whom the entry's
-	// enqueue was made for among them, written back as read, which none of
-	// the upserts' conflicts sets — the ejection, and the close a landing
-	// leaves owed.
+	// writes them: every column [entryColumns] reads (working_for written back
+	// as read, since no upsert's conflict sets it), the ejection, and the
+	// owed close.
 	insertEntriesSQL = `INSERT INTO code_queue (` + entryColumns + `, ejected, ejected_bytes, close_op) VALUES `
 	entryValuesSQL   = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 

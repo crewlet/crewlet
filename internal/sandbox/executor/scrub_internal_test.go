@@ -524,11 +524,11 @@ func TestTheScrubReadsNothingPastItsBoundsAndRefusesNothingForItsLength(t *testi
 	}
 	deep := func(n int) string { return strings.Repeat("[", n) + `"x"` + strings.Repeat("]", n) }
 	var fault *jsonscan.Error
-	if err := rewriteDocument(io.Discard, strings.NewReader(deep(jsonscan.MaxDepth+1)), s); !errors.As(err, &fault) ||
+	if err := rewriteDocument(io.Discard, strings.NewReader(deep(jsonscan.MaxDepth+1)), s, pieceGate{}); !errors.As(err, &fault) ||
 		fault.Fault != jsonscan.FaultDepth {
 		t.Errorf("a value nested past the depth: %v, want the scanner's FaultDepth", err)
 	}
-	if err := rewriteDocument(io.Discard, strings.NewReader(deep(jsonscan.MaxDepth)), s); err != nil {
+	if err := rewriteDocument(io.Discard, strings.NewReader(deep(jsonscan.MaxDepth)), s, pieceGate{}); err != nil {
 		t.Errorf("a value nested at the depth: %v", err)
 	}
 }

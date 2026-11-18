@@ -785,14 +785,14 @@ func (s *suite) runBatch(t *testing.T) {
 		// Open the window, then take the hold while it is open.
 		publish(ctx, t, q, "t.hold", newConvEvent("during", "c1"))
 		awaitWindow("the window to hold the published event")
-		if err := q.PauseTopic(ctx, "t.hold", "g", "test"); err != nil {
+		if err := q.PauseTopic(ctx, "t.hold", "g", attachmentOf(ctx, t, q, "t.hold", "g"), "test"); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		s.awaitParked(ctx, t, q, "t.hold", "g")
 		clock.Advance(clockedWindow)
 		batches.staysAt(ctx, t, 0, "a held attachment dispatched its window")
 
-		if err := q.ResumeTopic(ctx, "t.hold", "g", "test"); err != nil {
+		if err := q.ResumeTopic(ctx, "t.hold", "g", attachmentOf(ctx, t, q, "t.hold", "g"), "test"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		awaitWindow("the held event to open a window once the hold lifts")
@@ -1116,7 +1116,7 @@ func (s *suite) runBatch(t *testing.T) {
 				seen.record(firstConv(t, evs))
 				// The seat parks mid-conversation, so the hold lands while
 				// the rest of this very batch is still waiting to run.
-				if err := q.PauseTopic(hctx, "topic.hold", "grp", "queuetest-park"); err != nil {
+				if err := q.PauseTopic(hctx, "topic.hold", "grp", attachmentOf(hctx, t, q, "topic.hold", "grp"), "queuetest-park"); err != nil {
 					t.Errorf("PauseTopic: %v", err)
 				}
 				return queue.Ack()
@@ -1341,7 +1341,7 @@ func (s *suite) runBatch(t *testing.T) {
 					// still waiting to run, so the second partition
 					// goes back having been drained and never
 					// dispatched — the state this case is about.
-					if err := q.PauseTopic(hctx, topic, group, "queuetest-charged"); err != nil {
+					if err := q.PauseTopic(hctx, topic, group, attachmentOf(hctx, t, q, topic, group), "queuetest-charged"); err != nil {
 						t.Errorf("PauseTopic: %v", err)
 					}
 				}
@@ -1353,7 +1353,7 @@ func (s *suite) runBatch(t *testing.T) {
 		j.awaitLabels(t, "only the first partition to be handled", "a")
 		j.staysAt(ctx, t, 1, "the hold did not stop the batch")
 
-		if err := q.ResumeTopic(ctx, topic, group, "queuetest-charged"); err != nil {
+		if err := q.ResumeTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), "queuetest-charged"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		j.awaitLabels(t, "the held-back partition to come back", "a", "b")
@@ -1525,7 +1525,7 @@ func (s *suite) runBatch(t *testing.T) {
 // not currently have — how many partitions a delivery was drawn from.
 func holdForOneBatch(ctx context.Context, t *testing.T, q queue.EventQueue, topic, group string) func(convs ...string) {
 	t.Helper()
-	if err := q.PauseTopic(ctx, topic, group, "queuetest-fill"); err != nil {
+	if err := q.PauseTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), "queuetest-fill"); err != nil {
 		t.Fatalf("PauseTopic: %v", err)
 	}
 	return func(convs ...string) {
@@ -1533,7 +1533,7 @@ func holdForOneBatch(ctx context.Context, t *testing.T, q queue.EventQueue, topi
 		for _, conv := range convs {
 			publish(ctx, t, q, topic, newConvEvent(conv, conv))
 		}
-		if err := q.ResumeTopic(ctx, topic, group, "queuetest-fill"); err != nil {
+		if err := q.ResumeTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), "queuetest-fill"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 	}

@@ -131,19 +131,14 @@ func TestAScratchIsARepositoryThePoolAccepts(t *testing.T) {
 }
 
 // A MERGE'S SCRATCH LEANS ON EXACTLY THE PACKS IT MERGES: its one alternate is
-// a store of its own under scratch/, merge.<repository>.<id>.git, holding each
-// pack it names as the incarnation's very .pack, .idx and .rev, linked, and
-// nothing else — no pack it does not merge, no multi-pack-index, no
-// commit-graph, no alternate of its own — a repository the pool accepts. So a
-// git process run in it reads every object of the merged packs and none of
-// the rest: what `pack-objects --stdin-packs` walks to fill in its name hashes
-// ends at the merge's edge, never in the history beside it. None at all, a
-// pack named twice and a pack the incarnation does not hold live are refused,
-// with nothing made; Remove takes the store with the scratch and gives the pin
-// back.
+// a store under scratch/, merge.<repository>.<id>.git, holding each named
+// pack's .pack, .idx and .rev linked from the incarnation and nothing else (no
+// other pack, multi-pack-index, commit-graph or alternate), a repository the
+// pool accepts. So a git process in it reads the merged packs' objects and
+// none of the rest. No pack, a pack named twice and one not live are refused,
+// nothing made; Remove takes the store with the scratch and gives the pin back.
 //
-// Mutation: lean a merge's scratch on the incarnation (its alternate the
-// copy's own directory, as a compaction's build's was), and the third push's
+// Mutation: lean a merge's scratch on the incarnation, and the third push's
 // commit, in no pack the merge names, is read through it.
 func TestAMergesScratchLeansOnExactlyThePacksItMerges(t *testing.T) {
 	t.Parallel()

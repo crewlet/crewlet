@@ -19,173 +19,109 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE RETENTION PASS: what removes a retired pack's row once its grace has
-// passed, an idle repository's check rows once they outlive CheckHistory, its
-// queue history once it outlives QueueHistory, a deleted repository for good
-// once it has been deleted for longer than the
-// company's code.deleted_retention_days, a renamed repository's old name once
-// its redirect has ended, and a seat's scratch repository once it has sat idle
-// code.scratch.idle_days — never one a live turn holds.
+// THE RETENTION PASS removes what no record of a repository's own will: a
+// retired pack's row past its grace, an idle repository's check rows past
+// CheckHistory and queue history past QueueHistory, a repository deleted past
+// code.deleted_retention_days, a renamed repository's old name once its
+// redirect has ended, a scratch repository idle past code.scratch.idle_days
+// and a seat's idle branch — never one a live turn holds. It is the BODY of
+// the code-retention duty: the duty's singleton lease and tick
+// ([RetentionInterval]) are the engine's, which alone holds the fleet's
+// leases and the epoch. This owns what a pass works on, in what order, how
+// much of the write lane it takes, and when a purged name is handed on.
+
+// # What a pass works on, in order
 //
-// It is the BODY of the code-retention duty. The duty — a fleet singleton,
-// its lease and its tick ([RetentionInterval]) — is the engine's, because
-// only the engine holds the fleet's leases and the current epoch. What this
-// owns is what a pass works on, in what order, how much of the write lane it
-// takes, and when a purged name is handed on.
-//
-// # What a pass works on
-//
-// The RETIRED PACKS first: every repository holding a row of
-// code_packs_retired whose retired_at the pass's clock puts past
-// [RetireGrace] is swept ([Store.RetireSweep]) — one record removing up to
-// [RetireSweepRows] of its rows, the repository stepped again while rows past
-// the grace are left. Sweeps go first because each is cheap and every hour a
-// retired row outlives its grace is an object the collector cannot take;
-// purges keep their order behind them. The listing is a page at a time over
-// its own index, oldest retirement first, one entry a retiring record rather
-// than a row.
-//
-// Then the CHECKS: every repository holding a check row that ended before the
-// pass's clock less [CheckHistory] less [CheckSweepGrace] is swept
-// ([Store.ChecksSweep]) back to the history — one checks_sweep record on its
-// checks subject removing up to [CheckHorizonRows] of its rows that ended
-// before the clock less the history, oldest first, the repository stepped
-// again while rows past the history are left. A repository whose checks keep
-// ending removes its own history with each ending, so its rows never outlive
-// the history by the grace and it is never listed; this is for one whose
-// checks stopped ending — or whose endings' bounded horizons fell a grace
-// behind — whose rows nothing else would ever remove. Its listing is a page at
-// a time over code_checks_recent_idx, oldest ending first, one entry an
-// instant and a repository rather than a row.
-//
-// Then the QUEUES: every repository holding queue history — an ended entry, or
-// a landing below its target's green row — from before the pass's clock less
-// [QueueHistory] less [QueueSweepGrace] is swept ([Store.QueueSweep]) back to
-// the history, one queue_sweep record on its own subject removing up to
-// [QueueSweepRows] rows and [QueueSweepBytes] of ejections, the repository
-// stepped again while rows past the history are left. A repository whose
-// queues keep working removes its own history with every candidate, ejection
-// and landing; this is for one whose queues stopped, or whose landings are a
-// person's pushes and its merges' alone. Its listing walks the repositories by their key, a page at a time,
-// two seeks each.
-//
-// Then every PURGING repository, whatever the retention: a purge once begun
-// is always finished, because its rows are already partly gone, its name is
-// held ([ErrPurging]) and nothing restores it — a longer retention saves a
-// repository only while it is still merely deleted. Then every DELETED
-// repository past the retention, oldest deletion first. Each is stepped until
-// its purge is done ([Store.PurgeStep]): one record a step, decided inside its
-// own snapshot from the repository's rows and bounded by [PurgePartRows] and
-// [PurgePartBytes], so a step is the unit of progress and a purge is
-// resumable at every one. The listing is read a page at a time, the head of
-// the backlog the pass will reach, and only the columns it uses.
-//
-// Then every OLD NAME whose redirect has ended ([RedirectWindow]) is released
-// ([Store.ReleaseName]), and every SCRATCH REPOSITORY idle past
-// code.scratch.idle_days is deleted ([Store.ExpireScratch]) — restorable as
-// any deleted repository, then purged by the steps above — unless a LIVE TURN
-// holds it: a turn still running, or detached with a run row, that named it
-// through a code tool, a worker, an executor's bridge or a launch's
-// grant. The holds are read through [Retention.Holds] AFTER the expiry fixes
-// its cutoff and each page's position, which is what keeps a hold taken while
-// the pass decides from being lost ([Retention.expireScratch] states the
-// argument); a hold that cannot be read expires nothing.
-//
-// LAST, the REF LIFECYCLE: every branch a seat set in its own namespace and
-// nobody has set for [RefExpiry] is deleted by a push on the engine's own
-// account to its repository's committer ([ViaExpiry]) — unless a live turn
-// holds it, by the same reader and in the same order as the scratch expiry
-// (retention_expiry.go), and unless its committer's decide finds it no longer
-// idle ([ExpiryRule]).
-//
+// RETIRED PACKS first ([Store.RetireSweep]): each sweep is cheap, and every
+// hour a row outlives [RetireGrace] is an object the collector cannot take.
+// Then idle CHECKS ([Store.ChecksSweep]) and QUEUES ([Store.QueueSweep]): a
+// repository whose checks keep ending or whose queues keep working removes
+// its own history, so these list only one past the history by a grace
+// ([Retention.sweepChecks]). A sweep step is one bounded record, repeated
+// while rows past the horizon are left; each listing is a keyset page, the
+// queues' over the repositories' key and the others' over their own index.
+
+// Then every PURGING repository, whatever the retention — a begun purge has
+// removed rows and holds its name ([ErrPurging]), so it is always finished —
+// then every DELETED one past the retention, oldest deletion first, each
+// stepped ([Store.PurgeStep]) until done: one record a step, decided in its
+// own snapshot and bounded by [PurgePartRows] and [PurgePartBytes], so a
+// purge resumes at any step. Then old names whose redirect ended
+// ([RedirectWindow], [Store.ReleaseName]); then idle scratch repositories
+// ([Store.ExpireScratch], restorable as any deleted one) and, LAST, idle seat
+// branches ([ViaExpiry], retention_expiry.go) — each unless a live turn holds
+// it, read through [Retention.Holds] after its page is fixed
+// ([Retention.expireScratch] has why); a hold that cannot be read expires
+// nothing.
+
 // # How much of the write lane
 //
-// A pass PACES ITSELF and STOPS ITSELF, over a sweep's steps and a purge's
-// alike. Every step is a record EVERY data node applies on the replicated
-// estate's one write lane, and the holder only ever waits for its own apply:
-// taken back to back, a pass held that lane most of the time on every node,
-// and a node applying slower than the holder queued the difference in front
-// of its own pushes and reads. So after each step a pass waits twice as long
-// as the step took ([RetentionLaneShare], a third), and it takes steps for
-// [RetentionPassBudget] at most — its sweeps' first, its purges' with what
-// they leave; the next pass resumes from the rows. limits.go states the
-// arithmetic of both — what a node slower than the holder is left behind by,
-// how much of a pass the sweeps take, and how fast a backlog of either
-// drains.
-//
+// A pass PACES and STOPS ITSELF: every step is a record every data node
+// applies on the estate's one write lane while the holder waits only for its
+// own apply, so back to back a pass would hold that lane on every node and a
+// slower node would queue the difference ahead of its own pushes and reads.
+// After each step it waits twice the step's duration ([RetentionLaneShare]),
+// and it takes steps for [RetentionPassBudget] at most, sweeps first; the
+// next pass resumes from the rows. limits.go has the arithmetic.
+
 // # When a name is handed on
 //
-// A purge releases its name, and the epoch may declare it again: a
-// repository re-added while it purged, which the reconcile could only wait
-// out. [Retention.OnPurged] is handed the name — but only once THIS NODE's
-// rows hold the purge, because what it does with the name is decided from
-// those rows, and a purge whose last record resolved pending here still reads
-// purging. A name the pass cannot hand on yet — its record not applied here
-// within a read's budget, OnPurged refusing it, or the pass's context ending
-// first — is HELD, reported in [RetentionReport.Unhanded], and handed on by
-// the next pass that can. Held in this process: a duty that moves to another
-// node, or a process that dies, leaves it to the next activation's reconcile.
+// A purge releases its name, which the epoch may declare again.
+// [Retention.OnPurged] gets it only once THIS NODE's rows hold the purge,
+// since what it does is decided from those rows and a last record resolved
+// pending here still reads purging. A name not yet handed on — unapplied
+// within a read's budget, refused, or the context ended — is HELD in this
+// process ([RetentionReport.Unhanded]) for the next pass; a duty that moves
+// or a process that dies leaves it to the next activation's reconcile.
 
-// retentionPage is how many entries one read of each of the pass's listings
-// names — repositories of the purge listing, retiring records of the retired
-// one, (instant, repository) pairs of the checks one — each at most one
-// sweep step: a pass that steps one-step repositories at the measured 83 ms a
-// part reaches about 240 of them in RetentionPassBudget at
-// RetentionLaneShare, one sweeping at Gitlet's design point meets some
-// 370 retiring records, and the checks listing names a hundred-odd
-// repositories a pass at most (CheckSweepGrace; limits.go), so a page is
-// about what one pass consumes of any listing, read as one statement over an
-// index. A burst of sweeps reads further pages of the same statement —
-// sixteen at most in a pass, which takes about four thousand steps of a few
-// rows.
+// retentionPage is how many entries one read of a listing names, each at
+// most one step: about what one pass consumes of any listing — some 240
+// one-step purges at the measured 83 ms a part in RetentionPassBudget at
+// RetentionLaneShare, some 370 retiring records at Gitlet's design point, a
+// hundred-odd checks repositories (CheckSweepGrace; limits.go) — read as one
+// statement over an index. A burst of sweeps reads further pages, sixteen at
+// most a pass (about four thousand steps of a few rows).
 const retentionPage = 256
 
 // retentionIdlePerStep is how many times a step's own duration the pass
 // waits after it: (1 − share) / share, two at a third — exact, as a constant.
 const retentionIdlePerStep = (1 - RetentionLaneShare) / RetentionLaneShare
 
-// Retention is the code-retention pass over the retired packs past their
-// grace and the repositories purging or deleted past the current epoch's
-// retention. One value serves every pass of one duty holder: it HOLDS,
-// between its passes, the names it purged and could not yet hand on, so it is
-// used by pointer and never copied.
+// Retention is the code-retention pass (this file's header). One value
+// serves every pass of one duty holder: it HOLDS, between passes, the names
+// it purged and could not yet hand on, so it is used by pointer, never copied.
 type Retention struct {
-	// Store takes the sweeps' and the purges' steps.
+	// Store takes the pass's steps.
 	Store *Store
 	// Reader lists what is due and confirms what a purge left in this
 	// node's rows.
 	Reader *Reader
 	// Retention is code.deleted_retention_days of the CURRENT epoch, read
-	// once at the start of every pass — a revision that lengthens it saves
-	// a repository that is still deleted, and changes nothing for one
+	// once a pass: lengthening it saves a repository still deleted, never one
 	// already purging. Required: what a purge waits for is the company's
 	// decision, never a default taken here.
 	Retention func() time.Duration
-	// OnPurged is handed the name of every repository purged, under the
-	// pass's context, once this node's rows hold the purge — its last
-	// record applied here, never merely durable on the log: the purge
-	// released the name, and the epoch may declare it again. An error
-	// keeps the name, and the next pass hands it on again. It must be safe
-	// to call twice for one name, because a purge an earlier pass finished
-	// is handed on again by a pass whose listing had not yet applied it.
-	// Nil hands it to nobody.
+	// OnPurged is handed every purged name, under the pass's context, once
+	// this node has applied the purge's last record, since the epoch may
+	// declare the name again. An error keeps the name for the next pass. It
+	// must be safe to call twice for one name: a pass whose listing had not
+	// applied an earlier pass's purge hands it on again. Nil hands it to
+	// nobody.
 	OnPurged func(ctx context.Context, name string) error
 	// Policy is the CURRENT epoch's code.scratch ([ScratchOf]), read once at
 	// the scratch expiry's start: how long a scratch repository may sit idle.
 	// Required, for Retention's reason.
 	Policy func() LifecyclePolicy
-	// Holds answers which of keys a LIVE TURN holds — a scratch repository's
-	// key is its id (the engine's codeHolds: every run row, whatever its
-	// status, and every running turn of every seat holder) — asked once a
-	// page of DUE scratch repositories, AFTER the page and its position are
-	// read. An error is an UNKNOWN, and the step expires nothing on one.
-	// Required: an expiry that could not ask would delete a repository a
-	// parked run is waiting to come back to.
+	// Holds answers which of keys a LIVE TURN holds (a scratch repository's
+	// key is its id; the engine's codeHolds counts every run row, whatever its
+	// status, and every running turn), asked once a page of due keys AFTER
+	// the page and its position are read. An error is an UNKNOWN, on which
+	// nothing expires. Required: an expiry that could not ask would delete a
+	// repository a parked run is waiting to come back to.
 	Holds func(ctx context.Context, keys []string) (map[string]bool, error)
-	// Propose hands an expiry push to its repository's committer — the
-	// engine's estate router (estate.CodeSeam.Propose), which asks the
-	// committer rendezvous ranks first and fails over as every keyed
-	// operation does. Required: the ref lifecycle deletes through the
+	// Propose hands an expiry push to its repository's committer (the
+	// engine's estate.CodeSeam.Propose, which ranks and fails over as every
+	// keyed operation does). Required: the ref lifecycle deletes through the
 	// committer or not at all.
 	Propose func(ctx context.Context, p Proposal) (ProposeResult, error)
 	// Node is this node's id: an expiry proposal's Node, as every push names
@@ -223,114 +159,89 @@ type heldName struct {
 
 // RetentionReport is what one pass did.
 type RetentionReport struct {
-	// Sweeps counts the retire_sweep records the pass published, across
-	// every repository: each removing up to RetireSweepRows of one
-	// repository's retired pack rows past RetireGrace.
+	// Sweeps counts the retire_sweep records published, each removing up to
+	// RetireSweepRows of one repository's retired pack rows past RetireGrace.
 	Sweeps int `json:"sweeps"`
-	// SweptRows counts the retired pack rows those records remove — each
-	// step's decide's own count of the rows at or below its Through.
+	// SweptRows counts the rows those records remove, by each step's decide.
 	SweptRows int `json:"swept_rows"`
-	// ChecksSweeps counts the checks_sweep records the pass published, across
-	// every repository: each removing up to CheckHorizonRows of one
-	// repository's check rows past CheckHistory.
+	// ChecksSweeps counts the checks_sweep records published, each removing
+	// up to CheckHorizonRows of one repository's check rows past CheckHistory.
 	ChecksSweeps int `json:"checks_sweeps"`
-	// ChecksSweptRows counts the check rows those records remove — each
-	// step's decide's own count of the rows that ended before its Through.
+	// ChecksSweptRows counts the rows those records remove, by each step's
+	// decide.
 	ChecksSweptRows int `json:"checks_swept_rows"`
-	// QueueSweeps counts the queue_sweep records the pass published, across
-	// every repository: each removing up to QueueSweepRows of one
-	// repository's ended queue entries and landings below their green row
-	// past QueueHistory, its ejections within QueueSweepBytes.
+	// QueueSweeps counts the queue_sweep records published, each removing up
+	// to QueueSweepRows of one repository's ended entries and landings below
+	// their green row past QueueHistory, its ejections within QueueSweepBytes.
 	QueueSweeps int `json:"queue_sweeps"`
-	// QueueSweptRows counts the rows those records remove — each step's
-	// decide's own count of the history before its Through.
+	// QueueSweptRows counts the rows those records remove, by each step's
+	// decide.
 	QueueSweptRows int `json:"queue_swept_rows"`
-	// Purged names every repository whose purge the pass saw through and
-	// handed on — its last record applied in this node's rows and its name
-	// taken by OnPurged — in that order. A name an earlier pass purged and
-	// could not hand on is reported by the pass that does.
+	// Purged names every repository purged and handed on (applied here and
+	// taken by OnPurged), in that order; a name an earlier pass held is
+	// reported by the pass that hands it on.
 	Purged []string `json:"purged,omitempty"`
-	// Steps counts the purge steps that answered, across every repository:
-	// each a decision on one repository's rows that appended one record —
-	// all but a step that found its repository already purged, by an
-	// earlier pass whose last record this node's listing had not yet
-	// applied, and wrote nothing.
+	// Steps counts the purge steps that appended a record: all but those that
+	// found their repository already purged by an earlier pass this node's
+	// listing had not yet applied.
 	Steps int `json:"steps"`
-	// Failed maps the name of every repository whose sweep or purge failed
-	// in this pass to the failure's sentence — both, joined, where both did —
-	// keyed by the repository's id where this node holds no row to name it
-	// by. The pass went on past each, and the next pass asks again.
+	// Failed maps each repository whose sweep or purge failed this pass to
+	// the failure's sentence (both joined, where both did), keyed by id where
+	// this node holds no row to name it. The pass went on past each, and the
+	// next asks again.
 	Failed map[string]string `json:"failed,omitempty"`
-	// Unhanded names every repository purged on the log that the pass HOLDS
-	// at its end for a later pass to hand on: its purge's last record not
-	// yet applied on this node, OnPurged refusing it, or the context ending
-	// before it could be handed on.
+	// Unhanded names every purged repository the pass HOLDS at its end for a
+	// later pass: its last record not yet applied here, OnPurged refusing it,
+	// or the context ending first.
 	Unhanded []string `json:"unhanded,omitempty"`
-	// Remain says the pass stopped at its budget with repositories still
-	// due a sweep or a purge: the designed stop, which the next pass resumes
-	// from.
+	// Remain says the pass stopped at its budget with repositories still due
+	// a sweep or a purge: the designed stop, which the next pass resumes.
 	Remain bool `json:"remain,omitempty"`
-	// Released counts the old names the pass freed, each a release_name
-	// record: a renamed repository's old name whose redirect ended
-	// ([RedirectWindow]).
+	// Released counts the old names freed, each a release_name record, once
+	// their redirect ended ([RedirectWindow]).
 	Released int `json:"released,omitempty"`
-	// Expired counts the scratch repositories the pass deleted, idle past
+	// Expired counts the scratch repositories deleted, idle past
 	// code.scratch.idle_days and held by no live turn — each restorable for
 	// code.deleted_retention_days.
 	Expired int `json:"expired,omitempty"`
 	// ScratchHeld counts the scratch repositories idle past
-	// code.scratch.idle_days that the pass KEPT because a live turn holds
-	// them: a running turn named it, or a parked run's row holds it.
+	// code.scratch.idle_days that the pass KEPT because a live turn holds them.
 	ScratchHeld int `json:"scratch_held,omitempty"`
 	// ScratchExpiryUnread says why the scratch expiry stopped with nothing
-	// more expired: which live turns' holds could not be read. Never on a
-	// guess: a hold the pass cannot read is one it does not expire under.
+	// more expired: whose holds could not be read. A hold the pass cannot read
+	// is one it does not expire under.
 	ScratchExpiryUnread string `json:"scratch_expiry_unread,omitempty"`
-	// RefsExpired counts the seat branches the ref lifecycle deleted, idle
-	// past RefExpiry and held by no live turn — each restorable from its push
-	// row's Old for as long as the push history keeps it.
+	// RefsExpired counts the seat branches deleted, idle past RefExpiry and
+	// held by no live turn — each restorable from its push row's Old while
+	// the push history keeps it.
 	RefsExpired int `json:"refs_expired"`
-	// RefsKept counts the idle seat branches an expiry proposed and its
-	// decide kept ([ExpiryRule], or a protection): set, held, made the
-	// default or put under review since the page listed it, or set last by
-	// somebody else.
+	// RefsKept counts the idle seat branches proposed and kept by the decide
+	// ([ExpiryRule], or a protection): set, held, made the default or put
+	// under review since the page listed it, or set last by somebody else.
 	RefsKept int `json:"refs_kept,omitempty"`
-	// RefsHeld counts the idle seat branches the pass did not propose because
-	// a live turn holds them: one it read or wrote, one a launch resolved, or
-	// one a parked run's box pushed.
+	// RefsHeld counts the idle seat branches not proposed because a live
+	// turn holds them.
 	RefsHeld int `json:"refs_held,omitempty"`
 	// ExpiryFailed maps a repository's name to why an expiry of its branches
 	// failed this pass; what is still there is listed again by the next.
 	ExpiryFailed map[string]string `json:"expiry_failed,omitempty"`
 	// ExpiryUnread says why the ref expiry stopped with nothing more
-	// expired: which live turns' holds could not be read.
+	// expired: whose holds could not be read.
 	ExpiryUnread string `json:"expiry_unread,omitempty"`
 }
 
-// Pass hands on what an earlier pass purged and could not, sweeps every
-// repository's retired pack rows past [RetireGrace], an idle repository's
-// check rows past [CheckHistory] ([CheckSweepGrace]) and its queue history
-// past [QueueHistory] ([QueueSweepGrace]), then steps what is due
-// a purge — every purging repository, then every one deleted past the current
-// retention, each oldest deletion first — until its purge is done, the pass's
-// budget runs out, or the context ends, pacing every step to the pass's share
-// of the write lane.
+// Pass hands on what an earlier pass purged and could not, then takes the
+// steps in this file header's order until nothing is due, the budget runs out
+// ([RetentionReport.Remain], no error) or ctx ends, pacing every step to the
+// pass's share of the write lane.
 //
-// A repository whose sweep or purge fails is reported in
-// [RetentionReport.Failed] and the pass goes on to the next: one repository's
-// refusal never holds back another's. A repository the listing named that is
-// NO LONGER DUE when its step decides is not a failure either. The listing is
-// a stale read of this node's rows and every step decides again inside its
-// own snapshot, so a repository a later activation restored ([ErrNotDeleted])
-// — or restored and deleted again, inside its retention once more
-// ([ErrNotYet]) — after the listing read it is simply skipped, and so is one
-// whose retired rows a sweep or a purge removed since.
-//
-// The pass's error is the listing's, a field it cannot work without, or the
-// context's: when ctx ends the pass stops between steps and reports what it
-// did beside ctx.Err(), and a repository it was purging is not counted a
-// failure, because the context and not the repository is why it stopped.
-// Running out of budget is no error: the report says Remain.
+// One repository's failure is reported in [RetentionReport.Failed] and never
+// holds back another's. One NO LONGER DUE when its step decides is no failure:
+// the listing is a stale read and every step decides again in its own
+// snapshot, so one restored since ([ErrNotDeleted]), deleted again within its
+// retention ([ErrNotYet]) or swept already is skipped. The error is the
+// listing's, a missing field's or ctx's, beside what the pass did; the
+// repository it stopped on is not counted a failure.
 func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error) {
 	switch {
 	case r.Store == nil:
@@ -375,12 +286,10 @@ func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error
 	if err := r.handOnHeld(ctx, &report, log); err != nil {
 		return report, err
 	}
-	// THE STEPS IN ORDER, on one pacer and one budget: the retired packs'
-	// sweeps, the checks' sweeps, the queues' sweeps, the purges, the old
-	// names' releases, the idle scratch repositories' expiry, and the idle
-	// seat branches' expiry LAST — a purge and a release free names, an
-	// expiry only room. Each stops the pass at the budget (Remain), and the
-	// next pass resumes every step from the rows.
+	// THE STEPS IN ORDER, on one pacer and one budget, the expiries LAST: a
+	// purge and a release free names, an expiry only room. Each stops the
+	// pass at the budget (Remain), and the next resumes every step from the
+	// rows.
 	for _, step := range []func() (bool, error){
 		func() (bool, error) { return r.sweep(ctx, now, pace, &report) },
 		func() (bool, error) { return r.sweepChecks(ctx, now, pace, &report) },
@@ -398,9 +307,9 @@ func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error
 	return report, nil
 }
 
-// purges steps what is due a purge — every purging repository, then every one
-// deleted past the retention, each oldest deletion first — until nothing due
-// is left, the pass's budget runs out (stop) or the context ends (the error).
+// purges steps every purging repository, then every one deleted past the
+// retention, oldest deletion first, until none is left, the budget runs out
+// (stop) or the context ends (the error).
 func (r *Retention) purges(ctx context.Context, now time.Time, retention time.Duration, pace *pacer,
 	report *RetentionReport, log *slog.Logger) (stop bool, err error) {
 
@@ -414,9 +323,8 @@ func (r *Retention) purges(ctx context.Context, now time.Time, retention time.Du
 		}
 		for _, repo := range due {
 			if r.holds(repo) {
-				// ITS PURGE IS DONE ON THE LOG, and this node's stale
-				// listing has not applied the end of it: a step would only
-				// meet the record it already appended.
+				// ITS PURGE IS DONE ON THE LOG and this node's stale listing
+				// has not applied its end: a step would only meet its record.
 				continue
 			}
 			if stop, err := r.purge(ctx, repo, retention, pace, report, log); err != nil || stop {
@@ -430,12 +338,12 @@ func (r *Retention) purges(ctx context.Context, now time.Time, retention time.Du
 	}
 }
 
-// release frees every renamed repository's old name whose redirect has ended
-// by now ([Store.ReleaseName]), oldest first, a page at a time — keyset on the
-// listing's order, so a name its release left (re-pointed, or not yet due on
-// the decide's clock) is passed over rather than listed at the head of every
-// page — until none is left, the pass's budget runs out (stop) or the context
-// ends (the error). A release that fails is reported and passed over.
+// release frees every old name whose redirect has ended by now
+// ([Store.ReleaseName]), oldest first, a page at a time — keyset, so a name
+// its release left (re-pointed, or not yet due on the decide's clock) is
+// passed over rather than heading every page — until none is left, the
+// budget runs out (stop) or the context ends (the error). A failed release is
+// reported and passed over.
 func (r *Retention) release(ctx context.Context, now time.Time, pace *pacer,
 	report *RetentionReport) (stop bool, err error) {
 
@@ -471,26 +379,18 @@ func (r *Retention) release(ctx context.Context, now time.Time, pace *pacer,
 	}
 }
 
-// expireScratch deletes every scratch repository idle past code.scratch.idle_days
-// that no live turn holds — never on an unknown — a page at a time, oldest
-// activity first, until none is left, the pass's budget runs out (stop) or
-// the context ends (the error).
+// expireScratch deletes every scratch repository idle past
+// code.scratch.idle_days that no live turn holds, a page at a time, oldest
+// first, until none is left, the budget runs out (stop) or the context ends
+// (the error). A hold it cannot read ends the step with nothing more expired
+// ([RetentionReport.ScratchExpiryUnread]); an unknown is never "nobody".
 //
-// THE ORDER IS THE SAFETY ARGUMENT, and every step keeps it: the CUTOFF is
-// taken once, before anything is read; each PAGE is read with the code log's
-// position inside its own transaction (Through); and only THEN are the live
-// turns' holds read, for that page's ids. A hold the pass could not see was
-// therefore taken after its cutoff was fixed, and either the repository was
-// active within [HoldRecordAfter] when it was taken — later than the cutoff,
-// which the decide refuses — or the turn recorded its hold on the
-// repository's subject, past Through, which the decide refuses too
-// ([Store.ExpireScratch]). KEYSET, never the head again: a held repository
-// stays active and idle, and listed from the top, a page of held ones would
-// fill every page and the step would never reach the rest.
-//
-// A HOLD THAT CANNOT BE READ ends the step for this pass with nothing more
-// expired: [RetentionReport.ScratchExpiryUnread] says why, and a WARN line
-// names the page — an unknown is never "nobody holds it".
+// THE ORDER IS THE SAFETY ARGUMENT: the CUTOFF is fixed first, each PAGE read
+// with the code log's position (Through) in its own transaction, and only
+// THEN its holds. A hold it missed was taken after the cutoff, so the
+// repository was active past the cutoff ([HoldRecordAfter]) or the turn
+// recorded it past Through: the decide refuses both ([Store.ExpireScratch]).
+// KEYSET, never the head: held repositories stay idle, filling every page.
 func (r *Retention) expireScratch(ctx context.Context, now time.Time, pace *pacer, report *RetentionReport,
 	log *slog.Logger) (stop bool, err error) {
 
@@ -553,14 +453,11 @@ func (r *Retention) expireScratch(ctx context.Context, now time.Time, pace *pace
 	}
 }
 
-// sweep steps every repository the retired listing names — once each, however
-// many of its retiring records the listing names — until nothing past the
-// grace is left, the pass's budget runs out (stop) or the context ends (the
-// error).
-//
-// The listing is a stale read and each step decides again inside its own
-// snapshot, so a repository whose rows a sweep removed since the listing read
-// them, or whose purge took them, is simply answered nothing.
+// sweep steps every repository the retired listing names, once each however
+// many of its retiring records it names, until nothing past the grace is
+// left, the budget runs out (stop) or the context ends (the error). Each step
+// decides again in its own snapshot, so one swept or purged since the stale
+// listing read it is answered nothing.
 func (r *Retention) sweep(ctx context.Context, now time.Time, pace *pacer,
 	report *RetentionReport) (stop bool, err error) {
 
@@ -591,23 +488,17 @@ func (r *Retention) sweep(ctx context.Context, now time.Time, pace *pacer,
 	}
 }
 
-// sweepChecks steps every repository the checks listing names — the
-// repositories holding a check row past [CheckHistory] by [CheckSweepGrace],
-// once each however many of its endings the listing names — back to the
-// history, until nothing past the history and the grace is left, the pass's
-// budget runs out (stop) or the context ends (the error).
+// sweepChecks steps every repository holding a check row past [CheckHistory]
+// by [CheckSweepGrace], once each however many of its endings the listing
+// names, back to the history, until none is left, the budget runs out (stop)
+// or the context ends (the error).
 //
-// LISTED PAST THE GRACE, SWEPT TO THE HISTORY. A repository whose checks keep
-// ending removes its own history with each ending, so it holds no row past
-// the history by the grace and is not listed: a step on it would append a
-// record its next ending makes anyway, on every data node, ahead of the
-// purges. A repository holding such a row is one no ending of its own reached
-// for the grace — an IDLE one, which nothing else would ever sweep, or one
-// whose endings' bounded horizons fell that far behind — and its step removes
-// every row past the history, so it is listed again a grace later at the
-// soonest. The listing is a stale read and each step decides again inside its
-// own snapshot, so a repository whose rows an ending's horizon or a purge
-// removed since the listing read them is simply answered nothing.
+// LISTED PAST THE GRACE, SWEPT TO THE HISTORY: a repository whose checks keep
+// ending removes its own history with each, so stepping it would append, on
+// every data node and ahead of the purges, a record its next ending makes
+// anyway. One listed is IDLE, or its endings' bounded horizons fell a grace
+// behind; its step removes every row past the history, so it is listed a
+// grace later at the soonest. Each step decides again in its own snapshot.
 func (r *Retention) sweepChecks(ctx context.Context, now time.Time, pace *pacer,
 	report *RetentionReport) (stop bool, err error) {
 
@@ -638,17 +529,12 @@ func (r *Retention) sweepChecks(ctx context.Context, now time.Time, pace *pacer,
 	}
 }
 
-// sweepQueues steps every repository the queue sweep's listing names — the
-// repositories holding queue history past [QueueHistory] by
-// [QueueSweepGrace] — back to the history, until nothing past the history and
-// the grace is left, the pass's budget runs out (stop) or the context ends
-// (the error).
-//
-// LISTED PAST THE GRACE, SWEPT TO THE HISTORY, for the checks' reason
-// ([Retention.sweepChecks]): a repository whose queues keep working removes
-// its own history with every candidate, ejection and landing, so it holds
-// none past the history by the grace and is not listed. The listing is a
-// stale read and each step decides again inside its own snapshot.
+// sweepQueues steps every repository holding queue history past
+// [QueueHistory] by [QueueSweepGrace] back to the history, until none is
+// left, the budget runs out (stop) or the context ends (the error). Listed
+// past the grace for the checks' reason ([Retention.sweepChecks]): a
+// repository whose queues keep working removes its own history with every
+// candidate, ejection and landing.
 func (r *Retention) sweepQueues(ctx context.Context, now time.Time, pace *pacer,
 	report *RetentionReport) (stop bool, err error) {
 
@@ -674,17 +560,14 @@ func (r *Retention) sweepQueues(ctx context.Context, now time.Time, pace *pacer,
 	}
 }
 
-// sweepRepo steps one repository's sweep — step, the retired packs', the
-// checks' or the queues', each of its rows past its own horizon — while rows
-// past it are left beyond what the last record removed, a step fails, the
-// pass's budget
-// runs out (stop) or the context ends (the error); counted is told each step
-// that appended a record.
+// sweepRepo steps one repository's sweep (step: the retired packs', the
+// checks' or the queues') while rows past its horizon are left, until a step
+// fails, the budget runs out (stop) or the context ends (the error); counted
+// is told each step that appended a record.
 //
-// A STEP WHOSE RECORD RESOLVED PENDING ENDS THE REPOSITORY'S TURN: its rows
-// are removed on the log and not yet in this node's, so a further step would
-// decide from rows that still hold them, and wait for this node to apply what
-// it already appended. The next pass sweeps what is left.
+// A STEP WHOSE RECORD RESOLVED PENDING ENDS THE REPOSITORY'S TURN: this
+// node's rows still hold what it removed, so a further step would decide from
+// them and wait for this node to apply it. The next pass sweeps the rest.
 func (r *Retention) sweepRepo(ctx context.Context, id string, pace *pacer, report *RetentionReport,
 	step func(context.Context) (SweepResult, error), counted func(SweepResult)) (stop bool, err error) {
 	for {
@@ -733,10 +616,9 @@ func (r *Retention) purge(ctx context.Context, repo dueRepo, retention time.Dura
 		pace.took(began)
 		switch {
 		case err != nil && ctx.Err() != nil:
-			// THE CONTEXT, NOT THE REPOSITORY, is why it failed — a step
-			// on an ended context refuses before it reads a row — so the
-			// pass stops here, and the next one resumes this repository
-			// from what its applied steps left.
+			// THE CONTEXT, NOT THE REPOSITORY: a step on an ended context
+			// refuses before it reads a row, so the pass stops and the next
+			// resumes this repository from its rows.
 			return false, ctx.Err()
 		case errors.Is(err, ErrNotDeleted), errors.Is(err, ErrNotYet):
 			log.DebugContext(ctx, "code_repo_purge_skipped", "name", repo.name, "id", repo.id,

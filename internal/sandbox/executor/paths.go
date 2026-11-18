@@ -60,7 +60,11 @@
 // only as a key ([threadLine.AttachmentToolUseID]), since a PostToolUse
 // hook's firing carries the id of the call it followed, and a task
 // notification's `<tool-use-id>` as the leg its text claims
-// ([threadMessage.Notification]), matched only against a call read. The
+// ([threadMessage.Notification]), matched only against a call read; and a
+// hook's words (a system message, a success's stdout) leave the layer only as
+// the asked take tokens they name ([threadReader.Asking],
+// [threadLine.HookTakes], [claudeTakeToken]), each whole and exactly, never as
+// bytes, alongside the hook's event ([threadLine.HookEvent]). The
 // take's context meter (measure.go) reads the main
 // thread through the layer too, in one walk of its whole lines
 // ([walkThread]): it decides what a continuation of the capture is told, by
@@ -104,6 +108,224 @@
 // depth-one subagent's thread and metadata, through the layer, metering the
 // archive at [threadPlainMax] with the scrub's own meter and handing each
 // member it reads what is left of that budget.
+//
+// # A collection's read of a thread: a base, then one slot
+//
+// A pass over a session's main thread ([walkThread]) — a collection's read of
+// its job's copy ([ClaudeCode]'s readMainThread) and a take, its scrub and
+// its meter one pass — holds no token while what it holds stays within its
+// BASE, and holds ONE slot of a pool of its own ([CollectionLargeReadsAtOnce],
+// [passBudget]) while it holds more. Its triggers: a line past
+// [collectionBaseLineBytes] ([lineRun], beneath the line reader, so read-ahead
+// holds early and never late), and a reading keeping more than
+// [collectionBaseRecords] records ([recordKeeper], the chain). The take's
+// scrub holds no piece whole, and its trigger is a TEXT IT REDACTS AS ONE past
+// the base, whose redaction may hold up to its length ([pieceGate.pieces]): a
+// transcript's line, a `.json` file (read as text too), any other file, and an
+// export's name or string; and its plan past the base, the one thing it holds
+// across pieces, held to the take's end ([tarPlan.holdPast]), which only an
+// archive of millions of short lines reaches.
+//
+// HELD PER PIECE, KEPT ONLY WHERE A READING KEEPS RECORDS: a pass whose
+// readings keep records (the collection's chain, which may keep a long line's
+// facts) keeps the slot from its first hold to its end; every other reader,
+// the take's scrub and meter and a collection's count alone, holds it for its
+// piece past the base and drops it once done with it, the slot going back with
+// the pass's last hold. Kept to a take's end, the process's only slot would be
+// held for its whole scrub and spool, minutes, while its box's stream and every
+// take behind it waited. The scrub and the meter share one budget: with two,
+// the scrub's write would wait on the meter and the meter on the slot the
+// scrub holds. A wait its reader's context ends is [errLargeWait], a failure
+// of the read, never a reading of it. A take's Close ends both readers' waits.
+//
+// THE TWO COEFFICIENTS are the layer's own worst measurements over their own
+// bounds ([threadChain], THE BOUNDS and THE COLLECTION'S PASS): the chain at
+// both bounds holds 43 MiB at End's peak, 344 bytes a record of 2^17; and the
+// pass's worst line, a reply id at [threadLineMax] of bytes the decode reads
+// as U+FFFD, three bytes a byte, held 109 MiB beside the chain's 35 MiB as
+// End starts, 9.25 bytes a byte of the line.
+//
+// THE BASE: a line of 256 KiB is four times the 61,170-byte p99 of 67,871
+// lines in 9,434 real threads (the census's longest, 2,002,134 bytes; 28
+// threads held a line past the base, each a large file read or written into
+// the thread), at 9.25 bytes a byte 2.3 MiB at worst; and 2^13 records, at
+// 344 bytes 2.7 MiB, a thread of about 16 MiB at the 2,053 bytes a line probe
+// P6 measured, eight times a day's session. With the 64 KiB buffer and the
+// count's carry, a pass at its base holds about 5.1 MiB at its worst, by no
+// token, so a typical collection never waits. MEASURED on two cores
+// (BenchmarkACollectionPassAtItsBase, read off the GC trace as
+// BenchmarkAThreadChainAtItsBounds says): a main thread of 2^13 records the
+// chain files, its last a reply at the line's base whose id the decode
+// triples, read by the chain and the count in one walk, in 0.11 to 0.12 s,
+// holding 4 MiB at most at GOGC=10 and its heap peaking at 9 MiB at the
+// default, within the arithmetic, and taking no slot.
+//
+// THE BASE TIER'S COUNT: no token holds it, so it is every read in flight at
+// once: one per seat collecting on this node, one per take, and up to the box
+// host's boxReadsHeld (64) reads for its peers. A collection's pass holds about
+// 5.1 MiB at its worst; a take, whose scrub streams each text through
+// redact's stages, each holding its window, holds 11 to 12 MiB at its base
+// (BenchmarkATakeAtItsBase: a main-thread line, a `.json` string and a text
+// file each at the base, the line's and the string's of bytes the decode
+// triples, both readings and the meter, read as above, 0.21 s on two cores,
+// its heap peaking at 23 MiB at the default GOGC), so 768 MiB were every read
+// a take's.
+//
+// THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
+// holds the measured 109 MiB at most; a take, its meter beside it under the
+// same slot, 45 MiB (BenchmarkATakeAtItsLargeTier: as at its base, each piece
+// at [threadLineMax], 6.9 to 7.0 s on two cores, each piece's hold of the slot
+// about 1.3 s, its heap peaking at 126 MiB at the default GOGC against the
+// pass's 176 to 191). Shared with [TranscriptReadsAtOnce]'s two, a collection's
+// large pass waits behind two transcript reads of up to about 11 s each and
+// spends internal/sandbox's MainThreadReadWait (15 s), so a person paging a
+// transcript would decide how a turn's relaunch is told; apart, it never does.
+// One slot, not two: the process's thread readers then hold at worst
+// 2 x 133 + 109 = 375 MiB beside the base tier, and one waiter behind one
+// pass at its worst (2.85 s, 5.7 s loaded) is through in 11.4 s, within the
+// 15 s. A later waiter, or one behind a take's piece streaming from a slow box,
+// may not be: its read ends with [errLargeWait] and reads as no reading (count
+// unread), the safe side, as a read past MainThreadReadWait already is. The
+// wait is spent inside that wait, never added to it.
+//
+// WHAT RE-DERIVES IT: a layer that charges a line by its facts rather than
+// holding it whole moves the line's trigger to that charge and replaces the
+// 9.25-byte coefficient with its own measure.
+//
+// # A hook's note, confirmed off its job's main thread
+//
+// A note a Claude Code hook served counts as read only once the job's session
+// shows it: the read of the job's main thread ([ClaudeCode]'s readMainThread)
+// asks the served takes (internal/sandbox's MainThreadAsk), and one reading in
+// the same walk ([hookReading]), beside the resume's model ([chainReading],
+// fed first on each line so the reading reads that line's handle), answers
+// each take Held, Restarted, Absent, or none of these with why. The release
+// and the saved compaction mark the count alone, never the receipts.
+//
+// A PAIR is a main-thread chained `hook_system_message` at event E whose
+// content names the take's token ([threadLine.HookTakes]), then the
+// `hook_additional_context` of the same firing at E after it. A firing is
+// keyed by the digest of its `toolUseID` and E, never the string, so what the
+// reading keeps is fixed in size whatever the thread wrote: per asked take
+// (at most 64; an ask of more, which a row a peer with wider bounds wrote may
+// make, decides none) the firing's digest, its event as one of two constants,
+// the two records' handles, the system message's line, and the firing of the
+// first success whose stdout names the take. A context before its system
+// message pairs nothing. The success's stdout is the hook's whole answer, so
+// it is never a confirmation.
+//
+// HELD where the pair's two records are handed ([threadChain.Handed]) on a
+// thread every size path of the resume reads alike ([threadChain.AnySize]:
+// the box's copy is read, and the archive's resume may take another path),
+// the job's release is one whose resume was read ([claudeResumeRead]), and no
+// restart ([threadRestarts.See]) lies after the system message. RESTARTED
+// where the same holds but one does, or, for a BATCH pair, a main reply after
+// it says its request cleared tool results or says it unreadably
+// ([threadLine.ToolResultsCleared]): a batch's note rides its batch's last
+// tool result into the request and is cleared with it, where a Stop's note is
+// a turn of its own. A pair the resume does not hand (a withdrawn record, a
+// parent naming no record) is neither, and is evidence its take arrived.
+//
+// SO A THREAD THAT COMPACTED DECIDES NO TAKE, wherever its pairs lie: a
+// compaction's boundary, or a record the dispatch from the last record does
+// not reach (a later root's thread), binds it to the small path, so it is no
+// thread every size path reads alike, and every take on it is undecided and
+// its note told again; Restarted is never reached through a compaction or a
+// later root. Holding the pairs after the last boundary needs what every size
+// path hands of the records after it, which the readers' ports have not
+// measured.
+//
+// No walk is made for takes on a release whose resume was not read, where
+// none can be held and so none absent, nor for more than 64, which a hook
+// record's masks cannot name ([unreadTakes]): each is undecided.
+//
+// ABSENT only where the thread proves it: its harness ended its own run, it
+// was read to its end with no refused line and no torn last piece, it never
+// restarts, another asked take at the same event is held (each event writes
+// its own shapes, so a release that rewords one event's pair proves nothing
+// at that event, and a held take at the other licenses nothing), no asked
+// take is named outside its own pair (a success's stdout of another firing,
+// or a system message whose firing never gets its context or names a take of
+// another event), every hook record's type, firing and event read, and the
+// chain places the thread (implied by the held take: a thread the chain
+// cannot place hands no record, so holds no take). A take whose pair was
+// found is never absent, and a `hook_cancelled` line names no take, so it
+// denies nothing. Anything else is undecided: the safe side, a note told
+// again.
+//
+// # A thread line is read in one scanner pass, never held
+//
+// The scan reader (claudelinescan.go, [scanReader]) reads a member a line at a
+// time as [threadReader] does and answers each line as it does, but reads it
+// through [jsonscan] in ONE PASS that never holds the line, so a line of any
+// length costs what its readers read of it: Claude Code keeps no bound on a
+// line (a whole-PDF Read writes 55,924,056 bytes on one). Until it takes the
+// old reader's place, a differential holds it to the whole decode line by
+// line (claudelinescan_internal_test.go).
+//
+// A LINE IS ITS OWN READER ([lineSource]): it ends at the break and hands the
+// scanner the line without it, so the scanner reads one JSON text a line.
+// Every byte it takes of the member passes first through the member's meter
+// and through the line's byte facts ([lineBytes]), a tee of the raw bytes,
+// never of the tokens, since a pattern a reader of bytes reads can begin
+// inside a name, through an escaped quote ([threadBytes]). The context is
+// asked before each piece of at most [lineChunkBytes], so a reading overruns
+// its caller's wait by one piece whatever the line's length, and a line
+// refused part way is drained to its break through the same take.
+//
+// NOTHING OF A LINE COMMITS BEFORE ITS BREAK AND THE SCANNER'S END OF IT, and
+// a piece the member ends with no break commits nothing. Then the line is
+// judged in the order Claude Code's load reads it ([scanReader.commit]): a
+// fault of the grammar first, wherever it lies (a NUL or a byte order mark
+// first is faultLead, a cut value faultPrefix, too deep faultDepth, more after
+// the value faultTrailing, else faultSyntax), since the whole decode reads the
+// whole value before its head; then one value that is no object; then the head,
+// each key by its last occurrence; then the bounds below; only then a record,
+// each frame settled to its type ([settle]). So a late fault beats what the
+// line said before it, and a line past a bound is classed exactly where its
+// grammar or head refuses it: past a bound the pass keeps scanning, holding
+// nothing more.
+//
+// EVERY MEMBER IS READ BY ITS DECODED NAME, exactly, case kept, as the whole
+// decode reads a key under [threadDecoding] (`"type"` is `type`; `"Type"`
+// no key the layer reads), and a key written twice by its last value,
+// wholesale: each occurrence replaces what the one before it left, a frame's
+// all of it, never merged with it.
+//
+// EVERY VALUE IS READ BY ONE OF THREE MEANS, or passed over unheld
+// ([jsonscan.Scanner.Skip]). A small value the layer's own code decodes (a
+// uuid, a timestamp, a usage, a block's id) is CAPTURED as written within
+// [threadValueMax] ([jsonscan.Scanner.Capture]), copied into the facts or held
+// in the reader's buffers until its object ends; a capture past that bound
+// fails the line closed, never read as a guess. A container its readers walk
+// is a FRAME, read member by member, keeping only what its readers ask (a
+// message's kind, its blocks counted by kind, its calls) and deciding each
+// object by the layer's one rule of it ([blockCallOf]) once every key of it
+// has been met. A text its readers ask a property of STREAMS into the
+// automaton that answers it at any length ([textSays], [textNotice],
+// [textHandback], [textResult]), a hook's words into the asked take tokens they
+// name ([textTakes], [scanReader.Asking]). A list is read an element at a time by the
+// layer's one rule of an element, up to the first it refuses, as
+// [eachElement] hands it; an entry read by its first characters (a
+// retraction's, a kept uuid) is read one byte past them
+// ([lineDecoder.opening]), and a skill's name streams into its UTF-16 length
+// and whether its bytes were UTF-8 ([jsonscan.Scanner.InvalidUTF8]).
+//
+// A RECORD'S TYPE GATES ITS FRAMES ([gates]): a frame read on records of some
+// types alone is passed over where the `type` written before it names none of
+// them ([lineDecoder.admits]), since an api-request-blob writes its type first
+// and then a message repeating a whole request. A type is known only at the
+// line's end, though (an assistant writes its message first), so a frame met
+// before any type, or after one that is no string, is read; a line whose last
+// type reads a frame passed over for an earlier one fails closed; and a frame
+// the last type or subtype does not read is dropped at the commit.
+//
+// THE FACTS ARE HELD TO [threadLineMax] IN SUM ([lineMeter]), since a bound on
+// each value lets a line of a million tiny calls hold a million calls: every
+// allocation the facts keep is charged as it is made, an array before it is
+// made ([grow]), and nothing is refunded, so a key written many times pays for
+// every copy. What a line allocates and drops (a refused block's strings, an
+// error's text) is not charged: a line of many blocks costs time, not memory.
 //
 // # A run's harness session, carried between boxes
 //
@@ -306,7 +528,7 @@
 // figure) beside a [valueStream] and a string's encoder; two JSON rewrites,
 // each its scanner, its read buffer and a frame a container open; the readers
 // and writers of the archive's gzip and tar; and the plan, a sixteenth of the
-// plaintext at most. About 103 MiB at the archive's bound, 16 MiB of it the
+// plaintext at most. About 111 MiB at the archive's bound, 16 MiB of it the
 // plan, which a real session leaves nearly empty. A test holds the figure at a
 // smaller bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the
 // real one, 256 MiB of plaintext, both readings of the tar from a file on disk.
@@ -373,6 +595,275 @@
 // it, which a later `entries` or `attachment` replaces, so at most a bit for
 // each two bytes of the line; the second's ([definitionCut]) reads the plan's
 // cut back as it writes.
+//
+// # An OpenCode continuation's first request, judged in its box
+//
+// OpenCode compacts a session before a request where its count of it reaches
+// the point its box sets for the run's model: the model's limit, read off the
+// box's catalog and documents, less a buffer. Only the box the run is handed
+// can say that point, so the launch asks it there ([Runner.ReadOpenCodePoint],
+// opencodepoint.go), in ONE exec under the run's own environment, the
+// engine's own document set aside as the run's script sets it aside
+// (OPENCODE_CONFIG_CONTENT), in the run's working directory: the box's login
+// imported first, as the run's script imports it before its server reads a
+// provider's credential; `opencode --version` where the launch has no
+// release; `api model.list` and `api config.get` each answered into a file,
+// since a pipe cuts OpenCode's output at 64 KiB on 2.0.32 and 2.1.4; and a
+// listing of every plugin folder a release of the set reads. Each answer is
+// held to 4 MiB and removed from the box once read: config.get answers a
+// document's references resolved, so nothing it answered is logged or kept
+// but the values the point is decided by and the plugins' names.
+//
+// THE POINT BY THE BOX'S RELEASE ([openCodePointAt]), read in each release's
+// shipped code and measured at its boundaries: the model's limit (the smaller
+// of its input and context limits from 2.2.7, else its input limit, else its
+// context limit), less a buffer the highest document sets below it (a `"N%"`
+// share on 2.2.7 and 2.3.0; on 2.0.32 any buffer), else less the larger of
+// the release's share of it (a tenth on 2.0.32, fifteen hundredths after) and
+// 16,000 tokens once the limit is twice that. `compaction.auto: false` skips
+// every compaction but a manual one, the provider's refusal included, so the
+// session is sent whole whatever its count.
+//
+// NO POINT, EACH A MARK ([sandbox.PointMark]), wherever the read cannot prove
+// what OpenCode will do: a box release outside the set or other than the
+// writer's ([openCodeCountRead]: no pair has been measured); a plugin other
+// than the engine's own, by a document or a folder, or a configuration
+// directory the listing did not cover, since a plugin runs in the server and
+// can compact the session or add to it before the first request, which no
+// read of a release's hooks rules out; a provider's contextManagement option;
+// a model nothing states the limit of (OpenCode's default record holds it to
+// 200,000 tokens, which may not be its server's window: stated means a
+// document states its limit, or the catalog listed it, which its record's
+// release time says unless a document set that time); a zero limit with
+// compaction on (OpenCode's point is then infinite, and only the provider's
+// refusal compacts it); a native compaction; a model the catalog does not
+// list; a launch whose model names no provider; a read that failed.
+//
+// AND, IN THE BOX THAT HOLDS THE SESSION'S COPY, WHAT IT HANDS OVER FIRST
+// ([openCodeBoxBytes]). There OpenCode tells the session every context source
+// that changed since its last request in that box, each at most its whole
+// render: the run's own instructions and every instruction file it discovers
+// (the global AGENTS.md, an AGENTS.md on the way up from the working
+// directory, and, read as a superset, every CLAUDE.md beside them), with a
+// removal sentence for each directory it walks; the run's skills and the
+// guidance of the MCP servers the run's bridge serves it, which the engine
+// knows; the date and the environment. Two are NOT CHARGED: the id of each
+// skill a changed list names as gone, and a skill OpenCode finds in a folder
+// of its own (a configuration directory's `skill` or `skills`, `.claude/skills`
+// and `.agents/skills` in the home and on the way up), which only a job that
+// changed such a folder since the session's last request in the box adds
+// unseen; the whole of every other source charged usually covers either. A
+// box document that adds a source the read cannot size (MCP servers, skills,
+// instruction entries, references, Code Mode, an experimental key) and an MCP
+// server the box dials itself, whose instructions only it knows, are no point
+// there. After an import into another box OpenCode keeps no record of what it
+// handed the session before, and hands nothing.
+//
+// # What Claude Code estimates a line's content at
+//
+// Before a request, Claude Code decides whether to compact by its own count of
+// the conversation: the last reply whose usage counts, and an ESTIMATE of every
+// record after it (2.1.322's Xh and k7o @294311543, 2.1.310's Zg and KFo
+// @247646809). These are the facts a reader of that count reads of a line
+// ([threadLine.Estimate], [threadLine.AttachmentEstimate]), filled once, as the
+// line is read ([factsOf]), by the harness's own rules:
+//
+//   - A USER OR ASSISTANT RECORD is its message's content (EX, 2.1.322
+//     @292455010; zY in 2.1.310): a string at its length, a list element by
+//     element (n7e @292455428; GJn): a string or a `text` block at its text's
+//     length; `thinking` at its text, `redacted_thinking` at its data (the
+//     signature is not charged); a `tool_use` at its name's length plus its
+//     input's JSON, which is the input as the line writes it, since the
+//     harness writes a line with JSON.stringify; a `tool_result` at its
+//     content, by these rules again; a `document` whose source is text at its
+//     data, at TWO characters a token where its title's last dotted part is
+//     `json`, `jsonl` or `jsonc` in any case, and whose source is content at
+//     that content (a string, or its list's objects alone); an `image`, or a
+//     `document` of any other source, 2,000 flat (`m=2000`); and any other
+//     element at its JSON as written. On 2.1.322 the record also charges
+//     2,000 for each image its MCP task delivery carries (Ebs), which 2.1.310
+//     does not, so a figure read on that release holds 2,000 an image more
+//     than its own count did: the floor's safe side.
+//   - AN ATTACHMENT RECORD is what its record stores as its rendering, the
+//     record's own `rendered` (rTe and qLe @298643213, its shape held by
+//     Cje's schema @298645370): every rendered message's content, a non-empty
+//     string or a non-empty list of `text` blocks of non-empty text; plus, on
+//     a queued command, 2,000 for each image its task delivery carries. A PDF
+//     read is 3,000 a page whatever it stores (vbs, `kbs=3000` @292454941).
+//     Where no rendering is stored, or the one stored does not hold to that
+//     shape, the harness renders the attachment again by its type (VCt
+//     @298645939), a template this layer does not hold, so the estimate does
+//     not read ([threadLine.AttachmentEstimate]'s false): so too always for
+//     a type the harness renders again whatever it stores (`poll_events`,
+//     `project_doc_reads`; L_r @298641216). Only an attachment of no type,
+//     and one of the five types the harness renders as no message (`Nh`
+//     @283080639), reads as nothing where it stores no rendering, as none of
+//     the five does.
+//
+// LENGTH IS JAVASCRIPT'S: a string's length in UTF-16 code units, two for a
+// character past the basic plane, never capped ([quotedUnits]; the skill
+// listing's [textUnits] stops past a name's bound). And EACH ELEMENT IS
+// ROUNDED AS THE HARNESS ROUNDS IT, Math.round(length / n) (y @292454158),
+// half up, before the elements are summed, so a list of short texts charges
+// less than their summed length would ([estimateUnits]).
+//
+// AT BOTH RATES ([threadEstimate]): the harness reads four characters a token
+// for exactly fourteen older models and three for every other (2.1.322's F_
+// @286842850, 2.1.310's ry @240809635), and which model counts is the reader's
+// to say, so the facts hold the two sums.
+//
+// ONE PASS OVER A VALUE, HOLDING NO TEXT: a content value is walked once, as
+// its decoder reads it ([estimateWalk]), each element's charge read as it
+// passes and the length of what an element writes read off the value where it
+// lies, so a value nested a thousand levels deep costs its bytes once, never
+// once a level, and nothing of a text is kept but its length.
+//
+// # What Claude Code estimates a session's next request at
+//
+// A launch that continues a session sends it again before a word of its
+// brief, so its floor is that request with the brief (internal/engine's
+// continuedFloor). The last request's input ([contextReading]) is not that
+// request: it lacks the reply that request was answered with and every record
+// after it, and past a compaction no request has followed it is the
+// compacted-away conversation's. So the floor reads the harness's OWN ESTIMATE
+// of the next request, by the rule Claude Code decides whether to compact by
+// (resumed.go's file comment), run forward over the thread:
+//
+//   - THE ANCHOR, by the count's own rule ([countedReplyOf]): the last
+//     main-thread reply whose usage counts, at its input, cache writes, cache
+//     reads and OUTPUT, placed at the first record of its message id;
+//   - EVERY CHAINED MAIN-THREAD RECORD AFTER THAT PLACE at the harness's own
+//     estimate of it: a user or assistant record's content
+//     ([threadLine.Estimate]), an attachment's stored rendering or a PDF
+//     read's pages ([threadLine.AttachmentEstimate]), and an attachment the
+//     harness renders again by its type at two bytes a token of its line
+//     ([sandbox.ClaudeCharge]), which bounds any rendering of what the line
+//     holds; a system record and every other record nothing, as the harness
+//     charges them;
+//   - A MAIN COMPACT BOUNDARY restarts it: no anchor, and the estimate of the
+//     stretch the compaction kept before the boundary, which the harness
+//     relinks after its summary, beside every record after the boundary
+//     ([nextReading.preserved]). Where that stretch cannot be found in what
+//     the reading kept of the thread, there is no figure. Until a reply
+//     anchors after the boundary the figure holds no system prompt and no
+//     tool definitions, which only a reply's input counts, so it is short of
+//     the request by those: a residual the floor carries.
+//
+// AT BOTH RATES the harness counts text at ([threadEstimate]), since which
+// model the next request goes to is the launch's to pick
+// ([sandbox.NextRequest.At]); the anchor's counts are the same at both.
+//
+// NO FIGURE, where the thread was not read whole (a line the layer refused, a
+// walk ended on an error, no chained line), where a reply's usage does not
+// read since the last boundary, where a record after the anchor holds a
+// content the harness's own estimate throws on or a PDF read whose pages do
+// not read, where the release that wrote the thread is none the count's
+// rules were read in ([claudeCountFloor]), and where the box's read marked
+// the count before it opened the thread ([claudePrecompact]): the floor then
+// reads the last request's input. A server's clearing
+// of old tool results is not charged: the figure is what the request the
+// server is sent carries once the clearing has dropped them, which is what a
+// window has to hold, while the harness counts them back only to decide when
+// to compact.
+//
+// WHAT IT KEEPS FROM LINE TO LINE IS BOUNDED, whatever a line holds: its sums,
+// the digest of its run's message id, and of the records since the last
+// boundary at most [threadChainMaxRecords], each the 16 bytes of its uuid and
+// the running sums through it (32 bytes an entry, 4 MiB at the bound), from
+// which the stretch a boundary kept is charged ([nextReading.stretch]). Never a
+// string the thread chose the length of.
+//
+// # What OpenCode counts a session at before its next request
+//
+// OpenCode decides before every request, the first of a continued run
+// included, whether to compact the session first: it counts the conversation
+// from its last counted reply (that reply's input, cache reads and writes,
+// output and reasoning, as its provider reported them) and an estimate of
+// every message after it, the reply's own tool results among them, at a
+// rounded quarter of their text's UTF-16 length; and it restarts that count at
+// its newest completed compaction (read in the shipped code of every release
+// in [openCodeCountReleases], and measured to the token at each one's
+// boundaries). The engine bounds that count FROM ABOVE, at both places a
+// session's export is read whole: the take's meter, over the archive it keeps
+// ([newContextMeter]), and the collection's read of the export the job's
+// script left in its box ([OpenCode.readMainThread]).
+//
+// THE TAIL IS CHARGED AT A QUARTER OF ITS BYTES, rounded up: every message
+// after the reply at its whole span as the export holds it, and the reply's
+// own tool results at the spans of their answers and failures. OpenCode
+// renders a message to its model from the strings the message stores and at
+// most a fixed template, whose bytes the message's own keys exceed; a
+// string's UTF-8 bytes are never fewer than its UTF-16 units; and JSON's
+// escapes only add. So the charge is never under OpenCode's estimate. It is
+// over it by the export's keys and indentation, about 95 tokens a message on
+// the real exports this package keeps (testdata/opencode), which holds a
+// launch to a little more and never less. A file is the exception: OpenCode
+// charges a PDF or an image by what it is, not by its bytes, so a file after
+// the reply marks the count ([sandbox.CountPDF], [sandbox.CountMedia]).
+//
+// AND WHERE IT RESTARTS: the id of the newest compaction message, whatever
+// its status ([openCodeRestart]), the transcript's own restart rule, so a job
+// whose compaction failed reads as restarted (the side that tells more) while
+// its count goes on from its last reply, as OpenCode's does.
+//
+// AND THE PROVIDER OF THE REPLY IT IS ANCHORED ON, beside it: the figure is
+// what that provider reported, and a continuation on another provider's
+// model is not held to it.
+//
+// ONE WALK of the export, on the scanner (internal/jsonscan), which never
+// holds a string: each message's small values are captured at
+// [exportValueMaxBytes], its content is walked for the spans of its tool
+// results and the files it names, and every other value is passed over, its
+// bytes checked and none held. The floor's last-request figure
+// ([measuredPrompt]) is read in the same walk.
+//
+// # The OpenCode releases the count reads
+//
+// The count, the point and what a box hands over first are read only for the
+// OpenCode releases in one set ([openCodeCountReleases], [openCodeCountRead]),
+// each read in its shipped code and measured at the boundaries its rules
+// predict. A SET, NEVER A RANGE: a release between two of these is none of
+// them, since any release may move a rule the count rests on (2.1.4 raised
+// the share of the window held back from a tenth to fifteen hundredths, and
+// 2.2.7 took the smaller of a model's input and context limits), and nothing
+// here can tell which one did.
+//
+// TO ADD A RELEASE, re-probe it: read its bundle, as data, at the point
+// function, the count, the estimator, the compaction check (whether `auto`
+// skips the overflow route too), the catalog record's builder and a
+// document's overlay of it (what states a limit, what sets `time.released`),
+// the default model record, the anchor's qualification and its provider, the
+// compaction statuses and the native compaction's mark, the model-message
+// conversion of every message kind, the seven context sources and their
+// renders, the instruction discovery, the plugin locations, and the overflow
+// phrases; then continue, in a box of that release, exports placed one token
+// under and at the predicted point for a limit it defaults, a limit stated,
+// an integer buffer and a tool result after the reply, each of which must
+// split there; a first request refused in the overflow phrases; and read its
+// model.list and config.get answers as the launch reads them. Only then is it
+// added to [openCodeCountReleases].
+//
+// THE WRITER AND THE BOX ARE ONE RELEASE: a session one release wrote is
+// judged in a box of another only once a probe has continued that pair's
+// sessions (a text step, a tool step and a completed compaction) at the box's
+// point, which none has yet. So the set admits each release alone, and a pair
+// of two differing releases is none.
+//
+// # A box's release is pinned
+//
+// A box handed an archive is asked its harness's release ([Runner.CheckCarry]);
+// a relaunch that continues the copy of the session its job's box holds, in
+// that box, asks it only where an unheld telling is at stake, which is how the
+// engine learns the release that holds the copy (internal/sandbox's
+// continueKept). Either answer holds only while the box's release cannot
+// change under the session, and Claude Code updates itself in the background
+// by default, so the release that wrote a session, or answered for it, could
+// differ from the one that resumes it. So every Claude Code run pins
+// DISABLE_AUTOUPDATER=1, in the wrapper over the seat's, the image's or a
+// profile's value ([claudeSessionLayout]) and in its settings pin over a
+// repository's own ([claudeSettingsPin]), and the in-place path needs no
+// stricter telling. A managed settings file still wins over it, as over every
+// pin: an image's or a host's policy is its operator's own.
 //
 // # A run ends on request
 //

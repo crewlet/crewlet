@@ -18,45 +18,17 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A seat's READY work, in the order the work pickup offers it (ADR-0112).
-//
-// # Ready
-//
-// Assigned to the seat, `in_progress` or `todo`, not archived, not mid-merge,
-// not in the trash, past its start date if it has one, waiting on no open
-// blocker, and not held on a question the seat itself asked on it and nobody
-// has answered yet. `in_review` is ready on the same terms for the seat that
-// holds it: as its review when somebody else moved it into review, and, when
-// the seat moved it there itself, as a review nobody holds (a seat never
-// reviews what it submitted itself, so it acts on the review it was given or
-// names a reviewer).
-//
-// AND ONE WAIT IS READY BEFORE ITS DATE: an agent's wait whose reason names a
-// person its writer has not asked on the item ([PersonsNamed], ADR-0122). A
-// wait on a person is an ask, so such a wait comes back to be asked rather
-// than sit out a date nobody was told of, whenever and however it was written.
-//
-// AND A DEAD WAIT IS READY: an item whose every open blocker is a change the
-// engine recorded nothing moving ([DeadWait], ADR-0128), unless a reviewer
-// holds it in review. It is handed once per head and never rechecked.
-//
-// # The order
-//
-// Started work first, then the reviews the seat holds, then its own items in
-// review that nobody reviews, then its waits on a person nobody asked, then its
-// dead waits, then its priority list in its lead's order, then the queue:
-// priority, then due date, the order `my_work` lists `assigned` in.
-//
-// # What a pickup keys on, and whom its turn works for
-//
-// [ReadyItem.Moved] is the last change to the item that would have woken the
-// seat, so neither its own comment nor a change that only tells it (another
-// agent's words that ask nothing, a watcher added) hands it the same item
-// again. [ReadyItem.Quiet] is when the item went quiet for the seat, which the
-// pickup rechecks once a day (ADR-0122).
-// [ReadyItem.For] is whom the item's work is for, so the turn is held to
-// their apps (ADR-0109): whom its assignment, else its creation, was written
-// for, as the history row keeps it (`working_for`), else that row's writer.
+// A seat's READY work, in the order the work pickup offers it (ADR-0112). The
+// definition and the order are docs/concepts/scheduling.md, "The work pickup";
+// [heldBlock] and [orderReady] hold them. Beyond assigned, unblocked work past
+// its start and not held on the seat's own open question: `in_review` is ready
+// for its holder as a review when somebody else moved it there, and as one
+// nobody holds when the seat did (a seat never reviews its own submission); an
+// agent's wait naming a person it has not asked is ready before its date
+// ([PersonsNamed], ADR-0122); and a dead wait is ready once per head, never
+// rechecked, unless a reviewer holds it ([DeadWait], ADR-0128). A pickup keys on
+// [ReadyItem.Moved], rechecks [ReadyItem.Quiet] daily (ADR-0122), and holds its
+// turn to [ReadyItem.For]'s apps (ADR-0109).
 
 // ReadyRows is one page of ready work: the pickup reads the next page only
 // when every item on this one was already offered.
@@ -102,18 +74,15 @@ type ReadyItem struct {
 
 	// Quiet is when the item went quiet for the seat: the latest of MovedAt,
 	// the start it waited until (once passed) and the seat's own last write
-	// on it since, whatever that write was (ADR-0122). AN ITEM STILL READY
-	// is one no answer took out of the seat's ready set: an answer that moved
-	// its pickup key has it handed again anyway, and one that did not, an
-	// edit of its content, leaves it as quiet as words do.
+	// on it since, whatever that write was (ADR-0122). An item still ready is
+	// one no answer took out of the ready set: an answer that moved its pickup
+	// key hands it again anyway, and an edit of its content leaves it as quiet
+	// as words do.
 	Quiet time.Time `json:"quiet,omitzero"`
 
-	// For is whom the item's work is for: whom its last assignment was
-	// written for, a change that moved its assignee whatever kind its
-	// record ended with ([readyAssignedArm]), else whom its creation was
-	// written for ([readyCreatedArm]) — whom the writing turn worked for
-	// where an agent wrote it for somebody, and otherwise the writer itself;
-	// nil for the seat's own work.
+	// For is whom the item's work is for: whom its last assignment
+	// ([readyAssignedArm]), else its creation ([readyCreatedArm]), was
+	// written for ([whomFor]); nil for the seat's own work.
 	For *types.WorkingFor `json:"for,omitempty"`
 
 	// SubmittedBy is who moved an item in review into review (or filed it
@@ -548,11 +517,32 @@ func readyWaits(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time
 }
 
 // orderReady is the pickup order over the blocks and the priority list:
-// started work in queue order, then the reviews the seat holds, then its own
-// items in review nobody reviews, then the waits on a person nobody asked,
-// then the dead waits, then the waiting items the list names in its order,
-// then the rest in queue order.
+// urgent items first, then the rest (ADR-0159), each in the order of started
+// work in queue order, the reviews the seat holds, its own items in review
+// nobody reviews, the waits on a person nobody asked, the dead waits, the
+// waiting items the list names in its order, then the rest in queue order.
 func orderReady(started []TaskRow, reviews, own []reviewRow, onPerson []waitRow, dead []TaskRow,
+	waiting []TaskRow, priorities []string) []ReadyItem {
+
+	out := orderBlocks(started, reviews, own, onPerson, dead, waiting, priorities)
+	urgent := make([]ReadyItem, 0, len(out))
+	rest := make([]ReadyItem, 0, len(out))
+	for _, item := range out {
+		if item.Priority != PriorityUrgent {
+			rest = append(rest, item)
+			continue
+		}
+		// Not started: only its urgency puts it ahead of started work.
+		if item.Why == types.PickupPriorityList || item.Why == types.PickupQueue {
+			item.Why = types.PickupUrgent
+		}
+		urgent = append(urgent, item)
+	}
+	return append(urgent, rest...)
+}
+
+// orderBlocks is [orderReady]'s order of the blocks, urgency aside.
+func orderBlocks(started []TaskRow, reviews, own []reviewRow, onPerson []waitRow, dead []TaskRow,
 	waiting []TaskRow, priorities []string) []ReadyItem {
 
 	out := make([]ReadyItem, 0, len(started)+len(reviews)+len(own)+len(onPerson)+len(dead)+len(waiting))
@@ -667,34 +657,17 @@ func readyReviews(ctx context.Context, tx *sql.Tx, handle string,
 const readyFirstArm = `SELECT h.subject_id, h.log_seq, h.created_at FROM tracker_history h
 	WHERE h.subject_id = ? ORDER BY h.log_seq LIMIT 1`
 
-// readyAssignedArm is one item's last assignment by a person, a colleague or
-// a credential other than the seat — anybody but the engine's own duties — or
-// the seat's own take made in a turn for somebody.
+// readyAssignedArm is one item's last assignment by anybody but the seat and
+// the engine's own duties, or the seat's own take made in a turn for somebody.
 //
-// AN ASSIGNMENT IS A ROW THAT MOVED THE ASSIGNEE, read off its assignee delta
-// whatever kind its record ended with, as readyReviewArm reads a review
-// request off the status delta. A record carries one kind, and a write that
-// moves the assignee and another field in one call, the usual hand-off
-// "assign it to you and set it to todo", is filed under the other change's
-// kind ([ChangeKind.MovedFields]). Read by its kind, that hand-off was
-// invisible, and the pickup worked for the assigner before it (#930). An
-// assignment to the seat that already holds the item moves nothing, records no
-// delta, and is no assignment here: another colleague's reassertion changes
-// nothing about whom the work is for.
-//
-// THE CREATION OUTRANKS NOTHING. An item filed already assigned records the
-// assignee's delta on its creation row, its oldest, so any later assignment by
-// somebody else wins; where the creation is the only one, the arm reads whom
-// its filing was for, whom readyCreatedArm names anyway.
-//
-// THE SEAT'S OWN ROWS STAY OUT, BUT FOR ITS OWN TAKE MADE FOR SOMEBODY: an
-// agent's row that assigned the item to its own writer and carries whom that
-// turn worked for (ADR-0109's carrier). The arm reads the newest admitted row,
-// so the seat's own uncarried moves, and its moves away from itself — a
-// hand-away, an unassignment — are never admitted: a take-back made on the
-// seat's own initiative reads through to the newest move by somebody else, or
-// to the seat's own take made for somebody. Whom the seat works for is never
-// itself.
+// AN ASSIGNMENT IS A ROW THAT MOVED THE ASSIGNEE, whatever kind its record
+// ended with: a hand-off that also moves another field is filed under that
+// field's kind ([ChangeKind.MovedFields]). A reassertion to the holder records
+// no delta and is none; a creation filed already assigned is the oldest row,
+// so any later assignment wins. The seat's own rows stay out but for a take
+// carrying `working_for` (ADR-0109): its uncarried moves and its moves away
+// from itself (a hand-away, an unassignment) read through to the newest
+// admitted row, so whom the seat works for is never itself.
 const readyAssignedArm = `SELECT h.subject_id, h.actor, h.actor_kind, h.actor_apps, h.working_for
 	FROM tracker_history h
 	WHERE h.subject_id = ? AND json_extract(h.fields_json, '$.assignee.to') IS NOT NULL
@@ -707,9 +680,8 @@ const readyAssignedArm = `SELECT h.subject_id, h.actor, h.actor_kind, h.actor_ap
 // credential other than the seat, or by the seat itself in a turn for
 // somebody: whom work filed already assigned is for.
 //
-// THE SEAT'S OWN CREATION COUNTS ONLY AS AN AGENT'S ROW THAT CARRIES WHOM ITS
-// TURN WORKED FOR, the rule [whomFor] believes a carrier by: work a seat filed
-// for itself is its own, and work it filed for somebody is theirs.
+// THE SEAT'S OWN CREATION COUNTS ONLY AS AN AGENT'S ROW CARRYING WHOM ITS TURN
+// WORKED FOR ([whomFor]'s rule): work a seat filed for somebody is theirs.
 const readyCreatedArm = `SELECT h.subject_id, h.actor, h.actor_kind, h.actor_apps, h.working_for
 	FROM tracker_history h
 	WHERE h.subject_id = ? AND h.kind = 'created'
@@ -830,18 +802,16 @@ func writersOf(ctx context.Context, tx *sql.Tx, query string, args []any, reader
 }
 
 // whomFor is whom one admitted history row says the item's work is for, read
-// by the seat reader: whom an agent's row was written for, as its record
-// carried them (`working_for`, ADR-0109), and otherwise the row's writer
-// ([workingForWriter]).
+// by the seat reader: an agent row's carrier (`working_for`, ADR-0109), else
+// the row's writer ([workingForWriter]).
 //
-// A CARRIER IS BELIEVED ONLY FROM AN AGENT'S ROW, the rule a wake is read by:
-// a person, a credential and the engine write for nobody but themselves, so a
-// carrier on one of their rows would make the pickup work for somebody that
-// writer never spoke for. A carrier this build cannot read — one that does not
-// decode, or decodes to nothing — is a stranger's, which holds no app, the
-// closed end. A seat carrier naming the reader is the seat's own work, nil,
-// as the ceiling reads one; a credential's apps are the ones its writing turn
-// already narrowed, which the pickup's turn narrows again on its own node.
+// A CARRIER IS BELIEVED ONLY FROM AN AGENT'S ROW, as a wake reads one: a
+// person, a credential and the engine write only for themselves, so a carrier
+// on their row would have the pickup work for somebody they never spoke for.
+// A carrier this build cannot read (undecodable, or decoding to nothing) is a
+// stranger's, which holds no app: the closed end. A seat carrier naming the
+// reader is the seat's own work, nil, as the ceiling reads one; a credential's
+// apps are narrowed again by the pickup's turn on its own node.
 func whomFor(kind AuthorKind, actor, apps string, workingFor sql.NullString,
 	reader string) *types.WorkingFor {
 
@@ -875,8 +845,8 @@ func workingForWriter(kind AuthorKind, actor, apps string) *types.WorkingFor {
 	}
 	w := &types.WorkingFor{Kind: types.WorkingForCredential, Login: actor}
 	if apps != "" {
-		// A LIST THE APPLIER WROTE; one this build cannot read grants
-		// nothing, the closed end.
+		// The applier wrote it; one this build cannot read grants nothing:
+		// the closed end.
 		var grants []iam.Grant
 		if json.Unmarshal([]byte(apps), &grants) == nil {
 			w.Apps = grants

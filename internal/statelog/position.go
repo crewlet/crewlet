@@ -11,21 +11,18 @@ import (
 // form, and therefore the shift [Position.Packed] uses.
 //
 // 2^40 sequences per generation against 2^23 generations in an int64's
-// positive range. The split is not arbitrary: at the modelled 2.4 million
-// records a year a generation lasts four hundred thousand years, and a
-// generation only advances when an operator reanchors after losing the whole
-// broker estate — an event with no plausible count in the thousands. So the
-// wide half goes to the number that grows on its own.
+// positive range: at the modelled 2.4 million records a year a generation
+// lasts four hundred thousand years, and a generation advances only when an
+// operator reanchors after losing the whole broker estate. So the wide half
+// goes to the number that grows on its own.
 const GenerationStride = 1 << 40
 
 // MaxGeneration is the highest generation the packed form can carry, and
 // MaxSeq the highest sequence one generation's space holds.
 //
-// CHECKED WHERE A POSITION IS MINTED rather than on every conversion, by
-// [Position.Valid]: a Packed() that returned an error would put an error
-// check on every comparison in the tree for a bound a fleet reaches after
-// four hundred thousand years, and a call site that ignored it would be worse
-// than the bound. The mint points are few and each one calls Valid.
+// CHECKED WHERE A POSITION IS MINTED, by [Position.Valid], not on every
+// conversion: an error from Packed() would put a check on every comparison in
+// the tree for a bound a fleet reaches after four hundred thousand years.
 const (
 	MaxGeneration = uint32(1<<23 - 1)
 	MaxSeq        = uint64(GenerationStride - 1)
@@ -35,85 +32,42 @@ const (
 var ErrPositionRange = errors.New("position outside the packed range")
 
 // ErrWrongStream reports a comparison between positions on two different
-// streams.
-//
-// It is an error rather than a false, because the two answers are not the
-// same fact: "this position is not before that one" and "these two positions
-// are not comparable at all" lead to different code, and a bool collapses the
-// second into the first — which reads as "already caught up" at every call
-// site that asks.
+// streams. An error rather than a false: a bool collapses "not comparable"
+// into "not before", which every caller reads as "already caught up".
 var ErrWrongStream = errors.New("positions are on different streams")
 
 // ErrForeignPosition is a position a CALLER named — a read's floor, a feed's
-// cursor or its lower bound — that is on another log than the one it is asked
-// of: the caller's mistake about the request, never a state of the node
-// answering it.
+// cursor or its lower bound — on another log than the one it is asked of: the
+// caller's mistake, answered as a bad request like [ReadLevel.Valid]'s.
 //
-// # Why it is not a refusal, and not [ErrWrongStream]
-//
-// A [Refused] is a state of THIS node, and it unwraps to [ErrUnavailable],
-// which every surface answers as "this node cannot answer here": a client acts
-// on it by coming back later or by asking another node, and an operator by
-// acting on this one. A position from another log is none of that. Every node
-// in the fleet refuses it identically however long anybody waits, so answered
-// as a refusal — a floor was `wrong_stream`, the code this node's own
-// recreated stream answers — it sent a client to a node that would refuse it
-// the same, and a dashboard told a person an operator had to act on a node
-// with nothing wrong with it. It is [ReadLevel.Valid]'s kind of failure: the
-// request, which a surface answers as a bad request. [ErrWrongStream] is the
-// engine comparing two positions of its own, which is a fault rather than
-// anything a caller sent.
+// Not a [Refused]: that is a state of THIS node, unwrapping to
+// [ErrUnavailable], which sends a client to another node and an operator to
+// this one, while every node refuses a foreign position identically. Not
+// [ErrWrongStream]: that is the engine comparing two positions of its own, a
+// fault rather than anything a caller sent.
 var ErrForeignPosition = errors.New("statelog: a position on another log")
 
-// Position is where a domain is on a stream. THE THREE FIELDS ARE ONE VALUE.
+// Position is where a domain is on a stream. THE THREE FIELDS ARE ONE VALUE: a
+// rebuilt stream restarts at 1, so a bare sequence is indistinguishable from a
+// current one; the generation, advanced only by an audited reanchor, makes an
+// old sequence comparable and SAFELY STALE in one integer comparison; and the
+// stream keeps a position from meaning something on another domain's log.
+// [Position.Packed] is the one SQL-facing form, with no second name, so a
+// comparison means the same everywhere.
 //
-// # Why a triple and never a bare integer
-//
-// A sequence alone is meaningless the moment a stream can be recreated. An
-// operator who loses the broker estate rebuilds it, and the new stream starts
-// at 1 — so every stored sequence is suddenly a number in a space it does not
-// belong to, indistinguishable from a current one. The generation is what
-// makes an old sequence COMPARABLE AND SAFELY STALE rather than plausible: it
-// is a monotone integer that only an audited reanchor advances, and one
-// integer comparison answers "is this from before the estate was rebuilt"
-// with no clock and no round trip.
-//
-// The stream name is the third field for the same reason at a different
-// scale: a fleet runs more than one domain, each with its own stream and its
-// own sequence space, and a position that travelled between them would be a
-// number that means something on both.
-//
-// # One conversion, and one name for it
-//
-// [Position.Packed] is the SQL-facing form and there is deliberately no
-// second name for it. A Version() beside a Packed() is one value with two
-// spellings, and two spellings of one value is how a comparison in one place
-// stops meaning what it means in another.
-//
-// # On the wire
-//
-// A position travels in two forms and both name the same triple. Inside an
-// answer it is the object `{stream, generation, seq}` — the keys below, which
-// are what the dashboard's protocol types declare and what a reader of
-// `seen_through` or `incomplete.from` indexes. Untagged, the encoder used
-// Go's own field names, so the dashboard read `from.seq` and got `undefined`
-// while the Go side saw the same fields under `Seq` and compiled. As a
-// PARAMETER — a cursor, `since`, `min_position` — it is the token
-// [Position.String] renders, `<stream>@<generation>:<sequence>`, because a
-// query string carries no object.
+// In an answer it is the object `{stream, generation, seq}`, the keys the
+// dashboard's protocol types index; as a PARAMETER (a cursor, `since`,
+// `min_position`) it is the token [Position.String] renders, because a query
+// string carries no object.
 type Position struct {
 	// Stream is the stream this position is on.
 	Stream string `json:"stream"`
 
-	// Generation is the generation of THIS STREAM — each domain's log has
-	// its own, advanced only by an operator's reanchor of that log — so
-	// it is a coordinate within the stream's number space rather than a
-	// fact about the node.
-	//
-	// uint32, NOT uint64: the packed form shifts it by GenerationStride's
-	// exponent inside an int64, which bounds it at 2^23 either way. A
-	// wider field would promise a range the packed form cannot carry, and
-	// the value that overflowed would be silently negative.
+	// Generation is THIS STREAM's, advanced only by an operator's reanchor
+	// of that log: a coordinate in the stream's number space, not a fact
+	// about the node. uint32, NOT uint64: the packed form bounds it at 2^23
+	// either way, and a wider field would promise values that pack
+	// silently negative.
 	Generation uint32 `json:"generation"`
 
 	// Seq is the broker's own sequence — a PubAck's, an applier's
@@ -122,35 +76,21 @@ type Position struct {
 }
 
 // Packed is the position as one integer: the SQL-facing form, and what every
-// durable column stores.
-//
-// (generation << 40) | seq, which orders lexicographically by (generation,
-// seq) for free — so a cursor that spans a reanchor resumes with no gap and
-// no repeat, and a column can be compared with a plain `>` in SQL that has no
-// idea a generation exists.
-//
-// The stream is NOT in the packed form. It is the identity of the number
-// space rather than a coordinate within it, and two streams' packed positions
-// are never compared — [Position.Before] refuses that comparison, which is
-// the guard the packed form itself cannot carry.
+// durable column stores. (generation << 40) | seq orders by (generation, seq),
+// so a cursor spanning a reanchor resumes with no gap or repeat and SQL
+// compares a column with a plain `>`. The stream is NOT in it: it names the
+// number space, and [Position.Before] refuses the cross-stream comparison the
+// packed form cannot.
 func (p Position) Packed() int64 {
 	return int64(p.Generation)*GenerationStride | int64(p.Seq)
 }
 
-// Unpack is [Position.Packed]'s inverse, over the stream the column belongs to.
-//
-// IT EXISTS BECAUSE THE ARITHMETIC WAS WRITTEN FOUR TIMES — twice in this
-// package's own table reader, once in the tracker's coverage report and once
-// more in every domain that reads a position back out of a column. Each was
-// the same two lines, and each was one edit away from a generation that
-// divides where it should modulo: a position that is silently in the wrong
-// number space compares as plausible and orders wrongly, which is the failure
-// the generation exists to make impossible.
-//
-// THE STREAM IS AN ARGUMENT because it is not in the packed form: it is the
-// identity of the number space rather than a coordinate in it, and a caller
-// reading a column already knows which log it belongs to. A position built
-// without one fails [Position.Valid] and refuses every comparison.
+// Unpack is [Position.Packed]'s inverse, over the stream the column belongs
+// to: every reader of a packed column uses this one copy of the arithmetic,
+// since a slip in it puts a position silently in the wrong number space,
+// where it compares as plausible and orders wrongly. The stream is an argument
+// because the packed form does not carry it; a position built without one
+// fails [Position.Valid] and refuses every comparison.
 func Unpack(stream string, packed int64) Position {
 	return Position{
 		Stream:     stream,
@@ -160,12 +100,9 @@ func Unpack(stream string, packed int64) Position {
 }
 
 // Before reports whether p is strictly before q, and refuses a comparison
-// across streams.
-//
-// GENERATION FIRST, ALWAYS. A sequence from a previous generation is below
-// every sequence in the current one however large it is, because they are
-// numbers in unrelated spaces — and the whole point of the generation is that
-// this comparison is the one place that fact is enforced.
+// across streams. GENERATION FIRST, ALWAYS: a sequence from a previous
+// generation is below every sequence in the current one, and this is the one
+// place that is enforced.
 func (p Position) Before(q Position) (bool, error) {
 	if p.Stream != q.Stream {
 		return false, fmt.Errorf("%w: %q and %q", ErrWrongStream, p.Stream, q.Stream)
@@ -180,18 +117,10 @@ func (p Position) String() string {
 }
 
 // ParsePosition reads back the `stream@generation:seq` token [Position.String]
-// writes — a cursor, a `since`, a `min_position`, a wake's trigger.
-//
-// BESIDE THE WRITER, because a token is one vocabulary and its reader belongs
-// with the rule that writes it: the reader lived in the tracker, so a wake
-// carrying a knowledge base's position, or a node reading one back, had to ask
-// the tracker how a position is spelled.
-//
-// THE TRIPLE RATHER THAN A BARE SEQUENCE, because a sequence names no stream
-// and no generation: handed one from a previous generation, a reader cannot
-// tell a position that is behind from one that is impossibly far ahead — and
-// the whole reason the public token carries all three is that it then never
-// needs a migration.
+// writes — a cursor, a `since`, a `min_position`, a wake's trigger — beside
+// its writer, because a token is one vocabulary. The token is the triple
+// because a bare sequence names no stream and no generation: from a previous
+// generation, a reader cannot tell behind from impossibly far ahead.
 func ParsePosition(raw string) (Position, error) {
 	at, why, cause := parsePosition(raw)
 	switch {
@@ -204,14 +133,10 @@ func ParsePosition(raw string) (Position, error) {
 }
 
 // parsePosition is [ParsePosition] without the package's prefix: why a token
-// is not a position, as a sentence that names no package — the half a
-// caller-facing grammar renders under the name of its own parameter
-// ([ParseFreshness]) — and the error it was concluded from, where there is
-// one. Both are empty for a position.
-//
-// A SENTENCE AND A CAUSE RATHER THAN AN ERROR TYPE OF ITS OWN, because an
-// error type in this package crosses the estate's wire or loses its sentence
-// there, and this one is only ever a step on the way to the two errors above.
+// is not a position, as a sentence naming no package (which [ParseFreshness]
+// renders under its own parameter's name), and the error it was concluded
+// from, if any. Both are empty for a position. Not an error type: one in this
+// package crosses the estate's wire or loses its sentence there.
 func parsePosition(raw string) (Position, string, error) {
 	refuse := func() (Position, string, error) {
 		return Position{}, fmt.Sprintf("%q is not a log position — one reads "+
@@ -266,15 +191,10 @@ func (p Position) Valid() error {
 // compare and is honoured nowhere, so neither is refused. Anything else wraps
 // [ErrForeignPosition].
 //
-// # Why a caller's position is held to it before it is used at all
-//
-// [Position.Packed] deliberately carries the generation and the sequence and
-// NOT the stream, so a foreign position compared against a local one is two
-// coordinates from two number spaces, and every use of one is a comparison: a
-// floor selected against a barrier was DISCARDED whenever it sorted low
-// (`OTHER@0:0` against any live barrier) and the read was served as though no
-// floor had been named, and a feed's cursor or `since` bound compared against
-// a packed column answered a page of this log chosen by a number from another.
+// It runs before the position is used at all: [Position.Packed] carries no
+// stream, so a foreign floor that sorts low would be silently discarded and
+// the read served as though none was named, and a foreign cursor or `since`
+// would pick a page of this log by another log's number.
 func (p Position) On(stream string) error {
 	if p.IsZero() || p.Stream == "" || p.Stream == stream {
 		return nil

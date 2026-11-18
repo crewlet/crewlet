@@ -11,37 +11,17 @@ import (
 
 // The workspace catalogues: what a task may BE, and what it may carry.
 //
-// # Two objects, and therefore two subjects
-//
-// Types and fields are one family and two documents, arbitrated separately.
-// Folding them into one would make a founder renaming `bug` contend with a
-// lead adding a field, which are unrelated edits a company makes at unrelated
-// times — and the loser of that contention is a person told to retry an edit
-// that never conflicted with anything.
-//
-// # The builtin types cannot be removed, only archived
-//
-// A company's catalogue ADDS to what this build ships rather than replacing
-// it. The applier writes exactly the document's rows, so the union happens at
-// read time — and it has to, because the alternative is a catalogue that omits
-// `task` and breaks every create that did not name a type. A builtin a company
-// has stopped using is ARCHIVED, which keeps every task already filed under it
-// rendering as what it is: a type that vanished would leave those tasks naming
-// nothing.
-//
-// # A field's archive is one-way, and that is enforced here
-//
-// [FieldDef.Archived] says so at the field, and nothing made it true. A field
-// that came back with its old id would silently re-admit values validated
-// against a definition nobody has seen for a year — so un-archiving is refused
-// naming the field, and restoring one means declaring a NEW field with a new
-// id.
+// Types and fields are two documents on two subjects, so a founder renaming
+// `bug` never contends with a lead adding a field: the loser would be told to
+// retry an edit that conflicted with nothing. A company's catalogue ADDS to the
+// builtins, unioned at read time ([EffectiveTypes]), so no catalogue can omit
+// `task` and break every create that named no type; a builtin is archived,
+// never removed, so the tasks filed under it still render. A field's archive
+// is one-way ([archiveIsOneWay]).
 
-// The builtin task types, which every company has before it declares any.
-//
-// SEVEN, and each is a shape of work rather than a workflow state: a status
-// says where a task IS and a type says what it is. They carry `builtin` so a
-// catalogue screen can tell what a company chose from what it inherited.
+// builtinTypes are the task types every company has before it declares any:
+// shapes of work, not workflow states (a status says where a task IS). They
+// carry `builtin` so a catalogue screen can tell what a company inherited.
 var builtinTypes = []TaskType{
 	{Slug: "task", Name: "Task", Plural: "Tasks", Builtin: true,
 		Description: "Ordinary work with an owner and an end."},
@@ -55,23 +35,17 @@ var builtinTypes = []TaskType{
 		Description: "Time boxed to answer a question, not to deliver."},
 	{Slug: "chore", Name: "Chore", Plural: "Chores", Builtin: true,
 		Description: "Upkeep nobody asked for and everybody needs."},
-	// A MILESTONE IS A DATE SOMEBODY COMMITTED TO, which is why it is a
-	// TYPE rather than a status or a flag: it is an item on a board with
-	// an owner, a due date and things blocking it, and everything the
-	// tracker does to a task — a dependency, a watcher, a comment thread
-	// — is exactly what a milestone needs. A separate object would have
-	// been a second thing to file, route, notify about and report on.
+	// A milestone is a TYPE, not a status or a flag: it needs everything a
+	// task has (owner, due date, blockers, watchers, comments), and a separate
+	// object would be a second thing to file, route, notify about and report on.
 	{Slug: "milestone", Name: "Milestone", Plural: "Milestones", Builtin: true,
 		Description: "A date the company committed to, and what has to " +
 			"land before it."},
 }
 
-// DefaultTaskType is what a create that names none files under.
-//
-// EVERY COMPANY HAS IT, because it is a builtin and a catalogue adds to the
-// builtins rather than replacing them — so this default can never name a type
-// the company does not declare. `create_work_item` has always told a model
-// "`task` if you are unsure", and this is where that is true.
+// DefaultTaskType is what a create that names none files under. It is a
+// builtin, and a catalogue adds to the builtins, so it always names a declared
+// type; `create_work_item` tells a model "`task` if you are unsure".
 const DefaultTaskType = "task"
 
 // BuiltinTypes is what this build ships, copied so a caller cannot edit it.
@@ -87,18 +61,17 @@ const (
 
 // WriteTypes replaces the workspace's task-type catalogue.
 //
-// WHOLE POST-STATE: the catalogue is small, edited rarely and read on every
-// create, and a patch shape would need a merge rule per type. The BUILTINS
-// need not appear — they are unioned at read time — but a company may carry
-// one to archive it or to rename it for its own vocabulary.
+// WHOLE POST-STATE: the catalogue is small, rarely edited and read on every
+// create, and a patch would need a merge rule per type. Builtins need not
+// appear (they are unioned at read time), but one may be carried to archive or
+// rename it.
 func (w *Writer) WriteTypes(ctx context.Context, opID string, types []TaskType) (WriteResult, error) {
 	clean, err := checkTypes(types)
 	if err != nil {
 		return WriteResult{}, err
 	}
 	subject := CatalogueSubject(CatalogueTypes)
-	// THE FAMILY, which is what a catalogue subject resolves to anyway:
-	// every task in the company is validated against this document, so a
+	// The family: every task is validated against this document, so a
 	// deferred catalogue record concerns every read that could return one.
 	scope := ScopeSet{Subject: true}
 	at := w.Now()
@@ -111,20 +84,16 @@ func (w *Writer) WriteTypes(ctx context.Context, opID string, types []TaskType) 
 			post := TypeCatalogue{
 				V: DocumentVersion, Types: clean, UpdatedAt: at,
 			}
-			// THE CATALOGUE IS EDITED QUIETLY AND STILL NAMES ITSELF: a
-			// wake per catalogue edit would page the whole company for a
-			// renamed dropdown, and the feed still has to be able to say
-			// a dropdown was renamed.
+			// Quiet but named: a wake per catalogue edit would page the whole
+			// company for a renamed dropdown, yet the feed must still say one was.
 			return w.decide(ctx, tx, stamp, subject, OpPatch, ChangeCatalogue, scope, opID,
 				post, nil, at)
 		},
 	})
 }
 
-// WriteFields replaces the workspace's field declarations.
-//
-// A SEPARATE SUBJECT from the types, so a field edit and a type edit never
-// contend — see the file head.
+// WriteFields replaces the workspace's field declarations, on a subject of
+// its own so a field edit never contends with a type edit (see the file head).
 func (w *Writer) WriteFields(ctx context.Context, opID string, fields []FieldDef) (WriteResult, error) {
 	if err := checkFields(fields); err != nil {
 		return WriteResult{}, err
@@ -150,17 +119,12 @@ func (w *Writer) WriteFields(ctx context.Context, opID string, fields []FieldDef
 			post := FieldCatalogue{
 				V: DocumentVersion, UpdatedAt: at,
 				Fields: stampFields(current.Fields, fields, w.Actor, at),
-				// THE POLICY VERSION MOVES ON EVERY FIELDS EDIT, and it
-				// is what a task's policy stamp records having validated
-				// against. Derived from the stored one inside this
-				// snapshot rather than sent by the caller: a version a
-				// writer chose is one two writers can choose alike.
+				// Moves on every fields edit; a task's policy stamp records the
+				// version it validated against. Derived inside this snapshot, never
+				// sent by the caller: two writers could choose the same one.
 				PolicyVersion: current.PolicyVersion + 1,
 			}
-			// THE CATALOGUE IS EDITED QUIETLY AND STILL NAMES ITSELF: a
-			// wake per catalogue edit would page the whole company for a
-			// renamed dropdown, and the feed still has to be able to say
-			// a dropdown was renamed.
+			// Quiet but named, as in [Writer.WriteTypes].
 			return w.decide(ctx, tx, stamp, subject, OpPatch, ChangeCatalogue, scope, opID,
 				post, nil, at)
 		},
@@ -186,9 +150,8 @@ func checkTypes(types []TaskType) ([]TaskType, error) {
 			return nil, invalid("%q is not a slug — a type's slug is "+
 				"what a query and a task row both carry", t.Slug)
 		case seen[t.Slug]:
-			// TWO TYPES UNDER ONE SLUG collide on the table's own
-			// primary key, so the apply would write one and drop the
-			// other with nothing to say so.
+			// Two types under one slug collide on the table's primary key, so
+			// the apply would write one and silently drop the other.
 			return nil, invalid("the type catalogue names %q twice",
 				t.Slug)
 		case t.Name == "":
@@ -204,20 +167,11 @@ func checkTypes(types []TaskType) ([]TaskType, error) {
 		seen[t.Slug] = true
 		out = append(out, t)
 	}
-	// AND THE NAMES, case-insensitively, OVER THE EFFECTIVE SET. A type
-	// resolves by name as well as by slug — a model writes what it read
-	// off a board — and the schema has carried `name_norm` with an index
-	// annotated "the case-insensitive collision rule" the whole time, with
-	// nothing enforcing it: "Bug" and "bug " both landed, and a
-	// resolve-by-name picked whichever row was read first.
-	//
-	// THE EFFECTIVE SET RATHER THAN THE DECLARED ONE, because that is what
-	// resolves: a catalogue ADDS to the builtins, so a company declaring
-	// `defect` named "Bug" collides with the shipped `bug` — and checking
-	// only its own declarations would be the same hole one level up. A
-	// declared type carrying a builtin's SLUG replaces it rather than
-	// joining it, which is how a company renames `bug` to its own word,
-	// and [EffectiveTypes] is what states that.
+	// Names collide too, case-insensitively (the rule `name_norm`'s index
+	// is annotated with): a type resolves by name as well as slug, since a model
+	// writes what it read off a board. Over the EFFECTIVE set, which is what
+	// resolves: a declared `defect` named "Bug" collides with the shipped `bug`.
+	// A declared type with a builtin's SLUG replaces it ([EffectiveTypes]).
 	named := make([]namedDeclaration, 0, len(out)+len(builtinTypes))
 	for _, t := range EffectiveTypes(out) {
 		named = append(named, namedDeclaration{
@@ -232,22 +186,14 @@ func checkTypes(types []TaskType) ([]TaskType, error) {
 
 // stampFields carries a declaration's creation facts.
 //
-// THE STORED ONES, never the caller's, which is the rule [Writer.SaveView]
-// states for the same two columns: these writes are WHOLE POST-STATES, so a
-// document that carried its own `created_by` would let the next edit
-// re-attribute a field somebody else declared, and nothing downstream could
-// tell. A field the snapshot does not hold is NEW, and takes this write's own
-// actor and clock.
+// The STORED ones, never the caller's (the rule [Writer.SaveView] states for
+// the same columns): a whole post-state carrying its own `created_by` would let
+// the next edit re-attribute a field somebody else declared. A field the
+// snapshot does not hold is new and takes this write's actor and clock.
 //
-// Nothing wrote them at all before this: the catalogue served `created_by` and
-// `created_at` on every field and both were always empty, while a TAG — the
-// one other vocabulary a company declares — has recorded who added it since it
-// existed.
-//
-// INSIDE THE DECIDE, because "was this field already declared" is a question
-// only the snapshot the record lands beside can answer. IT RETURNS A COPY for
-// [coerceFields]'s reason: the decide runs again on a retry, and a write
-// folded into the caller's own slice is one the next attempt starts from.
+// Inside the decide, because only the snapshot the record lands beside knows
+// what was declared. It returns a copy for [coerceFields]'s reason: the decide
+// reruns on a retry and must not start from a slice the last attempt changed.
 func stampFields(current, post []FieldDef, actor string, at time.Time) []FieldDef {
 	held := make(map[string]FieldDef, len(current))
 	for _, field := range current {
@@ -282,10 +228,8 @@ func checkFields(fields []FieldDef) error {
 		f.Name = strings.TrimSpace(f.Name)
 		switch {
 		case f.ID == "":
-			// THE ID IS WHAT VALUES ARE KEYED BY, which is what lets a
-			// field MOVE between the workspace and a project keeping
-			// every stored value. A declaration with none would orphan
-			// them all.
+			// Values are keyed by id, so a field can move between the workspace
+			// and a project keeping them; a declaration with none orphans them all.
 			return invalid("field %q has no id — values are keyed "+
 				"by id so a field can move between the workspace and a "+
 				"project keeping them", f.Slug)
@@ -296,17 +240,10 @@ func checkFields(fields []FieldDef) error {
 			return invalid("%q is not a field slug — the slug is "+
 				"what `f.<slug>` resolves and what a model types", f.Slug)
 		case !f.Archived && slugs[f.Slug]:
-			// A COLLIDING SLUG makes `f.<slug>` ambiguous, and the
-			// resolution would pick whichever row the index reached
-			// first.
-			//
-			// AN ARCHIVED FIELD'S SLUG IS FREE, which is what makes the
-			// restore path this package documents possible at all: an
-			// archive is one-way, so bringing a field back means a NEW
-			// declaration under a new id — and it would carry the same
-			// slug, because the slug is the word the company uses.
-			// Nothing resolves against an archived field: its values
-			// left the value table when it was archived.
+			// A colliding slug makes `f.<slug>` resolve to whichever row the
+			// index reaches first. An archived field's slug is free: a restore is a
+			// NEW declaration under a new id ([archiveIsOneWay]) carrying the
+			// company's same word, and nothing resolves against an archived field.
 			return invalid("the field catalogue declares %q twice, "+
 				"so f.%s would resolve to whichever row was read first "+
 				"(an archived declaration does not count — its slug is free)",
@@ -336,9 +273,8 @@ func checkFields(fields []FieldDef) error {
 			"across every field and the maximum is %d", options,
 			MaxOptionsPerDocument)
 	}
-	// AND THE FIELD NAMES, on the types' own rule and for the same reason:
-	// `f.<name>` is the third tier of the resolution every filter, grouping
-	// and sort goes through.
+	// Field names too, on the types' rule: `f.<name>` is the third tier of
+	// the resolution every filter, grouping and sort goes through.
 	named := make([]namedDeclaration, 0, len(fields))
 	for _, f := range fields {
 		named = append(named, namedDeclaration{
@@ -368,9 +304,8 @@ func checkOptions(f *FieldDef) error {
 			return invalid("%q is not an option slug on field %s",
 				o.Slug, f.Slug)
 		case !o.Archived && slugs[o.Slug]:
-			// AN ARCHIVED OPTION'S SLUG IS FREE, on the field's own
-			// rule above and for the same reason: nothing resolves
-			// `f.<slug>=<option>` against a retired choice.
+			// An archived option's slug is free, as a field's is: nothing
+			// resolves `f.<slug>=<option>` against a retired choice.
 			return invalid("field %s declares option %q twice "+
 				"(an archived one does not count — its slug is free)",
 				f.Slug, o.Slug)
@@ -387,12 +322,9 @@ func checkOptions(f *FieldDef) error {
 			slugs[o.Slug] = true
 		}
 	}
-	// AND THE OPTION NAMES, which is the sharpest of the three: [OptionIDs]
-	// maps a lowercased NAME to an option's id, so two options whose names
-	// differ only in case collapsed to ONE entry there — and the one that
-	// survived was whichever came last in the slice. A value written by
-	// name resolved differently after somebody reordered the list, with
-	// nothing anywhere saying so.
+	// Option names too, the sharpest case: [OptionIDs] maps a lowercased NAME
+	// to an id, so names differing only in case would collapse to whichever came
+	// last, and a value written by name would change when the list was reordered.
 	named := make([]namedDeclaration, 0, len(f.Config.Options))
 	for _, o := range f.Config.Options {
 		named = append(named, namedDeclaration{
@@ -402,8 +334,8 @@ func checkOptions(f *FieldDef) error {
 	if err := checkNames("options of field "+f.Slug, named); err != nil {
 		return err
 	}
-	// OPTIONS BELONG TO THE THREE TYPES THAT HAVE THEM, and a list on any
-	// other is a caller who believes they configured something.
+	// Only the three types that have options take a list; one on any other
+	// is a caller who believes they configured something.
 	if len(f.Config.Options) > 0 {
 		switch f.Type {
 		case FieldDropdown, FieldLabels, FieldRelationship:
@@ -417,13 +349,10 @@ func checkOptions(f *FieldDef) error {
 	return nil
 }
 
-// archiveIsOneWay refuses a declaration that un-archives a field.
-//
-// The rule is [FieldDef.Archived]'s own, and this is what makes it true: a
-// field that came back with its old id would silently re-admit values
-// validated against a definition nobody has seen for a year. Restoring one
-// means declaring a NEW field, with a new id, which is a decision somebody
-// makes rather than a checkbox they clear.
+// archiveIsOneWay refuses a declaration that un-archives a field, which is
+// what makes [FieldDef.Archived]'s rule true: a field back under its old id
+// would silently re-admit values validated against a definition nobody has
+// seen for a year. Restoring one means declaring a NEW field with a new id.
 func archiveIsOneWay(current, post []FieldDef) error {
 	archived := make(map[string]string, len(current))
 	for _, f := range current {
@@ -457,11 +386,9 @@ func readFieldCatalogue(ctx context.Context, tx *sql.Tx) (FieldCatalogue, bool, 
 
 // EffectiveTypes is the builtins plus whatever the company declared.
 //
-// THE UNION, and the order is builtins first: a company's own vocabulary is
-// what it added, and a screen listing `task` after six bespoke types would
-// bury the one every create defaults to. A declared type with a builtin's slug
-// REPLACES it, which is how a company renames `bug` to its own word without
-// losing the tasks already filed under the slug.
+// Builtins first, so `task`, which every create defaults to, is not buried
+// under bespoke types. A declared type with a builtin's slug REPLACES it, which
+// is how a company renames `bug` without losing the tasks filed under it.
 func EffectiveTypes(declared []TaskType) []TaskType {
 	out := make([]TaskType, 0, len(builtinTypes)+len(declared))
 	overridden := make(map[string]TaskType, len(declared))
@@ -470,9 +397,8 @@ func EffectiveTypes(declared []TaskType) []TaskType {
 	}
 	for _, t := range builtinTypes {
 		if replacement, held := overridden[t.Slug]; held {
-			// THE BUILTIN FLAG SURVIVES THE OVERRIDE, because what it
-			// says is "this build ships this slug" — a fact about the
-			// engine rather than about the company's wording.
+			// Builtin survives the override: it says this build ships the slug,
+			// a fact about the engine rather than the company's wording.
 			replacement.Builtin = true
 			out = append(out, replacement)
 			continue

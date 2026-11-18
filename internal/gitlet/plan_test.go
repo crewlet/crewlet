@@ -1461,6 +1461,9 @@ func registeredStatements() map[string]statement {
 				"[]"},
 			[]string{"SCAN json_each AS j",
 				"sqlite_autoindex_code_notifications_1 (record_id=? AND change_id=? AND recipient=?)"}},
+		"one notice of an inbox, by its key": {inboxRecordSQL, []any{"record-1", "repo-1-change-000001", "founder",
+			int64(1) << 62, 0, 0, "[]", 1, "[]", "[]", "", 0, "exclude", "[]", "[]"},
+			[]string{"sqlite_autoindex_code_notifications_1 (record_id=? AND change_id=? AND recipient=?)"}},
 		"the descriptions an inbox page names": {noticeBodiesSQL, []any{`["repo-1-change-000001"]`},
 			[]string{"SCAN json_each AS j", bodyKey + " (change_id=?)"}},
 		"the agent findings an inbox page names": {noticeFindingsSQL, []any{`["repo-1-change-000001"]`},
@@ -1967,12 +1970,17 @@ func searchReads() map[string]statement {
 	reach, reachArgs := search.ChangeReachRead(0, search.ChangeIndexBatchRows)
 	batch, batchArgs := search.ChangeBatchRead(0, 1<<40)
 	repos, reposArgs := search.ChangeReposRead([]string{"repo-1", "repo-2"})
+	backReach, backReachArgs := search.ChangeBackReachRead("~", search.ChangeIndexBatchRows)
+	backBatch, backBatchArgs := search.ChangeBackBatchRead("~", "", 1<<40)
 	return map[string]statement{
 		"the index of changes' words' reach": {reach, reachArgs,
 			[]string{changesPositionKey + " (position>?)"}},
 		"the index of changes' words' batch": {batch, batchArgs,
 			[]string{changesPositionKey + " (position>? AND position<=?)", bodyKey + " (change_id=?)"}},
 		"the index of changes' words' repositories": {repos, reposArgs, []string{repoKey + " (id=?)"}},
+		"the first build's reach":                   {backReach, backReachArgs, []string{changeKey + " (id<?)"}},
+		"the first build's batch": {backBatch, backBatchArgs,
+			[]string{changeKey + " (id<? AND id>=?)", bodyKey + " (change_id=?)"}},
 	}
 }
 

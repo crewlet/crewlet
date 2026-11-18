@@ -365,6 +365,10 @@ type Engine struct {
 	// nomodels.go.
 	modelHolds modelHolds
 
+	// inboxes is the attachment of each seat's inbox this node holds, which
+	// every hold it takes on one names. See seatinbox.go.
+	inboxes seatInboxes
+
 	// budgetParks is every seat inbox this node holds because a capped
 	// token window is refusing, each with the alarm that releases it when
 	// the window turns over. See budgetpark.go.
@@ -458,6 +462,10 @@ type Engine struct {
 	// fleet-wide inputs, the model entries' and the MCP servers'
 	// ([Engine.entriesReading]).
 	entryInputs entryInputs
+
+	// blockedSaid is the last word of each live node on the runs of its
+	// seats waiting for an operator ([Engine.executorReading]).
+	blockedSaid blockedSaid
 
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
@@ -2489,9 +2497,13 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		Turn:            e.mailboxTurn,
 		// Before the mailbox opens and after it closes — see node.Config.
 		// A seat mid-detached-run must have its runs recovered and its mail
-		// parked before anything can deliver to it.
-		SeatReady: func(ctx context.Context, s placement.Seat, lease coord.Lease) error {
-			return e.prepareSeat(ctx, s, lease.Epoch, lease.Owner)
+		// parked before anything can deliver to it, and A SEAT A PERSON
+		// PAUSED is held before its inbox is attached, so placement moving
+		// it here does not deliver the mail it is holding: the release on
+		// the node it left dropped that node's hold with the attachment. See
+		// seatpause.go.
+		SeatReady: func(ctx context.Context, s placement.Seat, lease coord.Lease, inbox queue.Attachment) error {
+			return e.prepareSeat(ctx, s, lease.Epoch, lease.Owner, inbox)
 		},
 		SeatDone: e.releaseSeat,
 		// A seat that starts admitting turns re-checks at once what was
@@ -2515,11 +2527,6 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		SeatTurnEnded: func(handle string) {
 			e.readmitResumes(waitSeatBusy, handle)
 		},
-		// A SEAT A PERSON PAUSED is attached already held, so placement
-		// moving it here does not deliver the mail it is holding: the
-		// release on the node it left dropped that node's hold with the
-		// attachment. See seatpause.go.
-		AttachHolds:   e.attachHolds,
 		LeaseTTL:      e.leaseTTL,
 		SweepInterval: opts.sweepEvery,
 		// The host's own ceiling, from Tier A. Per NODE, so a fleet's is
@@ -2876,6 +2883,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	}
 	if d.DelegatedRequests == nil {
 		d.DelegatedRequests = e.readDelegatedRequests
+	}
+	if d.StaleWakes == nil {
+		d.StaleWakes = e.dropStaleWakes
 	}
 	if d.Observe == nil {
 		d.Observe = e.observe

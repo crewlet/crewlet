@@ -36,57 +36,52 @@ func crossing(messages int) time.Duration {
 	return time.Duration(int64(messages)*natsobj.MessageBytes) * objstore.MiBPace / objstore.MiB
 }
 
-// A WINDOW ACROSS A LINK CROSSES WITHIN A REQUEST'S TERM.
+// A NODE'S TRANSFERS ACROSS A LINK TAKE ITS ONE WINDOW, ONE PIECE AT A TIME.
 //
-// Whatever a node sends after a put has filled its window waits, on a link
-// that carries what it is sent in order, behind the window's bytes: a read, a
-// small write or a lease renewal on the connection the bucket rides, the
-// coordination store's, and at a bottleneck that queues first in first out
-// whatever another connection sends across the same link. Such a request is
-// not answered within its term ([jsapi.RequestTerm]) unless the window
-// crosses the floor ([objstore.MiBPace]) in what that term leaves after the
-// request's own round trip, one [jsprovision.ReadTerm]: four seconds,
-// whatever lease the node holds. So the window across a link is the widest
-// that crosses within that, and at least the one message a put needs to move
-// at all; a member's own client, which crosses no link, keeps the window its
-// throughput was measured at ([natsobj.MemberWindow]). Read off backends
-// opened both ways, so a window Open did not take from these figures fails
-// too.
+// A request on a link waits behind the node's transfers both ways, so a
+// bucket opened across a link takes the link's ONE window it was handed
+// (jsapi.Window), never one of its own; a put's piece and a download's each
+// fit it and two do not, so one crosses at a time whichever way it goes; and
+// a member's own client keeps [natsobj.MemberWindow] messages.
 //
-// Mutation: size the window across a link by the shipped lease heartbeat
-// again (four messages, fifteen seconds at the floor), and this goes red.
+// Mutation: open a bucket across a link on a window of its own, and this goes
+// red.
 func TestAWindowAcrossALinkCrossesWithinARequestsTerm(t *testing.T) {
 	t.Parallel()
 	if natsobj.MessageCrossing != crossing(1) {
 		t.Fatalf("one message crosses a link at the floor in %v by natsobj's figure and %v by the "+
 			"floor's own", natsobj.MessageCrossing, crossing(1))
 	}
-	window := natsobj.LinkWindow
-	if window < 1 {
-		t.Fatalf("the window across a link is %d messages; a put needs one out to move at all", window)
-	}
-	if c := crossing(window); c > requestBudget {
-		t.Errorf("the window across a link is %d messages, which cross the floor in %v: a request "+
-			"sent behind it is answered past the %v its %v term leaves after its own round trip",
-			window, c, requestBudget, jsapi.RequestTerm)
-	}
-	if window < natsobj.MemberWindow && crossing(window+1) <= requestBudget {
-		t.Errorf("the window across a link is %d messages, and %d still cross the floor within %v: "+
-			"throughput thrown away", window, window+1, requestBudget)
-	}
-	if c := crossing(window); c > objstore.Stall {
-		t.Errorf("a message waits up to %v behind a full window at the floor, past the %v stall",
-			c, objstore.Stall)
+	link := jsapi.NewLinkWindow()
+	window := link.Size()
+	if c := time.Duration(int64(window) * int64(objstore.MiBPace) / objstore.MiB); c > requestBudget {
+		t.Errorf("the link's window of %d bytes crosses the floor in %v, past the %v a request's %v "+
+			"term leaves after its own round trip", window, c, requestBudget, jsapi.RequestTerm)
 	}
 	c := memberClient(t)
-	across := openWith(t, c, natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true})
-	if got := across.Window(); got != window {
-		t.Errorf("a bucket opened across a link has a window of %d messages, want %d", got, window)
+	cfg := natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true, Window: link}
+	across := openWith(t, c, cfg)
+	if got := across.Window(); got != link {
+		t.Errorf("a bucket opened across a link transfers inside %p, want the link's window %p", got, link)
 	}
-	own := openWith(t, c, natsobj.Config{MaxBytes: testCeiling, Replicas: 1})
-	if got := own.Window(); got != natsobj.MemberWindow {
-		t.Errorf("a bucket opened on a member's own client has a window of %d messages, want %d",
-			got, natsobj.MemberWindow)
+	up, down := natsobj.PieceTake(across, natsobj.MessageBytes), natsobj.PieceBound(natsobj.MessageBytes)
+	if up > window || down > window || up+down <= window || 2*down <= window {
+		t.Errorf("a put's piece takes %d bytes and a download's %d of a window of %d: each must fit "+
+			"alone and no two together", up, down, window)
+	}
+	member := openWith(t, c, natsobj.Config{MaxBytes: testCeiling, Replicas: 1})
+	if got, one := member.Window().Size(), natsobj.PieceTake(member, 1); got != natsobj.MemberWindow ||
+		one != 1 || natsobj.PieceTake(member, natsobj.MessageBytes) != 1 {
+		t.Errorf("a bucket opened on a member's own client has a window of %d and a message takes %d of "+
+			"it, want %d messages, one a message whatever its size", got, one, natsobj.MemberWindow)
+	}
+	for _, bad := range []natsobj.Config{
+		{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true},
+		{MaxBytes: testCeiling, Replicas: 1, Window: jsapi.NewLinkWindow()},
+	} {
+		if _, err := natsobj.Open(t.Context(), c, bad); err == nil || !strings.Contains(err.Error(), "Config.Window") {
+			t.Errorf("a bucket opened with %+v = %v, want it refused naming Config.Window", bad, err)
+		}
 	}
 }
 
@@ -122,11 +117,10 @@ func TestAWindowAcrossALinkCrossesWithinARequestsTerm(t *testing.T) {
 func TestAReadSentBehindAFullWindowIsAnsweredInsideItsTerm(t *testing.T) {
 	t.Parallel()
 	across := kvtest.SlowLeaf(t, floorRate)
-	b := openWith(t, client(t, across.LeafBroker), natsobj.Config{MaxBytes: testCeiling, Replicas: 1,
-		AcrossLink: true})
+	b := openWith(t, client(t, across.LeafBroker), acrossLink())
 	sent := watchPieces(t, client(t, across.LeafBroker).Conn())
 	arrived := watchReadArrival(t, client(t, across.MemberBroker).Conn())
-	window := b.Window()
+	window := b.Window().Size() / natsobj.PieceTake(b, natsobj.MessageBytes)
 
 	// FOUR MESSAGES MORE THAN A WINDOW, so the put still holds its window
 	// full when the read is sent, whatever the window is, on a machine slow

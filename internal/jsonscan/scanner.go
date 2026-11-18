@@ -54,6 +54,9 @@ type Scanner struct {
 	// whole says nothing of the current token is taken past what Next read of it, so Capture can still
 	// answer it from its first byte, which a fill keeps in buf while it holds ([Scanner.slide]).
 	whole bool
+	// invalid says the text Read has handed of the current Name or String held a byte that begins no UTF-8
+	// character ([Scanner.InvalidUTF8]).
+	invalid bool
 
 	// expect is what the grammar takes next; depth is how many containers are open, and objects holds one
 	// bit for each, set for an object, from the outermost.
@@ -147,8 +150,9 @@ func (s *Scanner) Next() (Kind, error) {
 }
 
 func (s *Scanner) next() (Kind, error) {
-	// The current token is passed from here, so a fill need keep none of it.
-	s.whole = false
+	// The current token is passed from here, so a fill need keep none of it, and what its text held is no
+	// longer what the current token's holds.
+	s.whole, s.invalid = false, false
 	if err := s.passText(); err != nil {
 		return "", err
 	}

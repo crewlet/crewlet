@@ -96,6 +96,18 @@ func Idle(c Conditions) (bool, Skip) {
 	return true, ""
 }
 
+// UrgentMayJump reports whether a seat that is not idle may still be handed an
+// urgent item (ADR-0159): only a turn running, its executor's run holding the
+// seat, mail waiting or the settle holds it, so the pickup queues on the seat's
+// priority lane for its next turn. A run in its box is a turn in flight: the
+// inbox holds its mail, lane included, until the run settles. A run waiting on
+// a person's answer still holds the seat, whose next delivery is that answer.
+func UrgentMayJump(c Conditions) bool {
+	c.Dispatching, c.ExecutorHolds, c.MailWaiting, c.IdleBefore = false, false, false, true
+	ok, _ := Idle(c)
+	return ok
+}
+
 // IdleNow is [Idle] without the settle: whether this pass finds the seat idle,
 // which the next pass reads as [Conditions.IdleBefore].
 func IdleNow(c Conditions) bool {

@@ -12,29 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// AN AGENT'S WRITE CARRIES WHOM IT WAS WRITTEN FOR (ADR-0109). A task an agent
-// files in a turn ada woke records, beside the agent, that the turn worked for
-// ada, at the version that carries it, which an older build retains rather
-// than waking its assignee for the agent — and so does the same agent's task
-// that wakes nobody, since the work pickup reads a creation to learn whom the
-// work is for long after it woke anybody. A task a turn nobody woke files
-// carries nobody, and stays at the base version every build reads.
-//
-// AND THE TYPE REFUSES THE ACTOR THAT FORGOT: an agent's writer that states
-// nobody it writes for writes nothing, and a person's writer handed a carrier
-// writes nothing either, since a person writes for nobody but themselves. An
-// actor decoded off the estate's wire states it already, whatever its
-// provenance held, so a data node never refuses a write for a key an older
-// node never sends: that is the actor's own decoder's, held by
-// internal/estate's TestATrackerActorCrossesTheWireAsItWasStated and
-// TestAnAgentsWriteFromABuildWithoutTheCarrierRunsAsItsSeatsOwn, and on this
-// writer behind a data node by internal/engine's
-// TestAnAgentsTrackerWriteFromABuildWithoutTheCarrierRunsForNobody.
-//
-// Mutation: leave the carrier off the record the writer builds — ada's task
-// carries nobody; carry only where a creation wakes somebody — the quiet task
-// carries nobody; drop the refusal in recordedFor — the unstated agent's task
-// lands.
+// AN AGENT'S WRITE CARRIES WHOM IT WAS WRITTEN FOR (ADR-0109): a task filed in
+// a turn ada woke records ada at WorkingForVersion (an older build retains it
+// rather than waking the assignee for the agent) even if it wakes nobody, as
+// the pickup reads a creation long after any wake; a turn nobody woke files at
+// the base version. An agent's writer stating nobody, and a person's handed a
+// carrier, write nothing. A decoded actor already states it, so a data node
+// never refuses an older node's write (held by internal/estate's
+// TestATrackerActorCrossesTheWireAsItWasStated and
+// TestAnAgentsWriteFromABuildWithoutTheCarrierRunsAsItsSeatsOwn, and by
+// internal/engine's TestAnAgentsTrackerWriteFromABuildWithoutTheCarrierRunsForNobody).
+// Mutation: no carrier on the record (ada's task carries nobody); carry only on
+// a waking creation (the quiet one too); recordedFor not refusing (the unstated agent's task lands).
 func TestAnAgentsWriteThatWakesSomebodyCarriesWhomItWasWrittenFor(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -93,26 +82,17 @@ func TestAnAgentsWriteThatWakesSomebodyCarriesWhomItWasWrittenFor(t *testing.T) 
 }
 
 // A RECORD A LATER TURN READS CARRIES WHOM IT WAS WRITTEN FOR, AND NO OTHER DOES
-// (ADR-0109), whether the turn is one the record wakes now or a pickup later.
-// An item's creation and every move of its assignee carry it whatever they wake
-// — the pickup reads an item's creation and the rows that moved its assignee —
-// a move being any record whose patch changes the assignee, a status move that
-// takes the item included. A reassertion that moves nothing reads as no move,
-// and the alias a move claims for its old key as no creation: nothing reads
-// either for whom it was made. Any other record carries it only where its own
-// wake proves an agent other than the writer may start a turn, the lead a
-// status move falls back on included, which the parser reaches when the one
-// candidate it heard has left the company. The rest stay at the version main
-// reads: an agent's comment that asks nothing at 7 where it tells somebody
-// without waking them and 6 where nobody else hears it.
-//
-// Mutation: drop the creation and move arm, and the self-assigned creation
-// and the self-take carry nobody; decide a move by its kind alone, and the
-// self-take carries nobody; carry on a record of kind assignee whatever it
-// moves, and the reassertion carries ada; carry on every OpCreate, and the
-// move's alias carries ada; decide with noticeWakes, and the status move that
-// falls back on its lead carries nobody; carry on every wake, and the quiet
-// comments and the watch carry ada.
+// (ADR-0109). The pickup reads creations and assignee moves (any patch changing
+// the assignee, a status move taking the item too), so they carry it whatever
+// they wake; a reassertion and a move's alias for the old key are neither. Any
+// other record carries it only where its wake proves an agent besides the
+// writer may start a turn, a status move's fallback lead included; the rest
+// stay at main's version: 7 (a quiet comment telling somebody) or 6 (nobody).
+// Mutation: drop the creation-and-move arm (the self-assigned creation and the
+// self-take carry nobody); decide a move by kind (the self-take does); carry on
+// any assignee-kind record (the reassertion carries ada); carry on every
+// OpCreate (the alias does); decide with noticeWakes (the lead fallback carries
+// nobody); carry on every wake (the quiet comments and the watch carry ada).
 func TestARecordALaterTurnReadsCarriesWhomItWasWrittenFor(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -129,7 +109,7 @@ func TestARecordALaterTurnReadsCarriesWhomItWasWrittenFor(t *testing.T) {
 		return record
 	}
 	// update writes patch to id as dev, its wake built as the write paths build
-	// it from the item before and after, shaped by shape and then by tweak.
+	// it, then adjusted by shape and tweak.
 	update := func(t *testing.T, op, id string, patch worklet.TaskPatch, kind worklet.ChangeKind,
 		leads worklet.Leads, shape func(*worklet.Wake), tweak func(*worklet.Notify)) worklet.MutationRecord {
 		t.Helper()
@@ -161,8 +141,8 @@ func TestARecordALaterTurnReadsCarriesWhomItWasWrittenFor(t *testing.T) {
 		}
 	}
 
-	// THE ITEMS: one ana holds, one held by nobody, dev's own with a watcher
-	// who left, and one only dev ever touched.
+	// THE ITEMS: ana's, nobody's, dev's own with a watcher who left, and one
+	// only dev ever touched.
 	fileFor(t, r, "w-ana", "ana", worklet.StatusTodo, worklet.PriorityNormal)
 	fileFor(t, r, "w-free", "", worklet.StatusTodo, worklet.PriorityNormal)
 	watched := newTask("w-watched")

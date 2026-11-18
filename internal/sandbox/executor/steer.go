@@ -10,13 +10,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A person's notes to a run's turn, in the shapes the harnesses take them.
-// Which notes a run gets is the engine's run inbox (internal/engine,
+// Which notes a run is served is the engine's run inbox (internal/engine,
 // runsteer.go); here is only how each harness is handed them and set up to ask
 // ([ClaudeCode.WriteConfig], [OpenCode.WriteConfig], opencode_steer.js),
 // since those are measured facts about the harnesses.
@@ -80,8 +81,9 @@ const OpenCodeSteerInstruction = steerInstructionHead +
 // TEN SECONDS, not the vendor's 600: the harness holds its next model request
 // on the hook at every batch, so a stuck bridge would cost ten minutes a step.
 // The bridge answers within half of this (internal/api/mcpbridge, its take
-// budget), so a note it took arrives in time. The field is in seconds, and past
-// it the harness discards a late answer (measured on 2.1.310).
+// budget), so a note it served arrives in time; one whose answer comes too
+// late is never read, its job's session showing no pair. The field is in
+// seconds, and past it the harness discards a late answer (measured on 2.1.310).
 const ClaudeHookTimeout = 10 * time.Second
 
 // The Claude Code hook events a run's notes are taken at: the only two where
@@ -222,13 +224,14 @@ type claudeHookOutput struct {
 
 // ClaudeHookAnswer is the answer to a Claude Code hook at event handing its
 // model notes: their messages joined as additional context, and a transcript
-// line naming the senders. Empty for no notes.
+// line naming the senders, ending in take's token ([claudeTakeToken]), which
+// the live line leaves out. Empty for no notes.
 //
 // NEVER A DECISION: no `decision`, `continue` or `reason`, so it can never stop
 // the loop or block a step; at the finish the model continues its turn, whose
 // answer is the run's (measured on 2.1.263 and 2.1.310). The transcript line
 // reaches only the run's stream, never a request.
-func ClaudeHookAnswer(event string, notes []HookNote) string {
+func ClaudeHookAnswer(event, take string, notes []HookNote) string {
 	if len(notes) == 0 {
 		return ""
 	}
@@ -252,6 +255,7 @@ func ClaudeHookAnswer(event string, notes []HookNote) string {
 	if event == claudeEventFinish {
 		line += " as it was finishing"
 	}
+	line += " " + claudeTakeToken(take)
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	// A person's "<" or "&" reaches the model as itself, not escaped.
@@ -265,6 +269,38 @@ func ClaudeHookAnswer(event string, notes []HookNote) string {
 		return ""
 	}
 	return strings.TrimSuffix(buf.String(), "\n")
+}
+
+// claudeTakePrefix opens the token that names a take in a hook's words
+// ([claudeTakeToken]).
+const claudeTakePrefix = "[crewlet take "
+
+// claudeTakeTokenLen is every take token's length: a take is named by a uuid's
+// 36 characters (internal/engine, takeName), so the reader of a hook's words
+// holds one token's length of them and no more ([textTakes]).
+const claudeTakeTokenLen = len(claudeTakePrefix) + 36 + len("]")
+
+// claudeTakeToken is the token naming take that a hook's answer carries and
+// its job's session then shows ([threadLine.HookTakes]): ONE definition, which
+// the answer, the cut and the ask all read.
+func claudeTakeToken(take string) string { return claudeTakePrefix + take + "]" }
+
+// withoutTakeToken is said without a trailing take token of exactly the shape
+// [claudeTakeToken] writes (a uuid's 36 characters of hex and dashes), and the
+// space before it: what the hook said, as a person reads it. Anything else is
+// left as it is.
+func withoutTakeToken(said string) string {
+	trimmed := strings.TrimRightFunc(said, unicode.IsSpace)
+	at := len(trimmed) - claudeTakeTokenLen
+	if at < 0 || !strings.HasPrefix(trimmed[at:], claudeTakePrefix) || !strings.HasSuffix(trimmed, "]") {
+		return said
+	}
+	for _, r := range trimmed[at+len(claudeTakePrefix) : len(trimmed)-1] {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && r != '-' {
+			return said
+		}
+	}
+	return strings.TrimRightFunc(trimmed[:at], unicode.IsSpace)
 }
 
 // OpenCodeInboxID is the id OpenCode admits a note under for a job: `msg_` and

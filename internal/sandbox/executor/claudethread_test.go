@@ -10,6 +10,8 @@ import (
 	"io"
 	"maps"
 	"math"
+	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -183,15 +185,13 @@ const (
 	ctMCPResult  = `[{"tool_use_id":"` + ctMCPCall + `","type":"tool_result","content":` + ctMCPBlocks + `}]`
 )
 
-// The records of a hook's firing the layer reads by no name, beside the two
-// [threadLine.AttachmentWellFormed] reads (hookSuccess and
-// hookAdditionalContext): a system message a firing writes, a firing past its
-// timeout, and the summary a Stop firing ends with, a system record of this
-// subtype.
+// The records of a hook's firing the layer reads by no name, beside the three
+// it names (hookSuccess, hookAdditionalContext and hookSystemMessage): a
+// firing past its timeout, and the summary a Stop firing ends with, a system
+// record of this subtype.
 const (
-	hookSystemMessage = "hook_system_message"
-	hookCancelled     = "hook_cancelled"
-	hookStopSummary   = "stop_hook_summary"
+	hookCancelled   = "hook_cancelled"
+	hookStopSummary = "stop_hook_summary"
 )
 
 // The notes' hook records, each its attachment: at a batch (a `hook-<uuid>`
@@ -563,7 +563,7 @@ func ctWholeRecord(t *testing.T, name string, n int, line threadLine, record str
 			"its break, and the facts of its bytes but the break", name, n, line.N, line.Size, line.Bytes.Len(),
 			len(record)+1)
 	}
-	decoded, err := decodeThreadLine(n, []byte(record))
+	decoded, err := decodeThreadLine(n, []byte(record), nil)
 	if err != nil {
 		t.Fatalf("%s: line %d, decoded whole, is no record: %v", name, n, err)
 	}
@@ -751,12 +751,14 @@ func TestAReadingEndsAtTheLineItsContextEnded(t *testing.T) {
 // before its end could say whether it is torn.
 //
 // Mutation: keep any of what a reading leaves across Reset (how it ended, how
-// many lines it read, its torn piece, what of its bound it took), and the
-// member after it reads otherwise.
+// many lines it read, its torn piece, what of its bound it took, the takes it
+// asked), and the member after it reads otherwise.
 func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
 	t.Parallel()
 	brief := ctBrief(ctUUID(1))
-	next := ctThread(ctBrief(ctUUID(2)), "[1]", ctBrief(ctUUID(3)))
+	token := claudeTakeToken(ctProbeStopTake)
+	said := ctAttachment(ctUUID(3), ctUUID(4), ctReplace(t, ctBatchSystem, `the run"`, `the run `+token+`"`), "")
+	next := ctThread(ctBrief(ctUUID(2)), "[1]", ctBrief(ctUUID(3)), said)
 	within := int64(len(next)) + 1
 	ended, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -780,6 +782,9 @@ func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
 	} {
 		for _, bound := range []int64{within, within - 2} {
 			r := newThreadReader(tc.before(), tc.maxBytes)
+			if err := r.Asking([]string{token}); err != nil {
+				t.Fatal(err)
+			}
 			ctTrace(tc.ctx, r)
 			r.Reset(strings.NewReader(next), bound)
 			got := ctTrace(t.Context(), r)
@@ -837,7 +842,7 @@ func TestAHeadIsRefusedByItsKeysKindsAlone(t *testing.T) {
 			if key == "type" {
 				line = `{"type":` + value + `}`
 			}
-			_, decodeErr := decodeThreadLine(1, []byte(line))
+			_, decodeErr := decodeThreadLine(1, []byte(line), nil)
 			var refused *threadLineError
 			if errors.As(decodeErr, &refused) {
 				decodeErr = refused.Err
@@ -863,36 +868,22 @@ func ctSidechain(h threadHead) string {
 	return fmt.Sprint(*h.Sidechain)
 }
 
-// EVERY WHOLE LINE IS DECODED INTO ITS HEAD BEFORE ANYTHING READS IT: a line
-// that is not one record (two values, one cut short, a value that is no
-// object) or one whose head key is of the wrong type (`type`, `subtype` and
-// `agentId` strings, `parentUuid` null or a string, `isSidechain` a boolean,
-// and a user record's `replacesSpan` a boolean, as the brief's here) is a
-// *threadLineError naming its line, whatever keywords it holds, and the reader
-// reads on to the next line; and a whole record's head is what it says. None
-// of these lines holds a key a reader of hooks or calls looks for. Each such
-// error says how Claude Code's load reads its line, the kind of record a
-// refused head's type names where it names one the load reads, and how many
-// bytes the line takes, its break included.
-//
-// Mutation: decode only the lines that name a hook or a call, and every
-// broken line here reads as a record, and the records' heads as nothing; read
-// replacesSpan by its text alone, and one that is a string or null reads as a
-// record; read every refused line as one that yields the load nothing, and
-// the lines cut short, followed by more or led by a NUL read so; or hold a
-// refused head's type off the seven kinds the load reads, and a type that is
-// a number names one.
-func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
-	t.Parallel()
+// ctRefusal is a line the layer reads as no record, and how Claude Code's load
+// reads it: its fault, and the kind of record its refused head names.
+type ctRefusal struct {
+	line  string
+	fault lineFault
+	kind  recordKind
+}
+
+// ctBrokenLines is the lines that are not one record, or one whose head key
+// is of the wrong type, as [TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything]
+// reads them among records, by name.
+func ctBrokenLines() map[string]ctRefusal {
 	brief := ctBrief(ctUUID(1))
 	summary := ctSummary(ctUUID(1), ctUUID(2))
 	prompt := ctSubagentPrompt(ctUUID(3))
-	type refusal struct {
-		line  string
-		fault lineFault
-		kind  recordKind
-	}
-	broken := map[string]refusal{
+	return map[string]ctRefusal{
 		"two values":                         {ctDequeue + ctDequeue, faultTrailing, ""},
 		"two values a carriage return parts": {ctDequeue + "\r" + ctDequeue, faultTrailing, ""},
 		"a value cut short":                  {brief[:len(brief)/2], faultPrefix, ""},
@@ -923,6 +914,33 @@ func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
 		"NULs before a break":                    {"\x00\x00\x00", faultLead, ""},
 		"a record behind a byte that is no JSON": {"\x00" + ctDequeue, faultLead, ""},
 	}
+}
+
+// EVERY WHOLE LINE IS DECODED INTO ITS HEAD BEFORE ANYTHING READS IT: a line
+// that is not one record (two values, one cut short, a value that is no
+// object) or one whose head key is of the wrong type (`type`, `subtype` and
+// `agentId` strings, `parentUuid` null or a string, `isSidechain` a boolean,
+// and a user record's `replacesSpan` a boolean, as the brief's here) is a
+// *threadLineError naming its line, whatever keywords it holds, and the reader
+// reads on to the next line; and a whole record's head is what it says. None
+// of these lines holds a key a reader of hooks or calls looks for. Each such
+// error says how Claude Code's load reads its line, the kind of record a
+// refused head's type names where it names one the load reads, and how many
+// bytes the line takes, its break included.
+//
+// Mutation: decode only the lines that name a hook or a call, and every
+// broken line here reads as a record, and the records' heads as nothing; read
+// replacesSpan by its text alone, and one that is a string or null reads as a
+// record; read every refused line as one that yields the load nothing, and
+// the lines cut short, followed by more or led by a NUL read so; or hold a
+// refused head's type off the seven kinds the load reads, and a type that is
+// a number names one.
+func TestEveryWholeLineIsDecodedIntoItsHeadBeforeAnything(t *testing.T) {
+	t.Parallel()
+	brief := ctBrief(ctUUID(1))
+	summary := ctSummary(ctUUID(1), ctUUID(2))
+	prompt := ctSubagentPrompt(ctUUID(3))
+	broken := ctBrokenLines()
 	names := slices.Sorted(maps.Keys(broken))
 	lines := make([]string, 0, 2*len(names)+3)
 	for _, name := range names {
@@ -1002,6 +1020,45 @@ func fewestAllocations(read func()) uint64 {
 // asks for less than the cost of what it refutes.
 const fewestCalls = 2000
 
+// ctDeep is a user record whose one key holds lists nested to levels in all.
+func ctDeep(levels int) string {
+	return `{"type":"user","x":` + strings.Repeat("[", levels-1) + strings.Repeat("]", levels-1) + `}`
+}
+
+// ctRefusedLines is a line of every way a line is no record, as
+// [TestALineThatIsNoRecordSaysHowTheLoadReadsIt] reads each alone, by name.
+func ctRefusedLines(t *testing.T) map[string]ctRefusal {
+	t.Helper()
+	brief := ctBrief(ctUUID(1))
+	return map[string]ctRefusal{
+		"a record a later write tore into":       {brief[:60] + ctDequeue, faultSyntax, ""},
+		"white space alone":                      {" \t ", faultSyntax, ""},
+		"a list of numbers":                      {"[1,2]", faultNotObject, ""},
+		"a list ended by a carriage return":      {"[1,2]\r", faultNotObject, ""},
+		"a queue operation of a numeric agentId": {`{"type":"queue-operation","agentId":5}`, faultHead, ""},
+		"a summary of a string isSidechain": {`{"type":"summary","isSidechain":"no","leafUuid":"` + ctUUID(5) + `"}`,
+			faultHead, ""},
+		"a checkpoint of a numeric agentId": {ctReplace(t, ctLastPrompt, `"type":"last-prompt"`,
+			`"type":"last-prompt","agentId":5`), faultHead, recordLastPrompt},
+		"a progress record of a null isSidechain": {`{"type":"progress","isSidechain":null,"uuid":"` + ctUUID(6) +
+			`"}`, faultHead, recordProgress},
+		"a fork's reference of a numeric subtype": {`{"type":"fork-context-ref","subtype":1}`, faultHead,
+			recordForkContextRef},
+		"a content replacement of a numeric agentId": {ctReplace(t, ctReplacement(ctAgent, ctReplaced(ctCall)),
+			`"agentId":"`+ctAgent+`"`, `"agentId":5`), faultHead, recordContentReplacement},
+		"a reply of a string isSidechain": {ctReplace(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent),
+			`"isSidechain":false`, `"isSidechain":"false"`), faultHead, recordAssistant},
+		"an attachment of a numeric parentUuid": {ctReplace(t, ctAttachment(ctUUID(3), ctUUID(4), ctTokens,
+			ctTokensRendered), `"parentUuid":"`+ctUUID(3)+`"`, `"parentUuid":3`), faultHead, recordAttachment},
+		"a value cut at the break":           {brief[:len(brief)-9], faultPrefix, ""},
+		"a record followed by a number":      {ctDequeue + " 7", faultTrailing, ""},
+		"a record followed by a record":      {ctDequeue + ctDequeue, faultTrailing, ""},
+		"a record led by a NUL":              {"\x00" + ctDequeue, faultLead, ""},
+		"a record led by a byte order mark":  {"\xef\xbb\xbf" + ctDequeue, faultLead, ""},
+		"a record nested 10,001 levels deep": {ctDeep(10001), faultDepth, ""},
+	}
+}
+
 // A LINE THAT IS NO RECORD SAYS HOW THE LOAD READS IT: a line whose JSON fails
 // before any whole value (a record a later write tore into, a line of white
 // space alone) yields Claude Code's load nothing, faultSyntax; one whole value
@@ -1035,41 +1092,7 @@ const fewestCalls = 2000
 // line, refused or not, and a line the decode takes costs the classifier's
 // decoder too.
 func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
-	brief := ctBrief(ctUUID(1))
-	deep := func(levels int) string {
-		return `{"type":"user","x":` + strings.Repeat("[", levels-1) + strings.Repeat("]", levels-1) + `}`
-	}
-	for name, tc := range map[string]struct {
-		line  string
-		fault lineFault
-		kind  recordKind
-	}{
-		"a record a later write tore into":       {brief[:60] + ctDequeue, faultSyntax, ""},
-		"white space alone":                      {" \t ", faultSyntax, ""},
-		"a list of numbers":                      {"[1,2]", faultNotObject, ""},
-		"a list ended by a carriage return":      {"[1,2]\r", faultNotObject, ""},
-		"a queue operation of a numeric agentId": {`{"type":"queue-operation","agentId":5}`, faultHead, ""},
-		"a summary of a string isSidechain": {`{"type":"summary","isSidechain":"no","leafUuid":"` + ctUUID(5) + `"}`,
-			faultHead, ""},
-		"a checkpoint of a numeric agentId": {ctReplace(t, ctLastPrompt, `"type":"last-prompt"`,
-			`"type":"last-prompt","agentId":5`), faultHead, recordLastPrompt},
-		"a progress record of a null isSidechain": {`{"type":"progress","isSidechain":null,"uuid":"` + ctUUID(6) +
-			`"}`, faultHead, recordProgress},
-		"a fork's reference of a numeric subtype": {`{"type":"fork-context-ref","subtype":1}`, faultHead,
-			recordForkContextRef},
-		"a content replacement of a numeric agentId": {ctReplace(t, ctReplacement(ctAgent, ctReplaced(ctCall)),
-			`"agentId":"`+ctAgent+`"`, `"agentId":5`), faultHead, recordContentReplacement},
-		"a reply of a string isSidechain": {ctReplace(t, ctAssistant(ctUUID(3), ctUUID(4), ctUseContent),
-			`"isSidechain":false`, `"isSidechain":"false"`), faultHead, recordAssistant},
-		"an attachment of a numeric parentUuid": {ctReplace(t, ctAttachment(ctUUID(3), ctUUID(4), ctTokens,
-			ctTokensRendered), `"parentUuid":"`+ctUUID(3)+`"`, `"parentUuid":3`), faultHead, recordAttachment},
-		"a value cut at the break":           {brief[:len(brief)-9], faultPrefix, ""},
-		"a record followed by a number":      {ctDequeue + " 7", faultTrailing, ""},
-		"a record followed by a record":      {ctDequeue + ctDequeue, faultTrailing, ""},
-		"a record led by a NUL":              {"\x00" + ctDequeue, faultLead, ""},
-		"a record led by a byte order mark":  {"\xef\xbb\xbf" + ctDequeue, faultLead, ""},
-		"a record nested 10,001 levels deep": {deep(10001), faultDepth, ""},
-	} {
+	for name, tc := range ctRefusedLines(t) {
 		got := ctRead(ctThread(tc.line), threadPlainMax)
 		if len(got.lines) != 0 || len(got.broken) != 1 {
 			t.Errorf("%s reads as %d records and %d lines that are none; want one that is none", name,
@@ -1086,7 +1109,7 @@ func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
 				"break dropped", name, e.Bytes.Len(), e.Bytes.Head(), len(tc.line))
 		}
 	}
-	if got := ctRead(ctThread(deep(10000)), threadPlainMax); len(got.lines) != 1 || len(got.broken) != 0 {
+	if got := ctRead(ctThread(ctDeep(10000)), threadPlainMax); len(got.lines) != 1 || len(got.broken) != 0 {
 		t.Errorf("a record nested 10,000 levels deep reads as %d records and %d lines that are none; want one record",
 			len(got.lines), len(got.broken))
 	}
@@ -1103,12 +1126,12 @@ func TestALineThatIsNoRecordSaysHowTheLoadReadsIt(t *testing.T) {
 	// facts its accessors read ([factsOf]) with that second read on top, or it
 	// was read again.
 	good := []byte(ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn))
-	read := fewestAllocations(func() { _, _ = decodeThreadLine(1, good) })
+	read := fewestAllocations(func() { _, _ = decodeThreadLine(1, good, nil) })
 	decode := fewestAllocations(func() {
 		var w threadWire
 		_ = wireDecode(good, &w)
 		h, _ := w.head()
-		_ = factsOf(&w, h)
+		_ = factsOf(&w, h, nil)
 	})
 	again := fewestAllocations(func() { _ = refusedFault(good) })
 	if again < 4 {
@@ -1153,43 +1176,42 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 	}
 }
 
-// A KEY ONLY ONE READER READS COSTS THAT READER ALONE: an attachment that is
-// no object leaves the record's head, its message, its origin and its
-// checkpoint whole and is refused by AttachmentType alone, never read as one
-// of no type, and an origin that is no object leaves the message whole and is
-// refused by OriginKind alone. A reply's stop_reason that is no
-// string, null among them, leaves its message, its report of the edits
-// applied, its usage, its model and its id whole, and is refused
-// by StopReason alone, never read as ""; its report of the edits applied, of
-// the wrong shape, leaves its message, its stop_reason, its usage, its model
-// and its id whole and is refused by ToolResultsCleared alone; its usage of
-// the wrong shape leaves its message, its stop_reason, its report, its model
-// and its id whole and is refused by Usage alone; and its model or
-// its id of the wrong type, each a key two readers read, leaves its message
-// and its stop_reason whole and is refused by those two alone, Usage and
-// Model, or Usage and MessageID. A reply's mark of an API error that is no
-// boolean leaves its message, its stop_reason, its model and its usage whole
-// and is refused by APIError alone. A checkpoint whose
-// leafUuid is neither a string nor null leaves its head whole and is refused
-// by Checkpoint and LeafKeyed alone; and a compaction's metadata of the wrong
-// shape leaves its boundary's head and uuid whole and is refused by Preserved
-// alone, as a retraction list of the wrong shape leaves its retry's head and
-// message whole and is refused by Retracted alone, and a replacements list of
-// the wrong shape leaves its record's head whole and is refused by
+// A KEY ONLY ONE READER READS COSTS THAT READER ALONE: an attachment that is no
+// object leaves the record's head, its message, its origin and its checkpoint
+// whole and is refused by AttachmentType alone, never read as one of no type,
+// and an origin that is no object leaves the message whole and is refused by
+// OriginKind alone. A reply's stop_reason that is no string, null among them,
+// leaves its message, its report of the edits applied, its usage, its model and
+// its id whole, and is refused by StopReason alone, never read as ""; its
+// report of the edits applied, of the wrong shape, leaves its message, its
+// stop_reason, its usage, its model and its id whole and is refused by
+// ToolResultsCleared alone; its usage of the wrong shape leaves its message,
+// its stop_reason, its report, its model and its id whole and is refused by
+// Usage alone; and its model or its id of the wrong type, each a key two
+// readers read, leaves its message and its stop_reason whole and is refused by
+// those two alone, Usage and Model, or Usage and MessageID. A reply's mark of
+// an API error that is no boolean leaves its message, its stop_reason, its
+// model and its usage whole and is refused by APIError alone. A checkpoint
+// whose leafUuid is neither a string nor null leaves its head whole and is
+// refused by Checkpoint and LeafKeyed alone; and a compaction's metadata of the
+// wrong shape leaves its boundary's head and uuid whole and is refused by
+// Preserved alone, as a retraction list of the wrong shape leaves its retry's
+// head and message whole and is refused by Retracted alone, and a replacements
+// list of the wrong shape leaves its record's head whole and is refused by
 // ReplacedResults and ReplacementCount alone. A mark no plain record carries
-// that is no boolean (a
-// virtual record's, a shutdown's, a compaction's summary's), or a batch's
-// list of the wrong shape, leaves its record's head, message and usage whole
-// and is refused by its own accessor alone, and so does a timestamp of no
-// form the harness writes, Timestamp's, and a meta mark that is no boolean,
-// IsMeta's. A result's source that is no uuid names no reply, and leaves the
-// result whole. A record's own uuid that
-// is no string
-// (null, a number, an object, a boolean), on the harness's bookkeeping, on a
-// model's call or on a hook's record, leaves everything else the record hands
-// out as it reads with its uuid as written, and is refused by UUID alone. As
-// written, each reads: an origin's kind, and what a user record's own
-// toolUseResult answers of a subagent's leg, which no other record's answers.
+// that is no boolean (a virtual record's, a shutdown's, a compaction's
+// summary's), or a batch's list of the wrong shape, leaves its record's head,
+// message and usage whole and is refused by its own accessor alone, and so does
+// a timestamp of no form the harness writes, Timestamp's, and a meta mark that
+// is no boolean, IsMeta's. A result's source that is no uuid names no reply,
+// and leaves the result whole. A record's own uuid that is no string (null, a
+// number, an object, a boolean), on the harness's bookkeeping, on a model's
+// call or on a hook's record, leaves everything else the record hands out as it
+// reads with its uuid as written, and is refused by UUID alone. As written,
+// each reads: an origin's kind, and what a user record's own toolUseResult
+// answers of a subagent's leg, which no other record's answers. A hook's event
+// that is no string is refused by HookEvent alone, and leaves its record's
+// type, firing, takes and shape whole.
 //
 // Mutation: hold the attachment to an object in the head, and the record whose
 // attachment is not one is no record at all; hold the stop_reason, the report
@@ -1200,10 +1222,11 @@ func TestARecordIsTheMainThreadsOnlyWhereItSaysSo(t *testing.T) {
 // error in Message or Usage, and a reply whose mark is reshaped reads no
 // message or no usage; hold a checkpoint's leaf, a compaction's metadata or a
 // retraction list to its type in the head, and the record that reshapes it is
-// no record at all;
-// hold the uuid to its type in the head, and every record here whose uuid is
-// reshaped is no record at all; read an answer off every record's
-// toolUseResult, and an assistant's answers a leg.
+// no record at all; hold the uuid to its type in the head, and every record
+// here whose uuid is reshaped is no record at all; read an answer off every
+// record's toolUseResult, and an assistant's answers a leg; fold a hook's
+// event's error into its attachment's, and a hook whose event is reshaped is no
+// attachment its resume keeps.
 func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	t.Parallel()
 	attachment := ctLine(t, ctAttachment(ctUUID(1), ctUUID(2), `"hook_success"`, ""))
@@ -1218,6 +1241,26 @@ func TestAKeyOneReaderReadsCostsThatReaderAlone(t *testing.T) {
 	}
 	if kind, err := attachment.AttachmentType(); err == nil {
 		t.Errorf("an attachment that is no object reads as one of the type %q, never as one it cannot read", kind)
+	}
+	token := claudeTakeToken(ctProbeStopTake)
+	said := ctReplace(t, ctBatchSystem, `"content":"crewlet: a note reached the run"`,
+		`"content":"crewlet: a note reached the run `+token+`"`)
+	for name, event := range map[string]string{"a number": `7`, "null": `null`, "an object": `{}`} {
+		line := ctAsked(t, ctAttachment(ctUUID(1), ctUUID(2), ctReplace(t, said, `"hookEvent":"PostToolBatch"`,
+			`"hookEvent":`+event), ""), []string{token})
+		if got, err := line.HookEvent(); err == nil {
+			t.Errorf("a hook whose event is %s reads the event %q, want an error", name, got)
+		}
+		kind, kindErr := line.AttachmentType()
+		firing, keyed := line.AttachmentToolUseID()
+		content, stdout := line.HookTakes()
+		formed, formedErr := line.AttachmentWellFormed()
+		if kind != hookSystemMessage || kindErr != nil || !keyed || firing != sha256.Sum256([]byte(ctBatchFire)) ||
+			content != 1 || stdout != 0 || !formed || formedErr != nil || !line.Head.Main() {
+			t.Errorf("a hook whose event is %s reads as a %q record, %v, keyed %t, naming the takes %b and %b, kept "+
+				"%t, %v; want its system message, its firing and its take whole", name, kind, kindErr, keyed, content,
+				stdout, formed, formedErr)
+		}
 	}
 	if leaf, marked, err := attachment.Checkpoint(); leaf != "" || marked || err != nil {
 		t.Errorf("a record whose attachment is no object reads as the checkpoint %q (%t), %v", leaf, marked, err)
@@ -1566,10 +1609,10 @@ func ctReplace(t *testing.T, record, from, to string) string {
 // batch's reply, the calls that batch was split into among it, when it was
 // written, whether it is meta, the reply it names as its results' source, the
 // key of the call its attachment followed, whether its message says
-// anything, whether a resume keeps it as an attachment of its shape, and the
-// release that wrote it, each beside the error it answered. A raw value it
-// hands out is printed by [ctRaw], so an absent one and a null one never read
-// alike.
+// anything, whether a resume keeps it as an attachment of its shape, its
+// hook's event and the takes it names, and the release that wrote it, each
+// beside the error it answered. A raw value it hands out is printed by
+// [ctRaw], so an absent one and a null one never read alike.
 func ctAll(l threadLine) string {
 	uuid, err := l.UUID()
 	return fmt.Sprintf("uuid: %q; %v\n", uuid, err) + ctAllButUUID(l)
@@ -1694,6 +1737,10 @@ func ctFacts(b *strings.Builder, l threadLine, m threadMessage) {
 	fmt.Fprintf(b, "says text %t, anything %t\n", saysText, saysAny)
 	formed, err := l.AttachmentWellFormed()
 	fmt.Fprintf(b, "kept as well formed: %t; %v\n", formed, err)
+	event, err := l.HookEvent()
+	content, stdout := l.HookTakes()
+	fmt.Fprintf(b, "a hook's event %q, naming the takes %x in its content and %x in its stdout; %v\n", event, content,
+		stdout, err)
 	release, err := l.Version()
 	fmt.Fprintf(b, "written by %q; %v\n", release, err)
 }
@@ -4748,7 +4795,7 @@ func TestAContentListCostsOneBlockAtATime(t *testing.T) {
 	const slack = 64
 	// decoded is record, decoded whole as a thread's line ([decodeThreadLine]).
 	decoded := func(record []byte) threadLine {
-		l, err := decodeThreadLine(1, record)
+		l, err := decodeThreadLine(1, record, nil)
 		if err != nil {
 			t.Fatalf("a line of %d bytes, decoded whole, is no record: %v", len(record)+1, err)
 		}
@@ -5247,4 +5294,174 @@ func TestALineThatHoldsNoFactsReadsAsARecordOfNoKeys(t *testing.T) {
 	if got := ctAll(threadLine{}); got != ctAll(threadLine{Head: ctLine(t, `{}`).Head}) {
 		t.Errorf("the zero line reads as\n%s", got)
 	}
+}
+
+// The takes the probes' notes' hooks took, the firings that took them
+// (2.1.310's and 2.1.322's kept threads, ctProbeThreads), and one take no
+// firing took.
+const (
+	ctProbeBatchTake  = "00000000-0000-4000-8000-000000000020"
+	ctProbeBatchFire  = "hook-00000000-0000-4000-8000-000000000019"
+	ctProbeStopTake   = "00000000-0000-4000-8000-000000000028"
+	ctProbeStopFire   = "00000000-0000-4000-8000-000000000027"
+	ctProbeUntakenOne = "00000000-0000-4000-8000-0000000000ff"
+)
+
+// ctProbeThreads are the main threads the probes kept of a session whose hooks
+// took a note at a batch and at Stop, under testdata/claude.
+var ctProbeThreads = []string{
+	"2.1.310/holdings/s1/projects/crewlet/5e55100a-0000-4000-8000-000000000106.jsonl",
+	"2.1.322/holdings/s1/projects/crewlet/5e55100a-0000-4000-8000-000000000113.jsonl",
+}
+
+// A HOOK RECORD NAMES ONLY THE TAKES ITS READER ASKED, each in the words that
+// carry it: over the probes' kept threads, asked the batch's take, the Stop's
+// and one no firing took, each firing's system message names its take in its
+// content alone and its success in its stdout alone, and no other record
+// names any; asked nothing, nothing is named. A token is met as decoded (an
+// escape) and where a cut splits it; one in a context's list, another hook
+// record's stdout or another attachment's content names nothing.
+//
+// Mutation: match a token by its prefix alone, and the take no firing took is
+// named; read a success's stdout into its content's takes, or read a
+// context's list, any record's stdout, the raw bytes or a skill listing, and
+// a record names takes it should not, or misses one.
+func TestAHookRecordNamesOnlyTheTakesItWasAsked(t *testing.T) {
+	t.Parallel()
+	asked := []string{claudeTakeToken(ctProbeBatchTake), claudeTakeToken(ctProbeStopTake),
+		claudeTakeToken(ctProbeUntakenOne)}
+	firings := map[[32]byte]uint64{
+		sha256.Sum256([]byte(ctProbeBatchFire)): 1 << 0,
+		sha256.Sum256([]byte(ctProbeStopFire)):  1 << 1,
+	}
+	for _, thread := range ctProbeThreads {
+		raw, err := os.ReadFile(filepath.Join("testdata", "claude", thread))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ask := range [][]string{asked, nil} {
+			r := newThreadReader(bytes.NewReader(raw), threadPlainMax)
+			if err := r.Asking(ask); err != nil {
+				t.Fatal(err)
+			}
+			named := 0
+			for {
+				line, err := r.Next(t.Context())
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					t.Fatalf("%s: %v", thread, err)
+				}
+				kind, _ := line.AttachmentType()
+				firing, _ := line.AttachmentToolUseID()
+				var wantContent, wantStdout uint64
+				switch {
+				case ask == nil:
+				case kind == hookSystemMessage:
+					wantContent = firings[firing]
+				case kind == hookSuccess:
+					wantStdout = firings[firing]
+				}
+				content, stdout := line.HookTakes()
+				if content != wantContent || stdout != wantStdout {
+					t.Errorf("%s, asked %d takes: line %d, a %q record, names the takes %b in its content and %b "+
+						"in its stdout; want %b and %b", thread, len(ask), line.N, kind, content, stdout, wantContent,
+						wantStdout)
+				}
+				if content|stdout != 0 {
+					named++
+				}
+			}
+			if want := 4 * min(len(ask), 1); named != want {
+				t.Errorf("%s, asked %d takes: %d records name one; want %d, each firing's system message and "+
+					"success", thread, len(ask), named, want)
+			}
+		}
+	}
+	escaped := `\u005bcrewlet take ` + ctProbeStopTake + `]`
+	for name, tc := range map[string]struct {
+		attachment      string
+		content, stdout uint64
+	}{
+		"a system message whose token is escaped": {ctReplace(t, ctStopSystem, `finishing"`,
+			`finishing `+escaped+`"`), 1 << 1, 0},
+		"a system message carrying a stdout": {ctReplace(t, ctStopSystem, `"hookName"`,
+			`"stdout":"`+asked[1]+`","hookName"`), 0, 0},
+		"an additional context listing a token": {ctReplace(t, ctStopContext, `["## A note"]`,
+			`["## A note `+asked[1]+`"]`), 0, 0},
+		"a skill listing naming a token": {`{"type":"skill_listing","content":"- ` + asked[1] + `"}`, 0, 0},
+	} {
+		line := ctAsked(t, ctAttachment(ctUUID(1), ctUUID(2), tc.attachment, ""), asked)
+		if content, stdout := line.HookTakes(); content != tc.content || stdout != tc.stdout {
+			t.Errorf("%s names the takes %b in its content and %b in its stdout; want %b and %b", name, content,
+				stdout, tc.content, tc.stdout)
+		}
+	}
+	text := "crewlet: a note reached the run as it was finishing " + asked[1]
+	for cut := 1; cut < len(text); cut++ {
+		takes := textTakes{asked: asked}
+		takes.write([]byte(text[:cut]))
+		takes.write([]byte(text[cut:]))
+		if takes.bits != 1<<1 {
+			t.Errorf("a system message cut after %d bytes names the takes %b; want the Stop's alone", cut, takes.bits)
+		}
+	}
+}
+
+// A HOOK'S EVENT IS HELD TO ITS TYPE BY ITS OWN ACCESSOR: a string is the
+// event, an absent key none, and any other value HookEvent's error alone,
+// which costs the record nothing else: its type, its firing and the shape its
+// resume keeps it by read as they do with its event a string (the resume's
+// drop of a record is the chain's to judge, never this accessor's). Every
+// other record has no event.
+//
+// Mutation: fold the event's error into the attachment's, and a success whose
+// event is a number is no attachment its resume keeps.
+func TestAHooksEventIsHeldToItsType(t *testing.T) {
+	t.Parallel()
+	const event = `"hookEvent":"PostToolBatch",`
+	for name, tc := range map[string]struct {
+		event, want string
+		fails       bool
+	}{
+		"a string":  {event: event, want: "PostToolBatch"},
+		"absent":    {event: ""},
+		"a number":  {event: `"hookEvent":7,`, fails: true},
+		"null":      {event: `"hookEvent":null,`, fails: true},
+		"an object": {event: `"hookEvent":{"name":"PostToolBatch"},`, fails: true},
+		"a list":    {event: `"hookEvent":["PostToolBatch"],`, fails: true},
+	} {
+		line := ctLine(t, ctAttachment(ctUUID(1), ctUUID(2), ctReplace(t, ctBatchSuccess, event, tc.event), ""))
+		got, err := line.HookEvent()
+		if got != tc.want || (err != nil) != tc.fails {
+			t.Errorf("a success whose hookEvent is %s reads the event %q, %v; want %q, failing %t", name, got, err,
+				tc.want, tc.fails)
+		}
+		kind, kindErr := line.AttachmentType()
+		firing, keyed := line.AttachmentToolUseID()
+		formed, formedErr := line.AttachmentWellFormed()
+		if kind != hookSuccess || kindErr != nil || !keyed || firing != sha256.Sum256([]byte(ctBatchFire)) ||
+			!formed || formedErr != nil {
+			t.Errorf("a success whose hookEvent is %s reads as a %q record, %v, keyed %t, kept %t, %v; want a "+
+				"success of its firing its resume keeps", name, kind, kindErr, keyed, formed, formedErr)
+		}
+	}
+	if got, err := ctLine(t, ctBrief(ctUUID(1))).HookEvent(); got != "" || err != nil {
+		t.Errorf("a prompt reads the hook event %q, %v; want none", got, err)
+	}
+}
+
+// ctAsked is record read as the one line of a thread whose reader asks tokens.
+func ctAsked(t *testing.T, record string, tokens []string) threadLine {
+	t.Helper()
+	r := newThreadReader(strings.NewReader(ctThread(record)), threadPlainMax)
+	if err := r.Asking(tokens); err != nil {
+		t.Fatal(err)
+	}
+	line, err := r.Next(t.Context())
+	if err != nil {
+		t.Fatalf("%.120s reads as no record: %v", record, err)
+	}
+	return line
 }

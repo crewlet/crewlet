@@ -6,6 +6,39 @@
 // it, and collected back into the same turn for the reviewer (ADR-0066;
 // agentrun.go).
 //
+// A RELAUNCH THAT CONTINUES A SESSION JUDGES ITS FIRST REQUEST
+// (firstrequest.go): whether the session's harness may compact it before it
+// reads the brief, which leaves its model a summary, so it is told as a
+// session that may be one. Claude Code's here, against the window the seat's
+// chain may hold its model to. OpenCode's in the box the launch gets
+// (firstRequest.byBox): OpenCode compacts at a point its box's catalog and
+// documents set for the run's model, which the runner, writing its briefs
+// before any box exists, cannot read; so where the session's count has a
+// bound it hands the launch both tellings, the held one picked and the
+// summarized one beside it, and the launch hands the held one only where the
+// box's point proves it whole (internal/sandbox's OpenCodePoint.SendsWhole).
+// A brief told by a reading of what the session holds is judged on its own
+// brief on either harness, never by the held one's verdict: it drops held
+// calls and may add sections of its own, so it is ordered against neither
+// default, and it may ride beside the summarized telling, a shorter brief
+// that sends whole where the held one compacts. The restart values a verdict
+// reads read a count only for a harness [firstRequest.judges]. A continuation
+// carries its harness's estimate of the session's next request for the
+// engine's floor ([Continuation.NextRequest]): the job's record's where it
+// holds one, else the newest capture's (inPlaceNextRequest).
+//
+// A SESSION THE RUN STARTED OF ITS OWN IS TOLD ITS TASK AGAIN where it may be a
+// summary (leads.go): every launch whose run may start a session on its fresh
+// brief hands that brief's task as a lead of its own kind (freshLead,
+// [AgentRunRequest.FreshOwn], [Continuation.Fresh]), which the run keeps beside
+// its record, and a continuation that may be a summary, told every lead the run
+// keeps, tells it under [prompts.FreshTaskAgain]. The turn's ask is told ONCE a
+// section (oneAsk): every launch keeps a fresh lead, and a base continuation a
+// task lead too, each rendering the ask and its closed rounds' ledger, so told
+// each, a summary would be handed that ledger as many times as the turn
+// launched. A task lead that opens here tells it, with where the turn began;
+// else the newest fresh lead, whose brief rendered the most closed rounds.
+//
 // It is the wiring between four things that each know nothing about the
 // others: the prompt builder, the tool registry, the provider chain, and the
 // turn loop's [turn.Phases] contract. Everything here is plumbing plus the one
@@ -16,6 +49,43 @@
 // [github.com/crewlet/crewlet/internal/agent/structured]'s. What counts as a
 // VALID one stays here, in the decoders below, because that belongs to the
 // phase doing the asking.
+//
+// # A continued session's words and measure
+//
+// A relaunch that continues a kept capture taken while its job still worked
+// ([SessionBasis.WentOn]) tells the session it was saved then, when
+// ([SessionBasis.CapturedAt]), and that its run went on past it
+// (prompts.SavedSession), in place of the words that say only that it was cut
+// off: told those, the run takes the session's end for where its work stopped.
+// And each session a relaunch may continue is held to its own measure: a kept
+// session to what its own capture measured ([SessionBasis.ContextTokens]),
+// never the copy's, and the job's copy in its own box to its newest capture's
+// measure, kept or not ([SessionBasis.CopyContext]), or its record's where
+// larger. One figure for both would hold one session to what the other sends.
+//
+// # The order a continuation tells a person's notes in
+//
+// A continuation tells a session the notes a person sent the turn
+// ([Runner.toldNotes]) in the order the run's record placed them, never in
+// the order the runner came to hold them ([Runner.inReadOrder]). The two
+// differ in three ways. A read this segment made reaches the runner before
+// the record has numbered it (Order zero), and the source that recorded it
+// says where it is ([Runner.placed]). A lost take's note (a take recorded it
+// and its answer was lost, and the take's settle handed it to this brief,
+// [steer.Briefing.Orders]) is handed over only once its settle is answered,
+// at a later round, after a later take's notes, or at a brief, while the
+// record numbered it where the take was made. And a note a hook's serve
+// placed waits at that place, which the launch's write reads it at, while a
+// later note, correcting it, is read at a later one. Told in the order the
+// runner came to hold them, a person's later note, correcting it, was told
+// ahead of the note it corrects.
+//
+// So every note of the brief's fresh ones whose place the record holds
+// already, a lost take's or one a hook's serve placed, is told among the
+// reads at that place, and the rest of fresh, which the launch's write reads
+// after every placed one, follow in their own order. A read the source has
+// not placed (the first segment's box keeps no record) keeps its turn, after
+// every placed one.
 package runner
 
 import (

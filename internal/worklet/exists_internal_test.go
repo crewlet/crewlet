@@ -10,12 +10,11 @@ import (
 )
 
 // A CREATE THE FRAMEWORK FOUND MADE NAMES NOTHING, carrying the framework's
-// sentinel: its error names the subject it found made, and the translation
-// carried that after the subject's id, which any caller printing the error
-// would have shown a person. The sentence is the state log's, and every other
-// refusal travels unchanged. Mutations: wrap the framework's error again and
-// the text check goes red; drop the statelog arm from Sentence and the
-// sentence checks do.
+// sentinel: the framework's error names the subject it found made, which the
+// translation must not carry after the subject's id to a person. The sentence
+// is the state log's; every other refusal travels unchanged. Mutations: wrap
+// the framework's error again and the text check goes red; drop the statelog
+// arm from Sentence and the sentence checks do.
 func TestACreateTheFrameworkFoundMadeNamesNothing(t *testing.T) {
 	t.Parallel()
 	const subject = "crewlet.tracker.task.0192f0aa-7b1c-7d2e-9f3a-4b5c6d7e8f90"

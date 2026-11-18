@@ -20,9 +20,9 @@ import (
 )
 
 // A CHAIN OF MERGES, BUILT IN ONE SCRATCH (chain.go): each entry merged onto
-// the commit the one before it made by a merge_change's own build, a
-// conflicting entry skipped and leaving nothing behind, one pack stored — and
-// nothing of it in the cache until its caller's record applies.
+// the commit the one before made by a merge_change's own build, a conflicting
+// entry skipped leaving nothing behind, one pack stored, and nothing of it in
+// the cache until its caller's record applies.
 
 // chainCase is a write case whose ceo has pushed branches off main's seed for
 // a chain to merge.
@@ -37,10 +37,9 @@ func newChainCase(t *testing.T) *chainCase {
 	return &chainCase{writeCase: newWriteCase(t, gitlettest.SoloOptions{}, map[string]string{"README.md": "one\n"})}
 }
 
-// newChainCaseOn is newChainCase with its Gitlet node's host reading now for
-// its clock (host.SetClock) — what a chain's merges spend their share by,
-// beside the git charged for them — handed to the host before the case's
-// first request, since every request's goroutine reads it.
+// newChainCaseOn is newChainCase with its host's clock now (host.SetClock),
+// which a chain's merges spend their share by beside their git; set before the
+// case's first request, since every request's goroutine reads it.
 func newChainCaseOn(t *testing.T, now func() time.Time) *chainCase {
 	t.Helper()
 	c := newCase(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -68,8 +67,8 @@ func (c *chainCase) entry(name, head string, method gitlet.MergeMethod, at time.
 			SourceRef: "refs/heads/" + name, Owner: gitlettest.FixturePat, Authors: []string{gitlettest.FixturePat}}}
 }
 
-// build asks the Gitlet node to build entries onto main's seed, as one chain read
-// at the log's position now, and fails the case on an error.
+// build asks the Gitlet node to build entries onto main's seed as one chain
+// read at the log's position now, and fails the case on an error.
 func (c *chainCase) build(entries ...gitlet.ChainEntry) (gitlet.ChainResult, string) {
 	c.T.Helper()
 	b := gitlet.ChainBuild{RepoID: c.repo, ChainID: opNow(), TargetRef: "refs/heads/main", Base: c.head,
@@ -94,12 +93,11 @@ func (c *chainCase) inScratch(id, format, rev string) string {
 	return strings.TrimSpace(c.p.Git().Run(c.T, c.scratch(id), "log", "-1", "--format="+format, rev))
 }
 
-// A CHAIN SKIPS ITS CONFLICTING ENTRY: of three entries — one rewriting the
-// README, one rewriting it otherwise, one adding a file — the second
-// conflicts with what the first made and is skipped, naming the path; the
-// third is merged onto the FIRST's commit, so the chain lands on without it.
-// And the skipped merge leaves nothing behind: the chain's pack is the very
-// pack the same chain without that entry makes, byte for byte.
+// A CHAIN SKIPS ITS CONFLICTING ENTRY: of three entries (rewriting the README,
+// rewriting it otherwise, adding a file), the second conflicts with the first
+// and is skipped naming the path; the third is merged onto the FIRST's commit.
+// The skipped merge leaves nothing: the pack is byte for byte the one the
+// chain without that entry makes.
 //
 // Mutation: build the next entry onto the skipped one's tip (or stop the
 // chain at it) → the third's parent is wrong, red; drop the prune of what the
@@ -145,16 +143,13 @@ func TestAChainSkipsItsConflictingEntry(t *testing.T) {
 	}
 }
 
-// A REBUILT CHAIN IS BYTE-IDENTICAL: a chain of a merge and a squash built
-// twice, under two ids, is the same commits and the same pack — each commit
-// authored AND committed at its ENTRY's instant (U18 c: the later of it and
-// its parents', whose commits gittest dates at the start of 2026), never at
-// the build's; the merge commit authored by its enqueuer and the squash by its
-// change's owner (U43 a), committed by the engine.
-//
-// The entries' instants are the case's own, two days before it runs, so a
-// date the build's clock gave a commit is two days off whenever it is built:
-// read off the commits themselves, never off two builds a clock step apart.
+// A REBUILT CHAIN IS BYTE-IDENTICAL: a merge and a squash built twice, under
+// two ids, are the same commits and pack; each commit authored AND committed
+// at its ENTRY's instant (U18 c: the later of it and its parents'), never the
+// build's; the merge authored by its enqueuer, the squash by its change's
+// owner (U43 a), both committed by the engine. The instants are two days old,
+// so a date from the build's clock shows on the commits themselves, never
+// needing two builds a clock step apart.
 //
 // Mutation: date an entry's commit, author or committer, by the build's clock
 // → its dates are the build's, red; author the squash by its merger, pat,
@@ -195,9 +190,8 @@ func TestARebuiltChainIsByteIdentical(t *testing.T) {
 	}
 }
 
-// bigLines is lines of random base64, seeded, and line changed (none where it
-// is -1) reading "changed": about 77 bytes a line, which deflate keeps some
-// three quarters of.
+// bigLines is lines lines of seeded random base64 (77 bytes a line, deflating
+// to some three quarters), line changed (none at -1) reading "changed".
 func bigLines(lines, changed int) string {
 	rnd := rand.New(rand.NewPCG(1, 2))
 	raw := make([]byte, 57)
@@ -216,13 +210,11 @@ func bigLines(lines, changed int) string {
 	return b.String()
 }
 
-// AN ENTRY IS HELD TO A MERGE'S PACK BOUND: main's seed holds a file of 6 MiB
-// of random text; one entry changes its first line and another its last, so
-// the second's merge onto the first's commit writes a new 6 MiB blob, which
-// packs past gitlet.MaxWritePackBytes as a merge_change of it would. That entry
-// alone is skipped too_large, in a merge_change's own words; the entry after
-// it is built onto the first's commit, and the chain's pack holds none of the
-// skipped merge's blob.
+// AN ENTRY IS HELD TO A MERGE'S PACK BOUND: main's seed holds 6 MiB of random
+// text; one entry changes its first line and another its last, so the second's
+// merge writes a new 6 MiB blob, past gitlet.MaxWritePackBytes. That entry
+// alone is skipped too_large in a merge_change's words; the next is built onto
+// the first's commit, and the pack holds none of the skipped blob.
 //
 // Mutation: drop the entry's bound (accept every entry under any loose size)
 // → the second entry is built, red; prune nothing of it → the pack carries
@@ -258,15 +250,13 @@ func TestAChainEntryIsHeldToAMergesPackBound(t *testing.T) {
 	}
 }
 
-// A CHAIN HOLDS ITS OBJECTS' BYTES, AN ENTRY PAST THEM ALONE IS SKIPPED:
-// main's seed holds a file of 256 KiB of random text; three entries change
-// its first, its last and its middle line, so the second's merge and the
-// third's each write a new blob of the file's size, and the first's none.
-// With the chain's objects held to one and a half files, the third would
-// take the chain past them: it is NOT REACHED, and the chain answers the two
-// before it with the very pack those two alone make. Held to half a file,
-// the second and the third each write more than the chain may hold alone:
-// each is skipped too_large, naming the bound, and the first is built.
+// A CHAIN HOLDS ITS OBJECTS' BYTES, AN ENTRY PAST THEM ALONE IS SKIPPED: a
+// 256 KiB random file; entries change its first, last and middle line, so the
+// second's and third's merges each write a file-sized blob, the first's none.
+// Held to one and a half files, the third is NOT REACHED, and the chain is the
+// two before it with the very pack they alone make. Held to half a file, the
+// second and third are each skipped too_large naming the bound, and the first
+// is built.
 //
 // Mutation: drop the chain's running total → the third is built in the
 // first case, red; drop the bound an entry is held to alone → the second is
@@ -323,20 +313,13 @@ func TestAChainHoldsItsObjectsBytes(t *testing.T) {
 	}
 }
 
-// A CHAIN OUT OF TIME ANSWERS ITS BUILT PREFIX: the chain's merges share one
-// merge's budget after its first entry, which has a merge's whole budget of
-// its own. Its git charged 20 s a merge-tree, the first entry is built, the
-// second is cut by what the first left — short of a merge's whole budget, so
-// NOT REACHED rather than too_large — and the third is never started: the
-// chain answers the first alone, with the very pack the first alone makes, so
-// the cut merge left nothing. And the share is spent by the time since the
-// merges began as much as by the git charged for them: a chain whose first
-// merge-tree waited three seconds, charged nothing for it, stops there too.
-//
-// THE HOST'S CLOCK IS THE CASE'S (manualClock), and moves only when the case
-// moves it: the chain reads the time since its merges began off that clock,
-// so the waited merge-tree's three seconds are a step the case takes while it
-// is held, and no wall clock has to pass for them.
+// A CHAIN OUT OF TIME ANSWERS ITS BUILT PREFIX: after its first entry, which
+// has a merge's whole budget, its merges share one. At 20 s of git a
+// merge-tree, the second is cut short of a merge's budget, so NOT REACHED
+// rather than too_large, and the third never starts: the answer is the first
+// alone, with the pack the first alone makes. The time since the merges began
+// spends the share too: a first merge-tree held while the case's own clock
+// (manualClock) steps three seconds, charged nothing, stops it as well.
 //
 // Mutation: answer an error where the chain's time runs out → no prefix, red;
 // skip the cut entry too_large → a second entry answered, red; charge the

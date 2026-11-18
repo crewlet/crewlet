@@ -38,7 +38,7 @@ and accepted.
 **A limit is named and dated from the CLI's fields first.** A refused sign-in
 reported in fields (`auth_events`) is read before anything else, in a run the
 CLI reported failed; a limit, once recognised, takes its reset and window from
-the last matching `limit_reset_events` entry, then from the sentence's own
+the last `limit_reports` entry whose window is reached, then from the sentence's own
 reset and wording (`limit_windows`), then `unknown`. A time with no zone is
 read in the zone the engine handed the CLI: every child and every box is
 handed an explicit `TZ` (the engine's own, else UTC).

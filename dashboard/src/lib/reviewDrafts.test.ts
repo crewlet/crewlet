@@ -51,6 +51,20 @@ describe("a revision's drafts", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
+  // EDITED IN PLACE: its id and its place among the others kept. Mutation: add
+  // the edit as a new draft, and two are held.
+  test("are edited in place, keeping their id and their order", () => {
+    const diff = renderHook(() => useReviewDrafts("c1", 2));
+    act(() => diff.result.current.add(DRAFT));
+    act(() => diff.result.current.add({ ...DRAFT, title: "Second" }));
+    const first = readDrafts("c1", 2)[0]!;
+    act(() => diff.result.current.update(first.id, { ...DRAFT, title: "Test the backoff" }));
+    expect(readDrafts("c1", 2).map((d) => [d.id === first.id, d.title])).toEqual([
+      [true, "Test the backoff"],
+      [false, "Second"],
+    ]);
+  });
+
   // SENT AS THE TOOL TAKES A FINDING: nothing of the tab's own, and a
   // suggestion only on the newer side, which is the side it replaces lines on.
   test("are sent as the tool takes a finding, and nothing of the tab's", () => {
