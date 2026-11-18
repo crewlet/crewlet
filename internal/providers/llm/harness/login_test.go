@@ -176,26 +176,18 @@ func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 	}
 }
 
-// A BUNDLE RESTORES ONLY INTO THE HARNESS IT NAMES. A bundle is keyed by the
-// entry — CREWLET_LLM_CLI_<KEY>_CREDENTIALS, or the entry's
-// auth.credential_bundle — not by its harness, so an entry moved to another harness
-// still restores the bundle it was configured with. Judged by its files' names
-// alone, that bundle was refused only where the two harnesses keep different names:
-// six keep an `auth.json`, so codex's bundle was
-// written into pi's empty login, where it is a credential pi cannot read and,
-// as a login already present, turned every later restore away — the right
-// bundle included.
+// A BUNDLE RESTORES ONLY INTO THE HARNESS IT NAMES. A bundle is keyed by the entry
+// (CREWLET_LLM_CLI_<KEY>_CREDENTIALS or auth.credential_bundle), not its harness, so a
+// moved entry still restores its bundle. Judged by file names alone (six harnesses keep
+// an `auth.json`), codex's bundle was written into pi's login and turned away later restores.
 //
 // Every built-in harness's bundle, restored and imported into every other harness's
-// empty login on the same state directory — the move — is refused naming the
-// harness it came from, the move and the export that replaces it, and leaves that
-// login's directory empty; and it restores into its own harness byte for byte,
-// with nothing beside its login files.
+// empty login on one state directory, is refused naming its source harness, the move
+// and the export that replaces it, leaving that directory empty; into its own harness
+// it restores byte for byte with nothing beside its login files.
 //
-// Mutation: skip the manifest's check in restoreBundle, and every pair that
-// shares a file name restores (codex into pi, among others), and
-// every other pair is refused as a file it does not keep rather than as
-// another harness's bundle.
+// Mutation: skip the manifest's check in restoreBundle and every pair sharing a file
+// name restores (codex into pi), the rest being refused as a file not kept.
 func TestABundleRestoresOnlyIntoTheHarnessItNames(t *testing.T) {
 	t.Parallel()
 	var clis []string
@@ -623,27 +615,18 @@ func TestATokenMintRefusalNamesTheLoginTheHarnessHas(t *testing.T) {
 	}
 }
 
-// AND THE MODE CHOOSES ITS ROUTES BEFORE THE HARNESS DOES. Chosen by the harness alone,
-// an api-key entry was told to run the harness's login or, on Claude Code, to mint
-// a headless token with `-capture-token` — a login is not what an api-key entry
-// signs in with, and the token is one the mode removes from the harness's
-// environment and `crewlet llm login` refuses before it mints; an inherit-env
-// Claude Code entry was told the same mint, whose token lands in the secret
-// store that mode never reads, so the command refuses to store it. api-key is
-// now told its key alone, and inherit-env what it forwards, a login and, where
-// the harness mints, a token minted to stdout to export. Codex, which mints none,
-// is held to the same split. OpenCode under api-key, a pairing every write of
-// the configuration refuses and `crewlet llm` still loads, names no key
-// variable, so the mode hands its harness nothing and the remedy is the mode's own,
-// a login under subscription: it was told that and, in the same sentence, that
-// a login is not its sign-in. Codex under api-key with its key variable
-// outside the reference grammar (MY=KEY), which leaves ModeSignIn's Variables
-// empty too, still keeps a key and is told to name the variable.
+// AND THE MODE CHOOSES ITS ROUTES BEFORE THE HARNESS DOES. By harness alone, an api-key
+// entry was told to run a login or mint `-capture-token` (a token its mode removes and
+// `crewlet llm login` refuses), and an inherit-env one the same mint, whose token lands
+// in a store that mode never reads. api-key is now told its key alone, inherit-env a
+// login and, where the harness mints, a token to export; codex, which mints none, gets
+// the same split. OpenCode under api-key (config writes refuse it, `crewlet llm` loads
+// it) names no key variable, so its remedy is a login under subscription. Codex under
+// api-key with MY=KEY (outside the reference grammar) keeps a key and is told to name it.
 //
-// Mutation: choose the routes by the harness alone, and every case is red; word
-// the opencode case as an api-key entry that keeps its key, and it is red; ask
-// Variables alone for a harness that names no key variable, and the MY=KEY case is
-// worded as one, losing that a login is not its sign-in.
+// Mutation: choose by harness alone and every case is red; word opencode as an
+// api-key entry keeping its key and it is red; ask Variables alone for a harness
+// naming no key variable and MY=KEY is worded as one, losing "a login is not its sign-in".
 func TestACredentialLoginRefusalFollowsTheEntrysAuthMode(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1263,19 +1246,13 @@ func logoutNotice(t *testing.T, p *Provider) string {
 	return notice
 }
 
-// A LOGGED-OUT ENTRY IS TOLD OF A HEADLESS TOKEN ONLY WHERE ONE SIGNS IT IN.
-// The logout's notice told every entry with a bundle that "a headless token
-// from `-capture-token` or `-token-stdin` signs it in without ending this",
-// and the restore's refusal that a headless token signs it in: codex, whose
-// profile names no token variable, takes none, and `crewlet llm login`
-// refuses both commands for it; under a token variable outside the reference
-// grammar (MY-TOKEN) a token could be neither stored nor referenced; api-key
-// removes the token variable from the harness's environment; and inherit-env
-// never reads the secret store a token would be stored in, so the token that
-// signs it in is one exported in the engine's environment. A harness with a token
-// variable and no minting command is told `-token-stdin` alone. Claude Code
-// as shipped is the control: it mints a token and reads a stored one, and is
-// told both commands.
+// A LOGGED-OUT ENTRY IS TOLD OF A HEADLESS TOKEN ONLY WHERE ONE SIGNS IT IN. The notices
+// said `-capture-token` or `-token-stdin` signs in every entry with a bundle, wrongly for
+// codex (no token variable; `crewlet llm login` refuses both), a variable outside the
+// reference grammar (MY-TOKEN: neither storable nor referenceable), api-key (removes
+// the variable from the environment) and inherit-env (never reads the store; its token
+// is exported). With a token variable and no minting command it is told `-token-stdin`
+// alone. Claude Code is the control: it mints and reads a stored token, told both.
 //
 // Mutation: name both commands whatever the entry takes, and every case but
 // the control is red; name both wherever a token is read at all, and the

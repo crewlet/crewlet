@@ -13,23 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// auxiliaryTimeout bounds one AUXILIARY command — a short run of the harness that
-// is not the call itself but brackets it: a [harnessprofile.CredentialStore]'s
-// import before a seat's generation and export after it, and a
-// [harnessprofile.Profile.UsageArgs] report after a call.
+// auxiliaryTimeout bounds one AUXILIARY command, a short run of the harness that
+// brackets the call: a [harnessprofile.CredentialStore]'s import and export
+// around a seat's generation, and a [harnessprofile.Profile.UsageArgs] report.
 //
-// Measured against OpenCode 2.0.32 on an idle host, each takes about half a
-// second — most of it the harness starting the private server `--standalone`
-// gives it. Thirty seconds is sixty times that, so a host already running
-// max_concurrent harnesses does not fail a seat's generation or lose a
-// call's real counts over a slow start, and a twentieth of the default
-// per-call cap (timeout_seconds, 600), so a wedged command cannot quietly
-// spend much of the call it brackets: every one of them runs inside the
-// call's concurrency slot.
+// Each takes about half a second on an idle host (OpenCode 2.0.32; the private
+// server `--standalone` starts). Thirty seconds is sixty times that, so a host at
+// max_concurrent harnesses does not fail a generation or lose a call's counts
+// over a slow start, and a twentieth of the per-call cap (timeout_seconds, 600),
+// so a wedged command cannot spend much of the call it brackets, inside its slot.
 //
-// A constant rather than a setting because nothing about a deployment moves
-// it: the work is a fixed-size local round trip, and the per-call cap is the
-// setting an operator already reaches for when a host is slow.
+// A constant: the work is a fixed-size local round trip, and the per-call cap is
+// the setting an operator already reaches for when a host is slow.
 const auxiliaryTimeout = 30 * time.Second
 
 // auxiliary is one auxiliary command: its arguments, where it runs and with
@@ -48,38 +43,18 @@ type auxiliary struct {
 	credential bool
 }
 
-// runAuxiliary runs one auxiliary command and returns its stdout.
+// runAuxiliary runs one auxiliary command and returns its stdout. NOTHING IT WAS
+// HANDED OR PRINTED IS EVER PART OF AN ERROR: an export prints every secret the
+// harness holds, so a failure names the command, its exit and its stderr SCRUBBED
+// of what stdin and stdout carried ([scrubAuxiliary]).
 //
-// NOTHING IT WAS HANDED OR PRINTED IS EVER PART OF AN ERROR. A credential
-// store's export prints every secret the harness holds, and its import is handed
-// them on stdin, so a failure names the command, its exit and its stderr —
-// and the stderr is SCRUBBED of what stdin and stdout carried first
-// ([scrubAuxiliary]), because a harness that rejects a document may well quote the
-// part it rejected, and the shape-based [redact.Secrets] recognises neither a
-// refresh token nor a Google key by sight, and of an OAuth access token only
-// a JWT whole, never the piece of one a rejection quotes.
-//
-// TYPED, because what failed decides what the caller does about it — see
-// [acquireFailureKind]:
-//
-//   - the CALLER's context ending is checked FIRST and wrapped as itself. The
-//     child's own bound is derived from that context, so a parent deadline
-//     also reads as the child timing out, and checked second it reported
-//     "did not finish within 30s" for an import the call's own deadline had
-//     stopped in under a second;
-//   - running out of [auxiliaryTimeout] is an [auxiliaryTimeoutError], which
-//     is a [context.DeadlineExceeded] to errors.Is;
-//   - the engine ending it over its output — a stdout past [maxOutput], a
-//     stream that ran that far ahead of the reading — is an
-//     [auxiliaryUnfinishedError] saying so, checked before its exit, which
-//     the engine's kill made: read second, it would be the harness refusing a
-//     login;
-//   - exiting non-zero is an [auxiliaryExitError];
-//   - exiting 0 without being seen to its end — a stdout something it left
-//     running still held, a wait that failed — is an
-//     [auxiliaryUnfinishedError], because what it printed may be a login
-//     with its end missing;
-//   - a child that could not be started at all is the error [run] gave.
+// TYPED, because what failed decides what the caller does ([acquireFailureKind]):
+// the CALLER's context ending is checked FIRST (the child's bound derives from
+// it, so a parent deadline read as "did not finish within 30s"); then
+// [auxiliaryTimeout], an [auxiliaryTimeoutError] (a [context.DeadlineExceeded]
+// to errors.Is); the engine ending it over its output, an
+// [auxiliaryUnfinishedError] checked before the exit its kill made; non-zero, an
+// [auxiliaryExitError]; exit 0 not seen to its end, unfinished (a truncated login).
 func (p *Provider) runAuxiliary(ctx context.Context, a auxiliary) (string, error) {
 	command := string(p.profile.Binary) + " " + strings.Join(a.args, " ")
 	res, err := run(ctx, invocation{
@@ -205,31 +180,17 @@ const minTokenRun = 16
 // API key carries — at least [minTokenRun] long.
 var tokenRun = regexp.MustCompile(fmt.Sprintf(`[A-Za-z0-9_\-.+/=~]{%d,}`, minTokenRun))
 
-// scrubAuxiliary takes out of stderr everything the command was handed and
-// printed — handed being its stdin and its stdout — and then runs
-// [redact.Secrets] over what is left.
+// scrubAuxiliary takes out of stderr everything the command was handed (stdin)
+// and printed (stdout), then runs [redact.Secrets] over the rest: the material
+// the engine KNOWS is secret, not shapes it hopes to recognise. From each text it
+// takes the whole of it; where it is JSON, every string value at least
+// [minScrubbedValue] long at any depth and the [tokenRun]s inside each; where it
+// is not (truncated, a timed-out export), its [tokenRun]s.
 //
-// THE MATERIAL THE ENGINE ALREADY KNOWS IS SECRET, rather than shapes it hopes
-// to recognise: an import is handed every credential the shared login holds,
-// and an export prints every one the database does, so what a harness quoting
-// either could repeat is exactly what those two texts contain. From each:
-//
-//   - the whole of it, so a harness echoing a document entire leaves one marker;
-//   - where it is JSON, every string value at least [minScrubbedValue] long,
-//     at any depth, and the [tokenRun]s inside each one (a harness may quote a
-//     token out of a longer value, `Bearer …`);
-//   - where it is not — a truncated document, a timed-out export's partial
-//     output — the [tokenRun]s in it.
-//
-// The whole texts and the values are taken out where stderr repeats them
-// exactly, longest first, so a value never leaves part of a longer one behind.
-// A token run is taken out wherever stderr shares [minTokenRun] or more
-// consecutive characters with it ([maskShared]), not only where it repeats the
-// run whole: a parser's error quotes a WINDOW of its input — the bytes either
-// side of where it stopped — and a window cuts a credential wherever it falls,
-// so matched whole, the forty characters a window kept of a seventy-character
-// token went into the error intact. [redact.Secrets] stays as the second layer
-// for anything this did not know.
+// Whole texts and values go longest first, so none leaves part of a longer one
+// behind. A token run goes wherever stderr shares [minTokenRun] characters with
+// it ([maskShared]), not only where it repeats whole: a parser quotes a WINDOW of
+// its input, which cuts a credential anywhere.
 func scrubAuxiliary(stderr string, handed ...string) string {
 	if strings.TrimSpace(stderr) == "" {
 		return stderr

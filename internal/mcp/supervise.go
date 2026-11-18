@@ -13,36 +13,15 @@ import (
 // Keeping a server up once it has started, and bringing back one that would
 // not start.
 //
-// A server's session can end under the engine at any moment: a stdio child
-// crashes, is killed for memory, or exits because its vendor's API answered
-// something it could not handle; a remote server forgets the session. Before
-// this file existed nothing noticed. The bridge's entry stayed "running", the
-// tools stayed in every catalogue, and every call failed on a broken pipe
-// until something restarted the server — for a shared server, the next config
-// apply, which on a quiet company is never; for a seat's own child, the seat
-// changing hands. A shared server whose START failed for a reason that passes
-// — the vendor was down, a DNS blip — had the same wait, because nothing but
-// the next apply ever asked for it again.
-//
-// So every server a bridge runs has a SUPERVISOR: one goroutine for the life
-// of the server, which waits for its session to end (seen at the transport,
-// see client.end) and then restarts it on the schedule in timeouts.go —
-// at once for a server's first death and for a child that had been healthy,
-// then with a doubling, jittered wait. While it is down its tools STAY in the catalogue and refuse, with
-// [RefusalUnavailable] and a sentence saying what happened and that it is
-// coming back: a turn that already holds them gets an honest answer rather
-// than a broken pipe, and a catalogue that does not churn on every crash
-// keeps the provider's prompt cache. The Tool objects survive the restart
-// too — a Tool reaches its server through the server, never through one
-// session — so a restart that lists the same tools changes nothing outside
-// this package, and only one that lists different tools reports a change
-// ([Supervision.CatalogueChanged]).
-//
-// What the supervisor does NOT do is decide who may run the server. A
-// per-role child carries one seat's identity, and only the node holding that
-// seat may start it; the bridge asks its owner ([Supervision.MayStart])
-// before every start it makes on its own, and its owner stops it — ending the
-// supervision with it — the moment the seat is let go.
+// A session can end at any moment and a START can fail for a reason that
+// passes; unsupervised, calls failed on a broken pipe until the next apply.
+// Each server has a SUPERVISOR, one goroutine for its life, that waits for the
+// session to end (client.end) and restarts it on timeouts.go's schedule.
+// While down its tools STAY in the catalogue and refuse with
+// [RefusalUnavailable], keeping the prompt cache. Tool objects outlive the
+// restart; only different tools report a change ([Supervision.CatalogueChanged]).
+// Who may run the server is not its decision: the bridge asks its owner
+// ([Supervision.MayStart]) before every start of its own.
 
 // Supervision is what a bridge does on its own, between the calls its owner
 // makes. The zero value restarts a server whose session ended, unconditionally,
@@ -659,20 +638,16 @@ func (s *server) shutdown(ctx context.Context) error {
 
 // refusal is the answer to a call this server cannot take now.
 //
-// [RefusalUnavailable], although an MCP server's own failures carry no class,
-// because this one is not the server's: the engine knows its session is gone,
-// says so in its own words, and a person's surface may act on the class as on
-// any other first-party refusal — not now, rather than no such thing.
+// [RefusalUnavailable], although an MCP server's own failures carry no class:
+// this refusal is the engine's, which knows the session is gone, so a person's
+// surface may act on the class (not now, rather than no such thing).
 //
 // duringCall marks a call that was sent and got no answer because the session
-// ended under it — whether the server died or its owner stopped it, which ends
-// the session under a call in flight just the same. Whether such a call took
-// effect nobody can say, so a tool not known to be a read is caused by
-// [ErrOutcomeUnknown], and the sentence tells the model to look before it calls
-// again rather than make a write twice. That comes FIRST, before why the server
-// is not running: a stopped server's own sentence says the tool "cannot be
-// called", which told a call that was already sent as one that never left the
-// engine, and so invited the write again.
+// ended under it (the server died or its owner stopped it). Whether it took
+// effect is unknowable, so a tool not known to be a read is caused by
+// [ErrOutcomeUnknown] and the sentence tells the model to look before calling
+// again. That comes FIRST, before why the server is down: "cannot be called"
+// read as a call that never left the engine, and invited the write again.
 func (s *server) refusal(t *Tool, dead *client, duringCall bool) Result {
 	s.mu.RLock()
 	stopped, down := s.stopped, s.down
