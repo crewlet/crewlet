@@ -411,6 +411,37 @@ test("a head keeps Viewed and its counts on its first line at 820 px with a long
   expect(head.scrollWidth).toBeLessThanOrEqual(head.clientWidth);
 });
 
+// THE PROGRESS SITS IN THE FILES' TOOLBAR: beside Go to file on a wide page, its words
+// alone on a phone. Mutation: give the words a fixed width, and the phone's toolbar overflows.
+test("the files' toolbar holds the progress at 1440 px and 390 px", async () => {
+  for (const width of [1440, 390]) {
+    await page.viewport(width, 800);
+    mount(width, FILES);
+    const content = await stacked();
+    const bar = content.querySelector<HTMLElement>(".code-files-bar")!;
+    const viewed = await eventually(() => {
+      const box = bar.querySelector<HTMLElement>(".code-files-bar__viewed");
+      expect(box?.firstElementChild?.textContent).toBe("0 of 5 viewed");
+      return box!;
+    });
+    const band = bar.getBoundingClientRect();
+    const box = viewed.getBoundingClientRect();
+    expect(box.left).toBeGreaterThanOrEqual(band.left - 0.5);
+    expect(box.right).toBeLessThanOrEqual(band.right + 0.5);
+    expect(overflowing(bar)).toEqual([]);
+    const meter = viewed.querySelector<HTMLElement>(".code-files-bar__meter")!;
+    if (width === 1440) {
+      const find = bar.querySelector(".code-files-bar__find")!;
+      expect(Math.abs(middle(viewed) - middle(find))).toBeLessThan(4);
+      expect(meter.getBoundingClientRect().width).toBeGreaterThan(0);
+    } else {
+      expect(getComputedStyle(meter).display).toBe("none");
+    }
+    flushSync(() => root?.unmount());
+    host?.remove();
+  }
+});
+
 // ON A PHONE A RENAME'S HEAD STARTS WITH ITS PATH beside the fold, and its copy
 // follows the path's last word. Mutation: make the lead a wrapping row, and the
 // fold stands alone on the first line.

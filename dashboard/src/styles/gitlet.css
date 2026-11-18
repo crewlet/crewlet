@@ -3911,3 +3911,23 @@
     justify-self: end;
   }
 }
+
+/* HOW MANY FILES ARE VIEWED, in the files' toolbar: the words, then a short meter. */
+.code-files-bar__viewed {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.code-files-bar__viewed .code-files-bar__meter {
+  inline-size: 4rem;
+}
+
+@container page (width < 640px) {
+  .code-files-bar__viewed .code-files-bar__meter {
+    display: none;
+  }
+}

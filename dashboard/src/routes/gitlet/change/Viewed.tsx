@@ -5,11 +5,13 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { Meter } from "@crewlethq/ui";
 import { CheckGlyph, SquareGlyph } from "@crewlethq/icons/glyphs";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { changeLive } from "~/lib/code.ts";
+import { fmtCount } from "~/lib/format.ts";
 import type { CodeChangeDetail, CodeDiffFile } from "~/protocol/index.ts";
 import { partRefusal, refusedWords, usePagedViewed } from "./reads.ts";
 import { markable, viewedFiles, viewedKeyValid } from "./viewed.ts";
@@ -152,5 +154,43 @@ export function ViewedToggle({ file }: { file: CodeDiffFile }) {
     >
       Viewed
     </WriteButton>
+  );
+}
+
+/** How many of the listed files the reader has viewed: words, and a compact meter. */
+export function ViewedProgress({
+  viewed,
+  listed,
+  changed,
+  more,
+}: {
+  viewed: number;
+  listed: number;
+  /** Every file the revision changes, where pages remain unread. */
+  changed: number | undefined;
+  more: boolean;
+}) {
+  const words = more
+    ? `${fmtCount(viewed)} of ${fmtCount(listed)} loaded viewed`
+    : `${fmtCount(viewed)} of ${fmtCount(listed)} viewed`;
+  const spoken = more
+    ? `${fmtCount(viewed)} of the ${fmtCount(listed)} files loaded viewed${
+        changed !== undefined ? `; ${fmtCount(changed)} changed` : ""
+      }`
+    : `${fmtCount(viewed)} of ${fmtCount(listed)} files viewed`;
+  return (
+    <span className="code-files-bar__viewed">
+      <span aria-hidden="true">{words}</span>
+      <Meter
+        className="code-files-bar__meter"
+        size="compact"
+        hideLabel
+        label="Files viewed"
+        tone="neutral"
+        value={viewed}
+        max={listed}
+        valueText={spoken}
+      />
+    </span>
   );
 }

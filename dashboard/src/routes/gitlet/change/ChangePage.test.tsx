@@ -3399,9 +3399,9 @@ const toggle = (path: string) => screen.findByRole("button", { name: `Viewed: ${
 const bodyOf = (path: string) =>
   document.querySelector(`section[data-path="${CSS.escape(path)}"] .code-file__body`);
 
-// A MARK AT THE STATE SHOWN reads viewed, and a viewed file starts folded.
-// Mutation: match on the path digest alone, and case 2's moved file reads viewed.
-test("a file marked at the blob shown reads viewed and folded", async () => {
+// A MARK AT THE STATE SHOWN reads viewed, a viewed file starts folded, and the
+// toolbar counts it. Mutation: match on the path digest alone, and case 2's moved file reads viewed.
+test("a file marked at the blob shown reads viewed, folded and counted", async () => {
   stubViewed({ marks: [viewedRow(PAGE_GO, "n1", "100644")] });
   mount("#/gitlet/repos/web/changes/42?tab=files", MARKER);
   const page = await toggle(PAGE_GO);
@@ -3409,6 +3409,9 @@ test("a file marked at the blob shown reads viewed and folded", async () => {
   expect(bodyOf(PAGE_GO)).toBeNull();
   expect((await toggle(STREAM_GO)).getAttribute("aria-pressed")).toBe("false");
   expect(bodyOf(STREAM_GO)).not.toBeNull();
+  expect(screen.getByText("1 of 5 viewed")).toBeTruthy();
+  const meter = screen.getByRole("meter", { name: "Files viewed" });
+  expect(meter.getAttribute("aria-valuetext")).toBe("1 of 5 files viewed");
 });
 
 // A MARK OF ANOTHER BLOB is no mark: a file a revision changed reads unviewed again.
@@ -3515,6 +3518,44 @@ test("a closed change draws every toggle held with its sentence", async () => {
   fireEvent.click(page);
   await settled();
   expect(acted).toHaveLength(0);
+  expect(screen.queryByRole("meter", { name: "Files viewed" })).toBeNull();
+});
+
+// A FLEET THAT DOES NOT ANSWER THE MARKS holds the toggles and Unviewed with why,
+// and counts nothing. Mutation: count while refused, and "0 of 5 viewed" is drawn.
+test("a fleet that does not answer the marks holds the toggles and Unviewed", async () => {
+  stubViewed({ viewed: () => json({ error: "bad_params", detail: "unknown part" }, 400) });
+  mount("#/gitlet/repos/web/changes/42?tab=files&only=unviewed", MARKER);
+  const page = await toggle(PAGE_GO);
+  await waitFor(() =>
+    expect(page.getAttribute("title")).toBe("Viewed files are unavailable on this fleet yet."),
+  );
+  expect(screen.queryByText(/of 5 viewed/)).toBeNull();
+  expect(sectionPaths()).toHaveLength(5);
+  fireEvent.click(screen.getByRole("button", { name: "Filter options" }));
+  const held = (await screen.findByRole("checkbox", { name: /^Unviewed/ })) as HTMLInputElement;
+  expect(held.disabled).toBe(true);
+  expect(held.checked).toBe(false);
+  expect(
+    within(screen.getByRole("dialog", { name: "Filter options" })).getByText(
+      "Viewed files are unavailable on this fleet yet.",
+    ),
+  ).toBeTruthy();
+});
+
+// UNVIEWED KEEPS THE FILES NOT VIEWED in the stack and the tree, and counts them.
+// Mutation: filter the tree only, and the stack keeps five sections.
+test("Unviewed keeps the files not viewed and counts them", async () => {
+  stubViewed({ marks: [viewedRow(PAGE_GO, "n1", "100644")] });
+  mount("#/gitlet/repos/web/changes/42?tab=files&only=unviewed", MARKER);
+  await waitFor(() => expect(sectionPaths()).toHaveLength(4));
+  expect(sectionPaths()).not.toContain(PAGE_GO);
+  expect(treePaths()).toHaveLength(4);
+  expect(treePaths()).not.toContain(PAGE_GO);
+  expect(screen.getAllByText("Showing 4 of 5 files").length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole("button", { name: "Filter options" }));
+  const box = (await screen.findByRole("checkbox", { name: "Unviewed 4" })) as HTMLInputElement;
+  expect(box.checked).toBe(true);
 });
 
 // A PATH GIT CANNOT SPELL AS TEXT is refused by the engine, so it is held first.
