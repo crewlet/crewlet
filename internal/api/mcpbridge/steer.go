@@ -151,9 +151,16 @@ const steerTakeBudget = 5 * time.Second
 // harness polls, answered from memory.
 const steerHold = 10 * time.Second
 
-// steerReadBody bounds a read's body: a read names at most a turn's notes
-// ([steer.MaxTurnNotes]), a few hundred bytes, and 64 KiB is far past that
-// while far inside what the relay carries (internal/httprelay's MaxBody).
+// steerReadIDs is the most notes one read names: everything one job can be
+// owed, a turn's notes ([steer.MaxTurnNotes]) and the job's own items
+// ([sandbox.MaxJobItems]). OpenCode's plugin names every note it owes in one
+// read and sends it again on every retry, so a read refused for its count is
+// refused again forever and confirms nothing more for the rest of the run.
+const steerReadIDs = steer.MaxTurnNotes + sandbox.MaxJobItems
+
+// steerReadBody bounds a read's body: a read names at most [steerReadIDs]
+// notes, each a short id, a couple of kilobytes in all, and 64 KiB is far past
+// that while far inside what the relay carries (internal/httprelay's MaxBody).
 const steerReadBody = 64 << 10
 
 // steerRead is a read's body.
@@ -376,7 +383,7 @@ func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox St
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}
-	if len(body.IDs) == 0 || len(body.IDs) > steer.MaxTurnNotes {
+	if len(body.IDs) == 0 || len(body.IDs) > steerReadIDs {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidBody)
 		return
 	}

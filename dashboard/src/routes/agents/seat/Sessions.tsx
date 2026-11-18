@@ -96,6 +96,7 @@ import {
 export const KIND_LABELS: Record<TranscriptEntryKind, string> = {
   brief: "Brief",
   note: "Note",
+  late_call: "Late call",
   model: "Model",
   tool_call: "Tool call",
   tool_result: "Result",
@@ -830,9 +831,9 @@ function HandedSession({ turn }: { turn: string }) {
  *
  * A CALL'S INPUT AND A TOOL'S OUTPUT ARE BLOCKS, scrolling within the ceiling
  * every block in the shell's scroller takes, because their whitespace is the
- * content; a brief, a note, the model's words and a summary are prose. A block
- * takes a tab stop only when it scrolls (`focusWhenScrollable`), named by its
- * tool — never `selectable`, which would put a stop before each of two hundred
+ * content; a brief, a note, a late call, the model's words and a summary are
+ * prose. A block takes a tab stop only when it scrolls (`focusWhenScrollable`),
+ * named by its tool — never `selectable`, which would put a stop before each of two hundred
  * short blocks a page holds and take select-all from the page while one has
  * focus, for a block that is not the record the screen is about. A PART OF THE
  * RECORD NOT READ is drawn as the warning it is, in its place, so a gap never

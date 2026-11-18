@@ -588,11 +588,22 @@ type BriefTold struct {
 	// calls it was to tell (those the session it continues lacks, through the
 	// read the brief was built from, [Continuation.BriefRead]), the ones it did
 	// not. Nil where it left none out. Never a late call, which every brief
-	// tells again, nor one the log dropped from its middle, which keeps no
-	// place to name and is counted by every brief that tells it; and never
-	// more than a round's log lists ([MaxBridgeCalls]), which a launch refuses
-	// past before anything is opened ([LaunchRequest.toldBounded]).
+	// tells again (LateOmitted), nor one the log dropped from its middle,
+	// which keeps no place to name and is counted by every brief that tells
+	// it; and never more than a round's log lists ([MaxBridgeCalls]), with
+	// LateOmitted, which a launch refuses past before anything is opened
+	// ([LaunchRequest.toldBounded]).
 	Omitted []int
+
+	// LateOmitted is the late calls ([BridgeCall.Late], [BridgeCall.Abandoned])
+	// the brief counted without listing them, by their places, APART from
+	// Omitted: every brief tells such a call again, so none is owed; but the
+	// session holds only that count of it, and a continuation of it credits it
+	// no telling of the call (internal/agent/runner's heldByTelling). Apart,
+	// because once the log drops one from its middle it keeps no mark, and
+	// counted among the owed it was counted twice, there and among the late
+	// calls dropped ([BridgeLog.LateElided]).
+	LateOmitted []int
 
 	// Own is the leads the brief opened with of its own (leads.go): what
 	// carries its session on, an answer, a review or the turn's task, opened,
@@ -686,7 +697,7 @@ func (r LaunchRequest) toldBounded() error {
 		}
 	}
 	for _, t := range sets {
-		if n := len(t.set.Omitted); n > MaxBridgeCalls {
+		if n := len(t.set.Omitted) + len(t.set.LateOmitted); n > MaxBridgeCalls {
 			return fmt.Errorf("sandbox: %s names %d calls its brief left out, past the %d a round's log "+
 				"lists", t.field, n, MaxBridgeCalls)
 		}
@@ -1116,7 +1127,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// AND WHAT THAT BRIEF, AND THE FRESH ONE ITS BOX FALLS BACK TO, LEFT
 		// OUT OF THE ROUND IT CARRIES ON, for every later reader of what the
 		// job's session holds ([BriefTold]).
-		BriefOmitted: briefOmitted, FreshOmitted: freshOmitted,
+		BriefOmitted: briefOmitted.Omitted, FreshOmitted: freshOmitted.Omitted,
+		BriefLateOmitted: briefOmitted.LateOmitted, FreshLateOmitted: freshOmitted.LateOmitted,
 		// AND WHAT THAT BRIEF OPENED WITH: its own leads, sealed for this
 		// job, and the earlier ones it told again, or was to and could not
 		// read, for every later brief to a session of the work that may lack

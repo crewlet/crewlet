@@ -41,7 +41,7 @@ var lateStagedCases = []struct {
 	name string
 	fn   func(*testing.T, *stagedRuns, sandbox.PendingStore)
 }{
-	{"ALateCallTouchesNoRecord", testALateCallTouchesNoRecord},
+	{"ALateCallWritesNoJobsSpend", testALateCallWritesNoJobsSpend},
 }
 
 // carryRoundOn relaunches turnID's run carrying its round on — as a loss's
@@ -249,17 +249,18 @@ func testALateCallKeepsItsMarkThroughEveryWriteOfItsRound(t *testing.T, s sandbo
 	})
 }
 
-// A LATE CALL TOUCHES NO RECORD. An append reads and writes the run's log alone,
-// and the run's record only to write its job's spend, where the total moved. A
-// late call of the round has no job to pay it — the one the row holds would pay
-// it as its own, and its own is over — so the store decides as it takes the
-// call that its spend is nobody's, and asks the record nothing for it, its
-// calls in the log all the same. The next job's own call beside it still
-// writes its spend.
+// A LATE CALL WRITES NO JOB'S SPEND. An append reads and writes the run's log,
+// and the run's record to write its job's spend, where the total moved. A late
+// call of the round has no job to pay it — the one the row holds would pay it
+// as its own, and its own is over — so the store decides as it takes the call
+// that its spend is nobody's, and asks the record for it only ONCE, to hand
+// the call to the job working on the round as an item
+// ([sandbox.RunNote.LateCall]): never to write its spend. The next job's own
+// call beside it still writes its spend.
 //
 // Mutation: write a late call's spend as a job's own call's is, guarded by the
-// row's job alone, and the record is asked for it.
-func testALateCallTouchesNoRecord(t *testing.T, runs *stagedRuns, s sandbox.PendingStore) {
+// row's job alone, and the record is asked for it a second time.
+func testALateCallWritesNoJobsSpend(t *testing.T, runs *stagedRuns, s sandbox.PendingStore) {
 	const turn = "t-late-no-record"
 	first := mustLaunched(t, s, run(turn))
 	round := mustGet(t, s, turn).Round
@@ -270,8 +271,12 @@ func testALateCallTouchesNoRecord(t *testing.T, runs *stagedRuns, s sandbox.Pend
 		Call: madeAt("delegate", 1, 1), Spent: bridged(3)}) {
 		t.Fatal("a late call of the round was not recorded")
 	}
-	if asked := runs.rowAsks.Load() - before; asked != 0 {
-		t.Errorf("a late call asked the run's record %d times, want none: its spend is no job's", asked)
+	if asked := runs.rowAsks.Load() - before; asked != 1 {
+		t.Errorf("a late call asked the run's record %d times, want once, for its item: its spend is no job's",
+			asked)
+	}
+	if got := mustGet(t, s, turn).Launch.Bridged; got != (sandbox.EngineSpend{}) {
+		t.Errorf("the next job's record holds %+v after the late call, want no spend", got)
 	}
 	before = runs.rowAsks.Load()
 	if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: next, Round: round,

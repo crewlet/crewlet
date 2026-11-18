@@ -846,7 +846,13 @@ func testACaptureStampPastItsBoundsIsRefused(t *testing.T, s sandbox.PendingStor
 		t.Fatalf("the stamp refused for its reads left out changed the record: %d bytes to %d", len(before),
 			len(after))
 	}
-	stamp.Omitted = make([]int, sandbox.MaxBridgeCalls)
+	// AND THE LATE CALLS LEFT OUT BESIDE THEM: one log's calls in all.
+	stamp.Omitted, stamp.LateOmitted = make([]int, sandbox.MaxBridgeCalls), []int{1}
+	if took, err := s.StampCapture(ctx, r.TurnID, stamp); !errors.Is(err, sandbox.ErrCaptureUnbounded) || took {
+		t.Fatalf("a stamp naming more reads and late calls left out than a log lists = %v, %v; want "+
+			"ErrCaptureUnbounded", took, err)
+	}
+	stamp.Omitted = make([]int, sandbox.MaxBridgeCalls-1)
 	if took, err := s.StampCapture(ctx, r.TurnID, stamp); err != nil || !took {
 		t.Errorf("a stamp within its bounds = %v, %v; want it taken", took, err)
 	}

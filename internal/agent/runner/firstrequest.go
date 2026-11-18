@@ -419,7 +419,7 @@ type exactHolds struct {
 // and the notes.
 type inPlaceTelling struct {
 	after   []string
-	omitted []int
+	omitted omittedReads
 	told    toldAgain
 	notes   []string
 }

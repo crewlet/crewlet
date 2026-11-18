@@ -365,8 +365,16 @@ type SessionCapture struct {
 	// read, the session counts every call the log had taken as held, and
 	// without this would never be told a read its brief only counted. Nil
 	// where its brief left none out, and on a stamp an older build wrote.
-	// Held to [MaxBridgeCalls] ([SessionCapture.Bounded]).
+	// Held to [MaxBridgeCalls] with LateOmitted ([SessionCapture.Bounded]).
 	Omitted []int `json:"bridge_omitted,omitempty"`
+
+	// LateOmitted is the late calls that brief counted without listing them,
+	// apart from the reads it owes ([BriefTold.LateOmitted],
+	// [LaunchRecord.LateOmittedCalls]), stated as Omitted is: a launch that
+	// continues the session tells each of them as every late call is told, and
+	// credits the session no telling of one (internal/agent/runner's
+	// heldByTelling).
+	LateOmitted []int `json:"bridge_late_omitted,omitempty"`
 
 	// BridgeSeq and BridgeOpen are the same read's save point AS AN OLDER BUILD
 	// READS IT — zero and nil on a capture no read places, raised or not, so a
@@ -580,9 +588,9 @@ func (c SessionCapture) Bounded() error {
 		return fmt.Errorf("sandbox: it names %d open places, past the %d it may: %w", len(c.BridgeOpen),
 			maxOpenPlaces, ErrCaptureUnbounded)
 	}
-	if len(c.Omitted) > MaxBridgeCalls {
-		return fmt.Errorf("sandbox: it names %d reads its brief left out, past the %d a round's log lists: %w",
-			len(c.Omitted), MaxBridgeCalls, ErrCaptureUnbounded)
+	if n := len(c.Omitted) + len(c.LateOmitted); n > MaxBridgeCalls {
+		return fmt.Errorf("sandbox: it names %d calls its brief left out, past the %d a round's log lists: %w",
+			n, MaxBridgeCalls, ErrCaptureUnbounded)
 	}
 	if count := c.ResumedCount; count != nil {
 		if len(count.Mark) > maxCountMarkBytes {
@@ -632,13 +640,14 @@ const maxIncarnationBytes = 128
 // run's log, made before the take — holds them: its save point
 // ([SessionCapture.Through]) and, off the same read, the places an older build
 // reads it by ([SessionCapture.BridgeSeq], [SessionCapture.BridgeOpen]); and
-// omitted, the reads at or below that point its session holds only as its
-// job's brief's count ([SessionCapture.Omitted], [LaunchRecord.OmittedCalls]).
-func (c *SessionCapture) placeAt(read BridgeLog, omitted []int) {
+// the calls at or below that point its session holds only as its job's brief's
+// count, of the job's record launch ([SessionCapture.Omitted],
+// [SessionCapture.LateOmitted]).
+func (c *SessionCapture) placeAt(read BridgeLog, launch LaunchRecord) {
 	c.Through = new(read.Appends())
 	c.BridgeSeq = read.LastSeq()
 	c.BridgeOpen = openPlaces(read, c.BridgeSeq)
-	c.Omitted = slices.Clone(omitted)
+	c.Omitted, c.LateOmitted = launch.OmittedCalls(), launch.LateOmittedCalls()
 }
 
 // SavePoint is the save point c states ([SessionCapture.Through]), and whether
@@ -1254,7 +1263,9 @@ func openPlaces(calls BridgeLog, last int) []int {
 // a note a hook was served and nothing read ([RunNote.Place]); none where it
 // was cut off. A continuation tells every note past it as notes the session may
 // already show (internal/agent/runner's keptSession). An item for one job stops
-// nothing. See the package doc, "A turn's notes".
+// nothing; a telling of its call is read against the cursor as stamped, at the
+// place of the write that recorded it ([CallTelling.Place]). See the package
+// doc, "A turn's notes".
 func notesHeld(run PendingRun, cutOff bool) int {
 	if cutOff {
 		return 0
@@ -1485,7 +1496,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// call answered that it never wrote (savepoint.go).
 	var places *savePlaces
 	if calls != nil {
-		stamp.placeAt(*calls, current.Launch.OmittedCalls())
+		stamp.placeAt(*calls, current.Launch)
 	} else {
 		stamp.placeAtZero()
 		places = &savePlaces{run: current, resumeRead: taken.ResumeRead}
@@ -2569,7 +2580,7 @@ func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, cur
 		Launch: run.LaunchID, State: CaptureRefused, Reason: stampReason(why), Final: at.final,
 		Interrupted: at.cutOff, NoteCursor: notesHeld(current, at.cutOff), At: c.now().UTC()}
 	if calls != nil {
-		stamp.placeAt(*calls, current.Launch.OmittedCalls())
+		stamp.placeAt(*calls, current.Launch)
 	}
 	log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
 		"capture_seq", stamp.CaptureSeq, "detail", stamp.Reason)

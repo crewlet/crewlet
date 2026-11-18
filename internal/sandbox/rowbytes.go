@@ -52,18 +52,18 @@ const (
 	// what a later build adds.
 	RestBytes = RowBytes - ExecuteStateBytes
 
-	// ExtraRowBytes is the room, inside RestBytes, for keys a later build adds
-	// to the row, at its top ([PendingRun.Extra]) or in one of its sections
+	// ExtraRowBytes is the room, inside RestBytes, for keys a later build adds to
+	// the row, at its top ([PendingRun.Extra]) or in one of its sections
 	// ([LaunchRecord.Extra], [HeldCall.Extra], [OwedCall.Extra],
-	// [SessionCapture.Extra] in each capture section, [ConversationBase.Extra]
-	// and its session's and siblings', [RunSteer.Extra] and its notes', their
-	// hooks' serves' and the calls those answered), and that this build carries
-	// without reading: STATED HERE, so the next field a build adds is added
-	// inside it, and the build that adds it moves its own figure out of this
-	// one rather than out of a share somebody else's arithmetic needs. The
-	// turn's read of its conversation ([PendingRun.Base]) has its own place, at
-	// [ConversationBaseMaxBytes], and takes none of this room: all of it is
-	// still a later build's.
+	// [SessionCapture.Extra] in each capture section, [ConversationBase.Extra] and
+	// its session's and siblings', [RunSteer.Extra] and its notes', their hooks'
+	// serves', the calls those answered, an item's late call and the notes'
+	// tellings), and that this build carries without reading: STATED HERE, so the
+	// next field a build adds is added inside it, and the build that adds it moves
+	// its own figure out of this one rather than out of a share somebody else's
+	// arithmetic needs. The turn's read of its conversation ([PendingRun.Base])
+	// has its own place, at [ConversationBaseMaxBytes], and takes none of this
+	// room: all of it is still a later build's.
 	ExtraRowBytes = 256 << 10
 
 	// MaxAnswerBytes bounds a recorded answer as the row holds it — its seal
@@ -149,17 +149,28 @@ const (
 	MaxNoteCallBytes = 64
 
 	// MaxJobItems bounds the items for one job a run's row holds
-	// ([RunNote.For]), apart from a person's notes: the bound every write of
-	// the store's own that files one holds, since no filer files one
-	// ([PendingStore.FileNote] refuses it, [ErrNoteKind]). TEN: an item for
-	// one job is what that job alone is to be told, such as a call its
-	// predecessor still ran when it was replaced, which is ordinarily one or
-	// a few, and Claude Code runs at most ten tool calls at once by default
-	// (CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY, which nothing in this tree sets).
-	// Ten at the widest seal ([MaxNoteSealedBytes]), each served
+	// ([RunNote.For]), apart from a person's notes: the bound the store's own
+	// write that files one holds ([CoordStore.fileLateItems]), since no filer
+	// files one ([PendingStore.FileNote] refuses it, [ErrNoteKind]). TEN: an
+	// item is a late call for the job alone ([RunNote.LateCall]), such as a
+	// call its predecessor still ran when it was replaced, ordinarily one or a
+	// few, and Claude Code runs at most ten tool calls at once by default
+	// (CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY, which nothing in this tree sets);
+	// past it a call is told by every continuation instead. Ten at their
+	// widest copy ([itemCall], within [MaxBridgeCallBytes]), each served
 	// [MaxNoteServes] times and read, are under a quarter of a mebibyte of the
 	// row, which TestTheWholeRowFitsItsBudget holds.
 	MaxJobItems = 10
+
+	// MaxCallTellings bounds the late calls a run's row records its jobs'
+	// sessions took ([RunSteer.Tellings]). TWENTY, A JUDGMENT anchored to the
+	// tellings of the two newest jobs that took items, [MaxJobItems] each: a
+	// continuation reads the newest capture's lineage, whose jobs are those.
+	// An older telling dropped past it is a call told again, under words that
+	// say an earlier message may have told it, the safe direction. Twenty at
+	// their widest are about 3 KiB of the row, which
+	// TestTheWholeRowFitsItsBudget holds.
+	MaxCallTellings = 2 * MaxJobItems
 
 	// MaxAudienceHandles bounds the seats a parked question is put to
 	// ([PendingRun.AudienceHandles]). TWO HUNDRED AND FIFTY-SIX: a `team`
@@ -196,8 +207,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_309_462
-	measuredSpare       = 286_446
+	measuredOtherFields = 2_219_343
+	measuredSpare       = 376_565
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
@@ -637,6 +648,42 @@ func (l *BridgeLog) appendCall(next BridgeCall, absorbed []ElidedCall) {
 	}
 }
 
+// listedAs is call as the log lists it, found by the identity [BridgeLog.lists]
+// reads, and false where the log does not list it: the call a late-call item
+// copies ([itemCall]), which carries the number and the mark the log gave it.
+func (l BridgeLog) listedAs(call BridgeCall) (BridgeCall, bool) {
+	if call.Seq <= 0 {
+		return BridgeCall{}, false
+	}
+	kept := keptCall(call, MaxBridgeArgsBytes)
+	i := slices.IndexFunc(l.Calls, func(c BridgeCall) bool {
+		return c.Seq == kept.Seq && c.StartedAt.Equal(kept.StartedAt) && c.Name == kept.Name &&
+			c.Digest == kept.Digest
+	})
+	if i < 0 {
+		return BridgeCall{}, false
+	}
+	return l.Calls[i], true
+}
+
+// itemCall is call as a late-call item keeps it ([LateCall.Call]): what the
+// engine tells of it and finds it by — its name, its arguments and their size,
+// whether it failed and, where it did, its error and that error's size, its
+// places, its instants and its marks — held to an ordinary call's share
+// ([keptCall], [MaxBridgeArgsBytes]), whatever share the log kept it at. Never
+// a success's output, which no reader of an item shows, nor its digest, its
+// harness's id, who answered it, what it committed, a runner or a bound.
+func itemCall(call BridgeCall) BridgeCall {
+	kept := BridgeCall{Name: call.Name, Args: call.Args, ArgsBytes: call.ArgsBytes,
+		ArgsUnparsed: call.ArgsUnparsed, Failed: call.Failed, Seq: call.Seq, StartedAt: call.StartedAt,
+		At: call.At, Appended: call.Appended, Late: call.Late, Abandoned: call.Abandoned, Held: call.Held,
+		Approved: call.Approved}
+	if call.Failed {
+		kept.Output, kept.OutputBytes = call.Output, call.OutputBytes
+	}
+	return keptCall(kept, MaxBridgeArgsBytes)
+}
+
 // lists reports whether the log holds call already: the same place
 // ([BridgeCall.Seq]), the same instant the bridge handed it to the surface,
 // and the same name and identity, all as the log keeps them ([keptCall]).
@@ -651,14 +698,8 @@ func (l *BridgeLog) appendCall(next BridgeCall, absorbed []ElidedCall) {
 // which is the box's word: a harness that makes a call again may send the id
 // it sent before, and two calls under one id are two calls.
 func (l BridgeLog) lists(call BridgeCall) bool {
-	if call.Seq <= 0 {
-		return false
-	}
-	kept := keptCall(call, MaxBridgeArgsBytes)
-	return slices.ContainsFunc(l.Calls, func(c BridgeCall) bool {
-		return c.Seq == kept.Seq && c.StartedAt.Equal(kept.StartedAt) && c.Name == kept.Name &&
-			c.Digest == kept.Digest
-	})
+	_, listed := l.listedAs(call)
+	return listed
 }
 
 // keptEntry is call's entry in flight as the log keeps it

@@ -34,14 +34,14 @@ type savePlaces struct {
 // ([SessionCapture.placeAtNewest]).
 func (c *SessionCapture) placeAtZero() {
 	c.Through = new(0)
-	c.BridgeSeq, c.BridgeOpen, c.Omitted = 0, nil, nil
+	c.BridgeSeq, c.BridgeOpen, c.Omitted, c.LateOmitted = 0, nil, nil, nil
 }
 
 // placeAtNewest raises c, reserved at zero and its take's count stamped, to the
 // newest save point a capture its launch's session holds states whose newest
 // compaction is the one c's count names ([launchKept], [LaunchRecord.Continued]),
-// Omitted the launch's [LaunchRecord.OmittedCalls] at or below it; else c stays
-// at zero. The package doc's "A capture no read places" says why it is sound.
+// both omitted sets the launch's at or below it ([LaunchRecord.OmittedCalls]),
+// else leaves it at zero: the package doc's "A capture no read places" says why.
 //
 // THE POINT IS RAISED AFTER THE TAKE, never at the place: whether the session
 // compacted since a capture it holds is known only from the take's own count,
@@ -69,15 +69,23 @@ func (c *SessionCapture) placeAtNewest(from savePlaces) {
 	}
 	raised := *c
 	raised.Through = new(point)
-	raised.Omitted = nil
-	for _, place := range run.Launch.OmittedCalls() {
-		if place <= point {
-			raised.Omitted = append(raised.Omitted, place)
-		}
-	}
+	raised.Omitted = atOrBelow(run.Launch.OmittedCalls(), point)
+	raised.LateOmitted = atOrBelow(run.Launch.LateOmittedCalls(), point)
 	if raised.Bounded() == nil {
 		*c = raised
 	}
+}
+
+// atOrBelow is the places of set at or below point, nil where none is: a
+// continuation tells every call past the point anyway.
+func atOrBelow(set []int, point int) []int {
+	var kept []int
+	for _, place := range set {
+		if place <= point {
+			kept = append(kept, place)
+		}
+	}
+	return kept
 }
 
 // sameRestart reports whether seen, a newest compaction a capture or a launch

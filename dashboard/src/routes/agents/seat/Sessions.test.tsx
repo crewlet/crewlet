@@ -712,6 +712,25 @@ test("a note a person sent the run reads as a note", () => {
   expect(screen.queryByText(KIND_LABELS.brief)).toBeNull();
 });
 
+// A LATE CALL THE ENGINE HANDED THE RUN IS LABELLED ONE, never a brief or a
+// note: it is the engine's account of a call, neither a new task nor anybody's
+// word.
+test("a late call handed to the run reads as a late call", () => {
+  render(
+    <Router>
+      <TranscriptEntryView
+        entry={entry({
+          kind: "late_call",
+          text: "## A call the run that made it stopped waiting for\n\nOutcome: success",
+        })}
+      />
+    </Router>,
+  );
+  expect(screen.getByText(KIND_LABELS.late_call)).toBeTruthy();
+  expect(screen.queryByText(KIND_LABELS.brief)).toBeNull();
+  expect(screen.queryByText(KIND_LABELS.note)).toBeNull();
+});
+
 // A TOOL'S BLOCK THAT SCROLLS IS A NAMED REGION, AND ONLY THAT. Long enough to
 // scroll under its ceiling it takes a tab stop — a scroll container no keyboard
 // can reach is content no keyboard can read — named by its tool and which half
