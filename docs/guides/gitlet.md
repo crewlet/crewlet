@@ -573,7 +573,10 @@ applied](../concepts/gitlet.md#a-reviews-suggestions-applied)).
 **Discuss it.** A comment (`code_comment_on_change`) starts a thread — on a
 line of a revision, or on the change as a whole — or replies to a thread's
 first comment or to a finding: threads are one level deep. Whoever started a
-thread, an author, a maintainer or any person resolves it ([Comments and
+thread, an author, a maintainer or any person resolves it. A comment's menu
+edits it, for its author alone, and deletes it (`code_delete_comment`), for
+its author, a maintainer or any person: a deleted comment keeps its place in
+its thread with its words cleared, and every reply stays ([Comments and
 threads](../concepts/gitlet.md#comments-and-threads)).
 
 **See whether it is ready.** A live change's readiness is one judgement on
@@ -1202,7 +1205,7 @@ names — every one but `code_report_check`, `code_purge_unreachable` and
 none. Every seat reads with thirteen of the tools and comments on a change; a
 `review` seat also asks for reviews, reviews and dismisses the findings it
 raised; a seat whose `role.code.access` is `full_access` changes the
-repositories with all twenty-three others; and a seat's executor checks a repository out into its
+repositories with all twenty-four others; and a seat's executor checks a repository out into its
 box with `code_checkout` and works in that clone besides. What each may do is its grant, derived from
 the chart ([Who may read and push](../concepts/gitlet.md#who-may-read-and-push)).
 
@@ -1247,7 +1250,7 @@ from, on `api.external_url`.
 
 ### What your seats change
 
-A seat at `full_access` changes the repositories with the other twenty-three code
+A seat at `full_access` changes the repositories with the other twenty-four code
 tools, one change a call: a commit of up to 1 000 file operations to a branch
 (`code_commit_files`), a commit reverted or picked onto one (`code_revert`,
 `code_cherry_pick`), a branch created or deleted (`code_create_branch`,
@@ -1255,10 +1258,10 @@ tools, one change a call: a commit of up to 1 000 file operations to a branch
 deleted, restored or protected ([below](#scratch-repositories)), and a change
 opened, edited, closed, reviewed and discussed ([Or with a
 tool](#open-a-change-from-a-push)). A `read_only` seat — what a seat that
-sets none runs at — is offered one of the twenty-three, `code_comment_on_change`,
+sets none runs at — is offered one of the twenty-four, `code_comment_on_change`,
 and a `review` seat also `code_request_review`, `code_review_change` and
 `code_resolve_finding`, to dismiss the findings it raised: neither changes a
-repository, so neither is offered a write that would. Your assistant has the same twenty-three
+repository, so neither is offered a write that would. Your assistant has the same twenty-four
 and `code_report_check`, `code_purge_unreachable` and `code_import_repo`
 besides, each a person's alone, as you.
 

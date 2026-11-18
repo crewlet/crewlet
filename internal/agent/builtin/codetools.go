@@ -224,7 +224,8 @@ func codeAnnotations(name string) (tools.Annotations, bool) {
 	if slices.Contains(CodeWrites(), name) {
 		destructive, idempotent := mcp.No, mcp.Yes
 		switch name {
-		case CodeDeleteBranchTool, CodeDeleteRepoTool, CodeResolveFindingTool, CodePurgeUnreachableTool:
+		case CodeDeleteBranchTool, CodeDeleteRepoTool, CodeDeleteCommentTool, CodeResolveFindingTool,
+			CodePurgeUnreachableTool:
 			destructive = mcp.Yes
 		case CodeReviewChangeTool, CodeCommentOnChangeTool:
 			idempotent = mcp.No

@@ -43,6 +43,7 @@ func codeWriteCalls() []struct {
 			"summary": "Looks right."}},
 		{builtin.CodeCommentOnChangeTool, map[string]any{"change": "site!7", "body": "Done, thanks.",
 			"thread": thread, "resolve": true}},
+		{builtin.CodeDeleteCommentTool, map[string]any{"change": "site!7", "comment": thread}},
 		{builtin.CodeResolveFindingTool, map[string]any{"change": "site!7", "findings": []any{suggestedA},
 			"resolution": "resolved"}},
 		{builtin.CodeApplySuggestionsTool, applyArgs(suggestedA)},
@@ -126,7 +127,7 @@ func TestEveryCodeWriteStatesWhomItIsMadeFor(t *testing.T) {
 	}
 	// THE COUNTS, so a call that sent nothing fails too: engine writes are
 	// the tools' nine, the revert's merge and the approved ask_to_merge's.
-	want := map[string]int{"engine write": 11, "change's lifecycle": 4, "change's conversation": 7, "queue write": 1}
+	want := map[string]int{"engine write": 11, "change's lifecycle": 4, "change's conversation": 8, "queue write": 1}
 	for _, c := range []struct {
 		name string
 		// wake sets what woke the turn.
@@ -193,7 +194,7 @@ func TestEveryCodeWriteStatesWhomItIsMadeFor(t *testing.T) {
 				t.Fatalf("the person's %s answered %v %q", call.tool, err, got.Output)
 			}
 		}
-		person := map[string]int{"engine write": 10, "change's lifecycle": 4, "change's conversation": 7,
+		person := map[string]int{"engine write": 10, "change's lifecycle": 4, "change's conversation": 8,
 			"queue write": 1}
 		for what, carried := range requestsCarried(writer) {
 			if len(carried) != person[what] {

@@ -65,6 +65,7 @@ var changeToolNeeds = map[string]gitlet.Access{
 	CodeRequestReviewTool:   gitlet.AccessRead,
 	CodeReviewChangeTool:    gitlet.AccessReview,
 	CodeCommentOnChangeTool: gitlet.AccessRead,
+	CodeDeleteCommentTool:   gitlet.AccessRead,
 	CodeResolveFindingTool:  gitlet.AccessRead,
 	// An apply pushes the source branch, a full_access seat's own namespace:
 	// the push's rule, read.

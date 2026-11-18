@@ -457,19 +457,19 @@ terms the node's `/gitlet/` reads are: a node whose runtime was already running
 when Gitlet was turned on offers them once it restarts into it, and one
 that turned it off keeps them until that restart ([Turn it
 on](gitlet.md#turn-it-on)). A company that hosts no code is given none of them,
-and the operator catalogue serves the same thirty-nine, so an operator's own
+and the operator catalogue serves the same forty, so an operator's own
 assistant reads and changes the company's code exactly as a seat does — the
 person as the human seat they hold, while they hold the Gitlet permission —
 and reports their own CI's checks,
 purges a repository's unreachable objects and imports a repository from
 another host, which no seat does. The thirteen reads are reads: none counts as
 a delivery, a [worker](../concepts/turn-engine.md#workers) may be handed any of
-them, and the operator catalogue records no call to one. The twenty-six
+them, and the operator catalogue records no call to one. The twenty-seven
 writes each deliver to Gitlet, so a turn woken about work on a repository that
 answered by moving a branch, opening a change or reviewing one delivered; no
 worker is ever handed one, since it
 would write with its parent's grant; and every call to one on the operator
-catalogue is recorded as any write is. A seat is offered twenty-three of them —
+catalogue is recorded as any write is. A seat is offered twenty-four of them —
 every write but `code_report_check`, `code_purge_unreachable` and
 `code_import_repo`, each a person's alone — where
 its `role.code.access` is `full_access`. Below it, no repository's grant lets
@@ -513,7 +513,8 @@ findings it raised (`code_resolve_finding`).
 | `code_close_change` | A change closed without merging it (`reason`), or with `reopen` a closed one opened again at its branch's head — held to `expected_version` as an update is |
 | `code_request_review` | Reviewers asked of a change (`reviewers`, at most 32), or an ask withdrawn (`withdraw`), with a `note`. A seat asked must review the repository and not have written the change; a person asked must hold the Gitlet permission, and one without it is refused `not_permitted` ([Asking for review](../concepts/gitlet.md#asking-for-review)) |
 | `code_review_change` | A review of a change's revision — its latest unless `revision` names one — as ONE record: a `verdict` (`approve`, `request_changes` or `comment`), a `summary`, up to 64 `findings` (each a `path`, a `side` — `new`, its head, by default, or `old`, its base — its lines, a `severity`, a `category`, a `title`, a `body` and a `suggestion`, the lines to put in place of its own) on files the revision changes, and `carries`, the reviewer's own standing findings that still stand: a review of a later revision supersedes every other one of theirs ([Reviews](../concepts/gitlet.md#reviews)). It answers the review's id and its findings' ids in the order raised |
-| `code_comment_on_change` | A comment: a thread of its own — on a line, with an `anchor` (`path`, `line`, `side`, `revision`) — or a reply to a `thread` or a `finding`; with `thread`, `resolve` marks the thread resolved (`true`) or open again (`false`), after the reply where there is one |
+| `code_comment_on_change` | A comment: a thread of its own — on a line, with an `anchor` (`path`, `line`, `side`, `revision`) — or a reply to a `thread` or a `finding`; with `thread`, `resolve` marks the thread resolved (`true`) or open again (`false`), after the reply where there is one; with `edit` (a comment's id), `body` replaces the words of a comment of the caller's own, which reads as edited ([Comments and threads](../concepts/gitlet.md#comments-and-threads)) |
+| `code_delete_comment` | A comment deleted (`comment`, its id) by its author, a maintainer of the repository or a person: its words cleared and its place in its thread kept, every reply standing, and the excerpt of every notice that quoted it cleared. Deleting it again changes nothing; one the change does not hold is refused `comment_gone` |
 | `code_resolve_finding` | Findings answered (`findings`, at most 64): `resolved`, `wont_fix` or `disputed` — an author's, which leave a blocker standing for its raiser to judge — or `dismissed` — its raiser's, a maintainer's or a person's, which clears it — with a `note` and, for `resolved`, the `commit` that answers them ([Findings](../concepts/gitlet.md#findings)) |
 | `code_apply_suggestions` | The suggestions of the `findings` named (at most 64) — each a finding of the change that still stands, suggests lines and is on the new side — put in place of the lines they are anchored to on the change's source branch at the head the caller read (`expected_head`), as ONE commit of the caller's (`message`, a sentence naming the change by default): each where its finding was shown, all of them or none — an outdated one (`stale_version`, naming it) or two that overlap (`invalid`) apply nothing ([A review's suggestions applied](../concepts/gitlet.md#a-reviews-suggestions-applied)). Then each finding is answered `resolved` with the commit, in a second write; the applier becomes an author of the change, whose approval no longer counts |
 | `code_rebase_change` | The change rebased onto its target's tip from the head the caller read (`expected_head`): its commits the target does not hold replayed oldest first, each keeping its author and author date, and its branch moved to them by one forced push of the caller's, held to the branch's protections as a force-push is. The first commit that conflicts stops it with nothing changed (`invalid`, naming the commit and each conflicted path); a change of more than 1 000 such commits, or holding a merge commit, is refused (`invalid`) ([A change rebased](../concepts/gitlet.md#a-change-rebased)) |

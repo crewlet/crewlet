@@ -355,6 +355,7 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.CodeRequestReviewTool:   true,
 		builtin.CodeReviewChangeTool:    true,
 		builtin.CodeCommentOnChangeTool: true,
+		builtin.CodeDeleteCommentTool:   true,
 		builtin.CodeResolveFindingTool:  true,
 		// AND ITS SUGGESTIONS APPLIED, a commit onto its branch, and ITS
 		// REBASE, a forced push of it.
