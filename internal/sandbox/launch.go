@@ -270,6 +270,13 @@ type LaunchRequest struct {
 	// restore.go.
 	Session *SessionContinuation
 
+	// FreshOwn is the leads Brief opened with of its own where no Continue
+	// names them ([Continuation.Fresh]): a turn's first launch and a
+	// send-back, whose fresh brief opens with the turn's task
+	// ([LeadKindFresh]). Kept for the job whichever brief the launch hands
+	// its run ([BriefLeads.Fresh]). Nil keeps none.
+	FreshOwn []Lead
+
 	// Base is the read the turn's FIRST launch made of its conversation — the
 	// head the turn's launches continue while it has kept no session of its
 	// own, and the turns the read handed out that the turn's brief told
@@ -405,6 +412,13 @@ type LaunchRequest struct {
 	// environment for the names it shares. Nil sets none.
 	HomePaths map[string]string
 
+	// MCPGuidance is the instructions of each MCP server the run's bridge
+	// serves it, by server, as each server says them on its endpoint: what
+	// OpenCode lists to a session among its context sources, which the launch
+	// charges an OpenCode continuation in the box that holds its copy
+	// ([RunSources.Guidance]). Nil lists none.
+	MCPGuidance map[string]string
+
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
 }
@@ -535,6 +549,19 @@ type Continuation struct {
 	// falls back to where it cannot take the session up
 	// ([LaunchRecord.BriefOmitted], [LaunchRecord.FreshOmitted]).
 	Told, Fresh BriefTold
+
+	// Summarized is the prompt the copy is given told as a session that may
+	// be a summary, beside Brief, where its first request is the launch's to
+	// judge in the box (an OpenCode copy whose count has a bound), and
+	// SummarizedTold what it told of the round: handed where the box's point
+	// does not prove Brief sends the copy whole ([OpenCodePoint.SendsWhole]).
+	// "" where the runner judged the first request itself. Count and
+	// CountProvider are the copy's count off the job's record and the
+	// provider of the reply it is anchored on, which it is judged by.
+	Summarized     string
+	SummarizedTold BriefTold
+	Count          *ResumedCount
+	CountProvider  string
 }
 
 // BriefTold is what one brief a launch hands its run told of the round the
@@ -622,6 +649,15 @@ func (c *Coordinator) sealLeads(ctx context.Context, turnID string, opened Pendi
 	return out
 }
 
+// freshOwn is the leads the launch's fresh brief opened with of its own: its
+// continuation's ([Continuation.Fresh]), else the request's own.
+func (r LaunchRequest) freshOwn() []Lead {
+	if r.Continue != nil {
+		return r.Continue.Fresh.Own
+	}
+	return r.FreshOwn
+}
+
 // toldBounded reports why r carries a set of calls a brief left out longer
 // than a round's log lists ([MaxBridgeCalls]), naming the field, nil where it
 // carries none: a set past it names calls no log of the round holds, which the
@@ -634,12 +670,16 @@ func (r LaunchRequest) toldBounded() error {
 	}
 	var sets []told
 	if c := r.Continue; c != nil {
-		sets = append(sets, told{"continue.told", c.Told}, told{"continue.fresh", c.Fresh})
+		sets = append(sets, told{"continue.told", c.Told}, told{"continue.fresh", c.Fresh},
+			told{"continue.summarized", c.SummarizedTold})
 	}
 	if s := r.Session; s != nil {
 		sets = append(sets, told{"session.told", s.Told})
 		if s.Exact != nil {
 			sets = append(sets, told{"session.exact.told", s.Exact.Told})
+		}
+		if s.Summarized != nil {
+			sets = append(sets, told{"session.summarized.told", s.Summarized.Told})
 		}
 		if s.Unheld != nil {
 			sets = append(sets, told{"session.unheld.told", s.Unheld.Told})
@@ -881,6 +921,10 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// list the servers a box has.
 	var steer SteerWiring
 	var skillLoads SkillWiring
+	// THE SERVERS THE BOX IS HANDED, before what names the job joins its own,
+	// and what that joined: the run's sources tell the two apart ([runSourcesOf]).
+	own := req.MCPServers
+	var bridged map[string]MCPServer
 	// fresh is how the job's box is wired where its script starts a session of
 	// its own in place of the one this launch continues — see
 	// [Opening.Fresh] — nil where what named the job answered none.
@@ -898,7 +942,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 			fresh = &Wiring{MCPServers: withServers(req.MCPServers, f.Servers), Steer: f.Steer,
 				SkillLoads: f.SkillLoads}
 		}
-		req.MCPServers = withServers(req.MCPServers, named.Servers)
+		req.MCPServers, bridged = withServers(req.MCPServers, named.Servers), named.Servers
 		steer = named.Steer
 		skillLoads = named.SkillLoads
 	}
@@ -972,7 +1016,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// none: see restore.go. The run carries the brief its session needs, and
 	// the one a session of its own does, for its script to hand over the one
 	// its restore's outcome chose.
-	continued := c.continueSession(ctx, req, opened, box, runner, reused, begun)
+	continued := c.continueSession(ctx, req, opened, box, runner, reused, begun,
+		runSourcesOf(req, own, bridged, steer.Set()))
 	defer continued.release()
 	if req.Decided != nil {
 		req.Decided(continued.decision())
@@ -1045,6 +1090,14 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// completion marker nothing is ever going to write.
 	briefOmitted, freshOmitted := continued.omitted(req)
 	ownLeads := c.sealLeads(ctx, req.Turn.TurnID, opened, continued.told.Own)
+	// AND, BESIDE A BRIEF THAT CONTINUES A SESSION, THE FRESH BRIEF'S: its box
+	// starts a session of its own on that brief where its restore fails, and
+	// that session's task is then this job's fresh lead (protocol.go). A lead
+	// both briefs open with is taken in once, as the handed brief's.
+	var freshLeads []KeptLead
+	if continued.kind.Continues() {
+		freshLeads = c.sealLeads(ctx, req.Turn.TurnID, opened, req.freshOwn())
+	}
 	if err := store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
 		SandboxID: box.ID(), CommandID: handle.CommandID,
 		Placement: string(req.Spec.Placement), Node: c.node,
@@ -1072,7 +1125,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// of a run that ended carries that run's name, which is what lets the
 		// take refuse it.
 		Leads: BriefLeads{Run: opened.LeadsRun, Job: opened.LaunchID, Counted: opened.LeadsAppended,
-			Own: ownLeads, Told: slices.Clone(continued.told.Told),
+			Own: ownLeads, Fresh: freshLeads, Told: slices.Clone(continued.told.Told),
 			ToldUnread: slices.Clone(continued.told.ToldUnread)},
 		// AND WHAT THE SESSION IT HANDED ITS RUN CARRIED, along that
 		// session's lineage, for the read that collects the job to keep
@@ -1571,15 +1624,43 @@ func otelTokenTTL(spec Spec) time.Duration {
 // An error where the telemetry's token cannot be minted ([withTelemetry]).
 func jobEnvFor(m *Manager, req LaunchRequest, box Sandbox) (map[string]string, error) {
 	env, err := withTelemetry(m, req, box)
-	if err != nil || len(req.HomePaths) == 0 {
-		return env, err
+	if err != nil {
+		return nil, err
+	}
+	return withHomePaths(env, req, box), nil
+}
+
+// runSourcesOf is the context sources req's run hands its server
+// ([RunSources]): its instructions as its runner writes them, its skills, what
+// each server its bridge serves says it is for, and, as Unsized, every server
+// of own (the box's own, before the job was named) that bridged (what naming
+// it joined) does not take over, whose instructions only the box knows.
+func runSourcesOf(req LaunchRequest, own, bridged map[string]MCPServer, steered bool) RunSources {
+	var unsized []string
+	for name := range own {
+		if _, ok := bridged[name]; !ok {
+			unsized = append(unsized, name)
+		}
+	}
+	slices.Sort(unsized)
+	return RunSources{System: buildSystem(req), Reported: repoNames(Pushable(req.Spec.Repos)), Steered: steered,
+		Skills: req.Skills, Guidance: req.MCPGuidance, Unsized: unsized}
+}
+
+// withHomePaths is env with each of [LaunchRequest.HomePaths] joined onto box's
+// own home beneath it, a copy where it adds a path: the environment a job is
+// started with but for its telemetry ([jobEnvFor]), which is also what the
+// launch reads an OpenCode box's point under ([PointAsk.Env]).
+func withHomePaths(env map[string]string, req LaunchRequest, box Sandbox) map[string]string {
+	if len(req.HomePaths) == 0 {
+		return env
 	}
 	out := make(map[string]string, len(env)+len(req.HomePaths))
 	for name, rel := range req.HomePaths {
 		out[name] = path.Join(box.Home(), rel)
 	}
 	maps.Copy(out, env)
-	return out, nil
+	return out
 }
 
 // RunEnvFor is [withTelemetry] under a name a test can reach.

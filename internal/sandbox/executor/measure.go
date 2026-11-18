@@ -18,22 +18,22 @@ import (
 // WHAT A SESSION'S LAST REQUEST CARRIED, read off its archive as a take streams
 // it out of its box ([sandbox.TakenSession.Context]).
 //
-// A launch that continues a session sends the session's whole context again
-// before it reads a word of its brief, so its budget floor is that context and
-// the brief, never the static floor alone (internal/engine's launch floor). The
-// harness's own record of its last request is that context, cache included:
+// A launch continuing a session sends its whole context before a word of its
+// brief, so its floor is that context and the brief (internal/engine's launch
+// floor): the take's estimate of the next request (nextrequest.go), else the
+// harness's own record of its last request, cache included:
 //
 //   - Claude Code's transcript keeps every assistant message with the usage
 //     of the request that produced it, so the last one on the main thread (a
 //     subagent's messages are sidechains, or files of their own) is the
 //     input the session's last request carried: its uncached input, its cache
 //     reads and its cache writes;
-//   - OpenCode's export keeps every settled assistant message with its
-//     tokens, and the newest that measured a prompt is the input the
-//     session's last request carried, its input, cache reads and cache
-//     writes, by ONE RULE for every reader of an OpenCode session's measure
-//     ([measuredPrompt]): this one, and the read that measures the copy a
-//     job's box holds as the job ends, off its session's own message list
+//   - OpenCode's export keeps every settled assistant message with its tokens,
+//     and the newest that measured a prompt is the input the session's last
+//     request carried, its input, cache reads and cache writes, by ONE RULE for
+//     every reader of an OpenCode session's measure ([measuredPrompt]): this
+//     one ([meterExport]), and the read that measures the copy a job's box
+//     holds as the job ends, off its session's own message list
 //     ([openCodeContext]).
 //
 // READ OFF THE ARCHIVE AS IT IS KEPT, the scrub's output, so it is the session a
@@ -41,18 +41,18 @@ import (
 // beside the take, which every byte reaches and which never holds the take up:
 // what it cannot read it says nothing about (zero), and it drains the rest.
 //
-// AND WHAT CLAUDE CODE COUNTS THE SESSION AT before its next request
-// ([sandbox.TakenSession.Count], resumed.go), off the same read: a Claude Code
-// archive's main thread is walked ONCE, through the line layer ([walkThread]),
-// by two readings, the floor's figure ([contextReading]) and the count
-// ([resumedReading]). So the meter DECIDES something now (whether a relaunch
-// that continues the capture is told it as a cut-off one), and reads its
-// archive's members by the layer's rules: a member named absolutely or with a
-// `..` element, or a main thread held twice, leaves the count unread, since the
-// member it would read need not be the file a resumed session holds; a saved
-// compaction under either of its names marks it ([claudePrecompact]); and a
-// thread written by a release older than the count's floor is no count of a
-// session ([claudeCountFloor]).
+// AND WHAT THE HARNESS COUNTS THE SESSION AT and estimates its next request at
+// ([sandbox.TakenSession.Count], [sandbox.TakenSession.Next]; package doc), off
+// the same read: an OpenCode export walked ONCE ([meterExport]), a Claude Code
+// main thread ONCE through the line layer ([walkThread]) by three readings
+// ([contextReading], [resumedReading], [nextReading]). So the meter DECIDES
+// something now (whether a relaunch that continues the capture is told it as a
+// cut-off one), and reads its archive's members by the layer's rules: a member
+// named absolutely or with a `..` element, or a main thread held twice, leaves
+// the count unread, since the member it would read need not be the file a
+// resumed session holds; a saved compaction under either of its names marks it
+// ([claudePrecompact]); and a thread written by a release older than the
+// count's floor is no count of a session ([claudeCountFloor]).
 //
 // THE FLOOR'S FIGURE IS WHAT THE LAYER READS OF A REPLY ([contextReading]):
 // the input side of the last reply of the main thread's own
@@ -85,12 +85,16 @@ import (
 // the scrub took 11.7 to 12.2 s, on two dedicated cores.
 
 // contextMeter reads an archive written to it and keeps the whole input of the
-// last request its transcript records and what Claude Code counts it at.
+// last request its transcript records, what its harness counts it at, with
+// the provider of the reply an OpenCode count is anchored on, and what it
+// estimates its next request at.
 type contextMeter struct {
-	pw     *io.PipeWriter
-	done   chan struct{}
-	tokens int64
-	counts *sandbox.ResumedCount
+	pw       *io.PipeWriter
+	done     chan struct{}
+	tokens   int64
+	counts   *sandbox.ResumedCount
+	provider string
+	estimate sandbox.NextRequest
 }
 
 // newContextMeter starts a meter for an archive of layout holding session,
@@ -107,20 +111,24 @@ func newContextMeter(ctx context.Context, layout archiveLayout, session, release
 	go func() {
 		defer close(m.done)
 		var (
-			n     int64
-			count *sandbox.ResumedCount
-			err   error
+			n        int64
+			count    *sandbox.ResumedCount
+			provider string
+			next     sandbox.NextRequest
+			err      error
 		)
 		switch layout {
 		case archiveTar:
-			n, count, err = meterArchive(ctx, pr, session, release, large)
+			n, count, next, err = meterArchive(ctx, pr, session, release, large)
 		case archiveDocument:
-			n, err = lastExportInput(pr)
+			var read exportReading
+			read, err = meterExport(ctx, pr, release)
+			n, count, provider, next = read.figure, read.count, read.provider, read.next
 		}
 		if err == nil {
 			m.tokens = n
 		}
-		m.counts = count
+		m.counts, m.provider, m.estimate = count, provider, next
 		// DRAINED WHATEVER IT FOUND, so the take that feeds it never waits on
 		// a meter that stopped reading; the pipe ends when the take finishes.
 		_, _ = io.Copy(io.Discard, pr)
@@ -145,32 +153,53 @@ func (m *contextMeter) context() int64 {
 }
 
 // count is what the meter counted the session at, once the archive has ended:
-// nil for an archive of another harness's layout.
+// Claude Code's count of a thread, OpenCode's of an export.
 func (m *contextMeter) count() *sandbox.ResumedCount {
 	<-m.done
 	return m.counts
 }
 
+// countProvider is the provider of the reply an OpenCode count is anchored
+// on, once the archive has ended: "" for a Claude Code count, and where no
+// reply anchored one.
+func (m *contextMeter) countProvider() string {
+	<-m.done
+	return m.provider
+}
+
+// next is what the meter estimated the session's next request at, once the
+// archive has ended: zero for none.
+func (m *contextMeter) next() sandbox.NextRequest {
+	<-m.done
+	return m.estimate
+}
+
 // meterArchive is the input of the last request a Claude Code archive's main
-// thread of session records, zero where it records none, and what Claude Code
-// counts the session at, read off ONE walk of that thread ([walkThread]) by
-// both readings, under large. The count is marked where the archive's members
-// say so (the file comment) and unread where the archive does not read to its
-// end; err is the archive's own, where its gzip or tar framing failed.
+// thread of session records, zero where it records none, what Claude Code
+// counts the session at, and what it estimates the next request at, read off
+// ONE walk of that thread ([walkThread]) by the three readings, under large.
+// The count is marked where the archive's members say so (the file comment)
+// and unread where the archive does not read to its end, and the estimate is
+// none where the count is unread or of a release its rules were not read in;
+// err is the archive's own, where its gzip or tar framing failed. A SAVED
+// COMPACTION LEAVES THE ESTIMATE STANDING: it marks the count, since the
+// harness may swap it in, but what it swaps in is smaller than the session it
+// replaces, so the estimate of the session whole is the floor's safe side.
 func meterArchive(ctx context.Context, r io.Reader, session, release string,
-	large *passBudget) (int64, *sandbox.ResumedCount, error) {
+	large *passBudget) (int64, *sandbox.ResumedCount, sandbox.NextRequest, error) {
 
 	var (
 		callers countMarks
 		count   resumedReading
+		next    nextReading
 		figure  contextReading
 		walked  bool
 	)
 	if release == "" || !releaseAtLeast(release, claudeCountFloor) {
 		callers = callers.with(sandbox.CountRelease)
 	}
-	unread := func(err error) (int64, *sandbox.ResumedCount, error) {
-		return 0, count.count(callers.with(sandbox.CountUnread)), err
+	unread := func(err error) (int64, *sandbox.ResumedCount, sandbox.NextRequest, error) {
+		return 0, count.count(callers.with(sandbox.CountUnread)), sandbox.NextRequest{}, err
 	}
 	zr, err := gzip.NewReader(r)
 	if err != nil {
@@ -214,12 +243,16 @@ func meterArchive(ctx context.Context, r io.Reader, session, release string,
 			continue
 		}
 		walked = true
-		walkThread(ctx, tr, threadPlainMax, large, &figure, &count)
+		walkThread(ctx, tr, threadPlainMax, large, &figure, &count, &next)
 	}
 	if !walked {
 		callers = callers.with(sandbox.CountUnread)
 	}
-	return figure.context(), count.count(callers), nil
+	estimate := next.next()
+	if blind := countMarks(0).with(sandbox.CountUnread).with(sandbox.CountRelease); callers&blind != 0 {
+		estimate = sandbox.NextRequest{}
+	}
+	return figure.context(), count.count(callers), estimate, nil
 }
 
 // contextReading is the floor's figure as a reading of the walk
@@ -262,98 +295,6 @@ func (c *contextReading) context() int64 {
 		return 0
 	}
 	return c.last
-}
-
-// lastExportInput is the input of the last request an OpenCode export records:
-// its last assistant message that measured a prompt.
-func lastExportInput(r io.Reader) (int64, error) {
-	zr, err := gzip.NewReader(r)
-	if err != nil {
-		return 0, err
-	}
-	dec := json.NewDecoder(zr)
-	if err = expectDelim(dec, '{'); err != nil {
-		return 0, err
-	}
-	var last int64
-	for dec.More() {
-		key, err := dec.Token()
-		if err != nil {
-			return 0, err
-		}
-		if key != "messages" {
-			if err = skipValue(dec); err != nil {
-				return 0, err
-			}
-			continue
-		}
-		if err = expectDelim(dec, '['); err != nil {
-			return 0, err
-		}
-		for dec.More() {
-			n, measured, msgErr := exportMessageInput(dec)
-			if msgErr != nil {
-				return 0, msgErr
-			}
-			if measured {
-				last = n
-			}
-		}
-		if err = expectDelim(dec, ']'); err != nil {
-			return 0, err
-		}
-	}
-	return last, nil
-}
-
-// exportMessageInput reads one message of an export and answers the input its
-// request measured, and whether it measured one by [measuredPrompt]'s rule.
-//
-// THE MESSAGE IS THE ONE EVERY READER OF AN EXPORT TAKES ([openCodeMessage]),
-// so this and a session's transcript never disagree about what a message is,
-// its kind or its failure. A KEY AT A TIME, the export streamed: each of the
-// small values the measure reads, its type, its time, its tokens and its error,
-// is taken raw by its exact name and decoded on its own, by its keys exactly as
-// written ([openCodeMeasuredWire]), and every other field is passed over a
-// token at a time, so a message's content is never held whole. Decoded by
-// encoding/json into the message's fields, the tokens were read with a key that
-// differs from one they declare only in case taken for that one, the last of
-// the two written winning.
-func exportMessageInput(dec *json.Decoder) (int64, bool, error) {
-	if err := expectDelim(dec, '{'); err != nil {
-		return 0, false, err
-	}
-	var w openCodeMeasuredWire
-	for dec.More() {
-		key, err := dec.Token()
-		if err != nil {
-			return 0, false, err
-		}
-		switch key {
-		case "type":
-			err = dec.Decode(&w.Type)
-		case "time":
-			err = dec.Decode(&w.Time)
-		case "tokens":
-			err = dec.Decode(&w.Tokens)
-		case "error":
-			err = dec.Decode(&w.Error)
-		default:
-			err = skipValue(dec)
-		}
-		if err != nil {
-			return 0, false, err
-		}
-	}
-	if err := expectDelim(dec, '}'); err != nil {
-		return 0, false, err
-	}
-	m, _, err := w.message()
-	if err != nil {
-		return 0, false, err
-	}
-	n, measured := measuredPrompt(m)
-	return n, measured, nil
 }
 
 // openCodeMeasuredWire is the part of one message of an OpenCode session the
@@ -418,7 +359,7 @@ type openCodeSettled struct {
 
 // measuredPrompt is the input one message of an OpenCode session says its
 // step's request carried, and whether it measured one: THE ONE RULE for every
-// reader of an OpenCode session's measure, an export's ([lastExportInput]) and
+// reader of an OpenCode session's measure, an export's ([meterExport]) and
 // the session's own message list's as a job ends ([openCodeContext]). A message
 // measured a prompt where it is an assistant's step, settled (its time's
 // `completed` set: an export holds settled messages alone, and the list hands
@@ -431,26 +372,4 @@ func measuredPrompt(m openCodeMessage) (int64, bool) {
 	}
 	n := max(m.Tokens.Input, 0) + max(m.Tokens.Cache.Read, 0) + max(m.Tokens.Cache.Write, 0)
 	return n, n > 0
-}
-
-// skipValue passes over the next value whole, a token at a time.
-func skipValue(dec *json.Decoder) error {
-	depth := 0
-	for {
-		t, err := dec.Token()
-		if err != nil {
-			return err
-		}
-		if d, ok := t.(json.Delim); ok {
-			switch d {
-			case '{', '[':
-				depth++
-			case '}', ']':
-				depth--
-			}
-		}
-		if depth == 0 {
-			return nil
-		}
-	}
 }

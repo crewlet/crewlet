@@ -517,7 +517,7 @@ func TestTheMetersFloorFigureIsWhatTheLayerReadsOfAReply(t *testing.T) {
 	t.Parallel()
 	meter := func(t *testing.T, body string) (int64, *sandbox.ResumedCount) {
 		t.Helper()
-		figure, count, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, body)), ctSession,
+		figure, count, _, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, body)), ctSession,
 			"2.1.310", testPass(t))
 		if err != nil {
 			t.Fatalf("meterArchive: %v", err)
@@ -597,7 +597,7 @@ func TestAPrecompactMemberMarksTheCapturesCount(t *testing.T) {
 	for _, name := range saved {
 		archive := cntArchive(t, cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1, 0, 0, 1)),
 			tarMember{h: tar.Header{Name: name, Mode: 0o600, Typeflag: tar.TypeReg}, body: "{}"})
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310", testPass(t))
+		_, count, _, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310", testPass(t))
 		if err != nil {
 			t.Fatalf("meterArchive: %v", err)
 		}
@@ -625,7 +625,7 @@ func TestAnArchiveTheLayerGivesNoReadingLeavesNoCount(t *testing.T) {
 	} {
 		archive := cntArchive(t, body, tarMember{h: tar.Header{Name: extra, Mode: 0o600, Typeflag: tar.TypeReg},
 			body: body})
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310", testPass(t))
+		_, count, _, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310", testPass(t))
 		if err != nil {
 			t.Fatalf("%s: meterArchive: %v", name, err)
 		}
@@ -646,7 +646,7 @@ func TestAWriterBelowTheCountFloorLeavesNoCount(t *testing.T) {
 	archive := cntArchive(t, cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1, 0, 0, 1),
 		cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`), cntAnchor("u4", "u5", "m2", 1, 0, 0, 1)))
 	for _, release := range []string{"2.1.300", ""} {
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, release, testPass(t))
+		_, count, _, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, release, testPass(t))
 		if err != nil {
 			t.Fatalf("meterArchive: %v", err)
 		}
@@ -803,20 +803,20 @@ func TestAThreadWithNoChainedLineLeavesNoCount(t *testing.T) {
 	}
 }
 
-// ONLY CLAUDE CODE READS A MAIN THREAD: another harness's runner answers no
-// reading.
+// EACH RUNNER READS ITS OWN HARNESS'S SESSION: a Claude Code runner its main
+// thread, and an OpenCode runner the export its job's script left, never the
+// other's file, so a box holding a Claude Code thread and no export is no
+// count of an OpenCode session.
 //
-// Mutation: read every harness's thread, and this goes red.
-func TestOnlyClaudeCodeReadsAMainThread(t *testing.T) {
+// Mutation: read a Claude Code thread for an OpenCode runner, and this goes
+// red.
+func TestEachRunnerReadsItsOwnHarnesssSession(t *testing.T) {
 	t.Parallel()
 	box, _ := cntBox(cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 0, 0, 50)), nil)
-	ask := sandbox.MainThreadAsk{Session: ctSession, Release: "2.1.322", Count: true}
-	if got := New(OpenCode{}).ReadMainThread(t.Context(), box, ask); got.Count != nil {
-		t.Errorf("an OpenCode runner counts %+v, want no reading", got.Count)
-	}
-	if got := New(ClaudeCode{}).ReadMainThread(t.Context(), box, ask); got.Count == nil {
-		t.Error("a Claude Code runner reads no count")
-	}
+	ask := sandbox.MainThreadAsk{Session: ctSession, Release: "2.3.0", Count: true}
+	wantMark(t, New(OpenCode{}).ReadMainThread(t.Context(), box, ask).Count, sandbox.CountUnread)
+	ask.Release = "2.1.322"
+	wantBound(t, New(ClaudeCode{}).ReadMainThread(t.Context(), box, ask).Count, 150)
 }
 
 // THE REPORTED WINDOW IS THE LEAST ITS RUN REPORTED, over every model of every
@@ -1003,7 +1003,7 @@ func TestACountMarkedForWhatItsBytesCannotBoundNamesItsRestart(t *testing.T) {
 		`"role":"assistant","context_management":{"applied_edits":[{"type":"clear_tool_uses_20250919",`+
 			`"cleared_tool_uses":3,"cleared_input_tokens":9000}]},`, 1)
 	saved, _ := claudePrecompact(ctSession)
-	_, precompacted, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(restarted...),
+	_, precompacted, _, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(restarted...),
 		tarMember{h: tar.Header{Name: saved[0], Mode: 0o600, Typeflag: tar.TypeReg}, body: "{}"})), ctSession,
 		"2.1.322", testPass(t))
 	if err != nil {
@@ -1059,7 +1059,7 @@ func TestAMarkedCaptureStillSaysWhetherAJobRestartedItsSession(t *testing.T) {
 	// the collection read's count of the box's copy.
 	captured := func(lines ...string) *sandbox.ResumedCount {
 		t.Helper()
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(lines...))), ctSession,
+		_, count, _, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(lines...))), ctSession,
 			"2.1.322", testPass(t))
 		if err != nil || count == nil || count.Mark != sandbox.CountMedia {
 			t.Fatalf("the capture counts %+v (%v), want the mark media", count, err)
@@ -1156,7 +1156,7 @@ func BenchmarkTheMeterAtItsBounds(b *testing.B) {
 	b.Logf("an archive of %d bytes, %d of plaintext", len(archive), len(body))
 	b.Run("meter", func(b *testing.B) {
 		for b.Loop() {
-			if _, count, err := meterArchive(b.Context(), bytes.NewReader(archive), ctSession,
+			if _, count, _, err := meterArchive(b.Context(), bytes.NewReader(archive), ctSession,
 				"2.1.322", testPass(b)); err != nil || count == nil {
 				b.Fatalf("meterArchive: %v", err)
 			}

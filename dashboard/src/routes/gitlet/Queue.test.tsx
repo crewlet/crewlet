@@ -581,7 +581,14 @@ test.each([
   expect(acted).toEqual([]);
 });
 
-// Mutation: draw 0 for a refusal.
+/** Each counts question asked, as its parts and its repository. */
+const countsAsked = (urls: URL[]) =>
+  asked(urls, "/query/code_counts").map(
+    (u) =>
+      `${u.searchParams.get("parts")}${u.searchParams.has("repo") ? ` repo=${u.searchParams.get("repo")}` : ""}`,
+  );
+
+// Mutation: draw 0 for a refusal, or ask the company's queue beside the section counts.
 test("the summary counts what is queued and what was taken out, and a refused half is not drawn", async () => {
   const urls = story();
   mountCode("#/gitlet/queue", <Queue />);
@@ -589,9 +596,7 @@ test("the summary counts what is queued and what was taken out, and a refused ha
   await screen.findByText(WEB44.title);
   await afterMicrotasks();
   expect(said()).toBe("2 changes queued · 1 taken out in the last day");
-  const counts = asked(urls, "/query/code_counts")[0]!;
-  expect(counts.searchParams.get("parts")).toBe("queue");
-  expect(counts.searchParams.get("repo")).toBeNull();
+  expect(countsAsked(urls)).toEqual(["changes,repos,queue"]);
   cleanup();
   const named = story({
     "/query/code_counts": () =>
@@ -601,7 +606,7 @@ test("the summary counts what is queued and what was taken out, and a refused ha
   await screen.findByText(WEB44.title);
   await afterMicrotasks();
   expect(said()).toBe("1 taken out in the last day");
-  expect(asked(named, "/query/code_counts")[0]!.searchParams.get("repo")).toBe("web");
+  expect(countsAsked(named).sort()).toEqual(["changes,repos,queue", "queue repo=web"]);
 });
 
 // Mutation: offer an item the engine does not serve, or copy the hash alone.

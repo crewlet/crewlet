@@ -27,7 +27,8 @@ import (
 // threadReading is one reader's account of a Claude Code thread, composed into
 // the one walk ([walkThread]) and never reading the thread itself, so a thread
 // is read once however many readings ask: the count ([resumedReading]), the
-// meter's floor figure ([contextReading]), and any reading added later.
+// estimate of the next request ([nextReading]), the meter's last request's
+// input ([contextReading]), and any reading added later.
 type threadReading interface {
 	// line is the thread's next whole line that is one record ([threadLine]).
 	line(l threadLine)
@@ -298,7 +299,8 @@ func (b *passBudget) gate(ctx context.Context) pieceGate {
 }
 
 // mainThreadHarness is a harness that reads the main thread of the session a
-// job's box ran ([Runner.ReadMainThread]): Claude Code's.
+// job's box ran ([Runner.ReadMainThread]): Claude Code's, and OpenCode's, whose
+// session is one thread its export holds.
 type mainThreadHarness interface {
 	readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
 		ask sandbox.MainThreadAsk) sandbox.MainThreadReading
@@ -306,7 +308,7 @@ type mainThreadHarness interface {
 
 // ReadMainThread reads the main thread of the session a job's box ran, once
 // for every reading ask asks of it, through the runner's harness: zero for a
-// harness that reads none, as OpenCode reads none.
+// harness that reads none.
 func (r *Runner) ReadMainThread(ctx context.Context, box sandbox.Sandbox,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
@@ -317,13 +319,17 @@ func (r *Runner) ReadMainThread(ctx context.Context, box sandbox.Sandbox,
 	return reads.readMainThread(ctx, box, PathsFor(box), ask)
 }
 
-var _ mainThreadHarness = ClaudeCode{}
+var (
+	_ mainThreadHarness = ClaudeCode{}
+	_ mainThreadHarness = OpenCode{}
+)
 
 // readMainThread is Claude Code's read of the main thread of ask's session in
 // box, in the order the file comment states. The release and the saved
 // compaction mark the count alone: takes asked are read in the walk all the
 // same, the chain first on each line, unless no walk could decide one
-// ([unreadTakes]).
+// ([unreadTakes]). A count marked before the walk leaves no estimate of the
+// next request, so the floor reads the copy's last request's input.
 func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
@@ -332,10 +338,12 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 	if why := unreadTakes(ask); why != "" {
 		reading.Receipts, takes = sandbox.HookReceipts{Why: why}, nil
 	}
-	if !ask.Count && len(takes) == 0 {
+	if !ask.Count && !ask.Next && len(takes) == 0 {
 		return reading
 	}
+	early := false
 	marked := func(mark sandbox.CountMark) {
+		early = true
 		if ask.Count && reading.Count == nil {
 			reading.Count = &sandbox.ResumedCount{Mark: mark}
 		}
@@ -356,7 +364,7 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 	}
 	saved, _ := claudePrecompact(ask.Session)
 	for _, name := range saved {
-		if !ask.Count || reading.Count != nil {
+		if early {
 			break
 		}
 		// Its size, never its body: an empty file is one the harness cannot
@@ -369,8 +377,8 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 			marked(sandbox.CountPrecompact)
 		}
 	}
-	counts := ask.Count && reading.Count == nil
-	if !counts && len(takes) == 0 {
+	counts, nexts := ask.Count && !early, ask.Next && !early
+	if !counts && !nexts && len(takes) == 0 {
 		return reading
 	}
 	body, err := box.OpenFile(ctx, paths.ClaudeConfigDir()+"/"+thread)
@@ -383,6 +391,7 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 	var (
 		readings []threadReading
 		count    resumedReading
+		next     nextReading
 		hooks    *hookReading
 	)
 	if len(takes) > 0 {
@@ -393,6 +402,9 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 	if counts {
 		readings = append(readings, &count)
 	}
+	if nexts {
+		readings = append(readings, &next)
+	}
 	if hooks != nil {
 		readings = append(readings, hooks)
 	}
@@ -400,8 +412,53 @@ func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths
 	if counts {
 		reading.Count = count.count(0)
 	}
+	if nexts {
+		reading.Next = next.next()
+	}
 	if hooks != nil {
 		reading.Receipts = hooks.receipts(ctx, ask)
+	}
+	return reading
+}
+
+// readMainThread is OpenCode's read of ask's session in box: the export the
+// job's script left as the job ended ([openCodeCapture], [Paths.SessionCapture]),
+// which is the copy the box holds once its harness ended its own run (the
+// collection asks nothing of a job whose harness did not), walked ONCE for the
+// count and the estimate ([meterExport]). In this order, cheapest first: a
+// release outside the set the count's rules were read in is
+// [sandbox.CountRelease] with no read ([openCodeCountRead]); an export the
+// script left none of, or one that does not open, is [sandbox.CountUnread];
+// and only then is the export streamed (through envd on e2b) and walked. A
+// count marked before the walk leaves the estimate none, as a Claude Code
+// thread's does.
+func (OpenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
+	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
+
+	if !ask.Count && !ask.Next {
+		return sandbox.MainThreadReading{}
+	}
+	marked := func(mark sandbox.CountMark) sandbox.MainThreadReading {
+		if !ask.Count {
+			return sandbox.MainThreadReading{}
+		}
+		return sandbox.MainThreadReading{Count: &sandbox.ResumedCount{Mark: mark}}
+	}
+	if !openCodeCountRead(ask.Release) {
+		return marked(sandbox.CountRelease)
+	}
+	body, err := box.OpenFile(ctx, paths.SessionCapture())
+	if err != nil {
+		return marked(sandbox.CountUnread)
+	}
+	defer func() { _ = body.Close() }()
+	read, _ := meterExport(ctx, body, ask.Release)
+	var reading sandbox.MainThreadReading
+	if ask.Count {
+		reading.Count, reading.Provider = read.count, read.provider
+	}
+	if ask.Next {
+		reading.Next = read.next
 	}
 	return reading
 }

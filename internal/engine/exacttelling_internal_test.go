@@ -442,7 +442,7 @@ func TestABriefToldByAReadingTheFloorCannotCarryIsDroppedAlone(t *testing.T) {
 			if !tc.offered && len(dropped) == 1 {
 				without := *session
 				without.Exact = nil
-				own := fmt.Sprintf("needs %d tokens", keptFloor(staticFloor(l.company), &without).tokens())
+				own := fmt.Sprintf("needs %d tokens", keptFloor(staticFloor(l.company), &without, "").tokens())
 				if detail, _ := dropped[0]["detail"].(string); !strings.Contains(detail, own) {
 					t.Errorf("the line's detail is %q, want the session's own briefs' floor (%s)", detail, own)
 				}

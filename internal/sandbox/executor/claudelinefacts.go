@@ -68,6 +68,12 @@ type messageFacts struct {
 	// record.
 	content    threadMessage
 	contentErr error
+	// estimate is what Claude Code estimates the record at, and estimateErr
+	// why its own estimate throws on the content ([threadLine.Estimate]),
+	// read only of a content its rule reads, so neither is filled where
+	// contentErr is.
+	estimate    threadEstimate
+	estimateErr error
 }
 
 // object is the error every accessor of the message answers before reading a
@@ -122,6 +128,11 @@ type attachmentFacts struct {
 	// entriesKept is whether `entries` is a list whose every element is an
 	// entry a withheld memory keeps ([withheldKept]).
 	entriesKept bool
+	// estimate is what Claude Code estimates the record at, by what the
+	// record stores as its rendering or, of a PDF read, its pages, and
+	// estimated whether that reads ([threadLine.AttachmentEstimate]).
+	estimate  threadEstimate
+	estimated bool
 }
 
 // compactFacts is a compaction boundary's `compactMetadata`

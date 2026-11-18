@@ -614,13 +614,14 @@ func worstRow(t *testing.T) PendingRun {
 	capture := &SessionCapture{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64, Launch: uuid.NewString(),
 		State: CaptureUnresolved, Reason: markup(1 << 10), Through: new(math.MaxInt), Omitted: omitted,
 		BridgeSeq: math.MaxInt, BridgeOpen: make([]int, maxOpenPlaces), NoteCursor: math.MaxInt,
-		ContextTokens: math.MaxInt64, At: worstAt, Harness: plain(32), HarnessVersion: plain(64),
+		ContextTokens: math.MaxInt64, NextRequestTokens: math.MaxInt64, NextRequestOlderTokens: math.MaxInt64,
+		At: worstAt, Harness: plain(32), HarnessVersion: plain(64),
 		SessionID: plain(128), ArchiveFormat: 99, RunAfter: plain(MaxMessageIDBytes),
 		Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64, ContentKey: plain(256),
 		Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
 		SeatBudget: math.MaxInt64, Minted: worstAt, Taker: plain(maxIncarnationBytes), TakerEpoch: math.MaxInt64,
 		StandbyTaker: plain(maxIncarnationBytes), StandbyTakerEpoch: math.MaxInt64, StandbyAt: worstAt,
-		ResumedCount: worstCount()}
+		ResumedCount: worstCount(), CountProvider: plain(MaxCountProviderBytes)}
 	for i := range capture.BridgeOpen {
 		capture.BridgeOpen[i] = math.MaxInt
 	}
@@ -775,6 +776,15 @@ func worstRow(t *testing.T) PendingRun {
 		// most: the box's thread writes it, and nothing holds it to a uuid's
 		// shape.
 		ResumedCount: worstCount(), BasisRestart: new(markup(RestartIDMaxBytes)),
+		// AND THE PROVIDER BESIDE IT at its bound, every byte one a record
+		// writes as itself ([ValidCountProvider]).
+		CountProvider: plain(MaxCountProviderBytes),
+		// AND THE RELEASE THAT WROTE THE COPY at the most a release is
+		// ([ValidRelease]).
+		CountRelease: plain(executorkeep.HarnessVersionMaxBytes),
+		// AND WHAT THE HARNESS ESTIMATES ITS NEXT REQUEST AT, nineteen digits
+		// at each rate ([LaunchRecord.NextRequestTokens]).
+		NextRequestTokens: math.MaxInt64, NextRequestOlderTokens: math.MaxInt64,
 		Bridged: EngineSpend{Aux: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,
 			CacheWrite: math.MaxInt}, Workers: math.MaxInt, WorkerInput: math.MaxInt, WorkerOutput: math.MaxInt},
 		Condensed: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,

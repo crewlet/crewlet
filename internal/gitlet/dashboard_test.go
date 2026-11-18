@@ -301,6 +301,16 @@ func TestTheDashboardKnowsEverySortOfAListingOfChanges(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD NARROWS A LISTING OF CHANGES BY READINESS IN THE ENGINE'S WORDS (`READINESS_BUCKETS`).
+// Mutation: drop a bucket from either side, or reorder the dashboard's, and this fails.
+func TestTheDashboardKnowsEveryReadinessBucket(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "READINESS_BUCKETS"), spelledOut(gitlet.ReadinessBuckets())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's READINESS_BUCKETS is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
 // THE DASHBOARD KNOWS EVERY PRECONDITION A CHANGE'S READINESS JUDGES, in the
 // engine's order, and every state one stands in: a change row's meter and
 // its readiness word each by `PRECONDITION_KINDS` and `PRECONDITION_STATES`

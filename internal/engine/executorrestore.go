@@ -129,14 +129,14 @@ func storedSession(row executorkeep.TurnRow) executordomain.Session {
 // ([runner.SessionProber]): on the FIRST launch, the head its dispatch read
 // ([conversationRead.basis]); on a relaunch, as
 // [sandbox.Coordinator.ContinuedCapture] decides for the seat's chain, or why
-// none (logged, but for a conversation's first turn), and either way what the
-// job before's copy last carried. EACH SESSION'S CONTEXT IS ITS OWN: a kept
-// capture's own measure ([runner.SessionBasis.ContextTokens]) for the floor in
-// any box, its job's newest capture's for the copy in place
-// ([runner.SessionBasis.CopyContext]), since one figure would hold a session to
-// what another carried. ANY MEMBER OF THE CHAIN, never one picked here: the
-// launch picks once as it launches, and hands the briefs on only where its
-// member runs the session's harness ([agentLauncher.continuedFloor]).
+// none (logged, but for a conversation's first turn). EACH SESSION'S CONTEXT
+// IS ITS OWN: a kept capture's own measure and next-request estimate
+// ([runner.SessionBasis.ContextTokens], NextRequest) for the floor in any box,
+// its job's newest capture's, either way, for its copy in place (CopyContext,
+// CopyNextRequest), since one figure would hold a session to what another
+// carried. ANY MEMBER OF THE CHAIN, never one picked here: the launch picks
+// once as it launches, and hands the briefs on only where its member runs the
+// session's harness ([agentLauncher.continuedFloor]).
 func (l *agentLauncher) ProbeSession(ctx context.Context) runner.SessionBasis {
 	basis := l.probeSession(ctx)
 	// AND THE WINDOW EVERY PATH'S FIRST REQUEST IS JUDGED UNDER, on every basis
@@ -178,14 +178,15 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		// A TURN THAT HAS KEPT NOTHING, relaunched: the base its first launch
 		// froze, which its row still holds.
 		basis := baseBasis(*base, continued.CopyContext)
-		basis.KeptTurn = continued.KeptTurn
+		basis.KeptTurn, basis.CopyNextRequest = continued.KeptTurn, continued.CopyNextRequest
 		return basis
 	}
 	if why != "" {
 		// THE SESSION THE TURN KEEPS, or else the base it froze, where the
 		// relaunch continues neither: a run that starts a session of its own
 		// beside it is told it may read it.
-		return runner.SessionBasis{Why: why, CopyContext: continued.CopyContext, KeptTurn: continued.KeptTurn}
+		return runner.SessionBasis{Why: why, CopyContext: continued.CopyContext,
+			CopyNextRequest: continued.CopyNextRequest, KeptTurn: continued.KeptTurn}
 	}
 	captured := continued.Capture
 	// ITS SAVE POINT, which every capture a relaunch continues states: one
@@ -207,14 +208,16 @@ func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
 		// the run continuing it is told the session ends where it was saved,
 		// not where its job stopped.
 		WentOn: !captured.Final, CapturedAt: captured.At,
-		// WHAT THE CAPTURE ITSELF CARRIED, the kept path's floor, and what
-		// the job's copy in its box carried, the in-place path's.
-		ContextTokens: captured.ContextTokens, CopyContext: continued.CopyContext,
+		// WHAT THE CAPTURE ITSELF CARRIED AND ITS HARNESS PUT ITS NEXT REQUEST
+		// AT, the kept path's floor, and the same of the job's copy in its
+		// box, the in-place path's.
+		ContextTokens: captured.ContextTokens, NextRequest: captured.NextRequest(),
+		CopyContext: continued.CopyContext, CopyNextRequest: continued.CopyNextRequest,
 		KeptTurn: continued.KeptTurn,
-		// AND WHAT CLAUDE CODE COUNTS THE CAPTURE'S SESSION AT, as its take
-		// read its archive whole: what the kept path's first request is judged
-		// by.
-		Count: captured.ResumedCount,
+		// AND WHAT ITS HARNESS COUNTS THE CAPTURE'S SESSION AT, as its take
+		// read its archive whole, with the provider an OpenCode count's reply
+		// was answered by: what the kept path's first request is judged by.
+		Count: captured.ResumedCount, CountProvider: captured.CountProvider,
 		// AND THE READS AT OR BELOW IT THE SESSION HOLDS ONLY AS ITS JOB'S
 		// BRIEF'S COUNT, which the brief continuing it tells.
 		Owed: slices.Clone(captured.Omitted),
@@ -585,6 +588,10 @@ func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation 
 	if x := s.Exact; x != nil {
 		out.Exact = &sandbox.ExactTelling{Resumer: x.Resumer, Brief: x.Brief, Replaced: x.Replaced, Told: x.Told}
 	}
+	if x := s.Summarized; x != nil {
+		out.Summarized = &sandbox.SummarizedTelling{Brief: x.Brief, Replaced: x.Replaced, Told: x.Told}
+		out.Count, out.CountProvider = s.Count, s.CountProvider
+	}
 	if u := s.Unheld; u != nil {
 		out.Unheld = &sandbox.UnheldTelling{Brief: u.Brief, Replaced: u.Replaced, Told: u.Told}
 	}
@@ -600,5 +607,5 @@ func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation 
 func sessionDecision(d sandbox.LaunchDecision) runner.SessionDecision {
 	return runner.SessionDecision{Continues: d.Brief.Continues(), Kept: d.Kept, Base: d.Base,
 		NewBox: d.Brief == sandbox.BriefContinuedNewBox || d.Brief == sandbox.BriefContinuedConversation,
-		Exact:  d.Exact, Unheld: d.Unheld}
+		Exact:  d.Exact, Summarized: d.Summarized, Unheld: d.Unheld}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -978,19 +979,20 @@ func TestAnInPlaceContinuationIsHeldToTheLargerOfItsCopysAndItsCapturesMeasure(t
 }
 
 // AN IN-PLACE COPY BESIDE AN OLDER KEPT CAPTURE IS HELD TO THE COPY'S MEASURE:
-// the kept continuation to its capture's own (SessionBasis.ContextTokens), the
-// job's copy to its newest capture's (SessionBasis.CopyContext) or its
-// record's where larger. Where the capture continued is older than the newest,
-// the two differ, and the copy held to the older's would be held to less than
-// it sends.
+// the kept continuation to its capture's own (SessionBasis.ContextTokens and
+// NextRequest), the job's copy to its newest capture's (CopyContext, or its
+// record's where larger, and CopyNextRequest, or its record's where it holds
+// one). Where the capture continued is older than the newest, the two differ,
+// and the copy held to the older's would be held to less than it sends.
 //
-// Mutation: hand the in-place launch basis.ContextTokens, and the copy is held
-// to 40000 while it sends 150000.
+// Mutation: hand the in-place launch basis.ContextTokens or basis.NextRequest,
+// and the copy is held to 40000 or 45000 while it sends 150000 or 155000.
 func TestAnInPlaceCopyBesideAnOlderKeptCaptureIsHeldToTheCopysMeasure(t *testing.T) {
 	t.Parallel()
-	for name, tc := range map[string]struct{ copied, want int64 }{
-		"its newest capture measured more than its record": {copied: 90000, want: 150000},
-		"its record measured more than its newest capture": {copied: 180000, want: 180000},
+	for name, tc := range map[string]struct{ copied, want, recordNext, wantNext int64 }{
+		"its newest capture measured more than its record": {copied: 90000, want: 150000, wantNext: 155000},
+		"its record measured more than its newest capture": {copied: 180000, want: 180000, recordNext: 185000,
+			wantNext: 185000},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1001,23 +1003,27 @@ func TestAnInPlaceCopyBesideAnOlderKeptCaptureIsHeldToTheCopysMeasure(t *testing
 			parked.State.ActiveTools = req.Surface.Active()
 			older := keptBasis
 			older.ContextTokens, older.CopyContext = 40000, 150000
+			older.NextRequest, older.CopyNextRequest = sandbox.NextRequest{Tokens: 45000},
+				sandbox.NextRequest{Tokens: 155000}
 			relauncher := &probingLauncher{basis: older}
 			asked := &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
 				Branch: "wip/t1", SessionID: "sess-ask", BoxKept: true}
 			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
-				resume: &runner.Resume{State: parked.State, Asked: asked, Bridged: before, ContextTokens: tc.copied}})
+				resume: &runner.Resume{State: parked.State, Asked: asked, Bridged: before, ContextTokens: tc.copied,
+					NextRequest: sandbox.NextRequest{Tokens: tc.recordNext}}})
 			if _, _, err := collector.Resume(t.Context(), nil); err != nil {
 				t.Fatalf("Resume: %v", err)
 			}
 			again := relauncher.last(t)
-			if again.Session == nil || again.Session.Basis.ContextTokens != 40000 {
-				t.Fatalf("the relaunch continues kept %+v, want the older kept capture, held to its own 40000",
-					again.Session)
+			if again.Session == nil || again.Session.Basis.ContextTokens != 40000 ||
+				again.Session.Basis.NextRequest.Tokens != 45000 {
+				t.Fatalf("the relaunch continues kept %+v, want the older kept capture, held to its own 40000 "+
+					"and 45000", again.Session)
 			}
 			if again.Continue == nil || again.Continue.SessionID != "sess-ask" ||
-				again.Continue.ContextTokens != tc.want {
+				again.Continue.ContextTokens != tc.want || again.Continue.NextRequest.Tokens != tc.wantNext {
 				t.Fatalf("the relaunch continues in place %+v, want the asking run's own copy carrying the %d "+
-					"tokens it sends first", again.Continue, tc.want)
+					"tokens it sends first, estimated at %d", again.Continue, tc.want, tc.wantNext)
 			}
 		})
 	}

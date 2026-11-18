@@ -111,6 +111,7 @@ type threadWire struct {
 	ReplacesSpan  json.RawMessage `json:"replacesSpan"`
 	Message       json.RawMessage `json:"message"`
 	Attachment    json.RawMessage `json:"attachment"`
+	Rendered      json.RawMessage `json:"rendered"`
 	Origin        json.RawMessage `json:"origin"`
 	ToolUseResult json.RawMessage `json:"toolUseResult"`
 	APIError      json.RawMessage `json:"isApiErrorMessage"`
@@ -183,15 +184,15 @@ func factsOf(w *threadWire, h threadHead, asked []string) *lineFacts {
 	}
 	switch h.Type {
 	case recordUser:
-		f.message = messageOf(w.Message, blockToolResult)
+		f.message = messageOf(w.Message, blockToolResult, w.TaskDelivery)
 		f.result = toolResultOf(w.ToolUseResult)
 		f.retracted, f.retractedErr = retractedOf(w.Retracted)
 	case recordAssistant:
-		f.message = messageOf(w.Message, blockToolUse)
+		f.message = messageOf(w.Message, blockToolUse, w.TaskDelivery)
 		f.retracted, f.retractedErr = retractedOf(w.Retracted)
 		f.batch = batchOf(w.Batch)
 	case recordAttachment:
-		f.attachment = attachmentOf(w.Attachment, asked)
+		f.attachment = attachmentOf(w.Attachment, w.Rendered, asked)
 	case recordSystem:
 		switch h.Subtype {
 		case subtypeCompactBoundary:
@@ -207,8 +208,10 @@ func factsOf(w *threadWire, h threadHead, asked []string) *lineFacts {
 
 // messageOf reads a user or assistant record's `message`, raw, by ONE decode
 // of its object that every accessor of the message reads; its blocks of kind
-// call are its calls ([messageContent]).
-func messageOf(raw json.RawMessage, call string) messageFacts {
+// call are its calls ([messageContent]), and Claude Code's estimate of the
+// record counts the images its `taskDelivery`, delivery, carries
+// ([messageEstimate]).
+func messageOf(raw json.RawMessage, call string, delivery json.RawMessage) messageFacts {
 	m := messageFacts{kind: kindOfValue(raw)}
 	if m.kind != '{' {
 		return m
@@ -227,6 +230,9 @@ func messageOf(raw json.RawMessage, call string) messageFacts {
 	m.id, m.model, m.stopReason, m.usage, m.contextManagement = wire.ID, wire.Model, wire.StopReason, wire.Usage,
 		wire.ContextManagement
 	m.content, m.contentErr = messageContent(wire.Content, call)
+	if m.contentErr == nil {
+		m.estimate, m.estimateErr = messageEstimate(wire.Content, delivery)
+	}
 	return m
 }
 
@@ -240,9 +246,10 @@ func toolResultOf(raw json.RawMessage) toolResultFacts {
 
 // attachmentOf reads an attachment record's `attachment`, raw, once, answering
 // every attachment type's shape rule at once, so the accessor picks by the
-// attachment's type ([threadLine.AttachmentWellFormed]), and which of the
-// asked take tokens a hook record's words name ([takesOf]).
-func attachmentOf(raw json.RawMessage, asked []string) attachmentFacts {
+// attachment's type ([threadLine.AttachmentWellFormed]), Claude Code's
+// estimate of the record by its own `rendered` ([attachmentEstimate]), and
+// which of the asked take tokens a hook record's words name ([takesOf]).
+func attachmentOf(raw, rendered json.RawMessage, asked []string) attachmentFacts {
 	a := attachmentFacts{kind: kindOfValue(raw)}
 	if a.kind != '{' {
 		return a
@@ -257,6 +264,10 @@ func attachmentOf(raw json.RawMessage, asked []string) attachmentFacts {
 		Stdout    json.RawMessage `json:"stdout"`
 		Names     json.RawMessage `json:"names"`
 		Entries   json.RawMessage `json:"entries"`
+		// A PDF read's reads and a queued command's delivery, which its
+		// estimate reads.
+		Reads        json.RawMessage `json:"reads"`
+		TaskDelivery json.RawMessage `json:"taskDelivery"`
 	}
 	if a.err = wireDecode(raw, &wire); a.err != nil {
 		return a
@@ -276,6 +287,7 @@ func attachmentOf(raw json.RawMessage, asked []string) attachmentFacts {
 	a.skillsShaped = everyElement(wire.Skills, func(raw json.RawMessage) bool { return raw[0] == '{' || raw[0] == '[' })
 	a.namesKept, a.namesErr = skillNamesKept(wire.Names)
 	a.entriesKept = everyElement(wire.Entries, withheldEntryKept)
+	a.estimate, a.estimated = attachmentEstimate(wire.Type, wire.Reads, wire.TaskDelivery, rendered)
 	return a
 }
 

@@ -37,10 +37,15 @@ const (
 	// session its conversation's last turn left, recomposed with the closed
 	// rounds its brief rendered ([LeadTask]).
 	LeadKindTask LeadKind = "task"
+	// LeadKindFresh is the turn's task as a fresh brief told it to a session
+	// of the run's own, recomposed as a task lead is ([LeadTask]): kept by
+	// every launch whose run may start a session on that brief
+	// ([LaunchRequest.FreshOwn], [BriefLeads.Fresh]).
+	LeadKindFresh LeadKind = "fresh"
 )
 
-// LeadKinds are the three.
-var LeadKinds = []LeadKind{LeadKindAnswer, LeadKindReview, LeadKindTask}
+// LeadKinds are the four.
+var LeadKinds = []LeadKind{LeadKindAnswer, LeadKindReview, LeadKindTask, LeadKindFresh}
 
 // Valid reports whether k is one of [LeadKinds]. A newer build's kind is kept as
 // sealed and told as a message that cannot be read here.
@@ -115,8 +120,8 @@ type Lead struct {
 	Seq   int64
 	Round int
 
-	// Answer is an answer lead's source, Task a task lead's own facts; a
-	// review keeps neither.
+	// Answer is an answer lead's source, Task a task or fresh lead's own
+	// facts; a review keeps neither.
 	Answer *LeadAnswer
 	Task   *LeadTask
 
@@ -215,8 +220,8 @@ type LeadHeld struct {
 	Result *HeldKept `json:"result"`
 }
 
-// LeadTask is a task lead's own facts; the rest is recomposed from the turn's
-// records.
+// LeadTask is a task or fresh lead's own facts; the rest is recomposed from the
+// turn's records.
 type LeadTask struct {
 	// Rounds is the number of the last closed round the brief's prior-work
 	// block rendered, zero for none: the task is told again with the rounds up
@@ -290,7 +295,11 @@ type BriefLeads struct {
 	// Own is the brief's own leads, sealed for the job ([LeadSeal.Seal]); Told
 	// the earlier leads it told again, by name; ToldUnread the earlier ones it
 	// could not read, by number ([BriefTold.ToldUnread]), marked as Told is.
+	// Fresh is the fresh brief's leads beside a brief that continues a session:
+	// taken in after Own, never marked, since the brief the run read did not
+	// tell them (package doc).
 	Own        []KeptLead
+	Fresh      []KeptLead
 	Told       []LeadRef
 	ToldUnread []int
 }
@@ -372,16 +381,17 @@ func (p *leadsPart) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
-// took is p having taken in own, the brief's own leads: each once by
-// [KeptLead.Ref] (one already kept left as is, a new one numbered as taken),
-// the whole held by [heldLeads]. marks is the ascending numbers of every lead
-// the brief told (own, told, toldUnread) that next keeps; grew whether it took
-// anything in.
+// took is p having taken in own, the brief's own leads, then fresh, the fresh
+// brief's ([BriefLeads.Fresh]): each once by [KeptLead.Ref] (one already kept
+// left as is, a new one numbered as taken), the whole held by [heldLeads].
+// marks is the ascending numbers of every lead the brief told (own, told,
+// toldUnread, never fresh's) that next keeps; grew whether it took anything in.
 //
 // A TOLD LEAD THE PART DOES NOT KEEP IS NOT MARKED: a reader counts it against
 // the row ([PendingStore.Leads]). Names and numbers are looked up in sets, so
 // retelling every kept lead stays linear.
-func (p leadsPart) took(own []KeptLead, told []LeadRef, toldUnread []int) (next leadsPart, marks []int, grew bool) {
+func (p leadsPart) took(own, fresh []KeptLead, told []LeadRef, toldUnread []int) (next leadsPart, marks []int,
+	grew bool) {
 	next = p
 	next.Leads = slices.Clone(p.Leads)
 	named := make(map[LeadRef]bool, len(own)+len(told))
@@ -392,12 +402,14 @@ func (p leadsPart) took(own []KeptLead, told []LeadRef, toldUnread []int) (next 
 	for _, n := range toldUnread {
 		numbered[n] = true
 	}
-	kept := make(map[LeadRef]bool, len(next.Leads)+len(own))
+	kept := make(map[LeadRef]bool, len(next.Leads)+len(own)+len(fresh))
 	for _, lead := range next.Leads {
 		kept[lead.Ref()] = true
 	}
-	for _, lead := range own {
-		named[lead.Ref()] = true
+	for i, lead := range slices.Concat(own, fresh) {
+		if i < len(own) {
+			named[lead.Ref()] = true
+		}
 		if kept[lead.Ref()] {
 			continue
 		}

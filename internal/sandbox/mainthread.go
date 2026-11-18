@@ -9,17 +9,17 @@ import (
 )
 
 // THE JOB'S MAIN THREAD, READ ONCE. A relaunch carrying a round on in the job's
-// own box continues the session copy the box holds, which Claude Code may
-// compact before its first request (resumed.go); the event stream measures only
-// the newest request's input ([Result.LastRequest]), so only the box's thread
-// bounds what the harness counts. So the read of a job's box reads that thread
-// ONCE, on the box's host, before the take ([Coordinator.readMainThread]), and
-// every reading asked of it shares the one read ([MainThreadAsk]): the count
-// ([ResumedCount]), written after the take in the collection's one write of the
-// job's end ([EndRead.Count]), and the receipts of a hook's serves
-// ([HookReceipts]). A stop's read and a loss's ask receipts and no count: no
-// relaunch carries their round on in place. A job not over is counted unread,
-// its receipts read.
+// own box continues the copy the box holds, which its harness may compact
+// before its first request (resumed.go); the event stream measures only the
+// newest request's input ([Result.LastRequest]), so only the box's thread (a
+// Claude Code job's main thread, an OpenCode job's export) bounds its count.
+// The read of a job's box reads it ONCE, on the box's host, before the take
+// ([Coordinator.readMainThread]), every reading sharing the read
+// ([MainThreadAsk]): the count and next request, written after the take in the
+// collection's one write of the job's end ([EndRead]), and a Claude Code
+// hook's serves' receipts ([HookReceipts]). A stop's and a loss's read ask
+// receipts and no count: no relaunch carries their round on in place. A job
+// not over is counted unread, its receipts read.
 
 // MainThreadReadWait bounds the read of a job's main thread at its collection
 // ([Coordinator.readMainThread]): one wait every reading of the read shares.
@@ -52,9 +52,12 @@ type MainThreadAsk struct {
 	// ([Result.HarnessVersion]): the release that wrote the thread and that
 	// resumes it in place.
 	Release string
-	// Count asks for [ResumedCount], what Claude Code counts the session at
+	// Count asks for [ResumedCount], what the harness counts the session at
 	// before its next request: a collection's alone.
 	Count bool
+	// Next asks for [NextRequest], what the harness estimates the session's
+	// next request at.
+	Next bool
 	// Takes are the hooks' serves of a note to the job whose receipts are
 	// asked ([askedTakes]), at most [MaxNoteServes] for each of the job's
 	// notes and items; none asks no receipt.
@@ -105,6 +108,13 @@ type MainThreadReading struct {
 	// Count is the session's count where it was asked: a bound, or a mark
 	// saying why there is none. Nil where it was not asked.
 	Count *ResumedCount
+	// Provider is the provider of the reply an OpenCode count is anchored on
+	// ([LaunchRecord.CountProvider]), "" for a Claude Code count and where no
+	// reply anchored one.
+	Provider string
+	// Next is the harness's own estimate of the session's next request where
+	// it was asked; zero where it was not, and where the read made none.
+	Next NextRequest
 	// Receipts is what the session shows of the takes asked.
 	Receipts HookReceipts
 }
@@ -145,24 +155,29 @@ func hookEventOf(boundary string) string {
 }
 
 // readMainThread reads run's job's main thread in box through runner, once, for
-// every reading read asks of it ([asksMainThread]): at a Claude Code job's
-// collection what Claude Code counts the copy at, and at it, a stop or a loss
-// the receipts of the hooks' serves the copy holds ([askedTakes]). A job not
-// over is counted [CountUnread] with no count read ([capturePoint.final]), and
-// so is a runner that reads no thread. The count carries the least window the
-// run reported ([Result.ReportedWindow]). Held within
-// [Coordinator.mainThreadWait], armed here: past it the read ends where it is,
-// the count is [CountUnread] and no receipt is decided; a marked count is
-// logged.
+// every reading read asks of it ([asksMainThread]): at a Claude Code or an
+// OpenCode job's collection what its harness counts the copy at and estimates
+// its next request at, and at a Claude Code job's collection, stop or loss the
+// receipts of the hooks' serves the copy holds ([askedTakes]). A job not over,
+// a runner that reads no thread and an OpenCode job whose harness did not end
+// its own run (its export may lack what its copy holds) are counted
+// [CountUnread] with no count read. The count carries the least window the run
+// reported ([Result.ReportedWindow]). Held within [Coordinator.mainThreadWait],
+// armed here: past it the read ends where it is, the count is [CountUnread]
+// and no receipt is decided; a marked count is logged.
 func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sandbox, runner Runner,
 	read BoxRead, at capturePoint, result Result) MainThreadReading {
 
 	if !asksMainThread(run, read) {
 		return MainThreadReading{}
 	}
-	counts := read == BoxReadCollect
-	ask := MainThreadAsk{Session: run.SessionRan(), Release: result.HarnessVersion, Count: counts && at.final,
-		Takes: askedTakes(run), Ended: !at.cutOff}
+	counts, openCode := read == BoxReadCollect, run.Harness == OpenCodeHarness
+	counted := counts && at.final && (!openCode || !at.cutOff)
+	ask := MainThreadAsk{Session: run.SessionRan(), Release: result.HarnessVersion, Count: counted,
+		Next: counted, Ended: !at.cutOff}
+	if asksHookReceipts(run) {
+		ask.Takes = askedTakes(run)
+	}
 	var reading MainThreadReading
 	reader, reads := runner.(mainThreadReader)
 	if reads && (ask.Count || len(ask.Takes) > 0) {
@@ -171,7 +186,7 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 		cancel()
 	}
 	if !counts {
-		reading.Count = nil
+		reading.Count, reading.Provider, reading.Next = nil, "", NextRequest{}
 		return reading
 	}
 	count := reading.Count
@@ -184,12 +199,21 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 		switch {
 		case !at.final:
 			why = "the job was not over as its box was read, so its harness may still write its thread"
+		case openCode && at.cutOff:
+			why = "the job's harness did not end its own run, so its export may lack what its copy holds"
 		case !reads:
 			why = "the job's runner reads no main thread"
 		}
+		// THE SAME OUTCOME FOR EITHER HARNESS: a marked count bounds no first
+		// request, so the copy is told as a cut-off one; an OpenCode one's
+		// floor, which only its count would bound, reads its newest
+		// request's input as well.
+		outcome := "a relaunch that continues this copy in its box is told it as a cut-off one"
+		if openCode {
+			outcome += ", and is held to its newest request's input"
+		}
 		log.InfoContext(ctx, "executor_session_count_unbounded", "turn_id", run.TurnID,
-			"launch_id", run.LaunchID, "mark", string(count.Mark), "detail", why,
-			"outcome", "a relaunch that continues this copy in its box is told it as a cut-off one")
+			"launch_id", run.LaunchID, "mark", string(count.Mark), "detail", why, "outcome", outcome)
 	}
 	reading.Count = count
 	return reading
@@ -210,6 +234,9 @@ func unboundedBecause(mark CountMark) string {
 			"answered nothing"
 	case CountRelease:
 		return "the release that ran the job is none the count's rules were read in, so the thread was not read"
+	case CountUnanchored:
+		return "the session was read whole, and holds no counted reply since its start or its newest " +
+			"completed compaction, so its harness estimates what no export holds"
 	case CountPrecompact:
 		return "the session holds a saved compaction its harness swaps in where its threshold fires, so the " +
 			"thread was not read"
@@ -218,9 +245,19 @@ func unboundedBecause(mark CountMark) string {
 }
 
 // asksMainThread reports whether read of run's box asks the job's main thread
-// anything: a Claude Code job's collection, and its stop's or loss's read where
-// its copy holds a serve to the job ([PendingRun.asksReceipts]).
+// anything: a Claude Code or an OpenCode job's collection, and any read of a
+// box whose copy holds a serve its thread settles ([asksHookReceipts]).
 // [BoxReadBudget] holds the read's wait for exactly these.
 func asksMainThread(run PendingRun, read BoxRead) bool {
-	return run.Harness == ClaudeCodeHarness && (read == BoxReadCollect || run.asksReceipts())
+	collects := read == BoxReadCollect && (run.Harness == ClaudeCodeHarness || run.Harness == OpenCodeHarness)
+	return collects || asksHookReceipts(run)
+}
+
+// asksHookReceipts reports whether the read of run's box asks its job's
+// session for receipts: a Claude Code job's copy that holds a serve to the job
+// ([PendingRun.asksReceipts]). Only Claude Code's hooks serve a take its
+// thread shows, so an OpenCode job's read asks none, nor holds a verdict's
+// share ([BoxReadBudget]).
+func asksHookReceipts(run PendingRun) bool {
+	return run.Harness == ClaudeCodeHarness && run.asksReceipts()
 }
