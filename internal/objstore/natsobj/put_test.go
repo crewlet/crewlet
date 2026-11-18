@@ -399,20 +399,27 @@ func TestAPutLeavesNoSubscriptionBehind(t *testing.T) {
 // counted where the broker takes them, up to the first purge. The window
 // protects the link the bucket is opened across, which every lease renewal of
 // the node rides, so a frozen link holds one window of the node's uploads
-// however many are under way. Across a link it is the link's window, one
-// piece; on a member's own client, [natsobj.MemberWindow] pieces.
+// however many are under way. Across a link it is the link's window: one whole
+// piece, and as many small ones as its bytes hold. On a member's own client it
+// is [natsobj.MemberWindow] messages whatever their size.
 //
 // Mutation: give each put a window of its own, and three windows of pieces
-// are out before the first purge.
+// are out before the first purge; take a whole piece for a small one across a
+// link, and the small puts go out one at a time; count a member's window in
+// bytes, and its small puts all go out.
 func TestPutsOnOneConnectionShareOneWindow(t *testing.T) {
 	t.Parallel()
+	member := natsobj.Config{MaxBytes: testCeiling, Replicas: 1}
 	for _, c := range []struct {
-		name string
-		cfg  natsobj.Config
-		want int
+		name       string
+		cfg        natsobj.Config
+		puts, size int
+		want       int
 	}{
-		{"on a member's own client", natsobj.Config{MaxBytes: testCeiling, Replicas: 1}, natsobj.MemberWindow},
-		{"across a link", acrossLink(), 1},
+		{"on a member's own client", member, 3, 4 << 20, natsobj.MemberWindow},
+		{"small puts on a member's own client", member, 2 * natsobj.MemberWindow, 1 << 10, natsobj.MemberWindow},
+		{"across a link", acrossLink(), 3, 4 << 20, 1},
+		{"small puts across a link", acrossLink(), 3, 1 << 10, 3},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -421,19 +428,20 @@ func TestPutsOnOneConnectionShareOneWindow(t *testing.T) {
 				"$JS.API.STREAM.PURGE.>", "$JS.*.API.STREAM.PURGE.>")
 			l := relay(t, ns.Addr().String())
 			b := openWith(t, dialThrough(t, l), c.cfg)
-			if got := b.Window().Size() / natsobj.PieceTake(natsobj.MessageBytes); got != c.want {
-				t.Fatalf("a backend opened with %+v has a window of %d pieces, want %d", c.cfg, got, c.want)
+			if c.size == 4<<20 {
+				if got := b.Window().Size() / natsobj.PieceTake(b, natsobj.MessageBytes); got != c.want {
+					t.Fatalf("a backend opened with %+v has a window of %d pieces, want %d", c.cfg, got, c.want)
+				}
 			}
 			natsobj.SetStall(b, time.Second)
 			l.freezeDown()
 			ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 			defer cancel()
-			const puts = 3
-			errs := make([]error, puts)
+			errs := make([]error, c.puts)
 			var wg sync.WaitGroup
-			for i := range puts {
+			for i := range c.puts {
 				wg.Go(func() {
-					errs[i] = b.Put(ctx, fmt.Sprintf("windowed-%d", i), bytes.NewReader(patterned(4<<20)),
+					errs[i] = b.Put(ctx, fmt.Sprintf("windowed-%d", i), bytes.NewReader(patterned(c.size)),
 						objstore.PutMeta{})
 				})
 			}
@@ -441,7 +449,7 @@ func TestPutsOnOneConnectionShareOneWindow(t *testing.T) {
 			for i, err := range errs {
 				if !errors.Is(err, objstore.ErrStalled) {
 					t.Fatalf("put %d of %d whose acknowledgements never came = %v; want objstore.ErrStalled",
-						i, puts, err)
+						i, c.puts, err)
 				}
 			}
 			// ONE WINDOW OUT BETWEEN THEM until the first put stalled and
@@ -455,7 +463,7 @@ func TestPutsOnOneConnectionShareOneWindow(t *testing.T) {
 			}
 			if out != c.want {
 				t.Fatalf("%d puts with no acknowledgement published %d pieces between them before the "+
-					"first of them stalled, want the connection's window of %d", puts, out, c.want)
+					"first of them stalled, want the connection's window of %d", c.puts, out, c.want)
 			}
 			l.thaw()
 		})
@@ -517,14 +525,14 @@ func TestAPutWaitingForAPlaceTakesNoStallOfItsOwn(t *testing.T) {
 // share a window of one message across a link that takes a message a second,
 // so a put waits up to three seconds for its turn — longer than its stall —
 // while the connection is acknowledging one message every second. Each lands:
-// the waiter's clock is the connection's last acknowledgement, never how long
-// it has waited.
+// a waiter takes no stall of its own, and a put's stall runs only while it has
+// pieces out, never for how long it waited its turn.
 func TestAPutWaitingForAPlaceIsNoStallWhileTheConnectionMoves(t *testing.T) {
 	t.Parallel()
 	ns := tcpMember(t)
 	l := relay(t, ns.Addr().String())
 	b := open(t, dialThrough(t, l))
-	one, err := jsapi.NewWindow(natsobj.PieceTake(natsobj.MessageBytes))
+	one, err := jsapi.NewWindow(natsobj.PieceTake(b, natsobj.MessageBytes))
 	if err != nil {
 		t.Fatal(err)
 	}

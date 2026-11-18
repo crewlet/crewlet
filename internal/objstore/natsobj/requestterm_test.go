@@ -42,7 +42,7 @@ func crossing(messages int) time.Duration {
 // bucket opened across a link takes the link's ONE window it was handed
 // (jsapi.Window), never one of its own; a put's piece and a download's each
 // fit it and two do not, so one crosses at a time whichever way it goes; and
-// a member's own client keeps [natsobj.MemberWindow] pieces.
+// a member's own client keeps [natsobj.MemberWindow] messages.
 //
 // Mutation: open a bucket across a link on a window of its own, and this goes
 // red.
@@ -58,20 +58,22 @@ func TestAWindowAcrossALinkCrossesWithinARequestsTerm(t *testing.T) {
 		t.Errorf("the link's window of %d bytes crosses the floor in %v, past the %v a request's %v "+
 			"term leaves after its own round trip", window, c, requestBudget, jsapi.RequestTerm)
 	}
-	up, down := natsobj.PieceTake(natsobj.MessageBytes), natsobj.PieceBound(natsobj.MessageBytes)
+	c := memberClient(t)
+	cfg := natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true, Window: link}
+	across := openWith(t, c, cfg)
+	if got := across.Window(); got != link {
+		t.Errorf("a bucket opened across a link transfers inside %p, want the link's window %p", got, link)
+	}
+	up, down := natsobj.PieceTake(across, natsobj.MessageBytes), natsobj.PieceBound(natsobj.MessageBytes)
 	if up > window || down > window || up+down <= window || 2*down <= window {
 		t.Errorf("a put's piece takes %d bytes and a download's %d of a window of %d: each must fit "+
 			"alone and no two together", up, down, window)
 	}
-	c := memberClient(t)
-	cfg := natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true, Window: link}
-	if got := openWith(t, c, cfg).Window(); got != link {
-		t.Errorf("a bucket opened across a link transfers inside %p, want the link's window %p", got, link)
-	}
-	own := openWith(t, c, natsobj.Config{MaxBytes: testCeiling, Replicas: 1}).Window()
-	if got := own.Size(); got != natsobj.MemberWindow*up {
-		t.Errorf("a bucket opened on a member's own client has a window of %d bytes, want %d pieces' %d",
-			got, natsobj.MemberWindow, natsobj.MemberWindow*up)
+	member := openWith(t, c, natsobj.Config{MaxBytes: testCeiling, Replicas: 1})
+	if got, one := member.Window().Size(), natsobj.PieceTake(member, 1); got != natsobj.MemberWindow ||
+		one != 1 || natsobj.PieceTake(member, natsobj.MessageBytes) != 1 {
+		t.Errorf("a bucket opened on a member's own client has a window of %d and a message takes %d of "+
+			"it, want %d messages, one a message whatever its size", got, one, natsobj.MemberWindow)
 	}
 	for _, bad := range []natsobj.Config{
 		{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true},
@@ -118,7 +120,7 @@ func TestAReadSentBehindAFullWindowIsAnsweredInsideItsTerm(t *testing.T) {
 	b := openWith(t, client(t, across.LeafBroker), acrossLink())
 	sent := watchPieces(t, client(t, across.LeafBroker).Conn())
 	arrived := watchReadArrival(t, client(t, across.MemberBroker).Conn())
-	window := b.Window().Size() / natsobj.PieceTake(natsobj.MessageBytes)
+	window := b.Window().Size() / natsobj.PieceTake(b, natsobj.MessageBytes)
 
 	// FOUR MESSAGES MORE THAN A WINDOW, so the put still holds its window
 	// full when the read is sent, whatever the window is, on a machine slow

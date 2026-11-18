@@ -47,11 +47,11 @@ const (
 	PurgeWait       = purgeWait
 )
 
-// PieceTake is what a put's message of dataBytes takes of its window
-// ([pieceTake]), and PieceBound what a download's pull of a piece of want
-// bytes does ([pieceBound]).
-func PieceTake(dataBytes int) int { return pieceTake(dataBytes) }
-func PieceBound(want int) int     { return pieceBound(want) }
+// PieceTake is what a put's message of dataBytes takes of b's window
+// ([Backend.pieceTake]), and PieceBound what a download's pull of a piece of
+// want bytes does ([pieceBound]).
+func PieceTake(b *Backend, dataBytes int) int { return b.pieceTake(dataBytes) }
+func PieceBound(want int) int                 { return pieceBound(want) }
 
 // SetWindow gives b's transfers w in place of the window Open chose, so a
 // case can make them wait their turn.

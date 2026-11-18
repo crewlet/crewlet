@@ -36,23 +36,28 @@ import (
 const memberWindow = 16
 
 // newMemberWindow is the window a member's own client is given: [memberWindow]
-// whole messages, in the bytes a put takes for each ([pieceTake]), shared by
-// every put on the connection first come first served, since K puts at once
-// share it rather than hold K of it in the member's memory and its stream's
-// pipeline.
+// messages, one a take ([Backend.pieceTake]), shared by every put on the
+// connection first come first served, since K puts at once share it rather
+// than hold K of it in the member's memory and its stream's pipeline.
 func newMemberWindow() *jsapi.Window {
-	w, err := jsapi.NewWindow(memberWindow * pieceTake(MessageBytes))
+	w, err := jsapi.NewWindow(memberWindow)
 	if err != nil {
 		panic(err) // a constant above zero
 	}
 	return w
 }
 
-// pieceTake is what a put's message of dataBytes takes of its window: the
-// bytes its request puts on the link ([jsapi.RequestBytes]), so a small
-// object or an object's last piece takes what it carries, never a whole
-// [MessageBytes], and small transfers interleave.
-func pieceTake(dataBytes int) int { return jsapi.RequestBytes(dataBytes) }
+// pieceTake is what a put's message of dataBytes takes of b's window: across
+// a link the bytes its request puts on the link ([jsapi.RequestBytes]), so a
+// small object or an object's last piece takes what it carries, never a whole
+// [MessageBytes], and small transfers interleave; on a member's own client one
+// of its [memberWindow] messages, whatever its size, as it was measured.
+func (b *Backend) pieceTake(dataBytes int) int {
+	if !b.across {
+		return 1
+	}
+	return jsapi.RequestBytes(dataBytes)
+}
 
 // purgeWait bounds each step of a failed put's clean-up: the wait for the
 // acknowledgements still out, and each purge after it.
@@ -85,14 +90,14 @@ const purgeWait = 5 * time.Second
 // Pieces of [MessageBytes] are published IN ORDER from ONE buffer, refilled as
 // soon as each publish returns — nats.go copies a payload into its write
 // buffer at the publish, and only a RE-publish reads the message again — each
-// taking its bytes ([pieceTake]) from the [Backend]'s window first: across a
-// link the link's ONE window, which its downloads, walks and memory replays
-// share both ways, and on a member's own client [memberWindow] messages the
-// connection's puts share; and with NO PUBLISH RETRY, because the library's
-// retry of a piece answered "no responders" re-sends from its one reused
-// message over its one reused buffer, which by then holds a later piece: a
-// piece the stream did not take fails the put instead, which its caller asks
-// again whole. The metadata goes last, once every piece is acknowledged.
+// taking its share ([Backend.pieceTake]) from the [Backend]'s window first:
+// across a link the link's ONE window, which its downloads, walks and memory
+// replays share both ways, and on a member's own client [memberWindow]
+// messages the connection's puts share; and with NO PUBLISH RETRY, because
+// the library's retry of a piece answered "no responders" re-sends from its
+// one reused message over its one reused buffer, which by then holds a later
+// piece: a piece the stream did not take fails the put instead, which its
+// caller asks again whole. The metadata goes last, once every piece is acknowledged.
 //
 // A PUT ENDS ONLY WHEN THE BROKER HAS ACKNOWLEDGED NOTHING FOR [objstore.Stall]
 // WHILE PIECES ARE OUT ([objstore.ErrStalled]), so a put moving at any pace the
@@ -262,15 +267,15 @@ func (p *put) run(ctx context.Context, r io.Reader, m objstore.PutMeta) error {
 	return nil
 }
 
-// publish sends msg — the put's metadata where meta — once its bytes are
-// taken from the [Backend]'s window ([pieceTake]), counting it out first: an
-// acknowledgement can arrive before the publish call returns. Its turn is
+// publish sends msg — the put's metadata where meta — once its share is taken
+// from the [Backend]'s window ([Backend.pieceTake]), counting it out first:
+// an acknowledgement can arrive before the publish call returns. Its turn is
 // waited for under ctx alone: a put with pieces of its own out is ended by its
 // own stall ([put.check]), which cancels ctx.
 //
 // NO RETRY ([jetstream.WithRetryAttempts] 0): see [Backend.Put].
 func (p *put) publish(ctx context.Context, msg *nats.Msg, meta bool) error {
-	if err := p.b.window.Take(ctx, pieceTake(len(msg.Data))); err != nil {
+	if err := p.b.window.Take(ctx, p.b.pieceTake(len(msg.Data))); err != nil {
 		return err
 	}
 	p.mu.Lock()
@@ -321,7 +326,7 @@ func (p *put) settle(msg *nats.Msg) {
 	close(p.changed)
 	p.changed = make(chan struct{})
 	p.mu.Unlock()
-	p.b.window.Give(pieceTake(len(msg.Data)))
+	p.b.window.Give(p.b.pieceTake(len(msg.Data)))
 }
 
 // check is the stall timer: a put whose messages are out and that has had no
