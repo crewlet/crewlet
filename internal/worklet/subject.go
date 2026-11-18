@@ -133,6 +133,12 @@
 // held by a question to its reviewer or comes back to it, and `holding_up`
 // counts the agent work waiting on a person through what they hold or are asked.
 //
+// # Urgent ready work comes first
+//
+// ADR-0159 is the record: in a seat's ready work ([orderReady]) an urgent item
+// comes before every item that is not, started work included; below urgent,
+// and among urgent items, started work still comes first.
+//
 // # What a day costs the log, measured
 //
 // The reference company — 100 000 tasks a year, 300 000 comments, 1 000 edits
