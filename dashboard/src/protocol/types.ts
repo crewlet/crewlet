@@ -1071,6 +1071,14 @@ export interface ExecutorRow {
    * no tool, so the entries always account for `bridge_calls_elided`.
    */
   bridge_elided_calls?: ElidedCall[];
+
+  /**
+   * The late calls of the log (a call a relaunch outlived, or one its harness
+   * gave up on) that the job working as each landed took into its own session:
+   * no continuation of that session is told them again. Always an array on a
+   * row the store answered; absent on a live entry.
+   */
+  bridge_calls_told?: ToldCall[];
   /** The engine withheld this run's body from this reader — see [task_description]. */
   body_withheld?: boolean;
 }
@@ -1172,9 +1180,34 @@ export interface BridgeCall {
    * relaunch was readied, and finished after. A call of the round all the
    * same, whose effect happened — but what it cost is charged to no job, it is
    * never the round's submission, and every later continuation of the round is
-   * told it. Absent on every other call.
+   * told it but one of a session that took it while it worked
+   * ([ExecutorRow.bridge_calls_told]). Absent on every other call.
    */
   late?: boolean;
+  /**
+   * A call nobody waited for by the time it returned: its run's harness had
+   * given up on it, or the run's session on the bridge ended while it ran. It
+   * ran and its effect happened, while the session that made it holds it with
+   * no outcome, as timed out or as still running; told as a late call is.
+   * Absent on every other call.
+   */
+  abandoned?: boolean;
+  /**
+   * The call's place, from 1, in the order the round's log took its calls,
+   * which [ExecutorRow.bridge_calls_told] names a call by. Absent on a call an
+   * older engine appended.
+   */
+  appended?: number;
+}
+
+/**
+ * A late call of the run's log that the job working as it landed took into its
+ * own session, by the call's place in the log ([BridgeCall.appended]) and that
+ * job, never a word of the call.
+ */
+export interface ToldCall {
+  appended: number;
+  launch: string;
 }
 
 // ---------------------------------------------------------------------------

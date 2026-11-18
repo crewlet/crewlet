@@ -193,6 +193,44 @@ func (c *NoteCall) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+// MarshalJSON writes the late call with the keys a later build added to it.
+func (c LateCall) MarshalJSON() ([]byte, error) {
+	type plain LateCall
+	return marshalCarrying(plain(c), wireKeys(reflect.TypeFor[LateCall]()), c.Extra)
+}
+
+// UnmarshalJSON reads the late call and keeps the keys this build does not know.
+func (c *LateCall) UnmarshalJSON(raw []byte) error {
+	type plain LateCall
+	p := plain(*c)
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[LateCall]()))
+	if err != nil {
+		return err
+	}
+	*c = LateCall(p)
+	c.Extra = extra
+	return nil
+}
+
+// MarshalJSON writes the telling with the keys a later build added to it.
+func (c CallTelling) MarshalJSON() ([]byte, error) {
+	type plain CallTelling
+	return marshalCarrying(plain(c), wireKeys(reflect.TypeFor[CallTelling]()), c.Extra)
+}
+
+// UnmarshalJSON reads the telling and keeps the keys this build does not know.
+func (c *CallTelling) UnmarshalJSON(raw []byte) error {
+	type plain CallTelling
+	p := plain(*c)
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[CallTelling]()))
+	if err != nil {
+		return err
+	}
+	*c = CallTelling(p)
+	c.Extra = extra
+	return nil
+}
+
 // MarshalJSON writes the owed call with the keys a later build added to it.
 func (o OwedCall) MarshalJSON() ([]byte, error) {
 	type plain OwedCall

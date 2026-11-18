@@ -1120,7 +1120,7 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// names it: what a collection on any node reads this process's liveness by.
 	ledger.runner = e.callRunner()
 	s.Launch, s.LastSeq, s.CallIDMeta = job.LaunchID, job.LastSeq, job.CallIDMeta
-	inbox.Bind(ctx, job.LaunchID)
+	inbox.Bind(ctx, job.LaunchID, sessionFence(s.Surface))
 	endpoint := e.bridge.Open(ctx, s)
 	if endpoint == "" {
 		// UNREACHABLE past the refusals LaunchExecutor makes by name, which

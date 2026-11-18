@@ -31,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
@@ -510,7 +511,7 @@ func TestARunIsSteerableAfterItsLaunchingNodeRestarts(t *testing.T) {
 	// BEFORE THE RESTART the run reads one note at a batch.
 	c.file(t, "run-1", "req-before", "use the staging database")
 	before := c.e.runSteers.inbox(identityOfRun(row), 1)
-	before.Bind(t.Context(), row.LaunchID)
+	before.Bind(t.Context(), row.LaunchID, provenance.NewBoundary())
 	got := before.Take(t.Context(), mcpbridge.SteerEventFinish, hookCall())
 	if !strings.Contains(got, "staging") {
 		t.Fatalf("the run was not served its first note before the restart: %q", got)
