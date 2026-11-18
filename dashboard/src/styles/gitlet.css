@@ -4049,8 +4049,74 @@
   display: flex;
   flex: 1 1 100%;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
+}
+
+/* A filter's glyph and word inside its field, before the value. */
+.code-search-filter__lead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+/* The phrase box's grammar hint, at its trailing edge. */
+.code-search-grammar {
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.code-search-rule {
+  margin: 0 0 0 auto;
+}
+
+/* The facets beside the coverage line and the files; one column on a narrow page. */
+.code-search {
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr);
+  align-items: start;
+  gap: var(--spacing-6);
+}
+
+.code-search--narrow {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacing-3);
+}
+
+.code-search-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.code-search-facets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.code-search-facets__head {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-search-facets__more {
+  margin: 0;
+  padding-inline: var(--spacing-3);
+}
+
+.code-search-summary {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.code-search-summary > strong {
+  color: var(--color-text-primary);
 }
 
 /* EACH FILTER ITS OWN SIZE on one row, wrapping on a narrow screen, rather
@@ -4059,6 +4125,27 @@
   flex: 1 1 12rem;
   max-width: 20rem;
   min-width: 0;
+}
+
+/* The picker keeps its own width, so the typed filters sit beside it. */
+.code-search-filter--repo {
+  flex: none;
+}
+
+/* A phone: the grammar hint goes and each filter takes a row. */
+@container page (width < 640px) {
+  .code-search-grammar {
+    display: none;
+  }
+
+  .code-search-filter {
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .code-search-rule {
+    margin-inline-start: 0;
+  }
 }
 
 .code-search-results {
@@ -4083,8 +4170,22 @@
   font-size: var(--font-size-md);
 }
 
-/* A FILE OF RESULTS, as a code host's search draws one: a card, its path
-   across its head, its lines under it in the code face. */
+/* The commit searched, at the head's end. */
+.code-search-repo__tip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin-inline-start: auto;
+}
+
+.code-search-repo__sha {
+  padding: 0 var(--spacing-1);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+}
+
+/* A file of results: a card, its path across its head, its blocks of lines under it. */
 .code-search-file {
   display: flex;
   flex-direction: column;
@@ -4094,40 +4195,52 @@
   overflow: hidden;
 }
 
-.code-search-file__path {
+.code-search-file__head {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-2);
-  padding: var(--spacing-2) var(--spacing-3);
+  padding: var(--spacing-1) var(--spacing-2) var(--spacing-1) var(--spacing-3);
   background: var(--color-surface-subtle);
   border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-search-file__path {
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.code-search-file__count {
-  margin-inline-start: auto;
-  font-family: var(--font-family-sans);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
+/* Chrome, the heading its lines hang under: the link ink with no underline. */
+.code-search-file__link {
+  color: var(--color-text-primary);
 }
 
-/* A result's path, linking to its file: chrome, the heading its lines hang
-   under, drawn in the link ink with no underline. A link inside a sentence
-   takes .prose-link instead. */
-.code-search-file__link {
-  color: var(--color-brand-accent-ink);
+.code-search-file__dir {
+  color: var(--color-text-secondary);
+}
+
+/* Copy and Open stay at the head's end on its first line. */
+.code-search-file__acts {
+  display: flex;
+  flex: none;
+  align-self: flex-start;
+  margin-inline-start: auto;
 }
 
 .code-search-lines {
-  margin: 0;
-  padding: var(--spacing-1) 0;
-  list-style: none;
   overflow-x: auto;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-compact);
   line-height: var(--font-line-height-body);
   tab-size: 4;
+}
+
+/* As wide as its longest line, so a row's ground spans it when scrolled. */
+.code-search-block {
+  min-width: 100%;
+  width: max-content;
+  margin: 0;
+  padding: var(--spacing-1) 0;
+  list-style: none;
 }
 
 .code-search-line {
@@ -4141,15 +4254,67 @@
   background: var(--color-surface-hover);
 }
 
-/* A line's number is read (and is the link to the line), so it takes the
-   tertiary rung: the faint one is about 3:1, a mark's floor, not a word's. */
+/* A line's number is read (and a hit's links to it): the tertiary rung, a word's floor. */
 .code-search-line__number {
   text-align: end;
   color: var(--color-text-tertiary);
 }
 
+.code-search-line--hit .code-search-line__number {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
 .code-search-line__text {
   white-space: pre;
+}
+
+/* The hidden lines between two blocks, on the head's quiet ground, its control in the gutter. */
+.code-search-gap {
+  display: grid;
+  grid-template-columns: 6ch minmax(0, 1fr);
+  align-items: center;
+  gap: var(--spacing-3);
+  margin-block: var(--spacing-1);
+  padding-inline: var(--spacing-3);
+  background: var(--color-surface-subtle);
+}
+
+.code-search-gap > :first-child {
+  justify-self: end;
+}
+
+.code-search-file__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  padding: var(--spacing-1) var(--spacing-2);
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-search-file__foot > p {
+  margin: 0;
+}
+
+/* Where the engine says a hit matched: the code-match ground under the primary text, tokens too. */
+.code-search-match {
+  border-radius: var(--radius-xs);
+  background: var(--color-code-match);
+  color: var(--color-text-primary);
+}
+
+.code-search-match > span {
+  color: inherit;
+}
+
+/* Forced colours drop the ground; the system's own highlight pair keeps the run seen. */
+@media (forced-colors: active) {
+  .code-search-match {
+    forced-color-adjust: none;
+    background: Mark;
+    color: MarkText;
+  }
 }
 
 /* GO TO FILE in the bar's end group; a phone gives it a line of its own. */

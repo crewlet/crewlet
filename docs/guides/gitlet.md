@@ -1164,10 +1164,14 @@ that fill the answer, not every one — so narrow the search with `repo:` or
 
 **Searching from the dashboard.** **Gitlet › Search** (`#/gitlet/search`) takes
 the search as written above, with its mode, a repository, a path and a ref
-as controls beside it, and draws the lines by repository and file, each line
-opening its file at the commit it was searched at; what was not searched is
-said above them on every answer. In ⌘K, the **Code** tab searches the same
-way and lists the first eight lines.
+as controls beside it, and draws each file's matching lines with the lines
+around them, the matches marked, by repository and file, each line opening its
+file at the commit it was searched at; facets narrow it by repository or
+directory, and **Show N more** reads the rest of a file's matching lines. What
+was not searched is said above them on every answer. A repository searched
+only with git grep is named with `repo:` to search it, as the line above the
+results says. In ⌘K, the **Code** tab searches the same way and lists the
+first eight lines.
 
 **Searching from a script.** The same search is the question `code_search`,
 on [`GET /gitlet/search`](../reference/api-endpoints.md#get-gitletsearch):
