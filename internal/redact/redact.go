@@ -1485,7 +1485,7 @@ type valueRead struct {
 	// gutters are what the key's line has before the key ([valueRead.gutter]),
 	// read once each: from its piece's start and from its real line's; and
 	// none whether that line has none, beginning past the bound
-	// ([gutterFrom]).
+	// ([gutterFrom]); los where each was read from.
 	gutters [2]string
 	none    [2]bool
 	read    [2]bool
@@ -1792,6 +1792,12 @@ func (r *valueRead) gutterEnd(content string, crossed bool) int {
 // the line spells ends, in the text, or 0 where it spells none of it: a key's
 // line with no gutter has none to write a key's block apart from
 // ([claims.apart]), and its block is written whole.
+//
+// AS WRITTEN, the end [keyPrefix] reads is where it stands in the text: the
+// line as the rule leaves it is the text byte for byte up to its first
+// password's marker, since [writeValue] writes a value's escaped breaks
+// before its first marker as they stand, and a gutter ends at a password's
+// marker ([gutterLen]), so no gutter runs into a value written as its marker.
 func (r *valueRead) gutterOf(content string, crossed bool) (int, int) {
 	g := r.gutter(crossed)
 	k := gutterIndex(crossed)
@@ -1802,35 +1808,7 @@ func (r *valueRead) gutterOf(content string, crossed bool) (int, int) {
 	if at == 0 {
 		return n, 0
 	}
-	return n, keyPrefixAt(r.text, r.los[k], r.start, r.prior, at)
-}
-
-// keyPrefixAt is where in text the byte at of [keyPrefix]'s answer from lo to
-// start stands: past a value written there as its marker where at falls in
-// the marker.
-func keyPrefixAt(text string, lo, start int, prior [][2]int, at int) int {
-	at += leadingSpace(text[lo:start])
-	i, _ := slices.BinarySearchFunc(prior, lo, func(v [2]int, at int) int {
-		if v[1] <= at {
-			return -1
-		}
-		return 1
-	})
-	pos, w := lo, 0
-	for ; i < len(prior) && prior[i][0] < start; i++ {
-		from, to := max(prior[i][0], lo), min(prior[i][1], start)
-		if at <= w+from-pos {
-			return pos + at - w
-		}
-		w += from - pos
-		var b strings.Builder
-		writeValue(&b, passwordMarker, text[from:to])
-		if at < w+b.Len() {
-			return to
-		}
-		w, pos = w+b.Len(), to
-	}
-	return pos + at - w
+	return n, r.los[k] + leadingSpace(r.text[r.los[k]:r.start]) + at
 }
 
 // gutterIndex is which of a read's gutters a line takes ([valueRead.gutter]).

@@ -2,6 +2,7 @@ package redact
 
 import (
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -80,11 +81,14 @@ func gutterShapes() []gutterShape {
 	// Two keys on one line, the second's BEGIN after the first's END, and the
 	// second's END opening the password key's line as the first's opens the
 	// BEGIN's: the first is written a step before the second, whose cut still
-	// reads where the first ends ([keyStage.wrote]).
+	// reads where the first ends ([keyStage.wrote]); and with a key before
+	// them written in that step too, where the last it wrote ends.
 	colons := strings.ReplaceAll(testEnd, "-", ":")
 	two := testBegin + "\n" + testKeyLine + "\n" + testEnd + " " + testBegin + "\n" + testKeyLine + "\n" +
 		testEnd + " passwd:\n" + colons + " " + gutterValue + "\ndone\n"
 	add("a block written a step before, its END on the line", two+strings.Repeat("ok\n", 60<<10), strings.LastIndex(two, testBegin)+3+keyReach)
+	three := testBegin + "\n" + testKeyLine + "\n" + testEnd + "\n" + two
+	add("two blocks written a step before, the last's END on the line", three+strings.Repeat("ok\n", 60<<10), strings.LastIndex(three, testBegin)+3+keyReach)
 	add("concatenation, begun mid-line", "\t\"v1 "+pc+"\\n\" +\n\t\""+testEnd+"|passwd:\\n\" +\n\t\""+gutterValue+"\\n\" +\n")
 	add("no gutter under a stamped block", "2026-10-06T09:00:00.123Z hunter2x9 u1SU1Lf9x+\n"+testEnd+"|passwd:\n"+gutterValue+"\n")
 	add("an AWS secret's key after", "u1SU1Lf=\necho \""+testEnd+"|passwd:\" >> k\necho \""+gutterValue+"\" >> k\naws_secret_access_key = z6jmCqAkeYL1pRDxqWFVRmPZf+tiEOTNLBkMi2Yu\n")
@@ -161,14 +165,15 @@ func gutterStream(text string, at int) string {
 // A STREAM CUTS A BLOCK AS THE WHOLE TEXT DOES WHEREVER ITS WINDOWS END: over
 // every shape of [gutterShapes], placed at random, and every shape read as two
 // blocks placed with the keys' stage's read boundary, or where it writes to,
-// between them, at the stream's own hold Close answers nil and the stream wrote Secrets and
-// the whole text's blocks, its keys' stage within its figure ([keysBytes]).
+// between them, at the stream's own hold Close answers nil and the stream
+// wrote Secrets and the whole text's blocks, its keys' stage within its figure
+// ([keysBytes]).
 //
 // Mutation: cut a window's blocks before they join those read before them
 // ([keyStage.write]), and a joined shape is written otherwise; let go of the
 // text before the next block's line ([keyStage.opening]), and the shape
-// joined across a reach is too; forget the block written last, and the block
-// written a step after it is written whole.
+// joined across a reach is too; forget the block written last, or keep the
+// first a step wrote, and the block written a step after it is written whole.
 func TestAStreamCutsABlockAsTheWholeTextDoesWhereverItsWindowsEnd(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1170, 70))
@@ -200,8 +205,9 @@ func TestAKeyLinesOpeningIsShownAsItSettlesAsTheWholeTextHasIt(t *testing.T) {
 	t.Parallel()
 	for _, c := range gutterShapes() {
 		if len(c.text) > 4<<10 {
-			// Shown a byte at a time, a text is read once a byte: the one
-			// shape this long is the stream's ([keyStage.opening]).
+			// Shown a byte at a time, a text is read once a byte: the
+			// shapes this long are the stream's ([keyStage.opening],
+			// [keyStage.wrote]).
 			continue
 		}
 		want := Secrets(c.text)
@@ -324,5 +330,115 @@ func TestAStreamClaimsAValueItReadsOpenWithItsGutter(t *testing.T) {
 			continue
 		}
 		checkReading(t, "an open value under a gutter "+g, text, got)
+	}
+}
+
+// A CLAIM READS IN A WINDOW AS NAMING WHAT IT NAMES, wherever the window ends:
+// a key whose separator ends past the window names no value there, whether
+// that end is known or still to come, and a value that begins past the window,
+// decided or read open, reads as one ([keyStage.claimsIn]).
+//
+// Mutation: read every claim whose value begins past the window as a value,
+// and a key with none reads as one, so a block no END closes would end before
+// it ([claims.shortOfValues]).
+func TestAClaimReadsInAWindowAsNamingWhatItNames(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("x", 100)
+	for _, c := range []struct {
+		name  string
+		w     [5]int
+		value bool
+	}{
+		{"no value, its separator's end past the window", [5]int{90, 150, 150, 150, 0}, false},
+		{"no value, its separator's end to come", [5]int{90, -1, -1, -1, 0}, false},
+		{"no value, its separator's end set past the window since", [5]int{90, 150, -1, 150, 0}, false},
+		{"no value, its separator's end set in the window since", [5]int{90, 95, -1, 95, 0}, false},
+		{"a value past the window", [5]int{90, 95, 150, 160, 0}, true},
+		{"a value read open past the window", [5]int{90, 95, 150, -1, 0}, true},
+	} {
+		k := &keyStage{}
+		k.sources = []*claimSource{{keys: k, words: [][5]int{c.w}}}
+		p := k.claimsIn(text, 0).passwords[0]
+		if got := p[3] > p[2]; got != c.value {
+			t.Errorf("%s: the window reads %v as naming a value: %v, want %v", c.name, p, got, c.value)
+		}
+	}
+}
+
+// A KEY A BLOCK HOLDS CUTS NO OTHER BLOCK: a password's key inside one block,
+// on the line another ends on, its gutter's end on that line too, leaves the
+// other block whole ([claims.apartIn]). The rule reads no key inside a block,
+// so its line's gutter is no gutter of a value's.
+//
+// Mutation: cut a block for a key inside another, and the first block is
+// written as two markers.
+func TestAKeyABlockHoldsCutsNoOtherBlock(t *testing.T) {
+	t.Parallel()
+	g := "> "
+	text := testBegin + "\n" + g + testKeyLine + "\n" + g + testEnd + " " + testBegin + " passwd:\n" + g + testKeyLine + "\n" + g + testEnd + "\n"
+	line := strings.Index(text, g+testEnd)
+	key := strings.Index(text, "passwd:")
+	value := strings.LastIndex(text, g+testKeyLine) + len(g)
+	spans := [][2]int{{0, line + len(g+testEnd)}, {strings.LastIndex(text, testBegin), len(text) - 1}}
+	c := &claims{text: text, read: true, passwords: [][5]int{{key, key + len("passwd:"), value, value + len(testKeyLine), line + len(g)}}}
+	c.build()
+	if got := c.apartIn(slices.Clone(spans), spans); !slices.Equal(got, spans) {
+		t.Errorf("the blocks %v were written as %v", spans, got)
+	}
+}
+
+// A STEP THAT WRITES A BLOCK AND READS NO ARMOUR READS THE CLAIMS AS THE WHOLE
+// TEXT DOES: a value whose key a block read forward takes is no claim past
+// that block ([claims.take]), so the opening of the line a later block begins
+// on, which the value runs into, reads as the gutter, and the later block is
+// written whole. The keys' stage's first read boundary falls past the last
+// END, so the step after it writes that block and reads no armour.
+//
+// Mutation: take no forward block into such a step ([keyStage.step]), and the
+// stream cuts a block the whole text writes whole.
+func TestAStepThatOnlyWritesReadsTheClaimsAsTheWholeTextDoes(t *testing.T) {
+	t.Parallel()
+	r := rand.New(rand.NewPCG(1170, 1))
+	tested := false
+	for _, g := range []string{"KL20 ", "Ab3x "} {
+		shape := `{"log": "` + testBegin + `\n` + testKeyLine + ` password: \nu1SU1Lf9x.Ab3x\n` + g + testBegin + `\n` +
+			g + testKeyLine + `\n` + g + testEnd + `|passwd:\n` + g + gutterValue + `\n"}` + "\n"
+		spans, _, c := readKeys(shape)
+		bare := &claims{text: shape}
+		tested = tested || c != nil && !slices.Equal(bare.apart(spans), c.apart(spans))
+		end := strings.LastIndex(shape, testEnd) + len(testEnd)
+		for _, at := range []int{end + 64, end + 4<<10, end + 32<<10} {
+			text := gutterStream(shape, at)
+			got := readHolding(text, holdBytes(), r, 96<<10)
+			if got.err != nil {
+				t.Errorf("the gutter %q, the boundary at %d: Close answered %v at the stream's own hold", g, at, got.err)
+				continue
+			}
+			checkReading(t, "the gutter "+g, text, got)
+		}
+	}
+	if !tested {
+		t.Fatal("no shape's cut reads a block taken forward, so the test tests nothing")
+	}
+}
+
+// A CLAIM ENDED NAMES WHAT IT NAMED OPEN: a value read open and then ended
+// reads in a window as a value, and a key claimed with no value and then
+// ended reads as none ([claimSource.endWord]).
+//
+// Mutation: let an ended claim's value begin where it ends, and the value
+// read open reads as none.
+func TestAClaimEndedNamesWhatItNamedOpen(t *testing.T) {
+	t.Parallel()
+	k := &keyStage{}
+	src := &claimSource{keys: k}
+	k.sources = []*claimSource{src}
+	src.valued([3]int{10, 15, -1}, 16, 0)
+	src.endWord(-1, 30)
+	src.word([3]int{40, -1, -1})
+	src.endWord(45, 45)
+	got := k.claimsIn(strings.Repeat("x", 100), 0).passwords
+	if len(got) != 2 || got[0][3] <= got[0][2] || got[1][3] > got[1][2] {
+		t.Errorf("the claims read %v: want a value from 16 to 30 for the first key and none for the second", got)
 	}
 }

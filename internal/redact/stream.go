@@ -553,7 +553,9 @@ type claimSource struct {
 	tokens   [][2]int
 	// words are each password's or AWS secret's key, its separator's end,
 	// and its value's start and end, -1 while to come, and where the gutter
-	// of the key's line it was read under ends, or 0 ([claims]).
+	// of the key's line it was read under ends, or 0 ([claims]). A start of
+	// -1 stays so: only a word that names no value is claimed without one,
+	// and the window reads it past its end, as none ([keyStage.claimsIn]).
 	words [][5]int
 	// keys is the keys' stage that reads the claims: a claim that ends at
 	// or before where its next window begins ([keyStage.floor]) is asked
@@ -605,15 +607,11 @@ func (c *claimSource) endToken(end int) {
 }
 
 // endWord sets the ends of the word claimed last, claimed while open: its
-// separator's, where sep is not -1, and its value's, which begins there too
-// where no start was claimed with it.
+// separator's, where sep is not -1, and its value's.
 func (c *claimSource) endWord(sep, end int) {
 	w := &c.words[len(c.words)-1]
 	if sep >= 0 {
 		w[1] = sep
-	}
-	if w[2] < 0 {
-		w[2] = end
 	}
 	w[3] = end
 	c.keys.ended(c, end)
