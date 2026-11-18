@@ -181,12 +181,27 @@ import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 
-/** The two records the engine closes every turn with, read as one answer. */
+/** The two records the engine closes every turn with, the newest of each, read as one answer. */
 interface TurnRecord {
   /** `agent_turn_completed` — the dashboard's summary: tokens, models, trigger. */
   summary: EventRecord | undefined;
   /** `turn_completed` — the learning record: the clock, the outcome, the words. */
   learning: EventRecord | undefined;
+}
+
+/**
+ * The turn's own measured length: its ending record's whole tally, else every
+ * segment's own `duration_ms` summed, as the turn list sums them.
+ */
+function turnDuration(events: EventRecord[], last: EventRecord | undefined): number | null {
+  const whole = (field(last, "turn") as { duration_ms?: unknown } | undefined)?.duration_ms;
+  if (typeof whole === "number") return whole;
+  let sum: number | null = null;
+  for (const e of events) {
+    const ms = e.type === "turn_completed" ? field(e, "duration_ms") : undefined;
+    if (typeof ms === "number") sum = (sum ?? 0) + ms;
+  }
+  return sum;
 }
 
 function field(event: EventRecord | undefined, key: string): unknown {
@@ -611,20 +626,18 @@ export function useTurnView(turnId: string): TurnView {
     const starts = events.filter((e) => e.type === "agent_turn_started");
     return starts.find((e) => field(e, "resumed") !== true) ?? starts[0];
   }, [events]);
+  // THE NEWEST OF EACH: a parked turn completes once per segment, and only the
+  // last says how it ended.
   const rec: TurnRecord = useMemo(
     () => ({
-      summary: events.find((e) => e.type === "agent_turn_completed"),
-      learning: events.find((e) => e.type === "turn_completed"),
+      summary: events.findLast((e) => e.type === "agent_turn_completed"),
+      learning: events.findLast((e) => e.type === "turn_completed"),
     }),
     [events],
   );
 
-  // THE ENGINE'S OWN WALL CLOCK, off the record that actually carries it.
-  // `agent_turn_completed` has no `duration_ms` — that field is on
-  // `turn_completed`, published in the same breath — so reading it off the
-  // summary made this an unreachable branch and the span below the only answer
-  // the tile ever gave, under a caption claiming otherwise.
-  const measured = field(rec.learning, "duration_ms");
+  // THE ENGINE'S OWN WALL CLOCK, off `turn_completed`, which carries it.
+  const measured = useMemo(() => turnDuration(events, rec.learning), [events, rec.learning]);
 
   // WHAT WENT WRONG, and whether this turn may say nothing did. Both are read
   // by the header, which is one component in two frames, so they are derived
@@ -710,7 +723,7 @@ export function useTurnView(turnId: string): TurnView {
       null,
     outcome: outcomeOf(rec),
     running,
-    durationMs: typeof measured === "number" ? measured : null,
+    durationMs: measured,
     span: turnWindow,
     tokens: ownWork({ own, launches }).reduce((n, p) => n + p.totalTokens, 0),
     workerTokens,
