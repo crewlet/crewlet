@@ -13,34 +13,27 @@ import (
 
 // DefaultBoxTimeout is a box's TTL and keepalive window.
 //
-// NOT a run-time limit, and not a provisioning one: a launched job is never
-// force-stopped on a timer, and the waiter refreshes a running box's TTL to
-// this value every tick so the clock never kills it — as the launch refreshes
-// the box it is still provisioning ([keepProvisioning]), so no sum of setup
-// steps is raced against it either. It is effectively the
-// ORPHAN-RECLAIM GRACE — how long a box outlives an engine that stops
-// heart-beating before the provider reclaims it. 900s is 60 waiter ticks:
-// ample slack for a node that pauses for GC, a deploy, or a slow reconcile,
-// and short enough that a crashed engine's boxes do not linger for an
-// operator to find.
+// NOT a run-time or provisioning limit: a job is never stopped on a timer,
+// and the waiter refreshes a running box's TTL to this every tick, as the
+// launch does a provisioning one ([keepProvisioning]). It is the
+// ORPHAN-RECLAIM GRACE, how long a box outlives an engine that stops
+// heart-beating. 900s is 60 waiter ticks: slack for a GC pause, a deploy or a
+// slow reconcile, short enough that a crashed engine's boxes do not linger.
 const DefaultBoxTimeout = 900 * time.Second
 
-// provisionRefresh is how often a box the launch is still provisioning has its
-// timer refreshed ([keepProvisioning]): the waiter's own cadence
-// ([DefaultPollInterval]), so a box being provisioned is kept alive exactly as
-// a running one is — sixty refreshes inside [DefaultBoxTimeout], each one
-// control-plane call, as a running box's tick costs — and a refresh that fails
-// leaves fifty-nine more before the timer can run out.
+// provisionRefresh is how often a box being provisioned has its timer
+// refreshed ([keepProvisioning]): the waiter's cadence, so it is kept alive
+// as a running box is, and a failed refresh leaves fifty-nine more inside
+// [DefaultBoxTimeout].
 const provisionRefresh = DefaultPollInterval
 
 // DefaultPauseTTL bounds a box PAUSED on a clarification.
 //
-// A paused box has no provider-side deadline — a remote provider holds the
-// snapshot indefinitely and bills for it, and a local one holds RAM — and the
-// keepalive deliberately does not touch it. Left alone, one unanswered
-// question strands a box forever. 1800s is the wait after which a person is
-// evidently not answering promptly, and the run is not lost when it expires:
-// the work re-seeds from the pushed branch, which was always the durable half.
+// A paused box has no provider-side deadline (a remote one bills for the
+// snapshot, a local one holds RAM) and the keepalive skips it, so without this
+// one unanswered question strands it forever. 1800s is when a person is
+// evidently not answering promptly; expiry loses nothing, since the work
+// re-seeds from the pushed branch.
 const DefaultPauseTTL = 1800 * time.Second
 
 // ConfigError reports providers.sandbox being misconfigured — a placement
@@ -55,79 +48,60 @@ func (e *ConfigError) why() (Why, bool) { return WhyConfiguration, true }
 // ManagerOptions configures a [Manager].
 type ManagerOptions struct {
 	// Providers is the CATALOGUE: one backend per placement a company
-	// configured. A placement absent from this map is one no seat may run
-	// in, which is refused where the seat is resolved rather than where
-	// the box is created — a turn that has already spent its rounds is the
-	// wrong place to learn the config was incomplete.
+	// configured. A placement absent from it is refused where the seat is
+	// resolved, not where the box is created, after a turn spent its rounds.
 	Providers map[Placement]Provider
 
 	// DefaultPlacement is where a seat that names none runs. It MUST be a
-	// key of Providers: a default naming a backend nobody configured is
-	// the failure this whole reshape exists to make impossible, and it is
-	// checked here rather than at the first launch.
+	// key of Providers, checked here rather than at the first launch.
 	DefaultPlacement Placement
 
 	// Runners are the harnesses a box can run, by harness name. A launch
-	// names its own — the harness of the executor-chain member it launches on —
-	// so there is no default among them to fall back to.
+	// names its own (its executor-chain member's), so none is a default.
 	Runners map[string]Runner
 
 	// DefaultTimeout is the box TTL. Zero takes [DefaultBoxTimeout].
 	DefaultTimeout time.Duration
 
 	// DefaultPauseTTL bounds a paused box. Nil takes [DefaultPauseTTL];
-	// an explicit zero disables pausing engine-wide.
-	//
-	// A POINTER for the same reason [SpecInput.PauseTTL] is one: "say
-	// nothing" and "never pause" are different instructions and a single
-	// zero cannot carry both. It was a plain Duration whose zero took the
-	// default, which silently overrode every company that configured 0 —
-	// and there was an undocumented back door where a NEGATIVE value meant
-	// "disable", which the config layer refuses outright and so nothing
-	// could ever reach.
+	// an explicit zero disables pausing engine-wide: a pointer for the same
+	// reason [SpecInput.PauseTTL] is one.
 	DefaultPauseTTL *time.Duration
 
 	// DefaultMaxTurns caps the agentic rounds of a run on a seat that names
-	// none: providers.sandbox.default_max_turns, zero for uncapped as the
-	// config's own zero is (the reason is the config's). This layer passes it
-	// through and fills nothing in.
+	// none: providers.sandbox.default_max_turns, zero for uncapped as in the
+	// config. Passed through, nothing filled in.
 	DefaultMaxTurns int
 
 	// AttributeCommits is whether every run's own commits credit Crewlet
-	// (providers.sandbox.commit_attribution, whose default and its reason
-	// are the config's) — see [Manager.CommitAttribution]. False credits
-	// nothing.
+	// (providers.sandbox.commit_attribution; see [Manager.CommitAttribution]).
 	AttributeCommits bool
 
 	// DefaultSetup are the engine-wide steps (providers.sandbox.setup)
 	// applied to every box before a role's own extras. The engine ships
-	// none of its own, so these two config lists are the ONLY provisioning
-	// a box receives.
+	// none, so these two config lists are a box's ONLY provisioning.
 	DefaultSetup []SetupStep
 
 	// Telemetry mints each run's OTel environment. Nil exports nothing
-	// from inside the box, which is an ordinary configuration: the run's
-	// engine-side lifecycle events and its published transcript are the
-	// observability surface either way.
+	// from inside the box, an ordinary configuration: the run's lifecycle
+	// events and transcript remain the observability surface.
 	Telemetry *OtelReceiver
 }
 
 // Manager is the engine-held sandbox lifecycle.
 //
-// Unlike the MCP bridge's per-role PERSISTENT servers, sandboxes are per-turn
-// ephemeral. The manager holds the configured provider and the available
-// runners, resolves an effective spec for a role, and mints and installs a box
-// on demand. Teardown is the caller's — a turn that fails still reclaims its
-// box, which is why Acquire hands ownership over rather than tracking it.
+// Sandboxes are per-turn ephemeral, unlike the MCP bridge's persistent
+// servers. Teardown is the caller's (a failed turn still reclaims its box),
+// which is why Acquire hands ownership over rather than tracking it.
 type Manager struct {
 	providers map[Placement]Provider
 	placement Placement
 	runners   map[string]Runner
 
 	// retired are the cells an EARLIER catalogue configured and this one
-	// does not, each with the backend that catalogue built for it. Only
-	// the boxes already on a cell reach these — see [Manager.Provider] and
-	// [Manager.carrying] — and nothing is ever provisioned through one.
+	// does not, with that catalogue's backend: reached only by boxes already
+	// on them ([Manager.Provider], [Manager.carrying]), never provisioned
+	// through.
 	retired map[Placement]Provider
 
 	timeout   time.Duration
@@ -170,14 +144,11 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		attributes: opts.AttributeCommits,
 	}
 	if m.placement == "" && len(m.providers) == 1 {
-		// One backend is not a choice, so nothing is being decided for the
-		// operator. More than one without a default is a catalogue whose
-		// EVERY CALLER NAMES ITS CELL — config validation holds that for
-		// every executor entry a seat can launch on — and it is never resolved
-		// by map order here: that order is random, so the company would
-		// run somewhere different on every restart. A caller that names
-		// none against such a catalogue is refused by [Manager.Provider]
-		// at its launch, naming the field to set.
+		// One backend is not a choice. More than one without a default is a
+		// catalogue whose EVERY CALLER NAMES ITS CELL (config validation
+		// holds that), never resolved by map order, which is random across
+		// restarts: [Manager.Provider] refuses a caller naming none, naming
+		// the field to set.
 		for placement := range m.providers {
 			m.placement = placement
 		}
@@ -192,9 +163,8 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	if m.timeout == 0 {
 		m.timeout = DefaultBoxTimeout
 	}
-	// NIL IS THE ONLY THING THAT TAKES THE DEFAULT. An explicit zero is a
-	// setting — never pause — and reading it as "unset" is what silently
-	// billed for every paused box in a company that asked for none.
+	// NIL ALONE TAKES THE DEFAULT: an explicit zero is "never pause", and
+	// read as unset it bills for paused boxes a company asked not to keep.
 	if opts.DefaultPauseTTL != nil {
 		m.pauseTTL = *opts.DefaultPauseTTL
 	} else {
@@ -206,20 +176,15 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 // Provider is the backend for one placement, for reconnect-by-id and for the
 // pause reaper's kill.
 //
-// (Provider, error) RATHER THAN (Provider, bool), because the caller reaches
-// it holding a run row that names a placement, and the three answers there are
-// "this backend", "this build has no such placement" and "this company did not
-// configure it" — the last two are an operator's problem and must reach a log
-// saying which, not a nil the caller turns into "the box is gone".
+// (Provider, error), not (Provider, bool): "this build has no such placement"
+// and "this company did not configure it" are an operator's problem a log
+// must name, not a nil the caller reads as "the box is gone".
 //
-// A CELL THE CATALOGUE HAS SINCE DROPPED is still answered, with the backend
-// the catalogue that configured it built, for as long as this process has one
-// (see [Manager.carrying]). Every caller here holds a box that already EXISTS
-// — a row naming it, a reaper about to kill it — and a revision that stops
-// offering a cell to new runs has not made the boxes already on it vanish:
-// answered "not configured", a running job on it was settled failed with its
-// box never reclaimed, and a paused one was never killed at all. Provisioning
-// a NEW box goes through the current catalogue alone ([Manager.Acquire]).
+// A CELL THE CATALOGUE HAS SINCE DROPPED is still answered, with its last
+// backend, for this process's life ([Manager.carrying]): every caller holds a
+// box that already EXISTS, and answered "not configured" a running job on it
+// is settled failed with its box never reclaimed, and a paused one never
+// killed. A NEW box goes through the current catalogue alone ([Manager.Acquire]).
 func (m *Manager) Provider(placement Placement) (Provider, error) {
 	provider, err := m.configured(placement)
 	if err != nil && placement != "" {
@@ -231,21 +196,17 @@ func (m *Manager) Provider(placement Placement) (Provider, error) {
 }
 
 // configured is the backend the CURRENT catalogue configured for a placement,
-// the only one a new box may be provisioned through.
-//
-// An empty placement is the catalogue default, the same normalisation
-// [Manager.BuildSpec] applies: every spec and row production builds names its
-// cell already, so only one built by hand arrives here empty.
+// the only one a new box may be provisioned through. An empty placement is
+// the catalogue default, as in [Manager.BuildSpec]; only a hand-built spec or
+// row arrives empty.
 func (m *Manager) configured(placement Placement) (Provider, error) {
 	if placement == "" {
 		placement = m.placement
 	}
 	if placement == "" {
-		// A caller that named no cell against a catalogue with no
-		// default. Validation refuses this company, so reaching it means
-		// a row or a spec built by hand — and the honest answer names
-		// both fields that would have settled it, not "no backend for
-		// the empty string".
+		// No cell against a catalogue with no default: validation refuses
+		// that company, so this is a hand-built row or spec, and the error
+		// names both fields that would settle it.
 		return nil, &ConfigError{msg: fmt.Sprintf(
 			"no cell named for this run and providers.sandbox names no "+
 				"default_run_in (configured: %s): set one, or name the cell "+
@@ -261,9 +222,9 @@ func (m *Manager) configured(placement Placement) (Provider, error) {
 	return provider, nil
 }
 
-// CellOf is the cell a run's box is in: the one its row names, or — for a row
-// that names none, which only one built by hand does — this catalogue's
-// default, the cell [Manager.Provider] would reach it through.
+// CellOf is the cell a run's box is in: the one its row names, else (only a
+// hand-built row names none) this catalogue's default, as [Manager.Provider]
+// reaches it.
 func (m *Manager) CellOf(run PendingRun) Placement {
 	if cell := Placement(run.Placement); cell != "" {
 		return cell
@@ -282,13 +243,11 @@ type runBoxLister interface {
 	RunBoxes() ([]HostBox, error)
 }
 
-// HostBoxes is every box on this node's own host that records the run it was
-// made for, through every backend this manager reaches — a cell a revision
-// dropped included ([Manager.Provider]), since its boxes are still here — each
-// once, however many backends share a root.
-//
-// An error is a host that could not be listed, which says nothing about any
-// box on it: a caller reclaims nothing on it.
+// HostBoxes is every box on this node's own host that records its run,
+// through every backend this manager reaches (retired cells included, since
+// their boxes are still here), each once however many backends share a root.
+// An error is a host that could not be listed, which says nothing of any box
+// on it: the caller reclaims nothing there.
 func (m *Manager) HostBoxes() ([]HostBox, error) {
 	seen := map[string]bool{}
 	var out []HostBox
@@ -314,31 +273,26 @@ func (m *Manager) HostBoxes() ([]HostBox, error) {
 }
 
 // DefaultPlacement is where a seat that names none runs. Empty when the
-// catalogue names no default and holds more than one cell — a company whose
-// every seat names its own — and then [Manager.Provider] refuses a run that
-// names none rather than picking one.
+// catalogue names no default and holds several cells; [Manager.Provider] then
+// refuses a run that names none rather than picking one.
 func (m *Manager) DefaultPlacement() Placement { return m.placement }
 
 // Placements are the cells this company configured, for the operator surface.
 // A retired cell is not among them: nothing may be provisioned there.
 func (m *Manager) Placements() []Placement { return slices.Sorted(maps.Keys(m.providers)) }
 
-// carrying is this manager with the cells previous could reach and this one
-// does not configure kept as retired backends: the manager a live reload
-// installs ([Coordinator.SetManager]).
+// carrying is this manager with the cells previous reached and this one does
+// not configure kept as retired backends: the manager a live reload installs
+// ([Coordinator.SetManager]).
 //
-// A RUN'S PLACEMENT IS ON ITS ROW, and a revision only changes what the NEXT
-// run may pick. So the boxes a job is still running in, or a paused run is
-// held in, stay reachable through the backend that made them — the newest
-// catalogue that configured the cell, since a later one that configures it
-// again replaces it here. Bounded by the closed set of placements, and held
-// for the life of this process: a restart builds only the current catalogue,
-// and a row naming a cell nothing configures any more is then settled failed
-// by whoever polls it, naming the cell (see [Waiter]).
+// A RUN'S PLACEMENT IS ON ITS ROW and a revision changes only where the NEXT
+// run goes, so boxes still running or paused stay reachable through the newest
+// backend that configured their cell. Held for this process's life: after a
+// restart, a row naming an unconfigured cell is settled failed by its poller,
+// naming the cell ([Waiter]).
 //
-// A COPY, never a write through the receiver: a manager is shared by every
-// caller that already read it, and a reader that saw its catalogue change
-// under it would be reading two revisions at once.
+// A COPY, never a write through the receiver: a caller already holding the
+// manager must not read two revisions at once.
 func (m *Manager) carrying(previous *Manager) *Manager {
 	if previous == nil || previous == m {
 		return m
@@ -384,12 +338,11 @@ func (m *Manager) RunnerFor(harness string) (Runner, error) {
 	return runner, nil
 }
 
-// CallIDMeta is the `_meta` key the runner for harness declares its harness
-// sends each call's own id under ([CallIdentifier]): what the bridge serving a
-// job of that harness reads each call's id by ([OpenedJob.CallIDMeta]). ""
-// where no runner is registered for harness, where its runner declares none,
-// and on a nil manager — a node that has had no sandbox runtime yet — so a call
-// is then recorded with no id, never refused for one.
+// CallIDMeta is the `_meta` key harness's runner declares its calls' ids
+// under ([CallIdentifier]), which the bridge serving its job reads
+// ([OpenedJob.CallIDMeta]). "" with no such runner, none declared, or a nil
+// manager (no sandbox runtime yet): a call is then recorded with no id, never
+// refused.
 func (m *Manager) CallIDMeta(harness string) string {
 	if m == nil {
 		return ""
@@ -402,27 +355,24 @@ func (m *Manager) CallIDMeta(harness string) string {
 
 // SpecInput are the per-role values overlaid onto the provider defaults.
 //
-// A pointer PauseTTL rather than a sentinel duration: nil means "inherit", and
-// an explicit zero means "never pause, always re-seed from git" — two
-// genuinely different instructions that a single zero value cannot carry.
+// PauseTTL is a pointer: nil inherits, and an explicit zero means "never
+// pause, always re-seed from git", which one zero value cannot also carry.
 type SpecInput struct {
 	// Placement is the launching executor entry's run_in. Empty takes the
 	// provider default.
 	Placement Placement
 
 	// Harness is the runner the box runs: the harness of the executor-chain
-	// member the launch picked. REQUIRED, and passed through as given — a
-	// runner chosen apart from the entry whose login and model the run
-	// carries is a run that cannot read either, so there is nothing to
-	// default it to. An empty one is refused at the launch.
+	// member the launch picked. REQUIRED and passed as given, since a runner
+	// apart from the entry whose login and model the run carries could read
+	// neither; an empty one is refused at the launch.
 	Harness  string
 	Timeout  time.Duration
 	PauseTTL *time.Duration
 
 	// MaxTurns is the seat's round cap. Nil inherits the provider default;
-	// an explicit 0 is uncapped, which is how a seat escapes a company-wide
-	// cap — the same three states, and the same reason for a pointer, as
-	// PauseTTL above.
+	// an explicit 0 is uncapped, how a seat escapes a company-wide cap (a
+	// pointer as PauseTTL is).
 	MaxTurns *int
 
 	Env             map[string]string
@@ -430,17 +380,14 @@ type SpecInput struct {
 }
 
 // CommitAttribution is the credit a run's own commits carry under this
-// manager's catalogue: a — Crewlet as co-author, the seat and its work item
-// where the run is a seat's, and the run where it has a page to be named by —
-// or nil where the company turned the credit off, which names nothing at all:
-// a company that does not want Crewlet in its history wants no Crewlet
-// trailer in it either. Every launch path asks it, so a run is credited
-// however it was launched ([RunRequest.Attribution]).
+// manager's catalogue: a (Crewlet as co-author, plus the seat, its work item
+// and the run where they exist), or nil where the company turned the credit
+// off, which then names nothing at all, no trailer either. Every launch path
+// asks it ([RunRequest.Attribution]).
 //
-// ASKED OF THE MANAGER rather than carried on the [Spec], because a spec is
-// written onto a run's records and this is the catalogue's say at the moment
-// of the launch: a revision that turns it off reaches the next launch, not a
-// run already started.
+// ASKED OF THE MANAGER, not carried on the [Spec]: a spec is written onto the
+// run's records, and a revision that turns the credit off reaches the next
+// launch, not a run already started.
 func (m *Manager) CommitAttribution(a CommitAttribution) *CommitAttribution {
 	if !m.attributes {
 		return nil
@@ -474,10 +421,8 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 	if spec.MaxTurns < 0 {
 		spec.MaxTurns = 0
 	}
-	// CLAMPED, not a second meaning. A negative can only reach here from an
-	// embedder building a SpecInput by hand — config refuses one at both
-	// layers — and "never pause" is the honest reading of a TTL that has
-	// already elapsed.
+	// CLAMPED, not a second meaning: config refuses a negative, so only a
+	// hand-built SpecInput has one, and an elapsed TTL reads "never pause".
 	if spec.PauseTTLSec < 0 {
 		spec.PauseTTLSec = 0
 	}
@@ -487,16 +432,11 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 // Acquire provisions a box for spec, installs the harness, and applies
 // the launch's setup steps.
 //
-// On install OR setup failure the box is torn down before the error
-// propagates: a half-provisioned box must never reach a run whose brief
-// promises the full environment. Teardown uses a context of its own, because
-// the failure that got us here is often the caller's context expiring — and a
-// close that skips because the context is already dead leaks the box.
-//
-// THE BOX IS KEPT ALIVE from its creation until it is handed back or torn
-// down ([keepProvisioning]): the install and the steps run one after another,
-// each to its own timeout, and their sum is bounded by nothing the box's
-// timer knows of.
+// An install or setup failure tears the box down before the error returns,
+// on a detached context ([Manager.discard]): a half-provisioned box must never
+// reach a run whose brief promises the full environment. The box is kept
+// alive until handed back or torn down ([keepProvisioning]), since the steps'
+// summed timeouts are bounded by nothing its timer knows.
 func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sandbox, Runner, error) {
 	runner, err := m.RunnerFor(spec.Harness)
 	if err != nil {
@@ -509,35 +449,18 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 	return box, runner, nil
 }
 
-// AcquireBox provisions a box for spec with NO HARNESS — a check's box,
-// which runs a repository's own command and nothing of a seat's — and applies
-// setup to it: [Manager.Acquire] less the runner's install, torn down on a
-// setup failure the same way.
+// AcquireBox provisions a box for spec with NO HARNESS (a check's box, running
+// a repository's own command) and applies setup: [Manager.Acquire] less the
+// install. It refuses, since a caller setting one meant an executor: a
+// [Spec.Harness] (on a remote cell it picks the image); [Spec.CredentialFiles]
+// (a model's login beside a change's own code); [Spec.Repos] (a run's grants;
+// its repository is its [CloneRecipe]'s); an empty [Spec.Placement] (the
+// default cell is a seat's, so the caller names one); and [Direct], where the
+// command would run as the engine's user on its host (code.checks refuses it).
 //
-// WHAT A CODING BOX CARRIES AND THIS ONE DOES NOT, each refused rather than
-// dropped, since a caller that sets one meant an executor:
-//
-//   - a HARNESS ([Spec.Harness]): none is installed, and on a remote cell
-//     the harness's name picks the box's image;
-//   - a LOGIN ([Spec.CredentialFiles]): a check runs a change's own code, and
-//     a subscription login seeded beside it is a model's credential that code
-//     reads;
-//   - a RUN'S GRANTS ([Spec.Repos]): they ride an executor's row, which no
-//     such box has; its repository is its clone step's ([CloneRecipe]);
-//   - the CATALOGUE'S DEFAULT CELL: an empty [Spec.Placement] is where a seat
-//     that names none runs (providers.sandbox.default_run_in), never this
-//     box's — the caller names its cell;
-//   - the DIRECT cell: a box given a repository's own command to run never
-//     runs it as the engine's own user on the engine host, where it reads
-//     what the engine reads — config refuses `direct` for a check by name
-//     (code.checks, U1 a), and this refuses it where a box is made.
-//
-// AND NONE OF THE OPERATOR'S SETUP: the steps applied are exactly setup,
-// never the catalogue's own ([Manager.DefaultSetup], providers.sandbox.setup),
-// which provisions coding boxes for their harnesses — their env and files are
-// often credentials, and a check runs a change's own code. An executor's
-// launch hands those steps in itself; this box's caller hands in its git's
-// floor and its checkout ([GitVersionStep], [CloneRecipe]).
+// Setup is exactly setup, never [Manager.DefaultSetup]: the operator's steps
+// provision coding boxes, often with credentials. The caller hands in its
+// git floor and checkout ([GitVersionStep], [CloneRecipe]).
 func (m *Manager) AcquireBox(ctx context.Context, spec Spec, setup []SetupStep) (Sandbox, error) {
 	switch {
 	case spec.Harness != "":
@@ -560,14 +483,12 @@ func (m *Manager) AcquireBox(ctx context.Context, spec Spec, setup []SetupStep) 
 	return m.provision(ctx, spec, setup, nil)
 }
 
-// provision is a box for spec from the CURRENT CATALOGUE — a retired cell
-// reaches the boxes already on it and never a new one — with runner's agent
-// installed where there is a runner, and setup applied, run WITH the spec's
-// environment so a recipe can read the engine's identity facts and its own
-// configured tokens at provisioning time. A failure of either tears the box
-// down before it is answered ([Manager.discard]), and the box is kept alive
-// from its creation until both are done ([keepProvisioning]), for a check's
-// box as for an executor's.
+// provision is a box for spec from the CURRENT catalogue (a retired cell
+// reaches only its existing boxes), with runner's agent installed where there
+// is one and setup applied WITH the spec's environment, so a recipe can read
+// the engine's identity facts and its configured tokens. A failure of either
+// tears the box down first ([Manager.discard]); the box is kept alive until
+// both are done ([keepProvisioning]).
 func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, runner Runner) (Sandbox, error) {
 	placement := spec.Placement
 	if placement == "" {
@@ -581,10 +502,9 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 	if err != nil {
 		return nil, err
 	}
-	// STOPPED BEFORE THE BOX IS TORN DOWN, on every path below: a refresh
-	// racing the teardown would ask a provider to keep a box it is killing,
-	// and on the local backend would write the keepalive stamp back into a
-	// box directory the teardown had just removed.
+	// STOPPED BEFORE ANY TEARDOWN below: a racing refresh would ask the
+	// provider to keep a box it is killing, and on the local backend rewrite
+	// the keepalive stamp into a just-removed box directory.
 	stopKeepalive := keepProvisioning(ctx, box, m.timeout)
 	if runner != nil {
 		if err := runner.Install(ctx, box); err != nil {
@@ -596,8 +516,8 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 	}
 	if err := ApplySetup(ctx, box, setup, spec.Env); err != nil {
 		stopKeepalive()
-		// Logged distinctly from an install failure so the operator debugs
-		// the right subsystem: this one is their config, or the box's git.
+		// Apart from an install failure: this one is the operator's config,
+		// or the box's git.
 		log.ErrorContext(ctx, "sandbox_setup_failed", "sandbox_id", box.ID(), "error", err.Error())
 		m.discard(ctx, box)
 		return nil, err
@@ -614,38 +534,17 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 }
 
 // keepProvisioning keeps box's timer from running out while the engine
-// provisions it, and returns what stops it: [Sandbox.SetTimeout] to ttl at once
-// and every [provisionRefresh] after, until the stop — which waits for a
-// refresh in flight, so nothing of it touches the box once the stop returns.
-// The caller stops it when its provisioning ends, whichever way it ends, and
-// before anything tears the box down.
+// provisions it: [Sandbox.SetTimeout] to ttl at once and every
+// [provisionRefresh] until the returned stop, which waits out a refresh in
+// flight. The caller stops it when provisioning ends, before any teardown.
 //
-// THE WAITER'S KEEPALIVE DOES NOT REACH A BOX BEING PROVISIONED: it refreshes
-// the boxes of RUNNING rows that name one, and a launch's row is LAUNCHING
-// with no box on it until the box is ready. Everything provisioning runs — the
-// harness's install, the operator's setup, the box's git check and a
-// clone for each repository ([MaxRunRepos]), one after another, each up to its
-// own timeout ([DefaultSetupTimeout]) — ran inside the timer the box was
-// created or reconnected with alone, and a sum past it had the provider reap
-// the box mid-step: on E2B a launch failed on the transport's error under the
-// step's name, nothing naming the timer, and a reused box lost the work an
-// earlier job left in it; in the local backend's `direct` cell another
-// launch's orphan sweep deleted a box that had no job yet to show it was in
-// use. Refreshed while the engine works on the box, the timer stays what
-// [DefaultBoxTimeout] says it is, the grace a box outlives an engine that
-// stopped working on it, and only a step's own timeout ends a slow step.
-//
-// PROVISIONING ONLY: what the launch does after it — writing the box on the
-// row, starting the job, writing its command — is a few control-plane calls
-// each bounded in seconds, made inside the timer the last refresh set, and
-// the waiter's keepalive takes the box over once its run's row runs.
-//
-// THE FIRST REFRESH IS MADE BEFORE THIS RETURNS: a reused box's timer is
-// whatever its reconnect left — in the `direct` cell a keepalive stamp as old
-// as the last tick of the job before — and the step about to run must not
-// begin on a box an orphan sweep may take. A refresh that fails is logged and
-// left to the next, as the waiter's is: a box its provider has reclaimed fails
-// the step that runs on it, naming itself.
+// The waiter's keepalive takes over only once the row RUNS; a LAUNCHING row
+// has no box while install, setup, the git check and a clone per repository
+// ([MaxRunRepos]) run back to back, each to its own [DefaultSetupTimeout], and
+// a sum past the timer had the provider reap the box mid-step, or an orphan
+// sweep take a `direct` one. The first refresh precedes the return: a reused
+// box's timer is whatever its reconnect left. A failed refresh is left to the
+// next; the launch's few calls after provisioning fit inside the last one.
 func keepProvisioning(ctx context.Context, box Sandbox, ttl time.Duration) (stop func()) {
 	ctx, cancel := context.WithCancel(ctx)
 	refresh := func() {
@@ -681,17 +580,15 @@ func keepProvisioning(ctx context.Context, box Sandbox, ttl time.Duration) (stop
 }
 
 // discardGrace bounds a cleanup that has to outlive the context that asked for
-// it: the teardown of a box that failed to provision, of a launch that could
-// not finish or of a run that is over, and the hand-back of a claim whose
-// resume broke. Short: whatever it cleans up is already unusable, and the
-// caller is holding a turn or a delivery open while it runs.
+// it: tearing down a box that failed to provision, a launch that could not
+// finish or a finished run, and handing back a claim whose resume broke.
+// Short: what it cleans is already unusable, and the caller holds a turn or a
+// delivery open meanwhile.
 const discardGrace = 30 * time.Second
 
 func (m *Manager) discard(ctx context.Context, box Sandbox) {
-	// WithoutCancel(ctx), not Background(): a teardown must survive the
-	// cancellation it is undoing — often the very one that failed the
-	// provision — but it should keep the caller's VALUES, so the warning
-	// below still names the turn that was provisioning this box.
+	// Detached, not Background(): it survives the cancellation it undoes but
+	// keeps the caller's VALUES, so the warning names the provisioning turn.
 	closeCtx, cancel := detached(ctx)
 	defer cancel()
 	if err := box.Close(closeCtx); err != nil {
@@ -700,12 +597,10 @@ func (m *Manager) discard(ctx context.Context, box Sandbox) {
 }
 
 // Reconnect reattaches to an existing (possibly paused) box: Connect
-// auto-resumes a paused one. No re-Install and no setup re-apply — the box
-// already carries its bin directory, the work dir and the launch's provisioning,
-// which is why a box is only ever reattached for the harness it was installed for.
-// A repository on Gitlet is never provisioning: the run
-// checks each out itself, with the commands `code_checkout` answers, so the
-// box keeps what an earlier job cloned and is given nothing here.
+// auto-resumes a paused one. No re-Install and no setup re-apply: the box
+// already carries both, so it is only ever reattached for the harness it was
+// installed for. A Gitlet repository is never provisioned (the run checks each
+// out through `code_checkout`), so the box keeps what earlier jobs cloned.
 func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID, harness string) (Sandbox, Runner, error) {
 	runner, err := m.RunnerFor(harness)
 	if err != nil {

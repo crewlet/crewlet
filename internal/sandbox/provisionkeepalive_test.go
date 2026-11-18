@@ -11,29 +11,24 @@ import (
 	"time"
 )
 
-// slowStep is how long each setup command takes in the case below: four
-// minutes, so the fourth command of a launch ends past the 15-minute timer the
-// box was made with, and a launch's every command together — ten — is well
-// past it.
+// slowStep is each setup command's duration: four minutes, so a launch's
+// fourth command ends past the box's 15-minute timer, and all ten far past it.
 const slowStep = 4 * time.Minute
 
 // provisionSteps is how many operator steps the case's launch is given.
 const provisionSteps = 10
 
-// A BOX IS KEPT ALIVE FOR AS LONG AS ITS LAUNCH PROVISIONS IT. Its provider
-// ends a box at its timer, which nothing but a refresh moves, and the waiter's
-// keepalive refreshes only a running row's box — never one a launch is still
-// giving its setup steps, one after another, each to its own budget. A fresh
-// box given ten of the operator's steps of four minutes each is refreshed to
-// the manager's box timeout from the moment provisioning begins — before the
-// first command — and at most every provisionRefresh after, so its timer
-// never runs out while the forty minutes of steps run; and nothing refreshes
+// A BOX IS KEPT ALIVE FOR AS LONG AS ITS LAUNCH PROVISIONS IT. A provider ends
+// a box at its timer, which only a refresh moves, and the waiter's keepalive
+// refreshes only a running row's box, never one still given setup steps. A box
+// given ten four-minute steps is refreshed to the box timeout when
+// provisioning begins (before the first command) and at most every
+// provisionRefresh after, so its timer never runs out; and nothing refreshes
 // it once the launch has returned.
 //
-// Mutations: start no keepalive in Acquire — the box is reaped at its fourth
-// command, red; refresh only on the ticker — its first refresh comes a whole
-// interval after its first command began, red; never stop it — refreshes go
-// on after the launch, red.
+// Mutations: start no keepalive in Acquire — reaped at its fourth command,
+// red; refresh only on the ticker — the first refresh comes an interval after
+// the first command, red; never stop it — refreshes go on after the launch, red.
 func TestABoxIsKeptAliveWhileItsLaunchProvisionsIt(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -57,25 +52,21 @@ func TestABoxIsKeptAliveWhileItsLaunchProvisionsIt(t *testing.T) {
 }
 
 // timedBoxes is a provider whose boxes end at their timer, as a remote
-// provider's do: a create sets the timer to the spec's TTL and a reconnect —
-// of a box the case paused, whose snapshot ran no timer — starts it again at
-// what E2B's sets ([defaultSandboxTTLSeconds]); each [Sandbox.SetTimeout]
-// moves it, and a box whose timer ran out is gone — a later refresh revives
-// nothing — so a command run on it fails, as one on a reclaimed box does.
-// Every command takes step.
+// provider's do: create sets it to the spec's TTL, a reconnect (of a paused
+// box, whose snapshot ran no timer) restarts it at E2B's
+// [defaultSandboxTTLSeconds], each [Sandbox.SetTimeout] moves it, and once it
+// runs out the box is gone for good, so a command on it fails as on a
+// reclaimed box. Every command takes step.
 //
-// ONLY IN A BUBBLE ([newTimedBoxes]): a timer, a refresh and a command are
-// each an instant of the clock the case runs on, compared and slept on as a
-// provider's own clock would be, which only a bubble keeps exact — forty
-// minutes of steps in no time, and every instant the schedule's own.
+// ONLY IN A BUBBLE ([newTimedBoxes]): timers, refreshes and commands are
+// instants on the case's clock, which only a bubble keeps exact.
 type timedBoxes struct {
 	*FakeProvider
 	mu   sync.Mutex
 	step time.Duration
-	// command is [timedBoxes.timedCommand], which [newTimedBoxes] sets.
-	// Create, which the manager calls as a [Provider], is a method with an
-	// exported name, which no bubble declaration can hold to its callers, so
-	// it reaches the timed command through this rather than by its name.
+	// command is [timedBoxes.timedCommand], set by [newTimedBoxes]: Create,
+	// an exported method no bubble declaration can hold to its callers,
+	// reaches the timed command through this rather than by name.
 	command func(box *FakeSandbox) (ExecResult, error)
 	// set is the timers each box's create and reconnects set, by box.
 	set map[string][]FakeTimeout
@@ -165,10 +156,9 @@ func (p *timedBoxes) timedCommand(box *FakeSandbox) (ExecResult, error) {
 	return ExecResult{}, nil
 }
 
-// aliveAt reports whether box's timer has not run out up to now since its
-// provider last set it — its create, or the reconnect that woke it: every
-// refresh since came before the timer it replaced ran out, and the last has
-// not.
+// aliveAt reports whether box's timer, since its provider last set it (create
+// or the reconnect that woke it), has not run out by now: every later refresh
+// came before the timer it replaced ran out, and the last has not.
 //
 //fixedwait:bubble
 func (p *timedBoxes) aliveAt(box *FakeSandbox, now time.Time) bool {
@@ -197,11 +187,10 @@ func (p *timedBoxes) aliveAt(box *FakeSandbox, now time.Time) bool {
 	return !now.After(ends)
 }
 
-// keptAlive fails t unless box lived through a provisioning that began at
-// began and ran that many commands, longer together than the box's timer:
-// refreshed to the box timeout at the instant provisioning began, before its
-// first command, then at most every provisionRefresh while the commands ran;
-// and never again once the launch had returned.
+// keptAlive fails t unless box survived a provisioning that began at began and
+// ran that many commands, together longer than its timer: refreshed to the box
+// timeout at began, before the first command, then at most every
+// provisionRefresh, and never once the launch had returned.
 //
 //fixedwait:bubble
 func (p *timedBoxes) keptAlive(t *testing.T, box *FakeSandbox, began time.Time, commands int) {

@@ -16,12 +16,10 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
-// TestMain silences the engine logger. Every Open logs a line per applied
-// schema file and the suite opens a database per subtest — several hundred
-// lines of successful boot ahead of the one that says what failed.
-//
-// It also runs a box's teardown in a loop, when this binary was re-executed
-// as one ([runWriteBackWriter]), rather than the suite.
+// TestMain silences the engine logger: every Open logs a line per applied
+// schema file, hundreds of lines ahead of the one that says what failed. It
+// also runs a box's teardown loop when re-executed as one
+// ([runWriteBackWriter]).
 func TestMain(m *testing.M) {
 	logging.Configure(slog.LevelError, logging.FormatText, io.Discard)
 	// THE LANDLOCK HELPER IS THE ENGINE'S OWN BINARY, re-executed; in this
@@ -38,34 +36,26 @@ func TestMain(m *testing.M) {
 
 func TestPendingStoreContract(t *testing.T) {
 	t.Parallel()
-	// ONE implementation now — the run record lives in the fleet's
-	// coordination store, because a detached run is recovered by whichever
-	// node owns its seat NEXT. The record's own semantics are certified
-	// against both coordination backends by internal/coord/coordtest; what
-	// this suite covers is everything built on top of them, which is all of
-	// the conditional flips: the at-most-once tail claim, the epoch fence,
-	// the pause expiry.
+	// The record lives in the fleet's coordination store, since a detached run is
+	// recovered by whichever node owns its seat next. internal/coord/coordtest
+	// certifies the record itself; this suite covers the conditional flips built
+	// on it: the at-most-once tail claim, the epoch fence, the pause expiry.
 	sandboxtest.Run(t, func(*testing.T) (sandbox.PendingStore, coord.SandboxRuns) {
 		runs := memory.NewFleet()
 		return sandbox.NewCoordStore(runs), runs
 	}, func(runs coord.SandboxRuns) sandbox.PendingStore { return sandbox.NewCoordStore(runs) })
 }
 
-// NOTHING EMPTY EVER ANSWERS ANYTHING, and that is a rule of the value rather
-// than of the store that reads it.
+// NOTHING EMPTY EVER ANSWERS ANYTHING, a rule of the value rather than of the
+// store. A run launched by an A2A wake or a task assignment carries no
+// conversation, so two absences comparing equal would splice the first thing a
+// person said to a seat into somebody else's executor. The value decides which
+// parked run a delivery answers ([sandbox.ConversationRef.Best]), so every
+// caller matching a delivery to a run inherits the rule from it.
 //
-// A run launched by an A2A wake or a task assignment carries no conversation,
-// and a wake that could not name one carries none either — so two absences
-// comparing equal would make every such delivery the answer to every such run,
-// and the first thing a person said to a seat would splice into somebody
-// else's executor. A store only hands over a seat's parked runs as
-// candidates and the value decides which of them a delivery answers
-// ([sandbox.ConversationRef.Best]), so the rule is asserted here, on the value,
-// where every caller that matches a delivery to a run inherits it.
-//
-// A ROW NAMING ONLY A PARTITION IS ANSWERED BY NOTHING, a reply in the very
-// thread it was launched from included: the identity is what admits a
-// delivery, and the partition only picks between rows the identity admitted.
+// A ROW NAMING ONLY A PARTITION IS ANSWERED BY NOTHING, even a reply in its own
+// thread: the identity admits a delivery, and the partition only picks between
+// rows the identity admitted.
 func TestNoConversationAnswersNoParkedRun(t *testing.T) {
 	t.Parallel()
 	keyless := sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe"}
@@ -130,14 +120,11 @@ func TestAReplyIsAdmittedOnItsConversationAlone(t *testing.T) {
 	}
 }
 
-// A ROW KEEPS WHAT THIS BUILD CANNOT READ.
-//
-// Every flip is a compare-and-swap of the WHOLE value, and in a fleet mid
-// upgrade the older build makes some of them. Decoded into the struct alone,
-// that build wrote back only the fields it knew, and a newer build's key —
-// the item the run is charged to, the audience its question waits on — was
-// deleted by the first claim it made. The key here is one no build declares,
-// so what is being tested is the codec rather than any field.
+// A ROW KEEPS WHAT THIS BUILD CANNOT READ. Every flip is a compare-and-swap of
+// the WHOLE value, and mid-upgrade an older build makes some of them; decoding
+// into the struct alone would delete a newer build's key (the item the run is
+// charged to, the audience its question waits on) at its first claim. The key
+// here is one no build declares, so the test is of the codec, not a field.
 func TestAPendingRunKeepsKeysThisBuildDoesNotKnow(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -245,10 +232,9 @@ func (v *vanishingRuns) CreateSandboxRun(ctx context.Context, turnID string, val
 	return v.runStore.CreateSandboxRun(ctx, turnID, value)
 }
 
-// A ROW THAT VANISHES UNDER A LAUNCH IS CREATED AGAIN, not reported open. The
-// reset that found nothing used to report success, so the launch went on to
-// start a job — in a box — on a row that did not exist, which nothing would ever
-// collect or reclaim.
+// A ROW THAT VANISHES UNDER A LAUNCH IS CREATED AGAIN, not reported open:
+// otherwise the launch starts a job in a box on a row that does not exist,
+// which nothing would ever collect or reclaim.
 //
 // Mutation: return from the reset whatever it found, and the launch answers a
 // job no row holds.
@@ -272,11 +258,9 @@ func TestALaunchWhoseRowVanishesCreatesItAgain(t *testing.T) {
 }
 
 // A LAUNCH UNDER A LEASE THE ROW HAS OUTGROWN IS THIS NODE NOT HOLDING THE
-// SEAT: the seat's next holder has the row. Said as anything else, a caller
-// told only that the record refused the launch could not tell the seat's move
-// from a launch that broke, and a resumed turn whose relaunch it refused was
-// handed back for a retry rather than on to the seat's holder
-// ([sandbox.SeatLost]).
+// SEAT ([sandbox.SeatLost]): said as anything else, a caller could not tell
+// the seat's move from a broken launch, and would hand a refused relaunch of a
+// resumed turn back for a retry rather than on to the seat's holder.
 //
 // Mutation: drop the %w ErrSeatNotHeld from writeFound's refusal of an
 // outranked fence.

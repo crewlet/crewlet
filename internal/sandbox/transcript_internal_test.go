@@ -9,10 +9,8 @@ import (
 )
 
 // longRun is how many tool lines a run too long for its record wrote: some
-// 470 KB of them, past the start and the end the record keeps together
-// ([MaxRunTextBytes]) by enough that a middle is always left out. Every
-// branch of the bound is reached at it, and every line more is only bytes
-// redacted again.
+// 470 KB, past [MaxRunTextBytes] by enough that a middle is always left out,
+// so every branch of the bound is reached; more lines only cost redaction.
 const longRun = 4_000
 
 // toolLines is n distinct transcript lines of the width an OpenCode tool line
@@ -37,10 +35,8 @@ func TestATranscriptThatFitsIsCarriedWhole(t *testing.T) {
 }
 
 // A LONG TRANSCRIPT KEEPS ITS START AND ITS END, in whole lines, and says
-// exactly how much of its middle it left out. It used to keep its last 256 KiB
-// from wherever the byte count landed, mid-line, with a bare "…" and no count —
-// so a reader lost the run's plan and opening moves, and the screen's line
-// count presented what was kept as the whole.
+// exactly how much of its middle it left out: the start holds the run's plan,
+// and a cut without a count reads as the whole.
 func TestALongTranscriptKeepsItsStartAndEndAndCountsItsMiddle(t *testing.T) {
 	t.Parallel()
 	all := toolLines(longRun)
@@ -112,10 +108,9 @@ func TestALineLongerThanItsHalfKeepsAMarkedPartOfItself(t *testing.T) {
 	}
 }
 
-// REDACTED WHOLE, THEN BOUNDED. A private key is the one credential shape that
-// spans lines, so a whole-line cut can still fall inside one: its BEGIN kept on
-// one side and its END dropped, which no pattern then recognises — and the
-// key's body would be published on the launch's record.
+// REDACTED WHOLE, THEN BOUNDED. A private key spans lines, so a whole-line cut
+// can fall inside one, keeping its BEGIN and dropping its END, which no pattern
+// then recognises, and the key's body would reach the launch's record.
 func TestAKeyAcrossEitherCutIsRedactedFirst(t *testing.T) {
 	t.Parallel()
 	const body = "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n"

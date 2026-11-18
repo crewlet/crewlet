@@ -33,21 +33,17 @@ func ordinalOf(calls []BridgeCall, name string) (int, bool) {
 	return calls[i].Appended, true
 }
 
-// EVERY APPENDED CALL IS NUMBERED IN ITS ROUND, one past the call the log took
-// before it, through whatever the log does with its calls: a long round's middle
-// dropped by the bound, where each listed call keeps the number it was taken at
-// and the numbers the log no longer lists are exactly the calls it counts
-// without listing; calls whose entries were written ahead of them, each
-// numbered as its update lands, in the order they finish, never as it begins,
-// and one the log already lists neither taken nor numbered again; and the call
-// a person approved, which every reader's copy numbers as the next job's opening
-// then numbers it, before any call of that job.
+// EVERY APPENDED CALL IS NUMBERED IN ITS ROUND, one past the call before it:
+// past the bound, a listed call keeps its number and the unlisted numbers are
+// the calls counted without listing; a call whose entry was written ahead is
+// numbered as its update lands, in finishing order, and one already listed is
+// never numbered again; a person's approved call is numbered once, as the next
+// job's opening, before any call of that job.
 //
-// Mutation: number a call by what the log lists alone (len(Calls)+1), or by
-// its place (Seq), and the dropped middle's case goes red; number a call the
-// log already lists again, or a call as its entry is written, and the case of
-// the updates does; number the approved call anywhere but the one append, and
-// its copy and its opening disagree.
+// Mutation: number by len(Calls)+1 or by Seq, and the dropped middle's case
+// goes red; number a listed call again, or a call as its entry is written, and
+// the updates' case does; number the approved call anywhere but the one append,
+// and its copy and its opening disagree.
 func TestEveryAppendedCallIsNumberedInItsRound(t *testing.T) {
 	t.Parallel()
 	t.Run("past the bound, its middle dropped", func(t *testing.T) {
@@ -195,19 +191,16 @@ func keptAfter(t *testing.T, before, during []int) (SessionCapture, BridgeLog) {
 	return *held.Kept, log
 }
 
-// A CAPTURE'S SAVE POINT IS THE APPEND COUNT ITS LOG READ SAW. The capture reads
-// the round's log before it takes the box, and states how many calls the log
-// had taken then: not the highest place it lists, nor how many it lists, which a
-// long round's dropped middle and a harness's own order set apart from the
-// count; and a call answered while the box is read, after the log was, is
-// numbered past the save point, so a continuation is told it. A log no call
-// reached is a save point of none, stated; a capture refused before the log was
-// read states none, "not known".
+// A CAPTURE'S SAVE POINT IS THE APPEND COUNT ITS LOG READ SAW, read before the
+// box is taken: not the highest place listed nor how many are listed, which a
+// dropped middle and the harness's own order set apart from the count. A call
+// answered while the box is read is past the save point, so a continuation is
+// told it. A log no call reached states a save point of zero; a capture refused
+// before the log was read states none, "not known".
 //
-// Mutation: place the session by the log's highest place (LastSeq) or by what
-// it lists (len(Calls)), read the log after the take, or state no save point
-// for a log no call reached, and a case goes red; state one on a refusal made
-// before the log was read, and its case does.
+// Mutation: place the session by LastSeq or len(Calls), read the log after the
+// take, or state no save point for a log no call reached, and a case goes red;
+// state one on a refusal made before the log was read, and its case does.
 func TestACapturesSavePointIsTheAppendCountItsLogReadSaw(t *testing.T) {
 	t.Parallel()
 	t.Run("a long round, and a call answered as the box was read", func(t *testing.T) {
@@ -334,22 +327,16 @@ func TestAKeptStampWithNoSavePointIsNotContinued(t *testing.T) {
 }
 
 // A CUT-OFF CAPTURE IS PLACED AT THE NEWEST SAVE POINT ITS LAUNCH IS KNOWN TO
-// HOLD, AND AT NONE IT IS NOT. The take of a job still working, and every
-// capture of a job cut off, is packed where its harness may not have written
-// every call it made, and Claude Code makes a call before it writes it, so
-// nothing read off the log as such a capture is taken says what the session
-// holds: the capture takes its launch's own newest landed capture's point, the
-// row's kept capture only where it is that launch's — its job and its ordinal
-// both, a capture that differs in either being another launch's — or the
-// round's start. The places an older build reads come from the same capture as
-// the point, copied rather than shared.
+// HOLD, AND AT NONE IT IS NOT (see savepoint.go's file comment): its launch's
+// own newest landed capture's point — the row's kept capture only where its job
+// and its ordinal both are that launch's — or zero. The places an older build
+// reads come from the same capture as the point, copied rather than shared.
 //
-// Mutation: take the turn's kept capture of an earlier launch for this
-// launch's, read the launch off its job alone or its ordinal alone, or take a
-// kept capture that states no save point for one that states zero, and a case
-// goes red; share the kept capture's open places rather than copy them, and
-// the copied case does; leave the places a stamp already carried where no
-// capture places it, and every case placed at zero does.
+// Mutation: take an earlier launch's kept capture, match the launch on its job
+// or its ordinal alone, or read a kept capture stating no save point as zero,
+// and a case goes red; share the open places rather than copy them, and the
+// copied case does; keep places a stamp already carried where no capture
+// places it, and every case placed at zero does.
 func TestACutOffCaptureIsPlacedAtTheNewestSavePointItsLaunchIsKnownToHold(t *testing.T) {
 	t.Parallel()
 	// landed is a capture of the job launch (its ordinal seq) at save point
@@ -400,19 +387,16 @@ func TestACutOffCaptureIsPlacedAtTheNewestSavePointItsLaunchIsKnownToHold(t *tes
 }
 
 // A SAVE IS PLACED AT THE NEWEST SAVE POINT ITS LAUNCH IS KNOWN TO HOLD, AND AT
-// NONE IT IS NOT. A save is packed while its job works, and Claude Code makes a
-// call before it writes it, so nothing read off the log as the save is taken
-// says what the session holds: the save takes the newest of its launch's own
-// landed save and the capture the launch continued, where that capture counts
-// this round's calls, or the round's start. The places an older build reads come
-// from the same capture as the point, copied rather than shared.
+// NONE IT IS NOT: the newest of its launch's own landed capture and the capture
+// the launch continued, where that one counts this round's calls, or zero. The
+// places an older build reads come from the same capture, copied.
 //
-// Mutation: take the turn's kept capture of an earlier launch for this launch's
-// save, the continued capture's point across a new round or from a row that
-// names none, or the first candidate rather than the newest, and a case goes
-// red; place the older build's places off another capture, or share its slice,
-// and the copied case does; leave the places a stamp already carried where no
-// capture places it, and every case placed at zero does.
+// Mutation: take an earlier launch's kept capture, the continued capture's
+// point across a new round or from a row naming none, or the first candidate
+// rather than the newest, and a case goes red; take the older build's places
+// off another capture, or share its slice, and the copied case does; keep
+// places a stamp already carried where no capture places it, and every case
+// placed at zero does.
 func TestASaveIsPlacedAtTheNewestSavePointItsLaunchIsKnownToHold(t *testing.T) {
 	t.Parallel()
 	// saved is a capture of the job launch (its ordinal seq) at save point
@@ -473,27 +457,18 @@ func TestASaveIsPlacedAtTheNewestSavePointItsLaunchIsKnownToHold(t *testing.T) {
 	}
 }
 
-// A CAPTURE IS PLACED BY ITS LOG READ ONLY WHERE ITS HARNESS ENDED ITS OWN RUN.
-// A harness can make a call, and have it answered, before it writes the call to
-// its transcript (Claude Code 2.1.310, measured: it writes a message only once
-// the whole of it has streamed), so the calls its round's log had taken before
-// the pack say what the archive holds only of a job whose harness went cleanly
-// by itself, its script packing it. Every other capture is placed
-// at the newest save point its launch is known to hold: a job still working,
-// taken as it stands; and every job CUT OFF — its harness killed, past its
-// end's grace or by a signal its script packed after; told to stop by its end;
-// ended before its script packed, packed by the read; or lost, its box read by
-// the loss, which cannot say how its job went. Each is placed at the round's
-// start, its launch holding no landed capture and the capture it continued
-// unknown — or at its own launch's landed capture where it holds one, with that
-// capture's places for an older build — so a relaunch continuing it is told
-// every call its archive may lack.
+// A CAPTURE IS PLACED BY ITS LOG READ ONLY WHERE ITS HARNESS ENDED ITS OWN RUN
+// (see savepoint.go's file comment). Every other one — a job still working, and
+// every job CUT OFF: killed, told to stop by its end, ended before its script
+// packed, or lost — is placed at its own launch's landed capture with that
+// capture's places, or zero, so a relaunch continuing it is told every call its
+// archive may lack.
 //
-// Mutation: place a capture of a job cut off at its log read, as a job that is
-// over was, and its cases count calls its archive may lack; place every
-// capture at its launch's newest save point, and the job that ended its own
-// run tells again every call its session holds; place one at zero whatever its
-// launch holds, and the case whose launch kept a capture goes red.
+// Mutation: place a cut-off capture at its log read, and its cases count calls
+// its archive may lack; place every capture at its launch's newest save point,
+// and the job that ended its own run tells again every call its session holds;
+// place one at zero whatever its launch holds, and the case whose launch kept a
+// capture goes red.
 func TestACaptureIsPlacedByItsLogReadOnlyWhereItsHarnessEndedItsOwnRun(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

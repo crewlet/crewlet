@@ -17,12 +17,9 @@ import (
 )
 
 // What these cases protect: every failure a launch can meet is CLASSED where it
-// is met, by what clears it, so whatever tells the failure, to a model or a
-// person, can say whether a wait clears it or a person's change does, without
-// reading the error's text, which is the operator's. A failure that lost its
-// class reads as a fault of the node; one that took the wrong class sends its
-// reader to retry a key nobody has fixed, or to give up on an outage that
-// clears in a minute.
+// is met, by what clears it ([sandbox.Why]). A failure that lost its class
+// reads as a fault of the node; one with the wrong class sends its reader to
+// retry a key nobody fixed, or to give up on an outage that clears in a minute.
 
 // e2bAnswering is a provider whose control plane answers every request with
 // status, or — when status is zero — whose server is gone before it is asked.
@@ -50,7 +47,7 @@ func e2bAnswering(t *testing.T, status int) *sandbox.E2BProvider {
 // account unpaid or at a limit, E2B failing on its side, or the template the
 // request names — and a status that says none of those is left unclassed
 // rather than filed under the nearest. An unpaid account is not a limit: no
-// wait clears it, so it is a class of its own that offers none.
+// wait clears it.
 //
 // Mutation: drop the status table, or the create's template arm, and a row
 // goes red.
@@ -104,9 +101,8 @@ func TestAnE2BCreateIsClassedByWhatClearsIt(t *testing.T) {
 // A REQUEST THAT REACHED NO HOST IS CLASSED BY WHY: a domain that doesn't
 // resolve, or a certificate that doesn't match it, is the deployment's
 // providers.sandbox.e2b domain, which no wait changes; a timeout or a reset is
-// E2B, or the way to it, not answering, which clears when it does. Every one
-// was E2B not answering, so a mistyped domain read as an outage that would
-// clear by itself.
+// E2B, or the way to it, not answering, which clears when it does. Classed
+// unavailable, a mistyped domain would read as an outage that clears itself.
 //
 // Mutation: class every transport failure unavailable and the first two rows
 // fail.
@@ -141,11 +137,9 @@ func TestAnE2BRequestThatReachedNoHostIsClassedByWhy(t *testing.T) {
 	}
 }
 
-// A REQUEST ITS CALLER CANCELLED IS NO CLASS: a drain, a lost lease or a turn
-// stopped cancels it, which says nothing about E2B, and marked it was told as
-// the provider not answering. A request its own bound ended while the caller
-// still waits (an idle watchdog cancelling the exchange it guards) is still
-// E2B not answering.
+// A REQUEST ITS CALLER CANCELLED IS NO CLASS: a drain, a lost lease or a
+// stopped turn says nothing about E2B. A request its own bound ended while the
+// caller still waits (an idle watchdog) is still E2B not answering.
 //
 // Mutation: mark a transport failure whatever the caller's context says, and
 // the first half goes red; leave every cancellation unmarked, and the second.
@@ -215,9 +209,8 @@ func TestACreateNamingNoBoxIsTheProviders(t *testing.T) {
 }
 
 // A BOX'S OWN AGENT IS CLASSED AS THE PROVIDER IS, except where it refuses the
-// box's own access token: that credential was handed to the engine at the
-// create, so no person's key is wrong, and it is left for the caller to read as
-// the fault it is.
+// box's own access token: the engine was handed it at create, so no person's
+// key is wrong, and the caller reads it as the fault it is.
 func TestABoxsAgentIsClassedByWhatClearsIt(t *testing.T) {
 	t.Parallel()
 	for status, want := range map[int]sandbox.Why{
@@ -264,11 +257,10 @@ func TestABoxsAgentIsClassedByWhatClearsIt(t *testing.T) {
 }
 
 // A SETUP STEP IS THE COMPANY'S RECIPE WHERE A COMMAND OF IT EXITED, and the
-// box's where the box never ran it to an exit: the recipe is a person's to
-// change, a box that failed under it is not. The one status that is not the
-// recipe's to change is 75, its own word that a download it makes failed for
-// now, which a wait clears; its own timeout's 124 is still the recipe's. The
-// command's account is never read: every step here prints the same 503.
+// box's where the box never ran it to an exit: only the recipe is a person's to
+// change. Exit 75 is the recipe saying a download fails for now, which a wait
+// clears; its own timeout's 124 is still the recipe's. The command's output is
+// never read: every step prints a 503.
 //
 // Mutation: class every [sandbox.SetupError] as configuration, or drop its
 // Unwrap, or class 75 as configuration or 124 as temporary, and a case goes

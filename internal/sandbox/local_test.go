@@ -59,16 +59,10 @@ func TestContainerModeRefusesToStartWithoutAnImage(t *testing.T) {
 }
 
 // A HOST THAT CANNOT RUN THE CONTAINER CELL IS REFUSED WHEN ITS PROVIDER IS
-// BUILT, which is when the config is applied, and not at the first executor.
-//
-// NewLocal looks the runtime up, not Create. Were the lookup left to the first
-// box, an engine on a host with neither docker nor podman would apply a
-// `run_in: container` company and fail only once a seat asked for a box,
-// minutes into a turn: the config says yes and the runtime says no, the
-// direction that is hardest to see. So every spelling of the runtime is
-// refused here, as a [LocalError] that says what to change. A direct cell on
-// the same host still builds: it drives no runtime, so refusing it would turn
-// a host without docker away from work that never needed one.
+// BUILT (NewLocal, when the config is applied), not by Create at the first
+// box, which would fail minutes into a turn after the config was accepted.
+// Every spelling of the runtime is refused, as a [LocalError] that says what
+// to change. A direct cell on the same host still builds: it drives no runtime.
 func TestContainerModeRefusesToStartWithoutARuntimeOnThePath(t *testing.T) {
 	// Not parallel: PATH is how the backend finds its runtime, and this case
 	// empties it, as TestTheRuntimeGetsWhatItsRuntimeEnvDeclares fills it.
@@ -84,19 +78,17 @@ func TestContainerModeRefusesToStartWithoutARuntimeOnThePath(t *testing.T) {
 				runtime, err)
 			continue
 		}
-		// What the operator reads. A runtime named outright is a field whose
-		// command is not there; "auto" found neither, in the line the docs'
-		// failure modes quote, and the cell that needs no runtime is the way
-		// out.
+		// A runtime named outright is a field whose command is missing; "auto"
+		// found neither (the line the docs' failure modes quote) and points to
+		// the cell that needs no runtime.
 		want := []string{"providers.sandbox.local.runtime is " + strconv.Quote(runtime),
 			"not on the engine host's PATH"}
 		if runtime == "" || runtime == "auto" {
 			want = []string{"neither docker nor podman is on the engine host's PATH",
 				fmt.Sprintf("use run_in %q", Direct)}
-			// AND NOT THE RUNTIME FIELD. Every value it takes is looked up on
-			// this same PATH, and this case refuses each one named outright,
-			// so offering it sends the operator to a change that cannot build
-			// the cell, and to a second refusal after it.
+			// AND NOT THE RUNTIME FIELD: every value of it is looked up on this
+			// same PATH and refused above, so offering it leads to a second
+			// refusal.
 			if strings.Contains(refusal.Error(), "providers.sandbox.local.runtime") {
 				t.Errorf("runtime %q: the refusal offers providers.sandbox.local.runtime, "+
 					"though no value of it builds this cell on this PATH: %v", runtime, refusal)
@@ -223,11 +215,10 @@ func TestTheChildSeesTheRunEnvAndTheBoxHomeButNotTheEngineSecrets(t *testing.T) 
 }
 
 // EVERY TEMP ROOT A HOST BOX'S PROCESSES READ LIES INSIDE THE BOX, one
-// variable at a time, and as the box's own directory rather than anywhere
-// under its home: a temp root left at its default is a write outside the box,
-// which the host's confinement refuses. TMPDIR alone was set, and Claude Code,
-// which roots its per-uid temp directory at CLAUDE_CODE_TMPDIR or else /tmp,
-// had every Bash command of a confined deep-work run refused before it ran.
+// variable at a time (Claude Code reads CLAUDE_CODE_TMPDIR, not TMPDIR), and
+// as the box's own directory rather than anywhere under its home: a temp root
+// left at its default is a write outside the box, which the host's
+// confinement refuses.
 func TestEveryTempRootOfAHostBoxIsItsOwnTmp(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
@@ -266,14 +257,11 @@ func TestThePerCommandEnvOverridesTheRunEnv(t *testing.T) {
 }
 
 // A JOB LAUNCHED INTO A KEPT BOX CARRIES ITS OWN LAUNCH'S ENVIRONMENT, never
-// the one the box was made with. A follow-up job reaches a kept box through
-// Connect, and the box it gets back holds no environment of its own: so a
-// credential replaced between the two launches reaches the second job, and one
-// the new sign-in no longer names (a token swapped for a key) is gone from it
-// rather than lingering beside the new one, where a harness that prefers the old
-// variable would sign in with a credential the vendor already refused. That is
-// what lets a job refused on a replaced sign-in be relaunched in its own box
-// and sign in with the new one.
+// the one the box was made with: the box Connect hands back holds no
+// environment of its own. So a credential replaced between the launches
+// reaches the second job, and one the new sign-in no longer names (a token
+// swapped for a key) is gone, rather than lingering where a harness that
+// prefers it would sign in with a credential the vendor already refused.
 //
 // Mutation: have a reattached box keep the env it was created with, and the
 // old token reaches the follow-up job.
@@ -337,11 +325,9 @@ func TestDirectModeRefusesToWriteOutsideTheBox(t *testing.T) {
 	}
 }
 
-// A TILDE IS THE BOX'S HOME, in a direct box as in a remote one, whose own
-// agent expands it when it writes a setup file: "~/.npmrc" used to be written
-// to a directory named "~" inside the home here, so one step put its file in
-// two places depending on the cell. Another account's home is refused, as the
-// remote agent refuses it.
+// A TILDE IS THE BOX'S HOME, in a direct box as in a remote one, whose agent
+// expands it, so a setup file lands in one place whatever the cell; never a
+// directory named "~". Another account's home is refused, as remotely.
 func TestADirectBoxWritesATildePathInItsHome(t *testing.T) {
 	t.Parallel()
 	box := mustCreate(t, newDirect(t), Spec{})
@@ -362,15 +348,11 @@ func TestADirectBoxWritesATildePathInItsHome(t *testing.T) {
 	}
 }
 
-// A LOCAL BOX'S REFUSAL NAMES A REMEDY THAT WORKS IN EVERY LOCAL CELL.
-//
-// The direct box's used to end "or use run_in container", and a container box
-// refuses the same path: it writes a file only under its one mount, the home.
-// So an operator who followed it moved the seat and met the same refusal in
-// other words. What works in both is the box's home: a file named relative to
-// it, which a file entry can always write (a direct box's home is minted per
-// box, so no absolute path names it), or a setup command writing under
-// "$HOME".
+// A LOCAL BOX'S REFUSAL NAMES A REMEDY THAT WORKS IN EVERY LOCAL CELL, never
+// another cell, which refuses the same path (a container box writes only under
+// its home mount). What works in both is the home: a file named relative to it
+// (a direct box's home is minted per box, so no absolute path names it), or a
+// setup command writing under "$HOME".
 func TestALocalBoxsRefusalNamesARemedyThatWorks(t *testing.T) {
 	t.Parallel()
 	const system = "/usr/local/bin/tool"
@@ -581,20 +563,14 @@ func stoppedTree(states map[int]string, leader int) bool {
 // awaitStopped waits for a paused job's tree to stop ([stoppedTree]), failing
 // the case with what if it never does.
 //
-// WAITED FOR, NEVER GIVEN A HEAD START. A SIGSTOP is delivered, not applied:
-// each process stops once it next runs, finishing at most the call it was in,
-// which a loaded runner can leave for longer than any nap. Once every process
-// has stopped none has a write in flight, so a reading taken after is the
-// paused job's last; and a tree that reads stopped does no work until
-// something continues it, which no quiet window can say of a job a runner
-// merely did not schedule inside it.
+// WAITED FOR, NEVER GIVEN A HEAD START: a SIGSTOP takes effect once each
+// process next runs, which a loaded runner can delay past any nap. A tree read
+// stopped has no write in flight and does no work until continued, which no
+// quiet window can say.
 //
-// ITS JOB FORKS NOTHING, running builtins alone. A shell starts a command by
-// vfork and waits in the kernel, uninterruptibly, for the child to exec; a
-// stop that lands in that moment stops the child before it does, and leaves
-// the shell waiting on it, reading D rather than T, until something continues
-// the child. Its tree runs nothing then either, but nothing a reader can tell
-// from a shell blocked in a write.
+// ITS JOB FORKS NOTHING, running builtins alone: a stop landing while a shell
+// waits in vfork for its child to exec leaves the shell in D, not T,
+// indistinguishable from a shell blocked in a write.
 func awaitStopped(t *testing.T, leader int, what string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -646,14 +622,13 @@ func TestPauseStopsTheTreeAndConnectResumesIt(t *testing.T) {
 		"Connect did not resume the paused box")
 }
 
-// A READER NEVER WAKES A BOX. Attach hands a stopped direct box back STOPPED —
-// its files are the host's and its probe asks the host's kernel, so neither
-// needs the job to run — where Connect would SIGCONT it.
+// A READER NEVER WAKES A BOX. Attach hands a stopped direct box back STOPPED
+// (its files and its probe are the host's, so neither needs the job to run),
+// where Connect would SIGCONT it.
 //
-// READ AT ONCE, NOT OVER A WINDOW: a SIGCONT wakes every process of the group
-// inside the kill(2) that sends it, so a tree an Attach or its probe continued
-// no longer reads stopped by the time they return, however long it then takes
-// to work again. The pause before them is waited for ([awaitStopped]).
+// READ AT ONCE, NOT OVER A WINDOW: a SIGCONT wakes the group inside the
+// kill(2) that sends it, so a tree Attach continued no longer reads stopped
+// when it returns. The pause before is waited for ([awaitStopped]).
 //
 // Mutation: resume in Attach, and the paused tree runs again.
 func TestAttachingToAPausedBoxLeavesItPaused(t *testing.T) {
@@ -687,10 +662,9 @@ func TestAttachingToAPausedBoxLeavesItPaused(t *testing.T) {
 }
 
 // A PAUSED CONTAINER IS REFUSED, NEVER UNPAUSED. Its liveness probe is an exec
-// into it, which a paused container refuses, so it cannot be read as it is —
-// and Attach reads the runtime's own state rather than unpausing to find out.
-// The fake runtime here logs every call it is handed and answers `inspect` from
-// a file the test writes, so the log holds only what the engine asked.
+// a paused container refuses, so Attach reads the runtime's own state rather
+// than unpausing to find out. The fake runtime logs every call and answers
+// `inspect` from a file the test writes.
 //
 // Mutation: unpause in Attach, and the log shows it.
 func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {
@@ -742,25 +716,13 @@ func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {
 }
 
 // Teardown of a PAUSED box is the case SIGCONT-first exists for: a stopped
-// process never runs again to handle SIGTERM.
+// process never runs again to handle SIGTERM. The job traps SIGTERM, as a
+// harness cleaning up does, and leaves a witness outside the box; the group
+// being gone proves nothing, since the SIGKILL after the grace ends it anyway.
 //
-// THE JOB HANDLES SIGTERM, as a harness cleaning up on its way out does, and
-// leaves a witness outside the box when it does. That the group is gone after
-// Close shows nothing about the SIGCONT: a teardown that terminated the
-// stopped group without continuing it would end it all the same, by the
-// SIGKILL that follows the grace, which reaches a stopped process and which
-// Close waits for. Only the witness shows the job ran again to handle the
-// SIGTERM.
-//
-// ITS JOB FORKS NOTHING, running builtins alone ([awaitStopped]), and the case
-// reads its tree stopped before the teardown, so the SIGCONT has a stopped job
-// to continue.
-//
-// THE BOX IS PAUSED ONLY ONCE ITS JOB SAYS ITS TRAP IS SET, by a ready file
-// it writes after the trap, outside the box like the witness and with a
-// builtin, so it still forks nothing. A pause that lands before the shell runs
-// `trap` leaves SIGTERM at its default, and the teardown's SIGTERM then ends
-// the shell before any trap exists to write the witness.
+// Its job forks nothing ([awaitStopped]) and reads stopped before the
+// teardown. It is paused only once a ready file (a builtin write after the
+// trap) says its trap is set: paused before, SIGTERM is still at its default.
 //
 // Mutation: tear the box down without the SIGCONT, or without the SIGTERM,
 // and the SIGKILL that follows the grace ends the job before its trap runs.
@@ -796,23 +758,14 @@ func TestAPausedBoxCanStillBeTornDown(t *testing.T) {
 	}
 }
 
-// Connect resumes, so the pause reaper must not use it: that would boot the
-// work back up purely to stop it. Kill is the primitive that must not.
+// Connect resumes, so the pause reaper uses Kill, which must not: SIGKILL
+// reaches a stopped process directly, while Close's SIGCONT-first teardown
+// would let a reaped clarification pause run again on its way out.
 //
-// SIGKILL needs no SIGCONT — it cannot be caught, blocked or ignored, so it
-// reaches a stopped process directly. Waking the group first (which Close DOES
-// have to do, because a stopped process really never runs to handle SIGTERM)
-// lets a reaped clarification pause execute again on its way out.
-//
-// The tick file lives OUTSIDE the box, because Kill deletes the box: reading a
-// counter inside it would measure the deletion, not the resume.
-//
-// THE JOB HANDLES SIGTERM, as a harness cleaning up on its way out does, and
-// ticks when it does. The teardown's kill continues the group, terminates it
-// and gives it a grace to go, so a Kill through it has the paused job run
-// again for as long as that grace, which the counter shows once the job is
-// scheduled inside it. A SIGCONT that a SIGKILL overtakes before the job runs
-// again runs nothing, and leaves nothing to show.
+// The tick file lives OUTSIDE the box, which Kill deletes. The job also ticks
+// on SIGTERM, as a harness cleaning up does, so a Kill through the teardown's
+// continue, terminate and grace shows in the counter; a SIGCONT that a
+// SIGKILL overtakes runs nothing.
 //
 // Mutation: kill through the teardown's kill, continuing first, and the paused
 // job works on its way out.
@@ -836,9 +789,8 @@ func TestKillReclaimsAPausedBoxWithoutResumingIt(t *testing.T) {
 	if err := box.Pause(t.Context()); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
-	// THE PREMISE, read off the tree itself ([awaitStopped]): every process
-	// of it stopped, so none has a write in flight and the reading below is
-	// the paused job's last.
+	// THE PREMISE ([awaitStopped]): the whole tree stopped, so the reading
+	// below is the paused job's last.
 	awaitStopped(t, pid, "the box was not actually paused: its job's tree never stopped")
 	before := fileSize(counter)
 
@@ -996,12 +948,10 @@ func TestALoginTheBoxWasNotSeededWithIsNeverWrittenBack(t *testing.T) {
 }
 
 // AN IDLE BOX NEVER WRITES ITS SEED BACK. A run that refreshed nothing holds
-// exactly what it was seeded with — an OpenCode box always does, its export
-// reproducing its import byte for byte — while the host may have refreshed
-// the shared login meanwhile, rotating the seed's refresh token away. Written
-// back, that seed logs every seat out at the next expiry. Every teardown path
-// is held to it: the box Create returned, a kill by id and the orphan reaper,
-// which read the seed from the box's record.
+// exactly its seed (an OpenCode box always does), while the host may have
+// refreshed the shared login meanwhile, rotating the seed's refresh token
+// away: written back, the seed logs every seat out at the next expiry. Every
+// teardown path is held to it: Close, Kill by id and the orphan reaper.
 //
 // Mutation: compare the box's copy with the shared login as it is now, and
 // the host's refresh is reverted.
@@ -1044,12 +994,11 @@ func TestAnIdleBoxNeverWritesItsSeedBackOverALoginTheHostRefreshed(t *testing.T)
 	}
 }
 
-// A REFRESH IS WRITTEN BACK ONLY OVER THE LOGIN IT DESCENDS FROM. A run that
-// refreshed while the host also did holds the older of the two — the host's
-// refresh rotated the token the box's copy came from — so the shared login is
-// kept, and the dropped refresh is said, by file and path and never by value.
-// And a run that refreshed a login the operator removed meanwhile writes none,
-// which is said in its own words: there is no shared login to have kept.
+// A REFRESH IS WRITTEN BACK ONLY OVER THE LOGIN IT DESCENDS FROM. When the
+// host also refreshed, the box's copy is the older, so the shared login is
+// kept and the dropped refresh is said, by path and never by value. A refresh
+// of a login the operator removed meanwhile writes nothing, said in its own
+// words: there is no shared login to have kept.
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 //
@@ -1136,15 +1085,13 @@ func TestARefreshIsDroppedWhereTheSharedLoginMovedPastItsSeed(t *testing.T) {
 }
 
 // THE COMPARISON AND THE WRITE ARE ONE STEP against every other writer of the
-// shared directory: a write-back takes the directory's lock, which the harness
-// backend's seats and `crewlet llm` commands take for theirs, so it waits for
-// a writer that holds it rather than comparing against a login being replaced.
+// shared directory: a write-back takes the directory's lock, as the harness
+// backend's seats and `crewlet llm` commands do, rather than comparing against
+// a login being replaced.
 //
 // READ ONCE THE TEARDOWN IS BLOCKED, in a bubble: Wait returns once every
-// goroutine of the case is blocked, and the teardown's first wait is its wait
-// for the lock the case holds. A write that does not wait for it has landed by
-// then, however late a loaded runner ran it, where a quiet window saw only a
-// write that landed inside it.
+// goroutine blocks, and the teardown's first wait is for the lock the case
+// holds, so a write that skips the lock has landed by then, however late.
 //
 // Mutation: compare and write without the lock, and the write lands while
 // another writer holds it.
@@ -1207,9 +1154,8 @@ func TestASeededCredentialCannotEscapeTheBox(t *testing.T) {
 // the orphan reaper
 // ---------------------------------------------------------------------
 
-// Age alone does not mean orphaned. This is the bug the reaper had: it deleted
-// the checkout and the pid file of every run that lasted longer than the TTL,
-// leaving an unkillable job writing into a directory that no longer existed.
+// Age alone does not mean orphaned: reaping a run that outlasted the TTL
+// leaves an unkillable job writing into a deleted directory.
 func TestTheReaperLeavesABoxWithALiveJobAlone(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
@@ -1333,9 +1279,8 @@ func recordedLeader(t *testing.T, box Sandbox) procgroup.Leader {
 // A recycled pid pointing at some unrelated long-lived process would otherwise
 // keep a dead box's directory alive forever.
 //
-// The stranger is a real, live process group, because that is the whole case:
-// a pid that answers a liveness probe and is not the job. It is probed and
-// never signalled, and the reaper's decision rests on the start time alone.
+// The stranger is a real, live process group: a pid that answers a liveness
+// probe and is not the job. The reaper decides on the start time alone.
 func TestARecycledPidDoesNotKeepADeadBoxAlive(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
@@ -1390,27 +1335,16 @@ func TestARecycledPidIsNeverSignalled(t *testing.T) {
 }
 
 // assertUntouched fails the test if anything a box sends reached the
-// stranger's group before now. It sends the stranger SIGWINCH and waits for
-// what that leaves: its witness, or what a signal before it did.
+// stranger's group before now: it sends SIGWINCH and waits for the witness, or
+// for what an earlier signal did. THE WITNESS COMES AFTER EVERY SIGNAL THE
+// CASE COULD HAVE SENT, so no quiet window passes a signal acted on late.
 //
-// THE WITNESS COMES AFTER EVERY SIGNAL THE CASE COULD HAVE SENT, so this is no
-// quiet window, of any length: a window passes a signal a loaded runner acted
-// on after it. A SIGKILL or a SIGTERM before the witness's signal ends the
-// stranger before any trap runs, and a group the kernel is taking down drops
-// every signal after the fatal one, so it never writes its witness; it
-// lingers as a zombie instead, being this test's own unreaped child, which
-// the kernel's record shows. A SIGSTOP stops the group before any trap runs
-// too, which ps shows as T on both release platforms: the shell's, or the
-// sleep's where the stop caught the shell starting it, since the shell then
-// waits on its stopped child uninterruptibly ([awaitStopped]). And a
-// SIGCONT, which leaves a running process as it was, is caught: the shell runs
-// the traps of the signals it caught in the order of their numbers, and
-// SIGCONT's is below SIGWINCH's on both, so heard is written by the time the
-// witness is.
-//
-// Neither a kill nor a stop shows through [procgroup.Leader.Current]: a killed
-// stranger lingers as a zombie that is still current, and a stopped one is
-// current by definition, so the kernel's record and ps are read instead.
+// A SIGKILL or SIGTERM leaves a zombie (this test's unreaped child) that never
+// writes it; a SIGSTOP reads T in ps, the shell's or its sleep's
+// ([awaitStopped]). Both are read off the kernel's record and ps, since
+// [procgroup.Leader.Current] calls either current. A SIGCONT is trapped, and
+// the shell runs caught traps in signal-number order, SIGCONT's before
+// SIGWINCH's on both release platforms, so heard precedes the witness.
 func assertUntouched(t *testing.T, stranger strangerGroup, when string) {
 	t.Helper()
 	witness := stranger.heard + ".witness"
@@ -1443,10 +1377,9 @@ func assertUntouched(t *testing.T, stranger strangerGroup, when string) {
 }
 
 // THE COMPLETION POLL'S LIVENESS QUESTION, answered by the job's identity
-// rather than by its pid. The handle a direct box hands out is a host pid, and
-// once the wrapper is gone the kernel may give that pid to anything: a probe
-// that took the pid on trust read the stranger as the job, and a wrapper that
-// died without writing its marker held its run open until the stranger exited.
+// rather than its host pid, which the kernel may hand to anything once the
+// wrapper is gone: a wrapper that died without its marker would hold its run
+// open until that stranger exited.
 func TestTheJobProbeFollowsTheJobAndNotItsPid(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
@@ -1475,9 +1408,9 @@ func TestTheJobProbeFollowsTheJobAndNotItsPid(t *testing.T) {
 	}
 }
 
-// An exited wrapper is not running, and the answer does not wait for the reap.
-// It ENDED, not lost: the engine process that started it — this one — is still
-// here, so it went in an engine's sight and what it left is its result.
+// An exited wrapper is not running, without waiting for the reap. It ENDED,
+// not lost: the engine that started it is still here, so what it left is its
+// result.
 func TestAFinishedJobIsNotRunning(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
@@ -1521,10 +1454,10 @@ func TestAnUnreadableJobRecordKeepsTheBox(t *testing.T) {
 	}
 }
 
-// A record that is not a process group identity names no job. A direct box's
-// job runs as the engine's user beside its records, and a bare pid is exactly the
-// identity with no start time: acting on it would reach whatever holds that pid
-// now, so it is neither signalled nor allowed to keep the box.
+// A record that is not a process group identity names no job (a direct box's
+// job runs as the engine's user beside its records): a bare pid has no start
+// time, so acting on it would reach whatever holds that pid now. It is neither
+// signalled nor allowed to keep the box.
 func TestAJobRecordWithoutAStartTimeNamesNoJob(t *testing.T) {
 	t.Parallel()
 	stranger := startStranger(t)
@@ -1645,8 +1578,7 @@ func TestTheContainerEnvGoesInAFileNeverOnTheCommandLine(t *testing.T) {
 		t.Fatalf("env file mode = %v, %v; want 0600", info.Mode().Perm(), err)
 	}
 	// AND NOT IN THE MOUNT: the runtime's client reads it on the host, and
-	// a file in the container's home is one its job can replace between
-	// two execs.
+	// the container's job could replace a file in its home between execs.
 	if within, err := filepath.Rel(box.layout.home(), box.layout.envFile()); err != nil ||
 		!strings.HasPrefix(within, "..") {
 		t.Fatalf("the env file %s is under the box's home %s", box.layout.envFile(), box.layout.home())
@@ -1705,12 +1637,12 @@ func TestTheContainerMapsInBoxPathsOntoItsSideOfTheMount(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	box := &containerBox{layout: boxLayout{id: "box", root: root}, cli: containerCLI{path: "d"}, container: "c"}
-	// The box's side of its directory, never the directory itself: that
+	// The box's side of its directory, never the directory itself, which
 	// also holds the engine's records about the box.
 	home := box.layout.home()
 
-	// NAMED IN THE HOME, which every access opens as a root and reaches the
-	// file through ([boxLayout.openHome]).
+	// NAMED IN THE HOME, which every access opens as a root
+	// ([boxLayout.openHome]).
 	want := filepath.Join("workspace", "notes.md")
 	notes := func(got string) bool { return got == want }
 	got, err := box.homeRel(DefaultHome + "/workspace/notes.md")
@@ -1720,17 +1652,16 @@ func TestTheContainerMapsInBoxPathsOntoItsSideOfTheMount(t *testing.T) {
 	if !notes(got) || filepath.Join(home, got) != filepath.Join(home, "workspace", "notes.md") {
 		t.Fatalf("homeRel = %q, want %q", got, want)
 	}
-	// The mount compared as a path rather than as a prefix of one: a doubled
-	// separator and a climb that comes back are both still under it, and so is
-	// a tilde, which is the home in every cell.
+	// The mount compared as a path, not a prefix: a doubled separator, a
+	// climb that comes back and a tilde (the home in every cell) are under it.
 	for _, path := range []string{DefaultHome + "//workspace/notes.md", DefaultHome + "/../user/workspace/notes.md",
 		"~/workspace/notes.md"} {
 		if got, err := box.homeRel(path); err != nil || !notes(got) {
 			t.Errorf("homeRel(%q) = %q, %v; want %q", path, got, err, want)
 		}
 	}
-	// The home itself is no file in the box, which is how a direct box has
-	// always read it ([hostbox.SafeJoin] refuses a root).
+	// The home itself is no file in the box, as in a direct box
+	// ([hostbox.SafeJoin] refuses a root).
 	if got, err := box.homeRel(DefaultHome); err == nil {
 		t.Fatalf("homeRel(home) = %q; want a refusal: the home is no file in the box", got)
 	}
@@ -1803,19 +1734,11 @@ func TestAControlCommandThatHangsIsAbandonedWithATimeoutCode(t *testing.T) {
 // `docker run` spawning a stuck child is precisely the case: killing the harness
 // alone would leave it behind.
 //
-// THE FIXTURE IS WAITED FOR, NOT RACED. This ran the tree under a 1s timeout
-// and then read the pid file, with a t.Skip when it was not there yet — so the
-// assertion switched ITSELF OFF whenever the machine was too loaded for a fork
-// and an `echo` to land inside a second. That is the worst shape a skip can
-// have: least likely to be present exactly when process-tree teardown is most
-// likely to be wrong, and invisible, because a skipped subtest is not printed
-// without -v.
-//
-// So the timeout is made generous enough never to fire, readiness is WAITED
-// for, and the teardown is triggered by CANCELLING the context — which reaches
-// the identical path in [runHost], whose select has one `<-ctx.Done()` case
-// for both. A grandchild that never records its pid is now a failure, because
-// that is what it is: the fixture did not come up.
+// THE FIXTURE IS WAITED FOR, NOT RACED: a short timeout would let a loaded
+// runner miss the pid file. The timeout never fires; the teardown comes from
+// CANCELLING the context, the same path in [runHost], whose select has one
+// `<-ctx.Done()` case for both. A grandchild that never records its pid fails
+// the case: the fixture did not come up.
 func TestATimedOutControlCommandTakesItsChildrenWithIt(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1827,18 +1750,13 @@ func TestATimedOutControlCommandTakesItsChildrenWithIt(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := runHost(ctx, hostCommand{
-			// THE PATH TRAVELS IN THE ENVIRONMENT, quoted where it is used,
-			// rather than being pasted into the shell source. t.TempDir() is
-			// derived from TMPDIR and from the test's own name, so it can
-			// carry a space or a shell metacharacter — and interpolated, that
-			// writes the pid somewhere else or fails to start, which this
-			// case would then report as a process tree that survived its
-			// teardown. A quoting bug must not be able to look like the
-			// defect under test.
+			// THE PATH TRAVELS IN THE ENVIRONMENT, quoted where used, never
+			// pasted into the shell source: t.TempDir() can carry a space or a
+			// metacharacter, and a quoting bug must not look like a process
+			// tree that survived its teardown.
 			argv: []string{"/bin/sh", "-c", `sh -c 'echo $$ > "$PIDFILE"; sleep 300' & sleep 300`},
-			// Long enough that it is never what ends this command: the
-			// cancel below is, and a timeout racing it would reintroduce
-			// exactly the flake this case was rewritten to remove.
+			// Never what ends this command: the cancel below is, and a
+			// timeout racing it would make the case flaky.
 			timeout: time.Minute,
 			env:     map[string]string{"PATH": os.Getenv("PATH"), "PIDFILE": pidFile},
 		})
@@ -1857,9 +1775,8 @@ func TestATimedOutControlCommandTakesItsChildrenWithIt(t *testing.T) {
 	}
 
 	cancel()
-	// THE CALLER'S CANCELLATION IS ITS OWN ANSWER, never the command's
-	// timeout: answered as 124, a cancelled launch was told as a box that
-	// timed out or an image the runtime would not start.
+	// THE CALLER'S CANCELLATION IS ITS OWN ANSWER, never the timeout's 124,
+	// which reads as a box that timed out or an image that would not start.
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("runHost cancelled by its caller answered %v; want the cancellation", err)
 	}
@@ -1883,9 +1800,7 @@ func TestControlOutputIsBoundedRatherThanTheEnginesMemory(t *testing.T) {
 }
 
 // ONE WRITE CROSSING THE LIMIT IS MARKED TOO, and what is kept ends on a
-// whole line. Only a write that found the buffer already full used to set the
-// marker, so a command printing its output at once was clipped silently —
-// mid-line, and mid-character.
+// whole line, never mid-line or mid-character.
 func TestASingleWritePastTheLimitIsMarkedOnALine(t *testing.T) {
 	t.Parallel()
 	line := strings.Repeat("日", 20) + "\n" // 61 bytes: the limit lands inside a rune
@@ -1911,13 +1826,9 @@ func TestASingleWritePastTheLimitIsMarkedOnALine(t *testing.T) {
 	}
 }
 
-// A HOST COMMAND WITH NO ENVIRONMENT IS NOT STARTED.
-//
-// os/exec reads a nil Env as "inherit the parent's", which is exactly what the
-// allowlist exists to prevent — and every container-runtime call in this file
-// reached the child that way, handing the runtime's CLI the engine's keyring
-// and Tier A tokens. The refusal has to come before the fork, so the proof is
-// that the child never ran.
+// A HOST COMMAND WITH NO ENVIRONMENT IS NOT STARTED: os/exec reads a nil Env
+// as "inherit the parent's", handing the child the engine's keyring and Tier A
+// tokens. The refusal comes before the fork, so the child never runs.
 func TestAHostCommandWithNoEnvironmentIsNotStarted(t *testing.T) {
 	t.Parallel()
 	marker := filepath.Join(t.TempDir(), "ran")
@@ -1933,14 +1844,9 @@ func TestAHostCommandWithNoEnvironmentIsNotStarted(t *testing.T) {
 }
 
 // THE CONTAINER RUNTIME'S HARNESS SEES NONE OF THE ENGINE'S SECRETS, and every
-// setting of its own.
-//
-// Every `docker run`, `exec`, `pause`, `rm`, `ps` and `info` was started with
-// no environment, which os/exec fills with the engine's — so the runtime and
-// every plugin and credential helper it runs held the keyring every session
-// cookie is signed under. What the runtime cannot run correctly without — its
-// own DOCKER_HOST (a rootless daemon's socket), and the engine user's HOME
-// where its config lives — still arrives.
+// setting of its own: the runtime and every plugin and credential helper it
+// runs would otherwise hold the session keyring. What it needs still arrives:
+// its DOCKER_HOST (a rootless daemon's socket) and the HOME holding its config.
 func TestTheContainerRuntimeSeesNoneOfTheEnginesSecrets(t *testing.T) {
 	// Not parallel: it sets process-wide environment variables, which is the
 	// only way to prove what a real child INHERITS.
@@ -1962,8 +1868,7 @@ func TestTheContainerRuntimeSeesNoneOfTheEnginesSecrets(t *testing.T) {
 	runtime := filepath.Join(dir, "docker")
 	script := fmt.Sprintf("#!/bin/sh\n/usr/bin/env > '%s'\n", dump)
 	writeExecutable(t, runtime, script)
-	// The rootless probe is one of the runtime calls, and it is the one every
-	// container box makes first.
+	// The rootless probe: the runtime call every container box makes first.
 	runtimeIsRootless(t.Context(), containerCLI{path: runtime})
 
 	raw, err := os.ReadFile(dump)
@@ -1992,13 +1897,11 @@ func TestTheContainerRuntimeSeesNoneOfTheEnginesSecrets(t *testing.T) {
 
 // WHAT AN OPERATOR DECLARES FOR THE RUNTIME REACHES IT, OVER THE HOST'S.
 //
-// The fixed rule cannot know what a runtime's helpers read — the credential
-// helper that pulls a private image wants its cloud's role and profile — and
-// with no channel to add one, a runtime that needed it
-// was simply broken. `providers.sandbox.local.runtime_env` is that channel, so
-// what it declares arrives on every runtime call the backend makes, a declared
-// value beats the host's for the same name, and the map the caller handed in
-// is not the one the backend reads.
+// The fixed rule cannot know what a runtime's helpers read (a credential
+// helper pulling a private image wants its cloud's role and profile), so
+// `providers.sandbox.local.runtime_env` declares it: it arrives on every
+// runtime call, beats the host's value for the same name, and is copied, not
+// read from the caller's map.
 func TestTheRuntimeGetsWhatItsRuntimeEnvDeclares(t *testing.T) {
 	// Not parallel: PATH is how the backend finds its runtime, and the
 	// host's DOCKER_CONFIG is what the declared one must beat.
@@ -2102,10 +2005,9 @@ func ageBox(t *testing.T, box Sandbox, by time.Duration) {
 	}
 }
 
-// AN EMPTY ID NAMES NO BOX, and joining it gives the directory that holds
-// EVERY box — so a "box" built from one would take the whole estate down with
-// it on teardown. It is reachable: a run's row exists before its box is
-// attached, so a poll landing in that window asks to connect to "".
+// AN EMPTY ID NAMES NO BOX: joined, it gives the directory holding EVERY box,
+// which a teardown would delete. It is reachable: a run's row exists before its
+// box is attached, so a poll in that window connects to "".
 func TestAnEmptyBoxIdIsRefusedRatherThanResolvingToTheWholeEstate(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
@@ -2126,9 +2028,8 @@ func TestAnEmptyBoxIdIsRefusedRatherThanResolvingToTheWholeEstate(t *testing.T) 
 	}
 }
 
-// The ids are minted here and never come from config, but the join is the same
-// one a traversal would exploit and the check costs one comparison on a path
-// that is about to be deleted from.
+// The ids are minted here, never config, but the join is the one a traversal
+// would exploit, on a path about to be deleted from.
 func TestABoxIdThatIsAPathIsRefused(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
@@ -2139,9 +2040,8 @@ func TestABoxIdThatIsAPathIsRefused(t *testing.T) {
 	}
 }
 
-// A box that survives its own teardown holds the seeded login and whatever the
-// run wrote, and the only thing that will ever clean it up is the orphan
-// reaper on some later create.
+// A box that survives its own teardown keeps the seeded login and the run's
+// files until the orphan reaper runs on some later create.
 func TestKillWaitsForTheGroupBeforeRemovingTheBox(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
@@ -2150,8 +2050,7 @@ func TestKillWaitsForTheGroupBeforeRemovingTheBox(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	home := box.Home()
-	// A job that keeps writing into the box right up to the moment it dies,
-	// which is what races the removal.
+	// A job writing into the box until it dies races the removal.
 	if _, err := box.StartBackground(t.Context(),
 		"while true; do date >> churn.log; done", ExecOptions{}); err != nil {
 		t.Fatalf("StartBackground: %v", err)
@@ -2169,13 +2068,9 @@ func TestKillWaitsForTheGroupBeforeRemovingTheBox(t *testing.T) {
 }
 
 // The credential map is how a RECONNECTED box knows which files to sync back
-// after the run refreshed them, so losing it silently loses the refresh — and
-// the fleet is logged out at the next token expiry with nothing in the log to
-// say why.
-//
-// This is the case the previous shape could not report: the WriteFile error
-// went into an `if err :=` binding that shadowed the variable being checked,
-// so the warning never fired and no test could see it.
+// after the run refreshed them: losing it silently loses the refresh, and the
+// fleet is logged out at the next token expiry with nothing in the log to say
+// why.
 func TestAnUnwritableCredentialMapIsReported(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

@@ -34,10 +34,9 @@ func (p *specsSeen) seen() []Spec {
 	return slices.Clone(p.specs)
 }
 
-// boxManager is a manager over the three cells, each its own backend, the
-// catalogue's default the direct cell and its own setup one operator step —
-// the shape a check's box is most easily given wrongly: a default no check
-// may take, and steps no check may run.
+// boxManager is a manager over the three cells, each its own backend, with the
+// direct cell as the catalogue's default and one operator setup step: a default
+// no check may take and steps no check may run.
 func boxManager(t *testing.T, cells map[Placement]Provider) (*Manager, *FakeRunner) {
 	t.Helper()
 	runner := NewFakeRunner("claude-code")
@@ -55,19 +54,18 @@ func boxManager(t *testing.T, cells map[Placement]Provider) (*Manager, *FakeRunn
 	return m, runner
 }
 
-// A BOX FOR A CHECK INSTALLS NO AGENT. AcquireBox makes the box in the cell its
-// spec names, from the current catalogue, and applies exactly the steps it is
-// handed, with the spec's environment: no runner's install and none of the
-// catalogue's own setup — that provisions coding boxes, and a check runs a
-// change's own code. A step that fails takes the box with it, as Acquire's
-// does. What a coding box carries and this one must not — a harness, a
-// login, a run's grants, the catalogue's default cell, the direct cell — is
-// refused before any backend is asked for a box.
+// A BOX FOR A CHECK INSTALLS NO AGENT. AcquireBox makes the box in its spec's
+// cell from the current catalogue and applies exactly the steps it is handed,
+// with the spec's environment: no runner's install and none of the catalogue's
+// setup, which provisions coding boxes while a check runs a change's own code.
+// A failing step tears the box down, as Acquire's does. What a coding box
+// carries and this one must not (a harness, a login, a run's grants, the
+// catalogue's default cell, the direct cell) is refused before any backend is
+// asked for a box.
 //
-// Mutations: AcquireBox calling Acquire — the box has the agent installed, or
-// the agent it names none of is refused, red; AcquireBox prepending
-// DefaultSetup — the operator's step runs in the box, red; drop the direct
-// refusal — a box is made on the engine host, red.
+// Mutations, each red: AcquireBox calling Acquire (the agent is installed, or a
+// spec naming none refused); prepending DefaultSetup (the operator's step
+// runs); dropping the direct refusal (a box is made on the engine host).
 func TestABoxForACheckInstallsNoAgent(t *testing.T) {
 	t.Parallel()
 	steps := []SetupStep{GitVersionStep(), {Name: "checkout web", Commands: []string{"echo checked out"}}}
