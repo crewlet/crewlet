@@ -282,6 +282,7 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/gitlet/repo/PathOwners.tsx": "modal: a path owner and its globs, in its dialog",
   "routes/gitlet/repo/Protect.tsx": "modal: a branch protection rule, in its dialog",
   "routes/gitlet/repo/RepoLife.tsx": "modal: a repository delete's reason, in its dialog",
+  "routes/gitlet/repo/TagWrites.tsx": "modal: a new tag's name, target and message, in its dialog",
   "routes/gitlet/repo/RepoWrites.tsx":
     "modal: a repository's details, its new name and its mirrors, in their dialogs",
   "routes/settings/integrations/SshServers.tsx":

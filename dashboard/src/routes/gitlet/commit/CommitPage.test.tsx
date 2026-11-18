@@ -17,6 +17,7 @@ import type { ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
+import { usePageMenu } from "~/app/Shell.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { EMPTY_TREE } from "~/lib/code.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -30,6 +31,12 @@ import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { CommitPage } from "./CommitPage.tsx";
 import { ComparePage } from "./ComparePage.tsx";
+
+// THE PAGE BAR'S PHONE MENU is the frame's: what the page hands it is what it offers there.
+vi.mock("~/app/Shell.tsx", async () => ({
+  ...(await vi.importActual<typeof import("~/app/Shell.tsx")>("~/app/Shell.tsx")),
+  usePageMenu: vi.fn(),
+}));
 
 afterEach(() => {
   cleanup();
@@ -944,7 +951,7 @@ test.each([
   expect(acted).toHaveLength(0);
 });
 
-// THE PAGE BAR HOLDS BROWSE FILES, REVERT AND CHERRY-PICK, the writes drawn
+// THE PAGE BAR HOLDS BROWSE FILES, REVERT, CHERRY-PICK AND TAG, the writes drawn
 // for every reader and held with the reason. Mutation: draw Revert under the
 // header, outside the page bar.
 test.each([
@@ -955,7 +962,7 @@ test.each([
   ],
   ["a person the engine does not serve", { ...VIEWER, acts: [] }, WRITE_REASONS.not_served],
 ])(
-  "the page bar holds Browse files, Revert and Cherry-pick, held for %s",
+  "the page bar holds Browse files, Revert, Cherry-pick and Tag, held for %s",
   async (_who, viewer, reason) => {
     const { acted } = stubEngine();
     mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`, viewer);
@@ -964,7 +971,7 @@ test.each([
     expect(browse.getAttribute("href")).toBe(`#/gitlet/repos/web?ref=${SHA}`);
     const bar = browse.closest<HTMLElement>(".page-actions")!;
     expect(bar).not.toBeNull();
-    for (const name of ["Revert", "Cherry-pick"]) {
+    for (const name of ["Revert", "Cherry-pick", "Tag"]) {
       const write = within(bar).getByRole("button", { name });
       await waitFor(() => expect(write.getAttribute("title")).toBe(reason));
       fireEvent.click(write);
@@ -998,6 +1005,59 @@ test("a commit is reverted on the branch chosen, at the head its listing showed"
   expect(acted[0]).toEqual({
     tool: "code_revert",
     args: { repo: "web", branch: "main", expected_head: MAIN, commit: SHA },
+  });
+});
+
+// ON A PHONE THE BAR KEEPS BROWSE FILES and folds Revert and Cherry-pick into
+// its More, which opens the same dialogs: three buttons cut the third to
+// "Cherry-". Mutation: leave the writes unfolded, or hand the menu nothing, and this fails.
+test("Revert and Cherry-pick fold into the phone's More, and Browse files stays", async () => {
+  stubEngine();
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`, {
+    ...ADMIN_VIEWER,
+    acts: ["code_revert", "code_cherry_pick"],
+  });
+
+  const group = await screen.findByRole("group", { name: "Commit actions" });
+  expect(group.closest(".page-action-folds")).not.toBeNull();
+  const browse = screen.getByRole("link", { name: /^Browse the files at/ });
+  expect(browse.closest(".page-action-folds")).toBeNull();
+  await waitFor(() =>
+    expect(
+      vi
+        .mocked(usePageMenu)
+        .mock.calls.at(-1)![0]
+        .map((e) => [e.label, e.disabled ?? false]),
+    ).toEqual([
+      ["Revert", false],
+      ["Cherry-pick", false],
+    ]),
+  );
+  act(() => vi.mocked(usePageMenu).mock.calls.at(-1)![0][1]!.onSelect());
+  expect(await screen.findByRole("dialog", { name: /Cherry-pick 0123456/ })).toBeTruthy();
+});
+
+// TAG TAGS THIS COMMIT by its whole id, annotated where a message is typed.
+// Mutation: send the short id or the default branch, and this fails.
+test("a commit is tagged at its whole id from the page bar", async () => {
+  const { acted } = stubEngine();
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`, {
+    ...ADMIN_VIEWER,
+    acts: ["code_create_tag"],
+  });
+
+  const tag = await screen.findByRole("button", { name: "Tag" });
+  await waitFor(() => expect(tag.getAttribute("title")).toBeNull());
+  fireEvent.click(tag);
+  const dialog = await screen.findByRole("dialog", { name: "Tag 0123456" });
+  expect(within(dialog).queryByLabelText(/Points at/)).toBeNull();
+  fireEvent.change(within(dialog).getByLabelText(/^Name/), { target: { value: "v2.0.0" } });
+  fireEvent.change(within(dialog).getByLabelText(/^Message/), { target: { value: "Release two" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create tag" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_create_tag",
+    args: { repo: "web", tag: "v2.0.0", at: SHA, message: "Release two" },
   });
 });
 
@@ -1058,6 +1118,32 @@ test("every changed file is a section of one stack read by the walk of code_diff
   expect(walks[0]!.searchParams.get("base")).toBe(PARENT);
   expect(walks[0]!.searchParams.get("head")).toBe(SHA);
   expect(reads(asked, "code_diff").some((u) => u.searchParams.has("file"))).toBe(false);
+});
+
+// THE TREE IS THE DIFF'S NAVIGATION, and an unread file is no live region. Mutation: draw the
+// tree as an aside, or a pending file's words as a status, and this fails.
+test("the files' tree is a navigation, and a file not yet read announces nothing", async () => {
+  holdSectionsFar();
+  const fragment = (file: number, path: string) => ({
+    file,
+    path,
+    status: "M",
+    patch: `${["--- a/x", "+++ b/x", "@@ -1,2 +1,2 @@", " keep", "-old", "+new"].join("\n")}\n`,
+  });
+  stubEngine({
+    files: THREE,
+    walk: [[fragment(0, "cmd/app.go")], [fragment(1, "cmd/b.go")], [fragment(2, "web/c.go")]],
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_PAGE);
+
+  await within(await section("cmd/app.go")).findByText("new");
+  const changed = screen.getByRole("region", { name: "What it changed" });
+  expect(within(changed).getByRole("navigation", { name: "Files changed" })).toBeTruthy();
+  expect(within(changed).queryAllByRole("complementary")).toEqual([]);
+  const pending = (await section("web/c.go")).querySelector('[aria-busy="true"]');
+  expect(pending?.textContent).toBe("Reading the changes to web/c.go");
+  const said = (r: HTMLElement) => r.closest(".code-file");
+  expect(screen.queryAllByRole("status").filter(said)).toEqual([]);
 });
 
 // A FILE THE ADDRESS NAMES OPENS THE STACK AT IT: its head takes the focus and
@@ -1187,7 +1273,7 @@ test("a comparison draws the same toolbar, tree and stack as a commit", async ()
   expect((await screen.findByText(/^Showing/)).textContent).toBe(
     "Showing 3 changed files with 1 addition and 1 deletion",
   );
-  const pane = screen.getByRole("complementary", { name: "Files changed" });
+  const pane = screen.getByRole("navigation", { name: "Files changed" });
   expect(within(pane).getByText(/Compared with the merge base at/).textContent).toBe(
     "Compared with the merge base at 89abcde",
   );

@@ -1347,6 +1347,8 @@ func holdingCall(name string) (map[string]any, bool) {
 			"commit": featureOID},
 		builtin.CodeCreateBranchTool:  {"repo": repo, "branch": "fix", "at": mainOID},
 		builtin.CodeDeleteBranchTool:  {"repo": repo, "branch": "fix", "expected_head": mainOID},
+		builtin.CodeCreateTagTool:     {"repo": repo, "tag": "v1", "at": mainOID},
+		builtin.CodeDeleteTagTool:     {"repo": repo, "tag": "v1", "expected_target": mainOID},
 		builtin.CodeCreateRepoTool:    {"name": "agent-cto.lab2"},
 		builtin.CodeUpdateRepoTool:    {"repo": repo, "description": "the lab"},
 		builtin.CodeDeleteRepoTool:    {"repo": repo},

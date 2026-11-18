@@ -309,6 +309,8 @@ var filed = []struct {
 	{CodeCherryPickTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeCreateBranchTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeDeleteBranchTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeCreateTagTool, GroupCode, GateGitlet, reachesNoVendor},
+	{CodeDeleteTagTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeCreateRepoTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeUpdateRepoTool, GroupCode, GateGitlet, reachesNoVendor},
 	{CodeDeleteRepoTool, GroupCode, GateGitlet, reachesNoVendor},

@@ -1060,7 +1060,7 @@ const (
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
 	// kit releases account for its growth, and the last measure was 6801.9 KiB.
 	// A raise names the measured size and its cause in its commit.
-	treeBudget = 5<<20 + 1873<<10
+	treeBudget = 5<<20 + 1884<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
