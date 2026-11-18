@@ -134,10 +134,10 @@ import (
 // [holdingsMaxLegs]; every id kept is one the call-id rule holds
 // ([holdingsWalk.leg], [subagentMetaOf]), since an id is the box's word, as
 // long as [threadValueMax]. MEASURED (BenchmarkAReadingAtItsBounds, whose doc
-// says how; a loaded host): the worst, a line of the smallest results at its
-// facts' bound after a main thread at both of the model's bounds, holds 37 MiB
-// live and peaks at 62 MiB in 1.6 to 3.3 s; a whole PDF's Read, 53 MiB of
-// plaintext, reads in 42 to 76 ms; an ordinary session in 55 ms.
+// says how; two dedicated cores): the worst, a main thread at both of the
+// model's bounds, holds 43 MiB live and peaks at 70 MiB in 2.3 to 2.5 s; a line
+// of the smallest results at its facts' bound after it, 39 and 60 MiB; a whole
+// PDF's Read 56 to 75 ms; an ordinary session 72 to 88 ms.
 
 // holdingsWriterFloor is the oldest Claude Code release whose sessions a
 // reading reads ([ClaudeCode.holdingsFloor]).

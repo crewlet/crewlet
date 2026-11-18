@@ -277,14 +277,14 @@ type chainCallID int32
 // line probe P6 measured, is 130,754 lines, so 2^17 files a record a line, and
 // a call, two records of a block each, about as many ids; two bounds, not one
 // sum, since a thread of ordinary calls fills each about halfway. Past either,
-// See files nothing more (whyBound). HELD AT MOST (GOGC=10,
-// BenchmarkAThreadChainAtItsBounds, a loaded host): 43 MiB at both bounds, End
-// 34 to 45 ms of a 1.4 to 1.9 s read; End's worst, windows merging at
-// threadChainMaxSpread, 1.4 s; 37 MiB beside a line at [threadLineMax]. THE
-// COLLECTION'S PASS charges the chain to the one walk a collection reads its
-// main thread in ([walkThread]), beside the resumed count, in no transcript
-// slot: 2.6 to 2.9 s, within internal/sandbox's MainThreadReadWait, and 38 MiB
-// at worst, within the about 133 MiB of one slot ([SeatTranscriptReadsAtOnce]).
+// See files nothing more (whyBound). HELD AT MOST (GOGC=10, two dedicated
+// cores, BenchmarkAThreadChainAtItsBounds): 43 MiB at both bounds, End
+// 33 to 34 ms of a 2.0 to 2.2 s read; End's worst, windows merging at
+// threadChainMaxSpread, 1.8 to 1.9 s; 39 MiB beside a line at [threadLineMax].
+// THE COLLECTION'S PASS charges the chain to the one walk a collection reads
+// its main thread in ([walkThread]), beside the resumed count, in no transcript
+// slot: 2.2 to 2.4 s, within internal/sandbox's MainThreadReadWait, and 39 MiB
+// at worst, within one slot's 133 MiB ([SeatTranscriptReadsAtOnce]).
 const (
 	// threadChainMaxRecords is the most items the chain files of one thread:
 	// its records, the retraction prefixes they carry, and the uuids its

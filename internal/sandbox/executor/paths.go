@@ -224,33 +224,35 @@
 //
 // EIGHT MEBIBYTES, a constant of its own and never the scrub's piece
 // ([scrubPieceMaxBytes]), which bounds what the scrub holds of a line rather
-// than what a reader keeps of one. Every legitimate line's facts are KiBs:
-// its readers keep a block's kind, a call's id, name and target, a result's
-// length and digests, a few small values, never a value's text. So a reading's
-// coincident worst is the resume's model of the thread at its bounds
-// ([threadChain]) beside one line's facts at the bound and the reader's fixed
-// buffers. A larger bound would serve only lines no release writes: what this
-// one refuses is a line of tiny calls by the tens of thousands, a value read
-// whole past [threadValueMax] (an id, a uuid, a usage), or a type that turns
-// after a frame passed over for it, each failing toward no reading or cannot
-// tell.
+// than what a reader keeps of one. Every legitimate line's facts are under a
+// KiB: its readers keep a block's kind, a call's id, name and target, a
+// result's length and digests, a few small values, never a value's text. Of the
+// 59,519 lines of the 1,091 threads the probes kept and this package's testdata
+// holds, the most any line's facts hold is 753 bytes, and the longest line,
+// 2,002,134 bytes, holds 51. So a reading's coincident worst is the resume's
+// model of the thread at its bounds ([threadChain]) beside one line's facts at
+// the bound and the reader's fixed buffers. A larger bound would serve only
+// lines no release writes: what this one refuses is a line of tiny calls by the
+// tens of thousands, a value read whole past [threadValueMax] (an id, a uuid, a
+// usage), or a type that turns after a frame passed over for it, each failing
+// toward no reading or cannot tell.
 //
-// MEASURED on two cores, one case a process, on a host under a load of 5 to 27,
-// so every time is an upper bound; held is the largest live heap under
-// GODEBUG=gctrace=1 at GOGC=10, a peak the largest heap at the default. A
-// reader's fixed buffers (bufio's 64 KiB, the scanner's 67,072 bytes, two text
-// buffers of 4 KiB, the automata) hold about 146 KiB, and what no reader reads
-// of a line costs nothing more, whatever its length
-// (BenchmarkAReaderAtALineOfAnyLength): a whole PDF's Read, 55,924,056 bytes on
-// one line, reads in 26 ms holding 146.5 KiB, and a 64 MiB prompt in
-// 245 to 275 ms holding 145.8 KiB. A line of the smallest results, which no
-// release writes, holds 16,384 of them within the bound, the reader and its
-// facts 2,450 KiB, and one more is refused, a line of about 656 KiB, since a
-// list is charged at every size it doubles through. A line at the bound read
-// beside the resume's model at both its bounds held 37 MiB at most, its heap
-// peaking at 63 MiB, and the whole-PDF line beside it 36 MiB
-// (BenchmarkAThreadChainAtItsBounds): within the about 133 MiB a seat's read
-// for words holds in the same slot ([SeatTranscriptReadsAtOnce]).
+// MEASURED on a dedicated two-core build slot, one case a process, a time the
+// spread of three runs; held is the largest live heap under GODEBUG=gctrace=1
+// at GOGC=10, a peak the largest heap at the default. A reader's fixed buffers
+// (bufio's 64 KiB, the scanner's 67,072 bytes, two text buffers of 4 KiB, the
+// automata) hold about 146 KiB, and what no reader reads of a line costs
+// nothing more, whatever its length (BenchmarkAReaderAtALineOfAnyLength): a
+// whole PDF's Read, 55,924,056 bytes on one line, reads in 26 to 35 ms holding
+// 146.5 to 151.5 KiB, and a 64 MiB prompt in 264 to 268 ms holding 145.8 KiB. A
+// line of the smallest results, which no release writes, holds 16,384 of them
+// within the bound, the reader and its facts 2,450 KiB, read in 34 to 42 ms,
+// and one more is refused, a line of about 656 KiB, since a list is charged at
+// every size it doubles through. A line at the bound read beside the resume's
+// model at both its bounds held 39 MiB at most, its heap peaking at 63 MiB, and
+// the whole-PDF line beside it 35 MiB (BenchmarkAThreadChainAtItsBounds):
+// within the about 133 MiB a seat's read for words holds in the same transcript
+// slot ([SeatTranscriptReadsAtOnce]).
 //
 // # A run's harness session, carried between boxes
 //
