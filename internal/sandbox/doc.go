@@ -222,6 +222,72 @@
 // ([Coordinator.capturesLoss]), and its ending reads the row again before it
 // reports its notes.
 //
+// AND AN OPENCODE CONTINUATION'S FIRST REQUEST IS JUDGED IN ITS BOX. OpenCode
+// compacts a session before a request, a continued run's first among them,
+// where its count of the session with the brief reaches the point its box's
+// configuration sets for the run's model: the model's limit less a buffer.
+// Unlike Claude Code's window, that point is not the engine's to pin: it is
+// read off the model catalog and the documents of the box the run is handed,
+// which the relaunch's briefs are written before. So the runner builds both
+// tellings where the session's count has a bound, the held one and the one
+// told as a session that may be a summary, and the launch, once it has the
+// box, asks the box for its point ([PointReader]) and hands the held telling
+// only where the count's bound, the brief and what the box hands over before
+// it sit strictly below that point ([OpenCodePoint.SendsWhole]); anywhere
+// else, and wherever the point cannot be read, it hands the summarized one
+// ([SessionContinuation.Summarized], [Continuation.Summarized]). What the box
+// hands over before the brief is charged only in the box that holds the
+// session's copy ([PointAsk.Sources]): there OpenCode tells the session every
+// context source that changed since its last request in that box (its
+// instruction files, the run's own instructions, the skill and MCP server
+// listings, the date and the environment), each at most its whole render,
+// where after an import into another box it starts afresh and hands none. A
+// box document that adds a source the read cannot size is no point
+// ([PointBoxSources]). A box whose release is not the writer's is no point
+// either: no pair of differing releases has been measured. See
+// opencodefirst.go.
+//
+// AND A SESSION THE RUN STARTS OF ITS OWN KEEPS ITS TASK. A fresh brief opens a
+// session with the turn's task, and a later continuation of that session that
+// may be a summary may lack it as surely as a cut-off copy lacks its brief. So
+// every launch whose run may start a session on its fresh brief keeps that
+// brief's task beside the run's record as a lead of its own kind
+// ([LeadKindFresh]): a turn's first launch ([LaunchRequest.FreshOwn]), a
+// relaunch handed its fresh brief ([Continuation.Fresh]), and one whose handed
+// brief continues a session, whose box may start one of its own after a failed
+// restore ([BriefLeads.Fresh]). That last is kept unmarked: the brief the job's
+// run read did not tell it, so no continuation of a session that run did not
+// start on it is told it as a lead its brief told, while a continuation that
+// may be a summary is told every lead the run keeps (leads.go).
+//
+// AND THE HARNESS'S OWN ESTIMATE OF A SESSION'S NEXT REQUEST, read in the same
+// read as its count, of a Claude Code job's main thread or an OpenCode job's
+// export (asksMainThread): stamped on a capture
+// ([SessionCapture.NextRequestTokens], [TakenSession.Next]) and written in the
+// collection's one write ([EndRead.Next], [LaunchRecord.NextRequestTokens]),
+// never carried and never on the executor log, and handed to the floor beside
+// the last request's input of the same capture: a kept capture's own for its
+// restore ([SessionCapture.NextRequest]), never a newer one's it was continued
+// past, and its job's newest capture's for the copy in place
+// ([ContinuedSession.CopyNextRequest]). An OpenCode count
+// names the provider of the reply it is anchored on BESIDE it, never in it
+// ([SessionCapture.CountProvider], [LaunchRecord.CountProvider],
+// [ValidCountProvider]), written and cleared with the count
+// (LaunchRecord.counted), so no record names one count's provider beside
+// another's figure. internal/sandbox/executor's package doc says how each is
+// read.
+//
+// The estimate is held AT BOTH RATES Claude Code counts text at
+// ([NextRequest]'s Tokens and OlderTokens), since which model the next
+// request goes to is the launch's to pick ([NextRequest.At]). Zero is no
+// figure (a thread not read whole, a release whose rules were not read, a
+// compaction whose kept stretch could not be found), and its reader then
+// reads the last request's input. It is NEVER CARRIED along a session's
+// lineage, as [ResumedCount] is not: a job that made no request of its own
+// may have grown its copy by its brief, so a figure carried from its basis
+// would under-state it. And never on the executor log: a stamp settled off
+// the log carries the last request's input alone.
+//
 // See docs/concepts/code-sandbox.md.
 //
 // # A launch's harness session is kept, and a turn's end recorded
@@ -1555,8 +1621,8 @@
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... measuredOtherFields     2,308,597
-//	to spare, measured .............. measuredSpare             287,311
+//	every other field, measured ..... measuredOtherFields     2,309,376
+//	to spare, measured .............. measuredSpare             286,532
 //
 // Every other field is the identity, status and time fields, the run its turn's
 // leads are kept for and how many leads that part has taken
@@ -1577,24 +1643,25 @@
 // and which of the turn's leads its brief told, by their numbers in the run's
 // leads part ([LaunchRecord.LeadMarks], at most [MaxKeptLeads]), what the
 // session its box holds carried at its newest request the engine measured
-// ([LaunchRecord.Context]), what Claude Code counts that copy at and the
-// restart its launch's session held ([LaunchRecord.ResumedCount],
-// [LaunchRecord.BasisRestart]), and a refused completion its seat's holder owes
-// ([LaunchRecord.RefusalOwed], its condition at most [MaxOwedConditionBytes]);
-// the owed end and the captures (newest, kept and [PendingRun.Saving]), each
-// with the reads its session holds only as a count ([SessionCapture.Omitted])
-// and its count ([SessionCapture.ResumedCount]); and what the job may do on
-// Gitlet: the holds of its turn ([MaxCodeHolds]), its repositories
-// ([MaxRunRepos], each held to its grammar, its cone and its change's title,
-// [MaxChangeTitleBytes], among them), its floors and whom its pushes and its
-// change are made for ([PendingRun.CodeWorkingFor]). Every one of them is
-// bounded by THIS ENGINE: a person's reply, a tool's arguments and a box's
-// account of its session are each held to their share by the write that puts
-// them on the row, which refuses one past it by name ([ErrAnswerTooLarge],
-// [ErrHeldCallTooLarge], [ErrCaptureUnbounded]) rather than leave it to the
-// store; and the turn's read of its conversation is held to its line by
-// construction, made of a read the executor log bounds field by field
-// ([NewConversationBase]), the largest of which a test holds under it.
+// ([LaunchRecord.Context]), its harness's count of that copy, the count's
+// provider and writer and its next request (ResumedCount, CountProvider,
+// CountRelease, NextRequestTokens on [LaunchRecord]) and the restart its
+// launch's session held ([LaunchRecord.BasisRestart]), and a refused
+// completion its seat's holder owes ([LaunchRecord.RefusalOwed], its condition
+// at most [MaxOwedConditionBytes]); the owed end and the captures (newest,
+// kept and [PendingRun.Saving]), each with the reads its session holds only as
+// a count ([SessionCapture.Omitted]) and the same three figures; and what the
+// job may do on Gitlet: the holds of its turn ([MaxCodeHolds]), its
+// repositories ([MaxRunRepos], each held to its grammar, its cone and its
+// change's title, [MaxChangeTitleBytes], among them), its floors and whom its
+// pushes and its change are made for ([PendingRun.CodeWorkingFor]). Every one
+// of them is bounded by THIS ENGINE: a person's reply, a tool's arguments and
+// a box's account of its session are each held to their share by the write
+// that puts them on the row, which refuses one past it by name
+// ([ErrAnswerTooLarge], [ErrHeldCallTooLarge], [ErrCaptureUnbounded]) rather
+// than leave it to the store; and the turn's read of its conversation is held
+// to its line by construction, made of a read the executor log bounds field by
+// field ([NewConversationBase]), the largest of which a test holds under it.
 //
 // The two measured lines are the model's, and pinned ([measuredOtherFields],
 // [measuredSpare]): what every other field weighs at its worst, a held call's

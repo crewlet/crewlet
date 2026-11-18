@@ -333,13 +333,26 @@ type TakenSession struct {
 	// taker that measures nothing.
 	Context func() int64
 
-	// Count is what Claude Code counts the session at before its next
-	// request, as the archive's own main thread bounds it read whole
-	// ([ResumedCount]), once Body has been read to its end: a bound, or a mark
-	// saying why there is none ([CountUnread] where Body was not read whole).
-	// Nil from a taker that counts nothing, as one of another harness is, and
-	// a nil count from it is none.
+	// Next is the harness's own estimate of the session's next request
+	// ([NextRequest]), off the same read of the archive's main thread as
+	// Count, once Body has been read to its end: zero where the thread was
+	// not read whole ([SessionCapture.NextRequestTokens]). Nil from a taker
+	// that estimates nothing, as one of another harness is.
+	Next func() NextRequest
+
+	// Count is what the harness counts the session at before its next
+	// request, as the archive bounds it read whole ([ResumedCount]): Claude
+	// Code's main thread, OpenCode's export. Once Body has been read to its
+	// end: a bound, or a mark saying why there is none ([CountUnread] where
+	// Body was not read whole). Nil from a taker that counts nothing, and a
+	// nil count from it is none.
 	Count func() *ResumedCount
+
+	// CountProvider is the provider of the reply an OpenCode count is
+	// anchored on, off the same read, once Body has been read to its end
+	// ([SessionCapture.CountProvider]): "" for a Claude Code count and where
+	// no reply anchored one. Nil from a taker that names none.
+	CountProvider func() string
 }
 
 // SessionPackWait bounds a runner's on-demand pack of a session in its box

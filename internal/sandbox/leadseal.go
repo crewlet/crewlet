@@ -82,15 +82,15 @@ type sealedLead struct {
 }
 
 // shapeRefusal is why lead's source does not suit its kind, "" where it does: an
-// answer carries its answer alone, a task its own facts alone, and a review
-// neither, its words recomposed from the round it closed.
+// answer carries its answer alone, a task or a fresh brief's task its own facts
+// alone, and a review neither, its words recomposed from the round it closed.
 func shapeRefusal(lead Lead) string {
 	switch lead.Kind {
 	case LeadKindAnswer:
 		if lead.Answer == nil || lead.Task != nil {
 			return "an answer lead carries its answer and nothing else"
 		}
-	case LeadKindTask:
+	case LeadKindTask, LeadKindFresh:
 		if lead.Task == nil || lead.Answer != nil {
 			return "a task lead carries the task's own facts and nothing else"
 		}

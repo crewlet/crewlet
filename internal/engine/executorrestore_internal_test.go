@@ -250,8 +250,9 @@ func TestAProbeAnswersTheKeptSessionOfTheJobARelaunchFollows(t *testing.T) {
 }
 
 // refuseAfter stamps on turn's row, refused, the capture of its current job at
-// the place after after, measuring contextTokens: a newer capture of the job
-// than the one the turn kept, its keep refused for the seat's budget.
+// the place after after, measuring contextTokens and estimating its next
+// request at as much: a newer capture of the job than the one the turn kept,
+// its keep refused for the seat's budget.
 func refuseAfter(t *testing.T, pending sandbox.PendingStore, turn string, after sandbox.SessionCapture,
 	contextTokens int64) {
 	t.Helper()
@@ -262,7 +263,8 @@ func refuseAfter(t *testing.T, pending sandbox.PendingStore, turn string, after 
 	}
 	refused := sandbox.SessionCapture{LaunchSeq: row.LaunchSeq, CaptureSeq: after.CaptureSeq + 1,
 		Launch: row.LaunchID, State: sandbox.CaptureRefused, Reason: "past the seat's budget",
-		Harness: "claude-code", SessionID: "s-refused", ContextTokens: contextTokens}
+		Harness: "claude-code", SessionID: "s-refused", ContextTokens: contextTokens,
+		NextRequestTokens: contextTokens, NextRequestOlderTokens: contextTokens}
 	if _, err := pending.StampCapture(ctx, turn, refused); err != nil {
 		t.Fatalf("StampCapture: %v", err)
 	}
@@ -313,15 +315,17 @@ func TestAProbeThatContinuesNoKeptCaptureAnswersItsJobsCopysMeasure(t *testing.T
 }
 
 // A RELAUNCH IS HELD TO THE CONTEXT OF THE CAPTURE IT CONTINUES. A job kept a
-// capture of 40000 tokens and went on, its newer capture of 150000 refused:
-// the relaunch continues the kept one, which sends what it holds, so its floor
-// is the kept capture's own context, while the job's copy in its box went as
-// far as the newer one, which only the in-place floor is made of. Under a day
-// that holds 40000 and the brief but not 150000, the kept continuation is
-// offered and taken up.
+// capture of 40000 tokens and went on, its newer capture of 150000 refused,
+// which estimated its next request at as much: the relaunch continues the kept
+// one, which sends what it holds, so its floor is the kept capture's own
+// context and estimate (none, so its context), while the job's copy in its box
+// went as far as the newer one, which only the in-place floor is made of.
+// Under a day that holds 40000 and the brief but not 150000, the kept
+// continuation is offered and taken up.
 //
-// Mutation: answer the copy's measure as the kept capture's own, and the
-// session is held to 150000 and dropped for a session of the run's own.
+// Mutation: answer the copy's measure or its next-request estimate as the kept
+// capture's own, and the session is held to 150000 and dropped for a session
+// of the run's own.
 func TestARelaunchIsHeldToTheContextOfTheCaptureItContinues(t *testing.T) {
 	t.Parallel()
 	c, seat := executorCompany(t)
@@ -329,9 +333,10 @@ func TestARelaunchIsHeldToTheContextOfTheCaptureItContinues(t *testing.T) {
 	refuseAfter(t, k.e.sandbox.Load().pending, "t1", k.kept, 150000)
 	basis := k.l.ProbeSession(k.ctx)
 	if !basis.Continues() || basis.CaptureSeq != k.kept.CaptureSeq || basis.ContextTokens != 40000 ||
-		basis.CopyContext != 150000 {
-		t.Fatalf("the probe answered %+v, want the kept capture at its own 40000, the job's copy at 150000",
-			basis)
+		basis.NextRequest != (sandbox.NextRequest{}) || basis.CopyContext != 150000 ||
+		basis.CopyNextRequest != (sandbox.NextRequest{Tokens: 150000, OlderTokens: 150000}) {
+		t.Fatalf("the probe answered %+v, want the kept capture at its own 40000 and no estimate, the job's "+
+			"copy at 150000 by both", basis)
 	}
 	decided, err := k.relaunch(t, basis, nil)
 	if err != nil {

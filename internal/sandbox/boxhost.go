@@ -174,7 +174,7 @@ func BoxReadBudget(run PendingRun, read BoxRead) time.Duration {
 	if asksMainThread(run, read) {
 		held += MainThreadReadWait
 	}
-	if asksMainThread(run, read) && run.asksReceipts() {
+	if asksHookReceipts(run) {
 		held += hookVerdictWait + coord.MaxValueCrossing
 	}
 	return pollBound + time.Duration(float64(held)/BoxReadAnswerShare)
