@@ -406,3 +406,23 @@ func TestAClaudeRunInARealBoxIsCollectedFromItsStream(t *testing.T) {
 		t.Errorf("result text %q, input %d, cost %v; want the result line's", res.Text, res.InputTokens, res.CostUSD)
 	}
 }
+
+// A RUN'S LAST LIMIT REPORT RIDES ITS RESULT, answered or not, so the engine
+// reads where the plan's windows stood (harness.Provider.RunEnded).
+func TestARunsLastLimitReportRidesItsResult(t *testing.T) {
+	t.Parallel()
+	first := `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","utilization":0.1}}`
+	last := `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day","utilization":0.8}}`
+	runner := executor.NewClaudeCode()
+	b := box(t, runner)
+	stream := append([]string{first}, claudeRunStream...)
+	stream = append(stream[:len(stream)-1], last, stream[len(stream)-1])
+	b.Put(paths(b).Stream(), strings.Join(stream, "\n")+"\n")
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !res.Success || res.Limits != last {
+		t.Errorf("success %v, limits %q; want the run's last report %q", res.Success, res.Limits, last)
+	}
+}

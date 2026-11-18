@@ -1338,12 +1338,12 @@ type Profile struct {
 	// report, ahead of every limit report and sentinel; see [AuthEvent].
 	AuthEvents []AuthEvent `yaml:"auth_events,omitempty"`
 
-	// LimitResetEvents date and name the limit a run reported, from the
-	// harness's own fields; see [LimitResetEvent].
-	LimitResetEvents []LimitResetEvent `yaml:"limit_reset_events,omitempty"`
+	// LimitReports read where each of the vendor's windows stands from the
+	// harness's own fields, and date the limit a run reported; see [LimitReport].
+	LimitReports []LimitReport `yaml:"limit_reports,omitempty"`
 
 	// LimitWindows name the window of a limit from the vendor's sentence,
-	// where no [LimitResetEvent] named one; see [LimitWindowWording].
+	// where no [LimitReport] named one; see [LimitWindowWording].
 	LimitWindows []LimitWindowWording `yaml:"limit_windows,omitempty"`
 
 	// SignInEnv lists the variables that sign this harness in when an entry's
