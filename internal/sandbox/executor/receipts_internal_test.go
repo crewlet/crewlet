@@ -226,11 +226,13 @@ func TestABatchPairBeforeAClearedReplyIsRestartedAndAStopPairIsNot(t *testing.T)
 }
 
 // A PAIR THE RESUME DOES NOT HAND IS NOT HELD (D21), and is evidence its take
-// arrived, so never absent: a pair a retraction withdrew, and one off the
-// chain the leaf walks, under a parent naming no record.
+// arrived, so never absent: a pair a retraction withdrew either record of, and
+// one off the chain the leaf walks, under a parent naming no record.
 //
-// Mutation: hold a pair without asking the chain whether it is handed, or
-// read a take whose pair is not handed as absent, and a case goes red.
+// Mutation: hold a pair without asking the chain whether it is handed, read a
+// take whose pair is not handed as absent, or feed the reading a line before
+// the chain (each record read by the line before's handle), and a case goes
+// red.
 func TestAPairTheResumeDoesNotHandIsNotHeld(t *testing.T) {
 	t.Parallel()
 	later := sandbox.AskedTake{Take: rhLaterTake, Event: rhBatch}
@@ -243,6 +245,11 @@ func TestAPairTheResumeDoesNotHandIsNotHeld(t *testing.T) {
 		}})
 	rhWant(t, "a withdrawn system message", rhRead(t, "2.1.322", true, withdrawn, rhAskBatch, later, rhAskStop),
 		[]string{rhLaterTake, rhStopTake}, nil, nil)
+	// Its context, record 6, taken back instead: its system message, handed,
+	// holds nothing alone.
+	withdrawn[len(withdrawn)-1] = rcFallback(15, 16, 1600, rcQuoted(6))
+	rhWant(t, "a withdrawn additional context", rhRead(t, "2.1.322", true, withdrawn, rhAskBatch, later,
+		rhAskStop), []string{rhLaterTake, rhStopTake}, nil, nil)
 	// Records 4 to 6 hang under a parent naming no record, and the reply after
 	// them names the batch's result, record 3, as its parent: a thread no size
 	// path reads alike either, so nothing in it is held.
@@ -316,8 +323,10 @@ func TestAReadAskedMoreTakesThanAHookRecordNamesAnswers(t *testing.T) {
 // same event held, no stray name, every hook record read, and a thread the
 // chain places. A held take's own stdout is no stray name.
 //
-// Mutation: drop any condition, read a held take at the other event, or read
-// a held take's own stdout as stray, and a case goes red.
+// Mutation: drop any condition, read a held take at the other event, read a
+// held take's own stdout as stray, or tell the chain no refused line, and a
+// case goes red. Dropping the chain's placing is equivalent: a thread it
+// cannot place holds no take, so the held take's condition refuses first.
 func TestAbsenceIsProvenOnlyByAThreadThatMeetsEveryCondition(t *testing.T) {
 	t.Parallel()
 	takes := []sandbox.AskedTake{rhAskBatch, rhAskStop, rhAskUntaken}
@@ -331,8 +340,10 @@ func TestAbsenceIsProvenOnlyByAThreadThatMeetsEveryCondition(t *testing.T) {
 		lines func(t *testing.T) []string
 		held  []string
 	}{
-		"a line that is no record": {lines: func(*testing.T) []string { return append(rhBase(), "[1,2]") },
-			held: held},
+		"a line that is no record, between the pairs": {lines: func(*testing.T) []string {
+			lines := rhBase()
+			return slices.Insert(lines, 7, "[1,2]")
+		}, held: held},
 		"a restart before both pairs": {lines: func(*testing.T) []string {
 			return rhChained([]rhRecord{func(parent, n, ms int) string {
 				return rcSystem(parent, n, ms, "microcompact_boundary", "")

@@ -208,9 +208,11 @@
 // take is named outside its own pair (a success's stdout of another firing,
 // or a system message whose firing never gets its context or names a take of
 // another event), every hook record's type, firing and event read, and the
-// chain places the thread. A take whose pair was found is never absent, and a
-// `hook_cancelled` line names no take, so it denies nothing. Anything else is
-// undecided: the safe side, a note told again.
+// chain places the thread (implied by the held take: a thread the chain
+// cannot place hands no record, so holds no take). A take whose pair was
+// found is never absent, and a `hook_cancelled` line names no take, so it
+// denies nothing. Anything else is undecided: the safe side, a note told
+// again.
 //
 // # A thread line is read in one scanner pass, never held
 //
