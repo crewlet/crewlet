@@ -23,9 +23,8 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// tappedBroker is a node's broker connection that keeps every byte it carries,
-// both ways: what an observer of the broker sees of each question and its
-// answer.
+// tappedBroker is a broker connection that keeps every byte it carries both
+// ways: what an observer of the broker sees.
 type tappedBroker struct {
 	q *memory.Queue
 
@@ -97,17 +96,14 @@ func askMachineToken(t *testing.T, node *fakeNode, id, keyID string,
 // NO VERIFIER CROSSES THE BROKER, AND NO SECRET EITHER — and the token still
 // resolves.
 //
-// A node holding no identity rows asks a data node for the row a presented
-// machine token is checked against. Every byte an observer of the broker sees
-// of that question and its answer holds neither the token's secret, which
-// authenticates it, nor the stored verifier, which a guess is tested against.
-// Yet the row the asker gets back carries the stored verifier, because the MAC
-// that crossed in its place confirms the presented secret implies it — so
-// credential.CheckToken decides the token good exactly as a data node would.
-// And a wrong secret gets no verifier and is refused, again exactly as a data
-// node refuses it. Mutation: answer the row unnarrowed (factsOf keeping the
-// verifier) and the tap sees it; ask with the secret and the tap sees that;
-// set the verifier whatever the MAC says and the wrong secret is let in.
+// A node holding no identity rows asks a data node for a machine token's row.
+// No byte on the broker holds the token's secret or the stored verifier (which
+// a guess is tested against), yet the row arrives with the verifier, because
+// the MAC that crossed in its place confirms the presented secret implies it:
+// credential.CheckToken decides as a data node would, and refuses a wrong
+// secret, which gets no verifier.
+// Mutation: keep the verifier in factsOf, or ask with the secret, and the tap
+// sees it; set the verifier whatever the MAC says and the wrong secret is let in.
 func TestNoVerifierCrossesTheBroker(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -131,8 +127,7 @@ func TestNoVerifierCrossesTheBroker(t *testing.T) {
 			check.Answer, check.Detail)
 	}
 
-	// A WRONG SECRET gets no verifier at all, and is refused as a data node
-	// refuses it: the secret does not verify.
+	// A WRONG SECRET gets no verifier, and is refused as a data node refuses it.
 	wrong := presented
 	wrong.Secret = strings.Repeat("9f", credential.TokenBytes)
 	row, err = router.Identity().MachineToken(t.Context(), wrong)
@@ -172,12 +167,10 @@ type tokenFieldCrossing struct {
 }
 
 // tokenRowFields is every fact a machine token is checked against, and whether
-// it crosses.
-//
-// TWO-SIDED, like [carriedByServer]: a field of credential.TokenRow or of its
-// owner that is not listed fails, so whoever adds one decides whether the
-// asking node decides on it or an observer of the broker would want it — and
-// a listed field that is gone fails too.
+// it crosses. TWO-SIDED, like [carriedByServer]: an unlisted field of
+// credential.TokenRow or its owner fails, so whoever adds one decides whether
+// it crosses (the asker decides on it) or not (a broker observer would want
+// it), and a listed field that is gone fails too.
 var tokenRowFields = map[string]tokenFieldCrossing{
 	"TokenRow.Applied": {true, "an absent row is weighed against the mint's position"},
 	"TokenRow.Lag":     {true, "the coverage the table judges first"},
@@ -227,15 +220,13 @@ func fullToken() credential.TokenRow {
 
 // EVERY FACT A TOKEN IS CHECKED ON CROSSES, BUT ITS VERIFIER.
 //
-// The asking node decides the token by the one table a data node decides it by,
-// so every fact that table reads has to arrive — a fact that silently did not
-// would be its zero value, and a zero revocation or a zero owner epoch is a
-// token the asker lets in that a data node refuses. So each field of the row
-// and of its owner is classified, both ways; a row with every one of them set
-// is answered through a serving node; and every field that crosses arrives
-// with its value while the verifier arrives empty, and is nowhere in the
-// answer's bytes. Mutation: narrow a field the table reads (factsOf zeroing
-// the owner's epoch) and this fails; let the verifier through and it fails.
+// The asker decides the token by the same table a data node does, so every
+// fact it reads must arrive: one that silently did not would be its zero value,
+// and a zero revocation or owner epoch lets in a token a data node refuses.
+// Every field is classified both ways; a row with all of them set is answered
+// through a serving node; each crossing field arrives with its value, and the
+// verifier arrives empty and is nowhere in the answer's bytes. Mutation: zero
+// the owner's epoch in factsOf, or let the verifier through, and this fails.
 func TestEveryFactATokenIsCheckedOnCrossesButItsVerifier(t *testing.T) {
 	t.Parallel()
 	found := map[string]bool{}
@@ -299,10 +290,10 @@ func TestEveryFactATokenIsCheckedOnCrossesButItsVerifier(t *testing.T) {
 	}
 }
 
-// replayingBroker forwards the first question to the fleet and keeps its
-// answer, then answers every later question with that answer — sealed by the
-// fleet and bound to the question it answers, as a fleet member replaying a
-// cached answer would: the one sender the envelope's own binding cannot stop.
+// replayingBroker forwards the first question and keeps its answer, then
+// answers every later question with it, sealed by the fleet and bound to that
+// question: a fleet member replaying a cached answer, the one sender the
+// envelope's own binding cannot stop.
 type replayingBroker struct {
 	q *memory.Queue
 
@@ -337,14 +328,11 @@ func (b *replayingBroker) Ask(ctx context.Context, subject string, request []byt
 
 // A REPLAYED TOKEN ANSWER FAILS ANOTHER NONCE.
 //
-// Every machine-token question carries a nonce of its own, and the MAC that
-// stands in for the verifier is over it: so an answer to one question — even
-// one re-sealed by a fleet member and bound to a later question, which the
-// envelope alone would believe — confirms no verifier for that later
-// question, and the token is refused rather than decided on facts about
-// somebody else's question. And at the facts themselves: the same answer
-// checked under its own nonce confirms the verifier, and under any other, or
-// under another key, confirms nothing. Mutation: leave the nonce out of the
+// The MAC standing in for the verifier is over each question's own nonce, so an
+// answer re-sealed by a fleet member and bound to a later question, which the
+// envelope alone would believe, confirms no verifier there and the token is
+// refused. At the facts: the answer confirms the verifier under its own nonce,
+// and nothing under another nonce or key. Mutation: leave the nonce out of the
 // MAC and the replay is let in.
 func TestAReplayedTokenAnswerFailsAnotherNonce(t *testing.T) {
 	t.Parallel()
@@ -374,8 +362,7 @@ func TestAReplayedTokenAnswerFailsAnotherNonce(t *testing.T) {
 		t.Fatalf("a token decided on a replayed answer checked %s, want refused", check.Answer)
 	}
 
-	// AT THE FACTS: confirmed under the nonce they were MAC'd over, and under
-	// no other nonce or key.
+	// AT THE FACTS: confirmed under their own nonce, and under no other nonce or key.
 	asked := [nonceBytes]byte{1, 2, 3}
 	_, facts := askMachineToken(t, node, machineID, fleetRing.ActiveID, asked)
 	key, held := fleetEnvelopes.verifiers.key(fleetRing.ActiveID)
@@ -396,13 +383,12 @@ func TestAReplayedTokenAnswerFailsAnotherNonce(t *testing.T) {
 	}
 }
 
-// A MACHINE TOKEN NOBODY CAN ANSWER FOR IS UNKNOWN, NEVER "NO SUCH TOKEN": a
-// directory that cannot be read crosses as its own error, and a data node
-// holding no directory leaves the estate unserved — each an error, which the
-// guard answers 503, where the zero row would be a pipeline told its credential
-// is broken. A node asked to answer under a key it does not hold runs nothing
-// and reads nothing, so the router asks one that holds it. And a data node's
-// own router answers it in-process, MAC'd under its own envelopes' keys.
+// A MACHINE TOKEN NOBODY CAN ANSWER FOR IS UNKNOWN, NEVER "NO SUCH TOKEN": an
+// unreadable directory crosses as its own error and a data node holding none
+// leaves the estate unserved, each an error the guard answers 503, where the
+// zero row would tell a pipeline its credential is broken. A node asked under a
+// key it does not hold runs and reads nothing, so the router asks one that
+// holds it; a data node's own router answers in-process, MAC'd under its keys.
 func TestAMachineTokenNobodyCanAnswerForIsUnknown(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")

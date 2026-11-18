@@ -4,163 +4,93 @@ import "slices"
 
 // The tables a seat's memory is made of, and how each one travels.
 //
-// ONE REGISTRY, and it is the whole reason this package is not fifteen
-// publish calls scattered across the learning subsystem. Memory is written
-// from many places — the reflect worker, the persist decider, the skill
-// synthesizer and refiner, the counterparty profiler, the onboarding claim —
-// and a scheme that hooked each write site would need every one of them to
-// remember. The diary's own retention sweep proves
-// how that ends: it shipped, was documented, and for months nothing called
-// it.
-//
-// So replication reads the tables instead of intercepting the writers. A new
-// memory table is one entry here, and the day somebody adds one without an
-// entry, TestEveryAgentKeyedTableTravels fails.
+// ONE REGISTRY: replication reads the tables rather than hooking each of the
+// many writers (the reflect worker, the persist decider, the skill
+// synthesizer and refiner, the counterparty profiler, the onboarding claim),
+// every one of which would have to remember the hook. A new memory table is
+// one entry here; TestEveryAgentKeyedTableTravels fails for one without it.
 
 // table describes how one memory table is selected, keyed and carried.
 type table struct {
 	// name is the table.
 	name string
 
-	// seatCol names the seat. Two spellings exist in this schema and both
-	// are stable across nodes: a handle, or the derived agent id.
+	// seatCol names the seat: a handle, or the derived agent id. Both are
+	// stable across nodes.
 	seatCol string
 
-	// byAgentID says seatCol holds the derived UUIDv5 rather than the
-	// handle. The derivation is a pure function of (org name, handle), so
-	// every node computes the same value — which is what makes a row
-	// written on one node addressable from another.
+	// byAgentID says seatCol holds the derived UUIDv5, not the handle. It is a
+	// pure function of (org name, handle), so a row written on one node is
+	// addressable from another.
 	byAgentID bool
 
-	// key is the NATURAL key: the columns that identify this row the same
-	// way on every node. It is what the replication subject is built from
-	// and what an import conflicts on.
-	//
-	// Never a synthetic id. An AUTOINCREMENT `id` starts at 1 on every
-	// node, so replicating one would collide two unrelated rows the moment
-	// two nodes had both written one.
+	// key is the NATURAL key: the columns identifying the row the same way on
+	// every node, which the replication subject is built from and an import
+	// conflicts on. Never a synthetic id: an AUTOINCREMENT `id` starts at 1 on
+	// every node, so two nodes' unrelated rows would collide.
 	key []string
 
-	// columns is everything carried. The synthetic id is deliberately
-	// absent where one exists — see key.
+	// columns is everything carried; the synthetic id, where one exists, is
+	// deliberately absent (see key).
 	columns []string
 
-	// blobs names the columns whose values are bytes rather than text, so
-	// a round trip through JSON restores them as bytes. Only embeddings
-	// are, and getting it wrong would store a vector as its base64 text
-	// and silently break recall for that row.
+	// blobs names the byte columns, so a JSON round trip restores them as
+	// bytes. Only embeddings are; got wrong, a vector is stored as its base64
+	// text and recall silently breaks for that row.
 	blobs []string
 
 	// wholeEachCycle republishes every row rather than only what is new.
+	// THE SPLIT IS BY MUTABILITY: a watermark misses in-place updates, which
+	// is right for the append-only tables (a retrieval counter is bookkeeping,
+	// a compaction flag the lifecycle re-derives) and wrong where an update IS
+	// the content: a profile rewritten, a skill's state and use count, an
+	// onboarding marker flipping.
 	//
-	// THE SPLIT IS BY MUTABILITY. A watermark ([table.watermark]) catches
-	// inserts and misses in-place updates, which is right for the
-	// append-only tables — a diary entry's retrieval counter moving is
-	// bookkeeping, and a compaction flag that fails to travel self-heals
-	// because the lifecycle re-derives it. It is wrong for these, where an
-	// update IS the content: a counterparty profile is rewritten as the seat
-	// learns, a skill's state and use count move, an onboarding marker
-	// flips.
-	//
-	// WHAT IT COSTS IS EACH TABLE WHOLE, EVERY PUBLISH, and only one of them
-	// is small by construction. agent_onboarding_markers is one row per seat.
-	// counterparty_profiles is one row per person a seat has messaged within
-	// maintenance.CounterpartyRetention, and every hydration brings back the
-	// rows a sweep took, since deletes do not travel (crewlet/crewlet#348).
-	// synthesized_skills keeps every skill the seat ever archived: the
-	// synthesizer's cap (learning.DefaultMaxSkillsPerAgent) counts only the
-	// skills not archived, and a skill is archived, never deleted. A publish
-	// cut inside one of these tables keeps nothing of it, and the seat's next
-	// one starts it again: a seat whose profiles and skills alone outlast a
-	// cycle's publish has the rows before the cut sent again every cycle and
-	// never the rest of them, nor the onboarding marker the registry lists
-	// after them (crewlet/crewlet#1040). A publish's own pass carries the
-	// tables with a watermark before these ([ownPassOrder]), so what the
-	// seat wrote is not behind them.
+	// It costs each table whole, every publish: profiles return after a sweep
+	// since deletes do not travel, and archived skills are never deleted (the
+	// learning.DefaultMaxSkillsPerAgent cap counts only live ones). A cut
+	// inside one keeps nothing of it, hence [ownPassOrder].
 	wholeEachCycle bool
 
 	// watermark is the column an append-only table's incremental export
-	// is over: a seat's rows of each range about its boundary, its own and
-	// its backlog ([Syncer.PublishOwn], [Syncer.PublishBacklog]), past the
-	// last one of that range the stream acknowledged, in that column's
-	// order, a page at a time. Empty for a wholeEachCycle table, which has
-	// none.
+	// pages over, per seat, table and range ([Syncer.PublishOwn],
+	// [Syncer.PublishBacklog]), past the last row the stream acknowledged;
+	// empty for a wholeEachCycle table.
 	//
-	// IT MUST NEVER BE REUSED, which is what the rowid failed. A TEXT-keyed
-	// table with no AUTOINCREMENT hands out max(rowid) + 1, so after the
-	// newest row is deleted — the diary's expiry or its trim, a lifecycle
-	// sweep, a skill's pruned history — the next insert takes that rowid
-	// again, at or below a mark that has already passed it, and is never
-	// published while this node holds the seat. So those tables carry
-	// `change_seq`, stamped by a trigger from a counter that only ever
-	// increments, on every insert and on every vector set in place (node
-	// migration 0041). TestNoAppendOnlyTableReusesItsWatermark holds every
-	// append-only entry to that, so an entry added later cannot bring the
-	// reusable rowid back.
-	//
-	// AND NO TWO ROWS OF A TABLE SHARE ONE ABOVE 0, because the mark moves
-	// per acknowledged row: a page boundary or a cut between two rows of one
-	// value would leave the mark at that value, and the next read, strictly
-	// above it, would never publish the second while this node holds the
-	// seat. A mark per table could not split such a pair inside one export; a
-	// mark per row can. The change sequence holds it: every stamp is a fresh
-	// increment of the node's counter, a re-stamp leaves its row's old value
-	// to nobody, and the rows node migration 0041 found kept their rowids,
-	// unique within a table. (0 is the column's default, which no read
-	// returns, since every read is strictly above a mark that is never below
-	// 0; and values can coincide across tables, harmlessly, since a mark is
-	// per seat and table.) TestRowsWrittenTogetherCarryDistinctWatermarks
-	// holds every entry to it.
+	// NEVER REUSED (a rowid is, once its newest row is deleted, and a reuse at
+	// or below a passed mark is never published) AND UNIQUE ABOVE 0 within a
+	// table (0, the default, no read returns; the mark moves per row, so a
+	// cut between two rows of one value skips the second): `change_seq`,
+	// stamped by trigger from an only-increasing counter on insert and vector
+	// set (node migration 0041). Held by TestNoAppendOnlyTableReusesItsWatermark
+	// and TestRowsWrittenTogetherCarryDistinctWatermarks.
 	watermark string
 
-	// fillsVector says the holder FILLS this append-only table's vector
-	// after the insert — its `embedding` and the `embedding_model` it came
-	// from — for rows written without one or under a model the company
-	// has since left.
+	// fillsVector says the holder FILLS this append-only table's vector (its
+	// `embedding` and `embedding_model`) after the insert, for rows written
+	// without one or under a model the company has since left; the vector is
+	// of content stored on the row, so the holder can make it again.
 	//
-	// The one in-place change an append-only row takes, and both halves
-	// of carrying it are deliberate. Setting the vector stamps the row
-	// with a fresh change sequence (the table's trigger, node migration
-	// 0041), so the watermark carries it like an insert
-	// (learning.Diary.FillEmbeddings); and a carry over a row
-	// already here takes the carried vector WHEN THE STORED ONE IS OF NO
-	// MODEL OR ANOTHER — see [table.onConflict] — because with DO NOTHING
-	// a peer that already held the vectorless row would keep it, and when
-	// the seat moved there that stale copy would be the holder's.
-	//
-	// The diary and the episodes: a note's vector is of its content, and an
-	// episode's of its label, its ask and what it did — all stored on the
-	// row — so the holder can make either again.
+	// Both halves of carrying that in-place change are deliberate: setting
+	// the vector stamps a fresh change sequence, so the watermark carries it
+	// like an insert (learning.Diary.FillEmbeddings); and a carry over a row
+	// already here takes the carried vector when the stored one is of no
+	// model or another ([table.onConflict]), since with DO NOTHING a peer
+	// holding the vectorless row would keep it and hand it on as holder.
 	fillsVector bool
 
-	// parent is the carried table a row of this one belongs to, for a table
-	// whose schema references another: a skill version's skill_id names a
-	// synthesized_skills id. Nil for a table that references none.
+	// parent is the carried table a row of this one belongs to (a skill
+	// version's skill_id names a synthesized_skills id); nil for none.
 	//
-	// A hydration replays the parent's table first ([tables]), so a row
-	// whose parent is still not in the store is LEFT OUT, never written
-	// ([table.parentHeld]). Written, its foreign key refused the fetch and
-	// the seat with it, on every node whose store lacked the parent, and for
-	// good once the store that held it was gone, over a row nothing reads
-	// without its parent: a version of a skill the seat does not have.
-	//
-	// Such a version's skill is missing for one of two reasons. The
-	// changelog does not hold it at all: a publish's own pass carries the
-	// skill versions before the skills it sends whole ([ownPassOrder]), so a
-	// skill its holding wrote and refined had its archived body sent before
-	// the skill, and the publish was cut between the two, by a crash or by a
-	// release's flush running out, before any later publish of that node
-	// carried the skill. Or the changelog holds it and this
-	// store skipped it: the store already held another skill of the seat
-	// under the same name, which synthesized_skills' (agent_handle, name)
-	// index allows once, so the carried skill met the import's trailing skip
-	// ([table.onConflict]) — a skill deleted by hand and synthesized again
-	// under a new id while the old one's subject stays on the changelog, or
-	// two copies crossing in a seat's move (crewlet/crewlet#511). Both are
-	// left out alike and counted alike, as the seat's orphans.
+	// A hydration replays the parent's table first ([tables]) and LEAVES OUT
+	// a row whose parent is still not in the store ([table.parentHeld]),
+	// counted as an orphan: written, its foreign key refused the seat on every node
+	// lacking the parent, over a row nothing reads alone. The parent is
+	// missing after a publish cut between version and skill ([ownPassOrder]),
+	// or when this store skipped it for another skill of that name on the
+	// (agent_handle, name) index ([table.onConflict]).
 	// TestEveryReferenceBetweenCarriedTablesNamesAParentReplayedFirst holds
-	// every reference the schema declares between carried tables to an entry
-	// here and to a parent the registry lists first.
+	// every schema reference between carried tables to a parent listed first.
 	parent *reference
 }
 
@@ -186,20 +116,14 @@ var retiredTables = []string{
 }
 
 // tables is every table a seat's memory lives in, in the order a hydration
-// replays them. A publish's own pass carries the tables with a watermark
-// first ([ownPassOrder]), and its backlog carries only those, in this order
-// ([backlogPassOrder]).
+// replays them; a publish's own pass reorders them ([ownPassOrder]) and its
+// backlog carries only the watermark tables ([backlogPassOrder]).
 //
-// PARENTS BEFORE CHILDREN, and the reader enforces it:
-// synthesized_skill_versions references synthesized_skills, and foreign keys
-// are ON in this store. A hydration replays each table on its own, in this
-// order ([Syncer.Hydrate]), so every skill the changelog holds is in the store
-// before the first of its versions is written. The changelog itself keeps no
-// order across subjects (ADR-0014): every publish sends a seat's skills again,
-// whole, and each version once, so a skill's only copy sits after the
-// versions published before it, and one replay of the seat in the changelog's
-// order met those versions first and refused the seat on a store without the
-// skill (crewlet/crewlet#1051). A child names its parent ([table.parent]).
+// PARENTS BEFORE CHILDREN: synthesized_skill_versions references
+// synthesized_skills with foreign keys ON, and the changelog keeps no order
+// across subjects (ADR-0014), so a hydration replays each table on its own in
+// this order ([Syncer.Hydrate]) and every skill is in the store before its
+// versions. A child names its parent ([table.parent]).
 var tables = []table{
 	{
 		name:      "agent_diary",
@@ -285,33 +209,17 @@ var tables = []table{
 }
 
 // ownPassOrder is the order a publish's own pass carries the tables in
-// ([Syncer.PublishOwn]): the tables with a watermark, in the registry's order
-// (the diary, the episodes, the skill versions), and then the tables sent
-// whole, in the registry's order (the counterparty profiles, the skills, the
-// onboarding marker).
+// ([Syncer.PublishOwn]): the watermark tables (diary, episodes, skill
+// versions), then the tables sent whole (profiles, skills, onboarding
+// marker), each half in the registry's order.
 //
-// WHAT THE HOLDING WROTE GOES FIRST, because it is what a cut should lose
-// last. Of a watermark table the pass carries what the holding wrote since
-// its last pass, a few rows a cycle, while every pass sends each
-// whole-each-cycle table entire, as many rows as the seat has profiles and
-// skills, neither of them bounded (crewlet/crewlet#1040): a pass is cut
-// inside those far likelier than anywhere else, and one cut there has
-// carried every row the holding wrote. In the registry's order the skill
-// versions sat behind the profiles and skills, so a flush cut inside those
-// lost the versions too, and a seat whose profiles and skills outlast a
-// cycle never had its versions carried at all, by a flush or by any of its
-// cycles.
-//
-// A VERSION THEN GOES AHEAD OF ITS SKILL: a skill the holding refined has its
-// archived body sent before the skill's new copy, and a cut between the two
-// leaves the version on the changelog with the skill's older copy, or with no
-// copy where the skill is new to this holding. A hydration takes either: it
-// replays each table on its own, the skills before their versions, and leaves
-// out a version whose skill is still not in the store ([table.parent]), where
-// a cut in the registry's order would have lost the version as well. Within
-// each half the registry's order stands: a durable note, then a turn's
-// record, then a skill's archived body; and the profiles, the skills and the
-// marker, whose carrying crewlet/crewlet#1040 replaces.
+// WHAT THE HOLDING WROTE GOES FIRST, because a cut should lose it last: a
+// watermark table carries a few rows a cycle while the whole tables are
+// unbounded, so a pass is far likelier cut inside those, and a seat whose
+// profiles and skills outlast a cycle would never carry what sat behind them.
+// A version thus goes ahead of its skill; a cut between them leaves the
+// version with the skill's older copy or none, which a hydration tolerates
+// by leaving it out until the skill arrives ([table.parent]).
 var ownPassOrder = slices.Concat(
 	slices.DeleteFunc(slices.Clone(tables), func(t table) bool { return t.wholeEachCycle }),
 	slices.DeleteFunc(slices.Clone(tables), func(t table) bool { return !t.wholeEachCycle }))

@@ -22,13 +22,11 @@ import (
 	"github.com/crewlet/crewlet/internal/toolsession/toolsessiontest"
 )
 
-// THE BRIDGE'S DISPATCHER HOLDS THE GATES EVERY DISPATCHER HOLDS — the
-// contract the tool loop's runs as well (internal/agent/toolloop). Each case
-// is one detached run's session, opened on a bridge mounted on a live
-// listener, which the suite reaches over the run's minted URL as the harness in a
-// box does. The session names its caller, the seat its surface is bound to,
-// because the suite's surface is one that parks ([parking]) rather than the
-// seat's own; a seat's own session is held to the same gates by gates_test.
+// THE BRIDGE'S DISPATCHER HOLDS THE GATES EVERY DISPATCHER HOLDS, the contract
+// internal/agent/toolloop runs too. Each case is a detached run's session on a
+// live listener, reached over its minted URL as a box's harness does. The
+// session names its caller (the seat) because its surface parks ([parking])
+// rather than being the seat's own; gates_test holds a seat's own session.
 func TestTheBridgeKeepsTheToolSessionContract(t *testing.T) {
 	t.Parallel()
 	toolsessiontest.Run(t, func(t *testing.T, spec toolsessiontest.Spec) *toolsessiontest.Served {
@@ -71,10 +69,10 @@ func TestTheBridgeKeepsTheToolSessionContract(t *testing.T) {
 	})
 }
 
-// boxLine is a box's network to the engine, with a transport of its own: every
-// request it has in flight can be cut at once, as a box that dies cuts them —
-// with no DELETE, which a dead box never sends, and which the SDK's own close
-// holds until the calls in flight are answered.
+// boxLine is a box's network to the engine with its own transport, so every
+// request in flight can be cut at once as a dying box cuts them: with no
+// DELETE, which a dead box never sends and the SDK's close holds until the
+// calls in flight are answered.
 type boxLine struct {
 	base *http.Transport
 	gone chan struct{}
@@ -147,10 +145,9 @@ func contractSurface(t *testing.T, spec toolsessiontest.Spec) parking {
 	return parking{Surface: surf, parks: parks}
 }
 
-// parking is the suite's surface with its suspending tools' results asking
-// the run to park, as a tool whose work outlives its call answers — what the
-// Dashboard Assistant's quick-mode surface does with a proposal. No seat tool
-// asks for it, so the suite's are marked here rather than registered as one.
+// parking is the suite's surface with its suspending tools' results asking the
+// run to park, as the Dashboard Assistant's quick-mode surface does with a
+// proposal. No seat tool asks for it, so the suite's are marked here.
 type parking struct {
 	*tools.Surface
 	parks map[string]bool

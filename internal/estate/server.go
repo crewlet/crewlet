@@ -36,12 +36,9 @@ type ServerOptions struct {
 	Local LocalBackends
 
 	// Git is this node's git half, resolved per request ([LocalGit]), on a
-	// node with the `gitlet` role — every one of which holds data in this
-	// release — and nil on every other. Where it is set the node registers
-	// the two git lanes too, the reads' and the engine writes' ([gitLanes]:
-	// [laneGitReads], [laneGitWrites]), both from boot: until Gitlet
-	// is built there each answers `no_backend`, a git read and an engine write
-	// alike.
+	// node with the `gitlet` role (each holds data in this release), and nil
+	// on every other. Where set, the node also registers the git lanes from
+	// boot ([gitLanes]), each answering `no_backend` until Gitlet is built.
 	Git LocalGit
 
 	// Seams are this node's own: supplied to every operation it answers.
@@ -57,25 +54,17 @@ type ServerOptions struct {
 }
 
 // Serve makes this node answer the fleet on its own subjects, one a [lane],
-// from its own copy of the estate — and `out_of_service` for the operations of
+// from its own copy of the estate, and `out_of_service` for the operations of
 // a domain whose copy is wrong (ADR-0079). The returned withdrawal ends every
 // lane.
 //
-// EVERY DATA NODE SERVES, whether or not any other node asks yet, and from
-// BEFORE its runtime is up: a node joins without anybody reconfiguring the
-// others, and an answerer registered later would leave the first seat that
-// asked failing for however long that took. The backend is resolved per
-// request, so one that arrives before the runtime is answered "not here"
-// rather than refused for ever.
+// Every data node serves from BEFORE its runtime is up, the backend resolved
+// per request: a node joins without reconfiguring the others, and the first
+// seat to ask hears "not here" rather than failing until a late registration.
 //
-// EVERY LANE OR NONE: a lane that cannot be registered withdraws the ones
-// before it, because a node that answered its reads and no proposal would be
-// asked first for every push to the repositories it commits for, and cost
-// each one a whole write attempt before the runner-up — and a Gitlet node that
-// answered no git read would be every repository's silent home, as one that
-// answered no engine write would be to every write's walk. A node serving git
-// ([ServerOptions.Git]) registers the git lanes, the reads' and the writes'
-// ([gitLanes]), beside the others.
+// EVERY LANE OR NONE: a node answering reads but no proposal would cost every
+// push it commits a whole write attempt, and a Gitlet node missing its git
+// reads or engine writes ([gitLanes]) would be a silent home to every walk.
 func Serve(ctx context.Context, q Server, opts ServerOptions) (queue.Unsubscribe, error) {
 	switch {
 	case q == nil || opts.Local == nil:
@@ -142,20 +131,17 @@ type server struct {
 	writes chan struct{}
 }
 
-// answer runs one request that arrived on lane l and ALWAYS answers: a node
-// that stayed silent would be indistinguishable from one that is down, and the
-// asker would wait out its budget before trying the next — so every failure
-// here, down to a request this build cannot verify or decode, is an answer
-// that says so.
+// answer runs one request that arrived on lane l and ALWAYS answers, every
+// failure included: a silent node is indistinguishable from a down one, and
+// its asker would wait out its budget before trying the next.
 func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	out := reply{Node: s.self}
 	admitted := s.env.admit(raw, s.seen, s.now())
 	switch admitted.Disposition {
 	case signedask.Tampered:
-		// NOT THE FLEET'S, so nothing in it is believed — not even the id
-		// a reply would name, which is why this one names none. At ERROR:
-		// no holder will ever accept it, so it is somebody on the broker
-		// who is not the fleet, or a node whose keyring is not the fleet's.
+		// NOT THE FLEET'S, so nothing in it is believed, not even the id a
+		// reply would name. At ERROR: no holder will ever accept it, so it is
+		// somebody outside the fleet, or a node with a foreign keyring.
 		log.ErrorContext(ctx, "estate_request_refused", "node", s.self,
 			"disposition", string(admitted.Disposition), "detail", admitted.Why+"; nothing in it ran")
 		out.Unserved, out.Detail = unservedUnauthenticated, fmt.Sprintf(
@@ -195,31 +181,24 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 		return s.encodeReply(out)
 	}
 	if spec.lane != l {
-		// ANSWERED ONLY ON ITS OWN LANE, whatever the asker sent: run
-		// here, a proposal would hold a slot every read waits for, or a
-		// read one a proposal does — the separation is the server's to
-		// keep, so it does not depend on every asker keeping it.
-		// Unserved, like an operation this build does not know, so an
-		// asker whose build declares the lane differently moves on to a
-		// node that agrees with it.
+		// ANSWERED ONLY ON ITS OWN LANE, kept here rather than trusted to
+		// every asker: on the wrong lane a proposal holds a slot every read
+		// waits for, or the reverse. Unserved, so an asker whose build
+		// declares the lane differently moves on.
 		out.Unserved, out.Detail = unservedNoBackend, fmt.Sprintf(
 			"%s answers %s on %s (%s), and it was asked on %s", s.self, req.Op, spec.lane,
 			spec.lane.subject(s.self), l)
 		return s.encodeReply(out)
 	}
 	if spec.git {
-		// THE GIT ARM, after the envelope's admission and the lane check
-		// and before the copy's verdict and the readiness gates, none of
-		// which applies to a git operation ([GitCopy]). It reads the
-		// request's inputs itself, past the writes it holds.
+		// THE GIT ARM, before the copy's verdict and the readiness gates,
+		// none of which applies to a git operation ([GitCopy]). It reads the
+		// inputs itself, past the writes it holds.
 		return s.answerGit(ctx, spec, req, out)
 	}
-	// WHAT THE REQUEST ASKS, READ WHOLE OR NOT RUN, before anything is
-	// waited for or run ([decodeInput]): a request carrying a key this
-	// build does not declare is a newer build's, and run without it, it
-	// would land as something its writer never asked for. Ahead of the
-	// floors, so a node that would refuse it anyway does not first wait
-	// out a read budget behind one.
+	// INPUTS READ WHOLE OR NOT RUN (package doc, "A request is read whole,
+	// or runs nowhere"), ahead of the floors, so a node that refuses anyway
+	// does not first wait out a read budget.
 	args, actor, refused, err := inputs(spec, req)
 	switch {
 	case err != nil:
@@ -233,21 +212,17 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	// on everything run for it.
 	ctx, cancel := context.WithDeadline(ctx, req.Deadline)
 	defer cancel()
-	// EVERY WAIT ENDS A REPLY'S TRIP SHORT OF IT — the floor's below, and a
-	// read's barrier and level and a write's resolution inside the operation
-	// — so a node that runs out of time says so while its asker is still
-	// listening. Run to the deadline itself, a wait's honest `behind`
-	// reached the asker after it had given up on this node, which then heard
-	// a lagging node as a wedged one: asked it last for suspectFor and told
-	// the placement it went unanswered. gitlet.ReplyMargin is the one margin a
-	// serving node leaves, the committer's between a batch and its asker's
-	// deadline included.
+	// EVERY WAIT ENDS gitlet.ReplyMargin SHORT OF IT (the floor's below, a
+	// read's barrier and level, a write's resolution), so `behind` reaches the
+	// asker while it listens; heard late, a lagging node is taken for a wedged
+	// one, asked last for suspectFor. It is the one margin a serving node
+	// leaves, the committer's included (package doc, "Read-your-writes: ONE
+	// floor table per node, consulted for local reads too").
 	ctx = statelog.WithReplyMargin(ctx, gitlet.ReplyMargin)
 	b, wrong, unserved := unservedCopy(ctx, s.local, spec)
 	if unserved {
-		// NOTHING RAN, so every class moves on — a page write
-		// included, whose never-repeat rule is about a request that
-		// may have run.
+		// NOTHING RAN, so every class moves on, a page write included:
+		// its never-repeat rule is about a request that may have run.
 		out.Unserved = unservedOutOfService
 		out.Detail = outOfService(s.self, wrong)
 		return s.encodeReply(out)
@@ -269,9 +244,9 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	b.pageBytes = usagePageBytes
 	var written *writtenItems
 	if actor != nil && actor.Records {
-		// THE ASKER'S TURN WANTS TO HEAR what this write committed to,
-		// and its set is in another process: collect here, and answer it
-		// beside whatever the operation answers.
+		// THE ASKER'S TURN WANTS TO HEAR what this write committed to, and
+		// its set is in another process: collect here, answered beside the
+		// operation's result.
 		written = &writtenItems{}
 		actor.Provenance.Written = written
 	}
@@ -286,20 +261,18 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 			"%s's copy admits no seat yet — the same gate that withholds seats from it", s.self)
 		return s.encodeReply(out)
 	case errors.Is(err, errDecidesNoGrant):
-		// THE HARD ARM, answered whether or not the asker said to answer
-		// anyway ([op.judgesGrant]): nothing ran, and the node decides no
-		// grant from the chart the fleet replaced.
+		// THE HARD ARM, even when told to answer anyway ([op.judgesGrant]):
+		// nothing ran, and the node decides no grant from a replaced chart.
 		out.Unserved, out.Detail = unservedBehindConfig, decidesNoGrant(s.self)
 		return s.encodeReply(out)
 	}
 	return s.answered(out, spec, result, err)
 }
 
-// inputs decodes what req asks this node to run — the actor it runs as, and
-// its arguments in the operation's own type — under the wire's rule for an
-// operation's inputs ([decodeInput]). refused names every key either holds
-// that this build does not declare, and nothing is to run; err is either of
-// them failing to decode for any other reason.
+// inputs decodes req's actor and its arguments, in the operation's own type,
+// under the wire's rule ([decodeInput]). refused names every key either holds
+// that this build does not declare, and nothing is to run; err is either
+// failing to decode for any other reason.
 func inputs(spec *opSpec, req request) (args any, actor *Actor, refused *ErrUnknownKeys, err error) {
 	var unknown []string
 	if len(req.Actor) > 0 && !bytes.Equal(req.Actor, []byte("null")) {
@@ -320,16 +293,13 @@ func inputs(spec *opSpec, req request) (args any, actor *Actor, refused *ErrUnkn
 	return args, actor, nil, nil
 }
 
-// refuseUnknown answers a request whose inputs hold keys this node's build does
-// not declare ([inputs]) — refused, naming them, with nothing of it run, so the
-// asking router asks a data node of the writer's build ([Router.settle]).
+// refuseUnknown answers a request whose inputs hold keys this build does not
+// declare ([inputs]): refused, naming them, nothing run, so the asking router
+// asks a data node of the writer's build ([Router.settle]).
 //
-// LOGGED HERE, at WARN, once per request it refuses — as this server logs a
-// request signed under a key it does not hold and one past its window, the
-// other refusals that are facts about this node an operator changes — because
-// the node an operator looks at during an upgrade is the one still on the
-// older build: the asker's walk names what every node said, but only where
-// none served the request.
+// LOGGED HERE at WARN, like the other refusals an operator fixes on this node,
+// because during an upgrade the operator looks at the node still on the older
+// build; the asker's walk names what every node said only where none served.
 func (s server) refuseUnknown(ctx context.Context, out reply, req request, refused *ErrUnknownKeys) []byte {
 	refused.Nodes = []string{s.self}
 	log.WarnContext(ctx, "estate_request_refused", "node", s.self, "disposition", "unknown_keys",
@@ -342,9 +312,7 @@ func (s server) refuseUnknown(ctx context.Context, out reply, req request, refus
 }
 
 // answered is out carrying what an operation answered: its failure, crossing
-// as itself ([encodeError]), or its result encoded — under the rule an
-// operation's inputs cross by where a caller carries it into another request
-// ([op.answeredWhole]).
+// as itself ([encodeError]), or its result encoded ([encodeResult]).
 func (s server) answered(out reply, spec *opSpec, result any, err error) []byte {
 	if err != nil {
 		out.Err = encodeError(err)
@@ -368,11 +336,10 @@ type jsonAppender interface {
 }
 
 // encodeResult is an operation's answer as the reply carries it: its own
-// encoding where it holds one, so a usage page's rows — encoded once already,
-// to cut the page at its budget — are not encoded a second time to send it;
-// under the inputs' rule where a caller carries it into another request
-// ([op.answeredWhole]), so a key a newer build adds is on it only with a
-// value; and json.Marshal's otherwise.
+// encoding where it holds one (a usage page's rows, encoded once already to
+// cut the page at its budget); the inputs' rule where a caller carries it into
+// another request ([op.answeredWhole]), so a key a newer build adds is on it
+// only with a value; json.Marshal's otherwise.
 func encodeResult(spec *opSpec, result any) ([]byte, error) {
 	if a, ok := result.(jsonAppender); ok {
 		return a.AppendJSON(nil)
@@ -383,34 +350,18 @@ func encodeResult(spec *opSpec, result any) ([]byte, error) {
 	return json.Marshal(result)
 }
 
-// ready is the two gates a data node puts in front of an operation — no
-// better node left to ask, and the asker's floors on the log of the
-// operation's own domain reached ([opSpec.floorStream]) — and the same two
-// whether the asker is another node or this one's own router. reason is empty when the
-// operation may run; obsolete is every floor on a generation the log has
-// abandoned, which the asker stops carrying.
+// ready is the two gates a data node puts before an operation, for a peer and
+// its own router alike: no better node left to ask (a preference, [worse];
+// acceptLagging is the asker saying it has none, see [Router.route]), and the
+// asker's floors on the operation's own domain's log reached
+// ([opSpec.floorStream]). reason is empty when it may run; obsolete is every
+// floor on an abandoned generation, which the asker stops carrying.
 //
-// THE FIRST GATE IS A PREFERENCE, and acceptLagging is the asker saying it has
-// no better node to ask: a node that is a worse choice than another is never a
-// wrong one ([worse]). See [Router.route].
-//
-// A FLOOR ON ANOTHER DOMAIN'S LOG IS NOT WAITED FOR, though the estate carries
-// every domain's log: no operation reads another domain's rows at a position —
-// each domain's tables are written by its own applier alone, and the reads
-// that cross into another's, a search's semantic half over the vectors and a
-// page's backlinks over the tracker, are of indexes no position describes — so
-// a floor there buys nothing, and costs a refusal whenever THAT log's applier
-// lags. The seat a
-// page comment woke would otherwise hold every tracker read and write its node
-// routes until the pages applier reached the comment, and be refused them
-// `behind` while that applier was faulted. This node's own router never sends
-// one; the check is the server's own, so the rule does not depend on every
-// asker keeping it.
-//
-// A FLOOR THE REQUEST ALREADY WAITED OUT on a node asked before this one
-// ([statelog.Spent.Waited]) is not waited for again: this node serves if it
-// has applied it and is behind at once if it has not, so a walk past N nodes
-// behind one floor waits one read budget rather than N.
+// A floor on ANOTHER domain's log is skipped here rather than trusted to every
+// asker (package doc, "Read-your-writes: ONE floor table per node, consulted
+// for local reads too"). One already waited out on an earlier node
+// ([statelog.Spent.Waited]) is only checked, so a walk past N nodes behind one
+// floor waits one read budget, not N.
 func ready(ctx context.Context, self string, spec *opSpec, b Backend, floors []statelog.Position,
 	acceptLagging bool, spent statelog.Spent) (reason unservedReason, detail string, obsolete []statelog.Position) {
 
@@ -446,33 +397,16 @@ func ready(ctx context.Context, self string, spec *opSpec, b Backend, floors []s
 }
 
 // worse is why this node is a WORSE NODE TO ASK for spec than another data
-// node, or empty where it is not: the node is confirmed behind the company's
-// configuration ([Backend.Current], [unservedBehindConfig]), or its copy of
-// the operation's domain lags its log ([Backend.Answers], [unservedLagging]) —
-// each said, where both hold.
+// node, or empty: confirmed behind the company's configuration
+// ([Backend.Current], [unservedBehindConfig]), or its copy of the operation's
+// domain lags its log ([Backend.Answers], [unservedLagging]), both said where
+// both hold, under the code that lasts and ranks last ([Router.lastResort]).
 //
-// Both are preferences rather than refusals, and for one reason: what the
-// node answers is sound, only worse than another's. A copy that lags is held
-// to what the caller must see by the floors and the read's own level; a node
-// behind the configuration answers from the chart, the units, the scope and
-// the limits the fleet replaced, a stale value every reader of one already
-// meets when a revision changes it. So each sends the walk to every other data
-// node first, and is asked again, told to answer anyway, when none of them
-// takes the request — never refused, which on a fleet whose only data node
-// lags or failed an apply would refuse every call its seats make. The one
-// exception is no preference: an operation that JUDGES A GRANT from the chart
-// ([op.judgesGrant]) is refused by a node behind the configuration however it
-// is asked, by the hard arm the operation's own declaration runs, since an
-// answer under the chart the fleet replaced is the one thing being asked last
-// cannot make sound.
-//
-// TWO REASON CODES, because the asker does one thing with either answer — asks
-// the node last — and two more with the second: it asks it after every node
-// whose copy only lags, which answers under the current configuration
-// ([Router.lastResort]), and it REMEMBERS it, since a node stays behind its
-// configuration until an apply succeeds where a lag closes as the applier
-// catches up ([unservedBehindConfig]). Where both hold the answer is the one
-// that lasts and ranks last, so the asker remembers it.
+// Preferences, never refusals: either answer is sound, only worse, and a fleet
+// whose only data node lags or failed an apply would refuse every call. An
+// operation that judges a grant is refused by its own hard arm
+// ([op.judgesGrant]). See the package doc, "A node behind the company's
+// configuration is a worse node too".
 func worse(ctx context.Context, self string, spec *opSpec, b Backend) (unservedReason, string) {
 	var (
 		reason unservedReason
@@ -500,16 +434,12 @@ func worse(ctx context.Context, self string, spec *opSpec, b Backend) (unservedR
 		"node that is a better one to ask takes the request"
 }
 
-// waitFloor waits for this node to apply one floor, within the read budget —
-// and, on a request asked across the wire, within what its asker's attempt
-// left ([statelog.WithReplyMargin]), so a node that runs out says it is behind
-// while the asker is still listening — or not at all where the request
-// already waited it out (waited), when it only checks.
-//
-// It answers the bound it waited within and the error to report as "behind",
-// or obsolete when the floor names a generation this node's log has
-// abandoned: a position nobody will ever reach again, which the asker should
-// stop carrying rather than refuse every read on.
+// waitFloor waits for this node to apply floor within the read budget and,
+// asked across the wire, within what the asker left ([statelog.WithReplyMargin]);
+// where the request already waited it out (waited), it only checks. It answers
+// the bound it waited within and the error to report as "behind", or obsolete
+// for a floor on a generation this node's log abandoned, which nobody will
+// reach and the asker stops carrying.
 func waitFloor(ctx context.Context, b Backend, floor statelog.Position, waited bool) (
 	bound statelog.WaitBound, obsolete bool, behind error) {
 
@@ -530,11 +460,9 @@ func waitFloor(ctx context.Context, b Backend, floor statelog.Position, waited b
 	}
 }
 
-// readSpent is ctx carrying what the request it runs has already paid for on
-// the nodes asked before this one ([statelog.WithSpent]) — for a READ, whose
-// barrier and waits are what was paid; a write's waits are its write
-// authority's own, for its own record, and nothing a read refused elsewhere
-// paid for describes them.
+// readSpent is ctx carrying what the request already paid on the nodes asked
+// before this one ([statelog.WithSpent]), for a READ only: a write's waits are
+// its write authority's own, which nothing a read paid elsewhere describes.
 func readSpent(ctx context.Context, spec *opSpec, spent statelog.Spent) context.Context {
 	if spec.class != opRead {
 		return ctx
@@ -548,10 +476,9 @@ func readSpent(ctx context.Context, spec *opSpec, spent statelog.Spent) context.
 func (s server) encodeReply(r reply) []byte {
 	raw := s.env.sealReply(r)
 	if len(raw) > queue.MaxPayloadBytes {
-		// TOO LARGE TO SEND, and said so rather than dropped: a reply the
-		// broker refuses is a node the asker waits out and then counts as
-		// down, while this one says what to narrow. Measured as SEALED,
-		// which is what the broker carries.
+		// TOO LARGE TO SEND, and said so: a reply the broker refuses is a
+		// node the asker waits out and counts as down. Measured SEALED, as
+		// the broker carries it.
 		raw = s.env.sealReply(reply{Node: r.Node, Request: r.Request, Err: encodeError(fmt.Errorf(
 			"estate: the answer is %d bytes, over the %d a message carries — "+
 				"narrow the request: %w", len(raw), queue.MaxPayloadBytes, queue.ErrTooLarge))})

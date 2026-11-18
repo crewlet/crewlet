@@ -83,20 +83,18 @@ type fakeNode struct {
 	// notAdmitting is a copy that serves requests and admits no seat.
 	notAdmitting bool
 
-	// waits counts the floor waits this node began with time left to spend —
-	// a wait for a floor it is behind, run to its end — and none of a floor a
-	// node asked before it already waited out, which is waited for no time.
+	// waits counts the floor waits this node began behind with time left to
+	// spend; a floor whose wait already ran out is waited for no time.
 	waits int
 
 	// behindConfig is a node the control plane has confirmed behind the
 	// company's configuration — shed or stuck ([Backend.Current] false).
 	behindConfig bool
 
-	// spend is the usage spend this node pages out, 64 rows a page at any
-	// budget and every row at none, where it is set; spendAfters is every
-	// group a page of it was asked after, and spendBudgets the budget each
-	// page was asked at; and stuckPages answers every page ending where it
-	// began.
+	// spend, where set, is the usage spend this node pages out, 64 rows a
+	// page at any budget and every row at none; spendAfters and spendBudgets
+	// record each page's asked-after group and budget; stuckPages answers
+	// every page ending where it began.
 	spend        []usage.SpendRow
 	spendAfters  []usage.Group
 	spendBudgets []int
@@ -115,57 +113,47 @@ type fakeNode struct {
 	// release, when set, holds a floor wait until it is closed.
 	release chan struct{}
 
-	// levelRead, when set, is what a task read runs before it answers: a
-	// read through a REAL statelog reader, whose own waits — the barrier, the
-	// level — are the operation's rather than the serving node's
-	// ([laggingLinearizableRead]).
+	// levelRead, when set, runs before a task read answers: a REAL statelog
+	// read, whose barrier and level waits are the operation's rather than the
+	// serving node's ([laggingLinearizableRead]).
 	levelRead func(context.Context) error
 
-	// refusesLagging refuses every request while its copy lags, one that
-	// says "answer anyway" included: a server that does not honour the
-	// request's say-so, which the router must still not circle.
+	// refusesLagging refuses every request as lagging, "answer anyway"
+	// included: a server the router must still not circle.
 	refusesLagging bool
 
 	// directory is the node's identity directory, nil for a node whose core
 	// runtime is not up.
 	directory IdentityReader
 
-	// hang, when set, is a node that takes a request and never answers it
-	// until hang is closed — a wedged node, as the broker's own ask sees
-	// one: waited for until the asker's deadline, where a node that is
-	// simply gone is known to have answered nothing.
+	// hang, when set, holds every request unanswered until closed: a wedged
+	// node, waited for until the asker's deadline, where a gone node is known
+	// at once to have answered nothing.
 	hang chan struct{}
 
-	// requests is every request that reached this node over the broker,
-	// whatever it answered — run, refused or silent — and anyway is how
-	// many of them its asker sent as the last resort, told to answer
-	// anyway ([request.AcceptLagging]).
+	// requests counts every request that reached this node over the broker,
+	// whatever it answered; anyway counts those sent as the last resort
+	// ([request.AcceptLagging]).
 	requests int
 	anyway   int
 
 	// indexBuilding is a node whose index has not finished its first lap.
 	indexBuilding bool
 
-	// olderBuild, where it is set, rewrites every request this node is sent
-	// before it reads it: a key added to the arguments or the actor stands
-	// for one the asker's build declares and this node's does not — what a
-	// data node of an older build meets mid-upgrade (wirerule_test.go).
+	// olderBuild, where set, rewrites every request before this node reads
+	// it: an added key is one the asker's build declares and this older
+	// node's does not (wirerule_test.go).
 	olderBuild func(request) request
 
-	// newerBuild, where it is set, rewrites every reply this node gives after
-	// its own build has made it: a key added to the result stands for one this
-	// node's build declares and the asker's does not — what a node of an older
-	// build meets mid-upgrade when a data node of a newer one answers it
-	// (unreadwalk_test.go). And strip is the strip of views it answers.
+	// newerBuild, where set, rewrites every reply after this node made it:
+	// an added key is one this newer node's build declares and the asker's
+	// does not (unreadwalk_test.go). strip is the strip of views it answers.
 	newerBuild func(reply) reply
 	strip      worklet.ViewListing
 
-	// undeclared, where it is set, is the paths of the members this node's
-	// build does not declare, as a refusal names them: a request carrying one
-	// is refused naming each it carries, as a data node of an older build
-	// refuses it, and any other is read as this build reads it — for a case
-	// about which requests a refusal moves, which the asker's own request
-	// must carry (wirerule_test.go).
+	// undeclared, where set, is the member paths this node's build does not
+	// declare: a request carrying one is refused naming each, as an older
+	// data node refuses it, and any other is read normally (wirerule_test.go).
 	undeclared []string
 
 	// gestures is every inbox gesture it was asked to make, and
@@ -173,12 +161,10 @@ type fakeNode struct {
 	gestures    []inbox.Gesture[worklet.Reason]
 	taskQueries []worklet.Query
 
-	// proposals is every push proposed to this node's committer,
-	// compactions every compaction, expunges every expunge record, changes
-	// every write of a change, conversations every write of a change's
-	// conversation, codeSeq the code log's last position it committed at, and
-	// codeErr what its code half refuses every operation with — a proposal and
-	// every read — where it is set (codeops_test.go).
+	// The code half's records: every proposal, compaction, expunge, change
+	// and conversation write it was asked; codeSeq is the code log position
+	// it last committed at, and codeErr, where set, what it refuses every
+	// operation with (codeops_test.go).
 	proposals     []gitlet.Proposal
 	compactions   []gitlet.CompactionProposal
 	expunges      []gitlet.ExpungeProposal
@@ -189,24 +175,20 @@ type fakeNode struct {
 	codeSeq       uint64
 	codeErr       error
 
-	// codeHalf, where it is set, is this node's code half in place of the
-	// fake's own answers: a REAL reader, for a case about what the code
-	// domain itself answers on one node and the walk makes of it.
+	// codeHalf, where set, is a REAL code half in place of the fake's.
 	codeHalf CodeServer
 
-	// holdProposals, when set, is a committer whose batch is held: every
-	// proposal waits inside it until the channel is closed, counted in
-	// proposing as it arrives — a push queued behind its repository's
-	// earlier ones, holding whatever slot it was answered through.
+	// holdProposals, when set, holds every proposal inside the committer's
+	// batch until closed, counted in proposing as it arrives: a push queued
+	// behind its repository's earlier ones, holding its slot.
 	holdProposals chan struct{}
 	proposing     atomic.Int32
 	// rooms is this node's chat, nil for a company whose chat is not the
 	// engine's own — see chat_test.go.
 	rooms *chatDesk
-	// holdConversations and holdChecks, when set, are a change writer and a
-	// checks writer whose publishes are held the same way, each write
-	// counted in conversing or checking as it arrives — a write waiting its
-	// key's turn behind a publish an election holds.
+	// holdConversations and holdChecks hold the change and checks writers'
+	// publishes the same way, counted in conversing and checking: a write
+	// waiting its key's turn behind a publish an election holds.
 	holdConversations chan struct{}
 	conversing        atomic.Int32
 	holdChecks        chan struct{}
@@ -379,9 +361,8 @@ func (f fakeUsage) SpendPage(_ context.Context, q usage.SpendQuery, after usage.
 	case rows == nil:
 		return onePage(usage.SpendRow{Day: q.From, Node: f.name}), nil
 	}
-	// SIXTY-FOUR ROWS A PAGE whatever the budget, every row its own group:
-	// the asker must follow the pages it is handed, not compute them. No
-	// budget is the whole read, as usage.Fill has it.
+	// 64 rows a page whatever the budget, so the asker must follow the pages
+	// it is handed, not compute them; no budget is the whole read (usage.Fill).
 	var page usage.Page[usage.SpendRow]
 	for _, r := range rows {
 		if !after.Before(r.Group()) {
@@ -545,10 +526,9 @@ func (f *fakeNode) halves() Backend {
 	}
 }
 
-// For implements [LocalBackends]: this node's copy of domain serves unless it
-// was told that copy, or every copy, is out of service. Its SEAT copy is out
-// whenever its tracker's or its knowledge base's is, which is what the engine's
-// own domains declare: both gate seat admission.
+// For implements [LocalBackends]: a copy serves unless it, or every copy, is
+// out of service. The SEAT copy is out whenever the tracker's or the knowledge
+// base's is, as the engine's domains declare: both gate seat admission.
 func (f *fakeNode) For(_ context.Context, domain string) (Backend, bool) {
 	f.mu.Lock()
 	out := f.outOfService || f.outOfServiceOn[domain]
@@ -573,20 +553,17 @@ func (f *fakeNode) seams() ServerSeams {
 	}
 }
 
-// fakePlacement is the nodes a case names, or an error where it says the
-// placement cannot tell — and, as a git placement, what each Gitlet node it names
-// says it can give its background work: a node said names says its budget
-// (zero for one that says it has nothing to give), and every other node it
-// names is NOT SAYING, so a router over a placement that says none places
-// every repository's maintenance on its home.
+// fakePlacement is the nodes a case names, or err where the placement cannot
+// tell. As a git placement, said holds each Gitlet node's advertised budget for
+// background work (zero: nothing to give); a node absent from it is NOT SAYING,
+// so with none said every repository's maintenance stays on its home.
 type fakePlacement struct {
 	mu         sync.Mutex
 	nodes      []string
 	said       map[string]int64
 	err        error
 	unanswered []string
-	// reads counts the Holders and the Listings it answered: how often a
-	// router read it.
+	// reads counts the Holders and Listings it answered.
 	reads int
 }
 
@@ -645,10 +622,8 @@ type fleet struct {
 	// placement is what the routers route by.
 	placement *fakePlacement
 
-	// git is who serves git as the routers ask a git read of: no node,
-	// unless a case names some — and what each Gitlet node advertises it can
-	// give its background work, as the routers weigh a repository's
-	// maintainer by: nobody says anything, unless a case writes it.
+	// git is the routers' git placement: no node and no advertised budget
+	// unless a case sets them.
 	git *fakePlacement
 
 	client *Router
@@ -677,15 +652,10 @@ func newFleet(t *testing.T, names ...string) *fleet {
 // inBubble runs f in a synctest bubble, where a timer fires at exactly its time
 // and time moves only once every goroutine of the case is blocked.
 //
-// FOR THE CASES THAT HOLD A NODE'S ANSWER INSIDE ITS ASKER'S ATTEMPT BY THE
-// REPLY'S MARGIN: a serving node ends its waits gitlet.ReplyMargin before the
-// deadline its router stamped, and the answer then has that margin to be
-// sealed, carried over the twin broker and opened. On the machine's clock
-// that is a claim about how late a loaded race-detector run wakes the
-// goroutines doing it, which the margin was never sized for — and one such
-// run spent the whole second (CI run 41694160997). In the bubble the attempt
-// and the margin are exact and the trip takes no time, so a case fails on
-// the arithmetic of the deadline and the margin and on nothing else.
+// For the cases that hold a node's answer inside its asker's attempt by
+// gitlet.ReplyMargin: on the machine's clock the margin would have to cover a
+// loaded race run's scheduling, which it was never sized for. In the bubble the
+// trip takes no time, so a case fails only on the deadline's arithmetic.
 func inBubble(t *testing.T, f func(*testing.T)) {
 	t.Helper()
 	synctest.Test(t, f)
@@ -703,20 +673,14 @@ func (f *fleet) start(t *testing.T) *memory.Queue {
 }
 
 // router is a router on node self over the fleet, answering in-process from
-// local where it is given one, waiting PRODUCTION'S TIMING.
+// local where given one, waiting PRODUCTION'S TIMING.
 //
-// Its read attempt is production's, which holds every wait a holder makes at
-// its whole budget ([ReadAttempt]), rather than anything nearer the shortest a
-// router takes ([minReadAttempt]): a holder ends its waits inside whatever
-// attempt it is given, but a node that answered must still never be judged
-// silent because the machine running the suite was busy delivering its reply,
-// and a cut-short wait would turn a case's slow-but-healthy holder into a
-// `behind` it did not mean to test. Its write attempt cannot be shorter than
-// [minWriteAttempt] at all.
-// And a node that is gone costs none of either: the twin's ask ends as soon as
-// every answerer has answered or failed, so only a node that HANGS waits an
-// attempt out, and the case that hangs one gives its router a timing of its
-// own ([fleet.routerTimed]).
+// Production's [ReadAttempt] rather than [minReadAttempt]: a shorter attempt
+// would let a busy suite machine make an answering node look silent, or a
+// slow-but-healthy holder look `behind`; no write attempt is shorter than
+// [minWriteAttempt]. A gone node costs no attempt (the twin's ask ends once
+// every answerer has answered or failed); only a node that HANGS waits one out,
+// and such a case uses [fleet.routerTimed].
 func (f *fleet) router(t *testing.T, self string, local *fakeNode) *Router {
 	t.Helper()
 	return f.routerTimed(t, self, local, Production())
@@ -748,8 +712,8 @@ func (s silencer) Serve(ctx context.Context, subject string, answers int,
 	h queue.AnswerFunc) (queue.Unsubscribe, error) {
 
 	return s.q.Serve(ctx, subject, answers, func(ctx context.Context, raw []byte) ([]byte, error) {
-		// OPENED AS A FLEET MEMBER READS IT, since what arrives is sealed:
-		// the zero request where it is not the fleet's.
+		// Opened as a fleet member reads it: the zero request where it is
+		// not the fleet's.
 		req := opened(raw)
 		s.node.mu.Lock()
 		s.node.requests++
@@ -760,8 +724,8 @@ func (s silencer) Serve(ctx context.Context, subject string, answers int,
 		older, undeclared, newer := s.node.olderBuild, s.node.undeclared, s.node.newerBuild
 		s.node.mu.Unlock()
 		if refusesLagging {
-			// A REFUSAL THE FLEET SIGNED, bound to the request it
-			// answers, as a node of this fleet sends one.
+			// A refusal signed and bound to its request, as a fleet node
+			// sends one.
 			s.node.note("lagging")
 			if req.ID == "" {
 				return nil, errors.New("a request that does not open as the fleet's")
@@ -782,16 +746,15 @@ func (s silencer) Serve(ctx context.Context, subject string, answers int,
 			return nil, errors.New("this node is gone")
 		}
 		if held := heldOf(req, undeclared); len(held) > 0 {
-			// REFUSED AS A DATA NODE OF AN OLDER BUILD REFUSES IT
-			// ([server.refuseUnknown]): naming every member it carries that
-			// the build does not declare, and nothing of it run.
+			// Refused as an older data node refuses it
+			// ([server.refuseUnknown]): every undeclared member named,
+			// nothing run.
 			s.node.note("unread")
 			return fleetEnvelopes.sealReply(reply{Node: s.node.name, Request: req.ID,
 				Err: encodeError(&ErrUnknownKeys{Op: req.Op, Keys: held, Nodes: []string{s.node.name}})}), nil
 		}
 		if older != nil && req.ID != "" {
-			// SIGNED AGAIN, as the fleet signs: the node reads the request
-			// the newer asker's build would have sent it.
+			// Re-signed: the node reads what a newer asker would have sent.
 			sealed, err := fleetEnvelopes.sealRequest(older(req))
 			if err != nil {
 				return nil, err
@@ -802,8 +765,7 @@ func (s silencer) Serve(ctx context.Context, subject string, answers int,
 		if newer == nil || err != nil || req.ID == "" {
 			return answered, err
 		}
-		// SIGNED AGAIN, as the fleet signs: the reply this node's build made,
-		// as a newer build would have made it.
+		// Re-signed: the reply as a newer build would have made it.
 		rep, why, err := fleetEnvelopes.openReply(answered, req.ID)
 		switch {
 		case err != nil:
@@ -866,9 +828,8 @@ func (f *fleet) other(n *fakeNode) *fakeNode {
 var swe = Actor{Handle: "swe", Kind: worklet.AuthorAgent,
 	Provenance: worklet.Provenance{WrittenFor: types.ForTurn(nil)}}
 
-// A READ IS ANSWERED BY A DATA NODE, with the serving node's own chart
-// attached — the asking node's chart cannot cross a wire, and
-// a read that arrived without one would render every unit unresolved.
+// A READ IS ANSWERED WITH THE SERVING NODE'S OWN CHART: the asker's cannot
+// cross the wire, and without one every unit renders unresolved.
 func TestAReadIsAnsweredWithTheServingNodesChart(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -893,11 +854,10 @@ func TestAServingNodesErrorKeepsItsIdentity(t *testing.T) {
 	}
 }
 
-// A READ A COPY REFUSES ABOUT ITSELF IS ASKED OF THE NEXT NODE: a node whose
-// applier is behind the barrier its linearizable read appended ran nothing,
-// and a peer whose applier keeps up serves the read — the refusal is the
-// answer only where no node does better, and keeps its identity then. A
-// refusal about the whole fleet is final at once, since no node does better.
+// A READ A COPY REFUSES ABOUT ITSELF IS ASKED OF THE NEXT NODE: a node behind
+// its linearizable read's barrier ran nothing, so a peer that keeps up serves
+// it; the refusal, identity kept, answers only where no node does better. A
+// refusal about the whole fleet is final at once.
 func TestAReadACopyRefusesAboutItselfIsAskedOfTheNextNode(t *testing.T) {
 	t.Parallel()
 	behind := &statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadLinearizable,
@@ -957,8 +917,7 @@ func TestAReadACopyRefusesAboutItselfIsAskedOfTheNextNode(t *testing.T) {
 }
 
 // A NODE THAT DOES NOT ANSWER IS PASSED OVER FOR A READ, and asked last until
-// its suspicion lapses — so a node that died costs one attempt per router
-// rather than one per request.
+// its suspicion lapses: a dead node costs one attempt per router, not per request.
 func TestAnUnansweredReadMovesOnAndTheSilentNodeIsAskedLast(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
@@ -970,8 +929,8 @@ func TestAnUnansweredReadMovesOnAndTheSilentNodeIsAskedLast(t *testing.T) {
 	if next, _ := f.first(t, f.client); next == firstName {
 		t.Errorf("the silent node %s is still asked first", firstName)
 	}
-	// AND THE PLACEMENT IS TOLD, so a node that left on a clean stop is
-	// gone from its next answer rather than from the one a heartbeat later.
+	// And the placement is told, so a cleanly stopped node leaves its next
+	// answer rather than one a heartbeat later.
 	f.placement.mu.Lock()
 	told := slices.Clone(f.placement.unanswered)
 	f.placement.mu.Unlock()
@@ -981,13 +940,11 @@ func TestAnUnansweredReadMovesOnAndTheSilentNodeIsAskedLast(t *testing.T) {
 	}
 }
 
-// A CALLER THAT STOPS WAITING SUSPECTS NO NODE: silence is evidence that a
-// node is gone only through a wait the ROUTER chose for it, and a caller that
-// hung up, or gave the request less than a read attempt, has said nothing about
-// the node it was asking. Suspected for it, a healthy node would be asked last
-// by every request this router makes for suspectFor — and for a keyed
-// operation, every repository it commits sent to the runner-up — and dropped
-// from the placement's next answer.
+// A CALLER THAT STOPS WAITING SUSPECTS NO NODE: silence is evidence only
+// through a wait the ROUTER chose, and a caller that hung up, or gave less than
+// a read attempt, says nothing about the node. Suspected, a healthy node would
+// be asked last for suspectFor (a keyed operation's repositories sent to the
+// runner-up) and dropped from the placement's next answer.
 func TestACallerThatStopsWaitingSuspectsNoNode(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1038,10 +995,9 @@ func TestACallerThatStopsWaitingSuspectsNoNode(t *testing.T) {
 	}
 }
 
-// whileHeld runs stop once node holds the request its caller sent — a node
-// that hangs ([fakeNode.hang]) — and answers what the caller's wait ended
-// with. A caller whose wait ended before the node held its request is the
-// case's premise failing, never a pass.
+// whileHeld runs stop once node holds the caller's request ([fakeNode.hang])
+// and answers what the caller's wait ended with. A wait that ends before the
+// node holds the request fails the premise, never passes.
 func whileHeld(t *testing.T, node *fakeNode, done <-chan error, stop func()) error {
 	t.Helper()
 	for !node.askedFor("hung") {
@@ -1056,12 +1012,11 @@ func whileHeld(t *testing.T, node *fakeNode, done <-chan error, stop func()) err
 	return <-done
 }
 
-// A WRITE'S SILENCE THROUGH A WHOLE WRITE ATTEMPT IS EVIDENCE, under a caller's
-// own longer deadline too: such a write waits the caller's deadline rather than
-// the router's attempt (budgetFor), and a node silent for a whole attempt of
-// the router's own is one it judges gone rather than slow, whoever stopped
-// waiting first — and one silent for less is not. The router's clock is moved
-// on while the node holds the request, so the case waits no write attempt out.
+// A WRITE'S SILENCE THROUGH A WHOLE WRITE ATTEMPT IS EVIDENCE, even under a
+// caller's longer deadline (budgetFor): a node silent for a whole router attempt
+// is judged gone, whoever stopped waiting first, and one silent for less is not.
+// The router's clock is moved on while the node holds the request, so the
+// case waits no write attempt out.
 func TestAWritesSilenceThroughAWholeAttemptIsEvidence(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1112,14 +1067,10 @@ func TestAWritesSilenceThroughAWholeAttemptIsEvidence(t *testing.T) {
 }
 
 // A ROUTER REFUSES A TIMING WITH ANY FIELD UNSET, BY THE FIELD IT LACKS, and
-// takes Production whole.
-//
-// Read as a setting, a zero attempt is no bound of the router's own — a
-// request from a caller with no deadline waits on a wedged node for ever —
-// and a zero admission budget, like any negative field, is a deadline already
-// past, which withholds every seat's claim: neither is a setting anybody
-// chose. Each field is taken away from production's timing in turn, as zero
-// and as negative.
+// takes Production whole. A zero attempt would leave a deadline-less request
+// waiting on a wedged node for ever, and a zero or negative admission budget
+// is a deadline already past, withholding every seat's claim. Each field is
+// zeroed, then made negative, in turn.
 func TestARouterRefusesAZeroTiming(t *testing.T) {
 	t.Parallel()
 	build := func(timing Timing) error {
@@ -1138,8 +1089,7 @@ func TestARouterRefusesAZeroTiming(t *testing.T) {
 		"GitReadAttempt":  func(tm *Timing, d time.Duration) { tm.GitReadAttempt = d },
 		"GitWriteAttempt": func(tm *Timing, d time.Duration) { tm.GitWriteAttempt = d },
 	}
-	// EVERY FIELD, so a field added to Timing and to nothing here fails
-	// rather than going unchecked.
+	// Every field, so one added to Timing and not here fails.
 	if fields := reflect.TypeFor[Timing]().NumField(); len(unset) != fields {
 		t.Fatalf("Timing has %d fields and this case unsets %d", fields, len(unset))
 	}
@@ -1161,19 +1111,15 @@ func TestARouterRefusesAZeroTiming(t *testing.T) {
 // A READ ATTEMPT IS LONGER THAN THE REPLY'S MARGIN, or no router is built with
 // it — and at the shortest one taken, a node behind its asker's floor is HEARD
 // saying so. A serving node ends every wait a reply's margin short of its
-// asker's deadline (statelog.WithReplyMargin), so an attempt no longer than the
-// margin leaves it no time for anything, and any attempt past it is one a
-// lagging node answers inside: here the node has no time left to wait for the
-// floor at all and says it is behind at once. Waiting out its floor budget
-// instead, it answered after its asker had stopped listening, which asked an
-// HONEST node last for suspectFor and told the placement it was gone. The
-// bound is spelled from gitlet.ReplyMargin itself, never from the router's own
+// asker's deadline (statelog.WithReplyMargin), so an attempt no longer than
+// the margin leaves it no time at all, and at the shortest one it says it is
+// behind at once; waiting out its floor budget instead, it would
+// answer an asker no longer listening and an HONEST node would be suspected.
+// The bound is spelled from gitlet.ReplyMargin, never the router's own
 // constant, so a floor that drifted from the margin fails.
 //
-// IN A SYNCTEST BUBBLE ([inBubble]), for
-// [TestANodeThatLagsItsReadsBarrierIsHeardSayingSo]'s reason: the node's
-// answer has the margin's second to reach its router, and on the machine's
-// clock a loaded runner may spend it.
+// In a synctest bubble ([inBubble]), for
+// [TestANodeThatLagsItsReadsBarrierIsHeardSayingSo]'s reason.
 func TestAReadAttemptLongerThanTheReplysMarginIsAnsweredInside(t *testing.T) {
 	t.Parallel()
 	inBubble(t, testAReadAttemptLongerThanTheReplysMarginIsAnsweredInside)
@@ -1203,9 +1149,8 @@ func testAReadAttemptLongerThanTheReplysMarginIsAnsweredInside(t *testing.T) {
 		t.Fatalf("a read of a node behind its floor, at the shortest read attempt a router "+
 			"takes (%v), answered %v — want the node heard saying it is behind", timing.ReadAttempt, err)
 	}
-	// INSIDE THE ATTEMPT, never at its end: the node had a nanosecond to wait,
-	// and an answer the router heard only as its attempt ended was one sent
-	// without the margin.
+	// Inside the attempt, never at its end: an answer heard only as the
+	// attempt ended was sent without the margin.
 	if waited >= timing.ReadAttempt {
 		t.Errorf("the node was heard %v in, the router's whole %v attempt", waited, timing.ReadAttempt)
 	}
@@ -1219,25 +1164,16 @@ func testAReadAttemptLongerThanTheReplysMarginIsAnsweredInside(t *testing.T) {
 }
 
 // A NODE THAT HAS ITS ASKER'S FLOOR AND LAGS ITS READ'S BARRIER IS HEARD SAYING
-// SO, at an attempt a fraction of what a linearizable read's waits take at
-// their whole budgets. The node reaches the floor at once; its read, through a
-// real statelog reader, appends a barrier that commits at once and never
-// reaches the barrier's position — a node that lags the log's end. The
-// reader's wait ends a reply's margin short of the attempt
-// (statelog.WithReplyMargin), so the read is refused `behind` while the router
-// still listens, and the node is not reported unanswered. Waited out at its own
-// budget (statelog.ReadBudget) — on a seat's read, every tool's — that refusal
-// reached nobody, and an honest node was suspected.
+// SO, at an attempt a fraction of a linearizable read's whole-budget waits. Its
+// real statelog read appends a barrier it never reaches; the reader's wait ends
+// a reply's margin short of the attempt (statelog.WithReplyMargin), so the read
+// is refused `behind` while the router still listens and the node is not
+// reported unanswered. Waited out at statelog.ReadBudget instead, the refusal
+// would reach nobody and an honest node be suspected.
 //
-// IN A SYNCTEST BUBBLE ([inBubble]), so the refusal is held to the instant
-// the margin puts it at: a reply's margin before the attempt ends, the
-// attempt less gitlet.ReplyMargin to the nanosecond. On the machine's clock the
-// refusal had the margin's one second to be sealed, carried and opened, and
-// a loaded race-detector run spent it before the router heard (CI run
-// 41694160997): the router gave up on an honest node, as the case exists to
-// prove it does not. How late a busy runner wakes a goroutine is the
-// scheduler's latency, which the margin is not sized for — it is the wire's
-// trip and the clocks' skew.
+// In a synctest bubble ([inBubble]), so the refusal is held to exactly the
+// attempt less gitlet.ReplyMargin: the margin covers the wire's trip and clock
+// skew, not how late a loaded runner wakes a goroutine.
 func TestANodeThatLagsItsReadsBarrierIsHeardSayingSo(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -1274,10 +1210,8 @@ func TestANodeThatLagsItsReadsBarrierIsHeardSayingSo(t *testing.T) {
 }
 
 // PRODUCTION'S READ ATTEMPT HOLDS A LINEARIZABLE READ'S WAITS at their whole
-// budgets — the asker's floor, the barrier, the barrier's position — and the
-// reply's margin, so production cuts a healthy node's waits short only where a
-// barrier first waits out one already in flight. Raising any of those budgets
-// without the attempt fails here rather than in a fleet.
+// budgets (the floor, the barrier, the barrier's position) plus the reply's
+// margin. Raising any budget without the attempt fails here, not in a fleet.
 func TestProductionsReadAttemptHoldsALinearizableReadsWaits(t *testing.T) {
 	t.Parallel()
 	waits := 2*statelog.ReadBudget + statelog.DefaultBarrierBudget + gitlet.ReplyMargin
@@ -1288,21 +1222,15 @@ func TestProductionsReadAttemptHoldsALinearizableReadsWaits(t *testing.T) {
 }
 
 // A WEDGED NODE COSTS A READ THE ROUTER'S OWN READ ATTEMPT, never
-// production's: the timing a router is built with is the one it waits, which
-// is what lets a suite in another package — where no unexported budget can be
-// reached — drive the production router over a fleet whose node hangs without
-// waiting out a whole production attempt per case. The first node this router
-// asks takes the read and never answers; the next answers it, a whole attempt
-// of this router's later and well inside production's.
+// production's: a router waits the timing it is built with, which lets suites
+// in other packages hang a node without waiting a production attempt per case.
 //
-// AND THE WEDGED NODE IS SUSPECTED, because the wait that ran out on it was the
-// router's own. The router's clock is held still, so what marks it is the
-// attempt's own end and never how long the read took by that clock.
+// AND THE WEDGED NODE IS SUSPECTED, because the wait that ran out was the
+// router's own. The router's clock is held still, so the attempt's own end
+// marks it, never elapsed time by that clock.
 //
-// IN A SYNCTEST BUBBLE ([inBubble]), so the read is held to costing its
-// router's attempt to the nanosecond, the answering node's trip taking no
-// time, rather than to a ceiling halfway to production's attempt on the
-// machine's clock, which a runner stalled for four seconds overruns.
+// In a synctest bubble ([inBubble]), so the read costs its router's attempt to
+// the nanosecond rather than a loose wall-clock ceiling a stalled runner overruns.
 func TestAWedgedNodeCostsAReadTheRoutersOwnReadAttempt(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -1335,7 +1263,7 @@ func TestAWedgedNodeCostsAReadTheRoutersOwnReadAttempt(t *testing.T) {
 				"timing it was not built with is what this case exists to catch",
 				waited, firstName, timing.ReadAttempt, Production().ReadAttempt)
 		}
-		// SUSPECTED, which a caller's own ending never makes it
+		// Suspected, which a caller's own ending never makes it
 		// (TestACallerThatStopsWaitingSuspectsNoNode).
 		f.placement.mu.Lock()
 		told := slices.Contains(f.placement.unanswered, firstName)
@@ -1347,13 +1275,10 @@ func TestAWedgedNodeCostsAReadTheRoutersOwnReadAttempt(t *testing.T) {
 	})
 }
 
-// GITPROC'S READ BOUNDS ARE ONE READ ATTEMPT — production's, the one every
-// node's router gives a read on one data node: a local git read
-// (gitproc.ReadDeadline) is bounded like any read in the engine, and a run
-// that has waited a whole read attempt for a slot (gitproc.SlotWait) is on a
-// node a balancer should send the retry elsewhere from. gitproc imports no
-// engine package, so the equality its deadlines claim is held here, where both
-// sides are importable.
+// GITPROC'S READ BOUNDS ARE ONE PRODUCTION READ ATTEMPT: a local git read
+// (gitproc.ReadDeadline) is bounded like any read, and a run that waited a
+// whole attempt for a slot (gitproc.SlotWait) should be retried elsewhere.
+// gitproc imports no engine package, so the equality is held here.
 func TestGitprocsReadBoundsAreOneReadAttempt(t *testing.T) {
 	t.Parallel()
 	read := Production().ReadAttempt
@@ -1379,8 +1304,7 @@ func TestAnUnknownPlacementIsNotAnEmptyFleet(t *testing.T) {
 	if err == nil || errors.As(err, &unserved) {
 		t.Fatalf("an unknown placement answered %v, want the placement's own error", err)
 	}
-	// AND IT NAMES ITS OPERATION, so the person reading it knows which call
-	// to look at.
+	// And it names its operation, so the reader knows which call to look at.
 	const want = "estate: tracker.tasks: read who holds the estate: the leases could not be listed"
 	if err.Error() != want {
 		t.Fatalf("the error %q, want %q", err, want)
@@ -1446,13 +1370,9 @@ func TestAnUnansweredTrackerWriteRepeatsUnderTheSameOperation(t *testing.T) {
 
 // A REPEATABLE WRITE NO NODE ANSWERED IS UNKNOWN, NEVER UNSERVED.
 //
-// Every holder was asked under the same operation, none ran it, and at least
-// one never answered — so that one may have run it. "No data node could serve it" is the claim that
-// nothing ran, and a caller told that writes again, under a FRESH id where it
-// minted none, which is a second write: a purge appended twice, a task filed
-// twice. A READ nobody answered is still unserved, since a read ran nothing
-// that matters; and a write every node REFUSED is unserved too, since a node
-// that answered "I did not run it" did not.
+// A node that never answered may have run it, and a caller told "unserved"
+// writes again under a FRESH id where it minted none: a second write. A READ
+// nobody answered is still unserved, as is a write every node REFUSED.
 func TestARepeatableWriteNoNodeAnsweredIsUnknown(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
@@ -1486,8 +1406,7 @@ func TestARepeatableWriteNoNodeAnsweredIsUnknown(t *testing.T) {
 		t.Errorf("a write every node refused to run = %v, want ErrUnserved", err)
 	}
 
-	// ONE SILENT NODE IS ENOUGH: the other answering that it did not run
-	// the write says nothing about the one that never answered.
+	// One silent node is enough: the other's refusal says nothing about it.
 	mixed := newFleet(t, "data-a", "data-b")
 	silentName, silent := mixed.first(t, mixed.client)
 	silent.set(func(n *fakeNode) { n.silent = true })
@@ -1504,13 +1423,13 @@ func TestARepeatableWriteNoNodeAnsweredIsUnknown(t *testing.T) {
 			"ErrOutcomeUnknown naming %s", err, silentName)
 	}
 
-	// AND A WRITE WHOSE CALLER STOPPED LISTENING: the request was sent, and
-	// the caller's context ending says nothing about whether it ran.
+	// And a write whose caller stopped listening: the request was sent, so
+	// whether it ran is unknown.
 	wedged := newFleet(t, "data-a")
 	hang := make(chan struct{})
 	t.Cleanup(func() { close(hang) })
-	// PRODUCTION'S WRITE ATTEMPT (a minute) outlasts the caller's deadline,
-	// so what ends the wait is the caller.
+	// Production's write attempt outlasts the caller's deadline, so the
+	// caller ends the wait.
 	wedged.nodes["data-a"].set(func(n *fakeNode) { n.hang = hang })
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
@@ -1524,19 +1443,16 @@ func TestARepeatableWriteNoNodeAnsweredIsUnknown(t *testing.T) {
 
 // A WRITE STOPPED BEFORE ITS NEXT ASK IS STILL ONE A SILENT NODE MAY HAVE RUN.
 //
-// A request that cannot be made at all ends the walk — no other node would
-// fare better — but a node the write was already sent to, and never heard
-// from, may have committed it. So the walk's answer is unknown, carrying what
-// stopped it, rather than the bare failure of the ask that came after: told
-// that, a caller sees a refusal and writes again under a fresh id.
+// An ask that cannot be made ends the walk, but a node already sent the write
+// and never heard from may have committed it: the answer is unknown, carrying
+// what stopped it, never the bare failure a caller would retry under a fresh id.
 func TestAWriteWhoseNextAskFailsAfterASilentNodeIsUnknown(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
 	firstName, first := f.first(t, f.client)
 	first.set(func(n *fakeNode) { n.silent = true })
 	broken := errors.New("the queue went down between two asks")
-	// THE SHORTEST ATTEMPTS A ROUTER IS BUILT WITH, so the silent node is
-	// given up on quickly.
+	// The shortest attempts, so the silent node is given up on quickly.
 	timing := Production()
 	timing.ReadAttempt = minReadAttempt + 100*time.Millisecond
 	timing.WriteAttempt = minWriteAttempt + 100*time.Millisecond
@@ -1556,8 +1472,7 @@ func TestAWriteWhoseNextAskFailsAfterASilentNodeIsUnknown(t *testing.T) {
 		t.Errorf("the unknown write %q does not name %s, which it was sent to", err, firstName)
 	}
 
-	// A READ STOPPED THE SAME WAY RAN NOTHING THAT MATTERS: the failure as
-	// it is.
+	// A read stopped the same way ran nothing that matters: the failure as is.
 	if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); !errors.Is(err, broken) ||
 		errors.Is(err, ErrOutcomeUnknown) {
 		t.Errorf("a read stopped by its next ask = %v, want the ask's own failure", err)
@@ -1599,8 +1514,7 @@ func TestAWritesPositionIsTheNextReadsFloor(t *testing.T) {
 	if len(node.floors) != 1 || node.floors[0] != node.written {
 		t.Fatalf("the read waited for %v, want the write's %v", node.floors, node.written)
 	}
-	// ANOTHER DOMAIN'S LOG: a page write does not depend on the tracker's
-	// rows, so it carries no floor on its log.
+	// Another domain's log: a page write carries no tracker floor.
 	node.set(func(n *fakeNode) { n.floors = nil })
 	if _, _, err := f.client.Pages().Comment(t.Context(), doclet.Actor{}, "p", doclet.NewComment{}); err != nil {
 		t.Fatalf("comment: %v", err)
@@ -1609,8 +1523,7 @@ func TestAWritesPositionIsTheNextReadsFloor(t *testing.T) {
 		t.Errorf("a write to the pages log waited on %v, the tracker "+
 			"log's floor — a log it does not depend on", node.floors)
 	}
-	// A STREAM NO DOMAIN LOGS TO: a position on it is a floor no
-	// operation is about.
+	// A stream no domain logs to is a floor no operation is about.
 	f.client.Observe(statelog.Position{Stream: "CREWLET_OTHER_LOG", Generation: 1, Seq: 3})
 	node.set(func(n *fakeNode) { n.floors = nil })
 	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
@@ -1623,12 +1536,10 @@ func TestAWritesPositionIsTheNextReadsFloor(t *testing.T) {
 	}
 }
 
-// A FLOOR ON ANOTHER DOMAIN'S LOG NEVER HOLDS AN OPERATION, though the estate
-// carries both logs: no operation reads another domain's rows at a position,
-// so a seat a
-// page change woke — its trigger a floor on the pages log — reads and writes
-// the tracker on a node whose pages applier is stuck exactly as before it was
-// woken, and only the knowledge base's own operations wait for that applier.
+// A FLOOR ON ANOTHER DOMAIN'S LOG NEVER HOLDS AN OPERATION: no operation reads
+// another domain's rows at a position, so a seat a page change woke uses the
+// tracker on a node whose pages applier is stuck, and only the knowledge base's
+// own operations wait for that applier.
 func TestAFloorOnAnotherDomainsLogNeverHoldsAnOperation(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -1649,17 +1560,15 @@ func TestAFloorOnAnotherDomainsLogNeverHoldsAnOperation(t *testing.T) {
 	if len(carried) != 0 {
 		t.Errorf("the tracker's operations waited on %v, the pages log's floor", carried)
 	}
-	// AND THE SERVER HOLDS TO IT TOO, whatever an asker sends: a tracker
-	// read carrying a floor on the pages log does not wait for it.
+	// The server holds to it too, whatever an asker sends.
 	rep := askSigned(t, f.start(t), "data-a", request{Op: opTasks.spec.name,
 		Floors: []statelog.Position{{Stream: pagesStream, Generation: 1, Seq: 9}}})
 	if rep.Unserved != "" || rep.Err != nil {
 		t.Fatalf("a tracker read with a pages floor = %+v, want it answered", rep)
 	}
 
-	// The holder's floor wait ends a reply's margin inside its asker's
-	// attempt (statelog.WithReplyMargin), so it says it is behind while the
-	// asker is still listening.
+	// The floor wait ends a reply's margin inside the attempt
+	// (statelog.WithReplyMargin), so `behind` reaches a listening asker.
 	_, _, err := f.client.Pages().Comment(t.Context(), doclet.Actor{}, "p", doclet.NewComment{})
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) || !strings.Contains(err.Error(), "has not applied") ||
@@ -1703,10 +1612,9 @@ func TestAFloorNoNodeCanReachIsForgotten(t *testing.T) {
 	}
 }
 
-// A FLOOR IS FORGOTTEN BY POSITION, NEVER BY STREAM: a write observed after a
-// request went out raised the floor past the one a holder reported
-// abandoned — onto the log's new generation — and dropping the stream would
-// lose that write from the next read.
+// A FLOOR IS FORGOTTEN BY POSITION, NEVER BY STREAM: a write observed after the
+// request may have raised the floor onto the log's new generation, and dropping
+// the stream would lose it from the next read.
 func TestTheSessionForgetsOnlyTheFloorItWasTold(t *testing.T) {
 	t.Parallel()
 	s := NewSession()
@@ -1724,10 +1632,9 @@ func TestTheSessionForgetsOnlyTheFloorItWasTold(t *testing.T) {
 	}
 }
 
-// A PATCH'S GESTURES CROSS: they are resolved inside the decide and never
-// encoded into a record, so the patch type does not serialise them — and a
-// watch or a relation dropped on the way would be a write that did less than
-// it said, reported as done.
+// A PATCH'S GESTURES CROSS, though the patch type does not serialise them (they
+// are resolved inside the decide): a dropped watch or relation is a write that
+// did less than it said, reported as done.
 func TestAPatchsGesturesCross(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -1746,9 +1653,8 @@ func TestAPatchsGesturesCross(t *testing.T) {
 	}
 }
 
-// A WRITE NAMES WHO IT ACTS AS, or the serving node refuses it — a history
-// row nobody can attribute is not an audit trail. In-process too: the check
-// is the operation's, not the wire's.
+// A WRITE NAMES WHO IT ACTS AS, or the serving node refuses it: an
+// unattributed history row is no audit trail. In-process too.
 func TestAWriteThatNamesNobodyIsRefused(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -1768,11 +1674,9 @@ func TestAWriteThatNamesNobodyIsRefused(t *testing.T) {
 var hitLabel = provenance.Label{Source: provenance.SourcePageBody, Trust: provenance.TrustColleague,
 	Authors: []provenance.Author{{Kind: iam.ActorHuman, Seat: "ana"}}}
 
-// A HIT'S PROVENANCE CROSSES WITH IT. The backend that found a page is the only
-// one that knows who can write there (ADR-0040), and the node rendering the
-// hit into a seat's prompt is, on a node without data, never that backend: a
-// label left behind would reach the seat as the zero label's `external`, or a
-// colleague's page as nothing at all.
+// A HIT'S PROVENANCE CROSSES WITH IT: only the backend that found a page knows
+// who can write there (ADR-0040), and a label lost on the wire would reach the
+// seat as the zero label's `external`.
 func TestAKnowledgeHitsLabelCrossesTheWire(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -1785,10 +1689,9 @@ func TestAKnowledgeHitsLabelCrossesTheWire(t *testing.T) {
 	}
 }
 
-// A SEARCH KEEPS "NO EXCLUSION" APART FROM "THE DEFAULT EXCLUSION", which the
-// query tells apart on purpose, and is scoped by the serving node's chart. And
-// a turn's prefetch arrives as one: the serving node coordinates the scan and
-// times it, against the turn start's budget only if it is told whose it is.
+// A SEARCH KEEPS "NO EXCLUSION" APART FROM "THE DEFAULT EXCLUSION", and is
+// scoped by the serving node's chart. A turn's prefetch arrives as one, or the
+// serving node would not time it against the turn start's budget.
 //
 // Mutation: drop Prefetch from knowledgeArgs or its query, and the prefetch
 // arrives as a deliberate search.
@@ -1835,12 +1738,9 @@ func TestNoServingNodeSaysSo(t *testing.T) {
 	}
 }
 
-// AN UNSERVED WALK SAYS WHETHER A NODE WENT SILENT. One in which every node
-// answered that it would not run the operation is one in which NOTHING RAN it,
-// and a caller with a write may say so definitively; one in which a node said
-// nothing may have had it run there — a committer that appended and lost its
-// reply — and Gitlet then tells the person the outcome is unknown,
-// never that nothing took the push.
+// AN UNSERVED WALK SAYS WHETHER A NODE WENT SILENT. Where every node refused,
+// NOTHING RAN; where one said nothing, it may have run there (a committer that
+// appended and lost its reply), and Gitlet reports the push's outcome unknown.
 func TestAnUnservedWalkSaysWhetherANodeWentSilent(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1868,10 +1768,9 @@ func TestAnUnservedWalkSaysWhetherANodeWentSilent(t *testing.T) {
 // A TURN'S SPEND CROSSES, AS THE SEAT, AND AN UNANSWERED ONE IS ASKED AGAIN
 // UNDER THE SAME OPERATION.
 //
-// A node without `data` has no applier, so the spend of a turn its seat ran
-// reaches the task only through a data node. It carries its operation id,
-// which is what makes a repeat on the next node safe: the applier adds a
-// turn's spend only for an operation it has not applied.
+// A node without `data` reaches the task only through a data node; the
+// operation id makes a repeat safe, since the applier adds a turn's spend only
+// for an operation it has not applied.
 func TestATurnsSpendCrossesAndRepeatsUnderItsOperation(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
@@ -1900,9 +1799,7 @@ func TestATurnsSpendCrossesAndRepeatsUnderItsOperation(t *testing.T) {
 	}
 }
 
-// A DATA NODE ANSWERS ITS OWN SEATS IN-PROCESS, and asks nobody: it holds the
-// whole estate, and a request over the broker to itself would be a round trip
-// for nothing.
+// A DATA NODE ANSWERS ITS OWN SEATS IN-PROCESS, and asks nobody.
 func TestADataNodeAnswersItself(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -1920,12 +1817,9 @@ func TestADataNodeAnswersItself(t *testing.T) {
 
 // A LOCAL READ WAITS FOR THIS NODE'S OWN FLOOR — design B, the join direction.
 //
-// A data node's seats may write through ANOTHER data node — this node's copy
-// was out of service, or behind — and then read here: the write is on the log
-// and not yet in this node's rows. A node that trusted its own copy because
-// "it applies the write itself" answers its own seat from before a write it
-// was told landed. So the local path waits for the floor exactly as a remote
-// node would.
+// A data node's seats may write through ANOTHER data node and then read here,
+// before this copy applied the write, so the local path waits for the floor
+// exactly as a remote node would.
 func TestALocalReadWaitsForTheNodesOwnFloor(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -1984,13 +1878,10 @@ func TestALocalCopyBehindItsFloorAsksAnotherHolder(t *testing.T) {
 
 // A COPY THAT LAGS ITS LOGS IS A WORSE HOLDER, NEVER NO HOLDER.
 //
-// Whether a copy answers requests is its DISTANCE from its logs — the floors
-// and the read's own level hold what it answers to what the caller must see —
-// so a lagging copy is passed over for one that does not lag, and asked again,
-// told to take the request anyway, once no such holder is left. Refused
-// outright, a single data node a burst put past the snapshot slack refused its
-// own seats every call until it caught up, and a fleet the same burst put
-// behind together refused everybody's.
+// The floors and the read's level already hold what a copy answers to what the
+// caller must see, so lag only orders: a lagging copy is passed over, then asked
+// again, told to answer anyway, once no other holder is left. Refused outright,
+// a fleet a burst put behind together would refuse everybody.
 func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
@@ -1998,7 +1889,7 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 	second := f.other(first)
 	first.set(func(n *fakeNode) { n.notReady = true })
 
-	// A HOLDER WHOSE COPY DOES NOT LAG IS PREFERRED.
+	// A holder whose copy does not lag is preferred.
 	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
 		t.Fatalf("tasks with one copy lagging: %v", err)
 	}
@@ -2006,8 +1897,8 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 		t.Fatal("the lagging copy ran the read while a holder whose copy does not lag was there")
 	}
 
-	// AND WHEN EVERY COPY LAGS, ONE OF THEM ANSWERS — a read, a tracker
-	// write and a page write alike — held to the caller's floor.
+	// When every copy lags, one answers (read, tracker and page write alike),
+	// held to the caller's floor.
 	for _, n := range f.nodes {
 		n.set(func(n *fakeNode) { n.notReady, n.asked, n.floors = true, nil, nil })
 	}
@@ -2033,8 +1924,7 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 		t.Fatalf("a page write with every copy lagging: %v", err)
 	}
 
-	// THIS NODE'S OWN COPY, where it is the only data node: its seats are
-	// answered, not refused as though nobody held the estate.
+	// This node's own copy, the only data node: its seats are answered.
 	local := &fakeNode{name: "data-self", units: chartOf("self"), notReady: true}
 	alone := newFleet(t).router(t, "data-self", local)
 	if _, err := alone.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); err != nil {
@@ -2045,7 +1935,7 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 		t.Fatalf("the only copy, lagging, refused its own seat's write: %v", err)
 	}
 
-	// AND STILL ASKED LAST: a peer whose copy does not lag answers first.
+	// And still asked last: a peer whose copy does not lag answers first.
 	peered := newFleet(t, "data-a")
 	own := &fakeNode{name: "data-self", units: chartOf("self"), notReady: true}
 	r := peered.router(t, "data-self", own)
@@ -2059,18 +1949,12 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 
 // A NODE BEHIND THE COMPANY'S CONFIGURATION IS ASKED LAST, NEVER REFUSED.
 //
-// A data node the control plane has confirmed behind the epoch the fleet
-// activated — shed or stuck, never merely mid-rollout — gives up its seats, its
-// schedules and its inbound work, and goes on serving the estate. What it
-// supplies to an operation from its own epoch is the configuration the fleet
-// replaced: the chart a tracker write resolves a people field by, the leads a
-// wake falls back to, the unit a read renders. So it is a worse node to ask,
-// exactly as a copy that lags its log is: every other data node is asked first,
-// and this one is asked again, told to answer anyway, when none of them runs
-// the operation — so a fleet whose only data node failed an apply keeps its
-// tracker rather than losing it to a refusal. Asked first, a shed node decided
-// a create's people field against the chart the fleet had replaced while a
-// current peer could have decided it.
+// A data node confirmed behind the activated epoch (shed or stuck) still serves
+// the estate, but supplies the replaced configuration: the chart a people field
+// resolves by, a wake's fallback leads, a read's units. So, like a lagging copy,
+// it is asked last, told to answer anyway when no other node runs the
+// operation, so a fleet whose only data node failed an apply keeps its tracker
+// (package doc, "A node behind the company's configuration is a worse node too").
 func TestANodeBehindTheConfigurationIsAskedLast(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -2084,12 +1968,10 @@ func TestANodeBehindTheConfigurationIsAskedLast(t *testing.T) {
 		})
 	}
 
-	// ASKED FIRST BY ANOTHER NODE, the node behind runs nothing and the
-	// current one decides — a write and a read alike. Each through a
-	// router that has asked nobody yet, whose first node is the one behind:
-	// a router that had would stay on whichever node answered it
-	// ([Router.markAnswered]), and the preference would never be what
-	// moved it off the node behind.
+	// Asked first by another node, the node behind runs nothing and the
+	// current one decides, write and read alike. Each through a fresh router:
+	// one that had answered would stay on its answerer ([Router.markAnswered]),
+	// and the preference would never be what moved it.
 	for _, tc := range []struct {
 		name, op string
 		run      func(*Router) error
@@ -2123,10 +2005,9 @@ func TestANodeBehindTheConfigurationIsAskedLast(t *testing.T) {
 		}
 	}
 
-	// AND IT SAYS WHY, naming the configuration rather than its log, which
-	// is level — in a reason of its own, which the asker remembers: an
-	// operator reading a walk's account must be sent to the control plane,
-	// not to the applier.
+	// And it says why, in a reason of its own the asker remembers, naming the
+	// configuration rather than its log: the operator belongs at the control
+	// plane, not the applier.
 	f := newFleet(t, "data-a", "data-b")
 	_, behind := f.first(t, f.client)
 	behind.set(func(n *fakeNode) { n.behindConfig = true })
@@ -2141,8 +2022,7 @@ func TestANodeBehindTheConfigurationIsAskedLast(t *testing.T) {
 		t.Fatalf("the node behind answered %q: %q, want %q, naming the configuration and not "+
 			"its log", rep.Unserved, rep.Detail, unservedBehindConfig)
 	}
-	// A NODE THAT IS BOTH answers the reason that lasts, so its asker
-	// remembers it, and names both.
+	// A node that is both answers the lasting reason, and names both.
 	behind.set(func(n *fakeNode) { n.notReady = true })
 	if rep := ask(); rep.Unserved != unservedBehindConfig ||
 		!strings.Contains(rep.Detail, "configuration") || !strings.Contains(rep.Detail, "lags its log") {
@@ -2151,9 +2031,7 @@ func TestANodeBehindTheConfigurationIsAskedLast(t *testing.T) {
 	}
 	behind.set(func(n *fakeNode) { n.notReady = false })
 
-	// WITH THE CURRENT NODE GONE, THE NODE BEHIND DECIDES IT: never refused,
-	// or a fleet whose only data node failed an apply would answer none of
-	// its tracker.
+	// With the current node gone, the node behind decides it: never refused.
 	f.placement.set(func(p *fakePlacement) { p.nodes = []string{behind.name} })
 	if _, err := f.client.WriterAs(swe).CreateTask(ctx, "op-alone", assigned, nil); err != nil {
 		t.Fatalf("the only data node, behind the configuration, refused a create: %v", err)
@@ -2162,9 +2040,8 @@ func TestANodeBehindTheConfigurationIsAskedLast(t *testing.T) {
 		t.Fatal("the only data node, behind the configuration, did not decide the create")
 	}
 
-	// THIS NODE'S OWN ROUTER asks a current peer before its own copy, and
-	// its own copy when it is the only data node — in-process, as a remote
-	// asker is answered.
+	// This node's own router asks a current peer before its own copy, and
+	// its own copy when it is the only data node.
 	peered := newFleet(t, "data-b")
 	own := &fakeNode{name: "data-a", units: chartOf("a"), behindConfig: true}
 	if _, err := peered.router(t, "data-a", own).WriterAs(swe).CreateTask(ctx, "op-own",
@@ -2185,9 +2062,8 @@ func TestANodeBehindTheConfigurationIsAskedLast(t *testing.T) {
 		t.Fatal("this node's own copy, the only one, did not decide its own seat's create")
 	}
 
-	// ADMISSION'S PING IS NOT HELD BACK: it asks the copy's own seat
-	// admission and routes no later operation, so a node behind the
-	// configuration is asked it in turn like any other.
+	// Admission's ping is not held back: it asks the copy's own seat
+	// admission and routes no later operation.
 	pinged := newFleet(t, "data-a", "data-b")
 	_, first := pinged.first(t, pinged.client)
 	second := pinged.other(first)
@@ -2205,22 +2081,12 @@ func TestANodeBehindTheConfigurationIsAskedLast(t *testing.T) {
 // A NODE BEHIND THE COMPANY'S CONFIGURATION IS REMEMBERED, SO A REQUEST ASKS
 // IT ONCE RATHER THAN TWICE.
 //
-// Behind the configuration is no passing state, as a copy's lag is: a node
-// stays there until its apply succeeds — a stuck one until a person acts — and
-// says so to every request. Forgotten between requests, it cost every
-// operation a refusal's round trip before the walk moved on, for as long as it
-// stayed: on a stateless node beside one stuck data node every estate call was
-// two requests and the data node served twice the traffic; with every data node
-// behind, every call asked each of them twice; and a repository whose committer
-// was behind sent it every push's whole proposal — encoded, decoded and refused
-// — before the runner-up was asked. So the router remembers the answer for
-// [suspectFor] and asks a remembered node only as the last resort, told at once
-// to answer anyway: one ask a request once the router has heard the refusal,
-// and none at all where a current node answers first. Nothing but the window
-// ends the memory — the last resort's answer, given because it was told to
-// answer anyway, says nothing about the node's configuration — and admission's
-// ping, which the preference never holds back, is not held back by the memory
-// either.
+// Unlike lag, being behind the configuration lasts until the apply succeeds,
+// so forgetting it would cost every request a refusal's round trip (a committer
+// behind would be sent every push's whole proposal). The router remembers it
+// for [suspectFor] and asks the node only as the last resort, told at once to
+// answer anyway. Only the window ends the memory: the last resort's answer says
+// nothing about the configuration. Admission's ping is not held back by it.
 func TestANodeBehindTheConfigurationIsRemembered(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -2244,8 +2110,8 @@ func TestANodeBehindTheConfigurationIsRemembered(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		nodes []string
-		// first is what the first read costs: a refusal from each data
-		// node, all of them behind, and the last resort's answer.
+		// first is the first read's cost: each node's refusal, then the
+		// last resort's answer.
 		first int
 	}{
 		{name: "one data node", nodes: []string{"data-a"}, first: 2},
@@ -2271,7 +2137,7 @@ func TestANodeBehindTheConfigurationIsRemembered(t *testing.T) {
 		}
 	}
 
-	// A KEYED WRITE asks the runner-up instead of a committer behind: only
+	// A keyed write asks the runner-up instead of a committer behind: only
 	// the first push is proposed to it.
 	holders := []string{"data-a", "data-b", "data-c"}
 	f := newFleet(t, holders...)
@@ -2290,9 +2156,7 @@ func TestANodeBehindTheConfigurationIsRemembered(t *testing.T) {
 			"the first", requests, 1+later)
 	}
 
-	// THE WINDOW ENDS IT: past it the node is asked as any other again —
-	// refusing again while it is still behind, and answering at once once it
-	// is current.
+	// The window ends it: past it the node is asked as any other again.
 	alone := newFleet(t, "data-a")
 	n := alone.nodes["data-a"]
 	n.set(behindConfig)
@@ -2314,8 +2178,7 @@ func TestANodeBehindTheConfigurationIsRemembered(t *testing.T) {
 			"to answer anyway, want one ordinary ask", requests-before, anyway-beforeAnyway)
 	}
 
-	// ADMISSION'S PING IS NOT HELD BACK BY THE MEMORY EITHER: a router that
-	// has heard the node is behind still asks it the ping in its turn.
+	// Nor is admission's ping held back by the memory.
 	pinged := newFleet(t, "data-a", "data-b")
 	_, first := pinged.first(t, pinged.client)
 	second := pinged.other(first)
@@ -2336,23 +2199,12 @@ func TestANodeBehindTheConfigurationIsRemembered(t *testing.T) {
 // CONFIGURATION, AND ITS ORDER IS THE REASONS' — never when the router learned
 // them.
 //
-// Both are worse nodes to ask, and they are not equally worse: a copy that
-// only lags answers held to the caller's floors and to the CURRENT
-// configuration, while a node behind the configuration decides under the
-// revision the fleet replaced. So where no node in better standing runs an
-// operation, the last resort asks every copy that only lags first and every
-// node behind the configuration after them, each in the order the walk reached
-// it. The order is the same on the request that learns a node is behind as on
-// every one the router remembers it for, and the same in every asker: when the
-// last resort asked in the order the walk REACHED the refusals, the request
-// that learned a node was behind asked it first wherever rendezvous ranked it
-// first — the read it answered was decided under the replaced chart, and a
-// repository's pushes went to its committer behind the configuration on that
-// request and to the lagging runner-up on every one after, two nodes
-// committing one repository and contending on its one subject in every window.
-// And a router that remembered one node behind and had not yet heard another
-// asked them in another order than a router that had heard neither, so two
-// askers sent one repository's pushes to two committers.
+// A copy that only lags still answers under the CURRENT configuration; a node
+// behind it decides under the replaced one. So the last resort asks every
+// lagging copy first, then every node behind, each in walk order. The order
+// must not depend on when a router learned the reasons: otherwise the learning
+// request and later ones, or two askers with different memories, would send one
+// repository's pushes to two committers contending on its one subject.
 func TestTheLastResortAsksALaggingCopyBeforeANodeBehindTheConfiguration(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -2375,8 +2227,7 @@ func TestTheLastResortAsksALaggingCopyBeforeANodeBehindTheConfiguration(t *testi
 			t.Fatalf("a read with no data node in good standing: %v", err)
 		}
 	}
-	// pastTheWindow moves r's clock past the memory of every refusal it
-	// heard, each time it is called.
+	// pastTheWindow moves r's clock past every remembered refusal, each call.
 	pastTheWindow := func(r *Router) func() {
 		windows := 0
 		return func() {
@@ -2387,10 +2238,9 @@ func TestTheLastResortAsksALaggingCopyBeforeANodeBehindTheConfiguration(t *testi
 	}
 	const requests, window = 6, 3
 
-	// AN OPERATION ANY COPY ANSWERS EQUALLY, through a router whose first
-	// node is the one behind: the read that learns it is behind and every
-	// read after — across a window's end — is answered by the copy that
-	// only lags.
+	// An operation any copy answers, through a router whose first node is the
+	// one behind: the learning read and every later one, across a window's
+	// end, is answered by the copy that only lags.
 	f := newFleet(t, "data-a", "data-b")
 	_, behind := f.first(t, f.client)
 	lags := f.other(behind)
@@ -2408,9 +2258,8 @@ func TestTheLastResortAsksALaggingCopyBeforeANodeBehindTheConfiguration(t *testi
 		}
 	}
 
-	// THIS NODE'S OWN COPY behind the configuration is asked after a peer
-	// whose copy only lags, as a remote one is — in-process saves a round
-	// trip, never a decide under the replaced configuration.
+	// This node's own copy behind the configuration is asked after a peer
+	// whose copy only lags, as a remote one is.
 	peered := newFleet(t, "data-b")
 	peered.nodes["data-b"].set(lagging)
 	own := &fakeNode{name: "data-a", units: chartOf("a"), behindConfig: true}
@@ -2424,10 +2273,9 @@ func TestTheLastResortAsksALaggingCopyBeforeANodeBehindTheConfiguration(t *testi
 		}
 	}
 
-	// A KEYED OPERATION: a committer behind the configuration and a runner-up
-	// that only lags — every push across a window's end is committed by the
-	// runner-up, the push that learns the committer is behind included, so a
-	// repository's pushes meet at one node.
+	// A keyed operation: with the committer behind and the runner-up only
+	// lagging, every push, the learning one included, is committed by the
+	// runner-up, so a repository's pushes meet at one node.
 	holders := []string{"data-a", "data-b"}
 	keyed := newFleet(t, holders...)
 	const repo = "repo-worse"
@@ -2450,8 +2298,8 @@ func TestTheLastResortAsksALaggingCopyBeforeANodeBehindTheConfiguration(t *testi
 			"that only lags", n)
 	}
 
-	// THIS NODE AS THE COMMITTER, its own copy behind the configuration: the
-	// runner-up that only lags commits the push, as it would for any asker.
+	// This node as the committer, its own copy behind: the lagging runner-up
+	// commits, as for any asker.
 	alone := newFleet(t, o[1])
 	alone.nodes[o[1]].set(lagging)
 	ownCommitter := &fakeNode{name: o[0], units: chartOf(o[0]), behindConfig: true}
@@ -2469,9 +2317,8 @@ func TestTheLastResortAsksALaggingCopyBeforeANodeBehindTheConfiguration(t *testi
 			"runner-up that only lags", n)
 	}
 
-	// EVERY NODE BEHIND, ONE OF THEM REMEMBERED: the last resort asks them in
-	// the key's order, as a router that has heard neither does — never the
-	// one it has not heard yet first because the other is remembered.
+	// Every node behind, one remembered: the last resort asks in the key's
+	// order, as a router that has heard neither does.
 	both := newFleet(t, holders...)
 	both.nodes[o[0]].set(behindConfig)
 	if got, err := both.client.Code().Propose(ctx, proposalTo(repo, "learn")); err != nil ||
@@ -2492,11 +2339,10 @@ func TestTheLastResortAsksALaggingCopyBeforeANodeBehindTheConfiguration(t *testi
 	}
 }
 
-// A SEARCH THAT REACHED NOTHING STILL SAYS SO: its only data node gone, a
-// knowledge search is answered with no hits, as the seam requires — and with
-// NO MODE SERVED and none of the corpus covered, so the turn-start block and
-// the tool say the knowledge base could not be searched rather than "nothing
-// is written down", which a seat acts on by writing a duplicate.
+// A SEARCH THAT REACHED NOTHING STILL SAYS SO: no hits, as the seam requires,
+// but NO MODE SERVED and nothing covered, so the seat is told the knowledge
+// base could not be searched, not "nothing is written down" (it would write a
+// duplicate).
 func TestASearchThatReachedNothingSaysItDidNotRun(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -2507,16 +2353,15 @@ func TestASearchThatReachedNothingSaysItDidNotRun(t *testing.T) {
 		t.Fatalf("a search nothing answered = %+v, want no mode served and every "+
 			"bucket missing", got)
 	}
-	// AND THE ITEM SEARCH IS AN ERROR, never an empty list.
+	// And the item search is an error, never an empty list.
 	if answer, err := f.client.Work().Search(t.Context(),
 		worklet.SearchQuery{Text: "deploys", Limit: 5}); err == nil {
 		t.Fatalf("an item search nothing answered = %+v, want its error", answer)
 	}
 }
 
-// A SEARCH ON A FLEET A BURST PUT BEHIND RUNS ON ONE NODE, as a read does: its
-// last resort asks the lagging copies one at a time, stopping at the first
-// that answers — never every data node at once for one search.
+// A SEARCH ON A FLEET A BURST PUT BEHIND RUNS ON ONE NODE: its last resort asks
+// the lagging copies one at a time, never every data node at once.
 func TestASearchWithEveryCopyLaggingRunsOnce(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b", "data-c")
@@ -2562,10 +2407,7 @@ func TestALaggingCopyThatRefusesTheLastResortIsNotAskedAgain(t *testing.T) {
 	}
 }
 
-// A SEARCH THAT FAILS NAMES ITS OPERATION, as every read does: a placement
-// that cannot say who holds the estate fails it with "estate: <operation>:
-// read who holds the estate", so the person reading it knows which call to
-// look at.
+// A SEARCH THAT FAILS NAMES ITS OPERATION, as every read does.
 func TestASearchThatFailsNamesItsOperation(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -2580,12 +2422,8 @@ func TestASearchThatFailsNamesItsOperation(t *testing.T) {
 }
 
 // A LAGGING COPY OF ITS OWN STILL ANSWERS WHEN THE PLACEMENT CANNOT SAY WHO
-// HOLDS THE ESTATE. This node knows it holds it without asking anybody, so a
-// view that answers unknown names no peer to prefer and takes nothing from the
-// copy the walk passed over for lagging. Answered with the placement's error
-// instead, a single data node a burst put behind refused every call its own
-// seats made — while it kept them — for as long as its view could not answer.
-// A node whose own copy runs nothing still gets the placement's reason.
+// HOLDS THE ESTATE: this node knows it holds it, and an unknown view names no
+// peer to prefer. A node whose own copy runs nothing gets the placement's reason.
 func TestALaggingOwnCopyAnswersWhileThePlacementCannot(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -2611,8 +2449,8 @@ func TestALaggingOwnCopyAnswersWhileThePlacementCannot(t *testing.T) {
 		t.Fatalf("a lagging copy of its own refused this node's write: %v", err)
 	}
 
-	// A COPY OUT OF SERVICE is no node to ask at all, and the answer is the
-	// placement's own reason — never "nobody serves it".
+	// A copy out of service is no node to ask: the placement's own reason,
+	// never "nobody serves it".
 	own.set(func(n *fakeNode) { n.outOfService = true })
 	_, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 	var unserved *ErrUnserved
@@ -2624,10 +2462,8 @@ func TestALaggingOwnCopyAnswersWhileThePlacementCannot(t *testing.T) {
 }
 
 // A COPY THAT ANSWERS REQUESTS SERVES THEM AT ONCE, EVEN WHILE IT ADMITS NO
-// SEAT. Admission's gate is strict — a lag of zero this instant — and a busy
-// company's copy fails it on most instants, with a record in flight; a request
-// gate that asked it sent every request to whichever holder happened to be
-// level at that moment. Only admission's own ping asks it.
+// SEAT. Admission's gate (zero lag this instant) fails on most instants of a
+// busy company, so only admission's own ping asks it.
 func TestACopyThatAdmitsNoSeatStillServesRequests(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -2650,19 +2486,17 @@ func TestACopyThatAdmitsNoSeatStillServesRequests(t *testing.T) {
 		t.Fatalf("this node's copy was asked %v, want the read served without admission's "+
 			"question", local.asked)
 	}
-	// AND ADMISSION STILL REFUSES IT: the two gates disagree on purpose.
+	// And admission still refuses it: the two gates disagree on purpose.
 	if served, err := r.Serves(t.Context()); err != nil || served.Tracker {
 		t.Fatalf("a copy that admits no seat was admitted (%+v, %v)", served, err)
 	}
 }
 
 // THE ROUTER ASKS IN THE RENDEZVOUS ORDER OF ITS OWN ID: never itself or an
-// empty id, the placement's listing untouched, and — once a node has answered
-// and another gone silent — the answerer first and the silent node last with
-// the rendezvous order kept between them. Keyed on the ASKER's id, so a
-// fleet's askers make their first ask, and every failover, across the data
-// nodes rather than all to one; where an asker then stays is the sticky
-// node's business.
+// empty id, the placement's listing untouched; once a node has answered and
+// another gone silent, the answerer first, the silent node last, rendezvous
+// order between. Keyed on the ASKER's id so a fleet's first asks and failovers
+// spread across the data nodes.
 func TestTheRouterAsksInTheRendezvousOrderOfItsOwnID(t *testing.T) {
 	t.Parallel()
 	r := newFleet(t).router(t, "agent-2", nil)
@@ -2684,9 +2518,8 @@ func TestTheRouterAsksInTheRendezvousOrderOfItsOwnID(t *testing.T) {
 			want[0], got, w)
 	}
 
-	// PER DOMAIN: the tracker's sticky node is nobody's for the knowledge
-	// base, and a node whose copy of the tracker said it is out of service
-	// goes after every other live node — for the tracker alone.
+	// Per domain: the tracker's sticky node and out-of-service copy move
+	// only the tracker's order.
 	r.markOutOfService(want[1], trackerDomain)
 	if got, w := r.order(opTasks.spec, held), []string{want[3], want[2], want[1], want[0]}; !slices.Equal(got, w) {
 		t.Fatalf("with %s's tracker copy out of service, agent-2 asks %q for the tracker, "+
@@ -2696,7 +2529,7 @@ func TestTheRouterAsksInTheRendezvousOrderOfItsOwnID(t *testing.T) {
 		t.Fatalf("agent-2 asks %q for the knowledge base, want %q — the tracker's sticky "+
 			"node and its copy out of service moved the knowledge base's order", got, w)
 	}
-	// AND THE PASS LAPSES: after the window the node is back in its place.
+	// And the pass lapses: after the window the node is back in its place.
 	r.now = func() time.Time { return time.Now().Add(2 * suspectFor) }
 	if got, w := r.order(opTasks.spec, held), []string{want[3], want[0], want[1], want[2]}; !slices.Equal(got, w) {
 		t.Fatalf("after the window agent-2 asks %q for the tracker, want %q", got, w)
@@ -2705,13 +2538,10 @@ func TestTheRouterAsksInTheRendezvousOrderOfItsOwnID(t *testing.T) {
 
 // A NODE OUT OF SERVICE FOR ONE DOMAIN IS NO REASON TO CHASE ANOTHER — ADR-0079.
 //
-// A router on a node without data, between a peer whose tracker copy is out
-// of service and one whose knowledge base is, alternates tracker and
-// knowledge-base calls. Each domain settles on a node whose copy of IT serves,
-// so after each domain's first call every call reaches a serving node on its
-// first ask. With one sticky node for every domain, the two calls made each
-// other's server sticky in turn, and every call paid a round trip that ran
-// nothing.
+// Between a peer whose tracker copy is out of service and one whose knowledge
+// base is, alternating calls settle per domain, so after each domain's first
+// call every call reaches a serving node on its first ask. One sticky node for
+// every domain would make each call pay a round trip that ran nothing.
 func TestEachDomainSettlesOnANodeWhoseCopyOfItServes(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b", "data-c")
@@ -2755,11 +2585,8 @@ func TestEachDomainSettlesOnANodeWhoseCopyOfItServes(t *testing.T) {
 		}
 	}
 
-	// AND ONCE A DOMAIN'S STICKY NODE IS GONE, the node that said its copy is
-	// out of service is asked after the rest rather than first again: the
-	// tracker call that finds its sticky node silent goes on to the one node
-	// left whose tracker copy serves, past the rendezvous winner whose copy
-	// does not.
+	// Once a domain's sticky node is gone, a node that said its copy is out
+	// of service is asked after the rest, not first again.
 	f.nodes[o[1]].set(func(n *fakeNode) { n.silent = true })
 	winner := f.nodes[o[0]]
 	winner.mu.Lock()
@@ -2779,9 +2606,8 @@ func TestEachDomainSettlesOnANodeWhoseCopyOfItServes(t *testing.T) {
 }
 
 // THE DATA NODE THAT ANSWERED LAST IS ASKED FIRST NEXT TIME, ahead of the
-// rendezvous winner — its applier is the one most likely to hold this
-// node's writes — and loses that place the moment it goes silent, not only for
-// as long as it stays suspect.
+// rendezvous winner (its applier most likely holds this node's writes), and
+// loses that place for good the moment it goes silent.
 func TestTheNodeThatAnsweredLastIsAskedFirstUntilItGoesSilent(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
@@ -2796,13 +2622,13 @@ func TestTheNodeThatAnsweredLastIsAskedFirstUntilItGoesSilent(t *testing.T) {
 		return err
 	}
 
-	// THE RUNNER-UP ANSWERS ONCE, because the winner ran nothing...
+	// The runner-up answers once, because the winner ran nothing...
 	winner.set(func(n *fakeNode) { n.outOfService = true })
 	if err := read(); err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
 	winner.set(func(n *fakeNode) { n.outOfService = false })
-	// ...AND IS ASKED FIRST FROM THEN ON.
+	// ...and is asked first from then on.
 	for range 3 {
 		if err := read(); err != nil {
 			t.Fatalf("tasks: %v", err)
@@ -2812,8 +2638,8 @@ func TestTheNodeThatAnsweredLastIsAskedFirstUntilItGoesSilent(t *testing.T) {
 		t.Fatal("the rendezvous winner was asked ahead of the node that answered last")
 	}
 
-	// A NODE THAT GOES SILENT LOSES ITS PLACE for good: once its suspicion
-	// lapses it is back in the rendezvous order, not first.
+	// A node that goes silent loses its place: once its suspicion lapses it
+	// is back in the rendezvous order, not first.
 	runnerUp.set(func(n *fakeNode) { n.silent = true })
 	winner.set(func(n *fakeNode) { n.outOfService = true })
 	if err := read(); err == nil {
@@ -2828,9 +2654,8 @@ func TestTheNodeThatAnsweredLastIsAskedFirstUntilItGoesSilent(t *testing.T) {
 	}
 }
 
-// A COPY OUT OF SERVICE is never asked in-process — its seats are answered by
-// the other data nodes — and answers another node's request `out_of_service`,
-// having run nothing; the asker moves to the next data node.
+// A COPY OUT OF SERVICE is never asked in-process, and answers another node's
+// request `out_of_service`, having run nothing; the asker moves on.
 func TestACopyOutOfServiceRunsNothing(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
@@ -2859,11 +2684,8 @@ func TestACopyOutOfServiceRunsNothing(t *testing.T) {
 // A FAULT IN ONE DOMAIN'S COPY ROUTES ONLY THAT DOMAIN'S OPERATIONS — ADR-0079.
 //
 // A node whose tracker copy is wrong sends its seats' tracker calls to a peer
-// and still answers their knowledge-base calls from its own pages, and a peer
-// asking it is told `out_of_service` for the tracker's operations alone,
-// naming the domain. When one copy took every domain out of service, a
-// knowledge-base applier halted on one page sent every tracker call the
-// node's seats made to another node — and on a single node refused them all.
+// and still answers their knowledge-base calls itself; a peer asking it is told
+// `out_of_service` for the tracker's operations alone, naming the domain.
 func TestAFaultInOneDomainRoutesOnlyThatDomainsOperations(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
@@ -2886,7 +2708,7 @@ func TestAFaultInOneDomainRoutesOnlyThatDomainsOperations(t *testing.T) {
 		t.Fatalf("%d peers ran the write, want exactly one", ran)
 	}
 
-	// THE KNOWLEDGE BASE'S OPERATIONS ARE ANSWERED HERE: its copy is sound.
+	// The knowledge base's operations are answered here: its copy is sound.
 	found := r.Knowledge().Search(t.Context(), knowledge.Query{Text: "runbook"})
 	if len(found.Hits) != 1 || found.Hits[0].Title != "found on data-self" {
 		t.Fatalf("a knowledge search on a node whose knowledge base serves = %+v, "+
@@ -2898,7 +2720,7 @@ func TestAFaultInOneDomainRoutesOnlyThatDomainsOperations(t *testing.T) {
 		}
 	}
 
-	// AND A PEER ASKING IS TOLD SO, PER DOMAIN.
+	// And a peer asking is told so, per domain.
 	peer := f.nodes["data-a"]
 	peer.set(func(n *fakeNode) { n.outOfServiceOn = map[string]bool{trackerDomain: true} })
 	q := f.start(t)
@@ -2917,7 +2739,7 @@ func TestAFaultInOneDomainRoutesOnlyThatDomainsOperations(t *testing.T) {
 			"want it run", rep)
 	}
 
-	// AND ON A SINGLE NODE, WHAT AN UNSERVED ESTATE SAYS NAMES THE COPY.
+	// And on a single node, the unserved estate names the copy.
 	solo := newFleet(t)
 	alone := solo.router(t, "data-self", &fakeNode{name: "data-self", units: chartOf("self"),
 		outOfServiceOn: map[string]bool{trackerDomain: true}})
@@ -2931,13 +2753,10 @@ func TestAFaultInOneDomainRoutesOnlyThatDomainsOperations(t *testing.T) {
 }
 
 // A PAGE'S BACKLINKS RUN ONLY WHERE BOTH COPIES THEY READ SERVE — ADR-0079.
-// The links are derived from the pages' AND the tasks' bodies and named from
-// both domains' rows, so a node whose tracker copy is out of service runs none
-// of them though its knowledge base serves: its own router asks a peer, and a
-// peer asking it is told `out_of_service` naming the tracker. Read straight
-// off the node's own index, they merged a peer's page with links derived from
-// rows the node had stopped serving. And an index still building says so
-// across the wire, which is what the page answer's `building` status reads.
+// They derive from pages' AND tasks' bodies, so a node whose tracker copy is
+// out of service runs none: its router asks a peer, and a peer asking it is
+// told `out_of_service` naming the tracker. An index still building says so
+// across the wire, for the page answer's `building` status.
 func TestAPagesBacklinksRunOnlyWhereBothCopiesServe(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
@@ -2973,13 +2792,10 @@ func TestAPagesBacklinksRunOnlyWhereBothCopiesServe(t *testing.T) {
 	}
 }
 
-// A WRONG USAGE COPY ANSWERS NO SPEND SCREEN — ADR-0079. The usage domain's
-// reads cross like every other domain's: a node whose usage copy is out of
-// service answers its operator's spend and activity screens from a peer's
-// copy, while its tracker reads are still its own; and every one of the
-// domain's reads, its two-valued page of schedule runs included, arrives
-// whole. Read straight off the node's own estate, they were answered from the
-// very copy the node had stopped serving.
+// A WRONG USAGE COPY ANSWERS NO SPEND SCREEN — ADR-0079: a node whose usage
+// copy is out of service answers spend and activity screens from a peer's copy
+// while keeping its tracker reads, and every usage read, the two-valued page of
+// schedule runs included, arrives whole.
 func TestAWrongUsageCopyAnswersNoSpendScreen(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
@@ -3043,11 +2859,9 @@ func TestAWrongUsageCopyAnswersNoSpendScreen(t *testing.T) {
 	}
 }
 
-// A ROUTED USAGE READ ARRIVES WHOLE, IN PAGES. A window of spend is more than
-// one message carries, so a peer answers it a page at a time and the asker
-// asks again after the group each page ended on — here a thousand rows paged
-// sixty-four at a time by a peer that chose that size itself: every row
-// arrives, in order, each page asked after the one before it, and the node
+// A ROUTED USAGE READ ARRIVES WHOLE, IN PAGES: a window of spend is more than
+// one message carries, so the asker asks again after each page's last group,
+// at the page size the peer chose. Every row arrives, in order, and the node
 // whose usage copy is out of service is never asked.
 func TestARoutedUsageReadArrivesWholeInPages(t *testing.T) {
 	t.Parallel()
@@ -3101,13 +2915,8 @@ func TestARoutedUsageReadArrivesWholeInPages(t *testing.T) {
 }
 
 // A USAGE READ THIS NODE ANSWERS ITSELF IS ONE PAGE, and one a peer answers is
-// paged at the wire's budget. Nothing carries an in-process answer, so paging
-// it bought nothing and cost a transaction, a snapshot and an encoding of
-// every row a page; a peer's answer crosses one message, so it is paged. Here
-// the same thousand rows, read on a data node whose usage copy serves and
-// then on one whose copy is out of service: the first asks its own copy once,
-// with no budget, and never a peer; the second asks the peer page after page,
-// each at the wire's budget, and never its own copy.
+// paged at the wire's budget: an in-process answer crosses no message, so
+// paging it would only cost a transaction, snapshot and encoding a page.
 func TestAUsageReadThisNodeAnswersIsOnePageAndAPeersIsPaged(t *testing.T) {
 	t.Parallel()
 	var spend []usage.SpendRow
@@ -3153,11 +2962,10 @@ func TestAUsageReadThisNodeAnswersIsOnePageAndAPeersIsPaged(t *testing.T) {
 }
 
 // A REPOSITORY'S READERS ARE PAGED BY THEIR ASKER: each page is one routed
-// call at the budget the asker names — the wire's own where that is the
-// smaller — resumed from the cursor the page before handed back, so walked a
-// page at a time every reader arrives once and in order; the count of readers
-// the per-day cap dropped comes with the first page alone; and a cursor or a
-// range the read cannot take is refused naming why before anything is asked.
+// call at the asker's budget (capped at the wire's), resumed from the previous
+// page's cursor, so every reader arrives once and in order; the per-day cap's
+// elided count comes with the first page alone; and a bad cursor or range is
+// refused, naming why, before anything is asked.
 //
 // Mutation: ask the elided count on every page, and the walk asks it three
 // times.
@@ -3219,9 +3027,8 @@ func TestARepositorysReadersArePagedByTheirAsker(t *testing.T) {
 	}
 }
 
-// A USAGE PAGE THAT DOES NOT ADVANCE IS REFUSED rather than asked again: a node
-// paging by another rule — or a fault that hands back where it began — would
-// otherwise keep a screen's read looping for ever.
+// A USAGE PAGE THAT DOES NOT ADVANCE IS REFUSED rather than asked again, or a
+// node paging by another rule would loop a screen's read for ever.
 func TestAUsagePageThatDoesNotAdvanceIsRefused(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -3235,14 +3042,12 @@ func TestAUsagePageThatDoesNotAdvanceIsRefused(t *testing.T) {
 	}
 }
 
-// A USAGE PAGE FITS ONE MESSAGE at its worst: a page of the skill readers'
-// rows cut at [usagePageBytes], every string at its longest and every query
-// the longest a search accepts spelled in the bytes JSON escapes to six, and
-// every group padded to [usage.ReadsPerSeatDay] rows — more than any group of
-// that read holds, since a group is one page's entries in one seat-day record
-// and the record carries at most that many. Wrapped as a reply it is under
-// the message the transport carries. A spend group is bounded the same way,
-// by the record that wrote it being one message.
+// A USAGE PAGE FITS ONE MESSAGE at its worst: page-read rows cut at
+// [usagePageBytes], every string at its longest, every query the longest a
+// search accepts in bytes JSON escapes to six, and every group padded to
+// [usage.ReadsPerSeatDay] rows, the most one seat-day record carries. Sealed as
+// a reply it is under queue.MaxPayloadBytes. A spend group is bounded the same
+// way, by its record being one message.
 func TestAUsagePageFitsOneMessage(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 23, 23, 59, 59, 999_999_999, time.UTC)
@@ -3254,8 +3059,7 @@ func TestAUsagePageFitsOneMessage(t *testing.T) {
 			LastTurnID: long("t", 36), LastWorkKey: long("w", 36),
 			LastQuery: long("<", knowledge.MaxQueryBytes)}
 	}
-	// EVERY GROUP FULL, so whichever one straddles the budget — the one a
-	// page may run past it by — is as large as a group of this read gets.
+	// Every group full, so the one straddling the budget is the largest.
 	seq := func(yield func(usage.PageRead, error) bool) {
 		for seat := 0; ; seat++ {
 			for range usage.ReadsPerSeatDay {
@@ -3273,7 +3077,7 @@ func TestAUsagePageFitsOneMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// SEALED, as the broker carries it: the signature's frame counts.
+	// Sealed, as the broker carries it: the signature's frame counts.
 	raw := server{self: "data-a", env: fleetEnvelopes}.encodeReply(reply{Node: "data-a", Result: result})
 	if decoded := rawReply(t, raw); decoded.Err != nil || len(decoded.Result) == 0 {
 		t.Fatalf("a page at the budget did not cross as a result: %+v", decoded.Err)
@@ -3285,10 +3089,9 @@ func TestAUsagePageFitsOneMessage(t *testing.T) {
 	}
 }
 
-// AN UNVOUCHED ANSWER IS NOT FINAL FOR AN IDEMPOTENT WRITE: the answering
-// holder's ledger cannot say whether the operation landed, and another
-// holder's may. So the next holder is asked under the same operation id, and
-// only when none can vouch is the unknown what the caller is told.
+// AN UNVOUCHED ANSWER IS NOT FINAL FOR AN IDEMPOTENT WRITE: another holder's
+// ledger may vouch, so the next is asked under the same operation id, and the
+// caller is told unknown only when none can.
 func TestAnUnvouchedWriteIsAskedOfTheNextHolderUnderTheSameOperation(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
@@ -3312,7 +3115,7 @@ func TestAnUnvouchedWriteIsAskedOfTheNextHolderUnderTheSameOperation(t *testing.
 		}
 	}
 
-	// NOBODY VOUCHES: the answer is the unknown, never an unserved estate.
+	// Nobody vouches: the answer is the unknown, never an unserved estate.
 	second.set(func(n *fakeNode) { n.unvouched = true })
 	written, err = r.WriterAs(swe).CreateTask(t.Context(), "op-v", worklet.Task{Project: "ENG"}, nil)
 	if err != nil || written.Outcome != statelog.OutcomeUnknown || !written.Unvouched {
@@ -3322,9 +3125,8 @@ func TestAnUnvouchedWriteIsAskedOfTheNextHolderUnderTheSameOperation(t *testing.
 }
 
 // A REFUSAL ABOUT ANOTHER NODE'S COPY IS FINAL, and reaches the caller whole:
-// the node that refused passed its own fences, and the remedy — the same
-// operation once the duplicate window lets go — is the caller's. Taken to
-// another data node, the same operation id would meet the same copy there.
+// another data node would meet the same copy under the same operation id, and
+// the remedy (retrying once the duplicate window lets go) is the caller's.
 func TestARefusalOfAnotherNodesCopyIsFinal(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
@@ -3345,8 +3147,7 @@ func TestARefusalOfAnotherNodesCopyIsFinal(t *testing.T) {
 }
 
 // ADMISSION ASKS THE COPY THAT WILL SERVE THE SEAT: this node's own where it
-// serves — never passed over for a peer's, since its seats read here — and a
-// remote data node's where it does not.
+// serves (its seats read here), else a remote data node's.
 func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -3361,8 +3162,8 @@ func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 		t.Fatal("a peer was asked for a node whose own copy serves")
 	}
 
-	// A WRONG COPY OF A DOMAIN NO SEAT DEPENDS ON IS NOT THE SEAT'S COPY:
-	// admission stays here, and a peer is not asked (ADR-0079).
+	// A wrong copy of a domain no seat depends on is not the seat's copy:
+	// admission stays here (ADR-0079).
 	local.set(func(n *fakeNode) { n.outOfServiceOn = map[string]bool{"vectors": true} })
 	if served, err = r.Serves(t.Context()); err != nil || served.Tracker {
 		t.Fatalf("a node whose own seat copy admits no seat was admitted on a peer's "+
@@ -3372,26 +3173,22 @@ func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 		t.Fatal("a peer was asked for a node whose seat copy serves")
 	}
 
-	// A SEAT COPY OUT OF SERVICE is asked of a data node whose copy serves.
+	// A seat copy out of service is asked of a data node whose copy serves.
 	local.set(func(n *fakeNode) { n.outOfServiceOn = map[string]bool{SeatCopy: true} })
 	served, err = r.Serves(t.Context())
 	if err != nil || !served.Tracker {
 		t.Fatalf("a node served by a peer was not admitted (%+v, %v)", served, err)
 	}
 
-	// AND A REMOTE NODE THAT ADMITS NO SEAT IS PASSED OVER, like a node
-	// that ran nothing.
+	// And a remote node that admits no seat is passed over.
 	peer.set(func(n *fakeNode) { n.notAdmitting = true })
 	if served, err = f.client.Serves(t.Context()); served.Tracker {
 		t.Fatalf("a node was admitted on a data node that admits no seat (%v)", err)
 	}
 }
 
-// ADMISSION'S PING IS ABOUT THE ONE ESTATE, so it carries no arguments, and a
-// data node answers it with or without them: asked with none at all it is
-// still the question whether its copy admits a seat — never refused as
-// malformed, which the asker would take as final and withhold every seat
-// claim on.
+// ADMISSION'S PING IS ABOUT THE ONE ESTATE, so it needs no arguments: refused
+// as malformed, the asker would take it as final and withhold every seat claim.
 func TestAdmissionsPingNeedsNoArguments(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -3411,17 +3208,12 @@ func TestAdmissionsPingNeedsNoArguments(t *testing.T) {
 	}
 }
 
-// ADMISSION IS BOUNDED AS A WHOLE, not per data node: a sweep asks it on every
-// pass, the first one at boot, and each listed node that is wedged would
-// otherwise cost the sweep a whole read attempt. A fleet whose data nodes do
-// not answer withholds the claim at the bound, and the sweep goes on.
+// ADMISSION IS BOUNDED AS A WHOLE, not per data node: a sweep asks it every
+// pass, boot included, and each wedged node would otherwise cost a whole read
+// attempt. Unanswered, the claim is withheld at the bound and the sweep goes on.
 //
-// IN A SYNCTEST BUBBLE ([inBubble]), so the question is held to ending at its
-// bound to the nanosecond — one bound over every node it asks, where each
-// node's own read attempt would have run on past it — and to nothing about how
-// late a loaded runner wakes the case. On the machine's clock the case allowed
-// two seconds, ten times the bound, and a loaded race-detector run has spent a
-// whole second waking a case's goroutines (CI run 41694160997).
+// In a synctest bubble ([inBubble]), so the question ends at its bound to the
+// nanosecond, whatever a loaded runner's scheduling.
 func TestWedgedDataNodesCostAdmissionNoMoreThanItsBound(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -3443,9 +3235,8 @@ func TestWedgedDataNodesCostAdmissionNoMoreThanItsBound(t *testing.T) {
 			t.Fatalf("admission waited %v on wedged data nodes, want its whole %v bound and "+
 				"not a moment more", waited, timing.AdmissionAsk)
 		}
-		// AND THE NODE IT WAS ASKING IS SUSPECTED: the bound is the router's
-		// own, so a node silent through it is evidence, and the next sweep — a
-		// heartbeat later — asks the others first.
+		// And the node it was asking is suspected: the bound is the router's
+		// own, so the next sweep asks the others first.
 		f.placement.mu.Lock()
 		told := slices.Clone(f.placement.unanswered)
 		f.placement.mu.Unlock()
@@ -3456,14 +3247,11 @@ func TestWedgedDataNodesCostAdmissionNoMoreThanItsBound(t *testing.T) {
 	})
 }
 
-// A PUSH IS ASKED OF ITS REPOSITORY'S COMMITTER — the first node in the
-// rendezvous order of the repository over every data node — whichever node
-// asks and whichever node answered last, so a repository's pushes meet at one
-// committer and its group commit holds them, while the repositories spread
-// over the data nodes. A node that went silent is asked last for its keys and
-// one that said its copy of the code log is out of service after the rest; a
-// data node asks its OWN copy at its place in the order, in-process, and never
-// ahead of the node the key prefers.
+// A PUSH IS ASKED OF ITS REPOSITORY'S COMMITTER, the first in the repository's
+// rendezvous order, whoever asks and whoever answered last, so a repository's
+// pushes meet at one group commit while repositories spread. A silent node is
+// asked last for its keys, an out-of-service code copy after the rest, and a
+// data node asks its OWN copy in-process at its place in the order.
 func TestAKeyedOpAsksTheKeysRendezvousOrder(t *testing.T) {
 	t.Parallel()
 	holders := []string{"data-a", "data-b", "data-c", "data-d"}
@@ -3486,9 +3274,8 @@ func TestAKeyedOpAsksTheKeysRendezvousOrder(t *testing.T) {
 			len(committers), committers)
 	}
 
-	// NO STICKY NODE: a code read answered by one node leaves it the node
-	// asked first for READS, and a push to a repository it is not the
-	// committer of still goes to that repository's committer.
+	// No sticky node: a node that answered a read is still not asked a push
+	// to a repository it does not commit.
 	if _, err := r.Code().Read(t.Context(), gitlet.ReadQuery{Asker: gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: gitlet.ReadRepos}); err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -3508,9 +3295,8 @@ func TestAKeyedOpAsksTheKeysRendezvousOrder(t *testing.T) {
 			sticky, repo, got, o[0])
 	}
 
-	// A NODE THAT WENT SILENT IS ASKED LAST for its keys, and one that said
-	// its copy of the code log is out of service after the rest — the order
-	// between them still the key's.
+	// A silent node is asked last for its keys, an out-of-service code copy
+	// after the rest, the key's order between them.
 	r.markSuspect(o[0])
 	r.markOutOfService(o[1], codeDomain)
 	if got, want := r.orderFor(opCodePropose.spec, repo, holders, nil),
@@ -3519,9 +3305,8 @@ func TestAKeyedOpAsksTheKeysRendezvousOrder(t *testing.T) {
 			o[0], o[1], repo, got, want)
 	}
 
-	// A DATA NODE'S OWN COPY at its place in the order: run in-process where
-	// the key prefers it, and asked only after the node the key prefers
-	// otherwise — never over the wire.
+	// A data node's own copy at its place in the order, in-process, never
+	// over the wire.
 	local := &fakeNode{name: "data-b", units: chartOf("data-b")}
 	own := f.router(t, "data-b", local)
 	first, second := "", ""
@@ -3553,9 +3338,8 @@ func TestAKeyedOpAsksTheKeysRendezvousOrder(t *testing.T) {
 }
 
 // A KEYED WRITE THAT WENT UNANSWERED MOVES ON WITH THE SAME ARGUMENTS: the
-// repository's runner-up is handed the very proposal its committer was — the
-// same push id, which is what collapses the push should the first node have
-// decided it after all — and its answer is the answer.
+// runner-up gets the very proposal, whose push id collapses it should the
+// committer have decided it after all.
 func TestAKeyedWriteMovesOnWithTheSameArguments(t *testing.T) {
 	t.Parallel()
 	holders := []string{"data-a", "data-b", "data-c"}
@@ -3588,11 +3372,10 @@ func TestAKeyedWriteMovesOnWithTheSameArguments(t *testing.T) {
 	}
 }
 
-// A COMMITTER THAT RAN NOTHING HANDS THE REPOSITORY ON: a committer that
-// refuses before it appends anything — stopping, a node that does not publish,
-// a refusal about this node — is a node that ran nothing, so the runner-up is
-// asked with the same push id, from a remote committer and from this node's
-// own alike; and when every committer refuses, the refusal says why each did.
+// A COMMITTER THAT RAN NOTHING HANDS THE REPOSITORY ON: one that refuses before
+// appending (stopping, not publishing, a refusal about itself) ran nothing, so
+// the runner-up is asked with the same push id, remote or in-process alike;
+// when every committer refuses, the refusal says why each did.
 func TestACommitterThatRanNothingHandsTheRepositoryOn(t *testing.T) {
 	t.Parallel()
 	holders := []string{"data-a", "data-b"}
@@ -3617,7 +3400,7 @@ func TestACommitterThatRanNothingHandsTheRepositoryOn(t *testing.T) {
 		t.Fatalf("every committer refusing = %v, want an unserved push naming each one's reason", err)
 	}
 
-	// THIS NODE'S OWN COMMITTER, refusing in-process, hands on alike.
+	// This node's own committer, refusing in-process, hands on alike.
 	f.nodes[o[1]].set(func(n *fakeNode) { n.codeErr = nil })
 	local := &fakeNode{name: o[0], units: chartOf(o[0]), codeErr: stopping}
 	own := f.router(t, o[0], local)
@@ -3631,16 +3414,11 @@ func TestACommitterThatRanNothingHandsTheRepositoryOn(t *testing.T) {
 
 // A NODE THAT RAN NOTHING FOR A PUSH IS ASKED LAST FOR THE NEXT ONE.
 //
-// A keyed order has no sticky node to move the walk off a node that refused,
-// so a committer that answers `no_backend` — a node in a maintenance mode,
-// whose mode decides no push for the whole window; a committer stopping; a
-// refusal about the node itself — was asked FIRST again by every later push
-// to each repository it ranks first for: the whole encoded proposal sent,
-// decoded and refused, and only then the runner-up. Remembered as an
-// `out_of_service` copy is, for [suspectFor], it is asked last for that
-// operation instead — and only that one: its reads of the code log still
-// serve, so a read's order is not moved — and the memory lapses with the
-// window and clears the moment the node commits a push again.
+// A keyed order has no sticky node, so a committer that declines (`no_backend`,
+// stopping, a refusal about itself) would be sent every later push's whole
+// proposal first. It is remembered for [suspectFor] and asked last for that
+// operation only (its code reads still serve), and the memory clears the moment
+// it commits a push again.
 func TestAKeyedWriteAsksANodeThatRanNothingLast(t *testing.T) {
 	t.Parallel()
 	holders := []string{"data-a", "data-b", "data-c"}
@@ -3668,14 +3446,13 @@ func TestAKeyedWriteAsksANodeThatRanNothingLast(t *testing.T) {
 		[]string{o[1], o[2], o[0]}; !slices.Equal(got, want) {
 		t.Fatalf("a push to %s is asked of %v, want %v — %s last", repo, got, want, o[0])
 	}
-	// ONLY FOR THE OPERATION IT DECLINED: its copy of the code log is not
-	// out of service, so nothing moves it for a read.
+	// Only for the operation it declined: nothing moves it for a read.
 	if class := r.classes(opCodeRead.spec, false, nil)(o[0]); class != 1 {
 		t.Fatalf("a read ranks %s in class %d, want 1 — declining a push says nothing "+
 			"about its reads", o[0], class)
 	}
 
-	// THE WINDOW LAPSES: the node is back at its place in the key's order.
+	// The window lapses: the node is back at its place in the key's order.
 	r.now = func() time.Time { return time.Now().Add(2 * suspectFor) }
 	if got := r.orderFor(opCodePropose.spec, repo, holders, nil); !slices.Equal(got, o) {
 		t.Fatalf("after the window a push to %s is asked of %v, want the key's order %v",
@@ -3683,7 +3460,7 @@ func TestAKeyedWriteAsksANodeThatRanNothingLast(t *testing.T) {
 	}
 	r.now = time.Now
 
-	// AND A NODE THAT COMMITS A PUSH AGAIN IS ITS PLACE AGAIN AT ONCE.
+	// And a node that commits a push again regains its place at once.
 	f.nodes[o[0]].set(func(n *fakeNode) { n.codeErr = nil })
 	r.markDeclined(o[0], opCodePropose.spec.name)
 	f.nodes[o[1]].set(func(n *fakeNode) { n.codeErr = publishesNothing })
@@ -3704,19 +3481,14 @@ func TestAKeyedWriteAsksANodeThatRanNothingLast(t *testing.T) {
 	}
 }
 
-// A CODE HALF THAT DECLINES A READ HANDS IT ON: a data node whose code half
-// refuses a read gitlet.ErrNotServing — a Served holding no reader of the code
-// log, a half that is stopping — ran nothing, so every read Gitlet
-// makes moves on to the next data node and is answered there, rather than
-// failing the admission, the sync or the listing on the first node that
-// asked; and when every data node declines, the unserved answer names each
-// one's cause, so "nobody serves Gitlet" says why.
+// A CODE HALF THAT DECLINES A READ HANDS IT ON: a refusal of
+// gitlet.ErrNotServing ran nothing, so every Gitlet read moves on to the next
+// data node; when every node declines, the unserved answer names each cause.
 func TestACodeHalfThatDeclinesAReadHandsItOn(t *testing.T) {
 	t.Parallel()
 	holders := []string{"data-a", "data-b", "data-c"}
-	// The client asks an unkeyed read in the rendezvous order of its own id;
-	// every node but the LAST declines, so each declining node is asked
-	// before the one that serves.
+	// Every node but the LAST in the client's own rendezvous order declines,
+	// so each is asked before the one that serves.
 	o := rendezvous.Order("agent-1", holders)
 	declined := fmt.Errorf("%w: this node holds no reader of the code log", gitlet.ErrNotServing)
 	covered := map[string]bool{}
@@ -3760,12 +3532,9 @@ func TestACodeHalfThatDeclinesAReadHandsItOn(t *testing.T) {
 	}
 }
 
-// A KEYED OPERATION'S LAST RESORT KEEPS THE KEY'S ORDER: when every copy lags
-// its log, the copies are asked again — told to take the request anyway — in
-// the order the walk met them, so a data node whose own copy lags does not
-// commit a push ahead of the repository's committer, which lags too. Asked
-// first, this node's copy would split a burst between two committers exactly
-// when the fleet is busiest.
+// A KEYED OPERATION'S LAST RESORT KEEPS THE KEY'S ORDER: with every copy
+// lagging, this node's own copy must not commit ahead of the repository's
+// committer, or a burst splits between two committers.
 func TestAKeyedLastResortKeepsTheKeysOrder(t *testing.T) {
 	t.Parallel()
 	holders := []string{"data-a", "data-b"}
@@ -3786,8 +3555,7 @@ func TestAKeyedLastResortKeepsTheKeysOrder(t *testing.T) {
 }
 
 // A KEYED OPERATION WHOSE ARGUMENTS NAME NO KEY IS REFUSED before anybody is
-// asked: there is no node it prefers, and asking an arbitrary one would put a
-// repository's pushes on as many committers as there are askers.
+// asked: an arbitrary node would put pushes on as many committers as askers.
 func TestAKeyedOpWithNoKeyIsRefused(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b")
@@ -3805,10 +3573,9 @@ func TestAKeyedOpWithNoKeyIsRefused(t *testing.T) {
 	}
 }
 
-// GITLET'S OPERATIONS CARRY THE CODE LOG'S FLOOR — and only it: each
-// names the code domain, so the code copy's own verdict decides whether a
-// node answers it (ADR-0079), and a request carries this node's floor on the
-// code log and never its floor on another domain's.
+// GITLET'S OPERATIONS CARRY THE CODE LOG'S FLOOR, and only it: each names the
+// code domain, so the code copy's verdict decides whether a node answers
+// (ADR-0079).
 func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	t.Parallel()
 	ops := []*opSpec{opCodePropose.spec, opCodeCompact.spec, opCodeExpunge.spec, opCodeImport.spec,
@@ -3896,9 +3663,7 @@ func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 }
 
 // A KEYED OPERATION STILL ASKS ITS OWN COPY WHEN THE PLACEMENT CANNOT SAY WHO
-// HOLDS THE ESTATE: the key orders the data nodes, and with none named this
-// node's own copy is the one node left to ask — exactly the unknown-placement
-// rule every other operation keeps.
+// HOLDS THE ESTATE, as every other operation does.
 func TestAKeyedOpAsksItsOwnCopyWhenThePlacementCannotSay(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -3912,12 +3677,9 @@ func TestAKeyedOpAsksItsOwnCopyWhenThePlacementCannotSay(t *testing.T) {
 	}
 }
 
-// A DATA NODE'S REFUSAL IS NAMED IN THE ASKING NODE'S LOG. Handed back as the
-// asking node's own answer, it is told to a person as "the node answering this"
-// with the advice that the logs name it — and the error a surface logs carries
-// the refusal and no node, since the wire carries none. So the router names the
-// node it asked, at the level a surface logs the condition: WARN for one no
-// wait clears.
+// A DATA NODE'S REFUSAL IS NAMED IN THE ASKING NODE'S LOG: the error carries no
+// node, and a person is told the logs name it. The router logs the node at the
+// level a surface logs the condition: WARN for one no wait clears.
 //
 // Not parallel: it installs the process's log sink.
 //
