@@ -2229,35 +2229,44 @@ func TestAnEndingExpiresWaitingNotesOnceUnderStableIDs(t *testing.T) {
 }
 
 // AN ENDING REPORTS EACH NOTE NO STEP REPORTED, AS ITS RECORD KNOWS IT: a note a
-// take recorded read and whose answer was lost, marked unanswered and told by no
-// later launch, MISSED, at the step that took it; one the run's bridge handed to
-// its job's harness, which never confirmed it, UNCONFIRMED, at that job and the
-// iteration the record keeps for it; one still waiting EXPIRED, naming no step;
-// and nothing of a note a step reported reading. Each once, under the ending's
-// ids, at its instant.
+// review's take recorded read and whose answer was lost, marked unanswered and
+// told by no later launch, MISSED, at the round that took it; one a hook served
+// whose job's session proves it never took, MISSED at that serve; one the
+// run's bridge handed to its job's harness, never confirmed, UNCONFIRMED, at
+// that job and the iteration the record keeps for it; one still waiting
+// EXPIRED, naming no step; and nothing of a note a step reported reading.
 //
 // Mutation: report a missed note at no step, an unconfirmed one at no job or as
-// expired, or leave either out, and the case goes red.
+// expired, or leave any out, and the case goes red.
 func TestAnEndingReportsEachNoteAsItsRecordKnowsIt(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
 	runs, p := steersOver(t, steerRing, store)
 	launch := workingRun(t, store, runs, "run-1")
-	for _, id := range []string{"n-read", "n-missed", "n-handed", "n-waiting"} {
+	for _, id := range []string{"n-read", "n-missed", "n-absent", "n-handed", "n-waiting"} {
 		fileSealed(t, runs, "run-1", steer.Note{ID: id, Text: "the note " + id, By: "founder"})
 	}
 	take := func(id, name string) {
 		t.Helper()
 		if _, err := store.TakeNotes(ctx, "run-1", sandbox.NoteTake{IDs: []string{id}, Launch: launch,
-			Statuses: steerTakeStatuses, Read: sandbox.NoteRead{Phase: "execute", Round: 1,
-				Boundary: "tool_batch", Launch: launch, Take: name}}); err != nil {
+			Statuses: steerTakeStatuses, Read: sandbox.NoteRead{Phase: "review", Round: 1,
+				Boundary: string(types.SteerBoundaryRound), Take: name}}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	take("n-read", "answered")
 	take("n-missed", "lost")
 	if _, err := store.SettleTake(ctx, "run-1", sandbox.NoteSettle{Take: "lost", Unanswered: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ServeHook(ctx, "run-1", sandbox.HookServe{IDs: []string{"n-absent"}, Launch: launch,
+		Statuses: steerTakeStatuses, Serve: sandbox.HookServed{Take: "absent",
+			Boundary: string(types.SteerBoundaryToolBatch), Iteration: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SettleHook(ctx, "run-1", sandbox.HookSettle{Launch: launch,
+		Absent: []string{"absent"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.ServeNotes(ctx, "run-1", sandbox.NoteServe{IDs: []string{"n-handed"}, Launch: launch,
@@ -2285,9 +2294,13 @@ func TestAnEndingReportsEachNoteAsItsRecordKnowsIt(t *testing.T) {
 	if rec := got["n-waiting"]; rec.Outcome != types.SteerExpired || rec.Boundary != "" || rec.LaunchID != "" {
 		t.Errorf("the waiting note was reported %+v, want it expired at no step", rec)
 	}
-	if rec := got["n-missed"]; rec.Outcome != types.SteerMissed || rec.Phase != types.PhaseExecute ||
-		rec.Round != 1 || rec.Boundary != types.SteerBoundaryToolBatch || rec.LaunchID != launch {
-		t.Errorf("the note a lost take recorded was reported %+v, want it missed at the tool batch of job %s",
+	if rec := got["n-missed"]; rec.Outcome != types.SteerMissed || rec.Phase != types.PhaseReview ||
+		rec.Round != 1 || rec.Boundary != types.SteerBoundaryRound || rec.LaunchID != "" {
+		t.Errorf("the note a lost take recorded was reported %+v, want it missed at the review's first round", rec)
+	}
+	if rec := got["n-absent"]; rec.Outcome != types.SteerMissed || rec.Phase != types.PhaseExecute ||
+		rec.Iteration != 1 || rec.Boundary != types.SteerBoundaryToolBatch || rec.LaunchID != launch {
+		t.Errorf("the note a serve proved absent was reported %+v, want it missed at the tool batch of job %s",
 			rec, launch)
 	}
 	if rec := got["n-handed"]; rec.Outcome != types.SteerUnconfirmed || rec.Phase != types.PhaseExecute ||
@@ -2296,8 +2309,8 @@ func TestAnEndingReportsEachNoteAsItsRecordKnowsIt(t *testing.T) {
 		t.Errorf("the note handed to the job was reported %+v, want it unconfirmed at job %s, iteration %d",
 			rec, launch, run.Launch.Iteration)
 	}
-	if len(got) != 3 {
-		t.Errorf("the ending reported %d notes, want the three no step reported", len(got))
+	if len(got) != 4 {
+		t.Errorf("the ending reported %d notes, want the four no step reported", len(got))
 	}
 }
 
