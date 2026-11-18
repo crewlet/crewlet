@@ -182,6 +182,15 @@ type AgentRunRequest struct {
 	// ([prompts.CalledBefore]). Nil for every other launch.
 	Continue *Continuation
 
+	// BriefRead is the read of the round's log every brief of the launch was
+	// built from ([Resume.BridgedRead]), nil on a turn's first launch, which no
+	// read precedes. Its opening marks late every call of the round the log
+	// took after it, or carries them late into the new round a send-back
+	// starts (sandbox.LaunchRequest.BriefRead): calls of the job before that
+	// landed while the relaunch was readied, which no brief told. Every
+	// relaunch hands it, a send-back's as much as one carrying the round on.
+	BriefRead *sandbox.LogRead
+
 	// Session is the turn's kept session the launch continues, in whatever box
 	// it gets — the session of the job the relaunch follows, as the launcher
 	// said it would before the run's briefs were written ([SessionProber]) —
@@ -285,15 +294,6 @@ type Continuation struct {
 	// has followed; never the larger of the two, which would put that
 	// compacted figure back.
 	NextRequest sandbox.NextRequest
-
-	// BriefRead is how many calls the round's log had taken at the read
-	// every brief of the launch was built from ([Resume.BridgedRead]): the
-	// launch's opening of the job's log marks every call of the round the log
-	// took after it late ([ledger.Call.Late]) — calls of the job before that
-	// landed while the relaunch was readied, which no brief told — but the
-	// call a person approved, which the lead tells. NIL marks none: a launch
-	// built from no such read.
-	BriefRead *int
 
 	// Told is what Brief told of the round, and Fresh what the launch's fresh
 	// brief, [AgentRunRequest.Brief], told of it (every call of the round,
@@ -861,10 +861,14 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	decided := &launchDecided{}
 
 	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
-		System:     system.Text,
-		Brief:      user.Text,
-		Notes:      fresh,
-		Retold:     r.retold(),
+		System: system.Text,
+		Brief:  user.Text,
+		Notes:  fresh,
+		Retold: r.retold(),
+		// A SEND-BACK'S READ, the collection's this segment made, whose round
+		// its opening carries the unread calls of into the new one; none on a
+		// turn's first launch.
+		BriefRead:  sendBackRead(r.cfg.Resume),
 		Session:    briefs.kept,
 		FreshOwn:   freshLead(round, history, notes),
 		Decided:    r.sessionDecided(ctx, emit, round, system, surface, caps, briefs, decided),
@@ -897,6 +901,17 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	r.recordAgentSuspension(round, surface, history, began, time.Since(began), handed, launched.BridgeFrom,
 		decided.skills())
 	return turn.Work{Calls: calls(surface), Suspended: true}, describe(surface), nil
+}
+
+// sendBackRead is the read of the collected round's log a send-back's briefs
+// were built from ([Resume.BridgedRead]), nil where no collection precedes the
+// launch: a turn's first.
+func sendBackRead(resume *Resume) *sandbox.LogRead {
+	if resume == nil {
+		return nil
+	}
+	read := resume.BridgedRead
+	return &read
 }
 
 // continueAgentRun carries on a run that parked on a person's question, now
@@ -1200,11 +1215,6 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// record's off the copy itself where it holds one, else the
 			// newest capture's: the floor's figure where either holds one.
 			NextRequest: inPlaceNextRequest(r.cfg.Resume.NextRequest, basis.CopyNextRequest),
-			// AND THE READ EVERY BRIEF ABOVE WAS BUILT FROM, so the job's
-			// opening marks late what the log took after it: the job before's
-			// calls that landed while this relaunch was readied, the call a
-			// person approved but excepted, which the lead tells.
-			BriefRead: &read,
 			// AND WHAT THE COPY'S BRIEF AND THE FRESH ONE LEFT OUT OF THE
 			// ROUND, which the launch records on the job it opens for the brief
 			// it hands its run.
@@ -1221,6 +1231,11 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// the count the launch judges the held brief by in its box.
 			Summarized: summarized, SummarizedTold: summarizedTold, Count: count, CountProvider: countProvider,
 		},
+		// AND THE READ EVERY BRIEF ABOVE WAS BUILT FROM, so the job's opening
+		// marks late what the log took after it: the job before's calls that
+		// landed while this relaunch was readied, the call a person approved
+		// but excepted, which the lead tells.
+		BriefRead:  &read,
 		Session:    briefs.kept,
 		Decided:    r.sessionDecided(ctx, emit, state.Round, system, surface, caps, briefs, decided),
 		Started:    r.sessionStarted(ctx, emit, state.Round, system, surface, caps, briefs, decided),

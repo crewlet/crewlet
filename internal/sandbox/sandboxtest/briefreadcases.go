@@ -47,7 +47,7 @@ func testACallTakenAfterTheBriefsReadIsMarkedLateByTheOpening(t *testing.T, s sa
 		t.Fatalf("ClaimForResume = %v, %v", ok, err)
 	}
 	// THE READ THE RELAUNCH'S BRIEFS ARE BUILT FROM.
-	read := mustLogged(t, s, turn).Log.Appends()
+	read := mustLogged(t, s, turn).Log.Read()
 
 	// WHILE THE RELAUNCH IS READIED: the asking job's worker lands, as that
 	// job's own, and the call the person approved is made and recorded.

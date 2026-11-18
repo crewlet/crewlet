@@ -135,9 +135,9 @@ import (
 // reads its newest brief left out, each told by the next brief with room for
 // it. A brief that tells the round from its start, a fresh run's or a copy cut
 // off's, starts the account afresh. It ends with the round: a send-back opens a
-// new round, whose log restarts, and a closed round's reads past the cap are
-// counted under the ledger's rule for them, as every fresh brief's prior work
-// counts them.
+// new round, whose log restarts but for the calls its collection did not read,
+// carried late, and a closed round's reads past the cap are counted under the
+// ledger's rule for them, as every fresh brief's prior work counts them.
 //
 // AND A SESSION ITS HARNESS MAY HAND ITS MODEL AS A SUMMARY IS TOLD AS A CUT-OFF
 // ONE (firstrequest.go). Claude Code compacts a session before a request, a

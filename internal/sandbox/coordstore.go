@@ -535,51 +535,95 @@ type logOpening struct {
 	// keeps.
 	owed *OwedCall
 
-	// told is how many calls the round's log had taken at the read the
-	// relaunch's briefs were built from ([PendingRun.BriefRead]), nil for none
-	// known: an opening that carries the round on marks every call of it the
-	// log took after that read late ([BridgeLog.lateAfter]).
-	told *int
+	// told is the read of the round's log the relaunch's briefs were built
+	// from ([PendingRun.BriefRead]), nil for none known: applied to a log of
+	// its own round alone ([logOpening.reads]). A caller of the store that
+	// relaunched after a reset whose opening never landed holds a read of an
+	// empty answer under the row's round: the replaced round's unread calls
+	// are then folded by name alone, their absorbed calls carried nowhere.
+	told *LogRead
 }
 
-// walks reports whether the opening o of l walks l's calls past the read the
-// relaunch's briefs were built from ([BridgeLog.lateAfter]): one that carries
-// l's round on, that read known.
-func (o logOpening) walks(l BridgeLog) bool { return l.Round == o.round && o.told != nil }
-
-// walked is every call of l, as the opening o leaves it, that o walked
-// ([logOpening.walks]): taken after the briefs' read, a person's approved call
-// apart, late already or not. What the opening hands the job it opens
-// ([CoordStore.fileLateItems]).
-func (o logOpening) walked(l BridgeLog) []BridgeCall {
-	var out []BridgeCall
-	for _, call := range l.Calls {
-		if call.Appended > *o.told && !call.Approved {
-			out = append(out, call)
-		}
-	}
-	return out
-}
+// reads reports whether the opening o applies the briefs' read to l: one
+// known, of l's own round. A read of another round would carry, or mark, a
+// whole round no brief left untold.
+func (o logOpening) reads(l BridgeLog) bool { return o.told != nil && o.told.Round == l.Round }
 
 // opened is l as the opening o of job launch leaves it — see
-// [CoordStore.openLog], whose one write it decides.
-func (l BridgeLog) opened(launch string, o logOpening) BridgeLog {
+// [CoordStore.openLog], whose one write it decides — and the calls o walked
+// past the briefs' read, as the opened log lists them: of a round carried on,
+// every call taken after the read, late already or not ([BridgeLog.lateAfter]);
+// into a new round, the calls it carried ([BridgeLog.carried]). Never a call a
+// person approved, which the relaunch's lead tells.
+func (l BridgeLog) opened(launch string, o logOpening) (BridgeLog, []BridgeCall) {
 	if o.owed != nil {
 		l, _ = l.withApproved(o.owed.Round, o.owed.Call)
 	}
-	next := BridgeLog{Launch: launch, Round: o.round}
-	next.PriorCalls, next.PriorCallsElided = l.priorFor(o.round)
-	if l.Round == o.round {
-		next = l
-		next.Launch = launch
-		if o.answered != "" && l.CutFor != o.answered {
-			next.AnsweredThrough, next.CutFor = l.LastSeq(), o.answered
+	read := o.reads(l)
+	if l.Round != o.round {
+		next := BridgeLog{Launch: launch, Round: o.round, Committed: slices.Clone(l.Committed)}
+		next.PriorCalls, next.PriorCallsElided = l.priorFor(o.round)
+		if !read {
+			return next, nil
 		}
-		if o.walks(l) {
-			next = next.lateAfter(*o.told)
+		return next.carried(l, *o.told)
+	}
+	next := l
+	next.Launch = launch
+	if o.answered != "" && l.CutFor != o.answered {
+		next.AnsweredThrough, next.CutFor = l.LastSeq(), o.answered
+	}
+	if !read {
+		return next, nil
+	}
+	next = next.lateAfter(o.told.Took)
+	var walked []BridgeCall
+	for _, call := range next.Calls {
+		if call.Appended > o.told.Took && !call.Approved {
+			walked = append(walked, call)
 		}
 	}
-	return next
+	return next, walked
+}
+
+// carried is next, a new round's log, with what l, the round it replaces, took
+// after read, the read its relaunch's briefs were built from: every call l lists
+// past it but a person's approved one — the collection's own, which it read with
+// the round ([BridgeLog.withHeld]) — appended late, with no place and its
+// Abandoned kept; and the calls l absorbed past it ([unreadAbsorbed]). Answered
+// with the calls next lists, all carried, which the opening walked. See the
+// package doc, "A call that outlives its round's collection is a late call of
+// the round after".
+func (next BridgeLog) carried(l BridgeLog, read LogRead) (BridgeLog, []BridgeCall) {
+	next.AbsorbedCalls = unreadAbsorbed(l.Absorbed(), read.Absorbed)
+	for _, call := range l.Calls {
+		if call.Appended <= read.Took || call.Approved {
+			continue
+		}
+		call.Seq, call.Late = 0, true
+		next.appendCall(call, nil)
+	}
+	return next, slices.Clone(next.Calls)
+}
+
+// unreadAbsorbed is what of all, a round's absorbed tally, read did not hold:
+// each identity's count less the read's, never below zero. An identity the
+// bound folded into its tool's entry or the unnamed one after the read keeps
+// its whole count: an over-count, the safe direction ([ElidedCall]). Never the
+// whole tally: the collection seeded the read's part into the turn's call log.
+func unreadAbsorbed(all, read []ElidedCall) []ElidedCall {
+	var out []ElidedCall
+	for _, e := range all {
+		if i := slices.IndexFunc(read, func(r ElidedCall) bool {
+			return r.Name == e.Name && r.Digest == e.Digest
+		}); i >= 0 {
+			e.Calls -= read[i].Calls
+		}
+		if e.Calls > 0 {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // lateAfter is l with every call it took after told marked late
@@ -622,7 +666,7 @@ func (l BridgeLog) lateAfter(told int) BridgeLog {
 
 // openLog opens turnID's log to job launch, answering the place of the last
 // call it keeps from before the job ([BridgeLog.LastSeq]), the calls it walked
-// ([logOpening.walked]) and whether it was written (false: the record is gone).
+// ([BridgeLog.opened]) and whether it was written (false: the record is gone).
 //
 // ONE COMPARE-AND-SWAP OF THE LOG decides what the job keeps and moves the log
 // onto it, so no append of the replaced job can land between the two: an append
@@ -641,18 +685,18 @@ func (l BridgeLog) lateAfter(told int) BridgeLog {
 // round the row's own write named ([PendingRun.Round]) and the answer it is
 // cut for ([PendingRun.AnsweredJob]). An opening that failed, or that its node
 // stopped before, leaves the log on an earlier job of the round; the next
-// relaunch that carries the round on still keeps its calls, and still takes
-// the cut that opening owed. A log of another round is started afresh.
+// relaunch that carries the round on still keeps its calls and takes the cut
+// that opening owed. A log of another round is started afresh.
 //
 // AND WHAT A NEW ROUND TAKES OUT OF THE LOG IS FOLDED INTO THE TURN'S EARLIER
-// CALLS IN THE SAME WRITE ([BridgeLog.PriorCalls]): by name and outcome — the
-// calls the log kept and the identities of the ones it dropped — which is all
-// the run's own ending needs to know whether an earlier round delivered the
-// turn's reply. The new round's log keeps neither tally of the old one's: both
-// are that round's. One compare-and-swap, so a crash never leaves a round's
-// calls gone from the log and missing from the fold. The call a person approved
-// that the log is owed ([OwedCall]) is appended first, in the same write, so it
-// is kept with its round or folded with it.
+// CALLS IN THE SAME WRITE ([BridgeLog.PriorCalls]), by name and outcome, all the
+// run's own ending reads. The new round keeps the old one's Committed whole,
+// and of its calls and absorbed tally only what its collection did not read,
+// carried late ([BridgeLog.carried]), counted by its delivery check: their
+// effect happened and no collection read them. One compare-and-swap, so no
+// crash leaves a round's calls out of both log and fold. The call a person
+// approved that the log is owed ([OwedCall]) is appended first, in the same
+// write, so it is kept with its round or folded with it.
 func (s *CoordStore) openLog(ctx context.Context, turnID, launch string, o logOpening) (int, []BridgeCall, bool,
 	error) {
 	last := 0
@@ -665,10 +709,7 @@ func (s *CoordStore) openLog(ctx context.Context, turnID, launch string, o logOp
 			if err := json.Unmarshal(current.Value, &held); err != nil {
 				return nil, fmt.Errorf("sandbox: decode the log of run %s: %w", turnID, err)
 			}
-			next = held.opened(launch, o)
-			if o.walks(held) {
-				walked = o.walked(next)
-			}
+			next, walked = held.opened(launch, o)
 		}
 		last = next.LastSeq()
 		return json.Marshal(next)
@@ -2834,7 +2875,7 @@ func (s *CoordStore) TurnLog(ctx context.Context, run PendingRun) (BridgeLog, er
 	// AND THE LOG AS THE JOB'S OPENING LEAVES IT, where that opening has not
 	// landed: the round's calls and the turn's earlier ones, never none.
 	if held.Launch != run.LaunchID {
-		held = held.opened(run.LaunchID, logOpening{round: run.Round, answered: run.AnsweredJob,
+		held, _ = held.opened(run.LaunchID, logOpening{round: run.Round, answered: run.AnsweredJob,
 			owed: run.OwedCall})
 	}
 	return held, nil

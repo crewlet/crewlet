@@ -222,7 +222,7 @@ func (c *Coordinator) nameUnfinished(ctx context.Context, run PendingRun, left [
 			"call", inFlightName(u.call), "runner", u.call.Runner, "why", u.why,
 			"detail", "the collection stopped waiting for a call still in flight and reads it as one "+
 				"whose outcome is unknown: what it committed is in no outcome of the turn unless its "+
-				"update lands while the run's record stands")
+				"update lands before the turn's last collection reads the run's log")
 	}
 }
 

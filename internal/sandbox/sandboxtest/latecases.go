@@ -18,7 +18,9 @@ import (
 // may have opened the run's log to the next job. Where that relaunch carried
 // the round on, the call is a late call of the round ([sandbox.BridgeCall.Late]);
 // where it started a new round, its record is a late call of that round, with
-// no place (testARecordOfAnEarlierRoundIsListedLateInTheRoundAfterIt).
+// no place (testARecordOfAnEarlierRoundIsListedLateInTheRoundAfterIt), or, where
+// it landed before that round's opening, carried into it by the opening
+// (testANewRoundCarriesTheCallsItsCollectionDidNotRead).
 var lateCases = []struct {
 	name string
 	fn   func(*testing.T, sandbox.PendingStore)
@@ -37,6 +39,12 @@ var lateCases = []struct {
 	{"ARecordOfAnEarlierRoundAskedAgainIsListedOnce", testARecordOfAnEarlierRoundAskedAgainIsListedOnce},
 	{"AnEarlierRoundsCallMovesNoPlaceOfTheRound", testAnEarlierRoundsCallMovesNoPlaceOfTheRound},
 	{"WhatAnEarlierRoundsCallCommittedIsTheNextRounds", testWhatAnEarlierRoundsCallCommittedIsTheNextRounds},
+	{"ANewRoundCarriesTheCallsItsCollectionDidNotRead", testANewRoundCarriesTheCallsItsCollectionDidNotRead},
+	{"ANewRoundCarriesTheAbsorbedCallsItsCollectionDidNotRead",
+		testANewRoundCarriesTheAbsorbedCallsItsCollectionDidNotRead},
+	{"AReadIsAppliedOnlyToTheLogOfItsRound", testAReadIsAppliedOnlyToTheLogOfItsRound},
+	{"ANewRoundStartsWithTheTallyOfTheRoundBefore", testANewRoundStartsWithTheTallyOfTheRoundBefore},
+	{"ACarriedCallAskedAgainIsListedOnce", testACarriedCallAskedAgainIsListedOnce},
 }
 
 // lateStagedCases are the late-call cases whose subject is what the store asks
@@ -69,8 +77,17 @@ func carryRoundOn(t *testing.T, s sandbox.PendingStore, turnID string) string {
 // answers the new job, after checking its round is not the one the row held.
 func sendBack(t *testing.T, s sandbox.PendingStore, turnID string) string {
 	t.Helper()
+	return sendBackFrom(t, s, turnID, nil)
+}
+
+// sendBackFrom is [sendBack] handing the opening read, the read of the log the
+// send-back's briefs were built from ([sandbox.PendingRun.BriefRead]).
+func sendBackFrom(t *testing.T, s sandbox.PendingStore, turnID string, read *sandbox.LogRead) string {
+	t.Helper()
 	round := mustGet(t, s, turnID).Round
-	job := mustLaunched(t, s, run(turnID))
+	next := run(turnID)
+	next.BriefRead = read
+	job := mustLaunched(t, s, next)
 	if got := mustGet(t, s, turnID).Round; got == round || got == "" {
 		t.Fatalf("the send-back works in round %q, want a new one, not %q", got, round)
 	}
@@ -811,4 +828,214 @@ func testWhatAnEarlierRoundsCallCommittedIsTheNextRounds(t *testing.T, s sandbox
 	if got, want := mustLogged(t, s, turn).Log.Changes(), late.Committed; !slices.Equal(got, want) {
 		t.Errorf("the round after committed %q, want %q", strings.Join(got, ", "), strings.Join(want, ", "))
 	}
+}
+
+// collectedAt records each of calls as job's own in turnID's log, at round, and
+// fails t on one not recorded.
+func collectedAt(t *testing.T, s sandbox.PendingStore, turnID, job, round string, calls ...sandbox.BridgeCall) {
+	t.Helper()
+	for _, call := range calls {
+		if !recordCall(t, s, turnID, sandbox.BridgeAppend{Launch: job, Round: round, Call: call}) {
+			t.Fatalf("the job's own %s was not recorded", call.Name)
+		}
+	}
+}
+
+// A NEW ROUND CARRIES THE CALLS ITS COLLECTION DID NOT READ. A call still in
+// flight as the collection read the log can land before the send-back's
+// opening moves the log on: as its job's own, in its own round, after the read
+// the send-back's briefs were built from. The opening carries every such call
+// into the new round, late, with no place, numbered as its appends and the
+// bridge's mark that nobody waited for one kept; never a call the read saw,
+// nor the call a person approved, which the opening appends to the old round
+// and the collection read with it. The old round's calls are all folded by
+// name; the new job's own calls are numbered from the start.
+//
+// Mutation: carry nothing, carry the read's last call too, carry the approved
+// call, or clear the carried call's Abandoned mark, and this goes red.
+func testANewRoundCarriesTheCallsItsCollectionDidNotRead(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-carry-calls"
+	asking := heldParked(t, s, turn)
+	round := mustGet(t, s, turn).Round
+	collectedAt(t, s, turn, asking, round, madeAt("read_1", 1, 1), madeAt("read_2", 2, 2), madeAt("read_3", 3, 3))
+	if _, ok, err := s.RecordAnswer(ctx, turn, asking, answerOf("r1", "once"), sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+	if _, ok, err := s.ClaimForResume(ctx, turn, sandbox.RecordedAnswerTail(asking), sandbox.Fence{}); err != nil ||
+		!ok {
+		t.Fatalf("ClaimForResume = %v, %v", ok, err)
+	}
+	read := mustLogged(t, s, turn).Log.Read()
+	abandoned := madeAt("delegate", 4, 4)
+	abandoned.Abandoned = true
+	collectedAt(t, s, turn, asking, round, abandoned, madeAt("post_message", 5, 5))
+	if _, first, err := s.MarkHeldCall(ctx, turn, asking, sandbox.Fence{}); err != nil || !first {
+		t.Fatalf("MarkHeldCall = %v, %v", first, err)
+	}
+	if ok, err := s.RecordHeldResult(ctx, turn, asking, heldMade("sealed-result"), sandbox.Fence{}); err != nil ||
+		!ok {
+		t.Fatalf("RecordHeldResult = %v, %v", ok, err)
+	}
+
+	sendBackFrom(t, s, turn, &read)
+	got := mustLogged(t, s, turn).Log
+	listsExactly(t, got.Calls, []wantCall{
+		{"delegate", 0, 1, true},
+		{"post_message", 0, 2, true},
+	})
+	if len(got.Calls) == 2 && (!got.Calls[0].Abandoned || got.Calls[1].Abandoned) {
+		t.Errorf("the carried calls are marked nobody-waited %v and %v, want the delegate's mark kept alone",
+			got.Calls[0].Abandoned, got.Calls[1].Abandoned)
+	}
+	for _, name := range []string{"read_1", "read_3", "post_message", "tr_close_issue"} {
+		if !slices.Contains(got.PriorCalls, name) {
+			t.Errorf("the turn's earlier calls %v do not name %s", got.PriorCalls, name)
+		}
+	}
+	if last := got.LastSeq(); last != 0 {
+		t.Errorf("the new round's last place is %d, want none: its job numbers its calls from 1", last)
+	}
+}
+
+// A NEW ROUND CARRIES THE ABSORBED CALLS ITS COLLECTION DID NOT READ. The
+// collection seeded the turn's call log with what the log had absorbed at its
+// read; the new round's tally starts with only what was absorbed after it, by
+// identity, so nothing is seeded twice and nothing is lost. An identity the
+// read counted more of than the log now holds under it (the bound folded the
+// rest away since) carries none, never a negative count.
+//
+// Mutation: carry no absorbed calls, carry the whole tally, or carry an
+// identity's count below zero, and this goes red.
+func testANewRoundCarriesTheAbsorbedCallsItsCollectionDidNotRead(t *testing.T, s sandbox.PendingStore) {
+	a := func(digest string, calls int) sandbox.ElidedCall {
+		return sandbox.ElidedCall{Name: "read_file", Digest: digest, Calls: calls}
+	}
+	for _, tc := range []struct {
+		name  string
+		extra []sandbox.ElidedCall
+		want  []sandbox.ElidedCall
+	}{
+		{"what was absorbed after the read", nil, []sandbox.ElidedCall{a("d1", 1), a("d2", 1)}},
+		{"an identity the read counted more of", []sandbox.ElidedCall{a("d1", 5)},
+			[]sandbox.ElidedCall{a("d2", 1)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			turn := "t-carry-absorbed-" + strings.ReplaceAll(tc.name, " ", "-")
+			job := mustLaunched(t, s, run(turn))
+			round := mustGet(t, s, turn).Round
+			if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: job, Round: round,
+				Call: madeAt("delegate", 1, 1), Absorbed: []sandbox.ElidedCall{a("d1", 2)}}) {
+				t.Fatal("the job's first worker was not recorded")
+			}
+			read := mustLogged(t, s, turn).Log.Read()
+			if tc.extra != nil {
+				read.Absorbed = tc.extra
+			}
+			if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: job, Round: round,
+				Call: madeAt("delegate", 2, 2), Absorbed: []sandbox.ElidedCall{a("d1", 1), a("d2", 1)}}) {
+				t.Fatal("the job's second worker was not recorded")
+			}
+			sendBackFrom(t, s, turn, &read)
+			got := mustLogged(t, s, turn).Log.Absorbed()
+			if !slices.EqualFunc(got, tc.want, func(x, y sandbox.ElidedCall) bool {
+				return x.Name == y.Name && x.Digest == y.Digest && x.Calls == y.Calls
+			}) {
+				t.Errorf("the new round's absorbed tally is %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A READ IS APPLIED ONLY TO THE LOG OF ITS ROUND. The store answers a log on
+// another job as empty under the row's round, so a relaunch after an opening
+// that never landed holds a read of nothing, of a round the log does not hold;
+// applied, it would carry, or mark, a whole round its briefs told. An opening,
+// a new round's or one carrying the round on, applies no read of another round:
+// nothing carried, nothing marked, no absorbed calls carried.
+//
+// Mutation: apply a read whatever round it names, and this goes red.
+func testAReadIsAppliedOnlyToTheLogOfItsRound(t *testing.T, s sandbox.PendingStore) {
+	other := &sandbox.LogRead{Round: "another-round"}
+	seed := func(t *testing.T, turn string) (string, string) {
+		t.Helper()
+		job := mustLaunched(t, s, run(turn))
+		round := mustGet(t, s, turn).Round
+		if !recordCall(t, s, turn, sandbox.BridgeAppend{Launch: job, Round: round, Call: madeAt("delegate", 1, 1),
+			Absorbed: []sandbox.ElidedCall{{Name: "read_file", Digest: "d1", Calls: 1}}}) {
+			t.Fatal("the job's own call was not recorded")
+		}
+		return job, round
+	}
+	t.Run("a new round", func(t *testing.T) {
+		const turn = "t-read-other-new"
+		seed(t, turn)
+		sendBackFrom(t, s, turn, other)
+		if got := mustLogged(t, s, turn).Log; len(got.Calls) != 0 || len(got.Absorbed()) != 0 {
+			t.Errorf("the new round carried calls %+v and absorbed %+v from a read of another round, want none",
+				got.Calls, got.Absorbed())
+		}
+	})
+	t.Run("a round carried on", func(t *testing.T) {
+		const turn = "t-read-other-carried"
+		seed(t, turn)
+		next := run(turn)
+		next.Continues, next.BriefRead = true, other
+		mustLaunched(t, s, next)
+		listsExactly(t, mustLogged(t, s, turn).Log.Calls, []wantCall{{"delegate", 1, 1, false}})
+	})
+}
+
+// A NEW ROUND STARTS WITH THE TALLY OF THE ROUND BEFORE. What the turn's calls
+// committed is the turn's: the collection between two rounds folded only what
+// its read saw, and a kind a call committed after it would otherwise be in no
+// outcome. Kinds are a set, so the whole tally is carried, read or not, and
+// with no read at all.
+//
+// Mutation: start a new round's tally empty, and this goes red.
+func testANewRoundStartsWithTheTallyOfTheRoundBefore(t *testing.T, s sandbox.PendingStore) {
+	item, comment := madeAt("create_work_item", 1, 1), madeAt("post_comment", 2, 2)
+	item.Committed = []string{string(types.CommittedItem)}
+	comment.Committed = []string{string(types.CommittedComment)}
+	want := []string{string(types.CommittedItem), string(types.CommittedComment)}
+	for _, withRead := range []bool{true, false} {
+		t.Run(fmt.Sprintf("handed a read %v", withRead), func(t *testing.T) {
+			turn := fmt.Sprintf("t-carry-tally-%v", withRead)
+			job := mustLaunched(t, s, run(turn))
+			round := mustGet(t, s, turn).Round
+			collectedAt(t, s, turn, job, round, item)
+			var read *sandbox.LogRead
+			if withRead {
+				r := mustLogged(t, s, turn).Log.Read()
+				read = &r
+			}
+			collectedAt(t, s, turn, job, round, comment)
+			sendBackFrom(t, s, turn, read)
+			if got := mustLogged(t, s, turn).Log.Changes(); !slices.Equal(got, want) {
+				t.Errorf("the new round committed %q, want the turn's %q", strings.Join(got, ", "),
+					strings.Join(want, ", "))
+			}
+		})
+	}
+}
+
+// A CARRIED CALL ASKED AGAIN IS LISTED ONCE. A record that landed in its own
+// round after the collection's read, whose answer was lost, is asked again
+// once the send-back's opening carried it: the log finds it by its instant,
+// name and identity among the calls with no place, as it finds a record of an
+// earlier round, and lists it once.
+//
+// Mutation: carry a call with its own place, and it is listed twice.
+func testACarriedCallAskedAgainIsListedOnce(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-carry-again"
+	job := mustLaunched(t, s, run(turn))
+	round := mustGet(t, s, turn).Round
+	read := mustLogged(t, s, turn).Log.Read()
+	outlived := sandbox.BridgeAppend{Launch: job, Round: round, Call: madeAt("delegate", 1, 1)}
+	collectedAt(t, s, turn, job, round, outlived.Call)
+	sendBackFrom(t, s, turn, &read)
+	if !recordLate(t, s, turn, outlived) {
+		t.Error("the carried call asked again was not answered recorded")
+	}
+	listsExactly(t, mustLogged(t, s, turn).Log.Calls, []wantCall{{"delegate", 0, 1, true}})
 }

@@ -537,12 +537,12 @@ type Resume struct {
 	// submission made after it is the round's ([sinceAnswer]).
 	Answered int
 
-	// BridgedRead is how many calls the round's log had taken at the read
-	// Bridged is (sandbox.ResumeRequest.BridgedRead): every call a brief
-	// built from Bridged can tell. A relaunch that carries the round on hands
-	// it to its launch ([Continuation.BriefRead]), whose opening marks every
-	// call the log took after it late ([ledger.Call.Late]).
-	BridgedRead int
+	// BridgedRead is the read of the round's log Bridged is
+	// (sandbox.ResumeRequest.BridgedRead): every call a brief built from
+	// Bridged can tell. Every relaunch hands it to its launch
+	// ([AgentRunRequest.BriefRead]), whose opening marks late every call the
+	// log took after it ([ledger.Call.Late]), or carries it into a new round.
+	BridgedRead sandbox.LogRead
 
 	// Run describes the detached run this resume is collecting.
 	Run RunRecord

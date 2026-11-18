@@ -842,10 +842,10 @@ type BridgeCall struct {
 	// THE LOG'S TO GIVE, as a call's number is, in three writes alone: the
 	// append that takes the call once the log is open to a later job of the
 	// round, or to a later round ([BridgeLog.take], [takeEarlier]), which
-	// replaces whatever a caller handed in; and the opening that carries the
-	// round on, for a call the log took after the read the relaunch's briefs
-	// were built from ([PendingRun.BriefRead]). Never the call a person
-	// approved, which the store appends for its own round ([approvedCall]).
+	// replaces whatever a caller handed in; and the opening, for a call the
+	// log took after the read the relaunch's briefs were built from, of the
+	// round it carries on or carries into a new one ([PendingRun.BriefRead]).
+	// Never the call a person approved, the store's for its round ([approvedCall]).
 	//
 	// HELD BY NO SAVE POINT. No brief of the round had told it when the log
 	// took it — it landed after the read the briefs of the job carrying the
@@ -2100,23 +2100,22 @@ type PendingRun struct {
 	// round's calls — the run asked, or was cut off, partway through it — and
 	// the collection that closes the round rebuilds it from that log, its
 	// submission and its deliveries included. Every other relaunch is a new
-	// round, whose log starts empty.
+	// round, whose log starts with only what its collection did not read.
 	Continues bool `json:"-"`
 
 	// BriefRead is TRANSIENT as well, an instruction to
-	// [PendingStore.BeginLaunch] beside [PendingRun.Continues]: how many calls
-	// the round's log had taken at the read the relaunch's briefs were built
-	// from ([Continuation.BriefRead]), nil for none known. The write that
-	// opens the job's log to a job carrying the round on marks LATE
-	// ([BridgeCall.Late]) every call of the round it took after that read —
-	// one of the replaced job's, still running as the relaunch was readied,
-	// which no brief of the round told — but the call a person approved,
-	// which the relaunch's lead tells; and counts as late any of them the log
-	// has dropped from its middle since ([BridgeLog.LateElided]). The same
-	// mark a call the log takes after the opening gets, so no save point
-	// holds either. Never persisted: a read is the relaunch's, and an opening
-	// that never landed is the next relaunch's to make, after its own read.
-	BriefRead *int `json:"-"`
+	// [PendingStore.BeginLaunch]: the read of the round's log the relaunch's
+	// briefs were built from ([LaunchRequest.BriefRead]), nil for none known,
+	// applied by the opening to a log of the read's round alone. To a job
+	// carrying the round on it marks LATE ([BridgeCall.Late]) every call the
+	// log took after the read, counting late any of them dropped from its
+	// middle since ([BridgeLog.LateElided]); into a new round it carries
+	// them, late and with no place ([BridgeLog.carried]); a person's approved
+	// call apart, which the relaunch's lead tells. The same mark a call the
+	// log takes after the opening gets, so no save point holds either. Never
+	// persisted: a read is the relaunch's, and an opening that never landed
+	// is the next relaunch's to make, after its own read.
+	BriefRead *LogRead `json:"-"`
 
 	// Steer is the notes a person sent the run's turn from the run's launch
 	// to its turn's end, sealed, with the seat anchor authority to send one
@@ -2309,7 +2308,8 @@ type BridgeLog struct {
 	// id — a join the worker's leave came between, answered `applied` without
 	// landing — and a worker's call is no call of the round's, so no reader
 	// of whether the turn replied counts it. Read through
-	// [BridgeLog.Absorbed]; the round's, as ElidedCalls is.
+	// [BridgeLog.Absorbed]. A new round's starts with only what the round
+	// it replaces absorbed past its collection's read ([BridgeLog.carried]).
 	AbsorbedCalls []ElidedCall `json:"absorbed_calls,omitempty"`
 
 	// AnsweredThrough is the place ([BridgeCall.Seq]) of the last call the
@@ -2354,18 +2354,18 @@ type BridgeLog struct {
 	PriorCalls       []string `json:"prior_calls,omitempty"`
 	PriorCallsElided bool     `json:"prior_calls_elided,omitempty"`
 
-	// Committed is every kind of change the ROUND'S calls committed, each
-	// once, in the order the log took the calls that committed them: its
-	// jobs' own calls', a late call's ([BridgeCall.Late]) and one nobody
-	// waited for's ([BridgeCall.Abandoned]) alike, each folded in by the one
-	// append that takes every call ([BridgeLog.appendCall]) before the bound
-	// can drop it — and kept whole when the calls themselves are condensed,
-	// so the collection settles the turn's outcome by every one the log holds
-	// as it reads it ([BridgeLog.Changes]); a late call of an earlier round
-	// folds its kinds into the round after ([takeEarlier]), so only a kind
-	// folded in after the TURN'S last collection read the log is in no
-	// outcome. Kept by every opening of the round; a new round's log starts
-	// without it, the collection between having folded it into the turn.
+	// Committed is every kind of change the TURN'S calls committed up to this
+	// round's, each once, in the order the logs took the calls: its jobs' own
+	// calls', a late call's ([BridgeCall.Late]) and one nobody waited for's
+	// ([BridgeCall.Abandoned]) alike, each folded in by the one append that
+	// takes every call ([BridgeLog.appendCall]) before the bound can drop it,
+	// and kept whole when the calls are condensed, so the collection settles
+	// the turn's outcome by every one the log holds as it reads it
+	// ([BridgeLog.Changes]). KEPT BY EVERY OPENING, a new round's whole
+	// ([BridgeLog.carried]): the collection between two rounds folded only
+	// what it read, and kinds are a set. A late call of an earlier round folds
+	// its kinds in too ([takeEarlier]), so only a kind folded in after the
+	// TURN'S last collection read the log is in no outcome.
 	Committed []string `json:"committed,omitempty"`
 
 	// InFlight are the round's calls that have BEGUN AND NOT FINISHED: each
@@ -2537,6 +2537,24 @@ func (l BridgeLog) LastSeq() int {
 // bound dropped from the middle ([MaxBridgeCalls]), and the calls an older
 // build appended without numbering them.
 func (l BridgeLog) Appends() int { return len(l.Calls) + l.Elided }
+
+// LogRead is one read of a round's log, made by the collection that closes the
+// round's job ([ResumeRequest.BridgedRead]): the round it was of, how many calls
+// the log had taken ([BridgeLog.Appends]) and what it had absorbed
+// ([BridgeLog.Absorbed]). Every brief of a launch built from it can tell the
+// calls through Took, and the collection seeded Absorbed; so the launch's
+// opening marks late, or carries into a new round, only what the log took
+// after it ([PendingRun.BriefRead]). In memory only.
+type LogRead struct {
+	Round    string
+	Took     int
+	Absorbed []ElidedCall
+}
+
+// Read is what a read of l as it stands saw ([LogRead]).
+func (l BridgeLog) Read() LogRead {
+	return LogRead{Round: l.Round, Took: l.Appends(), Absorbed: l.Absorbed()}
+}
 
 // Changes is every kind of change the round's calls committed, each once,
 // whether the log still lists the call that committed it or has dropped it
@@ -3200,8 +3218,8 @@ type PendingStore interface {
 	// at its claim ([ResumeRequest.Engine]). So a call that outlives its
 	// job's claim can leave the task short of the turn's cost, never past it.
 	// Where it lands after the read a relaunch's briefs were built from, the
-	// opening that carries the round on marks it late as well
-	// ([PendingRun.BriefRead]).
+	// relaunch's opening marks it late as well, in its round or carried into
+	// a new one ([PendingRun.BriefRead]).
 	//
 	// HELD TO THE LOG'S BUDGET ([BridgeLogBytes]): the call is kept within
 	// its own share ([MaxBridgeCallBytes]) — its largest argument values left

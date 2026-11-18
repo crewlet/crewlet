@@ -1577,9 +1577,9 @@ func (l continuedLaunch) decision() LaunchDecision {
 //
 // NONE FOR A LAUNCH THAT CARRIES NO ROUND ON ([LaunchRequest.Continue] nil): a
 // turn's first launch tells no round's calls, and a send-back opens a new
-// round, whose log restarts, so a set of the collected round's calls would be
-// read against another round's log. A closed round's reads past the read cap
-// are counted under the prior-work ledger's rule for them.
+// round, which numbers its calls afresh, so a set of the collected round's
+// calls would be read against another round's log. A closed round's reads past
+// the read cap are counted under the prior-work ledger's rule for them.
 func (l continuedLaunch) omitted(req LaunchRequest) (brief, fresh BriefTold) {
 	if req.Continue == nil {
 		return BriefTold{}, BriefTold{}

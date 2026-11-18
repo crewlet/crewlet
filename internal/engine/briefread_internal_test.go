@@ -18,25 +18,24 @@ import (
 
 // AN OPENING MARKS LATE WHAT THE LOG TOOK AFTER ITS BRIEFS' READ, THROUGH THE
 // LAUNCH. A relaunch builds its briefs from one read of the round's log and
-// hands its launch that read's call count (runner.Continuation.BriefRead); the
-// store's opening of the job's log marks late every call taken after it. So a
-// call of the asking job landing after the read and before the opening is
-// listed late, and the call the read saw is not.
+// hands its launch that read (runner.AgentRunRequest.BriefRead); the store's
+// opening of the job's log marks late every call taken after it. So a call of
+// the asking job landing after the read and before the opening is listed late,
+// and the call the read saw is not.
 //
-// Mutation: drop the read from the continuation the launch hands the store, and
-// the call no brief told is listed as the asking job's own.
+// Mutation: drop the read from the request the launch hands the store, and the
+// call no brief told is listed as the asking job's own.
 func TestAnOpeningMarksLateWhatTheLogTookAfterItsBriefsRead(t *testing.T) {
 	t.Parallel()
 	read := newHeldTool("read_page")
 	close(read.release)
 	asking := launchBridged(t, "t-brief-read", read)
 	asking.call(t, "read_page")
-	briefRead := asking.calls(t, "t-brief-read").Appends()
+	briefRead := asking.calls(t, "t-brief-read").Read()
 
 	// THE ASKING JOB'S CALL LANDING WHILE THE RELAUNCH IS READIED.
 	asking.call(t, "read_page")
-	carried := asking.launch(t, &runner.Continuation{SessionID: "sess-ask", Brief: "use main",
-		BriefRead: &briefRead})
+	carried := asking.launchFrom(t, &runner.Continuation{SessionID: "sess-ask", Brief: "use main"}, &briefRead)
 
 	logged := carried.calls(t, "t-brief-read")
 	if len(logged.Calls) != 2 || logged.Calls[0].Late || !logged.Calls[1].Late {
@@ -45,27 +44,31 @@ func TestAnOpeningMarksLateWhatTheLogTookAfterItsBriefsRead(t *testing.T) {
 	}
 }
 
-// A RESUME HANDS THE RUNNER THE COUNT ITS READ SAW: the calls the round's log
-// had taken at the read, before the coordinator adds the call a person approved
-// that the row alone holds (sandbox.ResumeRequest.BridgedRead), never how many
-// calls the resume lists, since a relaunch's opening marks late every call
-// after that count.
+// A RESUME HANDS THE RUNNER THE READ ITS COLLECTION MADE: the round it was of,
+// the calls the round's log had taken at it, before the coordinator adds the
+// call a person approved that the row alone holds, and what the log had
+// absorbed (sandbox.ResumeRequest.BridgedRead) — never how many calls the
+// resume lists, since a relaunch's opening marks late, or carries into a new
+// round, every call after that read, of that round alone.
 //
-// Mutation: hand the runner no count, and a relaunch's opening marks late every
-// call the round's log took before it.
+// Mutation: hand the runner the read with no round, and a send-back's opening
+// carries nothing.
 func TestAResumeHandsTheRunnerTheCountItsReadSaw(t *testing.T) {
 	t.Parallel()
 	// THE READ SAW TWO CALLS; the resume lists a third, the call a person
 	// approved that the row alone held, added after the read.
-	logged := sandbox.BridgeLog{Calls: []sandbox.BridgeCall{
+	logged := sandbox.BridgeLog{Round: "round-1", Calls: []sandbox.BridgeCall{
 		{Name: "read_page", Seq: 1, Appended: 1},
 		{Name: "post_message", Seq: 2, Appended: 2},
 		{Name: "add_issue_comment", Seq: 3, Appended: 3, Approved: true},
 	}}
-	resumed := runnerResume(resumeInput{Bridged: logged, BridgedRead: 2}, nil, nil, nil)
-	if resumed.BridgedRead != 2 || len(resumed.Bridged) != 3 {
-		t.Errorf("the runner is handed a read of %d calls beside %d listed, want the 2 the read saw beside "+
-			"the 3 the resume lists", resumed.BridgedRead, len(resumed.Bridged))
+	read := sandbox.LogRead{Round: "round-1", Took: 2,
+		Absorbed: []sandbox.ElidedCall{{Name: "read_file", Digest: "d1", Calls: 2}}}
+	got := runnerResume(resumeInput{Bridged: logged, BridgedRead: read}, nil, nil, nil).BridgedRead
+	if got.Round != read.Round || got.Took != read.Took || len(got.Absorbed) != 1 ||
+		got.Absorbed[0].Calls != 2 {
+		t.Errorf("the runner is handed the read %+v, want the collection's %+v, never the 3 calls the resume "+
+			"lists", got, read)
 	}
 }
 
@@ -110,10 +113,10 @@ func TestACallLandingWhileARelaunchIsReadiedIsToldToTheNextContinuation(t *testi
 				t.Fatalf("ClaimForResume = %v, %v", ok, err)
 			}
 			// THE RESUME'S READ, which every brief of the relaunch is built from,
-			// and the count of it the runner is handed.
+			// as the runner is handed it.
 			logged := asking.calls(t, turnID)
 			resumed := runnerResume(resumeInput{Run: asking.row(t, turnID), Bridged: logged,
-				BridgedRead: logged.Appends()}, nil, nil, nil)
+				BridgedRead: logged.Read()}, nil, nil, nil)
 
 			// WHILE THE RELAUNCH IS READIED: the worker lands as the asking
 			// job's own, and the call the person approved is made.
@@ -130,9 +133,9 @@ func TestACallLandingWhileARelaunchIsReadiedIsToldToTheNextContinuation(t *testi
 			}
 
 			// THE RELAUNCH, handed the read as the runner hands it on
-			// (runner.Continuation.BriefRead).
-			carried := asking.launch(t, &runner.Continuation{SessionID: "sess-ask", Brief: "use main",
-				BriefRead: &resumed.BridgedRead})
+			// (runner.AgentRunRequest.BriefRead).
+			carried := asking.launchFrom(t, &runner.Continuation{SessionID: "sess-ask", Brief: "use main"},
+				&resumed.BridgedRead)
 			next := carried.calls(t, turnID)
 			listed := map[string]sandbox.BridgeCall{}
 			for _, call := range next.Calls {
@@ -150,7 +153,7 @@ func TestACallLandingWhileARelaunchIsReadiedIsToldToTheNextContinuation(t *testi
 			row.Launch.HarnessEnd = end
 			collectedFarBelow(&row.Launch)
 			brief := relaunchedInPlace(t, carried, runnerResume(resumeInput{Run: row, Bridged: next,
-				BridgedRead: next.Appends(), State: execstate.State{Version: execstate.Version, Round: 1},
+				BridgedRead: next.Read(), State: execstate.State{Version: execstate.Version, Round: 1},
 				Asked: &sandbox.AskedRun{Question: "which branch?", Answer: "use main", By: "founder",
 					SessionID: "sess-carried", BoxKept: true}}, nil, nil, nil))
 			const lateHeading = "## Calls the run that made them stopped waiting for, or whose outcome is unknown"

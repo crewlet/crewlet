@@ -131,6 +131,13 @@ func bridgedRigOn(t *testing.T, c *Company, turn *turnctx.Turn, offered ...tools
 // the bridge of the job it started, the way that job's harness would.
 func (b bridgedRun) launch(t *testing.T, cont *runner.Continuation) bridgedRun {
 	t.Helper()
+	return b.launchFrom(t, cont, nil)
+}
+
+// launchFrom is [bridgedRun.launch] handing the launch read, the read of the
+// round's log its briefs were built from (runner.AgentRunRequest.BriefRead).
+func (b bridgedRun) launchFrom(t *testing.T, cont *runner.Continuation, read *sandbox.LogRead) bridgedRun {
+	t.Helper()
 	before := len(b.jobs.Started())
 	if _, err := b.launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
 		Brief: "fix the failing test", Round: 1,
@@ -139,6 +146,7 @@ func (b bridgedRun) launch(t *testing.T, cont *runner.Continuation) bridgedRun {
 		OnFallback: func(chain.Fallback) {},
 		Fence:      b.engine.seatFence(b.handle),
 		Continue:   cont,
+		BriefRead:  read,
 	}); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}
