@@ -1,20 +1,42 @@
 package cdp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 )
+
+// bounded is the case's context under a liveness bound: what a case waits on
+// arrives at once when the claim holds, so the bound only turns a hang into a
+// failure that says what never came.
+func bounded(t testing.TB) context.Context {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+// step is one wait's context under a liveness bound of its own, for a case
+// whose volume makes its whole run long: the bound restarts with each wait, so
+// a slow runner that keeps delivering passes, and a wait nothing ends fails.
+func step(t testing.TB) context.Context {
+	ctx, cancel := context.WithTimeout(t.Context(), stepBound)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+// stepBound is step's bound. A wait moves at most one ReadLimit's message,
+// and a loaded race shard moved these cases' events at about a second a
+// mebibyte, so a wait still open after two minutes is one that never ends.
+const stepBound = 2 * time.Minute
 
 // The commands and events the internal cases send, declared in a test file so
 // they never reach the inventory.
@@ -168,51 +190,10 @@ func announce(ctx context.Context, t testing.TB, c *Conn, p *peer, as ...attachm
 	return out
 }
 
-// pair is a connection and its scripted peer, over one transport.
-type pair func(t testing.TB, log *slog.Logger) (*Conn, *peer)
-
-// transports is every transport a connection runs over, for a case that holds
-// both to one claim.
-var transports = []struct {
-	name string
-	pair pair
-}{
-	{"pipe", pipePair},
-	{"socket", socketPair},
-}
-
-// pipePair is a connection over a pair of in-process pipes and the peer on
-// their other ends, framed as Chromium's --remote-debugging-pipe frames.
-func pipePair(t testing.TB, log *slog.Logger) (*Conn, *peer) {
-	clientReads, peerWrites := io.Pipe()
-	peerReads, clientWrites := io.Pipe()
-	c := NewPipe(clientReads, clientWrites, Options{Logger: log})
-	in := newFrames(peerReads)
-	p := &peer{
-		t: t,
-		read: func() ([]byte, error) {
-			m, err := in.next()
-			return m.body, err
-		},
-		write: func(b []byte) error {
-			framed := append(bytes.Clone(b), 0)
-			_, err := peerWrites.Write(framed)
-			return err
-		},
-		stop: func() {
-			_ = peerWrites.Close()
-			_ = peerReads.Close()
-		},
-	}
-	t.Cleanup(func() {
-		_ = c.Close()
-		p.stop()
-	})
-	return c, p
-}
-
-// socketPair is a connection dialled to a websocket an httptest server
-// accepts, and the peer on the server's end.
+// socketPair is a connection dialled to a websocket served in memory, and
+// the peer on the server's end. Every byte crosses net.Pipe, whose blocking a
+// synctest bubble counts as durable, so one pair serves a case in a bubble and
+// out of one, and a peer that reads nothing holds the client's next write.
 func socketPair(t testing.TB, log *slog.Logger) (*Conn, *peer) {
 	t.Helper()
 	return socketPairDialled(t.Context(), t, log)
@@ -221,17 +202,27 @@ func socketPair(t testing.TB, log *slog.Logger) (*Conn, *peer) {
 // socketPairDialled is socketPair, its connection dialled under ctx.
 func socketPairDialled(ctx context.Context, t testing.TB, log *slog.Logger) (*Conn, *peer) {
 	t.Helper()
+	l := &memListener{conns: make(chan net.Conn), done: make(chan struct{})}
 	accepted := make(chan *websocket.Conn, 1)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ws, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
 		}
 		ws.SetReadLimit(-1)
 		accepted <- ws
-	}))
-	t.Cleanup(srv.Close)
-	c, err := Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"), DialOptions{HTTPClient: srv.Client(), Logger: log})
+	})}
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		_ = srv.Serve(l)
+	}()
+	t.Cleanup(func() {
+		_ = srv.Close()
+		<-served
+	})
+	client := &http.Client{Transport: &http.Transport{DialContext: l.dial}}
+	c, err := Dial(ctx, "ws://browser.test/devtools/browser/case", DialOptions{HTTPClient: client, Logger: log})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,6 +245,48 @@ func socketPairDialled(ctx context.Context, t testing.TB, log *slog.Logger) (*Co
 	})
 	return c, p
 }
+
+// memListener is a listener whose connections are net.Pipe's far ends, each
+// handed over as dial makes it.
+type memListener struct {
+	conns chan net.Conn
+	done  chan struct{}
+	once  sync.Once
+}
+
+func (l *memListener) Accept() (net.Conn, error) {
+	select {
+	case c := <-l.conns:
+		return c, nil
+	case <-l.done:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *memListener) Close() error {
+	l.once.Do(func() { close(l.done) })
+	return nil
+}
+
+func (l *memListener) Addr() net.Addr { return memAddr{} }
+
+// dial is a new connection's near end, once Accept has taken its far end.
+func (l *memListener) dial(ctx context.Context, _, _ string) (net.Conn, error) {
+	near, far := net.Pipe()
+	select {
+	case l.conns <- far:
+		return near, nil
+	case <-l.done:
+	case <-ctx.Done():
+	}
+	_, _ = near.Close(), far.Close()
+	return nil, net.ErrClosed
+}
+
+type memAddr struct{}
+
+func (memAddr) Network() string { return "memory" }
+func (memAddr) String() string  { return "memory" }
 
 // records is a log handler that keeps every record a connection logs, at
 // every level, and signals each one.

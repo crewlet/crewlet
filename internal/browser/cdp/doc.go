@@ -1,6 +1,6 @@
 // Package cdp is the engine's Chrome DevTools Protocol client: a thin, typed
-// client over one connection to a browser, a websocket ([Dial]) or a pair of
-// pipes ([NewPipe]), with every session flat on that connection.
+// client over one websocket to a browser ([Dial]), with every session flat on
+// that connection.
 //
 // # Thin, rather than chromedp or go-rod
 //
@@ -70,19 +70,19 @@
 //
 // Every command has its own deadline, [CommandTimeout] from its sending under
 // the caller's own context. Every message is read whole up to [ReadLimit], by
-// this package's own reader on either transport; a larger one is read through
-// and ends only what it is for — the call it answers, or the session whose
-// listener asked for it — so a page that provokes one ends at most its own
-// session. The events queued for a session's listeners are held to
-// [MaxBacklog], each counted once however many of them hold it, so a page that
-// outruns its reader ends its own session rather than grow the engine's heap;
-// and every session's together to [MaxConnBacklog], past which the session
-// holding the most ends, so the heap a connection holds is bounded however
-// many sessions it carries. What the browser's own session meets — an event
-// past ReadLimit, a backlog past a bound — ends the connection, so what a page
-// can make arrive there, a request gate's paused requests among it, can end
-// its whole browser, and a caller that must not let it listens for that on
-// the page's own session instead.
+// this package's own reader; a larger one is read through and ends only what
+// it is for — the call it answers, or the session whose listener asked for it
+// — so a page that provokes one ends at most its own session. The events
+// queued for a session's listeners are held to [MaxBacklog], each counted once
+// however many of them hold it, so a page that outruns its reader ends its own
+// session rather than grow the engine's heap; and every session's together to
+// [MaxConnBacklog], past which the session holding the most ends, so the heap
+// a connection holds is bounded however many sessions it carries. What the
+// browser's own session meets — an event past ReadLimit, a backlog past a
+// bound — ends the connection, so what a page can make arrive there, a
+// request gate's paused requests among it, can end its whole browser, and a
+// caller that must not let it listens for that on the page's own session
+// instead.
 //
 // [ReadLimit] is 16 MiB because the largest answer the render asks for by
 // design is a screenshot of its widest viewport, 1920 by 900 CSS pixels at a

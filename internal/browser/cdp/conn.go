@@ -70,8 +70,8 @@ const MaxConnBacklog = 2 * MaxBacklog
 // minute is one that will not answer the command it carries.
 const CommandTimeout = 60 * time.Second
 
-// transport is one way to carry messages to and from a browser: a websocket
-// ([Dial]) or a pair of pipes ([NewPipe]).
+// transport carries messages to and from a browser: the websocket [Dial]
+// opens, or a case's own in a test.
 type transport interface {
 	// read returns the next message — whole when it is at most ReadLimit
 	// bytes, and past that only what routing it needs (gather) — or the
@@ -153,7 +153,7 @@ func lastBytes(a, b []byte) []byte {
 }
 
 // errNoFrameTaken ends a connection whose browser took no frame for
-// CommandTimeout, whichever its transport.
+// CommandTimeout.
 var errNoFrameTaken = fmt.Errorf("the browser took no frame for %s", CommandTimeout)
 
 // Conn is one connection to a browser: one transport, one goroutine reading
@@ -289,9 +289,9 @@ func (c *Conn) Session(id SessionID) *Session {
 
 // Close ends the connection: every call in flight and every later one fails
 // with [ErrClosed], every listener drains and then reports it, and the
-// transport is closed — for a pipe, which makes Chromium exit. It waits for
-// the connection's goroutines to end, and is idempotent: a second Close, or
-// one after the connection ended by itself, returns nil.
+// transport is closed. It waits for the connection's goroutines to end, and is
+// idempotent: a second Close, or one after the connection ended by itself,
+// returns nil.
 func (c *Conn) Close() error {
 	err := c.end(ErrClosed)
 	c.wg.Wait()
@@ -372,14 +372,14 @@ func (c *Conn) writeLoop(ctx context.Context) {
 	for {
 		select {
 		case frame := <-c.writes:
-			// Each write is bounded here, on either transport, and never
-			// by a caller's context: a caller that gives up must not take
-			// the connection's next frame down with it, and a browser that
-			// takes no frame for CommandTimeout will not answer the command
-			// it carries. At that bound the connection ends, saying so,
-			// before its transport closes and frees the write, so what it
-			// reports is never the closed transport's own words, and never
-			// whichever of its reader and its writer saw them first.
+			// Each write is bounded here, and never by a caller's context: a
+			// caller that gives up must not take the connection's next frame
+			// down with it, and a browser that takes no frame for
+			// CommandTimeout will not answer the command it carries. At that
+			// bound the connection ends, saying so, before its transport
+			// closes and frees the write, so what it reports is never the
+			// closed transport's own words, and never whichever of its reader
+			// and its writer saw them first.
 			stalled := time.AfterFunc(CommandTimeout, func() {
 				_ = c.end(fmt.Errorf("%w: %w", ErrClosed, errNoFrameTaken))
 			})

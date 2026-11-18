@@ -88,7 +88,7 @@ func TestThePinsDescribeEveryMethodTheClientDeclares(t *testing.T) {
 // floor's pin — red.
 func TestTheFloorIsReadFromTheBrowser(t *testing.T) {
 	chromiumtest.Each(t, func(t *testing.T, chrome string) {
-		c, _ := chromiumtest.LaunchPipe(t, chrome)
+		c := launch(t, chrome)
 		v, err := cdp.CheckVersion(bounded(t), c.Browser())
 		if err != nil {
 			t.Fatal(err)
@@ -172,7 +172,7 @@ func inFlight(ctx context.Context, t testing.TB, s *cdp.Session) <-chan error {
 func TestACrashedPageFailsItsCallsInFlightAndNoOtherPagesCalls(t *testing.T) {
 	chromiumtest.Each(t, func(t *testing.T, chrome string) {
 		ctx := bounded(t)
-		c, _ := chromiumtest.LaunchPipe(t, chrome)
+		c := launch(t, chrome)
 		crashing, other := openPage(ctx, t, c), openPage(ctx, t, c)
 		target := crashing.Target().TargetID
 		if target == "" {
@@ -204,7 +204,7 @@ func TestACrashedPageFailsItsCallsInFlightAndNoOtherPagesCalls(t *testing.T) {
 func TestAClosedTargetFailsItsCallsInFlight(t *testing.T) {
 	chromiumtest.Each(t, func(t *testing.T, chrome string) {
 		ctx := bounded(t)
-		c, _ := chromiumtest.LaunchPipe(t, chrome)
+		c := launch(t, chrome)
 		page := openPage(ctx, t, c)
 		waiting := inFlight(ctx, t, page)
 		if _, err := cdp.Call(ctx, c.Browser(), cdp.TargetCloseTarget, cdp.TargetCloseTargetParams{
@@ -219,151 +219,137 @@ func TestAClosedTargetFailsItsCallsInFlight(t *testing.T) {
 	})
 }
 
-// A KILLED BROWSER FAILS EVERY CALL IN FLIGHT, on both transports: killing
-// Chromium's whole process group fails a call waiting on one of its pages with
-// ErrClosed, and ends the connection.
+// A KILLED BROWSER FAILS EVERY CALL IN FLIGHT: killing Chromium's whole
+// process group fails a call waiting on one of its pages with ErrClosed, and
+// ends the connection.
 //
 // Mutation: leave the calls in flight waiting when the reader ends, and they
 // hang to the case's bound — red.
 func TestAKilledBrowserFailsEveryCallInFlight(t *testing.T) {
 	chromiumtest.Each(t, func(t *testing.T, chrome string) {
-		for _, transport := range []string{"pipe", "socket"} {
-			t.Run(transport, func(t *testing.T) {
-				ctx := bounded(t)
-				var c *cdp.Conn
-				var p *chromiumtest.Process
-				if transport == "pipe" {
-					c, p = chromiumtest.LaunchPipe(t, chrome)
-				} else {
-					ep := chromiumtest.LaunchPort(t, chrome)
-					c, p = chromiumtest.Dial(t, ep), ep.Process
-				}
-				waiting := inFlight(ctx, t, openPage(ctx, t, c))
-				if err := p.Kill(); err != nil {
-					t.Fatal(err)
-				}
-				if err := <-waiting; !errors.Is(err, cdp.ErrClosed) {
-					t.Fatalf("the call in flight failed with %v, want ErrClosed", err)
-				}
-				select {
-				case <-c.Done():
-				case <-ctx.Done():
-					t.Fatal("the connection did not end with its browser")
-				}
-			})
+		ctx := bounded(t)
+		ep := chromiumtest.LaunchPort(t, chrome)
+		c := dial(t, ep)
+		waiting := inFlight(ctx, t, openPage(ctx, t, c))
+		if err := ep.Process.Kill(); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-waiting; !errors.Is(err, cdp.ErrClosed) {
+			t.Fatalf("the call in flight failed with %v, want ErrClosed", err)
+		}
+		select {
+		case <-c.Done():
+		case <-ctx.Done():
+			t.Fatal("the connection did not end with its browser")
 		}
 	})
 }
 
-// launch is a Chromium of chrome's over transport, "pipe" or "socket".
-func launch(t testing.TB, chrome, transport string) *cdp.Conn {
+// dial dials ep's browser websocket over the engine's own transport, as the
+// render dials the Chromium an operator runs, and closes it when t ends.
+func dial(t testing.TB, ep chromiumtest.Endpoint) *cdp.Conn {
 	t.Helper()
-	if transport == "pipe" {
-		c, _ := chromiumtest.LaunchPipe(t, chrome)
-		return c
+	c, err := cdp.Dial(t.Context(), ep.Browser, cdp.DialOptions{HTTPClient: httpx.Client(0)})
+	if err != nil {
+		t.Fatal(err)
 	}
-	return chromiumtest.Dial(t, chromiumtest.LaunchPort(t, chrome))
+	t.Cleanup(func() { _ = c.Close() })
+	return c
 }
 
-// A SCREENSHOT-SIZED MESSAGE CROSSES BOTH TRANSPORTS: a 9 MiB answer, the
-// largest screenshot the render asks for once base64 has carried it, arrives
-// over the pipe and over the socket, and one a mebibyte past ReadLimit fails
-// its own call with ErrMessageTooBig and nothing else: the same page answers
-// the next call, and the connection is open. On the newest arm alone: the
-// floor adds nothing to a claim about this client's transports.
+// launch is a connection to a Chromium of chrome's, launched with args.
+func launch(t testing.TB, chrome string, args ...string) *cdp.Conn {
+	t.Helper()
+	return dial(t, chromiumtest.LaunchPort(t, chrome, args...))
+}
+
+// A SCREENSHOT-SIZED MESSAGE CROSSES THE SOCKET: a 9 MiB answer, the largest
+// screenshot the render asks for once base64 has carried it, arrives, and one
+// a mebibyte past ReadLimit fails its own call with ErrMessageTooBig and
+// nothing else: the same page answers the next call, and the connection is
+// open. On the newest arm alone: the floor adds nothing to a claim about this
+// client's transport.
 //
 // Mutations: ReadLimit = 8 << 20, and the 9 MiB answer fails its call — red;
 // end the connection at a message past ReadLimit, and the page's next call
 // fails — red.
-func TestAScreenshotSizedMessageCrossesBothTransports(t *testing.T) {
-	chrome := chromiumtest.Newest(t)
-	for _, transport := range []string{"pipe", "socket"} {
-		t.Run(transport, func(t *testing.T) {
-			ctx := bounded(t)
-			c := launch(t, chrome, transport)
-			page := openPage(ctx, t, c)
-			got, err := evaluate(ctx, page, "'x'.repeat(9 << 20)")
-			if err != nil {
-				t.Fatalf("a 9 MiB answer: %v", err)
-			}
-			if len(got) != 9<<20+2 {
-				t.Fatalf("a 9 MiB answer arrived as %d bytes", len(got))
-			}
-			past := fmt.Sprintf("'x'.repeat(%d)", cdp.ReadLimit+1<<20)
-			if _, err := evaluate(ctx, page, past); !errors.Is(err, cdp.ErrMessageTooBig) {
-				t.Fatalf("an answer a mebibyte past ReadLimit: %v, want ErrMessageTooBig", err)
-			}
-			if got, err := evaluate(ctx, page, "1 + 1"); err != nil || string(got) != "2" {
-				t.Fatalf("the page whose answer passed ReadLimit then answered %s, %v", got, err)
-			}
-			if err := c.Err(); err != nil {
-				t.Fatalf("the connection ended with %v", err)
-			}
-		})
+func TestAScreenshotSizedMessageCrossesTheSocket(t *testing.T) {
+	ctx := bounded(t)
+	c := launch(t, chromiumtest.Newest(t))
+	page := openPage(ctx, t, c)
+	got, err := evaluate(ctx, page, "'x'.repeat(9 << 20)")
+	if err != nil {
+		t.Fatalf("a 9 MiB answer: %v", err)
+	}
+	if len(got) != 9<<20+2 {
+		t.Fatalf("a 9 MiB answer arrived as %d bytes", len(got))
+	}
+	past := fmt.Sprintf("'x'.repeat(%d)", cdp.ReadLimit+1<<20)
+	if _, err := evaluate(ctx, page, past); !errors.Is(err, cdp.ErrMessageTooBig) {
+		t.Fatalf("an answer a mebibyte past ReadLimit: %v, want ErrMessageTooBig", err)
+	}
+	if got, err := evaluate(ctx, page, "1 + 1"); err != nil || string(got) != "2" {
+		t.Fatalf("the page whose answer passed ReadLimit then answered %s, %v", got, err)
+	}
+	if err := c.Err(); err != nil {
+		t.Fatalf("the connection ended with %v", err)
 	}
 }
 
-// A PAGE ENDS AT MOST ITS OWN SESSION WITH A MESSAGE PAST THE READ LIMIT, on
-// both transports. Under Runtime.enable, which a binding needs, Chromium sends
-// a page's console lines and calls of the session's bindings unasked, as large
-// as the page makes them. A 40 MiB console line, which no listener can ask
-// for, is dropped: the page's session goes on — a small call of the binding
-// after it, routed after it, is delivered. A 40 MiB call of the binding, whose
-// event a listener of that session asked for, ends that session alone with
-// ErrMessageTooBig: its listener reports it, while the other tab answers and
-// a new one opens on a connection still open. On the newest arm alone: the
-// floor adds nothing to a claim about this client's reader.
+// A PAGE ENDS AT MOST ITS OWN SESSION WITH A MESSAGE PAST THE READ LIMIT. Under
+// Runtime.enable, which a binding needs, Chromium sends a page's console lines
+// and calls of its bindings unasked, as large as the page makes them. A console
+// line past ReadLimit, which no listener asked for, is dropped: a small call of
+// the binding routed after it is delivered. A call of the binding past it,
+// which a listener asked for, ends that session alone with ErrMessageTooBig,
+// while the other tab answers and a new one opens. On the newest arm alone:
+// the floor adds nothing to a claim about this client's reader.
 //
-// Mutations: end the connection at a message past ReadLimit, and the console
-// line ends it — red; end the session of an event past ReadLimit nobody asked
-// for, and the console line ends the page's — red; drop an event past
-// ReadLimit a listener asked for, and the page's session goes on — red.
+// Mutations, each red: end the connection at a message past ReadLimit; end the
+// session of an event past it nobody asked for; drop an event past it a
+// listener asked for.
 func TestAPageEndsAtMostItsOwnSessionWithAMessagePastTheReadLimit(t *testing.T) {
-	chrome := chromiumtest.Newest(t)
-	for _, transport := range []string{"pipe", "socket"} {
-		t.Run(transport, func(t *testing.T) {
-			ctx := bounded(t)
-			c := launch(t, chrome, transport)
-			page, other := openPage(ctx, t, c), openPage(ctx, t, c)
-			calls := page.Listen(cdp.RuntimeBindingCalled)
-			defer calls.Close()
-			if _, err := cdp.Call(ctx, page, cdp.RuntimeEnable, struct{}{}); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := cdp.Call(ctx, page, cdp.RuntimeAddBinding, cdp.RuntimeAddBindingParams{Name: binding}); err != nil {
-				t.Fatal(err)
-			}
+	ctx := bounded(t)
+	c := launch(t, chromiumtest.Newest(t))
+	page, other := openPage(ctx, t, c), openPage(ctx, t, c)
+	calls := page.Listen(cdp.RuntimeBindingCalled)
+	defer calls.Close()
+	if _, err := cdp.Call(ctx, page, cdp.RuntimeEnable, struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cdp.Call(ctx, page, cdp.RuntimeAddBinding, cdp.RuntimeAddBindingParams{Name: binding}); err != nil {
+		t.Fatal(err)
+	}
+	past := fmt.Sprintf("'x'.repeat(%d)", cdp.ReadLimit+1<<20)
 
-			if _, err := evaluate(ctx, page, "console.log('x'.repeat(40 << 20)); "+binding+"('after'); 1"); err != nil {
-				t.Fatalf("the page that logged a 40 MiB line: %v", err)
-			}
-			m, err := calls.Next(ctx)
-			if err != nil {
-				t.Fatalf("after a 40 MiB console line the page's listener read %v", err)
-			}
-			if e, _, err := cdp.RuntimeBindingCalled.Of(m); err != nil || e.Payload != "after" {
-				t.Fatalf("the call after the console line read as %+v, %v", e, err)
-			}
+	if _, err := evaluate(ctx, page, "console.log("+past+"); "+binding+"('after'); 1"); err != nil {
+		t.Fatalf("the page that logged a line past ReadLimit: %v", err)
+	}
+	m, err := calls.Next(ctx)
+	if err != nil {
+		t.Fatalf("after a console line past ReadLimit the page's listener read %v", err)
+	}
+	if e, _, err := cdp.RuntimeBindingCalled.Of(m); err != nil || e.Payload != "after" {
+		t.Fatalf("the call after the console line read as %+v, %v", e, err)
+	}
 
-			// Its answer may come before its event or after it: the end is
-			// read off the listener, which reports it either way.
-			_, _ = evaluate(ctx, page, binding+"('x'.repeat(40 << 20)); 1")
-			if _, err := calls.Next(ctx); !errors.Is(err, cdp.ErrMessageTooBig) {
-				t.Fatalf("after a 40 MiB call of the binding the listener read %v, want ErrMessageTooBig", err)
-			}
-			if err := page.Err(); !errors.Is(err, cdp.ErrMessageTooBig) {
-				t.Fatalf("the page's session ended with %v, want ErrMessageTooBig", err)
-			}
-			if got, err := evaluate(ctx, other, "1 + 1"); err != nil || string(got) != "2" {
-				t.Fatalf("the other tab answered %s, %v", got, err)
-			}
-			if got, err := evaluate(ctx, openPage(ctx, t, c), "1 + 1"); err != nil || string(got) != "2" {
-				t.Fatalf("a tab opened after answered %s, %v", got, err)
-			}
-			if err := c.Err(); err != nil {
-				t.Fatalf("the connection ended with %v", err)
-			}
-		})
+	// Its answer may come before its event or after it: the end is read off
+	// the listener, which reports it either way.
+	_, _ = evaluate(ctx, page, binding+"("+past+"); 1")
+	if _, err := calls.Next(ctx); !errors.Is(err, cdp.ErrMessageTooBig) {
+		t.Fatalf("after a call of the binding past ReadLimit the listener read %v, want ErrMessageTooBig", err)
+	}
+	if err := page.Err(); !errors.Is(err, cdp.ErrMessageTooBig) {
+		t.Fatalf("the page's session ended with %v, want ErrMessageTooBig", err)
+	}
+	if got, err := evaluate(ctx, other, "1 + 1"); err != nil || string(got) != "2" {
+		t.Fatalf("the other tab answered %s, %v", got, err)
+	}
+	if got, err := evaluate(ctx, openPage(ctx, t, c), "1 + 1"); err != nil || string(got) != "2" {
+		t.Fatalf("a tab opened after answered %s, %v", got, err)
+	}
+	if err := c.Err(); err != nil {
+		t.Fatalf("the connection ended with %v", err)
 	}
 }
 
@@ -533,7 +519,7 @@ for (const [origin, prefix] of [['` + otherSite + `', ''], ['', 'same-site-']]) 
 		"/service.js": report + "report('service');\n",
 	}, reports)
 
-	c, _ := chromiumtest.LaunchPipe(t, chrome, "--site-per-process", "--disable-popup-blocking")
+	c := launch(t, chrome, "--site-per-process", "--disable-popup-blocking")
 	opened, err := cdp.Call(ctx, c.Browser(), cdp.TargetCreateTarget, cdp.TargetCreateTargetParams{URL: "about:blank"})
 	if err != nil {
 		t.Fatal(err)
@@ -706,7 +692,7 @@ func TestTheZeroAttachOptionsHoldEachWorkerOnce(t *testing.T) {
 			"/shared.js":  report + "report('shared');\n",
 			"/service.js": report + "report('service');\n",
 		}, reports)
-		c, _ := chromiumtest.LaunchPipe(t, chrome)
+		c := launch(t, chrome)
 		var mu sync.Mutex
 		announced := map[string]int{} // each target of the site's, by type and address
 		firstTab := make(chan *cdp.Session, 1)
@@ -808,7 +794,7 @@ func TestTheZeroAttachOptionsHoldEachWorkerOnce(t *testing.T) {
 func TestATargetAlreadyRunningWhenAutoAttachReachesItArrivesUnheld(t *testing.T) {
 	chromiumtest.Each(t, func(t *testing.T, chrome string) {
 		ctx := bounded(t)
-		c, _ := chromiumtest.LaunchPipe(t, chrome)
+		c := launch(t, chrome)
 		running := map[cdp.TargetID]bool{}
 		for range 2 {
 			before, err := cdp.Call(ctx, c.Browser(), cdp.TargetCreateTarget, cdp.TargetCreateTargetParams{URL: "about:blank"})

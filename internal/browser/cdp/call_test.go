@@ -52,7 +52,7 @@ func TestADeclaredCommandOrEventCannotBeRetyped(t *testing.T) {
 func TestAMethodTheInventoryDoesNotDeclareSendsNothing(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)
-	c, p := pipePair(t, nil)
+	c, p := socketPair(t, nil)
 	// The browser answers every command it reads, saying which it read.
 	methods := make(chan string, 8)
 	go func() {
@@ -147,7 +147,7 @@ func TestAMethodTheInventoryDoesNotDeclareSendsNothing(t *testing.T) {
 func TestAnEventTheInventoryDoesNotDeclareIsReadByNobody(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)
-	c, p := pipePair(t, nil)
+	c, p := socketPair(t, nil)
 	declared := c.Browser().Listen(testEvent)
 	ended, end := context.WithCancel(ctx)
 	end()
@@ -204,7 +204,7 @@ func TestAnEventTheInventoryDoesNotDeclareIsReadByNobody(t *testing.T) {
 func TestSendReturnsOnceSentAndEachPendingReadsItsOwnAnswer(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)
-	c, p := pipePair(t, nil)
+	c, p := socketPair(t, nil)
 	read := make(chan request, 2)
 	go func() {
 		for range 2 {
@@ -262,7 +262,7 @@ func TestSendReturnsOnceSentAndEachPendingReadsItsOwnAnswer(t *testing.T) {
 func TestASentCommandFailsWithItsSessionsEnd(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)
-	c, p := pipePair(t, nil)
+	c, p := socketPair(t, nil)
 	child := announce(ctx, t, c, p, attachment{"child", "target-child"})[0]
 	read := make(chan request, 1)
 	go func() {

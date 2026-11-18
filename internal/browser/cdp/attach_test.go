@@ -25,7 +25,7 @@ import (
 func TestAutoAttachResumesATargetOnlyAfterItsSetup(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)
-	c, p := pipePair(t, nil)
+	c, p := socketPair(t, nil)
 	var mu sync.Mutex
 	var order []string
 	attaches := map[SessionID]targetSetAutoAttachParams{}
@@ -144,7 +144,7 @@ func TestAutoAttachResumesATargetOnlyAfterItsSetup(t *testing.T) {
 // reads it — red.
 func TestAutoAttachResumesAHeldTargetBeforeItAnswersWhatSetupSent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		c, p := pipePair(t, nil)
+		c, p := socketPair(t, nil)
 		var mu sync.Mutex
 		var seen []string
 		go func() {
@@ -218,7 +218,7 @@ func TestAutoAttachResumesAHeldTargetBeforeItAnswersWhatSetupSent(t *testing.T) 
 // running one's resume — red.
 func TestAutoAttachNeverResumesATargetAlreadyRunning(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		c, p := pipePair(t, nil)
+		c, p := socketPair(t, nil)
 		seen := browserScript(p, func(request) func(*peer) error { return nil })
 		var mu sync.Mutex
 		var setUp []SessionID
@@ -277,7 +277,7 @@ func TestAutoAttachNeverResumesATargetAlreadyRunning(t *testing.T) {
 // red.
 func TestACommandSetupSentThatChromiumRefusesIsTheAttachersErr(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		c, p := pipePair(t, nil)
+		c, p := socketPair(t, nil)
 		seen := browserScript(p, func(r request) func(*peer) error {
 			if r.Method != testCall.name {
 				return nil
@@ -331,7 +331,7 @@ func TestANilAnswerFromSetupIsTheAttachersErr(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				c, p := pipePair(t, nil)
+				c, p := socketPair(t, nil)
 				browserScript(p, func(request) func(*peer) error { return nil })
 				a, err := AutoAttach(t.Context(), c.Browser(), AttachOptions{
 					Setup: func(context.Context, *Session, TargetAttachedToTargetEvent) ([]Answer, error) {
@@ -409,7 +409,7 @@ func awaitCommand(ctx context.Context, t testing.TB, seen <-chan request, method
 func TestAutoAttachCarriesOnPastATargetThatServesNoSuchDomain(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)
-	c, p := pipePair(t, nil)
+	c, p := socketPair(t, nil)
 	seen := make(chan request, 16)
 	script(p, func(r request) int64 {
 		if r.SessionID == "bare" {
@@ -474,7 +474,7 @@ func TestAutoAttachStopsAtAChildCommandRefusedForAnotherReason(t *testing.T) {
 	for _, refused := range []string{targetSetAutoAttach.name, runtimeRunIfWaitingForDebugger.name} {
 		t.Run(refused, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				c, p := pipePair(t, nil)
+				c, p := socketPair(t, nil)
 				seen := browserScript(p, func(r request) func(*peer) error {
 					if r.SessionID != "paused" || r.Method != refused {
 						return nil
@@ -521,7 +521,7 @@ func TestAutoAttachStopsAtAChildCommandRefusedForAnotherReason(t *testing.T) {
 func TestAutoAttachRefusedOnItsParentLeavesNothingRunning(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)
-	c, p := pipePair(t, nil)
+	c, p := socketPair(t, nil)
 	script(p, func(request) int64 { return -32000 }, make(chan request, 16))
 	a, err := AutoAttach(ctx, c.Browser(), AttachOptions{})
 	var refused *ProtocolError
@@ -553,7 +553,7 @@ func TestAutoAttachRefusedOnItsParentLeavesNothingRunning(t *testing.T) {
 func TestAutoAttachClosedLeavesAHeldTargetHeld(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)
-	c, p := pipePair(t, nil)
+	c, p := socketPair(t, nil)
 	seen := make(chan request, 16)
 	script(p, func(request) int64 { return 0 }, seen)
 	settingUp := make(chan struct{})
@@ -672,7 +672,7 @@ func TestAutoAttachCarriesOnPastAChildThatEndsBeforeItIsResumed(t *testing.T) {
 		} {
 			t.Run(end.name+" "+point.name, func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
-					c, p := pipePair(t, nil)
+					c, p := socketPair(t, nil)
 					seen := browserScript(p, func(r request) func(*peer) error {
 						if r.SessionID == "goes" && r.Method == point.method {
 							return end.end
@@ -757,7 +757,7 @@ func TestAnAnnouncementTheAttacherCannotReadStopsIt(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				c, p := pipePair(t, nil)
+				c, p := socketPair(t, nil)
 				seen := browserScript(p, func(request) func(*peer) error { return nil })
 				a, err := AutoAttach(t.Context(), c.Browser(), AttachOptions{})
 				if err != nil {
@@ -881,7 +881,7 @@ func TestANilOrEmptyChildFilterLeavesOutWhatChromiumAnnouncesTwice(t *testing.T)
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := bounded(t)
-			c, p := pipePair(t, nil)
+			c, p := socketPair(t, nil)
 			sent := make(chan request, 16)
 			script(p, func(request) int64 { return 0 }, sent)
 			a, err := AutoAttach(ctx, c.Browser(), tc.o)
@@ -940,7 +940,7 @@ func TestAChildFilterThatTakesWhatChromiumAnnouncesTwiceIsRefused(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := bounded(t)
-			c, p := pipePair(t, nil)
+			c, p := socketPair(t, nil)
 			sent := make(chan request, 16)
 			script(p, func(request) int64 { return 0 }, sent)
 			a, err := AutoAttach(ctx, c.Browser(), AttachOptions{ChildFilter: tc.filter})
@@ -1007,7 +1007,7 @@ func TestAFilterThatTakesTabsIsRefused(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := bounded(t)
-			c, p := pipePair(t, nil)
+			c, p := socketPair(t, nil)
 			sent := make(chan request, 16)
 			script(p, func(request) int64 { return 0 }, sent)
 			a, err := AutoAttach(ctx, c.Browser(), AttachOptions{Filter: tc.filter})

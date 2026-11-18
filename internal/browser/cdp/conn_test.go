@@ -6,8 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"net"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -15,8 +16,8 @@ import (
 // a page, which no line the connection logs and no error it returns may carry.
 const pageWords = "page-words-sentinel "
 
-// sized is a message of exactly size bytes, as the transport carries it (the
-// pipe's NUL aside): start, then pageWords over and over, then end.
+// sized is a message of exactly size bytes, as the transport carries it:
+// start, then pageWords over and over, then end.
 func sized(size int, start, end string) []byte {
 	fill := size - len(start) - len(end)
 	b := make([]byte, 0, size)
@@ -25,159 +26,142 @@ func sized(size int, start, end string) []byte {
 	return append(b, end...)
 }
 
-// A MESSAGE PAST THE READ LIMIT ENDS ONLY WHAT IT IS FOR, on both transports,
-// and never the connection but for an event of the browser's own session
-// (TestAnEventPastTheReadLimitOnTheBrowsersSessionEndsItsConnection's). A
-// message of exactly ReadLimit bytes is delivered whole. Past it, an answer
-// fails its own call with ErrMessageTooBig, naming the method, and the next
-// call on that session is answered; an event no listener asked for is dropped,
-// and its session goes on; an event a listener asked for ends that session
-// alone with ErrMessageTooBig — its call in flight fails with it and its
-// listener reports it — while a sibling session answers; and a message whose
-// start names neither an id nor a method is no CDP message, and ends the
-// connection as a whole one would. Each is logged at DEBUG by its id or method,
-// its session and its size, never by its words. Not parallel: each transport
-// holds a few copies of a 32 MiB message at once, which is enough for one case.
+// A MESSAGE PAST THE READ LIMIT ENDS ONLY WHAT IT IS FOR, never the connection
+// but for an event of the browser's own session. One of exactly ReadLimit is
+// delivered whole. Past it, an answer fails its own call (ErrMessageTooBig,
+// naming the method), an event nobody asked for is dropped, one a listener
+// asked for ends that session alone while a sibling answers, and one naming
+// neither an id nor a method ends the connection; each is logged by its id or
+// method, session and size, never its words. Not parallel: it holds a few.
 //
-// Mutations: end the connection at a message past ReadLimit, and the large
-// answer's call fails with the connection's end rather than its own — red;
-// drop the socket's SetReadLimit(-1), and the library's own 32 KiB ends the
-// connection at the message of exactly ReadLimit — red; set the library's
-// limit at ReadLimit instead, and it closes the socket at the large answer —
-// red; end the session of an event nobody asked for, and its listener reads
-// that end where the mark after it was due — red; drop an event a listener
-// asked for, and its session's call in flight waits to the case's bound — red;
-// read the session off the message's start alone, and the event a listener
-// asked for reaches the browser's session, which asked for nothing, so its own
-// goes on — red.
+// Mutations, each red: end the connection at a message past ReadLimit; drop
+// the socket's SetReadLimit(-1), or set it at ReadLimit; end the session of an
+// event nobody asked for; drop one a listener asked for; read the session off
+// the message's start alone.
 func TestAMessagePastTheReadLimitEndsOnlyWhatItIsFor(t *testing.T) {
-	for _, tr := range transports {
-		t.Run(tr.name, func(t *testing.T) {
-			logs := newRecords()
-			c, p := tr.pair(t, logs.logger())
-			held := announce(step(t), t, c, p, attachment{"big", "target-big"}, attachment{"sibling", "target-sibling"})
-			big, sibling := held[0], held[1]
-			sent := make(chan error, 1)
-			write := func(b []byte) { go func() { sent <- p.write(b) }() }
-			wrote := func() {
-				t.Helper()
-				if err := <-sent; err != nil {
-					t.Fatalf("writing a large message: %v", err)
-				}
-			}
-			// answers is a call on s the peer answers, as a check that s and
-			// the connection are still open.
-			answers := func(s *Session) {
-				t.Helper()
-				calls := make(chan error, 1)
-				ctx := step(t)
-				go func() {
-					_, err := Call(ctx, s, testCall, testParams{})
-					calls <- err
-				}()
-				if err := p.answer(p.next(), testResult{}); err != nil {
-					t.Fatal(err)
-				}
-				if err := <-calls; err != nil {
-					t.Fatalf("a call on %s after a message past ReadLimit: %v", sessionName(s.ID()), err)
-				}
-			}
+	logs := newRecords()
+	c, p := socketPair(t, logs.logger())
+	held := announce(step(t), t, c, p, attachment{"big", "target-big"}, attachment{"sibling", "target-sibling"})
+	big, sibling := held[0], held[1]
+	sent := make(chan error, 1)
+	write := func(b []byte) { go func() { sent <- p.write(b) }() }
+	wrote := func() {
+		t.Helper()
+		if err := <-sent; err != nil {
+			t.Fatalf("writing a large message: %v", err)
+		}
+	}
+	// answers is a call on s the peer answers, as a check that s and
+	// the connection are still open.
+	answers := func(s *Session) {
+		t.Helper()
+		calls := make(chan error, 1)
+		ctx := step(t)
+		go func() {
+			_, err := Call(ctx, s, testCall, testParams{})
+			calls <- err
+		}()
+		if err := p.answer(p.next(), testResult{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-calls; err != nil {
+			t.Fatalf("a call on %s after a message past ReadLimit: %v", sessionName(s.ID()), err)
+		}
+	}
 
-			// Exactly ReadLimit: delivered whole.
-			l := c.Browser().Listen(testEvent)
-			write(sized(ReadLimit, `{"method":"Test.event","params":{"n":1,"text":"`, `"}}`))
-			m, err := l.Next(step(t))
-			if err != nil {
-				t.Fatalf("a message of exactly ReadLimit bytes: %v", err)
-			}
-			if got := messageSize(m.Method, m.Params); got < ReadLimit-64 {
-				t.Fatalf("a message of exactly ReadLimit bytes arrived as %d bytes", got)
-			}
-			wrote()
-			l.Close()
+	// Exactly ReadLimit: delivered whole.
+	l := c.Browser().Listen(testEvent)
+	write(sized(ReadLimit, `{"method":"Test.event","params":{"n":1,"text":"`, `"}}`))
+	m, err := l.Next(step(t))
+	if err != nil {
+		t.Fatalf("a message of exactly ReadLimit bytes: %v", err)
+	}
+	if got := messageSize(m.Method, m.Params); got < ReadLimit-64 {
+		t.Fatalf("a message of exactly ReadLimit bytes arrived as %d bytes", got)
+	}
+	wrote()
+	l.Close()
 
-			// An answer past it fails its own call alone.
-			calls := make(chan error, 1)
-			ctx := step(t)
-			go func() {
-				_, err := Call(ctx, big, testCall, testParams{})
-				calls <- err
-			}()
-			r := p.next()
-			write(sized(ReadLimit+1, fmt.Sprintf(`{"id":%d,"result":{"text":"`, r.ID), `"},"sessionId":"big"}`))
-			if err := <-calls; !errors.Is(err, ErrMessageTooBig) || !strings.Contains(err.Error(), testCall.name) {
-				t.Fatalf("the call answered past ReadLimit failed with %v, want ErrMessageTooBig naming %s", err, testCall.name)
-			}
-			wrote()
-			answers(big)
+	// An answer past it fails its own call alone.
+	calls := make(chan error, 1)
+	ctx := step(t)
+	go func() {
+		_, err := Call(ctx, big, testCall, testParams{})
+		calls <- err
+	}()
+	r := p.next()
+	write(sized(ReadLimit+1, fmt.Sprintf(`{"id":%d,"result":{"text":"`, r.ID), `"},"sessionId":"big"}`))
+	if err := <-calls; !errors.Is(err, ErrMessageTooBig) || !strings.Contains(err.Error(), testCall.name) {
+		t.Fatalf("the call answered past ReadLimit failed with %v, want ErrMessageTooBig naming %s", err, testCall.name)
+	}
+	wrote()
+	answers(big)
 
-			// An event past it nobody asked for is dropped. The mark after it
-			// is routed after it, so by the time the mark is taken it has
-			// been read through.
-			lb := big.Listen(testEvent)
-			write(sized(ReadLimit+1, `{"method":"Test.other","params":{"text":"`, `"},"sessionId":"big"}`))
-			wrote()
-			if err := p.event("big", testEvent.name, testEventParams{N: 2}); err != nil {
-				t.Fatal(err)
-			}
-			if m, err := lb.Next(step(t)); err != nil {
-				t.Fatalf("after an event past ReadLimit nobody asked for, its session's listener read %v", err)
-			} else if e, _, _ := testEvent.Of(m); e.N != 2 {
-				t.Fatalf("the mark read as %+v", e)
-			}
-			answers(big)
+	// An event past it nobody asked for is dropped. The mark after it
+	// is routed after it, so by the time the mark is taken it has
+	// been read through.
+	lb := big.Listen(testEvent)
+	write(sized(ReadLimit+1, `{"method":"Test.other","params":{"text":"`, `"},"sessionId":"big"}`))
+	wrote()
+	if err := p.event("big", testEvent.name, testEventParams{N: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := lb.Next(step(t)); err != nil {
+		t.Fatalf("after an event past ReadLimit nobody asked for, its session's listener read %v", err)
+	} else if e, _, _ := testEvent.Of(m); e.N != 2 {
+		t.Fatalf("the mark read as %+v", e)
+	}
+	answers(big)
 
-			// An event past it a listener asked for ends its own session.
-			ctx = step(t)
-			go func() {
-				_, err := Call(ctx, big, testCall, testParams{})
-				calls <- err
-			}()
-			p.next() // in flight, and never answered
-			write(sized(ReadLimit+1, `{"method":"Test.event","params":{"text":"`, `"},"sessionId":"big"}`))
-			wrote()
-			if err := <-calls; !errors.Is(err, ErrMessageTooBig) {
-				t.Fatalf("the call in flight on the session whose event passed ReadLimit failed with %v, want ErrMessageTooBig", err)
-			}
-			if _, err := lb.Next(step(t)); !errors.Is(err, ErrMessageTooBig) {
-				t.Fatalf("the listener that asked for the event read %v, want ErrMessageTooBig", err)
-			}
-			select {
-			case <-big.Done():
-			default:
-				t.Fatal("the session whose event passed ReadLimit is open")
-			}
-			answers(sibling)
-			answers(c.Browser())
-			if err := c.Err(); err != nil {
-				t.Fatalf("the connection ended with %v", err)
-			}
+	// An event past it a listener asked for ends its own session.
+	ctx = step(t)
+	go func() {
+		_, err := Call(ctx, big, testCall, testParams{})
+		calls <- err
+	}()
+	p.next() // in flight, and never answered
+	write(sized(ReadLimit+1, `{"method":"Test.event","params":{"text":"`, `"},"sessionId":"big"}`))
+	wrote()
+	if err := <-calls; !errors.Is(err, ErrMessageTooBig) {
+		t.Fatalf("the call in flight on the session whose event passed ReadLimit failed with %v, want ErrMessageTooBig", err)
+	}
+	if _, err := lb.Next(step(t)); !errors.Is(err, ErrMessageTooBig) {
+		t.Fatalf("the listener that asked for the event read %v, want ErrMessageTooBig", err)
+	}
+	select {
+	case <-big.Done():
+	default:
+		t.Fatal("the session whose event passed ReadLimit is open")
+	}
+	answers(sibling)
+	answers(c.Browser())
+	if err := c.Err(); err != nil {
+		t.Fatalf("the connection ended with %v", err)
+	}
 
-			// A message past it that names neither an id nor a method.
-			write(sized(ReadLimit+1, `{"params":{"text":"`, `"}}`))
-			select {
-			case <-c.Done():
-			case <-step(t).Done():
-				t.Fatal("a message past ReadLimit that is no CDP message left the connection open")
-			}
-			if err := c.Err(); !errors.Is(err, ErrClosed) || !strings.Contains(err.Error(), fmt.Sprint(ReadLimit+1)) {
-				t.Fatalf("the connection ended with %v, want ErrClosed naming the message's size", err)
-			}
+	// A message past it that names neither an id nor a method.
+	write(sized(ReadLimit+1, `{"params":{"text":"`, `"}}`))
+	select {
+	case <-c.Done():
+	case <-step(t).Done():
+		t.Fatal("a message past ReadLimit that is no CDP message left the connection open")
+	}
+	if err := c.Err(); !errors.Is(err, ErrClosed) || !strings.Contains(err.Error(), fmt.Sprint(ReadLimit+1)) {
+		t.Fatalf("the connection ended with %v, want ErrClosed naming the message's size", err)
+	}
 
-			logged := logs.text()
-			for _, want := range []string{
-				fmt.Sprintf("cdp_message_too_big id=%d method= session=big bytes=%d", r.ID, ReadLimit+1),
-				fmt.Sprintf("cdp_message_too_big id=0 method=Test.other session=big bytes=%d", ReadLimit+1),
-				fmt.Sprintf("cdp_message_too_big id=0 method=Test.event session=big bytes=%d", ReadLimit+1),
-			} {
-				if !strings.Contains(logged, want) {
-					t.Errorf("the connection logged no %q:\n%s", want, logged)
-				}
-			}
-			if strings.Contains(logged, pageWords) || strings.Contains(c.Err().Error(), pageWords) {
-				t.Errorf("a line or an error carries the message's words:\n%s\n%v", logged, c.Err())
-			}
-		})
+	logged := logs.text()
+	for _, want := range []string{
+		fmt.Sprintf("cdp_message_too_big id=%d method= session=big bytes=%d", r.ID, ReadLimit+1),
+		fmt.Sprintf("cdp_message_too_big id=0 method=Test.other session=big bytes=%d", ReadLimit+1),
+		fmt.Sprintf("cdp_message_too_big id=0 method=Test.event session=big bytes=%d", ReadLimit+1),
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("the connection logged no %q:\n%s", want, logged)
+		}
+	}
+	if strings.Contains(logged, pageWords) || strings.Contains(c.Err().Error(), pageWords) {
+		t.Errorf("a line or an error carries the message's words:\n%s\n%v", logged, c.Err())
 	}
 }
 
@@ -230,47 +214,44 @@ func TestAMessagePastTheReadLimitIsRoutedByItsStartAndItsEnd(t *testing.T) {
 	}
 }
 
-// A MESSAGE THAT IS NO CDP MESSAGE ENDS ITS CONNECTION, on both transports:
-// one that does not parse as JSON, and an object naming neither an id nor a
-// method, are what a peer speaking something else sends — a page, an error of
-// a pool's own — and the connection that reads one ends with ErrClosed, naming
-// the message's size and none of its words. A mark sent after it is never
-// delivered.
+// A MESSAGE THAT IS NO CDP MESSAGE ENDS ITS CONNECTION: one that does not
+// parse as JSON, and an object naming neither an id nor a method, are what a
+// peer speaking something else sends — a page, an error of a proxy's own — and
+// the connection that reads one ends with ErrClosed, naming the message's size
+// and none of its words. A mark sent after it is never delivered.
 //
 // Mutation: let the reader pass over such a message, and the mark after it is
 // delivered on a connection still open — red.
 func TestAMessageThatIsNoCDPMessageEndsItsConnection(t *testing.T) {
 	t.Parallel()
-	for _, tr := range transports {
-		for _, tc := range []struct {
-			name, message string
-		}{
-			{"a page", "<html>" + pageWords + "</html>"},
-			{"an object naming neither an id nor a method", `{"` + pageWords + `":1}`},
-		} {
-			t.Run(tr.name+", "+tc.name, func(t *testing.T) {
-				t.Parallel()
-				ctx := bounded(t)
-				c, p := tr.pair(t, nil)
-				marks := c.Browser().Listen(testEvent)
-				if err := p.write([]byte(tc.message)); err != nil {
-					t.Fatal(err)
-				}
-				// The peer's end may be closed by then: the mark's fate is
-				// read off the listener.
-				_ = p.event("", testEvent.name, testEventParams{N: 1})
-				if m, err := marks.Next(ctx); err == nil {
-					t.Fatalf("the mark sent after %q was delivered (%s): the connection read past it", tc.message, m.Params)
-				}
-				err := c.Err()
-				if !errors.Is(err, ErrClosed) || !strings.Contains(err.Error(), fmt.Sprintf("of %d bytes", len(tc.message))) {
-					t.Fatalf("the connection ended with %v, want ErrClosed naming the message's size", err)
-				}
-				if strings.Contains(err.Error(), pageWords) {
-					t.Fatalf("the connection's end carries the message's words: %v", err)
-				}
-			})
-		}
+	for _, tc := range []struct {
+		name, message string
+	}{
+		{"a page", "<html>" + pageWords + "</html>"},
+		{"an object naming neither an id nor a method", `{"` + pageWords + `":1}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := bounded(t)
+			c, p := socketPair(t, nil)
+			marks := c.Browser().Listen(testEvent)
+			if err := p.write([]byte(tc.message)); err != nil {
+				t.Fatal(err)
+			}
+			// The peer's end may be closed by then: the mark's fate is
+			// read off the listener.
+			_ = p.event("", testEvent.name, testEventParams{N: 1})
+			if m, err := marks.Next(ctx); err == nil {
+				t.Fatalf("the mark sent after %q was delivered (%s): the connection read past it", tc.message, m.Params)
+			}
+			err := c.Err()
+			if !errors.Is(err, ErrClosed) || !strings.Contains(err.Error(), fmt.Sprintf("of %d bytes", len(tc.message))) {
+				t.Fatalf("the connection ended with %v, want ErrClosed naming the message's size", err)
+			}
+			if strings.Contains(err.Error(), pageWords) {
+				t.Fatalf("the connection's end carries the message's words: %v", err)
+			}
+		})
 	}
 }
 
@@ -284,7 +265,7 @@ func TestAMessageThatIsNoCDPMessageEndsItsConnection(t *testing.T) {
 func TestAnAnswerAndAnEventReachOnlyTheirOwnSession(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)
-	c, p := pipePair(t, nil)
+	c, p := socketPair(t, nil)
 	held := announce(ctx, t, c, p, attachment{"A", "target-A"}, attachment{"B", "target-B"})
 	a, b := held[0], held[1]
 	la, lb, lbrowser := a.Listen(testEvent), b.Listen(testEvent), c.Browser().Listen(testEvent)
@@ -364,7 +345,7 @@ func TestADetachEndsOnlyItsSessionAndFailsItsCallsInFlight(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := bounded(t)
-			c, p := pipePair(t, nil)
+			c, p := socketPair(t, nil)
 			held := announce(ctx, t, c, p, attachment{"gone", "target-gone"}, attachment{"sibling", "target-sibling"})
 			gone, sibling := held[0], held[1]
 			l := gone.Listen(testEvent)
@@ -433,7 +414,7 @@ func TestADetachEndsOnlyItsSessionAndFailsItsCallsInFlight(t *testing.T) {
 func TestACrashEndsTheCrashedTargetsSessions(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)
-	c, p := pipePair(t, nil)
+	c, p := socketPair(t, nil)
 	// Two sessions on the first target, one on the second.
 	held := announce(ctx, t, c, p, attachment{"one", "first"}, attachment{"two", "first"}, attachment{"three", "second"})
 	one, two, three := held[0], held[1], held[2]
@@ -476,48 +457,43 @@ func TestACrashEndsTheCrashedTargetsSessions(t *testing.T) {
 	}
 }
 
-// A CLOSED TRANSPORT FAILS EVERY CALL AND ENDS EVERY LISTENER, on both
-// transports: when the browser's end goes away, every call in flight on every
-// session fails with ErrClosed, every listener reports it, the connection is
-// done, and a later call fails at once — never a hang.
+// A CLOSED TRANSPORT FAILS EVERY CALL AND ENDS EVERY LISTENER: when the
+// browser's end goes away, every call in flight on every session fails with
+// ErrClosed, every listener reports it, the connection is done, and a later
+// call fails at once — never a hang.
 //
 // Mutation: leave the calls in flight waiting when the reader ends, and they
 // hang — red at the case's bound.
 func TestAClosedTransportFailsEveryCallAndEndsEveryListener(t *testing.T) {
 	t.Parallel()
-	for _, tr := range transports {
-		t.Run(tr.name, func(t *testing.T) {
-			t.Parallel()
-			ctx := bounded(t)
-			c, p := tr.pair(t, nil)
-			child := announce(ctx, t, c, p, attachment{"child", "target"})[0]
-			l := child.Listen(testEvent)
-			calls := make(chan error, 2)
-			for _, s := range []*Session{c.Browser(), child} {
-				go func() {
-					_, err := Call(ctx, s, testCall, testParams{})
-					calls <- err
-				}()
-				p.next()
-			}
-			p.stop()
-			for range 2 {
-				if err := <-calls; !errors.Is(err, ErrClosed) {
-					t.Fatalf("a call in flight failed with %v, want ErrClosed", err)
-				}
-			}
-			if _, err := l.Next(ctx); !errors.Is(err, ErrClosed) {
-				t.Fatalf("the listener reported %v, want ErrClosed", err)
-			}
-			select {
-			case <-c.Done():
-			default:
-				t.Fatal("the connection is not done")
-			}
-			if _, err := Call(ctx, child, testCall, testParams{}); !errors.Is(err, ErrClosed) {
-				t.Fatalf("a later call answered %v, want ErrClosed", err)
-			}
-		})
+	ctx := bounded(t)
+	c, p := socketPair(t, nil)
+	child := announce(ctx, t, c, p, attachment{"child", "target"})[0]
+	l := child.Listen(testEvent)
+	calls := make(chan error, 2)
+	for _, s := range []*Session{c.Browser(), child} {
+		go func() {
+			_, err := Call(ctx, s, testCall, testParams{})
+			calls <- err
+		}()
+		p.next()
+	}
+	p.stop()
+	for range 2 {
+		if err := <-calls; !errors.Is(err, ErrClosed) {
+			t.Fatalf("a call in flight failed with %v, want ErrClosed", err)
+		}
+	}
+	if _, err := l.Next(ctx); !errors.Is(err, ErrClosed) {
+		t.Fatalf("the listener reported %v, want ErrClosed", err)
+	}
+	select {
+	case <-c.Done():
+	default:
+		t.Fatal("the connection is not done")
+	}
+	if _, err := Call(ctx, child, testCall, testParams{}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("a later call answered %v, want ErrClosed", err)
 	}
 }
 
@@ -607,7 +583,7 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 
 	t.Run("an event nobody listens for counts nothing", func(t *testing.T) {
 		t.Parallel()
-		c, p := pipePair(t, nil)
+		c, p := socketPair(t, nil)
 		l := c.Browser().Listen(testEvent)
 		for i := range over {
 			if err := event(p, testOther.name, i); err != nil {
@@ -626,7 +602,7 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 
 	t.Run("a listener that keeps up", func(t *testing.T) {
 		t.Parallel()
-		c, p := pipePair(t, nil)
+		c, p := socketPair(t, nil)
 		l := c.Browser().Listen(testEvent)
 		for i := range over {
 			if err := event(p, testEvent.name, i); err != nil {
@@ -644,7 +620,7 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 
 	t.Run("a listener closed with what it held", func(t *testing.T) {
 		t.Parallel()
-		c, p := pipePair(t, nil)
+		c, p := socketPair(t, nil)
 		marks := c.Browser().Listen(testOther)
 		held := c.Browser().Listen(testEvent)
 		for i := range half {
@@ -677,7 +653,7 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 
 	t.Run("an ended session's listener, closed", func(t *testing.T) {
 		t.Parallel()
-		c, p := pipePair(t, nil)
+		c, p := socketPair(t, nil)
 		ended := announce(step(t), t, c, p, attachment{"ended", "target-ended"})[0]
 		held := ended.Listen(testEvent)
 		for i := range 2 {
@@ -708,7 +684,7 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 		if half*chunk >= MaxBacklog || 2*half*chunk <= MaxBacklog {
 			t.Fatalf("%d events of %d bytes are not less than MaxBacklog once and more twice", half, chunk)
 		}
-		c, p := pipePair(t, nil)
+		c, p := socketPair(t, nil)
 		page := announce(step(t), t, c, p, attachment{"page", "target-page"})[0]
 		marks := c.Browser().Listen(testOther)
 		// Two listeners for one event, neither drained.
@@ -750,7 +726,7 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 
 	t.Run("a session's listener that does not keep up", func(t *testing.T) {
 		t.Parallel()
-		c, p := pipePair(t, nil)
+		c, p := socketPair(t, nil)
 		held := announce(step(t), t, c, p, attachment{"page", "target-page"}, attachment{"sibling", "target-sibling"})
 		page, sibling := held[0], held[1]
 		marks := c.Browser().Listen(testOther)
@@ -783,8 +759,8 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 
 	t.Run("the browser's own listener that does not keep up", func(t *testing.T) {
 		t.Parallel()
-		c, p := pipePair(t, nil)
-		other, otherPeer := pipePair(t, nil)
+		c, p := socketPair(t, nil)
+		other, otherPeer := socketPair(t, nil)
 		l := c.Browser().Listen(testEvent)
 		sent := 0
 		for ; sent < over; sent++ {
@@ -815,7 +791,7 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 
 	t.Run("an event just under the read limit", func(t *testing.T) {
 		t.Parallel()
-		c, p := pipePair(t, nil)
+		c, p := socketPair(t, nil)
 		held := announce(step(t), t, c, p, attachment{"page", "target-page"}, attachment{"other", "target-other"})
 		page, other := held[0], held[1]
 		marks := c.Browser().Listen(testOther)
@@ -923,7 +899,7 @@ func TestTheConnectionsBackstopEndsTheSessionThatHoldsTheMost(t *testing.T) {
 	}
 
 	t.Run("an open session holding the most", func(t *testing.T) {
-		c, p := pipePair(t, nil)
+		c, p := socketPair(t, nil)
 		held := announce(step(t), t, c, p, attachment{"most", "target-most"}, attachment{"next", "target-next"},
 			attachment{"small", "target-small"})
 		most, next, small := held[0], held[1], held[2]
@@ -966,7 +942,7 @@ func TestTheConnectionsBackstopEndsTheSessionThatHoldsTheMost(t *testing.T) {
 	})
 
 	t.Run("a session that has ended", func(t *testing.T) {
-		c, p := pipePair(t, nil)
+		c, p := socketPair(t, nil)
 		held := announce(step(t), t, c, p, attachment{"gone", "target-gone"}, attachment{"next", "target-next"},
 			attachment{"small", "target-small"})
 		gone, next, small := held[0], held[1], held[2]
@@ -1002,7 +978,7 @@ func TestTheConnectionsBackstopEndsTheSessionThatHoldsTheMost(t *testing.T) {
 	})
 
 	t.Run("the browser's own session holding the most", func(t *testing.T) {
-		c, p := pipePair(t, nil)
+		c, p := socketPair(t, nil)
 		held := announce(step(t), t, c, p, attachment{"next", "target-next"}, attachment{"small", "target-small"})
 		next := held[0]
 		marks := c.Browser().Listen(testOther)
@@ -1051,117 +1027,109 @@ func TestTheConnectionsBackstopEndsTheSessionThatHoldsTheMost(t *testing.T) {
 // Mutation: forget a session at its end, whatever ended it, and the child's
 // detach is unrouted: the child stays open — red.
 func TestASessionThatHasEndedStillEndsTheChildrenItAnnounced(t *testing.T) {
-	for _, tr := range transports {
-		t.Run(tr.name, func(t *testing.T) {
-			c, p := tr.pair(t, nil)
-			parent := announce(step(t), t, c, p, attachment{"parent", "target-parent"})[0]
-			l := parent.Listen(testEvent, TargetAttachedToTarget)
-			defer l.Close()
-			// The parent announces a child of its own, as a page announces
-			// a frame.
-			if err := p.event("parent", TargetAttachedToTarget.name, map[string]any{
-				"sessionId":          "child",
-				"targetInfo":         map[string]any{"targetId": "target-child", "type": "iframe"},
-				"waitingForDebugger": false,
-			}); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := l.Next(step(t)); err != nil {
-				t.Fatal(err)
-			}
-			child := c.Session("child")
-			if err := child.Err(); err != nil {
-				t.Fatalf("the announced child has ended: %v", err)
-			}
-			if err := p.write(sized(ReadLimit+1, `{"method":"Test.event","params":{"text":"`, `"},"sessionId":"parent"}`)); err != nil {
-				t.Fatal(err)
-			}
-			select {
-			case <-parent.Done():
-			case <-step(t).Done():
-				t.Fatal("the parent whose event passed ReadLimit is open")
-			}
-			if err := p.event("parent", testEvent.name, testEventParams{N: 1}); err != nil {
-				t.Fatal(err)
-			}
-			if err := p.event("parent", TargetDetachedFromTarget.name, map[string]any{"sessionId": "child"}); err != nil {
-				t.Fatal(err)
-			}
-			select {
-			case <-child.Done():
-			case <-step(t).Done():
-				t.Fatal("the child's detach, on its parent that had ended, left the child open")
-			}
-			var detached *DetachedError
-			if err := child.Err(); !errors.As(err, &detached) || detached.SessionID != "child" {
-				t.Fatalf("the child ended with %v, want a *DetachedError naming it", err)
-			}
-			if m, err := l.Next(step(t)); !errors.Is(err, ErrMessageTooBig) {
-				t.Fatalf("the parent's listener read %s, %v after its end; want its end alone", m.Method, err)
-			}
-			if c.Session("parent") != parent {
-				t.Fatal("the parent, ended by the connection, is no longer the session the connection holds for its id")
-			}
-			// Chromium's detach of the parent itself: forgotten from then on.
-			detaches := c.Browser().Listen(TargetDetachedFromTarget)
-			defer detaches.Close()
-			if err := p.event("", TargetDetachedFromTarget.name, map[string]any{"sessionId": "parent"}); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := detaches.Next(step(t)); err != nil {
-				t.Fatal(err)
-			}
-			if c.Session("parent") == parent {
-				t.Fatal("the parent Chromium detached is still the session the connection holds for its id")
-			}
-			if err := c.Err(); err != nil {
-				t.Fatalf("the connection ended with %v", err)
-			}
-		})
+	c, p := socketPair(t, nil)
+	parent := announce(step(t), t, c, p, attachment{"parent", "target-parent"})[0]
+	l := parent.Listen(testEvent, TargetAttachedToTarget)
+	defer l.Close()
+	// The parent announces a child of its own, as a page announces
+	// a frame.
+	if err := p.event("parent", TargetAttachedToTarget.name, map[string]any{
+		"sessionId":          "child",
+		"targetInfo":         map[string]any{"targetId": "target-child", "type": "iframe"},
+		"waitingForDebugger": false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Next(step(t)); err != nil {
+		t.Fatal(err)
+	}
+	child := c.Session("child")
+	if err := child.Err(); err != nil {
+		t.Fatalf("the announced child has ended: %v", err)
+	}
+	if err := p.write(sized(ReadLimit+1, `{"method":"Test.event","params":{"text":"`, `"},"sessionId":"parent"}`)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-parent.Done():
+	case <-step(t).Done():
+		t.Fatal("the parent whose event passed ReadLimit is open")
+	}
+	if err := p.event("parent", testEvent.name, testEventParams{N: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.event("parent", TargetDetachedFromTarget.name, map[string]any{"sessionId": "child"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-child.Done():
+	case <-step(t).Done():
+		t.Fatal("the child's detach, on its parent that had ended, left the child open")
+	}
+	var detached *DetachedError
+	if err := child.Err(); !errors.As(err, &detached) || detached.SessionID != "child" {
+		t.Fatalf("the child ended with %v, want a *DetachedError naming it", err)
+	}
+	if m, err := l.Next(step(t)); !errors.Is(err, ErrMessageTooBig) {
+		t.Fatalf("the parent's listener read %s, %v after its end; want its end alone", m.Method, err)
+	}
+	if c.Session("parent") != parent {
+		t.Fatal("the parent, ended by the connection, is no longer the session the connection holds for its id")
+	}
+	// Chromium's detach of the parent itself: forgotten from then on.
+	detaches := c.Browser().Listen(TargetDetachedFromTarget)
+	defer detaches.Close()
+	if err := p.event("", TargetDetachedFromTarget.name, map[string]any{"sessionId": "parent"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := detaches.Next(step(t)); err != nil {
+		t.Fatal(err)
+	}
+	if c.Session("parent") == parent {
+		t.Fatal("the parent Chromium detached is still the session the connection holds for its id")
+	}
+	if err := c.Err(); err != nil {
+		t.Fatalf("the connection ended with %v", err)
 	}
 }
 
 // AN EVENT PAST THE READ LIMIT ON THE BROWSER'S OWN SESSION ENDS ITS
-// CONNECTION, on both transports, when a listener of that session asked for
-// it: the browser's session ends only with its connection, since without it
-// the connection could create, attach and resume nothing. The connection ends
-// with ErrMessageTooBig, the listener reports that end and nothing after it,
-// and an announcement Chromium sent after it registers nothing: the session it
-// names is one that ended with the connection.
+// CONNECTION, when a listener of that session asked for it: the browser's
+// session ends only with its connection, since without it the connection could
+// create, attach and resume nothing. The connection ends with ErrMessageTooBig,
+// the listener reports that end and nothing after it, and an announcement
+// Chromium sent after it registers nothing: the session it names is one that
+// ended with the connection.
 //
 // Mutation: end the browser's own session alone, and the connection stays open
 // — red.
 func TestAnEventPastTheReadLimitOnTheBrowsersSessionEndsItsConnection(t *testing.T) {
-	for _, tr := range transports {
-		t.Run(tr.name, func(t *testing.T) {
-			c, p := tr.pair(t, nil)
-			l := c.Browser().Listen(testEvent, TargetAttachedToTarget)
-			sent := make(chan error, 1)
-			go func() {
-				sent <- p.write(sized(ReadLimit+1, `{"method":"Test.event","params":{"text":"`, `"}}`))
-			}()
-			if err := <-sent; err != nil {
-				t.Fatal(err)
-			}
-			// What Chromium sends next: the connection may have closed its
-			// end by then.
-			_ = p.event("", testEvent.name, testEventParams{N: 42})
-			_ = p.attach("late", "target-late", "page")
-			select {
-			case <-c.Done():
-			case <-step(t).Done():
-				t.Fatal("an event past ReadLimit the browser's own listener asked for left the connection open")
-			}
-			if err := c.Err(); !errors.Is(err, ErrMessageTooBig) || !strings.Contains(err.Error(), "the connection") {
-				t.Fatalf("the connection ended with %v, want ErrMessageTooBig naming the connection", err)
-			}
-			if m, err := l.Next(step(t)); !errors.Is(err, ErrMessageTooBig) {
-				t.Fatalf("the browser's listener read %s %s, %v; want the end alone", m.Method, m.Params, err)
-			}
-			if err := c.Session("late").Err(); !errors.Is(err, ErrMessageTooBig) {
-				t.Fatalf("the session announced after the end ended with %v, want the connection's end", err)
-			}
-		})
+	c, p := socketPair(t, nil)
+	l := c.Browser().Listen(testEvent, TargetAttachedToTarget)
+	sent := make(chan error, 1)
+	go func() {
+		sent <- p.write(sized(ReadLimit+1, `{"method":"Test.event","params":{"text":"`, `"}}`))
+	}()
+	if err := <-sent; err != nil {
+		t.Fatal(err)
+	}
+	// What Chromium sends next: the connection may have closed its
+	// end by then.
+	_ = p.event("", testEvent.name, testEventParams{N: 42})
+	_ = p.attach("late", "target-late", "page")
+	select {
+	case <-c.Done():
+	case <-step(t).Done():
+		t.Fatal("an event past ReadLimit the browser's own listener asked for left the connection open")
+	}
+	if err := c.Err(); !errors.Is(err, ErrMessageTooBig) || !strings.Contains(err.Error(), "the connection") {
+		t.Fatalf("the connection ended with %v, want ErrMessageTooBig naming the connection", err)
+	}
+	if m, err := l.Next(step(t)); !errors.Is(err, ErrMessageTooBig) {
+		t.Fatalf("the browser's listener read %s %s, %v; want the end alone", m.Method, m.Params, err)
+	}
+	if err := c.Session("late").Err(); !errors.Is(err, ErrMessageTooBig) {
+		t.Fatalf("the session announced after the end ended with %v, want the connection's end", err)
 	}
 }
 
@@ -1178,7 +1146,7 @@ func TestTheClientNeverLogsOrReportsParametersOrResults(t *testing.T) {
 	const sentinel = "hunter2-sentinel"
 	ctx := bounded(t)
 	logs := newRecords()
-	c, p := pipePair(t, logs.logger())
+	c, p := socketPair(t, logs.logger())
 	var errs []string
 
 	// A refusal whose data echoes the parameters.
@@ -1277,7 +1245,7 @@ func TestTheClientNeverLogsOrReportsParametersOrResults(t *testing.T) {
 func TestASessionTheConnectionDoesNotHoldHasEnded(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)
-	c, p := pipePair(t, nil)
+	c, p := socketPair(t, nil)
 	gone := announce(ctx, t, c, p, attachment{"gone", "target-gone"})[0]
 	if err := p.event("", TargetDetachedFromTarget.name, map[string]any{"sessionId": "gone"}); err != nil {
 		t.Fatal(err)
@@ -1353,7 +1321,7 @@ func TestASessionTheConnectionDoesNotHoldHasEnded(t *testing.T) {
 func TestACommandUnderAnEndedContextSendsNothing(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)
-	c, p := pipePair(t, nil)
+	c, p := socketPair(t, nil)
 	ended, cancel := context.WithCancel(ctx)
 	cancel()
 	for i := range 50 {
@@ -1393,7 +1361,7 @@ func TestACommandUnderAnEndedContextSendsNothing(t *testing.T) {
 func TestAClosedListenerAnswersErrListenerClosed(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)
-	c, p := pipePair(t, nil)
+	c, p := socketPair(t, nil)
 	l := c.Browser().Listen(testEvent)
 	marks := c.Browser().Listen(testOther)
 	// The mark is routed after the event, so the event is queued by then.
@@ -1418,23 +1386,21 @@ func TestAClosedListenerAnswersErrListenerClosed(t *testing.T) {
 }
 
 // A WRITE THAT FAILS ENDS THE CONNECTION: when the browser stops taking frames
-// — its read end closed alone, its writes still open — the write of the next
-// command fails, the connection ends with ErrClosed, and that call fails with
-// it at once, never at its deadline.
+// while its messages can still arrive, the write of the next command fails,
+// the connection ends with ErrClosed wrapping the write's own error, and that
+// call fails with it at once, never at its deadline. On a transport of the
+// case's own, whose writes fail and whose reads wait for its close: a socket
+// that fails a write fails its reads too, and either could end the connection.
 //
 // Mutation: let a failed write leave the connection open (drop writeLoop's
 // end), and the call waits to the case's bound — red.
 func TestAFailedWriteEndsTheConnection(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)
-	clientReads, peerWrites := io.Pipe()
-	peerReads, clientWrites := io.Pipe()
-	c := NewPipe(clientReads, clientWrites, Options{})
-	t.Cleanup(func() {
-		_ = c.Close()
-		_ = peerWrites.Close()
-	})
-	_ = peerReads.Close()
+	refused := errors.New("the browser takes no frame")
+	tr := &writesFail{err: refused, closed: make(chan struct{})}
+	c := newConn(ctx, tr, nil)
+	t.Cleanup(func() { _ = c.Close() })
 	if _, err := Call(ctx, c.Browser(), testCall, testParams{}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("the call whose write failed answered %v, want ErrClosed", err)
 	}
@@ -1443,7 +1409,27 @@ func TestAFailedWriteEndsTheConnection(t *testing.T) {
 	default:
 		t.Fatal("the connection whose write failed is open")
 	}
-	if err := c.Err(); !errors.Is(err, ErrClosed) || !errors.Is(err, io.ErrClosedPipe) {
+	if err := c.Err(); !errors.Is(err, ErrClosed) || !errors.Is(err, refused) {
 		t.Fatalf("the connection ended with %v, want ErrClosed wrapping the write's own error", err)
 	}
+}
+
+// writesFail is a transport whose every write fails with err and whose read
+// waits for its close, as a browser's that took no frame but could still send.
+type writesFail struct {
+	err    error
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (w *writesFail) read(context.Context) (message, error) {
+	<-w.closed
+	return message{}, net.ErrClosed
+}
+
+func (w *writesFail) write(context.Context, []byte) error { return w.err }
+
+func (w *writesFail) close() error {
+	w.once.Do(func() { close(w.closed) })
+	return nil
 }

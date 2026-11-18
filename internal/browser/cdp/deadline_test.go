@@ -20,7 +20,7 @@ import (
 // command sent at 10 s fails at 60 s with the first — red.
 func TestEveryCommandFailsAtItsOwnDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		c, p := pipePair(t, nil)
+		c, p := socketPair(t, nil)
 		start := time.Now()
 		type ended struct {
 			err error
@@ -76,16 +76,17 @@ func TestEveryCommandFailsAtItsOwnDeadline(t *testing.T) {
 
 // A BROWSER THAT TAKES NO FRAME ENDS ITS CONNECTION AT COMMANDTIMEOUT: the
 // write of a frame the browser never takes is bounded by CommandTimeout of its
-// own, by the connection's writer whichever its transport, and at that bound
-// the connection ends with ErrClosed saying why, so a hung browser fails every
-// call on the connection rather than each call alone at its deadline while the
-// connection stays open. On the pipe, in a bubble, so the instant is exact.
+// own, by the connection's writer, and at that bound the connection ends with
+// ErrClosed saying why, so a hung browser fails every call on the connection
+// rather than each call alone at its deadline while the connection stays
+// open. In a bubble, so the instant is exact: the peer reads nothing, and the
+// socket's in-memory pipe holds the write.
 //
 // Mutation: drop the writer's bound, and the connection is still open at
 // twice CommandTimeout — red.
 func TestABrowserThatTakesNoFrameEndsItsConnectionAtCommandTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		c, _ := pipePair(t, nil) // its browser never reads
+		c, _ := socketPair(t, nil) // its browser never reads
 		start := time.Now()
 		calls := make(chan error, 1)
 		go func() {
@@ -122,7 +123,7 @@ func TestABrowserThatTakesNoFrameEndsItsConnectionAtCommandTimeout(t *testing.T)
 // three times CommandTimeout — red.
 func TestASentCommandFailsAtItsOwnDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		c, p := pipePair(t, nil)
+		c, p := socketPair(t, nil)
 		start := time.Now()
 		read := make(chan struct{})
 		go func() {

@@ -59,7 +59,7 @@ func Dial(ctx context.Context, addr string, o DialOptions) (*Conn, error) {
 	// by closing the socket, which would end every session on it. The reader
 	// holds a message to ReadLimit itself, and reads one past it through.
 	ws.SetReadLimit(-1)
-	return newConn(ctx, &socket{ws: ws, buf: make([]byte, framesBuffer)}, o.Logger), nil
+	return newConn(ctx, &socket{ws: ws, buf: make([]byte, readBuffer)}, o.Logger), nil
 }
 
 // dialError is a failed Dial, naming the address without its query or
@@ -95,9 +95,15 @@ func redacted(raw string) string {
 // socket is the websocket transport.
 type socket struct {
 	ws   *websocket.Conn
-	buf  []byte // the reader's own, framesBuffer long: read is its one caller
+	buf  []byte // the reader's own, readBuffer long: read is its one caller
 	once sync.Once
 }
+
+// readBuffer is the socket reader's own slice, which a larger message crosses
+// a slice at a time: 64 KiB reads a ReadLimit message in 256 reads, for 64 KiB
+// a connection, and a message is gathered into a slice of its own size
+// (gather) however it was read.
+const readBuffer = 64 << 10
 
 // read reads the next message a buffer at a time, to its end, as the library
 // requires of every message: one past ReadLimit is read through and kept only

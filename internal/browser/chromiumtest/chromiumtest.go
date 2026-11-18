@@ -21,21 +21,20 @@
 //
 // # How a launch runs
 //
-// [LaunchPipe] speaks to Chromium over --remote-debugging-pipe, as a backend
-// on the engine host will; [LaunchPort] opens a DevTools port on loopback, as
-// a pool or a vendor hands one out, and [Dial] dials it. Each launch runs in a
-// process group of its own, with a profile in the case's temporary directory,
-// and is killed with its whole group and waited for when the case ends. It
-// ends with its test binary too, however the binary ends — interrupted,
-// signalled, killed for memory, or at go test's -timeout, none of which runs
-// a case's cleanup — rather than run on with a few hundred megabytes and a
-// profile directory and nothing left to stop it: every launch, LaunchPort's
-// too, speaks over the DevTools pipe, whose ends the binary holds, and exits
-// once they close, and on Linux the kernel kills it the moment its binary
-// dies. Its flags, each for a reason:
+// [LaunchPort] opens a DevTools port on loopback, which the artifact render's
+// client dials, as it dials the Chromium an operator runs. Each launch runs in
+// a process group of its own, with a profile in the case's temporary
+// directory, and is killed with its whole group and waited for when the case
+// ends. It ends with its test binary too, however the binary ends —
+// interrupted, signalled, killed for memory, or at go test's -timeout, none of
+// which runs a case's cleanup — rather than run on with a few hundred
+// megabytes and a profile directory and nothing left to stop it: every launch
+// holds Chromium's DevTools pipe, which nothing writes, and exits once its ends
+// close, and on Linux the kernel kills it the moment its binary dies. Its
+// flags, each for a reason:
 //
 //   - --headless=new: the only headless mode a Chrome for Testing `chrome`
-//     has, and what a backend on the engine host runs;
+//     has;
 //   - --no-sandbox: whether Chromium's own sandbox starts is a property of the
 //     host (Ubuntu from 23.10, GitHub's runners among them, restricts the
 //     unprivileged user namespaces it needs), and no case here asserts it;
@@ -83,8 +82,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/browser"
-	"github.com/crewlet/crewlet/internal/browser/cdp"
-	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/procgroup"
 )
@@ -303,9 +300,9 @@ func (w *tail) String() string {
 
 // command is chrome under every launch's flags and args, its first tab on
 // about:blank or on the one address args name (a headless Chromium opens one
-// tab from its command line), speaking the protocol over
-// --remote-debugging-pipe on the pipes p hands it, in a process group of its
-// own that t's end kills, and tied to this test binary (tie).
+// tab from its command line), holding Chromium's DevTools pipe, which nothing
+// writes, on the pipes p hands it, in a process group of its own that t's end
+// kills, and tied to this test binary (tie).
 //
 // The launch's cleanup kills that group, and only then reaps the leader. The
 // context's Cancel stays the standard library's, which kills the leader alone
@@ -328,14 +325,14 @@ func command(t testing.TB, p *pipes, chrome string, args ...string) *exec.Cmd {
 }
 
 // pipes are a launch's two DevTools pipes: fd 3, which Chromium reads, and
-// fd 4, which it writes. Every launch speaks over them, LaunchPort's too, and
-// that is what ends a Chromium with the test binary that started it whatever
-// ends the binary — an interrupt, a signal, an out-of-memory kill, go test's
-// -timeout, none of which runs a case's cleanup — on every platform: the
-// binary holds its ends until the case's cleanup, the kernel closes them when
-// the binary goes, and a Chromium whose pipe is closed exits, rather than run
-// on with a few hundred megabytes and a profile directory and nothing left to
-// stop it. On Linux the kernel's parent-death signal ends it sooner (tie).
+// fd 4, which it writes. Every launch holds them, and that is what ends a
+// Chromium with the test binary that started it whatever ends the binary — an
+// interrupt, a signal, an out-of-memory kill, go test's -timeout, none of
+// which runs a case's cleanup — on every platform: the binary holds its ends
+// until the case's cleanup, the kernel closes them when the binary goes, and a
+// Chromium whose pipe is closed exits, rather than run on with a few hundred
+// megabytes and a profile directory and nothing left to stop it. On Linux the
+// kernel's parent-death signal ends it sooner (tie).
 type pipes struct {
 	chromeReads, chromeWrites *os.File // Chromium's ends, its own once it starts
 	weRead, weWrite           *os.File // the test binary's
@@ -372,33 +369,6 @@ func (p *pipes) started() {
 	_ = p.chromeWrites.Close()
 }
 
-// LaunchPipe launches chrome speaking the protocol over
-// --remote-debugging-pipe — fd 3 what it reads, fd 4 what it writes — and
-// returns the connection over those pipes and the process, both ended with
-// t. args come before the first tab's about:blank, which an address among
-// them replaces.
-func LaunchPipe(t testing.TB, chrome string, args ...string) (*cdp.Conn, *Process) {
-	t.Helper()
-	p := newPipes(t)
-	cmd := command(t, p, chrome, args...)
-	stderr := &tail{}
-	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting %s: %v", chrome, err)
-	}
-	t.Cleanup(func() {
-		_ = procgroup.Kill(cmd.Process.Pid)
-		_ = cmd.Wait()
-		if t.Failed() {
-			t.Logf("%s's stderr ended with:\n%s", chrome, stderr)
-		}
-	})
-	p.started()
-	c := cdp.NewPipe(p.weRead, p.weWrite, cdp.Options{})
-	t.Cleanup(func() { _ = c.Close() })
-	return c, &Process{cmd: cmd}
-}
-
 // Endpoint is a Chromium launched with a DevTools port on loopback.
 type Endpoint struct {
 	// Browser is its browser websocket, as it printed it:
@@ -425,10 +395,9 @@ const listenTimeout = time.Minute
 
 // LaunchPort launches chrome with a DevTools port on loopback, chosen by
 // Chromium (--remote-debugging-port=0), and returns where it listens once it
-// has printed so; it is ended with t. It speaks over the DevTools pipe as
-// well, which the case never writes and holds to end the browser with the
-// test binary (pipes). args come before the first tab's about:blank, which an
-// address among them replaces.
+// has printed so; it is ended with t. It holds the DevTools pipe too, which
+// nothing writes, to end the browser with the test binary (pipes). args come
+// before the first tab's about:blank, which an address among them replaces.
 func LaunchPort(t testing.TB, chrome string, args ...string) Endpoint {
 	t.Helper()
 	p := newPipes(t)
@@ -486,16 +455,4 @@ func LaunchPort(t testing.TB, chrome string, args ...string) Endpoint {
 		t.Fatalf("%s printed no DevTools port within %s; its stderr:\n%s", chrome, listenTimeout, kept)
 	}
 	return Endpoint{}
-}
-
-// Dial dials ep's browser websocket over the engine's own transport, as a
-// backend dials a pool, and closes the connection when t ends.
-func Dial(t testing.TB, ep Endpoint) *cdp.Conn {
-	t.Helper()
-	c, err := cdp.Dial(t.Context(), ep.Browser, cdp.DialOptions{HTTPClient: httpx.Client(0)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = c.Close() })
-	return c
 }

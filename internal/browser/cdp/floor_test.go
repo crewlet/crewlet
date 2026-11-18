@@ -34,7 +34,7 @@ func TestABrowserBelowTheFloorIsRefusedNamingBothVersions(t *testing.T) {
 	} {
 		t.Run(tc.product, func(t *testing.T) {
 			t.Parallel()
-			c, p := pipePair(t, nil)
+			c, p := socketPair(t, nil)
 			go func() {
 				if r, err := p.recv(); err == nil {
 					_ = p.answer(r, map[string]any{"product": tc.product, "protocolVersion": "1.3"})
