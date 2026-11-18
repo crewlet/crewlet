@@ -14,7 +14,17 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { Button, cx, peekClickHandler, useDataGridDriving } from "@crewlethq/ui";
+import {
+  Button,
+  HeadingLevelProvider,
+  cx,
+  headingTag,
+  nextHeadingLevel,
+  peekClickHandler,
+  useDataGridDriving,
+  useHeadingLevel,
+  type HeadingLevel,
+} from "@crewlethq/ui";
 import { RotateCcwClockGlyph, type GlyphProps } from "@crewlethq/icons/glyphs";
 import { useOneReaderPerKey } from "~/app/frame/DataGrid.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -55,8 +65,8 @@ export interface CodeListProps<T> {
   look?: "card" | "timeline" | "boxes";
   /** The glyph on the spine at each heading (a commit's, a push's). */
   spine?: ComponentType<GlyphProps>;
-  /** The groups' heading level under the page's own headings. Three by default. */
-  headingLevel?: 2 | 3 | 4;
+  /** The groups' heading level; by default the kit's for where the list stands (`useHeadingLevel`). */
+  headingLevel?: HeadingLevel;
   /** The row's link, its title stretched over the row. Undefined: a row with no link. */
   rowHref?: (row: T) => string | undefined;
   /** The object a plain press or Enter peeks at; its page is the link where rowHref is absent. */
@@ -249,7 +259,7 @@ export function CodeList<T>({
   "aria-label": label,
   look = "card",
   spine: Spine,
-  headingLevel = 3,
+  headingLevel,
   rowHref,
   peek,
   isSelected,
@@ -274,6 +284,7 @@ export function CodeList<T>({
     throw new Error("CodeList draws rows or groups: hand it exactly one of the two.");
   }
   const id = useId();
+  const surface = useHeadingLevel();
   const root = useRef<HTMLDivElement>(null);
   const all = useMemo(
     () => (groups ? groups.flatMap((g) => g.rows) : (rows ?? [])),
@@ -367,7 +378,8 @@ export function CodeList<T>({
     );
   };
 
-  const Heading = `h${headingLevel}` as const;
+  const level = headingLevel ?? surface;
+  const Heading = headingTag(level);
   const busy = paged?.paging ? "true" : "false";
   const card = !groups;
   const cardRows = (
@@ -422,13 +434,15 @@ export function CodeList<T>({
                 {group.aside && <span className="code-list__aside">{group.aside}</span>}
               </Heading>
             )}
-            {group.first ? <div className="code-list__first">{group.first}</div> : null}
-            {group.rows.length > 0 && (
-              <ol className="code-list__rows" aria-labelledby={`${id}-${index}`}>
-                {group.rows.map(row)}
-              </ol>
-            )}
-            {group.last ? <div className="code-list__last">{group.last}</div> : null}
+            <HeadingLevelProvider level={nextHeadingLevel(level)}>
+              {group.first ? <div className="code-list__first">{group.first}</div> : null}
+              {group.rows.length > 0 && (
+                <ol className="code-list__rows" aria-labelledby={`${id}-${index}`}>
+                  {group.rows.map(row)}
+                </ol>
+              )}
+              {group.last ? <div className="code-list__last">{group.last}</div> : null}
+            </HeadingLevelProvider>
           </div>
         ))}
       {(paged?.more || paged?.pageError || foot) && (

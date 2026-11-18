@@ -77,6 +77,13 @@ const (
 	WriteCreateBranch EngineWriteKind = "create_branch"
 	// WriteDeleteBranch deletes a branch at the head its caller read.
 	WriteDeleteBranch EngineWriteKind = "delete_branch"
+	// WriteCreateTag creates a tag at a commit the repository holds: a
+	// lightweight tag, or an annotated one built as its tag object where the
+	// write carries a message ([EngineWrite.Annotates]).
+	WriteCreateTag EngineWriteKind = "create_tag"
+	// WriteDeleteTag deletes a tag at the value its caller read: an
+	// annotated tag's object, a lightweight tag's commit.
+	WriteDeleteTag EngineWriteKind = "delete_tag"
 	// WriteApplySuggestions commits findings' suggestions onto a change's
 	// source branch at the head its caller read ([EngineWrite.Suggestions]):
 	// each suggestion's lines placed in the head's file by the one rule a
@@ -117,11 +124,15 @@ const (
 // EngineWriteKinds is the closed set, in the order a reader is told them.
 func EngineWriteKinds() []EngineWriteKind {
 	return []EngineWriteKind{WriteCommitFiles, WriteRevert, WriteCherryPick, WriteCreateBranch, WriteDeleteBranch,
-		WriteApplySuggestions, WriteMergeChange, WriteRebaseChange, WriteRevertChange}
+		WriteCreateTag, WriteDeleteTag, WriteApplySuggestions, WriteMergeChange, WriteRebaseChange,
+		WriteRevertChange}
 }
 
 // Valid reports a kind this build knows.
 func (k EngineWriteKind) Valid() bool { return slices.Contains(EngineWriteKinds(), k) }
+
+// Tags reports a kind that moves a tag (refs/tags/<tag>) rather than a branch.
+func (k EngineWriteKind) Tags() bool { return k == WriteCreateTag || k == WriteDeleteTag }
 
 // Commits reports whether the kind makes a commit — and so a pack, a
 // signature and a build — landed as ONE PUSH, rather than only moving a ref to
@@ -205,11 +216,13 @@ type EngineWrite struct {
 	// person's linearizable — which the Gitlet node's copy is brought to before
 	// anything is judged. A floor on another log is [ErrInvalid].
 	Fresh statelog.Freshness `json:"fresh"`
-	// Ref is the branch the write moves: refs/heads/<branch>.
+	// Ref is the ref the write moves: refs/heads/<branch>, or refs/tags/<tag>
+	// for a kind that [EngineWriteKind.Tags].
 	Ref string `json:"ref"`
 	// ExpectedHead is the commit the caller last read at Ref: required to
 	// move or delete a branch, and empty to create one, which needs the ref
-	// absent. The write's commit sits on it.
+	// absent. The write's commit sits on it. A tag's delete names the value
+	// it read, an annotated tag's object.
 	ExpectedHead string `json:"expected_head,omitempty"`
 	// Base is a commit_files CREATE's start: the commit the new branch's first
 	// commit sits on, so a commit onto a new branch is one push; empty with an
@@ -217,12 +230,12 @@ type EngineWrite struct {
 	Base string `json:"base,omitempty"`
 	// Message is the commit's message: required of a commit_files, and of a
 	// revert or a cherry-pick it replaces the message git's own revert and
-	// cherry-pick -x write.
+	// cherry-pick -x write. A create_tag carrying one is annotated with it.
 	Message string `json:"message,omitempty"`
 	// Files are a commit_files' operations, at most [MaxFileOps].
 	Files []FileOp `json:"files,omitempty"`
 	// Commit is a revert's or a cherry-pick's subject, and a create_branch's
-	// target.
+	// or a create_tag's target.
 	Commit string `json:"commit,omitempty"`
 	// Suggestions are an apply_suggestions' findings' suggestions, 1 to
 	// [MaxSuggestionOps], each finding at most once.
@@ -334,9 +347,9 @@ type EngineWriteResult struct {
 	// Command is the ref update as the landing answered it: its result, its
 	// reason and its sentence. Zero beside a Refusal.
 	Command Command `json:"command"`
-	// Commit is the commit the write made — or, for a create_branch, the
-	// commit the branch was created at — where the outcome is applied or
-	// pending.
+	// Commit is the commit the write made (for a create_branch, the commit
+	// the branch was created at; for a create_tag, the tag's value, an
+	// annotated tag's object) where the outcome is applied or pending.
 	Commit string `json:"commit,omitempty"`
 	// PushID is the push the write lands under ([WritePushID]).
 	PushID string `json:"push_id"`
@@ -647,6 +660,10 @@ func (w EngineWrite) Instant() time.Time {
 	return t.Truncate(time.Second)
 }
 
+// Annotates reports a create_tag carrying a message: built as an annotated
+// tag's object, signed as a commit is, rather than only moving its ref.
+func (w EngineWrite) Annotates() bool { return w.Kind == WriteCreateTag && w.Message != "" }
+
 // Validate refuses a write no party to it may act on ([ErrInvalid], naming the
 // field): the one rule the asking tool, the carrying router and the building
 // Gitlet node all hold it to. First, a written_for value this build does not
@@ -705,7 +722,12 @@ func (w EngineWrite) Validate() error {
 	if err := w.Fresh.OnlyOn(topics.CodeLogStream); err != nil {
 		return fmt.Errorf("%w: fresh: %w", ErrInvalid, err)
 	}
-	if branch, ok := strings.CutPrefix(w.Ref, "refs/heads/"); !ok || !gitref.ValidBranch(branch) {
+	if w.Kind.Tags() {
+		if tag, ok := strings.CutPrefix(w.Ref, tagPrefix); !ok || !gitref.ValidTag(tag) {
+			return fmt.Errorf("%w: ref: %q is not a tag: a %s moves refs/tags/<tag>, a tag git takes", ErrInvalid,
+				w.Ref, w.Kind)
+		}
+	} else if branch, ok := strings.CutPrefix(w.Ref, branchPrefix); !ok || !gitref.ValidBranch(branch) {
 		return fmt.Errorf("%w: ref: %q is not a branch: an engine write moves refs/heads/<branch>, a branch git "+
 			"takes", ErrInvalid, w.Ref)
 	}
@@ -919,6 +941,11 @@ func (w EngineWrite) validKind() error {
 			return err
 		}
 		return none(head, files, base, message, suggestions)
+	case WriteCreateTag:
+		if err := want(commit); err != nil {
+			return err
+		}
+		return none(head, files, base, suggestions)
 	case WriteApplySuggestions:
 		// ONTO THE HEAD ITS CALLER READ, always: a suggestion is placed in the
 		// file at that head, so an apply that created a branch would place it

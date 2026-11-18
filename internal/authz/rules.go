@@ -170,8 +170,8 @@ const (
 	// node that builds it and again at the repository's committer, a
 	// repository's lifecycle by the one lifecycle rule on the data node that
 	// decides it (gitlet.GrantOf and the lifecycle's refusal, ADR-0088). Five
-	// change a branch — files committed, a commit reverted or picked, a
-	// branch created or deleted — and five a repository: made, changed
+	// change a branch (files committed, a commit reverted or picked, a branch
+	// created or deleted), two a tag, and five a repository: made, changed
 	// (settings, archive, rename), deleted, restored, or a branch protected.
 	// Named apart from the dotted ActionCodeRead and ActionCodeGit, which no
 	// tool serves.
@@ -180,6 +180,8 @@ const (
 	ActionCodeCherryPick    Action = "code_cherry_pick"
 	ActionCodeCreateBranch  Action = "code_create_branch"
 	ActionCodeDeleteBranch  Action = "code_delete_branch"
+	ActionCodeCreateTag     Action = "code_create_tag"
+	ActionCodeDeleteTag     Action = "code_delete_tag"
 	ActionCodeCreateRepo    Action = "code_create_repo"
 	ActionCodeUpdateRepo    Action = "code_update_repo"
 	ActionCodeDeleteRepo    Action = "code_delete_repo"
@@ -1321,6 +1323,10 @@ var rules = map[Action]rule{
 	ActionCodeCreateBranch: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	ActionCodeDeleteBranch: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeCreateTag: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionCodeDeleteTag: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	ActionCodeCreateRepo: {class: ClassApp, app: iam.GrantGitlet, recency: iam.RecencyAny,
 		assist: AssistApprove},

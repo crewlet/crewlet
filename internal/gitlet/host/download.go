@@ -113,8 +113,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request, admit admitter
 		return
 	}
 	if r.Method == http.MethodHead {
-		// The dashboard's probe of the route: answered before any
-		// repository read or git.
+		// A download is a GET: answered before any repository read or git.
 		w.Header().Set("Allow", http.MethodGet)
 		auth.GitText(w, http.StatusMethodNotAllowed, "a download is a GET")
 		return

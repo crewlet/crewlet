@@ -45,7 +45,16 @@
 // elsewhere. What can still move is where the next run starts, so the launch
 // asks each member whether it is ready in the same order and with the same
 // vocabulary a call uses: a retryable refusal hands off, a fatal one stops the
-// walk, and running out is the same [Error] a call reports.
+// walk (so does the caller's own cancellation), and running out is the same
+// [Error] a call reports.
+//
+// # Answering without a call
+//
+// The completion names the member that answered ([llm.Completion].ProviderKey),
+// because a chain shared by concurrent callers has no other place that fact is
+// true. [Unready] and [KnownLimit] say what a call would meet without making
+// one, where every member would fail: an executor's collected completion parks
+// its seat on that limit before its review is ever called.
 package chain
 
 import (
@@ -265,25 +274,14 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 // Pick is the executor's fallback at launch: the first of members that ready
 // accepts, walked in order.
 //
-// ready answers for one member at the moment of the launch — nil when it can
-// take the run, a classified error when it cannot. A RETRYABLE refusal (an
-// entry sitting out its spent plan) hands off exactly as [Chain.Complete]
-// does: it is logged as provider_fallback, reported to onFallback naming the
-// member that takes over — or none, on the last — and the walk moves on. A
-// fatal refusal is returned as it came, for the reason a fatal call stops the
-// walk, and so is any refusal once ctx is done. Every member refusing
-// retryably is an [*Error] naming them all, WITH EACH ONE'S REFUSAL
-// ([Error.Failures]), so the caller reads an exhausted launch exactly as an
-// exhausted call: the same unavailability the seat reports either way, and,
-// where every member sits out a limit, the same [Limited] chain a seat is
-// parked on until the first is tried again. Without them a launch every
-// member of which sat out read as a chain that had failed, and every turn
-// launches, so the seat's mail was taken back into the limit until the broker
-// dead-lettered it.
-//
-// The caller filters members that can never take a launch (a harness with no
-// in-box runner) BEFORE calling: that is a fact of the configuration, not a
-// refusal of the moment, and announcing it as a hand-off on every launch
+// ready is nil when a member can take the run, a classified error when not. A
+// RETRYABLE refusal (a spent plan) hands off as in [Chain.Complete]: logged as
+// provider_fallback, reported to onFallback, and the walk moves on. A fatal
+// refusal, or any once ctx is done, is returned as it came. All members refusing
+// retryably is an [*Error] carrying EACH ONE'S REFUSAL ([Error.Failures]), so a
+// chain of limits stays [Limited]; otherwise the seat's mail was taken back into
+// the limit until the broker dead-lettered it. The caller filters members that
+// can never launch (no in-box runner) BEFORE calling: that is configuration, and
 // would publish a fallback nothing fell from.
 func Pick(ctx context.Context, members []Member, ready func(Member) error,
 	onFallback func(Fallback)) (Member, error) {

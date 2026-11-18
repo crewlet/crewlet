@@ -442,6 +442,16 @@ export function deleteHeld(repo: CodeRepoSummary, viewer: Reader): string | unde
   return undefined;
 }
 
+/** Why the repository's files, history and tags are not read, or undefined: a deleted repository
+ *  answers no read, clone or push of its content until restored, one being purged never again. */
+export function contentHeld(repo: CodeRepoSummary): string | undefined {
+  if (repo.status === "purging") return `${repo.name} is being purged, with its files and history.`;
+  if (repo.status === "deleted") {
+    return `Its files, history and tags are read, cloned and pushed to again once ${repo.name} is restored.`;
+  }
+  return undefined;
+}
+
 /** Why the repository cannot be restored, or undefined: only a deleted one is. */
 export function restoreHeld(repo: CodeRepoSummary, viewer: Reader): string | undefined {
   if (repo.managed_by === "config") return DECLARED_LIFE;
@@ -616,6 +626,33 @@ export function branchDeleteHeld(repo: CodeRepoSummary, viewer: Reader): string 
   if (repo.access && repo.access !== "maintain") {
     return `You ${repo.access} ${repo.name}; deleting a branch takes maintain.`;
   }
+  return undefined;
+}
+
+/** Why the reader cannot create a tag, or undefined: what holds every push, and a grant below write. */
+export function tagWriteHeld(repo: CodeRepoSummary, viewer: Reader): string | undefined {
+  const held = pushHeld(repo, viewer);
+  if (held) return held;
+  if (repo.access && repo.access !== "write" && repo.access !== "maintain") {
+    return `You ${repo.access} ${repo.name}; creating a tag takes write.`;
+  }
+  return undefined;
+}
+
+/** Why the reader cannot delete a tag, or undefined: it takes maintain. */
+export function tagDeleteHeld(repo: CodeRepoSummary, viewer: Reader): string | undefined {
+  const held = pushHeld(repo, viewer);
+  if (held) return held;
+  if (repo.access && repo.access !== "maintain") {
+    return `You ${repo.access} ${repo.name}; deleting a tag takes maintain.`;
+  }
+  return undefined;
+}
+
+/** Why a new-tag form cannot be sent yet, or undefined. */
+export function tagFormHeld(name: string): string | undefined {
+  const n = name.trim();
+  if (n === "" || /\s/.test(n)) return "Name the tag, with no spaces.";
   return undefined;
 }
 

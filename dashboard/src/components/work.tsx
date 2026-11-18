@@ -682,11 +682,10 @@ export function WorkCard({
  * (`components/workGrid.tsx`): one sentence rather than a copy per list.
  */
 export function blockedBy(row: WorkSummary, keyOf?: (id: string) => string | undefined): string {
-  // `open` IS THE FLAG THE EDGE CARRIES, and `false` is a settled fact rather
-  // than a missing one — the blocker has finished. An edge that says nothing is
-  // counted as open, because `blocked` on the row is exactly "some entry here
-  // is open" and the two must not disagree.
-  const held = (row.waiting_on ?? []).filter((edge) => edge.open !== false);
+  // `open` IS THE FLAG THE EDGE CARRIES, stated on every edge, so a finished
+  // blocker is never named: `blocked` on the row is exactly "some entry here
+  // is open", and the two must not disagree.
+  const held = (row.waiting_on ?? []).filter((edge) => edge.open);
   if (held.length === 0) return "Blocked";
   // A WAIT NOTHING MOVES IS NAMED FIRST: it is the one that never ends by itself.
   const dead = held.find((edge) => edge.dead);

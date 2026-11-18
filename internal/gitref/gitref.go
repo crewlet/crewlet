@@ -352,6 +352,13 @@ func ValidBranch(branch string) bool {
 		ValidRef("refs/heads/"+branch)
 }
 
+// ValidTag reports whether tag is a tag name an engine write creates: git
+// tag's rules (refs/tags/<tag> a ValidRef, not HEAD, no leading '-') and,
+// stricter, not "@", for the reason [ValidBranch] gives.
+func ValidTag(tag string) bool {
+	return tag != "HEAD" && tag != "@" && !strings.HasPrefix(tag, "-") && ValidRef("refs/tags/"+tag)
+}
+
 // SeatsRoot is the directory of branches every seat's own namespace lives
 // under: a seat's namespace is refs/heads/seats/<handle>/, NEVER
 // refs/heads/<handle>/. A handle is a slug of a role name — docs, qa,

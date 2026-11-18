@@ -279,25 +279,16 @@ func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 }
 
 // assertHermesSeedKeepsACallToItself holds the hermes profile's one seeded file
-// to what it is for: the settings in $HERMES_HOME/config.yaml that keep a call
-// to itself, and nothing that decides anything else.
+// to the $HERMES_HOME/config.yaml settings that keep a call to itself:
+//   - agent.coding_context "off": a project marker above the working directory
+//     would switch on a coding brief naming tools the call lacks.
+//   - auxiliary.title_generation.enabled false: else a second, billed request
+//     re-sends the prompt, outside the usage report.
+//   - memory.memory_enabled and memory.user_profile_enabled false: else MEMORY.md
+//     and USER.md are read into every prompt and shared by concurrent calls.
 //
-//   - agent.coding_context "off": any project marker within six levels above
-//     the working directory otherwise switched on a coding brief naming tools
-//     the call does not have, so a seat's prompt depended on where state_dir
-//     was put (measured on 0.21.5).
-//   - auxiliary.title_generation.enabled false: every call otherwise made a
-//     second request re-sending the whole prompt, billed and left out of the
-//     usage report's input count.
-//   - memory.memory_enabled and memory.user_profile_enabled false: MEMORY.md
-//     and USER.md are read into every prompt, and calls running at once share
-//     a generation the prune runs only between.
-//
-// AND NO `model` SECTION: a login keeps its provider in auth.json, which
-// travels, and a seeded provider would override it for every seat. No toolsets
-// either: the denial is `--toolsets web` on argv, and a second copy of it in a
-// file is one more thing to keep in step.
-//
+// NO `model` SECTION (a login's provider lives in auth.json, which travels) and
+// no toolsets (`--toolsets web` on argv is the denial).
 // Mutation: drop a setting, or add a `model:` section, and this is red.
 func assertHermesSeedKeepsACallToItself(t *testing.T, p harnessprofile.Profile) {
 	t.Helper()
