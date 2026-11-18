@@ -1307,6 +1307,25 @@ describe("the pane", () => {
     expect(pane.textContent).toContain("https://evil.example.net/c?q=secret");
   });
 
+  // A CITED ARTIFACT OPENS IN THE DASHBOARD: the engine stores the address a
+  // publish answered as the artifact, so it is a link on any deployment's URL.
+  //
+  // Mutation: leave the kind unhandled, and the evidence draws nothing.
+  test("a cited artifact links to the artifact", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    const id = "0f2a6c3e-6b1d-4e0a-9d6f-2b4c8a1e7f30";
+    mount({
+      answers: {
+        decisions: decisionsOf(
+          askItem({ ...DECISION, evidence: [{ kind: "artifact", ref: id, label: "version 8" }] }),
+        ),
+      },
+    });
+    await settle();
+    const link = screen.getByRole("link", { name: /version 8/ });
+    expect(link.getAttribute("href")).toBe(`#/artifacts/${id}`);
+  });
+
   // A CITED ADDRESS READS AS THE SAME ADDRESS DOES IN A SENTENCE: what its
   // mark means is said before its words, a reference is set in mono, and one
   // that opens nothing still says whose it is (one helper draws both).

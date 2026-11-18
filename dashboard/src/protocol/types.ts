@@ -5661,7 +5661,7 @@ export interface WorkDecisionOption {
 /** One thing a decision cites. A task's `ref` is its id — resolved at write,
  *  because a key moves with the task — and a url's is https. */
 export interface WorkDecisionEvidence {
-  kind: "task" | "page" | "turn" | "run" | "url";
+  kind: "task" | "page" | "turn" | "run" | "artifact" | "url";
   ref: string;
   label?: string;
 }
