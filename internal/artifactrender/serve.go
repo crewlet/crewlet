@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactrender/internal/cdp"
 	"github.com/crewlet/crewlet/internal/artifacts"
-	"github.com/crewlet/crewlet/internal/browser/cdp"
 )
 
 // Every request of a render's tab is paused and answered here: the artifact

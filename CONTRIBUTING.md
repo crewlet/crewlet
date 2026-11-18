@@ -122,7 +122,7 @@ alone, as `TestAPageEndsAtMostItsOwnSessionWithAMessagePastTheReadLimit` does,
 whose claim is about the DevTools client's own reader. A one-package loop
 names them by hand, as three statements, each substitution its own, here for
 that case's package:
-`newest=$(scripts/chromium.sh newest) && floor=$(scripts/chromium.sh floor) && CREWLET_TEST_CHROMIUM="$newest" CREWLET_TEST_CHROMIUM_FLOOR="$floor" go test ./internal/browser/cdp/`
+`newest=$(scripts/chromium.sh newest) && floor=$(scripts/chromium.sh floor) && CREWLET_TEST_CHROMIUM="$newest" CREWLET_TEST_CHROMIUM_FLOOR="$floor" go test ./internal/artifactrender/internal/cdp/`
 — a bare `go test` without them skips those cases, saying so and naming that
 loop for the package it ran, and runs the rest. A Chromium named there is held
 to its pin's major by what it answers to `--version`: the newest at or above

@@ -119,7 +119,7 @@ func checkDeclared(d declared) error {
 		}
 		return fmt.Errorf("cdp: %s as %s: %w", name, reflect.TypeOf(d), errUndeclared)
 	case d.result() == nil:
-		return fmt.Errorf("cdp: an Event declared outside internal/browser/cdp names no event: %w", errUndeclared)
+		return fmt.Errorf("cdp: an Event declared outside internal/artifactrender/internal/cdp names no event: %w", errUndeclared)
 	}
-	return fmt.Errorf("cdp: a Method declared outside internal/browser/cdp names no command: %w", errUndeclared)
+	return fmt.Errorf("cdp: a Method declared outside internal/artifactrender/internal/cdp names no command: %w", errUndeclared)
 }

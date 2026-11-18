@@ -4,7 +4,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/crewlet/crewlet/internal/browser/cdp"
+	"github.com/crewlet/crewlet/internal/artifactrender/internal/cdp"
 )
 
 // THE KEYS a press plays: a named key or one character, after any modifiers,

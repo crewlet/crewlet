@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactrender/internal/cdp"
 	"github.com/crewlet/crewlet/internal/browser"
-	"github.com/crewlet/crewlet/internal/browser/cdp"
 	"github.com/crewlet/crewlet/internal/browser/chromiumtest"
 	"github.com/crewlet/crewlet/internal/httpx"
 )

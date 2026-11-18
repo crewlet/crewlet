@@ -6,8 +6,8 @@ import (
 	"html"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/artifactrender/internal/cdp"
 	"github.com/crewlet/crewlet/internal/artifacts"
-	"github.com/crewlet/crewlet/internal/browser/cdp"
 )
 
 // The host: the dashboard's part around a frame, served on the dashboard's

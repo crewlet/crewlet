@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/browser/cdp"
+	"github.com/crewlet/crewlet/internal/artifactrender/internal/cdp"
 )
 
 // protocol is a browser's own description of the protocol it speaks, as its

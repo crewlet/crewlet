@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/browser/cdp"
+	"github.com/crewlet/crewlet/internal/artifactrender/internal/cdp"
 )
 
 // An operator-run headless Chromium: a render opens a context and a tab of its
