@@ -323,6 +323,22 @@
 // packed on demand for its read alone too, by the run's own end's rule: the
 // capture is the job's own script's, which nothing else writes.
 //
+// # A box's release is pinned
+//
+// A box handed an archive is asked its harness's release ([Runner.CheckCarry]);
+// a relaunch that continues the copy of the session its job's box holds, in
+// that box, asks it only where an unheld telling is at stake, which is how the
+// engine learns the release that holds the copy (internal/sandbox's
+// continueKept). Either answer holds only while the box's release cannot
+// change under the session, and Claude Code updates itself in the background
+// by default, so the release that wrote a session, or answered for it, could
+// differ from the one that resumes it. So every Claude Code run pins
+// DISABLE_AUTOUPDATER=1, in the wrapper over the seat's, the image's or a
+// profile's value ([claudeSessionLayout]) and in its settings pin over a
+// repository's own ([claudeSettingsPin]), and the in-place path needs no
+// stricter telling. A managed settings file still wins over it, as over every
+// pin: an image's or a host's policy is its operator's own.
+//
 // # A run ends on request
 //
 // The read that takes a stopped or lost job's session, or that of a job still

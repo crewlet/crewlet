@@ -178,8 +178,9 @@ const (
 
 	// SteerMissed is a note a step took for its reader, which never had it:
 	// the take's answer was lost, so the record marks the read unanswered; or
-	// a Claude Code hook served it and its harness gave the call up or its
-	// job's session lacks it. And no later step read it: a later launch whose
+	// a Claude Code hook served it and every serve was lost, each a hook's
+	// serve its harness gave up or its job's whole session proves it never
+	// took, one the latter. And no later step read it: a later launch whose
 	// job started records it read by its brief, delivered there. Named at the
 	// step that took it or the last serve, reported by the turn's ending.
 	SteerMissed SteerOutcome = "missed"
@@ -187,8 +188,9 @@ const (
 	// SteerUnconfirmed is a note handed to its executor's harness, by a poll
 	// (OpenCode's) or a hook's answer (Claude Code's), which never confirmed
 	// it before the turn ended: OpenCode by its own confirmation, Claude Code
-	// by its session's record. Its session may hold it. Named at the step it
-	// was handed over at.
+	// by its session's record, its harness having given up each call that
+	// served it included, since an answer can outrun the cancel. Its session
+	// may hold it. Named at the step it was handed over at.
 	SteerUnconfirmed SteerOutcome = "unconfirmed"
 )
 

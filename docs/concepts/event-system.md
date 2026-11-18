@@ -546,10 +546,12 @@ agent_turn_steered         # what became of a person's note to this running
                            # that took it never handed it over; `expired`, the
                            # turn ended first; `missed`, a step took it for a
                            # reader that never had it, or every serve of it to
-                           # a Claude Code hook was lost, and no later launch
-                           # whose job started told it, at that step;
-                           # `unconfirmed`, the executor was handed it and
-                           # never confirmed it, at its job.
+                           # a Claude Code hook was lost and a serve's session
+                           # proves it absent, and no later launch whose job
+                           # started told it, at that step; `unconfirmed`, the
+                           # executor was handed it and never confirmed it, at
+                           # its job, or its harness gave up every lost serve
+                           # of it, at the last of them.
                            # Published by the node whose step read it (the
                            # runner's, for a round or a run's brief; the one
                            # serving the run's tool bridge, for OpenCode's

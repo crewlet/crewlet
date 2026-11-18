@@ -78,10 +78,9 @@ import (
 //   - every note a person sent the turn that the session has not read — read
 //     after it was saved, by the run that went on in it or by a review, which
 //     is never the session's — or, of a session cut off, every note the turn
-//     has read, as notes it may already show ([prompts.NotesReadAgain]): its
-//     job's last take of them was recorded read before its harness had them,
-//     and it is not known to hold its job's brief, which told the notes the
-//     session it continued lacked; or, of one whose notes stop before a read no
+//     has read, as notes it may already show ([prompts.NotesReadAgain]): it is
+//     not known to hold its job's brief, which told the notes the session it
+//     continued lacked; or, of one whose notes stop before a read no
 //     session of its job holds — an unanswered take's, or one before its last
 //     restart — every note past that, as notes it may already show
 //     ([Runner.firstUnheld]); and then the ones this brief is the first to
@@ -314,10 +313,9 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	// a note the run's bridge served a harness among either told as one it may
 	// already show ([Runner.toldNotes]); of a session cut off,
 	// EVERY NOTE THE TURN HAS READ, as notes it may already show, as the copy a
-	// job's own box holds is told them ([Runner.inPlaceNotes]): its job's last
-	// take of them was recorded read before its harness had them, and it is not
-	// known to hold its job's brief, which told the notes the session it
-	// continued lacked, and no record says which those were (internal/sandbox's
+	// job's own box holds is told them ([Runner.inPlaceNotes]): it is not known
+	// to hold its job's brief, which told the notes the session it continued
+	// lacked, and no record says which those were (internal/sandbox's
 	// notesHeld states none it holds). AND OF ONE WHOSE NOTES STOP BEFORE A READ
 	// MARKED UNANSWERED OR RESTARTED, every note past that, as notes it may
 	// already show ([Runner.notesHeldBy]): the session lacks that note, and

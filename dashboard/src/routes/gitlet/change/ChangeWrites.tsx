@@ -14,7 +14,7 @@
  * say, from the change and the repository's chart.
  */
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Checkbox, Stack } from "@crewlethq/ui";
 import { ConfirmModal } from "~/components/Modal.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
@@ -72,6 +72,7 @@ export function DequeueButton({
   target,
   queued,
   label = "Take out of the queue",
+  leadingIcon,
 }: {
   /** The change's reference, web!42. */
   changeRef: string;
@@ -79,6 +80,7 @@ export function DequeueButton({
   target: string;
   queued: boolean;
   label?: string;
+  leadingIcon?: ReactNode;
 }) {
   const write = useAct("code_dequeue_change");
   const [confirming, setConfirming] = useState(false);
@@ -90,6 +92,7 @@ export function DequeueButton({
         variant="ghost"
         blocked={queued ? undefined : `It is not in ${target}'s merge queue.`}
         aria-label={`Take ${changeRef} out of the queue`}
+        leadingIcon={leadingIcon}
         onPress={() => setConfirming(true)}
       >
         {label}

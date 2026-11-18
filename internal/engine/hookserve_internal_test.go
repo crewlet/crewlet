@@ -128,8 +128,7 @@ func (s *lostServeStore) asked() []sandbox.HookSettle {
 // of the same job hands the note over no more while its serve is live.
 //
 // Mutation: record a read at the take (today's rule), publish it delivered
-// there, answer no take, or offer a live-served note again, and a check goes
-// red.
+// there, or answer no take, and a check goes red.
 func TestAHooksTakeServesAndPublishesNothing(t *testing.T) {
 	t.Parallel()
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
@@ -373,8 +372,8 @@ func TestANoteIsServedToAJobAtMostThreeTimes(t *testing.T) {
 // which stands where the two disagree. The review's take says the same of a
 // note it reads at a place before a read its conversation holds.
 //
-// Mutation: render every note as SteerMessage, judge it over a note served to
-// another job, or hand the review's note no flag, and a check goes red.
+// Mutation: render every note as SteerMessage, or hand the review's note no
+// flag, and a check goes red.
 func TestANoteServedAfterALaterOneSaysItWasSentBefore(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -488,5 +487,56 @@ func TestAnUnreadSessionLeavesItsServesUnconfirmed(t *testing.T) {
 	if taken := claimedSource(t, store, runs, launch).Take(ctx, reviewRound(1)); len(taken) != 1 ||
 		taken[0].ID != "n-1" {
 		t.Errorf("the review took %+v, want the served note", taken)
+	}
+}
+
+// A SENT-BEFORE CUE NAMES ONLY A LATER NOTE HANDED TO THIS JOB. The cue tells a
+// job's model that a later note it already holds stands over this one, so it
+// is said only of a later note this job read, or was served by a serve its
+// session may hold: never one another job read, one whose serve the inbox
+// answered nothing, one its session proves absent, or one served again among
+// this answer's own candidates, which reaches the harness after it anyway.
+//
+// Mutation: judge the later note whatever job it was handed to, count a serve
+// the inbox answered nothing, or cue over a later note this answer serves
+// again, and a case goes red.
+func TestASentBeforeCueNamesOnlyALaterNoteHandedToThisJob(t *testing.T) {
+	t.Parallel()
+	older := openedNote{held: sandbox.RunNote{ID: "n-1", Seq: 1},
+		note: steer.Note{ID: "n-1", Text: "use staging", By: "founder"}}
+	later := func(read *sandbox.NoteRead, serves ...sandbox.HookServed) sandbox.RunNote {
+		n := sandbox.RunNote{ID: "n-2", Seq: 2, Read: read, Serves: serves}
+		if read == nil && len(serves) > 0 {
+			n.Served = serves[len(serves)-1].Launch
+		}
+		return n
+	}
+	serve := func(take string, lost sandbox.ServeLoss) sandbox.HookServed {
+		return sandbox.HookServed{Take: take, Launch: "job-1", Lost: lost}
+	}
+	again := openedNote{held: later(nil, serve("t-2", sandbox.ServeCancelled))}
+	for _, c := range []struct {
+		name       string
+		later      sandbox.RunNote
+		unanswered []string
+		candidates []openedNote
+		cue        bool
+	}{
+		{name: "read by this job", later: later(&sandbox.NoteRead{Launch: "job-1"}), cue: true},
+		{name: "read by another job", later: later(&sandbox.NoteRead{Launch: "job-2"})},
+		{name: "served live", later: later(nil, serve("t-2", "")), cue: true},
+		{name: "served, answered nothing", later: later(nil, serve("t-2", "")), unanswered: []string{"t-2"}},
+		{name: "served, lost to a cancel", later: later(nil, serve("t-2", sandbox.ServeCancelled)), cue: true},
+		{name: "served again in this answer", later: again.held, candidates: []openedNote{older, again}},
+		{name: "served, proved absent", later: later(nil, serve("t-2", sandbox.ServeAbsent))},
+	} {
+		candidates := c.candidates
+		if candidates == nil {
+			candidates = []openedNote{older}
+		}
+		got := hookMessage(older, []sandbox.RunNote{older.held, c.later}, "job-1", c.unanswered, candidates)
+		if cued := strings.Contains(got, "before a later note"); cued != c.cue {
+			t.Errorf("%s: the older note was rendered %q, want the cue %v", c.name, got, c.cue)
+		}
 	}
 }

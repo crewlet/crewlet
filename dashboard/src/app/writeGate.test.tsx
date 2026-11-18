@@ -291,6 +291,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "(code_rebase_change, code_dequeue_change, code_revert_change)",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
+  "routes/gitlet/queue/Requeue.tsx": {
+    why: "a change taken out of its queue, added again (code_merge_change)",
+    suite: "routes/gitlet/Queue.test.tsx",
+  },
   "routes/gitlet/change/FindingAnswer.tsx": {
     why: "a standing finding's Answer finding (code_resolve_finding)",
     suite: "routes/gitlet/change/ChangePage.test.tsx",

@@ -73,11 +73,12 @@ func (i *fakeInbox) cancelled() []sandbox.NoteCall {
 
 // A HOOK'S CALL CARRIES ITS IDENTITY TO THE INBOX: the MCP session it came on
 // and its JSON-RPC id, which the front reads off the POST and the middleware
-// hands the take; and a header a box sends in the front's name is dropped, so
-// a box can never name a call its harness did not make.
+// hands the take; and a header a box sends in the front's name is dropped on
+// every path, a seat server's included, whose POST names the engine's session
+// and so reaches its middleware: a box never names a call its harness did not.
 //
-// Mutation: keep a box-sent header, or hand the take no call, and a check
-// goes red.
+// Mutation: keep a box-sent header, on any path or on a seat server's alone,
+// or hand the take no call, and a check goes red.
 func TestAHookCallCarriesItsIdentityToTheInbox(t *testing.T) {
 	t.Parallel()
 	f := newSteerFixture(t, 0)
@@ -97,6 +98,14 @@ func TestAHookCallCarriesItsIdentityToTheInbox(t *testing.T) {
 	}
 	if call := f.inbox.lastCall(); call != nil {
 		t.Errorf("a box-sent header named the call %+v, want none read", call)
+	}
+	status, _ = rawPost(t, mcpbridge.ServerURL(f.url, "github"), sess.ID(), steerCall(`"not an id!"`, 0),
+		map[string]string{"Crewlet-Steer-Call": "998", "Mcp-Protocol-Version": versionOf(sess)})
+	if status != http.StatusOK {
+		t.Fatalf("a steer_take on a seat server's path, on the engine's session, answered %d", status)
+	}
+	if call := f.inbox.lastCall(); call != nil {
+		t.Errorf("a box-sent header on a seat server's path named the call %+v, want none read", call)
 	}
 }
 
@@ -127,6 +136,27 @@ func TestACancelReachesTheInboxBeforeTheSDK(t *testing.T) {
 	if len(got) != len(want) || got[0].Session != want[0].Session || got[0].ID != want[0].ID ||
 		got[1].Session != want[1].Session || got[1].ID != want[1].ID {
 		t.Errorf("the inbox heard %+v, want %+v", got, want)
+	}
+}
+
+// THE FRONT READS A BODY AS THE SDK DOES: a key the SDK does not match, being
+// matched exactly, names no cancel to the front either, so a box cannot give
+// up a call through the front that the SDK reads as no message of its own.
+//
+// Mutation: decode with encoding/json's case-insensitive struct match, and the
+// inbox hears both cancels.
+func TestTheFrontReadsABodyAsTheSDKDoes(t *testing.T) {
+	t.Parallel()
+	f := newSteerFixture(t, 0)
+	sess := dial(t, f.url)
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","Method":"notifications/cancelled","params":{"requestId":9}}`,
+		`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"RequestId":9}}`,
+	} {
+		rawPost(t, f.url, sess.ID(), body, map[string]string{"Mcp-Protocol-Version": versionOf(sess)})
+	}
+	if got := f.inbox.cancelled(); len(got) != 0 {
+		t.Errorf("the inbox heard %+v from keys the SDK does not match, want nothing", got)
 	}
 }
 

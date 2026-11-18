@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,9 +91,10 @@ type RunNote struct {
 	// At is when the turn took it, on the clock of the node that filed it.
 	At time.Time `json:"at"`
 
-	// Read is where the turn read it, nil while it WAITS. Recorded by the
-	// write that hands the note over, so a note is never handed over and
-	// left waiting, nor recorded read and never handed over.
+	// Read is where the turn read it, nil while it WAITS: recorded by the
+	// write that hands the note over, or, for one a hook or a poll served
+	// ([RunNote.Served]), once its harness is shown to have taken it, so a
+	// note is never recorded read and never handed over.
 	Read *NoteRead `json:"read,omitempty"`
 
 	// Served is the job the run's bridge last served the note to while it
@@ -246,9 +248,31 @@ type NoteCall struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// is reports whether c and other name one call: one session AND one id, since
-// a harness numbers its calls per session.
-func (c NoteCall) is(other NoteCall) bool { return c.Session == other.Session && c.ID == other.ID }
+// Is reports whether c and other name one call: one session AND one id, since
+// a harness numbers its calls per session. The one identity of a call, the
+// store's and the engine's alike.
+func (c NoteCall) Is(other NoteCall) bool { return c.Session == other.Session && c.ID == other.ID }
+
+// NoteCallID is a JSON-RPC id as a serve keeps it ([NoteCall.ID]), its
+// canonical JSON text: id is the id as go-sdk's jsonrpc.ID holds it (its Raw,
+// an int64 or a string), and false is an id a serve keeps as none
+// ([keptCallOf]), which no real call has. The one rule the bridge reads a
+// hook's call and its cancel by, so both name a call as the store keeps it.
+func NoteCallID(id any) (string, bool) {
+	var text string
+	switch v := id.(type) {
+	case int64:
+		text = strconv.FormatInt(v, 10)
+	case string:
+		text = `"` + v + `"`
+	default:
+		return "", false
+	}
+	if !validNoteCallID(text) {
+		return "", false
+	}
+	return text, true
+}
 
 // keptCallOf is call as a serve keeps it: whole where its session is of the id
 // charset ([ValidCallID]'s) and its id a JSON integer's text or a JSON string
@@ -340,9 +364,10 @@ type EndedNote struct {
 	// Serve is the hook's serve the outcome is at, where it is one: for a note
 	// unconfirmed, the serve that was live before every read of it that handed
 	// nothing over, a take marked unanswered or the brief of a job that never
-	// started ([RunNote.LiveServe] of the note unread); for one missed that no
-	// read marked, the last of its serves, every one of them lost. Nil
-	// otherwise.
+	// started ([RunNote.LiveServe] of the note unread), else the last of its
+	// lost serves, every one of them one its session may hold
+	// ([HookServed.MayHold]); for one missed that no read marked, the last of
+	// its serves, every one of them lost, one absent. Nil otherwise.
 	Serve *HookServed
 }
 
@@ -350,11 +375,12 @@ type EndedNote struct {
 // each as what the record knows became of it
 // ([CoordinatorOptions.SteersEnded]), in this precedence: delivered (told again
 // by a brief whose job started), unconfirmed (served to a harness, never
-// confirmed), missed (read by a take marked unanswered and told by no started
-// launch, or every hook serve lost), expired (waiting, or first told by a brief
-// whose job never started). Items for one job are not reported, and never the
-// row's command. The record is the one witness, since only the ending sees what
-// a brief took and that no job ran. See the package doc, "A turn's notes".
+// confirmed, or every lost serve one its session may hold), missed (read by a
+// take marked unanswered and told by no started launch, or every hook serve
+// lost, one absent), expired (waiting, or first told by a brief whose job never
+// started). Items for one job are not reported, and never the row's command.
+// The record is the one witness, since only the ending sees what a brief took
+// and that no job ran. See the package doc, "A turn's notes".
 func (r PendingRun) EndedNotes() []EndedNote {
 	var out []EndedNote
 	for _, n := range r.Steer.Notes {
@@ -385,7 +411,7 @@ func (r PendingRun) endOf(n RunNote) (EndedNote, bool) {
 	if r.briefNeverRan(n) {
 		read = read.Retold
 	}
-	lost := lostServe(n)
+	lost, mayHold := lostServe(n)
 	end := EndedNote{Note: n}
 	switch {
 	case read != nil && read.Retold != nil:
@@ -402,6 +428,12 @@ func (r PendingRun) endOf(n RunNote) (EndedNote, bool) {
 		if live, ok := unread.LiveServe(); ok {
 			end.Serve = &live
 		}
+	case lost != nil && mayHold:
+		// EVERY LOST SERVE ITS HARNESS GAVE UP ([ServeCancelled]), whose answer
+		// may have outrun the cancel: its session may hold the note, so it is
+		// unconfirmed at the last of them, never missed, whatever take marked
+		// unanswered read it since, as a live serve's note is.
+		end.Outcome, end.Serve = types.SteerUnconfirmed, lost
 	case read != nil:
 		end.Outcome, end.Read = types.SteerMissed, read
 	case lost != nil:
@@ -412,14 +444,20 @@ func (r PendingRun) endOf(n RunNote) (EndedNote, bool) {
 	return end, true
 }
 
-// lostServe is the last of n's serves a loss struck, nil where none did.
-func lostServe(n RunNote) *HookServed {
-	for i := len(n.Serves) - 1; i >= 0; i-- {
-		if s := n.Serves[i]; s.Lost != "" {
-			return &s
+// lostServe is the last of n's serves a loss struck, nil where none did, and
+// whether the session of every serve a loss struck may hold the note
+// ([HookServed.MayHold]).
+func lostServe(n RunNote) (*HookServed, bool) {
+	var last *HookServed
+	mayHold := true
+	for i := range n.Serves {
+		s := n.Serves[i]
+		if s.Lost == "" {
+			continue
 		}
+		last, mayHold = &s, mayHold && s.MayHold()
 	}
-	return nil
+	return last, mayHold
 }
 
 // briefNeverRan reports whether n was read by the brief of the record's job
@@ -1111,7 +1149,7 @@ func unserved(n RunNote, job string, cancelled []NoteCall, unanswered []string) 
 		case slices.Contains(unanswered, h.Take):
 			changed = true
 			continue
-		case h.Lost == "" && n.Served == job && h.Call != nil && slices.ContainsFunc(cancelled, h.Call.is):
+		case h.Lost == "" && n.Served == job && h.Call != nil && slices.ContainsFunc(cancelled, h.Call.Is):
 			h.Lost, changed = ServeCancelled, true
 		}
 		serves = append(serves, h)

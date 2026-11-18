@@ -284,8 +284,10 @@ func TestAHooksUnheldTellingIsJudgedOnItsOwnBrief(t *testing.T) {
 	active := guarded{basis: inBoxBasis}.relaunch(t).Surface.Active()
 	long := noteRead("hook", 1, types.SteerBoundaryToolBatch, false)
 	long.Text = strings.Repeat("keep the long note short ", 76)
+	// CONTINUED: the job's box said it took up the session its launch armed
+	// the skill for, so a guard that holds the session's skills arms it.
 	at := func(tokens int64, decides func(runner.AgentRunRequest) runner.SessionDecision) guarded {
-		return guarded{basis: keptClaude(countOf(tokens), false), decides: decides,
+		return guarded{basis: keptClaude(countOf(tokens), false), decides: decides, continued: true,
 			state: execstate.State{ActiveTools: active, LoadedSkills: []string{"chat-conventions"}},
 			carry: func(r *runner.Resume) {
 				answered("use main")(r)

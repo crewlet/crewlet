@@ -1283,15 +1283,16 @@ func codingHeldSubmit(ctx context.Context, args codingArgs, hooks codingHooks, t
 
 // codingCancelTake is the batch's hook call given up as Claude Code gives one up
 // past its hook timeout: a steer_take on the run's session under an id of its
-// own, its answer discarded unread and nothing filed in the session, then a
-// `notifications/cancelled` naming it. Raw, because the SDK's client names
-// its calls itself and cancels only a call still waiting.
+// own, its answer checked to have served the note (the case's premise: else
+// the finish serves it with no cancel exercised) and nothing filed in the
+// session, then a `notifications/cancelled` naming it. Raw, because the SDK's
+// client names its calls itself and cancels only a call still waiting.
 func codingCancelTake(ctx context.Context, bridge string, session *mcp.ClientSession) error {
 	version := session.InitializeResult().ProtocolVersion
-	post := func(body string) error {
+	post := func(body string) (string, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, bridge, strings.NewReader(body))
 		if err != nil {
-			return err
+			return "", err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json, text/event-stream")
@@ -1299,20 +1300,27 @@ func codingCancelTake(ctx context.Context, bridge string, session *mcp.ClientSes
 		req.Header.Set("Mcp-Protocol-Version", version)
 		res, err := httpx.Client(0).Do(req)
 		if err != nil {
-			return err
+			return "", err
 		}
-		_, _ = io.Copy(io.Discard, res.Body)
+		raw, err := io.ReadAll(res.Body)
 		_ = res.Body.Close()
-		if res.StatusCode >= http.StatusBadRequest {
-			return fmt.Errorf("the bridge answered %d", res.StatusCode)
+		if err != nil {
+			return "", err
 		}
-		return nil
+		if res.StatusCode >= http.StatusBadRequest {
+			return "", fmt.Errorf("the bridge answered %d", res.StatusCode)
+		}
+		return string(raw), nil
 	}
-	if err := post(`{"jsonrpc":"2.0","id":"cancelled-hook-1","method":"tools/call","params":{"name":"` +
-		mcpbridge.SteerTool + `","arguments":{"event":"` + codingEventToolBatch + `","agent":""}}}`); err != nil {
+	answer, err := post(`{"jsonrpc":"2.0","id":"cancelled-hook-1","method":"tools/call","params":{"name":"` +
+		mcpbridge.SteerTool + `","arguments":{"event":"` + codingEventToolBatch + `","agent":""}}}`)
+	if err != nil {
 		return fmt.Errorf("the batch's hook call: %w", err)
 	}
-	if err := post(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":` +
+	if !strings.Contains(answer, "additionalContext") {
+		return fmt.Errorf("the batch's hook call was answered no note, so no cancel is exercised: %s", answer)
+	}
+	if _, err := post(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":` +
 		`"cancelled-hook-1","reason":"hook timed out"}}`); err != nil {
 		return fmt.Errorf("giving the batch's hook call up: %w", err)
 	}

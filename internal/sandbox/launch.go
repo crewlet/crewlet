@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"path"
@@ -333,8 +334,10 @@ type LaunchRequest struct {
 	// that write the record holds the turn's notes, the brief's and the
 	// box's ([LaunchRequest.HandedNotes]), and a launch that fails after it
 	// ENDS the record, whose ending reports every one of them no job ran
-	// with ([PendingRun.EndedNotes]); a launch that fails before it wrote
-	// nothing, and its notes are the caller's still. Nil tells nobody.
+	// with ([PendingRun.EndedNotes]). A write whose answer was lost is told
+	// once the launch has ended a record that names the job
+	// ([UnopenedLaunchError]). A launch that fails before it wrote nothing,
+	// and its notes are the caller's still. Nil tells nobody.
 	Recorded func(launchID string)
 
 	// Opened is told the job the moment the store has opened it
@@ -823,6 +826,16 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	c.mu.Unlock()
 	moved()
 	if err != nil {
+		// A ROW THAT MAY NAME THE JOB WITH NO LOG OPENED TO IT is ended, that
+		// job alone ([UnopenedLaunchError]): left launching, nothing polls or
+		// claims it, and it holds its seat until the seat moves. Ended, the
+		// record held the turn's notes, and its ending reports them. The open
+		// counted nothing, so the ending moves no count and the seat is
+		// recounted from the store.
+		if unopened, ok := errors.AsType[*UnopenedLaunchError](err); ok &&
+			c.endLaunch(ctx, req, fence, unopened.LaunchID, false) && req.Recorded != nil {
+			req.Recorded(unopened.LaunchID)
+		}
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
 	}
 	// THE RECORD HOLDS THE TURN'S NOTES FROM HERE — see
@@ -1354,8 +1367,6 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 		}
 		cancel()
 	}
-	ctx, done := detachedEnding(ctx)
-	defer done()
 	// Every live status and every job: this launch is abandoned whatever the
 	// row reached. Two boxes can be owed a reclaim: the launch's own is killed
 	// here, since it may never have been attached, and the box the row names is
@@ -1363,9 +1374,22 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 	// killed twice, which every provider answers as done. The seat goes back as
 	// the delete lands, once ([ending.counted]); a row no longer this node's to
 	// end is recounted from the store. See the package doc, "Launching a run".
+	c.endLaunch(ctx, req, fence, EveryLaunch, true)
+}
+
+// endLaunch ends the run of a launch that could not finish, licensed to launch
+// alone or to [EveryLaunch], under a context of its own ([detachedEnding]),
+// reporting whether an ending of the run under that license was decided: a row
+// that names another job is left as it stands. counted says the launch counted
+// the run as it opened the row ([ending.counted]); where it did not, or the
+// ending was not this node's to make, the seat is recounted from the store.
+func (c *Coordinator) endLaunch(ctx context.Context, req LaunchRequest, fence Fence, launch string,
+	counted bool) bool {
+	ctx, done := detachedEnding(ctx)
+	defer done()
 	run := PendingRun{TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle}
 	decided, err := c.endRecord(ctx, run, ending{
-		fence: fence, whileIn: Active, launch: EveryLaunch, reclaim: true, counted: true,
+		fence: fence, whileIn: Active, launch: launch, reclaim: true, counted: counted,
 	})
 	switch {
 	case err != nil:
@@ -1374,14 +1398,15 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 			"detail", "the abandoned launch's record is not deleted yet; this node finishes "+
 				"the ending, and the seat's next recovery pass reaps the row if the seat "+
 				"moves first")
-	case decided == nil:
-		// THE RECOUNT WITHIN A TEARDOWN'S GRACE, as the kill above is
+	case decided == nil || !counted:
+		// THE RECOUNT WITHIN A TEARDOWN'S GRACE, as abandon's kill is
 		// ([detached]): the ending's context bounds none of the steps it
 		// does not make itself.
 		recountCtx, cancel := detached(ctx)
 		c.syncSeat(recountCtx, req.Turn.AgentHandle)
 		cancel()
 	}
+	return decided != nil
 }
 
 // label is what the run is named by, cut by [summarise]: the caller's own

@@ -156,6 +156,13 @@
 // read it ([BoxReader]), and a launching node whose presence stays lapsed for
 // the box timeout has its running jobs lost with it. See boxhost.go.
 //
+// AND A LAUNCH THAT FAILS ONCE ITS ROW IS WRITTEN ENDS ITS RUN, its log's
+// opening included: a row left launching is polled and claimed by nothing and
+// holds its seat until the seat moves. A write the store did not answer may
+// have landed, so the launch ends the job it named and nothing else
+// ([UnopenedLaunchError]); a row that names another job is left to its holder.
+// See "Launching a run".
+//
 // AND A JOB LOST WITH ITS HOST IS CARRIED ON, NEVER COLLECTED: one its
 // engine's restart killed — which the box tells from one that crashed by the
 // engine process that last saw it running ([JobLost], local_witness.go) — one
@@ -1380,7 +1387,10 @@
 // that did land had counted it out already, so the seat whose other run still
 // worked read free beside it. A row no longer this node's to end, ended by
 // somebody else or owned by a newer lease, has no delete of this node's to move
-// it, and the seat is recounted from the store instead.
+// it, and the seat is recounted from the store instead. So is the seat of an
+// open the store did not answer ([UnopenedLaunchError]): the open counted
+// nothing, a row it wrote all the same is counted only where a recount reads
+// it, and the ending of the job it named moves no count of its own.
 //
 // resetLaunch is [CoordStore.BeginLaunch]'s half for a row that was already
 // there, a relaunch its turn's resumed frame makes, reporting the row as it
@@ -4583,7 +4593,9 @@
 //     have reached the run is never said to have reached nothing. At the hook's
 //     serve that was live before those reads, where a hook was served it
 //     ([EndedNote.Serve]), the step it was handed over at; else at the job a
-//     poll served it to.
+//     poll served it to. And a note whose EVERY LOST SERVE ITS SESSION MAY
+//     HOLD ([HookServed.MayHold]), its harness having given the call up, at
+//     the last of them, ahead of a marked take's read as a live serve is.
 //   - MISSED: read by a take marked UNANSWERED ([NoteRead.Unanswered]), and
 //     told again by no launch whose job started: the take's write landed, its
 //     answer never reached its reader, and no later write records the note
@@ -4592,10 +4604,8 @@
 //     take's read beside it ([NoteRead.Retold]): so a note still marked is one
 //     no launch recorded telling again, and one whose telling's job never
 //     started is missed all the same, at that take, since the brief handed
-//     nothing over. And SERVED TO A JOB'S HOOKS AND EVERY SERVE LOST
-//     ([HookServed.Lost]), read by nothing since: its harness cancelled the
-//     call, or its session proves it never took the note. At the last of
-//     those serves ([EndedNote.Serve]).
+//     nothing over. And SERVED TO A JOB'S HOOKS, EVERY SERVE LOST, ONE ABSENT
+//     ([ServeAbsent]), read by nothing since: at the last serve ([EndedNote.Serve]).
 //   - EXPIRED: still WAITING, or read by the BRIEF OF THE RECORD'S CURRENT JOB
 //     where that job never started and that brief was the first to tell it:
 //     the job's record never took its command ([LaunchRecord.Started]),
@@ -4714,19 +4724,15 @@
 // AN ITEM FOR ONE JOB ([RunNote.For]) stops nothing: whatever its read, a
 // continuation is told the turn's notes, and an item is no person's note.
 //
-// NONE, NOT THE NOTES BEFORE THE JOB'S LAST SERVE. A hook's serve is recorded
-// in the write that answers the harness's ask, before the answer is handed
-// back (internal/engine's note hooks), so a harness cut off between the two
-// never had its last serve's notes; but neither is such a session known to hold its
-// job's brief, the message that told the notes the session it continued lacked,
-// an earlier job's among them: no probe has measured whether Claude Code
-// 2.1.310 writes the message a continued session is handed before it answers a
-// call, and no record says which notes that brief told. A cursor stopped before
-// the job's last take said the session held the notes that brief told, which
-// may never have reached it. A launch that continues a session cut off tells it
-// every note the turn has read, as notes it may already show, whatever its
-// cursor (internal/agent/runner's keptSession); an older build, which tells it
-// every note past its cursor, tells it every one.
+// NONE FOR A SESSION CUT OFF: it is not known to hold its job's brief, the
+// message that told the notes the session it continued lacked, an earlier job's
+// among them. No probe has measured whether Claude Code 2.1.310 writes the
+// message a continued session is handed before it answers a call, and no record
+// says which notes that brief told, so any cursor but none says the session
+// holds notes that may never have reached it. A launch that continues a session
+// cut off tells it every note the turn has read, as notes it may already show,
+// whatever its cursor (internal/agent/runner's keptSession); an older build,
+// which tells it every note past its cursor, tells it every one.
 //
 // # Filing and serving notes
 //

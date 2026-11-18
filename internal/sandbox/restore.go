@@ -1679,12 +1679,12 @@ func copyWentPast(req LaunchRequest, opened PendingRun, reused bool, want Sessio
 // WHICH TELLING, CHOSEN ONCE THE BOX'S HARNESS HAS SAID ITS RELEASE
 // ([SessionRestorer.CheckCarry]): the one told by a reading only where that
 // answer is exactly the release it was read for ([exactFor]), else logged
-// (`executor_session_holdings_unused`); the unheld one where the answer is a
-// release whose resume this build did not read ([UnheldTelling]), and no
-// session there where the seat's budget dropped it
-// ([SessionContinuation.UnheldDropped]). The box's own copy, taken whole there,
-// is asked only where an unheld telling is at stake: no reading is read of it
-// ([Coordinator.HoldingsOf]), and its harness may have updated since its job.
+// (`executor_session_holdings_unused`); the unheld one where it is a release
+// whose resume this build did not read ([UnheldTelling]), and no session there
+// where the seat's budget dropped it ([SessionContinuation.UnheldDropped]). The
+// box's own copy, read by no reading ([Coordinator.HoldingsOf]), is asked its
+// release only where an unheld telling is at stake: the one that wrote it, as
+// the executor's DISABLE_AUTOUPDATER pins it.
 func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opened PendingRun,
 	box Sandbox, runner Runner, reused bool, want SessionContinuation) (continuedLaunch, string) {
 

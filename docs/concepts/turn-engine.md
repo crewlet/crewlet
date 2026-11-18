@@ -863,9 +863,8 @@ sequenceDiagram
   by the run that went on in it or by a review, which is never the session's —
   and then the new ones. A session whose harness was cut off, or is not known
   to have ended its own run, is told every note the turn has read before the
-  new ones, as notes it may already show: its job's last serve was recorded
-  before its harness had it, and the session is not known to hold its job's
-  brief, which told the notes the session it continued lacked. One whose
+  new ones, as notes it may already show: the session is not known to hold
+  its job's brief, which told the notes the session it continued lacked. One whose
   harness ended its own run is told, the same way, every note from the first
   read its record marks unanswered — a review's take whose answer never
   reached it, below — or restarted, a note its session shows a hook took only
@@ -1004,8 +1003,10 @@ sequenceDiagram
   `missed` where a take whose answer was lost recorded it read and no later
   launch whose job started told it, at that take's step, a launch that told it
   again and failed before its job started among them, or where every serve of
-  it to a job's hooks was lost, cancelled by its harness or proved never taken
-  by its session, at the last of them; and `expired` where it still waits or was read first into the
+  it to a job's hooks was lost and one of those serves' sessions proves it
+  absent, at the last of them; `unconfirmed` too, at the last of them, where
+  every lost serve was one its harness gave up, since the answer can outrun
+  the cancel; and `expired` where it still waits or was read first into the
   brief of a job that never started. A park is never an ending: a question can wait
   days, and the segment that resumes reads what waited. A note is not carried
   to a later turn: it is about the work in flight.

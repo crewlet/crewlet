@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -53,8 +56,9 @@ func lostTo(t *testing.T, store sandbox.PendingStore, turnID, id string, why san
 // A CANCEL OF AN ANSWERED TAKE SERVES ITS NOTE AT THE NEXT BOUNDARY. The harness
 // gave up a hook's call after its take served a note, so its session never
 // took it: the inbox keeps the call, and the job's next take serves the note
-// again, its own write losing the cancelled serve, whatever the inbox's view
-// or the run's settle (held here) has caught up with.
+// again, its own write losing the cancelled serve, while the run's settle is
+// held. That take is the finish's, which reads the store, so the first serve
+// is live where it chooses, never hidden by a view one write behind.
 //
 // Mutation: offer no live-served note whatever the ring says, or write the
 // serve without the cancelled calls (ServeHook ignoring Cancelled), and the
@@ -74,7 +78,7 @@ func TestACancelOfAnAnsweredTakeServesItsNoteAtTheNextBoundary(t *testing.T) {
 	call := hookCall()
 	first := takeOf(t, inbox.Take(ctx, mcpbridge.SteerEventToolBatch, call))
 	inbox.Cancelled(ctx, *call)
-	answer := inbox.Take(ctx, mcpbridge.SteerEventToolBatch, hookCall())
+	answer := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall())
 	if !strings.Contains(answer, "use staging") {
 		t.Fatalf("the next boundary was answered %q, want the note a cancel lost served again", answer)
 	}
@@ -253,7 +257,11 @@ func TestCancelsAskTheStoreOnceARoundAndOnlyForCallsNotRuledOut(t *testing.T) {
 		t.Parallel()
 		ctx := t.Context()
 		store := sandbox.NewCoordStore(coordmem.NewFleet())
-		runs, _ := steersOver(t, steerRing, store)
+		// HELD, so a loop a cancel started stays in settling to be seen.
+		held := &lostServeStore{PendingStore: store, held: make(chan struct{})}
+		t.Cleanup(func() { close(held.held) })
+		runs, _ := steersOver(t, steerRing, held)
+		runs.stopped = ctx.Done()
 		launch := workingRun(t, store, runs, "run-1")
 		fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
 		inbox := boundInbox(t, runs, store, "run-1", launch)
@@ -298,6 +306,41 @@ func TestCancelsAskTheStoreOnceARoundAndOnlyForCallsNotRuledOut(t *testing.T) {
 				len(asked), asked)
 		}
 	})
+	t.Run("a cancel heard again", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		store := sandbox.NewCoordStore(coordmem.NewFleet())
+		held := &lostServeStore{PendingStore: store}
+		runs, _ := steersOver(t, steerRing, held)
+		runs.stopped = ctx.Done()
+		launch := workingRun(t, store, runs, "run-1")
+		fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+		inbox := boundInbox(t, runs, store, "run-1", launch)
+		call := hookCall()
+		takeOf(t, inbox.Take(ctx, mcpbridge.SteerEventFinish, call))
+		inbox.Cancelled(ctx, *call)
+		lostTo(t, store, "run-1", "n-1", sandbox.ServeCancelled)
+		eventually(t, "the first hearing's loop ended", func() bool {
+			runs.settleMu.Lock()
+			defer runs.settleMu.Unlock()
+			return len(runs.settling) == 0
+		})
+		// HELD FROM HERE, so a loop a repeat started stays in settling.
+		held.mu.Lock()
+		held.held = make(chan struct{})
+		held.mu.Unlock()
+		t.Cleanup(func() { close(held.held) })
+		for range 5 {
+			inbox.Cancelled(ctx, *call)
+		}
+		runs.settleMu.Lock()
+		asked := len(runs.settling)
+		runs.settleMu.Unlock()
+		if asked != 0 || len(held.asked()) != 1 {
+			t.Errorf("a cancel POSTed again started %d loops and the store was asked %d settles, want "+
+				"nothing past its first hearing's one", asked, len(held.asked()))
+		}
+	})
 }
 
 // A CANCELLED SERVE IS TOLD AGAIN UNDER THE HEADER. A note whose only serve a
@@ -328,4 +371,154 @@ func TestACancelledServeIsToldAgainUnderTheHeader(t *testing.T) {
 	if got := servedNotes(mustRow(t, store, "run-1")); !slices.Equal(got, []string{"n-1"}) {
 		t.Errorf("a continuation is told %v under the header, want the note a cancel alone lost", got)
 	}
+}
+
+// A BOUND SPENT BY AN UNANSWERED SERVE IS GIVEN BACK. A serve whose write
+// landed and answered an error handed its hook nothing, so it spends none of
+// the note's serves to its job: with two serves proven absent and the third
+// answered nothing (its settle held), the job's next take serves the note
+// again, its own write removing the unanswered serve, and the note holds one
+// live serve beside the two absent.
+//
+// Mutation: count the inbox's unanswered serves toward the bound, and the take
+// passes the note over for the review.
+func TestABoundSpentByAnUnansweredServeIsGivenBack(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	lost := &lostServeStore{PendingStore: store, held: make(chan struct{})}
+	t.Cleanup(func() { close(lost.held) })
+	runs, _ := steersOver(t, steerRing, lost)
+	runs.stopped = ctx.Done()
+	launch := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+	inbox := boundInbox(t, runs, store, "run-1", launch)
+	for range sandbox.MaxNoteServes - 1 {
+		answer := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall())
+		if _, err := store.SettleHook(ctx, "run-1", sandbox.HookSettle{Launch: launch,
+			Absent: []string{takeOf(t, answer)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lost.mu.Lock()
+	lost.lose = 1
+	lost.mu.Unlock()
+	if got := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall()); got != "" {
+		t.Fatalf("a serve whose write answered an error answered the hook %q, want nothing", got)
+	}
+	serves := noteOn(t, store, "run-1", "n-1").Serves
+	if len(serves) != sandbox.MaxNoteServes {
+		t.Fatalf("the premise: the note holds serves %+v, want %d, the last unanswered", serves,
+			sandbox.MaxNoteServes)
+	}
+	unanswered := serves[len(serves)-1].Take
+	answer := inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall())
+	if !strings.Contains(answer, "use staging") {
+		t.Fatalf("the next boundary was answered %q, want the note served again", answer)
+	}
+	servedNotRead(t, store, "run-1", "n-1", launch, takeOf(t, answer))
+	serves = noteOn(t, store, "run-1", "n-1").Serves
+	if len(serves) != sandbox.MaxNoteServes || slices.ContainsFunc(serves, func(h sandbox.HookServed) bool {
+		return h.Take == unanswered
+	}) {
+		t.Errorf("the note holds serves %+v, want the unanswered one removed by the serve's own write", serves)
+	}
+}
+
+// A JOB'S PENDING SETTLE KEEPS ITS NEWEST LOSSES. A run's loop merges every
+// settle a job's inbox hands it into one, so a box that loses serves faster
+// than its store answers would grow it without end: each list keeps its
+// newest steerLossesKept, as the inbox's own rings do.
+//
+// Mutation: leave either list uncapped, and the case goes red.
+func TestAJobsPendingSettleKeepsItsNewestLosses(t *testing.T) {
+	t.Parallel()
+	var held hookSettle
+	const asked = steerLossesKept + 8
+	for k := range asked {
+		held.merge(sandbox.HookSettle{Launch: "job-1", Unanswered: []string{"take-" + strconv.Itoa(k)},
+			Cancelled: []sandbox.NoteCall{{Session: "mcp-session-1", ID: strconv.Itoa(k)}}})
+	}
+	if got := held.settle.Unanswered; len(got) != steerLossesKept || got[0] != "take-8" ||
+		got[len(got)-1] != "take-"+strconv.Itoa(asked-1) {
+		t.Errorf("the pending settle holds %d unanswered takes, %v, want the newest %d", len(got), got,
+			steerLossesKept)
+	}
+	if got := held.settle.Cancelled; len(got) != steerLossesKept || got[0].ID != "8" {
+		t.Errorf("the pending settle holds %d cancelled calls, want the newest %d", len(got), steerLossesKept)
+	}
+}
+
+// servesLostSaid is the count of notes each steer_serve_lost line logs holds
+// for turnID says.
+func servesLostSaid(logs *bundleLog, turnID string) []int {
+	var out []int
+	for _, line := range strings.Split(logs.String(), "\n") {
+		var rec struct {
+			Msg    string `json:"msg"`
+			TurnID string `json:"turn_id"`
+			Notes  int    `json:"notes"`
+		}
+		if json.Unmarshal([]byte(line), &rec) == nil && rec.Msg == "steer_serve_lost" && rec.TurnID == turnID {
+			out = append(out, rec.Notes)
+		}
+	}
+	return out
+}
+
+// A SERVE LOST TO A CANCEL IS SAID WHERE IT IS LOST, AND ONLY IT: by the settle
+// loop, counting the notes its write lost to a cancel and never those a take
+// answered nothing merged into the same settle; and by a serve's own write
+// that loses one, which no loop then says. NOT PARALLEL: it reads the
+// process's log.
+//
+// Mutation: count every note the merged settle answered, or say nothing where
+// a serve's write lost one, and a case goes red.
+func TestAServeLostToACancelIsSaidWhereItIsLost(t *testing.T) {
+	logs := captureSteerLogs(t)
+	t.Run("by the settle loop", func(t *testing.T) {
+		ctx := t.Context()
+		store := sandbox.NewCoordStore(coordmem.NewFleet())
+		runs, _ := steersOver(t, steerRing, store)
+		runs.stopped = ctx.Done()
+		launch := workingRun(t, store, runs, "run-lost-1")
+		calls := map[string]*sandbox.NoteCall{}
+		for _, id := range []string{"n-1", "n-2"} {
+			fileSealed(t, runs, "run-lost-1", steer.Note{ID: id, Text: "the note " + id, By: "founder"})
+			calls[id] = hookCall()
+			if _, err := store.ServeHook(ctx, "run-lost-1", sandbox.HookServe{IDs: []string{id}, Launch: launch,
+				Statuses: steerTakeStatuses, Serve: sandbox.HookServed{Take: "take-" + id,
+					Boundary: string(types.SteerBoundaryFinish), Call: calls[id]}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		runs.settleHook(ctx, "run-lost-1", sandbox.HookSettle{Launch: launch, Unanswered: []string{"take-n-1"},
+			Cancelled: []sandbox.NoteCall{*calls["n-2"]}})
+		eventually(t, "the settle answered", func() bool {
+			runs.settleMu.Lock()
+			defer runs.settleMu.Unlock()
+			return len(runs.settling) == 0
+		})
+		if said := servesLostSaid(logs, "run-lost-1"); !slices.Equal(said, []int{1}) {
+			t.Errorf("steer_serve_lost said %v notes, want once, of the one note a cancel lost", said)
+		}
+	})
+	t.Run("by a serve's own write", func(t *testing.T) {
+		ctx := t.Context()
+		store := sandbox.NewCoordStore(coordmem.NewFleet())
+		held := &lostServeStore{PendingStore: store, held: make(chan struct{})}
+		t.Cleanup(func() { close(held.held) })
+		runs, _ := steersOver(t, steerRing, held)
+		runs.stopped = ctx.Done()
+		launch := workingRun(t, store, runs, "run-lost-2")
+		fileSealed(t, runs, "run-lost-2", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+		inbox := boundInbox(t, runs, store, "run-lost-2", launch)
+		call := hookCall()
+		takeOf(t, inbox.Take(ctx, mcpbridge.SteerEventFinish, call))
+		inbox.Cancelled(ctx, *call)
+		takeOf(t, inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall()))
+		if said := servesLostSaid(logs, "run-lost-2"); !slices.Equal(said, []int{1}) {
+			t.Errorf("steer_serve_lost said %v notes as the serve's write lost one, want once, of one", said)
+		}
+	})
 }
