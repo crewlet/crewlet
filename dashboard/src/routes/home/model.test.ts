@@ -201,9 +201,9 @@ describe("the status sentence", () => {
   });
 
   test("a condition that needs a look says where it is", () => {
-    const runs = statusSentence({ ...base, conditions: 1, conditionsHref: "#/inbox?row=x" })!;
+    const runs = statusSentence({ ...base, conditions: 1, conditionsHref: "#/inbox/condition/x" })!;
     const clause = runs.find((r) => r.text.includes("needs a look"));
-    expect(clause?.href).toBe("#/inbox?row=x");
+    expect(clause?.href).toBe("#/inbox/condition/x");
     expect(runs.filter((r) => r.href)).toHaveLength(1);
   });
 });

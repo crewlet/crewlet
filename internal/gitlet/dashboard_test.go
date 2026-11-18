@@ -531,25 +531,18 @@ func TestTheDashboardNamesAnObjectAsTheEnginesRepositoriesDo(t *testing.T) {
 }
 
 // THE DASHBOARD KNOWS EVERY STATE OF A CHECK, and every purpose one checks a
-// commit for, in the engine's order: the Checks section's facets, histogram
-// and checks tabs key on `CHECK_STATES`, `CHECK_ENDED_STATES` and
-// `CHECK_PURPOSES` (`contract/checks.ts`). A state they lack cannot be
-// narrowed to; one the engine dropped is refused as an unknown `state`
-// ([gitlet.CheckState.Valid]), or among the window's ending chips as one
-// that never ends ([gitlet.CheckState.Ended]).
+// commit for, in the engine's order: the Checks section's state tabs and the
+// checks tabs key on `CHECK_STATES` and `CHECK_PURPOSES` (`contract/checks.ts`).
+// A state they lack cannot be narrowed to; one the engine dropped is refused
+// as an unknown `state` ([gitlet.CheckState.Valid]).
 //
-// Mutation: drop a state or a purpose from either side, list `running` among
-// the endings, or reorder the dashboard's, and this fails.
+// Mutation: drop a state or a purpose from either side, or reorder the
+// dashboard's, and this fails.
 func TestTheDashboardKnowsEveryStateOfACheck(t *testing.T) {
 	t.Parallel()
 	got, want := theDashboardsList(t, "CHECK_STATES"), spelledOut(gitlet.CheckStates())
 	if !slices.Equal(got, want) {
 		t.Errorf("the dashboard's CHECK_STATES is %v, want the engine's, in order: %v", got, want)
-	}
-	ended := slices.DeleteFunc(gitlet.CheckStates(), func(s gitlet.CheckState) bool { return !s.Ended() })
-	got, want = theDashboardsList(t, "CHECK_ENDED_STATES"), spelledOut(ended)
-	if !slices.Equal(got, want) {
-		t.Errorf("the dashboard's CHECK_ENDED_STATES is %v, want the engine's endings, in order: %v", got, want)
 	}
 	got, want = theDashboardsList(t, "CHECK_PURPOSES"), spelledOut(gitlet.CheckPurposes())
 	if !slices.Equal(got, want) {

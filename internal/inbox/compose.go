@@ -118,6 +118,8 @@ type SourceQuery struct {
 	// of this source a page took, or the source's own [SourcePage.Next]
 	// where the page took every notice it answered — "" for its first page.
 	Cursor string
+	// Record is [Query.Record], narrowed in the source's own scan.
+	Record string
 }
 
 // SourcePage is one page of a source's notices, with what the source says
@@ -200,6 +202,9 @@ type Query struct {
 	Snoozed     SnoozeScope
 	Limit       int
 	Cursor      string
+	// Record narrows every source's scan to the one notice of that record id
+	// ([Notice.RecordID]); empty narrows nothing.
+	Record string
 	// Cards asks every [Carded] source for the cards of its notices the page
 	// takes — a read that draws them, as a list a person opens a notice from
 	// does. The zero value asks none: a count, a badge or a row draws a
@@ -272,7 +277,7 @@ func Compose(ctx context.Context, q Query, sources []Source) (Page, error) {
 			continue
 		}
 		got, err := s.Notices(ctx, SourceQuery{Handle: q.Handle, Unread: q.Unread, PrimaryOnly: q.PrimaryOnly,
-			Snoozed: q.Snoozed, Limit: limit, Cursor: cursor})
+			Snoozed: q.Snoozed, Limit: limit, Cursor: cursor, Record: q.Record})
 		if err != nil {
 			return Page{}, fmt.Errorf("inbox: read the %s notices: %w", s.Name(), err)
 		}

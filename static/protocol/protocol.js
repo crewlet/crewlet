@@ -4726,7 +4726,10 @@ var ACTIONS = {
 		args: [
 			"repo",
 			"change",
-			"all_failed"
+			"all_failed",
+			"sha",
+			"checked_for",
+			"checks"
 		],
 		domain: "code",
 		apps: ["gitlet"],
