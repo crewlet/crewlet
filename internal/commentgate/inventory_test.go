@@ -373,7 +373,7 @@ var rowInventory = map[string]int{
 	"jsinflight":                        2193,
 	"jsoncarry":                         1336,
 	"jsonform":                          1726,
-	"jsonscan":                          2770,
+	"jsonscan":                          2766,
 	"jsprovision":                       7121,
 	"jwks":                              2716,
 	"kept":                              2343,
