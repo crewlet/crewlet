@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -903,4 +905,74 @@ func TestATakesCloseEndsItsMetersWaitForTheSlot(t *testing.T) {
 		}
 		free()
 	})
+}
+
+// logBuffer is the process's log, written from any goroutine.
+type logBuffer struct {
+	mu  sync.Mutex
+	out bytes.Buffer
+}
+
+func (b *logBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.out.Write(p)
+}
+
+func (b *logBuffer) lines(event string) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var found []string
+	for line := range strings.Lines(b.out.String()) {
+		if strings.Contains(line, event) {
+			found = append(found, line)
+		}
+	}
+	return found
+}
+
+// A WAIT FOR THE LARGE SLOT IS LOGGED AS IT ENDS, and a slot taken free is
+// not: a pass that found the slot held logs executor_large_read_waited with
+// whether it took it, so a read cut while it waited is told from one past its
+// own wait.
+//
+// Mutation: log no wait, or every take of the slot, or `took` whatever the
+// wait's end, and a case goes red.
+func TestAWaitForTheLargeSlotIsLoggedAsItEnds(t *testing.T) {
+	var logs logBuffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &logs)
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+	free := new(passBudget)
+	if err := free.hold(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	free.drop()
+	if got := logs.lines("executor_large_read_waited"); len(got) != 0 {
+		t.Errorf("a slot taken free was logged as a wait: %q", got)
+	}
+	for _, leaves := range []bool{true, false} {
+		release := holdLargeSlot(t)
+		leaving, leave := context.WithCancel(t.Context())
+		ctx := newSlotWait(leaving)
+		large := new(passBudget)
+		done := make(chan error, 1)
+		go func() { done <- large.hold(ctx) }()
+		<-ctx.waited
+		if leaves {
+			leave()
+		} else {
+			release()
+		}
+		<-done
+		large.release()
+		release()
+		leave()
+		got := logs.lines("executor_large_read_waited")
+		if want := fmt.Sprintf("took=%t", !leaves); len(got) != 1 || !strings.Contains(got[0], want) {
+			t.Errorf("a wait that took the slot %t logged %q, want one line saying %s", !leaves, got, want)
+		}
+		logs.mu.Lock()
+		logs.out.Reset()
+		logs.mu.Unlock()
+	}
 }

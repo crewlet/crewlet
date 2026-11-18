@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -202,7 +203,7 @@ func (b *passBudget) hold(ctx context.Context) error {
 		taking := make(chan struct{})
 		b.taking = taking
 		b.mu.Unlock()
-		took, err := takeSlot(ctx, collectionLargeReads)
+		took, err := takeLargeSlot(ctx)
 		b.mu.Lock()
 		b.taking = nil
 		if err == nil {
@@ -215,6 +216,26 @@ func (b *passBudget) hold(ctx context.Context) error {
 		}
 		return nil
 	}
+}
+
+// takeLargeSlot takes a slot of [collectionLargeReads] ([takeSlot]). A take
+// that waits says so as its wait ends (executor_large_read_waited): that the
+// slot is contended, and where its read ran out waiting, why the count reads
+// unread or the take was refused.
+func takeLargeSlot(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case collectionLargeReads <- struct{}{}:
+		return func() { <-collectionLargeReads }, nil
+	default:
+	}
+	start := time.Now()
+	took, err := takeSlot(ctx, collectionLargeReads)
+	log.InfoContext(ctx, "executor_large_read_waited", "took", err == nil,
+		"waited_ms", time.Since(start).Milliseconds())
+	return took, err
 }
 
 // drop gives back one piece's hold, and the slot with the last.
