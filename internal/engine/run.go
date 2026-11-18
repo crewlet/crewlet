@@ -3213,13 +3213,44 @@ func (e *Engine) Drain(ctx context.Context) {
 				tracing.TraceOf(ctx))
 			announced.Go(func() { e.publishLifecycle(ctx, ev) })
 		}
+		// AND THE SESSIONS OF THE DIRECT JOBS THIS NODE LAUNCHED ARE SAVED
+		// BESIDE THE WAIT FOR TURNS, not after it: the stop a drain comes
+		// before usually takes such a job with its container, unit or host,
+		// its relaunch continues its newest save, and the wait for turns is
+		// time the drain already spends. Joined before the drain returns, so
+		// the teardown closes nothing a save still writes through; bounded by
+		// its own wait (the sandbox package doc's "A save as its node
+		// drains").
+		saved := make(chan struct{})
+		go func() {
+			defer close(saved)
+			if rt := e.sandbox.Load(); rt != nil {
+				rt.coordinator.SaveHosted(ctx)
+			}
+		}()
 		e.node.Drain(ctx)
 		// THE CALLS ITS SEATS' RUNS STILL HAD RUNNING, once every seat is
 		// given back: each to its record, before the teardown closes what it
 		// records through.
 		e.bridge.AwaitCalls(ctx)
 		announced.Wait()
+		awaitDrainSaves(ctx, saved)
 	})
+}
+
+// awaitDrainSaves waits for the drain's saves ([Engine.Drain]) to end, saying
+// so first where they have not, as the bridge's wait for its calls does: a
+// drain that holds a node's stop says what it waits on.
+func awaitDrainSaves(ctx context.Context, saved <-chan struct{}) {
+	select {
+	case <-saved:
+		return
+	default:
+	}
+	log.InfoContext(ctx, "executor_session_saves_draining",
+		"detail", "the sessions of this node's direct jobs are still being saved as it drains; "+
+			"waiting for each to pass its spool, for at most the drain save's wait")
+	<-saved
 }
 
 // ShuttingDown reports whether a drain has begun.

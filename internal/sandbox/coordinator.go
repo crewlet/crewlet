@@ -970,6 +970,12 @@ type CoordinatorOptions struct {
 	// sealed object — see restore.go. Nil continues no kept session: every
 	// relaunch then continues at most the session its own box holds.
 	Restore SessionRestore
+
+	// Saves is the fleet's ledger of each seat's saves, which a save of a
+	// running job is charged against before its stamp (saveledger.go): the
+	// engine's coordination store. Nil takes no save.
+	Saves SaveLedgers
+
 	// SpoolDir is the directory this node spools sealed sessions in: a
 	// capture's, between its take and its keep ([Coordinator.spool]), and a
 	// relaunch's, the kept session it fetched to carry into its box, between
@@ -1100,6 +1106,10 @@ type Coordinator struct {
 	endWait time.Duration
 	endPoll time.Duration
 	now     func() time.Time
+
+	// saves is this node's part in saving its runs' sessions as they work
+	// (save.go).
+	saves saveState
 
 	// mainThreadWait bounds the read of a job's main thread at its collection
 	// ([MainThreadReadWait], [Coordinator.readMainThread]), a test's its own;
@@ -1368,10 +1378,12 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		sessions:           opts.Sessions,
 		keep:               opts.Keep,
 		restore:            opts.Restore,
-		relaunchWait:       relaunchCaptureWait,
-		holdingsWait:       holdingsReadWait,
-		endWait:            JobEndWait,
-		endPoll:            jobEndPoll,
+		saves: saveState{ledger: opts.Saves, slots: make(chan struct{}, maxConcurrentSaves),
+			memos: map[string]*saveMemo{}},
+		relaunchWait: relaunchCaptureWait,
+		holdingsWait: holdingsReadWait,
+		endWait:      JobEndWait,
+		endPoll:      jobEndPoll,
 
 		// THE ONE WAIT every reading of a job's main thread shares.
 		mainThreadWait: MainThreadReadWait,
