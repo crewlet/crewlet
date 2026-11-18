@@ -27,6 +27,7 @@ const oid = (short: string) => short.padEnd(40, "0");
 const BASE = oid("c71d0e9");
 const T1 = oid("e1e1e1e");
 const HEAD = oid("aaaaaaa");
+const C17 = oid("c17");
 const page = { position: CODE_POSITION, level: "stale" };
 const NOW = Date.now();
 const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
@@ -89,7 +90,7 @@ const API17 = {
   checks: ["e2e"],
   enqueued_at: ago(23),
   ejected_at: ago(20),
-  tested_in: { candidate_id: "cand-9", base_oid: oid("5c3e8b1"), commit_oid: oid("c17") },
+  tested_in: { candidate_id: "cand-9", base_oid: oid("5c3e8b1"), commit_oid: C17 },
 };
 
 function check(name: string, state: string, more: Record<string, unknown> = {}) {
@@ -111,6 +112,11 @@ const T1_CHECKS = [
   check("unit", "passed", { started_at: ago(3) }),
   check("e2e", "running", { started_at: ago(4.5) }),
 ];
+
+const C17_CHECKS = [
+  check("e2e", "failed", { repo_id: "id-api", repo: "api", oid: C17, started_at: ago(22) }),
+];
+const CHECKS_OF: Record<string, unknown[]> = { [T1]: T1_CHECKS, [C17]: C17_CHECKS };
 
 const GATE = {
   pattern: "main",
@@ -138,7 +144,7 @@ function story(over: Answers = {}): URL[] {
         ...page,
       }),
     "/query/code_checks": (url) =>
-      jsonAnswer({ checks: url.searchParams.get("oid") === T1 ? T1_CHECKS : [], ...page }),
+      jsonAnswer({ checks: CHECKS_OF[url.searchParams.get("oid") ?? ""] ?? [], ...page }),
     "/query/code_repo": (url) =>
       jsonAnswer({ repo: { name: url.searchParams.get("name"), gates: [GATE] }, ...page }),
     "/query/code_refs": () =>
@@ -345,6 +351,97 @@ test("j moves over every box's entries and Enter peeks the change", async () => 
   act(() => (document.activeElement as HTMLElement).blur());
   fireEvent.keyDown(window, { key: "Enter" });
   expect(decodeURIComponent(location.hash)).toMatch(/peek=change:api!18/);
+});
+
+const callout = () => screen.getByRole("group", { name: "Taken out of api's queue" });
+
+// Mutation: link the base commit instead of the failed one.
+test("the ejection says why in words with the train's base, and View the run opens that run", async () => {
+  const urls = story();
+  mountCode("#/gitlet/queue", <Queue />);
+  await screen.findByText(/was taken out of the queue/);
+  expect(callout().querySelector(".code-queue__why")?.textContent).toBe(
+    "api!17 was taken out of the queue 20 minutes ago: e2e failed on the train's merge onto main at 5c3e8b1",
+  );
+  expect(callout().querySelector(".code-queue__why strong")?.textContent).toBe("api!17");
+  expect(callout().textContent).toMatch(
+    /api: page the orders listing by keyset ·\s+CTO enqueued it 23 minutes ago/,
+  );
+  expect(within(callout()).getByRole("link", { name: "Open api!17" }).getAttribute("href")).toBe(
+    "#/gitlet/repos/api/changes/17",
+  );
+  const run = await within(callout()).findByRole("link", { name: "View the run" });
+  expect(decodeURIComponent(run.getAttribute("href")!)).toBe(
+    `#/gitlet/checks?run=api:e2e:1:${C17}:refs/heads/main`,
+  );
+  const reads = asked(urls, "/query/code_checks").filter((u) => u.searchParams.get("oid") === C17);
+  expect(reads).toHaveLength(1);
+  expect(reads[0]!.searchParams.get("target")).toBe("refs/heads/main");
+});
+
+// Mutation: link with an empty commit.
+test("an ejection without its train says why and offers no run", async () => {
+  const urls = story({
+    "/query/code_queue": () =>
+      jsonAnswer({ queue: [], ejected: [{ ...API17, tested_in: undefined }], ...page }),
+  });
+  mountCode("#/gitlet/queue", <Queue />);
+  await screen.findByText(/on the train it was tested in/);
+  await afterMicrotasks();
+  expect(within(callout()).queryByRole("link", { name: /run/ })).toBeNull();
+  expect(asked(urls, "/query/code_checks")).toEqual([]);
+});
+
+// Mutation: say nothing where the train's rows are gone.
+test("a run no longer kept is said so", async () => {
+  story({ "/query/code_checks": () => jsonAnswer({ checks: [], ...page }) });
+  mountCode("#/gitlet/queue", <Queue />);
+  expect(
+    await within(await screen.findByRole("group", { name: "Taken out of api's queue" })).findByText(
+      "Its run is no longer kept.",
+    ),
+  ).toBeTruthy();
+});
+
+// Mutation: read every ejection's run on mount.
+test("more than three ejections in a box show three and the rest on a press, each run read only when drawn", async () => {
+  const five = Array.from({ length: 5 }, (_, i) => ({
+    ...API17,
+    entry_id: `api-gone-${i}`,
+    number: 17 + i,
+    ejected_at: ago(20 + i),
+    tested_in: { ...API17.tested_in, commit_oid: oid(`c${i}`) },
+  }));
+  const urls = story({
+    "/query/code_queue": () => jsonAnswer({ queue: [], ejected: five, ...page }),
+  });
+  mountCode("#/gitlet/queue", <Queue />);
+  await screen.findByText("api!17");
+  await afterMicrotasks();
+  expect(screen.getAllByRole("group", { name: "Taken out of api's queue" })).toHaveLength(3);
+  expect(asked(urls, "/query/code_checks")).toHaveLength(3);
+  fireEvent.click(screen.getByRole("button", { name: "Show 2 more taken out in the last day" }));
+  await screen.findByText("api!21");
+  await afterMicrotasks();
+  expect(screen.getAllByRole("group", { name: "Taken out of api's queue" })).toHaveLength(5);
+  expect(asked(urls, "/query/code_checks")).toHaveLength(5);
+});
+
+// Mutation: draw the ejections in the answer's order.
+test("a box's ejections are drawn newest first", async () => {
+  const older = { ...API17, entry_id: "api-older", number: 16, ejected_at: ago(50) };
+  const newer = { ...API17, entry_id: "api-newer", number: 18, ejected_at: ago(5) };
+  story({
+    "/query/code_queue": () => jsonAnswer({ queue: [], ejected: [older, API17, newer], ...page }),
+  });
+  mountCode("#/gitlet/queue", <Queue />);
+  await screen.findByText("api!18");
+  const drawn = screen.getAllByRole("group", { name: "Taken out of api's queue" });
+  expect(drawn.map((g) => g.querySelector(".code-queue__why strong")?.textContent)).toEqual([
+    "api!18",
+    "api!17",
+    "api!16",
+  ]);
 });
 
 // Mutation: fall back to the listing without trains.

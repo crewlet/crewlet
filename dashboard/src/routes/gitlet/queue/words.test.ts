@@ -10,6 +10,7 @@ import {
   elapsedWords,
   gateAsksApproval,
   gateChecks,
+  runKey,
   summaryWords,
   trainEnd,
   trainMeter,
@@ -238,6 +239,14 @@ describe("ejectionWords", () => {
     ).toBe("its merge conflicted on a.go and 2 more paths");
     expect(ejectionWords(ejected({ reason: "head_moved" })).why).toBe("its head moved");
   });
+});
+
+// Mutation: drop the attempt, and two runs of one check share a key.
+test("a run's key names its repository, check, attempt, commit and branch", () => {
+  const oid = "c".repeat(40);
+  expect(runKey({ repo: "api", name: "e2e", attempt: 2, oid, target: "refs/heads/main" })).toBe(
+    `api:e2e:2:${oid}:refs/heads/main`,
+  );
 });
 
 describe("summaryWords", () => {

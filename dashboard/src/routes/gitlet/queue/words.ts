@@ -147,6 +147,17 @@ export function elapsedWords(
   return { words: said(`${durationWords(ran)} of ${of}`), bar };
 }
 
+/** A run's `run=` key on Gitlet › Checks: `{repo}:{name}:{attempt}:{oid}:{target}`. */
+export function runKey(r: {
+  repo: string;
+  name: string;
+  attempt: number;
+  oid: string;
+  target: string;
+}): string {
+  return `${r.repo}:${r.name}:${r.attempt}:${r.oid}:${r.target}`;
+}
+
 /** Names past three counted: "e2e, lint, unit and 2 more". */
 function fewNames(names: readonly string[], noun?: string): string {
   if (names.length <= 3) return listed(names);

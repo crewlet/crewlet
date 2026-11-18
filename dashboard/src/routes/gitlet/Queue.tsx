@@ -33,6 +33,7 @@ import {
   type GateRead,
   type TipRead,
 } from "./queue/Box.tsx";
+import { Ejections } from "./queue/Ejection.tsx";
 import { gateAsksApproval, gateChecks } from "./queue/words.ts";
 
 /** A queue moves when a check ends, at the checks listings' pace. */
@@ -139,7 +140,12 @@ export function Queue() {
           first: train && (
             <BaseRow repo={band.repo} branch={refName(band.target).name} base={train.base_oid} />
           ),
-          last: <BoxNote band={band} approval={gate.approval} />,
+          last: (
+            <>
+              <Ejections repo={band.repo} rows={band.ejected} />
+              <BoxNote band={band} approval={gate.approval} />
+            </>
+          ),
           rows: band.places,
         };
       }),
