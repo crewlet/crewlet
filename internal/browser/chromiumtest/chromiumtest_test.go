@@ -3,6 +3,7 @@ package chromiumtest
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -215,68 +217,116 @@ func endsWithItsBinary(t *testing.T, chrome string) {
 	}
 }
 
-// A LAUNCHED BROWSER REACHES NO HOST BUT LOOPBACK, so what it does unasked
-// never leaves the machine, and a case reads no network but what it serves:
-// a page served on 127.0.0.1 loads by that address and by localhost, while
-// another name of the loopback's own — one Chromium answers itself, with no
-// network, as it answers every name under .localhost — and an address of the
-// documentation's range (RFC 5737) are refused before any connection, the
-// server never asked for the name. On both pins, since what a build does in
-// the background moves with its version.
+// A LAUNCHED BROWSER REACHES NO HOST BUT LOOPBACK, so nothing it does unasked
+// leaves the machine. A page served on 127.0.0.1 fetches localhost, a name
+// under .localhost (which Chromium answers itself, with no network), ::1 and an
+// address of RFC 5737's range, the last two written as addresses, and reports
+// each outcome: only localhost is reached, and no server is asked for a host
+// but 127.0.0.1 and localhost. A network may refuse the address off the
+// machine too, so ::1, which only the rules refuse, is the address the
+// mutation turns. On both pins, since what a build does moves with its version.
 //
-// Mutation: drop the resolver's rules from every launch's flags, and the
-// name under .localhost loads the page — red.
+// Mutation: drop the resolver's rules from every launch's flags, and the name
+// under .localhost and ::1 reach their servers — red.
 func TestALaunchedBrowserReachesNoHostButLoopback(t *testing.T) {
 	Each(t, func(t *testing.T, chrome string) {
+		v4, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		v6, err := net.Listen("tcp6", "[::1]:0")
+		if err != nil {
+			t.Fatalf("listening on ::1, the loopback address the case fetches for the rules to refuse: %v", err)
+		}
+		port, port6 := v4.Addr().(*net.TCPAddr).Port, v6.Addr().(*net.TCPAddr).Port
+		arms := map[string]string{
+			"localhost":                  fmt.Sprintf("http://localhost:%d/fetched", port),
+			"a name under .localhost":    fmt.Sprintf("http://reached.localhost:%d/fetched", port),
+			"::1":                        fmt.Sprintf("http://[::1]:%d/fetched", port6),
+			"an address off the machine": fmt.Sprintf("http://192.0.2.1:%d/fetched", port),
+		}
+		page := loopbackPage(t, arms)
+		type ask struct{ server, host string }
+		var mu sync.Mutex
+		var asked []ask // every Host either server was asked for
+		reports := make(chan [2]string, len(arms))
+		serve(t, v4, func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			asked = append(asked, ask{"127.0.0.1", r.Host})
+			mu.Unlock()
+			switch r.URL.Path {
+			case "/":
+				_, _ = w.Write([]byte(page))
+			case "/report":
+				select { // never held: the server's Close waits for its handlers
+				case reports <- [2]string{r.URL.Query().Get("arm"), r.URL.Query().Get("outcome")}:
+				default:
+				}
+			}
+		})
+		serve(t, v6, func(_ http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			asked = append(asked, ask{"::1", r.Host})
+			mu.Unlock()
+		})
+		hosts := func() []ask {
+			mu.Lock()
+			defer mu.Unlock()
+			return slices.Clone(asked)
+		}
+
+		LaunchPort(t, chrome, fmt.Sprintf("http://127.0.0.1:%d/", port))
 		ctx, cancel := context.WithTimeout(t.Context(), listenTimeout)
 		defer cancel()
-		var mu sync.Mutex
-		var hosts []string
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			mu.Lock()
-			hosts = append(hosts, r.Host)
-			mu.Unlock()
-			_, _ = w.Write([]byte("<!doctype html><title>served</title>"))
-		}))
-		t.Cleanup(srv.Close)
-		port := srv.Listener.Addr().(*net.TCPAddr).Port
-
-		c, _ := LaunchPipe(t, chrome)
-		created, err := cdp.Call(ctx, c.Browser(), cdp.TargetCreateTarget, cdp.TargetCreateTargetParams{URL: "about:blank"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		attached, err := cdp.Call(ctx, c.Browser(), cdp.TargetAttachToTarget, cdp.TargetAttachToTargetParams{
-			TargetID: created.TargetID, Flatten: true,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		page := c.Session(attached.SessionID)
-		for _, tc := range []struct {
-			host, failure string // failure: the navigation's errorText, empty for a page that loads
-		}{
-			{"127.0.0.1", ""},
-			{"localhost", ""},
-			{"reached.localhost", "net::ERR_NAME_NOT_RESOLVED"},
-			{"192.0.2.1", "net::ERR_NAME_NOT_RESOLVED"},
-		} {
-			got, err := cdp.Call(ctx, page, cdp.PageNavigate, cdp.PageNavigateParams{
-				URL: fmt.Sprintf("http://%s:%d/", tc.host, port),
-			})
-			if err != nil {
-				t.Fatalf("navigating to %s: %v", tc.host, err)
-			}
-			if got.ErrorText != tc.failure {
-				t.Errorf("navigating to %s failed with %q, want %q", tc.host, got.ErrorText, tc.failure)
+		outcomes := map[string]string{}
+		for len(outcomes) < len(arms) {
+			select {
+			case r := <-reports:
+				want := map[bool]string{true: "reached", false: "refused"}[r[0] == "localhost"]
+				if outcomes[r[0]] = r[1]; r[1] != want {
+					t.Fatalf("the fetch of %s %s, want %s; the servers were asked for %+v", r[0], r[1], want, hosts())
+				}
+			case <-ctx.Done():
+				t.Fatalf("the page reported %v of its %d fetches within %s; the servers were asked for %+v",
+					outcomes, len(arms), listenTimeout, hosts())
 			}
 		}
-		mu.Lock()
-		defer mu.Unlock()
-		for _, host := range hosts {
-			if strings.HasPrefix(host, "reached.localhost") {
-				t.Errorf("the server was asked for %s, a name the browser must never resolve: it asked for %q", host, hosts)
+		own, local := fmt.Sprintf("127.0.0.1:%d", port), fmt.Sprintf("localhost:%d", port)
+		if !slices.Contains(hosts(), ask{"127.0.0.1", own}) {
+			t.Errorf("the page was never served by 127.0.0.1: the servers were asked for %+v", hosts())
+		}
+		// Not which server was asked: the two listeners' ports may be one
+		// number, and localhost then reaches the ::1 server as its own.
+		for _, a := range hosts() {
+			if a.host != own && a.host != local {
+				t.Errorf("the %s server was asked for %s, which the browser must never reach: the servers were "+
+					"asked for %+v", a.server, a.host, hosts())
 			}
 		}
 	})
+}
+
+// loopbackPage is a document that fetches each arm's address, without CORS
+// and past any cache, and reports to its own origin whether each was reached.
+func loopbackPage(t *testing.T, arms map[string]string) string {
+	t.Helper()
+	encoded, err := json.Marshal(arms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return `<!doctype html><script>
+for (const [arm, url] of Object.entries(` + string(encoded) + `)) {
+  fetch(url, {mode: "no-cors", cache: "no-store"}).then(() => "reached", () => "refused").then((outcome) =>
+    fetch("/report?arm=" + encodeURIComponent(arm) + "&outcome=" + outcome, {cache: "no-store"}));
+}
+</script>`
+}
+
+// serve answers l with h until t ends.
+func serve(t *testing.T, l net.Listener, h http.HandlerFunc) {
+	srv := httptest.NewUnstartedServer(h)
+	_ = srv.Listener.Close()
+	srv.Listener = l
+	srv.Start()
+	t.Cleanup(srv.Close)
 }

@@ -51,7 +51,10 @@
 //     and what none reaches the resolver's rules refuse;
 //   - --password-store=basic and --use-mock-keychain: macOS never prompts for
 //     its keychain and hangs a case;
-//   - about:blank, last: the first tab opens on nothing.
+//   - about:blank, last, unless a case names its first tab's address among a
+//     launch's args: the first tab opens on nothing, where it would open the
+//     new tab page, and a headless Chromium opens one tab from its command
+//     line alone.
 //
 // Real-browser cases run one Chromium at a time — no t.Parallel among them —
 // since each takes a few hundred megabytes and a core beside the rest of a
@@ -71,6 +74,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -281,21 +285,24 @@ func (w *tail) String() string {
 }
 
 // command is chrome under every launch's flags and args, its first tab on
-// about:blank, speaking the protocol over --remote-debugging-pipe on the
-// pipes p hands it, in a process group of its own that t's end kills, and
-// tied to this test binary (tie).
+// about:blank or on the one address args name (a headless Chromium opens one
+// tab from its command line), speaking the protocol over
+// --remote-debugging-pipe on the pipes p hands it, in a process group of its
+// own that t's end kills, and tied to this test binary (tie).
 //
 // The launch's cleanup kills that group, and only then reaps the leader. The
 // context's Cancel stays the standard library's, which kills the leader alone
-// through its *os.Process and refuses one already reaped. A Cancel that
-// signalled the group by the leader's pid would not be safe: t's context
-// ends just before the cleanup runs, and nothing makes os/exec call Cancel
-// before the cleanup's Wait, so the call can come once Wait has reaped the
-// leader, whose pid may by then lead somebody else's group.
+// and refuses one already reaped: t's context ends just before the cleanup
+// runs, and nothing orders os/exec's Cancel before the cleanup's Wait, so a
+// Cancel that signalled the group by the leader's pid could reach a recycled
+// one.
 func command(t testing.TB, p *pipes, chrome string, args ...string) *exec.Cmd {
 	argv := append(flags(t.TempDir()), "--remote-debugging-pipe")
 	argv = append(argv, args...)
-	cmd := exec.CommandContext(t.Context(), chrome, append(argv, "about:blank")...)
+	if !slices.ContainsFunc(args, func(arg string) bool { return !strings.HasPrefix(arg, "-") }) {
+		argv = append(argv, "about:blank")
+	}
+	cmd := exec.CommandContext(t.Context(), chrome, argv...)
 	cmd.ExtraFiles = []*os.File{p.chromeReads, p.chromeWrites}
 	procgroup.Set(cmd)
 	tie(cmd)
@@ -351,7 +358,8 @@ func (p *pipes) started() {
 // LaunchPipe launches chrome speaking the protocol over
 // --remote-debugging-pipe — fd 3 what it reads, fd 4 what it writes — and
 // returns the connection over those pipes and the process, both ended with
-// t. args come before the first tab's about:blank.
+// t. args come before the first tab's about:blank, which an address among
+// them replaces.
 func LaunchPipe(t testing.TB, chrome string, args ...string) (*cdp.Conn, *Process) {
 	t.Helper()
 	p := newPipes(t)
@@ -402,7 +410,8 @@ const listenTimeout = time.Minute
 // Chromium (--remote-debugging-port=0), and returns where it listens once it
 // has printed so; it is ended with t. It speaks over the DevTools pipe as
 // well, which the case never writes and holds to end the browser with the
-// test binary (pipes). args come before the first tab's about:blank.
+// test binary (pipes). args come before the first tab's about:blank, which an
+// address among them replaces.
 func LaunchPort(t testing.TB, chrome string, args ...string) Endpoint {
 	t.Helper()
 	p := newPipes(t)
