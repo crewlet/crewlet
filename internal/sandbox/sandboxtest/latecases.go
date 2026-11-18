@@ -37,6 +37,8 @@ var lateCases = []struct {
 	{"ARecordOfAnEarlierRoundIsListedLateInTheRoundAfterIt", testARecordOfAnEarlierRoundIsListedLateInTheRoundAfterIt},
 	{"ABeginOrWithdrawalOfAnEarlierRoundIsNeverTaken", testABeginOrWithdrawalOfAnEarlierRoundIsNeverTaken},
 	{"ARecordOfAnEarlierRoundAskedAgainIsListedOnce", testARecordOfAnEarlierRoundAskedAgainIsListedOnce},
+	{"TwoCallsOfAnEarlierRoundAnsweredWithoutRunningAreBothListed",
+		testTwoCallsOfAnEarlierRoundAnsweredWithoutRunningAreBothListed},
 	{"AnEarlierRoundsCallMovesNoPlaceOfTheRound", testAnEarlierRoundsCallMovesNoPlaceOfTheRound},
 	{"WhatAnEarlierRoundsCallCommittedIsTheNextRounds", testWhatAnEarlierRoundsCallCommittedIsTheNextRounds},
 	{"ANewRoundCarriesTheCallsItsCollectionDidNotRead", testANewRoundCarriesTheCallsItsCollectionDidNotRead},
@@ -722,6 +724,34 @@ func testARecordOfAnEarlierRoundAskedAgainIsListedOnce(t *testing.T, s sandbox.P
 	}
 	if a := got.Absorbed(); len(a) != 1 || a[0].Calls != 1 {
 		t.Errorf("the round's absorbed tally is %+v, want the record's one call, counted once", a)
+	}
+}
+
+// TWO CALLS OF AN EARLIER ROUND ANSWERED WITHOUT RUNNING ARE BOTH LISTED. A
+// call answered without running carries no instant, and an earlier round's
+// record has no place to match, so two such calls of one tool with the same
+// arguments are told apart by nothing the log keeps. Each is listed, and what
+// each absorbed counted: a record of one asked again is listed twice, an
+// over-count, where matching them would list one call for two, an under-count.
+//
+// Mutation: match an earlier round's record with no instant to a listed one,
+// and the second call is lost.
+func testTwoCallsOfAnEarlierRoundAnsweredWithoutRunningAreBothListed(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-earlier-no-instant"
+	first := mustLaunched(t, s, run(turn))
+	round := mustGet(t, s, turn).Round
+	sendBack(t, s, turn)
+	for seq := 4; seq <= 5; seq++ {
+		if !recordLate(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round,
+			Call:     sandbox.BridgeCall{Name: "delegate", Seq: seq, Failed: true},
+			Absorbed: []sandbox.ElidedCall{{Name: "read_file", Digest: "d1", Calls: 1}}}) {
+			t.Fatalf("the earlier round's call %d was not recorded", seq)
+		}
+	}
+	got := mustLogged(t, s, turn).Log
+	listsExactly(t, got.Calls, []wantCall{{"delegate", 0, 1, true}, {"delegate", 0, 2, true}})
+	if a := got.Absorbed(); len(a) != 1 || a[0].Calls != 2 {
+		t.Errorf("the round's absorbed tally is %+v, want each call's one, counted twice", a)
 	}
 }
 
