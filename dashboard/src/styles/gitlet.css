@@ -3648,31 +3648,127 @@
   margin-inline-start: auto;
 }
 
-/* A PUSH'S REFS: a ref a line — its glyph, its name, what became of it and
-   the commits it moved between. */
+/* A PUSH'S REFS: one bordered block a ref, its glyph, what became of it, its name and its ids. */
 .code-push-refs {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: var(--spacing-1);
   min-width: 0;
 }
 
 .code-push-ref {
-  display: flex;
+  display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-1) var(--spacing-2);
+  max-width: 100%;
   min-width: 0;
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
 }
 
 .code-push-ref__name {
-  font-family: var(--font-family-mono);
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
 .code-push-ref__word {
+  font-weight: var(--font-weight-semibold);
+}
+
+.code-push-ref__ids {
+  white-space: nowrap;
+}
+
+/* THE PUSHES FEED: a sentence a push, its chips under it, its time and pack at its end. */
+.code-pushes-feed .code-list__aside {
+  margin-inline-start: 0;
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+.code-push-sentence {
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-secondary);
+}
+
+.code-push-sentence > strong {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.code-push-change {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-push-facts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--spacing-1);
+  align-self: start;
   font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+.code-push-pack {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+/* THE TOTAL at the toolbar's end, on its own line's end once the toolbar wraps. */
+.code-pushes-total {
+  margin-inline-start: auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.code-pushes-total > strong {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+/* A RULE'S PATTERN on its own line, its words under it. */
+.code-pushes-rule {
+  display: block;
+}
+
+/* A REFUSED HISTORY: the engine's sentence, then Clear filters while narrowed. */
+.code-pushes-refused {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.code-push-stored {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin: var(--spacing-2) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+@container code-list (width < 640px) {
+  .code-push-facts {
+    flex-direction: row;
+    gap: var(--spacing-2);
+  }
 }
 
 /* ---- Gitlet › Search ------------------------------------------------------ */
