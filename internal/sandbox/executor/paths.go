@@ -176,8 +176,10 @@
 // buffers alone and reads with no slot. The charge that passes the base waits
 // for the slot before it is counted, and an array is charged before it is
 // made, so what the facts keep past the base is kept under the slot, never
-// before it, but for one value's decode, as the meter's own bound allows. The
-// take's scrub holds each piece whole, so its trigger is a piece's length,
+// before it, but for the strings the charge covers, decoded just before it
+// (THE COEFFICIENTS). What the reader holds within a line is uncharged and
+// bounded whatever the line, so it comes off the base whole. The take's scrub
+// holds each piece whole, so its trigger is a piece's length,
 // [scrubPieceBaseBytes] ([lineRun]): a line, a JSON document holding a token
 // past it (its decoder keeps that token's buffer to the document's end), and a
 // stretch of short lines a redaction holds ([scrubBounds]).
@@ -196,35 +198,45 @@
 // scrub holds. A wait its reader's context ends is [errLargeWait], a failure
 // of the read, never a reading of it. A take's Close ends both readers' waits.
 //
-// THE COEFFICIENTS are the layer's own worst measurements over its own
-// bounds: the chain at both bounds holds 43 MiB at End's peak, 344 bytes a
-// record of 2^17 ([threadChain], THE BOUNDS); and a line, read in the layer's
-// one pass, holds the reader's buffers, about 280 KiB once its values grew
-// them ("A thread line is read in one scanner pass, never held"), and its
-// facts, whatever its length, at most 1.25 bytes a byte they charge: nothing
-// is refunded, so the charge counts every allocation they keep, and a charged
-// byte holds the most as a string just past 32 KiB, which takes whole 8 KiB
-// pages.
+// THE COEFFICIENTS are the layer's own worst over its own bounds. The chain
+// at both bounds holds 43 MiB at End's peak, 344 bytes a record of 2^17 with
+// its call ([threadChain], THE BOUNDS), more than any one item holds alone. A
+// line, read in the layer's one pass, holds three things whatever its length.
+// The reader, 1.7 MiB at most: its fixed buffers, 146 KiB, and the scanner's
+// capture, 64 KiB ("A thread line is read in one scanner pass, never held");
+// sixteen scratch buffers each holding a value as written, at most
+// [threadValueMax], 80 KiB once append has grown one there (past 256 bytes it
+// overshoots a need by a quarter, in whole 8 KiB pages); and the type's
+// decoded text, at most three bytes a byte as written (an invalid byte decodes
+// to U+FFFD), 240 KiB grown so. The strings one charge covers ([lineMeter]),
+// decoded just before it and held while it waits for the slot: three at most
+// at once (a head's type, subtype and agentId; a block's type, id and name),
+// 192 KiB each so decoded, 576 KiB. And its facts, at most 1.25 bytes a byte
+// they charge: nothing is refunded, so the charge counts every allocation they
+// keep, and a charged byte holds the most as a string just past 32 KiB, which
+// takes whole 8 KiB pages.
 //
-// THE BASE: a line's facts charging 1.5 MiB hold 1.9 MiB at most, 2.2 MiB with
-// the reader's buffers, two thousand times the 753 bytes the facts of any
-// probe line hold; and 2^13 of the chain's items (its records, retraction
-// prefixes, kept uuids and call ids), each at most the 344 bytes a record holds
-// with its call, 2.7 MiB: a thread of at least 4,096 records, about 8 MiB at
-// the 2,053 bytes a line probe P6 measured, four times a day's session, since
-// a thread of ordinary calls files one id a record at most. Its records alone
-// would let a few records file the bound's calls with no slot. With the count's carry, a pass at its base holds about 5.1 MiB at
-// its worst, by no token, so a typical collection never waits, nor one over
-// the census's longest lines (67,871 lines in 9,434 real threads, the longest
-// 2,002,134 bytes; each of the 28 threads holding a line past 256 KiB had a
-// large file read or written into it, which its facts do not keep). MEASURED
-// on a dedicated two-core slot (BenchmarkACollectionPassAtItsBase, read off
-// the GC trace as BenchmarkAThreadChainAtItsBounds says): a main thread of
-// 2^13 records the chain files, one a user's line of results under ids of
-// 32,769 bytes whose facts charge the base exactly, read by the chain and the
-// count in one walk, in 0.13 to 0.25 s, holding 5 MiB at most at GOGC=10 and
-// its heap peaking at 7 MiB at the default, within the arithmetic, and taking
-// no slot.
+// THE BASE: a pass at its base holds about 5.1 MiB at its worst, by no token:
+// the chain at 2^13 of its items (its records, retraction prefixes, kept uuids
+// and call ids), 2.7 MiB; a line's reader, 1.7 MiB, and the strings a charge
+// covers, 576 KiB, both at their worst; the facts of a line charging the base,
+// 128 KiB, holding 160 KiB, over 170 times the 753 bytes the facts of any probe
+// line hold; and the count's carry, a uuid and a digest. 2^13 items are a
+// thread of at least 4,096 records, about 8 MiB at the 2,053 bytes a line
+// probe P6 measured, four times a day's session, since a thread of ordinary
+// calls files one id a record at most; counted by its records alone, a few
+// records would file the bound's calls with no slot. So a typical collection
+// never waits, nor one over the census's longest lines (67,871 lines in 9,434
+// real threads, the longest 2,002,134 bytes; each of the 28 threads holding a
+// line past 256 KiB had a large file read or written into it, which its facts
+// do not keep). MEASURED on a dedicated two-core slot
+// (BenchmarkACollectionPassAtItsBase, read off the GC trace as
+// BenchmarkAThreadChainAtItsBounds says): a main thread whose chain files 2^13
+// items, one a user's line growing every scratch buffer to its most beside
+// results under ids of 32,769 bytes whose facts charge the base exactly, read
+// by the chain and the count in one walk, in 0.12 to 0.17 s, holding 4 MiB at
+// most at GOGC=10 and its heap peaking at 5 MiB at the default, within the
+// arithmetic, and taking no slot.
 //
 // THE BASE TIER'S COUNT: no token holds it, so it is every read in flight at
 // once, each about 5.1 MiB at its worst: one per seat collecting on this node,

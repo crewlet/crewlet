@@ -137,14 +137,14 @@ func keepsPastBase(readings []threadReading) bool {
 }
 
 // collectionBaseLineCharge is what a line's facts may charge ([lineMeter])
-// before its pass takes the large slot, its length taking nothing: 1.5 MiB.
-// The base tier counts a pass at 5.1 MiB; the chain at [collectionBaseRecords]
-// holds 2.7 MiB and the reader's buffers 280 KiB, leaving a line's facts
-// 2.1 MiB, and a charged byte holds 1.25 bytes at most (a string just past
-// 32 KiB takes whole 8 KiB pages), so the base's facts hold 1.9 MiB at most.
-// The facts of the census's lines hold 753 bytes at most. The package doc's "A
-// collection's read of a thread" has the measurement.
-const collectionBaseLineCharge = 3 << 19
+// before its pass takes the large slot, its length taking nothing: 128 KiB.
+// The base tier counts a pass at 5.1 MiB: the chain at [collectionBaseRecords]
+// holds 2.7 MiB, the reader within a line 1.7 MiB and the strings a charge
+// covers, decoded before it, 576 KiB, leaving the facts 164 KiB, and a charged
+// byte holds 1.25 bytes at most, so the base's facts hold 160 KiB. The facts of
+// the census's lines hold 753 bytes at most. The package doc's "A collection's
+// read of a thread" has the derivation and the measurement.
+const collectionBaseLineCharge = 1 << 17
 
 // collectionBaseRecords is the most a pass's readings keep before it takes the
 // large slot, in the chain's items ([threadChain.items]), its call ids among

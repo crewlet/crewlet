@@ -170,6 +170,67 @@ func slotUserCharging(tb testing.TB, n, charge int) string {
 	return resultsCharging(tb, head, tail, charge)
 }
 
+// grownScratch is what a user record under parent (as written) writes to grow
+// each scratch buffer its reader holds a value in to its most within the line
+// ([lineDecoder.reset]): head, every head key twice, at 32 KiB and then at
+// [threadValueMax] bytes as written, a `type` of bytes each decoding to three,
+// then the record's own head; block, a text block holding each block key so;
+// and result, a toolUseResult holding each of its keys so.
+func grownScratch(parent string) (head, block, result string) {
+	twice := func(keys ...string) string {
+		var b strings.Builder
+		for _, k := range keys {
+			for _, n := range []int{32 << 10, threadValueMax} {
+				fmt.Fprintf(&b, `"%s":"%s",`, k, strings.Repeat("x", n-2))
+			}
+		}
+		return b.String()
+	}
+	head = twice("type", "subtype", "agentId", "parentUuid", "isSidechain", "replacesSpan") + `"type":"` +
+		benchInvalid(threadValueMax-2) + `","parentUuid":` + parent + `,"isSidechain":false,"type":"user",` +
+		`"subtype":"","agentId":"","replacesSpan":false,`
+	block = `{` + twice("type", "id", "name", "tool_use_id", "is_error") + `"input":{` +
+		strings.TrimSuffix(twice("to"), ",") + `},"content":[{` + strings.TrimSuffix(twice("type"), ",") +
+		`}],"type":"text","text":"x"}`
+	result = `"toolUseResult":{` + strings.TrimSuffix(twice("status", "agentId", "success"), ",") + `},`
+	return head, block, result
+}
+
+// scratchGrown fails tb where line, read whole, leaves a scratch buffer of its
+// reader short of what [grownScratch] grows it to.
+func scratchGrown(tb testing.TB, line string) {
+	tb.Helper()
+	r := newThreadReader(strings.NewReader(line+"\n"), threadPlainMax)
+	if _, err := r.Next(context.Background()); err != nil {
+		tb.Fatalf("the line reads %v", err)
+	}
+	d, b := &r.dec, &r.dec.block
+	bufs := [][]byte{b.typ, b.id, b.name, b.toolUseID, b.isError, b.to, b.resultType, d.held[0], d.held[1], d.held[2]}
+	for _, h := range d.head {
+		bufs = append(bufs, h.raw)
+	}
+	for i, buf := range bufs {
+		if cap(buf) < threadValueMax {
+			tb.Fatalf("scratch buffer %d holds %d bytes, want at least %d", i, cap(buf), threadValueMax)
+		}
+	}
+	if cap(d.typeText) < 3*(threadValueMax-2) {
+		tb.Fatalf("the type's text holds %d bytes, want at least %d", cap(d.typeText), 3*(threadValueMax-2))
+	}
+}
+
+// slotUserGrown is record n of the chain of users ([slotUser]) growing every
+// scratch buffer ([grownScratch]) beside results whose facts charge the meter
+// exactly charge bytes ([resultsCharging]).
+func slotUserGrown(tb testing.TB, n, charge int) string {
+	tb.Helper()
+	head, block, result := grownScratch(cntParent(slotParent(n)))
+	line := resultsCharging(tb, `{"parentUuid":`+cntParent(slotParent(n))+`,"isSidechain":false,"type":"user",`+
+		head+`"message":{"role":"user","content":[`+block+`,`, `]},`+result+fmt.Sprintf(`"uuid":"u%d"}`, n), charge)
+	scratchGrown(tb, line)
+	return line
+}
+
 // slotSmallest is record n of the chain of users holding count of the
 // smallest results ([benchSmallest]): a line of many facts and few bytes.
 func slotSmallest(n, count int) string {
@@ -199,15 +260,18 @@ func manyFacts(tb testing.TB, n int) string {
 
 // A TYPICAL COLLECTION READ TAKES NO SLOT: the probe's two threads, and a
 // thread AT both bases, [collectionBaseRecords] records kept beside a line
-// whose facts charge [collectionBaseLineCharge], are each walked with the large
-// slot free throughout, as seen from inside the walk at every line.
+// whose facts charge [collectionBaseLineCharge], the line's reader holding its
+// most or not ([grownScratch]), are each walked with the large slot free
+// throughout, as seen from inside the walk at every line.
 //
-// Mutation: escalate on every pass, or at either base (`>=` for `>`), and a
-// line is read with the slot held.
+// Mutation: escalate on every pass, at either base (`>=` for `>`), or on what
+// the reader holds of a line, and a line is read with the slot held.
 func TestATypicalCollectionReadTakesNoSlot(t *testing.T) {
 	threads := map[string]string{
 		"at both bases": slotChain(collectionBaseRecords-1,
 			slotUserCharging(t, collectionBaseRecords, collectionBaseLineCharge)),
+		"at both bases, the reader at its most": slotChain(collectionBaseRecords-1,
+			slotUserGrown(t, collectionBaseRecords, collectionBaseLineCharge)),
 	}
 	for _, file := range []string{
 		"testdata/claude/2.1.310/holdings/s1/projects/crewlet/5e55100a-0000-4000-8000-000000000106.jsonl",
@@ -944,23 +1008,26 @@ func TestAReaderWhoseSharedWaitEndsWaitsOnItsOwn(t *testing.T) {
 	}
 }
 
-// WHAT A COLLECTION'S PASS COSTS AT ITS BASE, the figures
-// [collectionBaseLineCharge] and [collectionBaseRecords] are stated by (the
-// package doc's "A collection's read of a thread"): a main thread whose chain
-// files [collectionBaseRecords] items, each a record but for the call ids of
-// its last two lines, one a user's line whose facts charge
+// WHAT A COLLECTION'S PASS COSTS AT ITS BASE, the figures the package doc's "A
+// collection's read of a thread" states the bases by: a main thread whose
+// chain files [collectionBaseRecords] items, each a record but for the call
+// ids of its last two lines: a user's line growing every scratch buffer of its
+// reader to its most ([grownScratch]) beside facts charging
 // [collectionBaseLineCharge] exactly in the shape that holds the most a
-// charged byte ([resultsCharging]), the last a reply the count anchors on;
-// read by the chain and the count in the one walk, as a collection reads it,
-// under a pass that must take no slot. What is held at most is read off the
-// runtime's GC trace as BenchmarkAThreadChainAtItsBounds says:
+// charged byte ([resultsCharging]), and a reply the count anchors on; read by
+// the chain and the count in one walk, under a pass that must take no slot,
+// what is held at most read off the GC trace as
+// BenchmarkAThreadChainAtItsBounds says:
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkACollectionPassAtItsBase$' -benchtime 1x -benchmem
 func BenchmarkACollectionPassAtItsBase(b *testing.B) {
 	results := func(n int) string {
+		grown, block, result := grownScratch(benchOf(n - 2))
 		head, tail, _ := strings.Cut(benchRecord(benchOf(n-2), benchMain, "user",
-			`"message":{"role":"user","content":[@]},`, n-1, n-1), "@")
-		return resultsCharging(b, head, tail, collectionBaseLineCharge)
+			grown+`"message":{"role":"user","content":[`+block+`,@]},`+result, n-1, n-1), "@")
+		line := resultsCharging(b, head, tail, collectionBaseLineCharge)
+		scratchGrown(b, line)
+		return line
 	}
 	// The chain files each result's id and the anchor's call beside the records.
 	calls := strings.Count(results(collectionBaseRecords), `"tool_result"`) + 1

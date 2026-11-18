@@ -487,13 +487,13 @@ var recordRaws = [...]struct {
 // keep for them; over, whether a charge found too few left, after which every
 // charge is refused and the pass holds nothing more of the line. EVERY
 // ALLOCATION THE FACTS KEEP IS CHARGED as it is made: a kept raw or string by
-// its length (a string right after its decode, so the meter passes its bound
-// by one value's decode at most), an array by its capacity times its
-// element's size, before it is made ([grow]). NOTHING IS REFUNDED, so the
-// meter bounds what the line's facts keep, every copy of a value counted. Not
-// charged: the facts' struct, the reader's buffers, and what the pass makes
-// and drops (a refused block's strings, a frame's error). A charge past
-// unheld first holds gate's slot, if any ([threadReader.Gate]).
+// its length (a string right after its decode, past the bound by the three a
+// charge covers at most, "A collection's read of a thread"), an array by its
+// capacity times its element's size, before it is made ([grow]). NOTHING IS
+// REFUNDED, so the meter bounds what the line's facts keep, every copy of a
+// value counted. Not charged: the facts' struct, the reader's buffers, what
+// the pass makes and drops. A charge past unheld first holds gate's slot, if
+// any ([threadReader.Gate]).
 type lineMeter struct {
 	left int
 	over bool
