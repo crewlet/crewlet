@@ -796,8 +796,8 @@ func TestAMembersDeadLettersAreReadGivenTheHandlingOfTheLargestReply(t *testing.
 // the leaf's has a server on its side holding what crosses to its max_payload,
 // which no server holds a delivery to its own client to.
 //
-// Mutation: change any row's pace, leaf flag or meter, or give a member's
-// record read no handling or a crossing, and that row goes red.
+// Mutation: change any row's pace, leaf flag, meter or window, or give a
+// member's record read no handling or a crossing, and that row goes red.
 func TestOnlyAMembersOwnConnectionCrossesNoLink(t *testing.T) {
 	t.Parallel()
 	// THE METER IS THE LINK'S: a leaf's tunnel's, the external dial's own,
@@ -813,7 +813,16 @@ func TestOnlyAMembersOwnConnectionCrossesNoLink(t *testing.T) {
 			link{pace: objstore.MiBPace, leaf: true, meter: tunnelled}},
 		{"a client of an external cluster", nil, link{pace: objstore.MiBPace, meter: dialled}},
 	} {
-		if got := linkOf(c.embedded, dialled); got != c.want {
+		got := linkOf(c.embedded, dialled)
+		// ITS LINK'S ONE WINDOW, of the link's size, wherever it crosses
+		// one: compared apart, since each link makes its own.
+		if across := c.want.pace > 0; (got.window != nil) != across ||
+			(across && got.window.Size() != jsapi.LinkWindow) {
+			t.Errorf("%s: its link's window is %+v, want one of %d bytes only across a link",
+				c.name, got.window, jsapi.LinkWindow)
+		}
+		got.window = nil
+		if got != c.want {
 			t.Errorf("%s: its connection crosses %+v, want %+v", c.name, got, c.want)
 		}
 	}

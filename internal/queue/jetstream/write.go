@@ -41,18 +41,24 @@ type link struct {
 	// ([LinkMeter]): the leaf tunnel's, or the one external dials count
 	// into; nil on a member's own connection ([Queue.LinkMeter]).
 	meter *LinkMeter
+	// window is the link's ONE window ([jsapi.Window]): what the node's
+	// bulk transfers across it hold out at once, both ways together, on
+	// whichever connection of the link they ride ([Queue.LinkWindow]); nil
+	// on a member's own connection, which crosses none.
+	window *jsapi.Window
 }
 
 // linkOf is the link of a connection made through embedded: an external dial
 // is paced at the floor and metered by dialled; a leaf's connection is paced,
-// crosses the leaf link and is metered by its tunnel; a member's crosses
-// nothing.
+// crosses the leaf link and is metered by its tunnel; each of the two has its
+// link's one window. A member's crosses nothing.
 func linkOf(embedded *embeddedServer, dialled *LinkMeter) link {
 	switch {
 	case embedded == nil:
-		return link{pace: objstore.MiBPace, meter: dialled}
+		return link{pace: objstore.MiBPace, meter: dialled, window: jsapi.NewLinkWindow()}
 	case embedded.leaf:
-		return link{pace: objstore.MiBPace, leaf: true, meter: embedded.linkMeter()}
+		return link{pace: objstore.MiBPace, leaf: true, meter: embedded.linkMeter(),
+			window: jsapi.NewLinkWindow()}
 	}
 	return link{}
 }

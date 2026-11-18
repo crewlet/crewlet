@@ -329,6 +329,18 @@ func SlowEachWay(t testing.TB, target string, rate int64) *Link {
 	return open(t, target, carrier{rate: rate}, carrier{rate: rate, held: true})
 }
 
+// Distant is [SlowEachWay] whose link also delivers every chunk either side
+// sends no sooner than [Link.Lag] after it was sent: a link with a rate and a
+// round trip, as a distant one is, where a transfer that moves one window a
+// round trip runs at the window over the round trip, whatever the rate. Each
+// connection crosses at the whole rate. Set the lag once the node has linked,
+// as for [Lagging].
+func Distant(t testing.TB, target string, rate int64) *Link {
+	t.Helper()
+	positive(t, rate)
+	return open(t, target, carrier{rate: rate, lagging: true}, carrier{rate: rate, lagging: true})
+}
+
 // Lagging listens on a loopback port and carries every connection made to it
 // on to target, both ways, until the case ends: at once until the case sets a
 // lag ([Link.Lag]), and from then on every chunk either side sends that lag
