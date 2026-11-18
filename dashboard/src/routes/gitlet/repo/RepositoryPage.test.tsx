@@ -1845,7 +1845,8 @@ test("a history is a timeline of the reader's days, a day met again opening its 
   ]);
   mount("#/gitlet/repos/web?tab=commits");
   const history = await screen.findByRole("group", { name: /History of/ });
-  const headings = within(history).getAllByRole("heading", { level: 3 });
+  // AN H2 EACH, under the repository's title: the kit's level where the history stands.
+  const headings = within(history).getAllByRole("heading", { level: 2 });
   expect(headings.map((h) => h.textContent)).toEqual([
     "Commits on Oct 22, 2026",
     "Commits on Oct 21, 2026",

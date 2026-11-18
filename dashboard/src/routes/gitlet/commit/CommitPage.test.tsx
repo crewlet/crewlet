@@ -1060,6 +1060,34 @@ test("every changed file is a section of one stack read by the walk of code_diff
   expect(reads(asked, "code_diff").some((u) => u.searchParams.has("file"))).toBe(false);
 });
 
+// THE TREE IS THE DIFF'S NAVIGATION, and the stack's unread files are no live
+// regions: one each queued an announcement per file. Mutation: draw the tree as
+// an aside (a complementary landmark inside the page's region), or a pending
+// file's words as a status, and this fails.
+test("the files' tree is a navigation, and a file not yet read announces nothing", async () => {
+  holdSectionsFar();
+  const fragment = (file: number, path: string) => ({
+    file,
+    path,
+    status: "M",
+    patch: `${["--- a/x", "+++ b/x", "@@ -1,2 +1,2 @@", " keep", "-old", "+new"].join("\n")}\n`,
+  });
+  stubEngine({
+    files: THREE,
+    walk: [[fragment(0, "cmd/app.go")], [fragment(1, "cmd/b.go")], [fragment(2, "web/c.go")]],
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, COMMIT_PAGE);
+
+  await within(await section("cmd/app.go")).findByText("new");
+  const changed = screen.getByRole("region", { name: "What it changed" });
+  expect(within(changed).getByRole("navigation", { name: "Files changed" })).toBeTruthy();
+  expect(within(changed).queryAllByRole("complementary")).toEqual([]);
+  const pending = (await section("web/c.go")).querySelector('[aria-busy="true"]');
+  expect(pending?.textContent).toBe("Reading the changes to web/c.go");
+  const said = (r: HTMLElement) => r.closest(".code-file");
+  expect(screen.queryAllByRole("status").filter(said)).toEqual([]);
+});
+
 // A FILE THE ADDRESS NAMES OPENS THE STACK AT IT: its head takes the focus and
 // its line is marked and scrolled to. Mutation: drop the arrival's jump, or
 // drop the target from reveal.
@@ -1187,7 +1215,7 @@ test("a comparison draws the same toolbar, tree and stack as a commit", async ()
   expect((await screen.findByText(/^Showing/)).textContent).toBe(
     "Showing 3 changed files with 1 addition and 1 deletion",
   );
-  const pane = screen.getByRole("complementary", { name: "Files changed" });
+  const pane = screen.getByRole("navigation", { name: "Files changed" });
   expect(within(pane).getByText(/Compared with the merge base at/).textContent).toBe(
     "Compared with the merge base at 89abcde",
   );

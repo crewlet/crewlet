@@ -1,7 +1,7 @@
 /** Gitlet › Search's results: each repository's files as cards of blocks, a hit with the lines around it. */
 
 import { memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Button, IconButton, IconButtonLink } from "@crewlethq/ui";
+import { Button, IconButton, IconButtonLink, headingTag, useHeadingLevel } from "@crewlethq/ui";
 import {
   ChevronDownGlyph,
   ExternalLinkGlyph,
@@ -73,9 +73,10 @@ const RepoResult = memo(function RepoResult({
   group: RepoHits;
   asked: AskedSearch;
 }) {
+  const Heading = headingTag(useHeadingLevel());
   return (
     <section className="code-search-repo" aria-label={group.repo}>
-      <h3 className="code-search-repo__head">
+      <Heading className="code-search-repo__head">
         <SquareCodeGlyph size="sm" className="code-glyph" />
         <a className="mono" href={repoHref(group.repo, group.tip ? { ref: group.tip } : {})}>
           {group.repo}
@@ -91,7 +92,7 @@ const RepoResult = memo(function RepoResult({
             </a>
           </span>
         )}
-      </h3>
+      </Heading>
       {group.files.map((f) => (
         <FileResult
           key={`${group.tip}:${f.blob}:${f.pathB64 ?? f.path}`}
