@@ -210,7 +210,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	for range launchRounds {
 		made, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw)
 		if err != nil {
-			return PendingRun{}, fmt.Errorf("sandbox: create run %s: %w", run.TurnID, err)
+			// A CREATE THE STORE DID NOT ANSWER may have landed, naming the job.
+			return PendingRun{}, unopened(run.LaunchID,
+				fmt.Errorf("sandbox: create run %s: %w", run.TurnID, err))
 		}
 		if made {
 			// AND THE JOB'S LOG, a new run's: whatever a key of that
@@ -218,7 +220,7 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 			last, opened, openErr := s.openLog(ctx, run.TurnID, run.LaunchID,
 				logOpening{round: created.Round})
 			if openErr != nil {
-				return PendingRun{}, openErr
+				return PendingRun{}, unopened(run.LaunchID, openErr)
 			}
 			if !opened {
 				return PendingRun{}, endedUnderLaunch(run.TurnID)
@@ -445,8 +447,12 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		return true
 	})
 	switch {
-	case err != nil:
+	case errors.Is(err, ErrSeatNotHeld), errors.Is(err, ErrRunEnding):
 		return PendingRun{}, false, fmt.Errorf("sandbox: relaunch run %s: %w", run.TurnID, err)
+	case err != nil:
+		// A RESET THE STORE DID NOT ANSWER may have landed, naming the job.
+		return PendingRun{}, false, unopened(run.LaunchID,
+			fmt.Errorf("sandbox: relaunch run %s: %w", run.TurnID, err))
 	case full:
 		return PendingRun{}, false, fmt.Errorf("sandbox: relaunch run %s: %w", run.TurnID,
 			ErrCodeHoldsFull)
@@ -466,7 +472,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 	last, logged, err := s.openLog(ctx, run.TurnID, opened.LaunchID, opening)
 	switch {
 	case err != nil:
-		return PendingRun{}, false, err
+		return PendingRun{}, false, unopened(opened.LaunchID, err)
 	case !logged:
 		return PendingRun{}, false, endedUnderLaunch(run.TurnID)
 	}
@@ -479,6 +485,26 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 func endedUnderLaunch(turnID string) error {
 	return fmt.Errorf("sandbox: begin launch %s: the run ended under its launch: %w",
 		turnID, ErrRunEnding)
+}
+
+// UnopenedLaunchError is [PendingStore.BeginLaunch]'s failure past a write that
+// may have named its job on the row: the create, the reset or the log's
+// opening, which the store did not answer. The row may then name LaunchID
+// with no log opened to it, a launching run nothing polls or claims, so the
+// launch ends that one job ([Coordinator.Launch]); a row that does not name
+// it was never written, and stays whoever's it is.
+type UnopenedLaunchError struct {
+	LaunchID string
+	Err      error
+}
+
+func (e *UnopenedLaunchError) Error() string { return e.Err.Error() }
+
+func (e *UnopenedLaunchError) Unwrap() error { return e.Err }
+
+// unopened is err from a write that may have named job on the row.
+func unopened(job string, err error) error {
+	return &UnopenedLaunchError{LaunchID: job, Err: err}
 }
 
 // logOpening is what the write that opens a job's log keeps of the round

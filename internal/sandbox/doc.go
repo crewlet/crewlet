@@ -156,6 +156,13 @@
 // read it ([BoxReader]), and a launching node whose presence stays lapsed for
 // the box timeout has its running jobs lost with it. See boxhost.go.
 //
+// AND A LAUNCH THAT FAILS ONCE ITS ROW IS WRITTEN ENDS ITS RUN, its log's
+// opening included: a row left launching is polled and claimed by nothing and
+// holds its seat until the seat moves. A write the store did not answer may
+// have landed, so the launch ends the job it named and nothing else
+// ([UnopenedLaunchError]); a row that names another job is left to its holder.
+// See "Launching a run".
+//
 // AND A JOB LOST WITH ITS HOST IS CARRIED ON, NEVER COLLECTED: one its
 // engine's restart killed — which the box tells from one that crashed by the
 // engine process that last saw it running ([JobLost], local_witness.go) — one
@@ -774,7 +781,10 @@
 // that did land had counted it out already, so the seat whose other run still
 // worked read free beside it. A row no longer this node's to end, ended by
 // somebody else or owned by a newer lease, has no delete of this node's to move
-// it, and the seat is recounted from the store instead.
+// it, and the seat is recounted from the store instead. So is the seat of an
+// open the store did not answer ([UnopenedLaunchError]): the open counted
+// nothing, a row it wrote all the same is counted only where a recount reads
+// it, and the ending of the job it named moves no count of its own.
 //
 // resetLaunch is [CoordStore.BeginLaunch]'s half for a row that was already
 // there, a relaunch its turn's resumed frame makes, reporting the row as it
