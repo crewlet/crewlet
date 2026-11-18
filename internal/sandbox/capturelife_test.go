@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -885,10 +886,9 @@ func (a *floorArchive) Read(p []byte) (int, error) {
 // inside its room at the slowest crossing. A stop's take, and a collection's
 // while its box's pause blocks (its keep starts once spooled), stamp within
 // [takeLife]; an unanswered takeover, within [takeOverLife]; a standby whose
-// capture's taker goes in the wait's last tick, its settle not taken, reads
-// the log, settles again, reads the row and takes over within [standbyWindow],
-// a save under way beside that capture or not. Each within [captureLife] where
-// a capture's, and within a minute of its figure.
+// capture's taker goes in the wait's last tick, its settle not taken, reads the
+// log, settles again, reads the row and takes over within [standbyWindow], a
+// save beside it or not; a capture's in [captureLife], each a minute of its figure.
 //
 // Mutation: drop a step from a figure (a take's digest, a takeover's read back,
 // one change past a standby's wait), start a collection's keep behind its read,
@@ -997,14 +997,21 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 		})
 	})
 	// THE STANDBY'S ROW, alone and beside a save of the same job begun under
-	// the same lease: its passes settle the capture they stand by for alone, so
-	// the save adds no change to the window.
-	for _, saving := range []bool{false, true} {
-		name := "a read standing by for a capture that never stamps"
-		if saving {
-			name += ", beside a save under way"
-		}
-		t.Run(name, func(t *testing.T) {
+	// the same lease, the gone taker's capture still within its budget at the
+	// wait's last pass or, read on the log there ([Coordinator.awaitStood]'s
+	// last read), past it: the standby settles the capture it stands by for
+	// alone, so the save adds no change to the window.
+	for _, row := range []struct {
+		name               string
+		saving, pastBudget bool
+	}{
+		{name: "a read standing by for a capture that never stamps"},
+		{name: "a read standing by for a capture that never stamps, beside a save under way", saving: true},
+		{name: "a read standing by for a capture past its budget at the wait's last pass, beside a save under way",
+			saving: true, pastBudget: true},
+	} {
+		saving := row.saving
+		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
 			inBubble(t, func(t *testing.T) {
 				store := newTakerStore()
@@ -1013,6 +1020,13 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 				frozen := time.Now()
 				store.Clock = func() time.Time { return frozen }
 				rig, writes, keep := keepingRigWith(t, taking(thisProcess, store))
+				// PAST ITS BUDGET from the lease's going on, on this node's
+				// clock, so the wait's last pass is its read of the log.
+				var past atomic.Int64
+				if row.pastBudget {
+					clock := rig.coordinator.now
+					rig.coordinator.now = func() time.Time { return clock().Add(time.Duration(past.Load())) }
+				}
 				run := rig.launchKept(t, "t1")
 				lease := claimTaker(t, store, takingProcess)
 				begun := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID,
@@ -1057,6 +1071,9 @@ func TestEveryCapturesOutcomeLandsWithinItsLife(t *testing.T) {
 				waitEnds := time.Now().Add(standbyWait)
 				go func() {
 					time.Sleep(time.Until(waitEnds) - 10*time.Second)
+					if row.pastBudget {
+						past.Store(int64(begun.At.Add(SessionCaptureBudget).Sub(time.Now()) + time.Second))
+					}
 					if gave, err := store.Backend.Release(context.WithoutCancel(t.Context()),
 						coord.TakerResource(takingProcess), takingProcess, lease.Epoch); err != nil || !gave {
 						t.Errorf("giving node-a's taker lease back = %v, %v", gave, err)
