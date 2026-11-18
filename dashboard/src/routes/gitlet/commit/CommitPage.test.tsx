@@ -17,6 +17,7 @@ import type { ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
+import { usePageMenu } from "~/app/Shell.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { EMPTY_TREE } from "~/lib/code.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -30,6 +31,12 @@ import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { CommitPage } from "./CommitPage.tsx";
 import { ComparePage } from "./ComparePage.tsx";
+
+// THE PAGE BAR'S PHONE MENU is the frame's: what the page hands it is what it offers there.
+vi.mock("~/app/Shell.tsx", async () => ({
+  ...(await vi.importActual<typeof import("~/app/Shell.tsx")>("~/app/Shell.tsx")),
+  usePageMenu: vi.fn(),
+}));
 
 afterEach(() => {
   cleanup();
@@ -999,6 +1006,35 @@ test("a commit is reverted on the branch chosen, at the head its listing showed"
     tool: "code_revert",
     args: { repo: "web", branch: "main", expected_head: MAIN, commit: SHA },
   });
+});
+
+// ON A PHONE THE BAR KEEPS BROWSE FILES and folds Revert and Cherry-pick into
+// its More, which opens the same dialogs: three buttons cut the third to
+// "Cherry-". Mutation: leave the writes unfolded, or hand the menu nothing, and this fails.
+test("Revert and Cherry-pick fold into the phone's More, and Browse files stays", async () => {
+  stubEngine();
+  mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`, {
+    ...ADMIN_VIEWER,
+    acts: ["code_revert", "code_cherry_pick"],
+  });
+
+  const group = await screen.findByRole("group", { name: "Commit actions" });
+  expect(group.closest(".page-action-folds")).not.toBeNull();
+  const browse = screen.getByRole("link", { name: /^Browse the files at/ });
+  expect(browse.closest(".page-action-folds")).toBeNull();
+  await waitFor(() =>
+    expect(
+      vi
+        .mocked(usePageMenu)
+        .mock.calls.at(-1)![0]
+        .map((e) => [e.label, e.disabled ?? false]),
+    ).toEqual([
+      ["Revert", false],
+      ["Cherry-pick", false],
+    ]),
+  );
+  act(() => vi.mocked(usePageMenu).mock.calls.at(-1)![0][1]!.onSelect());
+  expect(await screen.findByRole("dialog", { name: /Cherry-pick 0123456/ })).toBeTruthy();
 });
 
 // A CHERRY-PICK ONTO ANOTHER BRANCH names that branch's own head. Mutation:
