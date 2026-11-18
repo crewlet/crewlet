@@ -36,22 +36,30 @@ func savingRig(t *testing.T, ledger SaveLedgers, takers *takerStore) (*coordRig,
 	return rig, writes, keep
 }
 
-// saveOf runs one save task of turnID's job to its end as its spawner does,
-// counted in the coordinator's inflight: due now, never saved on this node,
-// pacing from now, as edit leaves it, under the coordinator's own lifetime.
+// saveOf runs one save task of turnID's job ([dueSave]) under the
+// coordinator's own lifetime ([saveUnder]).
 func saveOf(rig *coordRig, turnID string, edit func(*saveJob)) saveOutcome {
-	return saveUnder(rig.coordinator.life, rig, turnID, edit)
+	return saveUnder(rig.coordinator.life, rig, dueSave(rig, turnID, edit))
 }
 
-// saveUnder is [saveOf] under stint, the duty an offer came under.
-func saveUnder(stint context.Context, rig *coordRig, turnID string, edit func(*saveJob)) saveOutcome {
+// dueSave is a save of turnID's job as its spawner hands it: due now, never
+// saved on this node, pacing from now, as edit leaves it.
+func dueSave(rig *coordRig, turnID string, edit func(*saveJob)) saveJob {
 	now := rig.coordinator.now()
 	job := saveJob{run: rig.get(turnID), due: now, mark: -1, interval: 10 * time.Minute, last: now}
 	if edit != nil {
 		edit(&job)
 	}
+	return job
+}
+
+// saveUnder runs job's save task to its end as its spawner does, under stint,
+// the duty an offer came under, counted in the coordinator's inflight.
+func saveUnder(stint context.Context, rig *coordRig, job saveJob) saveOutcome {
+	life, duty, endDuty := rig.coordinator.saveContexts(stint, job.drainEnd)
+	defer endDuty()
 	rig.coordinator.inflight.Add(1)
-	return rig.coordinator.saveTask(stint, job)
+	return rig.coordinator.saveTask(life, duty, job)
 }
 
 // ledgerOf is seat's save ledger in ledger as it stands, empty for none.
@@ -257,9 +265,9 @@ func TestASeatsSavesStayWithinItsAllowance(t *testing.T) {
 			rig, _, _ := savingRig(t, spy, newTakerStore())
 			rig.launchKept(t, "t1")
 			swaps := 0
-			spy.swapping = func(context.Context) {
+			spy.swapping = func(ctx context.Context) {
 				swaps++
-				if row := rig.get("t1"); row.Capture != nil {
+				if row := rig.getIn(ctx, "t1"); row.Capture != nil {
 					t.Errorf("the seat's ledger was charged with the run's row holding %+v, want nothing reserved "+
 						"yet", row.Capture)
 				}
@@ -533,7 +541,7 @@ func TestAStandDownCancelsAnE2BSavesPackAndNeverItsTake(t *testing.T) {
 				standDown()
 				synctest.Wait()
 			}
-			out := saveUnder(stint, rig, "t1", nil)
+			out := saveUnder(stint, rig, dueSave(rig, "t1", nil))
 			if out.class != saveStoodDown {
 				t.Errorf("the save came to %+v, want it stood down", out)
 			}
@@ -564,7 +572,7 @@ func TestAStandDownCancelsAnE2BSavesPackAndNeverItsTake(t *testing.T) {
 					t.Errorf("the save was taken on a context already done (%v), want the coordinator's", err)
 				}
 			}
-			out := saveUnder(stint, rig, "t1", nil)
+			out := saveUnder(stint, rig, dueSave(rig, "t1", nil))
 			if row := rig.get("t1"); out.class != saveLanded || row.Kept == nil {
 				t.Errorf("the save came to %+v keeping %+v, want it landed", out, row.Kept)
 			}
@@ -635,13 +643,13 @@ func TestASaveIsCutOffAndPlacedAtItsLaunchsNewestSavePoint(t *testing.T) {
 		inBubble(t, func(t *testing.T) {
 			rig, _, _ := savingRig(t, memory.NewFleet(), newTakerStore())
 			rig.launchKept(t, "t1")
-			rig.runner.Packing = func(context.Context, Sandbox) {
+			rig.runner.Packing = func(ctx context.Context, _ Sandbox) {
 				during := saved(rig, 1, 0)
-				if took, err := rig.pending.ReserveSave(context.WithoutCancel(t.Context()), "t1", during); err != nil ||
+				if took, err := rig.pending.ReserveSave(context.WithoutCancel(ctx), "t1", during); err != nil ||
 					!took {
 					t.Errorf("reserving the save placed during the pack = %v, %v", took, err)
 				}
-				stampOut(t, rig, "t1", during, CaptureLanded)
+				stampOutIn(context.WithoutCancel(ctx), t, rig, "t1", during, CaptureLanded)
 			}
 			out := saveOf(rig, "t1", nil)
 			if row := rig.get("t1"); out.class != saveNotYet || row.Capture == nil || row.Capture.CaptureSeq != 1 {

@@ -279,7 +279,7 @@ func TestADrainLetsASaveGoOnlyOnceItsKeepIsCounted(t *testing.T) {
 		now := c.now()
 		job := saveJob{run: rig.get("t1"), drainEnd: time.Now().Add(drainSaveWait), due: now, mark: -1,
 			interval: rigSaveInterval, last: now}
-		in, out := c.saveInHand(t.Context(), job, saveOutcome{streamed: -1})
+		in, out := c.saveInHand(c.life, t.Context(), job, saveOutcome{streamed: -1})
 		if in == nil {
 			t.Fatalf("the premise: the drain save ended before its take: %+v", out)
 		}
@@ -293,7 +293,7 @@ func TestADrainLetsASaveGoOnlyOnceItsKeepIsCounted(t *testing.T) {
 			c.closed = true
 			c.mu.Unlock()
 		}
-		if out = c.takeSave(job, job.point(), in, out, letGo, inflight); out.class != saveLanded {
+		if out = c.takeSave(c.life, job, job.point(), in, out, letGo, inflight); out.class != saveLanded {
 			t.Errorf("the drain save came to %+v, want its keep landed: counted before the drain let it go, "+
 				"no stop refuses it", out)
 		}

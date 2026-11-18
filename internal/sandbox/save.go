@@ -225,10 +225,10 @@ type saveTaken struct {
 // counted it in c.inflight; it is counted there exactly once until its keep
 // starts, and with the keeps from then on, so a stop that comes first cuts it
 // within the stop's grace and one that comes after gives its keep the keeps'
-// drain. stint ends its box phase once done: the duty the offer came under,
-// or the coordinator's own lifetime for a drain's save. It writes nothing to
-// memory: its outcome is its spawner's.
-func (c *Coordinator) saveTask(stint context.Context, job saveJob) saveOutcome {
+// drain. It runs on ctx, and duty bounds its box phase
+// ([Coordinator.saveContexts]). It writes nothing to memory: its outcome is
+// its spawner's.
+func (c *Coordinator) saveTask(ctx, duty context.Context, job saveJob) saveOutcome {
 	inflight := sync.OnceFunc(c.inflight.Done)
 	defer inflight()
 	passed := sync.OnceFunc(func() {
@@ -239,43 +239,63 @@ func (c *Coordinator) saveTask(stint context.Context, job saveJob) saveOutcome {
 	defer passed()
 	start := c.now()
 	point := job.point()
-	duty, endDuty := context.WithCancel(c.life)
-	defer endDuty()
-	defer context.AfterFunc(stint, endDuty)()
-	if !job.drainEnd.IsZero() {
-		var endDrain context.CancelFunc
-		duty, endDrain = context.WithDeadline(duty, job.drainEnd)
-		defer endDrain()
-	}
 	out := saveOutcome{streamed: -1}
-	in, out := c.saveInHand(duty, job, out)
+	in, out := c.saveInHand(ctx, duty, job, out)
 	if in != nil {
-		out = c.takeSave(job, point, in, out, passed, inflight)
+		out = c.takeSave(ctx, job, point, in, out, passed, inflight)
 	}
 	switch out.class {
 	case saveLanded:
-		log.InfoContext(c.life, "executor_session_saved", "turn_id", job.run.TurnID, "agent", job.run.AgentHandle,
+		log.InfoContext(ctx, "executor_session_saved", "turn_id", job.run.TurnID, "agent", job.run.AgentHandle,
 			"launch_seq", in.row.LaunchSeq, "capture_seq", nextCaptureSeq(in.row), "point", point,
 			"late_s", start.Sub(job.due).Seconds(), "took_s", c.now().Sub(start).Seconds(),
 			"counted", out.counted, "bytes", in.sealed)
 	case saveNotMoved, savePaced, saveNotYet:
-		log.DebugContext(c.life, "executor_session_save_deferred", "turn_id", job.run.TurnID, "point", point,
+		log.DebugContext(ctx, "executor_session_save_deferred", "turn_id", job.run.TurnID, "point", point,
 			"class", string(out.class), "why", out.why)
 	}
 	return out
 }
 
+// saveContexts is what a save task runs on: life, the coordinator's own
+// lifetime, which its take and keep go on under past its stint; and duty,
+// which bounds its box phase and ends with stint, a drain's end (drainEnd,
+// zero for none) or the coordinator. cancel ends duty.
+func (c *Coordinator) saveContexts(stint context.Context, drainEnd time.Time) (life, duty context.Context,
+	cancel context.CancelFunc) {
+
+	duty, endDuty := context.WithCancel(c.life)
+	stop := context.AfterFunc(stint, endDuty)
+	cancel = func() {
+		stop()
+		endDuty()
+	}
+	if !drainEnd.IsZero() {
+		var endDrain context.CancelFunc
+		duty, endDrain = context.WithDeadline(duty, drainEnd)
+		endStint := cancel
+		cancel = func() {
+			endDrain()
+			endStint()
+		}
+	}
+	return c.life, duty, cancel
+}
+
 // saveInHand is a save's steps up to its charge: the box attached, its stream,
 // the one read of the row, the policy, the seat's room, what the box was
-// handed, the taker, the pack, and the charge. Nil, with the outcome, where
-// the task ends there; the pack is released from its box on every such end.
-func (c *Coordinator) saveInHand(duty context.Context, job saveJob, out saveOutcome) (*saveTaken, saveOutcome) {
+// handed, the taker, the pack, and the charge, on ctx, the box's steps under
+// duty. Nil, with the outcome, where the task ends there; the pack is
+// released from its box on every such end.
+func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out saveOutcome) (*saveTaken,
+	saveOutcome) {
+
 	run := job.run
 	packed := false
 	// STOOD DOWN where the coordinator stopped, or the duty ended while the
 	// box phase ran: past the pack the save is the coordinator's.
 	end := func(class saveClass, why string) (*saveTaken, saveOutcome) {
-		if (class == saveNotYet || class == saveFailed) && (c.life.Err() != nil || (!packed && duty.Err() != nil)) {
+		if (class == saveNotYet || class == saveFailed) && (ctx.Err() != nil || (!packed && duty.Err() != nil)) {
 			class = saveStoodDown
 		}
 		out.class, out.why = class, why
@@ -307,15 +327,15 @@ func (c *Coordinator) saveInHand(duty context.Context, job saveJob, out saveOutc
 	if duty.Err() != nil {
 		return end(saveStoodDown, "the duty ended before the save read its row")
 	}
-	row, class, why := c.saveRow(job)
+	row, class, why := c.saveRow(ctx, job)
 	if class != "" {
 		return end(class, why)
 	}
-	policy, why := c.savePolicy()
+	policy, why := c.savePolicy(ctx)
 	if why != "" {
 		return end(saveNotYet, why)
 	}
-	room, err := c.seatSaveRoom(c.life, row.AgentHandle, policy.SeatBudget)
+	room, err := c.seatSaveRoom(ctx, row.AgentHandle, policy.SeatBudget)
 	if err != nil {
 		if errors.Is(err, errNewerLedger) {
 			out.unplaced = "ledger"
@@ -328,7 +348,7 @@ func (c *Coordinator) saveInHand(duty context.Context, job saveJob, out saveOutc
 			return end(savePaced, fmt.Sprintf("the seat's saves leave %d bytes of its budget", room))
 		}
 	}
-	if unopened := c.saveHanded(row); unopened != "" {
+	if unopened := c.saveHanded(ctx, row); unopened != "" {
 		out.unplaced = "handed"
 		return end(saveFailed, unopened)
 	}
@@ -346,13 +366,13 @@ func (c *Coordinator) saveInHand(duty context.Context, job saveJob, out saveOutc
 	}
 	packed = true
 	release := func() {
-		rel, cancel := detached(c.life)
+		rel, cancel := detached(ctx)
 		defer cancel()
 		_ = saver.ReleaseSave(rel, box, archive.Path)
 	}
 	counted := countedFor(archive.Size)
 	entry := savedEntry{ID: uuid.New(), Until: c.now().UTC().Add(saveLedgerHold), Bytes: counted}
-	if refused, refusal := c.chargeSave(c.life, row.AgentHandle, entry, policy.SeatBudget); refused != "" {
+	if refused, refusal := c.chargeSave(ctx, row.AgentHandle, entry, policy.SeatBudget); refused != "" {
 		release()
 		if refused == savePaced {
 			out.pacedUntil = c.now().Add(saveRetryCeiling)
@@ -368,9 +388,9 @@ func (c *Coordinator) saveInHand(duty context.Context, job saveJob, out saveOutc
 // turn was left begun by a gone taker or unanswered, and held to the
 // license's pre-check, so a pack the store would refuse is spared. A class
 // where the save ends here.
-func (c *Coordinator) saveRow(job saveJob) (PendingRun, saveClass, string) {
+func (c *Coordinator) saveRow(ctx context.Context, job saveJob) (PendingRun, saveClass, string) {
 	run := job.run
-	read, cancel := c.rowContext(c.life, c.recordBudget)
+	read, cancel := c.rowContext(ctx, c.recordBudget)
 	row, found, err := c.pending.Get(read, run.TurnID)
 	cancel()
 	ours := func(r PendingRun) bool {
@@ -382,7 +402,7 @@ func (c *Coordinator) saveRow(job saveJob) (PendingRun, saveClass, string) {
 	case !found || !ours(row):
 		return row, saveGone, "the run's row is gone, or names another job or box"
 	}
-	settle, cancel := c.rowContext(c.life, c.recordBudget)
+	settle, cancel := c.rowContext(ctx, c.recordBudget)
 	defer cancel()
 	if row, found, _ = c.settleGone(settle, row, askEvery, false); !found || !ours(row) {
 		return row, saveGone, "the run's row is gone, or names another job or box"
@@ -400,8 +420,8 @@ func (c *Coordinator) saveRow(job saveJob) (PendingRun, saveClass, string) {
 
 // savePolicy is the fleet's policy a save is taken under, or why none is now:
 // unreadable, or keeping no session.
-func (c *Coordinator) savePolicy() (SessionPolicy, string) {
-	read, cancel := context.WithTimeout(c.life, saveLedgerWait)
+func (c *Coordinator) savePolicy(ctx context.Context) (SessionPolicy, string) {
+	read, cancel := context.WithTimeout(ctx, saveLedgerWait)
 	defer cancel()
 	policy, err := c.keep.Policy(read)
 	switch {
@@ -418,8 +438,8 @@ func (c *Coordinator) savePolicy() (SessionPolicy, string) {
 // opened, "" where it can. Checked before the pack, so a set that is missing or
 // marked incomplete (which stays so for the launch) costs the box nothing;
 // the scrub's own values are read after the pack.
-func (c *Coordinator) saveHanded(row PendingRun) string {
-	read, cancel := c.rowContext(c.life, c.recordBudget)
+func (c *Coordinator) saveHanded(ctx context.Context, row PendingRun) string {
+	read, cancel := c.rowContext(ctx, c.recordBudget)
 	defer cancel()
 	sealed, err := c.pending.Handed(read, row)
 	switch {
@@ -466,17 +486,17 @@ func paceSave(row PendingRun, job saveJob, room int64, now time.Time) (time.Time
 	return now.Add(time.Duration(remaining)), true
 }
 
-// takeSave is a save's steps past its charge: the take, its stamp at the
-// launch's newest save point, its reservation, its spool and its keep. passed
-// marks the spool passed and the keep counted; inflight hands the task from
-// c.inflight to the keeps.
-func (c *Coordinator) takeSave(job saveJob, point string, in *saveTaken, out saveOutcome,
+// takeSave is a save's steps past its charge, on ctx: the take, its stamp at
+// the launch's newest save point, its reservation, its spool and its keep.
+// passed marks the spool passed and the keep counted; inflight hands the task
+// from c.inflight to the keeps.
+func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, in *saveTaken, out saveOutcome,
 	passed, inflight func()) saveOutcome {
 
 	run, row := job.run, in.row
 	at := capturePoint{name: point, pack: true, cutOff: true}
 	stopping := func() bool {
-		return c.life.Err() != nil || (!job.drainEnd.IsZero() && !time.Now().Before(job.drainEnd))
+		return ctx.Err() != nil || (!job.drainEnd.IsZero() && !time.Now().Before(job.drainEnd))
 	}
 	end := func(class saveClass, why string) saveOutcome {
 		if class == saveFailed && stopping() {
@@ -486,13 +506,13 @@ func (c *Coordinator) takeSave(job saveJob, point string, in *saveTaken, out sav
 		return out
 	}
 	release := func() {
-		rel, cancel := detached(c.life)
+		rel, cancel := detached(ctx)
 		defer cancel()
 		_ = in.saver.ReleaseSave(rel, in.box, in.archive.Path)
 	}
 	// THE TAKE CONTEXT AFTER THE PACK, so the scrub has its whole budget; a
 	// drain's end bounds it after takeContext, never its parent.
-	take, cancel, by := c.takeContext(c.life)
+	take, cancel, by := c.takeContext(ctx)
 	defer cancel()
 	if !job.drainEnd.IsZero() {
 		var endDrain context.CancelFunc
@@ -556,8 +576,7 @@ func (c *Coordinator) takeSave(job saveJob, point string, in *saveTaken, out sav
 	// PASSED ONCE COUNTED WITH THE KEEPS, so a drain let go here leaves no
 	// stop a moment to refuse the keep it promised goes on.
 	passed()
-	defer c.keeping.Done()
-	kept := c.keepCapture(c.keepLife, spooled)
+	kept := c.keepSave(spooled)
 	switch {
 	case kept == nil:
 		return end(saveFailed, "the save's keep kept nothing")
@@ -568,6 +587,14 @@ func (c *Coordinator) takeSave(job saveJob, point string, in *saveTaken, out sav
 		return end(saveLanded, "")
 	}
 	return end(saveUnresolved, "the save's record was sent and not answered")
+}
+
+// keepSave keeps a save's spool on the keeps' own lifetime, as
+// [Coordinator.keepLater] does, never the task's, and counts its keep done;
+// its caller has joined it to the keeps.
+func (c *Coordinator) keepSave(spooled *spooledCapture) *SessionKept {
+	defer c.keeping.Done()
+	return c.keepCapture(c.keepLife, spooled)
 }
 
 // SaveRunning is offered run's box, which a waiter's poll found running under
@@ -668,9 +695,8 @@ func (c *Coordinator) saveHosted(ctx context.Context) []*saveRun {
 	if deadline, ok := ctx.Deadline(); ok && deadline.Before(drainEnd) {
 		drainEnd = deadline
 	}
-	wait, cancel := context.WithDeadline(ctx, drainEnd)
+	wait, cancel := c.drainContext(ctx, drainEnd)
 	defer cancel()
-	defer context.AfterFunc(c.life, cancel)()
 	var picked []*saveRun
 	for _, hosted := range c.hostedSaves(wait) {
 		running := hosted.running
@@ -693,6 +719,19 @@ func (c *Coordinator) saveHosted(ctx context.Context) []*saveRun {
 	return picked
 }
 
+// drainContext is a drain's wait for its saves: ctx's, ended at drainEnd or
+// the coordinator's stop.
+func (c *Coordinator) drainContext(ctx context.Context, drainEnd time.Time) (context.Context,
+	context.CancelFunc) {
+
+	wait, cancel := context.WithDeadline(ctx, drainEnd)
+	stop := context.AfterFunc(c.life, cancel)
+	return wait, func() {
+		stop()
+		cancel()
+	}
+}
+
 // hostedSave is a job a drain saves: its run as listed, the save of its turn
 // already under way on this node (nil for none), and when it was last saved.
 type hostedSave struct {
@@ -712,7 +751,7 @@ func (c *Coordinator) hostedSaves(ctx context.Context) []hostedSave {
 	}
 	runs, err := c.pending.ListActive(ctx)
 	if err != nil {
-		log.WarnContext(c.life, "executor_session_not_kept", "point", drainSavePoint,
+		log.WarnContext(ctx, "executor_session_not_kept", "point", drainSavePoint,
 			"detail", fmt.Sprintf("this node's runs could not be listed: %v", err))
 		return nil
 	}
@@ -766,15 +805,19 @@ func (c *Coordinator) drainSave(wait context.Context, run PendingRun, begun, dra
 	job := saveJob{run: run, drainEnd: drainEnd, due: begun, mark: memo.mark, interval: interval, last: memo.last,
 		counted: memo.counted, taken: running.taken}
 	c.saves.mu.Unlock()
-	return c.spawnSave(c.life, job, memo, running)
+	// NO STINT: a drain's save ends its box phase at drainEnd or the
+	// coordinator's stop, never with the wait that picked it.
+	return c.spawnSave(context.WithoutCancel(wait), job, memo, running)
 }
 
-// runSave runs one save task its offer spawned, then writes what came of it
-// to memo, gives its slot back once its keep has ended, and logs a failure no
-// stamp's line names.
+// runSave runs one save task its offer spawned under stint, then writes what
+// came of it to memo, gives its slot back once its keep has ended, and logs a
+// failure no stamp's line names.
 func (c *Coordinator) runSave(stint context.Context, job saveJob, memo *saveMemo, running *saveRun) {
 	start := c.now()
-	out := c.saveTask(stint, job)
+	life, duty, endDuty := c.saveContexts(stint, job.drainEnd)
+	out := c.saveTask(life, duty, job)
+	endDuty()
 	c.saves.mu.Lock()
 	memo.running = nil
 	if out.counted > 0 {
@@ -811,7 +854,7 @@ func (c *Coordinator) runSave(stint context.Context, job saveJob, memo *saveMemo
 	if unlogged {
 		level = slog.LevelWarn
 	}
-	log.Log(c.life, level, "executor_session_not_kept", "turn_id", job.run.TurnID, "point", job.point(),
+	log.Log(life, level, "executor_session_not_kept", "turn_id", job.run.TurnID, "point", job.point(),
 		"failures", failures, "next_due_s", due.Sub(c.now()).Seconds(), "detail", out.why)
 }
 

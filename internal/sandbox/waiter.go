@@ -570,11 +570,7 @@ func (w *Waiter) pass(ctx context.Context) (*round, error) {
 	// A STINT MADE HERE, NEVER AT THE HOOK: a poll whose task began before a
 	// stand-down carries the stint that stand-down ended.
 	if w.stint == nil || w.stint.Err() != nil {
-		base := w.life
-		if base == nil {
-			base = ctx
-		}
-		w.stint, w.endStint = context.WithCancel(base)
+		w.stint, w.endStint = w.newStint(ctx)
 	}
 	w.mu.Unlock()
 	// ONE MANAGER FOR THE WHOLE PASS, read once: a reload landing mid-pass
@@ -892,6 +888,16 @@ func (w *Waiter) isBusy(turnID string) bool {
 	defer w.mu.Unlock()
 	_, busy := w.busy[turnID]
 	return busy
+}
+
+// newStint is a stint of the duty for a pass under ctx to hold
+// ([Waiter.stint]): made off the waiter's life, so it outlives the pass that
+// made it, or off ctx before Start. Its caller holds w.mu.
+func (w *Waiter) newStint(ctx context.Context) (context.Context, context.CancelFunc) {
+	if w.life == nil {
+		return context.WithCancel(ctx)
+	}
+	return context.WithCancel(w.life)
 }
 
 // begin claims the turn's box for one task, reporting false where a task is
