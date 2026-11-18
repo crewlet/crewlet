@@ -353,6 +353,12 @@ type SessionContinuation struct {
 	// in, beside Brief and Replaced; nil where they would tell the same
 	// ([UnheldTelling]). The launch hands one of them only to such a box.
 	Unheld *UnheldTelling
+
+	// UnheldDropped says the seat's budget could not carry Unheld's briefs,
+	// which internal/engine's continuedFloor dropped alone on its copy: the
+	// launch continues the session only in a box whose release the resume
+	// was read in. The runner never sets it.
+	UnheldDropped bool
 }
 
 // UnheldTelling is a relaunch's briefs for a box whose harness answers a

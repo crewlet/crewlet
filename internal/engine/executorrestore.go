@@ -569,8 +569,8 @@ func (e *Engine) relaunchCompany(turn string) *Company {
 // Beside a kept capture's two briefs, the two told by a reading where the
 // runner wrote them ([runner.SessionContinuation.Exact]), with their release
 // and what they left out, handed only to a box of that release, and the two
-// for a box whose release the resume was not read in
-// ([runner.SessionContinuation.Unheld]); never beside a base.
+// for a box whose release the resume was not read in, or the mark that the
+// floor dropped them ([runner.SessionContinuation.Unheld]); never beside a base.
 func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation {
 	switch {
 	case s == nil:
@@ -581,7 +581,7 @@ func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation 
 		return nil
 	}
 	out := &sandbox.SessionContinuation{LaunchSeq: s.Basis.LaunchSeq, CaptureSeq: s.Basis.CaptureSeq,
-		Brief: s.Brief, Replaced: s.Replaced, Told: s.Told}
+		Brief: s.Brief, Replaced: s.Replaced, Told: s.Told, UnheldDropped: s.UnheldDropped}
 	if x := s.Exact; x != nil {
 		out.Exact = &sandbox.ExactTelling{Resumer: x.Resumer, Brief: x.Brief, Replaced: x.Replaced, Told: x.Told}
 	}

@@ -19,19 +19,19 @@ var toldUnheld = BriefTold{Omitted: []int{4}, Own: []Lead{answerLead("told again
 // A read at a hook's step is held as the job's session showed it, which only a
 // release whose resume this build read rebuilds (CarryCheck.ResumeRead). So a
 // box answering such a release is handed the save point's brief, and any other
-// the one that tells those notes again ([UnheldTelling]) for the box it is,
-// its told set recorded and the decision saying so. The job's own box, its
-// copy taken whole there, is asked nothing and is handed the save point's.
+// the one that tells those notes again ([UnheldTelling]) for the box it is, its
+// told set recorded and the decision saying so; or, where the floor dropped
+// that telling, no session at all. The job's own whole copy is asked nothing.
 //
 // Mutation: hand the unheld brief whatever the box answers, never hand it,
-// hand it to the job's own whole copy, record the save point's told set beside
-// it, or leave it out of the decision, and a case goes red.
+// record the save point's told set beside it, leave it out of the decision, or
+// continue a box the dropped telling was for, and a case goes red.
 func TestAHookNoteIsToldAgainInABoxWhoseReleaseTheResumeWasNotReadIn(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name                string
 		reused, interrupted bool
-		unread              bool
+		unread, dropped     bool
 		brief               string
 	}{
 		{name: "its own box, a release read", reused: true, interrupted: true, brief: savePointSameBox},
@@ -41,6 +41,8 @@ func TestAHookNoteIsToldAgainInABoxWhoseReleaseTheResumeWasNotReadIn(t *testing.
 		{name: "a new box, a release not read", interrupted: true, unread: true, brief: unheldNewBox},
 		{name: "a new box of a clean exit, a release not read", unread: true, brief: unheldNewBox},
 		{name: "its own whole copy, asked nothing", reused: true, unread: true, brief: savePointSameBox},
+		{name: "dropped, a new box of a release read", interrupted: true, dropped: true, brief: savePointNewBox},
+		{name: "dropped, a new box of a release not read", interrupted: true, unread: true, dropped: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -48,9 +50,19 @@ func TestAHookNoteIsToldAgainInABoxWhoseReleaseTheResumeWasNotReadIn(t *testing.
 			rig.runner.CarryResumeUnread = tc.unread
 			req.Session.Exact = nil
 			req.Session.Unheld = &UnheldTelling{Brief: unheldSameBox, Replaced: unheldNewBox, Told: toldUnheld}
+			if tc.dropped {
+				req.Session.Unheld, req.Session.UnheldDropped = nil, true
+			}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 				rig.runner, tc.reused, false)
 			t.Cleanup(got.release)
+			if tc.brief == "" {
+				if got.session != "" || got.kind != BriefFresh {
+					t.Fatalf("the launch continues session %q (%s), want a session of the run's own", got.session,
+						got.kind)
+				}
+				return
+			}
 			if got.brief != tc.brief || got.session != "s-1" {
 				t.Fatalf("the launch hands brief %q continuing session %q, want %q continuing the kept session",
 					got.brief, got.session, tc.brief)

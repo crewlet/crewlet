@@ -1378,6 +1378,12 @@ type SessionContinuation struct {
 	// and Replaced; nil where they would tell the same. Only for a kept
 	// capture. The launch hands one of them only to such a box.
 	Unheld *UnheldTelling
+
+	// UnheldDropped says the seat's budget could not carry Unheld's briefs,
+	// which the engine dropped alone (internal/engine's continuedFloor): the
+	// session is then continued only in a box whose release the resume was
+	// read in, and any other starts a session of its own.
+	UnheldDropped bool
 }
 
 // UnheldTelling is a relaunch's briefs for a box whose release this build did
@@ -1653,22 +1659,19 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 }
 
 // continueKept continues the turn's kept capture want in box, or says why it
-// cannot.
+// cannot. THE BOX THE CAPTURE WAS TAKEN IN IS THE REUSED ONE: the capture is
+// the job before's ([ContinuityOf]), and a reused box is that job's
+// ([PriorBox.ContinuesIn]), so the same-box brief is handed exactly where the
+// session was last worked in, and the new-box brief everywhere else.
 //
-// THE BOX THE CAPTURE WAS TAKEN IN IS THE REUSED ONE: the capture is the job
-// before's, by [ContinuityOf], and a reused box is that job's
-// ([PriorBox.ContinuesIn]) — so the same-box brief is handed exactly where the
-// session was last worked in this box, and the new-box brief everywhere else.
-//
-// AND THE BRIEF TOLD BY A READING ONLY TO A BOX OF ITS RELEASE
-// ([SessionContinuation.Exact]): chosen once the box's harness has said its
-// release ([SessionRestorer.CheckCarry]), handed where that answer is read
-// and is exactly the release the reading was read for ([ExactTelling.Resumer])
-// and the telling wrote a brief for this box, and the brief told by the save
-// point otherwise, logged (`executor_session_holdings_unused`) once the
-// session is otherwise continued. Never where the box's own copy is continued
-// without asking its harness: no reading is read of a capture whose harness
-// ended its own run ([Coordinator.HoldingsOf]), and no release was asked.
+// WHICH TELLING, CHOSEN ONCE THE BOX'S HARNESS HAS SAID ITS RELEASE
+// ([SessionRestorer.CheckCarry]): the one told by a reading only where that
+// answer is exactly the release it was read for ([exactFor]), else logged
+// (`executor_session_holdings_unused`); the unheld one where the answer is a
+// release whose resume this build did not read ([UnheldTelling]), and no
+// session there where the seat's budget dropped it
+// ([SessionContinuation.UnheldDropped]). The box's own copy, taken whole there,
+// is asked nothing: no reading is read of it ([Coordinator.HoldingsOf]).
 func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opened PendingRun,
 	box Sandbox, runner Runner, reused bool, want SessionContinuation) (continuedLaunch, string) {
 
@@ -1732,6 +1735,9 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 		if reused {
 			brief = want.Unheld.Brief
 		}
+	case want.UnheldDropped && !check.ResumeRead:
+		return continuedLaunch{}, fmt.Sprintf("the seat's budget could not carry the briefs for a box whose "+
+			"release the resume was not read in, and this box's harness answers %s", answeredRelease(check))
 	}
 	fetched, err := c.fetchSession(ctx, row)
 	if err != nil {
@@ -1757,6 +1763,14 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 			_ = body.Close()
 			fetched.remove()
 		}}, ""
+}
+
+// answeredRelease is the release check's box answered, in a person's words.
+func answeredRelease(check CarryCheck) string {
+	if check.Version == "" {
+		return "no release this build reads"
+	}
+	return fmt.Sprintf("%q", check.Version)
 }
 
 // exactFor is the brief told by a reading that a launch hands a box whose
