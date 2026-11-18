@@ -116,8 +116,8 @@ func (m *saveMemo) of(run PendingRun) bool {
 }
 
 // saveRun is a save task under way on this node: taken is closed once it has
-// passed its spool or ended before it, ended once its outcome is in memory and
-// its slot given back.
+// passed its spool and joined the keeps, or ended before, ended once its
+// outcome is in memory and its slot given back.
 type saveRun struct {
 	taken chan struct{}
 	ended chan struct{}
@@ -179,8 +179,8 @@ type saveJob struct {
 	// counted is what this launch's last save to reach its charge was
 	// counted at, pacing's expected size before any save of it lands.
 	counted int64
-	// taken, where set, is closed once the task has passed its spool or
-	// ended before it.
+	// taken, where set, is closed once the task has passed its spool and
+	// joined the keeps, or ended before.
 	taken chan struct{}
 }
 
@@ -467,8 +467,8 @@ func paceSave(row PendingRun, job saveJob, room int64, now time.Time) (time.Time
 
 // takeSave is a save's steps past its charge: the take, its stamp at the
 // launch's newest save point, its reservation, its spool and its keep. passed
-// marks the spool passed; inflight hands the task from c.inflight to the
-// keeps.
+// marks the spool passed and the keep counted; inflight hands the task from
+// c.inflight to the keeps.
 func (c *Coordinator) takeSave(job saveJob, point string, in *saveTaken, out saveOutcome,
 	passed, inflight func()) saveOutcome {
 
@@ -547,12 +547,14 @@ func (c *Coordinator) takeSave(job saveJob, point string, in *saveTaken, out sav
 		return end(saveFailed, why)
 	}
 	c.spooledWhole(take, by, row, spooled, taken, 0)
-	passed()
 	if !c.joinKeeps() {
 		c.dropSpool(take, spooled, "the node stopped before the session could be uploaded")
 		return end(saveStoodDown, "the node stopped before the save could be kept")
 	}
 	inflight()
+	// PASSED ONCE COUNTED WITH THE KEEPS, so a drain let go here leaves no
+	// stop a moment to refuse the keep it promised goes on.
+	passed()
 	defer c.keeping.Done()
 	kept := c.keepCapture(c.keepLife, spooled)
 	switch {
@@ -644,9 +646,9 @@ func (c *Coordinator) spawnSave(job saveJob, memo *saveMemo, running *saveRun) *
 // launched whose session moved since its last save here, most stale first,
 // under the node's save slots, for at most [drainSaveWait]; from its first
 // instant the node takes no periodic save. It returns once each save it
-// picked has passed its spool, or at its wait; their keeps go on, counted
-// with every keep, until the coordinator's stop (the package doc's "A save as
-// its node drains").
+// picked has passed its spool and joined the keeps, or at its wait; their
+// keeps go on, counted with every keep, until the coordinator's stop (the
+// package doc's "A save as its node drains").
 func (c *Coordinator) SaveHosted(ctx context.Context) {
 	c.saveHosted(ctx)
 }

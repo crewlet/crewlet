@@ -257,3 +257,38 @@ func TestADrainSaveEndsWithinItsWait(t *testing.T) {
 		})
 	})
 }
+
+// A DRAIN LETS A SAVE GO ONLY ONCE ITS KEEP IS COUNTED: a stop whose close
+// lands the instant the drain is let go of a save still lets that save's keep
+// land, since the keep had already joined the keeps a stop waits for.
+//
+// Mutation: mark the spool passed before the save joins the keeps.
+func TestADrainLetsASaveGoOnlyOnceItsKeepIsCounted(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		rig, _, _ := savingRig(t, memory.NewFleet(), newTakerStore())
+		rig.launchKept(t, "t1")
+		c := rig.coordinator
+		now := c.now()
+		job := saveJob{run: rig.get("t1"), drainEnd: time.Now().Add(drainSaveWait), due: now, mark: -1,
+			interval: rigSaveInterval, last: now}
+		in, out := c.saveInHand(t.Context(), job, saveOutcome{streamed: -1})
+		if in == nil {
+			t.Fatalf("the premise: the drain save ended before its take: %+v", out)
+		}
+		c.inflight.Add(1)
+		inflight := sync.OnceFunc(c.inflight.Done)
+		defer inflight()
+		// THE STOP'S FIRST STEP, closing the coordinator the instant the
+		// drain is let go of the save.
+		letGo := func() {
+			c.mu.Lock()
+			c.closed = true
+			c.mu.Unlock()
+		}
+		if out = c.takeSave(job, job.point(), in, out, letGo, inflight); out.class != saveLanded {
+			t.Errorf("the drain save came to %+v, want its keep landed: counted before the drain let it go, "+
+				"no stop refuses it", out)
+		}
+	})
+}
