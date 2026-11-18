@@ -12,10 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 )
 
-// BenchmarkTheChangeIndexBuild walks changes minted at 40 000 a day from an empty index, which is a
-// first build and so newest first, and reports the time and bytes a change costs: short, typical (150
-// distinct words, 110 of them rare words at random places in the term key) at two corpus sizes, so the
-// time's growth shows, and at the smaller batches the two-second write hold takes, and long.
+// BenchmarkTheChangeIndexBuild runs a first build (newest first) over changes minted at 40 000 a day and
+// reports time and bytes a change: short, typical (150 distinct words) at two corpus sizes and at the
+// write hold's smaller batches, and long.
 func BenchmarkTheChangeIndexBuild(b *testing.B) {
 	for _, arm := range []struct {
 		name    string

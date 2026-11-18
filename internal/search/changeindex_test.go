@@ -21,12 +21,9 @@ import (
 	"github.com/crewlet/crewlet/internal/textindex"
 )
 
-// THE INDEX HOLDS EVERY CHANGE'S WORDS, whatever moved it: through a seeded run of opens, edits, moves
-// and a purge, swept at random from its 150th position while a first build in small batches walks back
-// over those, every row a walk has reached holds its scope and exactly its terms after each sweep, and so
-// does every live row at the end.
-// Mutation: drop the state update on an equal hash, drop the purge follower, clear only the slots the
-// new terms overwrite, cut the floor one row below the batch, or let the watermark pass rows it did not write.
+// Through seeded opens, edits, moves and a purge while a first build walks back, every reached row holds
+// its scope and exactly its terms after each sweep, and every live row at the end.
+// Mutation: drop the equal-hash state update or the purge follower, or let the floor or watermark slip.
 func TestTheChangeIndexHoldsEveryChangesWords(t *testing.T) {
 	t.Parallel()
 	for seed := range uint64(4) {
@@ -319,12 +316,8 @@ func TestThePurgeFollowerReachesEveryRepositoryTheIndexHolds(t *testing.T) {
 	}
 }
 
-// A REBUILD KEEPS THE INDEX AND WRITES IT AGAIN NEWEST FIRST: asked to rebuild over a copy that
-// diverged (a change gone, one retitled, one moved to another owner alone, one new), the index
-// answers Rebuilding and keeps every document until its first build begins again at the applied
-// prefix, which a second indexer over the same store does; each stretch the build reaches holds exactly
-// the copy's changes, the gone one's document leaves once the floor passes it, and so the end holds the
-// copy alone.
+// A rebuild over a diverged copy keeps every document, answers Rebuilding until the build begins again,
+// and leaves each reached stretch holding exactly the copy's changes, so the end holds the copy alone.
 // Mutation: drop pruneChangeDocs, or compare only the state on an equal hash.
 func TestARebuildKeepsTheChangeIndexAndWritesItAgainNewestFirst(t *testing.T) {
 	t.Parallel()
@@ -440,11 +433,8 @@ func TestAFreshChangeIndexOnAnAdoptedEstateWalksItAndRebuildsNothing(t *testing.
 	}
 }
 
-// EVERY INDEX WRITE RECORDS WHAT IT WAS DECIDED FROM: a forward batch, a backward batch and a purge
-// drop each raise Seen to the settled checkpoint of the snapshot they read and never lower it; the
-// first backward batch begins the build at the applied prefix of its snapshot, with the watermark at
-// least there; a rebuild's mark sets Seen to 0 and the build to not begun; and an idle sweep or a walk
-// held at a retained record writes nothing.
+// Each forward batch, backward batch and purge drop raises Seen to its snapshot's settled checkpoint and
+// never lowers it; a rebuild resets it; an idle sweep or a held walk writes nothing.
 // Mutation: drop the update from the purge drop or the backward batch, or write it without MAX.
 func TestEveryChangeIndexWriteRecordsWhatItWasDecidedFrom(t *testing.T) {
 	t.Parallel()
@@ -532,11 +522,9 @@ func TestEveryChangeIndexWriteRecordsWhatItWasDecidedFrom(t *testing.T) {
 	}
 }
 
-// HOLDING ANSWERS THE NEWEST CHANGES HOLDING EVERY WORD in its scope, driven by the narrowest of the
-// scope and the words, newest minted first: the same corpus built by the first build's backward walk
-// and by the forward walk as each change opens answers the same ids in the same order.
-// Mutation: key documents by the order the walks take them, drive every search by its rarest word,
-// drop an EXISTS, test a word over a neighbour's slot range, or order ascending.
+// Holding answers the newest minted changes holding every word, driven by the narrowest of scope and
+// words, the same whether the backward or the forward walk built the corpus.
+// Mutation: key by walk order, drive by the rarest word, drop an EXISTS, or order ascending.
 func TestHoldingAnswersTheNewestChangesHoldingEveryWord(t *testing.T) {
 	t.Parallel()
 	// f takes the corpus in one first build; g as each change opens, a sweep after each.
@@ -717,11 +705,9 @@ func TestEveryTermOfTheLargestChangeIsKept(t *testing.T) {
 	}
 }
 
-// A DOCUMENT IS KEYED BY WHEN ITS CHANGE WAS MINTED, whichever walk took it and in whichever order; two
-// ids sharing a natural key both get one, the second the next free key; ids past a natural key's window,
-// with no instant, or at the last millisecond take the arena's keys; every one is found by its words.
-// Mutation: take the natural key without reading the window, drop the arena, or let the last
-// millisecond be natural (its slot range's end wraps negative).
+// A document is keyed by its change's mint time whichever walk took it; a taken natural key goes to the
+// next free one, and ids with no instant or past the window take the arena's keys, all found by words.
+// Mutation: skip the window read, drop the arena, or let the last millisecond be natural.
 func TestADocumentIsKeyedByWhenItsChangeWasMinted(t *testing.T) {
 	t.Parallel()
 	f := newChangeFixture(t)
@@ -805,10 +791,8 @@ func TestADocumentIsKeyedByWhenItsChangeWasMinted(t *testing.T) {
 	}
 }
 
-// THE FIRST BUILD INDEXES THE NEWEST CHANGES FIRST: its floor only moves down, every change minted at
-// or after it is held and none before, and a search for a word every change holds answers the newest
-// from the top; a change opened or edited meanwhile is held by its words after the next sweep, and the
-// walk back keeps the edit; once whole every change is held.
+// The first build's floor only moves down, holding every change minted at or after it; changes opened or
+// edited meanwhile are held after the next sweep, and once whole every change is held.
 // Mutation: walk ids ascending, skip the forward walk while the build runs, or begin it at 0.
 func TestTheFirstBuildIndexesTheNewestChangesFirst(t *testing.T) {
 	t.Parallel()
@@ -879,9 +863,8 @@ func TestTheFirstBuildIndexesTheNewestChangesFirst(t *testing.T) {
 // changeIDsTop is above every change id, as a floor no build has moved yet.
 const changeIDsTop = "~"
 
-// A BATCH'S WRITE IS HELD TO ABOUT TWO SECONDS: its budget halves after a write past
-// ChangeIndexBatchWrite, not below its least, doubles after one under a quarter of it, not past its
-// cap, and stays between.
+// A batch budget halves after a write past ChangeIndexBatchWrite (not below its least) and doubles after
+// one under a quarter of it (not past its cap).
 // Mutation: never halve, or halve below the least.
 func TestABatchWriteIsHeldToAboutTwoSeconds(t *testing.T) {
 	t.Parallel()
@@ -906,9 +889,8 @@ func TestABatchWriteIsHeldToAboutTwoSeconds(t *testing.T) {
 	}
 }
 
-// EACH KIND OF WRITE IS HELD BY ITS OWN TIMES: a slow backward write halves the next backward batch
-// though a fast forward write came between, fast ones grow it back, the forward budget stays at its cap,
-// and a slow purge drop's next step removes half the documents.
+// Each walk keeps its own budget: a slow backward write halves the next backward batch despite a fast
+// forward one between, and a slow purge drop halves its next step.
 // Mutation: share one budget between the walks, time no write, or never move the drop step.
 func TestEachKindOfWriteIsHeldByItsOwnTimes(t *testing.T) {
 	t.Parallel()
@@ -979,9 +961,8 @@ func TestEachKindOfWriteIsHeldByItsOwnTimes(t *testing.T) {
 	}
 }
 
-// THE FIRST BUILD BEGINS BELOW A RETAINED RECORD: begun while a record is retained, it begins at the
-// applied prefix below it, leaves the rows above it to the forward walk, which waits, and once the record
-// applies at its own position, the change it opened, the newest of all, is found.
+// Begun while a record is retained, the first build starts at the applied prefix below it, and the
+// change that record opens is found once it applies.
 // Mutation: begin the build at the settled checkpoint.
 func TestTheFirstBuildBeginsBelowARetainedRecord(t *testing.T) {
 	t.Parallel()

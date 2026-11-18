@@ -389,10 +389,9 @@ func (x *ChangeIndexer) readDocs(ctx context.Context, tx *sql.Tx, query string, 
 	return out, rows.Err()
 }
 
-// reachBack indexes the first build's next batch: the changes below its floor, newest minted first,
-// at or below where it began, which an index that has not begun takes as the applied prefix in this
-// snapshot, and removes the documents of ids in that stretch the snapshot no longer holds. It reports
-// the rows it read, or 1 where it read none but began the build or marked it whole.
+// reachBack indexes the first build's next batch, newest minted first below its floor and at or below
+// where it began, and drops documents of ids in that stretch the snapshot no longer holds. It reports
+// the rows read, or 1 where it only began the build or marked it whole.
 func (x *ChangeIndexer) reachBack(ctx context.Context, now time.Time, state changeIndexState) (int, error) {
 	var (
 		docs          []changeDoc
@@ -442,10 +441,9 @@ func (x *ChangeIndexer) reachBack(ctx context.Context, now time.Time, state chan
 	return max(len(read), 1), nil
 }
 
-// reachBelow walks the next ids below from, newest first, adding up the description bytes of the rows
-// at or below back: the id where they pass the backward budget, or the last of a full read, is where
-// the batch reaches and the next floor; "" where the read came back short, so nothing older is left.
-// read is every id in that stretch, wherever it is.
+// reachBelow walks ids below from, newest first, summing description bytes of rows at or below back:
+// reached is where they pass the budget (or a full read ends) and the next floor, "" when nothing
+// older is left; read is every id in that stretch.
 func (x *ChangeIndexer) reachBelow(ctx context.Context, tx *sql.Tx, from string, back int64) (reached string,
 	read map[string]bool, held int, err error) {
 

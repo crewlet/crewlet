@@ -133,12 +133,9 @@ func summariesOf(t *testing.T, r *gitlet.Reader, q gitlet.ReadQuery) []gitlet.Ch
 	return out
 }
 
-// A LISTING NARROWED BY WORDS IS EXACT AS OF ITS SNAPSHOT: a change edited past the index's watermark
-// is judged by its row, a candidate at or below it is trusted only where the read holds every record
-// the index was decided from and only where a walk has reached its row, and an index that is not this
-// copy's, or is rebuilding, is not used.
-// Mutation: trust candidates where not covered, trust every candidate whatever its row's position, or
-// trust a candidate at or below where the first build began whatever its id.
+// A listing narrowed by words is exact as of its snapshot: past the watermark a row is judged itself, and
+// below it a candidate is trusted only where the read covers the index and a walk reached the row.
+// Mutation: trust uncovered candidates, or any candidate whatever its row's position or id.
 func TestAListingNarrowedByWordsIsExactAsOfItsSnapshot(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -545,12 +542,9 @@ func TestAChangeEditedAMomentAgoIsFoundByItsNewWords(t *testing.T) {
 	check("after a sweep")
 }
 
-// A WORDS LISTING SAYS HOW FAR BACK ITS INDEX REACHES: while this copy's first build walks back, every
-// page its words lead carries the instant the build's floor was minted at, in UTC to the millisecond;
-// none once the build is whole, none from an index it does not use, and none on a page another walk
-// leads. A floor carrying no instant is building. So it is over the real index, whose first batch ends
-// past its byte budget.
-// Mutation: drop the field, set it where the build is whole, or set it on a page another walk leads.
+// While the first build walks back, every page the words lead carries the floor's mint instant (UTC,
+// milliseconds); none once whole, from an unused index, or on a page another walk leads.
+// Mutation: drop the field, or set it where the build is whole or another walk leads.
 func TestAWordsListingSaysHowFarBackItsIndexReaches(t *testing.T) {
 	t.Parallel()
 	n, _ := grantedChanges(t)
