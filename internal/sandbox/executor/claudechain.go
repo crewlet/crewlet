@@ -932,8 +932,8 @@ const chainPrefixBytes = 10
 //
 // THE COLLECTION'S PASS: a node's collection reads its job's main thread
 // once, in one walk ([walkThread]) for every reading it asks, the resumed
-// count ([resumedReading]) now, the chain a reading beside it, never a read
-// of its own. Within its base it holds no token, past it the one slot of a
+// count ([resumedReading]) and, where takes are asked, the chain and the
+// hook receipts beside it ([chainReading], [hookReading]). Within its base it holds no token, past it the one slot of a
 // pool of its own ([CollectionLargeReadsAtOnce]), never a transcript slot:
 // the package doc's "A collection's read of a thread" derives both from
 // these figures. MEASURED as above, the chain first and the count after it

@@ -59,6 +59,25 @@ type MainThreadAsk struct {
 	// Count asks for [ResumedCount], what Claude Code counts the session at
 	// before its next request.
 	Count bool
+	// Takes asks which of the job's served takes its thread shows a hook
+	// handed to the model ([HookReceipts]); at most 64.
+	Takes []AskedTake
+	// Ended is whether the job's harness ended its own run.
+	Ended bool
+}
+
+// AskedTake is one take a hook served the job: Event is the hook's event,
+// "PostToolBatch" or "Stop".
+type AskedTake struct{ Take, Event string }
+
+// HookReceipts is what the job's main thread showed of the takes asked. The
+// zero value is no reading.
+type HookReceipts struct {
+	// Held, Restarted and Absent are asked takes whose pair lies after the
+	// thread's last restart, before it, and that the thread proves not
+	// taken; Why says why some asked take is none of these, for the log.
+	Held, Restarted, Absent []string
+	Why                     string
 }
 
 // MainThreadReading is what one read answered, a part per reading asked. The
@@ -67,6 +86,8 @@ type MainThreadReading struct {
 	// Count is the session's count where it was asked: a bound, or a mark
 	// saying why there is none. Nil where it was not asked.
 	Count *ResumedCount
+	// Receipts is the takes' receipts where any was asked.
+	Receipts HookReceipts
 }
 
 // readMainThread reads run's job's main thread in box through runner, once, for

@@ -140,6 +140,51 @@
 // holding it whole moves the line's trigger to that charge and replaces the
 // 9.25-byte coefficient with its own measure.
 //
+// # A hook's note, confirmed off its job's main thread
+//
+// A note a Claude Code hook served counts as read only once the job's session
+// shows it: the read of the job's main thread ([ClaudeCode]'s readMainThread)
+// asks the served takes (internal/sandbox's MainThreadAsk), and one reading in
+// the same walk ([hookReading]), beside the resume's model ([chainReading],
+// fed first on each line so the reading reads that line's handle), answers
+// each take Held, Restarted, Absent, or none of these with why. The release
+// and the saved compaction mark the count alone, never the receipts.
+//
+// A PAIR is a main-thread chained `hook_system_message` at event E whose
+// content names the take's token ([threadLine.HookTakes]), then the
+// `hook_additional_context` of the same firing at E after it. A firing is
+// keyed by the digest of its `toolUseID` and E, never the string, so what the
+// reading keeps is fixed in size whatever the thread wrote: per asked take
+// (at most 64) the firing's digest, its event as one of two constants, the two
+// records' handles, the system message's line, and the firing of the first
+// success whose stdout names the take. A context before its system message
+// pairs nothing. The success's stdout is the hook's whole answer, so it is
+// never a confirmation.
+//
+// HELD where the pair's two records are handed ([threadChain.Handed]) on a
+// thread every size path of the resume reads alike ([threadChain.AnySize]:
+// the box's copy is read, and the archive's resume may take another path),
+// the job's release is one whose resume was read ([claudeResumeRead]), and no
+// restart ([threadRestarts.See]) lies after the system message. RESTARTED
+// where the same holds but one does, or, for a BATCH pair, a main reply after
+// it says its request cleared tool results or says it unreadably
+// ([threadLine.ToolResultsCleared]): a batch's note rides its batch's last
+// tool result into the request and is cleared with it, where a Stop's note is
+// a turn of its own. A pair the resume does not hand (a withdrawn record, a
+// parent naming no record) is neither, and is evidence its take arrived.
+//
+// ABSENT only where the thread proves it: its harness ended its own run, it
+// was read to its end with no refused line and no torn last piece, it never
+// restarts, another asked take at the same event is held (each event writes
+// its own shapes, so a release that rewords one event's pair proves nothing
+// at that event, and a held take at the other licenses nothing), no asked
+// take is named outside its own pair (a success's stdout of another firing,
+// or a system message whose firing never gets its context or names a take of
+// another event), every hook record's type, firing and event read, and the
+// chain places the thread. A take whose pair was found is never absent, and a
+// `hook_cancelled` line names no take, so it denies nothing. Anything else is
+// undecided: the safe side, a note told again.
+//
 // # A run's harness session, carried between boxes
 //
 // Every run names the harness session it works in before the harness starts
