@@ -120,20 +120,17 @@ func listsExactly(t *testing.T, calls []sandbox.BridgeCall, want []wantCall) {
 }
 
 // A LATE CALL OF THE ROUND IS LISTED, MARKED, AND PAID BY NO JOB. A call still
-// running when a relaunch carried its round on — a loss's relaunch, an answered
-// question's, a replaced sign-in's, a refused session's — finishes after the
-// log was opened to the next job. It is a call of the round, and its effect
-// happened: the log lists it as it lists every call, at the place the bridge
-// gave it and numbered past every call the round's log took before it, and
-// MARKS it, so no save point of the round holds it. Its spend is nobody's: the
-// next job's record keeps its own total, which that job's resume pays, and the
-// job it was made in is over. The next job's own call beside it is listed
-// unmarked, its spend written, as every job's own call is. And an append that
-// names no round — what served its job knew none — is dropped once its job is
-// replaced, as every late append once was.
+// running when a relaunch carried its round on finishes after the log was
+// opened to the next job. It is a call of the round and its effect happened:
+// the log lists it at the place the bridge gave it, numbered past every call
+// the log took before it, and MARKS it, so no save point of the round holds it.
+// Its spend is nobody's: the next job's record keeps its own total, which that
+// job's resume pays, and the job it was made in is over. The next job's own
+// call is listed unmarked, its spend written. An append naming no round is
+// dropped once its job is replaced.
 //
-// Mutation: take a late append by the job alone, as before, and it is not
-// listed; list it without its mark, and this goes red.
+// Mutation: take a late append by the job alone, and it is not listed; list it
+// without its mark, and this goes red.
 func testALateCallOfTheRoundIsListedMarkedAndPaidByNoJob(t *testing.T, s sandbox.PendingStore) {
 	const turn = "t-late-listed"
 	first := mustLaunched(t, s, run(turn))
@@ -308,17 +305,16 @@ func bigSubmission(t *testing.T, what string) string {
 
 // A LATE SUBMISSION NEVER TAKES THE ROUND'S WHOLE SHARE. The log keeps one
 // submission's arguments whole, past every other call's share, because the
-// collection replays it as the round's outcome — and refuses one the log cut,
+// collection replays it as the round's outcome and refuses one the log cut,
 // reading the round as one that submitted nothing. The collection never
 // replays a late one: its job was replaced, and the round's submission is the
-// one the job carrying the round on makes. So the whole share is never a late
-// submission's, though its place — which its own job's session gave it — sorts
-// after the carried-on job's own submission, or ties with it, the late one
-// taken last: the round's own is kept whole, and the late one held to the
-// ordinary share.
+// carried-on job's. So the whole share is never a late submission's, though
+// its place (from its own job's session) sorts after that submission or ties
+// with it, the late one taken last: the round's own is kept whole, the late one
+// held to the ordinary share.
 //
-// Mutation: let a late submission take the whole share, as any submission it
-// sorts after, and the round's own is cut.
+// Mutation: let a late submission take the whole share, and the round's own is
+// cut.
 func testALateSubmissionNeverTakesTheRoundsWholeShare(t *testing.T, s sandbox.PendingStore) {
 	for _, tc := range []struct {
 		name    string
@@ -439,15 +435,14 @@ func testTheCallAPersonApprovedIsNeverLate(t *testing.T, s sandbox.PendingStore)
 
 // A CALL NOBODY WAITED FOR KEEPS ITS MARK, AND IS PAID BY ITS JOB. The bridge
 // marks a call whose harness had stopped waiting for it by the time it returned
-// — given up on, or still running as its opening ended
-// ([sandbox.BridgeCall.Abandoned]) — whose effect happened while the session of
-// the job that made it holds no outcome of it, so no save point may hold it.
-// The mark is the bridge's, and the log keeps it as handed, in the call's ONE
-// UPDATE of the entry written ahead of it: on a call of the log's own job, whose
-// spend is written to the job's record as any of its calls' is; and on a call
-// of the job that lands after a relaunch carried the round on, which the log
-// marks late beside it in the same write. A call the bridge did not mark is
-// listed unmarked, and no entry is left in flight.
+// (given up on, or still running as its opening ended,
+// [sandbox.BridgeCall.Abandoned]), whose effect happened while its job's
+// session holds no outcome of it, so no save point may hold it. The log keeps
+// the bridge's mark as handed, in the call's ONE UPDATE of the entry written
+// ahead of it: on a call of the log's own job, whose spend is written to the
+// job's record as any call's is; and on a call landing after a relaunch carried
+// the round on, which the log marks late beside it in the same write. A call
+// not marked is listed unmarked, and no entry is left in flight.
 //
 // Mutation: drop the mark as the log takes a call, and this goes red.
 func testACallNobodyWaitedForKeepsItsMarkAndIsPaidByItsJob(t *testing.T, s sandbox.PendingStore) {
@@ -499,21 +494,17 @@ func testACallNobodyWaitedForKeepsItsMarkAndIsPaidByItsJob(t *testing.T, s sandb
 }
 
 // WHAT A LATE CALL AND ONE NOBODY WAITED FOR COMMITTED IS THE ROUND'S, listed
-// or dropped. Each ran and its effect happened — a message posted, an item
-// filed — so the kinds of change it committed to its turn
-// ([sandbox.BridgeCall.Committed]) are what the round's collection settles the
-// turn's outcome by, as any call's are ([sandbox.BridgeLog.Changes]): a call
-// nobody waited for, which is its job's own, and a late one, which the log
-// takes after its job was replaced and answers beside [sandbox.ErrJobReplaced]
-// on its first try. Read while the log lists both, and again once the log's
-// bound has dropped both from its middle, which keeps no field of a dropped
-// call: their kinds are in the log's own union of the round's
-// ([sandbox.BridgeLog.Committed]), each once.
+// or dropped. Each ran and its effect happened, so the kinds of change it
+// committed ([sandbox.BridgeCall.Committed]) are what the round's collection
+// settles the turn's outcome by ([sandbox.BridgeLog.Changes]): a call nobody
+// waited for, its job's own, and a late one ([sandbox.ErrJobReplaced] on its
+// first try). Read while the log lists both, and again once its bound has
+// dropped both from the middle, which keeps no field of a dropped call: their
+// kinds are in the log's union of the round's ([sandbox.BridgeLog.Committed]).
 //
-// Mutation: drop a late call's kinds where the log takes it, and they are
-// missing while it is listed; fold into the log's union only the kinds of a
-// call a save point holds, and both calls' are missing once the bound drops
-// them.
+// Mutation: drop a late call's kinds where the log takes it; fold into the
+// union only the kinds of a call a save point holds, and both calls' are
+// missing once the bound drops them.
 func testWhatALateCallOrOneNobodyWaitedForCommittedIsTheRounds(t *testing.T, s sandbox.PendingStore) {
 	const turn = "t-late-committed"
 	first := mustLaunched(t, s, run(turn))

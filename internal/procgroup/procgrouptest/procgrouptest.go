@@ -34,30 +34,13 @@ const GORACE = "GORACE"
 // be launched with: the options this process was started with, followed by
 // atexit_sleep_ms=0.
 //
-// A race-built binary that EXITS 0 — main returning or os.Exit(0) alike — runs
-// the race runtime's finaliser on its way out, and the finaliser sleeps
-// atexit_sleep_ms before the process ends, 1000 by default, so a goroutine
-// still running at exit has a moment to report a race. A stand-in is a test
-// binary, race-built whenever its suite is, so every clean exit cost a second
-// of nothing, and the suites that launch one per case spent most of their wall
-// clock asleep: harness's fake harness took ~1.02 s per call against 0.05 s for
-// the same exec path exiting 1, and the MCP helper ~1.005 s from stdin-EOF to
-// exit against ~320 µs for `cat`.
-//
-// What it gives up is that grace for a race in the STAND-IN's own exit, and no
-// suite here is testing its stand-in. A race anywhere else in one is reported
-// as before, with the race runtime's exit status, since detection never waited
-// on the sleep.
-//
-// APPENDED rather than set, so the options a suite was run with — a
-// halt_on_error, a log_path — reach its stand-ins too. The race runtime reads
-// them in order and the last one wins, so a developer's own atexit_sleep_ms is
-// the only thing this overrides.
-//
-// A caller passes it EXPLICITLY, in the environment it launches the stand-in
-// with, rather than trusting the GORACE the suite inherited to arrive: a
-// launcher that builds its child's environment from an allowlist — harness's
-// does — drops it, so a GORACE exported by make or CI never gets there.
+// A race-built binary that EXITS 0 sleeps atexit_sleep_ms (1000 by default) in
+// the race runtime's finaliser, so every clean exit of a stand-in cost a second
+// of nothing. This gives up that grace for a race in the STAND-IN's own exit;
+// races elsewhere are reported as before. APPENDED rather than set, so the
+// suite's own options (halt_on_error, log_path) reach it, the last winning. A
+// caller passes it EXPLICITLY: a launcher building the child's environment from
+// an allowlist (harness's) drops an inherited GORACE.
 func StandInRaceOptions() string {
 	return strings.TrimSpace(os.Getenv(GORACE) + " atexit_sleep_ms=0")
 }
@@ -65,22 +48,12 @@ func StandInRaceOptions() string {
 // Hold blocks the calling goroutine, and with it a helper process that has
 // nothing else to do, for as long as any test could still be watching it.
 //
-// NOT `select {}`, which is what these helpers used, and which only looks like
-// the same thing. When every goroutine is blocked and no timer is pending, the
-// Go runtime declares a deadlock and exits the process with status 2. The one
-// build in which that check cannot fire is one that links runtime/cgo, whose
-// extra thread counts as running: the Linux CI suite links it through package
-// net's resolver, darwin never does, and neither does a Linux build with
-// CGO_ENABLED=0. So a "mute server" or a "grandchild that outlives its parent"
-// written with `select {}` died within milliseconds everywhere but CI, and the
-// suites around it either failed for a reason unrelated to the code under test
-// or, where they only asserted that something ended, passed without the
-// process ever having run. A sleep keeps a timer pending, which the deadlock
-// check honours on every platform and linkage.
-//
-// It returns after [HoldLimit]. A helper exists to be ended by the code under
-// test, so one still running then belongs to a test that failed to end it, and
-// holding on would leave a stray process on the developer's machine for good.
+// NOT `select {}`: with every goroutine blocked and no timer pending the Go
+// runtime declares a deadlock and exits 2, except in a build linking
+// runtime/cgo (Linux CI does, through net's resolver; darwin and CGO_ENABLED=0
+// do not), so such a helper died at once everywhere but CI. A sleep keeps a
+// timer pending, which the check honours everywhere. It returns after
+// [HoldLimit]: one running then belongs to a test that failed to end it.
 func Hold() {
 	time.Sleep(HoldLimit) //fixedwait:simulated a helper process that stays up until the code under test ends it
 }

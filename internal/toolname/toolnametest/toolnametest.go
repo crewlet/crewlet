@@ -2,8 +2,13 @@
 // every string literal in the module to, for the suites that hold a tool
 // surface to it.
 //
+// THE SET: the authority table's tool-shaped verbs plus every constant
+// internal/toolname declares, read off its source, so a new constant joins the
+// set without an edit here.
+//
 // ONE SET, READ IN ONE PLACE: the walk itself (TestNoToolNameIsSpelledTwice)
-// and every suite that checks a surface against it ask [Names], so the set a
+// and every suite that checks a surface against it (the runner's, over every
+// tool a phase surface offers beyond the seat's registry) ask [Names], so the set a
 // surface is held to is the set the walk reads, and a tool a surface offers
 // that the set lacks fails in that surface's suite rather than dropping out of
 // the walk unread. TEST-ONLY: it reads source files and the authority table,
