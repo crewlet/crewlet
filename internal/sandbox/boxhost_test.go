@@ -22,12 +22,23 @@ type boxAsks struct {
 	result Result
 	ended  bool
 	err    error
+
+	// during is what happens while an ask is out, before the host's answer
+	// is read: the asking node's clock moving on, the seat moving off it.
+	// Nil for nothing.
+	during func()
 }
 
 func (b *boxAsks) ReadBox(_ context.Context, _ PendingRun, read BoxRead) (Result, bool, error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.asked = append(b.asked, read)
+	during := b.during
+	b.mu.Unlock()
+	if during != nil {
+		during()
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return b.result, b.ended, b.err
 }
 

@@ -605,7 +605,8 @@ type applyHooks struct {
 	// REPLACED under a running node — an adoption, or a reopen of the file
 	// a failed join installed ([stateLog.estateReplaced]) — for whatever
 	// this node keeps derived from those rows by a walk that only moves
-	// forward: the chat index ([search.ChatIndexer.RequestRebuild]). Not a
+	// forward: the chat index ([search.ChatIndexer.RequestRebuild]) and the
+	// index of changes' words ([search.ChangeIndexer.RequestRebuild]). Not a
 	// post-commit hook, since no batch says it; beside them because it is
 	// the same kind of signal, handed down the same way. It must not block.
 	replaced func()

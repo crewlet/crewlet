@@ -405,6 +405,7 @@ export function UserBlock({
             name={resolved ? who.name || "?" : "?"}
             size={compact ? "sm" : "md"}
             kind="human"
+            avatar={null}
             ring={resolved ? "brand" : undefined}
             icon={credential && !bound ? <KeyGlyph size="sm" /> : undefined}
             mark={credential && bound ? <KeyGlyph size="xs" /> : undefined}

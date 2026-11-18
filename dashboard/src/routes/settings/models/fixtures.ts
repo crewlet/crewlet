@@ -23,6 +23,7 @@ import type {
 import type { CompanyDocument, OrgProjection } from "~/protocol/types.ts";
 import { assistantOf, modelViews, type ModelsData } from "~/routes/settings/models/data.ts";
 import { withDerived } from "~/test/org.ts";
+import { SERVED_LOOK } from "~/test/org.ts";
 
 /** The instant every model reading here is taken at. */
 export const MODELS_NOW = Date.parse("2026-10-29T12:00:00Z");
@@ -135,9 +136,15 @@ export function apiKeyEntry(over: Partial<ModelEntry> & { key: string }): ModelE
   });
 }
 
-/** A seat as the org index draws it, for a suite that names its own seats. */
+/** A seat as the org index draws it, for a suite that names its own seats: an agent served a look. */
 export function seat(handle: string, name: string): Seat {
-  return { key: handle, handle, name, kind: "agent", avatar: null } as unknown as Seat;
+  return {
+    key: handle,
+    handle,
+    name,
+    kind: "agent",
+    avatar: { ...SERVED_LOOK },
+  } as unknown as Seat;
 }
 
 /** A company document holding `llm`'s entries as written, for the reading an admin joins. */

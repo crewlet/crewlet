@@ -398,7 +398,7 @@ func TestAReconnectToAServerBelowTheContractIsNamed(t *testing.T) {
 			t.Fatalf("DialOwned: %v", err)
 		}
 		t.Cleanup(owned.Close)
-		dialled, _, err := dialOptions(Config{})
+		dialled, _, err := dialOptions(Config{}, nil)
 		if err != nil {
 			t.Fatalf("dialOptions: %v", err)
 		}

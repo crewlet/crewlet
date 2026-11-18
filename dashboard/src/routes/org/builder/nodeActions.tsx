@@ -25,6 +25,7 @@
 import type { KeyboardEvent, ReactNode } from "react";
 import { seatPath } from "~/lib/seats.ts";
 import { NodeGlyph, leadName, leadPill, leadSentenceOf } from "~/ui/orgNodes.tsx";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 import type { AddKind, BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, SeatView, Structure, UnitView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
@@ -504,11 +505,12 @@ export function leadMenu(api: BuilderApi, structure: Structure, unit: UnitView):
   // ANSWERED BY HANDLE, the value a lead writes; named as the seat is.
   const declared = unit.lead && !unit.lead.inherited ? unit.lead.handle : null;
   const refused = refusedEntry(api, unit.key, "lead");
-  const answer = (key: string, label: string, lead: string | null): MenuEntry => {
+  const answer = (key: string, label: string, lead: string | null, icon?: ReactNode): MenuEntry => {
     const checked = declared === lead;
     return {
       key,
       label,
+      icon,
       checked,
       ...refused,
       onSelect: checked
@@ -533,12 +535,14 @@ export function leadMenu(api: BuilderApi, structure: Structure, unit: UnitView):
       "none",
       unit.inheritable ? `No one (inherits ${unit.inheritable.name})` : "No one",
       null,
+      <ChoiceFace seat={null} />,
     ),
     ...members.map((m) =>
       answer(
         `seat:${m.handle}`,
         shared.has(m.name) ? `${m.name} (@${m.handle})` : m.name,
         m.handle,
+        <ChoiceFace seat={m} />,
       ),
     ),
   ];

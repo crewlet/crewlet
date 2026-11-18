@@ -1,7 +1,6 @@
 /**
  * What changed from one commit (or tree) to another: the files, a page at a
- * time, and one file's patch drawn by the dashboard's one `DiffView`, in the
- * code hue, its code coloured by kind.
+ * time, and one file's patch drawn by `DiffView`, its code coloured by kind.
  *
  * READ BY OBJECT ID, WHOLE ON BOTH SIDES: a commit's page and a comparison
  * each name the two commits by their whole ids (`code_diff` `base=`, `head=`),
@@ -23,13 +22,13 @@ import { Button, Select, Skeleton, Stack } from "@crewlethq/ui";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { DiffView, type DiffHunk, type DiffLine } from "~/components/DiffView.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
-import { fmtCount, plural } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
 import { usePatchPages } from "~/lib/patchPages.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type { CodeDiffFile, CodeGitAnswer } from "~/protocol/index.ts";
 import { useDiffTokens } from "../syntax.tsx";
-import { DiffHead, FileTree } from "../FileTree.tsx";
+import { DiffCounts, DiffHead, FileTree } from "../FileTree.tsx";
 import { PatchPager } from "../PatchPager.tsx";
 import { repoHref } from "../paths.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
@@ -113,7 +112,8 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
           <Stack gap={2}>
             {totals && (
               <p className="code-files__totals">
-                {`${plural(totals.total, "file")} changed, +${fmtCount(totals.added)} −${fmtCount(totals.deleted)}`}
+                {`${plural(totals.total, "file")} changed, `}
+                <DiffCounts added={totals.added} deleted={totals.deleted} />
               </p>
             )}
             <FileTree
@@ -259,7 +259,6 @@ function FilePatch({
             // A NEW FILE IS A NEW DIFF: its window, and the line it reveals
             // once, start over.
             key={path}
-            hue="code"
             tokens={tokens}
             hunks={hunks}
             layout={layout}

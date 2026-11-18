@@ -110,7 +110,14 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { activityOf, indexOrg, liveOnItems, statusOf, seatResolvers } from "~/lib/seats.ts";
+import {
+  activityOf,
+  indexOrg,
+  liveOnItems,
+  statusOf,
+  seatLookup,
+  seatResolvers,
+} from "~/lib/seats.ts";
 import { startOfDay, useClock, useNow } from "~/lib/clock.ts";
 import { dayLabelIn, useCompanyZone } from "~/lib/companyDay.ts";
 import {
@@ -155,6 +162,7 @@ import {
 } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
 import type { WorkSummary, WorkTaskCounts, WorkView } from "~/protocol/index.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /**
  * Every custom-field narrowing on the address, as the grammar spells them.
@@ -683,10 +691,7 @@ export function ItemsView({
   // every option and every custom-field row on each poll and each keystroke in
   // the substring box, while looking exactly like a memo that holds. The chart
   // is what it derives from, and `index` already moves only when that does.
-  const roster = useMemo(
-    () => index.seats.map((s) => ({ handle: s.handle, name: s.name })),
-    [index],
-  );
+  const roster = index.seats;
   const labels = {
     statuses: detail?.statuses,
     types: catalogue.data?.types,
@@ -844,10 +849,7 @@ export function ItemsView({
   const dayPatch = (day: string) => ({ shape: "list", due: dayRange(day), month: null });
   const dayListHref = (day: string) => patchedHref(route.path, route.query, dayPatch(day));
   // WHO CAN HOLD A TASK, for a writer's inline assignee picker.
-  const seats = useMemo(
-    () => index.seats.map((s) => ({ handle: s.handle, name: s.name, human: s.kind === "human" })),
-    [index],
-  );
+  const seats = index.seats;
 
   const foot = endNote({
     shown: shown.length,
@@ -960,6 +962,9 @@ export function ItemsView({
         <FilterChips
           chips={anyFilter({ ...filters, scope: "open" }) ? chips : []}
           onRemove={(param) => setFilter(param, "")}
+          face={(handle) =>
+            handle ? <ChoiceFace seat={seatLookup(index)(handle)} size="text" /> : undefined
+          }
           onClear={clearFilters}
           add={
             <FilterMenu

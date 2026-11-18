@@ -33,7 +33,7 @@ import type {
 } from "~/contract/mcp.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { MCP_STATUS_POLL_MS } from "~/lib/mcpStatusPoll.ts";
-import { indexOrg, type Seat } from "~/lib/seats.ts";
+import { indexOrg, type Seat, type SeatBadge } from "~/lib/seats.ts";
 import { useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
@@ -58,6 +58,8 @@ export interface McpData {
   agents: readonly Seat[];
   /** A seat's name by its handle; the handle where the chart holds no such seat. */
   seatName: (handle: string) => string;
+  /** A seat's badge by its handle, for an Agent column's face. */
+  seat: (handle: string) => SeatBadge;
   /**
    * The agent seats a server's grant reaches, in the chart's order, read off
    * the answer's `agents`; null where the engine did not say: a member's
@@ -143,6 +145,7 @@ export function mcpViewOf(
   const servers: readonly McpMemberServerStatus[] = answer?.servers ?? [];
   const byName = new Map(servers.map((s) => [s.name, s]));
   const names = new Map(seats.map((s) => [s.handle, s.name]));
+  const bySeat = new Map(seats.map((s) => [s.handle, s]));
   const agents = answer?.reading === "admin" ? answer.agents : null;
   const reachKnown = agents !== null;
   const reached = new Map<string, Set<string>>();
@@ -164,6 +167,12 @@ export function mcpViewOf(
     builtin: answer?.builtin ?? [],
     agents: seats,
     seatName: (handle) => names.get(handle) ?? handle,
+    seat: (handle) => {
+      const s = bySeat.get(handle);
+      return s
+        ? { name: s.name, kind: s.kind, avatar: s.avatar }
+        : { name: handle, kind: undefined, avatar: undefined };
+    },
     reaches: (name) =>
       reachKnown ? seats.filter((s) => reached.get(name)?.has(s.handle) ?? false) : null,
     reachKnown,

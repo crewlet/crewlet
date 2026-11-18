@@ -48,11 +48,12 @@ import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { STRUCTURE_PATH } from "~/app/routes.ts";
 import { CONTAINER_KEY_MAX, CONTAINER_KEY_PATTERN } from "~/contract/config.ts";
-import { documentUnits } from "~/lib/seats.ts";
+import { documentUnits, seatLookup, useOrgIndex } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { CompanyDocument } from "~/protocol/index.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /** A project's key, as the engine holds one (`config.ContainerKeyPattern`). */
 const KEY = new RegExp(CONTAINER_KEY_PATTERN);
@@ -158,6 +159,7 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
   const config = useQuery("config", undefined, { enabled: access.can });
   const doc = config.error ? null : (config.data ?? null);
   const owners = useMemo(() => ownersOf(doc), [doc]);
+  const index = useOrgIndex();
   const taken = useMemo(() => keysIn(doc), [doc]);
 
   const [ownerId, setOwnerId] = useState("");
@@ -199,6 +201,9 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
     value: o.id,
     label: `${o.name} (${o.kind === "team" ? (o.type ?? "team") : "seat"})`,
     group: o.kind === "team" ? "Teams" : "Seats",
+    ...(o.kind === "seat"
+      ? { leading: <ChoiceFace seat={{ ...seatLookup(index)(o.query.seat!), name: o.name }} /> }
+      : {}),
   }));
 
   const blocked = !access.can

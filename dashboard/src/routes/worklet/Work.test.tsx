@@ -117,7 +117,7 @@ test("an overdue due date is marked and an on-time one is not", () => {
 // draws the holder — so it is there on every card, set or not.
 test("an unassigned card draws the empty seat rather than a blank", () => {
   const { container } = card();
-  expect(container.querySelector(".work-card-top .work-nobody")).toBeTruthy();
+  expect(container.querySelector(".work-card-top .seat-nobody")).toBeTruthy();
   expect(screen.getByText("Unassigned")).toBeTruthy();
   cleanup();
   const held = render(
@@ -127,7 +127,7 @@ test("an unassigned card draws the empty seat rather than a blank", () => {
       chrome={{ seatName: () => "Ada Lovelace" }}
     />,
   );
-  expect(held.container.querySelector(".work-nobody")).toBeNull();
+  expect(held.container.querySelector(".seat-nobody")).toBeNull();
   expect(held.container.querySelector(".crewlet-avatar")?.textContent).toBe("AL");
 });
 
@@ -140,14 +140,14 @@ test("an unassigned card draws the empty seat rather than a blank", () => {
 test("a card with nothing set draws no foot, while the same task as a row keeps its cell", () => {
   const bare = card().container;
   expect(bare.querySelector(".work-card-foot")).toBeNull();
-  expect(bare.querySelector(".work-card-top .work-nobody")).toBeTruthy();
+  expect(bare.querySelector(".work-card-top .seat-nobody")).toBeTruthy();
   cleanup();
   const asRow = listRow(row("1"));
-  expect(asRow.container.querySelector(".work-nobody")).toBeTruthy();
+  expect(asRow.container.querySelector(".seat-nobody")).toBeTruthy();
   cleanup();
   const dated = card({ due: "2031-09-01T00:00:00Z" }).container;
   expect(dated.querySelector(".work-card-foot")).toBeTruthy();
-  expect(dated.querySelector(".work-card-foot .work-nobody")).toBeNull();
+  expect(dated.querySelector(".work-card-foot .seat-nobody")).toBeNull();
   cleanup();
   // And a card whose only fact is that it is blocked still has a foot, which
   // is what says the predicate reads every mark rather than the assignee.

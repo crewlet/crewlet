@@ -1,13 +1,11 @@
 /**
  * How an agent seat is drawn: one of the Crewlet characters, in one of the
- * six seat colours, both chosen by whoever authors the seat.
+ * six seat colours, as the engine serves it on every seat it publishes: each
+ * part as the seat's author chose it, or picked from the seat's handle.
  *
- * ONE READING OF THE WIRE, here, so every screen draws a seat the same way.
- * The engine fills an agent's defaults in before it publishes the org, so a
- * seat read off the projection always names both parts; a part this build's
- * kit cannot draw (a character a newer engine admitted) is drawn as the
- * default part rather than as nothing. The org builder reads a seat's
- * AUTHORED block, where either part may be absent, through the same rule.
+ * ONE IMPLEMENTATION, THE ENGINE'S: a screen draws the look it is served, and
+ * a part this kit cannot draw is no look (initials). The org builder lays a
+ * seat's AUTHORED parts over the look the running chart serves.
  *
  * The lists themselves are the contract's (`contract/avatar.ts`), which the
  * engine and this build's design system are both held to.
@@ -24,12 +22,6 @@ export interface AgentAvatar {
   readonly color: AvatarColor;
 }
 
-/** What a seat that chose nothing is drawn as: the first of each list. */
-export const DEFAULT_AVATAR: AgentAvatar = {
-  character: AVATAR_CHARACTERS[0],
-  color: AVATAR_COLORS[0],
-};
-
 const isCharacter = (value: unknown): value is AvatarCharacter =>
   (AVATAR_CHARACTERS as readonly unknown[]).includes(value);
 
@@ -37,14 +29,34 @@ const isColor = (value: unknown): value is AvatarColor =>
   (AVATAR_COLORS as readonly unknown[]).includes(value);
 
 /**
- * The avatar a block describes, part by part: each part as written where it
- * is one this build draws, and the default part otherwise.
+ * An agent's look as the kit's `character` and `hue`, the one translation every
+ * face goes through; nothing for a person or a key the chart does not hold.
  */
+export function faceOf(
+  kind: "human" | "agent",
+  avatar: AgentAvatar | null | undefined,
+): { character?: AvatarCharacter; hue?: AvatarColor } {
+  return kind === "agent" && avatar ? { character: avatar.character, hue: avatar.color } : {};
+}
+
+/** The look a block names, where both of its parts are ones this build draws; null otherwise. */
 export function avatarOf(
   raw: { character?: unknown; color?: unknown } | null | undefined,
-): AgentAvatar {
-  return {
-    character: isCharacter(raw?.character) ? raw.character : DEFAULT_AVATAR.character,
-    color: isColor(raw?.color) ? raw.color : DEFAULT_AVATAR.color,
-  };
+): AgentAvatar | null {
+  return isCharacter(raw?.character) && isColor(raw?.color)
+    ? { character: raw.character, color: raw.color }
+    : null;
+}
+
+/**
+ * A seat's look in the org builder: each part its author wrote, the part it
+ * left out as the running chart serves it, and null where neither says.
+ */
+export function lookOf(
+  authored: { character?: unknown; color?: unknown } | null | undefined,
+  served: AgentAvatar | null | undefined,
+): AgentAvatar | null {
+  const character = isCharacter(authored?.character) ? authored.character : served?.character;
+  const color = isColor(authored?.color) ? authored.color : served?.color;
+  return character && color ? { character, color } : null;
 }

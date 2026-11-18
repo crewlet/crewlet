@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { MAX_EDITS } from "./lineDiff.ts";
+import { MAX_EDITS } from "@crewlethq/ui";
 import { merge3, mergedText } from "./merge.ts";
 
 const doc = (...ls: string[]) => ls.join("\n") + "\n";

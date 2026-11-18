@@ -78,6 +78,7 @@ import {
   type ScheduleTarget,
 } from "./scheduleWrite.ts";
 import { useScheduleWrite, type ScheduleWrite } from "./useScheduleWrite.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /** The org target an owner's configuration write is decided on. */
 function targetOf(owner: ScheduleOwner): OrgTarget {
@@ -451,7 +452,12 @@ function ownerOptions(index: OrgIndex, scope: ScheduleScope): SelectOption[] {
   return scope === "role"
     ? index.seats
         .filter((s) => s.kind === "agent")
-        .map((s) => ({ value: s.handle, label: s.name, hint: handleLabel(s.handle) }))
+        .map((s) => ({
+          value: s.handle,
+          label: s.name,
+          hint: handleLabel(s.handle),
+          leading: <ChoiceFace seat={s} />,
+        }))
     : index.units.map((u) => ({ value: u.id, label: u.name, hint: u.id }));
 }
 

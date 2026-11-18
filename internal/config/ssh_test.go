@@ -150,7 +150,11 @@ func TestEverySSHProblemIsReportedAtItsPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert := &ssh.Certificate{Key: signer.PublicKey(), CertType: ssh.HostCert, ValidBefore: ssh.CertTimeInfinity}
+	// A HOST CERTIFICATE AS A HOST'S CA WOULD ISSUE IT, naming the host it is
+	// for: golang.org/x/crypto (0.59 on) refuses to sign a certificate with no
+	// principal, which OpenSSH reads as valid for every one.
+	cert := &ssh.Certificate{Key: signer.PublicKey(), CertType: ssh.HostCert,
+		ValidPrincipals: []string{"api-1.example.com"}, ValidBefore: ssh.CertTimeInfinity}
 	if err := cert.SignCert(rand.Reader, signer); err != nil {
 		t.Fatal(err)
 	}

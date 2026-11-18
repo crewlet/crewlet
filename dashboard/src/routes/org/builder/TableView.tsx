@@ -107,7 +107,7 @@ import {
 import { seatLookup, seatPath, type OrgIndex, type ShownState } from "~/lib/seats.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { sameValue } from "~/protocol/equal.ts";
-import { faceOf } from "~/ui/SeatAvatar.tsx";
+import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { NodeGlyph, seatMark, unitTypeLabel } from "~/ui/orgNodes.tsx";
 import { FilterEmpty, LimitBanner, StatusChips, useDrawnSeatCount } from "../structureParts.tsx";
 import {
@@ -764,16 +764,13 @@ function ReportsTo({ view, index }: { view: NodeView; index: OrgIndex | null }) 
     );
   }
   const badge = seatLookup(index)(seat.handle);
-  const kind = badge.kind === "human" ? "human" : "agent";
   // THE SEAT AS ITSELF: an agent's character and hue, a person's initials.
   return (
     <EntityChip
       className="btable-chip"
-      name={seat.name}
+      {...seatBadge(seat.name, badge.kind, badge.avatar)}
       href={href(seatPath(seat))}
-      kind={kind}
       size="xs"
-      {...faceOf(kind, badge.avatar)}
       title={view.type === "unit" ? leadLabel(view) : seat.name}
     />
   );

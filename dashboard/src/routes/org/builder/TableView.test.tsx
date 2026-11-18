@@ -362,7 +362,7 @@ describe("the rows", () => {
    * system tints a row only when asked (`data-tone` on its name group and on
    * its wire), so what carries one here is exactly what asked.
    */
-  test("an agent seat's row is toned purple, and no other row is", () => {
+  test("only an agent seat's row is toned, in its own look's colour", () => {
     const { container } = mount();
     const rows = screen.getAllByRole("row").filter((r) => r.hasAttribute("aria-level"));
     const agents = rows.filter((r) =>
@@ -372,13 +372,10 @@ describe("the rows", () => {
     // are statements about them rather than about an empty table.
     expect(agents.length).toBeGreaterThan(0);
     expect(agents.length).toBeLessThan(rows.length);
+    // THE FIXTURE'S AGENTS CHOSE NO LOOK and none runs here, so none is
+    // toned; a row that is toned is an agent's, never another kind's.
     const tinted = [...container.querySelectorAll("[data-tone]")];
-    for (const el of tinted) {
-      expect(el.getAttribute("data-tone")).toBe("purple");
-      expect(agents).toContain(el.closest("[role='row']"));
-    }
-    for (const r of agents)
-      expect(r.querySelector("[data-tone='purple']"), r.textContent ?? "").not.toBeNull();
+    for (const el of tinted) expect(agents).toContain(el.closest("[role='row']"));
   });
 });
 

@@ -92,6 +92,7 @@ import { REPO_PARAM, changeDiffHref, changeObject, compareHref } from "./paths.t
 import { RepoPicker } from "./RepoPicker.tsx";
 import { Face } from "./ui.tsx";
 import "~/styles/gitlet.css";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /** How often the listing's first page is read again while open: a minute, the code log's cadence. */
 const CHANGES_POLL_MS = 60_000;
@@ -482,15 +483,23 @@ function SeatPicker({
   const org = useOrg();
   const me = useViewer().handle;
   const options = useMemo(() => {
-    const seats = indexOrg(org)
-      .seats.filter((s) => s.handle !== me)
-      .map((s) => ({ value: s.handle, label: s.name || s.handle }))
+    const index = indexOrg(org);
+    const seats = index.seats
+      .filter((s) => s.handle !== me)
+      .map((s) => ({
+        value: s.handle,
+        label: s.name || s.handle,
+        leading: <ChoiceFace seat={s} />,
+      }))
       .sort((a, b) => a.label.localeCompare(b.label));
     const named = value !== "" && value !== me && !seats.some((s) => s.value === value);
+    const mine = index.byHandle.get(me);
     return [
       // NOBODY PICKED says what the picker narrows by, as a code host's does.
       { value: "", label },
-      ...(me !== "" ? [{ value: me, label: "You" }] : []),
+      ...(me !== ""
+        ? [{ value: me, label: "You", ...(mine ? { leading: <ChoiceFace seat={mine} /> } : {}) }]
+        : []),
       ...(named ? [{ value, label: value }] : []),
       ...seats,
     ];

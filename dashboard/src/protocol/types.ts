@@ -8871,16 +8871,26 @@ export interface CodeChangeCard {
   ejected?: CodeCardEjection;
 }
 
+/** How wholly a listing narrowed by its words (`text`) searched; on every such page, `{}` where whole. */
+export interface CodeChangesText {
+  /** The answering node's index of changes' words was behind its rows: a match may be missing. */
+  building?: boolean;
+  /** More changes may hold the words than one search reads: the page is drawn from the newest. */
+  truncated?: boolean;
+}
+
 /**
  * `code_changes`: the changes a listing's filters name — a page READ, not
  * kept, so one can be short or empty with a cursor — in the order the index
- * its filters lead walks.
+ * its filters lead walks; a page its words lead is served full.
  */
 export interface CodeChangesAnswer extends CodePage {
   /** Absent on a page that holds none. */
   changes?: CodeChangeSummary[];
   /** The bucket a `readiness=` page was narrowed to, on every such page; absent where it was not narrowed, as an older node answers. */
   narrowed_to?: string;
+  /** On every page a `text=` listing narrowed; absent where it was not narrowed, as an older node answers. */
+  changes_text?: CodeChangesText;
 }
 
 /** One author of a change (`gitlet.ChangeAuthor`), from the revision they first wrote. */

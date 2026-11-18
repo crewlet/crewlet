@@ -370,6 +370,20 @@ var nodeEstatePlacements = []placement{
 			"them, so it goes where they go.",
 	},
 	{
+		Table: "change_docs",
+		Why: "The index of Gitlet changes' words, derived from replicated rows by this node's own " +
+			"walk; a peer's copy buys nothing a rebuild does not.",
+	},
+	{
+		Table: "change_postings",
+		Why:   "The inverted list over those documents; it goes where they go.",
+	},
+	{
+		Table: "change_index_state",
+		Why: "How far THIS node has walked the changes and the newest snapshot of them its index was " +
+			"decided from, which a read compares with its own; a fact about one node's progress.",
+	},
+	{
 		Table: "kb_docs",
 		Why: "The lexical search index's document side, built asynchronously " +
 			"behind replicated rows and droppable wholesale when the analyzer " +

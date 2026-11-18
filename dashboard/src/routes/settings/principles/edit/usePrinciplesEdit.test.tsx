@@ -276,9 +276,11 @@ test("a colleague's change to the same part is shown, and keeping the draft writ
   engine.charter = { ...engine.charter, mission: "Their mission" };
   engine.tag = 2;
   saveKey(missionBox());
-  expect(
-    await screen.findByText(/^The mission changed while you were editing\. Your draft is kept/),
-  ).toBeDefined();
+  const note = await screen.findByText(
+    /^The mission changed while you were editing\. Your draft is kept/,
+  );
+  // THE ANSWERS ARE THE BUTTONS' WORDS ALONE: the sentence does not say them again.
+  expect(note.textContent).not.toMatch(/keep yours|use theirs/i);
   expect(engine.puts).toEqual([]);
   // WHAT CHANGED, line by line: the words the person started from, and theirs.
   const diff = screen.getByRole("group", { name: "Mission: what changed since you started" });

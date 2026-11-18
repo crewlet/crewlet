@@ -59,6 +59,7 @@ import {
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { NodeGlyph, seatMark } from "~/ui/orgNodes.tsx";
+import { useServedLook } from "../structureLive.tsx";
 
 const KINDS: { value: AddKind; label: string }[] = [
   { value: "unit", label: "Unit" },
@@ -184,7 +185,8 @@ function useAddNode({ parent, kind: initialKind = "agent", onClose }: AddProps):
   const [contact, setContact] = useState("");
   // SUGGESTED ONCE, when the form opens: the first character no agent wears
   // and the next colour round, which the author may change before adding.
-  const [avatar, setAvatar] = useState<AgentAvatar>(() => suggestAvatar(state.draft));
+  const served = useServedLook();
+  const [avatar, setAvatar] = useState<AgentAvatar>(() => suggestAvatar(state.draft, served));
   const [refusal, setRefusal] = useState<string | null>(null);
   const contactLimit = scopeLimit(state.scope, state.draft, parentKey, "key");
 
