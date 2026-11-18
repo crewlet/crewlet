@@ -187,10 +187,11 @@ func TestAnItemAtItsServeBoundIsSaidLeftToTheContinuation(t *testing.T) {
 }
 
 // viewSettled waits until the inbox's view of the record, which a tool batch is
-// served from, shows note id served n times and none of them live.
+// served from, shows note id served n times and none of them live. On the
+// view's own change signal alone: a view that never settles is the suite's
+// timeout, never a deadline a loaded runner can miss (internal/fixedwait).
 func viewSettled(t *testing.T, inbox *runInbox, id string, n int) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
 	for {
 		_, watch := inbox.bound()
 		view, _, changed := watch.snapshot()
@@ -200,11 +201,7 @@ func viewSettled(t *testing.T, inbox *runInbox, id string, n int) {
 				return
 			}
 		}
-		select {
-		case <-changed:
-		case <-time.After(time.Until(deadline)):
-			t.Fatalf("the view never showed note %s served %d times, none of them live", id, n)
-		}
+		<-changed
 	}
 }
 
