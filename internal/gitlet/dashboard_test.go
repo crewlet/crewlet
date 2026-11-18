@@ -591,14 +591,18 @@ func TestTheDashboardKnowsEveryMergeRefusal(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("the dashboard's MERGE_REFUSALS is %v, want the engine's, in order: %v", got, want)
 	}
-	// A MERGE'S BUILD answers a change that does not merge cleanly in the
-	// write's own word, which the controls name too.
-	conflict, err := clientsource.Scalar(clientsource.Tree(t), "MERGE_CONFLICT")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if conflict != string(gitlet.WriteConflict) {
-		t.Errorf("the dashboard's MERGE_CONFLICT is %q, want the engine's %q", conflict, gitlet.WriteConflict)
+	// A MERGE'S BUILD answers a change that does not merge cleanly, and a
+	// fast-forward whose head does not hold its target's tip, in the write's
+	// own words, which the controls name too.
+	for name, word := range map[string]gitlet.WriteRefusal{"MERGE_CONFLICT": gitlet.WriteConflict,
+		"MERGE_NOT_FAST_FORWARD": gitlet.WriteNotFastForward} {
+		got, err := clientsource.Scalar(clientsource.Tree(t), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != string(word) {
+			t.Errorf("the dashboard's %s is %q, want the engine's %q", name, got, word)
+		}
 	}
 }
 

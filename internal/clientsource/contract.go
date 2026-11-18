@@ -535,6 +535,7 @@ var contract = []Entry{
 	{"MERGE_METHODS", ReadLiteral, "internal/gitlet.TestTheDashboardOffersEveryMergeMethod"},
 	{"MERGE_REFUSALS", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryMergeRefusal"},
 	{"MERGE_CONFLICT", ReadScalar, "internal/gitlet.TestTheDashboardKnowsEveryMergeRefusal"},
+	{"MERGE_NOT_FAST_FORWARD", ReadScalar, "internal/gitlet.TestTheDashboardKnowsEveryMergeRefusal"},
 
 	// cron.ts
 	{"CRON_FIELDS", ReadLiteral, "internal/cron.TestTheDashboardReadsTheFieldsTheGrammarHas"},

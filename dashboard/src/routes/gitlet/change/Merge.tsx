@@ -60,8 +60,18 @@ import {
   UsersGlyph,
 } from "@crewlethq/icons/glyphs";
 import { Modal } from "~/components/Modal.tsx";
-import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
-import { MERGE_CONFLICT, MERGE_METHODS, MERGE_REFUSALS } from "~/contract/merge.ts";
+import {
+  RefusalNote,
+  RefusalsTo,
+  useRefusalPlace,
+  WriteButton,
+} from "~/components/WriteButton.tsx";
+import {
+  MERGE_CONFLICT,
+  MERGE_METHODS,
+  MERGE_NOT_FAST_FORWARD,
+  MERGE_REFUSALS,
+} from "~/contract/merge.ts";
 import { ago } from "~/lib/ago.ts";
 import { changeLive, preconditionWord, refName, shortOID } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -96,6 +106,8 @@ import { DequeueButton, RebaseButton, RevertChangePanel } from "./ChangeWrites.t
 import {
   boxTone,
   checksKept,
+  fastForwardHeld,
+  measuredBeforeMove,
   mergeSections,
   sectionTone,
   type MergeSection,
@@ -169,9 +181,14 @@ export const MERGE_REFUSAL_SENTENCES: Readonly<Record<MergeRefusal, string | nul
 const CONFLICT_SENTENCE =
   "It does not merge cleanly onto its target's tip: rebase it, or resolve the conflict on its branch.";
 
+/** What the controls say when a fast-forward's head does not hold its target's tip. */
+const NOT_FAST_FORWARD_SENTENCE =
+  "Its target has moved past its head, so a fast-forward cannot land it: rebase it first, or merge it another way.";
+
 /** The controls' own words for a refusal, or null for the engine's. */
 export function mergeRefusalSentence(hostRefusal: string): string | null {
   if (hostRefusal === MERGE_CONFLICT) return CONFLICT_SENTENCE;
+  if (hostRefusal === MERGE_NOT_FAST_FORWARD) return NOT_FAST_FORWARD_SENTENCE;
   return (MERGE_REFUSALS as readonly string[]).includes(hostRefusal)
     ? MERGE_REFUSAL_SENTENCES[hostRefusal as MergeRefusal]
     : null;
@@ -260,13 +277,21 @@ export function mergeDetails(
 export function MergePanel({
   change,
   checks,
+  revisions,
 }: {
   change: CodeChangeDetail;
   checks: readonly CodeCheckRow[] | null;
+  revisions: readonly CodeRevisionRow[];
 }) {
   const merge = useAct("code_merge_change");
   const viewer = useViewer();
-  const [method, setMethod] = useState<MergeMethod>(MERGE_METHODS[0]);
+  const [chosen, setMethod] = useState<MergeMethod>(MERGE_METHODS[0]);
+  const ffWhy = useId();
+  // HELD, NEVER OFFERED, where its head does not hold its target's tip: the
+  // build would refuse it not_fast_forward. A choice held since it was made
+  // falls back to the engine's default.
+  const ffHeld = fastForwardHeld(change, revisions);
+  const method = ffHeld && chosen === "fast_forward" ? MERGE_METHODS[0] : chosen;
   // UNSAID UNTIL CHOSEN: the engine's own default stands until the person ticks it
   // either way; the details line says which way it goes.
   const [deleteBranch, setDeleteBranch] = useState<boolean | null>(null);
@@ -343,6 +368,9 @@ export function MergePanel({
             value,
             icon: METHOD_GLYPHS[value],
             ...METHOD_LABELS[value],
+            ...(value === "fast_forward" && ffHeld
+              ? { disabled: true, describedBy: ffWhy, title: ffHeld }
+              : {}),
           }))}
         />
         <span className="code-merge-box__ticks">
@@ -362,6 +390,11 @@ export function MergePanel({
           )}
         </span>
       </div>
+      {ffHeld && (
+        <p id={ffWhy} className="code-merge-box__held">
+          Fast-forward is held: {ffHeld}
+        </p>
+      )}
       {sum}
       <div className="code-merge-box__act">
         <WriteButton
@@ -552,7 +585,7 @@ export function MergeBox({ change, facts }: { change: CodeChangeDetail; facts: M
             now={now}
           />
         ))}
-      <MergePanel change={change} checks={facts.checks.rows} />
+      <MergePanel change={change} checks={facts.checks.rows} revisions={facts.revisions} />
     </Card>
   );
 }
@@ -575,6 +608,10 @@ function Section({
   end?: ReactNode;
   children?: ReactNode;
 }) {
+  // A SECTION IS A ROW OF CONTROLS: a refusal of one (Re-run, Re-request,
+  // Rebase) is drawn on a row of its own under the words, never in the end
+  // cell, whose width would squeeze the title to a word a line.
+  const refusals = useRefusalPlace("code-merge-box__refusal");
   return (
     <article className="code-merge-box__section" aria-label={title}>
       <Disc glyph={glyph} tone={sectionTone(section)} />
@@ -584,7 +621,12 @@ function Section({
           {said}
         </span>
       </span>
-      {end && <span className="code-merge-box__end">{end}</span>}
+      {end && (
+        <span className="code-merge-box__end">
+          <RefusalsTo place={refusals.element}>{end}</RefusalsTo>
+        </span>
+      )}
+      {refusals.place}
       {children}
     </article>
   );
@@ -990,13 +1032,33 @@ function MergesSection({
       .
     </>
   );
+  // A TARGET MOVED SINCE THE MEASUREMENT: the home measures it again only after
+  // a while, so the box says the measurement is of a tip that no longer stands.
+  const moved = measuredBeforeMove(change) && change.target_tip && (
+    <>
+      {" "}
+      {target} has moved since, to{" "}
+      <a className="prose-link mono" href={commitHref(change.repo, change.target_tip)}>
+        {shortOID(change.target_tip)}
+      </a>
+      , so it may no longer merge as measured. Its home measures it again; rebase it to merge onto
+      the new tip now.
+    </>
+  );
   if (m.state === "clean") {
     return (
       <Section
         section={section}
         glyph={glyph}
-        title={`Merges cleanly into ${target}`}
-        said={measured(true)}
+        title={
+          moved ? `Merged cleanly into ${target} before it moved` : `Merges cleanly into ${target}`
+        }
+        said={
+          <>
+            {measured(true)}
+            {moved}
+          </>
+        }
         end={rebase}
       />
     );
@@ -1012,6 +1074,7 @@ function MergesSection({
         said={
           <>
             In {plural(count, "path")}, {measured(false)}
+            {moved}
           </>
         }
         end={rebase}

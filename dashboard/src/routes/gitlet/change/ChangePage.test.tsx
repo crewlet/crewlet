@@ -2328,6 +2328,16 @@ test.each([
     409,
     /It still waits for an approval of its latest revision\. @cto can move it forward\./,
   ],
+  [
+    "not_fast_forward",
+    {
+      error: "invalid",
+      refusal: "not_fast_forward",
+      detail: "code_merge_change: the head does not hold the target's tip.",
+    },
+    422,
+    /Its target has moved past its head, so a fast-forward cannot land it: rebase it first/,
+  ],
 ])("a %s refusal is drawn in its own words", async (_word, body, status, said) => {
   stubEngine(detail(ready()), () => json(body, status));
   mount();
@@ -2410,6 +2420,28 @@ test("Re-run failed checks runs every failed check of the change's head again", 
     tool: "code_rerun_checks",
     args: { change: "web!42", all_failed: true },
   });
+});
+
+// A REFUSED RE-RUN IS DRAWN UNDER THE SECTION'S WORDS, on a row of its own,
+// never in the end cell beside Re-run, whose width squeezed the title to a word
+// a line. Mutation: drop the section's refusal place, and the refusal is drawn
+// inside the end cell.
+test("a refused Re-run is drawn on its own row under the checks section's words", async () => {
+  LATEST = [check({ name: "e2e", state: "failed" }), check()];
+  stubEngine(detail(), () =>
+    json({ error: "invalid", detail: "the re-run was refused for this test" }, 422),
+  );
+  mount();
+  const box = await screen.findByRole("region", { name: "Merge" });
+  const section = await within(box).findByRole("article", { name: "1 of 2 checks failed" });
+  fireEvent.click(within(section).getByRole("button", { name: "Re-run failed checks" }));
+  const place = await waitFor(() => {
+    const found = section.querySelector(".code-merge-box__refusal");
+    expect(found?.textContent).toMatch(/refused/i);
+    return found!;
+  });
+  expect(place.closest(".code-merge-box__end")).toBeNull();
+  expect(section.querySelector(".code-merge-box__end")?.textContent).not.toMatch(/refused/i);
 });
 
 /** The reader, served the change's later writes as well. */
@@ -4435,6 +4467,76 @@ test("the details line says what the press will do", async () => {
   expect(note()).toBe(
     "main moves to its head, 0123456, and no commit is written. Its branch is deleted. ENG-415 closes once it merges.",
   );
+});
+
+// FAST-FORWARD IS HELD WHERE THE TARGET MOVED PAST THE BRANCH: the head's facts,
+// measured against the tip the read found, name another merge base, so the
+// build would refuse it; the option says why and cannot be chosen. Mutation:
+// offer it whatever the facts say, and it is chosen.
+test("Fast-forward is held, saying why, where its target has moved past the branch", async () => {
+  const behind = () => ({
+    ...storyParts(() => story({ target_tip: C71 })),
+    "": () =>
+      json({
+        position: POSITION,
+        level: "session",
+        change: story({ target_tip: C71 }),
+        revisions: [
+          {
+            n: 3,
+            head: HEAD,
+            pusher: "dev",
+            pusher_kind: "agent",
+            position: POSITION,
+            at: "2026-10-27T09:37:00Z",
+            facts: {
+              target_ref: "refs/heads/main",
+              target_oid: C71,
+              base_oid: "b".repeat(40),
+              touched: ["a.go"],
+              node: "n1",
+              measured_at: "2026-10-27T09:38:10Z",
+            },
+          },
+        ],
+      }),
+  });
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  vi.setSystemTime(new Date(STORY_NOW));
+  stubEngine(
+    () => story({ target_tip: C71 }),
+    () => json({ outcome: "applied" }),
+    behind(),
+  );
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const box = await screen.findByRole("region", { name: "Merge" });
+  const ff = await within(box).findByRole("radio", { name: "Fast-forward" });
+  await waitFor(() => expect(ff.getAttribute("aria-disabled")).toBe("true"));
+  const why = document.getElementById(ff.getAttribute("aria-describedby") ?? "");
+  expect(why?.textContent).toBe(
+    "Fast-forward is held: main has moved past this branch, so main cannot move to its head. Rebase it first, or merge it another way.",
+  );
+  fireEvent.click(ff);
+  expect(
+    within(box).getByRole("radio", { name: "Merge commit" }).getAttribute("aria-checked"),
+  ).toBe("true");
+});
+
+// A MEASUREMENT OF A TIP THE TARGET HAS MOVED PAST SAYS SO, rather than "Merges
+// cleanly ... ready" until the home measures again. Mutation: ignore target_tip.
+test("a merge measured before its target moved says the target moved since", async () => {
+  const { box } = await mountStory(() => story({ target_tip: "e".repeat(40) }));
+  const section = await within(box).findByRole("article", {
+    name: "Merged cleanly into main before it moved",
+  });
+  expect(section.textContent).toContain("Measured against main at c71d0e9, 10 minutes ago.");
+  expect(section.textContent).toContain("main has moved since, to eeeeeee");
+  expect(within(section).getByRole("button", { name: "Rebase" })).toBeTruthy();
+  cleanup();
+  const { box: current } = await mountStory(() => story({ target_tip: C71 }));
+  expect(
+    await within(current).findByRole("article", { name: "Merges cleanly into main" }),
+  ).toBeTruthy();
 });
 
 // RE-REQUEST ASKS AGAIN, IN ONE ASK, everyone whose verdict is not an approval

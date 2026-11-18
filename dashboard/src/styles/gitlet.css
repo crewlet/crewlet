@@ -763,7 +763,8 @@
   color: var(--color-text-tertiary);
 }
 
-/* A SECTION'S ROWS: the check rows and a conflict's paths, under its words. */
+/* A SECTION'S ROWS: its controls' refusals, the check rows and a conflict's paths, under its words. */
+.code-merge-box__refusal,
 .code-merge-checks,
 .code-merge-paths,
 .code-merge-checks__pane {
@@ -850,6 +851,14 @@
   flex-wrap: wrap;
   gap: var(--spacing-2) var(--spacing-4);
   margin-inline-start: auto;
+}
+
+/* WHY A METHOD IS HELD, under the method control that holds it (its option's
+   description, `describedBy`). */
+.code-merge-box__held {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
 }
 
 .code-merge-box__sum {
