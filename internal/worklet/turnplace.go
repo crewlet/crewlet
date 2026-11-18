@@ -11,16 +11,14 @@ import (
 )
 
 // TurnPlace is where one run sits in the tracker: the task it was charged to
-// and its "Turn n" there — what a page's reader line says as "turn 3 on
-// ENG-412".
+// and its "Turn n" there, as a reader line's "turn 3 on ENG-412".
 type TurnPlace struct {
 	TaskID string `json:"id"`
 	Key    string `json:"key"`
 
-	// KeyCollision is the task's [TaskRow.KeyCollision]: its key is one
-	// another task claimed first, so a link built from [TurnPlace.Key]
-	// opens that task and this one is reached by [TurnPlace.TaskID]. See
-	// [ItemAddress].
+	// KeyCollision is the task's [TaskRow.KeyCollision]: another task claimed
+	// the key first, so a link built from [TurnPlace.Key] opens that one and
+	// this one is reached by [TurnPlace.TaskID]. See [ItemAddress].
 	KeyCollision bool `json:"key_collision,omitempty"`
 
 	Title string `json:"title"`
@@ -30,28 +28,19 @@ type TurnPlace struct {
 	Ordinal int `json:"ordinal"`
 }
 
-// MaxTurnPlaces is how many runs one [Reader.TurnPlaces] names — the most
+// MaxTurnPlaces is how many runs one [Reader.TurnPlaces] names: the most
 // readers one page's answer lists, with room.
 const MaxTurnPlaces = 200
 
-// TurnPlaces names the task each run was charged to and its ordinal there,
-// for the runs given; a run the tracker holds no row for is absent from the
-// answer, and so is a run whose only tasks were REMOVED — a reader line would
-// otherwise link "turn 2 on ENG-412" to a task that is gone, the same reason
-// the backlinks drop a removed task (`search.linkedTasks`).
+// TurnPlaces names the task each run was charged to and its ordinal there. A
+// run with no row, or only REMOVED tasks, is absent: a reader line must not
+// link to a task that is gone (as `search.linkedTasks` drops one).
 //
-// # One task per run, the charged one
-//
-// A turn is charged to ONE work item (ADR-0022), and its counted row — the one
-// whose spend carries `turns` — is on that item. A run with rows on more than
-// one task (more of a turn charged elsewhere) is placed on the task holding its
-// counted row; a run with no counted row anywhere is placed on the task of its
-// newest row, with ordinal zero rather than an invented one.
-//
-// # The ordinal is the task page's
-//
-// Read by the same numbering [Reader.TurnsOf] uses (`turnOrdinals`), so "turn
-// 3" beside a reader and "Turn 3" on the task's own page are one count.
+// A turn is charged to ONE work item (ADR-0022), which holds its counted row
+// (the one whose spend carries `turns`). So a run is placed on its counted
+// row's task, else on its newest row's task with ordinal zero rather than an
+// invented one. The ordinal is [Reader.TurnsOf]'s numbering (`turnOrdinals`),
+// so "turn 3" beside a reader and "Turn 3" on the task's page are one count.
 func (r *Reader) TurnPlaces(ctx context.Context, runs []string,
 	fresh statelog.Freshness) (map[string]TurnPlace, error) {
 
@@ -134,8 +123,7 @@ func readTurnPlaces(ctx context.Context, tx *sql.Tx, runs []string,
 	}
 	_ = rows.Close()
 
-	// THE ORDINALS, one numbering per task however many of its runs were
-	// asked about.
+	// One numbering per task, however many of its runs were asked about.
 	ordinals := map[string]map[string]int{}
 	for run, place := range out {
 		if !counted[run] {

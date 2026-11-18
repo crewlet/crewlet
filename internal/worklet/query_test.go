@@ -27,10 +27,9 @@ func mustParse(t *testing.T, kv map[string]any) worklet.Query {
 
 // AN ABSENT CONTAINER IS NEITHER THE WORKSPACE NOR A PROJECT.
 //
-// Defaulting to the workspace would make an omitted key the most expensive
-// query in the system; defaulting to a project would answer about one the
-// caller never named. The surface resolves it, and it can only do that if the
-// parser reports honestly that nothing was said.
+// The workspace would make an omitted key the most expensive query; a project
+// would answer about one never named. The surface resolves it, so the parser
+// reports that nothing was said.
 func TestAnAbsentContainerIsNotTheWorkspace(t *testing.T) {
 	t.Parallel()
 	q := mustParse(t, map[string]any{})
@@ -54,10 +53,9 @@ func TestAnAbsentContainerIsNotTheWorkspace(t *testing.T) {
 
 // A CONTAINER OF ANOTHER KIND IS REFUSED, NOT READ AS A PROJECT KEY.
 //
-// A view strip belongs to a unit or a person; a task does not. Parsed as a
-// project key, `container=unit:eng` became the project `UNIT:ENG` — a key no
-// project can have — and a board asked for a team's work answered an empty
-// list, the one failure shape a person acts on.
+// Parsed as a project key, `container=unit:eng` would be the project
+// `UNIT:ENG`, which no project can have, and a team's board would answer an
+// empty list.
 func TestAContainerOfAnotherKindIsRefusedRatherThanReadAsAProject(t *testing.T) {
 	t.Parallel()
 	for _, form := range []string{"unit:eng", "person:ana", "team:x"} {
@@ -76,9 +74,8 @@ func TestAContainerOfAnotherKindIsRefusedRatherThanReadAsAProject(t *testing.T) 
 
 // A STATUS OUTSIDE THE SIX IS REFUSED, AND NEGATION IS ITS OWN LIST.
 //
-// The set is fixed, so a slug nobody declared can only be a typo — and a
-// filter that silently dropped it would answer over every status, which reads
-// as a filter that found more than it should have.
+// The set is fixed, so an undeclared slug is a typo; dropped silently, the
+// filter would answer over every status.
 func TestAStatusOutsideTheSixIsRefused(t *testing.T) {
 	t.Parallel()
 	q := mustParse(t, map[string]any{"status": "todo,!closed,in_review"})
@@ -114,11 +111,10 @@ func TestTheTagModesAreThreeAndDefaultToAny(t *testing.T) {
 
 // A TAG FILTER NAMES TAGS THE WAY A WRITE STORES THEM.
 //
-// The rows hold slugs ([worklet.TagSlug]) and a filter compares them exactly,
-// so a filter left as typed is one `tag=Regression` — the label a model read —
-// silently matches nothing under. Normalised at the parse, as the write
-// normalises, and a value with no slug in it refused by name rather than
-// answered as an empty board.
+// The rows hold slugs ([worklet.TagSlug]) compared exactly, so a filter left
+// as typed (`tag=Regression`) silently matches nothing. Normalised at the parse
+// as the write normalises; a value with no slug in it is refused by name
+// rather than answered as an empty board.
 func TestATagFilterIsNormalisedAsAWriteNormalisesIt(t *testing.T) {
 	t.Parallel()
 	got := mustParse(t, map[string]any{"tag": "all:Needs Design, API ,api"})
@@ -137,9 +133,8 @@ func TestATagFilterIsNormalisedAsAWriteNormalisesIt(t *testing.T) {
 
 // A DATE FILTER RESOLVES AT PARSE TIME, AGAINST THE COMPANY'S CLOCK.
 //
-// What reaches the store is two numbers. A query that carried the token would
-// resolve it per row, and two nodes in two datacentres would resolve it
-// differently.
+// What reaches the store is two numbers: a token resolved per row would
+// resolve differently on two nodes.
 func TestADateFilterIsResolvedRatherThanCarried(t *testing.T) {
 	t.Parallel()
 	q := mustParse(t, map[string]any{"due": "thisweek", "created": "lt:today"})
@@ -160,10 +155,9 @@ func TestADateFilterIsResolvedRatherThanCarried(t *testing.T) {
 
 // A CUSTOM-FIELD PREDICATE IS COLLECTED, NOT RESOLVED.
 //
-// Which ops a field admits depends on its declared type, and the declaration
-// lives in a catalogue this parser does not read. A parser that read one could
-// fail on a store — and a query that cannot be parsed without I/O cannot be
-// parsed inside the transaction that answers it.
+// Which ops a field admits depends on its declared type, in a catalogue this
+// parser does not read: a query that needs I/O to parse cannot be parsed
+// inside the transaction that answers it.
 func TestCustomFieldsAreCollectedInAStableOrder(t *testing.T) {
 	t.Parallel()
 	q := mustParse(t, map[string]any{
@@ -195,16 +189,9 @@ func TestCustomFieldsAreCollectedInAStableOrder(t *testing.T) {
 // A MODE WITHOUT TEXT IS REFUSED NAMING THE MISSING KEY.
 //
 // Ignoring it answers an unfiltered list, which reads as a search that matched
-// everything — the one wrong answer a caller cannot tell from a right one.
-// THERE IS NO SEARCH MODE ON THIS GRAMMAR, and `mode` is refused as the
-// unknown key it now is.
-//
-// `q` here is a substring of a key or a title — the item somebody half
-// remembers. Ranked search over what an item says is the search index's
-// (`search_work_items`, `work_search`), which is where the analyzer, the
-// inverted list and the vectors are. Three modes over one behaviour is a knob
-// whose values cannot differ, and a caller that asked for `semantic` and got a
-// substring match was answered by a name rather than by a search.
+// everything. There is NO search mode on this grammar: `mode` is refused as an
+// unknown key. `q` is a substring of a key or a title; ranked search over what
+// an item says is the search index's (`search_work_items`, `work_search`).
 func TestThereIsNoSearchModeOnTheTaskGrammar(t *testing.T) {
 	t.Parallel()
 	_, err := parse(t, map[string]any{"q": "auth", "mode": "semantic"})
@@ -242,8 +229,8 @@ func TestAFindLongerThanAnyTitleIsRefused(t *testing.T) {
 // THE DISJUNCTION IS ONE LEVEL, CAPPED, AND CARRIES NO ANSWER KEYS.
 //
 // A branch with its own limit, cursor, sort or grouping is a second query
-// pretending to be a predicate — and an N-way OR across indexes is the one
-// shape the planner handles worst, which is what the cap is for.
+// posing as a predicate; the cap is because an N-way OR across indexes is the
+// shape the planner handles worst.
 func TestTheDisjunctionIsOneLevelAndCapped(t *testing.T) {
 	t.Parallel()
 	q := mustParse(t, map[string]any{
@@ -285,9 +272,8 @@ func TestTheDisjunctionIsOneLevelAndCapped(t *testing.T) {
 
 // A STALENESS BOUND AT A LEVEL THAT IS NOT STALE IS REFUSED.
 //
-// It is not a level of its own and it does not narrow anything at the other
-// three: passing it there is a caller who believes they asked for something
-// they did not.
+// It narrows nothing at the other three levels, so passing it there is a
+// caller who believes they asked for something they did not.
 func TestAStalenessBoundBelongsToTheStaleLevelAlone(t *testing.T) {
 	t.Parallel()
 	q := mustParse(t, map[string]any{"read_level": "stale", "max_lag_seconds": "30"})
@@ -318,14 +304,10 @@ func TestAStalenessBoundBelongsToTheStaleLevelAlone(t *testing.T) {
 // `session` NEEDS THE POSITION IT WAITS FOR, and `min_position` is how a
 // caller names one.
 //
-// A session read waits for the CALLER'S OWN high-water mark. Accepted bare,
-// the level would wait for the zero position, serve this node's committed
-// prefix and come back labelled `session` — a WRONG LABEL on a stale answer
-// rather than a weaker answer than the one asked for, which is precisely how
-// twenty-one seat call sites asked for the engine's strongest guarantee and
-// were handed its weakest without anything saying so. So the level is refused
-// without a floor, and the refusal names the key that would make it honest
-// beside the two other asks a caller who typed `session` might have meant.
+// A session read waits for the CALLER'S OWN high-water mark. Accepted bare, it
+// would wait for position zero and label a stale answer `session`. So it is
+// refused without a floor, naming that key beside the two other asks a caller
+// who typed `session` might have meant.
 func TestSessionNeedsThePositionItWaitsFor(t *testing.T) {
 	t.Parallel()
 	_, err := parse(t, map[string]any{"read_level": "session"})
@@ -410,18 +392,15 @@ func TestMinPositionIsCarriedAtEveryLevelAndRefusedMalformed(t *testing.T) {
 
 // `min_position` REPEATS, ONCE PER LOG, AND EVERY FLOOR IS CARRIED.
 //
-// One answer can be read from two logs, and a write the caller is reading back
-// may have landed on both, so each log takes its own floor: as a JSON array off
-// a socket frame, as the strings a query string repeated (which reach a data
-// node across the estate as that array), and one alone as before. Which log
-// each floor holds up is the read's to decide, so the grammar carries every
-// one — and refuses what no read could wait on: two floors on one log, more
-// than [statelog.MaxFloors], and a value that is not a position, each naming
-// the key.
+// One answer can be read from two logs, so each log takes its own floor: a
+// JSON array off a socket frame, a repeated query-string key (reaching a data
+// node as that array), or one alone. The read decides which log each floor
+// holds up, so the grammar carries every one and refuses, naming the key, what
+// no read could wait on: two floors on one log, more than [statelog.MaxFloors],
+// a value that is not a position.
 //
-// Mutation: read min_position with String (the first value, or none of an
-// array) and the floors are lost; drop ValidFloors and the pair on one log is
-// accepted.
+// Mutation: read min_position with String and the floors are lost; drop
+// ValidFloors and the pair on one log is accepted.
 func TestMinPositionRepeatsOncePerLog(t *testing.T) {
 	t.Parallel()
 	work := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 5}
@@ -463,12 +442,8 @@ func TestMinPositionRepeatsOncePerLog(t *testing.T) {
 
 // AND THE BOUND IS CARRIED, IN BOTH OF ITS UNITS.
 //
-// A bound refused where it is inconsistent and dropped where it is not is a
-// bound that never bounded anything — the defect `max_lag_seconds` was fixed
-// for and `max_lag_seq` was left in: it was validated against the level above
-// and then read by nothing at all, so a caller declaring how many records
-// behind it would accept was served an answer of any distance and told it came
-// back at the level asked for.
+// A bound validated and then dropped bounds nothing: the caller would be
+// served an answer of any distance, labelled with the level asked for.
 func TestBothStalenessBoundsReachTheRead(t *testing.T) {
 	t.Parallel()
 	q := mustParse(t, map[string]any{
@@ -491,9 +466,9 @@ func TestBothStalenessBoundsReachTheRead(t *testing.T) {
 
 // ABSENT IS NOT A FOURTH READ LEVEL.
 //
-// It resolves to the SURFACE's own default — a seat tool linearizable, a
-// dashboard poll stale — which is what makes the default a property of the
-// surface rather than of the model that happened to omit the key.
+// It resolves to the SURFACE's own default (a seat tool linearizable, a
+// dashboard poll stale), a property of the surface rather than of the model
+// that omitted the key.
 func TestAnAbsentReadLevelIsTheSurfacesToResolve(t *testing.T) {
 	t.Parallel()
 	if got := mustParse(t, map[string]any{}).Level; got != "" {
@@ -545,9 +520,9 @@ func TestSortParsesItsDirectionAndRefusesTheRest(t *testing.T) {
 // SHOW_CLOSED TAKES THREE FORMS AND `recent:` APPLIES TO THE WHOLE FINISHED
 // SET.
 //
-// Because the finish stamp is by GROUP, a task cancelled inside the window is
-// in the answer exactly as one done inside it is — which is what makes a
-// board's Cancelled column non-empty without a second field.
+// The finish stamp is by GROUP, so a task cancelled inside the window is in
+// the answer as one done inside it is, filling a board's Cancelled column
+// without a second field.
 func TestShowClosedTakesItsThreeForms(t *testing.T) {
 	t.Parallel()
 	if got := mustParse(t, map[string]any{}).ShowClosed; got.All || got.Recent != 0 {
@@ -569,9 +544,8 @@ func TestShowClosedTakesItsThreeForms(t *testing.T) {
 
 // A BOOLEAN FILTER TELLS ABSENT FROM FALSE.
 //
-// `blocked=false` asks for tasks with nothing blocking them; an absent key
-// asks for all of them. A plain bool cannot say which, which is why every one
-// of these is a pointer.
+// `blocked=false` asks for tasks with nothing blocking them; an absent key for
+// all of them. A plain bool cannot say which, so each is a pointer.
 func TestABooleanFilterTellsAbsentFromFalse(t *testing.T) {
 	t.Parallel()
 	if got := mustParse(t, map[string]any{}).Blocked; got != nil {
@@ -588,12 +562,9 @@ func TestABooleanFilterTellsAbsentFromFalse(t *testing.T) {
 
 // A TASK KEY IS UPPER-CASED WHEREVER IT IS TYPED.
 //
-// `key=` and `container=project:` both upper-case, each with a comment naming
-// the exact failure — an empty list rather than a refusal. `references=` names
-// the same thing, a task KEY compared exactly against a column minted
-// upper-case, and it was read raw: `references=eng-7` answered nothing, with
-// no error, while `key=eng-7` beside it resolved. One spelling, two answers,
-// decided by which parameter it was pasted into.
+// `key=`, `container=project:` and `references=` each compare exactly against
+// a column minted upper-case: read raw, `references=eng-7` would answer
+// nothing, with no error, while `key=eng-7` beside it resolved.
 func TestATaskKeyIsUpperCasedWhereverItIsTyped(t *testing.T) {
 	t.Parallel()
 	q := mustParse(t, map[string]any{

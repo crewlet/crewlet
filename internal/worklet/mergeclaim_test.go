@@ -9,15 +9,9 @@ import (
 
 // THE DUTY FINISHES ONLY A MERGE WHOSE HOLDER HAS LET GO.
 //
-// A task is marked mid-merge for the whole of a live merge's walk, so the
-// marker cannot tell a walk that died from one still running — and the duty
-// used to finish every marked task it found, racing a live walk child by child
-// and publishing a second close behind the walk's own. The claim is what
-// tells the two apart: a live walk heartbeats it, and a dead one's lapses.
-//
-// The claim is named here the way the tracker names it, as the `merge` class
-// over the duplicate's id; were the tracker to rename it this case would see
-// the duty finish a merge another node holds and go red rather than pass.
+// The marker cannot tell a dead walk from a live one; the claim can: a live
+// walk heartbeats it, a dead one's lapses. It is named as the tracker names it
+// (the `merge` class over the duplicate's id), so a rename turns this red.
 func TestTheDutyLeavesAMergeWhoseHolderIsAlive(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -36,8 +30,7 @@ func TestTheDutyLeavesAMergeWhoseHolderIsAlive(t *testing.T) {
 	}
 	r.drain()
 
-	// THE MARK A LIVE WALK HAS PUBLISHED, and the claim it still holds —
-	// on another node, heartbeating.
+	// THE MARK A LIVE WALK HAS PUBLISHED, and its claim, held by another node.
 	merging, reparent := true, true
 	if _, err := r.writer.UpdateTask(t.Context(), "op-mark", "dup", "ENG",
 		worklet.NoIfMatch, worklet.TaskPatch{
@@ -74,8 +67,8 @@ func TestTheDutyLeavesAMergeWhoseHolderIsAlive(t *testing.T) {
 		t.Errorf("the duty moved the subtask to %q under a live walk", got)
 	}
 
-	// THE WALK DIES: its claim is given up (or lapses, which is the same
-	// answer a TTL later), and the next tick finishes it.
+	// THE WALK DIES: its claim is released (a lapse is the same, a TTL later),
+	// and the next tick finishes it.
 	if _, err := r.claims.Release(t.Context(), resource, "node-b",
 		lease.Epoch); err != nil {
 		t.Fatalf("release node-b's claim: %v", err)

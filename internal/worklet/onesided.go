@@ -11,46 +11,22 @@ import (
 
 // The one-sided dependency repair: the LAST step of a gesture that stopped.
 //
-// # What a one-sided edge is, and what it costs
-//
-// A dependency is two commits — the authored `waiting_on` edge on the
-// dependent, and the mirrored entry in the blocker's own `Dependents`. The
-// second is best effort, because the first is already durable and refusing the
-// whole gesture over it would lose an edge somebody asked for.
-//
-// So the residue is an edge whose mirror never landed, and it costs two
-// distinct things:
-//
-//  1. THE BLOCKER'S ASSIGNEE WAS NEVER TOLD. The mirror carries
-//     [Snapshot.Dependents], which is what routes `blocking` — and the
-//     dependent's own commit routes to the DEPENDENT's parties, so "the wake
-//     went out with the other commit" is false.
-//  2. A CLOSE CANNOT NAME WHO IT UNBLOCKS from the blocker's own row.
-//
-// # Why the repair is LOUD
-//
-// Every other repair in this file's neighbourhood re-derives something that is
-// already true and tells nobody. This one is the missing STEP of a sequence,
-// not a correction of a value, and the step it is missing is the one that
-// announces itself. It carries `Late: true` so a person receiving it hours
-// after the fact can see why.
+// A dependency is two commits: the authored `waiting_on` edge on the
+// dependent, then a best-effort mirror in the blocker's `Dependents` (the
+// first is already durable, and refusing the gesture would lose the edge). An
+// edge whose mirror never landed leaves the blocker's assignee untold (the
+// mirror's [Snapshot.Dependents] routes `blocking`; the dependent's commit
+// routes only to its own parties) and a close unable to name whom it unblocks.
+// So unlike a re-derivation the repair is LOUD: it is the missing step, and it
+// carries `Late: true` so a wake hours later says why.
 
-// OneSidedRepairAge is how old an edge must be before the duty repairs it.
-//
-// THIRTY SECONDS: how long a gesture that is still running may reasonably take
-// to reach its own last step. An age, because a dependency gesture takes no
-// claim — unlike a move or a merge, whose duty waits for the walk's own lease
-// to lapse ([ClaimTTL]) — so how long ago the edge was authored is the only
-// thing that can say the gesture behind it is over. Shorter and the duty races
-// live writers, publishing a mirror the gesture was about to publish itself —
-// two records on one subject where one would do, and a second wake for the
-// blocker's assignee. Longer and a dependency written during a node's restart
-// sits unannounced for no reason.
-//
-// It is measured against the AUTHORED instant carried on the EDGE rather than
-// against the task's `updated_at`, because any unrelated edit resets that
-// column — and a busy task would postpone its own repair indefinitely, while
-// the busiest tasks are exactly the ones that acquire dependencies.
+// OneSidedRepairAge is how old an edge must be before the duty repairs it:
+// how long a running gesture may take to reach its last step. An age, because
+// a dependency gesture takes no claim (a move or merge waits on [ClaimTTL]).
+// Shorter races live writers into a second mirror record and a second wake;
+// longer leaves a dependency written during a restart unannounced. Measured
+// from the edge's AUTHORED instant, not the task's `updated_at`, which any edit
+// resets, postponing the busiest tasks' repairs indefinitely.
 const OneSidedRepairAge = 30 * time.Second
 
 // OneSided is one edge whose mirror was never written.
@@ -69,9 +45,8 @@ type OneSided struct {
 	BlockerKey        string
 	BlockerAssignee   string
 
-	// BlockerDependents is how many the blocker already has, and
-	// BlockerRemoved whether it has since been tombstoned. Both are
-	// reasons the repair is PERMANENT rather than pending.
+	// BlockerDependents, BlockerRemoved and BlockerMissing are the reasons
+	// a repair is PERMANENT rather than pending ([OneSided.Final]).
 	BlockerDependents int
 	BlockerRemoved    bool
 	BlockerMissing    bool
@@ -79,11 +54,9 @@ type OneSided struct {
 
 // Final reports an edge whose mirror can never be written.
 //
-// THREE REASONS, and they are the three the design names: the blocker is gone,
-// it was tombstoned since, or its dependent list is full. Each is a fact a
-// person resolves rather than something a retry could change — so the duty
-// stamps the edge and never looks at it again, and the attention queue is
-// where it surfaces.
+// The blocker is gone, tombstoned, or its dependent list is full: no retry
+// changes any of them, so the duty stamps the edge once and the attention
+// queue surfaces it for a person.
 func (o OneSided) Final() (string, bool) {
 	switch {
 	case o.BlockerMissing:
@@ -105,13 +78,10 @@ const pendingOneSidedStatement = `
 
 // oneSidedStatement is [ScanOneSided]'s read, named for the plan test.
 //
-// IT DOES NOT COUNT THE BLOCKER'S DEPENDENTS, which [blockerDependentsStatement]
-// reads for the batch: as a correlated `COUNT(*)` here it was a seek of the
-// mirror per edge only for as long as the planner chose not to unnest it, and
-// unnested it is one grouped read of every mirror row in the company per batch
-// — and whether it is unnested is the planner's cost guess over a database
-// nobody has ANALYZEd, which no line of this statement decides (the rule is
-// stated at Decorrelated in internal/store/storetest).
+// IT DOES NOT COUNT THE BLOCKER'S DEPENDENTS ([blockerDependentsStatement] does,
+// per batch): a correlated `COUNT(*)` here is a seek per edge only until the
+// planner unnests it into a grouped read of every mirror row, a choice no line
+// of this statement decides (storetest.Decorrelated).
 const oneSidedStatement = `
 		SELECT r.task_id, r.other_id,
 		       COALESCE(t.key, ''), t.project_key, COALESCE(t.assignee, ''),
@@ -138,10 +108,9 @@ const oneSidedStatement = `
 		ORDER BY r.task_id, r.other_id
 		LIMIT ?`
 
-// blockerDependentsStatement counts the mirror rows of n blockers — how many
-// dependents each already lists — by the blockers' keys, the leading column of
-// the mirror's primary key, for the batch [oneSidedStatement] scanned. A
-// blocker listing none has no row, and counts zero.
+// blockerDependentsStatement counts how many dependents each of n blockers
+// already lists, by the mirror primary key's leading column. A blocker listing
+// none has no row, and counts zero.
 func blockerDependentsStatement(n int) string {
 	return `
 		SELECT task_id, COUNT(*) FROM tracker_task_dependents
@@ -151,9 +120,8 @@ func blockerDependentsStatement(n int) string {
 
 // ScanOneSided reads the edges whose mirror has not been written.
 //
-// SELECTED ON THE STORED FLAG, which the applier derives on both ends — so
-// this is an indexed read of exactly the broken edges rather than a join over
-// every relation in the company. On a healthy fleet it reads nothing.
+// Selected on the stored flag the applier derives on both ends: an indexed
+// read of exactly the broken edges, nothing on a healthy fleet.
 func ScanOneSided(ctx context.Context, db store.ReplicatedReader, before time.Time,
 	limit int) ([]OneSided, error) {
 
@@ -190,9 +158,8 @@ func ScanOneSided(ctx context.Context, db store.ReplicatedReader, before time.Ti
 
 // countBlockerDependents fills each edge's [OneSided.BlockerDependents] from
 // one grouped read of the batch's distinct blockers, IN THE SCAN'S OWN
-// TRANSACTION, so the count is of the same snapshot the edges were read from.
-// A batch is at most the scan's limit, so its blockers are a bounded list of
-// bound keys.
+// TRANSACTION, so it counts the edges' snapshot. The scan's limit bounds the
+// key list.
 func countBlockerDependents(ctx context.Context, tx *sql.Tx, edges []OneSided) error {
 	var blockers []any
 	seen := map[string]bool{}
@@ -231,23 +198,16 @@ func countBlockerDependents(ctx context.Context, tx *sql.Tx, edges []OneSided) e
 // RepairOneSided writes the mirror commit a dependency gesture never reached,
 // or stamps the edge permanently one-sided.
 //
-// ON THE BLOCKER'S SUBJECT, which is what makes this the missing STEP rather
-// than a new gesture: the record is the one the writer would have published,
-// with the same patch and the same wake, published by whoever holds the duty.
+// On the BLOCKER'S subject, with the patch and wake the writer would have
+// published: the missing STEP, not a new gesture.
 func (w *Writer) RepairOneSided(ctx context.Context, opID string, edge OneSided,
 	leads Leads) (WriteResult, error) {
 
 	if _, final := edge.Final(); final {
-		// THE STAMP GOES ON THE DEPENDENT'S OWN EDGE, because that is
-		// the row that carries the flag and the row a person opens to
-		// see it — and it is a GESTURE, resolved inside the decide,
-		// because this write lands minutes after the scan that chose
-		// it and a collection composed from that scan would discard
-		// every edge authored since.
-		//
-		// QUIET. Nothing happened that anybody acts on: the dependency
-		// the author asked for is not going to be mirrored, and the
-		// place that says so is the attention queue the flag feeds.
+		// Stamped on the dependent's own edge, the row carrying the
+		// flag, as a GESTURE resolved inside the decide: the scan is
+		// minutes old, and a collection composed from it would discard
+		// edges authored since. QUIET: the attention queue says so.
 		return w.UpdateTask(ctx, opID, edge.Dependent, edge.DependentProject,
 			NoIfMatch, TaskPatch{Relate: &RelationIntent{Final: []Relation{{
 				Kind: RelationWaitingOn, Other: edge.Blocker,
@@ -257,9 +217,8 @@ func (w *Writer) RepairOneSided(ctx context.Context, opID string, edge OneSided,
 		NoIfMatch, TaskPatch{Depend: &DependentIntent{Add: []string{edge.Dependent}}},
 		ChangeRelations, &Notify{
 			Kind: ChangeRelations,
-			// LATE, and the flag is what tells a reader this wake is
-			// the step rather than the change: a blocker's assignee
-			// receiving it hours later should see why.
+			// Late tells an assignee woken hours later that this is
+			// the missed step, not a new change.
 			Late: true,
 			Snapshot: Snapshot{
 				Key: edge.BlockerKey, Project: edge.BlockerProject,

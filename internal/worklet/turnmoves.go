@@ -15,10 +15,9 @@ type TurnsMovedQuery struct {
 	Level statelog.ReadLevel
 }
 
-// turnsMovedStatement is, of the turns its argument lists (a JSON array),
-// every history row they wrote but the conversation's ([conversationKinds],
-// whose words are the change): each row's turn, kind and deltas, which
-// [TurnsMoved] reads a move of work from.
+// turnsMovedStatement reads every history row the turns in its JSON-array
+// argument wrote, but the conversation's ([conversationKinds]): turn, kind and
+// deltas, for [TurnsMoved].
 const turnsMovedStatement = `SELECT h.turn_id, h.kind, h.fields_json
 	FROM json_each(?) AS j
 	JOIN tracker_history AS h ON h.turn_id = CAST(j.value AS TEXT)
@@ -27,12 +26,12 @@ const turnsMovedStatement = `SELECT h.turn_id, h.kind, h.fields_json
 // TurnsMoved reports which of q's turns moved work on the tracker: wrote any
 // history row but a comment or a change of who watches and nothing else.
 //
-// BY THE ROW'S DELTAS, NEVER BY ITS KIND ALONE, and by the rule a turn's own
-// outcome is read by ([Notify.watchOnly], [committedChange]): a row records
-// one kind, and `update_work_item` files a watch written with a due date, a
-// priority or a custom value under `watchers`, so read by its kind such a turn
-// moved nothing. Decided here rather than in the statement, so the rule is
-// that one function over the applier's own deltas, which are whole (#953).
+// BY THE ROW'S DELTAS, NEVER BY ITS KIND ALONE, through the rule a turn's own
+// outcome is read by ([Notify.watchOnly], [committedChange]): a row records one
+// kind, and `update_work_item` files a watch written with a due date, priority
+// or custom value under `watchers`, which its kind alone would call no move.
+// Decided here, not in the statement, so the rule stays that one function
+// over the applier's own deltas, which are whole (#953).
 func (r *Reader) TurnsMoved(ctx context.Context, q TurnsMovedQuery) (map[string]bool, error) {
 	out := map[string]bool{}
 	if len(q.Turns) == 0 {

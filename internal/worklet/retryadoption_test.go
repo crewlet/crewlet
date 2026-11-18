@@ -15,18 +15,17 @@ import (
 )
 
 // A NODE THAT ADOPTED A SNAPSHOT JUDGES A WRITE BY THE LEDGER THAT TRAVELLED
-// WITH IT — through a real snapshot, a real transfer, a real install, and the
-// real writer, publisher and ledger on the node that adopted.
+// WITH IT — through a real snapshot, transfer and install, and the real
+// writer, publisher and ledger on the node that adopted.
 //
-// The adopter holds a row for every operation its donor applied, so a retry of
-// one — a turn re-run under its derived operation id, a caller repeating an
-// `unknown` — is answered from it with the first copy's position and never
-// published again. And an operation neither ledger holds never applied, so a
-// write whose id was minted before the join — the FIRST attempt of a turn
-// woken by a trigger from before it, which derives its ids from that trigger's
-// instant — is decided and published like anyone's. That is why the ledger
-// travels: scrubbed out of the snapshot, both would be answered `unknown`,
-// and the second is a recovering node refusing its own backlog.
+// The adopter holds a row for every operation its donor applied, so a retry
+// (a re-run turn, a caller repeating an `unknown`) is answered from it with the
+// first copy's position and never published again. An operation neither
+// ledger holds never applied, so a write minted before the join (the FIRST
+// attempt of a turn woken by an earlier trigger, whose ids derive from that
+// trigger's instant) is decided and published like anyone's. Scrubbed from the
+// snapshot, the ledger would leave both answered `unknown`, the second a
+// recovering node refusing its own backlog.
 func TestANodeThatAdoptedJudgesAWriteByTheLedgerThatTravelled(t *testing.T) {
 	t.Parallel()
 	donor := newRoundTrip(t)
@@ -182,20 +181,15 @@ func adoptFrom(t *testing.T, donor *roundTrip) *roundTrip {
 }
 
 // A WRITE RETRIED AFTER ITS LEDGER ROW WAS SWEPT IS NOT APPLIED A SECOND TIME,
-// through the real writer, the real publisher, the real ledger and the real
-// sweep.
+// through the real writer, publisher, ledger and sweep.
 //
-// The ledger keeps a row for thirty days, and a retry is judged by it — so a
-// retry of an operation whose row the sweep deleted used to find the same
-// silence as an operation that never ran, decide again on rows that already
-// held the first application, and publish a second copy. The sweep now
-// records how far back it forgot, and the publisher reads that before it
-// trusts the silence.
-//
-// A RETITLE, because its decide finds nothing in the rows to answer a retry
-// with and so would publish again. A comment would not test this: a remark's
-// row is its post's own record, and a retry finds it there and publishes
-// nothing whatever the ledger kept (TestARemarkAlreadyPostedIsAnsweredByItsRow).
+// The ledger keeps a row for thirty days; past it a retry meets the silence of
+// an operation that never ran and would publish a second copy, so the sweep
+// records how far back it forgot and the publisher reads that before trusting
+// the silence. A RETITLE, because its decide finds nothing in the rows to
+// answer a retry with; a comment would not test this, since a remark's row
+// answers a retry whatever the ledger kept
+// (TestARemarkAlreadyPostedIsAnsweredByItsRow).
 func TestAWriteRetriedAfterItsLedgerRowWasSweptIsNotAppliedTwice(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

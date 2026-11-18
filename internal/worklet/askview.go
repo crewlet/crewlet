@@ -13,29 +13,14 @@ import (
 
 // AskView is the question a notice or a feed row is about, as it stands now.
 //
-// # Why a notice carries it
-//
-// An `asked` notice says somebody put a question to you and an `answered` one
-// that your question came back — and neither could say WHICH question, whether
-// it is still open, or what was chosen, without a second read per row. A card
-// that has to ask "is this still waiting on me?" of another endpoint is a card
-// that renders stale, and an inbox built around decisions needs the options on
-// the row it is drawing.
-//
-// # It is the ASK, whichever comment the change wrote
-//
-// A change that asked writes the ask itself; a change that answered writes the
-// answer, whose `answers` names the ask. Both resolve here to the ASK, because
-// that is the object with a state — open, answered, resolved — and the thing a
-// person decides on. The answer's own contribution is who answered, when, and
-// the option it chose.
-//
-// # It is read NOW, not at the change
-//
-// `open` is the ask's state at the instant of this read, not when the notice
-// was written: an `asked` notice for a question somebody has since answered
-// reads `open: false` with the answer beside it, which is the whole point —
-// the notice is history and the ask is live.
+// A notice carries it so a card can say which question, whether it is still
+// open and what was chosen without a second read per row (a card that asks
+// another endpoint renders stale). It is always the ASK, whichever comment
+// the change wrote, since the ask holds the state and is what a person
+// decides on; an answer contributes who answered, when, and its choice. And
+// it is read NOW: an `asked` notice for a question since answered reads
+// `open: false` with the answer beside it — the notice is history, the ask
+// is live.
 type AskView struct {
 	// Comment is the ask's own id — what an answer names in `answers`.
 	Comment string `json:"comment"`
@@ -79,13 +64,11 @@ type AskView struct {
 // askViewsStatement is [readAskViews]' one statement, bound to the page's
 // comment ids as one JSON array.
 //
-// THE IDS ARE SOUGHT, NOT TESTED: `c.id IN (SELECT value FROM json_each(?))`
-// is a column of json_each on the right of IN, which the pinned driver's
-// planner cannot seek by — measured, it SCANNED tracker_comments, every
-// comment the company ever wrote, for each inbox or feed page that named one.
-// An expression over the column is seekable, and CAST(… AS TEXT) is the one
-// that changes nothing, since every id already is text
-// (TestTheAsksAPageNamesAreSoughtByID).
+// The ids are SOUGHT: `c.id IN (SELECT value FROM json_each(?))` puts
+// json_each's column right of IN, which the pinned driver's planner cannot
+// seek by, so it scanned every comment per page. An expression over the
+// column is seekable, and CAST(… AS TEXT) changes nothing, every id being
+// text (TestTheAsksAPageNamesAreSoughtByID).
 const askViewsStatement = `
 	SELECT c.id, a.id, a.ask, a.resolved, a.removed,
 	       a.answered_by IS NOT NULL, a.resolved_by, a.resolved_at,
@@ -99,15 +82,11 @@ const askViewsStatement = `
 
 // readAskViews resolves comment ids to the asks they are about.
 //
-// ONE STATEMENT FOR A PAGE, whatever its size: the comment a row names, joined
-// to the ask it is or answers, joined to the comment that answered that ask. A
-// comment that is neither an ask nor an answer — an ordinary remark — joins
-// nothing and is simply absent from the map, which is how a row about one
-// carries no `ask`.
-//
-// Shared by the inbox and the activity feed, because "which question is this
-// row about, and where does it stand" is one question and two readers of it
-// written separately would disagree the first time the rule moved.
+// One statement for a page: the comment a row names, joined to the ask it is
+// or answers, joined to the comment that answered that ask. An ordinary
+// remark joins nothing and is absent from the map, so its row carries no
+// `ask`. Shared by the inbox and the activity feed, so the two cannot
+// disagree on which question a row is about and where it stands.
 func readAskViews(ctx context.Context, tx *sql.Tx, comments []string) (
 	map[string]*AskView, error) {
 

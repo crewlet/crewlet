@@ -13,12 +13,11 @@ import (
 
 // A ONE-SIDED EDGE'S REPAIR IS NAMED IN ONE STEP OF ITS OPERATION ID.
 //
-// The grammar is `<uuidv7>[.<name>][.<step>…]`, so a dot begins a step: the
-// repair's name joined the dependent and the blocker with one, and its id read
-// as the name `onesided-<dependent>` with a step `<blocker>` — an id the
-// engine's own caller rule calls malformed.
+// The grammar is `<uuidv7>[.<name>][.<step>…]`, so a dot joining the dependent
+// and the blocker reads as a name and a step: an id statelog.CheckCallerOpID
+// calls malformed.
 //
-// Mutation: join the pair with a dot again, and the name holds one.
+// Mutation: join the pair with a dot, and the name holds one.
 func TestAOneSidedRepairIsNamedInOneStep(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

@@ -11,14 +11,10 @@ import (
 )
 
 // A TRACKER WAKE HANDS ITS SEAT WHAT SOMEBODY WROTE INSIDE A FENCE (ADR-0040),
-// labelled as what it is and by whom.
-//
-// The comment, the description a task was filed with and the note an
-// assignment carries are the one part of a tracker wake the engine did not
-// write, and they reached the seat's user message bare — a comment that spelt
-// a closer and an instruction addressed the seat in the voice of its trigger.
-// The parser states what the body is and who wrote it, and the spine fences it
-// before the prompt sees it; text spelling the closer stays inside.
+// labelled as what it is and by whom. A comment, a filed description and an
+// assignment's note are the part of a wake the engine did not write: the
+// parser names the body's source and author, the spine fences it, and text
+// spelling the closer stays inside.
 //
 // Mutation: stamp no body source and a question's text reads as a description;
 // stamp no author and every wake reads as nobody's; render the raw body and the
@@ -58,9 +54,9 @@ func TestATrackerWakeFencesWhatSomebodyWrote(t *testing.T) {
 				Kind: worklet.ChangeAssignee, Before: before, After: filed, Excerpt: attack,
 			}.Notify(nil))
 		}, []string{"ana", "cy"}, "source=change_note trust=colleague authors=agent:ana]"},
-		// A TASK FILED AS A QUESTION carries its ask as its text, which is a
-		// remark rather than a description although the change is a create —
-		// the one place what the body is cannot be read off the kind.
+		// A TASK FILED AS A QUESTION carries its ask as a remark, not a
+		// description, though the change is a create: the one body whose
+		// source cannot be read off the kind.
 		"a task filed as a question": {func() worklet.MutationRecord {
 			bare := filed
 			bare.Body = ""

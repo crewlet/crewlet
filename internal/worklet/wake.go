@@ -14,29 +14,20 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// WHAT A CHANGE TELLS PEOPLE, decided at the WRITE and carried on the record.
+// WHAT A CHANGE TELLS PEOPLE is decided at the WRITE and carried on the record.
 //
-// # Why the snapshot is built here and never at the wake
-//
-// The node that wins a change feed's delivery is rarely the node that runs the
-// woken seat, and it may be behind on the very task the record is about. So a
-// wake carries the task's routing state COPIED at the moment of the change —
-// who was assigned, who was watching, who leads the project, what the previous
-// assignee and status group were — rather than a task id somebody looks up.
-// A node routing from its own row would route from a row that has moved on,
-// or would have to block the feed until it caught up.
-//
-// The previous values are the sharpest case. Routing turns on the TRANSITION
-// and not on the destination: "entered or left a finished group" is what wakes
-// a reporter and a parent's assignee, and "was reassigned away from" is what
-// tells the person who no longer has it. Neither is reconstructible later from
-// a row that already holds the new value.
+// A wake carries the task's routing state COPIED at the change (assignee,
+// watchers, project lead, previous assignee and status group) rather than a
+// task id to look up: the node winning the feed's delivery may be behind on
+// the task, and would route from a row that has moved on or block the feed
+// until it caught up. The previous values matter most: routing turns on the
+// TRANSITION ("entered or left a finished group" wakes a reporter and a
+// parent's assignee, "reassigned away from" tells the one who lost it), which
+// a row already holding the new value cannot reconstruct.
 
-// Leads resolves the two fallbacks a wake may need.
-//
-// BOTH ARE CARRIED, because which one applies depends on whether the task has
-// a routing unit at the moment of the change — a fact the receiving node
-// cannot reconstruct afterwards.
+// Leads resolves the two fallbacks a wake may need. Both are carried, because
+// which applies depends on whether the task has a routing unit at the moment
+// of the change, which the receiving node cannot reconstruct.
 type Leads interface {
 	// ProjectLead is who hears about unassigned work in a project.
 	ProjectLead(project string) string
@@ -45,27 +36,21 @@ type Leads interface {
 	UnitLead(unit string) string
 }
 
-// Wake is what a write says about itself, before it is published.
-//
-// A VALUE THE CALLER FILLS AND THIS PACKAGE COMPLETES. The caller knows what
-// it did — it created, it commented, it reassigned — and everything else on a
-// notification is derivable from the two states of the task, so the caller
-// states the kind and the rest is computed rather than remembered.
+// Wake is what a write says about itself, before it is published. The caller
+// states the kind; the rest is computed from the task's two states.
 type Wake struct {
 	// Kind is what happened, as a recipient needs to be told it.
 	Kind ChangeKind
 
-	// Before is the task as it stood, and After as it will stand. Before
-	// is the zero value on a create, which is what makes every delta on a
-	// create a field with no previous value rather than an empty diff.
+	// Before is the task as it stood, and After as it will stand. Before is
+	// the zero value on a create, so every delta there has no previous value.
 	Before, After Task
 
 	// Comment is the comment this change carried, if any.
 	Comment *Comment
 
-	// Mentions are the handles the text addressed, resolved by the caller
-	// — a mention resolved at READ time names whoever holds the role
-	// later, which is a different person.
+	// Mentions are the handles the text addressed, resolved by the caller:
+	// resolved at READ time, a mention names whoever holds the role later.
 	Mentions []string
 
 	// Asks is an agent author's statement of whether the comment asks the
@@ -78,35 +63,25 @@ type Wake struct {
 	// comment, or from the body on a create.
 	Excerpt string
 
-	// AnswersDecision is the decision of the ask this comment answers —
-	// [ResolvedThread.AnswersDecision] — carried so the card can say which
-	// option the answer chose by its LABEL. The comment names the option
-	// by id, and an id alone tells the asker nothing it can read at a
-	// glance; the label lives on a different row, which is why the caller
-	// fills it rather than this package resolving it.
+	// AnswersDecision is the decision of the ask this comment answers
+	// ([ResolvedThread.AnswersDecision]), so the card names the chosen
+	// option by its LABEL. The comment names it only by id and the label
+	// lives on another row, so the caller fills it.
 	AnswersDecision *decision.Decision
 
-	// Dependents and Thread are two of the three routing facts this
-	// package cannot derive from the two states of ONE task, and they are
-	// filled by the caller for the same reason [Wake.Mentions] is: each
-	// is about a DIFFERENT row, and resolving another row at the wake
-	// would resolve it from a node that may never have applied it. The
-	// third, the parent's assignee, the WRITE resolves, in its decide's
-	// own snapshot ([Notify.restated]): a parent each caller had to fill
-	// was a parent three of the callers that close a task never filled,
-	// and its assignee was told of none of those closes.
-	//
-	// Each is also the only thing standing between a reason and silence.
-	// [Candidates] reads `Snapshot.Dependents` for `blocking`,
-	// `Snapshot.ParentAssignee` for `parent_assignee`, and the thread for
-	// `asked`, `answered` and `thread` — and a field nothing fills routes
-	// to nobody without ever looking wrong, because an empty handle is
-	// dropped by the candidate builder's own guard.
+	// Dependents and Thread are filled by the caller, like Mentions, because
+	// each is about a DIFFERENT row, which the node routing the wake may
+	// never have applied. The third such fact, the parent's assignee, the
+	// write resolves in its decide's own snapshot ([Notify.restated]), so no
+	// caller can forget it. A field nothing fills routes to nobody without
+	// looking wrong: [Candidates] reads the three for `blocking`,
+	// `parent_assignee`, `asked`, `answered` and `thread`, and drops an
+	// empty handle.
 
-	// Dependents names the tasks a MIRROR commit added to this blocker,
-	// with each one's key and assignee. Set on the blocker's side of a
-	// dependency and on the duty's repair of one, and on nothing else: a
-	// new dependent is a fact for the blocker's assignee to weigh.
+	// Dependents names the tasks a MIRROR commit added to this blocker, each
+	// with its key and assignee. Set only on the blocker's side of a
+	// dependency and on the duty's repair of one: a new dependent is the
+	// blocker's assignee's to weigh.
 	Dependents []TaskParty
 
 	// Thread is the comment conversation this change joins: who has
@@ -116,17 +91,14 @@ type Wake struct {
 }
 
 // ThreadParties is what a comment's routing needs to know about the
-// conversation it lands in.
-//
-// RESOLVED BY THE CALLER, from the thread rows, because [Candidates] is pure
-// over the notification and the node that routes the wake is rarely the node
-// that holds the thread.
+// conversation it lands in. The caller resolves it from the thread rows:
+// [Candidates] is pure over the notification, and the routing node rarely
+// holds the thread.
 type ThreadParties struct {
-	// Participants are the handles already in this thread — the parent
-	// comment's author and everyone who has replied. Capped at
-	// [MaxThreadParticipants] by the caller's own query; this package
-	// cuts what arrives longer, deterministically, so two nodes reading
-	// one record agree.
+	// Participants are the handles already in this thread: the parent
+	// comment's author and every replier. The caller's query caps them at
+	// [MaxThreadParticipants]; this package cuts longer input
+	// deterministically, so two nodes reading one record agree.
 	Participants []string
 
 	// Asked is the handle THIS comment asks, which is a question somebody
@@ -138,29 +110,22 @@ type ThreadParties struct {
 	Owing    []string
 	Awaiting []string
 
-	// AnsweredAuthor is the author of the comment this one ANSWERS.
-	//
-	// The author of the answering comment is the ANSWERER, so routing off
-	// it would wake the seat that just replied and leave the person who
-	// asked unwoken. That is why this is a snapshot field and not a
-	// lookup at the wake.
+	// AnsweredAuthor is the author of the comment this one ANSWERS: the
+	// answering comment's own author is the answerer, so routing off it
+	// would wake the seat that replied and not the asker.
 	AnsweredAuthor string
 }
 
 // Notify builds the record's routing snapshot, or nil when this change wakes
-// nobody.
-//
-// NIL IS THE ONLY WAY TO SAY "QUIET", and it is a question about the record's
-// own shape rather than a flag a writer can forget to set: a quiet commit is a
-// full record, arbitrated exactly like a loud one, and writes its history row
-// like every other.
+// nobody. Nil is the only way to say "quiet", so quiet is the record's shape
+// rather than a flag a writer can forget; a quiet commit is still a full
+// record, arbitrated and history-written like a loud one.
 func (w Wake) Notify(leads Leads) *Notify {
 	if !w.Kind.Valid() {
 		return nil
 	}
-	// IN THE CALLER'S FRAME, WHICH HOLDS NO CATALOGUE ([TaskDeltas]), so a
-	// custom value is not named here: an update's decide restates the card
-	// from its own comparison, the catalogue's names included
+	// The caller's frame holds no catalogue ([TaskDeltas]), so custom values
+	// go unnamed here; an update's decide restates the card with them
 	// ([Notify.restated]).
 	fields, omitted := cardFields(TaskDeltas(w.Before, w.After, nil))
 	notify := &Notify{
@@ -178,40 +143,17 @@ func (w Wake) Notify(leads Leads) *Notify {
 	return notify
 }
 
-// settled brings a create's wake up to everything the writer settled on the
-// task after its caller built that wake: handed is the task as the caller
-// handed it in, and filed is the task the record carries.
-//
-// A CREATE'S CALLER BUILDS ITS WAKE BEFORE THE WRITER SETTLES ANYTHING, and
-// the writer settles a good deal: the tags as the slugs they normalise to and
-// the default type, before the key is minted ([Writer.CreateTask]); a
-// question's addressee among the watchers ([checkCreateAsk]); and, inside the
-// create's own snapshot, the
-// unit the project files the work into ([filedUnit]), the project's default
-// assignee ([Writer.landsOn]) and the watch they then hold, and the status and
-// priority a create naming none starts at. A wake left at what the caller
-// handed in routes from a task the record does not carry: the default
-// assignee unwoken while the create went to the lead's fallback as triage,
-// and a fallback with no unit lead to offer, so unassigned work filed into a
-// project with no lead of its own reached nobody. Completed one settlement at
-// a time, the card still disagreed with the history row beside it about the
-// rest. So it is ONE COMPLETION, made once every settlement is.
-//
-// THE CARD IS THE CREATE'S HISTORY ROW, trimmed for a card: the applier writes
-// that row from [TaskDeltas] over nothing and the task as filed, and the card
-// is stated from the same call, so the two cannot disagree about what a
-// create moved — the disagreement [TaskDeltas] was exported to end. Nothing
-// the caller stated is re-stated otherwise: a create's own card is that same
-// call over the task it handed in, so a field the writer did not move reads
-// exactly as the caller had it. Trimmed from the whole set again, so a field
-// the caller's trim left off is counted once rather than twice.
-//
-// THE SNAPSHOT ONLY WHERE THE WRITER MOVED IT — the assignee, the watchers
-// less the muted, the status and its group, the unit's lead — because the rest
-// is routing state the caller copied and the writer decided nothing about.
-// The unit's lead through the writer's own chart ([Writer.Leads]), since the
-// writer is what settled the unit; a unit the caller named is never filled
-// in, so it keeps the lead the caller's own chart resolved.
+// settled brings a create's wake (handed: the task as handed in) up to what
+// the writer settled after the caller built it (filed: the task the record
+// carries): normalised tags and default type ([Writer.CreateTask]), an ask's
+// addressee as watcher ([checkCreateAsk]), the filed unit ([filedUnit]), the
+// default assignee and its watch ([Writer.landsOn]), the starting status and
+// priority. ONE completion once all are settled, or the default assignee and
+// unit lead go unwoken and the card disagrees with the history row. When the
+// writer moved anything, the card is recomputed whole from [TaskDeltas] over
+// nothing and the filed task, as the applier's history row is. The snapshot
+// changes only where the writer moved it: a unit the caller named keeps the
+// lead its own chart resolved, a settled one takes [Writer.Leads]'s.
 func (n *Notify) settled(handed, filed Task, leads Leads) {
 	if n == nil {
 		return
@@ -233,18 +175,12 @@ func (n *Notify) settled(handed, filed Task, leads Leads) {
 	}
 }
 
-// keyed names, on a create's wake, the key the write minted.
-//
-// A CREATE'S CALLER BUILDS ITS WAKE BEFORE THE KEY EXISTS — the key is the
-// project's next counter value, taken by the write itself — so the snapshot
-// it hands in names none. [Snapshot.Key] is read as the task's addressable
-// name by everything the record wakes: the notice's `subject_key`, the woken
-// seat's `item_key` and the prompt's "Read **<key>**" line. The notice was
-// already repaired from the applier's own row, but the wake a seat is
-// delivered carried no key, so the turn it started was charged to a bare
-// uuid — a row every turn list drew as `native:<uuid>` — and its prompt had
-// no key to read the task by. Stamped here, at the one point a create passes
-// through with the key in hand.
+// keyed names, on a create's wake, the key the write minted. The caller builds
+// the wake before the write takes the project's next counter value, and
+// [Snapshot.Key] is the task's addressable name to everything the record wakes:
+// the notice's `subject_key`, the woken seat's `item_key` and the prompt's
+// "Read **<key>**" line. Without it a woken turn is charged to a bare uuid and
+// its prompt has no key to read the task by.
 func (n *Notify) keyed(key string) {
 	if n == nil || key == "" {
 		return
@@ -281,24 +217,17 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 		StatusGroup: after.StatusGroup,
 		Assignee:    after.Assignee,
 		Reporter:    after.Reporter,
-		// THE SET MINUS THE MUTED, so the feed never has to subtract and
-		// can never forget to. The mute itself travels in the mutation
-		// payload whenever the watcher collection is touched.
+		// Minus the muted, so the feed never has to subtract. The mute
+		// itself travels in the mutation payload when watchers are touched.
 		Watchers:        without(after.Watchers, after.Muted),
 		Collaborators:   slices.Clone(after.Collaborators),
 		PrevAssignee:    w.Before.Assignee,
 		PrevStatusGroup: w.Before.StatusGroup,
 	}
 	if w.Comment != nil {
-		// WHO WROTE IT DECIDES WHETHER THE ASSIGNEE IS ADDRESSED, which
-		// is the difference between a turn that answers and one that
-		// absorbs (see [Notify.ownerAsked]). It was never copied
-		// here, so the field was the zero AuthorKind on every record
-		// ever written and the comparison against `human`/`operator`
-		// was false for every comment: a person asking an agent a
-		// question in a comment produced an unaddressed wake, and the
-		// agent read it as activity to note rather than a question to
-		// answer.
+		// The author's kind decides whether the assignee is addressed: a
+		// turn that answers rather than absorbs ([Notify.ownerAsked]).
+		// Without it a person's question to an agent reads as activity.
 		snapshot.CommentAuthorKind = w.Comment.AuthorKind
 		snapshot.CommentAsks = w.Asks
 		snapshot.MentionedAgents = slices.Clone(w.MentionedAgents)
@@ -325,11 +254,10 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 		snapshot.CommentAsk = w.Comment.Ask
 	}
 	if w.Comment != nil && w.Kind == ChangeComment {
-		// THE CREATION KIND ALONE. A comment becomes a question when it
-		// is WRITTEN — see [Comment.Ask] — and an edit re-sends the whole
-		// comment document, so a snapshot filled on `comment_edited`
-		// would wake the asked party again for a typo fix, and re-wake
-		// the person who asked a question that was answered days ago.
+		// The creation kind alone: a comment becomes a question when
+		// WRITTEN ([Comment.Ask]) and an edit re-sends the whole comment,
+		// so filling this on `comment_edited` would re-wake the asked
+		// party for a typo fix, and the asker of a long-answered question.
 		snapshot.CommentAsk = w.Thread.Asked
 		snapshot.AnsweredAuthor = w.Thread.AnsweredAuthor
 		snapshot.ThreadParticipants = capHandles(
@@ -341,17 +269,11 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 	return snapshot
 }
 
-// checklistAssignees is everybody whose checklist item this change touched.
-//
-// BY ITEM ID rather than by position, because a checklist is reordered and
-// renamed constantly and a positional diff would report the whole list as
-// changed the first time somebody dragged a line. An item counts as touched
-// when it appeared, disappeared, or changed in a way its assignee would care
-// about — see [itemTouched].
-//
-// The set is SORTED and deduped, because two nodes read the record rather than
-// re-deriving it and a slice in map order would put two spellings of one
-// notification in the store.
+// checklistAssignees is everybody whose checklist item this change added,
+// removed or touched ([itemTouched]). By item ID, not position: a positional
+// diff reports the whole list changed after one drag. Sorted and deduped,
+// because nodes read the record rather than re-derive it, and map order would
+// store two spellings of one notification.
 func checklistAssignees(before, after Task) []string {
 	was := itemsByID(before)
 	now := itemsByID(after)
@@ -367,8 +289,7 @@ func checklistAssignees(before, after Task) []string {
 		case !held:
 			mark(item)
 		case itemTouched(previous, item):
-			// BOTH OWNERS, because a reassigned item is news to the
-			// person who had it as much as to the person who has it.
+			// Both owners: a reassigned item is news to who had it too.
 			mark(item)
 			mark(previous)
 		}
@@ -387,15 +308,10 @@ func checklistAssignees(before, after Task) []string {
 }
 
 // itemTouched reports whether an item changed in a way its assignee would care
-// about: its text, its done flag, or who holds it.
-//
-// NAMED FIELDS, NOT THE STRUCT. It was `!=` over the whole item, which asked
-// two wrong questions at once. `Parent` is a POINTER, so two decodings of one
-// unchanged nested item — the stored one and the one a checklist write
-// re-sends — compared unequal by address, and every nested item's assignee was
-// woken by any edit to its list. And `Order` and `Parent` are LAYOUT: dragging
-// one line renumbers its neighbours, so the reorder this function's own doc
-// says must not report the whole list woke everybody on it.
+// about: its text, its done flag, or who holds it. Named fields, not struct
+// `!=`: `Parent` is a pointer, so two decodings of one unchanged item compare
+// unequal, and `Order` and `Parent` are layout, so a drag would wake everybody
+// on the list.
 func itemTouched(before, after ChecklistItem) bool {
 	return before.Name != after.Name || before.Done != after.Done ||
 		before.Assignee != after.Assignee
@@ -414,13 +330,11 @@ func itemsByID(task Task) map[string]ChecklistItem {
 	return out
 }
 
-// capHandles cuts a handle set to its cap, deduped, order preserved.
-//
-// CUT RATHER THAN REFUSED, unlike every collection a caller states: these are
-// derived from rows, so a set over its cap is a task that grew rather than a
-// writer that asked for too much — and refusing the write would fail somebody's
-// comment because a thread has many voices. The cap bounds what rides on the
-// record; nobody is silenced, because a participant past it is still a watcher.
+// capHandles cuts a handle set to its cap, deduped, order preserved. Cut
+// rather than refused, unlike a collection a caller states: these derive from
+// rows, so an oversize set is a task that grew, and refusing would fail a
+// comment because its thread has many voices. Nobody is silenced: a
+// participant past the cap is still a watcher.
 func capHandles(in []string, cap int) []string {
 	out := make([]string, 0, min(len(in), cap))
 	seen := make(map[string]bool, len(in))
@@ -461,37 +375,27 @@ func capParties(in []TaskParty, cap int) []TaskParty {
 	return out
 }
 
-// moves fills in the transitions a write made from before to after: the
-// watchers it dropped, the lead of a team it moved the task to and the holders
-// of the checklist items it touched. Each is filled only where its transition
-// happened and emptied where it did not, so a filled field IS the transition,
-// and [Candidates] reads each wherever it is filled, whatever kind the record
-// ends with: a hand-off written with a status still drops a watcher, moves the
-// team and touches the item it touches (#953). Never asked of a creation,
-// whose before is nothing.
+// moves fills in the transitions a write made from before to after: watchers
+// dropped, the lead of a unit the task moved to, holders of checklist items
+// touched. Each is filled only where its transition happened and emptied
+// otherwise, so a filled field IS the transition, and [Candidates] reads it
+// whatever kind the record ends with (a hand-off written with a status still
+// drops a watcher). Never asked of a creation, whose before is nothing.
 func (s *Snapshot) moves(before, after Task, leads Leads) {
 	s.RemovedWatchers = nil
 	if removed := without(before.Watchers, after.Watchers); len(removed) > 0 {
-		// THE HANDLES THIS WRITE DROPPED, which only the two states know.
-		// [Candidates] writes them to the INBOX rather than routing them —
-		// a human learns that a lead removed her watch — and with nothing
-		// filling the field that never happened at all.
+		// [Candidates] writes these to the INBOX rather than routing them:
+		// a human learns that a lead removed her watch.
 		s.RemovedWatchers = removed
 	}
 	s.RoutedTo = ""
 	if after.RoutingUnit != before.RoutingUnit && after.RoutingUnit != "" && leads != nil {
-		// THE NEW UNIT'S LEAD IS AN ORDINARY CANDIDATE, never the
-		// fallback — which is the whole reason this field exists beside
-		// RoutingUnitLead rather than being read from it. A fallback
-		// survives only when no ordinary candidate did, so on any task
-		// that still has an assignee, a collaborator or a watcher the new
-		// lead would be dropped in silence.
-		//
-		// GATED ON THE UNIT ACTUALLY MOVING, by whatever write moved it. A
-		// commit that re-asserts the unit it already had tells its lead
-		// nothing they do not know, and a walk that re-stamps a thousand
-		// tasks with the unit they are already in would otherwise wake
-		// one person a thousand times.
+		// The new unit's lead is an ORDINARY candidate, hence this field
+		// beside RoutingUnitLead: a fallback survives only when no ordinary
+		// candidate does, so on a task with an assignee, collaborator or
+		// watcher the new lead would be dropped. Gated on the unit moving,
+		// so a walk re-stamping a thousand tasks with the unit they are
+		// already in does not wake one lead a thousand times.
 		s.RoutingUnitLead = leads.UnitLead(after.RoutingUnit)
 		s.RoutedTo = s.RoutingUnitLead
 	}
@@ -502,28 +406,16 @@ func (s *Snapshot) moves(before, after Task, leads Leads) {
 }
 
 // restated is an update's wake as its decide publishes it: the caller's, with
-// what the write moved stated from the two states the decide holds — before,
-// the row in this snapshot, and after, the row this record leaves — rather
-// than from the task the caller read outside it.
-//
-// THE CARD IS THE UPDATE'S HISTORY ROW, as a create's is ([Notify.settled]):
-// the applier writes that row from [TaskDeltas] over the same two states and
-// the project's catalogue (declared), and the caller's account missed what
-// only this snapshot settles. A link a gesture resolved here recorded no edge;
-// a custom value, keyed by the slug it was typed as and named only through the
-// catalogue, read as a move whenever one was written; a status the patch named
-// without its group kept the old group; and a change another writer made
-// after the caller's read stood as this write's own. The router decides who
-// hears a change by these deltas ([Notify.moved]), so each was a misroute
-// (#953).
-//
-// THE TRANSITIONS WITH THEM, each only where it happened: the assignee and the
-// seat it left, the status and the group it left, the moves [Snapshot.moves]
-// fills, and, across the finished edge, the parent's assignee, which the
-// decide read in the same snapshot (parent). The rest of the snapshot is
-// routing state the caller copied and this write decided nothing about — a
-// repair's deliberately narrow one among it, which names its one recipient
-// and nobody else.
+// what the write moved restated from the decide's two states (before, this
+// snapshot's row; after, the row this record leaves) rather than from the task
+// the caller read outside it. The card is the update's history row, as a
+// create's is ([Notify.settled]): [TaskDeltas] with the catalogue (declared),
+// so a link resolved here, a custom value and a status's group are stated, and
+// another writer's later change is not claimed; the router routes by these
+// deltas ([Notify.moved]). Transitions only where they happened: assignee,
+// status and group, [Snapshot.moves], and across the finished edge the
+// parent's assignee (parent), read in the same snapshot. The rest is routing
+// state the caller copied, a repair's deliberately narrow recipient among it.
 func (n *Notify) restated(before, after Task, declared map[string]FieldDef,
 	leads Leads, parent string) *Notify {
 
@@ -558,37 +450,16 @@ func crossesFinished(before, after Task) bool {
 
 // TaskDeltas is what changed between two versions of a task.
 //
-// EXPORTED AND SHARED, because two frames need the same answer and a second
-// copy is how one stops matching the other: the WRITER computes it for the
-// notification card, and the APPLIER computes it for the history row — which
-// every quiet commit also writes, and which the entered stamp is derived
-// from. While this was a method on [Wake] the applier had no way to reach it,
-// so a quiet status change wrote a history row with NO deltas, and
-// `status_entered_at` went on naming an older change than the task had
-// actually last made.
+// Exported and shared so the WRITER (the notification card) and the APPLIER
+// (the history row, which every quiet commit writes and `status_entered_at`
+// derives from) cannot disagree about what moved. It is the task's half of one
+// rule; read `deltas.go`'s head, which states the bounds, the text forms and
+// why a value is never a rendering, before adding a field.
 //
-// IT IS THE TASK'S HALF OF ONE RULE, and `deltas.go` is the other: every apply
-// that writes a history row records what it moved, computed by the APPLIER
-// from the two states it holds. Read that file's head before adding a field
-// here — the bounds, the text forms and the reason a value is never a
-// rendering are stated there once for every object.
-//
-// # `declared` is the ONE thing the two frames do not share
-//
-// A task's custom-field values are keyed by field ID, so naming them takes the
-// project's catalogue — which the APPLIER holds (it reads the same
-// declarations to write the value rows) and the WRITER does not: a wake is
-// built by the tool from the snapshot it read, outside the write's own
-// transaction. Nil therefore means "no catalogue", and the comparison is
-// SKIPPED rather than keyed by uuid, because a delta reading
-// `0f3c…=3 → 0f3c…=5` is worse on every surface than no delta at all.
-//
-// That is the whole of the split, and it is deliberately the whole: every
-// OTHER field here is computed identically in both frames, because this
-// function was exported precisely so two frames could not disagree about what
-// moved. A field held back from the notification "because a card is one line"
-// would be that disagreement re-introduced by hand — and what a card shows is
-// already bounded, by [MaxDeltas].
+// `declared`, the project's custom-field catalogue, is the one input the two
+// frames do not share: the applier holds it, a writer's wake does not. Nil
+// skips custom values rather than keying them by uuid. Every other field is
+// computed identically, none held back from a card: [MaxDeltas] bounds it.
 func TaskDeltas(before, after Task, declared map[string]FieldDef) map[string]Delta {
 	moved := deltaSet{}
 	add := moved.add
@@ -598,76 +469,35 @@ func TaskDeltas(before, after Task, declared map[string]FieldDef) map[string]Del
 	add("priority", string(before.Priority), string(after.Priority))
 	add("project", before.Project, after.Project)
 	add("type", before.Type, after.Type)
-	// THE TAGS AS A SET — what this commit added and removed, whole slugs
-	// ([deltaSet.set]). Both sides used to be carried, joined and cut to
-	// six hundred bytes, so on a task carrying many tags the one a commit
-	// added was off the end of both. A re-ordering records nothing: the
-	// order a writer stated them in is not something anybody changed.
+	// The tags as a set ([deltaSet.set]): what this commit added and
+	// removed, whole slugs. A re-ordering records nothing.
 	moved.set("tags", before.Tags, after.Tags)
-	// THE SCHEDULE MOVES TOO, and until a tool could set any of these
-	// nothing here could observe it: a due date, an estimate and a size
-	// had no producer in the tree, so their absence from this list was
-	// invisible. With one, a re-estimate wrote a history row and a
-	// notification card carrying NO deltas at all — which renders as the
-	// bare kind, and reads as a change that lost what it changed.
-	// THE WHOLE INSTANT, which is [instantText].
-	//
-	// A DAY IS NOT A DELTA. Rendered as a calendar day these compared
-	// equal whenever a move stayed inside one, so pulling a due time from
-	// 09:00 to 17:00 produced NO entry at all: the history row and the
-	// notification card carried the change's kind and nothing it changed,
-	// which is the exact failure the block above this one was added to
-	// end. The day form was also wrong about WHICH day for any company
-	// east or west of UTC — an all-day due date is stored as the
-	// company's own midnight, so truncating it in UTC moved it a day —
-	// and a delta written by the APPLIER cannot consult the company's
-	// zone to fix that: these rows are the state log's N identical
-	// copies, and text derived from live configuration would differ
-	// between two nodes at different epochs. The instant is the value
-	// that is both lossless and the same everywhere; rendering a day from
-	// it belongs to a surface, which knows the zone.
+	// The schedule as the WHOLE INSTANT ([instantText]), never a day: a day
+	// drops a move within one (09:00 to 17:00) and, truncated in UTC,
+	// shifts an all-day date stored as the company's midnight. The applier
+	// cannot use the company's zone: these rows are the state log's
+	// identical copies, and live config differs between nodes at different
+	// epochs. Rendering a day belongs to a surface, which knows the zone.
 	add("due", instantText(before.DueAt), instantText(after.DueAt))
-	// AND WHETHER THAT INSTANT IS A DAY, which is the one thing about a due
-	// date the instant cannot say. An all-day date is stored as the
-	// company's own midnight, so making a midnight due date all-day — or
-	// giving an all-day one a time of 00:00 — moves the flag and leaves the
-	// instant exactly where it was: without this the commonest way to reach
-	// that flag is a row saying the schedule changed and naming nothing.
-	// [boolText] rather than an absence, for `archived`'s reason: both
-	// states are present on every task.
+	// And whether that instant is a day, which it cannot say: making a
+	// midnight due date all-day moves only this flag. [boolText], for
+	// `archived`'s reason: both states are present on every task.
 	add("due_all_day", boolText(before.DueAllDay), boolText(after.DueAllDay))
 	add("start", instantText(before.StartAt), instantText(after.StartAt))
-	// AND WHY IT WAITS, a write of its own when the date is restated with
-	// another reason: unrecorded, that write moved nothing a reader could see.
+	// And why it waits: restating the date with another reason is a write
+	// of its own, which would otherwise move nothing a reader could see.
 	moved.prose("wait_reason", before.WaitReason, after.WaitReason)
 	add("estimate", minutesText(before.EstimateMinutes), minutesText(after.EstimateMinutes))
 	add("points", pointsText(before.Points), pointsText(after.Points))
-	// AND THE EDGES, ONE FIELD PER RELATION KIND, because an edge change
-	// is a change to this task and the row that recorded it said only
-	// `relations`. Every dependency write is a task patch — a
-	// [Writer.Depend] sequence publishes `Relate` on the dependent and
-	// `Depend` on the blocker, and both land here — so the applier already
-	// holds both documents and the one thing missing was the comparison.
-	//
-	// HERE RATHER THAN AS A KIND OF ITS OWN, which is the choice this
-	// makes explicit: a [ChangeKind] says what HAPPENED and a delta says
-	// what MOVED, and they are different facts about one commit — the same
-	// separation [Applier.writeHistory] draws between the kind and
-	// `notified`. Keeping them apart is what lets `update_work_item`
-	// record a status move and an edge in ONE row, which a second kind
-	// could not have: one record has one kind.
-	//
-	// THE OTHER TASK BY ITS ID, never by its key. See `deltas.go`'s head:
-	// a key belongs to another task's row, a history row is written once
-	// and repaired by nothing, and a node that had not applied that task
-	// would store a different string for ever. Resolving it is the
-	// surface's, exactly as rendering a day is.
-	//
-	// ONE FIELD PER KIND, derived from [RelationKinds] rather than listed,
-	// so a fifth kind of edge is recorded with no second edit — the reason
-	// that slice exists.
-	//
-	// EACH KIND IS A SET, recorded as what joined and what left it.
+	// The edges, one field per relation kind, each a set (what joined, what
+	// left). Every dependency write is a task patch ([Writer.Depend]
+	// publishes `Relate` on the dependent and `Depend` on the blocker), so
+	// the applier holds both documents. A delta, not a [ChangeKind]: a kind
+	// says what HAPPENED and a delta what MOVED, so `update_work_item` can
+	// record a status move and an edge in ONE row ([Applier.writeHistory]
+	// draws the same line). The other task by its ID, never its key
+	// (`deltas.go`'s head). Kinds come from [RelationKinds], so a new kind
+	// is recorded with no second edit.
 	for _, kind := range RelationKinds {
 		was, now := relationMembers(before.Relations, kind), relationMembers(after.Relations, kind)
 		if kind == RelationEntry {
@@ -678,98 +508,57 @@ func TaskDeltas(before, after Task, declared map[string]FieldDef) map[string]Del
 		}
 		moved.set(string(kind), was, now)
 	}
-	// AND THE MIRROR, under the word this package already uses for it:
-	// `blocking` is what [DependencyChange] calls the other direction and
-	// what [Reason] calls the wake it produces. It is a field of its own
-	// rather than a fifth relation kind because it is not an authored edge
-	// — it is the copy the blocker carries so a close can name who it
-	// unblocks.
+	// The mirror, under the name [DependencyChange] and [Reason] use. Its
+	// own field rather than a relation kind: not an authored edge, but the
+	// copy a blocker carries so a close can name who it unblocks.
 	moved.set("blocking", before.Dependents, after.Dependents)
-	// AND THE REST OF WHAT A WRITER CAN MOVE, which recorded nothing at
-	// all. Every field below had a producer and no comparison, so the
-	// commit that changed it wrote a history row and a card carrying its
-	// KIND and nothing it changed — a `watchers` row that did not say who,
-	// an `archived` row that did not say which way, a `reparented` row that
-	// named neither parent. The kind is what HAPPENED and a delta is what
-	// MOVED, and a row with only the first is the exact failure the edge
-	// block above was added to end.
+	// The rest of what a writer can move, so no row carries its kind and
+	// nothing it changed. Left out is what no patch moves: version, log
+	// position and instants are the row's own columns, key and rank have
+	// two producers and neither is a patch ([TaskPatch.Mint]), depth is
+	// re-derived from the closure, and spend writes no history. A field
+	// that gains a patch field belongs here.
 	//
-	// WHAT IS STILL LEFT OUT IS WHAT A WRITER CANNOT MOVE, and it is left
-	// out because a delta describes a WRITE: a version, a log position and
-	// the instants are the row's own columns, a key and a rank have exactly
-	// two producers and neither is a patch ([TaskPatch.Mint] says so), a
-	// depth is a hint the applier re-derives from the closure, and a turn's
-	// spend writes no history row at all. A field that gains a patch field
-	// later belongs in the list below, for the reason the schedule block
-	// above gives: an absence nothing can produce is an absence nobody
-	// notices.
-	//
-	// THE THREE PEOPLE SETS ARE SETS, so they record what joined and what
-	// left, like the edges: nothing orders them, [settleWatch] rebuilds the
-	// watcher list by removing a handle and appending it, and a caller may
-	// state a whole set it read in any order — so a delta over document
-	// order would record a change on every re-statement that moved nobody.
-	//
-	// AND `muted` IS ITS OWN FIELD RATHER THAN SUBTRACTED FROM `watchers`.
-	// [Wake.snapshot] subtracts because it is building a ROUTING list; a
-	// delta records what the DOCUMENT holds, and folding the two would make
-	// "was never watching" and "chose to stop" the same row — which is the
-	// distinction those two fields exist to keep.
+	// The people sets are sets: [settleWatch] rebuilds watchers by remove
+	// and append, and callers restate a set in any order. `muted` is its
+	// own field, not subtracted as [Wake.snapshot]'s routing list is: a
+	// delta records the document, where "never watching" and "chose to
+	// stop" differ.
 	add("reporter", before.Reporter, after.Reporter)
 	moved.set("watchers", before.Watchers, after.Watchers)
 	moved.set("muted", before.Muted, after.Muted)
 	moved.set("collaborators", before.Collaborators, after.Collaborators)
-	// THE PARENT BY ITS ID, for the reason every relation is by one: a key
-	// is a fact about another task's row and this row is repaired by
-	// nothing. The activity read resolves it against the rows this node
-	// holds at the instant it answers — see `deltas.go`'s head.
+	// The parent by its ID, as every relation: the activity read resolves
+	// it against this node's rows when it answers (`deltas.go`'s head).
 	add("parent", parentText(before.Parent), parentText(after.Parent))
-	// THE ROUTING UNIT AND NOT THE FILED ONE. [Task.FiledUnit] is
-	// immutable, so the only commit that could ever move it is the create,
-	// where it says exactly what `routing_unit` already says — one more key
-	// on every new task's row, carrying nothing a reader did not have.
+	// The routing unit, not the filed one: [Task.FiledUnit] is immutable,
+	// so only a create moves it, where `routing_unit` already says it.
 	add("routing_unit", before.RoutingUnit, after.RoutingUnit)
-	// BOTH STATES PRESENT, which is [boolText]'s rule: "archived: — → true"
-	// would read as a field that had no value before, and every task has
-	// always had this one.
+	// Both states present ([boolText]): every task has always had this one.
 	add("archived", boolText(before.Archived), boolText(after.Archived))
-	// AND WHICH ROOT A CASCADE TOOK THIS TASK WITH — the one thing a
-	// tombstone holds that the history row does not already carry.
-	//
-	// The other three members of a [Tombstone] are `By`, `Kind` and `At`,
-	// and those ARE the row's own `actor`, `actor_kind` and `created_at`;
-	// recording them would be one commit's facts written twice, in two
-	// columns a later reader can find disagreeing. `RemovedWith` has no
-	// second home, and without it a descendant's `removed` row and a task
-	// somebody removed on purpose are the same three words — "removed by
-	// ada" — meaning two different things, with nothing on either row to
-	// tell them apart.
+	// And which root a cascade took this task with. A [Tombstone]'s other
+	// members (`By`, `Kind`, `At`) are the row's own `actor`, `actor_kind`
+	// and `created_at`; without `RemovedWith` a descendant's `removed` row
+	// reads like a deliberate removal.
 	add("removed_with", removedWithText(before.Removed), removedWithText(after.Removed))
 	add("checklists", checklistText(before.Checklists), checklistText(after.Checklists))
 	if before.Body != after.Body {
-		// A MARKER AND NEVER THE PROSE. A body is [MaxBody] — 32 KiB —
-		// and `tracker_history` is never swept, so carrying both sides
-		// would put 64 KiB on one log line on every node for the life
-		// of the company; the mutation itself is already on this row's
-		// `document` column for anybody who needs the text.
-		// [deltaSet.mark] rather than `add` because the two markers read
-		// the same when an edit replaced one paragraph with another of
-		// the same length, and that is a change.
+		// A marker, never the prose: a body is up to [MaxBody] (32 KiB),
+		// `tracker_history` is never swept, and the text is on this row's
+		// `document` column. [deltaSet.mark] rather than `add`: two bodies
+		// of one length give equal markers and are still a change.
 		moved.mark("body", bodyText(before.Body), bodyText(after.Body))
 	}
 	if from, to, changed := fieldsText(before.Fields, after.Fields, declared); changed {
-		// THE CUSTOM VALUES, BY SLUG. [deltaSet.mark] because a value
-		// past [MaxDeltaElement] is carried as its size, so two long
-		// values of one size render alike although the field moved.
+		// By slug. [deltaSet.mark] because a value past [MaxDeltaElement]
+		// is carried as its size, so two long values can render alike.
 		moved.mark("fields", from, to)
 	}
 	return moved.done()
 }
 
-// parentText is a task's parent, and the empty string when it is a root.
-//
-// THE EMPTY STRING RATHER THAN A WORD, so "— → 0f3c…" reads the way every
-// other absent value on a delta already does.
+// parentText is a task's parent, and the empty string when it is a root, so
+// "— → 0f3c…" reads like every other absent value on a delta.
 func parentText(parent *string) string {
 	if parent == nil {
 		return ""
@@ -777,15 +566,10 @@ func parentText(parent *string) string {
 	return *parent
 }
 
-// removedWithText is the root a cascade removed this task with, by its ID.
-//
-// BY ID for the reason the parent and every relation are: a key is a fact
-// about another task's row. Empty both for a live task and for one removed on
-// its own, which is the honest fold — neither went with anything.
-//
-// [removedWith], which binds the same fact into the task's own column, is
-// derived FROM this one, so the column and the delta cannot name two different
-// roots.
+// removedWithText is the root a cascade removed this task with, by its ID (a
+// key is a fact about another task's row). Empty for a live task and for one
+// removed on its own: neither went with anything. [removedWith], the task's own
+// column, derives from this, so the two cannot name different roots.
 func removedWithText(tomb *Tombstone) string {
 	if tomb == nil || tomb.RemovedWith == nil {
 		return ""
@@ -793,15 +577,10 @@ func removedWithText(tomb *Tombstone) string {
 	return *tomb.RemovedWith
 }
 
-// bodyText is how big a body is, and never a byte of it.
-//
-// BYTES RATHER THAN RUNES, because this is a statement about what the write
-// COST — the figure [MaxBody] is declared in, and the one a reader comparing
-// it against that cap needs. An absent body is the empty string, which every
-// renderer of a delta already draws as an em dash, so "— → 1204 bytes" is a
-// description written and "980 bytes → —" is one cleared: the two states the
-// marker has to tell apart, in the spelling this package uses for absence
-// everywhere else.
+// bodyText is how big a body is, and never a byte of it. Bytes, not runes: the
+// unit [MaxBody] is declared in. An absent body is the empty string, drawn as
+// an em dash, so "— → 1204 bytes" is a body written and "980 bytes → —" one
+// cleared.
 func bodyText(body string) string {
 	if body == "" {
 		return ""
@@ -809,25 +588,12 @@ func bodyText(body string) string {
 	return strconv.Itoa(len(body)) + " bytes"
 }
 
-// checklistText is a task's checklists as COUNTS PER NAMED LIST.
-//
-// COUNTS BECAUSE THE ITEMS DO NOT FIT: a task carries up to [MaxChecklists]
-// lists holding [MaxChecklistItemsTotal] items between them, each with its own
-// text, so listing them would put a copy of the whole tree on both sides of
-// one log line in a table nothing sweeps. "3 of 5 done" is what a reader of a
-// change wants from a checklist, and the item-level detail is on this row's
-// `document` column for anybody who needs it.
-//
-// A LIST THAT ARRIVED OR LEFT IS NAMED BY BEING THERE — each side carries the
-// lists that state held, so an addition appears on the `to` side alone and a
-// removal on the `from` side alone, which is [paramsText]'s shape for the same
-// reason.
-//
-// IN DOCUMENT ORDER, unlike the people sets above and like a person's
-// `priorities`: a checklist collection renders in the order it is stored, so
-// that order is something somebody arranged rather than an artefact of how a
-// set was assembled. WHOLE, both sides: a task holds at most [MaxChecklists]
-// lists, each named in at most [MaxChecklistName] bytes.
+// checklistText is a task's checklists as COUNTS PER NAMED LIST: the items (up
+// to [MaxChecklistItemsTotal]) would copy the whole tree onto both sides of a
+// log line nothing sweeps, and the detail is on this row's `document` column.
+// A list added or removed appears on one side only, as in [paramsText]. In
+// document order, unlike the people sets: somebody arranged it. Whole on both
+// sides: at most [MaxChecklists] lists, each named in [MaxChecklistName] bytes.
 func checklistText(lists []Checklist) string {
 	if len(lists) == 0 {
 		return ""
@@ -846,11 +612,9 @@ func checklistText(lists []Checklist) string {
 	return listText(out)
 }
 
-// checklistName is what a list is called, falling back to its id.
-//
-// THE ID IS ON THIS TASK'S OWN DOCUMENT, so quoting it breaks none of the
-// rules a task KEY would: it is not a fact about another row. A nameless list
-// rendering as ": 2 of 3 done" would be a line nobody can attach to anything.
+// checklistName is what a list is called, falling back to its id: the id is on
+// this task's own document, so quoting it breaks none of a task key's rules,
+// and ": 2 of 3 done" would attach to nothing.
 func checklistName(list Checklist) string {
 	if name := strings.TrimSpace(list.Name); name != "" {
 		return name
@@ -859,28 +623,14 @@ func checklistName(list Checklist) string {
 }
 
 // fieldsText is the custom-field values that MOVED, as `slug=value` on each
-// side, and whether any moved at all.
-//
-// [paramsText]'S SHAPE, for [paramsText]'s reason: a task may carry
-// [MaxFieldValues] values of up to [MaxFieldValueBytes] each, so carrying the
-// whole map twice would put hundreds of kilobytes into a log line to show that
-// one number changed. Only the ids whose stored bytes differ appear, and both
-// sides of each — so an addition, a clearing and a re-pointing are three
-// different pictures.
-//
-// BY SLUG, WHICH TAKES THE CATALOGUE. A value is keyed by field ID precisely
-// so a rename never re-points it, and an id is a uuid: `declared` is what
-// turns it back into the word a person typed. A nil catalogue is the WRITER's
-// frame and yields nothing at all — see [TaskDeltas].
-//
-// A FIELD THIS PROJECT DOES NOT DECLARE IS COUNTED RATHER THAN NAMED. There is
-// no slug to name it with, its value is already outside every filter (see
-// `fieldvalues.go`'s foreign rows), and dropping it in silence would make a
-// commit that moved only such a value read as a commit that moved nothing.
-//
-// THE `changed` FLAG IS THE VALUES' OWN ANSWER, not the text's: the members
-// are cut at [MaxDeltaElement], so two long values differing past the cut
-// render the same and only the comparison above can tell them apart.
+// side, and whether any moved at all. Only ids whose stored bytes differ
+// appear, both sides of each, in [paramsText]'s shape: the whole map is up to
+// [MaxFieldValues] × [MaxFieldValueBytes]. By slug, through `declared`; a nil
+// catalogue is the writer's frame and yields nothing ([TaskDeltas]). A field
+// the project does not declare is counted, not named: it has no slug
+// (`fieldvalues.go`'s foreign rows), and dropping it would make a commit that
+// moved only it read as moving nothing. `changed` comes from the bytes, not
+// the text: values cut at [MaxDeltaElement] can render alike.
 func fieldsText(before, after map[string]json.RawMessage,
 	declared map[string]FieldDef) (string, string, bool) {
 
@@ -924,9 +674,8 @@ func fieldsText(before, after map[string]json.RawMessage,
 			to:   proseText(fieldValueText(field, after[id]), MaxDeltaElement),
 		})
 	}
-	// ORDERED BY SLUG, because a map has no order and two nodes must write
-	// one string — and the two sides keep that one order, so a reader can
-	// line them up member for member.
+	// By slug, so two nodes write one string, and both sides in that one
+	// order, so a reader can line them up member for member.
 	sort.Slice(named, func(i, j int) bool { return named[i].slug < named[j].slug })
 	from := make([]string, 0, len(named)+1)
 	to := make([]string, 0, len(named)+1)
@@ -948,22 +697,13 @@ func fieldsText(before, after map[string]json.RawMessage,
 }
 
 // fieldValueText is one stored custom-field value as the text a delta carries.
-//
-// THE OPTION'S SLUG FOR A CHOICE, which is the same decision `fields` itself
-// takes one level up: [coerceOption] stores the option's ID so a rename never
-// re-points a stored value, and the declaration in hand is what turns it back
-// into the word somebody chose. Left unresolved, the commonest custom field
-// there is would put a uuid on both sides of every change to it.
-//
-// A RELATIONSHIP KEEPS ITS TASK ID, which is the opposite answer for the
-// opposite reason: the option list is on the declaration this frame holds,
-// while the other task is another ROW, which `deltas.go`'s head forbids
-// quoting by key.
-//
-// A MULTI-VALUED FIELD'S MEMBERS ARE JOINED WHOLE with "/", because ", "
-// already separates one field from the next; the caller describes a value past
-// [MaxDeltaElement] by its size ([proseText]) rather than cutting it, and a
-// whole value is bounded where it is written ([MaxFieldValueBytes]).
+// A choice is its option's SLUG: [coerceOption] stores the ID so a rename
+// never re-points a value, and the declaration in hand turns it back into the
+// word chosen. A relationship keeps its task ID: the other task is another
+// ROW, which `deltas.go`'s head forbids quoting by key. A multi-valued field's
+// members join whole with "/" (", " separates fields); the caller describes a
+// value past [MaxDeltaElement] by its size ([proseText]), and a whole value is
+// bounded where written ([MaxFieldValueBytes]).
 func fieldValueText(field FieldDef, raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
@@ -978,10 +718,8 @@ func fieldValueText(field FieldDef, raw json.RawMessage) string {
 	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err != nil {
-		// A NUMBER, A BOOLEAN OR SOMETHING THIS BUILD DOES NOT KNOW: its
-		// own JSON, which is what the document holds and what somebody
-		// typed. Guessing a shape for it is how `"3"` and `3` stop
-		// comparing.
+		// A number, a boolean or a shape this build does not know: its own
+		// JSON, as typed. Guessing a shape is how `"3"` and `3` stop comparing.
 		return string(raw)
 	}
 	if field.Type == FieldDropdown || field.Type == FieldLabels {
@@ -995,12 +733,8 @@ func fieldValueText(field FieldDef, raw json.RawMessage) string {
 }
 
 // relationMembers is one kind's counterparties, as the members of the set a
-// delta records.
-//
-// BY KIND rather than the whole set in one field, because the kinds are
-// unrelated facts: `waiting_on` is a dependency somebody has to clear and
-// `page` is a link to a wiki page, and folding them into one set would make
-// adding a link read as a change to what the task is waiting for.
+// delta records. Per kind, because the kinds are unrelated facts: adding a
+// `page` link must not read as a change to what the task is `waiting_on`.
 func relationMembers(relations []Relation, kind RelationKind) []string {
 	others := make([]string, 0, len(relations))
 	for _, relation := range relations {
@@ -1011,28 +745,20 @@ func relationMembers(relations []Relation, kind RelationKind) []string {
 	return others
 }
 
-// excerpt is what a card shows, cut rune-safely to the display limit.
+// excerpt is what a card shows, cut rune-safely to the display limit and
+// MARKED, the marker counted against the cap. A card is all most readers see
+// (inbox, history, activity feed; the wake prompt only where the excerpt was
+// stated, [wakeBody]), so an unmarked cut reads as a comment that ENDED there.
+// [textcut.Within] rather than Ellipsis because [Notify.Validate] refuses an
+// excerpt above MaxExcerpt, which would fail every long comment's write.
 //
-// MARKED, and the marker counted against the cap. A card is the whole of what
-// most of its readers see — a person's inbox, the item's history and the
-// activity feed show it, and the wake prompt renders it under "What changed"
-// only where it was stated rather than cut from the payload, a woken seat
-// reading the whole text otherwise ([wakeBody]) — so a comment cut at exactly
-// six hundred bytes and handed over unmarked reads as a comment that ENDED
-// there, which is a different message. [textcut.Within] rather than Ellipsis
-// because [Notify.Validate] REFUSES an excerpt above MaxExcerpt: a marker
-// outside the budget would turn every long comment into a failed write.
-//
-// AN ANSWER THAT CHOSE LEADS WITH THE CHOICE — `Chose “Ship Friday”: <body>` —
-// because the choice is the answer and the body is its reason: cut at the cap,
-// a card that led with the body could lose the one thing the asker was waiting
-// for.
+// An answer that chose leads with the choice (`Chose “Ship Friday”: <body>`):
+// the choice is the answer, and a card leading with the body could cut it off.
 func (w Wake) excerpt() string {
 	text := w.Excerpt
 	if text == "" && w.Kind == ChangeCreated {
-		// THE BODY BEFORE THE ASK on a create: a task filed as a
-		// question carries its question as the title — which the card
-		// already shows — and its detail as the body.
+		// The body before the ask on a create: a task filed as a question
+		// carries the question as its title, which the card already shows.
 		text = w.After.Body
 	}
 	if text == "" && w.Comment != nil {
@@ -1073,14 +799,10 @@ func choiceExcerpt(label, body string) string {
 const choicePrefix = "Chose “"
 
 // ExcerptQuotesAChoice reports whether a change's excerpt is the line
-// [choiceExcerpt] wrote for an answer that chose: one that quotes the ASKER's
-// option label before the answerer's own words, so the answerer is not the
-// only writer of it.
-//
-// READ OFF THE LINE ITSELF, because the readers that hold an excerpt — the
-// activity feed, a task's history, a person's inbox — hold no payload to say
-// which comment it was cut from, and a remark that happens to open the same
-// way is read as quoting somebody too, which is the safe direction.
+// [choiceExcerpt] wrote for an answer that chose, which quotes the ASKER's
+// option label, so the answerer is not its only writer. Read off the line
+// itself, because its readers (activity feed, history, inbox) hold no payload;
+// a remark opening the same way counts as quoting too, the safe direction.
 func ExcerptQuotesAChoice(excerpt string) bool { return strings.HasPrefix(excerpt, choicePrefix) }
 
 // without is a minus b, order preserved.
@@ -1097,28 +819,15 @@ func without(all, muted []string) []string {
 	return out
 }
 
-// The three schedule values, as the TEXT a delta carries.
+// The schedule values, as the TEXT a delta carries. An absent value is the
+// empty string, drawn as an em dash, so "— → 16 Apr" reads like "— → jun".
 //
-// AN ABSENT VALUE IS THE EMPTY STRING, which every renderer of a delta already
-// draws as an em-dash — so "no due date → 16 Apr" reads the way "— → jun"
-// already does for an assignee.
-//
-// AND A ZERO IS ABSENT for an estimate and a size, because in this package it
-// is the only absence those two have. [Task.StartAt] and [Task.DueAt] are
-// pointers and can be nil; [Task.EstimateMinutes] and [Task.Points] are a
-// plain int and a plain float64 over NOT NULL columns defaulting to 0, and
-// every reader of them already spends that zero as "unsized" — a workload sums
-// it and a total adds it. Rendering 0 as "0m" here would put a number on the
-// one surface that disagreed with both.
-//
-// The obvious alternative is to make "sized at nothing" its own fact by giving
-// the two fields the pointer this repo's zero-value rule calls for. It is not
-// wanted: nothing downstream can act on the distinction, and it would buy a
-// nullable column, a migration and a nil check in every sum to separate two
-// states that mean the same thing to a person reading a card. What a fold here
-// would cost — a size being CLEARED reported as no change at all — is not what
-// it costs: clearing 3 points renders "3" → "", which differs and is a delta
-// like any other. Only 0 → 0 folds, and that is not a change.
+// A zero is absent for an estimate and a size: [Task.EstimateMinutes] and
+// [Task.Points] are plain numbers over NOT NULL columns defaulting to 0, which
+// every reader already spends as "unsized"; "0m" would disagree. A pointer for
+// "sized at nothing" is deliberately not wanted: nothing can act on the
+// distinction, and it costs a nullable column, a migration and a nil check in
+// every sum. Clearing still shows ("3" → ""); only 0 → 0 folds.
 
 // minutesText is the estimate in minutes, or empty when there is none.
 func minutesText(minutes int) string {
@@ -1138,11 +847,7 @@ func pointsText(points float64) string {
 }
 
 // instantText renders an optional instant for a delta, and an absent one as
-// the empty string.
-//
-// A DELTA IS TEXT, because it is read by a card and by a history row rather
-// than compared — so an absent date is the empty string rather than a zero
-// instant that renders as the year one.
+// the empty string rather than a zero instant that renders as the year one.
 func instantText(at *time.Time) string {
 	if at == nil {
 		return ""

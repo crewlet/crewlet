@@ -16,15 +16,10 @@ import (
 // A MARK WAITS FOR THE POSITION ITS ASKER READ TO, rather than refusing a
 // notice the person was shown as one the company never recorded.
 //
-// A mark is unkeyed, so the estate router asks whichever data node it reaches,
-// and the inbox page that showed the notice may have been read from a peer
-// ahead of that node. Node b here is that node: on the same log as node a,
-// which wrote and applied the change that reached ana, and not yet at it. With
-// no floor its decide finds no history row for the notice and refuses the mark
-// `invalid` — "change the arguments", which is false: the same call lands once
-// b catches up. With the notice's own position as the floor, a b that cannot
-// reach it answers `behind`, a condition, and appends nothing; once its
-// applier runs the same mark lands.
+// A mark is unkeyed, so it may reach a node (b here) behind the peer the inbox
+// page was read from. With no floor b refuses it `invalid`, which is false: the
+// same call lands once b catches up. Floored at the notice's position, b
+// answers `behind` and appends nothing until its applier runs.
 func TestAMarkWaitsForTheAskersFloor(t *testing.T) {
 	t.Parallel()
 	a := newRoundTrip(t)
@@ -38,8 +33,7 @@ func TestAMarkWaitsForTheAskersFloor(t *testing.T) {
 	read := inbox.Gesture[worklet.Reason]{Read: []string{notice.RecordID}}
 	end := a.logEnd(t)
 
-	// BLIND, node b refuses what it has not reached as none of the
-	// company's — the refusal this floor exists to retire.
+	// BLIND, node b refuses what it has not reached: the refusal the floor retires.
 	_, err := b.writer.MarkInbox(t.Context(), "op-blind", "ana", statelog.Position{}, read,
 		worklet.PersonAuthority{})
 	if !errors.Is(err, worklet.ErrInvalid) || !strings.Contains(err.Error(), notice.RecordID) {
@@ -47,8 +41,7 @@ func TestAMarkWaitsForTheAskersFloor(t *testing.T) {
 			"invalid naming the notice — the state this test is about", err)
 	}
 
-	// HELD TO THE FLOOR, a node that cannot reach it says it is behind,
-	// which the same call clears, and writes nothing.
+	// HELD TO THE FLOOR, a node that cannot reach it answers behind and writes nothing.
 	_, err = b.writer.MarkInbox(t.Context(), "op-held", "ana", seen, read, worklet.PersonAuthority{})
 	var refusal *statelog.Unavailable
 	switch {
@@ -76,8 +69,7 @@ func TestAMarkWaitsForTheAskersFloor(t *testing.T) {
 		t.Fatalf("ana's read list on node b is %v, want the notice she marked", got.Read)
 	}
 
-	// A FLOOR ON ANOTHER LOG is refused before anything is asked: it says
-	// nothing of how far this one was read.
+	// A FLOOR ON ANOTHER LOG is refused: it says nothing of how far this one was read.
 	foreign := statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1, Seq: seen.Seq}
 	if _, err := b.writer.MarkInbox(t.Context(), "op-foreign", "ana", foreign, read,
 		worklet.PersonAuthority{}); !errors.Is(err, worklet.ErrInvalid) {

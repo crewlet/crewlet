@@ -11,41 +11,23 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The derived columns: values the applier COMPUTES from the rows it already
-// holds rather than copies out of a record.
+// The derived columns, COMPUTED from rows the applier holds, are maintained
+// INCREMENTALLY by the apply and REDERIVED by [Applier.Rederive] in this Go
+// (never a migration's SQL) when the checkpoint's rule set differs
+// ([statelog.Deriver]). Each pair shares one rule, so backfill equals replay:
 //
-// Six today, and the rule all follow is [statelog.Deriver]'s: maintained
-// INCREMENTALLY by the apply, and REDERIVED by [Applier.Rederive] whenever the
-// checkpoint's rule set differs from this build's — a cursor a reanchor created
-// (derivation 0), or rows adopted from a build whose rules differ — in this Go,
-// never a second copy in a migration's SQL.
-//
-//   - A task's `reopens`, maintained as each task history row is written, off
-//     the status delta that row records. "Backfill equals replay" is true by
-//     construction rather than by two implementations agreeing: both read one
-//     delta per applied status change through the one predicate, [reopened].
-//   - A project's `active_count`, maintained beside the three status buckets
-//     by [Applier.maintainProjectCounts] and recounted from the task rows by
-//     [rederiveActiveCounts].
-//   - A task history row's `reassignments`, the hand-off count that commit
-//     left, carried forward in log order as each row is written and walked
-//     again by [rederiveHandOffs] — see apply_handoffs.go.
-//   - A task's `updated_at`, the effective instant of the newest record that
-//     changed it — the `effective_at` of its newest history row — written by
-//     [Applier.applyTask] and recomputed by [restampUpdated].
-//   - A question's `answered_by`, the first answer the log carries after it,
-//     stamped by the answering remark's apply ([writeComment]) and walked
-//     again by [rederiveAnswers] — see apply_answers.go.
-//   - An open question's `overtaken`, restamped for its task at the end of
-//     every task apply and for every task by [Applier.Rederive]: see
-//     apply_overtaken.go.
+//   - a task's `reopens`: [countReopen] / [rederiveReopens], via [reopened];
+//   - a project's `active_count`: [Applier.maintainProjectCounts] / [rederiveActiveCounts];
+//   - a history row's `reassignments`: [deriveHandOffs] / [rederiveHandOffs];
+//   - a task's `updated_at`, its newest history `effective_at`:
+//     [Applier.applyTask] / [restampUpdated];
+//   - a question's `answered_by`: [writeComment] / [rederiveAnswers];
+//   - an open question's `overtaken`: [stampOvertaken] for one task / all.
 
 // DerivationVersion is the rule set this build derives its columns at.
 //
-// Bumped by ANY change to what a derived column holds, the first one a column
-// adds included: the bump is what re-derives every data node's rows in this
-// Go, so a node holding rows derived under another rule set converges on this
-// one.
+// Bumped by ANY change to what a derived column holds, a new column included:
+// the bump is what re-derives every data node's rows to this rule set.
 const DerivationVersion = 2
 
 var _ statelog.Deriver = (*Applier)(nil)
@@ -58,11 +40,9 @@ func (a *Applier) DerivationVersion() int { return DerivationVersion }
 // reopen — the work stayed finished — and neither is todo → in progress,
 // which never finished at all.
 //
-// BY GROUP, from the fixed status table, for the reason [stampFinish] cuts on
-// the group: a company that adds `shipped` or renames `done` must not change
-// what a reopen is. An unknown slug is in no group and so is never finished,
-// which reads a status this build does not know as unfinished on BOTH sides —
-// the same answer the history row's delta gives it on every data node.
+// BY GROUP, for [stampFinish]'s reason: adding `shipped` or renaming `done`
+// must not change what a reopen is. An unknown slug is in no group, so it
+// reads as unfinished on both sides, on every data node alike.
 func reopened(from, to Status) bool {
 	return from.Group().Finished() && !to.Group().Finished()
 }
@@ -73,12 +53,9 @@ const countReopenStatement = `UPDATE tracker_tasks SET reopens = reopens + 1 WHE
 // countReopen adds one to a task's reopen counter when the history row this
 // apply has just written records a reopen.
 //
-// OFF THE ROW'S OWN `fields_json`, the exact bytes [Applier.Rederive] reads
-// back — never off the two documents again. The history row is the one record
-// of a status change both halves can see, and it is written in cases the
-// object row is not (a record reprocessed below an applied successor writes
-// its history row and skips the object), so a rule keyed anywhere else would
-// count on one side what the other never sees.
+// OFF THE ROW'S `fields_json`, the bytes [Applier.Rederive] reads back, never
+// the documents: a record reprocessed below an applied successor writes its
+// history row and skips the object, so only the history row is seen by both.
 func countReopen(ctx context.Context, tx *sql.Tx, subject Subject, fields string) (int, error) {
 	if subject.Kind != KindTask {
 		return 0, nil
@@ -100,9 +77,7 @@ func countReopen(ctx context.Context, tx *sql.Tx, subject Subject, fields string
 }
 
 // Rederive implements [statelog.Deriver]: every derived column recomputed from
-// the rows this transaction holds — a task's `reopens`, a project's
-// `active_count`, each task history row's hand-off count, a task's
-// `updated_at` and a question's `answered_by`.
+// the rows this transaction holds.
 func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOptions) (int, error) {
 	reopens, err := rederiveReopens(ctx, tx)
 	if err != nil {
@@ -131,12 +106,9 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOpti
 	return reopens + active + handOffs + updated + answers + overtaken, nil
 }
 
-// restampStatement is [restampUpdated]'s read for one task, or for every task
-// when id is empty — named for the plan test.
-//
-// The one task's filter sits INSIDE the aggregate, so a late record reads its
-// own history rows through the subject index rather than grouping the
-// company's whole history to keep one group of it.
+// restampStatement is [restampUpdated]'s read for one task, or every task when
+// id is empty, named for the plan test. The one task's filter sits INSIDE the
+// aggregate, so it seeks the subject index rather than grouping all history.
 func restampStatement(id string) (string, []any) {
 	scope, args := "", []any{string(KindTask)}
 	if id != "" {
@@ -155,28 +127,17 @@ func restampStatement(id string) (string, []any) {
 // change, named for the plan test.
 const restampUpdatedStatement = `UPDATE tracker_tasks SET updated_at = ?, document = ? WHERE id = ?`
 
-// restampUpdated is every task's `updated_at` recomputed as the newest
-// `effective_at` among its own history rows — every task's when id is empty,
-// and the one task's otherwise.
+// restampUpdated recomputes `updated_at` as the newest `effective_at` among a
+// task's history rows: every task's when id is empty, else the one task's.
 //
-// THE SAME INSTANT THE INCREMENTAL RULE WRITES: [Applier.applyTask] stamps the
-// task with [effectiveAt] at the record it applies, and the history row that
-// apply writes carries that same value — so the newest history row IS the
-// newest stamp, and a row this build maintained re-derives to itself. Only
-// rows that differ are written, which is how an upgrade with nothing to repair
-// reports none.
+// THE SAME INSTANT [Applier.applyTask] stamps (its history row carries it), so
+// a maintained row re-derives to itself; only rows that differ are written.
+// ONE TASK serves a late record: it changes no document, yet its history row
+// raises every successor's effective instant ([Applier.raiseSuccessors]), so
+// the task is restamped to match a node that applied in log order.
 //
-// ONE TASK is the late record's half of the same rule. A record applied below
-// the task's version changes no document, but its history row still RAISES
-// every successor's effective instant (see [Applier.raiseSuccessors]) — so
-// the task's newest instant moved while its stamp did not, and a node that
-// applied the same records in log order would hold the raised one. Restamping
-// that task from its history is what keeps the two nodes identical.
-//
-// THE DOCUMENT MOVES WITH THE COLUMN. A task page reads the document and a
-// list reads the column, and a repair of one would draw two different "last
-// changed" instants for one task — so both are rewritten, in Go, because the
-// document's instant is RFC 3339 text and the column's is the store's integer.
+// THE DOCUMENT MOVES WITH THE COLUMN (a page reads one, a list the other), in
+// Go, since the document holds RFC 3339 text and the column an integer.
 func restampUpdated(ctx context.Context, tx *sql.Tx, id string) (int, error) {
 	query, args := restampStatement(id)
 	rows, err := tx.QueryContext(ctx, query, args...)
@@ -234,18 +195,12 @@ const activeRecount = `(SELECT COUNT(*) FROM tracker_tasks t
 // rederiveActiveCounts is every project's `active_count` recounted from its
 // task rows.
 //
-// A COUNT OVER THE ROWS rather than a replay of history, because the census is
-// a function of what the rows hold NOW, and the rows are exactly what the
-// incremental rule was maintaining it against: `status_group` and `removed_at`
-// are written by the task apply from the same two facts [activeOf] reads, so
-// "active and not removed" here and there cannot disagree. A purged task has
-// no row, which is the purge's own decrement.
+// A COUNT OVER THE ROWS, not a replay: `status_group` and `removed_at` are
+// written from the same two facts [activeOf] reads, so the two cannot
+// disagree, and a purged task has no row.
 //
-// ONE STATEMENT over every project, WRITING ONLY THE ONES THAT DIFFER, so a
-// re-derivation over rows this build maintained rewrites nothing — which is
-// how [Applier.Rederive] reports an upgrade with nothing to repair. A
-// company's projects are tens; the count seeks each through the tasks'
-// project index.
+// ONE STATEMENT WRITING ONLY THE PROJECTS THAT DIFFER, so maintained rows
+// rewrite nothing. Projects are tens, each seeking the tasks' project index.
 func rederiveActiveCounts(ctx context.Context, tx *sql.Tx) (int, error) {
 	res, err := tx.ExecContext(ctx, activeCountsStatement,
 		string(GroupActive), string(GroupActive))
@@ -256,8 +211,8 @@ func rederiveActiveCounts(ctx context.Context, tx *sql.Tx) (int, error) {
 }
 
 // clearReopensStatement and setReopensStatement are [rederiveReopens]' two
-// writes, named for the plan test: every counter cleared, a pass over the
-// whole table by definition, and then each task's written by its key.
+// writes, named for the plan test: every counter cleared (a whole-table pass
+// by definition), then each task's written by its key.
 const (
 	clearReopensStatement = `UPDATE tracker_tasks SET reopens = 0 WHERE reopens <> 0`
 	setReopensStatement   = `UPDATE tracker_tasks SET reopens = ? WHERE id = ?`
@@ -266,14 +221,10 @@ const (
 // rederiveReopens is every task's `reopens` recomputed from the status deltas
 // in its history rows.
 //
-// ORDER-FREE, because a count of transitions does not depend on the order it
-// is taken in — each history row records one change with both of its ends, so
-// the walk needs no sort and no per-task state. The rows are read whole and
-// the counters written after, because a statement cannot be issued on a
-// transaction while a query on it is still being read.
-//
-// A PURGED task has no row left to write, and its history rows are skipped
-// with it: the UPDATE of an id with no row affects nothing.
+// ORDER-FREE: each history row holds both ends of one change, so the walk
+// needs no sort. The reads finish before any write: a statement cannot be
+// issued on a transaction while a query on it is open. A purged task's UPDATE
+// affects nothing.
 func rederiveReopens(ctx context.Context, tx *sql.Tx) (int, error) {
 	counts, err := reopensFromHistory(ctx, tx)
 	if err != nil {
@@ -291,9 +242,8 @@ func rederiveReopens(ctx context.Context, tx *sql.Tx) (int, error) {
 	for id := range counts {
 		ids = append(ids, id)
 	}
-	// SORTED so the writes are issued in one order on every node; the
-	// result does not depend on it, but a re-derivation that is
-	// deterministic down to its statements is one a failure reproduces.
+	// SORTED, not for the result: statements deterministic on every node
+	// make a failure reproduce.
 	slices.Sort(ids)
 	written := 0
 	for _, id := range ids {

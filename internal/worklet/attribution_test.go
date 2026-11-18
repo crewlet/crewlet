@@ -13,17 +13,11 @@ import (
 // TestAttributionFieldsAreTheEngines holds the dashboard's field-name list
 // against the names [worklet.TaskDeltas] actually writes.
 //
-// THE FAILURE IS SILENT IN BOTH DIRECTIONS, which is the whole reason for a
-// gate. A properties rail asks "who set `estimate`" and gets nothing back when
-// the engine records it under another name — no error, no warning, the line
-// simply never appears — and the client's own first attempt asked for
-// `estimate_minutes`, which is what the TASK ROW calls the same number. In the
-// other direction, a field added to `TaskDeltas` is a property the rail could
-// now attribute and does not, which nothing else would ever report.
-//
-// The client list may be a SUBSET — a delta the rail has no row for is not a
-// defect — so what is asserted is that every name it uses is one the engine
-// writes, plus a named report of the ones it has not taken up.
+// The failure is silent both ways: a rail asking "who set `estimate`" under a
+// name the engine does not write (the task row's `estimate_minutes`, say) just
+// never shows the line, and a field added to TaskDeltas is a property the rail
+// could attribute and does not. The client list may be a SUBSET, so every name
+// it uses must be one the engine writes, and the rest are reported by name.
 func TestAttributionFieldsAreTheEngines(t *testing.T) {
 	t.Parallel()
 	engine := deltaFields(t)
@@ -58,12 +52,9 @@ func TestAttributionFieldsAreTheEngines(t *testing.T) {
 }
 
 // deltaFields is every field name TaskDeltas writes, observed rather than
-// listed: two tasks differing in every field, and the keys that come back.
-//
-// WITH A CATALOGUE, because one of the names is only reachable with one: a
-// task's custom-field values are keyed by field id and are named by SLUG or
-// not at all, so a nil map here would hide `fields` from a gate whose whole
-// job is to report the complete set.
+// listed: two tasks differing in every field, and the keys that come back. It
+// passes a catalogue because custom-field values are named by SLUG or not at
+// all, so a nil map would hide `fields` from the complete set.
 func deltaFields(t *testing.T) []string {
 	t.Helper()
 	before, after := twoDifferentTasks()
@@ -152,12 +143,9 @@ func twoDifferentTasks() (worklet.Task, worklet.Task) {
 	return before, after
 }
 
-// edgesTo is one edge of EVERY declared kind, so the fixture moves every
-// relation field rather than whichever one it happened to name.
-//
-// FROM [worklet.RelationKinds], for the reason [worklet.TaskDeltas] derives
-// its fields from the same slice: a fifth kind of edge is covered here with no
-// second edit.
+// edgesTo is one edge of EVERY kind in [worklet.RelationKinds], the slice
+// [worklet.TaskDeltas] derives its fields from, so the fixture moves every
+// relation field and a new kind is covered with no second edit.
 func edgesTo(other string) []worklet.Relation {
 	out := make([]worklet.Relation, 0, len(worklet.RelationKinds))
 	for _, kind := range worklet.RelationKinds {

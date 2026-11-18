@@ -94,10 +94,9 @@ func TestAnEmptyRankingFromABuildingIndexSaysSo(t *testing.T) {
 
 // AN EXACT KEY IS ITS TASK, AND IT LEADS: the index ranks words, and a key
 // split into "eng" and "2" ranks every body that mentions it above the task
-// itself, so a person who typed the key of the task they meant was offered
-// its subtasks and not it. Typed in any case, the key's task comes first and
-// is not listed again where the ranking also found it; words that are more
-// than one key are ranked as before.
+// itself. Typed in any case, the key's task comes first and is not listed
+// again where the ranking also found it; text that is more than one key is
+// ranked as words.
 func TestAnExactKeyLeadsTheRankingAndIsNotListedTwice(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

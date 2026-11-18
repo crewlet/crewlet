@@ -10,18 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE TRASH'S TWO WALKS KEEP THE CONTRACT EVERY OTHER WALK KEEPS.
-//
-// A subtree removal and its restore are one commit per task, which makes both
-// sequences — and they were the two the step contract never reached. Each
-// descendant's answer was discarded, so a step whose outcome was unknown was
-// carried on over; the root's own unknown was never checked, so descendants
-// followed a root nobody could say had gone; and every step was named by its
-// POSITION in a list the re-run reads afresh. A restore's list is what is
-// still in the trash, so once one task had come back the re-run's first step
-// carried the id the first run's first step landed under — on another task —
-// and the ledger refused it as an operation id reused: the restore could
-// never be finished under its own operation.
+// THE TRASH'S TWO WALKS KEEP THE STEP CONTRACT EVERY OTHER SEQUENCE KEEPS: a
+// subtree removal and its restore commit once per task, so an unknown step
+// stops the walk, an unknown root takes no descendant with it, and a step is
+// named by its task, never by its POSITION in a list the re-run reads afresh.
 
 // trashFixture is a root with three subtasks, every write applied as it lands.
 func trashFixture(t *testing.T) *roundTrip {
@@ -105,7 +97,7 @@ func TestASubtreeRemovalWhoseRootIsUnknownRemovesNothingElse(t *testing.T) {
 }
 
 // A RESTORE STOPPED PART OF THE WAY THROUGH IS FINISHED UNDER ITS OWN
-// OPERATION — the case positional step names made impossible — and under a
+// OPERATION (positional step names collide there in the ledger) and under a
 // new one, on a root that is already back.
 func TestARestoreStoppedPartOfTheWayIsFinishedAgain(t *testing.T) {
 	t.Parallel()

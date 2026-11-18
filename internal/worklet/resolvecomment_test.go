@@ -11,14 +11,12 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A REMARK IS RESOLVED BY WHOEVER MADE IT AND BY NOBODY ELSE.
-//
-// A question resolved without an answer is closed for its asker: the person
-// it asks answers it instead, and anybody else resolving it would take the
-// asker's question off every board on their behalf. So the refusal is the
-// writer's own, decided against the row it read, and a caller holding every
-// grant there is is still refused here. A remark that is not on the item, not
-// there at all or another item's, is not one to resolve on it.
+// A REMARK IS RESOLVED BY WHOEVER MADE IT AND BY NOBODY ELSE. A question
+// resolved without an answer is closed for its asker; the person it asks
+// answers it instead, and anybody else resolving it would take the asker's
+// question off every board. So the refusal is the writer's own, decided against
+// the row it read: a caller holding every grant is still refused. A remark not
+// on the item (absent, or another item's) is not one to resolve on it.
 func TestOnlyACommentsAuthorMayResolveIt(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -80,13 +78,10 @@ func TestOnlyACommentsAuthorMayResolveIt(t *testing.T) {
 	}
 }
 
-// A REMARK IS RESOLVED ONLY THROUGH ResolveComment.
-//
-// The resolve kind is what the applier writes a resolution on, and
-// ResolveComment is the one door that forms it from the stored row and refuses
-// anybody but the author. A plain patch stating that kind would be a
-// resolution under an author rule nothing checked, saying whoever it liked
-// resolved the remark whenever it liked; so it is refused, the author's own
+// A REMARK IS RESOLVED ONLY THROUGH ResolveComment, the one door that forms the
+// resolve kind from the stored row and refuses anybody but the author. A plain
+// patch stating that kind would be a resolution under an author rule nothing
+// checked, naming any resolver at any time; so it is refused, the author's own
 // included.
 func TestARemarkIsResolvedOnlyThroughResolveComment(t *testing.T) {
 	t.Parallel()

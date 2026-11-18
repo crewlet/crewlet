@@ -21,50 +21,25 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// The FIVE sequences that stay genuinely cross-object — a create (1), a
-// cross-project move (7) and a merge (13) here, a dependency in depend.go and
-// a board drag across lanes in place.go — and the one property that makes
-// them tolerable.
+// The five cross-object sequences: a create (1), a cross-project move (7) and
+// a merge (13) here, a dependency in depend.go, a board drag across lanes in
+// place.go. They cannot be one append like every other write, because they
+// mint from one object and write another (a counter's number lands on a task).
 //
-// # Why a multi-append sequence is not a transaction, and must not pretend
-//
-// Every single-object write in this domain is ONE append: snapshot, decide
-// inside it, commit at the anchor the same transaction read. There is no
-// "between" and therefore no crash residue. A handful of gestures cannot
-// reach that shape, because the object they mint from and the object they
-// write are different objects with different arbitration — a key comes from a
-// project's counter and lands on a task.
-//
-// So each states FOUR things and this file implements exactly them: the
-// ORDER of its appends, the DURABLE CLAIM that stops two nodes running it at
-// once, the CRASH RESIDUE the order was chosen to leave, and the REPAIRER
-// that clears it — or the argument for why none is needed.
-//
-// The order is never arbitrary. A create mints its number first and its task
-// second, so a crash leaves a numbering GAP rather than two tasks sharing a
-// key, because a key is what people paste into chat. A cross-project move
-// writes the alias for a key BEFORE it re-keys the task, so a key somebody
-// pasted keeps resolving from the moment it stops being current. A board drag
-// across lanes (place.go) writes the task's status FIRST, because that is the
-// half the caller's if_match guards.
-//
-// # Every step is a step ON THE LOG
-//
-// Nothing here writes a row. Each step publishes a record and lets the
-// framework arbitrate it, so a sequence interrupted anywhere leaves only
-// records — no half-written state, nothing to roll back, and a re-run that
+// Each states its ORDER of appends, the DURABLE CLAIM that stops two nodes
+// running it at once, the CRASH RESIDUE that order leaves, and the REPAIRER (or
+// why none is needed). A create mints before filing (a gap, never a shared
+// key); a move writes the alias before re-keying (a pasted key keeps
+// resolving); a drag writes status first (the half if_match guards). Every step
+// is a record on the log, never a row: nothing to roll back, and a re-run that
 // re-derives the same identities is refused rather than duplicated.
 
 const (
-	// MaxTasksNamed is how many other tasks one call may name: a
-	// dependency change's counterparties ([Writer.Depend]) and a rank
-	// order's own moves, beside the neighbours a re-spread adds to them
-	// ([Writer.MoveTasks]).
-	//
-	// THE SAME 64 as every other fan-out in this design — a walk's batch
-	// ([WalkBatch]), the scope term cap ([MaxScopeTerms]) — because they
-	// are one quantity: how many objects one step may name before the work
-	// is a batch rather than a gesture.
+	// MaxTasksNamed is how many other tasks one call may name: a dependency
+	// change's counterparties ([Writer.Depend]) and a rank order's own moves,
+	// beside the neighbours a re-spread adds ([Writer.MoveTasks]). The same 64
+	// as [WalkBatch] and [MaxScopeTerms]: how many objects one step may name
+	// before the work is a batch rather than a gesture.
 	MaxTasksNamed = 64
 
 	// WalkBatch is one batch of a paced walk — a merge's children, a
@@ -73,33 +48,24 @@ const (
 	// subtree it read whole, bounded by [MaxDescendants].
 	WalkBatch = 64
 
-	// ClaimTTL is how long the durable claim a walking sequence holds
-	// survives unrenewed. FOUR HEARTBEATS, so three consecutive misses are
-	// survivable and the fourth hands the walk to the duty.
-	//
-	// THE LEASE'S OWN EXPIRY IS THE ONLY STALENESS THERE IS. The duty
-	// finishes a walk only under the walk's claim, so "abandoned" means
-	// "a claim the duty could take", and nothing else decides it: a second
-	// figure — the thirty-second ClaimStale this block used to declare,
-	// which nothing ever read — would be a second opinion about one event,
-	// and a coordination lease cannot be taken before it expires whatever
-	// that figure said.
+	// ClaimTTL is how long a walking sequence's durable claim survives
+	// unrenewed: four heartbeats, so three misses are survivable and the
+	// fourth hands the walk to the duty. The lease's expiry is the only
+	// staleness there is: the duty finishes a walk only under its claim, so a
+	// second "abandoned" threshold would be an opinion the lease ignores.
 	ClaimTTL = 60 * time.Second
 
-	// ClaimHeartbeat is how often the holder renews that claim — a quarter
-	// of [ClaimTTL], which is the arithmetic its own comment rests on.
+	// ClaimHeartbeat is how often the holder renews that claim: a quarter of
+	// [ClaimTTL].
 	ClaimHeartbeat = 15 * time.Second
 )
 
-// Claims is the coordination a multi-append sequence takes its claim from.
-//
-// FOUR METHODS OF [coord.Backend], named by the consumer as this package uses
-// them. Three-valued by construction and that is the whole reason it is not a
-// bool: a lease is held, a (nil, nil) says a peer holds it, and an error says
-// NOTHING IS KNOWN. A walk fails closed over both of the last two, and tells
-// its caller which it was ([Writer.hold]): a peer's hold is the walk already
-// running, while an unknown is a store that did not answer. Collapsed to two
-// values, one of those two answers would have to be a guess.
+// Claims is the coordination a multi-append sequence takes its claim from:
+// the four [coord.Backend] methods this package uses. Three-valued on purpose:
+// a lease is held, (nil, nil) says a peer holds it, an error says nothing is
+// known. A walk fails closed on both of the last two and tells its caller
+// which ([Writer.hold]): a peer's hold is the walk already running, an unknown
+// is a store that did not answer.
 type Claims interface {
 	TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error)
 	Renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (bool, error)
@@ -107,23 +73,13 @@ type Claims interface {
 	Get(ctx context.Context, resource string) (*coord.Lease, error)
 }
 
-// The claim names. One function each rather than a format string at the call
-// site, because a claim spelled two ways is two claims and admits exactly the
-// concurrency it was taken to exclude.
+// The claim names, one function each because a claim spelled two ways is two
+// claims and admits the concurrency it was taken to exclude. Built through
+// [coord.Class] like every lease, since they share the fleet's store and its
+// one naming grammar; the class is the key's leading subject token.
 //
-// Built through [coord.Class] like every other lease, because these land in
-// the SAME store as the fleet's own — on the KV backend the same bucket as the
-// fleet's duties — and a store with two naming conventions in it has two
-// grammars to keep right. The class is the key's leading SUBJECT TOKEN, so
-// each of these is filterable on its own.
-//
-// AND HELD TO THE CONTRACT'S CEILING, NEVER TO THE SEAT LEASE TTL: a class
-// that is not a seat or a node's presence is honoured at any TTL up to
-// [coord.MaxDutyTTL] on every backend ([coord.HeldToSeatTTL]), so [ClaimTTL]
-// is this package's own arithmetic and moves with nothing an operator tunes
-// for failover. Until that was the contract's, the KV store held these to its
-// seat lease bucket's age, and at the shipped 45 seconds refused the 60-second
-// walk claim on every fleet.
+// Held to [coord.MaxDutyTTL], never the seat lease TTL ([coord.HeldToSeatTTL]),
+// so [ClaimTTL] moves with nothing an operator tunes for failover.
 const (
 	classMove  coord.Class = "move"
 	classMerge coord.Class = "merge"
@@ -132,60 +88,41 @@ const (
 func moveClaim(task string) string  { return classMove.Resource(task) }
 func mergeClaim(task string) string { return classMerge.Resource(task) }
 
-// stepID derives one append's operation id from the gesture's own.
+// stepID derives one append's operation id from the gesture's own: stable and
+// distinct. The ledger dedupes one RECORD and a sequence publishes several, so
+// a shared id would answer the second append from the first's row; an id
+// minted per attempt would defeat the ledger in the lost-acknowledgement case.
 //
-// STABLE AND DISTINCT, and both halves matter. The operation ledger dedupes
-// one RECORD, and a sequence publishes several — so a shared id would make the
-// second append's resolution read the first's ledger row and report a write
-// that never happened. A freshly minted id per attempt would defeat the ledger
-// for exactly the lost-acknowledgement case it exists for, which is contract
-// 2's own rule about why an operation id is minted once.
-//
-// THE STATE LOG'S OWN GRAMMAR ([statelog.StepOpID]), so a step carries the
-// gesture's mint instant: the ledger's vouching reads it off the step's id,
-// and a step spelled here in a shape that grammar did not recognise would be
-// read as minted at the zero instant — answered `unknown` on any node whose
-// ledger's sweep ever lost a row.
+// It is the state log's grammar ([statelog.StepOpID]) so the ledger reads the
+// gesture's mint instant off it; any other shape reads as minted at the zero
+// instant and is answered `unknown` wherever the ledger's sweep lost a row.
 func stepID(opID, step string) string { return statelog.StepOpID(opID, step) }
 
 // ErrStepUnresolved reports a walking sequence that stopped at a step whose
-// outcome is UNKNOWN.
-//
-// NEITHER "DONE" NOR "NOT MADE": the steps before it landed, the step itself
-// may or may not be on the log, and nothing after it was written. A caller
-// told this re-runs the gesture under the SAME operation id, and every step
-// answers for itself — see each sequence's "Re-running it".
+// outcome is UNKNOWN: the steps before it landed, it may or may not be on the
+// log, and nothing after it was written. The caller re-runs the gesture under
+// the SAME operation id, and every step answers for itself (each sequence's
+// REPAIRER).
 var ErrStepUnresolved = errors.New("worklet: a step's outcome is unresolved")
 
-// ErrStepUnvouched reports a walking sequence that stopped at a step whose
-// outcome is unknown BECAUSE THIS NODE'S OPERATION LEDGER CANNOT VOUCH FOR IT
-// ([statelog.Result.Unvouched]): the step's operation was minted before the
-// instant the ledger may have lost rows from, and it holds no row for it.
+// ErrStepUnvouched reports a walking sequence stopped at a step whose outcome
+// is unknown because this node's operation ledger cannot vouch for it
+// ([statelog.Result.Unvouched]): the step was minted before the instant the
+// ledger may have lost rows from, and it holds no row for it.
 //
-// IT IS AN [ErrStepUnresolved] — errors.Is answers true for both — and the one
-// kind of it the same operation id retried HERE never finishes: the row the
-// step needs is the one the loss took, so every re-run on this node stops at
-// the same step. What can finish it is another node, or one whose ledger lost
-// nothing that far back. A caller told "call again" about it goes round a loop
-// the answer already knew the end of.
+// It is an [ErrStepUnresolved] (errors.Is answers true for both) that a retry
+// on THIS node never finishes, since the missing row is the one lost; another
+// node, or one whose ledger lost nothing that far back, can.
 var ErrStepUnvouched = fmt.Errorf("worklet: this node's operation ledger "+
 	"cannot vouch for a step: %w", ErrStepUnresolved)
 
-// resolved reads one step of a walking sequence the way the walk must: a step
-// that failed stops it, and so does one whose outcome is UNKNOWN.
-//
-// AN UNKNOWN STEP IS NOT ONE THAT LANDED. [Writer.UpdateTask] answers unknown
-// with a nil error — the record may be on the log and may not — and every walk
-// checked only the error, so it carried on over a step it could not vouch for:
-// descendants moved under a root whose own move might not have landed, a mark
-// taken down over a child still keyed in the old project, a duplicate closed
-// with a subtask still under it, and a caller told the whole gesture
-// succeeded. Stopping leaves the walk's own mark up, which is what hands the
-// remainder to the re-run or the duty rather than to nobody.
-//
-// AN UNKNOWN THIS NODE'S LEDGER CANNOT VOUCH FOR IS SAID SO ([ErrStepUnvouched]),
-// because the re-run the ordinary unknown asks for is exactly what never
-// finishes it here.
+// resolved reads one step of a walking sequence: a step that failed stops the
+// walk, and so does one whose outcome is UNKNOWN. [Writer.UpdateTask] answers
+// unknown with a nil error, so checking only the error would carry on over a
+// step nobody can vouch for (descendants moved under a root that may not have
+// moved) and report success. Stopping leaves the walk's mark up, which hands
+// the remainder to the re-run or the duty. An unknown this node's ledger
+// cannot vouch for says so ([ErrStepUnvouched]): a re-run here never ends it.
 func resolved(step string, result WriteResult, err error) error {
 	switch {
 	case err != nil:
@@ -206,12 +143,10 @@ func resolved(step string, result WriteResult, err error) error {
 	return nil
 }
 
-// WriteResult is what a tracker write returns.
-//
-// It carries the framework's own three-valued outcome UNCHANGED — a write is
-// applied, pending or unknown, and nothing here collapses them — plus the two
-// things only this domain can say: what a mint produced, and what the caller
-// should know but was not refused for.
+// WriteResult is what a tracker write returns: the framework's three-valued
+// outcome UNCHANGED (applied, pending or unknown), plus what only this domain
+// can say: what a mint produced, and what the caller should know but was not
+// refused for.
 type WriteResult struct {
 	statelog.Result
 
@@ -220,23 +155,18 @@ type WriteResult struct {
 	Key  string
 	Rank Rank
 
-	// KeyCollision says Key opens ANOTHER task — one that claimed it first,
-	// which is what a counter restored beside newer work mints — so the task
-	// this write landed is reached only by its id ([ItemAddress]). Read from
-	// the key directory in the snapshot that decided the write, or that read
-	// the task back ([keyHeldByAnother]); false wherever Key is empty.
-	//
-	// ON THE RECEIPT because the receipt is the first thing that names the
-	// duplicate: a create after a counter restore is what PRODUCES one, and
-	// a caller handed the key alone acts on the claimant with its next call.
+	// KeyCollision says Key opens ANOTHER task, one that claimed it first
+	// (what a counter restored beside newer work mints), so this write's task
+	// is reached only by its id ([ItemAddress]). Read in the snapshot that
+	// decided or read back the write ([keyHeldByAnother]); false wherever Key
+	// is empty. On the receipt because a caller handed the key alone acts on
+	// the claimant with its next call.
 	KeyCollision bool
 
-	// Assignee is who a create filed the task to: the assignee it named,
-	// else the project's default ([Writer.landsOn]), else empty for
-	// triage. Reported because only the create's own snapshot decides the
-	// second, so a caller answering from the task it SENT would tell
-	// somebody their work went to triage while it sat on a colleague's
-	// queue. Empty on every other path.
+	// Assignee is who a create filed the task to: its named assignee, else
+	// the project's default ([Writer.landsOn]), else empty for triage. Only
+	// the create's snapshot decides the default, so a caller answering from
+	// what it SENT would misreport where the work went. Empty elsewhere.
 	Assignee string
 
 	// Declared are the tags a write brought into existence, reported from
@@ -245,78 +175,35 @@ type WriteResult struct {
 	// declared a moment earlier.
 	Declared []string
 
-	// Posted is the remark a post found already on its task under its id —
-	// the call that posted it, made again — which the write answered from
-	// that row with nothing published ([PostedRemark]). Read in the snapshot
-	// that decided the write, because what the remark asked and answered is
-	// the row's: a caller reporting what its own read resolved before the
-	// write could name a question the post never closed, where the first
-	// attempt landed after that read. Nil on every other path.
+	// Posted is the remark a post found already on its task under its id
+	// (the same call, made again), answered from that row with nothing
+	// published ([PostedRemark]). Read in the deciding snapshot, because a
+	// read before the write misses a first attempt that landed after it.
+	// Nil on every other path.
 	Posted *PostedRemark
 
 	// Caveats are what the caller should know and was not refused for: a
-	// body carrying more task keys than the applier will resolve, a tag
-	// that nearly matched an existing one. THE APPLY MUST NEVER DEPEND ON
-	// ONE: every data node applies the same record, and only this node saw the
-	// caveat. Each carries a model's phrasing and a person's
-	// ([caveat.Caveat]), because the same write answers both.
-	//
-	// A result crosses the estate router between nodes as JSON, and the
-	// router rebuilds these from a peer's answer ([caveat.RebuildFromPeer]).
-	// No compatibility is kept with the list of sentences this field
-	// replaced: no tag has shipped it, so no fleet runs a peer that sends
-	// one (ADR-0060).
+	// body carrying more task keys than the applier resolves, a tag that
+	// nearly matched an existing one. The apply must never depend on one:
+	// every data node applies the record, and only this node saw the caveat.
+	// Each carries a model's phrasing and a person's ([caveat.Caveat]); the
+	// estate router rebuilds them from a peer's JSON answer
+	// ([caveat.RebuildFromPeer], ADR-0060).
 	Caveats []caveat.Caveat
 }
 
-// CreateTask mints a task. SEQUENCE 1.
+// CreateTask mints a task. SEQUENCE 1: read the project and its catalogues
+// (refuse an archived project, check required fields), append on the counter
+// at its anchor, then on the task at expectation 0 with rank = intPart(n).
 //
-//	Rs the project and its catalogues (refuse an archived project, check
-//	the required fields) → A on the counter at its own anchor → A on the
-//	task at expectation 0, carrying rank = intPart(n).
-//
-// CRASH RESIDUE: a numbering gap — the counter moved and the task never
-// landed. REPAIRER: nobody, and it stays documented. ENG-7 exists, ENG-8 never
-// did, ENG-9 is next, which is what Jira does too and is strictly better than
-// the alternative: minting the item first and the number after would let two
-// items share a key, and a key is what people paste into chat.
-//
-// # A retry under the same operation id
-//
-// THE TASK'S ID MUST BE A FUNCTION OF THE OPERATION — the builtin derives it
-// from the operation id — because the id is the subject the second append
-// arbitrates on: a retry that named a different task under the same
-// operation would be a second task the broker has no reason to refuse.
-//
-// A retry whose counter step already landed cannot use the number: that step
-// is answered from the ledger rather than decided ([statelog.Result.Collapsed]),
-// so the number it would have taken is one the counter never recorded. So the
-// retry asks for the task step the same way ([Writer.resumeCreate]): a task
-// that landed is answered with its own key, and only a task that never did
-// is filed on a FRESH mint — leaving the gap the crash residue already
-// describes, and never a second task or a shared key.
-//
-// # A create whose task is already filed
-//
-// THE TASK'S ID NAMES THE CREATE, so a create meeting a task already under it
-// is that create, made before, and is answered with that task from its row:
-// no number minted, nothing published. That is a retry the ledger cannot
-// answer — a rebased re-run (ADR-0029) mints its operations afresh, so its
-// operation is new, while the builtin derives the id as the work began and
-// names the task the first attempt filed. It is asked inside the counter's own
-// snapshot, before the mint, so the re-run spends no number; and the task
-// step answers the same way where the guarding row only appears after the mint
-// (the first attempt landing in between), leaving the gap the crash residue
-// above already describes. It used to be refused `ErrExists` there — after a
-// number was spent — and told a re-run that its own item could not be filed.
-//
-// THE RANK COMES FROM THE COUNTER VALUE and nothing arbitrates it a second
-// time. n is unique and increasing under the counter row's own arbitration, so
-// no two creates collide and every create's key is strictly the new maximum —
-// new tasks land at the tail in creation order. It cannot collide with a drag
-// either, and the proof is about the VALUE rather than about any bound: a
-// create's key is a pure integer at or above [RankOrigin], and every mint a
-// move makes carries a fractional part or sits strictly below the origin.
+// CRASH RESIDUE: a numbering gap, which nobody repairs (as in Jira); minting
+// the task first would let two tasks share a key. The task id MUST derive from
+// the operation id (as the builtin's does), else a retry is a second task the
+// broker cannot refuse. A retry whose counter step landed asks for the task
+// step ([Writer.resumeCreate]), filing on a fresh mint only if none landed. A
+// task already under the id (a rebased re-run, ADR-0029) is answered from its
+// row before the mint, spending no number. The rank is the counter value:
+// unique, the new maximum, never a drag's (fractional or below [RankOrigin]).
 func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	notify *Notify) (WriteResult, error) {
 
@@ -324,23 +211,14 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 }
 
 // CreateTaskAsking is [Writer.CreateTask] for an item filed AS A QUESTION: the
-// task and the ask on it — a [Comment] with `ask` set, and a [Decision] when
-// the question needs somebody to choose — land in ONE record.
+// task and its ask (a [Comment] with `ask` set, and a [Decision] when somebody
+// must choose) land in ONE record. Filed as two, a crash losing the comment
+// leaves a task with nobody asked: it wakes its assignee as work,
+// `asked_of_me` never lists it, and the answer has no ask to close.
 //
-// # Why one record and not a create followed by a comment
-//
-// Because the second append is the one that matters and it is the one a crash
-// loses. Filed as two, a question put through "Ask" or "Message" is a task
-// with nobody asked on it whenever the comment did not land: it wakes its
-// assignee as work rather than as a question, `asked_of_me` never lists it,
-// and the answer — which is what the person was waiting for — has no ask to
-// close. One record is either the whole question or nothing, and it is
-// arbitrated once, on the task's own subject, exactly like the create it is.
-//
-// THE ASK IS THE QUESTION ITSELF, so it answers nothing, replies to nothing
-// and chooses nothing: a task that does not exist yet holds no comment to
-// answer or reply to. The person asked starts following the item, as they do
-// when a comment asks them — see [followAuto].
+// The ask is the question itself, so it answers, replies to and chooses
+// nothing: the task holds no comment yet. The person asked starts following
+// the item ([followAuto]).
 func (w *Writer) CreateTaskAsking(ctx context.Context, opID string, task Task,
 	ask Comment, notify *Notify) (WriteResult, error) {
 
@@ -351,9 +229,8 @@ func (w *Writer) CreateTaskAsking(ctx context.Context, opID string, task Task,
 func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 	ask *Comment, notify *Notify) (WriteResult, error) {
 
-	// THE TASK AS THE CALLER HANDED IT IN, which is what its wake was built
-	// from: everything below that settles a field of it is brought onto the
-	// wake once the task is filed ([Notify.settled]).
+	// The task as handed in, which its wake was built from; what is settled
+	// below is brought onto the wake once filed ([Notify.settled]).
 	handed := task
 	switch {
 	case task.ID == "":
@@ -370,22 +247,18 @@ func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 		copied := *ask
 		ask = &copied
 	}
-	// BEFORE ANY READ, because a cap is a property of the value rather
-	// than of the database: a title past its cap is refused identically
-	// whichever node is asked and whatever the project holds, so paying
-	// for a transaction to say so would buy nothing.
+	// Before any read: a cap is a property of the value, refused the same on
+	// every node, so a transaction would buy nothing.
 	if err := checkTextCaps(&task.Title, &task.Body, nil); err != nil {
 		return WriteResult{}, err
 	}
-	// AND THE INSTANTS, for the caps' reason: the zero instant is no
-	// instant, whichever node is asked ([Task.CheckInstants]).
+	// The instants too, for the same reason ([Task.CheckInstants]).
 	if err := task.CheckInstants(); err != nil {
 		return WriteResult{}, err
 	}
 	if ask != nil {
-		// A VALUE CHECK TOO, and before the mint for the reason the caps
-		// are: a malformed question refused after the counter moved is a
-		// numbering gap nobody asked for.
+		// Before the mint too: a malformed question refused after the counter
+		// moved is a needless numbering gap.
 		if err := ask.CheckInstants(); err != nil {
 			return WriteResult{}, err
 		}
@@ -393,26 +266,22 @@ func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 			return WriteResult{}, err
 		}
 	}
-	// BEFORE THE MINT, because the catalogue check runs inside it. The
-	// other two defaults below cannot: they are applied after the key is
-	// minted and nothing validates them.
+	// Before the mint, because the catalogue check runs inside it; the other
+	// defaults are applied after the key and nothing validates them.
 	if task.Type == "" {
 		task.Type = DefaultTaskType
 	}
-	// THE TAGS ARE NORMALISED HERE and checked against the project's set
-	// inside the mint's own snapshot, for the same split: the spelling is
-	// a property of the argument and the declaration is a property of the
-	// project, and only the second needs a read.
+	// Tags are normalised here (a property of the argument) and checked
+	// against the project's set inside the mint's snapshot (a property of the
+	// project, the only half needing a read).
 	tags, err := normaliseTags(task.Project, task.Tags)
 	if err != nil {
 		return WriteResult{}, err
 	}
 	task.Tags = tags
 
-	// WHAT THE SNAPSHOT SETTLED COMES BACK OUT OF IT, and the LAST run of
-	// the closure is the one whose mint was accepted — so every field of
-	// it is assigned rather than appended to, exactly as the update path
-	// does with its own warnings.
+	// The LAST run of the closure is the one whose mint was accepted, so
+	// every field of settled is assigned, never appended to.
 	var settled settledCreate
 	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), task.Project, 1,
 		w.settleCreate(ctx, task, &settled))
@@ -430,24 +299,15 @@ func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 }
 
 // unvouchedCreate answers a create whose counter step this node's operation
-// ledger cannot vouch for ([statelog.Result.Unvouched]).
+// ledger cannot vouch for ([statelog.Result.Unvouched]). It is not "not made":
+// the operation predates rows the ledger may have lost (a turn re-run after
+// the thirty-day sweep, a month-old `unknown` finished), so its first run may
+// have filed the task; told "not made", a seat files a duplicate.
 //
-// # Why it is not "not made"
-//
-// The operation was minted before the ledger may have lost rows — a seat
-// re-running a turn whose trigger predates the ledger's thirty-day sweep, a
-// caller finishing a month-old `unknown` — so its first run may
-// well have filed the task, on this node or another. An unknown counter was
-// turned into ErrUnavailable, which every caller read as "the change was NOT
-// made": the seat then rephrased and filed a duplicate under a new operation,
-// or gave up on work that already existed.
-//
-// THE TASK'S OWN ROW CAN SAY, because its id is a function of the operation
-// ([Task.ID] is derived from the op id): a row under it is this operation's
-// task, filed by an earlier run, and is answered with its key exactly as a
-// resumed create would. No row is not proof of absence — the first run may
-// have filed it on a node this one has not caught up with — so it is answered
-// `unknown`, still unvouched, with no error: neither made nor not made.
+// The task's own row can say, since [Task.ID] derives from the operation: a
+// row is this operation's task, answered with its key as a resumed create
+// would. No row is not proof of absence (the task may be on a node this one
+// lags), so it answers `unknown`, still unvouched, with no error.
 func (w *Writer) unvouchedCreate(ctx context.Context, opID string, task Task,
 	minted statelog.Result) (WriteResult, error) {
 
@@ -498,9 +358,7 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task, handed Task,
 		task.FiledUnit, task.RoutingUnit, settled.unit)
 	if filed := w.landsOn(task, settled.assignee); filed.assignee != task.Assignee {
 		task.Assignee = filed.assignee
-		// THE ASSIGNEE WATCHES WHAT THEY HOLD, whoever named them: the
-		// caller put a named assignee on the watchers, and a default one is
-		// the same person holding the same task.
+		// The assignee watches what they hold, as a named assignee does.
 		task.Watchers, _ = followAuto(task.Watchers, task.Muted, task.Assignee)
 	} else if !filed.caveat.IsZero() {
 		settled.caveats = append(settled.caveats, filed.caveat)
@@ -538,10 +396,9 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task, handed Task,
 		return w.filedTask(ctx, opID, task.ID)
 	}
 	if err == nil && result.Collapsed {
-		// THE TASK STEP LANDED UNDER AN EARLIER COPY of this operation —
-		// found once a fresh mint's append met it on the task's subject
-		// — so the task is that copy's, under the number it took, and n
-		// is the gap this retry left.
+		// The task step landed under an earlier copy of this operation (met on
+		// the task's subject after a fresh mint), so the task is that copy's and
+		// n is this retry's gap.
 		return w.landedTask(ctx, result.Result, task.ID)
 	}
 	result.Key, result.Rank = task.Key, task.Rank
@@ -551,24 +408,16 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task, handed Task,
 }
 
 // resumeCreate finishes a create whose counter step already landed under its
-// operation id — a retry of a create the first attempt got at least halfway
-// through.
+// operation id. The task step is asked for first and only answered: deciding
+// it needs the number the earlier counter step took, so its Decide refuses
+// and only the ledger can answer it. Minting first would spend a number on
+// every retry of a finished create.
 //
-// THE TASK STEP IS ASKED FOR FIRST, AND ONLY ANSWERED. Its decision cannot be
-// taken here — it needs the number the earlier copy's counter step took,
-// which is on the log and not in this call — so its Decide refuses; the
-// ledger answers it before the Decide runs if the task landed, and then the
-// retry is the task the first attempt filed, under its own key, with no
-// second counter record. Minting first would spend a number on every retry
-// of a create that had already finished.
-//
-// ONLY A TASK THAT HAS NOT APPLIED HERE IS FILED ON A FRESH MINT, under an
-// operation of its own: the earlier number is the documented gap, and the
-// fresh one is unique under the counter's arbitration like any other. If the
-// task did land and this node simply has not applied it yet, the fresh mint
-// still costs only a number: the task step then meets the earlier copy on the
-// task's own subject, is refused its expectation of zero, and is answered
-// from the ledger once this node catches up ([Writer.fileTask]).
+// Only a task that has not applied here is filed on a fresh mint under an
+// operation of its own; the earlier number is the documented gap. If the task
+// landed but has not applied here yet, the fresh mint costs only a number: its
+// task step is refused expectation zero and answered from the ledger once
+// this node catches up ([Writer.fileTask]).
 func (w *Writer) resumeCreate(ctx context.Context, opID string, task, handed Task,
 	ask *Comment, notify *Notify) (WriteResult, error) {
 
@@ -585,9 +434,8 @@ func (w *Writer) resumeCreate(ctx context.Context, opID string, task, handed Tas
 	})
 	switch {
 	case err == nil && answered.Outcome == statelog.OutcomeUnknown:
-		// THE LEDGER CANNOT VOUCH FOR THE TASK STEP, so its silence is not
-		// "the task has not applied" and filing it now could file it
-		// twice: the answer is the step's own, and it is not a landing.
+		// The ledger cannot vouch for the task step, so its silence is not "not
+		// applied" and filing now could file twice.
 		return WriteResult{Result: answered}, nil
 	case err == nil:
 		return w.landedTask(ctx, answered, task.ID)
@@ -665,37 +513,17 @@ func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
 }
 
 // filedUnit is which team a new task belongs to, and which team's lead hears
-// about it.
+// about it. With no unit named, the project's own unit (from the chart apply,
+// on the project row): `filed_unit` is what `unit=` filters, a board's `unit`
+// axis groups and the dashboard's "Filed into" shows. Derived here, from a row
+// the decide's transaction reads, so every surface gets the same answer (an
+// operator or a root-level seat has no team to stamp) and no writer files
+// against a chart its peers have not applied.
 //
-// THE PROJECT'S OWN UNIT WHEN THE WRITER NAMED NONE, because that is what the
-// field means: `filed_unit` is the unit the work belongs to — it is what
-// `unit=` filters on, what a board's `unit` axis groups by, and what the
-// dashboard labels "Filed into" — and a task's project already has an owning
-// unit, written by the chart apply and carried on the project's own row.
-//
-// Deriving it here rather than at a caller is what makes the answer the same
-// whoever files the work. It was a caller's job once and only one caller did
-// it, stamping the FILING SEAT'S own team: every write from any other surface
-// landed with no unit at all. An item an operator filed into ENG through
-// `/operator/mcp` — an operator holds no seat and therefore no team — read
-// "Filed into: no unit" on a page whose project said it belonged to Core, and
-// so did every item filed by a root-level seat, which belongs to no unit
-// either. Nothing derived it from the project, although the project knew.
-//
-// THE ROW RATHER THAN A SEAM, unlike the people fields [FieldWorld] resolves:
-// a project's unit is a row this package reads inside the decide's own
-// transaction, so it needs no caller to supply it — the same distinction
-// [FieldWorld]'s doc draws for a relationship's task. It is also the value
-// every node already holds, so a writer cannot file against a chart its peers
-// have not applied.
-//
-// AN EXPLICIT UNIT IS LEFT ALONE, because it is the one thing the project
-// cannot say: work that belongs to another team than the one that owns the
-// project it sits in is exactly what `create_work_item`'s `unit` argument is
-// for. And the routing half follows whatever the filed half settles on
-// whenever the writer named no routing unit of its own, so the unit the work
-// belongs to is the unit whose lead hears about it — while a create that
-// deliberately routed somewhere else keeps that.
+// An explicit unit is left alone: work belonging to another team than the
+// project's is what `create_work_item`'s `unit` is for. Routing follows the
+// filed unit unless the writer named its own, so the lead who hears is the
+// lead of the unit the work belongs to.
 func filedUnit(stated, routed, project string) (filed, routing string) {
 	filed, routing = stated, routed
 	if filed == "" {
@@ -713,38 +541,18 @@ type landing struct {
 	caveat   caveat.Caveat
 }
 
-// landsOn is who a new task is assigned to.
+// landsOn is who a new task is assigned to: with nobody named, the project's
+// `default_assignee` ("who unassigned work lands on"), as `write_project` and
+// the dashboard's New task sheet promise. Decided in the create's own
+// snapshot, beside [filedUnit] and for its reason. A named assignee is left
+// alone, and so is an empty default (the project's choice of triage).
 //
-// THE PROJECT'S DEFAULT ASSIGNEE WHEN THE WRITER NAMED NOBODY, because that is
-// what the setting is: `write_project` has taken a `default_assignee` — "who
-// unassigned work lands on" — and resolved it against the chart since the
-// lead's policy verb shipped, the project read has served it, and the
-// dashboard's New task sheet says under an empty Assignee field that the task
-// goes to them. Nothing ever applied it. Every task filed without an assignee
-// landed in triage whatever the lead had set, which is a rule a lead set that
-// nothing applied and nothing said was not applying.
-//
-// HERE, IN THE CREATE'S OWN SNAPSHOT, beside [filedUnit] and for its reason:
-// the project row is what this decide already reads (it refuses an archived
-// project and checks the types, the tags and the required fields on it), so
-// the default is the one the create was DECIDED against rather than one a
-// caller read in another transaction — and every surface that files work gets
-// the same answer without knowing the rule.
-//
-// A NAMED ASSIGNEE IS LEFT ALONE, and so is an empty default, which is the
-// project's own setting for triage.
-//
-// A DEFAULT THAT NO LONGER NAMES A SEAT IS NOT APPLIED. It was resolved when
-// the lead set it, and a chart apply that removes the seat does not rewrite
-// the project: a task filed to that handle would wake nobody and sit on
-// nobody's queue, which is triage with the lead left out. So the task lands
-// in triage — where the lead IS told — and the writer is warned, naming the
-// setting to change. The chart is asked through [Writer.World], the seam the
-// people fields already resolve through, and it must answer with the SAME
-// handle: its resolver is the colleague match, whose later tiers would
-// happily turn a departed `ana` into a present `anabel`. With no chart seam
-// the stored handle is trusted as set — it was checked at the write that
-// stored it.
+// A default that no longer names a seat is not applied: the chart apply that
+// removed the seat does not rewrite the project, and a task filed to it would
+// wake nobody. It lands in triage, where the lead is told, with a caveat
+// naming the setting. [Writer.World] must answer with the SAME handle, since
+// its colleague match would turn a departed `ana` into `anabel`; with no
+// World the stored handle, checked when it was set, is trusted.
 func (w *Writer) landsOn(task Task, projectDefault string) landing {
 	if task.Assignee != "" || projectDefault == "" {
 		return landing{assignee: task.Assignee}
@@ -793,13 +601,9 @@ func checkCreateAsk(task *Task, ask *Comment) error {
 }
 
 // TaskCreate is a create record's payload: the whole task, and the question it
-// was filed as when it was filed as one.
-//
-// THE TASK IS EMBEDDED, so a create without an ask encodes to exactly the
-// bytes it always did and every reader that decodes the payload as a [Task]
-// still reads the task. The comment is a row of its own on apply — never part
-// of the task document — which is why it rides beside the task rather than on
-// it.
+// was filed as when it was. The task is embedded, so a create without an ask
+// encodes as a bare [Task] and every reader decoding one still reads it; the
+// comment is its own row on apply, so it rides beside the task, not on it.
 type TaskCreate struct {
 	Task
 	Comment *Comment `json:"comment,omitempty"`
@@ -822,12 +626,10 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 	ask *Comment, notify *Notify, at time.Time) (WriteResult, error) {
 
 	subject := TaskSubject(task.ID)
-	// THE TASK AND EVERY KEY IT CARRIES, because the create's apply claims
-	// each one that is not already claimed, and which task holds a key is
-	// decided in log order: on a node that retained another create of the
-	// same key, this one applied first would take the claim every other
-	// node gave to that one (see [keyTerm]). The keys are the task's own,
-	// fixed before the request, so the scope cannot come up short of them.
+	// The task and every key it carries: the apply claims each unclaimed key
+	// in log order, so a node retaining another create of the same key would
+	// otherwise give the claim to whichever applied first ([keyTerm]). The
+	// keys are fixed before the request, so the scope cannot fall short.
 	scope := ScopeSet{Subject: true, Container: task.Project}.
 		withKeys(task.ID, keysOf(task)).capped()
 	// WHETHER THE KEY THIS CREATE TOOK IS ANOTHER TASK'S, from the snapshot
@@ -869,20 +671,12 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 	}, err
 }
 
-// mintKey takes the next key number in a project. SEQUENCE 1's first append,
-// and 7's.
-//
-// # Why the number is a record and not a row read
-//
-// A counter read inside the snapshot says what this node has applied. Two
-// nodes reading it would read the same number and mint two tasks with one key,
-// which is precisely what a conditional append on the counter's own subject
-// makes impossible: the loser is rejected, re-decides against the winner's
-// number and takes the next one.
-//
-// It mints a RANGE of k, because a cross-project move re-keys a whole subtree
-// and doing it one at a time would be one append per descendant on the busiest
-// subject in the project.
+// mintKey takes the next k key numbers in a project: SEQUENCE 1's first
+// append, and 7's. The number is a record, not a row read: two nodes reading
+// the counter would mint two tasks with one key, while a conditional append on
+// the counter's subject rejects the loser, which re-decides and takes the
+// next. A RANGE of k, because a cross-project move re-keys a whole subtree and
+// one append per descendant would load the project's busiest subject.
 func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 	guard func(*sql.Tx) error) (uint64, statelog.Result, error) {
 
@@ -894,11 +688,9 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 	scope := ScopeSet{Subject: true}
 	at := w.Now()
 
-	// THE VALUE THE LAST DECISION FORMED, captured rather than returned:
-	// the framework re-decides on a rejected append, so the number that
-	// landed is the one the final decision took, and only the closure sees
-	// it. Reading the row afterwards would read whatever the fleet has
-	// since minted.
+	// Captured, not read back: the framework re-decides on a rejected append,
+	// so only the closure sees the number the final decision took; the row
+	// afterwards holds whatever the fleet has minted since.
 	var base uint64
 	result, err := w.publish(ctx, statelog.Request{
 		Subject: wire(subject),
@@ -934,24 +726,18 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 		return 0, result, err
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
-		// AN UNKNOWN MINT CANNOT BE BUILT ON. The record may or may not
-		// be on the log, so the number may or may not be ours — and a
-		// task published against a number somebody else also holds is
-		// two tasks with one key, which is the single thing this order
-		// exists to prevent.
+		// An unknown mint cannot be built on: the number may not be ours, and a
+		// task on a number somebody else holds is two tasks with one key, the
+		// one thing this order exists to prevent.
 		return 0, result, fmt.Errorf("worklet: the key mint for %s is "+
 			"unresolved, so the number it took cannot be built on: %w",
 			project, statelog.ErrUnavailable)
 	}
 	if result.Collapsed {
-		// NOR CAN A MINT THAT WAS ANSWERED RATHER THAN DECIDED. This
-		// operation's counter already moved under an earlier copy of it,
-		// and `base` is what THIS call would have taken — a number the
-		// counter never recorded and the next create is free to take too,
-		// which is two tasks with one key. The number the earlier copy
-		// took is on the log, not here: a create resumes from its task
-		// step instead ([Writer.resumeCreate]), and every other caller
-		// refuses.
+		// Nor can a mint answered rather than decided: the counter moved under
+		// an earlier copy, and `base` is a number the counter never recorded. A
+		// create resumes from its task step instead ([Writer.resumeCreate]);
+		// every other caller refuses.
 		return 0, result, fmt.Errorf("worklet: the key mint for %s already "+
 			"landed under operation %s, and the number it took is the earlier "+
 			"copy's, so it cannot be built on: %w", project, opID, errMintLanded)
@@ -959,21 +745,12 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 	return base, result, nil
 }
 
-// mintFresh takes k numbers under an operation minted for this call alone — the
-// mint a create resumes on, and a cross-project move's re-mint for what its
-// first range could not carry.
-//
-// AN ANSWER IT CANNOT PROVE ITS OWN IS MINTED AGAIN. No earlier copy of a
-// fresh operation exists, but a mint whose acknowledgement was lost is
-// resolved from the ledger, and the ledger cannot say whose copy of the
-// operation it names, so the publisher reports it collapsed ([errMintLanded])
-// and the number it took cannot be built on. Another fresh operation takes
-// another number and leaves that one as a gap, which is what every other
-// crash residue here costs.
-//
-// BOUNDED at [freshMintAttempts], because each such answer needs a lost
-// acknowledgement, and the attempts after the first are spent on a broker
-// that is dropping them.
+// mintFresh takes k numbers under an operation minted for this call alone:
+// the mint a create resumes on, and a cross-project move's re-mint for what
+// its first range could not carry. A mint whose acknowledgement was lost is
+// answered from the ledger, which cannot say whose copy it names, so it is
+// reported collapsed ([errMintLanded]) and minted again under another fresh
+// operation, leaving a gap. Bounded at [freshMintAttempts].
 func (w *Writer) mintFresh(ctx context.Context, project string, k int,
 	guard func(*sql.Tx) error) (uint64, statelog.Result, error) {
 
@@ -997,12 +774,9 @@ func (w *Writer) mintFresh(ctx context.Context, project string, k int,
 }
 
 // freshMintAttempts is how many fresh mints [Writer.mintFresh] makes before it
-// gives up.
-//
-// THREE, because only a lost acknowledgement makes one fail, and one of those
-// is the broker's ordinary weather: a second in a row on the same subject is
-// already unusual, and a third is a broker failing in a way a fourth mint does
-// not fix — while every attempt spends a number the project never gets back.
+// gives up. Three: only a lost acknowledgement fails one, two in a row on one
+// subject is already unusual, and a third is a failing broker a fourth mint
+// does not fix, while each attempt spends a number the project never regains.
 const freshMintAttempts = 3
 
 // errMintLanded is a key mint answered from an earlier copy of its operation.
@@ -1011,14 +785,10 @@ const freshMintAttempts = 3
 var errMintLanded = fmt.Errorf("the mint's number is an earlier copy's: %w",
 	statelog.ErrUnavailable)
 
-// settledCreate is what a create's own snapshot decided: the values that could
-// only be settled against rows, carried back out to the record the sequence's
-// second append publishes.
-//
-// A STRUCT RATHER THAN THREE RETURNS, because every one of them is the same
-// kind of thing — read inside the mint's transaction, assigned rather than
-// accumulated across the closure's runs — and a fourth loose value is where a
-// caller starts pairing one run's answer with another's.
+// settledCreate is what a create's own snapshot decided: the values only rows
+// can settle, carried out to the record the second append publishes. One
+// struct, assigned whole on each run of the closure, so no caller pairs one
+// run's answer with another's.
 type settledCreate struct {
 	// fields are the task's custom-field values in their canonical form,
 	// nil when nothing needed settling.
@@ -1027,10 +797,9 @@ type settledCreate struct {
 	// caveats are what the writer is told and was not refused for.
 	caveats []caveat.Caveat
 
-	// unit is the project's own chart-owned unit, which a task that names
-	// none is filed into. Empty for a project the chart gave no unit —
-	// which is honest rather than a default, and is what a company with a
-	// root-level project has.
+	// unit is the project's chart-owned unit, which a task naming none is
+	// filed into. Empty for a project the chart gave no unit (a root-level
+	// project), honestly rather than by default.
 	unit string
 
 	// assignee is the project's DEFAULT ASSIGNEE, which a task that names
@@ -1040,24 +809,17 @@ type settledCreate struct {
 }
 
 // refuseCreate is what sequence 1 reads the project and its catalogues for.
-// It also COERCES the task's custom-field values, which is why it answers with
-// them rather than only with an error: a value is normalised against the
-// declarations this snapshot holds — an option spelling to the option's id, a
-// timestamp on a date-only field to its date — and the record has to carry
-// that canonical form, so every node writes identical rows without re-deciding
-// anything.
-//
-// The project's own UNIT rides back out for the same reason and on the same
-// row it already reads: see [filedUnit] for why the derivation belongs at the
-// write rather than at whichever caller happened to know its filer's team. So
-// does its DEFAULT ASSIGNEE, for [landsOn]'s.
+// It also COERCES the task's custom-field values against the declarations in
+// this snapshot (an option spelling to its id, a timestamp on a date-only
+// field to its date), so the record carries the canonical form and every node
+// writes identical rows without re-deciding. The project's unit ([filedUnit])
+// and default assignee ([landsOn]) ride back out from the same row.
 func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 	settledCreate, error) {
 
-	// THE TASK ALREADY FILED UNDER THIS CREATE'S ID is the create made
-	// before, asked before anything else — before the project's state is,
-	// since a project archived since the item was filed is no reason to
-	// refuse the create that filed it. See [Writer.CreateTask].
+	// A task already filed under this create's id is the create made before,
+	// asked first: a project archived since is no reason to refuse the create
+	// that filed it ([Writer.CreateTask]).
 	var present int
 	if err := tx.QueryRowContext(ctx, taskPresentStatement, task.ID).
 		Scan(&present); err != nil {
@@ -1101,63 +863,18 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		assignee: project.DefaultAssignee}, nil
 }
 
-// refuseParent refuses a parent a task cannot be filed under.
-//
-// # A SUBTREE LIVES IN ONE PROJECT
-//
-// A board draws a project's ROOTS and lets their subtrees ride along, and the
-// query carries the container on the outer row as well — so a subtask filed in
-// another project from its root is on neither project's board: its root's
-// filters it out by project, and its own finds no root to hang it from. The
-// attention set's `inconsistent_project` names the shape; this is what keeps
-// a writer from making it. A task's project changes only when a cross-project
-// move carries its whole subtree ([Writer.MoveTaskToProject]), so the parent's
-// project read in THIS snapshot is the one its subtree lives in, and a refusal
-// here closes the shape rather than flagging it afterwards.
-//
-// # Nor does the part of a subtree a move has not carried yet
-//
-// A move re-keys the root first, marking it mid-move, and then each
-// descendant, from a subtree it read ONCE before its first append — so a task
-// filed under a descendant the walk has not reached is one that walk never
-// carries: it passes the project check below, since its parent is still in
-// the old project. So a parent with a MARKED task above it in another project
-// takes no new child until the walk has carried it ([refuseMidMove]). It is
-// [statelog.ErrUnavailable] rather than a refusal, because the walk — or the
-// duty that finishes an abandoned one — carries the parent without anybody
-// acting, and the same call made then files the child where the parent went.
-// It is asked BEFORE the project comparison, so a caller who named the
-// project the parent is going to is told to come back rather than that the
-// parent is somewhere else.
-//
-// The mark is only as good as the snapshot that reads it: a create decided on
-// a node that had not applied the root's move yet cannot see it. The walk's
-// last append is what catches that one — the mark does not come down while
-// anything beneath the root is outside its project ([carriedAll]), so the
-// walk carries it in one more pass, or the re-run or the duty does.
-//
-// # And a parent in the trash takes no new child
-//
-// A live child under a removed parent is the orphan a subtree removal
-// publishes in depth order to avoid, and a restore brings back only what the
-// removal took — so a child filed under the removed parent in between would
-// stay a live row under a parent nobody can see.
-//
-// # Nor does a task's own subtree
-//
-// A task filed under itself, or under one of its own descendants, makes its
-// parent chain a CYCLE: the applier applies it — a committed record is never
-// refused there — and raises `cycle`, and the subtree drops off every board,
-// since a board draws roots and a cycle has none. The closure doc says two
-// concurrent re-parents on two subjects can form one no single write sees;
-// ONE write forming it is simply a write nobody refused, so it is refused
-// here, in the snapshot that also reads the parent.
-//
-// # An absent parent is one of two facts
-//
-// See [missingTask]: a PURGED parent is gone for good and is refused as such,
-// while one this node holds no row of at all may be a create it has not
-// applied yet, which is the only absence worth coming back for.
+// refuseParent refuses a parent a task cannot be filed under:
+//   - one in another project: a board draws a project's roots with their
+//     subtrees, so a subtask elsewhere is on neither board; only a move of the
+//     whole subtree changes project ([Writer.MoveTaskToProject]).
+//   - one beneath a task marked mid-move that the walk has not carried
+//     ([refuseMidMove]), asked first so a caller naming the destination is
+//     told to come back; [carriedAll] catches a node behind the mark.
+//   - one in the trash: a restore brings back only what the removal took, so
+//     a child filed between would stay live under a parent nobody sees.
+//   - the task itself or its descendant: a cycle the applier would apply,
+//     dropping the subtree off every board.
+//   - an absent one, which is one of two facts ([missingTask]).
 func refuseParent(ctx context.Context, tx *sql.Tx, task Task, parentID string) error {
 	parent, held, err := readTask(ctx, tx, parentID)
 	switch {
@@ -1194,21 +911,15 @@ func refuseParent(ctx context.Context, tx *sql.Tx, task Task, parentID string) e
 }
 
 // refuseMidMove refuses a write that would change what a task is filed under,
-// or what is filed under it, while a move it is part of has not carried it —
-// the task sits beneath a task marked mid-move ([TaskPatch.Moving]) that is in
-// another project than it is. why says what the write would do if it landed.
+// or what is filed under it, while a move has not yet carried it: the task
+// sits beneath a task marked mid-move ([TaskPatch.Moving]) in another project.
+// why says what the write would do. Unavailable, never a refusal: the walk,
+// its re-run or the duty carries the task unprompted, and the write asked
+// again is decided in the project it went to.
 //
-// UNAVAILABLE, NEVER A REFUSAL: the walk, a re-run of it or the duty that
-// finishes an abandoned one carries the task without anybody acting, and the
-// same write asked again then is decided on the project it went to.
-//
-// THREE WRITES ASK IT. A create or a re-parent asks it of the PARENT, since a
-// child filed under an uncarried task is one the walk never read. A re-parent
-// asks it of the TASK too, since the walk still carries a task it read however
-// it has been filed since: moved out from under the subtree it would land in
-// the new project under a parent in the old one, and moved within it, under a
-// parent the walk may already have carried. And a merge that re-parents asks it
-// of both ends before its mark, for the same two reasons.
+// A create or a re-parent asks it of the PARENT (the walk never read a new
+// child); a re-parent also of the TASK (the walk carries what it read, however
+// re-filed since); a merge that re-parents, of both ends before its mark.
 func refuseMidMove(ctx context.Context, tx *sql.Tx, task Task, role, why string) error {
 	target, err := movingAway(ctx, tx, task.ID, task.Project)
 	switch {
@@ -1232,16 +943,12 @@ const movingAwayStatement = `
 		ORDER BY c.distance DESC LIMIT 1`
 
 // movingAway reports the project a move is carrying a task into when a task
-// ABOVE it is marked mid-move and in another project than it is, and "" when
-// none is — see [refuseMidMove].
-//
-// ANY MARKED ANCESTOR, read off the closure, and never the task's root alone:
-// the mark is on the task that MOVED, and a root re-parented under another
-// while its walk runs is no longer anybody's root — asked by `root_id`, every
-// task its walk had not carried read as settled. The outermost is answered
-// when two are marked, so the answer names the move that decides where the
-// task ends up. A task that is itself marked is in the project it is moving
-// into, so it is never its own answer.
+// ABOVE it is marked mid-move and in another project, and "" when none is
+// ([refuseMidMove]). Any marked ancestor off the closure, never the root by
+// `root_id`: the mark is on the task that moved, which may since have been
+// re-parented. The outermost answers when two are marked, since it decides
+// where the task ends up; a marked task is already in its target project, so
+// it is never its own answer.
 func movingAway(ctx context.Context, tx *sql.Tx, id, project string) (string, error) {
 	var target string
 	err := tx.QueryRowContext(ctx, movingAwayStatement, id, project).Scan(&target)
@@ -1265,22 +972,13 @@ const uncarriedStatement = `
 
 // carriedAll is the amendment a move's last append is decided under: the mark
 // comes down only in a snapshot where nothing beneath the root is outside the
-// root's project.
-//
-// # Why the last append checks rather than trusting the walk
-//
-// A walk carries the subtree it READ, before its first append, and
-// [refuseMidMove] refuses a new child under an uncarried task only on a node
-// that has applied the root's move — a create decided on a node behind it
-// passes, and lands under a descendant the walk read before it existed. With
-// the mark taken down behind it, that task stayed in the old project for good,
-// under a root in the new one, flagged `inconsistent_project` and repaired by
-// nothing. Checked here, in the snapshot the last append is decided in and
-// after the walk's own appends ([Writer.After]), such a task keeps the mark up:
-// the append is refused as unavailable ([errUncarried]), and a pass
-// ([Writer.followRoot]) re-reads the subtree and carries it — the walk's own,
-// at once, or the re-run's or the duty's. A task in the trash under the root is
-// the same answer, and the pass that meets it names it.
+// root's project. A walk carries the subtree it READ before its first append,
+// and a create on a node behind the root's move passes [refuseMidMove] and
+// lands under a descendant the walk never read; with the mark down it would
+// stay in the old project for good. Checked here, after the walk's own appends
+// ([Writer.After]), such a task (or one in the trash) refuses the append as
+// unavailable ([errUncarried]), keeping the mark up for a pass
+// ([Writer.followRoot]) that re-reads and carries it.
 func carriedAll(ctx context.Context, tx *sql.Tx, current Task,
 	patch TaskPatch) (TaskPatch, error) {
 
@@ -1330,17 +1028,11 @@ func inSubtree(ctx context.Context, tx *sql.Tx, root, candidate string) (bool, e
 	return found == 1, nil
 }
 
-// declaredType refuses a task naming a type the company has not declared.
-//
-// THE TOOL HAS ALWAYS SAID SO — `create_work_item` asks for "a task type from
-// your workspace's own catalogue" — and nothing checked it, so any string a
-// model invented became a type: `Bug`, `bugfix` and `BUG` filed three
-// different types beside `bug`, and every board grouped and filtered on them
-// as if they were real.
-//
-// AN ARCHIVED TYPE IS REFUSED FOR NEW WORK and left alone on old, which is
-// what archiving a type is FOR: the tasks already filed under it still render
-// as what they are.
+// declaredType refuses a task naming a type the company has not declared, as
+// `create_work_item` promises ("a task type from your workspace's own
+// catalogue"): otherwise `Bug`, `bugfix` and `BUG` become three types beside
+// `bug`. An archived type is refused for new work and left alone on old, which
+// is what archiving a type is for.
 func declaredType(ctx context.Context, tx *sql.Tx, task Task) error {
 	catalogue, _, err := readTypeCatalogue(ctx, tx)
 	if err != nil {
@@ -1368,30 +1060,13 @@ func declaredType(ctx context.Context, tx *sql.Tx, task Task) error {
 }
 
 // requiredFields refuses a task missing a field its company or its project
-// declares required.
-//
-// # THE WHOLE CHAIN, not the project's half of it
-//
-// Fields are declared in TWO places — the workspace catalogue and the
-// project — and [declaredFields] is what composes them, with a project's
-// declaration shadowing a workspace one of the same id. Reading
-// `project.Fields` alone meant a field marked required at the workspace was
-// enforced on no task in any project: a rule an operator set, that nothing
-// applied and nothing said was not applying.
-//
-// # AND ONLY THE FIELDS THAT APPLY TO THIS TASK
-//
-// `AppliesTo` names the TYPES a field is carried by, and a field that does not
-// apply cannot be missing from a task — its value would be hidden the moment
-// it was set (see [appliesTo] and the hidden state in `explodeFieldValues`).
-// Ignoring it refused every plain task filed into a project that required
-// `severity` of its bugs, which is the worked example this rule exists for.
-//
-// A SUBTASK IS JUDGED BY A DIFFERENT FLAG. ClickUp ships two toggles and so
-// does this, and the default that matters is the second: a field required on a
-// task is NOT required on a subtask unless the definition says so — otherwise
-// one required field is a form to fill for every step somebody breaks a task
-// into.
+// declares required: the whole chain [declaredFields] composes (a project's
+// declaration shadowing the workspace's), so a workspace-required field binds
+// too. Only fields that apply to this task's type count ([appliesTo]): one
+// that does not apply would be hidden the moment it was set, and counting it
+// would refuse every plain task in a project that requires `severity` of its
+// bugs. A subtask is judged by RequiredInSubtasks instead (as in ClickUp), so
+// one required field is not a form for every step a task is broken into.
 func requiredFields(ctx context.Context, tx *sql.Tx, project Project, task Task) error {
 	declared, err := declaredFields(ctx, tx, project.Key)
 	if err != nil {
@@ -1418,13 +1093,10 @@ func requiredFields(ctx context.Context, tx *sql.Tx, project Project, task Task)
 		"does not set", task.Type, project.Key, words.And(missing))
 }
 
-// bodyCaveats is what a writer is told and not refused for.
-//
-// THE APPLY MUST NOT DEPEND ON IT. Every data node applies the same record and
-// resolves the same first [MaxReferencesPerBody] keys in document order, so
-// the cap is deterministic without this — the warning exists so the person who
-// wrote a body full of keys learns that most of them link nothing, rather than
-// discovering it on a page.
+// bodyCaveats is what a writer is told and not refused for. The apply must not
+// depend on it: every data node resolves the same first [MaxReferencesPerBody]
+// keys in document order, so the cap is deterministic without it; the warning
+// tells the author that the rest link nothing.
 func bodyCaveats(body string) []caveat.Caveat {
 	if body == "" {
 		return nil
@@ -1469,15 +1141,11 @@ type held struct {
 	done     chan struct{}
 }
 
-// hold takes a claim and keeps it alive.
-//
-// THE HEARTBEAT IS A GOROUTINE WITH AN OWNER, per this tree's rule: it is
-// started here, stopped by [held.release], and cannot outlive the sequence
-// that took it. A heartbeat nobody stops is a claim nobody else can ever take.
-//
-// UNDER AN OWNER OF ITS OWN ([Writer.claimOwner]), never this node's id, so a
-// second walk of the same thing on the SAME node is refused exactly as a
-// peer's would be.
+// hold takes a claim and keeps it alive. The heartbeat goroutine is owned:
+// started here and stopped by [held.release], since a heartbeat nobody stops
+// is a claim nobody else can ever take. The owner is this claim's own
+// ([Writer.claimOwner]), so a second walk on the SAME node is refused like a
+// peer's.
 func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 	if w.claims == nil {
 		return nil, fmt.Errorf("worklet: this writer has no coordination, so "+
@@ -1490,21 +1158,17 @@ func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 	})
 	switch {
 	case err != nil:
-		// UNKNOWN, AND THIS ONE FAILS CLOSED. A cross-project move
-		// rewrites a whole subtree's keys; two of them interleaved
-		// produce a subtree keyed into two projects, which no duty can
-		// tell from an abandoned walk.
+		// Unknown fails closed: two interleaved moves key a subtree into two
+		// projects, which no duty can tell from an abandoned walk.
 		return nil, fmt.Errorf("worklet: take %s: %w", resource, err)
 	case lease == nil && refused == coord.RefusedHeld:
 		return nil, fmt.Errorf("worklet: %s is held by another walk, on this "+
 			"node or a peer, so this walk is already running: %w", resource,
 			statelog.ErrUnavailable)
 	case lease == nil:
-		// NOT "another walk": the protocol gate refuses every claim this
-		// node makes while a node on a lower lease protocol is live, and a
-		// walk is refused with them — it fails closed for the reason
-		// above. Told it was already running, a caller would wait for a
-		// walk nobody had started, for as long as that node stayed.
+		// Not "another walk": the protocol gate refuses every claim while a
+		// node on a lower lease protocol is live. Told the walk was running, a
+		// caller would wait on one nobody started.
 		return nil, fmt.Errorf("worklet: %s was refused (%s): a node on a "+
 			"lower lease protocol is live in this fleet and this node takes no "+
 			"claim beside it, so the walk waits until that node has left: %w",
@@ -1519,26 +1183,13 @@ func (w *Writer) hold(ctx context.Context, resource string) (*held, error) {
 }
 
 // claimOwner is the owner one claim is taken under: this node, and THIS call.
-//
-// UNIQUE PER CLAIM, never the node id alone, and that is the whole of it.
-// [coord] reads an owner that already holds a lease as that holder RENEWING
-// it — an owner is a holder, not a machine — so under the node id two walks
-// on one node were both told yes: the Worklet duty's completion of a merge or
-// a move ran beside the live walk it was meant to leave alone on every
-// single-node deployment, two moves of one task walked it together, and
-// whichever finished first released the other's lease in the middle of its
-// walk, leaving it unclaimed for a third to join.
-//
-// Not an in-process claim beside a node-wide owner, the shape [setup.Hold]
-// takes: that closes the collision inside one process and leaves it open
-// across two that share a node id — a restarted process renewing the lease its
-// dead predecessor held, which it cannot tell from one that is still walking.
-// A holder of its own also costs that restart nothing it should keep: a claim
-// whose process died lapses over [ClaimTTL], after which the duty or a re-run
-// takes it, which is what an abandoned walk was always waiting for.
-//
-// The node id stays in front, so a claim a person reads still says where its
-// walk runs.
+// [coord] reads an owner already holding a lease as RENEWING it, so under the
+// node id alone two walks on one node would both be told yes, and the first to
+// finish would release the other's lease mid-walk. Nor an in-process claim
+// beside a node-wide owner ([setup.Hold]'s shape): a restarted process sharing
+// the node id would renew its dead predecessor's lease. A dead holder's claim
+// lapses over [ClaimTTL] for the duty or a re-run. The node id stays in front
+// so a person reading a claim sees where its walk runs.
 func (w *Writer) claimOwner() string {
 	return w.nodeID + "/" + uuid.NewString()
 }
@@ -1552,22 +1203,17 @@ func (h *held) beat(ctx context.Context) {
 		case <-h.stop:
 			return
 		case <-ticker.C:
-			// A FAILED RENEW IS NOT FATAL HERE. The claim's TTL is four
-			// heartbeats, so three misses are survivable, and the walk
-			// that would be abandoned on the fourth is idempotent and
-			// completed by the duty. Tearing the walk down on the first
-			// blip would abandon more of them, not fewer.
+			// A failed renew is not fatal: the TTL is four heartbeats, and an
+			// abandoned walk is idempotent and finished by the duty, so tearing
+			// down on the first blip would abandon more walks, not fewer.
 			_, _ = h.claims.Renew(ctx, h.resource, h.owner, h.epoch, ClaimTTL)
 		}
 	}
 }
 
-// release stops the heartbeat and gives the claim up.
-//
-// [context.WithoutCancel], because the failure being undone is often the
-// cancellation itself and a release that inherited a dead context would leave
-// the claim to expire — sixty seconds during which nobody else may run this
-// walk and the duty has not yet decided it was abandoned.
+// release stops the heartbeat and gives the claim up, under
+// [context.WithoutCancel]: the failure being undone is often the cancellation,
+// and a claim left to expire blocks this walk for [ClaimTTL].
 func (h *held) release(ctx context.Context) {
 	close(h.stop)
 	<-h.done
@@ -1575,23 +1221,15 @@ func (h *held) release(ctx context.Context) {
 }
 
 // MoveStopped reports a cross-project move whose ROOT landed in its target and
-// whose walk over the subtree stopped before carrying all of it.
+// whose walk over the subtree stopped before carrying all of it. A type, for
+// [SubtreeStopped]'s reason: the caller must say both that the item is in the
+// new project and that some of what goes with it is not; "not made" about a
+// re-keyed root sends a model to move it again and a person to a dead key.
 //
-// A TYPE RATHER THAN A SENTENCE, for [SubtreeStopped]'s reason: the caller has
-// to say two true things at once — the item it named is in the new project,
-// and some of what goes with it is not — and a bare error made every caller
-// say the second as though it were the first. The move tool answered every
-// such stop but an unknown step with "the change was NOT made", about a root
-// that had moved and been re-keyed; a model told that moves it again, and a
-// person told that goes looking for an item under a key it no longer has.
-//
-// THE REMEDY IS THE SAME OPERATION, and only that — which is where it differs
-// from a removal's: a new operation meets a root already in the target that
-// its own ledger never moved there, and is refused as somebody else's move
-// ([Writer.finishMove]). The same operation is answered from the ledger for
-// the root and carries the rest; and the root stays marked mid-move for as
-// long as anything is left, so the Worklet duty finishes the walk on its own
-// once nobody holds its claim ([duty.finishMoves]).
+// The remedy is the SAME operation only: a new one meets a root its own ledger
+// never moved and is refused as somebody else's move ([Writer.finishMove]).
+// The root stays marked mid-move while anything is left, so the Worklet duty
+// finishes the walk once nobody holds its claim ([duty.finishMoves]).
 type MoveStopped struct {
 	// Root is the task the move named, and Key the key it holds in the
 	// target — empty only when this stop could not read it back, which a
@@ -1609,12 +1247,10 @@ type MoveStopped struct {
 	// and Of how many there are.
 	Followed, Of int
 
-	// Waiting is the ADDRESS of a task under the root that is in the TRASH
-	// and still in the old project — its key, or its id where another task
-	// claimed that key first ([ItemAddress]), since it is what a caller
-	// hands a restore: frozen, so nothing carries it until somebody
-	// restores it — or purges it, which takes it out of the subtree. Empty
-	// for every other stop.
+	// Waiting is the ADDRESS ([ItemAddress]: its key, or its id where another
+	// task claimed the key first) of a task under the root that is in the
+	// TRASH and still in the old project; nothing carries it until it is
+	// restored or purged. Empty for every other stop.
 	Waiting string
 
 	// OpID is the move's operation — what finishes it.
@@ -1646,98 +1282,18 @@ func (e *MoveStopped) Error() string {
 
 func (e *MoveStopped) Unwrap() error { return e.Err }
 
-// MoveTaskToProject re-homes a task and everything beneath it. SEQUENCE 7.
-//
-//	Rk, then take move/<task> → Rs the target project and its tag set;
-//	refuse archived, refuse a required field the task lacks, refuse a
-//	subtree with a task in the trash → A the tags the subtree carries that
-//	the target lacks → A the alias on the former key at expectation 0 → A
-//	the counter, a RANGE mint for the whole subtree → A the root task on
-//	the range's first number, MARKED mid-move when it has a subtree → per
-//	descendant, in (depth, id) order, A on its own subject on the next →
-//	A taking the root's mark down → release.
-//
-// THE SOURCE PROJECT'S ORDER IS NOT REWRITTEN. The rows leave it entirely, so
-// there is nothing to place; what covers a reader whose closure names the
-// source is this sequence's own scope, which carries BOTH containers.
-//
-// # Re-running it
-//
-// Under the SAME operation id — what a caller told `unknown` does, and what a
-// turn re-run after a crash does — and every step answers for itself: the
-// tags, the alias and each task's move are answered from the ledger where they
-// landed. A ROOT ALREADY IN THE TARGET that this operation moved is the move's
-// answer, `applied`, and whatever descendants have not followed it are moved
-// now ([Writer.finishMove]); one this operation did NOT move is refused, since
-// somebody else moved it. It used to be refused either way — "already in" the
-// project the move itself had put it in.
-//
-// The descendants left behind are moved on a FRESH range, and the numbers the
-// first run minted for them are a gap. Nothing records which number was meant
-// for which task, and a range re-derived from the subtree as it stands now
-// would pair numbers with tasks differently: its membership moves as tasks are
-// filed and re-parented, so the (depth, id) order fixes a walk's order and not
-// a key assignment anybody can reproduce.
-//
-// Each descendant's step is named by the DESCENDANT, never by its place in the
-// walk: the ledger answers a step's id with whatever it recorded under it, and
-// a re-run's walk is shorter than the first run's, so a step numbered by
-// position would answer one descendant with another's record and report it
-// moved when nothing had touched it.
-//
-// # When nobody re-runs it
-//
-// The root's own append carries the MARK ([TaskPatch.Moving]) whenever there is
-// a subtree behind it, and the walk's last append takes it down. A walk that
-// stopped between the two — its process died, a descendant's append was
-// refused, its caller never retried — leaves a root that says so, and the
-// tracker duty finishes it once this sequence's claim has lapsed: every
-// descendant still outside the root's project follows it on a fresh range, and
-// the mark comes down ([duty.finishMoves]). Before the mark, nothing did: the
-// subtree stayed split across two projects until somebody re-ran the gesture
-// under an operation id nobody had kept.
-//
-// While the mark is up, nothing is filed under, or moved from under, a task the
-// walk has not carried ([refuseMidMove]); and the last append takes it down
-// only once nothing under the root is outside its project ([carriedAll]). A
-// task filed there by a node the mark had not reached yet is therefore carried
-// rather than left behind: the walk runs one more pass for it, as the duty
-// would, and one it cannot carry — put in the trash since — keeps the mark up
-// and is named.
-//
-// # Who hears about it
-//
-// The people on the ROOT, through notify — the root's own move carries it, and
-// nothing beneath it does: a subtree that moved is one thing that happened, and
-// forty subtasks would otherwise wake everybody watching any of them for it.
-// The root's step was published with no notification at all, so a move woke
-// nobody, although the kind routes and falls back to a lead like a status
-// change does.
-//
-// # The tags the subtree carries
-//
-// ARE READ HERE, from the subtree and its own project's declarations, and
-// declared in the target as an ADD ([Writer.WriteTags]) resolved inside that
-// write's own snapshot. The caller used to hand them in, which every caller
-// did as nil — so the step never ran and a moved task arrived carrying labels
-// its new project had never declared — and the step itself wrote the target's
-// WHOLE set composed from a read outside any snapshot, which a tag a colleague
-// declared in between would have been overwritten by.
-//
-// # What it refuses before the first append
-//
-// A task in the TRASH anywhere in the subtree, the root included. A tombstoned
-// task refuses every write, so its step would stop the walk — and the re-run,
-// and the duty behind both — on the same task for good, with the subtree split
-// around it. So the move refuses whole and names it: restore it or purge it,
-// then move again. A task removed while the walk runs cannot be refused this
-// way, and the walk waits for it instead ([Writer.followRoot]).
-//
-// CRASH RESIDUE: a tag declared with no task yet (harmless); an alias for a key
-// still held (harmless — the apply never lowers `current`); a numbering gap;
-// descendants still keyed in the old project, under a root marked mid-move.
-// REPAIRER: the re-run above or the Worklet duty, whichever comes first; the
-// other then finds nothing left to move.
+// MoveTaskToProject re-homes a root task and everything beneath it. SEQUENCE
+// 7: take move/<task>; read the target and its tag set, refusing an archived
+// project, a missing required field, or a task in the trash in the subtree
+// (its frozen step would stop every walk for good); ADD the subtree's tags the
+// target lacks; alias the former key; mint a RANGE; move the root, MARKED
+// mid-move ([TaskPatch.Moving]) when it has a subtree and alone carrying
+// notify (one thing happened, not forty); move each descendant in (depth, id)
+// order; take the mark down ([Writer.endMove]); release. The source's order is
+// not rewritten: its rows leave, and the scope carries both containers.
+// CRASH RESIDUE: an unused tag or alias (harmless), a numbering gap, and
+// descendants in the old project under the marked root. REPAIRER: a re-run
+// under the same op id ([Writer.finishMove]) or the duty ([duty.finishMoves]).
 func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target string,
 	notify *Notify) (WriteResult, error) {
 
@@ -1861,19 +1417,17 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 
 	base, minted, err := w.mintKey(ctx, stepID(opID, "counter"), target, 1+len(subtree), nil)
 	if minted.Outcome == statelog.OutcomeUnknown && minted.Unvouched {
-		// NOT "NOT MOVED": the operation predates this node's ledger loss,
-		// so an earlier run may have moved the root on a node this one has
-		// not caught up with. The walk stops as one this node cannot vouch
-		// for, which is what the caller has to be told.
+		// Not "not moved": the operation predates this node's ledger loss, so
+		// an earlier run may have moved the root elsewhere; the walk stops as
+		// one this node cannot vouch for.
 		return WriteResult{Result: minted}, resolved(fmt.Sprintf(
 			"the key range for task %s's move into %s", taskID, target),
 			WriteResult{Result: minted}, nil)
 	}
 	if errors.Is(err, errMintLanded) {
-		// THE COUNTER STEP LANDED UNDER AN EARLIER COPY and the root has
-		// not moved — this node read it in its old project — so the range
-		// that copy took is on the log and not here. This run takes one
-		// of its own, and the earlier one is the gap.
+		// The counter step landed under an earlier copy, but the root has not
+		// moved (read in its old project), so this run takes a range of its own
+		// and the earlier one is the gap.
 		base, _, err = w.mintFresh(ctx, target, 1+len(subtree), nil)
 	}
 	if err != nil {
@@ -1899,23 +1453,16 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		)
 		followed, last, err = w.moveDescendants(ctx, opID, target, subtree, base+1)
 		if err == nil {
-			// THE MARK COMES DOWN ONLY ONCE THIS NODE HOLDS THE WHOLE
-			// WALK: its decide asks whether anything under the root is
-			// still outside the target ([carriedAll]), and the
-			// descendants are on subjects of their own — so the last of
-			// them, and never only the root's position, is what this
-			// append has to see. See [Writer.After].
+			// The mark comes down only once this node holds the whole walk:
+			// [carriedAll] reads the descendants' own subjects, so the last of
+			// them, not only the root's position, must be applied ([Writer.After]).
 			err = w.After(statelog.Later(result.Position, last)).endMove(ctx, opID,
 				taskID, target)
 			if errors.Is(err, errUncarried) {
-				// A TASK FILED BEHIND THE WALK, which this node has
-				// now applied — the append that met it waited for the
-				// whole walk first. So the pass the duty would run a
-				// quarter of an hour from now runs here, under the
-				// claim this call holds: it re-reads the subtree,
-				// carries what the first read could not see, and takes
-				// the mark down. Once — a second task filed behind THIS
-				// pass is the duty's, and the caller is told.
+				// A task filed behind the walk, now applied here: run the duty's
+				// pass at once under the claim this call holds, which re-reads and
+				// carries the subtree. Once only: a task filed behind THIS pass is
+				// the duty's.
 				_, err = w.finishAbandonedMove(ctx, opID, taskID)
 			}
 		}
@@ -1941,12 +1488,11 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 }
 
 // finishMove answers a move whose root is already in the target project: a
-// re-run of a move that got at least as far as its root.
-//
-// THE ROOT'S STEP IS ASKED FOR, AND ONLY ANSWERED, the way [Writer.resumeCreate]
-// asks for a create's task: the ledger answers it before the Decide runs if
-// THIS operation moved the root, and a Decide that does run means somebody
-// else did, which is a refusal. Then the rest follows it ([Writer.followRoot]).
+// re-run of a move that got at least as far as its root. The root's step is
+// asked for and only answered, as [Writer.resumeCreate] asks for a task: the
+// ledger answers it if THIS operation moved the root, and a Decide that runs
+// means somebody else did, which is refused. Then the rest follows
+// ([Writer.followRoot]).
 func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
 	rootCollision bool, target string, subtree []Task) (WriteResult, error) {
 
@@ -1985,15 +1531,11 @@ func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
 }
 
 // finishAbandonedMove completes a move whose walk stopped with its root marked
-// mid-move: the Worklet duty's half of [Writer.MoveTaskToProject], run under
-// the move's own claim, which the caller holds. It reports whether there was a
-// walk to finish. The walk runs it too, once, when its last append met a task
-// filed behind it ([errUncarried]).
-//
-// THE ROOT IS READ AGAIN HERE, under the claim, because the holder may have
-// finished between the duty's selection and its claim: a root whose mark is
-// down is a move that is done, and one in the trash is frozen until somebody
-// restores it.
+// mid-move: the duty's half of [Writer.MoveTaskToProject], under the move's
+// claim, which the caller holds; the walk runs it once too, on [errUncarried].
+// It reports whether there was a walk to finish. The root is read again under
+// the claim, since the holder may have finished since the duty selected it: a
+// mark down is a finished move, and a root in the trash is frozen.
 func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool, error) {
 	if w.db.IsZero() {
 		return false, fmt.Errorf("worklet: this writer has no store, so it " +
@@ -2028,18 +1570,14 @@ func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool
 	return true, w.followRoot(ctx, opID, root, collision, subtree)
 }
 
-// carryStragglers carries into a root's project every live task under it that
-// is still outside it although no move of that root is running: the tracker
-// duty's repair for a task filed behind a finished move ([duty.carryStragglers]),
-// run under the move's own claim, which the caller holds. It answers how many
-// it carried.
-//
-// THE ROOT IS READ AGAIN HERE, under the claim, and anything that makes it no
-// longer this repair's is nothing to do: a root in the trash is frozen, a
-// MARKED one is a walk the abandoned-move job finishes, and one with a parent
-// is where a cycle's walk stopped rather than a root. A straggler in the trash
-// is left out of the pass rather than waited for — with the mark down there is
-// no walk to hold open for it, and its restore brings it back to the duty.
+// carryStragglers carries into a root's project every live task under it still
+// outside it while no move of that root runs: the duty's repair for a task
+// filed behind a finished move ([duty.carryStragglers]), under the move's
+// claim, which the caller holds. It answers how many it carried. The root is
+// read again under the claim; one in the trash, MARKED (the abandoned-move
+// job's) or with a parent (where a cycle's walk stopped) is not this repair's.
+// A straggler in the trash is skipped, not waited for: with no walk to hold
+// open, its restore brings it back to the duty.
 func (w *Writer) carryStragglers(ctx context.Context, opID, id string) (int, error) {
 	if w.db.IsZero() {
 		return 0, fmt.Errorf("worklet: this writer has no store, so it " +
@@ -2091,40 +1629,18 @@ func (w *Writer) carryStragglers(ctx context.Context, opID, id string) (int, err
 	return left, nil
 }
 
-// followRoot moves every descendant a root's move has not carried yet, and
-// then takes the root's mark down. SHARED BY THE RE-RUN AND THE DUTY, so a walk
-// finished either way is finished by one algorithm rather than by two that
-// have to keep agreeing.
+// followRoot moves every descendant a root's move has not carried yet, then
+// takes the mark down: one algorithm for the re-run and the duty, every stop a
+// [MoveStopped] (rootCollision, from [keyHeldByAnother], names the root in it).
+// A descendant is LEFT when outside the root's project, so a task filed behind
+// the first run's read is carried here ([carriedAll]). On a FRESH range: no
+// record pairs the first run's numbers with tasks, and the subtree has changed
+// since, so those numbers are a gap. On a node behind the log, a descendant
+// already carried is refused in its own snapshot, so nothing moves twice.
 //
-// ON A FRESH RANGE, never the first run's — see [Writer.MoveTaskToProject] —
-// and a descendant is LEFT when it is outside the ROOT'S project, whichever
-// project that is: the move carries the whole subtree as it stands NOW, which
-// includes a task filed under a descendant after the first run read it, by a
-// node the root's mark had not reached yet ([refuseMidMove] refuses one
-// after). That task is what keeps the first run's mark up ([carriedAll]), so
-// this pass is the one that carries it.
-//
-// A DESCENDANT IN THE TRASH IS WAITED FOR, never skipped. The move refuses a
-// subtree holding one before its first append, so this is a task removed
-// while the walk ran; it is frozen, so nothing can carry it until somebody
-// restores it, and taking the mark down around it would leave it in the old
-// project for good, under a root in the new one. So everything else moves, the
-// mark stays up, and the refusal names the task: the restore is what lets the
-// next pass — the duty's or a re-run — finish the walk, and a purge takes it
-// out of the subtree altogether.
-//
-// ON A NODE BEHIND THE LOG the subtree it reads may still show descendants the
-// walk already carried. Their steps are refused inside their own snapshots —
-// each is conditioned on the project it was read in, and the task is no longer
-// there — so nothing is moved twice; the range minted for them is a gap, which
-// is what every other crash residue here costs.
-//
-// EVERY FAILURE IS A [MoveStopped]: the root is in its project before this
-// runs, so whatever stops the pass stops a move that has happened.
-//
-// rootCollision is whether the root's key opens another task, read beside the
-// root by the caller ([keyHeldByAnother]), so a stop names the root the way a
-// caller can open it.
+// A descendant in the TRASH is waited for, never skipped: it is frozen, and a
+// mark taken down around it would strand it in the old project. Everything
+// else moves, the mark stays up, and the stop names it for a restore or purge.
 func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 	rootCollision bool, subtree []Task) error {
 
@@ -2194,11 +1710,8 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 }
 
 // addressOf is the reference a caller opens a task by: its key, or its id where
-// another task claimed the key first ([ItemAddress]).
-//
-// ITS ID WHEREVER THE DIRECTORY CANNOT BE READ, because the id is the one
-// reference that is never wrong — only less readable — and this names a task
-// to somebody about to act on it.
+// another task claimed the key first ([ItemAddress]). The id wherever the
+// directory cannot be read: it is never wrong, only less readable.
 func (w *Writer) addressOf(ctx context.Context, task Task) string {
 	if w.db.IsZero() {
 		return task.ID
@@ -2214,19 +1727,13 @@ func (w *Writer) addressOf(ctx context.Context, task Task) string {
 	return ItemAddress(task.ID, task.Key, collision)
 }
 
-// endMove takes a root's mid-move mark down: the walk's last append.
-//
-// A MARK ALREADY DOWN IS NOTHING TO WRITE, decided inside the append's own
-// snapshot ([Writer.UpdateTask]) — so a re-run of a walk whose last append
-// landed, and a duty that raced the holder's own, each publish nothing rather
-// than a history row saying nothing.
-//
-// A MARK OVER A TASK THE WALK HAS NOT CARRIED STAYS UP ([carriedAll]), decided
-// in the same snapshot — so a caller waits the walk's appends out first
-// ([Writer.After]) or it reads its own walk as unfinished.
-//
-// A QUIET COMMIT UNDER [ChangeMoved]: it is the move finishing, and the people
-// watching the root heard about the move from its first append.
+// endMove takes a root's mid-move mark down: the walk's last append, a quiet
+// commit under [ChangeMoved] (the root's watchers heard at its first append).
+// Decided in the append's own snapshot ([Writer.UpdateTask]): a mark already
+// down publishes nothing, so a re-run or a duty racing the holder writes no
+// empty history row; and a mark over an uncarried task stays up
+// ([carriedAll]), so a caller waits out the walk's appends first
+// ([Writer.After]) or reads its own walk as unfinished.
 func (w *Writer) endMove(ctx context.Context, opID, rootID, project string) error {
 	down := false
 	result, err := w.updateTask(ctx, stepID(opID, "moved"), rootID, project,
@@ -2237,10 +1744,10 @@ func (w *Writer) endMove(ctx context.Context, opID, rootID, project string) erro
 
 // moveDescendants moves each of a subtree's descendants, in order, on the
 // consecutive numbers from base, and answers how many it moved and the
-// position of the last — what the append that takes the mark down has to have
-// applied before it decides. A step that stops the walk is answered as it is:
-// the caller knows how much of the subtree was carried before this pass, which
-// the [MoveStopped] it forms has to count.
+// position of the last, which the mark's removal must have applied. A stop is
+// returned as is: the caller counts what was carried before this pass. Each
+// step is named by the DESCENDANT, never its place: a re-run's walk is
+// shorter, so a positional id would answer one descendant with another's row.
 func (w *Writer) moveDescendants(ctx context.Context, opID, target string,
 	descendants []Task, base uint64) (int, statelog.Position, error) {
 
@@ -2248,10 +1755,9 @@ func (w *Writer) moveDescendants(ctx context.Context, opID, target string,
 	for i, descendant := range descendants {
 		moved, err := w.moveOne(ctx, stepID(opID, "task-"+descendant.ID),
 			descendant, target, &KeyMint{N: base + uint64(i)}, false, nil)
-		// AN UNKNOWN DESCENDANT STOPS THE WALK like a refused one, and
-		// the root's mark stays up over it: lowering the mark past a
-		// task that may still be in the old project is the split subtree
-		// nothing would look for again.
+		// An unknown descendant stops the walk like a refused one, keeping the
+		// mark up: lowering it past a task that may still be in the old project
+		// splits the subtree for good.
 		if err = resolved(fmt.Sprintf("task %s's move into %s",
 			descendant.ID, target), moved, err); err != nil {
 			return i, last, err
@@ -2262,14 +1768,10 @@ func (w *Writer) moveDescendants(ctx context.Context, opID, target string,
 }
 
 // moveStopped is what [Writer.MoveTaskToProject] answers when the walk stops
-// after the root's own move landed: a [MoveStopped], and never the bare error
-// that stopped it.
-//
-// A LATER PASS's OWN STOP IS KEPT WHOLE — the pass the walk runs for a task
-// filed behind it ([Writer.followRoot]) read the subtree again and counts what
-// it found, which the first read did not hold. key is the root's key in the
-// target by this run's own range; a root that moved under an EARLIER copy of
-// the operation holds that copy's number instead, read off its row.
+// after the root's own move landed: a [MoveStopped], never the bare error. A
+// later pass's own stop is kept whole, since it counted a subtree it re-read.
+// key is the root's key from this run's range; a root moved under an EARLIER
+// copy holds that copy's number, read off its row.
 func (w *Writer) moveStopped(ctx context.Context, result WriteResult, opID string,
 	root Task, target, key string, followed, of int, err error) error {
 
@@ -2288,18 +1790,12 @@ func (w *Writer) moveStopped(ctx context.Context, result WriteResult, opID strin
 		Target: target, Followed: followed, Of: of, OpID: opID, Err: err}
 }
 
-// moveOne re-homes one task of a moving subtree, and marks it mid-move when it
-// is the root of one that has a walk still to come.
-//
-// CONDITIONED ON THE PROJECT THE TASK WAS READ IN, which is what makes a
-// second walk over the same subtree harmless: a task somebody already carried
-// is in another project by the time its step decides, and [Writer.UpdateTask]
-// refuses a write naming the wrong one rather than re-keying it again.
-//
-// THE KEY IT LEAVES IS NOT NAMED HERE: the mint re-keys the task, and the
-// decide turns whatever key it holds in its own snapshot into a former one
-// ([formerKeysAfterRekey]) — a list formed from the read that started the walk
-// replaced the former keys a task had gained since with the ones it held then.
+// moveOne re-homes one task of a moving subtree, marking it mid-move when it
+// is a root with a walk still to come. Conditioned on the project the task was
+// read in, so a second walk is harmless: a task already carried is elsewhere
+// when its step decides, and [Writer.UpdateTask] refuses it. The key it leaves
+// becomes a former key in the decide's own snapshot ([formerKeysAfterRekey]),
+// never from the walk's read, which would drop former keys gained since.
 func (w *Writer) moveOne(ctx context.Context, opID string, task Task,
 	target string, mint *KeyMint, mark bool,
 	notify *Notify) (WriteResult, error) {
@@ -2308,11 +1804,9 @@ func (w *Writer) moveOne(ctx context.Context, opID string, task Task,
 	if mark {
 		patch.Moving = &mark
 	}
-	// WHETHER THE KEY THIS STEP LANDS THE TASK UNDER IS ANOTHER TASK'S,
-	// read in the snapshot the step decides in — the key is the one the
-	// applier composes from the mint, so no row holds it yet and the
-	// directory is the only thing that can say. Assigned on every round;
-	// the last is the one whose record was published.
+	// Whether the key this step lands under is another task's, read in the
+	// deciding snapshot: the applier composes the key from the mint, so only
+	// the directory can say. The last round's assignment is the published one.
 	var key string
 	if mint != nil {
 		key = mintedKey(target, mint.N)
@@ -2337,14 +1831,10 @@ func (w *Writer) moveOne(ctx context.Context, opID string, task Task,
 }
 
 // carriedTags is every tag the tasks a move carries hold, as their own project
-// declares it — the label, colour and description a person chose — so the
-// target is given the same grouping rather than a bare slug. A slug the source
-// no longer declares (a set somebody edited after tagging) is carried as
-// itself.
-//
-// INSIDE A READ BESIDE THE TASKS IT DESCRIBES — the move's pre-flight, or a
-// later pass's ([Writer.followedTags]) — and in the source set's own order so
-// two moves of the same subtree declare the same list.
+// declares it (label, colour, description), so the target groups them the
+// same; a slug the source no longer declares is carried as itself. Read
+// beside the tasks it describes, in the source set's order, so two moves of
+// the same subtree declare the same list.
 func carriedTags(ctx context.Context, tx *sql.Tx, source string,
 	tasks []Task) ([]Tag, error) {
 
@@ -2381,15 +1871,11 @@ func carriedTags(ctx context.Context, tx *sql.Tx, source string,
 	return out, nil
 }
 
-// followedTags is [carriedTags] over the tasks a LATER pass carries — a re-run
-// or the duty finishing a walk — each read against the project it is in now.
-//
-// A LATER PASS DECLARES WHAT IT CARRIES as the first run did, because what it
-// carries is not always what the first run read: a task filed under the
-// subtree behind the walk ([carriedAll]) is carrying whatever tags it was
-// given, and moved without them it arrived holding slugs its new project had
-// never declared — shown bare on every board, and refused back by the next
-// edit of its tags.
+// followedTags is [carriedTags] over the tasks a LATER pass carries (a re-run
+// or the duty), each read against the project it is in now. A later pass
+// declares its own: a task filed behind the walk ([carriedAll]) may carry tags
+// the first run never read, and moved without them it would hold slugs its new
+// project never declared, refused by its next tag edit.
 func (w *Writer) followedTags(ctx context.Context, left []Task) ([]Tag, error) {
 	byProject := map[string][]Task{}
 	var projects []string
@@ -2420,13 +1906,10 @@ func (w *Writer) followedTags(ctx context.Context, left []Task) ([]Tag, error) {
 	return out, err
 }
 
-// tagsStep names the append that declares a set of carried tags, by the set.
-//
-// NAMED BY WHAT IT DECLARES, because a walk is finished by as many passes as it
-// takes, each under the operation it was given — and a re-run's passes all
-// share the caller's. A step named for its place would be answered, on the
-// second pass, from the ledger row of the first pass's declaration, and the
-// second pass's own tags would never be declared.
+// tagsStep names the append that declares a set of carried tags by the set,
+// not its place: a re-run's passes share the caller's operation, so a
+// positional name would answer the second pass from the first's ledger row and
+// never declare its tags.
 func tagsStep(tags []Tag) string {
 	slugs := make([]string, 0, len(tags))
 	for _, tag := range tags {
@@ -2438,18 +1921,11 @@ func tagsStep(tags []Tag) string {
 }
 
 // claimAlias takes a former key, create-only, so the key keeps resolving.
-//
-// FIRST-WRITER-WINS ON ITS OWN SUBJECT, and a claim that loses is not an error:
-// somebody already recorded this key's move, which is the fact the claim
-// exists to establish.
-//
-// A KEY ANOTHER TASK HOLDS IS NOTHING TO CLAIM, and the decide publishes
-// nothing. The directory names another task for a key only when the moving
-// task is a duplicate of it (`key_collision`): the key was never this task's
-// address — it opened the task that claimed it first — so there is nothing to
-// keep resolving, and the claimant goes on answering to it as it always did.
-// This refused instead, naming the claimant, which made a duplicate the one
-// task a move could never re-key: the gesture that gives it a key of its own.
+// First writer wins on its own subject, and losing is not an error: somebody
+// already recorded this key's move. A key the directory gives another task
+// (the moving task is its duplicate, `key_collision`) was never this task's
+// address, so the decide publishes nothing and the claimant keeps it; refusing
+// would make a duplicate the one task a move could never re-key.
 func (w *Writer) claimAlias(ctx context.Context, opID, key, taskID string,
 	at time.Time) (WriteResult, error) {
 
@@ -2477,34 +1953,18 @@ func (w *Writer) claimAlias(ctx context.Context, opID, key, taskID string,
 	return result, err
 }
 
-// MergeDuplicates folds one task into another. SEQUENCE 13.
+// MergeDuplicates folds one task into another. SEQUENCE 13: take
+// merge/<task>; append on the duplicate (the merge marker and `duplicates`);
+// per batch of ≤64, re-parent each child onto into; clear the marker and
+// cancel; release. The marker is cleared LAST, so the duplicate is visibly
+// mid-merge rather than silently half-merged.
 //
-//	Rk, then take merge/<task> → A on the duplicate (the merge marker and
-//	the `duplicates` relation) → per batch of ≤64: A re-parenting each
-//	child onto Into → A clearing the marker and writing the cancelled
-//	status → release.
-//
-// CRASH RESIDUE: children partly re-parented. REPAIRER: the Worklet duty, once
-// the claim this sequence heartbeats has lapsed — it finishes a walk only
-// under that claim, never beside a live holder — and it is idempotent for the
-// same reason the move's walk is: a child already carrying the new parent is
-// not selected, so a completion writes only what is left. A child in the
-// TRASH is not selected either, and stays under the duplicate: it is frozen,
-// and a walk that tried to write it could never finish.
-//
-// THE MARKER IS CLEARED LAST. While it stands, the duplicate is visibly
-// mid-merge rather than silently half-merged, which is the difference between
-// a state somebody can wait out and one they have to reconstruct.
-//
-// WHAT NOTHING COULD FINISH IS REFUSED BEFORE THE MARK: a survivor in the
-// trash, whichever way the subtasks go; moving the subtasks onto one of them,
-// which would file one under itself; and moving them onto an item in another
-// project ([ErrReparentAcrossProjects]). Each would be a mark the walk, the
-// re-run and the duty all fail on for ever. And moving them while a
-// cross-project move has not carried either end is UNAVAILABLE rather than
-// refused ([refuseMidMove]), since which project each end is in is about to
-// change. What arrives AFTER the mark is the duty's to wait out and name — see
-// [mergeWaits].
+// CRASH RESIDUE: children partly re-parented. REPAIRER: the Worklet duty once
+// the claim has lapsed, idempotent since a child already moved (or in the
+// trash, frozen) is not selected. Refused before the mark, since nothing could
+// finish it: a survivor in the trash, re-parenting onto the duplicate's own
+// subtree or across projects ([ErrReparentAcrossProjects]); an end a move has
+// not carried is unavailable ([refuseMidMove]). Later arrivals: [mergeWaits].
 func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into string,
 	reparent bool, notify *Notify) (WriteResult, error) {
 
@@ -2547,14 +2007,10 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		case !held:
 			return missingTask(ctx, tx, into, "nothing can be merged into it")
 		case survivor.Removed != nil:
-			// REFUSED BEFORE THE MARK, WHICHEVER WAY THE SUBTASKS GO.
-			// Moving them, every re-parent is refused on its own
-			// subject — a parent in the trash takes no new child — so
-			// the mark would be one nothing can finish, retried by the
-			// duty on every tick. Leaving them, the duplicate is
-			// cancelled INTO an item nobody can see, so the one live
-			// copy of the work is closed in favour of one in the trash.
-			// Either way the survivor has to be live first.
+			// Refused before the mark whichever way the subtasks go: moving
+			// them, each re-parent is refused (a trashed parent takes no child),
+			// a mark the duty retries forever; leaving them, the one live copy
+			// is cancelled in favour of one nobody can see.
 			return invalid("%s (%s) is in the trash — removed by %s at "+
 				"%s; restore it before merging anything into it",
 				survivor.Key, into, survivor.Removed.By,
@@ -2562,10 +2018,8 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		case !reparent:
 			return nil
 		}
-		// AND NOT INTO ITS OWN SUBTREE when the subtasks move: the child
-		// the survivor sits under would be re-parented onto the survivor,
-		// which [refuseParent] refuses as a cycle — so the mark would
-		// stand with nothing to finish it.
+		// Nor into its own subtree when the subtasks move: [refuseParent]
+		// refuses that re-parent as a cycle, so the mark could never finish.
 		under, err := inSubtree(ctx, tx, duplicate, into)
 		switch {
 		case err != nil:
@@ -2577,21 +2031,18 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 				"subtasks to leave them where they are",
 				survivor.Key, current.Key)
 		}
-		// ONLY WHAT THERE IS TO CARRY IS JUDGED BELOW: a duplicate with no
-		// subtask in its own project moves nothing onto the survivor, so
-		// neither which project the survivor is in nor whether a move is
-		// still carrying either end is anything to refuse it over.
+		// Only what there is to carry is judged below: with no subtask in its
+		// project to move, neither the survivor's project nor a move in flight
+		// is a reason to refuse.
 		kids, err := readChildBatch(ctx, tx, duplicate, current.Project, "", 1)
 		if err != nil || len(kids) == 0 {
 			return err
 		}
-		// NOR WHILE A MOVE HAS NOT CARRIED EITHER END, and asked before
-		// the projects are compared, because one of them is about to
-		// change: the walk carries whatever it read, so a subtask moved
-		// off an uncarried duplicate would land in the move's project
-		// under a survivor left in the old one, and one moved onto an
-		// uncarried survivor is a child that walk never read. See
-		// [refuseMidMove].
+		// Nor while a move has not carried either end, asked before the
+		// projects are compared since one is about to change: a subtask moved
+		// off an uncarried duplicate lands under a survivor left behind, and
+		// one moved onto an uncarried survivor is never read by that walk
+		// ([refuseMidMove]).
 		if err = refuseMidMove(ctx, tx, current, "task",
 			"its subtasks moved now would be split across two projects"); err != nil {
 			return err
@@ -2601,12 +2052,9 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 			return err
 		}
 		if survivor.Project != current.Project {
-			// A SUBTASK UNDER AN ITEM IN ANOTHER PROJECT is drawn under
-			// that item on neither board and sits in the attention
-			// queue as `inconsistent_project` — a state only a move of
-			// its root clears, and a merge is not a move. Refused
-			// before the first append, naming both ways out, rather
-			// than left for somebody to find.
+			// A subtask under an item in another project is on neither board
+			// (`inconsistent_project`) and only a move of its root clears it,
+			// so it is refused before the first append, naming both ways out.
 			return invalid("task %s's subtasks are in %s and %s is "+
 				"in %s, so re-parenting them onto it would file subtasks under "+
 				"an item in another project: move %s into %s first — its "+
@@ -2619,17 +2067,13 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		return WriteResult{}, err
 	}
 
-	// THE EDGE IS A GESTURE, not a collection this sequence composes. The
-	// read above is a PRE-FLIGHT — it happens before the first append and
-	// outside every snapshot — so a set built from it and written whole
-	// silently drops any relation a colleague added in between. An add is
-	// resolved against the task's own rows inside the decide, which is the
-	// one place a single consistent read of them exists.
+	// The edge is an ADD resolved inside the decide: the read above is a
+	// pre-flight outside every snapshot, so a whole set built from it would
+	// drop a relation a colleague added in between.
 	//
-	// THE MARK CARRIES THE INTENT, because the duty that finishes this
-	// walk if this process dies reads it off the task and has no other
-	// way to know: a merge that declined to move the subtree and one that
-	// crashed before moving its first child leave identical rows.
+	// The mark carries the intent (MergeReparent): a duty finishing this walk
+	// reads it off the task, since a merge that declined to move the subtree
+	// and one that crashed before its first child leave identical rows.
 	merging := true
 	marked, err := w.UpdateTask(ctx, stepID(opID, "mark"), duplicate, task.Project, NoIfMatch,
 		TaskPatch{Relate: &RelationIntent{Add: []Relation{{
@@ -2649,10 +2093,8 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 
 	cancelled := StatusCancelled
 	done := false
-	// THE CLOSE LANDS ON THE SUBJECT THE MARK ALREADY MOVED, and the
-	// re-parented children in between are on subjects of their own — so
-	// the mark's position is what this last append has to see, whatever
-	// the loop above published. See [Writer.After].
+	// The close lands on the mark's subject while the children are on their
+	// own, so the mark's position is what this append must see ([Writer.After]).
 	closed, err := w.After(marked.Position).UpdateTask(ctx, stepID(opID, "close"),
 		duplicate, task.Project, NoIfMatch,
 		TaskPatch{Status: &cancelled, Merging: &done}, ChangeStatus, notify)
@@ -2661,28 +2103,16 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 }
 
 // reparentOnto moves whatever is left of a duplicate's subtasks onto the
-// canonical task, in batches of [WalkBatch].
+// canonical task, in batches of [WalkBatch] (a bounded read, and a bounded
+// stretch between heartbeats). Shared by the sequence and the duty, so the
+// duty's repair is a RE-RUN of what the holder did not reach. Each step id is
+// keyed on the child, not its position: a re-run's batches divide differently,
+// so an index would answer one child's move with another's ledger row.
 //
-// SHARED BY THE SEQUENCE AND THE DUTY, which is what [readChildBatch]'s
-// selection buys: the duty's repair is a RE-RUN of the batch the holder did
-// not reach, not a second algorithm that has to keep agreeing with this one.
-// A merge's children are one of the walks [WalkBatch] is named for, and the
-// value buys the same two things here as elsewhere — a bounded read whatever
-// the subtree's size, and a bounded stretch between the claim's heartbeats.
-//
-// THE STEP ID IS KEYED ON THE CHILD rather than on its position in the walk,
-// because a re-run's batches do not divide the same way: the moved ones are
-// gone from the selection, so an index would give a different child the same
-// operation id and the ledger would answer one move's question with another's
-// row.
-//
-// ONLY A CHILD IN THE CANONICAL TASK'S OWN PROJECT IS SELECTED. The sequence
-// refuses a merge that would carry one across ([ErrReparentAcrossProjects]),
-// and this is what makes that an invariant rather than a check at the door: a
-// subtask filed under the duplicate after that check, or a walk the duty
-// finishes, never files a subtask under an item in another project. One that
-// is not selected stays under the duplicate, where the trash's frozen children
-// stay too.
+// Only a child in the canonical task's project is selected, which makes
+// [ErrReparentAcrossProjects] an invariant rather than a check at the door: a
+// subtask in another project filed under the duplicate since stays there, with
+// the trash's frozen children.
 func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string) (int, error) {
 	project, err := w.taskProject(ctx, into, "nothing can be merged into it")
 	if err != nil {
@@ -2712,14 +2142,10 @@ func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string)
 			// that may still be under the duplicate.
 			if err = resolved(fmt.Sprintf("subtask %s's move onto %s",
 				child.ID, into), result, err); err != nil {
-				// THE DUTY FINISHES IT ONCE THE MOVE CAN LAND, which is
-				// not the same promise as "the duty finishes it": a
-				// survivor that went to the trash after the pre-flight
-				// takes no child until it is restored, one filed under
-				// the duplicate since takes none of the subtasks above
-				// it, and the duty leaves such a merge waiting —
-				// reported, not retried — rather than failing on it
-				// every tick. See [mergeWaits].
+				// The duty finishes it once the move CAN land: a survivor trashed
+				// since the pre-flight, or one filed under the duplicate since (a
+				// cycle), leaves the merge waiting, reported and not retried each
+				// tick ([mergeWaits]).
 				return moved, fmt.Errorf("worklet: %d subtask(s) re-parented "+
 					"onto %s and %s still has more, so it stays marked "+
 					"mid-merge; the Worklet duty moves the rest once the "+
