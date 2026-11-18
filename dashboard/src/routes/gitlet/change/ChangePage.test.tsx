@@ -2063,6 +2063,25 @@ test("a closed change's header and merge box name who closed it, not its owner",
   );
 });
 
+// A REASON WRITTEN WITHOUT ITS STOP is ended as a sentence, so "Reopen it" reads apart.
+// Mutation: say the reason as written, and it runs into the next sentence.
+test("a close's reason without a closing stop is ended before the next sentence", async () => {
+  stubEngine(
+    detail({
+      state: "closed",
+      readiness: undefined,
+      closed_at: "2026-10-27T12:00:00Z",
+      closed_by: "cto",
+      closed_by_kind: "agent",
+      close_reason: "Closed by mistake",
+    }),
+    () => json({}),
+  );
+  mount();
+  const box = await screen.findByRole("article", { name: "Closed without being merged" });
+  expect(box.textContent).toMatch(/Closed by mistake\. Reopen it from the page bar\.$/);
+});
+
 test("a change a push closed by deleting its branch names no closer, and says why in words", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-10-27T13:00:00Z"));

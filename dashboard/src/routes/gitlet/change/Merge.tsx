@@ -1172,7 +1172,10 @@ function OtherSection({ change, section }: { change: CodeChangeDetail; section: 
 /** Why a closed change closed, in a sentence: its closer's reason, or that its branch was deleted. */
 export function closeReasonSentence(change: Pick<CodeChangeDetail, "close_reason">): string {
   if (change.close_reason === SOURCE_DELETED) return "Its branch was deleted.";
-  return change.close_reason ?? "Nobody said why.";
+  const reason = change.close_reason?.trim();
+  if (!reason) return "Nobody said why.";
+  // A PERSON'S REASON, ended as a sentence, so the one after it reads apart.
+  return /[.!?]$/.test(reason) ? reason : `${reason}.`;
 }
 
 /** How a merged change came to be merged where no record names who merged it. */
