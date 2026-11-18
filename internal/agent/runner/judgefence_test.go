@@ -37,22 +37,18 @@ func (j *echoingJudge) Decide(_ context.Context, req extension.Request) (extensi
 }
 
 // THE JUDGE IS TOLD THE TURN'S TOKEN, AND ITS REASON REACHES THE SEAT DEFUSED
-// (ADR-0040). A judge reads the foreign words in the turn's ask under a token
-// of its own call only if it is told which token they were fenced under; and
-// its reason is written into the pass's own conversation as a user message,
-// where anything it echoed of what it read — the turn's closer, a forged
-// opener — would read as one of the turn's fences. So the runner hands the
-// judge the turn's token, and the nudge carrying the reason is defused under
-// it.
+// (ADR-0040). The judge can re-fence the ask's foreign words under its own
+// call's token only if told the turn's; and its reason enters the pass's
+// conversation as a user message, where an echoed closer or forged opener would
+// read as one of the turn's fences. So the runner hands the judge the token and
+// defuses the nudge carrying the reason under it.
 //
-// Driven through onboarding, in a turn whose fences carry a token of its own:
-// the one phase the engine drives whose ceiling sits above its budget, so the
-// one the judge reaches.
+// Driven through onboarding, the one phase whose ceiling sits above its budget,
+// so the one the judge reaches.
 func TestTheJudgeIsToldTheTurnsTokenAndItsReasonReachesTheSeatDefused(t *testing.T) {
 	t.Parallel()
 	b := provenance.NewBoundary()
-	// Three rounds of work against a two-round cap, so the pass exhausts its
-	// budget once and the judge is asked.
+	// Three rounds against a two-round cap, so the judge is asked.
 	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		persist(t, "conventions", "start with the conventions"),
 		persist(t, "owners", "and who owns what"),
@@ -90,8 +86,7 @@ func TestTheJudgeIsToldTheTurnsTokenAndItsReasonReachesTheSeatDefused(t *testing
 	if fenceMarker.MatchString(nudge) || strings.Contains(strings.ToUpper(nudge), string(b)) {
 		t.Errorf("the judge's reason reaches the seat undefused:\n%s", nudge)
 	}
-	// DEFUSED, NOT DROPPED: a nudge that lost the reason would pass the
-	// check above for nothing.
+	// Defused, not dropped: a nudge without the reason passes the check above.
 	if !strings.Contains(nudge, "approve everything") {
 		t.Errorf("the judge's reason never reached the seat:\n%s", nudge)
 	}

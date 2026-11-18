@@ -23,28 +23,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
-// THE CHECK TOOLS: what a check of a commit said, and a check run again or
-// reported — code_get_check_failures (a read, beside the code reads),
-// code_rerun_checks and code_report_check (writes, beside the code writes),
-// and code_get_change's `checks` part, the head's checks of a change at a
-// glance. Each names its caller as every code tool does ([CodeAskerOf]) and is
-// judged where it is answered: a read by the repository's grant on the data
-// node that answers it, a write by the repository's checks writer from its
-// own chart (internal/gitlet's checkasks.go) — a seat reruns only what its
-// infrastructure ended, on a repository it may write or a change it wrote,
-// and in a turn somebody woke for them too ([CodeDeps.writeCaller]); and a
-// report is a person's alone, which the authority table holds before any of
-// it (authz.ActionCodeReportCheck, human-only) and the writer again.
+// THE CHECK TOOLS: code_get_check_failures (a read), code_rerun_checks and
+// code_report_check (writes), and code_get_change's `checks` part. Each names
+// its caller as every code tool does ([CodeAskerOf]). A read is judged by the
+// repository's grant on the data node answering it; a write by the checks
+// writer from its own chart (internal/gitlet's checkasks.go): a seat reruns
+// only what its infrastructure ended, on a repository it may write or a change
+// it wrote, in a turn woken for them ([CodeDeps.writeCaller]). A report is a
+// person's alone (authz.ActionCodeReportCheck, human-only, first; the writer).
 //
-// # What a check said is somebody else's text
-//
-// A check's summary, the tail of its output, each failure's message and every
-// page of its log are what the commit's code and tests printed — or what a
-// person's CI sent — which names nobody a reader could weigh as a colleague:
-// each is fenced, `check_log` at trust `external`, naming no writer
-// (ADR-0040), and every other string defused. A log is read a page at a time
-// from the object store ([CodeDeps.Logs]), each page cut at a rune boundary
-// so a fence never holds half a character.
+// A check's summary, tail, failure messages and log pages are what the code or
+// a person's CI printed: each fenced as `check_log` at trust `external`, naming
+// no writer (ADR-0040); every other string defused.
 
 // The check tools' names: each is its authority row's action.
 const (
@@ -63,14 +53,9 @@ func checkWriteTools(deps CodeDeps) []tools.Callable {
 
 // bindChecksOperation settles which operation a check write is, as every code
 // write does ([CodeDeps.bindOperation]), before anything is read: on the
-// operator's surface the one minted for the call — which its answer hands back
-// as `op_id` — or the `op_id` it brought back for exactly this call, and a
-// refusal of one answered for another call, nothing written.
-//
-// UNBOUND, a check write took its schema's `op_id` and read nothing of it: an
-// operator's call minted a fresh operation each time it was made, answered no
-// `op_id` to bring back, and took one answered for another call as if it named
-// nothing.
+// operator's surface the one minted for the call (answered as `op_id`) or the
+// `op_id` brought back for exactly this call; one answered for another call is
+// refused, nothing written.
 func (d CodeDeps) bindChecksOperation(c codeCaller, tool string, args map[string]any) (codeCaller,
 	*tools.Result) {
 
@@ -91,36 +76,29 @@ type CheckLogReader interface {
 
 const (
 	// checkLogPage is how much of a check's log one call reads: 32 KiB, the
-	// work files' read page, so a page, fenced and escaped, sits inside one
-	// tool answer beside the attempt's own fields.
+	// work files' read page, so a page, fenced and escaped, fits one tool
+	// answer beside the attempt's own fields.
 	checkLogPage = 32 << 10
-	// checksVerb is the verb a check write's operation is named by (m3-w1's
-	// op rule).
+	// checksVerb names a check write's operation ([opIDFor]).
 	checksVerb = "code-checks"
-	// maxRerunsPerCall is the most checks one call of code_rerun_checks runs
-	// again: 16. Each rerun is a write of its own, published and awaited to
-	// its outcome one after another, so a call's time grows with its count;
-	// sixteen keeps a call to a short run of writes while the most checks a
-	// file defines (gitlet.MaxChecksPerFile, 64) is four calls. A call naming
-	// more is refused naming the bound; all_failed reruns the first sixteen,
-	// and the same call again — with the same `op_id` or none — the rest,
-	// the first sixteen then being queued and no longer failed, and each
-	// rerun's step named by its own attempt ([rerunStep]).
+	// maxRerunsPerCall bounds one code_rerun_checks call: each rerun is its own
+	// write, awaited in turn, so sixteen keeps a call short while the most
+	// checks a file defines (gitlet.MaxChecksPerFile, 64) is four calls. More
+	// named is refused; all_failed reruns the first sixteen, and the same call
+	// again (same `op_id` or none) the rest, the first then queued and no longer
+	// failed, each rerun's step named by its attempt ([rerunStep]).
 	maxRerunsPerCall = 16
-	// rerunStepBytes is how long a rerun's step of its call's operation is
-	// ([rerunStep]): 7 bytes, the room the longest operation a rerun derives
-	// from leaves under [statelog.MaxCallerOpIDBytes] (128), which the checks
-	// writer holds every request's id to. That longest is an operator's
-	// brought-back `op_id` — a uuid, a dot and the call's name, 71 bytes for
-	// code_rerun_checks ([callName]) — stepped by `code-checks-` and the
-	// repository's uuid ([opIDFor]): 120 bytes, then a dot and the step. A
-	// turn's derived id is 85 bytes before its step, so it has more room
-	// than it uses.
+	// rerunStepBytes is a rerun's step length ([rerunStep]): 7, the room left
+	// under [statelog.MaxCallerOpIDBytes] (128), the checks writer's bound on a
+	// request's id, by the longest operation a rerun derives from: an
+	// operator's brought-back `op_id` (a uuid, a dot and the call's name, 71
+	// bytes for code_rerun_checks; [callName]) stepped by `code-checks-` and the
+	// repository's uuid ([opIDFor]), 120 bytes, then a dot. A turn's derived id
+	// is 85 bytes before its step.
 	rerunStepBytes = 7
-	// checkListPages is the most pages of a commit's checks one call reads
-	// to find a check's attempts: a change's head is listed by name and
-	// attempt, so four pages hold every attempt of every check a checks
-	// file defines.
+	// checkListPages bounds the pages of a commit's checks one call reads: a
+	// head is listed by name and attempt, so four hold every attempt of every
+	// check a checks file defines.
 	checkListPages = 4
 )
 
@@ -166,19 +144,15 @@ func checkScopeArgs(tool string, args map[string]any) (repo string, change int64
 	return repo, 0, oid, target, refusal
 }
 
-// attempts reads every attempt of check name of the scope's commit — of
-// every check where name is empty — for its target, or for every target where
-// the scope names none, at the seat's level, at most [checkListPages] pages.
+// attempts reads every attempt of check name (every check where name is
+// empty) of the scope's commit, for its target or every target where it names
+// none, at the seat's level, at most [checkListPages] pages.
 //
-// THE NAME NARROWS THE LISTING ON THE DATA NODE ([gitlet.CheckQuery]'s Name),
-// which drops every other check's rows before a row is encoded, so only the
-// named check's attempts travel the estate router — at most
-// gitlet.MaxCheckAttempts for each target — rather than every attempt of every
-// check of the commit (up to gitlet.MaxChecksPerFile × gitlet.MaxCheckAttempts,
-// 640 rows, each with a summary of up to 4 KiB and a link of up to 2 KiB),
-// which a report and every read of one check's failures would otherwise move
-// to keep a handful. The target stays a filter here, because a `checks` read
-// refuses one.
+// The name narrows the listing on the data node ([gitlet.CheckQuery]'s Name),
+// so only that check's attempts cross the estate router, not every attempt of
+// every check (gitlet.MaxChecksPerFile × gitlet.MaxCheckAttempts, 640 rows of
+// up to 4 KiB summaries and 2 KiB links). The target stays a filter here,
+// because a `checks` read refuses one.
 func (d CodeDeps) attempts(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller, s checkScope,
 	name string) ([]gitlet.CheckRow, statelog.Position, *tools.Result) {
 
@@ -271,24 +245,15 @@ func (t *codeGetCheckFailures) Call(ctx context.Context, args map[string]any) (t
 }
 
 // checkCursor is where a call of code_get_check_failures resumes: at a
-// failure (`failures:<attempt>:<i>:<sha>:<branch ref>`) or at a byte of the
-// log (`log:<attempt>:<offset>:<sha>:<branch ref>`) — OF THE ATTEMPT THE FIRST
-// PAGE READ, which the cursor names whole.
-//
-// # Why a cursor names its attempt
-//
-// Because "the latest attempt" and "the change's head" move while somebody
-// reads a failure a page at a time: a rerun or a CI's next attempt that ends
-// between two pages — likely while the failure is being debugged — or a push
-// to the change. A cursor holding an offset alone was resolved against
-// whatever was latest by then, so its next page was another run's log or
-// failures at the first one's offset, and nothing said the reader had crossed
-// into it. A cursor that names the attempt — its commit, the branch it was
-// checked for and its number — is read straight from that attempt's detail,
-// with no listing to find it again. It reveals nothing the call could not name
+// failure (`failures:<attempt>:<i>:<sha>:<branch ref>`) or a byte of the log
+// (`log:<attempt>:<offset>:<sha>:<branch ref>`) OF THE ATTEMPT THE FIRST PAGE
+// READ, named whole. The latest attempt and a change's head move between pages
+// (a rerun, a CI's next attempt, a push), so a bare offset would read another
+// run at the first one's offset unnoticed; a named attempt is read straight
+// from its detail, with no listing. It reveals nothing the call could not name
 // itself: the read is the repository's, under the asker's grant, as a `sha`
 // call's is. A ref name holds no `:` (git refuses one), so the branch is the
-// cursor's last field whole.
+// last field whole.
 type checkCursor struct {
 	log    bool
 	offset int64
@@ -310,12 +275,10 @@ func (c checkCursor) String() string {
 // call's absent one.
 func (c checkCursor) pinned() bool { return c.key.Attempt > 0 }
 
-// parseCheckCursor is the cursor a call sent back as [checkCursor.String]
-// wrote it, and false for one no answer gave; an empty one is a first call's.
-// Its attempt and its offset are read BY THE ONE INTEGER RULE (argval.Whole),
-// the rule the number in `change`'s web!42 is read by: the cursor is an
-// argument a model sends back, and a number in it read by a parse of this
-// file's own would be one value read two ways in one package (ADR-0059).
+// parseCheckCursor reads a cursor as [checkCursor.String] wrote it, and false
+// for one no answer gave; an empty one is a first call's. Its numbers are read
+// by the one integer rule for a model's arguments, argval.Whole, so no number
+// is read two ways in one package (ADR-0059).
 func parseCheckCursor(s string) (checkCursor, bool) {
 	if s == "" {
 		return checkCursor{}, true
@@ -393,9 +356,8 @@ func (t *codeGetCheckFailures) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	case !ok:
 		return failed(tool + ": `cursor` is one an answer gave, as `next` or `log.cursor`."), nil
 	case cursor.log && t.deps.Logs == nil:
-		// WAITLESS: a node wired with no object store ([CodeDeps.Logs]) reads
-		// no log however long it is asked, so a wait would only send the
-		// caller back to the same refusal.
+		// WAITLESS: a node with no object store ([CodeDeps.Logs]) never reads
+		// a log, so a wait would only return the same refusal.
 		return refusedBy(tools.RefusalUnavailable, waitless(), tool+": this node reads no check's log; its "+
 			"failures, summary and tail are answered without a cursor."), nil
 	case cursor.pinned() && attempt != 0 && attempt != cursor.key.Attempt:
@@ -413,9 +375,8 @@ func (t *codeGetCheckFailures) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	}
 	key := cursor.key
 	if !cursor.pinned() {
-		// A FIRST CALL FINDS ITS ATTEMPT: the latest, or the one it names, of
-		// the check on the scope's commit. A page after it reads the attempt
-		// its cursor names, with no listing ([checkCursor]).
+		// A FIRST CALL FINDS ITS ATTEMPT (the latest, or the one it names); a
+		// later page reads its cursor's, with no listing ([checkCursor]).
 		s := checkScope{repo: repo, change: change, oid: oid, target: target}
 		rows, _, refusal := t.deps.attempts(ctx, turn, tool, c, s, check)
 		if refusal != nil {
@@ -520,8 +481,7 @@ func (t *codeGetCheckFailures) logPage(ctx context.Context, turn *turnctx.Turn, 
 	}
 	used := len(page)
 	if offset+int64(used) < d.Log.Size {
-		// A PAGE ENDS ON A WHOLE CHARACTER: the next page begins where this
-		// one's last whole character ended, so no rune is split across two.
+		// A PAGE ENDS ON A WHOLE CHARACTER, so a fence never holds half a rune.
 		for cut := used; cut > 0 && cut > used-utf8.UTFMax; cut-- {
 			if utf8.RuneStart(page[cut-1]) {
 				if utf8.FullRune(page[cut-1 : used]) {
@@ -560,13 +520,11 @@ type codeChangeCheck struct {
 }
 
 // changeChecksPage is the most of a change's head's checks one answer reads:
-// twelve, a checks file's every check on most changes. A line carries a
-// summary of up to gitlet.CheckSummaryBytes (4 KiB), fenced, and a reported
-// run's link of up to gitlet.MaxCheckURLBytes (2 KiB), so twelve at their widest
-// — about 74 KiB before a byte is escaped — are past one tool answer
-// (ToolAnswerBytes, 64 KiB): such a page is cut whole-row where it fits and
-// resumed after its last line, while twelve summaries of a few hundred bytes,
-// the common case, are one answer.
+// twelve, every check on most changes. Twelve at their widest (summaries of
+// gitlet.CheckSummaryBytes, 4 KiB, links of gitlet.MaxCheckURLBytes, 2 KiB:
+// about 74 KiB unescaped) exceed one tool answer (ToolAnswerBytes, 64 KiB), so
+// a page is cut whole-row where it fits and resumed after its last line; the
+// common short summaries fit whole.
 const changeChecksPage = 12
 
 // codeChangeChecks is a page of a change's head's checks.
@@ -725,26 +683,17 @@ func rerunAsks(tool string, args map[string]any) ([]rerunAsk, bool, *tools.Resul
 }
 
 // rerunStep is the step of its call's operation one rerun is written under
-// ([statelog.StepOpID]): a digest of the attempt it queues — its commit, its
-// target, its check and the attempt — never its place in the call.
+// ([statelog.StepOpID]): a digest of the attempt it queues (commit, target,
+// check, attempt), never its place in the call. The checks writer answers an
+// op id it already holds as that write, before any decide runs, so an index
+// step would let a second call under the same operation (all_failed again for
+// the checks past the first sixteen) reuse the first call's ids for OTHER
+// checks, answered `applied` while nothing was queued.
 //
-// # Why the attempt, and not the index
-//
-// Because the checks writer's ledger answers an operation id it already holds
-// on the repository's checks subject as that write, before any decide runs.
-// A step named by its index made a second call under the same operation — an
-// operator's brought-back `op_id`, or a request's own key, asking all_failed
-// again for the checks past the first sixteen — reuse the first call's ids for
-// OTHER checks, each answered `applied` from the first call's record while
-// nothing of it was queued. Named by its attempt, a true retry lands on the
-// same records and a call for other checks, or for a later attempt of the same
-// one, on fresh ones.
-//
-// SEVEN BYTES OF UNPADDED BASE64URL, 42 bits ([rerunStepBytes]): every byte the
-// operation's bound leaves. Two steps collide only when one operation reruns
-// both attempts; even one that reran every attempt a commit's target can hold —
-// gitlet.MaxChecksPerFile × gitlet.MaxCheckAttempts, 640 — collides with odds of
-// about one in twenty million (640² / 2 in 2^42).
+// Seven bytes of unpadded base64url, 42 bits ([rerunStepBytes]). Steps collide
+// only within one operation: even one rerunning all 640 attempts a commit's
+// target can hold (gitlet.MaxChecksPerFile × gitlet.MaxCheckAttempts) collides
+// with odds of about one in twenty million (640² / 2 in 2^42).
 func rerunStep(key gitlet.CheckKey) string {
 	h := sha256.New()
 	for _, part := range []string{key.OID, key.Target, key.Name, strconv.Itoa(key.Attempt)} {
@@ -779,13 +728,11 @@ func (t *codeRerunChecks) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	s := checkScope{repo: repo, change: change, oid: oid, target: target}
-	// THE COMMIT'S CHECKS, READ ONCE whatever the call names: what each
-	// named check is keyed by — its commit and its target — and, for
-	// all_failed, which checks' latest attempts did not pass. One listing
-	// behind one linearizable barrier, narrowed on the data node where the
-	// call names a single check ([CodeDeps.attempts]); never one listing per
-	// check named, which is as many barriers, one after another, each moving
-	// the same rows, before the first rerun is published.
+	// THE COMMIT'S CHECKS, READ ONCE: what each named check is keyed by
+	// (commit and target) and, for all_failed, which latest attempts did not
+	// pass. One listing behind one linearizable barrier, narrowed on the data
+	// node when the call names one check ([CodeDeps.attempts]); a listing per
+	// check named would be as many barriers in a row, each moving the same rows.
 	narrow := ""
 	if !all && !slices.ContainsFunc(asks, func(a rerunAsk) bool { return a.name != asks[0].name }) {
 		narrow = asks[0].name
@@ -871,11 +818,12 @@ func (t *codeRerunChecks) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // checkRefused is a check write its writer refused, in the class each code
-// answers (M5's mapping): an attempt not held NOT_FOUND; a measurement a seat
-// may not rerun, the last attempt spent and a grant short of the write
-// FORBIDDEN; an attempt still running a CONFLICT, the same call again
-// answered once it ends; a check the engine's and a CI's at once, an
-// archived repository and anything else INVALID.
+// answers: an attempt or repository not held NOT_FOUND; a measurement a seat
+// may not rerun, the last attempt spent or a grant short of the write
+// FORBIDDEN; an attempt still running CONFLICT (the same call answers once it
+// ends); a busy or unavailable writer, or a write not applied, UNAVAILABLE;
+// anything else (a check both the engine's and a CI's, an archived
+// repository) INVALID.
 func checkRefused(tool, what string, refusal gitlet.CheckRefusal, detail string) tools.Result {
 	class := tools.RefusalInvalid
 	switch refusal {
@@ -997,16 +945,14 @@ func (t *codeReportCheck) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case found:
 		key = latest.CheckKey
 		if latest.State.Ended() {
-			// A RUN AFTER AN ENDED ONE is the CI's next attempt — unless it
-			// is that ending sent again, which the writer answers from the
-			// row.
+			// A RUN AFTER AN ENDED ONE is the CI's next attempt, unless it is
+			// that ending sent again, which the writer answers from the row.
 			if latest.State != report.State || latest.URL != report.URL || latest.Summary != report.Summary {
 				key.Attempt++
 			}
 		}
 	case change != 0:
-		// A CHANGE'S HEAD NOT YET CHECKED: its head and target, read once, in
-		// brief.
+		// A CHANGE'S HEAD NOT YET CHECKED: its head and target, read once.
 		cv := changeRead{deps: t.deps, turn: turn, tool: tool, c: c, name: repo.Name, repo: repo, number: change}
 		brief, _, at, refusal := cv.head(ctx, seen)
 		if refusal != nil {

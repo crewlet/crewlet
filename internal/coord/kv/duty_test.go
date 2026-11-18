@@ -18,14 +18,11 @@ import (
 // because this package must not import the seat layer).
 const productionSeatTTL = 45 * time.Second
 
-// TestEveryEngineDutyIsHonouredBesideTheProductionSeatTTL is the regression the
-// duty bucket exists for, at the TTLs that actually failed.
-//
-// With duties in the seat lease bucket, a store opened at the production 45 s
-// refused all of these, and each refusal was one warning per tick on a fleet
-// that never swept, never retired a mailbox, never reconciled an integration
-// and never curated a skill. The contract suite's duty cases certify the rule
-// at coordtest.LongTTL; this pins it at the seat TTL a fleet really runs.
+// TestEveryEngineDutyIsHonouredBesideTheProductionSeatTTL pins why the duty
+// bucket exists, at the seat TTL a fleet really runs: in the seat lease bucket
+// at 45 s every one of these duties would be refused, and the fleet would never
+// sweep, retire a mailbox, reconcile an integration or curate a skill. The
+// contract suite's duty cases run at coordtest.LongTTL.
 func TestEveryEngineDutyIsHonouredBesideTheProductionSeatTTL(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -68,16 +65,11 @@ func TestEveryEngineDutyIsHonouredBesideTheProductionSeatTTL(t *testing.T) {
 // restated because this package must not import the tracker.
 const trackerClaimTTL = 60 * time.Second
 
-// TestEveryCallerClaimIsHonouredBesideTheProductionSeatTTL is the duty
-// regression's second half: a lease of a class the fleet does not own — the
-// tracker's walk claims — is honoured at the TTL its caller sized it to,
-// beside a seat lease bucket at the TTL a fleet really runs on.
-//
-// With every class but `worker:` written to the seat lease bucket, a store at
-// the shipped 45 s refused both, so on every embedded-kv fleet a
-// cross-project move and a merge failed before their first append. The
-// contract suite runs its seat bucket at coordtest.LongTTL, which is longer
-// than either.
+// TestEveryCallerClaimIsHonouredBesideTheProductionSeatTTL is the same for a
+// class the fleet does not own — the tracker's walk claims — at the TTL its
+// caller sized it to. In the seat lease bucket at 45 s both would be refused,
+// and a cross-project move or merge would fail before its first append; the
+// contract suite's seat bucket (coordtest.LongTTL) is longer than either.
 func TestEveryCallerClaimIsHonouredBesideTheProductionSeatTTL(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -102,8 +94,7 @@ func TestEveryCallerClaimIsHonouredBesideTheProductionSeatTTL(t *testing.T) {
 		}
 	}
 
-	// And nothing widened for the classes the seat TTL IS for: presence
-	// keeps the seat bucket's ceiling as the seats do.
+	// Presence keeps the seat bucket's ceiling, as the seats do.
 	_, _, err := s.TryAcquire(ctx, coord.NodeResource("node-a"), coord.AcquireOptions{
 		Owner: "node-a:1", TTL: productionSeatTTL + time.Second, Ungated: true,
 	})
@@ -177,12 +168,10 @@ func rawLease(ctx context.Context, t *testing.T, l *lane, resource string) lease
 	return v
 }
 
-// Every lease outside seats and presence — a duty, and a class a caller owns —
-// is written in the duty bucket and nowhere else, and every read of it reads
-// that bucket: the seat lease bucket holds seats and presence alone, so a
-// class listing of either never meets one, a listing of another class never
-// opens the seat bucket, and the gate's view of that bucket takes in none of
-// their writes.
+// Every lease outside seats and presence — a duty, a class a caller owns — is
+// written and read in the duty bucket alone, so a seat or presence listing
+// never meets one, another class's listing never opens the seat bucket, and
+// the gate's view of that bucket takes in none of their writes.
 func TestEveryLeaseOutsideSeatsAndPresenceLivesInTheDutyBucketAlone(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

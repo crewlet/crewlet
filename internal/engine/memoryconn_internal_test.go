@@ -14,19 +14,14 @@ import (
 
 // A NODE CARRIES ITS SEATS' MEMORY WHOEVER RUNS THE BROKER.
 //
-// A seat's memory is written to the node's own store and placement moves
-// seats, so every row rides a changelog on the stream and the node that takes
-// a seat replays it first. The syncer was handed Backends.Conn, whose nil on
-// an external broker is the BACKUP's decision — an operator's cluster backs up
-// its own streams — and a nil connection is how memsync says "this node cannot
-// carry memory". So every fleet on `stream.type: nats` built no syncer, and a
-// seat that moved forgot everything it had learned, with nothing saying so.
+// Placement moves seats, so a seat's memory rides a changelog the taker
+// replays. The syncer rides the coordination store's connection (the queue's
+// own on an external broker, Backends' second one on an embedded broker),
+// never Backends.Conn: that is nil on an external broker, the backup's
+// decision, and a nil connection tells memsync this node carries no memory,
+// so on `stream.type: nats` a moved seat would silently forget everything.
 //
-// Both topologies, and the connection each one's syncer rides: the
-// coordination store's, which is the queue's own on an external broker and the
-// second connection Backends owns on an embedded one.
-//
-// Mutation: hand memsync Backends.Conn again and the external row goes red.
+// Mutation: hand memsync Backends.Conn and the external row goes red.
 func TestANodeCarriesSeatMemoryWhoeverRunsTheBroker(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

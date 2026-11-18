@@ -21,10 +21,9 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// What a phase's prompt offered from the knowledge base, and what its tools
-// read: the pages behind a tool-skill catalogue are recorded as a
-// `knowledge_read` with `via: skill_injected`, per rendered catalogue, and a
-// tool call records the phase it ran in.
+// The pages behind each rendered tool-skill catalogue are recorded as a
+// `knowledge_read` with `via: skill_injected`; a load records the phase it
+// ran in.
 
 // reads is every knowledge_read a capture holds.
 func (c *capture) reads() []*types.KnowledgeRead {
@@ -39,9 +38,8 @@ func (c *capture) reads() []*types.KnowledgeRead {
 	return out
 }
 
-// skilledRunner builds a runner over two published skills: one about a tool the
-// executor has, and one an operator scoped to Review on an MCP server the
-// seat's registry holds a tool of.
+// skilledRunner builds a runner over two skills: one on a tool the executor
+// has, and one scoped to Review on an MCP server the seat holds a tool of.
 func skilledRunner(t *testing.T, prov *scriptedProvider, pub *capture, launcher runner.AgentLauncher) *runner.Runner {
 	t.Helper()
 	registry := skills.NewRegistry()
@@ -69,19 +67,15 @@ func skilledRunner(t *testing.T, prov *scriptedProvider, pub *capture, launcher 
 		tools.OriginBuiltin); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	// THE SERVER THE REVIEW SKILL IS KEYED ON, held as a seat holds a
-	// server: by a tool of it in the seat's registry, and by no mcp_env
-	// block, which names credentials rather than a server the seat reaches.
+	// The review skill's server, held as a seat holds one: by a tool of it
+	// in the registry, not by an mcp_env block (which names credentials).
 	if err := reg.Register(stubTool{name: "gh_search", out: "found"},
 		tools.Origin("github")); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	// THE REAL LOADER, publishing through the same capture, so a load made
-	// inside a phase is seen with the phase the surface bound it to — and the
-	// REAL AUTHORITY DECISION, because every builtin is gated at registration
-	// and a nil Authorizer refuses: without one the load is refused before
-	// it reads anything, and no read is recorded for a reason that has
-	// nothing to do with what this file asserts.
+	// The real loader, publishing through the same capture so a load shows
+	// its phase, with a real Authorizer: a nil one refuses every builtin, and
+	// no read would be recorded for a reason unrelated to this file.
 	if _, err := builtin.Register(reg, builtin.Deps{
 		ToolSkills: registry, Events: pub,
 		Authorize: builtin.Decide(authz.NoChart{}),
@@ -143,8 +137,8 @@ func TestTheExecutorsSkillCatalogueIsRecordedAsARead(t *testing.T) {
 		got.TurnID != "t-read" || len(got.Pages) != 1 || got.Pages[0] != want {
 		t.Errorf("catalogue read = %+v; want the executor offered %+v", got, want)
 	}
-	// THE PHASE A TOOL SEES IS THE PHASE THAT CALLED IT: the surface binds
-	// the turn as that phase, so the loader can say it ran in the executor.
+	// The surface binds the turn as the calling phase, so the loader
+	// records execute.
 	if len(loaded) != 1 || loaded[0].Phase != types.PhaseExecute ||
 		len(loaded[0].Pages) != 1 || loaded[0].Pages[0].ID != "pg-chat" {
 		t.Errorf("load reads = %+v; want one skill_loaded of pg-chat in execute", loaded)
@@ -152,9 +146,8 @@ func TestTheExecutorsSkillCatalogueIsRecordedAsARead(t *testing.T) {
 }
 
 // A SKILL AN OPERATOR SCOPED TO REVIEW REACHES THE REVIEWER, and is recorded
-// as offered there. The prompt, the parser and the docs all supported it and
-// the runner never passed the registry to the reviewer's prompt, so a skill
-// authored with `phases: [review]` reached nobody.
+// as offered there: the runner passes the registry to the reviewer's prompt,
+// or a skill authored with `phases: [review]` reaches nobody.
 func TestAReviewScopedSkillReachesTheReviewer(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{review: []llmtest.Response{
@@ -187,20 +180,17 @@ func TestAReviewScopedSkillReachesTheReviewer(t *testing.T) {
 }
 
 // A WORKER'S CATALOGUE IS RECORDED IN THE SUBAGENT PHASE, once per worker
-// prompt. A worker's prompt is built inside the subagent package, so its offer
-// is drained on the one hook that package calls on every path a child takes —
-// and a worker offered a skill whose page nobody counted would leave the pages
-// a company's fan-outs are shown reading as unread. The worker is spawned by
-// the run's delegate call over the bridge, as every worker is.
+// prompt. The prompt is built inside the subagent package, so the offer is
+// drained on the one hook it calls on every child's path; otherwise pages a
+// fan-out read show as unread. The worker is spawned by a bridged delegate.
 func TestAWorkersSkillCatalogueIsRecordedInTheSubagentPhase(t *testing.T) {
 	t.Parallel()
 	registry := skills.NewRegistry()
 	registry.Replace([]skills.Skill{{
 		Key: "research-method", Title: "Research method",
 		Summary: "how this company researches", Body: "Cite sources.",
-		// A TOOL THE WORKER IS GRANTED: a worker's catalogue is matched
-		// against its own grant, which holds what its parent holds active,
-		// and an executor holds no MCP tool until it activates one.
+		// A tool the worker is granted: its catalogue matches its grant,
+		// what the parent holds active (no MCP tool until activated).
 		Trigger:      skills.Trigger{Tool: "read_file"},
 		Phases:       []prompts.Phase{prompts.PhaseSubagent},
 		SourcePageID: "pg-research", SourceBackend: "native", SourceContainer: "SKILLS",

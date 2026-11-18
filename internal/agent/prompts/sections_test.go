@@ -31,10 +31,9 @@ func TestHumanColleaguesNoteAppearsOnlyInMixedOrgs(t *testing.T) {
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, "## Human colleagues")
 }
 
-// A human member's roster block renders their external identities and their
-// availability. How a reachable person is handed work is the `## Human
-// colleagues` note's to say, ONCE: a lead of a mostly human team used to pay
-// for it per profile, out of the allowance that buys profiles.
+// A human member's roster block renders their external identities and
+// availability; how a reachable person is handed work is said ONCE, in the
+// `## Human colleagues` note, not per profile out of the allowance.
 func TestRosterRendersHumanMemberBlock(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{
@@ -122,9 +121,8 @@ func TestZeroSeatRendersTheContractWithoutPanicking(t *testing.T) {
 
 func TestCapitalizeMatchesPythonSemantics(t *testing.T) {
 	t.Parallel()
-	// Upper the first rune, lower the rest — which is what renders
-	// "Github ID:" rather than "GitHub ID:". Carried as-is because the
-	// roster line is prompt text.
+	// Upper the first rune, lower the rest: what renders "Github ID:"
+	// rather than "GitHub ID:", kept since the roster line is prompt text.
 	for in, want := range map[string]string{
 		"slack":  "Slack",
 		"github": "Github",
@@ -140,13 +138,11 @@ func TestCapitalizeMatchesPythonSemantics(t *testing.T) {
 
 // A PERSON WITH NO CHAT ACCOUNT HAS NOBODY TO @-MENTION — ON A VENDOR'S CHAT.
 //
-// A human seat can be in the chart with no contact identity at all — somebody
-// who signs in to the dashboard and never joined the company's Slack — and a
-// roster that told an agent to mention them would produce a message addressed
-// to a handle resolving to nobody, which reads to everyone else as work handed
-// over. The company below is VALIDATED first, because a roster case over a
-// chart validation refuses would be certifying a state no company can be in.
-// The engine's own chat is the other case, below.
+// A human seat may hold no contact identity (signs in to the dashboard, never
+// joined Slack); a roster telling an agent to mention them addresses a handle
+// resolving to nobody, which reads to everyone else as work handed over. The
+// company is VALIDATED first, so the case certifies a state a company can be
+// in. The engine's own chat is the next case.
 func TestRosterOffersNoMentionForAPersonWithNoChatAccount(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{
@@ -186,16 +182,13 @@ func TestRosterOffersNoMentionForAPersonWithNoChatAccount(t *testing.T) {
 
 // ON THE ENGINE'S OWN CHAT, A PERSON ANSWERS TO THEIR SEAT'S HANDLE.
 //
-// Chatlet reads a handle: `@jane-founder` in a room reaches the person
-// holding that seat, and `send_dm` opens a conversation with them, with no
-// vendor account behind either. So the person with no contact identity above
-// is somebody to address there — and a roster that decided reachability from
-// contact identities alone told their lead there was nobody to @-mention, so
-// the lead routed everything through the PM tool and never asked them anything
-// in the room where they read. A person who also has a code-host account keeps
-// it listed beside the handle. The profile names the handle and nothing more:
-// how a person is reached and handed work is the `## Human colleagues` note's,
-// once, and on Chatlet the note names the handle and `send_dm` too.
+// Chatlet reads a handle: `@jane-founder` in a room reaches the seat's holder
+// and `send_dm` opens a conversation, with no vendor account behind either. So
+// the person with no contact identity above is addressable there, not "nobody
+// to @-mention", which would route everything through the PM tool. A
+// code-host account stays listed beside the handle. The profile names the
+// handle only; reaching and handing work is the `## Human colleagues` note's,
+// which on Chatlet names the handle and `send_dm`.
 func TestRosterOffersAPersonsHandleOnChatlet(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{
@@ -273,16 +266,10 @@ func headingsIn(prompt string) []heading {
 
 // EVERY SECTION OF A PHASE PROMPT IS A SIBLING.
 //
-// These documents are flat: the company's policies are not part of the
-// agent's identity, and the tool catalogue is not part of the turn contract —
-// each is the next thing the model reads. A single `#` over a run of `##`
-// says the opposite, and says it to every reader of the document: the model,
-// anything that summarises one, and the dashboard's prompt outline, which
-// draws the structure the builders wrote.
-//
-// It is asserted rather than remembered because nothing else would notice.
-// The executor's prompt carried that `#` for its whole life and no assertion
-// in this package was looking at the level of anything.
+// These documents are flat: policies are not part of the identity, nor the
+// tool catalogue of the turn contract. A single `#` over a run of `##` says
+// otherwise to every reader: the model, anything summarising one, and the
+// dashboard's prompt outline. Asserted because nothing else would notice.
 func TestEveryHeadingAPromptBuilderEmitsIsASibling(t *testing.T) {
 	t.Parallel()
 	seat := lead()
@@ -309,12 +296,9 @@ func TestEveryHeadingAPromptBuilderEmitsIsASibling(t *testing.T) {
 	}
 }
 
-// THE ASK IS A SECTION OF THE MESSAGE, NOT A LINE INSIDE THE BLOCK ABOVE IT.
-//
-// It was "Task:", a bare label, and the block above it is a heading — so with
-// the conversation's earlier turns told above it, the newest thing anybody said
-// was filed under that account, whose own text calls it "the task below".
-// Every block of this message is a peer, and this is what says so.
+// THE ASK IS A SECTION OF THE MESSAGE, NOT A LINE INSIDE THE BLOCK ABOVE IT:
+// as a bare label under the earlier turns' heading, the newest thing anybody
+// said would be filed under that account. Every block here is a peer.
 func TestTheUserMessagesBlocksAreAllPeers(t *testing.T) {
 	t.Parallel()
 	msg := BuildPhaseUserMessage(UserMessage{
@@ -340,12 +324,11 @@ func TestTheUserMessagesBlocksAreAllPeers(t *testing.T) {
 
 // A SEAT WHOSE CONTACT IDENTITIES THE DIRECTORY WITHHOLDS RENDERS NONE.
 //
-// The party registry already resolves a suspended person's Slack message to an
-// outside party; a roster that still printed their Slack id would have a lead's
-// agent DMing somebody the company has off-boarded. The seat stays — work for it
-// waits for whoever holds it next — and the prompt does not say WHY: a
-// person's standing is not an agent's business. The control is the same
-// roster with nothing withheld.
+// A suspended person's Slack message already resolves to an outside party; a
+// roster still printing their Slack id would have an agent DM somebody the
+// company off-boarded. The seat stays (its work waits for the next holder),
+// and the prompt does not say WHY: a person's standing is not an agent's
+// business. The control is the same roster with nothing withheld.
 func TestRosterRendersNoIdentityForAWithheldSeat(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{
@@ -381,15 +364,10 @@ func TestRosterRendersNoIdentityForAWithheldSeat(t *testing.T) {
 
 // A SEAT THAT CAN ASK IS TOLD WHEN TO ASK FOR A DECISION, AND TO STOP.
 //
-// The ask is a structured `decision` because the person answers by choosing
-// and the asker is woken with the choice — and the shape of one (options, a
-// recommendation, the evidence, the role) is the `decision` argument's own
-// schema, which reaches the model with the tool: a list of it here was the
-// same contract twice. What only this section says is when, and that asking
-// ends the branch: a seat that asked and carried on has decided for the
-// person, or is waiting inside a turn that cannot receive the reply. Gated on
-// the tool it names, like every other instruction to call something: a seat
-// without it is told nothing.
+// The ask's shape is the `decision` argument's own schema, which reaches the
+// model with the tool, so the section must not list it again; it says when to
+// ask and that asking ends the branch (a seat that carried on has decided for
+// the person). Gated on the tool it names: a seat without it is told nothing.
 func TestTheExecutorIsToldToAskAndStopOnTheBranch(t *testing.T) {
 	t.Parallel()
 	asking := BuildExecutor(engineer(), ExecutorInput{

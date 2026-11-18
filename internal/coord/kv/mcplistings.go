@@ -9,11 +9,10 @@ import (
 
 // ---- MCP listings and tool definitions ---------------------------------- //
 
-// Both are classes of the positions register, for the reason internal/coord's
-// mcplisting.go gives, and both are written through [entryClass], whose verbs
-// the model records already share. A listing's "entry" is its whole key,
-// because it is named by two segments (the server and the node) where an
-// entry class names one; the definition's is its digest.
+// Both are classes of the positions register (internal/coord's mcplisting.go
+// says why), written through [entryClass]. A listing's "entry" is its whole
+// key, since two segments (server and node) name it; a definition's is its
+// digest.
 
 var (
 	listingClass = entryClass[coord.MCPListing]{
@@ -24,9 +23,7 @@ var (
 			_, _, ok := coord.MCPListingOf(key)
 			return key, ok
 		},
-		// THE KEY NAMES THE SERVER AND THE NODE, and a record cannot say
-		// otherwise: a node writing under its own key describes its own
-		// listing of that server, whatever the body it was handed claims.
+		// THE KEY NAMES THE SERVER AND THE NODE, whatever the body claims.
 		stored: func(l coord.MCPListing, key string, version uint64) coord.MCPListing {
 			l.Server, l.Node, _ = coord.MCPListingOf(key)
 			l.At, l.Version = l.At.UTC(), version
@@ -47,9 +44,8 @@ var (
 
 // PutMCPListing writes one node's listing of one server, replacing it.
 //
-// A PLAIN PUT, as a node's positions row is: the only writer of the key is the
-// node it names, so there is no race to arbitrate, and a compare-and-set would
-// fail a node on a value only its own process can have changed.
+// A PLAIN PUT: the key's only writer is the node it names, so a
+// compare-and-set would only fail a node on a value no other process changes.
 func (f *FleetStore) PutMCPListing(ctx context.Context, l coord.MCPListing) (coord.MCPListing, error) {
 	l = l.Bounded()
 	if err := l.Validate(); err != nil {
@@ -94,8 +90,7 @@ func (f *FleetStore) WatchMCPListings(ctx context.Context) (<-chan coord.MCPList
 		})
 }
 
-// CreateMCPToolDefinition stores a definition unless its digest holds
-// one.
+// CreateMCPToolDefinition stores a definition unless its digest holds one.
 func (f *FleetStore) CreateMCPToolDefinition(ctx context.Context, s coord.MCPToolDefinition) (bool, error) {
 	if err := s.Validate(); err != nil {
 		return false, err

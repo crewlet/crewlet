@@ -16,22 +16,17 @@ import (
 )
 
 // AN OPENCODE SESSION IS PACKED ON DEMAND BY ITS OWN STANDALONE EXPORT, AND KEPT
-// WITHOUT A SECRET THE ENGINE PUT IN ITS BOX. A job that never packed — killed
-// before its script could, lost with its engine, still working where its box
-// would not end it — leaves no server the engine can reach, whose address and
-// password only its script held, so the pack asks the box's OpenCode itself
-// (`--standalone`) whether it holds the session the run's record names: an id
-// it does not hold — a harness that failed before it made the session — is
-// nothing to pack, and one it holds is exported, gzipped and its digest kept
-// in the box. Taken out through the scrub of a document, then
-// sealed, uploaded and opened from the store as a later launch opens it, the
-// export is still one JSON document of that session, holding no value the
-// engine named — in a message's text or as a key — no credential only its
+// WITHOUT A SECRET THE ENGINE PUT IN ITS BOX. A job that never packed leaves no
+// server the engine can reach (only its script held the address and password),
+// so the pack asks the box's OpenCode itself (`--standalone`) for the recorded
+// session: one it does not hold is nothing to pack, one it holds is exported,
+// gzipped and its digest kept in the box. Scrubbed, sealed, stored and opened
+// as a later launch opens it, the export is one JSON document of that session
+// holding no value the engine named (in text or as a key), no credential its
 // shape gives away, and no value under a password's key.
 //
 // Mutation: export through the run's server, export a session the box does not
-// hold, skip the document's rewrite, or write a key as it came, and a check
-// here goes red.
+// hold, skip the document's rewrite, or write a key as it came: a check is red.
 func TestAnOpenCodeSessionIsPackedOnDemandAndKeptScrubbed(t *testing.T) {
 	t.Parallel()
 	runner, b := openCodeBox(t, t.TempDir())
@@ -96,14 +91,11 @@ func TestAnOpenCodeSessionIsPackedOnDemandAndKeptScrubbed(t *testing.T) {
 }
 
 // AN OPENCODE SESSION PACKED ON DEMAND IS PACKED WHOLE BY AN OPENCODE THAT CUTS
-// WHAT IT WRITES INTO A PIPE. The pack exports with OpenCode's own runtime
-// (`--standalone`) and piped that export into gzip, which 2.0.32 and 2.1.4 stop
-// writing after a 64 KiB multiple with status 0: a 16 MiB session's standalone
-// export was packed as 3,080,192 bytes of it on 2.0.32 and 7,077,888 on 2.1.4,
-// and the take's scrub refused the cut archive, so the pack failed. Written to
-// a file and gzipped from there, the archive of a session whose export runs
-// past the cut gunzips to all of it, and that whole archive's digest is the one
-// the box keeps.
+// WHAT IT WRITES INTO A PIPE: 2.0.32 and 2.1.4 stop writing a standalone export
+// into a pipe after a 64 KiB multiple, exiting 0 (the take's scrub then refused
+// the cut archive and the pack failed), so the pack writes it to a file and
+// gzips that. An export past the cut gunzips whole, and that whole
+// archive's digest is the one the box keeps.
 //
 // Mutation: pipe the export into gzip again, and the archive holds the first
 // 64 KiB of it.
@@ -153,14 +145,12 @@ func TestAnOpenCodeSessionPackedOnDemandIsPackedWhole(t *testing.T) {
 }
 
 // AN ENDED OPENCODE JOB'S SESSION IS TAKEN AS ITS SCRIPT EXPORTED IT. A job the
-// engine's read ends while it still works — a stop's, a loss's, a collection's
-// past its turn's cap (internal/sandbox's endJob) — has its script, asked,
+// engine's read ends while it works (internal/sandbox's endJob) has its script
 // interrupt the session through the run's own server, export it through that
-// server while it still serves, and only then stop it; the runner's take that
-// follows, of a job that is over ([sandbox.SessionTake.Pack] false), reads
-// that export as the script left it and packs nothing again: no runtime of
-// OpenCode's own (`--standalone`) is started against the database the run's
-// server held, where it could find the database busy and refuse the pack.
+// server while it still serves, and only then stop it. The take that follows
+// ([sandbox.SessionTake.Pack] false) reads that export and packs nothing again,
+// so no `--standalone` runtime meets the database the run's server held, which
+// it could find busy and refuse the pack.
 //
 // Mutation: have a take of a job that is over pack the session anew, and the
 // harness is asked for a runtime of its own; export the ended run's session
@@ -220,12 +210,11 @@ func TestAnEndedOpenCodeJobsSessionIsTakenAsItsScriptExportedIt(t *testing.T) {
 }
 
 // A SESSION THE BOX'S OPENCODE COULD NOT BE ASKED ABOUT IS A PACK THAT FAILED,
-// never "no session". Only OpenCode's own answer that it holds no such id says
-// the box has nothing to pack; a probe that failed any other way — its private
-// server would not start, its database was busy under a job whose server still
-// ran, it crashed — is a session the box may well hold, and the capture is
-// refused with what OpenCode said, so the turn's end names the capture that was
-// not kept rather than an older one as the turn's last.
+// never "no session". Only OpenCode's own answer that it holds no such id means
+// nothing to pack; a probe that failed otherwise (its server would not start,
+// its database was busy, it crashed) may hide a session the box holds, so the
+// capture is refused with what OpenCode said, and the turn's end names the
+// capture not kept rather than an older one as its last.
 //
 // Mutation: read every failed probe as nothing to pack, or drop what the probe
 // said from the refusal, and a check here goes red.

@@ -34,14 +34,11 @@ units:
         handle: swe
 `
 
-// A DATA NODE WITH A KNOWLEDGE BASE ARMS THE REAPER, and the pass it runs
-// purges a page through the domain's own purge record once the page has been
-// in the trash past the term, and not a moment before.
-//
-// The whole wire, end to end: the source the engine adapts from its own write
-// side, the store's listing and its purge, the term the engine passes, and the
-// report the fleet keeps. A pass at today's clock finds the page inside its
-// term and leaves it readable; a pass a term and two slots later purges it.
+// A DATA NODE WITH A KNOWLEDGE BASE ARMS THE REAPER, and its pass purges a
+// page through the domain's own purge record once the page has been in the
+// trash past the term, and not before. End to end: the source adapted from the
+// engine's write side, the store's listing and purge, the term, and the
+// fleet's report.
 //
 // Mutation: drop the pages source from [Engine.trashSources] and the node arms
 // no reaper and the pass purges nothing.
@@ -99,15 +96,14 @@ func TestADataNodeReapsAPageOnlyOnceItsTermHasRunOut(t *testing.T) {
 	}
 }
 
-// reapSource runs one pass of the reaper over every source this node arms, at
-// at, and answers the named source's part of the report, failing when the pass
-// did not visit every source the node offers or failed the named one.
+// reapSource runs one reaper pass over every source this node arms, at at, and
+// answers the named source's report, failing when the pass missed a source the
+// node offers or failed the named one.
 //
-// THE NAMED SOURCE'S FAILURE, NOT THE PASS'S. A pass's error joins every
-// source's, and on these nodes, whose company no activation has named, the
-// assistant's term and the executor sessions' are unknown and their sources'
-// parts fail by design ([Engine.assistantRetention],
-// [Engine.executorRetention]); the cases are about the source they name.
+// THE NAMED SOURCE'S FAILURE, NOT THE PASS'S: no activation named these nodes'
+// company, so the assistant's and executor sessions' terms are unknown and
+// their parts fail by design ([Engine.assistantRetention],
+// [Engine.executorRetention]).
 func reapSource(t *testing.T, e *Engine, fleet trashreap.Reports, at time.Time,
 	source string) trashreap.SourceReport {
 
@@ -125,12 +121,7 @@ func reapSource(t *testing.T, e *Engine, fleet trashreap.Reports, at time.Time,
 	for _, src := range sources {
 		names = append(names, src.Name())
 	}
-	// THE ASSISTANT'S TOO, the executor sessions', the access log's and the
-	// atlas's: a conversation untouched for its retention is purged through
-	// the same reaper, a session untouched for the company's conversation
-	// retention is deleted through it, and an hour of access records or of the
-	// atlas's history past its retention is expired through it, each a Termed
-	// source of its own.
+	// Every retention-bound store is a Termed source of this one reaper.
 	if !slices.Equal(names, []string{"pages", artifactsdomain.Domain{}.Name(),
 		assistantdomain.Domain{}.Name(), executordomain.Domain{}.Name(),
 		accessdomain.Domain{}.Name(), atlasdomain.Domain{}.Name()}) {
@@ -152,7 +143,7 @@ func reapSource(t *testing.T, e *Engine, fleet trashreap.Reports, at time.Time,
 }
 
 // A DATA NODE REAPS AN ARTIFACT ONLY ONCE ITS TERM HAS RUN OUT, through the
-// artifacts domain's own guarded purge, as the engine.
+// artifacts domain's own guarded purge.
 //
 // Mutation: drop the artifacts source from [Engine.trashSources] and the pass
 // visits no artifact.
@@ -228,9 +219,9 @@ func createEventually(t *testing.T, kb *doclet.Store, actor doclet.Actor,
 	}
 }
 
-// THE REAPER NEVER STARTS ONCE IT HAS BEEN STOPPED: the native half that arms
-// it may be brought up by an apply as late as the teardown, and only the
-// stop's own flag keeps a late start from running a duty nothing ends.
+// THE REAPER NEVER STARTS ONCE IT HAS BEEN STOPPED: an apply may bring up the
+// native half that arms it as late as the teardown, and only the stop's flag
+// keeps a late start from running a duty nothing ends.
 //
 // Mutation: drop the stopped check from [Engine.startTrashReaper] and the
 // loop starts on a node that has stopped.
@@ -248,10 +239,10 @@ func TestTheTrashReaperNeverStartsOnceStopped(t *testing.T) {
 	}
 }
 
-// A PURGE IS COUNTED ONLY WHEN IT IS DURABLE. The state log answers an
-// unknown outcome with no error, and a source that read that as a purge would
-// report an item gone that may still be in the trash; a refusal naming the
-// domain's not-eligible sentinels is a skip, and anything else a failure.
+// A PURGE IS COUNTED ONLY WHEN IT IS DURABLE: the state log answers an unknown
+// outcome with no error, which read as a purge reports an item gone that may
+// still be in the trash. A refusal naming the domain's not-eligible sentinels
+// is a skip; anything else a failure.
 //
 // Mutation: answer nil for [statelog.OutcomeUnknown] and the unknown case
 // below reads as a purge.

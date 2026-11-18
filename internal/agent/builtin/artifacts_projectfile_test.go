@@ -19,17 +19,14 @@ import (
 
 // A project's file copied into an artifact (`from_project_file`) is
 // read_project_file's read: decided by that tool's verb, its path held to the
-// tracker's rule, and every refusal in that tool's words. Every refusal case
-// below runs through each of the three calls that copy one, and so does the
-// seat's half of the authority case; the person's half runs through
-// create_artifact, which holds the operator surface's wiring, and what a copy
-// reserves and moves is held through create_artifact, with publish_artifact
-// for a file the artifact already holds.
+// tracker's rule, every refusal in that tool's words. Each refusal case and
+// the seat's authority case run through all three copying calls; the person's
+// authority case (the operator surface's wiring) and what a copy reserves
+// run through create_artifact, with publish_artifact for a file already held.
 
-// newCopyRig is the artifacts tools registered for a seat beside a project's
-// files, over fakes, behind the real authority decision: the artifact rig
-// ([newArtifactRig]) on a node whose company runs Worklet. read_project_file
-// is registered beside them, so a case can ask it the same question.
+// newCopyRig is the artifact rig ([newArtifactRig]) on a company that runs
+// Worklet, behind the real authority decision, with read_project_file
+// registered beside it so a case can ask it the same question.
 func newCopyRig(t *testing.T, req requesters) (artifactRig, *fakeFiles, *fakeObjects) {
 	t.Helper()
 	f, files, objects := newFakeArtifacts(), newFakeFiles(), newFakeObjects()
@@ -63,9 +60,8 @@ func keepFile(t *testing.T, files *fakeFiles, objects *fakeObjects, filePath, co
 }
 
 // copyDoor is one of the three calls that copy a project's file into an
-// artifact: its tool, and its arguments naming ref as `from_project_file`,
-// over an artifact of agent-cto's the rig is seeded with where the call needs
-// one.
+// artifact: its tool, and its arguments naming ref as `from_project_file`
+// (seeding an artifact of agent-cto's where the call needs one).
 type copyDoor struct {
 	tool string
 	args func(r artifactRig, ref map[string]any) map[string]any
@@ -112,20 +108,15 @@ func wordsAfter(res tools.Result, tool string) (string, bool) {
 }
 
 // A COPY NAMING A PROJECT OR A FILE THAT IS NOT THERE IS THE ARGUMENT TO
-// CHANGE: refused `invalid`, in read_project_file's own sentence, with the
-// tracker's sentinel beneath it, and nothing reserved, published or written.
-// read_project_file answers the same words `not_found`, because its call is
-// ABOUT the file; a copy only names its source, and `not_found` there is a
-// 404 about the artifact the call is about, which a person's screen reads as
-// gone. Neither is ever an internal fault: the missing project was one, with
-// an error in the node's log, and the missing file was told in words of the
-// copy's own. The project and the path are spelled as read_project_file takes
-// them, so the words hold the copy's own reading of both.
+// CHANGE: `invalid`, in read_project_file's sentence over the tracker's
+// sentinel, nothing reserved or written, never an internal fault. Only
+// read_project_file says `not_found`: a copy's call is about the artifact, so
+// `not_found` would read as the artifact gone. Project and path are spelled
+// as read_project_file takes them, so the copy's own reading is held too.
 //
-// Mutation: tell the copy's read through readFailure again and the project
-// rows are internal faults; pass not_found for a copy and every row fails on
-// the class; drop the copy's ProjectKey or its normalizePath and the words
-// stop being read_project_file's.
+// Mutation: tell the copy's read through readFailure and the project rows are
+// internal faults; pass not_found for a copy and every row fails on the
+// class; drop the copy's ProjectKey or normalizePath and the words differ.
 func TestACopyNamingWhatIsNotThereIsTheArgumentToChange(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -169,10 +160,8 @@ func TestACopyNamingWhatIsNotThereIsTheArgumentToChange(t *testing.T) {
 }
 
 // A PATH THE TRACKER REFUSES IS REFUSED IN A COPY IN THE TRACKER'S WORDS:
-// `invalid`, in the sentence read_project_file gives it and never with the
-// "worklet:" the tracker's error opens with, before the tracker is read and
-// before anything is reserved. It reached the reader as it was typed, and the
-// reader's refusal was told as a fault of this node.
+// `invalid`, in read_project_file's sentence without the tracker error's
+// "worklet:", before the tracker is read or anything is reserved.
 //
 // Mutation: drop normalizePath from the copy and every row is an internal
 // fault.
@@ -210,13 +199,12 @@ func TestAPathTheTrackerRefusesInACopyIsToldInItsWords(t *testing.T) {
 	}
 }
 
-// A COPY IS DECIDED AS read_project_file IS, by that tool's own verb: a caller
-// who may not read a project's files copies none of them into an artifact,
-// refused before anything is reserved — a seat in a turn somebody woke who
-// does not use Worklet (the turn is held to the apps whoever woke it uses,
-// ADR-0109), and a person who does not use it, calling through the operator's
-// catalogue — and each copies once they use it. The same create with inline
-// content lands either way: the refusal is the copy's, not the call's.
+// A COPY IS DECIDED AS read_project_file IS, by that tool's verb: a caller who
+// may not read a project's files copies none, refused before anything is
+// reserved — a seat woken by somebody who does not use Worklet (ADR-0109),
+// and such a person through the operator's catalogue — and each copies once
+// they use it. The same create with inline content lands either way: the
+// refusal is the copy's, not the call's.
 //
 // Mutation: drop the copy's authority question and the refused rows land;
 // leave the authority the copy asks unwired on either surface and the landing
@@ -312,10 +300,10 @@ func TestACopyIsDecidedAsReadProjectFileIs(t *testing.T) {
 
 // A COPIED FILE IS RESERVED AT ITS ROW'S DIGEST AND SIZE: the upload intent
 // declares it as the tracker records it, the transfer moves exactly its bytes,
-// and the create names it as an upload. Its project and its path are taken as
-// read_project_file takes them (`eng`, `/reports/q3.md`). A file the artifact
-// already holds is carried, and its bytes are never read: the copy opens its
-// content only for a transfer the intent asks for.
+// and the create names it as an upload; project and path are read as
+// read_project_file reads them (`eng`, `/reports/q3.md`). A file the artifact
+// already holds is carried unread: content opens only for a transfer the
+// intent asks for.
 //
 // Mutation: declare any other digest or size and the entry check fails; open
 // the content before the intent and the carried publish fails on the cleared
@@ -382,8 +370,8 @@ func TestACopiedFileIsReservedAtItsRowsDigestAndSize(t *testing.T) {
 }
 
 // A COPY LARGER THAN AN ARTIFACT'S LARGEST FILE IS REFUSED BEFORE ANYTHING IS
-// RESERVED: `invalid`, naming the bound, from the row's size alone — the
-// content is never read, and here is nowhere to be read.
+// RESERVED: `invalid`, naming the bound, from the row's size alone (the case
+// holds no content to read).
 //
 // Mutation: drop the bound and an intent is declared, and the transfer fails
 // on the missing content.
@@ -412,8 +400,8 @@ func TestACopyLargerThanAnArtifactFileIsRefusedBeforeAnythingIsReserved(t *testi
 }
 
 // A COPY WHERE THE COMPANY RUNS NO WORKLET IS UNAVAILABLE, AND NO WAIT CLEARS
-// IT: the company's choice of tracker changes by nobody's waiting, so the
-// refusal carries no wait, says why, and reserves nothing.
+// IT, since no wait changes the company's tracker: the refusal carries no
+// wait, says why, and reserves nothing.
 //
 // Mutation: drop the check and the call panics on the missing reader; mark
 // it as one a wait clears and the wait is offered.
@@ -441,18 +429,15 @@ func TestACopyIsUnavailableWhereTheCompanyRunsNoWorklet(t *testing.T) {
 }
 
 // CONTENT THE OBJECT STORE CANNOT HAND BACK IS TOLD AS read_project_file TELLS
-// IT, never as a fault of this node and never as a file that changed: content
-// the store did not serve is `unavailable`, a wait invited and the store's own
-// words kept for the log; content that is not what the file records is
-// `internal_error`, which no retry reads past — whether the store says so, or
-// hands back other bytes of the file's length, which the copy holds to the
-// row's digest before a byte of them moves. Nothing is published either way.
-// Each was told through the box's teller: a fault of this node, or, for the
-// other bytes, a file that "changed while it was being published", after the
-// pipeline had stored them.
+// IT, never as a fault of this node or a file that changed: content not
+// served is `unavailable`, a wait invited and the store's words kept for the
+// log; content that is not what the file records is `internal_error`, no
+// retry helping — whether the store says so or hands back other bytes of the
+// file's length, held to the row's digest before a byte moves. Nothing is
+// published either way.
 //
-// Mutation: tell the copy's open through boxFailure again and the first two
-// cases are faults; drop the digest check and the third publishes.
+// Mutation: tell the copy's open through boxFailure and the first two cases
+// are faults; drop the digest check and the third publishes.
 func TestACopyWhoseContentTheStoreCannotServeIsToldAsReadProjectFileTellsIt(t *testing.T) {
 	t.Parallel()
 	const content = "# Q3\n\nIt went well."
@@ -461,9 +446,8 @@ func TestACopyWhoseContentTheStoreCannotServeIsToldAsReadProjectFileTellsIt(t *t
 		damage func(file worklet.File, objects *fakeObjects)
 		class  tools.Refusal
 		says   string
-		// asRead is whether read_project_file meets the same failure, and
-		// so says the same words: a page read cannot hold other bytes of
-		// the file's length to its digest.
+		// asRead is whether read_project_file meets the same failure and
+		// so says the same words; a page read cannot check the digest.
 		asRead bool
 	}{
 		{"content the store does not hold", func(_ worklet.File, o *fakeObjects) {
@@ -517,13 +501,13 @@ func TestACopyWhoseContentTheStoreCannotServeIsToldAsReadProjectFileTellsIt(t *t
 	}
 }
 
-// A LIVE FILE NAMING NO OBJECT IS NOT COPIED: its row is one the applier
-// refuses to write, so reaching it is the engine's own fault, refused in
-// read_project_file's words — never a file that is gone, never a retry — and
-// before anything is reserved, since there is no content to reserve.
+// A LIVE FILE NAMING NO OBJECT IS NOT COPIED: the applier refuses such a row,
+// so reaching it is the engine's own fault, refused in read_project_file's
+// words — never a file that is gone, never a retry — before anything is
+// reserved.
 //
-// Mutation: build the object off the row's fields again and an intent is
-// declared before the transfer fails in other words.
+// Mutation: build the object off the row's fields and an intent is declared
+// before the transfer fails in other words.
 func TestALiveFileNamingNoObjectIsNotCopied(t *testing.T) {
 	t.Parallel()
 	for _, door := range copyDoors {

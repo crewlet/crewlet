@@ -21,59 +21,40 @@ import (
 
 // DomainConsumer is one node's own reader of one domain's log.
 //
-// # Why it is DURABLE and per NODE, not per fleet
+// Durable and named after the node, never shared by the fleet: every data
+// node applies every record, and a shared consumer would deliver each record
+// to one node only, the opposite of replication.
 //
-// Every data node applies every record — that is what makes N identical SQL
-// copies — so this is not a work queue and there is no group to share. Each
-// node keeps its own consumer, named after itself, and its own position within
-// it. A shared consumer would deliver each record to exactly one node, which is
-// the opposite of replication.
-//
-// # And why the CONSUMER's position is not the checkpoint
-//
-// The applier's checkpoint lives in the same transaction as the rows, in SQL.
-// This consumer's acknowledgement floor is a second, weaker number: it moves
-// after the commit, it can lag behind a crash, and on a rebuilt consumer it
-// starts wherever the delivery policy says. So the loop RESUMES from the SQL
-// checkpoint and the acknowledgement exists to let the broker release
-// redelivery state — which is why a lost ack costs a redelivery and never a
-// hole.
-//
-// # But the checkpoint cannot ask for what the consumer already gave away
-//
-// Resuming from the checkpoint means DROPPING what arrives below it; nothing
-// on the loop's side can make the broker hand over a record it has already
-// delivered and been told was handled. So the two numbers are compared when
-// the consumer is opened, and one that disagrees with the rows is rebuilt from
-// them — see [Queue.DomainConsumer] for the directions they can disagree in
-// and what each one costs a node that is left with it.
+// Its acknowledgement floor is not the checkpoint. The applier's checkpoint
+// commits with the rows in SQL; the floor moves after that commit and can lag
+// a crash, so the loop resumes from the SQL checkpoint and a lost ack costs a
+// redelivery, never a hole. What the consumer already gave away cannot be
+// asked back, so an open compares the two and rebuilds a consumer that
+// disagrees with the rows: see [Queue.DomainConsumer].
 type DomainConsumer struct {
 	q      *Queue
 	stream string
 	name   string
 
-	// cons is the broker-side consumer, under a mutex because [Reset]
-	// replaces it while the applier that holds this handle is between
-	// runs — the handle stays, the consumer under it moves.
+	// cons is the broker-side consumer, under mu because [Reset] replaces it
+	// while the applier holding this handle is between runs.
 	//
-	// NIL IS A REAL STATE: a reset deletes before it creates, so a create
-	// that fails leaves the broker with no consumer at all, and a handle
-	// that went on naming the deleted one would fail every fetch for the
-	// life of the process with nothing able to repair it. Cleared instead,
-	// and rebuilt from `want` by the next caller — see [DomainConsumer.consumerFor].
+	// NIL IS A REAL STATE: a reset that deleted and then failed to create
+	// leaves the broker with no consumer, and a handle still naming the
+	// deleted one would fail every fetch for the life of the process. Cleared
+	// instead, and rebuilt from want by [DomainConsumer.consumerFor].
 	mu   sync.Mutex
 	cons jetstream.Consumer
 
-	// want is the configuration this consumer should have, kept so that a
-	// handle cleared by a failed reset can be rebuilt without the caller
-	// knowing how one is configured.
+	// want is this consumer's configuration, kept so a handle cleared by a
+	// failed reset can be rebuilt.
 	want jetstream.ConsumerConfig
 
-	// pull is the consumer's standing pull (pullrequest.go): one inbox
+	// pull is the consumer's standing pull (pullrequest.go): the one inbox
 	// every fetch's request is answered on, and what it delivered that no
-	// fetch has taken. Made by the first fetch, dropped by a reset, whose
-	// consumer those deliveries belonged to, and released by [Close], whose
-	// consumer stays. Guarded by mu.
+	// fetch took. Made by the first fetch, dropped by a reset (its deliveries
+	// came from the deleted consumer), released by [Close] (the consumer
+	// stays). Guarded by mu.
 	pull *puller
 	// closed is [DomainConsumer.Close] having run. Guarded by mu.
 	closed bool
@@ -82,124 +63,34 @@ type DomainConsumer struct {
 // domainConsumerMaxAckPending is how many records the broker may hand this
 // node's applier before one is acknowledged.
 //
-// [statelog.FetchMessages] is the number, and it is the applier's transaction
-// budget: one pull is at most one transaction's worth of records, and this
-// ceiling keeps it at most one transaction's worth IN FLIGHT. The pull carries
-// the count itself as well — see [DomainConsumer.Fetch] — so what this adds is
-// the bound across pulls: records delivered and not yet acknowledged, because
-// their transaction has not committed, hold back the next pull rather than
-// piling up behind it. And so it is also how many barriers the applier can
-// reach while their checkpoint's commit is stalled — they are acknowledged
-// only once it returns — before the reads resting on the next one wait for
-// that commit again; [statelog.FetchMessages] says what that covers.
-//
-// It used to be the ONLY count bound, because the client library could not
-// send one pull with both a count and a byte bound and the applier pulled by
-// bytes. Before that it was the applier taking a prefix of a byte-bounded
-// batch, which left the remainder delivered and unacknowledged, so the broker
-// hit its own default cap of a thousand, handed over nothing more for a
-// thirty-second ack window, and then redelivered the same prefix.
+// [statelog.FetchMessages], the applier's transaction budget. One pull
+// already carries that count ([DomainConsumer.Fetch]); this bounds it across
+// pulls, so records whose transaction has not committed hold back the next
+// pull rather than piling up behind it. It is also how many barriers the
+// applier can reach while their checkpoint's commit is stalled (they are
+// acknowledged only after it); [statelog.FetchMessages] says what that covers.
 const domainConsumerMaxAckPending = statelog.FetchMessages
 
 // domainConsumerAckWait is how long the broker waits for an acknowledgement
 // before redelivering.
 //
-// THIRTY SECONDS, against an applier whose own transaction is bounded by a row
-// budget and a time budget far below it. What a redelivery costs here is one
-// re-apply, which is free by construction — the apply is idempotent at a
-// position — so the bound exists to release the broker's redelivery state
-// rather than to protect the applier from itself.
+// Thirty seconds, far above the row and time budgets bounding the applier's
+// own transaction. A redelivery costs one idempotent re-apply, so the bound
+// exists to release the broker's redelivery state, not to protect the applier.
 const domainConsumerAckWait = 30 * time.Second
 
 // DomainConsumer opens (or creates) this node's durable reader of a domain's
-// log, resuming from `after`.
+// log, resuming at `after + 1`, past the SQL checkpoint (the beginning when
+// `after` is zero): never the head, which skips what was published before the
+// consumer existed, nor the beginning on a node with a checkpoint, which
+// redelivers everything for the applier to drop.
 //
-// # DeliverPolicy is derived from the SQL checkpoint, and that is the whole
-// of the resume rule
-//
-// A consumer created fresh must not start at the stream's head — it would
-// silently skip everything published before it existed, which on a state log
-// is every record the node has not applied. It must not blindly start at the
-// beginning either, on a node that has applied a million records: that is a
-// million redeliveries the applier drops one at a time.
-//
-// So a node with a checkpoint starts at `after + 1` and a node with none
-// starts at the beginning. Both are the same rule — resume from what the ROWS
-// say — and the rows are the only durable statement of it.
-//
-// # An EXISTING consumer is held to the same rule
-//
-// A consumer this node made on an earlier run is kept only when it would hand
-// over exactly what a fresh one at `after + 1` would: nothing past the
-// checkpoint delivered, nothing in flight, nothing between the two left to
-// deliver. Anything else is DELETED AND CREATED AGAIN at `after + 1` — the
-// same operation an adoption performs through [DomainConsumer.Reset], because
-// the broker treats a start sequence as immutable and a create-or-update
-// would refuse to move it while reporting success.
-//
-// It used to be taken as it was, on the reasoning that a consumer sitting
-// lower than the rows only costs redeliveries the applier drops. That covers
-// one of the four ways the two can disagree, and the other three stall the
-// node — one of them for ever:
-//
-//   - AHEAD, ACKNOWLEDGED. The broker has been told records past the
-//     checkpoint were handled, so it will never deliver them again — and the
-//     loop, which resumes at the checkpoint, waits for them for ever. This is
-//     what a node's rows going BACKWARDS under the same node id produces: the
-//     replicated database deleted and rebuilt, or restored from a copy older
-//     than the broker estate beside it (a backup copies the store FIRST, so a
-//     restore of one is exactly this). On a strict log the node stays
-//     unhydrated, every write on the missing subjects refuses `behind`, and
-//     the heartbeat's below-floor check never fires because the records are
-//     still on the log — measured on a node whose replicated database was
-//     deleted between two boots on one broker: `applying: 2 record(s) behind
-//     the log's head` at every sample to forty-five seconds, past any
-//     redelivery window. On a compacted log it is quieter and worse: nothing
-//     there checks contiguity, so the node applies what comes next and
-//     reports itself caught up with the skipped records' rows absent.
-//   - AHEAD, DELIVERED. Records past the checkpoint went to a process that is
-//     gone — a stop mid-drain, a pull the server answered after its caller
-//     left — and come back only when their ack window expires. On a strict
-//     log every later record waits in the reorder buffer behind the first of
-//     them, so a restarted node sat unhydrated for the whole
-//     [domainConsumerAckWait].
-//   - IN FLIGHT, at or below the checkpoint. Harmless records, but each one
-//     holds a slot of [domainConsumerMaxAckPending] for a reader that will
-//     never acknowledge it, and a ceiling full of them — a process that
-//     committed its whole pull and died before the acknowledgements — hands
-//     over nothing new for the same thirty seconds.
-//   - BEHIND. Correct, and costs the redeliveries between for the applier to
-//     drop under the in-flight ceiling. Small after a crash, but a node that
-//     ADOPTED a snapshot at boot opens its consumers after the adoption moved
-//     its checkpoint to the artefact's position, with everything from the
-//     log's first surviving record up to it still to be delivered, and
-//     nothing else on the boot path moves them — the runtime adoption calls
-//     Reset for exactly this cost, and the boot's was the same cost with no
-//     Reset.
-//
-// A rebuild is one replicated delete and create, which is what every node
-// pays for its consumers on its first boot; a consumer left disagreeing costs
-// between thirty seconds and for ever. And it touches nothing but this node:
-// the consumer is named after the node, so on a fleet no peer reads through
-// it, and no retention term reads its acknowledgements — the trim takes the
-// SQL positions the heartbeat publishes, never this.
-//
-// # A rebuild that fails is decided by what a node LEFT with the consumer pays
-//
-// The delete and the create are metadata writes, and on a fleet whose group
-// is not answering either can fail. BEHIND and IN FLIGHT cost time and never
-// records — nothing past the checkpoint was given away — so there the open
-// asks the broker which consumer it now holds and keeps that one, with a
-// warning. That is what every open did before the rebuild existed, and a boot
-// failed over an optimisation's metadata write would be worse off than the
-// boot the optimisation improves. AHEAD, acknowledged or delivered, can cost a
-// strict log for ever (the ack floor is only a lower bound — see [driftOf]),
-// so there the open fails. So it does when the broker holds NO consumer after
-// the failure — the delete landed and the create did not, which is the state
-// a failed create on the absent path above fails the open on too — or cannot
-// say which it holds: a handle kept on a guess names a consumer that may not
-// exist, or leaves nothing where one does, and either way fails every fetch
-// for the life of the process while the boot reports success.
+// An existing consumer is kept only when it hands over exactly what a fresh
+// one would ([driftOf]); any other is rebuilt through [DomainConsumer.Reset],
+// because the broker will not move a start sequence and a create-or-update
+// reports success without moving it. A failed rebuild is decided by
+// [DomainConsumer.afterFailedRebuild]; package doc, "A domain consumer is held
+// to its node's rows", has the four drifts and what each costs.
 func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	after uint64) (*DomainConsumer, error) {
 
@@ -211,37 +102,19 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	}
 	name := domainConsumerName(stream, nodeID)
 	config := domainConsumerConfig(name, after)
-	// THE HANDLE EXISTS BEFORE THE BROKER-SIDE CONSUMER DOES, so the
-	// rebuild below is [DomainConsumer.Reset] itself rather than a second
-	// copy of a delete-then-create whose half-done state that method
-	// already knows how to leave repairable.
+	// The handle exists before the broker-side consumer, so the rebuild below
+	// is [DomainConsumer.Reset] itself, whose half-done state is repairable.
 	handle := &DomainConsumer{q: q, stream: stream, name: name, want: config}
 
-	// ONLY AN ABSENT CONSUMER IS CREATED HERE, and whatever consumer the
-	// broker ends up holding is judged against the checkpoint by
-	// [DomainConsumer.resumeAt] — see the doc comment for why the obvious
-	// create-or-update cannot do either job.
-	//
-	// A BREADCRUMB, and a provisioning budget on the create below, because
-	// this is a replicated create on the boot path like every other one —
-	// and it does not come through [Queue.ensureDurableConsumer], whose
-	// create-or-read-back shape is wrong here (see above: an existing
-	// consumer is judged, not merely found). Without them the caller's
-	// context reached nats.go with no deadline and the client's five-second
-	// default decided a clustered boot, silently.
-	//
-	// IT SPANS THE LOOKUP AND THE CREATE, AND SAYS SO — and it stops where
-	// the create ends rather than where this function does.
-	//
-	// Both halves were wrong in the same way, at opposite ends: armed
-	// before the lookup while saying "created", and left armed across the
-	// read-back after it. Either way the line names a
-	// step this member is not on, which is the one thing it exists to get
-	// right.
-	//
-	// ON ctx rather than on either term, because the two halves it spans
-	// carry separate deadlines now and a watcher armed on one would stop
-	// reporting the moment that half gave up.
+	// Only an absent consumer is created here, and whatever the broker ends up
+	// holding is judged by [DomainConsumer.resumeAt] — not through
+	// [Queue.ensureDurableConsumer], whose create-or-read-back keeps an
+	// existing consumer unjudged. So the breadcrumb and the create's
+	// provisioning budget are this site's own: the caller's ctx may carry no
+	// deadline, and the client's five-second default would decide a clustered
+	// boot. The breadcrumb spans the lookup and the create, stops where the
+	// create ends (it must name the step this member is on), and watches ctx
+	// because the two halves carry separate deadlines.
 	stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
 		q.log.WarnContext(ctx, "jetstream_consumer_slow", "stream", stream,
 			"consumer", name, "waited", after,
@@ -250,20 +123,14 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 				"a metadata group that has not settled")
 	})
 
-	// THE LOOKUP IS SIZED AS A READ AND RE-ASKED, like its three siblings —
-	// see [Queue.askRead] — on a ceiling of its own, and the create's budget
-	// starts only once it has returned. It shared the create's term, so a
-	// probe the metadata group never answered spent the whole clustered
-	// budget and left none of it for the create that would have settled the
-	// question.
+	// The lookup is a read, sized and re-asked as one ([askRead]) on its own
+	// ceiling; the create's budget starts once it returns, so a probe the
+	// group never answered cannot spend the create's budget.
 	cons, err := handle.lookup(ctx)
 	if jsprovision.Unanswered(ctx, err) {
-		// TOLD NOTHING, which is not "it is not there" — see
-		// [jsprovision.Unanswered]. The create below answers it either
-		// way, so a boot no longer fails on a question nobody got
-		// round to. Reported as not-found so the one create path
-		// handles both, which is exactly what it already does with a
-		// held create's timeout a few lines down.
+		// Told nothing, which is not "absent" ([jsprovision.Unanswered]).
+		// Reported as not-found: the create below settles it either way, as
+		// it does a held create's timeout.
 		q.log.WarnContext(ctx, "jetstream_consumer_lookup_unanswered",
 			"stream", stream, "consumer", name, "error", err.Error(),
 			"detail", "the broker did not say whether this state-log consumer "+
@@ -274,27 +141,19 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	}
 	switch {
 	case errors.Is(err, jetstream.ErrConsumerNotFound):
-		// THE CREATE'S BUDGET IS DERIVED HERE, ONCE THE LOOKUP HAS
-		// RETURNED: the lookup and the create get separate deadlines, as
-		// at every other create site — see
-		// [Queue.createOrObserveStream]. Derived before the lookup, it
-		// ran while the lookup did, so an unanswered lookup spent up to
-		// its whole ceiling of the create's budget: on a solo broker,
-		// where the two are equal, an exhausted lookup handed the create
-		// a context that had already expired, the create never reached
-		// the broker, and the open failed over a consumer that "is not
-		// there"; on a fleet the create kept ninety seconds of its two
-		// minutes.
+		// The create's budget is derived once the lookup has returned, as at
+		// every create site ([Queue.createOrObserveStream]): derived before,
+		// an unanswered lookup spends it, and on a solo broker (equal
+		// ceilings) hands the create an expired context.
 		//
-		// NOT SHADOWING ctx, for [jsprovision.Settle]'s reason: the
+		// Not shadowing ctx, for [jsprovision.Settle]'s reason: the
 		// read-back below must not inherit a deadline this create may
 		// have spent.
 		createCtx, cancel := context.WithTimeout(ctx, q.provisioning().Budget)
 		defer cancel()
-		// WAITED OUT, for the reason [Queue.ensureDurableConsumer]
-		// gives: this consumer is placed by the same metadata group as
-		// the stream it reads, so "no suitable peers" is transient here
-		// too and the budget above is worth nothing without the retry.
+		// Waited out, for [Queue.ensureDurableConsumer]'s reason: placed by
+		// the same metadata group as its stream, so "no suitable peers" is
+		// transient here too.
 		err = q.provisioning().Place(createCtx, func(ctx context.Context) error {
 			q.noteConsumerProposal()
 			var e error
@@ -310,55 +169,31 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 		stop()
 		switch {
 		case err == nil:
-			// A CREATE CAN ANSWER WITH A CONSUMER THAT WAS ALREADY THERE:
-			// nats.go hands back the existing one when its configuration
-			// matches what was asked for. And a node whose rows are gone
-			// asks for exactly what it asked for on its first boot —
-			// DeliverAll, from nothing — so when the lookup above went
-			// unanswered or fell inside the propagation window, the
-			// consumer this create returns may be the very one that is
-			// ahead. It is judged like any other; a consumer that really
-			// is fresh agrees with the checkpoint by construction, and
-			// the judgement reads the state this create already returned.
+			// A create can answer with a consumer already there: nats.go
+			// returns the existing one when its config matches, and a node
+			// whose rows are gone asks for its first boot's config
+			// (DeliverAll). So it is judged like any other, on the state the
+			// create returned; a really fresh one agrees by construction.
 			err = handle.resumeAt(ctx, cons, after)
 		case jsprovision.NoApplicableLimit(err):
-			// NO LIMIT APPLIES TO THIS CONSUMER AT ALL, which is not
-			// a peer having won the race and never becomes one: the
-			// account's limits are tiered and carry none for the class
-			// `stream.replicas` puts this node in, so the broker
-			// refused before it looked at anything else
-			// (server/consumer.go, acc.selectLimits). Read back like
-			// any other create error it came back as a consumer that
-			// is "not there", which reads as a state-log reader this
-			// node lost rather than as an account with no limit for
-			// it.
+			// No limit applies to this consumer at all (the account's tiered
+			// limits carry none for the class `stream.replicas` puts this
+			// node in; server/consumer.go, acc.selectLimits). Never a lost
+			// race: read back, it would report a reader this node lost
+			// rather than an account with no limit for it.
 			err = fmt.Errorf("%w%s", err,
 				jsprovision.NoApplicableLimitDetail(q.cfg.Replicas))
 		case !jsprovision.Refused(err):
-			// THE LOOKUP ABOVE WAS INSIDE THE PROPAGATION WINDOW, so
-			// the consumer this create met is one THIS NODE made on an
-			// earlier boot and has not been told about yet — the name
-			// carries the node id, so no peer can have made it.
+			// The lookup fell inside the propagation window, so the create
+			// met a consumer THIS node made on an earlier boot (the name
+			// carries the node id). Every error but a refusal: nats.go
+			// returns ErrConsumerExists only when the configs differ, and a
+			// create the server held while the group settled comes back a
+			// timeout with the consumer there, the shape a clustered boot
+			// produces. A refusal ([jsprovision.Refused]) placed nothing.
 			//
-			// EVERY ERROR BUT A REFUSAL, not just
-			// ErrConsumerExists, because the create announces this in
-			// two shapes and the tidy one is the rarer. nats.go returns
-			// the existing consumer when the configs MATCH and
-			// ErrConsumerExists when they differ — but a create the
-			// server HELD while the metadata group settled outlives the
-			// deadline and comes back a timeout, with the consumer
-			// there all the same. That is the shape a clustered boot
-			// actually produces, and it is the one
-			// [Queue.ensureDurableConsumer] has always read back.
-			// A refusal is excluded for its own reason — see
-			// [jsprovision.Refused]: nothing was placed, and no race
-			// explains the answer, so there is nothing to become
-			// visible.
-			//
-			// Read it back and hold it to the checkpoint, which is the
-			// same rule the lookup's own found branch below applies: a
-			// consumer an earlier boot made is one whose position this
-			// node's rows may no longer agree with.
+			// Read back and held to the checkpoint, like the lookup's found
+			// branch below.
 			createErr := err
 			cons, err = jsprovision.SettleWith(ctx, q.provisioning(),
 				func(ctx context.Context) (jetstream.Consumer, error) {
@@ -368,17 +203,14 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 			case err == nil:
 				err = handle.resumeAt(ctx, cons, after)
 			default:
-				// THE CREATE'S ERROR IS WHAT IS REPORTED, with the
-				// read-back's beside it: the first says what went
-				// wrong and the second only confirms the consumer
-				// really is absent.
+				// The create's error is reported; the read-back's only
+				// confirms the consumer is absent.
 				err = fmt.Errorf("%w (and it is not there: %w)", createErr, err)
 			}
 		}
 	case err == nil:
-		// STOPPED BEFORE THE JUDGEMENT, because the breadcrumb names the
-		// lookup and the create and this is neither: a rebuild carries
-		// its own, inside [DomainConsumer.Reset].
+		// Stopped before the judgement: the breadcrumb names the lookup and
+		// the create, and a rebuild carries its own in [DomainConsumer.Reset].
 		stop()
 		err = handle.resumeAt(ctx, cons, after)
 	default:
@@ -392,22 +224,18 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 }
 
 // domainConsumerConfig is the one configuration a domain consumer has,
-// positioned to resume after `after`.
-//
-// ONE FUNCTION for the open and the reset, because they are the same object
-// made at two moments: two literals are how a consumer rebuilt by an adoption
-// comes to carry a ceiling or an ack window the boot never gave it.
+// positioned to resume after `after`. One function for the open and the
+// reset, so a rebuilt consumer cannot carry a ceiling or ack wait the boot's
+// never had.
 func domainConsumerConfig(name string, after uint64) jetstream.ConsumerConfig {
 	config := jetstream.ConsumerConfig{
 		Durable:       name,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		AckWait:       domainConsumerAckWait,
 		MaxAckPending: domainConsumerMaxAckPending,
-		// NO MaxDeliver. A record this node cannot apply is not a
-		// poison message to be given up on: it is either a transient
-		// failure the loop retries or a version this build retains
-		// deliberately, and a delivery budget that ran out would leave
-		// the node silently past a record it never applied.
+		// No MaxDeliver: a record this node cannot apply is a transient
+		// failure the loop retries or a version this build defers, never
+		// poison, and a spent budget would leave the node silently past it.
 		MaxDeliver: -1,
 	}
 	if after > 0 {
@@ -420,47 +248,24 @@ func domainConsumerConfig(name string, after uint64) jetstream.ConsumerConfig {
 }
 
 // Reset moves this node's reader to resume from `after`, by deleting the
-// broker-side consumer and creating it again there.
+// broker-side consumer and creating it again there: the broker treats a start
+// sequence as immutable. An adoption calls it when its checkpoint jumps to a
+// snapshot's position (left alone, the consumer would deliver everything
+// between for the applier to drop), and an open when its consumer disagrees
+// with the rows ([Queue.DomainConsumer]). An adoption's applier resumes from
+// the checkpoint whatever the consumer says, so a failed reset there costs
+// only redeliveries; an open decides in [DomainConsumer.afterFailedRebuild].
 //
-// # Why a delete rather than an update
-//
-// The broker treats a consumer's start sequence as immutable, so the only way
-// to move one is to make a new one. Two callers need one moved. An ADOPTION: a
-// node that fell below the trim floor installs a peer's snapshot, and its
-// checkpoint jumps to the artefact's position — thousands or millions of
-// records past where its consumer stopped. Left where it was, the consumer
-// would deliver every record in between for the applier to drop one at a
-// time, under an in-flight ceiling, for as long as that took. And an OPEN that
-// finds a consumer disagreeing with the rows it is opened for — see
-// [Queue.DomainConsumer] — where the direction that matters is the other one:
-// a consumer AHEAD of the rows never hands the missing records over at all.
-//
-// What a reset that fails costs depends on who asked. For an adoption the
-// applier resumes from the checkpoint whatever the consumer says, so a reset
-// that fails there costs the redeliveries and is reported. An open reads back
-// which consumer the broker now holds and keeps it only where the drift costs
-// time rather than records — behind, or in flight — and otherwise fails, as
-// it does when the broker holds none or cannot say: see [Queue.DomainConsumer].
-//
-// # What a HALF-done reset leaves, and why the handle is cleared
-//
-// The delete and the create are two calls and the broker can take the first
-// and refuse the second — a connection lost in between, a server that went
-// away. That leaves no consumer on the stream at all, and a handle still
-// naming the deleted one: every later fetch fails against something that does
-// not exist, for the life of the process, and no later reset is ever attempted
-// because the caller only logs this error. The handle is therefore CLEARED on
-// that path, which makes the next fetch rebuild it — the repair happens where
-// the damage is noticed rather than needing a second failure to trigger it.
+// A delete that lands and a create that fails leave no consumer on the
+// broker, and the caller only logs this error, so the handle is CLEARED then
+// and the next fetch rebuilds it ([DomainConsumer.consumerFor]).
 func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 	config := domainConsumerConfig(c.name, after)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// ONE BREADCRUMB FOR BOTH HALVES, for the reason the open's spans its
-	// lookup and its create: a member stalled on either is waiting on the
-	// same metadata group, and the line has to say which object it is on.
-	// An open reaches this on the boot path, where a silent stall is the
-	// failure [jsprovision.WhenSlow] exists to name.
+	// One breadcrumb for both halves: a member stalled on either waits on the
+	// same metadata group, and an open reaches this on the boot path, where a
+	// silent stall is what [jsprovision.WhenSlow] exists to name.
 	stop := jsprovision.WhenSlow(ctx, func(waited time.Duration) {
 		c.q.log.WarnContext(ctx, "jetstream_consumer_slow", "stream", c.stream,
 			"consumer", c.name, "waited", waited, "resume_at", after+1,
@@ -469,13 +274,10 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 				"metadata group that has not settled")
 	})
 	defer stop()
-	// THE DELETE IS BUDGETED AND RE-ASKED LIKE THE CREATE AFTER IT. It is a
-	// request to the same metadata group, and on the caller's context it
-	// had neither: an adoption's context carries no deadline, which hands
-	// the client the request term alone (jsapi.RequestTerm, five seconds),
-	// and a request the group dropped failed the reset when that expired
-	// rather than being asked again. Asking twice is safe — a delete that landed the first time is
-	// not-found the second, and not-found is the answer this wants.
+	// The delete is budgeted and re-asked like the create: an adoption's ctx
+	// has no deadline, leaving the request term (jsapi.RequestTerm, five
+	// seconds) to fail a request the group dropped. Asking twice is safe: a
+	// delete that landed is not-found the second time, the answer wanted.
 	deleteCtx, cancelDelete := context.WithTimeout(ctx, c.q.provisioning().Budget)
 	defer cancelDelete()
 	if err := c.q.provisioning().Ask(deleteCtx,
@@ -489,24 +291,17 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 		return fmt.Errorf("jetstream: reset the domain consumer %s on %s: %w",
 			c.name, c.stream, err)
 	}
-	// THE DELETE HAS LANDED, so from here the broker has no consumer and
-	// the handle must not go on naming one — and what the standing pull
-	// holds was delivered by the consumer that is gone: the new one hands
-	// those records over again from the checkpoint, so they are dropped
-	// with the inbox rather than handed to the next fetch a second time.
+	// The delete has landed: the handle must not name a consumer the broker
+	// no longer has, and the standing pull's records came from it, so they go
+	// with its inbox; the new consumer hands them over again.
 	c.cons = nil
 	if c.pull != nil {
 		c.pull.close()
 		c.pull = nil
 	}
-	// THROUGH [jsprovision.Place] like every other replicated create,
-	// which this one was not. A domain consumer is placed by the same
-	// metadata group as the durable consumers beside it, so it meets the
-	// same two transient conditions — a placement refusal while the group
-	// is short of members, and a request the group never answers — and it
-	// met them with no budget of its own, which is the request term
-	// (jsapi.RequestTerm, five seconds) on whatever context the applier
-	// happened to hold.
+	// Through [jsprovision.Place], with a budget of its own: placed by the
+	// same metadata group as the durable consumers beside it, it meets the
+	// same placement refusals and unanswered requests.
 	createCtx, cancelCreate := context.WithTimeout(ctx, c.q.provisioning().Budget)
 	defer cancelCreate()
 	var cons jetstream.Consumer
@@ -523,15 +318,10 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 					"this consumer; retrying until the provisioning deadline")
 		})
 	if err != nil {
-		// `want` IS LEFT AS IT WAS, deliberately: the rebuild then
-		// restores the consumer at its PREVIOUS position rather than at
-		// one this broker has just refused. For an adoption that costs
-		// redeliveries and not correctness, which is the trade its
-		// caller makes when it logs this error and carries on. An open
-		// never returns a handle in this state: it installs the
-		// consumer a second lookup finds, or fails — see
-		// [Queue.DomainConsumer] for which, and why it does not leave the
-		// repair to the next fetch.
+		// want is left as it was: a rebuild restores the consumer at its
+		// PREVIOUS position, not one the broker just refused. An adoption
+		// accepts the redeliveries that costs; an open never returns a
+		// handle in this state ([DomainConsumer.afterFailedRebuild]).
 		return fmt.Errorf("jetstream: recreate the domain consumer %s on %s at "+
 			"%d: %w", c.name, c.stream, after, err)
 	}
@@ -540,21 +330,17 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 }
 
 // consumerFor is the current broker-side consumer, created if a failed reset
-// left none.
-//
-// THE REBUILD IS HERE rather than at the call site because this is where the
-// absence is discovered, and because every caller wants the same thing: a
-// consumer at the position the last reset asked for. It is idempotent — a
-// consumer the broker still has comes back from CreateConsumer unchanged.
+// left none: here because this is where the absence is found, and every
+// caller wants the last reset's position. Idempotent: a consumer the broker
+// still has comes back from CreateConsumer unchanged.
 func (c *DomainConsumer) consumerFor(ctx context.Context) (jetstream.Consumer, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.cons != nil {
 		return c.cons, nil
 	}
-	// THE SAME BUDGET AND THE SAME RE-ASK as Reset's own create: this is
-	// the identical call, reached when that one failed, so it faces the
-	// identical transient conditions.
+	// The same budget and re-ask as Reset's create: the identical call,
+	// facing the identical transient conditions.
 	createCtx, cancelCreate := context.WithTimeout(ctx, c.q.provisioning().Budget)
 	defer cancelCreate()
 	var cons jetstream.Consumer
@@ -574,40 +360,25 @@ func (c *DomainConsumer) consumerFor(ctx context.Context) (jetstream.Consumer, e
 	return cons, nil
 }
 
-// resumeAt leaves the handle holding a broker-side consumer that resumes at
-// `after + 1`: cons itself when it agrees with the checkpoint, a rebuilt one
-// when it does not, and — when the rebuild fails for a drift that costs only
-// time — whichever consumer the broker still holds. [Queue.DomainConsumer] is
-// where the directions, their costs and what a failed rebuild does are set
-// out.
+// resumeAt leaves the handle holding a consumer that resumes at `after + 1`:
+// cons when it agrees with the checkpoint, a rebuilt one when it does not, and
+// whatever the broker holds when the rebuild fails for a drift that only costs
+// time ([DomainConsumer.afterFailedRebuild]).
 //
-// # The state judged is the one the broker last reported
-//
-// The lookup and the create each return the consumer's state with the
-// consumer, and that is what is read rather than a second request: nothing
-// READS this node's consumer while it is being opened — the process that last
-// read it is gone, which is the whole premise of every in-flight delivery
-// counting as dead.
-//
-// That is not the same as nothing having been SENT to it. An acknowledgement
-// is a fire-and-forget publish, and the server only queues it for the
-// consumer's own goroutine while a lookup is answered by a separate API
-// worker, so acknowledgements a reader sent just before it went — a stop, or
-// an earlier engine in this same process — can still be queued when the state
-// is read, and show as deliveries in flight that are already acknowledged.
-// What that costs is a rebuild that was not needed, which is always correct.
-// It can never keep a consumer that should have been rebuilt: a consumer is
-// kept only when its state shows nothing in flight, and with nothing in flight
-// there is nothing a queued acknowledgement could still change.
+// It judges the state the lookup or create returned, not a second request:
+// nothing reads this consumer while it is opened. Acknowledgements a departed
+// reader sent may still be queued on the server (an ack is fire-and-forget,
+// and a lookup is answered by another worker), showing as in flight; that
+// costs at most an unneeded rebuild, and never keeps a consumer that needed
+// one, since only a consumer with nothing in flight is kept.
 func (c *DomainConsumer) resumeAt(ctx context.Context, cons jetstream.Consumer,
 	after uint64) error {
 
 	info := cons.CachedInfo()
 	if info == nil {
-		// A READ, sized and re-asked as one — see [askRead] — through a
-		// handle of each request's own: the consumer handle's Info caches
-		// its reply into the handle with no lock, and a read may have two
-		// requests out at once.
+		// A read, sized and re-asked as one ([askRead]), through a handle
+		// per request: a handle's Info caches its reply unlocked, and a read
+		// may have two requests out at once.
 		var err error
 		info, err = askRead(ctx, c.q, func(ctx context.Context) (*jetstream.ConsumerInfo, error) {
 			fresh, lookupErr := c.q.js.Consumer(ctx, c.stream, c.name)
@@ -623,20 +394,11 @@ func (c *DomainConsumer) resumeAt(ctx context.Context, cons jetstream.Consumer,
 			return fmt.Errorf("read the consumer's state: %w", err)
 		}
 	}
-	// THE RAW POSITIONS ARE JUDGED FIRST, and the stream's first sequence is
-	// read only when it can change the answer — which is not whenever the
-	// consumer disagrees with the checkpoint. The broker's skip over what the
-	// stream no longer holds (see [nextDelivery]) can only bring positions
-	// together, so it changes what is kept, and which drift is reported at
-	// which level, for exactly the three raw drifts
-	// [consumerDrift.firstMatters] names. A consumer that agrees, or that
-	// holds deliveries in flight at or below the checkpoint, is what it is on
-	// any stream — so the in-flight consumer a busy restart leaves costs no
-	// request here.
-	//
-	// UNKNOWN IS THE RAW ANSWER: the skip is then not credited, so a consumer
-	// it would have brought into agreement is rebuilt anyway. A rebuild is
-	// always correct, so failing this read must not fail the open.
+	// Raw positions are judged first, and the stream's first sequence read
+	// only when it can change the answer ([consumerDrift.firstMatters]), so
+	// the in-flight consumer a busy restart leaves costs no request. When that
+	// read fails the skip is not credited and the consumer is rebuilt, which
+	// is always correct, so the failure does not fail the open.
 	drift := driftOf(info.Delivered.Stream, info.AckFloor.Stream,
 		info.NumAckPending, 0, after)
 	var first uint64
@@ -648,10 +410,9 @@ func (c *DomainConsumer) resumeAt(ctx context.Context, cons jetstream.Consumer,
 		}
 	}
 	if drift == driftNone {
-		// KEPT AS IT IS: every consumer of this name was made from
-		// [domainConsumerConfig], so its in-flight ceiling and ack wait are
-		// already this build's. The rebuild below takes the boot's context,
-		// because [DomainConsumer.Reset] owns its terms.
+		// Kept as it is: every consumer of this name came from
+		// [domainConsumerConfig]. The rebuild below takes the boot's ctx, as
+		// [DomainConsumer.Reset] sets its own terms.
 		c.mu.Lock()
 		c.cons = cons
 		c.mu.Unlock()
@@ -682,20 +443,12 @@ func (c *DomainConsumer) resumeAt(ctx context.Context, cons jetstream.Consumer,
 					drift.leftCosts()+"; the next open rebuilds it")...)
 		return nil
 	}
-	// A WARNING FOR THE ONE DIRECTION THAT SAYS SOMETHING HAPPENED TO THE
-	// ROWS. The broker holding acknowledgements this node's rows do not
-	// cover means the replicated database went backwards under the same
-	// node id — a deletion or a restore — and an operator who did that is
-	// told what it would have cost. The other three are what an unclean
-	// stop or an adoption leaves, and a warning on every busy restart is
-	// one that gets filtered out.
-	//
-	// STILL A WARNING when the stream's first sequence could not be read,
-	// and the detail says why it may not be what it names: a raw
-	// acknowledged-past is then either that deletion or restore, or a node
-	// below the trim floor whose reader the broker placed at the first
-	// surviving record. Demoting it would put the one case this warning
-	// exists for among the lines nobody reads.
+	// A warning only for acknowledged-past, which says the rows went
+	// backwards under this node id (a deletion or a restore); the other three
+	// are what an unclean stop or an adoption leaves, and a warning on every
+	// busy restart gets filtered out. Still a warning when the first sequence
+	// was unreadable, the detail saying it may instead be a node below the
+	// trim floor: demoted, the case it exists for would go unread.
 	level := slog.LevelInfo
 	if drift == driftAcknowledged {
 		level = slog.LevelWarn
@@ -713,9 +466,14 @@ func (c *DomainConsumer) resumeAt(ctx context.Context, cons jetstream.Consumer,
 }
 
 // afterFailedRebuild is what an open does when the rebuild of a consumer that
-// disagrees with its checkpoint fails, by the rule [Queue.DomainConsumer] sets
-// out. It reports rebuilt when the consumer the broker holds is not the one
-// that was judged: the create placed it before reporting failure.
+// disagrees with its checkpoint fails. A drift that only costs time
+// ([consumerDrift.onlyCostsTime]) keeps whatever consumer the broker holds,
+// with a warning: failing a boot over an optimisation's metadata write would
+// leave it worse off than not rebuilding. Any other drift fails the open, as
+// does a broker holding no consumer or unable to say which, since a handle
+// kept on a guess fails every fetch while the boot reports success. It reports
+// rebuilt when the held consumer is not the judged one: the create placed it
+// before reporting failure.
 func (c *DomainConsumer) afterFailedRebuild(ctx context.Context, drift consumerDrift,
 	judged *jetstream.ConsumerInfo, after uint64, resetErr error) (rebuilt bool, err error) {
 
@@ -724,19 +482,15 @@ func (c *DomainConsumer) afterFailedRebuild(ctx context.Context, drift consumerD
 			"disagrees with it (%s) and could not be rebuilt there — left "+
 			"reading it, %s: %w", after, drift, drift.leftCosts(), resetErr)
 	}
-	// WHAT THE BROKER HOLDS NOW IS ASKED, never inferred from the error. A
-	// delete that was refused left the consumer where it was, one that
-	// landed left none, and one nobody answered for its whole budget may
-	// have done either — so the handle is given what a lookup finds, and
-	// the open fails when the lookup cannot say.
+	// What the broker holds is asked, never inferred from the error: a
+	// refused delete left the consumer, a landed one left none, and an
+	// unanswered one may have done either.
 	held, err := c.lookup(ctx)
 	switch {
 	case err == nil:
-		// WHICHEVER CONSUMER THE BROKER HOLDS UNDER THIS NAME, and the
-		// name carries the node id, so it is one of two: the old one, when
-		// the delete was refused, or the rebuilt one, when the create
-		// placed it before reporting failure. Neither gives a record away,
-		// and both were made from [domainConsumerConfig].
+		// The name carries the node id, so this is the old consumer (delete
+		// refused) or the rebuilt one (placed before the create failed):
+		// neither gives a record away, and both came from [domainConsumerConfig].
 		c.mu.Lock()
 		c.cons = held
 		c.mu.Unlock()
@@ -768,21 +522,28 @@ const (
 	driftNone consumerDrift = ""
 
 	// driftAcknowledged is a consumer the broker has been told has handled
-	// records past the checkpoint. It will never deliver them again.
+	// records past the checkpoint. It will never deliver them again. The
+	// rows going backwards under the same node id leave it: the replicated
+	// database deleted, or restored from a backup (which copies the store
+	// before the broker estate).
 	driftAcknowledged consumerDrift = "acknowledged_past_checkpoint"
 
 	// driftDelivered is a consumer that has delivered records past the
-	// checkpoint to a reader that is gone, and redelivers them only when
-	// their ack window expires.
+	// checkpoint to a reader that is gone (a stop mid-drain, a pull answered
+	// after its caller left), and redelivers them only when their ack window
+	// expires; a strict log waits behind the first of them until then.
 	driftDelivered consumerDrift = "delivered_past_checkpoint"
 
 	// driftInFlight is a consumer holding deliveries at or below the
 	// checkpoint for a reader that is gone, each one a slot of the
-	// in-flight ceiling until its ack window expires.
+	// in-flight ceiling until its ack window expires: a full ceiling, from a
+	// process that committed its pull and died before acknowledging, hands
+	// over nothing new until then.
 	driftInFlight consumerDrift = "in_flight_for_a_gone_reader"
 
 	// driftBehind is a consumer below the checkpoint, which would deliver
-	// the records between for the applier to drop.
+	// the records between for the applier to drop: after a crash, or a
+	// snapshot adoption at boot that moved the checkpoint.
 	driftBehind consumerDrift = "behind_checkpoint"
 )
 
@@ -833,14 +594,10 @@ func (d consumerDrift) leftCosts() string {
 }
 
 // onlyCostsTime reports whether a node may be LEFT reading a consumer with
-// this drift when its rebuild fails.
-//
-// BEHIND AND IN FLIGHT, because neither has delivered a record past the
-// checkpoint: the worst either does is redeliver what the applier drops, or
-// hold ceiling slots for one ack window. The two drifts ahead of the rows are
-// not, and the delivered one is no exception although its records do come
-// back — the ack floor is only a lower bound (see [driftOf]), so what looks
-// merely delivered can hide records acknowledged one by one, which never do.
+// this drift when its rebuild fails: behind and in flight, which delivered
+// nothing past the checkpoint. Not delivered-past, though its records come
+// back: the ack floor is only a lower bound ([driftOf]), so it can hide
+// records acknowledged one by one, which never do.
 func (d consumerDrift) onlyCostsTime() bool {
 	return d == driftBehind || d == driftInFlight
 }
@@ -848,16 +605,13 @@ func (d consumerDrift) onlyCostsTime() bool {
 // firstMatters reports whether the stream's first sequence can change what
 // [driftOf] answers for a consumer whose RAW positions judge as d.
 //
-// THE SKIP ONLY EVER BRINGS POSITIONS TOGETHER: [nextDelivery] raises every
-// position it is given to at least the same first sequence, so positions that
-// were equal stay equal and one that was no later than another stays no later.
-// A consumer that agrees therefore agrees on any stream, and one holding
-// deliveries at or below the checkpoint holds them on any stream, since
-// neither of its positions was past the checkpoint and the in-flight count is
-// not a position. Only a position strictly past the checkpoint (acknowledged,
-// delivered) or strictly short of it (behind) can be one a trimmed prefix
-// explains. [TestTheFirstSequenceIsReadOnlyWhenItCanChangeTheAnswer] holds
-// this against the arithmetic in both directions.
+// The skip ([nextDelivery]) raises every position to at least the same first
+// sequence, so it only brings positions together: agreement, and in-flight
+// (no position past the checkpoint; the count is not a position), hold on any
+// stream. Only a position strictly past the checkpoint or short of it can be
+// one a trimmed prefix explains.
+// [TestTheFirstSequenceIsReadOnlyWhenItCanChangeTheAnswer] holds this in both
+// directions.
 func (d consumerDrift) firstMatters() bool {
 	switch d {
 	case driftAcknowledged, driftDelivered, driftBehind:
@@ -869,25 +623,15 @@ func (d consumerDrift) firstMatters() bool {
 // driftOf is how a consumer that has delivered through `delivered`,
 // acknowledged every record through `ackFloor` and holds `inFlight`
 // unacknowledged deliveries stands against a checkpoint at `after`, on a
-// stream whose first surviving sequence is `first` (zero when unknown).
+// stream whose first surviving sequence is `first` (zero when unknown). Pure
+// over values, so which consumers are kept is tested without a broker.
 //
-// PURE OVER VALUES, so the judgement is tested without a broker: which
-// consumers are kept is the part of this that is easy to get subtly wrong, and
-// a rule reachable only through a live stream is one nobody re-checks.
-//
-// # The order is the order of harm
-//
-// Acknowledged-past is checked first because it is the one no amount of
-// waiting repairs. Delivered-past is next because it stalls a strict log for
-// the whole ack window. In-flight below it costs ceiling slots for the same
-// window. Behind costs only redeliveries.
-//
-// # The ack floor is a lower bound on what was acknowledged
-//
-// Records above it may have been acknowledged one by one, and those are never
-// redelivered either. That is why delivered-past is rebuilt too rather than
-// waited out: from outside the broker a record acknowledged above the floor
-// and one merely delivered look the same.
+// The order is the order of harm: acknowledged-past no waiting repairs,
+// delivered-past stalls a strict log for the ack window, in-flight holds
+// ceiling slots for it, behind costs redeliveries. Delivered-past is rebuilt
+// rather than waited out because the ack floor is only a lower bound: records
+// acknowledged one by one above it are never redelivered, and from outside
+// look merely delivered.
 func driftOf(delivered, ackFloor uint64, inFlight int, first, after uint64) consumerDrift {
 	want := nextDelivery(after, first)
 	switch {
@@ -906,12 +650,10 @@ func driftOf(delivered, ackFloor uint64, inFlight int, first, after uint64) cons
 // nextDelivery is the first sequence a consumer positioned after `through`
 // hands over, on a stream whose first surviving sequence is `first`.
 //
-// THE BROKER SKIPS WHAT THE STREAM NO LONGER HOLDS: a consumer whose next
-// sequence was trimmed resumes at the first survivor, and one created below it
-// is placed there outright and reports the survivor's predecessor as already
-// delivered. So two positions that differ only below the first survivor are
-// the SAME position, and treating them as different would rebuild the
-// consumer of a node that is below the floor on every boot — into exactly the
+// The broker skips what the stream no longer holds (a consumer created below
+// the first survivor is placed there and reports its predecessor delivered),
+// so positions differing only below it are the SAME position; treating them as
+// different would rebuild a below-floor node's consumer on every boot into the
 // place it already was.
 func nextDelivery(through, first uint64) uint64 {
 	return max(through+1, first)
@@ -938,30 +680,18 @@ func (c *DomainConsumer) lookup(ctx context.Context) (jetstream.Consumer, error)
 	})
 }
 
-// askRead runs one metadata READ on a state log's bring-up — its stream's
-// ceiling when the logs are sized, and everything a domain consumer's open
-// reads: at [Queue.provisioning]'s cadences, re-issued by
+// askRead runs one metadata READ on a state log's bring-up (its stream's
+// ceiling when the logs are sized, and every read a domain consumer's open
+// makes): at [Queue.provisioning]'s cadences, re-issued by
 // [jsprovision.ReadWith] while nobody answers, every request kept outstanding,
-// and never past the lookup ceiling that every such read is held to.
+// never past the lookup ceiling. Not sized like the writes beside it, for
+// [jsprovision.LookupBudget]'s reason: a slow read's request was dropped, not
+// delayed, and asking again is what gets an answer.
 //
-// # Why a read on this path is not sized like the writes beside it
-//
-// For [jsprovision.LookupBudget]'s reason: a create has to be agreed by a
-// quorum, and a read is slow only because the group cannot answer it yet —
-// in which case its request was destroyed rather than delayed, and what gets
-// an answer is asking again. The lookup went through this idiom already; the
-// stream's first sequence was read once, on the provisioning budget — two
-// minutes on a fleet — so one request the group dropped stalled its domain
-// that long with nothing in the log, and one of them per domain spent more
-// than the ceiling every domain's consumer shares.
-//
-// ON THE CALLER'S CONTEXT, which is the one that bounds the boot, and never on
-// what an earlier read or write left: each gets its own term, so no one of
-// them decides how long the next may take.
-//
-// A FUNCTION RATHER THAN A METHOD only because a method cannot take a type
-// parameter, and the read hands back what it read rather than writing it
-// anywhere: [jsprovision.ReadWith] may have more than one request out at once.
+// It runs on the caller's ctx, so no earlier read or write decides how long
+// this one may take. A function only because a method cannot take a type
+// parameter; it returns what it read because [jsprovision.ReadWith] may have
+// several requests out at once.
 func askRead[T any](ctx context.Context, q *Queue, read func(context.Context) (T, error)) (T, error) {
 	return jsprovision.ReadWith(ctx, q.provisioning(), read, nil)
 }
@@ -994,57 +724,28 @@ func domainConsumerName(stream, nodeID string) string {
 // maxMessages of them and, when maxBytes is positive, maxBytes of them,
 // waiting up to wait for the first.
 //
-// THROUGH THE CONSUMER'S STANDING PULL (pullrequest.go), never a pull of its
-// own. A request carries BOTH bounds and the server enforces both, so nothing
-// past either is delivered to one — see pullrequest.go for why the request is
-// made by hand, where the client library's byte-bounded fetch allocated
-// 32 MiB on every call. Every request is answered on the one inbox the handle
-// holds, so a record the server delivers to a request the client stopped
-// counting — under load the server's clock and the client's disagree about
-// when one ends — lands in the handle's buffer rather than on an inbox nobody
-// holds, where it waited out the thirty-second ack window.
-//
-// A message that cannot report its own sequence is DROPPED with its
-// acknowledgement withheld, rather than passed on with a zero: the sequence is
-// the applier's checkpoint, its contiguity check and the next writer's
-// expectation, so a record delivered as sequence zero would move the cursor
-// backwards on every node that applied it.
-//
-// # It returns at the first burst, not at the end of the wait
-//
-// A pull that is read until its request ENDS holds whatever reached it for the
-// rest of its wait — one record does not end a request — so a record appended
-// a millisecond into a half-second pull was applied half a second later, and a
-// barrier appended onto a quiet log sat in a pull nobody had finished
-// collecting, against a read budget it could exceed. So a fetch hands over
-// what has arrived as soon as the burst it belongs to is complete — the newest
-// delivery reports nothing pending behind it — or a bound is met, which is
-// what [statelog.Fetcher] asks for; the runner decides whether a partial run
-// is worth another fetch.
-//
-// # Everything the broker delivered is returned, by this call or a later one
-//
-// What a request delivers past what one call returns stays in the handle's
-// buffer, and the next call hands it over first. And a CONTEXT THAT ENDS
-// returns nothing and leaves what was delivered there: returned beside the
-// error, a stopping caller would drop records the broker holds in flight until
-// the ack window, while left, they reach the next reader on this handle at
-// once.
+// Through the consumer's standing pull, whose one request carries both bounds
+// and whose one inbox answers every request (package doc, "A pull allocates
+// for what it receives, never for what it may"). It returns once a burst is
+// complete (the newest delivery reports nothing pending) or a bound is met,
+// not when the request ends, which one record does not do. What a call does
+// not return stays buffered for the next, as does everything when ctx ends:
+// returned beside the error, a stopping caller would drop records the broker
+// then holds in flight until the ack window.
 func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 	wait time.Duration) ([]statelog.Message, error) {
 
 	if maxMessages <= 0 {
 		return nil, nil
 	}
-	// THE STANDING PULL FIRST, which is what refuses a closed handle before
-	// anything is rebuilt for it; it sends nothing.
+	// The standing pull first: it refuses a closed handle before anything is
+	// rebuilt for it, and sends nothing.
 	p, err := c.standing()
 	if err != nil {
 		return nil, err
 	}
-	// THE CONSUMER IS ENSURED BEFORE A REQUEST IS SENT, so a handle a failed
-	// reset cleared is rebuilt before a request is addressed to a name the
-	// broker does not hold — see [DomainConsumer.consumerFor].
+	// Ensured before a request is sent, so a handle a failed reset cleared is
+	// rebuilt before a request names a consumer the broker does not hold.
 	if _, err = c.consumerFor(ctx); err != nil {
 		return nil, err
 	}
@@ -1059,10 +760,10 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 	for _, msg := range msgs {
 		meta, unreadable := msg.Metadata()
 		if unreadable != nil {
-			// NOT ACKNOWLEDGED. A message whose metadata is
-			// unreadable is one this node cannot place in the log,
-			// and acknowledging it would move the broker's floor
-			// past a record nothing applied.
+			// Dropped, and not acknowledged: its sequence is the
+			// applier's checkpoint and contiguity check, so passing a
+			// zero would move the cursor backwards, and an ack would move
+			// the broker's floor past a record nothing applied.
 			continue
 		}
 		out = append(out, statelog.Message{
@@ -1070,9 +771,8 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 			StoredAt: meta.Timestamp,
 			Payload:  msg.Data,
 			Ack:      func() error { return msg.Ack() },
-			// A NEGATIVE ACKNOWLEDGEMENT, which the broker answers by
-			// delivering the record again at once, where a delivery
-			// nobody acknowledged waits out the ack window.
+			// A nak is redelivered at once; an unacknowledged delivery
+			// waits out the ack window.
 			Release: func() error { return msg.Nak() },
 		})
 	}
@@ -1099,16 +799,13 @@ func (c *DomainConsumer) standing() (*puller, error) {
 }
 
 // Close gives up this handle for good, leaving the consumer on the broker for
-// whoever opens it next — a stopped engine's successor in the same process,
-// on the same connection. Call it once nothing will fetch through the handle
-// again; a fetch after it is refused.
+// whoever opens it next (a stopped engine's successor in the same process, on
+// the same connection). Call it once nothing will fetch through the handle; a
+// later fetch is refused. Idempotent.
 //
-// WHAT THE HANDLE HOLDS IS HANDED BACK, not left: its standing pull's buffer,
-// and every record a request it left standing delivers from here (see
-// pullrequest.go's head). Left, those went to a handle nobody would read, and
-// the successor's own request — queued behind the abandoned one, since the
-// server serves them oldest first — waited out the ack window for a record
-// already on the log. Idempotent.
+// What the handle holds is handed back: its buffer, and whatever a request it
+// left standing still delivers (pullrequest.go's head). Left, the successor's
+// request, served behind the abandoned one, would wait out the ack window.
 func (c *DomainConsumer) Close() {
 	c.mu.Lock()
 	p := c.pull
@@ -1123,35 +820,17 @@ func (c *DomainConsumer) Close() {
 var errHandleClosed = errors.New("jetstream: state-log consumer handle closed")
 
 // Pending implements [statelog.Fetcher]: how many records this consumer has
-// not handed to a fetch, which is what tells a partially filled batch whether
-// waiting would buy anything.
+// not handed to a fetch, which tells a partial batch whether waiting buys
+// anything.
 //
-// # Counted from what the pull delivered, never asked of the broker
-//
-// The applier asks it on every run it holds records for — at least once a
-// committed run, per domain, per data node — so a request here is a request on
-// the commit path, and a linearizable read whose barrier is in the run waits
-// for it too. The consumer's info was that request: answered only by the
-// consumer's LEADER, served by the server only once its main API queue is
-// empty, and dropped without a word by a member that still believes in a
-// leader its group has just lost (server/jetstream_api.go,
-// jsConsumerInfoRequest: "only the consumer leader should answer"). Measured
-// under load on a fleet of three, the slow ones took 77 ms at the median and
-// 910 ms at worst, every millisecond added to the commit, and the fleet's
-// info requests grew with its data nodes, its domains and its run rate.
-//
-// Every record the pull delivers carries the same count in its own metadata —
-// what the consumer still held past it, at the instant it was delivered — so
-// the answer is the pull's ([puller.undelivered]): the newest delivery's count
-// and what was delivered that no fetch has taken. A hint either way, as a
-// consumer info was, and one no leader election or backed-up queue can drop or
-// delay. Both read the consumer's own count, which can trail an append by a
-// moment: the server acknowledges an append before it tells the stream's
-// consumers of it, from a queue of its own, so a delivery made in between can
-// count fewer records behind it than the log holds. A pull that has delivered
-// nothing has counted nothing, and says so:
-// the applier commits the run in hand on an unknown count, where a zero would
-// call it level with the log on nobody's word.
+// Counted from what the pull delivered ([puller.undelivered]: the newest
+// delivery's own pending count plus what no fetch has taken), never asked of
+// the broker: the applier asks on every committed run, so a consumer info
+// request would sit on the commit path, answered only by the consumer's
+// leader and dropped silently by a member that lost it. A hint, which can
+// trail an append (the server acknowledges one before telling its consumers).
+// Before any delivery it returns [errNotCounted]: the applier then commits on
+// an unknown count, where a zero would claim it level with the log.
 func (c *DomainConsumer) Pending(context.Context) (uint64, error) {
 	c.mu.Lock()
 	p := c.pull
@@ -1172,35 +851,25 @@ var errNotCounted = errors.New("jetstream: nothing counted yet")
 // a stalled applier back to the thing that is not delivering.
 func (c *DomainConsumer) Name() string { return c.name }
 
-// DomainGroup is a FLEET-WIDE pull consumer over one domain's log.
+// DomainGroup is a FLEET-WIDE pull consumer over one domain's log: one
+// consumer shared by the fleet, each record handled by whichever node gets
+// there first, as a change feed needs (the opposite of [DomainConsumer]'s
+// replication).
 //
-// # Why this exists beside the per-node one
-//
-// [DomainConsumer] is replication: every data node reads every record, so
-// each has its own. This is the opposite shape — one consumer SHARED by the fleet,
-// where a record is handled by whichever node gets there first — and it is
-// what a change feed needs.
-//
-// A GROUP RATHER THAN A DUTY, and the difference is a real outage: a duty is
-// held by one node under a lease, so a lease flap stalls the whole company's
-// notifications for work that is stateless. A group has no holder to lose.
+// A group rather than a duty: a duty's lease flap would stall the whole
+// company's notifications for stateless work, and a group has no holder to
+// lose.
 type DomainGroup struct {
 	cons     jetstream.Consumer
 	messages jetstream.MessagesContext
 	stream   string
 	name     string
 
-	// closed ends the context watcher, and once guards the iterator's
-	// stop so a Stop from the caller and one from a cancelled context are
-	// the same Stop.
-	//
-	// THE ITERATOR HAS NO CONTEXT OF ITS OWN. [jetstream.MessagesContext.Next]
-	// blocks until a message arrives or the iterator is stopped, and a
-	// quiet log means it blocks for ever — so a caller that only
-	// cancelled a context would hang on the goroutine it was joining.
-	// That is not a theoretical shutdown wart: the tracker's wake feed
-	// sits in exactly this call, and it wedged every engine test that
-	// stopped before its own context expired.
+	// closed ends the context watcher, and once makes a caller's Stop and a
+	// cancelled context's the same Stop. The iterator has no context:
+	// [jetstream.MessagesContext.Next] blocks until a message or a stop, for
+	// ever on a quiet log, so a caller that only cancelled a context would
+	// hang on the goroutine it joins (the tracker's wake feed sits in it).
 	closed chan struct{}
 	once   sync.Once
 }
@@ -1234,19 +903,12 @@ type DomainDelivery struct {
 // Group opens (or creates) a fleet-wide consumer over this log, and reports
 // whether this call created it.
 //
-// AN EXISTING GROUP IS OPENED WHERE IT STANDS, and from says nothing to it:
-// the durable consumer is the fleet's position, and a node opening it resumes
-// from that.
-//
-// A GROUP CREATED HERE STARTS AT from, the record after the last one the group
-// is known to have acknowledged (the caller's own record of it), or at the
-// log's first retained record when from is zero. Never at the head: a group
-// created at the head discards everything published before its first consumer,
-// which for a wake feed is every notification the company owed while nothing
-// was watching. And never at the first retained record when the caller knows
-// better: a group that had been consumed and is created again after its
-// consumer went replayed the log's whole retention (a week of a company's
-// chat) as wakes.
+// An existing group is opened where it stands, whatever from says: the
+// durable consumer is the fleet's position. One created here starts at from,
+// the record after the last the caller knows the group acknowledged, or at the
+// first retained record when from is zero. Never at the head, which drops
+// every wake owed while nothing watched, nor at the first record when the
+// caller knows better, which replays the log's whole retention as wakes.
 func (l *DomainLog) Group(ctx context.Context, name string, from uint64) (*DomainGroup, bool, error) {
 	if name == "" {
 		return nil, false, fmt.Errorf("jetstream: a domain group has no name, and it is " +
@@ -1259,22 +921,19 @@ func (l *DomainLog) Group(ctx context.Context, name string, from uint64) (*Domai
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		AckWait:       domainConsumerAckWait,
 		DeliverPolicy: jetstream.DeliverAllPolicy,
-		// NO MaxDeliver, for the reason the per-node consumer gives: a
-		// record nobody could handle yet is a retry rather than a poison
-		// message, and a budget that ran out would drop a wake silently.
+		// No MaxDeliver, for [domainConsumerConfig]'s reason: a spent
+		// budget would drop a wake silently.
 		MaxDeliver: -1,
 	}
 	if from > 0 {
-		// A START BELOW THE LOG'S FIRST RECORD starts at that record, and
-		// one past its last waits for the next: the broker clamps both, so
-		// a mark from before a trim, or the moment before a publish,
+		// The broker clamps a start below the first record to it and one
+		// past the last to the next publish, so a mark from before a trim
 		// starts where it means to.
 		cfg.DeliverPolicy, cfg.OptStartSeq = jetstream.DeliverByStartSequencePolicy, from
 	}
-	// THROUGH THE PACKAGE'S ONE DURABLE-CONSUMER PATH, so a group every
-	// node of a fleet ensures at boot survives a peer winning the race, and
-	// a group that exists is opened as it stands whatever start this call
-	// asked for: see [Queue.ensureDurableConsumer].
+	// Through [Queue.ensureDurableConsumer], so a group every node ensures
+	// at boot survives a peer winning the race, and an existing one is
+	// opened as it stands.
 	cons, created, err := l.q.ensureDurableConsumer(ctx, l.name, cfg)
 	if err != nil {
 		return nil, false, fmt.Errorf("jetstream: open the group %s on %s: %w",
@@ -1288,10 +947,8 @@ func (l *DomainLog) Group(ctx context.Context, name string, from uint64) (*Domai
 		cons: cons, messages: messages, stream: l.name, name: safe,
 		closed: make(chan struct{}),
 	}
-	// The context is turned into a Stop by a goroutine, for the reason
-	// [DomainGroup.closed] gives. It exits with the group, so a
-	// long-lived process holds one goroutine per group rather than one
-	// per read.
+	// ctx becomes a Stop through a goroutine ([DomainGroup.closed] says
+	// why), one per group rather than per read: it exits with the group.
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -1328,13 +985,10 @@ func (g *DomainGroup) Next(ctx context.Context) (*DomainDelivery, error) {
 	case errors.Is(err, jetstream.ErrMsgIteratorClosed):
 		return nil, nil
 	case err != nil:
-		// A CANCELLED CALLER IS THE SAME ANSWER AS A CLOSED ITERATOR. The
-		// goroutine this group started turns ctx.Done into a Drain, so a
-		// cancellation reaches the iterator by two routes at once and
-		// whichever lands first decides what Next returns — the tidy
-		// ErrMsgIteratorClosed above, or the underlying read failing
-		// mid-drain. Reporting the second as a failure would make a clean
-		// shutdown log an error on the race's losing half.
+		// A cancelled caller gets the closed-iterator answer: the group's
+		// goroutine turns ctx.Done into a Drain, so whichever lands first
+		// decides whether Next sees ErrMsgIteratorClosed or a read failing
+		// mid-drain, and a clean shutdown must not log the second.
 		if ctx.Err() != nil {
 			//nolint:nilerr // Swallowing it IS the contract: a nil delivery
 			// with a nil error means the consumer closed, which is how the
@@ -1345,9 +999,8 @@ func (g *DomainGroup) Next(ctx context.Context) (*DomainDelivery, error) {
 	}
 	meta, err := msg.Metadata()
 	if err != nil {
-		// NOT ACKNOWLEDGED, and not returned: a delivery this node
-		// cannot place in the log is one it cannot derive a stable wake
-		// id from, and acknowledging it would drop the wake outright.
+		// Not acknowledged: without its place in the log no stable wake id
+		// can be derived, and an ack would drop the wake outright.
 		return nil, fmt.Errorf("jetstream: read %s's metadata: %w", g.name, err)
 	}
 	return &DomainDelivery{
@@ -1368,10 +1021,9 @@ func (g *DomainGroup) Stop() error {
 
 // stop ends the iterator once, however it was reached.
 //
-// DRAIN RATHER THAN Stop, which is the choice [internal/coord/kv]'s feed makes
-// for the same reason: a drain naks what it has pulled ahead and not yet
-// handed over, so a peer receives those records at once rather than after the
-// full ack window. This node is going away and has done nothing with them.
+// Drain rather than Stop, as [internal/coord/kv]'s feed does: a drain naks
+// what it pulled ahead and has not handed over, so a peer gets those records
+// at once rather than after the ack window.
 func (g *DomainGroup) stop() {
 	g.once.Do(func() {
 		close(g.closed)
@@ -1383,40 +1035,25 @@ func (g *DomainGroup) stop() {
 func (g *DomainGroup) Name() string { return g.name }
 
 // GroupAckFloor is how far a fleet-wide group has acknowledged, WITHOUT
-// attaching to it.
+// attaching to it: the trim duty's node need not run the feed, so the answer
+// comes from the consumer's name, which [DomainLog.Group] derives from the
+// stream and the group.
 //
-// # Why the retention gate cannot just ask the group
-//
-// The trim's feed term is "a record the wake feed has not seen is one nobody
-// has been told about", and the node evaluating it is whichever one holds the
-// trim duty — which is not necessarily a node running the feed at all. So the
-// question has to be answerable from the consumer's NAME, which is stable by
-// construction ([DomainLog.Group] derives it from the stream and the group),
-// rather than from a handle.
-//
-// It reports (0, false, nil) when no such consumer exists. That is an ordinary
-// answer and a load-bearing one: a fleet that has never opened the group has
-// not failed to read it, and the two must not look alike — an unreadable
-// consumer is a term nobody could evaluate, while an unopened one is a feed
-// that has seen nothing yet. Neither says whether the domain HAS a feed: that
-// is the domain's own declaration, and the caller asks it first. The same
-// answer is what a group name this log never had returns, for ever, so the
-// caller must pass the group the domain declares and never one it knows.
+// It reports (0, false, nil) when no such consumer exists: a fleet that never
+// opened the group has a feed that has seen nothing, which must not look like
+// a term nobody could read. A group name this log never had returns the same,
+// for ever, so the caller passes the group its domain declares, having asked
+// first whether the domain has a feed at all.
 func (l *DomainLog) GroupAckFloor(ctx context.Context, group string) (uint64, bool, error) {
-	// THE ERRORS NAME THE DURABLE, not only the group: an operator chasing
-	// an unreadable term looks the consumer up on the broker, where the
-	// group's own spelling finds nothing.
+	// The errors name the durable: an operator looks the consumer up on the
+	// broker, where the group's own spelling finds nothing.
 	durable := domainGroupName(l.name, group)
-	// ASKED AS A READ ([jsprovision.ReadBoundedWith]), and ONCE: the lookup
-	// is the consumer's info request itself, so a second request on the
-	// handle it returns asked the same question twice. Only the consumer's
-	// leader answers it, and a member that still believes in a leader the
-	// group has just lost drops it without a word — on the trim tick's
-	// lifetime, which carries no deadline, one dropped request waited out
-	// the client's five-second default and left the term unreadable, which
-	// blocks that log's trim for the tick. The tick keeps those five
-	// seconds, asked again inside them, so a dropped request costs it two. A
-	// handle of each request's own, since requests can be out together.
+	// Asked as a read ([jsprovision.ReadBoundedWith]), once: the lookup is the
+	// info request itself. Only the consumer's leader answers, and a member
+	// that lost one drops it silently, so the trim tick (no deadline of its
+	// own) keeps the client's default term and asks again inside it rather
+	// than leaving the log's trim blocked for the tick. A handle per request,
+	// since requests can be out together.
 	info, err := jsprovision.ReadBoundedWith(ctx, l.q.provisioning(), l.js.Options().DefaultTimeout,
 		func(ctx context.Context) (*jetstream.ConsumerInfo, error) {
 			cons, err := l.js.Consumer(ctx, l.name, durable)
@@ -1432,10 +1069,7 @@ func (l *DomainLog) GroupAckFloor(ctx context.Context, group string) (uint64, bo
 		return 0, false, fmt.Errorf("jetstream: read the group %q (consumer %s) on %s: %w",
 			group, durable, l.name, err)
 	}
-	// THE ACK FLOOR RATHER THAN THE DELIVERED SEQUENCE. Delivered says a
-	// record left the broker; the floor says every record below it was
-	// handled. The trim needs the second, because a wake the feed fetched
-	// and had not finished acting on is one the record still has to be
-	// there for.
+	// The ack floor, not the delivered sequence: the trim must keep a record
+	// whose wake the feed fetched and has not finished acting on.
 	return info.AckFloor.Stream, true, nil
 }

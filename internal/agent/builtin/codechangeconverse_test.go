@@ -80,15 +80,12 @@ func reviewArgsOf() map[string]any {
 
 // ---- code_review_change ----------------------------------------------------- //
 
-// A REVIEW IS ONE RECORD: its verdict, its summary, every finding it raises
-// and every finding of the reviewer's own it carries go to the change's writer
-// as ONE write, of the revision it judges — the head by default — each
-// finding anchored where its lines were read: the revision's head on the new
-// side and its recorded base on the old, its blob from ONE read of the
-// revision's diff kept to the files the findings name, at the floor of the
-// record that moved the revision's head. A seat's review names its turn and
-// the model its call was made on; the answer names the review and its findings
-// in the order raised.
+// A REVIEW IS ONE RECORD: verdict, summary, raised and carried findings go to
+// the change's writer as ONE write of the judged revision (the head by
+// default), each finding anchored where its lines were read (head on the new
+// side, recorded base on the old), its blob from ONE diff read kept to the
+// findings' files at the floor of the head's record. A seat's review names its
+// turn and model; the answer names the review and its findings in order raised.
 //
 // Mutations: a write per finding → three writes, red; an old-side finding
 // anchored in the head → red; the diff read with no floor → red.
@@ -151,12 +148,11 @@ func TestReviewChangeIsOneRecord(t *testing.T) {
 	}
 }
 
-// A REVIEW NAMES THE FINDINGS IT CARRIES, and the revision it judges: the
-// carried ids are sent as the call named them, for the change's writer to hold
-// to the reviewer's own standing findings; an earlier revision is judged where
-// the call names one, its findings anchored in that revision's own head and
-// base; and a revision past the change's head, or a finding on a file the
-// revision does not change, is refused with nothing written.
+// A REVIEW NAMES THE FINDINGS IT CARRIES, and the revision it judges: carried
+// ids are sent as named, for the change's writer to hold to the reviewer's own
+// standing findings; a named earlier revision is judged with findings anchored
+// in its own head and base; a revision past the head, or a finding on a file
+// the revision does not change, is refused with nothing written.
 //
 // Mutations: the revision taken as the head whatever the call names → red; a
 // finding on an unchanged file sent → red.
@@ -198,13 +194,9 @@ func TestAReviewNamesTheFindingsItCarries(t *testing.T) {
 	}
 }
 
-// EVERY CONVERSATION REFUSAL IS IN AN EXISTING CLASS: a rule of the change
-// refusing the caller forbidden, a revision the node has not reached stale,
-// the change or its repository in a state that refuses the write until
-// somebody changes it (closed, merged, archived) conflict, what is gone not
-// found, an ask past its bounds invalid, and what waiting clears unavailable —
-// each with the decide's own sentence — and superseded, the home's own
-// refusal, which no caller is ever answered, the engine's fault.
+// EVERY CONVERSATION REFUSAL IS IN AN EXISTING CLASS (conversationClass's),
+// with the decide's own sentence; superseded, the home's own refusal that no
+// caller is ever answered, is the engine's fault.
 //
 // Mutation: drop not_raiser from conversationClass → red; answer repo_archived
 // forbidden again → red.
@@ -244,11 +236,10 @@ func TestEveryConversationRefusalIsInAnExistingClass(t *testing.T) {
 	}
 }
 
-// AN AUTHOR'S REVIEW IS REFUSED IN A PERSON'S WORDS: the act route answers a
-// person the refusal's own words ([caveat.ReviewOfYourOwnChange]) rather than
-// the forbidden class's sentence, which told the author the change was not
-// theirs to make; every other conversation refusal carries none, and its
-// code's own sentence is what a person reads (ADR-0060).
+// AN AUTHOR'S REVIEW IS REFUSED IN A PERSON'S WORDS ([caveat.ReviewOfYourOwnChange]),
+// not the forbidden class's sentence, which would tell the author the change is
+// not theirs; every other conversation refusal carries none, leaving its code's
+// own sentence (ADR-0060).
 //
 // Mutation: drop own_change from conversationRefusalWords and the review
 // answers no person's words, red.
@@ -274,12 +265,11 @@ func TestAnAuthorsReviewIsRefusedInAPersonsWords(t *testing.T) {
 
 // ---- code_comment_on_change and the rest --------------------------------------- //
 
-// A COMMENT SETS ITS THREAD AS A SECOND WRITE: a reply that also marks its
-// thread resolved is the reply, then the thread's state as a step of the
-// reply's operation decided at or past the reply's record; a thread marked
-// with nothing said is that one write; a mark of a finding's thread is refused
-// — a finding is answered by its own answer — and an anchored comment names
-// the line, the revision and the blob it was read in.
+// A COMMENT SETS ITS THREAD AS A SECOND WRITE: the reply, then the thread's
+// state as a step of its operation decided at or past the reply's record; a
+// mark with nothing said is that one write; a mark of a finding's thread is
+// refused (code_resolve_finding answers it); and an anchored comment names its
+// line, revision and blob.
 //
 // Mutations: the thread marked before the reply lands → red; the mark under a
 // fresh operation → red.
@@ -347,13 +337,11 @@ func (s seatsNamed) Mentions(text string) []string {
 	return out
 }
 
-// A MENTION IS RESOLVED AT WRITE (rule D38): the handles a change's text names
-// that are seats of the company — an open's title and body, an edit's, a
-// review's summary and its findings, a comment's body — go to the change's
-// writer as the write's Mentions, each once in the order first named, and a
-// handle no seat holds goes nowhere; a text naming more seats than one write
-// of a change mentions is refused naming the bound, before anything is read
-// or written.
+// A MENTION IS RESOLVED AT WRITE (rule D38): the seat handles a change's text
+// names (an open's or edit's title and body, a review's summary and findings, a
+// comment's body) go to the change's writer as the write's Mentions, each once
+// in first-named order, and other handles go nowhere; past gitlet.MaxMentions
+// the call is refused naming the bound before anything is read or written.
 //
 // Mutations: a comment's, a review's, an open's or an edit's Mentions left
 // unset → red; the bound not held → red.
@@ -430,10 +418,9 @@ func TestAMentionIsResolvedAtWrite(t *testing.T) {
 	}
 }
 
-// AN ANSWER TO FINDINGS NAMES EVERY FINDING ONCE, each with the answer, its
-// note and the commit the call names — a ref resolved to the commit it points
-// at — in ONE write; and an ask for review is one write naming whom it asks
-// and whom it withdraws.
+// AN ANSWER TO FINDINGS NAMES EVERY FINDING ONCE, each with the answer, note
+// and the named ref resolved to its commit, in ONE write; an ask for review is
+// one write naming whom it asks and whom it withdraws.
 //
 // Mutation: the commit sent as the ref the call named → red.
 func TestAnAnswerToFindingsNamesEveryFindingOnce(t *testing.T) {

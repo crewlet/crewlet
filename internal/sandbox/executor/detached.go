@@ -25,34 +25,18 @@ import (
 
 var log = logging.Get("sandbox.executor")
 
-// deliveredRefs is what a run delivered, as its own account names it: the
-// branches it pushed and the pull or merge requests it opened, read from the
-// texts given in the order given — the report before the harness's last message.
+// deliveredRefs is what a run delivered as its own account names it — the
+// branches it pushed, the pull or merge requests it opened — read from texts
+// in the order given (the report before the harness's last message).
 //
-// THE RUN NAMES THEM, ON LINES OF THEIR OWN. The report is asked for one
-// `Delivered: <branch or URL>` line per ref ([FindingsInstruction]), and the
-// first text holding any such line is the answer, whole and in its order: a
-// branch as well as a pull request, on any host and any scheme. WHICH HOSTS a
-// box can push to is set by the seat's own environment and setup steps, which
-// the engine deliberately never names, and a seat can push to a host no
-// integration block mentions — so no list of hosts the engine knows can say
-// what a run delivered, and the two it used to know left a GitHub Enterprise,
-// a self-managed GitLab and the walkthrough's own GitLab on a port delivering
-// nothing, and a pushed branch, which no URL pattern matches, never delivered
-// at all.
-//
-// A RUN THAT NAMES NONE is read by the URL's shape instead ([prPattern]):
-// the first text holding a pull request's URL gives every one it holds. A
-// named ref outranks a scraped one wherever each is found, because a scrape
-// cannot tell a pull request the run opened from one it only read.
-//
-// EACH REF AS THE TEXT HOLDS IT, BYTE FOR BYTE, a URL that is not UTF-8
-// included — on a `Delivered:` line, or in the host a scrape reads. Whether
-// the run's record can carry a ref is the coordinator's to judge, for every
-// runner alike ([sandbox.Result.DeliveredRefs]), and it can judge only the
-// bytes it is handed: mended into UTF-8 here, as a decode mends one, a ref
-// would reach the record as a URL nobody delivered, with nothing left to
-// tell it from one somebody did.
+// The first text with `Delivered: <ref>` lines ([FindingsInstruction]) gives
+// them all, in order: a branch or a URL on any host, since which hosts a box
+// pushes to is the seat's setup's, never the engine's to list. Only where no
+// text names one is a URL scraped by shape ([prPattern]), which cannot tell a
+// pull request the run opened from one it only read. Refs stay byte for byte:
+// the coordinator judges what the record can carry
+// ([sandbox.Result.DeliveredRefs]), and a ref mended here would read as one
+// somebody delivered.
 func deliveredRefs(texts ...string) []string {
 	for _, text := range texts {
 		if refs := namedRefs(text); len(refs) > 0 {
@@ -84,18 +68,11 @@ func namedRefs(text string) []string {
 	return refs
 }
 
-// namedRef is the ref a `Delivered:` line holds after its label, if it holds
-// one: a URL, whatever bytes it holds ([deliveredRefs] says why), or a branch
-// name the engine's one grammar takes ([gitref.ValidBranch]: a name git
-// accepts, valid UTF-8 and at most [gitref.MaxBranchBytes], what a ref under
-// refs/heads can be), unwrapped from the backticks, emphasis or angle
-// brackets a report puts around it and from the full stop a sentence puts
-// after it.
-//
-// ALONE ON ITS LINE, because the label is not proof of a ref: "Delivered: the
-// fix for the flake" is a sentence, and its first word is no branch anybody
-// pushed. And NEVER A URL CARRYING A CREDENTIAL — that is a remote an agent
-// pasted, not a ref to show anybody.
+// namedRef is the ref a `Delivered:` line holds after its label, if any: a URL,
+// bytes as they are ([deliveredRefs]), or a branch [gitref.ValidBranch] takes,
+// unwrapped from backticks, emphasis, angle brackets and a closing full stop.
+// Alone on its line, since "Delivered: the fix for the flake" is a sentence,
+// not a branch; never a URL carrying a credential, which is a pasted remote.
 func namedRef(rest string) (string, bool) {
 	ref := strings.TrimSuffix(strings.TrimSpace(rest), ".")
 	ref = strings.Trim(ref, "`*")
@@ -112,58 +89,45 @@ func namedRef(rest string) (string, bool) {
 	return ref, gitref.ValidBranch(ref)
 }
 
-// prPattern is a pull or merge request's URL by its SHAPE, on any host: the
-// fallback for an account that names no ref on a line of its own.
-//
-// THE HOST IS NOT THE ENGINE'S TO KNOW (see [deliveredRefs]), so what is
-// matched is the path every forge spells one with — `/pull/N` (GitHub, GitHub
-// Enterprise), `/pulls/N` (Gitea, Forgejo), `/-/merge_requests/N` (GitLab),
-// `/pull-requests/N` (Bitbucket), `/pullrequest/N` (Azure DevOps) — after any
-// host, with or without a port, over http or https. Never a host carrying
-// credentials (`https://user:token@…`), which is a remote, not a ref. The
-// number ends at a word boundary, so `/pull/12` is not read out of `/pull/12abc`.
-//
-// A GUESS, and the reason it is the fallback: a URL the run only referenced —
-// the pull request it followed, the one it was asked to fix — reads exactly
-// like one it opened, which is why a report that names its refs is never
-// scraped. And it can never match a branch.
+// prPattern is a pull or merge request's URL by its shape, on any host (see
+// [deliveredRefs]): the fallback for an account that names no ref on a line of
+// its own. It matches the path each forge uses — `/pull/N` (GitHub), `/pulls/N`
+// (Gitea, Forgejo), `/-/merge_requests/N` (GitLab), `/pull-requests/N`
+// (Bitbucket), `/pullrequest/N` (Azure DevOps) — over http or https, any port,
+// never a host with credentials (a remote, not a ref); the number ends at a
+// word boundary. Only a fallback, because a URL the run merely referenced reads
+// exactly like one it opened.
 var prPattern = regexp.MustCompile(
 	`https?://[^\s/?#@:]+(?::\d+)?/[\w.\-/]+/(?:pull|pulls|pull-requests|pullrequest|merge_requests)/\d+\b`)
 
-// Harness is what one harness contributes on top of the shared plumbing.
-//
-// WHAT IS THE HARNESS'S, AND ONLY THAT: its invocation, its config file, where its
-// stdout lands and how its result is read back ([Output]), how its event
-// stream is decoded ([Decoder]) and how its result is parsed. Everything else
-// — when a run has ended included, which is the done marker for every harness —
-// where
-// the markers go, how the box is torn down, how a question is signalled, how
-// a stream is read and how much of one is kept — is the same for every harness,
-// and a runner that could override it would be a second implementation of the
-// completion protocol.
+// Harness is what one harness contributes on top of the shared plumbing: its
+// invocation, its config file, where its stdout lands and how its result is
+// read back ([Output]), how its event stream is decoded ([Decoder]) and how its
+// result is parsed. Everything else — the done marker that ends every run, the
+// markers' places, teardown, question signalling, stream reading and bounds — is
+// shared: a runner that could override it would be a second implementation of
+// the completion protocol.
 type Harness interface {
 	// Name is the harness's config name: "claude-code", "opencode".
 	Name() string
 
 	// Session is the session req's run works in ([Session]), its ids in the
-	// harness's own form and minted where they are new. The runner settles it
-	// before the harness starts, so a run's session is known from its start — a
-	// run killed before it reported anything included
+	// harness's own form and minted where new. Settled before the harness
+	// starts, so even a run killed before it reported anything has one
 	// ([sandbox.RunHandle.SessionID]).
 	Session(req sandbox.RunRequest) Session
 
 	// Command builds the headless invocation of a run that works in session.
-	// The brief and the system text are already final — the report
-	// instruction is appended to the system text by the base — but for the
-	// instruction about notes, which a harness that reads them adds where a note
-	// can reach its run ([noteReader]); and a harness given system text puts it
-	// on the channel that adds to its own system prompt, never in the prompt
-	// it runs.
+	// The brief and system text are final (the base appended the report
+	// instruction), except the notes instruction, which a harness that reads
+	// notes adds where a note can reach its run ([noteReader]). System text goes
+	// on the channel that adds to the harness's own system prompt, never into
+	// the prompt it runs.
 	Command(req sandbox.RunRequest, session Session, paths Paths, configPath string) string
 
 	// Output is where the harness's stdout lands and how its result is read
-	// back — DECLARED, so the shared wrapper and the shared reads follow it
-	// rather than knowing which harness they are driving.
+	// back, declared so the shared wrapper and reads need not know which
+	// harness they drive.
 	Output(paths Paths) Output
 
 	// Pins is every variable the wrapper sets for req's run to a value of its
@@ -200,41 +164,35 @@ type Session struct {
 	Continues bool
 
 	// Fresh is, for a run that continues ID, the session it starts in ID's
-	// place where its box neither holds ID nor can restore it — minted with
-	// ID, so that start is a new conversation under a new id rather than an
-	// empty one under the old id, which a harness asked to continue a session it
-	// does not hold creates and then answers as if it remembered
+	// place where its box neither holds nor can restore ID: minted beside ID so
+	// that start is a new conversation under a new id, never an empty one under
+	// the old id, which a harness answers as if it remembered
 	// ([sandbox.Result.Continued]). "" for a run that continues nothing.
 	Fresh string
 
-	// Replaces says the archive carried in replaces the box's own copy of
-	// the session even where that copy already holds it
-	// ([sandbox.CarriedSession.Replace]): the copy is one its harness was cut
-	// off in. False for a run carried no archive, or one whose box keeps a
-	// copy that holds it.
+	// Replaces says the carried archive replaces the box's own copy of the
+	// session even where that copy holds it ([sandbox.CarriedSession.Replace]):
+	// the copy is one its harness was cut off in. False for a run carried no
+	// archive, or one whose box keeps a copy that holds it.
 	Replaces bool
 }
 
-// resumer is a harness that continues a session an earlier run reported.
-//
-// AND THAT WIRES ITS RUN TO THE SESSION IT STARTED: a run that continues a
-// session is handed the seat's tools under two bridge tokens, that session's
-// and one for a session of its own its script starts in that one's place
-// ([sandbox.RunRequest.FreshWiring]), and a resumer's [Harness.WriteConfig]
-// writes both and its script installs the one of the session it started,
-// removing the other, before its harness starts. A harness that could not would
-// start a session of its own reaching the seat's tools as the continued one, and
-// be held to that session's skill guard.
+// resumer is a harness that continues a session an earlier run reported, and
+// wires its run to the session it started: a continuing run is handed the
+// seat's tools under two bridge tokens, the continued session's and one for a
+// fresh session its script may start instead ([sandbox.RunRequest.FreshWiring]);
+// its [Harness.WriteConfig] writes both and its script installs the started
+// one's, removing the other, before the harness starts. Otherwise a fresh
+// session would reach the seat's tools as the continued one, held to that
+// session's skill guard.
 type resumer interface{ Resumes() bool }
 
 // carrier is a harness whose session the runner carries between boxes
-// ([sandbox.SessionArchive]): its run's script packs the session it ran into
+// ([sandbox.SessionArchive]): its run's script packs the session into
 // [Paths.SessionCapture] once the harness exits, and restores one carried into
-// [Paths.SessionCarried] before the harness starts.
-//
-// OPTIONAL, as [resumer] is: a harness not taught to pack and restore its session
-// carries none, and a run handed one is refused rather than started in a
-// conversation its caller believes is the old one.
+// [Paths.SessionCarried] before it starts. Optional: a run handed a session on
+// a harness that is not one is refused, never started in a conversation its
+// caller believes is the old one.
 type carrier interface {
 	// ArchiveFormat is the version of the layout the harness's script packs a
 	// session in — the only one it restores.
@@ -244,82 +202,67 @@ type carrier interface {
 	VersionCommand() string
 
 	// Continues reports whether a session written by release writer, carried
-	// from another box, can be continued by release box — as each harness's
-	// `--version` gave it — and, where it cannot, why, in a person's words.
-	// A release that cannot be read is taken for a current one, as the
-	// notes gate takes it ([claudeNotesGate]).
+	// from another box, can be continued by release box (each as `--version`
+	// gave it), and if not, why, in a person's words. An unreadable release is
+	// taken for a current one, as the notes gate takes it ([claudeNotesGate]).
 	Continues(box, writer string) (bool, string)
 
-	// Pack is the script that packs session NOW, as the run's script packs
-	// it once its harness exits — the same pack, staged in staged, this
-	// pack's own directory ([Paths.SessionPackStaging]), and moved over dest,
-	// the pack's own [Paths.SessionPackHeld] for its reader alone, never
-	// [Paths.SessionCapture], its digest kept the same way — for a job that
-	// never got to ([Runner.PackCapture]): one that is over, or, where working
-	// says so, one its box would not end, its harness still working, which a
-	// harness whose files a pack reads beside it holds to a stricter rule
-	// ([claudeHeldTar]). Run in a login shell with the box's bin directory
-	// first on its PATH, as the run's wrapper runs.
+	// Pack is the script that packs session now, the same pack the run's
+	// script makes once its harness exits, for a job that never got to
+	// ([Runner.PackCapture]): one that is over or, where working says so, one
+	// its box would not end, its harness still working — then held to a
+	// stricter rule where a pack reads the harness's files beside it
+	// ([claudeHeldTar]). Staged in staged ([Paths.SessionPackStaging]) and moved
+	// over dest, this pack's own [Paths.SessionPackHeld] for its reader alone,
+	// never [Paths.SessionCapture]; its digest kept the same way. Run in a login
+	// shell with the box's bin directory first on PATH, as the wrapper runs.
 	Pack(paths Paths, session, staged, dest string, working bool) string
 
-	// layout is how the harness's archive is laid out, which is what the
-	// scrub a capture streams it through has to read and write it as
-	// ([scrubArchive]).
+	// layout is how the harness's archive is laid out, which the scrub a
+	// capture streams it through reads and writes it as ([scrubArchive]).
 	layout() archiveLayout
 
-	// transcript reads an archive of ArchiveFormat, already decompressed, as
-	// the entries of the session's transcript, handing each to b in the
-	// order the harness recorded it, until ctx is done ([ReadTranscript]):
-	// what the archive holds is the harness's own record, so reading it is
-	// the same knowledge as packing it, kept beside it.
+	// transcript reads an archive of ArchiveFormat, decompressed, as the
+	// session's transcript entries, handing each to b in recorded order until
+	// ctx is done ([ReadTranscript]); kept beside packing, as reading the
+	// harness's own record is the same knowledge.
 	transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error
 }
 
-// saver is a [carrier] whose session the engine packs WHILE ITS RUN STILL WORKS,
-// as a save ([Runner.PackSave]): beside its harness, from outside the run's own
-// script, to a place of that save's own, named after the taker it is taken
-// under.
-//
-// OPTIONAL, as [carrier] is, and only Claude Code's runner is one: its session
-// is files a pack beside the harness can read, in a store its harness takes no
-// lock on. An OpenCode session lives in the database the run's own server
-// holds, which only the run's script can reach — the server's address and
-// password are the script's alone — so the engine has no pack of its own to
-// make beside an OpenCode run, and saves none.
+// saver is a [carrier] whose session the engine packs while its run still
+// works, as a save ([Runner.PackSave]): beside its harness, from outside the
+// run's script, to a place of the save's own, named after its taker. Only
+// Claude Code's runner is one: its session is files a pack beside the harness
+// can read, in a store it takes no lock on. An OpenCode session lives in the
+// database the run's server holds, reachable only from the run's script (the
+// server's address and password are the script's alone), so none is saved.
 type saver interface {
 	// PackSave is the script that packs session now, beside a harness that
-	// may still be working, held to the rule a pack beside one keeps
-	// ([claudeHeldTar]), into staged, this save's own staging directory
-	// ([Paths.SessionSaveStaging]), and moved to dest, this save's own place
-	// ([Paths.SessionSave]) — never [Paths.SessionCapture], nor a place another
-	// save moves over — its digest kept as every pack's is. It ends as
-	// [carrier.Pack] does: [packNothing] where the harness wrote no
-	// transcript, [packFailed] where no save was made, its error stream saying
-	// why. Run as [carrier.Pack] is.
+	// may still be working ([claudeHeldTar]), staged in staged
+	// ([Paths.SessionSaveStaging]) and moved to dest ([Paths.SessionSave]) —
+	// never [Paths.SessionCapture] nor a place another save moves over — its
+	// digest kept as every pack's is. It ends as [carrier.Pack] does
+	// ([packNothing] where the harness wrote no transcript, [packFailed] where
+	// no save was made, its error stream saying why) and runs as it does.
 	PackSave(paths Paths, session, staged, dest string) string
 }
 
 // mcpHolder is a harness that can be held to the MCP servers a run hands it,
 // starting none its own configuration, a repository's or a plugin's declares
-// ([sandbox.RunRequest.OnlyMCPServers]).
-//
-// OPTIONAL, as [resumer] is, and only Claude Code's runner implements it: the
-// one run that asks for it, the assistant's deep work, runs on Claude Code
-// alone. A run held that way on any other harness is refused rather than
-// started on every server that harness's configuration adds up to.
+// ([sandbox.RunRequest.OnlyMCPServers]). Only Claude Code's runner is one, as
+// the one run that asks (the assistant's deep work) runs on Claude Code alone;
+// such a run on another harness is refused rather than started on every server
+// its configuration adds up to.
 type mcpHolder interface{ HoldsToItsMCPServers() bool }
 
-// sessionTotals is a harness whose result, on a run that continues a session, can
-// state the SESSION's spend rather than the run's own: from the release
-// TotalsRestored names, the harness starts a continued session from the totals
-// the job before it saved, and every result after counts them again. The
-// runner keeps that job's result as the run starts ([Paths.BaseResult]) and
-// charges a continued run the difference — unless its own stream stated what
-// the run spent ([runSpender]), which is exact on any release that says it.
-//
-// OPTIONAL, as [resumer] is: a harness whose result is the run's own spend on
-// every release needs nothing kept, and OpenCode measures its session before
-// and after the run in the run's own script instead ([openCodeUsageBefore]).
+// sessionTotals is a harness whose result, on a run that continues a session,
+// may state the session's spend rather than the run's: from the release
+// TotalsRestored names, a continued session starts from the totals the job
+// before saved. The runner keeps that job's result as the run starts
+// ([Paths.BaseResult]) and charges the difference, unless the stream stated
+// the run's own spend ([runSpender]), which is exact. Optional: OpenCode
+// measures its session around the run in its own script instead
+// ([openCodeUsageBefore]).
 type sessionTotals interface {
 	// TotalsRestored reports whether the harness release version, as its
 	// `--version` printed it, restores a continued session's totals. A
@@ -383,12 +326,11 @@ func (s runSpend) on(result sandbox.Result) sandbox.Result {
 	return result
 }
 
-// less is result with what base already stated taken off: a continued run's
-// own spend, where its harness stated the session's. A difference below zero is
-// passed on as it is, for the coordinator to floor and say
-// ([sandbox.Result]'s floor, sandbox_usage_negative), as every negative count a
-// harness reports is. The turn count is the process's own on every release, so it
-// is never a difference.
+// less is result with what base stated taken off: a continued run's own spend
+// where its harness stated the session's. A negative difference passes on for
+// the coordinator to floor and report ([sandbox.Result]'s floor,
+// sandbox_usage_negative), as every negative count is. The turn count is the
+// process's own on every release, so it is never a difference.
 func less(result, base sandbox.Result) sandbox.Result {
 	result.InputTokens -= base.InputTokens
 	result.OutputTokens -= base.OutputTokens
@@ -398,17 +340,14 @@ func less(result, base sandbox.Result) sandbox.Result {
 	return result
 }
 
-// noteReader is a harness that takes a person's notes to its run's turn between its
-// own steps, where its launch wires it to them ([sandbox.RunRequest.Steer]),
-// and tells its model so: NoteInstruction is the standing instruction about
-// notes its runs are given ([ClaudeCodeSteerInstruction],
-// [OpenCodeSteerInstruction]) — the harness's own, because where a note appears in
-// what the model reads is the harness's to decide, and the harness adds it to its run's
-// system text itself ([withNoteInstruction]), on the run its notes can reach.
-//
-// OPTIONAL, as [resumer] is, because a harness is taught to read notes in its own
-// way — hooks, a plugin — and one not taught yet must not be claimed to: the
-// instruction, and the warning that a run never asked for any, both follow it.
+// noteReader is a harness that takes a person's notes to its run's turn between
+// its own steps, where its launch wires them ([sandbox.RunRequest.Steer]), and
+// tells its model so: NoteInstruction is that standing instruction
+// ([ClaudeCodeSteerInstruction], [OpenCodeSteerInstruction]), the harness's own
+// because where a note appears is the harness's to decide, and the harness adds
+// it to the system text of a run its notes can reach ([withNoteInstruction]).
+// Optional: a harness not taught to read notes (hooks, a plugin) must not claim
+// to, and the instruction and the never-asked warning both follow this.
 type noteReader interface{ NoteInstruction() string }
 
 // Output is how the wrapper connects a harness's standard streams in the box —
@@ -423,30 +362,25 @@ type Output struct {
 	// call the run makes.
 	Events bool
 
-	// Result is the file the harness's RESULT is read from, whole ([Harness.Parse]),
-	// or "" when the result is the stream's own. When it names a file other
-	// than Stdout, the wrapper writes it after the harness exits: the stream's
-	// last line, which is where a harness that streams puts its result — and
-	// where the wrapper died before it could, the collection reads that line
-	// from the stream in its place.
+	// Result is the file the harness's result is read from, whole
+	// ([Harness.Parse]), or "" when the result is the stream's own. Where it
+	// differs from Stdout, the wrapper writes the stream's last line into it
+	// after the harness exits (where a streaming harness puts its result), and
+	// where the wrapper died first, the collection reads that line instead.
 	Result string
 
-	// BriefOnStdin says the harness reads its brief on STDIN, from a file Start
-	// writes ([Paths.Brief]), rather than on its argv — for a harness that does
-	// not take an argv prompt verbatim. OpenCode re-quotes one: a brief
-	// passed as an argument reached the model wrapped in double quotes with
-	// every quote inside it escaped, so code and quoted text in a brief came
-	// out altered (measured on 1.18.35 and 2.0.32 alike), while the same
-	// brief on stdin arrived byte for byte. Unset, the harness's stdin is
-	// /dev/null, so a headless agent can never block waiting for input.
+	// BriefOnStdin says the harness reads its brief on stdin, from a file Start
+	// writes ([Paths.Brief]), rather than its argv: OpenCode re-quotes an argv
+	// prompt, altering the quotes and code in a brief, while stdin arrives byte
+	// for byte. Unset, stdin is /dev/null, so a headless agent never blocks on
+	// input.
 	BriefOnStdin bool
 
-	// Unset is every variable the wrapper removes from the harness's environment
-	// before it starts: one that, from wherever it came — the seat's
-	// role.sandbox.env, the image, a profile the login shell sources —
-	// switches off something the run depends on. Removed IN the wrapper,
-	// after the login shell has sourced its profile, because that is the
-	// one place every source has already been read.
+	// Unset is every variable the wrapper removes from the harness's
+	// environment, from whatever source (role.sandbox.env, the image, a login
+	// profile), because it switches off something the run depends on. Removed
+	// in the wrapper, after the login shell sourced its profile: the one place
+	// every source has been read.
 	Unset []string
 }
 
@@ -458,29 +392,14 @@ type Pinned struct{ Name, Value string }
 type Runner struct {
 	harness Harness
 
-	// failureBound is how much of a run's error stream, from its END, a
-	// collection reads, and the most a failure it composes may be:
-	// [sandbox.MaxFailureBytes] in every runner [New] builds.
-	//
-	// The error stream becomes the failure's detail, which the resumed
-	// executor acts on and which the coordinator condenses past the record's
-	// bound — and the whole failure a runner composes is held to what one
-	// condensation can take beside the coordinator's own prefix. A longer
-	// read is text no model could be shown, so it is not read; what was left
-	// unread is said by size where it was. From the END, because a process's
-	// conclusion — the line naming what broke — is the last thing it prints.
-	//
-	// THIS IS THE READ, NOT WHAT THE FAILURE CARRIES OF IT. The failure opens
-	// with the engine's own sentences — a piece it could not read, the exit
-	// status, the harness's error — and the error stream gets what is left of the
-	// bound after them ([failureDetail]). Read to the bound and carried whole
-	// behind them, as it was, a failure built around a long stderr was always
-	// a few hundred bytes past what the compactor reads, refused before a
-	// model was asked.
-	//
-	// A FIELD rather than the constant at each use so the suite can stage a
-	// failure past it in kilobytes: at two mebibytes every such case built,
-	// redacted and measured megabytes of error stream, two to four times.
+	// failureBound is how much of a run's error stream, from its end, a
+	// collection reads, and the most a composed failure may be:
+	// [sandbox.MaxFailureBytes] in every runner [New] builds. The failure is
+	// what the coordinator condenses, so it is held to what one condensation
+	// takes beside the coordinator's prefix; from the end, because a process's
+	// conclusion is the last thing it prints. The engine's own sentences come
+	// first and the stream gets what is left ([failureDetail]). A field so the
+	// suite can stage a failure past it in kilobytes, not mebibytes.
 	failureBound int
 
 	// lineBound is the longest line of a run's event stream the runner
@@ -489,14 +408,9 @@ type Runner struct {
 	lineBound int
 
 	// now is the clock a pack's release is bounded by ([releaseContext]):
-	// time.Now in every runner New builds.
-	//
-	// A FIELD so the suite holds a release's deadline to the one its rule
-	// gives, exactly. Read off the wall clock inside the case, the rule turned
-	// on how long the case's take had run: past a minute less the floor, the
-	// floor moved a healthy release's deadline past its take's, and the case
-	// refused it. An instant compared against a deadline is an elapsed bound
-	// (internal/fixedwait).
+	// time.Now in every runner New builds, a field so the suite holds a
+	// release's deadline to the one its rule gives exactly, not one moved by how
+	// long the case has run (internal/fixedwait).
 	now func() time.Time
 }
 
@@ -519,21 +433,16 @@ func (r *Runner) Name() string { return r.harness.Name() }
 // that succeeded never asked for its notes (internal/sandbox).
 func (r *Runner) ReadsNotes() bool { return r.noteInstruction() != "" }
 
-// CallIDMeta is the `_meta` key this runner's harness sends each of its calls'
-// own id under, which the bridge serving a box of it records each call's id by
-// ([sandbox.CallIdentifier]): the key the harness's BUILT-IN profile reads its
-// calls by (harnessprofile's Requests.CallIDMeta) — `claudecode/toolUseId` for
-// Claude Code, measured on the box's own transport, and none for OpenCode,
-// whose `_meta` carries no id of the call.
-//
-// ONE RULE FOR EVERY HARNESS A BOX RUNS, rather than a key each harness type
-// states: the profile is the one place the key and its measurement live, so a
-// harness whose profile is taught one is read by it here with nothing else to
-// change. THE BUILT-IN PROFILE, NEVER AN ENTRY'S: an entry's `overrides` of the
-// key reach its runs on the engine host, which read the entry's own profile,
-// while a box's runner is the harness's, shared by every entry that launches
-// it; a key an entry got wrong costs its box's calls their ids, each read by
-// its place as an older build's are.
+// CallIDMeta is the `_meta` key this runner's harness sends each call's own id
+// under, by which the bridge serving its box records each call
+// ([sandbox.CallIdentifier]): the key the harness's built-in profile reads
+// (harnessprofile's Requests.CallIDMeta) — `claudecode/toolUseId` for Claude
+// Code, none for OpenCode, whose `_meta` carries no call id. The profile is the
+// one place the key lives, so a harness taught one there is read here unchanged.
+// Never an entry's `overrides`: those reach its runs on the engine host, while
+// a box's runner is the harness's, shared by every entry; a wrong entry key
+// would cost its box's calls their ids, each then read by its place as an
+// older build's are.
 func (r *Runner) CallIDMeta() string { return callIDKeys()[r.harness.Name()] }
 
 // callIDKeys is the `_meta` key of each harness this build drives
@@ -559,13 +468,10 @@ func (r *Runner) noteInstruction() string {
 
 // Install prepares the box: the artefact directory every file of a run's is
 // written under ([Paths.WorkDir]), and the box's own bin directory first on
-// the run's PATH ([Paths.BinDir]).
-//
-// The harness itself is NOT installed here — it ships in the image, which is what
-// makes a coding box a template rather than a per-run build. Environment
-// provisioning (git auth, registry credentials, toolchains) is not the
-// runner's concern either: the manager applies the launch's setup steps after
-// this returns.
+// the run's PATH ([Paths.BinDir]). The harness ships in the image, which makes
+// a coding box a template rather than a per-run build, and provisioning (git
+// auth, registry credentials, toolchains) is the launch's setup steps, which
+// the manager applies after this returns.
 func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 	paths := PathsFor(box)
 	if _, err := box.Exec(ctx, "mkdir -p "+sandbox.ShellQuote(paths.BinDir()), sandbox.ExecOptions{}); err != nil {
@@ -574,52 +480,18 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 	return nil
 }
 
-// ClearArtifacts removes the previous run's markers before a reuse run.
-//
-// A reused box still carries the prior run's done marker, result and
-// findings. Without clearing them the completion poll fires immediately on the
-// stale marker and Collect reads the old result. Its brief, system text,
-// settings and configuration go too, its MCP configuration ([Paths.MCPConfig])
-// among them, since a run's instructions are its own (a
-// previous job's hooks name a bridge session that job's end closed). (Whatever
-// mode a previous run left on one, the file this run writes has the box's
-// own: a box write replaces a file whole ([sandbox.Sandbox.WriteFile]).)
-// OpenCode's values ([Paths.OpenCodeValues]) and its notes plugin
-// ([Paths.OpenCodeSteerPlugin]) are DIRECTORIES, removed whole: a run writes
-// one file per value, so one with fewer values than the last would otherwise
-// keep the last one's beside its own, and a run wired to no notes would
-// otherwise leave a plugin no configuration names. The commit attribution
-// ([Paths.CommitAttribution]) is a directory too, removed whole: a run that
-// credits nothing must leave no hook, and one that names another run must not
-// credit the last one. THE CHECKOUT IS LEFT INTACT — that disk state is the
-// continued context, and it is the whole reason to reuse a box.
-//
-// SO EVERY FILE A RUN STARTS WITH IS NEW TO ITS BOX: a container mounted across a VM
-// keeps its entry for a file replaced from the host side for about a second, and a
-// harness opening it then finds nothing; a name the box removed is looked up anew.
-//
-// AND THE END PROTOCOL'S RECORDS: the pid the previous run's script published
-// ([Paths.JobScript]) — a request read through it would go to a process that
-// is not this run's — and the record of how that job was ended
-// ([Paths.JobEnded]), which this run's collection would otherwise read as its
-// own; each with the file it was written beside, which a script killed before
-// its move leaves.
-//
-// AND THE SESSION'S PIECES: the previous run's record of its session, its
-// capture and a carried archive it left — each this run's to write again or
-// to have none of, so a run that packs nothing is never collected with the
-// last run's capture as its own — and the staging directory a script that was
-// killed part way left; and EVERY SAVE of the previous job's session, with its
-// staging directory, whichever taker packed it ([Paths.SessionSave]), so none
-// a take never removed waits in the box for its life. And the wiring a run that
-// continued a session was handed for a session of its own ([Paths.MCPConfigFresh],
-// [Paths.OpenCodeValuesFresh]), which its script removes before its harness
-// starts and one killed before it could leaves behind: this run writes its own
-// where it has one, and none is left beside a run that has none.
-// NOT THE HARNESS'S OWN SESSION STORE, which is the session
-// a run in this box continues, nor the digests of the archives that store's
-// copy holds ([Paths.SessionDigests]), which describe it for as long as it is
-// there.
+// ClearArtifacts removes what a previous run left in a reused box, all but the
+// checkout, which is the continued context and the reason to reuse a box.
+// Left, a stale done marker fires the completion poll at once and Collect reads
+// the old result; a previous job's hooks name a bridge session its end closed;
+// its end-protocol records ([Paths.JobScript], [Paths.JobEnded]) would aim an
+// end request at another process or read as this run's own; its session record,
+// capture, saves and staging would be collected as this run's or wait in the box
+// for its life; its fresh-session wiring ([Paths.MCPConfigFresh]) would sit
+// beside a run that has none. Directories go whole, so no stale value, plugin or
+// commit hook survives, and every file a run starts with is new to its box: across
+// a VM mount, a harness opening a host-replaced file finds nothing for ~1 s.
+// Never the session store a run continues, nor its [Paths.SessionDigests].
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.harness.Output(p)
@@ -635,24 +507,12 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	if out.Stdout != p.Result() {
 		files = append(files, out.Stdout)
 	}
-	// The directories alone are removed recursively; every other target is a
-	// file, removed as it always was. Separate statements rather than one
-	// joined by `&&`, so a file that will not go never keeps a directory.
-	//
-	// AND EVERY SAVE'S FILES, whoever took them ([Paths.SessionSave]): each is
-	// named by its taker and its own save, so the clear cannot list them — the
-	// taker of a box's last save may be a process that is gone — and removes
-	// what matches instead, the glob outside the quotes. Left, a save its take
-	// never removed — its node stopped between its pack and its take — would
-	// wait in the box for as long as the box lives.
-	//
-	// AND EVERY PACK ON DEMAND'S STAGING DIRECTORY, each named for its pack
-	// alone ([Paths.SessionPackStaging]), so the clear cannot list them and
-	// removes what matches instead, the glob outside the quotes: one a pack
-	// cut short left, its node stopped as it packed, would otherwise stay in
-	// the box for its life — as would the archive every such pack keeps
-	// beside it for its read ([Paths.SessionPackHeld]), where that read was
-	// cut short before it removed it.
+	// Only directories are removed recursively, in separate statements rather
+	// than joined by `&&`, so a file that will not go never keeps a directory.
+	// Saves ([Paths.SessionSave]) and on-demand pack staging with its held
+	// archive ([Paths.SessionPackStaging]) are named per taker or per pack, so
+	// they cannot be listed and are matched by a glob outside the quotes: one
+	// whose node stopped part way would otherwise stay for the box's life.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
 		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(),
 			p.CommitAttribution(), p.SessionStaging(), p.ClaudeSkillsPlugin(),
@@ -676,23 +536,19 @@ func shellQuoteAll(paths []string) string {
 
 // Start launches the harness detached and returns its handle.
 //
-// The job runs UNCAPPED: nothing force-stops it on a wall-clock timer, so a
-// legitimately long run is free to finish. On a clean exit the shell writes the
-// exit code into both the exit-code file and the done marker — non-empty, for
-// the reason on [Paths.Done].
-//
-// Its stdin is closed — or, for a harness that reads its brief there, the brief's
-// file, which ends: a headless agent must never block waiting for input, and
-// one that does would hang forever with no timer to stop it.
+// The job runs uncapped: no wall-clock timer stops it, so a long run may
+// finish. On a clean exit the shell writes the exit code into the exit-code
+// file and the done marker (non-empty, for the reason on [Paths.Done]). Its
+// stdin is closed, or is the brief's file, which ends: with no timer, a
+// headless agent blocked on input would hang forever.
 func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest) (sandbox.RunHandle, error) {
 	if c, ok := r.harness.(resumer); req.Resume != "" && (!ok || !c.Resumes()) {
 		return sandbox.RunHandle{}, fmt.Errorf("executor: %s cannot continue an earlier "+
 			"session, and this run asks it to", r.harness.Name())
 	}
-	// A SESSION ID NAMES FILES IN THE BOX — the transcript a run resumes and
-	// restores, the archive it packs — and it was read back from a box a run's
-	// own agent could write, so one that is no id a harness mints is refused
-	// rather than handed to the run's script as a path.
+	// A session id names files in the box and was read back from a box a run's
+	// agent could write, so one that is no id a harness mints is refused rather
+	// than handed to the run's script as a path.
 	if req.Resume != "" && !sandbox.ValidSessionID(req.Resume) {
 		return sandbox.RunHandle{}, fmt.Errorf("executor: the session this run continues, %q, is "+
 			"not a session id a harness names", req.Resume)
@@ -716,11 +572,9 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 			"handed a second wiring for one, which only a run that continues a session is handed")
 	}
 	paths := PathsFor(box)
-	// WHAT THE SESSION HAD SPENT, read before the clear removes it: the
-	// result the job before this one left in the box, where this run
-	// continues its session and its harness's result may state the session's
-	// spend ([sessionTotals]). Read where the job before left it — the box
-	// a continued session lives in is the box that job ran in.
+	// What the session had spent ([sessionTotals]), read before the clear
+	// removes it, from the box a continued session lives in: the one its
+	// previous job ran in.
 	base, err := r.baseResult(ctx, box, paths, req)
 	if err != nil {
 		return sandbox.RunHandle{}, err
@@ -736,38 +590,31 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 			return sandbox.RunHandle{}, fmt.Errorf("executor: keeping the session's spend so far: %w", err)
 		}
 	}
-	// THE SESSION CARRIED FROM ANOTHER BOX, written after the clear — which
-	// removes the previous run's carried archive with its capture — and
-	// STREAMED, never held here: an archive grows with its session, and a
-	// node restoring many seats' sessions at once would hold every one whole.
-	// The run's own script restores it, or leaves a box that already holds
-	// the session as it is.
+	// The carried session, written after the clear (which removes a previous
+	// carried archive) and streamed, never held: an archive grows with its
+	// session, and a node restoring many seats' sessions would hold each whole.
+	// The run's script restores it, or leaves a box that holds it as it is.
 	if c := req.Carried; c != nil {
 		if err = box.WriteStream(ctx, paths.SessionCarried(), c.Body); err != nil {
 			return sandbox.RunHandle{}, fmt.Errorf("executor: writing the session carried "+
 				"into the box: %w", err)
 		}
 	}
-	// THE SESSION THE RUN WORKS IN, named before the harness starts: the one it
-	// continues, or a new one minted for it — and, for a run that continues
-	// one, the new one it starts instead where its box turns out to hold the
-	// session neither way.
+	// The session the run works in, named before the harness starts
+	// ([Harness.Session]).
 	session := r.harness.Session(req)
-	// FINAL BEFORE THE CONFIG IS WRITTEN, which is where a harness writes the
-	// system text from — all but the instruction about notes, which a harness
-	// that reads them adds itself, where a note can reach its run
+	// Final before the config is written, which is where a harness writes the
+	// system text from; the notes instruction is the harness's to add
 	// ([noteReader]).
 	req.System = finalSystem(req.System, paths, req.ReportedRepos)
-	// AND THE SERVERS AS THIS BOX DIALS THEM, for the same reason: their
-	// URLs, the tool bridge's included, are written in the engine host's
-	// network, and a loopback one reaches nothing from inside a container
-	// ([sandbox.EngineAddress]). Here, because every run reaches its harness's
-	// config through this one call, whichever caller launched it.
+	// And the servers as this box dials them: their URLs, the tool bridge's
+	// included, are in the engine host's network, and a loopback one reaches
+	// nothing from inside a container ([sandbox.EngineAddress]). Here, because
+	// every run reaches its harness's config through this one call.
 	req.MCPServers = sandbox.EngineServers(box, req.MCPServers)
-	// The run's notes route too: it is the same bridge under a path of its
-	// own, and a harness that polls it by URL rather than through its MCP server
-	// (OpenCode's plugin, [OpenCode.WriteConfig]) dials it from inside the
-	// box as well. A copy, since req is this call's own.
+	// The notes route too, which a harness may poll by URL from inside the box
+	// (OpenCode's plugin, [OpenCode.WriteConfig]). A copy, as req is this
+	// call's own.
 	if req.Steer.Set() {
 		req.Steer.URL = sandbox.EngineAddress(box, req.Steer.URL)
 	}
@@ -823,16 +670,10 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		}
 	}
 
-	// A LOGIN SHELL, and the -l is load-bearing: a harness is commonly
-	// installed through nvm, asdf or a similar version manager, whose PATH
-	// entries exist only in a profile a login shell sources. A plain `sh -c`
-	// finds no harness at all in exactly the images operators build.
-	//
-	// It also means the box's PATH inside the wrapper is the PROFILE's, not
-	// the environment the engine handed the process, which is why the box's
-	// bin directory is prepended INSIDE the script ([withBoxBin]) rather
-	// than exported around it: an assignment made outside would be replaced
-	// by the profile before the agent ever ran.
+	// A login shell, because a harness installed through nvm, asdf or similar
+	// is on PATH only after a profile a login shell sources. So PATH inside is
+	// the profile's, which is why the box's bin directory is prepended inside
+	// the script ([withBoxBin]): an export around it would be replaced.
 	pid, err := box.StartBackground(ctx, "sh -lc "+sandbox.ShellQuote(script), sandbox.ExecOptions{Env: req.Env})
 	if err != nil {
 		return sandbox.RunHandle{}, fmt.Errorf("executor: starting %s: %w", r.harness.Name(), err)
@@ -878,23 +719,14 @@ func (r *Runner) refuseCarried(req sandbox.RunRequest) error {
 // continues its session on a harness whose result may state the session's spend
 // ([sessionTotals]), and "" for every other run.
 //
-// A RESULT THE BOX COULD NOT GIVE BACK IS NO BASE, and the run still starts: a
-// continued session is the work the person was waiting for, and its spend is
-// then the one its harness states, logged so that an overcharge has a cause on
-// record. A read that failed outright fails the start, as every other read
-// of Start's does, for the launch to try again.
-//
-// NONE IS EXPECTED of a box a session was carried into
-// ([sandbox.RunRequest.Carried]) that holds no result: the job before ran in
-// the box the session was packed in, and a box restores a carried session only
-// on a release that states each run's own spend ([claudeCarryFloor]), which no
-// base is taken off. Logged as an overcharge, every carried session's first run
-// in a new box would be one that was never charged twice.
-//
-// A JOB BEFORE THAT STOPPED BEFORE ITS RESULT states no totals and was charged
-// nothing, so the base it kept is still what the session had been charged for:
-// carried forward, the next result is charged the stopped job's calls with its
-// own. A stopped last job's calls are charged by no later result.
+// One the box cannot give back is no base: the run still starts (it is the
+// work a person waits for), charged what its harness states and logged so an
+// overcharge has a cause on record. A read that failed outright fails the
+// start, for the launch to retry. A box a session was carried into
+// ([sandbox.RunRequest.Carried]) is expected to hold none, as carrying needs a
+// release that states each run's own spend ([claudeCarryFloor]). A job before
+// that stopped before its result was charged nothing, so the base it kept is
+// carried forward and the next result is charged its calls too.
 func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Paths, req sandbox.RunRequest) (string, error) {
 	if _, totals := r.harness.(sessionTotals); !totals || req.Resume == "" {
 		return "", nil
@@ -942,19 +774,14 @@ func (r *Runner) statesTotalsOf(raw, session string) bool {
 	return sandbox.ValidSessionID(got) && got == session
 }
 
-// ownSpend is result charged what THIS run spent ([sessionTotals],
-// [runSpender]): the spend the run's own stream stated, where it stated any;
-// else, for a run that continued a session on a harness that restores the
-// session's totals, the result less what the session had spent when the run
-// took it up ([Paths.BaseResult]); else the result as its harness stated it, which
-// is the run's own.
-//
-// ONLY A RUN THAT DID CONTINUE ITS SESSION took up its totals, as its script
-// recorded ([sessionRecord]): one asked to continue a session that its box
-// neither held nor could restore started a new one, whose totals begin at the
-// run, and less the base it kept it would be charged below nothing. So would a
-// run whose harness stopped before its result (a stalled or killed relaunch),
-// which states no totals at all.
+// ownSpend is result charged what this run spent ([sessionTotals],
+// [runSpender]): the spend its own stream stated, where it stated any; else,
+// for a run that continued a session on a harness that restores its totals,
+// the result less the base kept when the run took it up ([Paths.BaseResult]);
+// else the result as stated, which is the run's own. Only a run that did
+// continue its session, as its script recorded ([sessionRecord]), and whose
+// result states that session's totals has the base taken off: one that started
+// a new session, or stopped before its result, would be charged below nothing.
 func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	result sandbox.Result, streamed *runSpend, rec sessionRecord, stated string) (sandbox.Result, error) {
 
@@ -977,9 +804,8 @@ func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 	if !totals.TotalsRestored(rec.release) {
 		return result, nil
 	}
-	// ONLY A RESULT STATING THE BASE'S OWN SESSION'S TOTALS (stated, the
-	// session its harness's result names) has them taken off: a run that
-	// stopped before its result states none, and would be charged below nothing.
+	// Only a result naming the base's own session (stated) has them taken off:
+	// one that stopped before its result states none.
 	base := r.harness.Parse(raw)
 	if !sandbox.ValidSessionID(stated) || stated != base.SessionID {
 		return result, nil
@@ -990,16 +816,12 @@ func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 // wrapperScript is the shell line a job runs under: the harness with its stdout
 // and stderr redirected, then its result, its exit code and its done marker.
 //
-// THE EXIT STATUS IS THE HARNESS'S OWN. It is read into code before anything else
-// runs, so the result line a streaming harness's wrapper copies out afterwards
-// cannot replace it — and it is copied after the harness EXITS rather than piped
-// beside it, because a pipe's status is its last command's under a plain
-// `sh`, which has no pipefail to say otherwise.
-//
-// hooks is the directory the run's git takes its hooks from — the run's
-// commit attribution ([attributionExports]) — or "" for a run that credits
-// nothing. A pin whose value no assignment can carry
-// ([envfile.FormatAssignment]) refuses the run: its job is never started.
+// The exit status is the harness's own: read into code before anything else
+// runs, with the result line copied after the harness exits rather than piped
+// beside it, since a plain `sh` has no pipefail. hooks is the directory the
+// run's git takes its hooks from ([attributionExports]), or "" for a run that
+// credits nothing. A pin no assignment can carry ([envfile.FormatAssignment])
+// refuses the run before its job starts.
 func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks string) (string, error) {
 	stdin := "/dev/null"
 	if out.BriefOnStdin {
@@ -1011,11 +833,9 @@ func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks s
 	if len(out.Unset) > 0 {
 		fmt.Fprintf(&b, "unset %s; ", strings.Join(out.Unset, " "))
 	}
-	// AND THE PINS AFTER THE UNSETS, for their reason: exported here, every
-	// value an earlier source gave the same name is replaced. Each is written
-	// as envfile writes an assignment, the one form a dotenv reader and
-	// `source` agree on, so a value with a quote or a newline in it is refused
-	// rather than written in a form one of them would misread.
+	// And the pins after the unsets, so each replaces what an earlier source
+	// gave it, written as envfile writes an assignment, the one form a dotenv
+	// reader and `source` agree on: a value either would misread is refused.
 	for _, pin := range pins {
 		line, err := envfile.FormatAssignment(pin.Name, pin.Value)
 		if err != nil {
@@ -1044,15 +864,11 @@ func wrapperScript(inner string, out Output, pins []Pinned, paths Paths, hooks s
 	return b.String(), nil
 }
 
-// finalSystem appends the report instruction, addressed at THIS box, to the
-// run's standing instructions — saying which of its pushes the engine reports
-// for it (native, the repositories on Gitlet it may push
-// to).
-//
-// Composed here rather than at the launch because the findings path is a
-// property of the box the run lands in, which the caller does not know when it
-// builds the request. On the system side, because it is not part of the task:
-// it is how every run works, whatever it was asked.
+// finalSystem appends the report instruction, addressed at this box, to the
+// run's standing instructions, naming which pushes the engine reports for it
+// (native: the Gitlet repositories it may push to). Composed here because the
+// findings path belongs to the box the run lands in, unknown when the request
+// is built; on the system side because it is how every run works, not its task.
 func finalSystem(system string, paths Paths, native []string) string {
 	parts := make([]string, 0, 2)
 	if system = strings.TrimSpace(system); system != "" {
@@ -1062,16 +878,12 @@ func finalSystem(system string, paths Paths, native []string) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// withNoteInstruction is a run's final system text with its harness's instruction
-// about notes after it ([noteReader]) — what a harness that reads notes hands a run
-// wired to them, as the last of its standing instructions.
-//
-// THE HARNESS'S TO ADD, AND ONLY WHERE A NOTE CAN ARRIVE: told to a run whose harness
-// takes none, a run wired to none, or a run started without what reads them, it
-// would describe a channel that never opens. Which of those a run is can be
-// known only where it starts — a Claude Code run's box decides from its harness's
-// release ([claudeNotesGate]) — so the runner, which composes everything else,
-// leaves this to the harness.
+// withNoteInstruction is a run's final system text followed by its harness's
+// instruction about notes ([noteReader]), the last of its standing
+// instructions. The harness adds it, and only where a note can arrive, or it
+// would describe a channel that never opens: whether one can is known only
+// where the run starts, as a Claude Code box decides from its harness's
+// release ([claudeNotesGate]).
 func withNoteInstruction(system, instruction string) string {
 	if system == "" {
 		return instruction
@@ -1086,45 +898,18 @@ func withBoxBin(cmd string, paths Paths) string {
 	return "PATH=" + sandbox.ShellQuote(paths.BinDir()) + `:"$PATH" ` + cmd
 }
 
-// Poll reports what is known of the detached job ([sandbox.JobState]).
-//
-// TWO SIGNALS, because a finished or dead job must not be able to wedge the
-// run — and there is no run-time TTL to fall back on, since the waiter keeps
-// the box alive for exactly as long as the job needs:
-//
-//  1. THE DONE MARKER. The wrapper returned, cleanly or not, and wrote its
-//     exit code: the job ENDED.
-//  2. THE BOX'S ACCOUNT OF THE JOB ([sandbox.Sandbox.Job]). The wrapper is
-//     gone yet no marker was written: the whole process group died
-//     abnormally, before the tail echo ran. Without this the run hangs
-//     forever. The box answers it, because only the backend knows whether its
-//     handle is a pid in the box's own namespace or a host pid the kernel may
-//     since have handed to a stranger — and whether the job went while an
-//     engine watched it, so that what it left is its result, which Collect
-//     surfaces with the failure (ENDED), or went with the engine that last saw
-//     it running, so that what it left is not (LOST). The wrapper is the right
-//     process to ask about: while the harness runs the wrapper is alive,
-//     and once it exits it has already written the done marker, which is
-//     checked first.
-//
-// THE MARKER IS READ AGAIN before a job is answered lost: a wrapper that wrote
-// it and exited between the first read and the box's answer finished, and is
-// collected like any job that did.
-//
-// There was a third — a terminal event read off the end of the stream, for an
-// agent that finished its work and did not exit, which was OpenCode 1.x. No
-// harness this build drives does that: Claude Code exits, and OpenCode 2 exits
-// when its session does. A signal no runner gives is a branch nothing tests.
-//
-// A READ THAT FAILS NEVER SKIPS THE LIVENESS PROBE. It used to return before
-// it: a read the box refused made a dead job poll as still running for good,
-// with its keepalive refreshed every tick and its seat busy until a person
-// stopped it. The read's error is still reported — beside a "running" — once
-// the probe has had its say.
-//
-// A still-alive wrapper reports RUNNING, whether it is working or hung: a
-// genuinely hung-but-alive process is indistinguishable from a working one
-// without a timer, and imposing one is exactly what this design refuses.
+// Poll reports what is known of the detached job ([sandbox.JobState]) from two
+// signals, since there is no run-time TTL and a finished or dead job must never
+// wedge the run: the done marker, which the wrapper writes however the harness
+// exits (ENDED); and, with no marker, the box's account of the wrapper
+// ([sandbox.Sandbox.Job]), which only the backend can give — whether its handle
+// is a pid in the box's namespace or a reusable host pid, and whether the job
+// went while an engine watched it (ENDED) or with the engine that last saw it
+// (LOST). The marker is read again before a job is answered lost, in case the
+// wrapper wrote it meanwhile. A failed read never skips the liveness probe, or
+// a dead job would poll as running for good; its error is reported beside
+// "running". A live wrapper is RUNNING, working or hung: telling those apart
+// needs a timer, which this design refuses.
 func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.JobState, error) {
 	paths := PathsFor(box)
 	marker, readErr := box.ReadFile(ctx, paths.Done())
@@ -1151,32 +936,17 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 	return state, nil
 }
 
-// Collect reads the finished job's result out of the box.
-//
-// THE STREAMS ARE READ AS STREAMS. The event stream is decoded a line at a
-// time in bounded memory ([eachLine]), and the error stream is read from its
-// end ([Runner.failureBound]); neither is refused for its size, because a run
-// is never lost to the size of its own log. The pieces meant to be read WHOLE
-// — the report, the question, the result line, the exit code — are, and one
-// past [sandbox.MaxFileBytes] degrades ONLY ITSELF: it is described by its size,
-// the run reads as not succeeded with that as the reason, and the run's
-// tokens, refs and transcript are still collected, charged and published. A
-// refusal used to fail the whole collection, which settled the run as
-// unreachable and took its charge and its record with it. So does ANY piece,
-// a stream included, whose path the box refuses as not a regular file
-// ([sandbox.ErrNotRegularFile]): what a path names is the box's own doing, and
-// retrying the collection would only read it again.
-//
-// A READ THAT FAILS is an error, as it always was: that is a box that could
-// not be read back, not a piece that was too large or was not a file.
-//
-// EVERYTHING IS REDACTED WHOLE before anything is bounded: every file here
-// came out of a box whose environment holds the seat's credentials, and a
-// secret straddling a cut survives as a fragment the pattern no longer
-// recognises. The report, the failure detail and the transcript all leave
-// here WHOLE: the coordinator holds each to the record's bound — condensing
-// the two a model acts on, keeping the transcript's start and end in whole
-// lines — in one place ([sandbox.MaxRunTextBytes]).
+// Collect reads the finished job's result out of the box. The event stream is
+// decoded a line at a time ([eachLine]) and the error stream read from its end
+// ([Runner.failureBound]), so neither is refused for its size. A piece read
+// whole (report, question, result line, exit code) past [sandbox.MaxFileBytes],
+// or any piece whose path is not a regular file ([sandbox.ErrNotRegularFile],
+// which a retry would read again), degrades only itself: described, the run
+// not a success, its tokens, refs and transcript still collected and charged.
+// A read that fails is an error: the box could not be read back. Everything is
+// redacted whole before anything is bounded, since a secret cut in two
+// survives as fragments; report, failure and transcript leave whole, bounded
+// by the coordinator in one place ([sandbox.MaxRunTextBytes]).
 func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.Result, error) {
 	paths := PathsFor(box)
 	out := r.harness.Output(paths)
@@ -1204,22 +974,12 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		raw, refusal, err := readWhole(ctx, box, out.Result, "the result its harness printed")
 		if err == nil && out.Events && out.Result != out.Stdout && last.said() &&
 			(refusal != "" || strings.TrimSpace(raw) == "") {
-			// THE STREAM'S LAST LINE IS WHAT THE RESULT FILE HOLDS: the
-			// wrapper copies it there once the harness has exited. So where the
-			// file has nothing to give — a run whose process group died (an
-			// OOM kill, a host restart) left it empty, and Parse("") called
-			// a run that streamed a whole session "a run that produced no
-			// output"; or the box refused it, and the run's spend went
-			// uncharged — the line is read in its place: a result message
-			// the harness did print, or whatever it was saying when it stopped,
-			// which Parse names for what it is. A refused file is still said:
-			// the run did not report as it was asked to.
-			//
-			// ONLY WHERE THE STREAM SAID SOMETHING: the wrapper writes the
-			// file whatever the harness did, so a harness that exited at once leaves
-			// it empty beside an empty stream, and there is nothing to read
-			// in its place — nor anything to say about it beside the run's
-			// real failure.
+			// The result file holds the stream's last line, copied by the
+			// wrapper after the harness exits. Where the file is empty (the
+			// process group died) or refused, that line is read in its place,
+			// so a streamed session is not "no output" and its spend is
+			// charged; a refused file is still reported. Only where the stream
+			// said something: a harness that exited at once leaves both empty.
 			why := "was empty"
 			if refusal != "" {
 				refused = append(refused, refusal)
@@ -1243,25 +1003,22 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			result = parsed
 		}
 	}
-	// WHAT THE SESSION'S NEWEST REQUEST CARRIED, off the stream, set once the
-	// result is whichever of the stream's and the result file's it is: a
-	// figure set inside the block above would be dropped with the stream's
-	// result wherever the result file replaces it, as Claude Code's does.
+	// What the session's newest request carried, off the stream, set once the
+	// result is final: set above, it would be dropped wherever the result file
+	// replaces the stream's result, as Claude Code's does.
 	if out.Events {
 		result.LastRequest = r.lastRequest(ctx, request)
-		// AND THE LEAST WINDOW THE RUN REPORTED, set here for the same reason:
-		// a continuation of the copy is judged under it where it is less than
-		// the engine's own reading of the model's window.
+		// And the least window the run reported, here for the same reason: a
+		// continuation of the copy is judged under it where it is less than the
+		// engine's own reading of the model's window.
 		result.ReportedWindow = window
 	}
 
-	// WHICH SESSION THE RUN TOOK UP, as its script recorded before its harness
-	// started ([Paths.SessionRecord]): the session a harness that reported none
-	// ran in, whether it was the one the run was asked to continue, why it
-	// started anew where it did — a sentence, held to its bound here, where it
-	// enters the result ([sandbox.BoundFellBack]): the line is the box's, as
-	// long as the record — and the harness's release. A record the box refused
-	// is a piece the run did not report, as any other is.
+	// Which session the run took up, as its script recorded before its harness
+	// started ([Paths.SessionRecord]): its id, whether it continued, why it
+	// started anew (the box's sentence, bounded where it enters the result,
+	// [sandbox.BoundFellBack]), and the harness's release. A refused record is
+	// a piece the run did not report.
 	recorded, recordRefusal, err := readWhole(ctx, box, paths.SessionRecord(), "the record of the session its harness ran in")
 	if err != nil {
 		return sandbox.Result{}, err
@@ -1270,12 +1027,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		refused = append(refused, recordRefusal)
 	}
 	rec := parseSessionRecord(recorded)
-	// THE HARNESS'S OWN WORD for its session only where it is an id a harness
-	// mints ([sandbox.ValidSessionID]), the record's otherwise: what the harness
-	// printed is a file in the box as much as the record is, and the id rides
-	// the launch's record and is handed to a later run's script (the
-	// assistant's deep work resumes its run by it), so one that is no id is
-	// none, as the record's is.
+	// The harness's own session id only where it is one a harness mints
+	// ([sandbox.ValidSessionID]), else the record's: what it printed is a box
+	// file too, and the id is handed to a later run's script.
 	stated := result.SessionID
 	if !sandbox.ValidSessionID(result.SessionID) {
 		result.SessionID = rec.id
@@ -1294,10 +1048,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		return sandbox.Result{}, fmt.Errorf("executor: reading what the run itself spent: %w", err)
 	}
 
-	// The transcript is the observability surface for an agent that emits no
-	// telemetry of its own. The parser may have built one from streamed
-	// events; otherwise the error stream is it. Read once, reused below for
-	// the failure detail.
+	// The transcript is the observability surface of an agent with no
+	// telemetry: the parser's from streamed events, else the error stream,
+	// read once and reused below for the failure detail.
 	errTail, err := box.ReadTail(ctx, paths.Err(), r.failureBound+redactContext)
 	if refusal := notRegularPiece(err, paths.Err(), "the error stream"); refusal != "" {
 		refused = append(refused, refusal)
@@ -1333,10 +1086,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		return sandbox.Result{}, err
 	}
 
-	// WHETHER THE JOB WAS ENDED ON REQUEST, as its script recorded the moment
-	// its harness was over ([Paths.JobEnded]): a run ended so did not finish,
-	// whatever it wrote and however its harness exited — a harness that
-	// exits 0 on SIGTERM included — so it never reads as a success, and its
+	// Whether the job was ended on request, as its script recorded
+	// ([Paths.JobEnded]): such a run did not finish, whatever it wrote or exited
+	// with (a harness may exit 0 on SIGTERM), so it is never a success and its
 	// failure says so first. A word this build does not know is no end.
 	endedText, refusal, err := readWhole(ctx, box, paths.JobEnded(), "the record of how its job was ended")
 	if err != nil {
@@ -1354,12 +1106,10 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// whose status the box never recorded ([sandbox.Result.HarnessCutOff]).
 	result.HarnessCutOff = code != "0"
 
-	// THE FINDINGS FILE IS THE RESULT CARRIER OF RECORD. The system text asks
-	// the agent to write its report there before stopping, and it survives both
-	// a run whose process group died before its streamed final message was
-	// written and a tool-only run that parses to no text — so it wins for the
-	// result text, and its presence is the success signal unless the process
-	// crashed.
+	// The findings file is the result carrier of record: the agent is asked to
+	// write its report there, and it survives a process group that died before
+	// the final message and a tool-only run that parses to no text. So it wins
+	// for the text, and its presence means success unless the process crashed.
 	findingsText, refusal, err := readWhole(ctx, box, paths.Findings(), "the report the harness wrote")
 	if err != nil {
 		return sandbox.Result{}, err
@@ -1376,12 +1126,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	errStream := ""
 	switch {
 	case findings != "":
-		// THE REFS ARE THE REPORT'S BEFORE THE MESSAGE'S, read by one rule
-		// over both ([deliveredRefs]) — the message being what the harness's
-		// Parse already read its own refs from, by the same rule — so a
-		// report that names its refs is never outranked by a pull request
-		// the message only mentions, nor a message that names its refs by
-		// one the report only mentions.
+		// The report's refs before the message's, by one rule over both
+		// ([deliveredRefs]), so neither's named refs are outranked by a pull
+		// request the other only mentions.
 		result.DeliveredRefs = deliveredRefs(findings, result.Text)
 		result.Text = findings
 		if !crashed {
@@ -1390,13 +1137,11 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		}
 		said = append(said, result.Error)
 	case !result.Success && strings.TrimSpace(result.Text) == "":
-		// No report AND nothing parsed: the job produced nothing. Surface
-		// the exit status, the harness's own error and the stderr — ALL THREE,
-		// in that order — so the completion reports a real failure rather
-		// than a silent stall. The harness's error used to be REPLACED by the
-		// stderr whenever the stderr held anything at all, so a run that
-		// hit its turn cap and printed one warning reported the warning.
-		// A run ended on request says its status in saying so (below).
+		// Nothing reported or parsed: surface the exit status, the harness's
+		// error and the stderr, all three in that order, so the completion is
+		// a real failure, not a silent stall, and a stray stderr warning never
+		// displaces the harness's error. A run ended on request says its status
+		// in saying so (below).
 		if crashed && result.JobEnd == "" {
 			said = append(said, "the harness exited with status "+code)
 		}
@@ -1478,16 +1223,14 @@ func endedSentence(ended sandbox.JobEnd, code string) string {
 	return opening + "its harness was told to stop and exited " + code
 }
 
-// AskEnd asks the job handle names to end ([sandbox.JobEnder]): the end
-// protocol its script recorded in box ([Paths.JobScript]) read, and its script
-// sent the request through the box ([sandbox.Sandbox.EndJob]).
-//
-// NOTHING IS ASKED OF A SCRIPT THAT RECORDED NO PROTOCOL THIS BUILD SPEAKS —
-// an older build's script, one that has not reached its first line, a record
-// that is not `1 <pid>` with a pid above 1 — and the answer says so
-// ([sandbox.EndUnheard]): the read kills such a job instead. A pid the box
-// says is no process of the job is [sandbox.EndGone], for the same end. The
-// record is the job's own file, read whole and parsed, never handed on as text.
+// AskEnd asks the job handle names to end ([sandbox.JobEnder]), sending the
+// request through the box ([sandbox.Sandbox.EndJob]) to the script whose end
+// protocol it recorded ([Paths.JobScript]). A script that recorded no protocol
+// this build speaks (an older build's, one not yet at its first line, a record
+// not `1 <pid>` with a pid above 1) is asked nothing and answered
+// [sandbox.EndUnheard], and a pid the box says is no process of the job
+// [sandbox.EndGone]: the read kills such a job instead. The record is parsed,
+// never handed on as text.
 func (r *Runner) AskEnd(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.EndAsk, error) {
 	paths := PathsFor(box)
 	recorded, refusal, err := readWhole(ctx, box, paths.JobScript(), "the end protocol its script recorded")
@@ -1527,26 +1270,17 @@ func parseJobScript(recorded string) (int, bool) {
 	return pid, true
 }
 
-// failureDetail composes a run's failure: the engine's own sentences in the
-// order given — a piece it could not read, the exit status, the harness's error —
-// then as much of the error stream's END as is left of bound — the runner's
-// [Runner.failureBound], [sandbox.MaxFailureBytes] — after them, with what was
-// not shown of it said by size. unread is how much of the stream's start the
-// read itself left.
-//
-// HELD TO THE BOUND AS A WHOLE, AND EXACTLY, because the whole failure is what
-// the coordinator condenses, and the compactor refuses one past what it reads
-// before any model is asked. The sentences are taken as they are — they are
-// what nobody can find anywhere else — and only the error stream gives way.
-//
-// MEASURED AS IT LEAVES, REDACTED. A marker can be longer than the credential
-// it replaces, and a credential's name closing one piece and its value opening
-// the next — across the `:\n` between them — is one match neither piece
-// holds; measured piece by piece, the failure grew past its bound when the
-// whole was redacted. So the composition is redacted whole and measured, and
-// what is over comes off the stream's share. The room the stream is given
-// also holds the mark [sandbox.KeepEnd] puts on a single line too long to keep
-// whole, which is not part of what it counts.
+// failureDetail composes a run's failure: the engine's own sentences in order
+// (an unreadable piece, the exit status, the harness's error), then as much of
+// the error stream's end as bound ([Runner.failureBound]) leaves, with what was
+// not shown said by size; unread is how much of the stream's start the read
+// left. The whole is held to bound exactly, since the compactor refuses a
+// failure past what it reads; only the stream gives way. Measured redacted, as
+// it leaves: a marker can outgrow its credential, and a name ending one piece
+// with its value opening the next (across the `:\n`) is one match neither
+// holds, so the whole is redacted and measured and any excess comes off the
+// stream's share, whose room also holds the mark [sandbox.KeepEnd] puts on a
+// line too long to keep whole.
 func failureDetail(sentences []string, errStream string, unread int64, bound int) string {
 	var parts []string
 	for _, s := range sentences {
@@ -1715,10 +1449,10 @@ func readWhole(ctx context.Context, box sandbox.Sandbox, path, what string) (str
 // not a regular file ([sandbox.ErrNotRegularFile]), or "" for any other
 // answer.
 //
-// A REFUSAL RATHER THAN AN ERROR, because what the path names is the box's
-// own doing and a retry reads it again: an error would have the collection
-// retried until the run was settled as lost, uncharged and unrecorded — for a
-// pipe the agent made where its report goes.
+// A refusal rather than an error, because what the path names is the box's
+// doing and a retry reads it again: an error would retry the collection until
+// the run settled as lost, uncharged and unrecorded, over a pipe the agent
+// made where its report goes.
 func notRegularPiece(err error, path, what string) string {
 	var notRegular *sandbox.NotRegularFileError
 	if !errors.As(err, &notRegular) {

@@ -25,9 +25,8 @@ func deliverySurface() turn.Surface {
 }
 
 // workTool builds a submit_work tool over a scripted record of the turn: what
-// was called, and who is waiting. Both are facts the model does not control,
-// which is the whole point — the account a phase gives of itself is exactly
-// what a phase can get wrong.
+// was called, and who is waiting: facts the model does not control, since the
+// account a phase gives of itself is what it can get wrong.
 func workTool(reply turn.Reply, calls ...ledger.Call) *structured.Tool[workPayload] {
 	return structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(reply,
@@ -46,9 +45,8 @@ func args(t *testing.T, blob string) map[string]any {
 
 func TestASubmissionCapturesThePhasesAnswer(t *testing.T) {
 	t.Parallel()
-	// The tool does not DO anything: the phase's answer IS the arguments it
-	// was called with, so the loop's ordinary tool machinery carries it out
-	// and nothing needs a side channel.
+	// The tool does nothing: the phase's answer IS its arguments, so the
+	// loop's ordinary tool machinery carries it and no side channel is needed.
 	tool := workTool(turn.ToolReply(""), ledger.Call{Name: "slack_post"})
 	if _, called := tool.Value(); called {
 		t.Fatal("a fresh tool reports a submission")
@@ -75,9 +73,8 @@ func TestASubmissionCapturesThePhasesAnswer(t *testing.T) {
 
 func TestAnInvalidSubmissionGoesBackToTheModel(t *testing.T) {
 	t.Parallel()
-	// It is the one tool failure a model can reliably fix, and refusing the
-	// turn over a malformed submission throws away everything the phase
-	// already did.
+	// The one tool failure a model can reliably fix; refusing the turn over
+	// it throws away everything the phase already did.
 	tool := workTool(turn.NoReply())
 	res, err := tool.Call(context.Background(), args(t, `{"outcome":"wat","summary":"s"}`))
 	if err != nil {
@@ -118,10 +115,9 @@ func TestTheLastSubmissionWins(t *testing.T) {
 
 func TestAnAbsentOutcomeTakesTheCommonCase(t *testing.T) {
 	t.Parallel()
-	// `delivered` is what every other field is written for, and `done` is
-	// the unremarkable review. Refusing the most predictable omission would
-	// throw away a round of real work — and the engine checks the delivery
-	// claim against the record either way.
+	// `delivered` and `done` are the expected defaults; refusing the most
+	// predictable omission would throw away a round of real work, and the
+	// engine checks the delivery claim against the record either way.
 	decode := decodeWork(turn.ToolReply(""),
 		func() []ledger.Call { return []ledger.Call{{Name: "slack_post"}} },
 		deliverySurface)
@@ -199,8 +195,7 @@ func TestBlockedNeedsEvidence(t *testing.T) {
 }
 
 // CHECKED INSIDE THE LOOP, where a wrong claim costs one bounced tool call the
-// model can fix — instead of a whole review round or a silently accepted
-// no-op.
+// model can fix, not a whole review round or a silently accepted no-op.
 func TestADeliveryClaimMustNameACallThatHappened(t *testing.T) {
 	t.Parallel()
 	called := []ledger.Call{{Name: "slack_post"}, {Name: "slack_history"}}
@@ -228,9 +223,8 @@ func TestADeliveryClaimMustNameACallThatHappened(t *testing.T) {
 // outward tool yet, and telling it to pick from an empty list is useless.
 //
 // HOW TO DELIVER, AND HOW TO FIND A TOOL ONLY WHERE ONE CAN BE FOUND: an
-// executor holds every tool it can reach, so its refusal says to call the tool
-// that delivers and names no discovery tool, which is on no executor's surface;
-// a phase that reaches its MCP tools by discovery is told how to find one.
+// executor holds every tool it can reach, so its refusal names no discovery
+// tool; a phase that reaches its MCP tools by discovery is told how to find one.
 //
 // Mutation: name the discovery pair whatever the surface, and the executor is
 // sent to two tools it does not hold.
@@ -261,15 +255,9 @@ func TestNothingDeliveredYetSaysSoRatherThanListingNothing(t *testing.T) {
 }
 
 // A REFUSAL ON THE TRACKER NAMES THE TRACKER'S OWN TOOLS, and claims a write
-// elsewhere only when there was one.
-//
-// The refusal used to say "a call that reached somewhere else does not answer
-// the person waiting … `list_mcp_server_tools` and `activate_tool` will find
-// it" to every turn waiting on a named surface. A seat woken by a founder's
-// comment, whose only calls were reads, was told both: that it had written
-// somewhere, and to find the tracker's tool through discovery — which lists
-// MCP servers' tools and never the tracker's. It found the one server it held
-// and posted in chat.
+// elsewhere only when there was one: discovery lists MCP servers' tools, never
+// the tracker's, so a read-only turn sent to discover the tracker's tool finds
+// a chat server and posts there.
 func TestARefusalOnTheTrackerNamesTheTrackersOwnTools(t *testing.T) {
 	t.Parallel()
 	s := turn.Surface{
@@ -303,10 +291,9 @@ func TestARefusalOnTheTrackerNamesTheTrackersOwnTools(t *testing.T) {
 		t.Errorf("the refusal does not say the turn's write landed elsewhere: %v", elsewhere)
 	}
 
-	// BOTH OPEN WITH THE ONE EXPORTED CLAUSE, which is what a scripted model
-	// recognises the refusal by: a copy of the sentence that drifted from
-	// this one never sees it, and answers the same claim until the rounds
-	// run out.
+	// BOTH OPEN WITH THE ONE EXPORTED CLAUSE, which a scripted model
+	// recognises the refusal by; a drifted copy never matches, and the model
+	// answers the same claim until the rounds run out.
 	for _, refused := range []error{err, elsewhere} {
 		if !strings.HasPrefix(refused.Error(), NotDeliveredOn("work")) {
 			t.Errorf("a refusal naming the surface does not open with %q: %v",
@@ -368,13 +355,11 @@ func TestACitationRefusalDoesNotCallAFailedPostAWriteElsewhere(t *testing.T) {
 }
 
 // A REFUSAL THAT FINDS NO DELIVERY SAYS WHAT THE TURN DID CALL. A turn that
-// asked a colleague or reacted, and then claimed the work delivered, was told
-// "no call in this turn has reached anybody", or that no tool acting outside
-// the engine had been called — false against its own successful call, and a
-// refusal a model can see is false is one it argues with. It is told what it
-// called and that none of it reached the person waiting, still opening with
-// the clause a scripted model recognises; a turn that only read is told what
-// it was told before.
+// asked a colleague or reacted, then claimed delivery, is told what it called
+// and that none of it reached the person waiting (still opening with the
+// clause a scripted model recognises), never that it called nothing: a
+// refusal a model can see is false is one it argues with. A turn that only
+// read keeps the plain refusal.
 //
 // Mutation: drop either acted case, and the colleague ask is told it reached
 // nobody or called nothing.
@@ -417,20 +402,12 @@ func TestANothingDeliveredRefusalSaysWhatTheTurnCalled(t *testing.T) {
 	}
 }
 
-// A NO_ACTION IS REFUSED AT SUBMISSION ONCE THE TURN ACTED. A turn nobody
-// asked for that asked a colleague, or posted, and then said nobody was asking
-// would leave what it did unreported; the run is told so while it can still
-// say what it did, naming the calls, as one bounced call rather than a round
-// relaunched by the engine's check. A read of the world, a failed call and no
-// call at all leave no_action open. A closed round's act counts as much as
-// this round's. And no_action alone is refused: the refusal tells the run to
-// report what the turn did as delivered or as blocked, so after any act both
-// stay open to it.
-//
-// LIVE ONLY: decodeWork, which the replay of a made submission decodes with,
-// accepts the same claim, since a no_action the run made before it acted is
-// collected as made and corrected by turn.Check. And on a turn somebody is
-// waiting on, the decline rule speaks first.
+// A NO_ACTION IS REFUSED AT SUBMISSION ONCE THE TURN ACTED (any round's act),
+// naming the calls, as one bounced call rather than a round the engine's check
+// relaunches; a read, a failed call or no call leave it open. Only no_action is
+// refused: delivered and blocked both stay open after an act. LIVE ONLY: the
+// replay's decodeWork accepts it (turn.Check corrects a made one), and on a
+// turn somebody waits on, the decline rule speaks first.
 //
 // Mutation: drop the check, and every refusal is accepted; move it into
 // decodeWork, and the replay refuses what the run had made; refuse any outcome
@@ -491,14 +468,12 @@ func TestANoActionIsRefusedAtSubmissionOnceTheTurnActed(t *testing.T) {
 	}
 }
 
-// A NO_ACTION REFUSED FOR A CALL THE ENGINE ONLY PRESUMES WROTE SAYS SO. A
-// turn nobody asked for that only searched through an MCP tool that no hint
-// marks as a read or as a write has its no_action refused, since the delivery
-// check counts that call whatever it did; told it "has already acted outside
-// the engine", a model reads the refusal as false against its own search, and
-// the outcome field it submitted under promised that a read changes nothing.
-// So the refusal names the call as one the engine cannot tell from a write. A
-// write its server marks as one is still refused as an act.
+// A NO_ACTION REFUSED FOR A CALL THE ENGINE ONLY PRESUMES WROTE SAYS SO: a
+// search through an MCP tool no hint marks as a read or a write is counted as
+// a write, and a model told it "has already acted" reads that as false (the
+// outcome field promised a read changes nothing), so the refusal names the
+// call as one the engine cannot tell from a write. A marked write is still
+// refused as an act.
 //
 // Mutation: refuse by turn.ActedWith again, and the search is told it acted.
 func TestANoActionAfterAnUnmarkedSearchIsRefusedSayingWhy(t *testing.T) {
@@ -535,10 +510,9 @@ func TestANoActionAfterAnUnmarkedSearchIsRefusedSayingWhy(t *testing.T) {
 	}
 }
 
-// A REFUSED NO_ACTION SAYS THE WHOLE ACCOUNT, BOUNDED AS THE CHECK'S IS: what
-// turn.ActedAccount says, each of its two lists five tools by name and then
-// how many more, since the refusal points the run at calls its own transcript
-// holds.
+// A REFUSED NO_ACTION SAYS THE WHOLE ACCOUNT, BOUNDED AS THE CHECK'S IS
+// (turn.ActedAccount): each of its two lists names five tools, then counts
+// the rest, since the run's own transcript holds them.
 //
 // Mutation: list either kind with words.And in turn.ActedAccount, and the
 // refusal names all seven of that kind.
@@ -565,9 +539,9 @@ func TestANoActionRefusalNamesFiveOfEachKindAndCountsTheRest(t *testing.T) {
 	}
 }
 
-// A colleague's ask is answered by the engine on the channel it opened, and an
-// unaddressed turn owes nobody a posted answer — so demanding a citation in
-// either case would loop a turn that did exactly the right thing.
+// The engine answers a colleague's ask on its own channel, and an unaddressed
+// turn owes nobody a posted answer, so demanding a citation in either case
+// would loop a turn that did exactly the right thing.
 func TestOnlyAToolAwaitedTurnMustCiteACall(t *testing.T) {
 	t.Parallel()
 	for _, reply := range []turn.Reply{turn.NoReply(), turn.EngineReply()} {
@@ -589,9 +563,8 @@ func mustErr(t *testing.T, decode func(map[string]any) (workPayload, error), blo
 
 func TestALoopBackNeedsSomethingToDoDifferently(t *testing.T) {
 	t.Parallel()
-	// A self_iterate with no correction sends the next round to do exactly
-	// what the last one did. The stall guard catches it eventually — but
-	// only after spending the rounds.
+	// A self_iterate with no correction repeats the last round; the stall
+	// guard catches it only after spending the rounds.
 	if _, err := decodeReview(args(t, `{"decision":"self_iterate"}`)); err == nil {
 		t.Error("a correction-free loop-back was accepted")
 	}
@@ -611,13 +584,10 @@ func TestALoopBackNeedsSomethingToDoDifferently(t *testing.T) {
 
 func TestASchemaShapedSubmissionDecodesIntoItsStruct(t *testing.T) {
 	t.Parallel()
-	// The schemas are hand-written so their DESCRIPTIONS can be real prose,
-	// which means the tags and the schema can drift. This is what says they
-	// have not: every property the schema publishes is a field the struct
-	// accepts. It can say so only because a submission's decode REFUSES a
-	// field its struct lacks — while the decode dropped one, a property
-	// published with no field behind it decoded cleanly here and was
-	// discarded from every real submission.
+	// The hand-written schemas can drift from the tags: every property the
+	// schema publishes must be a field the struct accepts. This holds only
+	// because the decode REFUSES a field its struct lacks; were it dropped, a
+	// property with no field behind it would decode cleanly here.
 	decodeAWork := decodeWork(turn.NoReply(), func() []ledger.Call { return nil }, deliverySurface)
 	for name, pair := range map[string]struct {
 		schema map[string]any
@@ -641,13 +611,8 @@ func TestASchemaShapedSubmissionDecodesIntoItsStruct(t *testing.T) {
 }
 
 // A SUBMISSION FIELD THE SCHEMA DOES NOT DECLARE GOES BACK TO THE MODEL,
-// named, rather than being dropped from what the phase decided.
-//
-// A reviewer's `complete_work` for `completed_work` was accepted as a
-// self_iterate that never told the next round what had already landed — the
-// field exists so that round adds to a post rather than firing it a second
-// time — and a work submission's `evidnce` as an answer saying nothing about
-// what it tried. Each an answer the model did not give.
+// named, rather than being dropped: a misspelt `completed_work` or `evidence`
+// dropped silently is an answer the model did not give.
 func TestASubmissionFieldTheSchemaDoesNotDeclareIsRefused(t *testing.T) {
 	t.Parallel()
 	decodeAWork := decodeWork(turn.NoReply(), func() []ledger.Call { return nil }, deliverySurface)
@@ -665,9 +630,8 @@ func TestASubmissionFieldTheSchemaDoesNotDeclareIsRefused(t *testing.T) {
 	}
 }
 
-// sampleFor builds a value matching a schema property, so the test above
-// exercises the real mapping rather than a hand-written fixture that could
-// drift alongside the schema it is meant to check.
+// sampleFor builds a value matching a schema property, so the test exercises
+// the real mapping rather than a fixture that could drift with the schema.
 func sampleFor(t *testing.T, phase, key string, spec any) any {
 	t.Helper()
 	obj, ok := spec.(map[string]any)
@@ -675,11 +639,9 @@ func sampleFor(t *testing.T, phase, key string, spec any) any {
 		t.Fatalf("%s.%s: property is not an object", phase, key)
 	}
 	if enum, ok := obj["enum"].([]any); ok && len(enum) > 0 {
-		// The LAST enum member for the work schema and the first for the
-		// review's: both are the value with no extra requirement attached.
-		// `delivered` needs a citation and `self_iterate` needs notes, so
-		// picking either would fail for the right reason and hide a real
-		// drift.
+		// The work schema's LAST enum member and the review's first carry no
+		// extra requirement; `delivered` (a citation) or `self_iterate`
+		// (notes) would fail for the right reason and hide a real drift.
 		if phase == "work" {
 			return enum[len(enum)-1]
 		}
@@ -700,9 +662,8 @@ func sampleFor(t *testing.T, phase, key string, spec any) any {
 
 func TestArgumentsThatCannotBeReEncodedFailTheSubmissionNotTheTurn(t *testing.T) {
 	t.Parallel()
-	// A model cannot produce this through the wire, but a builtin caller
-	// could. It must come back as a failed tool result the phase can retry,
-	// not as a Go error that ends the turn.
+	// Not producible over the wire, but a builtin caller could: it must come
+	// back as a failed tool result the phase can retry, not a Go error.
 	tool := workTool(turn.NoReply())
 	res, err := tool.Call(context.Background(), map[string]any{"summary": make(chan int)})
 	if err != nil {
@@ -711,11 +672,9 @@ func TestArgumentsThatCannotBeReEncodedFailTheSubmissionNotTheTurn(t *testing.T)
 	if !res.Failed {
 		t.Fatal("an unencodable argument was accepted")
 	}
-	// The REASON matters. Swallowing the encode error leaves the payload
-	// zero-valued, which then trips the missing-summary rule — so the
-	// submission still fails, for a reason that has nothing to do with what
-	// went wrong, and the model is told to add a summary it already wrote.
-	// Found by mutation: asserting only that it failed passed either way.
+	// The REASON matters: a swallowed encode error leaves the payload zero,
+	// which trips the missing-summary rule and tells the model to add a
+	// summary it already wrote. Asserting only failure passed either way.
 	if !strings.Contains(res.Output, "re-encoded") {
 		t.Errorf("the failure blames the wrong thing: %s", res.Output)
 	}
@@ -723,12 +682,10 @@ func TestArgumentsThatCannotBeReEncodedFailTheSubmissionNotTheTurn(t *testing.T)
 
 func TestATypeMismatchIsReportedAsOne(t *testing.T) {
 	t.Parallel()
-	// A model that sends a bare string where the schema says array. The
-	// reason has to be the mismatch: swallowing it leaves the payload part
-	// filled, which trips a content rule instead, and the model is told to
-	// fix something it got right.
-	//
-	// Found by mutation — asserting only that it failed passed either way.
+	// A bare string where the schema says array. The reason has to be the
+	// mismatch: swallowing it leaves the payload part filled, which trips a
+	// content rule and tells the model to fix something it got right.
+	// Asserting only failure passed either way.
 	tool := workTool(turn.NoReply())
 	res, err := tool.Call(context.Background(),
 		args(t, `{"outcome":"delivered","summary":"s","deliveries":"slack_post"}`))
@@ -745,9 +702,8 @@ func TestATypeMismatchIsReportedAsOne(t *testing.T) {
 
 func TestALargeIDInASubmissionSurvivesTheStructRoundTrip(t *testing.T) {
 	t.Parallel()
-	// The submission's own arguments go through a marshal/unmarshal to
-	// reach the struct. json.Number has to survive it, or the precision the
-	// provider layer just protected is lost one layer higher.
+	// The arguments reach the struct through a marshal/unmarshal, which
+	// json.Number must survive or the provider layer's precision is lost.
 	var m map[string]any
 	dec := json.NewDecoder(strings.NewReader(
 		`{"outcome":"blocked","summary":"issue 1234567890123456789","evidence":"e"}`))

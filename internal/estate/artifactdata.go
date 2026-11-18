@@ -11,16 +11,14 @@ import (
 
 // THE DATASTORE AS OPERATIONS: every read and write a tool or the API makes of
 // an artifact's datastore, answered by a data node whose copy serves (this one
-// where it does), so a node holding no data acts through one that does
-// (ADR-0025), and a node whose own copy is out of service reads its verdict
-// from one that serves.
+// where it does; ADR-0025).
 //
-// READS ARE FLOORED ON THE DATASTORE LOG. WRITES carry the caller's operation
-// key on their [artifactdata.Call]: keyed, a write derives its record id from
-// it and a repeat is the same operation, so an unanswered one is asked of the
-// next data node under the same key; unkeyed it is never repeated. The
-// authority a write is stamped with crosses whole, decided on the asking node
-// where the grants and the chart are.
+// READS ARE FLOORED ON THE DATASTORE LOG. A WRITE carries the caller's
+// operation key on its [artifactdata.Call]: keyed, it derives its record id
+// from the key, so a repeat is the same operation and an unanswered one is
+// asked of the next data node under the same key; unkeyed, it is never
+// repeated. Its stamped authority crosses
+// whole, decided on the asking node, where the grants and the chart are.
 
 // ArtifactDataReader is the datastore's read side the surfaces ask of: exactly
 // the domain reader's method set, so a consumer cannot tell local from routed.
@@ -50,10 +48,9 @@ type ArtifactDataWriter interface {
 	PurgeArtifactState(ctx context.Context, c artifactdata.Call, opID string, id artifacts.ID) error
 }
 
-// ArtifactDataHalf is the datastore a data node serves: its reader and its
-// writer, which every data node runs. A nil half is one this node's core
-// runtime has not built, and a nil writer beside a reader a node that
-// publishes nothing, as [ArtifactsHalf]'s is.
+// ArtifactDataHalf is the datastore a data node serves. A nil half is one this
+// node's core runtime has not built; a nil writer beside a reader is a node
+// that publishes nothing, as with [ArtifactsHalf].
 type ArtifactDataHalf struct {
 	Reader ArtifactDataReader
 	Writer ArtifactDataWriter
@@ -154,12 +151,11 @@ type dataStoreArgs struct {
 var opDataSchema = define("artifactdata.schema", opRead, artifactDataDomain, false, dataSchema)
 
 // A STORE'S COLLECTIONS A CALLER SENDS BACK, ANSWERED WHOLE ([op.answeredWhole]):
-// set_artifact_schema replaces every collection, and its description tells a
-// model to read them with read_artifact_data and send them back with its
-// change (internal/agent/builtin) — so a newer build's field on a collection or
-// a column this build would drop is refused rather than written away. Its own
-// operation, so the reads that only filter rows by a schema are not refused
-// one ([opArtifactVersionCarried] says why).
+// set_artifact_schema replaces every collection, which a model reads through
+// read_artifact_data and sends back changed (internal/agent/builtin), so a
+// newer build's field or column this build would drop is refused rather than
+// written away. A separate operation, so reads that only filter rows by a
+// schema are not refused ([opArtifactVersionCarried]).
 var opDataSchemaCarried = define("artifactdata.schema_carried", opRead, artifactDataDomain, false,
 	dataSchema).answeredWhole()
 
@@ -349,8 +345,8 @@ func (a ArtifactData) State(ctx context.Context, id artifacts.ID, rd artifactdat
 	return out, err
 }
 
-// Write publishes one batch of ops. Never repeated when unanswered unless its
-// call carries the caller's operation key. So for every write below.
+// Write publishes one batch of ops. Like every write below, an unanswered one
+// is repeated only when its call carries the caller's operation key.
 func (a ArtifactData) Write(ctx context.Context, c artifactdata.Call, id artifacts.ID,
 	in artifacts.DataWrite) (artifactdata.WriteResult, error) {
 	return a.written(call(ctx, a.r, opDataWrite, nil, dataWriteArgs{Call: c, ID: id, Write: in}))

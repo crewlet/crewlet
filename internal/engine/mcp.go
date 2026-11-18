@@ -53,10 +53,10 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 		if !server.IsShared() || !server.IsEnabled() {
 			continue
 		}
-		// HELD TO ITS REFERENCES like a seat's child (toolcredentials.go):
-		// one whose key does not resolve is kept from the bridge, whose
-		// retries would wait on a value nothing is about to supply; the next
-		// apply (every snapshot change is one) starts it.
+		// HELD TO ITS REFERENCES like a seat's child (package doc, "Tool
+		// server credentials"): one whose key does not resolve is kept from
+		// the bridge, whose retries would wait on a value nothing is about to
+		// supply; the next apply (every snapshot change is one) starts it.
 		values, missing := resolveServer(server, "", server.Name, nil, env, nil)
 		if missing != nil {
 			outcomes = append(outcomes, mcpOutcome{server: server.Name, err: missing})
@@ -635,9 +635,9 @@ func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Ch
 // A child with a value (the seat's block or the template's, under a key not
 // declared optional) whose variable resolves to nothing gets no spec but an
 // outcome carrying a [credentialMissing], judged and logged by
-// [Engine.withheldForCredentials] (toolcredentials.go); so does a template
-// that resolves to no launchable spec. Either way the status record still
-// reports the server.
+// [Engine.withheldForCredentials] (package doc, "Tool server credentials"); so
+// does a template that resolves to no launchable spec. Either way the status
+// record still reports the server.
 func seatSpecs(
 	c *Company, seat *org.Role, env *config.Resolver, mint *seatMint,
 ) ([]mcp.Spec, []mcpOutcome) {

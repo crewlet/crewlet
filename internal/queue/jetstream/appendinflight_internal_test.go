@@ -36,18 +36,12 @@ func (f *inFlightJS) PublishMsg(context.Context, *nats.Msg, ...jetstream.Publish
 }
 
 // AN APPEND IS ANSWERED BY WHAT THE LEADER DECIDED, never by its "still in
-// flight".
-//
-// A clustered leader refuses a conditional append without comparing anything
-// while another write to the subject is in flight — and that write may be
-// this node's own, already acknowledged. Handed up as it came, the state log
-// read it as a rejection, re-decided against the anchor it already had, and
-// was refused again for as long as the write ahead took to clear. So the
+// flight": a clustered leader refuses a conditional append unjudged while
+// another write to the subject (perhaps this node's own) is in flight, which
+// the state log would read as a rejection and re-decide in a loop. So the
 // append waits it out, and one still in flight at its deadline comes back with
-// no API error on it, which the state log reads as the no-answer it is.
-//
-// Staged rather than raced: the window is a few hundred microseconds on an
-// idle machine.
+// no API error: the no-answer it is. Staged rather than raced: the window is a
+// few hundred microseconds.
 //
 // Mutation: publish once and return, and the first case reads the refusal and
 // the second a rejection the state log would discriminate as a lost race.

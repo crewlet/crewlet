@@ -47,11 +47,9 @@ func itoa(n int) string { return strconv.Itoa(n) }
 func ftoa(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
 
 // A CLAUDE CODE RUN IS CHARGED WHAT ITS OWN RESULTS STATED. From 2.1.310 each
-// result states, per model, what the calls this process made since its
-// previous result cost; nothing another process counted is carried into it, so
-// the sum over the run's results is the run's own spend — however many results
-// it printed (a note handed to it as it finished carries its loop on to
-// another), and whatever the session's totals beside it say after a resume.
+// result states, per model, what this process's calls cost since its previous
+// result, so their sum is the run's own spend however many results it printed
+// and whatever the session's totals say after a resume.
 //
 // Mutation: charge the last result's usage, or only its per-run figures, and
 // the run pays for the session's earlier jobs, or loses its first loop's
@@ -84,13 +82,10 @@ func TestAClaudeRunIsChargedWhatItsOwnResultsStated(t *testing.T) {
 	}
 }
 
-// A CLAUDE CODE RUN WHOSE RESULT STATES ITS SPEND FOR MORE MODELS THAN A
-// RESULT IS READ FOR IS CHARGED WHAT ITS RESULT STATES, as a run on a release
-// that states no spend model by model is: that result is read for none of its
-// models, so no sum of its results' spend is the run's own, and the run is
-// charged neither the sum of the results before it nor that of the models
-// before the bound, either of which would leave calls it made uncharged. A
-// fresh run's result states the run's own spend.
+// A CLAUDE CODE RUN WHOSE RESULT STATES SPEND FOR MORE MODELS THAN
+// ClaudeResultModelsMax IS CHARGED WHAT ITS RESULT STATES, as on a release with
+// no per-model spend: summing the earlier results, or the models before the
+// bound, would leave calls it made uncharged.
 //
 // Mutation: drop the bound, or read a result past it as one that states
 // nothing, and the run is charged a sum of its results' spend model by model.
@@ -145,13 +140,12 @@ func TestAFreshClaudeRunOnAnOlderReleaseIsChargedItsResult(t *testing.T) {
 }
 
 // A CONTINUED RUN ON A RELEASE THAT RESTORES THE SESSION'S TOTALS IS CHARGED
-// THE DIFFERENCE. From 2.1.277 a continued session starts from the totals the
-// job before it saved, and before 2.1.310 its result states no per-run
-// figures: the run keeps the job before's result as it starts, before its own
-// artefacts are cleared, and the collection takes it off. A release before
-// 2.1.277 starts the session's totals at zero, so its result is the run's own;
-// and so is a run whose script found the session neither in its box nor
-// restorable, and started a new one in its place, which its record says.
+// THE DIFFERENCE. On 2.1.277–2.1.309 a continued session starts from the job
+// before's totals and its result states no per-run figures, so the run keeps
+// that result as a base at Start, before its artefacts are cleared, and the
+// collection takes it off. Before 2.1.277 the totals start at zero, as they do
+// for a run whose script started a new session in place of the one it could
+// not find or restore (its record says so).
 //
 // Mutation: keep no base at Start, subtract it whatever the release, or
 // whether the run continued its session or not, and a case below is charged
@@ -323,11 +317,10 @@ func TestAFreshRunKeepsNoBase(t *testing.T) {
 	}
 }
 
-// A CLAUDE CODE RUN RECORDS ITS HARNESS'S RELEASE before the harness starts, asked
-// once, first, of the harness the box's PATH finds — the release every gate of the
-// script decides by, which the collection reads to know whether a continued
-// run's result states the session's spend, and reports as the run's own
-// ([sandbox.Result.HarnessVersion]) — beside the session the run took up.
+// A CLAUDE CODE RUN RECORDS ITS HARNESS'S RELEASE beside its session before the
+// harness starts, asked once, first, of the harness on the box's PATH: every
+// script gate decides by it, the collection reads it to know what a continued
+// run's result states, and it is reported as [sandbox.Result.HarnessVersion].
 //
 // Mutation: drop the record, or write it after the harness, and a continued run on
 // 2.1.277–2.1.309 is read as a current release with nothing to say otherwise;
@@ -379,10 +372,8 @@ func TestTheReleaseThatRestoresTotalsIsReadOffTheHarness(t *testing.T) {
 }
 
 // AN OPENCODE RUN THAT CONTINUED A SESSION IS CHARGED WHAT THE SESSION GAINED
-// DURING IT. OpenCode's report is the session's lifetime totals — every step
-// it ever ran, and what an import restored — so the run's script reads the
-// report before the run takes the session up too, and the run is charged the
-// difference.
+// DURING IT: OpenCode reports lifetime totals (imports included), so the script
+// also reads the report before the run and the run is charged the difference.
 //
 // Mutation: ignore the report before, and the run pays for every step the
 // session ever ran.

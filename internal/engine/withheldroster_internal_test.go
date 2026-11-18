@@ -18,15 +18,12 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A TURN SHOWS ITS AGENT ONLY THE PEOPLE WHO MAY BE REACHED — through the
-// wiring a real turn goes through, from the live registry's reading to the
-// standing instructions its executor's run is launched with.
-//
-// The party registry withholds a suspended person's contact identities, so an
-// inbound message from them resolves to an outside party. A lead's prompt that
-// still printed their Slack id would hand its agent the one address the
-// company stopped routing. The control is the same turn over a registry that
-// withholds nobody.
+// A TURN SHOWS ITS AGENT ONLY THE PEOPLE WHO MAY BE REACHED, through a real
+// turn's wiring from the live registry to its executor's standing
+// instructions. The registry withholds a suspended person's contact
+// identities, so a lead's prompt still printing their Slack id would hand the
+// agent the one address the company stopped routing. The control is the same
+// turn over a registry that withholds nobody.
 func TestATurnShowsItsAgentOnlyThePeopleWhoMayBeReached(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -46,9 +43,9 @@ func TestATurnShowsItsAgentOnlyThePeopleWhoMayBeReached(t *testing.T) {
 			tick := events.New(types.TaskAssigned{
 				TaskID: "t-1", RoleName: "Lead", Description: "plan the week",
 			}, events.TraceContext{})
-			// THE INSTANT THE WORK BEGAN, as every dispatch hands a turn:
-			// a unit of work stated with none began at the zero instant,
-			// past every ledger, and is refused before it reaches a model.
+			// THE INSTANT THE WORK BEGAN, as every dispatch hands a turn: work
+			// stated with none began at the zero instant, past every ledger, and
+			// is refused before it reaches a model.
 			_, _ = e.runTurn(t.Context(), Request{
 				Handle: "lead", WorkKey: "wk-1", WorkSince: time.Now().UTC(),
 				Events: []*events.Event{tick},

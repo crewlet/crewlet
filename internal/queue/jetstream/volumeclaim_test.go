@@ -9,12 +9,10 @@ import (
 // A BROKER'S CLAIM ON ITS VOLUME IS ITS LIMIT LESS WHAT IT STORES, AND ONLY A
 // BROKER WITH A VOLUME HAS ONE.
 //
-// A neighbour on the broker's disk — the code cache, whose derived budget is
-// what the volume has room for — has to leave the broker what it may still
-// write. That is bytes, never ceilings: a stream reserving a gibibyte and
-// holding nothing has written nothing, and a message the broker accepted has
-// spent the disk whatever its stream reserved. A broker keeping its streams in
-// memory, and one somebody else operates, holds no part of this node's disk.
+// A neighbour on the broker's disk (the code cache) must leave the broker what
+// it may still write, in bytes, never ceilings: a reservation holding nothing
+// has written nothing, and an accepted message has spent the disk whatever its
+// stream reserved. An in-memory or external broker holds none of this disk.
 //
 // Mutation: report the reservations instead of the bytes stored, and the
 // reservation moves the claim.
@@ -64,8 +62,8 @@ func TestAVolumeClaimIsWhatTheBrokerMayStillWrite(t *testing.T) {
 		t.Errorf("a broker holding its streams in memory: VolumeClaim = (%+v, %t, %v), "+
 			"want none", claim, found, err)
 	}
-	// AN EXTERNAL QUEUE IS ONE WITH NO EMBEDDED SERVER, the field VolumeClaim
-	// branches on; nothing is put back, the queue being this case's own.
+	// An external queue is one with no embedded server, the field
+	// VolumeClaim branches on.
 	external := newQueueWith(t, Config{StoreDir: brokertest.TempDir(t), StoreMaxBytes: brokertest.StoreMaxBytes})
 	server := external.embedded
 	external.embedded = nil

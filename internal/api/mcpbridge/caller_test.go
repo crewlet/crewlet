@@ -100,12 +100,12 @@ func TestACallerBoundToNobodyOpensNoSession(t *testing.T) {
 	}
 }
 
-// A RUN WHOSE TOKENS NO SURFACE WOULD REDACT OPENS NO SESSION: a token whose
-// subject holds what internal/redact ends a subject at, as a run id holding a
-// dot would put there, or runs past redact.MaxReach, is one no surface knows
-// by its shape, and runtoken refuses to mint it. Both of a job's tokens are
-// minted before anything is filed, so a job whose own token fits but whose
-// other one, a mark longer, does not is refused whole, leaving nothing live.
+// A RUN WHOSE TOKENS NO SURFACE WOULD REDACT OPENS NO SESSION: a subject
+// holding what internal/redact ends a subject at (a dot in the run id), or
+// running past redact.MaxReach, is unrecognisable by shape, and runtoken
+// refuses to mint it. Both of a job's tokens are minted before anything is
+// filed, so a job whose other token (a mark longer) does not fit is refused
+// whole, leaving nothing live.
 //
 // Mutation: answer a token's refusal with an endpoint, or mint the other token
 // only when it is asked for, and a refused job is handed one, or leaves its
@@ -180,11 +180,10 @@ func TestAClosedDeepRunsTokenIsRefused(t *testing.T) {
 	}
 }
 
-// A LOOPBACK SESSION ADMITS ONLY THIS HOST: the token a confined host run
-// holds is refused from any other address, so a leaked copy is useless off
-// the engine host. Every call names the loopback host a confined run dials,
-// so the address is all that differs; the Host such a session admits is
-// host_test.go's.
+// A LOOPBACK SESSION ADMITS ONLY THIS HOST: a confined host run's token is
+// refused from any other address, so a leaked copy is useless off the engine
+// host. Every call names the loopback Host, so only the address differs; which
+// Host such a session admits is host_test.go's.
 func TestALoopbackSessionRefusesAnotherHost(t *testing.T) {
 	t.Parallel()
 	s := serve(t)

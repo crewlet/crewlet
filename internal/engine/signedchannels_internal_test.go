@@ -26,28 +26,17 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// EVERY CHANNEL A NODE CARRIES OUT A REQUEST ON SIGNS IN DOMAINS OF ITS OWN —
-// the estate service, the fleet broker's membership, a note to a running turn,
-// a read of a box asked of its host, a box's tool call relayed to the process
-// holding its session, the Dashboard Assistant's replays and stops, a code
-// search, and a test of an MCP server asked of the nodes it runs on — and
-// none of them in a state log's. So does a person's answer to a parked run,
-// sealed onto the run's row and handed to the resumed run as their words, and
-// what carried each session of a run on, kept beside a run's record for a later
-// brief to tell again, an answer's words among it, and
-// a note to a turn whose executor is out, sealed onto the run's row with the
-// seat anchor a person's authority to send one is decided on. And so do the
-// sealed channels that are no instruction: presence, which a node displays as
-// a person in a room; the live relay, whose answers a node pushes to its
-// sockets as a peer's appliers' work; and the assistant's frames, which a node
-// streams to a person as their own turn. A domain shared with any of the
-// others would let a captured frame of one verify as the other. The domain is
-// in the derived key and in the MAC, so two channels sharing one would each
-// verify the other's frames: a captured estate reply sent to a member as a
-// broker request, or a state-log record replayed as a note. The names live in
-// the packages that build them and nothing else compares them; this does,
-// here, where all of them are built, and
-// TestEverySignedChannelTheTreeBuildsIsClaimed holds the tree to this list.
+// EVERY CHANNEL A NODE SIGNS ON HAS KEY DOMAINS OF ITS OWN, none a state
+// log's: the instruction channels (the estate service, broker membership, a
+// note to a running turn, a box read, the tool bridge's relay, the Dashboard
+// Assistant's replays and stops, a code search, an MCP server's test, a parked
+// run's answer, a run's kept leads, a note on a run record and its seat anchor)
+// and the sealed ones that are no instruction (presence, the live relay, the
+// assistant's frames). The domain is in the derived key and the MAC, so two
+// channels sharing one verify each other's frames: an estate reply sent as a
+// broker request, a state-log record replayed as a note. Nothing else compares
+// the names; TestEverySignedChannelTheTreeBuildsIsClaimed holds the tree to
+// this list.
 func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 	t.Parallel()
 	if owner := claimedDomains(t); len(owner) != len(registeredDomains())+28 {
@@ -156,37 +145,18 @@ func claimedDomains(t *testing.T) map[string]string {
 
 func pair(request, reply string) [2]string { return [2]string{request, reply} }
 
-// EVERY CHANNEL THE TREE SIGNS ON IS ONE THE GATE ABOVE HOLDS APART. That gate
-// compares the channels it builds, and a channel built without a line there
-// was compared with nothing: the MCP server's test channel signed in domains
-// no gate held apart from any other's. So this reads the module's source for
-// every call that names a key domain — signedask's New and NewOneWay,
-// recordseal's NewSigner and NewVerifier — and refuses a domain the gate does
-// not claim, one a state log signs in, and one that two functions build,
-// since the gate claims each domain for one channel and one channel has one
-// constructor.
-//
-// WITH TYPES, because a name is a constant spelled anywhere: `steer.Channel`
-// and `liveRelayChannel` read like any identifier. A name a function is
-// handed as a parameter, or as a field of one, is read at each call of that
-// function — the run record's seals take theirs through newSealPair, and the
-// tool bridge's relay through httprelay.New's options — so a channel built
-// through a constructor is judged by the names its callers give.
-//
-// A NAME THE WALK CANNOT READ FAILS IT, unless [computedChannelNames] says
-// why the function that spells it signs only in domains the gate claims; an
-// excuse that excuses nothing fails too. So does a signing function used as a
-// value, or a function a name enters, since either could be called with any
-// name.
-//
-// AND EVERY DOMAIN THE GATE CLAIMS IS ONE THE WALK FOUND BUILT, but the state
-// logs', which the excused functions build: a walk that stopped reading the
-// tree would otherwise pass, and so would a claim whose channel moved to a
-// name the walk cannot read.
-//
-// Mutation: take the MCP server's test out of claimedDomains and this fails
-// naming internal/engine/mcpcheck.go; name newSealPair's verifier after its
-// own parameter plus a suffix and it fails naming the domain no gate claims.
+// EVERY CHANNEL THE TREE SIGNS ON IS ONE THE GATE ABOVE HOLDS APART; one
+// missing from claimedDomains is compared with nothing. With types (a constant
+// reads like any identifier), this reads every call naming a key domain
+// (signedask's New and NewOneWay, recordseal's NewSigner and NewVerifier),
+// follows a name handed in as a parameter or its field to each caller
+// (newSealPair, httprelay.New's options), and refuses a domain the gate does
+// not claim, a state log's, or one two functions build. An unreadable name
+// fails unless [computedChannelNames] excuses it (an unused excuse fails), as
+// does a signing function, or one a name enters, used as a value; and every
+// claimed domain but the state logs' must be found built, or a walk that
+// stopped reading would pass. Mutation: drop the MCP server's test from
+// claimedDomains, or suffix newSealPair's verifier name, and this fails.
 func TestEverySignedChannelTheTreeBuildsIsClaimed(t *testing.T) {
 	t.Parallel()
 	claimed := claimedDomains(t)
@@ -440,17 +410,12 @@ type channelWalk struct {
 }
 
 // walkSignedChannels reads every call in the module's non-test source that
-// names a key domain, and what each is named.
-//
-// IT READS ONLY WHERE SUCH A CALL OR ITS NAME CAN BE: a package that imports
-// signedask or recordseal, which a call of one needs, and a package that
-// imports one holding an exported function a name enters through a parameter
-// of. An unexported one is called only in its own package, and a name that
-// enters an exported method is refused, since any package holding the type may
-// call it. sourcetree hands each package after every package of the module it
-// imports, so the functions a package's imports hold are known when it is
-// selected. Neither signedask nor recordseal is read: a call inside them is
-// the derivation every call outside is judged by.
+// names a key domain, and what each is named. It reads only packages importing
+// signedask or recordseal, or importing one that exports a function a name
+// enters through a parameter (an unexported one is called only in its package;
+// a name entering an exported method is refused). sourcetree hands each package after its imports, so
+// those functions are known when it is selected. signedask and recordseal are
+// not read: their calls are the derivation every other is judged by.
 func walkSignedChannels(t *testing.T) *channelWalk {
 	t.Helper()
 	w := &channelWalk{fset: token.NewFileSet(), root: sourcetree.Root(t),

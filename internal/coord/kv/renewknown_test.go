@@ -16,22 +16,20 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// knownTTL is the seat lease bucket's age in these cases, and the TTL every
-// lease they renew in one round trip is taken at: the production shape, where
-// a seat or presence lease is held at its bucket's whole age.
+// knownTTL is the seat lease bucket's age here and every known lease's TTL:
+// the production shape, a lease held at its bucket's whole age.
 const knownTTL = time.Minute
 
-// published is how many messages nc sent while call ran: one per request a
-// store makes on it, a read or a write, since its replies come back on a
-// subscription the connection made once.
+// published is how many messages nc sent while call ran: one per request,
+// since replies come back on a subscription made once.
 func published(nc *nats.Conn, call func()) uint64 {
 	before := nc.Stats().OutMsgs
 	call()
 	return nc.Stats().OutMsgs - before
 }
 
-// peerOf is a second store on s's buckets, over a connection of its own to ns:
-// another process of the same fleet, whose writes s's connection never sends.
+// peerOf is a second store on s's buckets over its own connection to ns, so
+// its writes never count on s's connection.
 func peerOf(t *testing.T, ns *server.Server, s *Store) *Store {
 	t.Helper()
 	nc, err := nats.Connect("", nats.InProcessServer(ns))
@@ -52,8 +50,8 @@ func knownSeat(n int) string {
 	return coord.SeatResource(uuid.NewSHA1(uuid.NameSpaceOID, fmt.Appendf(nil, "known-seat-%d", n)))
 }
 
-// claimUngated claims resource for owner at ttl, outside the protocol gate, so
-// no gate view runs on the store's connection beside what a case counts.
+// claimUngated claims resource for owner at ttl outside the protocol gate, so
+// no gate view adds messages to what a case counts.
 func claimUngated(ctx context.Context, t *testing.T, s *Store, resource, owner string,
 	ttl time.Duration) *coord.Lease {
 
@@ -68,16 +66,11 @@ func claimUngated(ctx context.Context, t *testing.T, s *Store, resource, owner s
 }
 
 // A RENEWAL OF A RECORD THIS STORE LAST WROTE IS ONE ROUND TRIP: one write at
-// the revision its own last write was given, with no read before it, counted
-// as the messages the store's own connection sends. A peer's write in between
-// moves the revision, and the renewal reads and decides as before — renewed
-// for a write by the same tenure, false once a peer took the lease — and then
-// it is one round trip again, or, for a lease it no longer holds, a read.
+// its own last revision, no read. A peer's write moves the revision, and the
+// renewal reads and decides (true for the same tenure, false once a peer took
+// it), then is one round trip again, or a read for a lease it lost. Thirty-two
+// renewals at once are thirty-two messages.
 //
-// Thirty-two renewals at once are thirty-two messages: what a pass sending its
-// renewals together costs the connection.
-//
-// Red on main: every renewal read the record first, two messages.
 // Mutation: read before every renewal (2 messages, where 1 is wanted).
 func TestARenewOfARecordThisStoreLastWroteIsOneRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -109,18 +102,16 @@ func TestARenewOfARecordThisStoreLastWroteIsOneRoundTrip(t *testing.T) {
 		renew(fmt.Sprintf("renewal %d of the store's own claim", i+1), true, 1)
 	}
 
-	// The same tenure renewed through another handle — a second path of
-	// this owner's — moves the revision: the write at the known one is
-	// refused, the record is read, and the renewal written at what it read.
+	// Another handle of the same tenure moves the revision: refused, read,
+	// written at what was read.
 	if ok, err := peer.Renew(ctx, seat, owner, lease.Epoch, knownTTL); err != nil || !ok {
 		t.Fatalf("the peer's renewal of the same tenure = (%v, %v)", ok, err)
 	}
 	renew("a renewal after another handle's write", true, 3)
 	renew("the renewal after that", true, 1)
 
-	// A peer takes the lease: the write at the known revision is refused,
-	// the read finds the peer's record, and the answer is false — after
-	// which nothing is known of the seat, so the next renewal reads alone.
+	// A peer takes the lease: refused, read, false; then nothing is known,
+	// so the next renewal only reads.
 	if ok, err := peer.Release(ctx, seat, owner, lease.Epoch); err != nil || !ok {
 		t.Fatalf("the peer's release = (%v, %v)", ok, err)
 	}
@@ -159,13 +150,10 @@ func TestARenewOfARecordThisStoreLastWroteIsOneRoundTrip(t *testing.T) {
 }
 
 // A CLAIM ITS OWNER STILL HOLDS IS ITS WRITE AND ITS READ-BACK: the presence's
-// renewal, which claims rather than renews, starts from the record its store
-// last wrote and writes at that revision with no read before it, so it costs
-// two round trips — the write, and the read that hands back the store's
-// deadline — where it cost three. A peer's write in between moves the
-// revision, and the claim reads and decides as before.
+// renewing claim writes at the revision its store last wrote, with no read
+// first, then reads back the store's deadline: two round trips. A peer's write
+// moves the revision, and the claim reads and decides as before.
 //
-// Red on main: three messages.
 // Mutation: read on the first round too (three, where two are wanted).
 func TestAClaimItsOwnerStillHoldsIsItsWriteAndItsReadBack(t *testing.T) {
 	t.Parallel()
@@ -196,9 +184,8 @@ func TestAClaimItsOwnerStillHoldsIsItsWriteAndItsReadBack(t *testing.T) {
 	claim("the claim after that", 2)
 }
 
-// awaitLapsed returns once the store itself judges resource unheld: its Get,
-// which compares the record's deadline with the STORE's clock, finds no live
-// lease. No clock of the case's decides it.
+// awaitLapsed returns once the store's Get, judging by the STORE's clock,
+// finds no live lease on resource; no clock of the case's decides it.
 func awaitLapsed(ctx context.Context, t *testing.T, s *Store, resource string) {
 	t.Helper()
 	for {
@@ -215,13 +202,10 @@ func awaitLapsed(ctx context.Context, t *testing.T, s *Store, resource string) {
 	}
 }
 
-// A KNOWN REVISION NEVER RENEWS A LAPSED DUTY LEASE: a duty's record is judged
-// by its deadline against the store's clock, and can lapse while it is still
-// there, so a write at its revision — which would land — renews nothing. The
-// renewal reads the record and the clock and answers false, as a lapsed lease
-// is deliberately not renewable.
+// A KNOWN REVISION NEVER RENEWS A LAPSED DUTY LEASE: a duty can lapse by the
+// store's clock while its record is still there, where a write at its revision
+// would land. The renewal reads the record and clock and answers false.
 //
-// A guard on main, where every renewal read first.
 // Mutation: know a record whatever its bucket (the duty renewed, true).
 func TestAKnownRevisionNeverRenewsALapsedDutyLease(t *testing.T) {
 	t.Parallel()
@@ -229,8 +213,7 @@ func TestAKnownRevisionNeverRenewsALapsedDutyLease(t *testing.T) {
 }
 
 // A KNOWN REVISION NEVER RENEWS A SEAT LEASE THAT LAPSED BEFORE ITS BUCKET'S
-// AGE: a seat lease taken for less than the bucket's age is judged by its own
-// deadline, as a duty is, so it is not known either.
+// AGE: one shorter than the bucket's age is judged by its deadline, as a duty.
 //
 // Mutation: know a record whatever its TTL (the seat renewed, true).
 func TestAKnownRevisionNeverRenewsASeatLeaseShorterThanItsBucket(t *testing.T) {
@@ -246,8 +229,7 @@ func lapsesBeforeRenewing(t *testing.T, resource string) {
 	s := openStore(t, embeddedNATS(t), knownTTL)
 	const (
 		owner = "node-a:1"
-		// short is far under the bucket's age, so the record is still
-		// there when it lapses.
+		// short is far under the bucket's age: the record outlives it.
 		short = 300 * time.Millisecond
 	)
 	lease := claimUngated(ctx, t, s, resource, owner, short)
@@ -259,12 +241,9 @@ func lapsesBeforeRenewing(t *testing.T, resource string) {
 	}
 }
 
-// RENEWALS OF KNOWN RECORDS GO TO THE BROKER TOGETHER: nothing in the store
-// holds one renewal's write while another's is in flight, so a pass that sends
-// its renewals together has them in flight together — which counting their
-// messages cannot tell, since renewals sent one at a time send as many. Each
-// renewal is held at its write until every one of them has reached it, which
-// only renewals running at once can do.
+// RENEWALS OF KNOWN RECORDS GO TO THE BROKER TOGETHER: nothing serializes
+// their writes. Message counts cannot tell, so each renewal is held at its
+// write until all have reached it, which only concurrent renewals can do.
 //
 // Mutation: hold one lock across a known renewal's write (the first renewal
 // waits alone, until the case gives up on the others).
@@ -279,9 +258,8 @@ func TestRenewalsOfKnownRecordsAreInFlightTogether(t *testing.T) {
 		leases[i] = claimUngated(ctx, t, s, knownSeat(i), owner, knownTTL)
 	}
 
-	// THE CASE'S PATIENCE, a liveness bound that decides nothing: renewals
-	// in flight together all reach their writes at once, and only renewals
-	// that cannot leave the first waiting for it to run out.
+	// THE CASE'S PATIENCE, a liveness bound that decides nothing: only
+	// serialized renewals leave the first waiting for it to run out.
 	giveUp, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var (

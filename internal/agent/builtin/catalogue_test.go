@@ -10,22 +10,14 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// EVERY TOOL A SEAT CAN BE OFFERED IS FILED IN THE CATALOGUE, ONCE.
+// EVERY TOOL A SEAT CAN BE OFFERED IS FILED IN THE CATALOGUE, ONCE, both
+// ways, against the fully wired registry ([fullDeps]) plus the discovery
+// pair: an unfiled built-in hides from a reader auditing what agents hold,
+// and a filing nobody registers describes no tool.
 //
-// Both ways, against the registry a seat's tools come from with every
-// dependency wired ([fullDeps]) and the discovery pair the runner adds to
-// every phase that discovers. A built-in added without a filing is one the
-// catalogue does not show, so a reader auditing what agents hold sees less
-// than they hold; a filing for a tool nobody registers any more is a row
-// describing a tool that does not exist.
-//
-// LESS WHAT NO AGENT IS EVER OFFERED: a registered tool whose row bars every
-// agent (Gitlet's report, purge and import, each a person's alone) is
-// withheld from every seat's surfaces by the authority table
-// ([builtin.Withheld]), so the registry holding it offers it to nobody, and
-// the catalogue of what agents hold files it nowhere. Asked of the table
-// itself, so a row that starts admitting agents puts its tool back in this
-// set and turns the case red until it is filed.
+// Less a registered tool whose row bars every agent ([builtin.Withheld]),
+// asked of the authority table itself, so a row that starts admitting agents
+// turns this red until its tool is filed.
 func TestEveryToolASeatIsOfferedIsFiledOnce(t *testing.T) {
 	t.Parallel()
 	reg := tools.NewRegistry()
@@ -69,12 +61,9 @@ func TestEveryToolASeatIsOfferedIsFiledOnce(t *testing.T) {
 	}
 }
 
-// AND EVERY GROUP HOLDS A TOOL, IN THE ORDER IT IS LISTED.
-//
-// A group with nothing filed under it is a rail entry that opens an empty
-// list, and a group missing its words is one the dashboard draws as its key.
-// The ranks are each group's own order, from zero, with no gap: the
-// dashboard sorts on them.
+// AND EVERY GROUP HOLDS A TOOL, IN THE ORDER IT IS LISTED: an empty group is
+// a rail entry opening an empty list, one without words is drawn as its key,
+// and ranks run from zero with no gap because the dashboard sorts on them.
 func TestEveryGroupHoldsItsToolsInOrder(t *testing.T) {
 	t.Parallel()
 	ranks := map[builtin.Group][]int{}

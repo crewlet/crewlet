@@ -13,12 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
-// A COLLECTED ROUND CARRIES ITS REFUSED REPLIES TO ITS REVIEW (ADR-0114). A reply
-// too large for the run to take is refused by the engine, which resumes the run
-// told so; the round's calls hold the run's questions and none of the reply, so
-// the refusals ride the collected run's record (sandbox's RoundRefusals, through
-// the engine's RunRecord) into the round's Work, which is what the reviewer is
-// handed.
+// A COLLECTED ROUND CARRIES ITS REFUSED REPLIES TO ITS REVIEW (ADR-0114). The
+// round's calls hold the questions and none of a refused reply, so the
+// refusals ride the run's record (sandbox's RoundRefusals, via the engine's
+// RunRecord) into the Work the reviewer is handed.
 //
 // Mutation: leave RefusedReplies off the Work finishWork builds, and the round's
 // reviewer is told of no refusal.
@@ -49,10 +47,9 @@ func TestACollectedRoundCarriesItsRefusedRepliesToItsReview(t *testing.T) {
 }
 
 // A REVIEWER IS TOLD WHAT REPLY THE RUN NEVER GOT (ADR-0114). The round's
-// refused replies reach the review prompt beside the log, in the engine's
-// words: each one's message count and figures, and what the engine told the
-// run to do — so a question asked again after one reads as the follow-up it
-// is, never the same question sent twice.
+// refused replies reach the review prompt beside the log in the engine's
+// words (message count, figures, what the run was told), so a question asked
+// again reads as a follow-up, not a repeat.
 //
 // Mutation: leave RefusedReplies off the ReviewInput Review builds, and the
 // reviewer reads the round's two questions with nothing between them.

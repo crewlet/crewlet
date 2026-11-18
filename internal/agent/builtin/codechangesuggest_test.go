@@ -42,12 +42,10 @@ func suggestedChange() *changeFixture {
 	return f
 }
 
-// AN APPLY READS ONLY THE FINDINGS IT NAMES: whatever the change's review
-// history holds, the findings an apply names are ONE read of the change's
-// findings narrowed to them — never a walk of the part, on whose last page a
-// time-ordered history puts the newest review's findings, the ones an apply
-// names — each id asked once, and one no finding could carry asked not at all
-// and refused as one the change does not hold.
+// AN APPLY READS ONLY THE FINDINGS IT NAMES: ONE read narrowed to them, never
+// a walk of the part (whose last page holds the newest review's findings),
+// each id asked once, and one no finding could carry not asked at all but
+// refused as one the change does not hold.
 //
 // Mutations: page the findings from no cursor, unnarrowed → three reads, red;
 // ask a malformed id → the read names it, red; ask an id named twice twice →
@@ -111,15 +109,13 @@ func applyArgs(findings ...string) map[string]any {
 	return map[string]any{"change": "site!7", "findings": ids, "expected_head": revHead(3)}
 }
 
-// AN APPLIED SUGGESTION RESOLVES ITS FINDING AS A STEP: the call's findings'
-// suggestions are ONE engine write onto the change's source branch at the head
-// the caller read, each named by its finding, read in the blob and lines its
-// finding was raised on; once it landed, each finding is answered resolved
-// with the commit it made, as a second write — a step of the apply's operation
-// decided at or past the push's record, where the applier is an author. A
-// finding no apply takes — gone, standing no longer, suggesting nothing, on
-// its revision's old side — refuses the call with nothing written; an apply
-// the Gitlet node refuses as outdated resolves nothing.
+// AN APPLIED SUGGESTION RESOLVES ITS FINDING AS A STEP: the suggestions are ONE
+// engine write onto the source branch at the head the caller read, each in the
+// blob and lines its finding was raised on; once it landed, each finding is
+// answered resolved with the commit, as a step of the apply's operation decided
+// at or past the push's record. A finding no apply takes (gone, no longer
+// standing, suggesting nothing, old side) refuses the call with nothing
+// written; an apply refused as outdated resolves nothing.
 //
 // Mutations: resolve the findings before the push lands, or under an
 // operation of their own → red; take a finding that suggests nothing → red.

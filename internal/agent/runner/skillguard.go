@@ -11,27 +11,19 @@ import (
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
-// The required-skill guard, with telemetry.
-//
-// The guard itself decides; this adds the operator's view of it. They are
-// separate because the guard is a pure decision over a registry and a
-// surface — testable with neither a queue nor a turn — while the fact that
-// somebody wants to WATCH those decisions belongs to the runner, which is
-// where every other phase event is published from.
+// The required-skill guard, with telemetry. skills.Guard stays a pure
+// decision, testable without a queue or a turn; publishing its refusals
+// belongs to the runner, where every other phase event is published.
 
-// reportingGuard publishes each refusal.
-//
-// OCCASIONAL BLOCKS ARE THE GUARD WORKING. What an operator needs to see is
-// the chronic case: one skill blocked over and over says its catalogue
-// summary is not landing, or that its trigger is over-scoped — and neither
-// is visible from the turn's own record, where a block looks like any other
-// failed tool call.
+// reportingGuard publishes each refusal. Occasional blocks are the guard
+// working; the event shows the chronic case (a skill blocked over and over:
+// its summary is not landing or its trigger is over-scoped), which the
+// turn's record shows only as another failed tool call.
 type reportingGuard struct {
 	guard *skills.Guard
 	emit  emitter
 	phase phase.Phase
-	// iteration is the turn's iteration the guarded surface was built for,
-	// which every other event of the phase carries too.
+	// iteration is the turn iteration the guarded surface was built for.
 	iteration int
 }
 
@@ -52,12 +44,9 @@ func (g *reportingGuard) Observe(tool string, args toolargs.Args) {
 	g.guard.Observe(tool, args)
 }
 
-// report publishes one refusal.
-//
-// It names EVERY pending skill rather than just the one that blocked this
-// call: a model about to be blocked twice more is a model whose catalogue
-// summary is not landing, and an operator reading one key at a time cannot
-// see that.
+// report publishes one refusal, naming EVERY pending skill rather than the
+// one that blocked: a model about to be blocked again is invisible to an
+// operator reading one key at a time.
 func (g *reportingGuard) report(tool string) {
 	if !g.emit.on() {
 		return
@@ -72,10 +61,7 @@ func (g *reportingGuard) report(tool string) {
 		WorkKey:   g.emit.turn.WorkKey,
 		Iteration: g.iteration,
 	}, g.emit.turn.Trace)
-	// A BACKGROUND context, because tools.Guard has none to inherit — the
-	// interface is called from a tool dispatch that passes only names. A
-	// refusal is worth recording even when the call that triggered it is
-	// being torn down, and the publish is fire-and-forget either way, so
-	// there is nothing here a cancellation should reach.
+	// Background: tools.Guard passes no context, and a fire-and-forget
+	// refusal is worth recording even while its call is torn down.
 	g.emit.publish(context.Background(), ev)
 }

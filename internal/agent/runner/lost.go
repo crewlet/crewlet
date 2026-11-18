@@ -13,29 +13,15 @@ import (
 // Lost is a run whose job was LOST with the host it ran on before it finished:
 // what a resume carries the round on from ([Resume.Lost]).
 //
-// # Why the round is carried on, not collected
-//
-// The job was cut off mid-step by something outside it — the restart that
-// replaced its engine killed it, its box went with its host, its node left the
-// fleet — with nothing written to say how far it got. What it left is not an
-// account of the round, and judged as one the round "did not succeed" for a
-// reason the run never had. So the resumed turn relaunches its executor for the
-// same round, as it does for a run a person's answer carries on ([Asked]): in
-// the lost job's box where the launch may continue in it, its working tree as
-// the job left it, and in a fresh one otherwise. In the lost job's own session,
-// where its launcher says it can be continued (continued.go): the capture
-// packed once the loss was found, where its engine's restart left its box
-// behind — never the box's own copy as it stands, which the harness was cut off
-// in — told it was cut off, what it called after the capture and that it may
-// end mid-call ([Lost.Continuation]). A job whose box went with its host left
-// no capture, and an earlier job's holds none of what this one was told, so its
-// round goes on in a session of its own, as it does after a second loss in the
-// round: told what happened and where to look for what the job left
-// ([Lost.Reseed]).
-//
-// UNLESS THE ROUND WAS ALREADY SUBMITTED: a job whose `submit_work` is on the
-// round's calls had finished its work and was lost on its way out, and the
-// round is collected from those calls like any other ([Runner.Resume]).
+// The round is carried on, not collected: a job cut off mid-step left no
+// account of the round, and judged as one it "did not succeed" for a reason it
+// never had. The executor relaunches for the same round as for [Asked]: in the
+// kept box where it may continue, else a fresh one; in the job's session where
+// its launcher can continue one, restored from the capture packed once the
+// loss was found, never the box's copy it was cut off in ([Lost.Continuation],
+// continued.go); else, with no capture or after a second loss, in a session of
+// its own ([Lost.Reseed]). A round whose `submit_work` is already on its calls
+// is collected instead ([Runner.Resume]).
 type Lost struct {
 	// Why is what happened to the job, as a clause that follows "when":
 	// "the engine it ran under restarted, which killed it".
@@ -46,31 +32,23 @@ type Lost struct {
 	// continues in it finds the job's working tree as the job left it.
 	BoxKept bool
 
-	// Losses is how many of the round's jobs have been lost, this one
-	// included, and Limit how many a round is carried on after: past it the
-	// round is not relaunched again ([ErrRoundLost]).
+	// Losses counts the round's lost jobs, this one included; past Limit the
+	// round is not relaunched ([ErrRoundLost]).
 	Losses, Limit int
 }
 
-// ErrRoundLost is a round whose jobs were lost with their hosts more often than
-// a round is carried on after ([Lost.Limit]): a run that keeps taking its own
-// host down, which every relaunch would take down again.
-//
-// ITS REFUSAL ENDS THE TURN: it wraps [turn.ErrPermanent] beside this, since a
-// retry of the resume carries the same losses and is refused the same way.
+// ErrRoundLost is a round lost with its hosts more than [Lost.Limit] times: a
+// run that keeps taking its host down. Its refusal also wraps
+// [turn.ErrPermanent], ending the turn, since a retry carries the same losses.
 var ErrRoundLost = errors.New("the executor's round was lost with its host too often to start again")
 
 // Reseed is what the run carrying a lost job's round on is told beside its
-// brief: that a run before it on this round was cut off, why, and where to look
-// for what it left.
+// brief: that a run before it was cut off, why, and where to look for what it
+// left.
 //
-// IT PROMISES NOTHING THE LAUNCH DECIDES. Whether this run is in the lost
-// job's box is the launch's to decide once it knows which box it has, and a
-// kept box is continued in only on the node whose host it is on, by the same
-// harness — so the text says where to look either way rather than describing a
-// working tree that may not be in front of it. And it says that what the lost
-// job did through the seat's tools did happen: those calls are not undone by
-// the loss, and a run that repeats them repeats their effects.
+// It promises nothing the launch decides: whether this run is in the kept box
+// is known only at launch, so the text says where to look either way. And the
+// lost job's tool calls did happen; repeating them repeats their effects.
 func (l Lost) Reseed() string {
 	var b strings.Builder
 	b.WriteString("## A run before you on this task was cut off\n\n")
@@ -93,8 +71,7 @@ func (l Lost) Reseed() string {
 	return b.String()
 }
 
-// why is the job's loss as a clause, in the most general terms where the
-// coordinator gave none.
+// why is the loss as a clause, a general one where the coordinator gave none.
 func (l Lost) why() string {
 	if strings.TrimSpace(l.Why) == "" {
 		return "it was lost with the host it ran on"
@@ -102,11 +79,9 @@ func (l Lost) why() string {
 	return l.Why
 }
 
-// Continuation is what the session a lost job worked in is told when the round
-// is carried on in it, restored from the turn's kept capture of it: that it was
-// cut off, why, and that what it did through the seat's tools before did happen.
-// What came after the capture, and that the session may end mid-call, the
-// continuation adds beside it (continued.go).
+// Continuation is what the lost job's session, restored from the turn's kept
+// capture, is told: that it was cut off, why, and that its tool calls did
+// happen. What came after the capture is added beside it (continued.go).
 func (l Lost) Continuation() string {
 	return "## Your previous segment was cut off\n\n" +
 		"You were working on this task when " + l.why() + ", so you stopped mid-step, before you " +
@@ -121,33 +96,28 @@ func (l Lost) Continuation() string {
 // whose continued session its provider refused ([Refused]).
 // [Runner.continueAgentRun] relaunches each the same way.
 type carried interface {
-	// session is the run's own harness session, which the relaunch continues
-	// where it runs in that run's box and takes up no kept capture of it;
-	// "" continues none there. boxKept says that box is still there: where it
-	// is gone no launch continues in it, whatever session says.
+	// session is the harness session a relaunch in the run's own box,
+	// taking up no kept capture, continues in place ("" for none); boxKept
+	// says that box still exists, and where it does not, no launch continues
+	// in it whatever session says.
 	session() string
 	boxKept() bool
-	// continuation is the prompt the continued session is given, and
-	// reseed what a fresh run carrying the round on is told beside its
-	// brief, each under the fence token of the turn that relaunches it.
+	// continuation prompts the continued session, reseed a fresh run, each
+	// under the fence token of the relaunching turn.
 	continuation(provenance.Boundary) string
 	reseed(provenance.Boundary) string
-	// tellsHeld is the held call the continuation tells what became of
-	// ([Asked.Held]), by its id and its tool, "" and "" where it tells none:
-	// the call a person approved for it is told there, by the lead of the
-	// brief the continuation opens, and in no list of the round's calls that
-	// brief tells ([Runner.calledAfter]).
+	// tellsHeld is the held call ([Asked.Held]) the continuation's lead tells
+	// the fate of, by id and tool ("", "" for none); that call is left out of
+	// the brief's list of the round's calls ([Runner.calledAfter]).
 	tellsHeld() (id, tool string)
-	// lead is what carries the round on as the run keeps it beside its
-	// record, for a later brief to a session that may lack the one this opens
-	// to tell again (leads.go), nil where the engine's own words carry it on: a
-	// loss's and a replaced sign-in's, which the cut-off section of every
-	// later brief says as well, and a provider's refusal's, whose run did no
-	// work for a later session to lack ([Refused]).
+	// lead is kept beside the run's record so a later brief to a session that
+	// lacks it can tell it again (leads.go); nil where the engine's own words
+	// carry the round on (a loss, a replaced sign-in, which every later brief's
+	// cut-off section repeats) or the run did no work ([Refused]).
 	lead() *sandbox.Lead
-	// keeps says the round may be carried on in the turn's kept session at
-	// all (continued.go); branch is the work-in-progress branch the run
-	// before pushed, where the engine knows it, for a box that replaced its.
+	// keeps says the round may continue the turn's kept session at all
+	// (continued.go); branch is the work-in-progress branch the previous run
+	// pushed, where known, for a replacement box.
 	keeps() bool
 	branch() string
 	// refusal is why the round may not be carried on, nil where it may.
@@ -164,14 +134,11 @@ func (a *Asked) keeps() bool                               { return true }
 func (a *Asked) branch() string                            { return a.Branch }
 func (a *Asked) refusal() error                            { return nil }
 
-// tellsHeld is the held call the question was about, which the answer's
-// continuation tells what became of ([Asked.Continuation]): that the call was
-// made and what it returned, or that it may or may not have taken effect — or
-// that it was not made, where nothing of it is in the round's log. "" for a
-// question about no held call, and for a reply refused, whose continuation
-// tells only the refusal (a chat reply never answers a held call). By its id,
-// which the call a person approved for it carries ([BridgedCall.HeldID]), and
-// its tool.
+// tellsHeld is the held call the question was about, whose fate the
+// continuation tells ([Asked.Continuation]), by the id the approved call
+// carries ([BridgedCall.HeldID]) and its tool. "" for no held call, and for a
+// refused reply, whose continuation tells only the refusal (a chat reply never
+// answers a held call).
 func (a *Asked) tellsHeld() (id, tool string) {
 	if a.Held == nil || a.Refused != nil {
 		return "", ""
@@ -187,14 +154,11 @@ func (a *Asked) what() string {
 	return "carrying on the run with its answer"
 }
 
-// A lost job's session is never continued IN PLACE: what its box holds is
-// what its harness was cut off in, and the kept capture of it — whose archive
-// leaves out what its harness never finished, and whose continuation says what
-// came after it — is what a relaunch continues (continued.go). Not a second
-// time in one round, though: a round lost again is a run that may take its host
-// down from the state it holds, so its relaunch starts a session of its own
-// rather than replay that state toward the round's limit. What a fresh run is
-// told of it is the engine's own words, which no fence token touches.
+// A lost job's session is never continued IN PLACE: its box holds what the
+// harness was cut off in, so a relaunch continues the kept capture instead
+// (continued.go), and after a second loss not even that
+// ([sandbox.KeptAfterLoss]). A fresh run is told only the engine's own words,
+// which need no fence token.
 func (l *Lost) session() string                         { return "" }
 func (l *Lost) boxKept() bool                           { return l.BoxKept }
 func (l *Lost) continuation(provenance.Boundary) string { return l.Continuation() }

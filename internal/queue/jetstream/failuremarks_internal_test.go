@@ -15,12 +15,9 @@ import (
 // wakeEvent is the event the cases' deliveries carry, for their lines.
 var wakeEvent = &events.Event{Type: "external_notification"}
 
-// A MESSAGE'S OWN FAILURE IS MARKED ONCE, AND A NODE'S NEVER.
-//
-// What one attachment knows of a message's failures says whether its failure
-// mark is still to be written: at the message's own failure, until this
-// attachment has written it (failuremarks.go), and never at a failure of the
-// node's own (queue.NakNode), which judges nothing of the message. Every
+// A MESSAGE'S OWN FAILURE IS MARKED ONCE, AND A NODE'S NEVER: a mark is asked
+// for at the message's own failure until this attachment has written it, never
+// at the node's own (queue.NakNode), which judges nothing of the message; every
 // failure counts towards the spacing, whoever's it is.
 //
 // Mutation: answer a mark at a node's own failure, or again once written, and
@@ -56,13 +53,10 @@ func TestAMessagesOwnFailureIsMarkedOnceAndANodesNever(t *testing.T) {
 }
 
 // A MESSAGE THAT FAILED AS ITSELF IS MARKED ON THE BROKER, AND THE MARK GOES
-// ONCE IT IS SETTLED.
-//
-// The member whose return spends a message's budget is rarely the one that saw
-// it fail, so the failure is marked where every member reads it — the broker —
-// before the message goes back (markFailed); and the member that wrote the
-// mark deletes it once it settles the message, here by acknowledging it.
-// Read off the broker, the leader's own answer.
+// ONCE IT IS SETTLED: the member whose return spends the budget is rarely the
+// one that saw the failure, so it is marked where every member reads it before
+// the message goes back (markFailed), and its writer deletes it on settling,
+// here by acknowledging. Read off the broker, the leader's own answer.
 //
 // Mutation: write no mark at the message's own failure, and the broker holds
 // none; delete nothing when the message settles, and the mark stays.

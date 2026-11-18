@@ -12,19 +12,13 @@ import (
 // Asked is the question a parked run put to a person, answered: what a resume
 // carries the run on with ([Resume.Asked]).
 //
-// # Why the run is carried on, not collected
-//
-// A run asks only when it cannot go on without the answer, so the round it
-// asked in is not over: there is no report to judge yet, and the reply is no
-// account of anything the run did. Filed as the run's report — which is what
-// the resume once did with it — the answer reached the turn as a run that
-// ended without submitting, was rescued as incomplete, and never reached the
-// run that asked for it. So the resumed turn relaunches its executor instead,
-// continuing the harness's own conversation with the answer as its next prompt
-// ([Asked.Continuation]) — the turn's kept capture of it, in whatever box the
-// launch gets (continued.go), or the session the asking run's own box holds —
-// or, where the conversation can be continued in neither, as a fresh run told
-// the question, the answer and the branch beside its brief ([Asked.Reseed]).
+// The answer is never filed as the run's report: a run asks only when it
+// cannot go on, so its round is not over and the reply accounts for nothing
+// it did. The resumed turn relaunches the executor instead, continuing the
+// harness's conversation with the answer as its next prompt
+// ([Asked.Continuation]) from the turn's kept capture (continued.go) or the
+// asking box's session, or else a fresh run told the question, answer and
+// branch beside its brief ([Asked.Reseed]).
 type Asked struct {
 	// Question is what the run asked and Answer the reply; By is who
 	// answered, "" where the route that carried the reply does not say.
@@ -49,9 +43,8 @@ type Asked struct {
 	Label *provenance.Label
 
 	// Held is the call to a tool at Needs approval the question was about,
-	// nil for a question the run asked itself (ADR-0077): made, at most
-	// once, as the run is carried on ([makeHeld]), and what became
-	// of it is the answer the run is told.
+	// nil for a question the run asked itself (ADR-0077): made at most once
+	// as the run is carried on ([makeHeld]); its outcome is the answer.
 	Held *HeldCall
 
 	// Withdrawn is whether the seat withdrew the question, or the held
@@ -59,10 +52,9 @@ type Asked struct {
 	// told as its own withdrawal, never as a person's answer.
 	Withdrawn bool
 
-	// Refused is set where the question's outcome was no answer but the
-	// REFUSAL of a reply too large to hand the run (ADR-0114): Answer and
-	// By are empty, and the run is told the refusal in their place, in the
-	// engine's words ([RefusedReply]) — never handed an empty answer.
+	// Refused is set where a reply was refused as too large to hand the run
+	// (ADR-0114): Answer and By are empty, and the run is told the refusal
+	// in the engine's words ([RefusedReply]), never an empty answer.
 	Refused *RefusedReply
 }
 
@@ -75,20 +67,12 @@ const withdrawnTail = "Carry on with the task from where you stopped, under your
 
 // happened is what every fresh run carrying an asking run's work on is told of
 // what that run did through the seat's tools, as [Lost.Reseed] and
-// [Rotated.Reseed] tell it: it happened, and is to be checked before any of it
-// is done again. Said at the end of its account of the run before it, before
-// where the work is and what to finish it with ([Asked.freshMachine]), in every
-// branch of [Asked.Reseed]: an answer, a withdrawal, a refused reply and a held
-// call, answered or withdrawn.
+// [Rotated.Reseed] tell it: it happened, so check before redoing it. Said in
+// every branch of [Asked.Reseed], before [Asked.freshMachine].
 //
-// THE LIST OF THE ROUND'S CALLS BESIDE IT CANNOT SAY THIS ALONE
-// (internal/agent/prompts' CalledBefore): it tells only what the run did
-// through the seat's tools that the round's record kept one by one, so
-// neither the run's work outside them (its commits, its pushes, what its shell
-// did) nor a call its record counted only in a tally or past the read cap is
-// told by any line. Lost and rotated rounds' fresh briefs said it; an asked
-// one's alone did not, though its run had done as much before it stopped to
-// ask.
+// The list of the round's calls (internal/agent/prompts' CalledBefore) cannot
+// say this alone: it omits work outside the seat's tools (commits, pushes,
+// shell) and calls the record kept only in a tally or past the read cap.
 const happened = "What it did through your tools before it stopped did happen: check before doing any of it again."
 
 // withdrew is the seat's own reason, as the run reads it, under fence token b.
@@ -96,33 +80,21 @@ func (a Asked) withdrew(b provenance.Boundary) string {
 	return "You withdrew it before anybody answered: " + provenance.Neutralise(b, a.Answer)
 }
 
-// RefusedReply is what a run is told of the reply to its question that was
-// too large to hand it: how many messages it was, what it came to as the
-// engine records an answer, and what an answer to a run may (internal/sandbox's
-// AnswerRefusal) — figures, and none of its words.
+// RefusedReply is what a run is told of a reply too large to hand it: its
+// message count, its recorded size and the bound (internal/sandbox's
+// AnswerRefusal) — figures, never its words, which no record could carry.
 //
-// # Why the run is told, and told this
-//
-// The run is the one that knows what it asked for and why, so it is the one
-// that can say what shorter answer would serve, or another way to get the rest
-// to it — a part of a log, a file in its checkout, a link — or that it can go
-// on without. A reply refused with nobody told left the run waiting on a
-// question the person believed answered, and their next short message ("any
-// luck?") became its answer. So the run is resumed with the refusal through
-// the very channel an answer reaches it, and either asks again — its new
-// question, anchored on its own asking, takes only what is written after it —
-// or carries on and says the reply never reached it.
-//
-// QUOTING NOTHING: the reply's words are the very thing no record of the run
-// could carry, and its figures are the engine's own. And SAID IN THE QUESTION
-// IT ASKS AGAIN, which is all a reviewer of the round reads of the exchange:
-// the review's evidence is the run's calls, never the person's replies, so a
-// second `ask_and_wait` that says why it asks again is the follow-up it is,
-// where one that only repeated the first would read as asking twice.
+// The run is resumed with the refusal through the channel an answer takes,
+// because only it knows what shorter answer or other route (part of a log, a
+// file, a link) would serve; left untold, it waits on a question the person
+// thinks answered, and their next short message becomes its answer. It asks
+// again (the new question takes only what is written after it) or carries on,
+// saying the reply never reached it.
+// The run says why in the question it asks again, since a reviewer reads the
+// run's calls, never the replies, and a bare repeat reads as asking twice.
 type RefusedReply struct {
 	// Messages is how many messages the reply was: several that reached the
-	// seat together are refused together, and a person asked for a shorter
-	// answer needs to know their reply was all of them.
+	// seat together are refused together, which the person needs to know.
 	Messages int
 
 	// Bytes is what the reply came to as the engine records an answer, and
@@ -162,17 +134,12 @@ func (r RefusedReply) askAgain(whose string) string {
 // answered is the answer as the run reads it, under the fence token b of the
 // turn that carries the run on.
 //
-// A REPLY IS FENCED UNDER WHO WROTE IT (ADR-0040): somebody spoke in the
-// conversation the run asked in, and the chat surface, not the engine,
-// vouched for who that was, so the run reads their words as it reads the
-// message that woke its turn, as information from them and never an
-// instruction that overrides its own. AN ANSWER BY TURN IS NOT FENCED: it
-// came from a person the engine let answer this run, its requester, its
-// seat's lead or an administrator, sealed onto its record as that person's
-// instruction to it (ADR-0068), and a fence would tell the run not to follow
-// the one answer it stopped to wait for. Either way nothing in the words, and
-// nothing in the question the run's own session wrote or in the answerer's
-// name, opens or closes a fence ([provenance.Neutralise]).
+// A chat reply is fenced under who wrote it (ADR-0040): the chat surface, not
+// the engine, vouched for them, so it is information, never an instruction.
+// An answer by turn is not fenced: it came from someone the engine let answer
+// (requester, seat's lead or administrator), sealed as their instruction
+// (ADR-0068), and a fence would tell the run not to follow it. Either way no
+// words, question or name open or close a fence ([provenance.Neutralise]).
 func (a Asked) answered(b provenance.Boundary) string {
 	if a.Label != nil {
 		return a.answerer(b) + " answered:\n" + a.Label.Fence(b, a.Answer)
@@ -229,11 +196,9 @@ func (a Asked) Continuation(b provenance.Boundary) string {
 // before it asked, what, and the answer — and where its work in progress is,
 // since this run does not remember any of it.
 //
-// IT MUST NOT PROMISE A WORKING TREE. A fresh run is one that could not carry
-// the asking run's conversation on, and most often that is because the box was
-// reclaimed while the question waited: the run starts by looking for a
-// checkout, and a text that implied one would send it looking for files that
-// are gone. Git is the durable state, so the branch is what it is pointed at.
+// It must not promise a working tree: a fresh run most often means the box
+// was reclaimed while the question waited, so it is pointed at the branch,
+// git being the durable state, not at files that may be gone.
 func (a Asked) Reseed(b provenance.Boundary) string {
 	if a.Refused != nil {
 		return a.refusedReseed(b)
@@ -265,10 +230,8 @@ func (a Asked) Reseed(b provenance.Boundary) string {
 
 // refusedContinuation is [Asked.Continuation] for a refused reply: the asking
 // run's own session is told the person replied and the reply did not reach it,
-// with its figures, and to ask again or carry on.
-//
-// THE REFUSAL FIRST, BEFORE ANYTHING ELSE THE RESUME COULD SAY: a refused
-// reply is a chat reply, and a chat reply never answers a held call
+// with its figures, and to ask again or carry on. Checked before Held: a
+// refused reply is a chat reply, which never answers a held call
 // (internal/sandbox's ConversationRef.Answers), so the two never meet.
 func (a Asked) refusedContinuation(b provenance.Boundary) string {
 	var w strings.Builder

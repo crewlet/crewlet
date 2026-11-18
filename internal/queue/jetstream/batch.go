@@ -24,11 +24,8 @@ func eventOf(d delivery) *events.Event { return d.ev }
 // partition by the key [queue.BatchKeyFunc] derives, dispatch one handler
 // call per partition oldest-partition-first, and ack per partition. A
 // failing partition never blocks or replays a different one from the same
-// drain.
-//
-// This is what makes ten comments on one issue cost ONE agent turn instead
-// of ten. It is also why an agent that was busy does not wake to a thundering
-// herd: everything that queued up while it worked coalesces into one batch.
+// drain. Ten comments on one issue thus cost one agent turn, and what queued
+// while an agent was busy coalesces into one batch.
 func (q *Queue) SubscribeBatch(
 	ctx context.Context,
 	topic, group string,
@@ -44,9 +41,8 @@ func (q *Queue) SubscribeBatch(
 			if ctx.Err() != nil {
 				return
 			}
-			// THE LOOP TOP that [Queue.Loops] reports, as on the
-			// single-event loop: the gate is read once, and what it said
-			// is what the loop then does.
+			// THE LOOP TOP [Queue.Loops] reports: the gate is read once,
+			// and what it said is what the loop then does.
 			blocked := a.blocked()
 			a.reachedTop(blocked)
 			if blocked {
@@ -60,20 +56,12 @@ func (q *Queue) SubscribeBatch(
 				continue
 			}
 			// A stop or a hold that landed DURING the linger window must
-			// not be flushed past: the whole point of pausing a seat's
-			// inbox is that no turn starts, and a batch collected a
-			// moment earlier would start one. Hand it straight back.
-			//
-			// The two are handled DIFFERENTLY and conflating them was a
-			// seat-killing bug. A cancelled context is teardown, so the
-			// loop ends. A hold is RELEASED IN PLACE — ResumeTopic clears
-			// it and the attachment is expected to carry on — so ending
-			// the loop there left the seat attached, owning its lease,
-			// and reading nothing for the rest of the process's life.
-			// Nothing detects that: the seat looks owned and healthy and
-			// its mail simply accumulates. It is the same condition the
-			// top of this loop already answers with `continue`, ten lines
-			// up, which is what it should have said here too.
+			// not be flushed past: a paused inbox starts no turn. Hand the
+			// batch straight back. A cancelled context is teardown, so the
+			// loop ends; a hold is released in place (ResumeTopic), so the
+			// loop must `continue` as at its top — ending it would leave
+			// the seat attached, owning its lease, and silently reading
+			// nothing for the rest of the process's life.
 			if ctx.Err() != nil {
 				a.handBackUndispatched(ctx, batch, handBackStopping)
 				return
@@ -89,21 +77,17 @@ func (q *Queue) SubscribeBatch(
 
 // drain collects one cycle's worth of deliveries.
 //
-// Options are read HERE, once per cycle, which is what makes a live config
-// reload take effect on the next batch with no re-subscription — and they are
-// read once the cycle's FIRST MESSAGE IS IN HAND, not when the cycle starts.
-//
-// An idle cycle spends up to a whole poll window ([Queue.fetchWait], a second
-// at the shipped value) parked in that first fetch. Read before it, the
-// options belonged to whenever the loop last went round, so a reload landing
-// while an idle seat waited was applied to the batch AFTER the next one — and
-// the next one is exactly the burst an operator who just opened the window
-// was expecting it to absorb. The window is measured from the first message,
-// so the instant that opens it is the instant that says how long it is.
+// Options are read HERE, once per cycle, so a live config reload takes effect
+// on the next batch with no re-subscription — and once the cycle's FIRST
+// MESSAGE IS IN HAND, not when the cycle starts: an idle cycle parks up to a
+// poll ([Queue.fetchWait]) in that first fetch, and options read before it
+// would apply a reload landing meanwhile only to the batch after the burst it
+// was meant for. The window is measured from the first message, so that
+// instant also says how long it is.
 func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []delivery {
 	var batch []delivery
-	// Counted as it is collected, for [Queue.InWindow], and cleared on every
-	// way out: what a drain that has returned holds is no window's.
+	// Counted for [Queue.InWindow], and cleared on every way out: what a
+	// returned drain holds is no window's.
 	defer a.windowed.Store(0)
 	collect := func(msg jetstream.Msg) {
 		if d, ok := a.toDelivery(msg); ok {
@@ -111,14 +95,12 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 			a.windowed.Store(int64(len(batch)))
 		}
 	}
-	// THE PRIORITY LANE FIRST, and all of it the cap allows, without
-	// waiting: this is what puts a person's message in the drain while the
-	// topic's own head is a backlog of work nobody is waiting for. What it
-	// takes is dispatched ahead of the rest ([queue.OrderForDispatch]), and
-	// the topic fills the drain behind it as before. The cap is read here,
-	// ahead of the first message, because the lane is asked before anything
-	// is known to be waiting; the window below is still read once a message
-	// is in hand.
+	// THE PRIORITY LANE FIRST, all the cap allows, without waiting: a
+	// person's message gets into the drain while the topic's head is a
+	// backlog nobody waits for, and is dispatched ahead of it
+	// ([queue.OrderForDispatch]). The cap is read ahead of the first message
+	// because the lane is asked before anything is known to wait; the window
+	// is still read once a message is in hand.
 	if err := a.fetchLane(opts.EffectiveMaxBatch(), collect); err != nil {
 		a.logLaneFetchErr(ctx, err)
 	}
@@ -136,13 +118,9 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 	linger := opts.EffectiveLinger()
 
 	// The linger window is measured from the FIRST message and is fixed,
-	// not sliding: a steady trickle must not be able to delay dispatch
-	// unboundedly. With linger 0 (the default) this still drains
-	// everything already available, so a backlog that accumulated while a
-	// previous handler ran coalesces at zero added latency.
-	//
-	// Where it ends, and whether it has, are read off [lingerClock]: the
-	// wall clock outside this package's own tests.
+	// not sliding: a steady trickle must not delay dispatch unboundedly.
+	// With linger 0 (the default) this still drains everything already
+	// available, at zero added latency. Its end is read off [lingerClock].
 	clock := a.q.windowClock()
 	deadline := clock.Now().Add(linger)
 	defer a.lingering.Store(false)
@@ -158,48 +136,30 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 		if err := a.fetch(maxBatch-len(batch), wait, collect); err != nil {
 			break
 		}
-		// THE WINDOW IS THE BOUND, and only the window.
-		//
-		// This used to end the drain on a fetch that produced nothing AND a
-		// passed deadline, which made the window SLIDE: any arrival kept
-		// collection going, so the real bound was maxBatch × drainWait
-		// rather than the linger — a second of collection at the default
-		// cap, fifty at a large one, spent out of the same ack budget that
-		// has to hold a whole turn as well. The comment above the deadline
-		// already said fixed; this is what makes it true.
-		//
-		// An empty fetch is deliberately NOT an ending on its own: a
-		// positive window exists precisely to wait for arrivals that have
-		// not happened yet. With linger 0 the deadline has already passed
-		// on the first check, so exactly one tail fetch runs — which asks
-		// for the whole remaining cap and is what drains a backlog that
-		// accumulated while the previous handler ran.
+		// THE WINDOW IS THE BOUND, and only the window: also requiring an
+		// empty fetch to end would let any arrival slide it, to maxBatch ×
+		// drainWait, spent from the ack budget a whole turn needs too. An
+		// empty fetch is NOT an ending on its own, since a positive window
+		// waits for arrivals not yet made. With linger 0 exactly one tail
+		// fetch runs, asking for the whole remaining cap.
 		if !clock.Now().Before(deadline) {
 			break
 		}
-		// THE WINDOW HAS OUTLIVED A FETCH, which a window of nothing never
-		// does: it ends with its one tail fetch, so what this drain collects
-		// from here it collects because the window is open. Only a window
-		// longer than the poll ([Queue.fetchWait]) gets here, since a fetch
-		// waits at most the poll; the conformance harness polls every 25 ms.
+		// THE WINDOW HAS OUTLIVED A FETCH, so what is collected from here is
+		// collected because the window is open. Only a window longer than the
+		// poll ([Queue.fetchWait]) gets here; the conformance harness polls
+		// every 25 ms.
 		a.lingering.Store(true)
 	}
 	return batch
 }
 
 // lingerClock is what a drain's linger window ends on: the wall clock, unless
-// this package's own tests hand the queue another (Config.clock).
-//
-// A SEAM FOR THE CONFORMANCE SUITE. A case asking what a pause, a hold or a
-// stop does to a window that is open when it lands needs the window open at the
-// verb and ended after it, and on the wall clock nothing orders the two: a
-// runner that reached the verb late met a window that had already flushed. On a
-// clock the case moves, the window ends where the case says and never before.
-//
-// THE WINDOW'S END, AND NOTHING ELSE. Where the window ends and whether it has
-// are the drain's own decision, read off this; each fetch inside the window
-// keeps its expiry on the wall clock, for the reason the package doc gives (a
-// linger window ends on a clock the conformance suite can move).
+// this package's own tests hand the queue another (Config.clock), so a
+// conformance case can land a verb inside an open window and only then end it.
+// It decides the window's end and nothing else; each fetch keeps its expiry on
+// the wall clock (package doc, "A linger window ends on a clock the
+// conformance suite can move").
 type lingerClock interface {
 	Now() time.Time
 }
@@ -231,20 +191,13 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 	parts := queue.OrderForDispatch(queue.PartitionByKey(batch, key, eventOf), eventOf)
 
 	for _, part := range parts {
-		// A deferral, a detach or a pause taken mid-drain stops the rest
-		// of it: the remaining partitions are work this consumer has
-		// equally lost the right to run. They go back unhandled so the
-		// successor gets them, rather than being run by a consumer that
-		// has just admitted it should not.
+		// A deferral, a detach or a pause taken mid-drain stops the rest:
+		// the remaining partitions go back unhandled, to the successor.
 		//
-		// UNHANDLED IS NOT UNCHARGED. These messages were FETCHED, which
-		// is where this broker's counter moves, so their delivery is
-		// already spent by the time the loop gets here — the hand-back only
-		// decides whether the last one dead-letters with a copy or is
-		// discarded by MaxDeliver in silence. That is the contract's rule
-		// and not this backend's shape: see [queue.DeliveriesLeft], and
-		// internal/queue/memory, whose mailbox is a slice and therefore
-		// has to charge a take deliberately.
+		// UNHANDLED IS NOT UNCHARGED: a fetch already spent their
+		// delivery, so the hand-back only decides whether the last one
+		// dead-letters with a copy or is dropped by MaxDeliver in silence.
+		// That is the contract's rule ([queue.DeliveriesLeft]).
 		if a.blocked() {
 			a.handBackUndispatched(ctx, part.Items, a.blockedBy())
 			continue
@@ -258,46 +211,37 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		a.q.beginHandler()
 		done := a.runningOn(evs...)
 		// EACH MESSAGE'S OWN HEADROOM, and the partition's folded from
-		// them by the contract. Both, because they answer different
-		// questions: one outcome covers the whole partition, so a
-		// hand-back spends a delivery of every message in it and the
-		// nearest its budget is the one that dead-letters first — while
-		// a handler deciding what to do with ONE of these events has to
-		// ask what THAT message has left. See [queue.DeliveriesLeft] and
-		// [queue.DeliveriesLeftFor].
+		// them: one outcome spends a delivery of every message, so the
+		// nearest its budget dead-letters first, while a handler deciding
+		// about ONE event asks what that message has left
+		// ([queue.DeliveriesLeft], [queue.DeliveriesLeftFor]).
 		res := runBatchHandler(a.withProgress(a.withHeadroom(ctx, part.Items...), part.Items...),
 			a.log, evs, h)
 
 		a.applyPartition(ctx, part.Key, part.Items, evs, res)
 		// IN FLIGHT UNTIL THE OUTCOME IS SETTLED, a dead letter's keep
-		// included, for [attachment.dispatchOne]'s reason.
+		// included ([attachment.dispatchOne]).
 		a.q.endHandler()
-		// AFTER THE OUTCOME IS APPLIED: an acked message leaves the
-		// consumer's unfinished count only then, and released before it
-		// would read as waiting for that moment.
+		// AFTER THE OUTCOME IS APPLIED: only then does an acked message
+		// leave the consumer's unfinished count.
 		done()
 	}
 }
 
 // applyPartition applies one outcome to every message in a partition.
 //
-// Per-partition rather than per-message: the handler saw the partition as a
-// unit and its verdict covers all of it. Acking some and NAKing others would
-// deliver a partial one to the successor.
+// The handler saw the partition as a unit and its verdict covers all of it;
+// acking some and NAKing others would hand the successor a partial one.
 func (a *attachment) applyPartition(ctx context.Context, batchKey string, items []delivery, evs []*events.Event, res queue.Result) {
 	queue.LogBatchResult(ctx, a.log, a.key.topic, a.key.group, batchKey, evs, res)
 
 	switch res.Outcome {
 	case queue.OutcomeAck:
 		for _, d := range items {
-			// FORGOTTEN FIRST, for the reason [attachment.apply]
-			// gives on the single-message path: a partition that
-			// succeeded after failing must not carry those failures
-			// into a later redelivery of the same sequences, and the
-			// map would otherwise hold every sequence this seat ever
-			// failed for the life of the attachment. That is
-			// ordinary operation here — an answer a parked executor
-			// is still owed is NAKed and acked on a later pass.
+			// FORGOTTEN FIRST, for [attachment.apply]'s reason: a
+			// later redelivery of the same sequence must not carry
+			// these failures, and the map must not grow for the
+			// attachment's life.
 			var mark uint64
 			if md, err := d.msg.Metadata(); err == nil {
 				mark = a.settled(md.Sequence.Stream)
@@ -316,8 +260,7 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 		}
 	case queue.OutcomePass:
 		// Each message by its own delivery count, under the partition's
-		// reason, and the attachment goes on taking mail: see
-		// [attachment.pass].
+		// reason, and the attachment goes on taking mail ([attachment.pass]).
 		for _, d := range items {
 			a.pass(ctx, d.msg, d.ev, res.Reason)
 		}
@@ -328,14 +271,10 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 // mid-drain, or teardown — for reason. Nothing is wrong with any of these
 // messages.
 //
-// THROUGH THE BUDGET CHECK, because a Nak spends a delivery whatever it means.
-// Handing a batch back is not a failure, but JetStream counts it as one
-// redelivery all the same, and this used to call msg.Nak() bare: a message
-// whose 25 deliveries were spent by lease movements and sandbox parks was then
-// discarded by the broker's own MaxDeliver backstop — no dead-letter copy, no
-// `dead_lettered` line, no advisory consumer anywhere in this package to
-// notice. A healthy inbox event, silently gone. The boundary is the same one
-// the failure path already honours; what differs is only how it got there.
+// THROUGH THE BUDGET CHECK ([attachment.handBack]), because a Nak spends a
+// delivery whatever it means: a bare msg.Nak() lets a message whose deliveries
+// lease moves and sandbox parks spent be discarded by MaxDeliver in silence,
+// with no dead-letter copy and no `dead_lettered` line.
 func (a *attachment) nakAll(ctx context.Context, items []delivery, reason string) {
 	for _, d := range items {
 		a.handBack(ctx, d.msg, d.ev, reason)
@@ -346,10 +285,10 @@ func (a *attachment) nakAll(ctx context.Context, items []delivery, reason string
 // not dispatch — a stop, a hold, a pause, a quiesce or a detach met before a
 // handler ran — for reason ([attachment.nakAll]).
 //
-// IN FLIGHT UNTIL IT IS SETTLED, though no handler runs, for the reason
-// [attachment.dispatchOne] counts its own hand-back: one of them may spend a
-// message's budget, and its dead letter's keep crosses a link at its bytes'
-// pace, under a drain that would otherwise read the queue as idle and stop it.
+// IN FLIGHT UNTIL IT IS SETTLED, though no handler runs
+// ([attachment.dispatchOne]): a hand-back may dead-letter, and that keep
+// crosses a link at its bytes' pace under a drain that would otherwise read
+// the queue as idle and stop it.
 func (a *attachment) handBackUndispatched(ctx context.Context, items []delivery, reason string) {
 	a.q.beginHandler()
 	defer a.q.endHandler()

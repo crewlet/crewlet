@@ -6,19 +6,13 @@ import (
 	"time"
 )
 
-// LEADS TOLD AGAIN ARE ONES THE SESSION MAY ALREADY SHOW. A session that may
-// lack its job's brief is told again the messages that brief opened with, under
-// a header that says the session may already show them, that a message shown
-// both above and here is one message, sent once, and, of several, that they are
-// in the order they were sent and the later of two that differ stands; with
-// how many of them it says, and how many earlier ones are not kept to tell
-// again, said rather than left out, even where none is left to tell, and never
-// as messages the engine no longer keeps: a read of them that failed counts
-// every one, though the store may keep them still. Nothing at all is no
-// section. AND NEVER WHY THE SESSION MAY NOT SHOW THEM, which the section before
-// it says in the words the session's record bears out: said here that its run
-// may have been cut off, a session whose harness ended its own run, told it may
-// be a summary, was told what nothing says.
+// LEADS TOLD AGAIN ARE ONES THE SESSION MAY ALREADY SHOW. The header says the
+// session may already show them, that one shown twice is one message sent once,
+// and of several, their count, that they are in sent order and the later of two
+// that differ stands. Earlier ones not kept are counted, even with none left to
+// tell, never as ones the engine no longer keeps (a failed read counts them
+// all). Nothing is no section. NEVER WHY the session may not show them: the
+// section before says that, as the record bears out, not "cut off".
 //
 // Mutation: drop the count, say one message as several, leave the cut out, say
 // it as no longer kept, leave a cut with nothing to tell unsaid, or say the run
@@ -70,24 +64,13 @@ func TestLeadsToldAgainAreOnesTheSessionMayAlreadyShow(t *testing.T) {
 	}
 }
 
-// A TURN TOLD AGAIN KEEPS ITS BOUNDARY AND NOT ITS BOX. The lead of a run that
-// continued the session its conversation's last turn left, told again to a
-// later session of the work that may lack it, says where this turn began (the
-// turn it began after, when that turn ended, that it was lost, in a schedule's
-// words for a fire) and what that boundary makes stale; and, of a session that
-// began as the one the earlier turns left, that its files from before the turn
-// were the earlier box's, that it ends where it was kept while that turn still
-// worked or may not hold the last of a lost one, and that, cut off when it was
-// kept, it may hold a call with no result from before the turn began. NEVER
-// that the run is in a new box, on a fresh checkout, to check a repository out
-// again, or where the earlier box's paths were: those are true of the box that
-// lead's run started in, and stale or false of the box a later job continues
-// the session in.
-//
-// NOR THAT THE SESSION ABOVE BEGAN THERE: a session that may be a summary is
-// told every task the run keeps, another lineage's among them, which began with
-// a fresh brief. So every word of the session the earlier turns left comes
-// after the line that says it is of a session that began as that one.
+// A TURN TOLD AGAIN KEEPS ITS BOUNDARY AND NOT ITS BOX. A continued turn's lead,
+// told again, says where the turn began (after which turn, ended or lost, a fire
+// in a schedule's words) and what that makes stale. Every word of the earlier
+// turns' session (its box's files, where it was kept, a cut-off call) follows
+// the line making it conditional: the session may be another lineage's. NEVER
+// a new box, a fresh checkout or the earlier box's paths, stale where a later
+// job continues.
 //
 // Mutation: tell the lead again as BuildNextTurn renders it, keep its new-box
 // section, lose the boundary of a turn that went on or was lost, say that the
@@ -152,15 +135,11 @@ func TestATurnToldAgainKeepsItsBoundaryAndNotItsBox(t *testing.T) {
 	}
 }
 
-// A SEND-BACK TOLD AGAIN SAYS NOTHING OF THE SESSION ABOVE. A review's send-back,
-// told again as a lead to a later session of the work, may reach a session that
-// is not the one it was sent to: one that began with a fresh brief, or the
-// session the conversation's last turn left. So it says that the turn's work was
-// reviewed and sent back, and the rules a turn's earlier calls are read by,
-// said of every call the turn's earlier rounds made whether or not the session
-// above shows it: never that this is the same session, nor that those rounds
-// are in it. The send-back itself, to the session that did the round, says
-// both, which is true of it.
+// A SEND-BACK TOLD AGAIN SAYS NOTHING OF THE SESSION ABOVE. Told again, it may
+// reach a session it was not sent to, so it says the work was sent back and the
+// rules for the earlier rounds' calls whether or not the session shows them,
+// never that this is the same session or that those rounds are in it. The
+// original send-back says both, which is true of it.
 //
 // Mutation: tell a send-back again in its own words, or lose the rules or the
 // review, and a check goes red.
@@ -190,18 +169,12 @@ func TestASendBackToldAgainSaysNothingOfTheSessionAbove(t *testing.T) {
 	}
 }
 
-// EARLIER ANSWERS ARE TOLD IN THE ORDER THEY CAME. A run that starts a session
-// of its own is told the answers that carried the turn's work on before it,
-// under a header of their own: how many, that they are in the order they came,
-// each in the round its heading names, that the later of two that differ
-// stands, and that its session holds none of them; and how many earlier
-// messages that carried the work on are not kept to tell, said rather than left
-// out, even where no answer is left to tell, and never as messages the engine
-// no longer keeps: a read of them that failed counts every one, though the
-// store may keep them still. Told again inside a task, the same answers are
-// said in words true of any session of the work, which may show them, with no
-// cut, which the section around the task says once. Nothing to tell is no
-// section. And the section nests a level down by its own headings alone.
+// EARLIER ANSWERS ARE TOLD IN THE ORDER THEY CAME. To a fresh session the header
+// says how many, in order, each in its heading's round, the later of two that
+// differ stands, and its session holds none; earlier messages not kept are
+// counted, even with no answer left, never as ones the engine no longer keeps.
+// Told again inside a task, the words hold for any session and carry no cut.
+// Nothing is no section, and it nests by its own headings alone.
 //
 // Mutation: drop the count, the order, the rule that the later stands, or the
 // word that the fresh session holds none of them; say it of a session told them
@@ -277,12 +250,10 @@ func TestEarlierAnswersAreToldInTheOrderTheyCame(t *testing.T) {
 	}
 }
 
-// AN ANSWER NAMES THE ROUND IT CAME IN. Told to a run working in a round, an
-// answer of that round came in this round; one of an earlier round came in a
-// round a review sent back, since nothing else begins a later round, and is
-// named by its number, as the work already done numbers its rounds; and the
-// held call it approved, made in that round, is among that round's calls there,
-// which say how it ended. A round no record names is named not at all.
+// AN ANSWER NAMES THE ROUND IT CAME IN: "this round", or an earlier round by
+// number as one a review sent back (nothing else begins a later round), and the
+// held call it approved is among that round's calls in the work already done.
+// A round no record names is named not at all.
 //
 // Mutation: name an earlier round without its review, or this round by its
 // number, or point a held call anywhere but its round's calls, and a case goes
@@ -309,13 +280,10 @@ func TestAnAnswerNamesTheRoundItCameIn(t *testing.T) {
 	}
 }
 
-// A COUNTED HELD CALL IS ONE OF ITS ENTRY'S CALLS, TOLD HOW IT ENDED. Where the
-// work already done holds the round an answer came in under an entry that may
-// count the held call it approved rather than list it, the answer says the call
-// is one of that round's calls, under the entry's heading in the work already
-// done: a round alone by its number, a span of rounds a park dropped by its
-// first and its last, written with "to" rather than its heading's dash; and that
-// what became of it is told there, since the entry may not say it.
+// A COUNTED HELD CALL IS ONE OF ITS ENTRY'S CALLS, TOLD HOW IT ENDED. Where an
+// entry may count the approved call rather than list it, the answer names the
+// entry (a round by number, a parked span by first "to" last, never a dash) and
+// says what became of the call is told here, since the entry may not say it.
 //
 // Mutation: name a span by its first round alone, say a round alone as a span,
 // name another round's calls, or leave out that the entry may count it, and a
@@ -349,12 +317,10 @@ func TestACountedHeldCallIsOneOfItsEntrysCalls(t *testing.T) {
 }
 
 // A REVIEW NOT KEPT IS SAID AS GONE, NEVER AS A COPY THE ENGINE HOLDS. A review
-// whose round a park has dropped from the turn's record is said in its place
-// among the messages told again, under a heading of its own at a lead's level:
-// that it sent the work back, that the round it reviewed is not kept on the
-// parked turn, as the work already done says of such a round, and that what it
-// said is not told again. Never as a message whose copy cannot be read here,
-// which says the engine holds one, and never a word of what it said.
+// whose round a park dropped is said in its place, under its own lead-level
+// heading: it sent the work back, its round is not kept on the parked turn, and
+// what it said is not told again. Never as an unreadable copy, which claims the
+// engine holds one.
 //
 // Mutation: say it in LeadUnread's words, or as a send-back, or leave out that
 // its round is not kept, and this goes red.

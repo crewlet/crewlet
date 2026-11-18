@@ -23,9 +23,8 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
-// jsOf is a JetStream client over nc in the API these tests' own brokers
-// speak: they are started raw, with no domain, so a client addresses the
-// account's own JetStream.
+// jsOf is a JetStream client over nc for these tests' brokers, started with
+// no domain, so it addresses the account's own JetStream.
 func jsOf(nc *nats.Conn) jetstream.JetStream {
 	js, err := jsapi.Account().Client(nc)
 	if err != nil {
@@ -34,9 +33,8 @@ func jsOf(nc *nats.Conn) jetstream.JetStream {
 	return js
 }
 
-// embeddedNATS starts a nats-server inside the test process with no listener,
-// the same topology internal/queue/jetstream boots for a solo node. Nothing
-// outside this process can reach it, and it dies with the test.
+// embeddedNATS starts a listenerless nats-server in the test process, the
+// topology internal/queue/jetstream boots for a solo node.
 func embeddedNATS(t *testing.T) *nats.Conn {
 	t.Helper()
 	_, nc := embeddedServer(t)
@@ -55,10 +53,8 @@ func embeddedServer(t testing.TB) (*server.Server, *nats.Conn) {
 		DontListen:        true,
 		StoreDir:          dir,
 		JetStreamMaxStore: brokertest.StoreMaxBytes,
-		// THE TRANSPORT'S CEILING, as every server the engine starts holds
-		// its connections to: a value at what a key holds
-		// (coord.MaxValueBytes) is a message of six mebibytes, past the
-		// server's own default of one.
+		// THE ENGINE'S TRANSPORT CEILING: a value at coord.MaxValueBytes
+		// is a 6 MiB message, past the server's 1 MiB default.
 		MaxPayload: int32(queue.MaxPayloadBytes),
 	})
 	if err != nil {
@@ -105,21 +101,14 @@ func openStoreVia(t *testing.T, client jetstream.JetStream, reach Reach, ttl tim
 //
 // Two things about how it is wired here.
 //
-// The store's TTL is coordtest.LongTTL because the bucket's MaxAge has to be
-// able to accommodate the longest TTL any case asks for — a shorter bucket
-// would reap a LongTTL record early, and this backend refuses a TTL it cannot
-// honour rather than quietly shortening it. The suite's ShortTTL and churnTTL
-// leases are honoured by the deadline the record carries, judged against the
-// STORE's clock (Store.storeNow), never the test process's. The duty cases
-// are the exception the suite names: they claim a duty and a caller's class at
-// coord.MaxDutyTTL, far past this bucket's age, and both are honoured by the
-// duty bucket, whose ceiling is the contract's rather than this
-// configuration's.
+// The TTL is coordtest.LongTTL because the bucket's MaxAge must cover the
+// longest TTL a case asks for, and this backend refuses a TTL it cannot honour.
+// Shorter leases lapse by the record's deadline on the STORE's clock
+// (Store.storeNow). The duty cases claim at coord.MaxDutyTTL, which the duty
+// bucket honours whatever this configuration's TTL.
 //
-// And there is no coordtest.Advancer: a real broker's clock is its own and
-// cannot be moved, which is exactly the case the hook was made optional for.
-// So harness.lapse falls back to a real sleep of ShortTTL + margin — 150 ms
-// per lapsing case, overlapped because the suite runs its cases in parallel.
+// There is no coordtest.Advancer, since a real broker's clock cannot be moved:
+// harness.lapse sleeps ShortTTL + margin, overlapped across parallel cases.
 func TestContract(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -141,9 +130,8 @@ func TestMintingContract(t *testing.T) {
 }
 
 // TestSharedContract runs the shared cases over three handles on one
-// single-member broker — the easy case, since every read is answered by the
-// one copy there is. shared_cluster_test.go is the one that means something:
-// the same cases with the handles on three members of a cluster.
+// single-member broker, the easy case; shared_cluster_test.go runs them on
+// three members of a cluster.
 func TestSharedContract(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -165,9 +153,8 @@ func TestSharedContract(t *testing.T) {
 
 func TestKeyMappingRoundTrips(t *testing.T) {
 	t.Parallel()
-	// A resource containing a dot is the one that matters most: a dot is a
-	// SUBJECT SEPARATOR in a NATS key, so an unescaped one would silently
-	// split the key into two tokens.
+	// A dot matters most: it is a SUBJECT SEPARATOR in a NATS key, so an
+	// unescaped one would silently split the key into two tokens.
 	resources := []string{
 		"seat:alice",
 		"seat:alice.smith",
@@ -239,9 +226,8 @@ func TestDecodeKeyRejectsWhatItDidNotWrite(t *testing.T) {
 	}
 }
 
-// TestAwkwardResourceNamesSurviveTheStore takes the mapping end to end. The
-// round-trip test above proves encodeKey/decodeKey are inverses; this proves
-// nothing between them — the listings, the prefix filters, the two buckets —
+// TestAwkwardResourceNamesSurviveTheStore proves nothing between
+// encodeKey and decodeKey (the listings, the prefix filters, the buckets)
 // reads a resource by anything but its real name.
 func TestAwkwardResourceNamesSurviveTheStore(t *testing.T) {
 	t.Parallel()
@@ -249,15 +235,9 @@ func TestAwkwardResourceNamesSurviveTheStore(t *testing.T) {
 	nc := embeddedNATS(t)
 	s := openStore(t, nc, time.Minute)
 
-	// A dot is a SUBJECT SEPARATOR in a NATS key, so an unescaped one would
-	// split the key into two tokens.
-	//
-	// BUILT FROM THE CLASS DIRECTLY rather than through coord.SeatResource,
-	// which takes a uuid and can no longer produce a dotted name. What is
-	// under test is the STORE's key encoding over an arbitrary resource
-	// name, and there is nothing in the contract that says a class's names
-	// are uuid-shaped — a company name, a duty and a stream all reach these
-	// buckets, and each can carry a dot.
+	// BUILT FROM THE CLASS DIRECTLY: coord.SeatResource takes a uuid and
+	// cannot produce a dotted name, but a company, a duty or a stream name
+	// reaching these buckets can carry a dot.
 	dotted := coord.ClassSeat.Resource("alice.smith")
 	plain := coord.ClassSeat.Resource("alice")
 	for _, r := range []string{dotted, plain} {
@@ -338,8 +318,8 @@ func TestATTLLongerThanTheBucketIsRefused(t *testing.T) {
 	nc := embeddedNATS(t)
 	s := openStore(t, nc, time.Minute)
 
-	// The refusal is an ERROR, not a (nil, nil) refusal: nobody else holds
-	// the seat, the caller asked for something the bucket cannot promise.
+	// An ERROR, not (nil, nil): nobody else holds the seat; the caller
+	// asked for what the bucket cannot promise.
 	lease, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: 2 * time.Minute})
 	if err == nil {
 		t.Fatalf("TryAcquire with a TTL above the bucket's = (%v, nil), want an error", lease)
@@ -353,15 +333,15 @@ func TestATTLLongerThanTheBucketIsRefused(t *testing.T) {
 	if _, err := s.Renew(ctx, "seat:ceo", "node-a", 1, 2*time.Minute); !errors.Is(err, errTTLTooLong) {
 		t.Fatalf("Renew with a TTL above the bucket's = %v", err)
 	}
-	// Exactly the configured TTL is the normal case and must be accepted.
+	// Exactly the configured TTL is accepted.
 	if _, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: time.Minute}); err != nil {
 		t.Fatalf("TryAcquire at exactly the bucket TTL: %v", err)
 	}
 }
 
 // TestServerSideExpiryHandsTheSeatOver is the production shape the contract
-// suite cannot reach: every lease at the configured TTL, so the record's own
-// disappearance is the expiry and no clock is consulted at all.
+// suite cannot reach: every lease at the bucket's TTL, so the record's
+// disappearance is the expiry and no clock is consulted.
 func TestServerSideExpiryHandsTheSeatOver(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -376,8 +356,8 @@ func TestServerSideExpiryHandsTheSeatOver(t *testing.T) {
 		t.Fatalf("first claim = (%v, %v)", first, err)
 	}
 
-	// A renew through Update refreshes the record's age, which is the only
-	// reason a lease can be held for longer than the bucket's TTL.
+	// Renewing through Update refreshes the record's age, the only reason a
+	// lease outlives the bucket's TTL.
 	for range 3 {
 		time.Sleep(ttl / 2)
 		ok, err := s.Renew(ctx, "seat:ceo", "node-a:1", first.Epoch, ttl)
@@ -398,19 +378,18 @@ func TestServerSideExpiryHandsTheSeatOver(t *testing.T) {
 		t.Fatalf("the lease KEY survived its bucket TTL: (%v, %v)", raw, err)
 	}
 
-	// The peer's claim lands through Create, on a key the broker removed.
+	// The peer's claim lands through Create on the key the broker removed.
 	taken, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{Owner: "node-b:1", TTL: ttl})
 	if err != nil || taken == nil {
 		t.Fatalf("takeover after a server-side expiry = (%v, %v)", taken, err)
 	}
-	// The whole reason the epoch lives in its own bucket: the lease key was
-	// deleted by the broker and the counter still went up.
+	// Why the epoch has its own bucket: the lease key expired and the
+	// counter still went up.
 	if taken.Epoch <= first.Epoch {
 		t.Fatalf("epoch %d after the lease key expired at epoch %d — the counter reset with the key",
 			taken.Epoch, first.Epoch)
 	}
-	// And the hint survived with it, which a lease-bucket-only hint could
-	// not have done: the key it lived on no longer exists.
+	// The hint survived too, which a hint on the lease key could not.
 	if taken.Preferred != "node-a" {
 		t.Fatalf("placement hint is %q after the lease key expired, want node-a", taken.Preferred)
 	}
@@ -436,8 +415,8 @@ func TestReleaseExpiresInPlaceAndKeepsTheKey(t *testing.T) {
 	if ok, err := s.Release(ctx, "seat:ceo", "node-a", lease.Epoch); err != nil || !ok {
 		t.Fatalf("release = (%v, %v)", ok, err)
 	}
-	// A delete would take the record away; a tombstone leaves it, which is
-	// what keeps the resource's history readable while it is unheld.
+	// A tombstone, not a delete, keeps the resource's history readable while
+	// it is unheld.
 	kve, err := s.leases.kv.Get(ctx, encodeResource("seat:ceo"))
 	if err != nil {
 		t.Fatalf("the released key was deleted, not expired in place: %v", err)
@@ -456,9 +435,9 @@ func TestUngatedClaimsDoNotScanTheFleet(t *testing.T) {
 	nc := embeddedNATS(t)
 	s := openStore(t, nc, time.Minute)
 
-	// An older peer holds a seat. A presence registration must still land —
-	// membership is not work, and a newer node invisible in the membership
-	// read makes every peer divide the seats by a fleet that excludes it.
+	// An older peer holds a seat, and a presence registration still lands:
+	// a newer node missing from membership makes every peer divide the
+	// seats by a fleet that excludes it.
 	if _, _, err := s.TryAcquire(ctx, "seat:ceo", coord.AcquireOptions{
 		Owner: "old:1", TTL: time.Minute, Protocol: 1,
 	}); err != nil {
@@ -482,17 +461,12 @@ func TestUngatedClaimsDoNotScanTheFleet(t *testing.T) {
 
 // TestFleetContract runs the shared-state suite against the real broker.
 //
-// The retentions are the suite's ([openFleetVia]): what the broker is being
-// certified for is the SEMANTICS — an atomic increment, a Create that only one
-// caller wins, a Put whose revision is the epoch — and those do not vary with
-// the retention.
+// The retentions are the suite's ([openFleetVia]): what is certified is the
+// SEMANTICS, which do not vary with retention.
 //
-// EVERY NODE OVER A CONNECTION OF ITS OWN to one embedded broker — the easy
-// topology — because a node is a store that coalesces its own writes to a key
-// ([writeLines]): the contention cases' several nodes on one record are
-// several contenders only as several stores, and each on its own connection
-// is how a fleet's nodes reach it. Through leaves of their own is
-// [TestFleetContractThroughALeaf].
+// EVERY NODE ON A CONNECTION OF ITS OWN, because a store coalesces its own
+// writes to a key ([writeLines]): contention cases need several stores to have
+// several contenders. Through leaves is [TestFleetContractThroughALeaf].
 func TestFleetContract(t *testing.T) {
 	t.Parallel()
 	srv, _ := embeddedServer(t)
@@ -510,8 +484,8 @@ func TestFleetContract(t *testing.T) {
 }
 
 // TestNodeStatusRecordContract runs the node status records' suite over the
-// KV: a record store and the lease store whose presence it is joined to, each
-// on its own buckets on one embedded broker, as a node opens both.
+// KV: a record store and the lease store its presence joins, on their own
+// buckets on one broker, as a node opens both.
 func TestNodeStatusRecordContract(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -521,8 +495,8 @@ func TestNodeStatusRecordContract(t *testing.T) {
 }
 
 // A NODE'S STATUS RECORD AGES OUT WITH ITS BUCKET, at the apply status's
-// freshness: what removes a dead node's rows is the age, and nothing sweeps
-// them, so a bucket opened without one would keep every node that ever ran.
+// freshness: nothing sweeps a dead node's rows, so a bucket with no age keeps
+// every node that ever ran.
 //
 // Mutation: open the node status bucket with no age, or with the ledger's,
 // and the age in force reads otherwise.
@@ -539,10 +513,9 @@ func TestANodesStatusRecordAgesOutAtTheStatusFreshness(t *testing.T) {
 	}
 }
 
-// ONE NODE'S UNREADABLE RECORD IS THAT NODE NOT SAYING, never every node's rows
-// failed: a record this build cannot decode — a body that is not an object —
-// is skipped, and the listing answers every other node's. (The memory twin
-// keeps only what Encode wrote, so it cannot hold one; it skips the same way.)
+// ONE NODE'S UNREADABLE RECORD IS THAT NODE NOT SAYING, never every node's
+// rows failed: a record this build cannot decode is skipped. (The memory twin
+// cannot hold one, so the case is here.)
 //
 // Mutation: raise the decode error from the listing, and the fleet's rows go
 // with one node's.
@@ -566,12 +539,9 @@ func TestAnUndecodableStatusRecordIsSkippedNotRaised(t *testing.T) {
 
 // THE BODY RIDES THE POINTER AS THE JSON IT IS.
 //
-// Carried as bytes, encoding/json spells it as a base64 string — over an
-// envelope whose ciphertext is base64 already, so every body would cross the
-// wire encoded twice and a third larger than it is. The contract suite cannot
-// see the record, only what Payload hands back, so the WIRE SHAPE is asserted
-// here: the pointer's own record carries the body as an object, beside the
-// origin the contract requires.
+// As bytes, encoding/json spells it base64 over a ciphertext already base64,
+// a third larger on the wire. The contract suite sees only what Payload
+// returns, so the WIRE SHAPE is asserted here.
 //
 // Mutation: carry the payload as []byte in coord.ActivationRecord and the field is a
 // string.
@@ -602,12 +572,10 @@ func TestThePointerCarriesItsBodyAsAnObject(t *testing.T) {
 
 // A POINTER THAT CARRIES NO BODY IS UNREADABLE, NOT ABSENT.
 //
-// Every activation writes its body into the pointer, so a pointer naming a
-// revision with none is a record nothing this build writes. Answered as
-// "absent" it would read to a converging node as a pointer that moved between
-// its Target and this read, and the node would wait for a body that is never
-// coming; an error says the store holds something it cannot use. And a pointer
-// naming ANOTHER revision is still absent, which is the control.
+// Nothing this build writes a pointer without its body. Answered "absent",
+// a converging node would read it as a pointer that moved since its Target and
+// wait for a body never coming. A pointer naming ANOTHER revision is still
+// absent: the control.
 //
 // Mutation: answer a bodiless pointer as not found and the first half fails.
 func TestAPointerWithNoBodyIsUnreadable(t *testing.T) {
@@ -631,13 +599,11 @@ func TestAPointerWithNoBodyIsUnreadable(t *testing.T) {
 
 // A CORRUPT CREDENTIAL RECORD RAISES RATHER THAN VANISHING.
 //
-// The contract suite cannot plant one — PutSecret validates on the way in —
-// but the decode path is where a bad record would be swallowed, and swallowing
-// is the failure that matters here. SecretValues IS the engine's boot
-// snapshot: a name silently dropped from it resolves as an empty ${VAR} on
-// every node at once, which reaches a provider as an empty credential and
-// comes back as an auth failure blamed on the vendor. "I could not read it"
-// has to be louder than "there is none".
+// The contract suite cannot plant one (PutSecret validates). SecretValues IS
+// the engine's boot snapshot: a name silently dropped resolves as an empty
+// ${VAR} on every node, reaching a provider as an empty credential and an auth
+// failure blamed on the vendor. "I could not read it" must be louder than
+// "there is none".
 func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -661,8 +627,7 @@ func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("PutSecret: %v", err)
 	}
-	// Straight into the bucket, past the contract's validation — an
-	// operator's stray write, a half-finished migration, a truncated value.
+	// Straight into the bucket, past the contract's validation.
 	if _, err := store.secrets.Put(ctx, encodeKey("BROKEN"), []byte("{not json")); err != nil {
 		t.Fatalf("planting the corrupt record: %v", err)
 	}
@@ -675,22 +640,17 @@ func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 		t.Fatalf("the boot snapshot skipped the corrupt record and returned %d "+
 			"rows — every ${VAR} it should have carried is now empty", len(rows))
 	}
-	// And the healthy one is still readable, so the failure is the record's
-	// rather than the bucket's.
+	// The healthy one still reads: the failure is the record's, not the
+	// bucket's.
 	if _, found, err := store.Secret(ctx, "GOOD"); err != nil || !found {
 		t.Fatalf("GOOD: found=%v err=%v", found, err)
 	}
 }
 
-// THE CLASS IS A SUBJECT TOKEN, which is the whole reason a resource key is
-// segmented rather than one escaped blob.
-//
-// Before it was, `seat:alice` became the single token `seat=3Aalice`; a subject
-// wildcard matches whole tokens, so there was no filter that selected the
-// seats and every class listing read the entire bucket and discarded the rest.
-// This asserts the property directly, on the KEY, because it is what the
-// broker matches on and a listing that happened to be correct while the key
-// was one token would prove nothing about the filter.
+// THE CLASS IS A SUBJECT TOKEN, which is why a resource key is segmented
+// rather than one escaped blob: a subject wildcard matches whole tokens, so
+// only then can a filter select a class. Asserted on the KEY, what the broker
+// matches on, since a correct listing proves nothing about the filter.
 func TestAResourceClassIsItsOwnSubjectToken(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -700,11 +660,10 @@ func TestAResourceClassIsItsOwnSubjectToken(t *testing.T) {
 		{"seat:alice", "seat.alice"},
 		{"node:node-0", "node.node-0"},
 		{"worker:scheduler", "worker.scheduler"},
-		// A name carrying the separator is MORE segments, never a class
-		// with a colon in it — the class is the leading one either way.
+		// A name carrying the separator is MORE segments; the class is
+		// still the leading one.
 		{"merge:proj:7", "merge.proj.7"},
-		// And a name carrying a dot keeps it escaped, because an
-		// unescaped one would add a token the grammar never wrote.
+		// A dot in a name stays escaped, or it would add a token.
 		{"seat:alice.smith", "seat.alice=2Esmith"},
 	}
 	for _, c := range cases {
@@ -713,10 +672,9 @@ func TestAResourceClassIsItsOwnSubjectToken(t *testing.T) {
 		}
 	}
 
-	// And the filter a class builds selects its own keys and no others —
-	// including the adversarial pair, where one class name is a string
-	// prefix of another. A subject wildcard matches per TOKEN, so `node.>`
-	// does not take `node-pool.x`; a string prefix would.
+	// A class's filter selects its own keys alone, even where one class
+	// name is a string prefix of another: a wildcard matches per TOKEN, so
+	// `node.>` does not take `node-pool.x`.
 	seat := coord.DocumentFilter(string(coord.ClassSeat))
 	for _, c := range []struct {
 		resource string
@@ -736,9 +694,8 @@ func TestAResourceClassIsItsOwnSubjectToken(t *testing.T) {
 }
 
 // subjectMatches is NATS subject matching over the two wildcards, written out
-// here because the assertion above is about what the BROKER will do and a test
-// that asked the client's own helper would be asserting nothing the server
-// promises.
+// because the assertion is about the BROKER, which the client's own helper
+// promises nothing about.
 func subjectMatches(filter, subject string) bool {
 	f, s := strings.Split(filter, "."), strings.Split(subject, ".")
 	for i, tok := range f {
@@ -755,18 +712,12 @@ func subjectMatches(filter, subject string) bool {
 	return len(f) == len(s)
 }
 
-// THE BROKER NARROWS THE CLASS READS, and this measures it rather than
-// trusting the filter.
+// THE BROKER NARROWS THE CLASS READS, measured rather than trusted.
 //
-// The two reads it covers are the ones paid on a ticker: the membership read
-// the sweep takes every five seconds, and the placement hints it takes beside
-// them — that one over the epochs bucket, which has NO TTL and therefore holds
-// a record for every resource the deployment has ever leased. Both used to
-// read their whole bucket and discard what they did not want.
-//
-// The count is taken from INSIDE the walk, because the rows it yields were
-// always correct: a filter that did not narrow would return the same leases
-// and simply move everything else over the wire to get there.
+// Both reads run on the sweep's ticker: membership, and the placement hints
+// over the epochs bucket, which has NO TTL and so holds every resource ever
+// leased. The count is taken INSIDE the walk: a filter that did not narrow
+// yields the same rows and moves everything else over the wire.
 func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -796,11 +747,10 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 		return n
 	}
 
-	// Six resources across four classes, each in the lease bucket its
-	// class is written to: seats and presence in the seat lease bucket, the
-	// duty and the caller's walk claim in the duty bucket. The epochs bucket
-	// holds all six whichever lease bucket the lease itself is in, which is
-	// what keeps a counter monotonic across a move between them.
+	// Six resources across four classes: seats and presence in the seat
+	// lease bucket, the duty and the walk claim in the duty bucket. The
+	// epochs bucket holds all six, keeping a counter monotonic across a move
+	// between lease buckets.
 	for _, c := range []struct {
 		lane  *lane
 		class coord.Class
@@ -823,10 +773,8 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 		}
 	}
 
-	// AND THE SEAT LEASE BUCKET CARRIES NOTHING BUT SEATS AND PRESENCE,
-	// which is the other half of what keeps the membership read cheap: a
-	// class the bucket does not hold is a bucket the read never opens at
-	// all, and a write the gate's view of it never takes in.
+	// THE SEAT LEASE BUCKET CARRIES ONLY SEATS AND PRESENCE, the other half
+	// of a cheap membership read and of the gate's view of it.
 	for _, class := range []coord.Class{coord.ClassWorker, coord.Class("move")} {
 		if got := count(s.leases.kv, class); got != 0 {
 			t.Errorf("the seat lease bucket holds %d %s records; this build writes "+
@@ -834,8 +782,7 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 		}
 	}
 
-	// And the answers are still right, which is the half a narrowing bug
-	// would not disturb.
+	// And the answers are still right.
 	live, err := s.ListLive(ctx, coord.ClassNode)
 	if err != nil || len(live) != 1 {
 		t.Fatalf("ListLive(node) = %v, %v; want the one presence lease", live, err)
@@ -849,16 +796,9 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 // A SECOND NODE ADOPTS THE LEASE BUCKET RATHER THAN REWRITING IT, and is
 // honest about the TTL that is actually in force.
 //
-// Open used to call CreateOrUpdateKeyValue, which makes every booting node's
-// call a WRITE: the losers of the create race rewrote a configuration they
-// already agreed with against a metadata group that was still electing, which
-// is the shape this package removed from every other bucket. The consequence
-// when the two disagree is worse than the write: whichever node booted LAST
-// silently redefined how long every other node's leases lived.
-//
-// So the bucket is adopted, and the store carries the live TTL. Believing the
-// configured one instead would let validateTTL accept claims the bucket will
-// not honour — a deadline handed back that is a lie about when the lease ends.
+// Rewriting would let the node that booted LAST redefine every other node's
+// lease life; believing the configured TTL would let validateTTL accept claims
+// the bucket will not honour. See [Open], "What adopting costs".
 func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -874,8 +814,8 @@ func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 			first.TTL(), inForce)
 	}
 
-	// THE SECOND NODE ASKS FOR SOMETHING ELSE, which is what N nodes
-	// holding possibly-different Tier A files actually do.
+	// THE SECOND NODE ASKS FOR SOMETHING ELSE, as nodes with differing
+	// Tier A files do.
 	second, err := Open(context.Background(), jsOf(nc), Config{TTL: 30 * time.Second, BucketPrefix: prefix, Reach: InProcess})
 	if err != nil {
 		t.Fatalf("a second Open against an existing bucket: %v", err)
@@ -899,35 +839,22 @@ func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 
 // A BUCKET REPLICATED BELOW WHAT THIS NODE IS CONFIGURED FOR IS REFUSED.
 //
-// # Why this one difference is fatal where the lease TTL is only warned about
-//
-// Because it is the difference with no symptom. Every other way a running
-// bucket can disagree with this node's Tier A changes how the store BEHAVES,
-// and behaviour is observable: a shorter lease TTL hands seats around sooner,
-// and the case above is about reporting the one in force rather than the one
-// configured. Replication changes nothing until a node is lost — and then it
-// changes everything, because the leases, the fencing epochs and the company's
-// secrets were on one disk the whole time while every node reported itself
-// correctly configured for three.
-//
-// An operator who raises stream.replicas on an existing fleet gets a
-// rolling restart in which each node finds its buckets already there, adopts
-// them, and goes on running single-replica coordination. Nothing writes to a
-// bucket that exists — that is the rule openBucket is built on — so the only
-// honest move left is to say so.
+// Fatal where a TTL difference is only reported, because it has no symptom
+// until a node is lost, when the leases, fencing epochs and secrets turn out
+// to have been on one disk. Raising stream.replicas on a running fleet adopts
+// the old buckets, and nothing rewrites a bucket that exists ([openBucket]),
+// so the only honest move is to refuse.
 func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
 	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
 
-	// THE FLEET STARTED AT ONE REPLICA, which is what a single-node
-	// deployment or an early cluster actually has.
+	// THE FLEET STARTED AT ONE REPLICA, as a single node or early cluster does.
 	if _, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1, Reach: InProcess}); err != nil {
 		t.Fatalf("the first Open: %v", err)
 	}
 
-	// AND THE OPERATOR RAISED IT. The buckets are still the ones made at
-	// one replica, and no node rewrites them.
+	// AND THE OPERATOR RAISED IT; the buckets are still single-replica.
 	_, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 3, Reach: InProcess})
 	if err == nil {
 		t.Fatal("a node configured for 3 replicas adopted single-replica " +
@@ -935,20 +862,17 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 			"fencing epochs and the company's secrets are on one disk and " +
 			"nothing says so")
 	}
-	// THE COUNTS ARE IN THE MESSAGE, because "replication mismatch" leaves
-	// an operator unable to tell which side is the one to change.
-	// THE FIELD IS stream.replicas, which is the one an operator can grep
-	// their Tier A for: the coordination buckets take their replica count
-	// from it because they live on the same broker, and there is no
-	// coordination.replicas to go and look for.
+	// THE COUNTS ARE IN THE MESSAGE, so an operator knows which side to
+	// change, and THE FIELD IS stream.replicas: the coordination buckets
+	// take their count from it, and there is no coordination.replicas.
 	for _, want := range []string{"1x", "3x", "stream.replicas"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not mention %q: %v", want, err)
 		}
 	}
 
-	// AND EQUAL OR HIGHER STILL STARTS, so a single-replica development
-	// node against a replicated fleet's buckets is not locked out.
+	// AND A BUCKET AT OR ABOVE THE CONFIG STILL OPENS, so a single-replica
+	// development node is not locked out of a replicated fleet.
 	if _, err := Open(context.Background(), jsOf(nc), Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1, Reach: InProcess}); err != nil {
 		t.Errorf("a node configured for fewer replicas than the bucket has "+
 			"was refused: %v", err)
@@ -957,11 +881,9 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 
 // AN ADMITTED CHARGE CLEARS ONLY THE REFUSAL IT SAW.
 //
-// The contract suite cannot reach this interleaving: a charge is admitted
-// while the scope carries a refusal, another caller is refused and stamps a
-// newer one, and only then does the first caller clear. Its stamp is stale by
-// then, and the newer refusal is still true, so a clear that ignored which
-// stamp it saw would hide a scope that is refusing right now.
+// An interleaving the contract suite cannot reach: a charge admitted under a
+// refusal clears it only after another caller stamped a newer one. A clear
+// ignoring which stamp it saw would hide a scope refusing right now.
 func TestAnAdmittedChargeLeavesANewerRefusalStanding(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
@@ -987,8 +909,7 @@ func TestAnAdmittedChargeLeavesANewerRefusalStanding(t *testing.T) {
 
 	refuse()
 	seen := stamp()
-	// A distinct instant, so the two stamps cannot compare equal by
-	// landing in the same clock tick.
+	// A distinct instant, so the two stamps cannot share a clock tick.
 	time.Sleep(2 * time.Millisecond)
 	refuse()
 	newer := stamp()
@@ -1033,11 +954,10 @@ func spentBy(t *testing.T, store *FleetStore, scope string) [3]int {
 
 // AN UNREACHABLE COUNTER IS AN ERROR, NEVER A REFUSAL.
 //
-// "The company is out of tokens" is a budget event an operator acts on and
-// "the counter could not be read" is an outage, and a caller that cannot tell
-// them apart either stops a healthy company over a blip or spends past a cap
-// it could not read. A dead context is the one unreachable store a test can
-// make on demand; the answer it gets must carry the error and no refusal.
+// "Out of tokens" is a budget event; "the counter could not be read" is an
+// outage. A caller that cannot tell them apart stops a healthy company over a
+// blip or spends past a cap it could not read. A dead context stands in for
+// the unreachable store.
 func TestAnUnreachableCounterIsAnErrorNeverARefusal(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
@@ -1060,14 +980,11 @@ func TestAnUnreachableCounterIsAnErrorNeverARefusal(t *testing.T) {
 
 // A CHARGE WHOSE SEAT WRITE FAILS KEEPS THE ROUND ON THE COMPANY.
 //
-// The company is written before the seat, and the round was billed before
-// either: a charge is handed tokens a model call has already spent. So when
-// the seat's write fails after the company's landed, the company's record of
-// the round is true and stays — the answer is an error, naming the partial,
-// and the round stops as an outage. The compensation this replaced took the
-// company's half back, and since nothing that charges asks again, the billed
-// round then sat on neither counter and the next round was admitted against
-// room it had used.
+// A charge is handed tokens already spent, and the company is written before
+// the seat, so when the seat's write fails the company's record is true and
+// stays: the answer is an error naming the partial. Taking the company's half
+// back would leave the round on neither counter, since nothing that charges
+// asks again.
 func TestAChargeWhoseSeatWriteFailsKeepsTheRoundOnTheCompany(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
@@ -1098,15 +1015,12 @@ func TestAChargeWhoseSeatWriteFailsKeepsTheRoundOnTheCompany(t *testing.T) {
 
 // THE SEAT'S HALF OUTLIVES A CALLER WHO HANGS UP AFTER THE COMPANY'S.
 //
-// The company is written first, and from the moment its write lands the round
-// is half recorded. The caller's context dying between the two writes is
-// ordinary — a turn cancelled, a node draining — and the round was spent
-// whatever the caller does next. Left on that context the seat's write failed
-// with it, and the seat's own ceiling judged a round less than it had spent
-// for the rest of the window, only because somebody stopped listening. So
-// every way a charge or a post-charge reaches the seat after the company's
-// write lands finishes on a context of its own, and answers what it decided:
-// a refusal by either scope, an admission, or the post-charge's record.
+// Once the company's write lands the round is spent whatever the caller does,
+// and a caller hanging up then (a turn cancelled, a node draining) is
+// ordinary. On the caller's context the seat's write failed and its ceiling
+// undercounted for the rest of the window. So every charge or post-charge
+// reaching the seat after the company's write finishes on a context of its
+// own, and answers what it decided.
 func TestTheSeatsHalfOutlivesACallerWhoHangsUp(t *testing.T) {
 	t.Parallel()
 	seat := coord.AgentScope("x")
@@ -1170,14 +1084,12 @@ func TestTheSeatsHalfOutlivesACallerWhoHangsUp(t *testing.T) {
 // A POST-CHARGE WHOSE SEAT WRITE FAILS KEEPS ITS SPEND ON THE COMPANY, AND THE
 // SEAT'S HALF CAN BE FINISHED ALONE.
 //
-// The spend already happened (a collected executor launch, an auxiliary call),
-// so the company's record of it is true when its write lands and the seat's
-// then fails. The compensation this replaced took it back so a caller that
-// retried would not count the company twice — but an auxiliary call is never
-// offered again, and an executor launch only when its resume fails, so in the
-// common case the company lost the spend for good. Kept, the partial is named,
-// and the one caller that does offer the spend again finishes the seat's half
-// alone.
+// The spend already happened (an executor launch collected, an auxiliary
+// call), so the company's record is true when the seat's write then fails.
+// Taking it back would lose the spend for good: an auxiliary call is never
+// offered again, an executor launch only when its resume fails. Kept, the
+// partial is named, and a caller that offers the spend again finishes the
+// seat's half alone.
 func TestAPostChargeWhoseSeatWriteFailsKeepsTheCompanysHalf(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
@@ -1213,18 +1125,16 @@ func TestAPostChargeWhoseSeatWriteFailsKeepsTheCompanysHalf(t *testing.T) {
 
 // AN ADMITTED CHARGE CLEARS THE STAMP EVEN IF THE CALLER HAS HUNG UP.
 //
-// The clear runs after BOTH counters are written, so the charge is a fact by
-// then and the caller's context dying in between is ordinary — a turn
-// cancelled, a node draining. Left on that context the clear failed with it,
-// and the scope went on telling every dashboard it was refusing charges while
-// it had just admitted one, until the next admitted charge on a live context.
+// The clear runs after BOTH counters are written, when the charge is a fact.
+// On the caller's context a hang-up failed it, and the scope went on telling
+// every dashboard it was refusing while it had just admitted a charge.
 func TestACancelledChargeStillClearsTheRefusalItAdmittedPast(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))
 	seat := coord.AgentScope("x")
 	w := testWindows()
-	// A refusal on each scope, at ceilings of 5: the company's, then the
-	// seat's while the company's ceiling has room.
+	// A refusal on each scope at a ceiling of 5: the company's, then the
+	// seat's under a roomy company ceiling.
 	for _, caps := range []struct{ org, seat coord.Caps }{
 		{coord.Caps{period.Day: 5}, nil},
 		{coord.Caps{period.Day: 100}, coord.Caps{period.Day: 5}},
@@ -1238,13 +1148,13 @@ func TestACancelledChargeStillClearsTheRefusalItAdmittedPast(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	// The SEAT's write is the last one before the company's clear, so a
-	// hang-up there leaves both counters written and the clear to make.
+	// The SEAT's write is the last before the clear, so a hang-up there
+	// leaves both counters written and the clear to make.
 	store.budgets = hangUpAfterWriting{
 		KeyValue: store.budgets, key: encodeKey(seat), hangUp: cancel,
 	}
 
-	// The ceilings raised, which is what gives a refusing scope room again.
+	// The ceilings raised, giving the refusing scopes room again.
 	if got, err := store.Charge(ctx, coord.ChargeRequest{
 		Seat: seat, Tokens: 10, Windows: w,
 		OrgCaps: coord.Caps{period.Day: 100}, SeatCaps: coord.Caps{period.Day: 100},
@@ -1265,19 +1175,17 @@ func TestACancelledChargeStillClearsTheRefusalItAdmittedPast(t *testing.T) {
 
 // THE WINDOWED COUNTERS AGE, AND THE AGE IS THE CONFIGURED ONE.
 //
-// A windowed counter nobody has charged for longer than the bucket's retention
-// ages out, so a seat that stopped running does not keep a record for the
-// life of the deployment — here a bucket built with a short retention, so the
-// case can watch it happen.
+// A counter uncharged past the bucket's retention ages out, so a seat that
+// stopped running keeps no record for the deployment's life. The bucket's
+// retention here is short enough to watch.
 func TestAnUnchargedCounterAgesOut(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
 	store := openFleetWithTTL(t, nc, 500*time.Millisecond)
-	// BOUNDED, so a listing that never ends fails this case by name rather
-	// than the package's timeout. This is the case that found one: a listing
-	// whose counters aged out between its consumer's creation and its first
-	// delivery waited for an end marker no delivery would bring, for nine
-	// minutes and forty-two seconds (see [passOver]).
+	// BOUNDED, so a listing that never ends fails this case by name, not
+	// the package's timeout: counters aging out between a consumer's creation
+	// and its first delivery once left one waiting on an end marker
+	// ([passOver]).
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	if _, err := store.PostCharge(ctx, coord.AgentScope("x"), 10, testWindows()); err != nil {
@@ -1300,12 +1208,10 @@ func TestAnUnchargedCounterAgesOut(t *testing.T) {
 	}
 }
 
-// THE COUNTER RECORD'S WIRE IS SHARED BY EVERY BUILD ON THE BUCKET, and its
-// failure is the open one. A record whose slot key a reader does not know
-// decodes as a slot with no label, which every charge rolls — so a renamed key
-// would hand each scope its whole allowance back on the first charge a peer of
-// the other spelling made. Pinned as bytes, both ways: what this build writes,
-// and that what a peer wrote reads back as the same counter.
+// THE COUNTER RECORD'S WIRE IS SHARED BY EVERY BUILD ON THE BUCKET, and it
+// fails open: an unknown slot key decodes as an unlabelled slot every charge
+// rolls, so a renamed key hands each scope its allowance back. Pinned as
+// bytes, both ways.
 func TestTheCounterRecordNamesEachSlotByItsLabel(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, time.March, 14, 12, 0, 0, 0, time.UTC)
@@ -1333,8 +1239,8 @@ func TestTheCounterRecordNamesEachSlotByItsLabel(t *testing.T) {
 	}
 }
 
-// openFleet opens a fleet store on its own buckets, for a test that needs to
-// reach inside one rather than run the contract suite over it.
+// openFleet opens a fleet store on its own buckets, for a test that reaches
+// inside one.
 func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 	t.Helper()
 	store, err := OpenFleet(context.Background(), jsOf(nc), FleetConfig{
@@ -1353,9 +1259,8 @@ func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
 	return store
 }
 
-// hangUpAfterWriting is the budgets bucket with one fault injected: the moment
-// one key is written, the caller's context is cancelled, the way a caller
-// hanging up between the org's write and the seat's makes the second fail.
+// hangUpAfterWriting is the budgets bucket with one fault: the moment key is
+// written, the caller's context is cancelled.
 type hangUpAfterWriting struct {
 	jetstream.KeyValue
 	key    string
@@ -1378,10 +1283,8 @@ func (k hangUpAfterWriting) Update(ctx context.Context, key string, value []byte
 	return rev, err
 }
 
-// failWriting is a counter bucket whose broker refuses every write to one key,
-// with an error that is not a lost race — so the write fails once rather than
-// being retried, the way a broker that is unreachable or out of storage fails
-// it.
+// failWriting is a counter bucket refusing every write to key with an error
+// that is not a lost race, so the write fails once rather than being retried.
 type failWriting struct {
 	jetstream.KeyValue
 	key string

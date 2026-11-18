@@ -8,9 +8,8 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// contains fails unless every want appears in got, naming the first that
-// does not. The prompt itself is not printed: it is thousands of characters
-// and the missing phrase is the finding.
+// contains fails unless every want appears in got, naming the first that does
+// not; the prompt is not printed, since the missing phrase is the finding.
 func contains(t *testing.T, got string, want ...string) {
 	t.Helper()
 	for _, w := range want {
@@ -47,13 +46,9 @@ func order(t *testing.T, got string, phrases ...string) {
 }
 
 // THE EXECUTOR LISTS NO TOOL AND NO SERVER TO DISCOVER. Every tool its seat
-// holds is on its surface from its launch, each one's definition reaching its
-// harness over the bridge under the server it comes from, with what that
-// server is for as the server's own MCP instructions; and its harness keeps a
-// large server's tools out of the requests that do not need them itself. A
-// section naming them would be the prompt paying for what each request
-// already carries, and a section to discover them would send the model to
-// tools no executor holds.
+// holds reaches its harness over the bridge from launch, with each server's
+// MCP instructions: a section naming them pays twice for what every request
+// carries, and one to discover them sends the model to tools no executor holds.
 func TestExecutorPromptListsNoToolAndCarriesItsIdentity(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(engineer(), ExecutorInput{
@@ -64,9 +59,8 @@ func TestExecutorPromptListsNoToolAndCarriesItsIdentity(t *testing.T) {
 		"create_issue")
 }
 
-// THE ACT RULE. A turn that ended with a composed reply nobody was sent is
-// the failure this sentence exists for, and it is carried verbatim from the
-// Execute contract it replaces.
+// THE ACT RULE: the failure it prevents is a turn ending on a composed reply
+// nobody was sent.
 func TestExecutorPromptSaysWritingIsNotDoing(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(engineer(), ExecutorInput{}).Text
@@ -76,12 +70,10 @@ func TestExecutorPromptSaysWritingIsNotDoing(t *testing.T) {
 	)
 }
 
-// THE SEARCH SENTENCE is what stops an executor giving up when the tool it
-// needs is not already in front of it: every tool its seat holds is its own,
-// but its harness shows a large server's tools only once its model looks for
-// them. ONE SENTENCE, naming no engine tool — how to look is the harness's own
-// to teach (its tool search, Code Mode's `search()`), and the discovery pair
-// the engine used to name is on no executor's surface.
+// THE SEARCH SENTENCE stops an executor giving up on a tool its harness shows
+// only once the model looks for it. ONE SENTENCE, naming no engine tool: how to
+// look is the harness's to teach, and the discovery pair is on no executor's
+// surface.
 func TestExecutorPromptSaysToSearchBeforeGivingUp(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(engineer(), ExecutorInput{}).Text
@@ -90,21 +82,13 @@ func TestExecutorPromptSaysToSearchBeforeGivingUp(t *testing.T) {
 		"before reporting that you cannot act",
 	)
 	excludes(t, p, "list_mcp_server_tools", "activate_tool")
-	// Nothing survives of the reconciliation the two-phase engine needed — no
-	// declared tool list, no phantom warning about one — nor of the
-	// API-era wording that described a vendor's tool channel this engine no
-	// longer has.
+	// No declared tool list, no warning about one, no vendor tool channel.
 	excludes(t, p, "tools_needed", "Heads-up", "tools=[", "next message")
 }
 
-// The originating-channel rule earned its place: a tracker-create task
-// triggered from chat ended up with no way to reach the requester. The
-// executor hit an unresolvable assignee, had no way to ask, and the requester
-// got silence. The rule must state the WHY, or a model cannot generalise it
-// to a novel case.
-//
-// And the work filed elsewhere is not the reply: a founder's direct message
-// was once "answered" with a work item they never heard about.
+// The originating-channel rule prevents a requester's silence when the work
+// stalls or lands elsewhere (a work item filed is not the reply). It must state
+// the WHY, or a model cannot generalise it to a novel case.
 func TestExecutorPromptRequiresStayingReachable(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(engineer(), ExecutorInput{}).Text
@@ -118,11 +102,9 @@ func TestExecutorPromptRequiresStayingReachable(t *testing.T) {
 	excludes(t, p, "slack_conversations_add_message", "jira_add_comment")
 }
 
-// A direct ask that the seat declines still gets a reply — the decline IS the
-// reply — and the header says where it goes. What `no_action` MEANS is the
-// outcome field's to say, beside the field (runner's schema), and the decoder
-// refuses it on a turn somebody is waiting on: a second copy here was the
-// same rule written twice, for two texts to drift apart.
+// A declined direct ask still gets a reply (the decline IS the reply), and the
+// header says where it goes. What `no_action` means is the outcome field's to
+// say (runner's schema), never a second copy here.
 func TestExecutorPromptRequiresADeclineOnTheOriginatingChannel(t *testing.T) {
 	t.Parallel()
 	contains(t, ExecutorHeader,
@@ -131,8 +113,8 @@ func TestExecutorPromptRequiresADeclineOnTheOriginatingChannel(t *testing.T) {
 	excludes(t, ExecutorHeader, "no_action")
 }
 
-// Production failure: routed comment triggers produced recon only, and the
-// turn ended with the model writing "I don't have write tools" as text.
+// The failure it prevents: a turn that gathers data, then ends saying in text
+// that it has no write tools.
 func TestExecutorPromptCallsOutTheFullArcRule(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(engineer(), ExecutorInput{}).Text
@@ -145,12 +127,9 @@ func TestExecutorPromptCallsOutTheFullArcRule(t *testing.T) {
 	excludes(t, p, "`jira_add_comment`", "`jira_transition_issue`")
 }
 
-// ONE COPY OF EACH RULE. A fact about a submission field — that `deliveries`
-// is checked against the engine's record, what an outcome means — is the
-// field's own description, which reaches the model beside the field on every
-// round; the header carries the rules about the TURN. And it says nothing the
-// prompt already shows: the mission and the roster need no sentence saying
-// they are present.
+// ONE COPY OF EACH RULE. A submission field's facts are its own description,
+// beside it on every round; the header carries the TURN's rules, and no
+// sentence saying the mission or roster is present.
 func TestTheExecutorContractLeavesFieldRulesToTheSchema(t *testing.T) {
 	t.Parallel()
 	excludes(t, ExecutorHeader,
@@ -178,8 +157,7 @@ func TestExecutorPromptRostersOnlyForLeads(t *testing.T) {
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, "## Your Team")
 }
 
-// A lead's roster inlines each member's profile so the lead can reason about
-// assignment without a knowledge fetch.
+// A lead's roster inlines each member's profile, so assignment needs no fetch.
 func TestExecutorPromptRosterInlinesMemberProfiles(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), ExecutorInput{}).Text
@@ -187,11 +165,9 @@ func TestExecutorPromptRosterInlinesMemberProfiles(t *testing.T) {
 		"Goal: Ship quality code.", "Responsibilities: Write tests.")
 }
 
-// THE CODE GUIDANCE NEEDS THE CODE TOOLS: it is rendered for a seat that holds
-// every code tool its claims rest on — a company hosting code registers them
-// together — and for no other, so no prompt sends a seat to tools its surface
-// does not carry, nor bills a company that hosts no code for the sentence on
-// every turn.
+// THE CODE GUIDANCE NEEDS THE CODE TOOLS: rendered only for a seat holding
+// every code tool it rests on (registered together), so no prompt sends a seat
+// to tools it lacks or bills a company hosting no code for it.
 //
 // Mutation: the gate dropped (rendered unconditionally), or read as "any one
 // of them" → red.
@@ -220,11 +196,9 @@ func TestTheCodeHistoryGuidanceNeedsACodeTool(t *testing.T) {
 	}
 }
 
-// THE CODE WRITES GUIDANCE NEEDS THE CODE WRITES: it is rendered for a seat
-// that holds every write its claims rest on — Gitlet's writes are
-// registered together — and for no other, so no prompt sends a seat to commit
-// with a tool its surface does not carry; a seat that only reads code is told
-// how to read it and nothing about changing it.
+// THE CODE WRITES GUIDANCE NEEDS THE CODE WRITES: rendered only for a seat
+// holding every Gitlet write it rests on (registered together), so no seat is
+// sent to commit with a tool it lacks; a read-only seat learns only to read.
 //
 // Mutation: the gate dropped (rendered unconditionally), or read as "any one
 // of them" → red.
@@ -254,8 +228,8 @@ func TestTheCodeWritesGuidanceNeedsTheCodeWrites(t *testing.T) {
 
 func TestExecutorPromptOmitsTheLearnedSkillsScaffold(t *testing.T) {
 	t.Parallel()
-	// Synthesized skills arrive as a prefetch block, never as a section of
-	// the static identity scaffold.
+	// Synthesized skills arrive as a prefetch block, never in the static
+	// scaffold.
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, "## Your Skills")
 }
 
@@ -270,8 +244,7 @@ func TestExecutorPromptRendersOrgAndRoleContextInline(t *testing.T) {
 		"## Behavioral Guidelines", "- Be concise.",
 		"## Your Unit (Eng Team)", "**Purpose:** Build the thing.", "- Ship v1.0.",
 	)
-	// It has all of it inline — and no knowledge-fetch pointer, nor a sentence
-	// telling the model what it can already read.
+	// No sentence telling the model what it can already read.
 	excludes(t, p, "no lookup needed")
 }
 
@@ -284,8 +257,7 @@ func TestExecutorPromptDropsEmptySections(t *testing.T) {
 	role.Responsibilities = nil
 	role.BehavioralGuidelines = nil
 	p := BuildExecutor(seatIn(o, "eng"), ExecutorInput{}).Text
-	// Empty bullet lists are visual noise; a section with nothing in it is
-	// dropped whole.
+	// A section with nothing in it is dropped whole.
 	excludes(t, p, "## Company Context", "## Your Background",
 		"## Your Responsibilities", "## Behavioral Guidelines")
 }
@@ -301,22 +273,11 @@ func TestExecutorPromptPrefetchBlocks(t *testing.T) {
 		CounterpartyProfile: "Subject: U0TESTUSER1",
 	}
 	p := BuildExecutor(engineer(), in).Text
-	// Ordered so the agent reads the conversation it was woken in, then
-	// memory, then what it learned, then the team's docs, then prior work,
-	// then who it is talking to. The thread leads because it is the
-	// trigger's own context rather than something retrieved about it — and
-	// it led in the prose before it led in the prompt, with another block
-	// appended above it.
-	//
-	// EVERY BLOCK IS AN ANCHOR. A subset pins the blocks it names and says
-	// nothing about one appended between two of them, which is exactly how
-	// another block once came to render first while the comment beside it
-	// and the docs both said the thread did.
-	//
-	// Anchored on the section break rather than the bare heading:
-	// ExecutorHeader itself mentions `## Relevant knowledge` in prose, and
-	// matching that would have this assertion pass on a prompt that renders
-	// no block at all.
+	// The thread leads, being the trigger's own context rather than
+	// something retrieved about it. EVERY BLOCK IS AN ANCHOR: a subset says
+	// nothing of a block appended between two it names. Anchored on the
+	// section break, since ExecutorHeader mentions `## Relevant knowledge` in
+	// prose and the bare heading would match a prompt rendering no block.
 	order(t, p,
 		"\n## The thread so far\n",
 		"\n## Personal memory\n",
@@ -325,25 +286,20 @@ func TestExecutorPromptPrefetchBlocks(t *testing.T) {
 		"\n## Similar prior work\n",
 		"\n## Known counterparty\n",
 	)
-	// AND IT IS NOT CALLED `## Thread context`, which is what the chat
-	// prompt titles the section it writes into the notification BODY — and
-	// that lands in the USER message of this same conversation. Two sections
-	// under one heading saying different things is a model reading whichever
-	// it saw last.
+	// NOT `## Thread context`: the chat prompt titles its section in the
+	// user message so, and two sections under one heading leave the model
+	// reading whichever it saw last.
 	excludes(t, p, "## Thread context")
-	// Each block is dropped whole when empty — no stub headings.
+	// Each block is dropped whole when empty.
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text,
 		"\n## The thread so far\n",
 		"\n## Personal memory\n", "\n## Synthesized skills you've learned\n",
 		"\n## Relevant knowledge\n", "\n## Similar prior work\n", "\n## Known counterparty\n")
 }
 
-// THE CONTRACT IS THE SAME WHATEVER WAS PREFETCHED. It used to carry a note
-// saying team documentation had been surfaced whenever the knowledge block was
-// present — which was false whenever that block was the prefetch's own hint
-// that the search found nothing, and redundant otherwise, since the block's
-// heading says what it is. A contract that changes with the prefetch is also
-// one sentence more that moves between two turns of one seat.
+// THE CONTRACT IS THE SAME WHATEVER WAS PREFETCHED: the block's heading says
+// what it is, and a note about it would be false when the search found nothing
+// and would move between two turns of one seat.
 func TestTheContractIsTheSameWhateverWasPrefetched(t *testing.T) {
 	t.Parallel()
 	with := BuildExecutor(engineer(), ExecutorInput{RelevantKnowledge: "- **Runbook**: steps."})
@@ -359,10 +315,8 @@ func TestTheContractIsTheSameWhateverWasPrefetched(t *testing.T) {
 	excludes(t, with.Text, "was surfaced")
 }
 
-// Both identity renderings must phrase a top-level seat the same way. They
-// diverged once — "none" in one, "None (top-level)" in the other — and an
-// agent reading its own chart differently from its reviewer is a difference
-// no phase assertion is looking for.
+// Both identity renderings phrase a top-level seat the same way, so an agent
+// never reads its own chart differently from its reviewer.
 func TestIdentityLineAndSectionAgreeOnATopLevelSeat(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Acme", Roles: []*org.Role{{Name: "Engineer", Goal: "Ship."}}}
@@ -372,15 +326,11 @@ func TestIdentityLineAndSectionAgreeOnATopLevelSeat(t *testing.T) {
 	contains(t, BuildReview(s, ReviewInput{}).Text, "None (top-level)")
 }
 
-// THE REVIEW IS THE SMALLER PROMPT of one seat's turn, because it renders a
-// one-line identity and its rules and never the executor's scaffold — the
-// whole turn's budget counts the roster once on that premise.
-//
-// Measured with EVERY GATE ON in both, the way production sends them to a
-// seat that holds every gated tool: the review's `a2a_ask`, and the
-// executor's escalation and workers (referenceExecutor). An ungated review is the smallest one there is, and a
-// comparison made on it held for a review that had grown every rule it can
-// render.
+// THE REVIEW IS THE SMALLER PROMPT of one seat's turn (a one-line identity and
+// its rules, never the executor's scaffold); the turn's budget counts the
+// roster once on that premise. Measured with EVERY GATE ON in both (the
+// review's `a2a_ask`, referenceExecutor's), since an ungated review is the
+// smallest there is and would prove nothing.
 func TestTheReviewPromptIsSmallerThanTheExecutors(t *testing.T) {
 	t.Parallel()
 	s := lead()
@@ -392,8 +342,8 @@ func TestTheReviewPromptIsSmallerThanTheExecutors(t *testing.T) {
 	}
 }
 
-// The contracts steer by capability, never by a vendor tool name. The engine
-// must not re-couple itself to one tool stack.
+// forbiddenToolNames are vendor tool names: the contracts steer by capability,
+// never coupling the engine to one tool stack.
 var forbiddenToolNames = []string{
 	"slack_conversations_add_message",
 	"slack_conversations_postMessage",

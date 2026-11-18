@@ -9,18 +9,14 @@ import (
 )
 
 // Wiring cross-agent skill promotion: which knowledge base a draft lands in,
-// and which unit's seats are pooled.
-//
-// The ENTANGLEMENT the rest of the subsystem is written to avoid. The pass in
-// internal/learning knows nothing about Confluence or org units; the third-party app
-// writer knows nothing about units. Both facts meet here, which is what this
-// package is for.
+// and which unit's seats are pooled. internal/learning knows nothing of
+// Confluence or org units, and the app writer nothing of units; the two meet
+// only here.
 
 // promotionWired reports whether a knowledge base is wired to draft into.
 //
 // It mirrors [Engine.Knowledge] deliberately: the pages a lead reviews must
-// land in the same place the company's search reads, and asking one question
-// in two ways is how those two drift apart.
+// land where the company's search reads.
 func (e *Engine) promotionWired() bool {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
@@ -29,23 +25,18 @@ func (e *Engine) promotionWired() bool {
 
 // promotionWriter builds the writer for the wired knowledge base.
 //
-// READ AT PASS TIME, never captured — it is handed to the pass as the
-// resolver [learning.PromotionWriterFor], because the background passes are
-// armed BEFORE the inbound service builds its third-party app clients. A writer read
-// at arm time is nil for every company, and the symptom is one boot line
-// saying no knowledge base is configured while one is.
+// READ AT PASS TIME, as the resolver [learning.PromotionWriterFor]: the
+// background passes are armed BEFORE the inbound service builds its app
+// clients, so a writer captured at arm time is nil for every company.
 //
-// Nil means no backend is wired, which disables promotion rather than failing
-// it. A company with no wiki has nowhere to put a page a person reviews, and
-// there is no fallback worth having — writing the draft into an agent's own
-// catalogue would be exactly the unreviewed cross-agent skill the review step
-// exists to prevent.
+// Nil disables promotion rather than failing it. There is no fallback: a draft
+// written into an agent's own catalogue is the unreviewed cross-agent skill the
+// review step exists to prevent.
 func (e *Engine) promotionWriter() learning.PromotionWriter {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
-	// The concrete pointer is checked before conversion: a typed nil
-	// assigned into the interface is not nil, so NewPromoter's
-	// `Writer == nil` guard would pass and the first draft would panic.
+	// Checked before conversion: a typed nil in the interface would pass
+	// NewPromoter's `Writer == nil` guard and panic on the first draft.
 	if c := e.notify.confluence.pages; c != nil {
 		return confluence.NewPromotionWriter(c)
 	}
@@ -54,21 +45,17 @@ func (e *Engine) promotionWriter() learning.PromotionWriter {
 
 // promotionUnits is every unit whose seats could converge, read FRESH.
 //
-// A function rather than a slice for the reason every roster here is one: an
-// apply changes the org, and a pass holding the units it started with would
-// keep drafting into a space the company has moved off.
+// A function rather than a slice: an apply changes the org, and a pass holding
+// the units it started with would keep drafting into a space the company left.
 func (e *Engine) promotionUnits() []learning.PromotionUnit {
 	company := e.Company()
 	if company == nil || company.Org == nil {
 		return nil
 	}
-	// ASKED ONCE, before the walk: whether a draft has anywhere to go at
-	// all cannot change inside one walk, and asking per unit would take
-	// the mutex once per unit for the same answer.
+	// Asked once: constant within a walk, and each ask takes the mutex.
 	wired := e.promotionWired()
-	// EVERY UNIT'S LEAD THROUGH ONE INDEX of the chart: the chart's own
-	// [org.Organization.EffectiveLead] walks every seat for each lead a
-	// unit inherits, so asked of every unit it cost units x seats
+	// One index for every unit's lead: [org.Organization.EffectiveLead]
+	// walks every seat per call, units x seats over the walk
 	// ([org.Index.EffectiveLead]).
 	leads := company.Org.Index()
 	var out []learning.PromotionUnit
@@ -79,12 +66,9 @@ func (e *Engine) promotionUnits() []learning.PromotionUnit {
 		}
 		container, hint := promotionContainer(unit, wired)
 		out = append(out, learning.PromotionUnit{
-			// THE UNIT'S KEY, which is its stable identity — it is what
-			// a `manages:` entry and a seat's `unit:` resolve, and what
-			// every stored row that names a unit holds. The display name
-			// was a different value the moment a unit declared an id, so
-			// the `unit_id` on every skill_promoted event named something
-			// nothing could be filtered or joined on.
+			// THE UNIT'S KEY, never its display name: the key is what
+			// `manages:`, a seat's `unit:` and every stored row resolve,
+			// so skill_promoted's `unit_id` can be filtered and joined.
 			ID: unit.Key(), Lead: leads.EffectiveLead(unit),
 			Handles: handles, Container: container, Hint: hint,
 		})
@@ -94,10 +78,8 @@ func (e *Engine) promotionUnits() []learning.PromotionUnit {
 
 // agentHandlesIn is the unit's OWN agent seats, not its descendants'.
 //
-// Direct members only, deliberately. A parent unit that pooled every
-// descendant's catalogue would find the same convergence its child already
-// promoted and draft it a second time, one level up — and the page a lead
-// reviews would name a team that never converged on anything.
+// Direct members only: a parent pooling its descendants would draft its
+// child's convergence again one level up, naming a team that never converged.
 func agentHandlesIn(unit *org.Unit) []string {
 	var out []string
 	for _, role := range unit.Roles {
@@ -112,20 +94,15 @@ func agentHandlesIn(unit *org.Unit) []string {
 
 // promotionContainer is where this unit files a draft, or what to set.
 //
-// THE UNIT'S WIKI SPACE, never its tracker project. A unit carries both
-// identities, and they are different things: the tracker project is where
-// its work is filed, and a draft handed to the wiki writer under that name
-// would create a page in whatever space happens to be called the same, or
-// fail against nothing at all.
+// THE UNIT'S WIKI SPACE, never its tracker project: under the project's name
+// the wiki writer would file into whatever space shares it, or fail.
 //
-// The HINT is not decoration: a unit with no container is soft-skipped, and
-// without the field name in the log an operator sees a team that never
-// promotes anything and nothing saying why.
+// The HINT names the field to set: a unit with no container is soft-skipped,
+// and nothing else would say why it never promotes.
 func promotionContainer(unit *org.Unit, wired bool) (container, hint string) {
 	if !wired {
-		// No knowledge base at all. buildPromoter refuses the pass before
-		// any unit is walked, so this is only reached by a caller
-		// inspecting the roster; say what is actually missing.
+		// Reached only by a caller inspecting the roster: buildPromoter
+		// refuses the pass first.
 		return "", "no knowledge base is configured for this company, so " +
 			"there is nowhere to file a draft at all"
 	}
@@ -140,10 +117,9 @@ func promotionContainer(unit *org.Unit, wired bool) (container, hint string) {
 
 // buildPromoter builds the promotion pass, or says why it is not armed.
 //
-// A FLEET SINGLETON on the same duty the other background passes claim: two
-// nodes promoting one unit would draft the same page twice, and the writers'
-// dedup would make the second a silent no-op only if the first had already
-// committed — which across two nodes it may not have.
+// A FLEET SINGLETON on the background passes' duty: the writers' dedup stops a
+// second draft of one page only once the first has committed, which two nodes
+// racing need not have.
 func (e *Engine) buildPromoter(c *Company) *learning.Promoter {
 	cfg := c.Config.Learning.SkillPromotion
 	if !cfg.Promotes() || e.backends.Store == nil {
@@ -167,8 +143,6 @@ func (e *Engine) buildPromoter(c *Company) *learning.Promoter {
 	return promoter
 }
 
-// Compile-time proof that the integration writer satisfies the pass's seam. The
-// interface is declared by the consumer, so nothing else would notice a
-// signature drift until the wiring above failed to build — which is later
-// than a reader of the integration package would want to find out.
+// The writer satisfies the consumer-declared seam, checked here so a signature
+// drift fails at the integration rather than in later wiring.
 var _ learning.PromotionWriter = (*confluence.PromotionWriter)(nil)

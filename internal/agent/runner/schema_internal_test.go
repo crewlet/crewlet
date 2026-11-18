@@ -20,16 +20,12 @@ func descriptions(tool string, schema map[string]any) []string {
 	return out
 }
 
-// THE REVIEW CONTRACT NEVER ASKS WHETHER THE ANSWER WAS DELIVERED.
-//
-// That is settled before the reviewer runs: the engine checks the executor's
-// claims against its record, refuses a bad one in the loop, and overturns a
-// `done` that reached nobody — and the review prompt says so. The schema kept
-// asking anyway ("the answer was never delivered by a tool call" →
-// self_iterate), in words the prompt had retired, so the reviewer read one
-// contract in its system prompt and the opposite one beside the field it was
-// filling in. Re-deriving that fact is how a real delivery was once read as
-// none and posted twice.
+// THE REVIEW CONTRACT NEVER ASKS WHETHER THE ANSWER WAS DELIVERED: the engine
+// settles that before the reviewer runs (it checks the executor's claims
+// against its record and overturns a `done` that reached nobody), and the
+// review prompt says so. A schema asking anyway contradicts the prompt beside
+// the very field, and re-deriving delivery can read a real one as none and
+// post it twice.
 func TestTheReviewContractNeverAsksWhetherTheAnswerWasDelivered(t *testing.T) {
 	t.Parallel()
 	for _, d := range descriptions(submitReviewDescription, reviewSchema) {
@@ -40,12 +36,10 @@ func TestTheReviewContractNeverAsksWhetherTheAnswerWasDelivered(t *testing.T) {
 }
 
 // ONE COPY OF EACH RULE between the submission contracts and the system
-// prompts. A fact about a field lives on the field — what `no_action` means,
-// that `deliveries` is checked, what `completed_work` carries — and the
-// tool's own description says only what the call is: the turn's rules (act
-// with tool calls, search for what is missing) are the executor's header, and
-// the reviewer's are its header. Each was written in two or three of these
-// places once, and the copies drifted.
+// prompts: a fact about a field lives on the field (what `no_action` means,
+// that `deliveries` is checked, what `completed_work` carries), and the tool's
+// own description says only what the call is; the turn's rules are each
+// phase's header. Copies of a rule drift.
 func TestEachSubmissionRuleLivesOnItsField(t *testing.T) {
 	t.Parallel()
 	for _, rule := range []string{"deliveries", "no_action", "list_mcp_server_tools",

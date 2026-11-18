@@ -9,14 +9,10 @@ import (
 )
 
 // CODE_GET_REPO CARRIES EVERY FIELD OF A REPOSITORY'S DETAIL, OR SAYS WHY NOT.
-// Its detail is a copy of gitlet.RepoDetail made field by field, and nothing
-// failed when the detail grew a field the copy did not take: the purge a
-// person asked for (expunge) and an import's end (remotes) were read with the
-// rest of the row and dropped, so the purge's own answer sent its asker to
-// read what code_get_repo never answered. Every field the detail declares
-// beside its summary — the row every listing answers, which repoRowOf copies
-// — is either one this answer carries, by its JSON name, or one named here
-// with the reason it is left out.
+// Its detail is a field-by-field copy of gitlet.RepoDetail, so a field the
+// detail grows is silently dropped unless something fails. Every field the
+// detail declares beside its summary (which repoRowOf copies) is either
+// carried by its JSON name or named here with why it is left out.
 //
 // Mutation: drop Remotes from codeRepoDetail → red.
 func TestCodeGetRepoCarriesEveryDetailFieldOrSaysWhy(t *testing.T) {

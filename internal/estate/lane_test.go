@@ -20,20 +20,17 @@ import (
 )
 
 // A QUEUED PUSH HOLDS NO SLOT A READ IS ANSWERED THROUGH. A proposal waits —
-// queued behind its repository's earlier pushes, then for its batch, for as
-// long as its asker's attempt — so a data node answers proposals on a lane of
-// their own, as wide as one repository's committer holds. With every slot of
-// that lane held by a push behind a held batch, a tracker read and a git
-// fetch's code.resolve asked of the SAME node are answered while every one of
-// those pushes still holds its slot; on one registration, sixty-four queued
-// pushes held every slot the node answered anything through, and a reader
-// gave up and marked the node suspect for every domain.
+// behind its repository's earlier pushes, then for its batch, as long as its
+// asker's attempt — so proposals have a lane of their own, as wide as one
+// repository's committer holds. With every slot of it held by a push behind a
+// held batch, a tracker read and a git fetch's code.resolve asked of the SAME
+// node are still answered.
 //
-// JUDGED BY WHAT WAS STILL HELD, never by a clock: the reader has the
-// fleet's attempt, production's read attempt ([fleet.router]), so a node slow
-// under load still answers it, and what proves the read never waited for a
-// proposal's slot is that no push had let go of one when it was answered. Served on one registration, every slot stays held until the
-// release below, so the read waits out its whole attempt and is refused.
+// JUDGED BY WHAT WAS STILL HELD, never by a clock: the reader has production's
+// read attempt ([fleet.router]), so a node slow under load still answers it;
+// no push having let go of a slot proves it never waited for one. Served on
+// one registration, every slot stays held until the release below, so the
+// read waits out its whole attempt and is refused, marking the node suspect.
 func TestAQueuedPushHoldsNoSlotAReadIsAnsweredThrough(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
@@ -110,16 +107,14 @@ func TestAQueuedPushHoldsNoSlotAReadIsAnsweredThrough(t *testing.T) {
 }
 
 // EACH LANE IS SERVED ON ITS OWN SUBJECT WITH ITS OWN BOUND, and proposals'
-// bound is everything the committer and its two sibling writers hold at once:
-// a burst must meet its component's own bounds — busy at once past a key's
-// count, the node's count or the node's bytes — never the registration's,
-// past which a request waits unseen in the broker's buffer for a slot. A node
-// serving git registers the git reads' lane and the git writes' lane too: the
-// reads' as wide as the shared one (the node's seat git-work share, not a
-// lane, bounds the git work running), and the writes' as wide as the writes it
-// holds and the shared lane's width beside them, for the answers it gives at
-// once to a write past the held ones — so no such write waits unseen in the
-// broker's buffer either. A node serving none registers neither.
+// bound is everything the committer and its two sibling writers hold at once,
+// so a burst meets its component's own busy bounds (a key's count, the node's
+// count or bytes), never the registration's, past which a request waits unseen
+// in the broker's buffer. A node serving git also registers the git reads'
+// lane, as wide as the shared one (the seat's git-work share, not a lane,
+// bounds the git work), and the git writes' lane, as wide as the writes it
+// holds plus the shared lane's width for its immediate answers past them. A
+// node serving none registers neither.
 func TestEachLaneIsServedOnItsOwnSubjectWithItsOwnBound(t *testing.T) {
 	t.Parallel()
 	shared := map[string]int{
@@ -176,21 +171,18 @@ func TestEachLaneIsServedOnItsOwnSubjectWithItsOwnBound(t *testing.T) {
 	}
 }
 
-// EVERY HOLDER ON THE PROPOSAL LANE HAS ITS SHARE AT ONCE. The committer, the
-// change writer and the checks writer each hold a request's slot for as long
-// as they hold the request — a push queued behind a held batch, a write of a
-// change's conversation or of a repository's checks waiting its key's turn
-// behind a publish an election holds — and each refuses busy at once past its
-// own node-wide count. With all three full at once, every one of their
-// requests reaches its component: none waits unseen in the broker's buffer
-// for a slot another component's burst holds, so a burst of comments on a
-// node's changes never keeps a push routed to it from its committer.
+// EVERY HOLDER ON THE PROPOSAL LANE HAS ITS SHARE AT ONCE: the committer, the
+// change writer and the checks writer each hold a slot as long as the request
+// (a push behind a held batch, a write behind a publish an election holds)
+// and refuse busy past their own node-wide counts. With all three full, every
+// request reaches its component and none waits unseen in the broker's buffer
+// behind another's burst, so comments never keep a push from its committer.
 //
-// JUDGED BY WHAT REACHED EACH COMPONENT, never by a clock, as the read case
-// above is: every request's attempt outlasts the wait.
+// JUDGED BY WHAT REACHED EACH COMPONENT, never by a clock: every request's
+// attempt outlasts the wait.
 //
-// Mutation: size the lane to the committer's count alone, as it was before
-// the writers' shares, and the writes past it never reach their writers.
+// Mutation: size the lane to the committer's count alone, and the writes past
+// it never reach their writers.
 func TestEveryHolderOnTheProposalLaneHasItsShareAtOnce(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")

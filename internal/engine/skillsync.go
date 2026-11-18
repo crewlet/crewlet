@@ -11,22 +11,13 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 )
 
-// The tool-skill sync, wired.
-//
-// # Which knowledge backend the skills come from is config
-//
-// The registry's content is a wiki's, but WHICH wiki, which container in it,
-// and whether there is one at all are all in the company document. So every
-// apply re-derives the source and hands it to the node's one sync loop, which
-// walks a source that changed, retires the skills of one that went away, and
-// leaves an unchanged one alone. See package skillsync for the loop itself.
+// The tool-skill sync, wired. Which wiki, which container in it, and whether
+// there is one are company config, so every apply re-derives the source and
+// hands it to the node's one sync loop (package skillsync).
 
-// newSkillSync builds the node's sync loop over its registry, stopped.
-//
-// Built with the engine rather than when it starts, so the post-commit nudge
-// from Doclet's applier, which is wired before the loop runs, has something
-// to nudge: a request made before the loop starts is kept and acted on once
-// it does.
+// newSkillSync builds the node's sync loop over its registry, stopped: built
+// with the engine rather than at start, so Doclet's applier nudge, wired
+// earlier, has a loop to nudge. A request made before Start is kept.
 func (e *Engine) newSkillSync(nodeID string) error {
 	opts := skillsync.Options{
 		Registry: e.skills, Node: nodeID, OnChange: e.auditSkills,
@@ -44,29 +35,20 @@ func (e *Engine) newSkillSync(nodeID string) error {
 	return nil
 }
 
-// startSkillSync runs the loop and attaches the fleet nudge.
-//
-// BEFORE the notification service, whose Confluence parser hands this loop
-// every page change it hears: a parser that ran first would drop the changes
-// that arrived in between on a loop that was not there to take them.
+// startSkillSync runs the loop and attaches the fleet nudge. Before the
+// notification service, whose Confluence parser hands this loop every page
+// change: started after it, the changes in between would be dropped.
 func (e *Engine) startSkillSync(ctx context.Context) { e.skillSync.Start(ctx) }
 
-// stopSkillSync ends the loop. Nil-safe, which is the engine that never built
-// one because its boot failed first.
+// stopSkillSync ends the loop. Nil-safe, for an engine whose boot failed
+// before building one.
 func (e *Engine) stopSkillSync(ctx context.Context) { e.skillSync.Stop(ctx) }
 
-// reconcileSkills points the sync loop at the skills source an epoch names.
-//
-// ON EVERY APPLY, and at boot. The loop decides what that costs: a source that
-// moved is walked (and the previous one's skills are retired at once), a source
-// whose last walk failed is walked again, and an unchanged healthy source costs
-// nothing. Before it was wired here, no apply reached the registry at all, so
-// connecting Confluence live loaded no skills, moving the skills container kept
-// serving the old one's, and disconnecting the wiki left every skill it had
-// registered for the life of the process.
-//
-// AFTER the knowledge base's own reconcile, because the Confluence source is
-// read off the wiring that reconcile left running.
+// reconcileSkills points the sync loop at the skills source an epoch names,
+// on every apply and at boot; the loop decides the cost (a moved source is
+// walked and the old one's skills retired, a failed one walked again, an
+// unchanged healthy one costs nothing). After the knowledge base's own
+// reconcile, since the Confluence source reads the wiring it left running.
 func (e *Engine) reconcileSkills(c *Company) {
 	e.skillSync.SetSource(e.skillSource(c))
 }
@@ -117,12 +99,10 @@ func skillBackend(backend config.KnowledgeBackend) string {
 	return string(backend)
 }
 
-// confluenceSkillSource is the Confluence half of [Engine.skillSource].
-//
-// THE WIRING THAT IS RUNNING, not the block the epoch declares: a revision
-// whose Confluence block is broken keeps the previous parser and client, and
-// the skills follow the same wiring rather than going dark over a block that
-// never built.
+// confluenceSkillSource is the Confluence half of [Engine.skillSource]. It
+// reads the RUNNING wiring, not the epoch's block: a revision whose block is
+// broken keeps the previous parser and client, and skills follow them rather
+// than go dark.
 func (e *Engine) confluenceSkillSource(src skillsync.Source) skillsync.Source {
 	e.notify.mu.Lock()
 	parts := e.notify.confluence
@@ -151,9 +131,8 @@ func (e *Engine) confluenceSkillSource(src skillsync.Source) skillsync.Source {
 		page, space, err := confluence.SkillPage(ctx, client, id)
 		switch {
 		case confluence.Status(err) == http.StatusNotFound:
-			// GONE, deleted or in the trash. An answer rather than a
-			// failure: the page holds nothing, and a failure would walk
-			// the whole space to learn the same thing.
+			// GONE (deleted or trashed) is an answer, not a failure,
+			// which would walk the whole space to learn the same.
 			return skillsync.PageRead{}, nil
 		case err != nil:
 			return skillsync.PageRead{}, err

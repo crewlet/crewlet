@@ -11,18 +11,17 @@ import (
 
 // ---- the upload reservations ------------------------------------------ //
 
-// The uploads bucket holds two classes of key: the ONE ledger of every hold the
-// company has outstanding, and one record per upload. Two segments for a record
-// and one for the ledger, so no upload id can ever spell the ledger's key.
+// The uploads bucket holds the ONE ledger of every hold the company has
+// outstanding, and one record per upload. A record's key has two segments and
+// the ledger's one, so no upload id can spell the ledger's key.
 const uploadLedgerKey = "ledger"
 
 // uploadRecordKey is one upload's record key.
 func uploadRecordKey(upload string) string { return coord.DocumentKey("upload", upload) }
 
-// UploadLedger reads the reservation ledger from the stream LEADER, for the
-// reason every single-key read here does ([getLatest]): a replica behind the
-// last reservation would hand the next one a total it has already spent, and
-// its compare-and-set would then lose for nothing.
+// UploadLedger reads the reservation ledger from the stream LEADER
+// ([getLatest]): a replica behind the last reservation would hand the next one
+// a total already spent, and its compare-and-set would lose for nothing.
 func (f *FleetStore) UploadLedger(ctx context.Context) ([]byte, uint64, error) {
 	return f.uploadValue(ctx, uploadLedgerKey, "read the upload ledger")
 }
@@ -58,17 +57,16 @@ func (f *FleetStore) SwapUploadRecord(ctx context.Context, upload string, value 
 
 // DeleteUploadRecord removes one upload's record while it is still at revision.
 //
-// A DELETE, NOT A PURGE: the bucket ages every message, its marker included, so
-// the marker goes on its own and nothing sweeps it (the purge rule is for the
-// buckets no clock ages, markers.go).
+// A DELETE, NOT A PURGE: this bucket ages every message, its marker included,
+// so nothing need sweep it (the purge rule is for buckets no clock ages,
+// markers.go).
 func (f *FleetStore) DeleteUploadRecord(ctx context.Context, upload string, revision uint64) (bool, error) {
 	if upload == "" {
 		return false, errors.New("coord/kv: an upload record needs an upload")
 	}
 	if revision == 0 {
 		// The client drops a LastRevision of 0 and deletes unconditionally,
-		// so a caller that never read a revision would remove whatever was
-		// there: a record another node had just claimed.
+		// which would remove a record another node had just claimed.
 		return false, nil
 	}
 	err := f.uploads.Delete(ctx, uploadRecordKey(upload), jetstream.LastRevision(revision))

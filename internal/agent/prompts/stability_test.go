@@ -12,22 +12,12 @@ import (
 // round would have drifted several times over by the last one.
 const rounds = 9
 
-// stableAcrossRounds is the byte-stability check: build the same phase's
-// system prompt on every round of a loop whose per-round state is genuinely
-// moving, and require identical bytes.
-//
-// Why it matters: the provider's prompt cache keys on the prefix. One changed
-// byte between round 1 and round 9 costs the full uncached rate for every
-// remaining round of every turn — and nothing reports it except the bill.
-//
-// A test asserting an ABSENCE (nothing drifted) passes both when the property
-// holds and when the test is broken, so this carries two guards:
-//
-//   - the prompt must be substantial, so an empty or truncated build cannot
-//     satisfy "all rounds equal";
-//   - `sensitive` — the same builder with ONE input changed — must produce
-//     DIFFERENT bytes, proving the builder reads its inputs at all. Without
-//     it, a builder that ignored everything it was given would pass.
+// stableAcrossRounds requires a phase's system prompt to be byte-identical on
+// every round while the per-round state moves (package doc, "Byte-stability
+// across rounds"): a drift shows up only on the bill. An absence passes when
+// the test is broken too, so two guards: the prompt must be substantial, and
+// `sensitive` (the builder with ONE input changed) must differ, proving the
+// builder reads its inputs.
 func stableAcrossRounds(t *testing.T, name string, build func(round int) string, sensitive string) {
 	t.Helper()
 	first := build(1)
@@ -63,18 +53,15 @@ func firstDiff(a, b string) string {
 	return fmt.Sprintf("  identical for %d bytes, then lengths differ: %d vs %d", n, len(a), len(b))
 }
 
-// The executor loops: a run is launched, collected and reviewed, and a turn
-// sent back launches another — often from another process, after a park. None
-// of that may reach the system prompt: the prefetch blocks are frozen at turn
-// start, and the ledger of what has already run rides the brief.
+// A turn sent back launches another run, often from another process after a
+// park; none of that reaches the system prompt: the prefetch blocks are frozen
+// at turn start and the ledger rides the brief.
 func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 	t.Parallel()
 	seat := lead()
 	frozen := ExecutorInput{
-		// comment_on_work_item DELIBERATELY, so the escalation guidance
-		// it gates is inside the bytes held stable across rounds — and the
-		// code tools for the same reason, for the code guidance — the
-		// reads' and the writes'.
+		// comment_on_work_item and the code tools, so the escalation and
+		// code guidance they gate are inside the bytes held stable.
 		AvailableTools: append([]string{"post_message", "refresh_memory", "comment_on_work_item"},
 			slices.Concat(CodeHistoryTools(), CodeSearchTools(), CodeWriteTools(), CodeMergeTools())...),
 		ThreadContext:     "- **Ana Ruiz (ana)**: staging redirects in a loop",
@@ -91,8 +78,7 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 		return BuildExecutor(seat, frozen).Text
 	}, BuildExecutor(seat, ExecutorInput{AvailableTools: frozen.AvailableTools}).Text)
 
-	// Guard the guard: if the per-round state never moved, the stability
-	// assertion above tested nothing at all.
+	// Guard the guard: unmoved per-round state tests nothing.
 	if userMessages[0] == userMessages[len(userMessages)-1] {
 		t.Fatal("the per-round state never changed — this test would pass on a " +
 			"prompt that drifted every round")
@@ -107,10 +93,9 @@ func ledgerAfter(round int) string {
 	return b.String()
 }
 
-// Review's evidence is assembled once when the phase starts and is fixed for
-// every round of it. It legitimately DIFFERS between round 1 and round 2 of a
-// turn, because by then the evidence genuinely differs — a tool round is one
-// model turn inside a phase, a turn round is a whole executor/reviewer pass.
+// Review's evidence is fixed for every tool round of the phase, yet DIFFERS
+// between turn rounds (whole executor/reviewer passes), since the evidence
+// does.
 func TestReviewPromptIsByteStableAcrossRounds(t *testing.T) {
 	t.Parallel()
 	seat := lead()
@@ -119,9 +104,8 @@ func TestReviewPromptIsByteStableAcrossRounds(t *testing.T) {
 		Outcome:  "delivered",
 		Produced: "Posted the summary.",
 		ToolLog:  "- post_message(...) → success",
-		// The gated rule ON, so the bytes it adds are inside what is held
-		// stable across rounds — and the run's delivered refs, which are
-		// evidence fixed for the phase like the rest.
+		// The gated rule ON and delivered refs set, so their bytes are held
+		// stable too.
 		Delivered: DeliveredRefs([]string{"acme/api#41"}, 0),
 		OffersA2A: true,
 		Skills:    allSkills(),
@@ -130,8 +114,7 @@ func TestReviewPromptIsByteStableAcrossRounds(t *testing.T) {
 		func(int) string { return BuildReview(seat, frozen).Text },
 		BuildReview(seat, ReviewInput{Intent: "Post the summary to #eng."}).Text)
 
-	// And the cross-round case, stated so it is not mistaken for drift: a
-	// second pass carries the ledger the first one did not have.
+	// Not drift: a second pass carries the ledger the first lacked.
 	second := frozen
 	second.EarlierIterations = "### Iteration 1\nCalled:\n- post_message(...) → success"
 	if BuildReview(seat, second).Text == BuildReview(seat, frozen).Text {
@@ -139,10 +122,8 @@ func TestReviewPromptIsByteStableAcrossRounds(t *testing.T) {
 	}
 }
 
-// THE WHOLE TURN is byte-stable too, which is the claim that actually bills:
-// a per-prompt assertion cannot catch a section moving from the executor's
-// prompt into the reviewer's, and with two prompts instead of three there is
-// one less place for a section to hide.
+// THE WHOLE TURN is byte-stable, the claim that bills: a per-prompt assertion
+// misses a section moving from the executor's prompt into the reviewer's.
 func TestTheWholeTurnIsByteStableAcrossRounds(t *testing.T) {
 	t.Parallel()
 	seat := lead()
@@ -153,14 +134,11 @@ func TestTheWholeTurnIsByteStableAcrossRounds(t *testing.T) {
 		BuildExecutor(seat, ExecutorInput{}).Text+BuildReview(seat, ReviewInput{}).Text)
 }
 
-// Assembly is deterministic for the same inputs, which is a stronger claim
-// than "stable across rounds": a catalogue may answer in any order (a registry
-// keyed by a map does), and an order that leaked into the prompt could reorder
-// it between two builds in the same process.
+// Assembly is deterministic for the same inputs: a catalogue may answer in
+// map order, and a leaked order would reorder two builds in one process.
 func TestAssemblyIsDeterministic(t *testing.T) {
 	t.Parallel()
-	// A wide MCP surface, given out of order, so a leaked order has plenty
-	// of room to show.
+	// A wide MCP surface, out of order, so a leaked order shows.
 	seat := seatIn(acme(), "eng")
 	worker := []Phase{PhaseSubagent}
 	cat := &fakeCatalogue{skills: []fakeSkill{
@@ -180,19 +158,15 @@ func TestAssemblyIsDeterministic(t *testing.T) {
 			t.Fatalf("build %d of %d differs from the first\n%s", i, builds, firstDiff(first, got))
 		}
 	}
-	// Guard: the catalogue really did render, so the loop compared prompts
-	// that had something to disagree about.
+	// Guard: the catalogue rendered, so the builds had something to differ on.
 	contains(t, first, "- `mcp:atlassian` — A", "- `mcp:slack` — S")
 	order(t, first, "mcp:atlassian", "mcp:github", "mcp:mattermost", "mcp:slack")
 }
 
-// A system prompt is a pure function of turn-start inputs. A round counter
-// among those inputs is the one way that stops being true, and it would not
-// fail any assertion here — the builder would simply start rendering it.
-//
-// "Iteration" is deliberately NOT on this list: ReviewInput.EarlierIterations
-// is a per-TURN-ROUND input, which is a different thing from a per-tool-round
-// one and is allowed to move between passes of a turn.
+// A system prompt is a pure function of turn-start inputs, and a round
+// counter among them would break that without failing any other assertion.
+// "Iteration" is NOT banned: ReviewInput.EarlierIterations is per TURN round,
+// allowed to move between passes.
 func TestNoPhaseInputCarriesARoundCounter(t *testing.T) {
 	t.Parallel()
 	banned := []string{"round", "attempt", "retry"}

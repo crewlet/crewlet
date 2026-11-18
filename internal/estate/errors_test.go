@@ -47,9 +47,8 @@ func throughWire(t *testing.T, err error) error {
 }
 
 // EVERY SENTINEL ANSWERS errors.Is ON THE FAR SIDE, wrapped as a caller
-// wraps it, and the words cross unchanged. A tool that asked "is this no such
-// task" of a remote answer and was told no would tell a model its item does
-// not exist in the wrong words — or, worse, file it again.
+// wraps it, and the words cross unchanged: a tool told a remote "no such task"
+// was not one would misreport it to a model, or file the item again.
 func TestEverySentinelKeepsItsIdentityAcrossTheWire(t *testing.T) {
 	t.Parallel()
 	for _, s := range sentinels {
@@ -71,10 +70,9 @@ func TestEverySentinelKeepsItsIdentityAcrossTheWire(t *testing.T) {
 
 // A REFUSAL THAT IS TWO SENTINELS AT ONCE KEEPS BOTH.
 //
-// A page's bad parent is a field refusal ([doclet.ErrInvalid], which a tool
-// renders as "refused that") AND the one fact [doclet.ErrParent] names, in the
-// shape the pages store builds it. A stateless node's tool branches on either,
-// so the wire has to carry both rather than whichever it met first.
+// A page's bad parent is [doclet.ErrInvalid] AND [doclet.ErrParent], as the
+// pages store builds it; a stateless node's tool branches on either, so the
+// wire carries both rather than whichever it met first.
 func TestARefusalThatIsTwoSentinelsKeepsBoth(t *testing.T) {
 	t.Parallel()
 	original := fmt.Errorf("%w (%w)",
@@ -90,13 +88,11 @@ func TestARefusalThatIsTwoSentinelsKeepsBoth(t *testing.T) {
 }
 
 // AN ARTIFACT'S CREATE OF WHAT IS THERE CROSSES AS BOTH OF ITS SENTINELS AND
-// ITS WORDS: the artifacts' own [artifactsdomain.ErrExists], which a tool and
-// the artifacts API class it by, and the framework's [statelog.ErrExists],
-// which a person's surface tells it by ([statelog.Sentence]) — the second in
-// its chain and not in its words, which [artifactsdomain.AlreadyExists] carries
-// as a type of its own. Rebuilt from its message alone, it would still answer
-// both on the far side, through the sentinels the chain carries; the type is
-// what a caller unwrapping it reads What from.
+// ITS WORDS: [artifactsdomain.ErrExists], which a tool and the artifacts API
+// class it by, and [statelog.ErrExists], which a person's surface tells it by
+// ([statelog.Sentence]) — in its chain, not its words. The sentinels cross
+// either way; the [artifactsdomain.AlreadyExists] type is what a caller reads
+// What from.
 //
 // Mutation: drop AlreadyExists from typedKinds and errors.As finds nothing.
 func TestAnArtifactsCreateOfWhatIsThereKeepsBothSentinels(t *testing.T) {
@@ -119,9 +115,8 @@ func TestAnArtifactsCreateOfWhatIsThereKeepsBothSentinels(t *testing.T) {
 }
 
 // AN EXECUTOR RECORD A NEWER BUILD WROTE KEEPS WHAT IT IS ABOUT ACROSS THE
-// WIRE: [executordomain.ErrFutureVersion] carries the subject a deferral files
-// it under and the two versions as fields, and a typed error rebuilt from its
-// message alone would answer errors.As with none of them.
+// WIRE: [executordomain.ErrFutureVersion]'s subject (which a deferral files it
+// under) and its two versions are fields, which its message alone lacks.
 //
 // Mutation: drop executordomain.ErrFutureVersion from typedKinds and errors.As
 // finds nothing.
@@ -141,14 +136,11 @@ func TestAnExecutorRecordFromANewerBuildKeepsItsSubjectAcrossTheWire(t *testing.
 	}
 }
 
-// A REFUSAL CROSSES WITH ITS REASON AND ITS CAUSE. A tool branches on the
-// reason (`op_reused` has a remedy of its own), and the cause is what still
-// answers errors.Is — a stream recreated behind `wrong_stream` — so a
-// refusal rebuilt as its message alone would lose both. And the writer of a
-// copy it names crosses too, and whether the record it names is the
-// operation's own: whether the reason is the serving node's standing or
-// another node's, and whether a record of the write landed at all, are what
-// its remedy turns on.
+// A REFUSAL CROSSES WITH ITS REASON AND ITS CAUSE: a tool branches on the
+// reason (`op_reused` has a remedy of its own), and the cause still answers
+// errors.Is (a stream recreated behind `wrong_stream`). The copy's writer and
+// whether the named record is the operation's own cross too, since its remedy
+// turns on whose standing the reason is and whether the write landed at all.
 func TestATypedRefusalCrossesWithItsFieldsAndItsCause(t *testing.T) {
 	t.Parallel()
 	original := fmt.Errorf("write: %w", &statelog.Unavailable{
@@ -177,16 +169,14 @@ func TestATypedRefusalCrossesWithItsFieldsAndItsCause(t *testing.T) {
 
 // AN IDENTITY RECORD'S REFUSAL CROSSES SAYING WHETHER A PERMISSION LIFTS IT.
 //
-// A node holding no data asks a data node to publish an identity record, and a
-// refusal is answered by its kind: one a permission lifts names it, one the
-// record's own rule made names none, and one asked through a machine token
-// says a person must be present. All three are read off the refusal's fields
-// and its chain, so all three must survive the wire — and so must what it was
-// about ([iamdomain.Refusal.About]), which the asking node's log prints while
-// the person it answers reads the sentence alone ([iamdomain.Sentence]).
+// A refusal names the permission that lifts it, none when the record's own
+// rule made it, or that a person must be present when asked through a machine
+// token — all read off its fields and chain — and carries what it was about
+// ([iamdomain.Refusal.About]) for the asking node's log, while the person
+// reads the sentence alone ([iamdomain.Sentence]).
 // Mutations: drop the refusal's typed row and errors.As finds nothing on the
 // far side; leave About off the wire and the asking node's sentence carries
-// the ids again.
+// the ids.
 func TestAnIdentityRefusalCrossesWithWhatLiftsIt(t *testing.T) {
 	t.Parallel()
 	for _, original := range []*iamdomain.Refusal{
@@ -225,12 +215,11 @@ func TestAnIdentityRefusalCrossesWithWhatLiftsIt(t *testing.T) {
 	}
 }
 
-// THE ROUTER'S OWN WORDS CROSS TOO, and so does every answer the router's
-// failover turns on. An estate nobody served says who was asked on the far
-// side of a second hop, and whether they were data nodes or Gitlet nodes; and an
-// unvouched step rebuilt from the wire must still read as one another node's
-// ledger may answer, or a router that met it on another node would stop at it
-// rather than ask the next, under its operation id.
+// THE ROUTER'S OWN WORDS CROSS TOO, and every answer its failover turns on:
+// an unserved estate says who was asked across a second hop and whether they
+// were data or Gitlet nodes, and a rebuilt unvouched step still reads as one
+// another node's ledger may answer, or the router would stop at it rather
+// than ask the next under its operation id.
 func TestTheRouterReadsARefusalTheWayItWasSent(t *testing.T) {
 	t.Parallel()
 	var unserved *ErrUnserved
@@ -266,12 +255,10 @@ func TestAStructuredRefusalKeepsItsValue(t *testing.T) {
 	}
 }
 
-// A REFUSAL'S WORDS FOR A PERSON CROSS WITH IT (ADR-0060): a write a data
-// node refused answers the person on the node they are on in the words the
-// writer chose, whether the writer put them beside its error or a typed
-// refusal carries them. AND A ROLLING UPGRADE DEGRADES TO THE FLOOR: an older
-// peer sends no phrasing, and the refusal reads as one with none, which the
-// act route answers with its code's own sentence, never the model's message.
+// A REFUSAL'S WORDS FOR A PERSON CROSS WITH IT (ADR-0060), whether beside its
+// error or carried by a typed refusal. AND A ROLLING UPGRADE DEGRADES TO THE
+// FLOOR: an older peer's refusal reads as unphrased, which the act route
+// answers with its code's own sentence, never the model's message.
 func TestARefusalsPersonWordsCrossTheRouter(t *testing.T) {
 	t.Parallel()
 	said := throughWire(t, fmt.Errorf("thread: %w", caveat.Saying(
@@ -297,16 +284,12 @@ func TestARefusalsPersonWordsCrossTheRouter(t *testing.T) {
 
 // A REFUSAL A PERSON IS SHOWN CROSSES AS THE SENTENCE THEY ARE SHOWN.
 //
-// Each package's Sentence gives a person the writer's own words without the
-// Go prefix — and it finds them by unwrapping the package's refusal TYPE. A
-// refusal decided on the data node that answered and printed on the node whose
-// caller asked has crossed the wire, so the type has to cross with its fields
-// or Sentence finds nothing and prints "worklet: …", "doclet: invalid: …" or
-// "chatlet: invalid: …" to the person. The class must survive beside it, since a
-// surface picks the refusal's class by it — and the rebuilt refusal must
-// answer for every sentinel it carries, the one a refusal holds of its own
-// beside its class included, since that is what a caller acting on that
-// refusal in particular tests.
+// Each package's Sentence finds the writer's words by unwrapping the package's
+// refusal TYPE, so the type must cross with its fields or the person reads
+// "worklet: …", "doclet: invalid: …" or "chatlet: invalid: …". The class must
+// survive too (a surface picks by it), and every sentinel the refusal holds,
+// its own beside its class included, which a caller acting on that refusal
+// tests.
 func TestARefusalsSentenceSurvivesTheWire(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -334,14 +317,12 @@ func TestARefusalsSentenceSurvivesTheWire(t *testing.T) {
 		{"chat", &chatlet.InvalidError{Field: "name",
 			Why: "is longer than 80 bytes — shorten it"},
 			[]error{chatlet.ErrInvalid}, chatlet.Sentence, chatRefusal},
-		// A MARK ON A PERSON'S INBOX, decided on the data node whose copy
-		// holds it. Mutation: drop inbox.Refusal from typedKinds and this
-		// fails.
+		// A mark on a person's inbox, decided on the data node whose copy
+		// holds it. Mutation: drop inbox.Refusal from typedKinds and this fails.
 		{"inbox", &inbox.Refusal{Mark: inbox.ErrFull,
 			Why: "the read list holds 256 notices — mark them read through one"},
 			[]error{inbox.ErrFull}, inbox.Sentence, inboxRefusal},
-		// A RETENTION GESTURE'S TOLD REFUSAL, which a node without the
-		// data role reaches through the estate router like any other.
+		// A retention gesture's told refusal, reached through the router.
 		// Mutation: drop statelog.Telling from typedKinds and this fails.
 		{"a told gesture", &statelog.Telling{Say: "the window is held by node-2",
 			Err: statelog.ErrReanchorRefused},
@@ -436,9 +417,8 @@ func TestAnUnknownIdentityKeepsItsMessage(t *testing.T) {
 }
 
 // neverCrosses is every error type of the crossing packages that never
-// crosses the wire as itself, each with why, so the gate's question is
-// answered for it once, in review, rather than skipped by its spelling. An
-// entry whose type is gone fails the gate, so none outlives what it excused.
+// crosses the wire as itself, each with why, answered once in review rather
+// than skipped by its spelling. An entry whose type is gone fails the gate.
 var neverCrosses = map[string]string{
 	"estate.remoteError": "the wire's own rebuilt error, which is what every " +
 		"other value here crosses AS: it never crosses itself",
@@ -468,10 +448,9 @@ var neverCrosses = map[string]string{
 		"the gitlet package itself",
 }
 
-// THE REGISTRY IS COMPLETE, and this is the gate that keeps it so: every
-// exported sentinel and every error type of the packages whose errors cross
-// is registered — parsed from their source, because the list of what a tool
-// compares grows in another package and nothing else would tell this one.
+// THE REGISTRY IS COMPLETE: every exported sentinel and error type of the
+// packages whose errors cross is registered, parsed from their source, since
+// what a tool compares grows in other packages and nothing else would tell.
 func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -485,24 +464,15 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 	}
 	var found int
 	exempt := map[string]bool{}
-	// EVERY DOMAIN AN OPERATION FLOORS ON, read off the domains themselves
-	// ([crossingDomains]) rather than listed: its backend is what answers
-	// the operation, so its errors are the first a tool on the asking node
-	// compares, and a domain routed with its package left off a hand list
-	// would cross its refusals as words alone, with nothing here to say so.
-	//
-	// THIS PACKAGE'S OWN TOO: a router refuses with them, and a node that
-	// answers on another's behalf carries them back across a second hop.
-	// And the state log's, whose freshness and eviction refusals every
-	// domain's read and write returns, and the identity vocabulary's and
-	// the session's, whose answers a person verb is decided on; the
-	// artifacts' vocabularies their domains' answers carry; and the
-	// phrasing for a person that a refusal of any domain carries beside
-	// its error (ADR-0060). AND THE INBOX RULES', which a person's mark
-	// verb on any domain's inbox is decided by, and the search index's, which
-	// every domain's search answers through. And the executor log's keep
-	// vocabulary, whose session bound a refused capture carries. A code is the identifier as Go
-	// code spells it, so a nested package is named by its last element.
+	// Every domain an operation floors on, read off the domains
+	// ([crossingDomains]) rather than a hand list that could miss one and
+	// cross its refusals as words alone. Beside them, the packages whose
+	// errors every domain's answers carry: this one's (the router's, and a
+	// second hop's), the state log's, the identity vocabulary's and the
+	// session's, the artifacts' vocabularies, caveat's (ADR-0060), the inbox
+	// rules', the search index's and executorkeep's session bound. A code is
+	// the identifier as Go spells it, so a nested package is named by its
+	// last element.
 	packages := append([]string{"statelog", "estate", "iam", "iam/session", "executorkeep",
 		"artifacts", "artifacts/manifest", "artifacts/mediatype",
 		"artifactdata/canon", "artifactdata/query", "caveat", "inbox", "search"},
@@ -524,14 +494,10 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 				continue
 			}
 			if !ast.IsExported(ty) {
-				// AN UNEXPORTED ERROR TYPE CANNOT CROSS: the wire
-				// rebuilds a type from its exported fields, so one of
-				// these arrives as its message alone. That is how a
-				// refusal's sentence was lost on every routed write —
-				// the tracker's and the knowledge base's refusal types
-				// were both unexported, so each package's Sentence on
-				// the asking node found no refusal and handed a person
-				// the Go error's prefix.
+				// An unexported error type cannot cross: the wire
+				// rebuilds a type from its exported fields, so it arrives
+				// as its message alone (package doc, "Errors keep their
+				// identity").
 				t.Errorf("%s.%s is an unexported error type, which the wire "+
 					"rebuilds as its message alone: export it with its fields "+
 					"and register it in estate's typedKinds", name, ty)

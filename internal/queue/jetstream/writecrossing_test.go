@@ -17,32 +17,20 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// slowLinkRate is the pace the cases below hold a leaf's link to, towards its
-// member: a mebibyte a second, thirty times the slowest a link is allowed to
-// be ([objstore.MiBPace]). A write at the transport's ceiling takes about
-// eight seconds to cross it — past the five seconds a write whose caller set
-// no deadline was given whatever it carried, and far inside the time its bytes
-// are given to cross at the slowest pace allowed.
+// slowLinkRate is the pace the cases hold a leaf's link to, towards its member:
+// a mebibyte a second, thirty times the slowest allowed ([objstore.MiBPace]).
+// A write at the transport's ceiling takes about eight seconds to cross it,
+// past the request term's five seconds and far inside its budget at the floor.
 const slowLinkRate = 1 << 20
 
-// A WRITE ACROSS A LINK IS WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS IT.
+// A WRITE ACROSS A LINK IS WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS IT
+// (package doc, "A write across a link is given the time its bytes take to
+// cross"): held to five seconds, a write at the ceiling fails as the broker
+// unavailable, and a keeper retries it for ever while each copy lands.
 //
-// A node without the `data` role reaches the fleet's broker as a leaf, across
-// its link to a member, and every node of a fleet on an external broker dials
-// one: either way a write it makes is acknowledged only once its last byte has
-// crossed that link, which the engine allows to carry as little as a
-// mebibyte in [objstore.MiBPace]. A write whose caller set no deadline was
-// held to the client's five seconds whatever it carried, so one at the
-// transport's ceiling could not be acknowledged at any pace below about a
-// mebibyte and a half a second, and failed as the broker being unavailable: a
-// keeper retries such an entry for ever, as an outage, while each copy of it
-// crosses the link and lands (crewlet/crewlet#1005, the conformance suite's
-// keep at the ceiling through a leaf, on a loaded runner).
-//
-// Each case writes at its write's ceiling with no deadline of its own, across
-// a leaf's link carrying a mebibyte a second — side by side, so their
-// transfers overlap — and then asks the broker what landed. The payloads are
-// random, so a link that compresses still carries every byte.
+// Each case writes at its write's ceiling with no deadline of its own, side by
+// side across one slow leaf link so their transfers overlap, then asks the
+// broker what landed. Random payloads, so a compressing link carries every byte.
 //
 // Mutation: drop the crossing from the budget KeepDeadLetter, Publish, Append
 // or the budget's dead letter waits within, and that case fails at five
@@ -69,12 +57,9 @@ func TestAWriteAcrossALinkIsWaitedForAsLongAsItsBytesTakeToCross(t *testing.T) {
 		}
 	})
 
-	// THE DELIVERY BUDGET'S DEAD LETTER, which the consume loop writes on
-	// a context with no deadline: a message at the ceiling the budget gives
-	// up on across a slow link is kept, and said to be. Its bytes land
-	// whatever the publish answers, so the answer is what is held here —
-	// at five seconds it was `dead_letter_failed` for a message the stream
-	// went on to keep.
+	// The delivery budget's dead letter, written on a context with no
+	// deadline: its bytes land whatever the publish answers, so the answer
+	// is what is held (a kept message must not read dead_letter_failed).
 	t.Run("a_message_the_budget_dead_letters_at_the_ceiling", func(t *testing.T) {
 		t.Parallel()
 		q := leafAcrossSlowLink(t, slowLinkRate)
@@ -130,9 +115,8 @@ func TestAWriteAcrossALinkIsWaitedForAsLongAsItsBytesTakeToCross(t *testing.T) {
 		if err != nil {
 			t.Fatalf("open the log: %v", err)
 		}
-		// A CREATE, as the state log's publisher makes one: its operation's
-		// id and the expectation that the subject holds nothing ride as
-		// headers beside the largest record the transport carries.
+		// A create as the state log's publisher makes one: an operation id
+		// and an expect-empty header beside the largest record.
 		none := uint64(0)
 		seq, duplicate, err := log.Append(t.Context(), "crewlet.slowlink.log.object.big",
 			"slowlink-create", &none, incompressible(t, statelog.MaxTransportRecordBytes))
@@ -140,9 +124,9 @@ func TestAWriteAcrossALinkIsWaitedForAsLongAsItsBytesTakeToCross(t *testing.T) {
 			t.Fatalf("a record at the transport's ceiling, across a link carrying a mebibyte "+
 				"a second = (%d, duplicate %t, %v), want it appended", seq, duplicate, err)
 		}
-		// THE LOG'S OWN STATE, never the record read back: a leader's reply
-		// carrying the record base64-encoded is past what a leaf's link
-		// carries, and the leaf closes the link it arrives on.
+		// The log's own state, never the record read back: a leader's reply
+		// carrying it base64-encoded is past what a leaf's link carries, and
+		// the leaf closes the link it arrives on.
 		stats, err := log.Stats(t.Context())
 		if err != nil {
 			t.Fatalf("read the log's state: %v", err)
@@ -163,8 +147,8 @@ func leafAcrossSlowLink(t *testing.T, rate int64) *Queue {
 	memberCfg := cfg
 	memberCfg.ServerName = "member"
 	memberCfg.LeafHost, memberCfg.LeafPort = "127.0.0.1", AnyPort
-	// A MEMBER THAT SERVES LEAVES PERSISTS, and the leaf creates what it
-	// is first to use in the file store to match.
+	// A member that serves leaves persists, and the leaf creates what it
+	// first uses in the file store to match.
 	memberCfg.StoreDir, memberCfg.StoreMaxBytes = brokertest.TempDir(t), brokertest.StoreMaxBytes
 	member := startTestServer(t, memberCfg)
 
@@ -185,9 +169,9 @@ func leafAcrossSlowLink(t *testing.T, rate int64) *Queue {
 	return q
 }
 
-// eventAtTheCeiling is an event whose encoding, as q publishes it, is exactly
-// the transport's ceiling — the largest event a stream of the engine's takes,
-// none of which states a largest message of its own — its bulk random text.
+// eventAtTheCeiling is an event whose encoding as q publishes it is exactly the
+// transport's ceiling (no engine stream states a smaller largest message), its
+// bulk random text.
 func eventAtTheCeiling(t *testing.T, q *Queue) *events.Event {
 	t.Helper()
 	e := ev(1)

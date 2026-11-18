@@ -19,31 +19,17 @@ import (
 )
 
 // THE CLIENT'S ASYNCHRONOUS ERRORS REACH THE ENGINE'S LOGGER, ON EVERY
-// CONNECTION.
+// CONNECTION, not the client's default raw stderr ([clientErrors]).
 //
-// A connection given no handler gets the client's default, which writes each
-// one to the process's raw stderr with fmt: a line outside every handler the
-// engine configured — never in logging.file, never at a level, a bare line in
-// the middle of a JSON stream — and the only place the authorization refusal
-// before a connection's close for good was ever said.
+// Three halves: the handler logs what it is handed, asserted directly as
+// [reconnectWatch]'s is; it reads NOTHING off the subscription, whose Subject
+// an ordered consumer's reset rewrites under the client's lock, so the race
+// detector reports any read against the writer below; and every connection
+// this package opens is given it, embedded and through an operator's server.
 //
-// Three halves. The client calls the handler on a goroutine of its own, so its
-// answer is asserted directly with a logger the case holds, as
-// [reconnectWatch]'s is. Then that it reads NOTHING off the subscription it is
-// handed: the client rewrites a JetStream ordered consumer's Subject on every
-// reset under a lock it does not export, and reports that consumer's errors on
-// the same subscription from its dispatcher — every coordination-store walk is
-// such a consumer — so a handler that read the field raced the client, and the
-// writer below is that reset, which the race detector every suite here runs
-// under reports against any read. And then that it is the handler every
-// connection this package opens is given — the queue's own, a watched second
-// one and an owned one, on an embedded broker and through an operator's
-// server's dial.
-//
-// Mutation: drop the ErrorHandler option from either dial and a row of the
-// third half goes red; log nothing and the first half does; read the
-// subscription's Subject again and the first half names a reset's inbox while
-// the race detector fails the second.
+// Mutation: drop the ErrorHandler option from either dial and the third half
+// goes red; log nothing and the first does; read Subject again and the first
+// names a reset's inbox while the race detector fails the second.
 func TestTheClientsAsynchronousErrorsReachTheEnginesLogger(t *testing.T) {
 	t.Parallel()
 
@@ -84,9 +70,8 @@ func TestTheClientsAsynchronousErrorsReachTheEnginesLogger(t *testing.T) {
 		reset := make(chan struct{})
 		go func() {
 			defer close(reset)
-			// AS resetOrderedConsumer DOES, on its own goroutine — under
-			// the subscription's lock there, which is unexported, so no
-			// reader outside the client can be ordered against it.
+			// AS resetOrderedConsumer DOES, under a lock no reader
+			// outside the client can take.
 			for i := range resets {
 				sub.Subject = fmt.Sprintf("_INBOX.reset-%d", i)
 			}

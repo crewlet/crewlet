@@ -8,10 +8,9 @@ import (
 
 // ---- MCP restarts -------------------------------------------------------- //
 
-// One record per server, and one per seat a person restarted one instance of,
-// filed in the positions register under a class of their own: see
-// internal/coord's mcprestart.go for why that bucket, which has no age. The
-// model retries' verbs (modelrecords.go), over the restart's entry.
+// One record per server, and one per seat whose instance a person restarted,
+// a positions-register class with no age (internal/coord's mcprestart.go says
+// why), over [entryClass] keyed by the restart's entry.
 
 var restartClass = entryClass[coord.MCPRestart]{
 	name:   "the MCP restarts",
@@ -19,9 +18,8 @@ var restartClass = entryClass[coord.MCPRestart]{
 	key:    coord.MCPRestartKey,
 	entry:  coord.MCPRestartEntryOf,
 	stored: func(r coord.MCPRestart, entry string, version uint64) coord.MCPRestart {
-		// A RECORD DESCRIBES THE ENTRY IT IS FILED UNDER, whatever its body
-		// says: the entry was read off a key [coord.MCPRestartEntryOf]
-		// accepted, so it names a server and, for one instance, a seat.
+		// The entry it is filed under, whatever its body says; a key
+		// [coord.MCPRestartEntryOf] accepted names a server and maybe a seat.
 		r.Server, r.Seat, _ = coord.MCPRestartTarget(entry)
 		r.At, r.Version = r.At.UTC(), version
 		return r
@@ -41,10 +39,9 @@ func (f *FleetStore) ListMCPRestarts(ctx context.Context) ([]coord.MCPRestart, e
 // PutMCPRestart records a restart, keeping the later stamp: a read, then a
 // create or an update at the version read, retried on a lost race.
 //
-// AT MOST [fleetCASAttempts] TIMES, not [maxRetryRounds] as
-// [FleetStore.PutModelRetry]'s person-paced record is: a restart is
-// recorded by every node that restarts the server, so its contenders are
-// the fleet's members, which the fleet's head count bounds.
+// AT MOST [fleetCASAttempts] TIMES, not the person-paced [maxRetryRounds]:
+// every node that restarts the server records it, so its contenders are
+// bounded by the fleet's head count.
 func (f *FleetStore) PutMCPRestart(ctx context.Context, r coord.MCPRestart) (coord.MCPRestart, error) {
 	if err := r.Validate(); err != nil {
 		return coord.MCPRestart{}, err

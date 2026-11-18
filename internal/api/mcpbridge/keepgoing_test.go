@@ -22,9 +22,8 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A call's answer, started at once and kept going, and how long a box waits
-// for one (the package doc's "A call's answer starts at once and keeps going"
-// and "How long a box waits for a call").
+// The package doc's "A call's answer starts at once and keeps going" and "How
+// long a box waits for a call".
 
 // dialHearing connects an MCP client to url as a harness's own client does,
 // handing on every progress it is sent.
@@ -51,8 +50,7 @@ func dialHearing(t *testing.T, url string) (*mcp.ClientSession, <-chan *mcp.Prog
 	return sess, heard
 }
 
-// callWithToken makes a call to name on progress token token, and hands back
-// its answer once the call returns.
+// callWithToken calls name on progress token token and returns its answer.
 func callWithToken(ctx context.Context, sess *mcp.ClientSession, name string, args any,
 	token string) <-chan *mcp.CallToolResult {
 
@@ -70,14 +68,11 @@ func callWithToken(ctx context.Context, sess *mcp.ClientSession, name string, ar
 	return answered
 }
 
-// A BRIDGED CALL'S ANSWER STARTS BEFORE ITS TOOL RETURNS. A box's harness dials
-// the bridge over streamable HTTP, whose SDK writes nothing on a call's
-// response until its first event, and Claude Code gives that first byte a
-// minute before it tells its model the call timed out, cancelling nothing,
-// while the call runs on and its effect happens (2.1.310, measured). So every
-// call the bridge runs is sent a progress on its own token the moment its tool
-// starts: on the job's endpoint, while the tool is still held, and on each of
-// the seat's servers beneath it alike.
+// A BRIDGED CALL'S ANSWER STARTS BEFORE ITS TOOL RETURNS (why: the package
+// doc's "A call's answer starts at once and keeps going"). Every call the
+// bridge runs is sent a progress on its own token the moment its tool starts:
+// on the job's endpoint, while the tool is still held, and on each of the
+// seat's servers beneath it alike.
 //
 // Mutation: build an opening's servers without keeping answers going, or the
 // engine's own alone, or run a call without starting its answer, and a box is
@@ -138,9 +133,8 @@ func TestABridgedCallsAnswerStartsBeforeItsToolReturns(t *testing.T) {
 	})
 }
 
-// wireTap records each POST a client makes and every byte it is answered, as
-// the client reads it: what a harness's own transport sees, in the order it
-// sees it.
+// wireTap records each POST a client makes and every byte of its answer as
+// the client reads it: what a harness's transport sees, in its order.
 type wireTap struct {
 	next http.RoundTripper
 
@@ -194,8 +188,8 @@ func (b *tappedBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// answerTo is what the one POST whose body holds marker was answered, as far
-// as the client has read it.
+// answerTo is the answer, as far as the client has read it, to the one POST
+// whose body holds marker.
 func (w *wireTap) answerTo(t *testing.T, marker string) string {
 	t.Helper()
 	w.mu.Lock()
@@ -214,12 +208,11 @@ func (w *wireTap) answerTo(t *testing.T, marker string) string {
 	return found[0].answer.String()
 }
 
-// A CALL THE BRIDGE ANSWERS WITHOUT RUNNING GETS NO PROGRESS. The bridge
-// answers some calls at once, never running them — one whose arguments did
-// not parse, one made once the run's tools have closed — and nothing about
-// such a call needs keeping going: its answer comes before any harness could
-// give up on it. Read off the wire, in the order the box reads it: a call that
-// runs, on the same session, starts its answer with a progress.
+// A CALL THE BRIDGE ANSWERS WITHOUT RUNNING GETS NO PROGRESS. A call whose
+// arguments did not parse, or made once the run's tools have closed, is
+// answered at once, before any harness could give up on it. Read off the wire
+// in the box's order; the control, a call that runs on the same session,
+// starts its answer with a progress.
 //
 // Mutation: start a call's answer before the bridge's own refusals, and each
 // refused call's answer is preceded by a progress.
@@ -319,8 +312,8 @@ func TestACallWhoseToolReturnsAtOnceIsToldItRan(t *testing.T) {
 	}
 }
 
-// boundedTool is a tool that declares the longest one call of it runs, as a
-// seat's MCP server's tools and `delegate` do.
+// boundedTool declares the longest one call of it runs, as a seat's MCP
+// server's tools and `delegate` do.
 type boundedTool struct {
 	stubTool
 	bound time.Duration
@@ -329,8 +322,8 @@ type boundedTool struct {
 func (b *boundedTool) CallBound() time.Duration { return b.bound }
 
 // boundedSurface is a seat's surface offering read_page alone, whose universe
-// also holds a tool bound at each of bounds: offered or not, a tool is one a
-// run can activate as it goes, after its box's settings were written.
+// also holds a tool bound at each of bounds: a run can activate an unoffered
+// tool after its box's settings were written, so its bound counts too.
 func boundedSurface(t *testing.T, bounds ...time.Duration) *tools.Surface {
 	t.Helper()
 	reg := tools.NewRegistry()
@@ -347,12 +340,11 @@ func boundedSurface(t *testing.T, bounds ...time.Duration) *tools.Surface {
 	return tools.NewSurface("execute", reg.Snapshot(), []string{"read_page"}).ForTurn(seatTurn())
 }
 
-// A BOX WAITS AS LONG AS THE BRIDGE CAN TAKE TO ANSWER A CALL. Kept going, a
-// call keeps its harness waiting for as long as it runs, so the box is told
-// how long that can be: the holder's wait where the bridge joined a fleet,
-// the longest bound the surface's tools declare — never under the engine's
-// one-call ceiling, and counting a tool not offered yet — and the bridge's own
-// margin around a call.
+// A BOX WAITS AS LONG AS THE BRIDGE CAN TAKE TO ANSWER A CALL (the package
+// doc's "How long a box waits for a call"): the holder's wait where the bridge
+// joined a fleet, plus the longest bound the surface's tools declare (never
+// under the engine's one-call ceiling, counting a tool not offered yet), plus
+// the bridge's own margin around a call.
 //
 // Mutation: ignore the bounds the tools declare, or leave the holder's wait
 // out, and a box gives up a call the bridge could still answer.

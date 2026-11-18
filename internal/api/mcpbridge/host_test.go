@@ -18,11 +18,10 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// THE HOST A CALL MAY NAME: any, on a token that resolves, for every session
-// but one held to this host's loopback; for that one, a loopback host name or
-// a container runtime's name for the engine host, and nothing else. Every case
-// here goes over a real listener on 127.0.0.1, so a call arrives on loopback
-// exactly as one does through a reverse proxy or tunnel on the engine host.
+// THE HOST A CALL MAY NAME: any, on a token that resolves, except for a session
+// held to loopback, which admits only a loopback name or a container runtime's
+// name for the engine host. Every case runs over a real listener on 127.0.0.1,
+// so a call arrives on loopback as one through a proxy on the engine host does.
 
 // namingHost delivers every request under host, as a reverse proxy or tunnel
 // that passes the public name on delivers a box's call to the node.
@@ -88,12 +87,11 @@ func portOf(t *testing.T, raw string) string {
 }
 
 // A SEAT'S CALL IS SERVED UNDER WHATEVER HOST IT ARRIVES WITH. A reverse proxy
-// or tunnel on the engine host — Caddy, cloudflared and ngrok each as it comes
-// — connects to the node on 127.0.0.1 and passes the public name on, and that
-// is the hop every call of an e2b executor behind one takes. The token in the
-// path is the route's credential, so a call carrying the run's own is served
-// whatever it names, and one carrying a token another keyring signed is
-// refused 401 under the same names, its tool never run.
+// or tunnel on the engine host (Caddy, cloudflared, ngrok as each comes)
+// reaches the node on 127.0.0.1 passing the public name on, the hop every e2b
+// executor's call behind one takes. The token in the path is the credential:
+// the run's own is served whatever host it names, and one another keyring
+// signed is refused 401 under the same names, its tool never run.
 //
 // Mutation: judge every session's Host as a held one's (call loopbackRefusal
 // for every opening), and the public names are refused; admit a token that
@@ -105,13 +103,12 @@ func TestASeatsCallIsServedUnderTheHostAProxyPassesOn(t *testing.T) {
 	if endpoint == "" {
 		t.Fatal("no endpoint was minted")
 	}
-	// FORGED: the same run and job, the same shape, signed under another
-	// keyring than the fleet's.
+	// FORGED: the same run, job and shape, signed under another keyring.
 	other := bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "another-key"), BaseURL: f.server.URL,
 	})
-	// MOUNTED, as Open requires of a bridge before it mints anything, and
-	// served by nothing: only its signature is wanted.
+	// MOUNTED, as Open requires before it mints, and served by nothing: only
+	// its signature is wanted.
 	_ = other.Handler()
 	forged := other.Open(t.Context(), &mcpbridge.Session{
 		RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer", Surface: emptySurface(),
@@ -148,14 +145,12 @@ func TestASeatsCallIsServedUnderTheHostAProxyPassesOn(t *testing.T) {
 
 // A SESSION HELD TO LOOPBACK ADMITS A LOOPBACK NAME OR A RUNTIME'S NAME FOR THE
 // ENGINE HOST, AND NO OTHER. Its token is worth nothing off this host's
-// loopback ([mcpbridge.Session.Loopback]), and a page in a browser on the host,
-// under a name its author points at 127.0.0.1, sends its requests to the
-// loopback under that name (DNS rebinding) — so a held run's leaked token must
-// not be spendable by one either. The runtime's names are admitted because
-// Docker Desktop and Podman's machine on macOS and Windows deliver a container
-// box's call to the host's loopback under them. A refusal is the route's own
-// 401, saying no more than any refused token does, and the run's tool never
-// runs.
+// loopback ([mcpbridge.Session.Loopback]), and a browser page under a name its
+// author points at 127.0.0.1 reaches that loopback (DNS rebinding), so the Host
+// is held too. The runtime's names are admitted because Docker Desktop and
+// Podman's machine on macOS and Windows deliver a container box's call to the
+// host's loopback under them. A refusal is the route's 401, telling no more
+// than any refused token's, and the run's tool never runs.
 //
 // Mutation: drop the Host from the hold, and every rebound name is served;
 // drop the runtime's names, and a held container run on Docker Desktop has
@@ -207,20 +202,18 @@ func TestALoopbackSessionAdmitsOnlyLoopbackAndTheRuntimesNames(t *testing.T) {
 	}
 }
 
-// aliasedBox is a box whose network is not the engine host's, as a
-// container's is: all [sandbox.EngineAddress] asks of it is the name the host
-// answers to inside it.
+// aliasedBox is a box on a network not the engine host's, as a container's
+// is: [sandbox.EngineAddress] asks it only the host's name inside it.
 type aliasedBox struct{ sandbox.Sandbox }
 
 func (aliasedBox) EngineHost() string { return "host.docker.internal" }
 
-// A BASE THE REHOSTING MOVES IS A BASE THE HOLD COVERS. A container box is
-// handed the runtime's name for the engine host in place of a loopback base
-// ([sandbox.EngineAddress]), and a run on the engine host on such a base is
-// held to loopback ([mcpbridge.Bridge.LoopbackBase]), so that the name widens
-// nothing. The two must read "loopback" alike: read narrower here, as it was,
-// a container run on a base such as http://engine.localhost:8000 was moved to
-// the runtime's name and held to nothing.
+// A BASE THE REHOSTING MOVES IS A BASE THE HOLD COVERS. A container box gets
+// the runtime's name for the engine host in place of a loopback base
+// ([sandbox.EngineAddress]), and a run on such a base is held to loopback
+// ([mcpbridge.Bridge.LoopbackBase]) so the name widens nothing. The two must
+// read "loopback" alike, or a run on a base such as
+// http://engine.localhost:8000 is rehosted and held to nothing.
 //
 // Mutation: read a base as loopback only for `localhost` or an address, and
 // the `.localhost` name and the upper-cased one go red.

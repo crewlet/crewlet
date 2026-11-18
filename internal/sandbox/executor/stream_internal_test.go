@@ -9,22 +9,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A FAILURE IS HELD TO ITS BOUND EXACTLY, as it leaves — redacted whole. Two
-// things grew a failure composed to the bound past it: the mark KeepEnd puts on
-// a single line it keeps only the end of, which is outside the bytes it
-// counts, and a credential's name closing one piece meeting the next across
-// the `:\n` between them, one match neither piece held when each was redacted
-// and measured alone. The slack between the unread note's widest form and the
-// one it gets usually hid both; an unread start whose note is as wide as the
-// widest takes the slack away.
+// A FAILURE IS HELD TO ITS BOUND EXACTLY, as it leaves, redacted whole. Two
+// things can grow it past: KeepEnd's mark on a line kept by its end (outside
+// the bytes it counts), and a credential's name ending one piece matching
+// across the `:\n` into the next. The widest unread note removes the slack
+// that would hide both.
 //
 // Mutation: return the first composition without measuring it redacted, and
 // the key-name case is fifteen bytes past the bound; leave the mark out of the
 // room as well, and the single-line case is three past it.
 //
-// At a bound of 64 KiB with a line half again past it, as the three
-// mebibytes this was are of the real one: what grows a composition past its
-// bound is a marker and a join, which are the same bytes at any bound.
+// At a 64 KiB bound, not the real one: a marker and a join are the same bytes
+// at any bound.
 func TestAFailureIsHeldToItsBoundAsItLeaves(t *testing.T) {
 	t.Parallel()
 	// Thirteen digits of MiB, the width of the widest note.
@@ -48,18 +44,15 @@ func TestAFailureIsHeldToItsBoundAsItLeaves(t *testing.T) {
 	}
 }
 
-// A KEY THAT BEGAN BEFORE THE WINDOW IS STILL REDACTED. A private key is the
-// one credential shape that spans lines, and a window opening inside its block
-// shows a base64 body with no BEGIN line for the rule to anchor on — so the
-// end of a stream is read with context before what it keeps, and redacted
-// over all of it, before anything is dropped.
+// A KEY THAT BEGAN BEFORE THE WINDOW IS STILL REDACTED: the end is read with
+// [redactContext] before it and redacted over all of it before anything is
+// dropped.
 func TestAKeyThatBeganBeforeTheWindowIsStillRedacted(t *testing.T) {
 	t.Parallel()
 	body := strings.Repeat("MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n", 40)
 	key := "-----BEGIN RSA PRIVATE KEY-----\n" + body + "-----END RSA PRIVATE KEY-----\n"
 	keep := 1024
-	// The key's BEGIN sits before the last `keep` bytes, its body and END
-	// inside them.
+	// The key's BEGIN sits before the last `keep` bytes, its body and END inside.
 	stream := strings.Repeat("noise\n", 2000) + key + "done\n"
 	data := []byte(stream)
 	window := keep + redactContext
@@ -78,10 +71,9 @@ func TestAKeyThatBeganBeforeTheWindowIsStillRedacted(t *testing.T) {
 	}
 }
 
-// THE WINDOW STARTS ON A LINE, past the context a read that began inside the
-// stream opens with, and everything before it is counted; a line longer than
-// the window keeps its own end on a character, marked — and one a read began
-// inside keeps its end past the context too.
+// THE WINDOW STARTS ON A LINE past the context, and everything before it is
+// counted; a line longer than the window, or one a read began inside, keeps
+// its end on a character, marked.
 func TestTheEndOfAStreamIsWholeLines(t *testing.T) {
 	t.Parallel()
 	const keep = 1 << 10
@@ -116,14 +108,10 @@ func TestTheEndOfAStreamIsWholeLines(t *testing.T) {
 	}
 }
 
-// A KEY THAT BEGAN BEFORE THE READ IS NEVER SHOWN, however much the redaction
-// shrinks what comes after it. Read from inside, its BEGIN not in the text, a
-// key is redacted only as far back as a read from its END reaches, and three
-// lines in a row that are not the key's stop that read: the lines above them
-// are published (package redact's doc). The context a read takes before what
-// it keeps is there to read such a key whole; but bounded by the redacted
-// text's bytes, what was kept reached back into the context whenever the keys
-// after it collapsed into their markers, and brought the published lines.
+// A KEY THAT BEGAN BEFORE THE READ IS NEVER SHOWN, however much redaction
+// shrinks what follows: read without its BEGIN, a key is redacted back from
+// its END only until three foreign lines (package redact's doc), and later
+// keys collapsing into markers must not pull the kept end into the context.
 //
 // Mutation: keep the end of the whole read's redaction (sandbox.KeepEnd over
 // redact.Secrets of every whole line read), and the key's body is shown.
@@ -139,15 +127,13 @@ func TestAKeyThatBeganBeforeTheReadIsNeverShown(t *testing.T) {
 	s.WriteString(strings.Repeat(body+"\n", 40))
 	s.WriteString(strings.Repeat("retrying the upload in two seconds\n", 3))
 	s.WriteString(strings.Repeat(body+"\n", 5) + end)
-	// Keys enough after it to fill the context, each a twenty-two byte
-	// marker once redacted.
+	// Keys enough to fill the context, each a 22-byte marker once redacted.
 	for range 45 {
 		s.WriteString(begin + strings.Repeat(other+"\n", 25) + end)
 	}
 	s.WriteString("done\n")
 	stream := s.String()
-	// The read opens inside the key's body, ten lines and a few bytes in,
-	// and keeps what is past the context.
+	// The read opens inside the key's body, ten lines and a few bytes in.
 	data := []byte(stream[opened+10*(len(body)+1)+7:])
 	keep := len(data) - redactContext
 	if keep <= 0 {
@@ -163,12 +149,11 @@ func TestAKeyThatBeganBeforeTheReadIsNeverShown(t *testing.T) {
 	}
 }
 
-// ONE LINE IS HELD AT MOST: a line past the bound is counted as it passes and
-// never kept, and the lines around it are read as they were.
+// ONE LINE IS HELD AT MOST: a line past the bound is counted, never kept, and
+// the lines around it are read as they were.
 //
-// At a bound of 64 KiB, which is larger than the reader's own 64 KiB buffer
-// — so a line at it still arrives in more than one piece, the case the
-// counting is for — and a five-hundredth of [maxLineBytes].
+// The bound is one past [lineChunkBytes], so a line at it still arrives in
+// more than one piece, the case the counting is for.
 func TestALineIsReadInOnePieceUpToTheBound(t *testing.T) {
 	t.Parallel()
 	const bound = 64<<10 + 1
@@ -191,11 +176,9 @@ func TestALineIsReadInOnePieceUpToTheBound(t *testing.T) {
 	}
 }
 
-// A RUNNER READS TO THE ENGINE'S OWN BOUNDS: a failure to what one
-// condensation can take beside the coordinator's prefix, and a line to what
-// a whole read takes. The cases that go past either run at a bound of their
-// own ([Bounded] in export_test.go), so this is what ties the bounds they skip
-// building to the ones every runner New makes reads to.
+// A RUNNER READS TO THE ENGINE'S OWN BOUNDS (sandbox.MaxFailureBytes,
+// maxLineBytes): the cases past either run at their own ([Bounded] in
+// export_test.go), so this ties those to what every runner New makes.
 func TestARunnerReadsToTheEnginesOwnBounds(t *testing.T) {
 	t.Parallel()
 	if maxLineBytes != sandbox.MaxFileBytes {

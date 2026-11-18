@@ -31,9 +31,8 @@ func (c *closeIssue) Call(_ context.Context, args map[string]any) (tools.Result,
 	return tools.Result{Output: "closed #7"}, nil
 }
 
-// ledgerCommit is a [HeldCommit] over one row's mark, as the store keeps it:
-// marked once, the result recorded once, with what the surface answered. Each
-// attempt's claim reads the row as it stands when the attempt asks.
+// ledgerCommit is a [HeldCommit] over one row's mark as the store keeps it:
+// marked once, the result and what the surface answered recorded once.
 type ledgerCommit struct {
 	marked   bool
 	result   *sandbox.HeldResult
@@ -98,27 +97,18 @@ func heldSurface(t *testing.T, tool *closeIssue) *tools.Surface {
 	return tools.NewSurface("execute", reg.Snapshot(), nil)
 }
 
-// A HELD CALL RUNS ONCE AFTER ONCE, AND NEVER AFTER DENY. The call a person
-// allowed is made through the surface the run carries on with, with the
-// arguments they approved, and its result handed to the run; every later
-// attempt at the same answer finds it marked and hands over the result the
-// first recorded, or, where the first stopped before recording one, says the
-// call may or may not have taken effect. Neither makes it again. A denied call
-// is never made, and the run is told it was refused as forbidden.
+// A HELD CALL RUNS ONCE AFTER ONCE, AND NEVER AFTER DENY. The approved call is
+// made through the run's surface with the approved arguments; a later attempt
+// finds it marked and hands over the first's recorded result, or, where none
+// was recorded, says it may or may not have taken effect. A denied call is
+// never made; the run is told it is forbidden. The record is handed what the
+// surface answered ([HeldCommit.Record]), which readers of whether the turn
+// replied read. The mark decides, not the claim's read of the row: a mark the
+// claim missed, which Begin reports as not the first, is answered from too.
 //
-// THE RECORD IS HANDED WHAT THE SURFACE ANSWERED, beside the result: the call
-// is recorded among its round's calls as the tool that made it answered it
-// ([HeldCommit.Record]), and every reader of whether the turn replied reads it
-// there.
-//
-// AND THE MARK IS WHAT DECIDES IT, not the claim's read of the row: a mark the
-// attempt's claim did not see, which the store's answer to the mark reports as
-// not the first, is answered from as any other.
-//
-// Mutation: make the call before [HeldCommit.Begin] marks it, or on a mark that
-// is not the first, and the mark the claim missed has the tool called twice;
-// hand the record anything but the surface's own answer, and the call is
-// recorded as nobody's.
+// Mutation: make the call before [HeldCommit.Begin] marks it, or on a mark not
+// the first, and the missed mark has the tool called twice; hand the record
+// anything but the surface's answer, and the call is recorded as nobody's.
 func TestAHeldCallRunsOnceAfterOnceAndNeverAfterDeny(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -250,16 +240,13 @@ func (g holdsBack) Check(tool, _ string) string {
 func (holdsBack) Observe(string, toolargs.Args) {}
 
 // A CALL AN EARLIER ATTEMPT MARKED IS ANSWERED FROM ITS MARK, WHATEVER CHANGED
-// SINCE. An attempt at an answer can make the call and be refused after it, at
-// the launch (the floor of the session it continues, every member sitting
-// out), and the answer is attempted again later, through a surface rebuilt
-// from the live tools and skills: a skill made required in between, the tool
-// blocked or its definition changed, or arguments this node cannot open. None
-// of that is asked of a call already marked. The later attempt hands the run
-// the result the first recorded, or, where the first stopped before it
-// recorded one, says the call may or may not have taken effect. It never says
-// the call was not made, which sends the run to ask the person again for a
-// call that was made, and it never makes it again.
+// SINCE. An attempt can make the call and be refused after it at the launch
+// (its continued session's floor, every member sitting out); the retry's
+// surface is rebuilt from live tools and skills, where a skill may now hold
+// the tool back, or it is gone, redefined, or its arguments do not open here.
+// None of that is asked of a marked call: the retry hands over the recorded
+// result, or says the call may or may not have taken effect. It never says the
+// call was not made, which has the run ask the person again, nor remakes it.
 //
 // Mutation: ask the arguments' seal, the tool's lookup, its digest or the guard
 // before the mark answers, and the case that changed it tells the run the call
@@ -289,16 +276,14 @@ func TestACallAnEarlierAttemptMarkedIsAnsweredFromItsMark(t *testing.T) {
 				return &HeldCall{Tool: "tr_close_issue", Server: "tracker", Digest: "sha256:d1",
 					Args: map[string]any{"id": "7"}, Choice: sandbox.HeldOnce, Commit: commit}
 			}
-			// THE FIRST ATTEMPT MAKES THE CALL, as nothing has changed yet, and
-			// records what it returned.
+			// THE FIRST ATTEMPT MAKES AND RECORDS THE CALL, before anything changed.
 			recorded := &ledgerCommit{}
 			if err := makeHeld(ctx, heldSurface(t, tool), attempt(recorded)); err != nil {
 				t.Fatal(err)
 			}
 			for told, commit := range map[string]*ledgerCommit{
 				"closed #7": recorded,
-				// A FIRST ATTEMPT STOPPED once it marked the call, before it
-				// recorded anything.
+				// A FIRST ATTEMPT STOPPED after marking, before recording.
 				"may or may not have taken effect": {marked: true},
 			} {
 				again := attempt(commit)
@@ -377,15 +362,13 @@ func TestAnApprovedCallsUnkeptOutputReachesTheRunAlone(t *testing.T) {
 	}
 }
 
-// A MADE CALL WHOSE RESULT CANNOT BE READ HERE IS TOLD AS MADE. An earlier
-// attempt at the answer made the call a person allowed and recorded what it
-// returned, and the node carrying the run on holds no key that record was
-// sealed under. The run is told the call was made, and whether the tool
-// reported a failure, which is what the round's log lists of the call — never
-// that the node making it stopped before its result was recorded, which it did
-// not, and which sends the run to doubt a call it need not. A later attempt
-// tells the call by this lead alone: no list of the round's calls in the brief
-// it leads tells it again. And it is not made again.
+// A MADE CALL WHOSE RESULT CANNOT BE READ HERE IS TOLD AS MADE: an earlier
+// attempt made and recorded it, sealed under a key this node lacks. The run is
+// told it was made and whether the tool reported a failure (what the round's
+// log lists of it), never that it stopped before recording, which has the run
+// doubt a call it need not. A later attempt tells the call by this lead alone,
+// with no list of the round's calls in its brief repeating it, and never
+// remakes it.
 //
 // Mutation: tell an unreadable result as no result recorded, or as a result
 // that returned nothing, and a case goes red.

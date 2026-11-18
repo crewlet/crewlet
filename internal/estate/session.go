@@ -9,24 +9,15 @@ import (
 )
 
 // Session is THIS NODE's read-your-writes floor: the furthest position any
-// write it made — or anything it was told to wait for — reached, per log
-// stream. Every request carries the floor on the log of its operation's own
-// domain, and whichever data node answers it, this node included, waits to
-// have applied it first.
+// write it made, or anything it was told to wait for, reached per log stream.
+// Every request carries the floor on its operation's own domain's log, and
+// whichever data node answers, this one included, waits to have applied it.
 //
-// # One table per node, consulted for local reads too
-//
-// It is the NODE's, shared by every seat on it, which is conservative rather
-// than wrong: a read may wait for another seat's write on this node as well as
-// its own, and never for less than its own.
-//
-// And it is consulted by a read this node answers ITSELF, not only by one it
-// sends. A node's seats may write through another data node — this node's
-// copy was out of service, or behind — and then read here once its copy
-// serves again; the write is on the log and not yet in this node's rows. A
-// data node that trusted its own copy because "it applies the write itself" is
-// one that answers its own seat from before a write it has already been told
-// landed.
+// It is the NODE's, shared by every seat on it: conservative, never short of a
+// seat's own writes. A read this node answers ITSELF consults it too, since
+// its seats may have written through another data node while this copy was
+// out of service (package doc, "Read-your-writes: ONE floor table per node,
+// consulted for local reads too").
 type Session struct {
 	mu sync.Mutex
 	// highWater is the furthest position observed on each stream.
@@ -54,8 +45,7 @@ func (s *Session) Observe(at statelog.Position) {
 }
 
 // Await is [Session.Observe] in the shape the tool seams wait in: nothing is
-// waited for HERE, because what the next read needs is that whichever data
-// node answers it has applied this far — and that node waits.
+// waited for HERE, since whichever data node answers the next read waits.
 func (s *Session) Await(_ context.Context, at statelog.Position) error {
 	s.Observe(at)
 	return nil
@@ -78,16 +68,14 @@ func (s *Session) Floors(streams []string) []statelog.Position {
 	return out
 }
 
-// Forget drops floors no data node will ever reach — each a position on a
-// generation its log has since abandoned, as a node reported
-// ([reply.Obsolete]) — so the node stops carrying a floor that refuses every
-// read of its log.
+// Forget drops floors no data node will ever reach, positions on a generation
+// their log abandoned as a node reported ([reply.Obsolete]), which would
+// otherwise refuse every read of that log.
 //
-// BY POSITION, NOT BY STREAM: a floor is dropped only while the session still
-// holds exactly the one that was reported. A write observed after the request
-// went out raised the floor past it — on the log's new generation, which a
-// node CAN reach — and dropping the stream wholesale would lose that write
-// from the next read.
+// BY POSITION, NOT BY STREAM, only while the session holds exactly the floor
+// reported: a write observed since the request went out raised the floor onto
+// the new generation, which a node CAN reach, and dropping the stream would
+// lose that write from the next read.
 func (s *Session) Forget(floors ...statelog.Position) {
 	if s == nil {
 		return

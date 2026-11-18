@@ -14,161 +14,59 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE WIRE'S RULE FOR WHAT AN OPERATION TAKES: a key on the wire is a value the
-// serving build must read, and a build that cannot read one runs nothing.
-//
-// # Why there is a rule at all
-//
-// A rolling upgrade mixes builds, and the node that asks is not always the
-// build of the data node that answers. A seats-only node upgraded first sends
-// an operation whose arguments carry a field the data node's older build does
-// not declare — `executor.end`'s ending growing a fact about the turn, as
-// #519's `went_on` did — and a data node that decoded them with a plain
-// json.Unmarshal dropped the key without a word: the write ran as though the
-// writer had never sent it, the record was stamped with the lowest version
-// that reads what was LEFT, and every node, the newer ones included, applied
-// it by the older rule. Nothing logged it. The rest of the upgrade path does
-// the opposite — a state-log record a build cannot read is deferred, never
-// dropped; a parked run's unknown keys ride its row's Extra; an owed end
-// holding keys a build does not know is left owed for one that does — and so
-// does this wire now.
-//
-// # Two halves, both the standard library's own
-//
-// What an operation takes — its arguments, and the actor it runs as — crosses
-// under two options of encoding/json, so neither half is a rule of this
-// package's to keep in step with the decoder:
-//
-//   - ENCODED with every struct field LEFT OUT AT ITS ZERO
-//     ([jsonv2.OmitZeroStructFields], which the standard library documents as
-//     `omitzero` on every field). A field a later build adds goes on the wire
-//     only when a write uses it, so a write that does not is served by an
-//     older data node exactly as before, and only one that WOULD lose
-//     something is refused. Its zero means what an older build does — the
-//     value a build without the field decodes the absence as — which is the
-//     rule [define] states for every operation.
-//   - DECODED refusing every object member no field declares
-//     ([jsonv2.RejectUnknownMembers], the rule json.Decoder's
-//     DisallowUnknownFields sets), at every depth: a nested struct, each
-//     element of a slice or array of structs, an embedded struct's promoted
-//     fields. A map's keys are data, never declarations, and so is the inside
-//     of a json.RawMessage — a datastore document, a canonical snapshot —
-//     which nothing here decodes.
-//
-// Each is json.Marshal's and json.Unmarshal's own behaviour in every other
-// respect ([json.DefaultOptionsV1]): the same bytes for every value but a
-// field at its zero, the same case-insensitive names, the same promotion, the
-// same `-`. The decoder reports a member it refuses as a [jsonv2.SemanticError]
-// naming where it is ([json.ReportErrorsWithLegacySemantics] off), which a bare
-// DisallowUnknownFields does not: its error is an untyped `json: unknown field
-// "went_on"`, with no path — so a member under `Ending` read the same as one at
-// the top — and a refusal built from it would have been a reading of the
-// decoder's words.
-//
-// # A type that writes its own encoding is held to the rule only through it
-//
-// Both options live on the encoder and the decoder, and a type's own method
-// sees them only if it writes and reads through the ones it is handed:
-// encoding/json/v2's MarshalJSONTo and UnmarshalJSONFrom, calling
-// [jsonv2.MarshalEncode] and [jsonv2.UnmarshalDecode] with no options of their
-// own. A MarshalJSON or an UnmarshalJSON is handed bytes, and the json.Marshal
-// or json.Unmarshal inside it starts again from encoding/json's defaults, which
-// hold neither option: every zero field below it goes on the wire, and every
-// member it does not declare is dropped without a word. So a type an operation
-// takes that must decode itself does it the v2 way: the actors, each of which
-// states whom its writes are for when it arrives (ADR-0109), whatever members
-// did; whom a write was made for (types.WrittenFor), whose fields are its own;
-// and the six requests a code write forms, which state it on arrival too. An
-// actor carries no policy in its codec and has no encoder at all: a write
-// whose actor may write nothing is refused before it is asked anywhere
-// ([actorWrites]), never in the encoder of a request that might not be made.
-// The gates hold every type an operation takes that decodes itself to saying
-// why it drops nothing (wirerule_test.go's decodesItself), and read the actors'
-// fields as any struct's, since what crosses of them is their plain encoding.
-//
-// # A kind or an app the build does not know is refused as a member is
-//
-// A code write's request refuses, beside the members its build does not
-// declare, its carrier's kind, or an app a credential's carrier names, that the
-// build does not know, with the decoder's own refusal of a name it does not
-// declare (jsonv2.ErrUnknownName, at the value's place: internal/gitlet's
-// unknownToThisBuild, the one place a build decides whether it knows what a
-// carrier names). A kind and an app are names of the build's vocabulary as a
-// member is one of a type's, and only a newer build sends one this build does
-// not know, as only a newer build sends such a member, since no sender
-// composes a kind or an app its own build does not know. So the rule answers
-// it as it answers a member: named by its place ([strikeMember]'s
-// args.written_for.kind, which it strikes as it strikes a member, and
-// args.written_for.apps[], by its list, whose element it cannot strike), and
-// nothing of the request run, so the walk asks a node that knows it — never a
-// refusal of the request as malformed, which would end the walk and tell a
-// newer build's valid request it is.
-//
-// AND IN PROCESS ALIKE, where nothing decodes the request: a code write's
-// request handed to this node's own copy meets the same value in its Validate,
-// through the same one place, FIRST, before any other rule of the request — as
-// the decoder meets it before any rule runs — and refuses it with the same
-// decoder's refusal (gitlet.IsUnknownToThisBuild), whatever else the request
-// holds, which the walk answers as the wire answers the same request — the
-// keys a serving node of this build refuses its encoding for, this node among
-// the nodes whose build does not declare them ([unreadHere]) — and moves on
-// from. A carrier a stored row holds, which another build may have written, is
-// such a request: a box's push and a run's open carry it as the run's row holds
-// it.
-//
-// # Not a refusal of a field this build retired
-//
-// The rule refuses what the serving build does not declare, whichever build
-// sent it. A field a later build REMOVES is the same case run backwards: a
-// writer of the older build still sends it, and the newer data node refuses
-// the write rather than drop it. A field is retired by a build that stops
-// SETTING it first, so the wire never carries it again before the build that
-// deletes it.
-//
-// # The in-process path takes neither
-//
-// A data node's own router answers its own seats from its own copy in
-// process ([Router.tryLocal]) with the caller's own values: nothing is encoded,
-// so nothing can be lost, and nothing here runs.
+// The wire's rule for what an operation takes, its arguments and its actor
+// (package doc, "A request is read whole, or runs nowhere"): a key on the wire
+// is a value the serving build must read, and a build that cannot read one runs
+// nothing. Both halves are encoding/json's own options over json.Marshal's and
+// json.Unmarshal's defaults ([json.DefaultOptionsV1]), so no rule here can
+// fall out of step with the decoder. It binds a field a later build REMOVES
+// alike: the newer node refuses an older writer's, so a build stops SETTING a
+// field before a later one deletes it. In process ([Router.tryLocal]) nothing
+// is encoded and none of this runs.
 var (
+	// inputEncoding leaves every struct field at its zero off the wire, so a
+	// field a later build adds is sent only by a write that uses it; its zero
+	// must mean what an older build decodes the absence as ([define]).
 	inputEncoding = jsonv2.JoinOptions(json.DefaultOptionsV1(), jsonv2.OmitZeroStructFields(true))
+	// inputDecoding refuses every member no field declares, at every depth (a
+	// map's keys and a json.RawMessage's inside are data), as a
+	// [jsonv2.SemanticError] naming its path, which DisallowUnknownFields lacks.
+	//
+	// A type that decodes itself is held to it only through UnmarshalJSONFrom
+	// calling [jsonv2.UnmarshalDecode] with no options of its own: an
+	// UnmarshalJSON's json.Unmarshal restarts from the defaults and drops what it
+	// does not declare (a MarshalJSON likewise sends every zero), so
+	// wirerule_test.go's decodesItself holds each such type to saying why it
+	// drops nothing. An actor has no encoder: a write whose actor may write
+	// nothing is refused before it is asked anywhere ([actorWrites]).
 	inputDecoding = jsonv2.JoinOptions(json.DefaultOptionsV1(), jsonv2.RejectUnknownMembers(true),
 		json.ReportErrorsWithLegacySemantics(false))
 )
 
-// encodeInput is v — an operation's arguments, the actor it runs as, or an
-// answer a caller carries into another request ([op.answeredWhole]) — as it crosses
-// the wire: json.Marshal's encoding with every struct field at its zero left
-// out ([inputEncoding]).
+// encodeInput is v — an operation's arguments, its actor, or an answer a caller
+// carries into another request ([op.answeredWhole]) — under [inputEncoding].
 func encodeInput(v any) ([]byte, error) {
 	return jsonv2.Marshal(v, inputEncoding)
 }
 
-// decodeInput decodes raw into into, a pointer, under the wire's rule
-// ([inputDecoding]), and answers every member raw holds that into's type does
-// not declare, each by its path ([strikeMember]), sorted — none where it read
-// raw whole. err is any other failure to decode.
+// decodeInput decodes raw into into, a pointer, under [inputDecoding], and
+// answers every member raw holds that into's type does not declare, by path
+// ([strikeMember]), sorted; err is any other failure. Where it answers members,
+// into is partly filled and never to be used: the caller refuses the request.
 //
-// WHERE IT ANSWERS MEMBERS, into holds whatever the decoder had filled before
-// it stopped, and is never to be used: the caller refuses the request.
-//
-// EVERY MEMBER, NOT THE FIRST. The decoder stops at the first member it
-// refuses, so each one it names is struck from a copy of the document — from
-// every element of each list on its way, where the same member is undeclared
-// in each — and the copy decoded again, until it decodes whole. The standard
-// library's rule decides every one: nothing here decides which keys a type
-// declares, its case-insensitive names, its promoted fields and its `-` tags
-// included, so this can never disagree with the decoder about one.
+// EVERY MEMBER, NOT THE FIRST: the decoder stops at its first refusal, so each
+// named member is struck from a copy and the copy decoded again until whole.
+// The decoder alone decides what a type declares (case-insensitive names,
+// promoted fields, `-` tags), so this never disagrees with it.
 func decodeInput(raw []byte, into any) ([]string, error) {
 	decoded := jsonv2.Unmarshal(raw, into, inputDecoding)
 	at, refused := unknownMember(decoded)
 	if !refused {
 		return nil, decoded
 	}
-	// A COPY TO STRIKE FROM, its numbers kept as their text: a number this
-	// build would have read into a narrower type must reach the next
-	// decode as the writer wrote it, or the copy fails on something other
-	// than a member and the rest go unnamed.
+	// Numbers kept as their text: one read into a narrower type would fail
+	// the next decode on something other than a member, leaving the rest
+	// unnamed.
 	doc, docErr := looseDoc(raw)
 	if docErr != nil {
 		return nil, fmt.Errorf("read the document again to name what it holds: %w", docErr)
@@ -179,40 +77,41 @@ func decodeInput(raw []byte, into any) ([]string, error) {
 		path, struck := strikeMember(doc, at)
 		unknown = append(unknown, path)
 		if !struck {
-			// NOTHING LEFT TO STRIKE where the decoder pointed: the
-			// member is named, and a loop that cannot shorten the
-			// document would name it for ever.
+			// Nothing to strike: a loop that cannot shorten the
+			// document would name the member for ever.
 			break
 		}
 		rest, encodeErr := json.Marshal(doc)
 		if encodeErr != nil {
-			// NEVER, for a document a decode built — objects, lists,
-			// numbers kept as their text, strings, booleans and nulls — and
-			// said rather than swallowed, should a decoder ever build one
-			// that does not encode.
+			// Never, for a document a decode built; said rather than
+			// swallowed should one ever not encode.
 			return nil, fmt.Errorf("encode the document again to name what it holds: %w", encodeErr)
 		}
-		// WHOLE, or failing for another reason, which the refusal of the
-		// members already named outranks: the request is a build's this
-		// one cannot read either way.
+		// Whole, or failing for another reason, which the members already
+		// named outrank: this build cannot read the request either way.
 		if at, refused = unknownMember(jsonv2.Unmarshal(rest, reflect.New(target).Interface(),
 			inputDecoding)); !refused {
 			break
 		}
 	}
-	// SORTED, because the order they were met in is the copy's — whose
-	// members the encoder writes in its own order — and a refusal that
-	// named them in one order on one node and another on the next would be
-	// two refusals of one request.
+	// Sorted: the order met is the encoder's, and two nodes naming them in
+	// different orders would be two refusals of one request.
 	slices.Sort(unknown)
 	return unknown, nil
 }
 
 // unknownMember is where err says the decoder met an object member its type
-// does not declare — or a name a type's own decoder refused as one its build
-// does not declare, a code write's carrier's kind or app ("A kind or an app
-// the build does not know is refused as a member is", above) — or false where
-// err is anything else.
+// does not declare, or false where err is anything else. A code write's
+// carrier's kind or app this build does not know counts as one: only a newer
+// build sends one, so its type's decoder refuses it with jsonv2.ErrUnknownName
+// at its place (internal/gitlet's unknownToThisBuild decides), and the walk
+// asks a node that knows it rather than calling a valid request malformed.
+// [strikeMember] strikes args.written_for.kind as a member;
+// args.written_for.apps[] names a list whose element it cannot strike. In
+// process a request's Validate meets the same value first and refuses it alike
+// (gitlet.IsUnknownToThisBuild), which the walk answers as the wire does
+// ([unreadHere]); a carrier a stored row holds counts, since another build may
+// have written it.
 func unknownMember(err error) (jsontext.Pointer, bool) {
 	var semantic *jsonv2.SemanticError
 	if !errors.As(err, &semantic) || !errors.Is(err, jsonv2.ErrUnknownName) {
@@ -221,14 +120,12 @@ func unknownMember(err error) (jsontext.Pointer, bool) {
 	return semantic.JSONPointer, true
 }
 
-// strikeMember deletes the member at, from doc as a generic decode holds it,
-// and answers its path as a person reads one — `Ending.went_on`, a list's
-// elements `Commands[].note` — and whether it struck anything.
-//
-// FROM EVERY ELEMENT of each list on the way, not the one the decoder pointed
-// at: every element is the same type, so a member undeclared in one is in
-// all, and naming it once per element would name one key a thousand times and
-// decode a thousand-command push a thousand times to do it.
+// strikeMember deletes the member at from doc, a generic decode, and answers
+// its path as a person reads one (`Ending.went_on`, `Commands[].note`) and
+// whether it struck anything. It strikes from every element of each list on
+// the way, not only the one pointed at: they share a type, and striking per
+// element would name one key, and decode a thousand-command push, a thousand
+// times.
 func strikeMember(doc any, at jsontext.Pointer) (path string, struck bool) {
 	tokens := slices.Collect(at.Tokens())
 	var b strings.Builder
@@ -268,17 +165,12 @@ func strikeMember(doc any, at jsontext.Pointer) (path string, struck bool) {
 	return b.String(), struck
 }
 
-// carries reports whether doc — a request's inputs as a generic decode holds
-// them, under the members a refusal names them by (`args`, `actor`) — holds a
-// member at path, a path as a refusal spells one ([strikeMember]): members
-// joined by a dot, a list's elements by `[]` after the list's member.
-//
-// A MATCH OF THE WORDS, NOT A DECODE: a member whose own name holds a dot or
-// `[]` is read as the words say, so a path naming one may miss it or meet
-// another — and either costs only a request asked of a node in an order that
-// is not the best for it ([Router.markUnread]), never a request answered
-// wrong: a node passed over is asked last, still asked, and one asked first
-// that refuses again is moved on from.
+// carries reports whether doc, a request's inputs as a generic decode holds
+// them (under `args`, `actor`), holds a member at path as [strikeMember]
+// spells one. It matches the words, not a decode: a member whose name holds a
+// dot or `[]` may be missed or confused, which costs only a node asked in a
+// worse order ([Router.markUnread]), never a wrong answer — a node passed over
+// is still asked last, and one that refuses again is moved on from.
 func carries(doc any, path string) bool {
 	level := []any{doc}
 	for _, segment := range strings.Split(path, ".") {
@@ -311,9 +203,8 @@ func carries(doc any, path string) bool {
 	return true
 }
 
-// looseDoc is raw as a generic decode holds it — objects, lists, numbers kept
-// as their text, so none is read into a narrower type than its writer wrote —
-// or why it holds no JSON document.
+// looseDoc is raw as a generic decode holds it, numbers kept as their text so
+// none is read narrower than its writer wrote, or why it holds no JSON.
 func looseDoc(raw []byte) (any, error) {
 	var doc any
 	dec := json.NewDecoder(bytes.NewReader(raw))
@@ -324,39 +215,25 @@ func looseDoc(raw []byte) (any, error) {
 	return doc, nil
 }
 
-// ErrUnknownKeys is a request a data node's build cannot read whole — its
-// arguments or the actor it runs as hold keys the operation's types on that
-// build do not declare — or an answer this node's build cannot read whole, for
-// an operation whose answer a caller carries into another request
-// ([op.answeredWhole]).
+// ErrUnknownKeys is a request a data node's build cannot read whole (its
+// arguments or actor hold keys that build does not declare), or an answer this
+// node's build cannot read whole, of an operation whose answer a caller
+// carries into another request ([op.answeredWhole]).
 //
-// NOTHING OF THE REQUEST RAN — a write or a read alike: a read carrying a
-// newer argument is refused the same way, never answered with the argument
-// ignored. A data node refuses such a request before it waits for anything or
-// calls its backend, and the router asks the next data node, as it does a node
-// that ran nothing; only where none serves it is the caller handed this — the
-// walk's account beside it ([ErrUnserved], which it wraps, so every caller that
-// reads an estate nobody served reads this as one). A caller that keeps its
-// write owed keeps it owed on it, as it does when the estate cannot be reached;
-// every other caller surfaces it, and its words say what to do: a data node of
-// the asking node's build is needed, so finish the upgrade.
-//
-// AN ANSWER IS THE OTHER DIRECTION: a newer data node's answer holding keys
-// this build does not declare, which this node would drop and then carry on
-// short. It is refused here, at the first node that gives it, since the
-// answer IS the data and another node's would not change what this build can
-// read — so it wraps no walk ([ErrUnknownKeys.Unserved] is nil): the request
-// RAN on the node that answered, and it is this node's build that cannot read
-// what it said.
+// Nothing of a refused request ran, read or write: the data node refuses before
+// waiting or calling its backend, and the router asks the next. Only where none
+// serves it is the caller handed this, wrapping the walk's [ErrUnserved]; a
+// caller that keeps its write owed keeps it owed, as when the estate cannot be
+// reached. A refused ANSWER wraps no walk (Unserved is nil): the request ran,
+// the answer is the data, and another node's would read no better.
 type ErrUnknownKeys struct {
 	// Op is the operation.
 	Op string
 
-	// Keys are the keys, each by its path from the request or the reply that
-	// held it — `args.Ending.went_on`, `actor.provenance.Zone`,
-	// `result.Manifest.files[].integrity`, and `args.written_for.kind` and
-	// `args.written_for.apps[]` for a code write's carrier's kind and a
-	// credential's app that the build does not know.
+	// Keys are the keys, each by its path from the envelope that held it:
+	// `args.Ending.went_on`, `actor.provenance.Zone`,
+	// `result.Manifest.files[].integrity`, or `args.written_for.kind` and
+	// `args.written_for.apps[]` for a carrier's unknown kind or app.
 	Keys []string
 
 	// Nodes are the nodes whose build refused them: the data nodes that would
@@ -367,9 +244,8 @@ type ErrUnknownKeys struct {
 	// than in a request a data node was sent.
 	Answer bool
 
-	// Unserved is the walk that found no data node to serve the request,
-	// what every node it asked said: nil on one node's own refusal, and on an
-	// answer this node refused.
+	// Unserved is the walk that found no data node to serve the request: nil
+	// on one node's own refusal, and on an answer this node refused.
 	Unserved *ErrUnserved
 }
 
@@ -389,9 +265,8 @@ func (e *ErrUnknownKeys) Error() string {
 	return sentence
 }
 
-// Unwrap is the walk that found no data node to serve the request, so a caller
-// that asks for an estate nobody served finds one here; nil on a refusal
-// made by one node, and on an answer refused.
+// Unwrap is [ErrUnknownKeys.Unserved], so a caller asking for an estate nobody
+// served finds one here.
 func (e *ErrUnknownKeys) Unwrap() error {
 	if e.Unserved == nil {
 		return nil

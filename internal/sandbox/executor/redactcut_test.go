@@ -9,9 +9,8 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// The two credential shapes a run's environment most often carries,
-// each with a body of distinct characters so a surviving fragment is
-// unambiguous.
+// The two credential shapes a run's environment most often carries, each body
+// of distinct characters so a surviving fragment is unambiguous.
 const (
 	cutGitHubBody = "Q7wErTy9UiOp3AsDfGh5JkLzXcVbNm1PqRsT" // 36, the rule's floor
 	cutGitHub     = "ghp_" + cutGitHubBody
@@ -19,15 +18,10 @@ const (
 )
 
 // A CREDENTIAL IS REDACTED BEFORE A PREVIEW IS CUT, at every place a
-// transcript line previews a value: a tool call's subject, a failed call's
-// error and a run's ending, for both harnesses. The transcript is redacted again
-// downstream, but by then the cut has been made — a token whose start fell
-// just before the limit survived as `ghp_` and most of its body, shorter than
-// the rule's length floor, so no later pass could see it, and it was stored
-// on the run's record and shown on the live view.
-//
-// Every offset that puts the token across the cut is tried, and NO run of the
-// token's body long enough to identify it may survive.
+// transcript line previews a value (a tool call's subject, a failed call's
+// error, a run's ending) for both harnesses: the downstream pass cannot see a
+// token cut below the rule's length floor. Every offset that puts the token
+// across the cut is tried, and no 8-byte run of its body may survive.
 func TestACredentialIsRedactedBeforeATranscriptLineIsCut(t *testing.T) {
 	t.Parallel()
 	sites := []struct {
@@ -66,8 +60,7 @@ func TestACredentialIsRedactedBeforeATranscriptLineIsCut(t *testing.T) {
 				value := strings.Repeat("x", pad) + " https://x-access-token:" + token + "@github.com/acme/api"
 				dec := site.events()
 				dec.Line([]byte(site.line(value)))
-				// As every reader of a transcript sees it: after the
-				// downstream pass, which a fragment slips through.
+				// As a reader sees it: after the downstream pass.
 				got := redact.Secrets(strings.Join(dec.Entries(), "\n"))
 				if got == "" {
 					t.Fatalf("%s: the decoder showed nothing for the line", site.name)

@@ -17,11 +17,9 @@ import (
 
 // AN UNREACHABLE STORE IS NOT UNPAUSED.
 //
-// "This seat has no pause" lets the seat take work; "the store could not be
-// read" says nothing about it. A seat a person stopped because it was doing
-// damage must not start again because a read failed, so every read answers the
-// outage as an error that is not a false — the one listing included, which
-// every node's cache is rebuilt from.
+// A seat a person stopped for doing damage must not start again because a
+// read failed, so every read answers an outage as an error, never "no pause",
+// the listing every node's cache is rebuilt from included.
 func TestAnUnreachableStoreIsNotUnpaused(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -64,16 +62,12 @@ func TestAnUnreachableStoreIsNotUnpaused(t *testing.T) {
 }
 
 // A PAUSE WATCH WHOSE PASS GOES QUIET STILL GIVES ITS FIRST ANSWER, WHOLE.
-//
-// The watch ended its first answer on the client's end marker and nothing
-// else, and the client sends that marker on a delivery — so a watch whose
-// pending messages were removed before it reached them, a resume's marker
-// swept from the register, never ended it. The node's copy stayed unread, and
-// it deferred every delivery until somebody next paused or resumed a seat. The
-// pass here hands over one of three pauses and goes silent, as that consumer
-// does: the answer must still come inside the caller's bounded context, and
-// hold the two pauses the pass never delivered, read from the leader — one
-// read each and no more.
+// The client sends its end marker on a delivery, so a pass whose pending
+// messages were removed (a resume's marker swept) never sends it, and a watch
+// ending on that marker alone leaves the node's copy unread. The pass here
+// hands over one of three pauses and goes silent: the answer must still come
+// inside the caller's bounded context, holding the other two read from the
+// leader, one read each and no more.
 func TestAPauseWatchWhosePassGoesQuietStillAnswersWhole(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -108,20 +102,16 @@ func TestAPauseWatchWhosePassGoesQuietStillAnswersWhole(t *testing.T) {
 }
 
 // A PAUSE WATCH'S FIRST ANSWER IS CERTIFIED, AND AN OLDER REVISION AFTER IT IS
-// NOT A CHANGE.
+// NOT A CHANGE. The client ends its initial values on a count guess, which can
+// come while a live pause is still ahead of the cursor, and the first answer
+// REPLACES a node's copy, so a missing pause is a hold lifted. The pass here
+// ends before either of two pauses: the answer must hold both as the leader
+// does, the amended one amended.
 //
-// The client ends its initial values on a count guess, which on a register
-// that keeps one revision per key can come while a pause live throughout is
-// still ahead of the cursor — and the first answer REPLACES a node's copy, so
-// a pause missing from it is a hold lifted and a seat let loose until the
-// consumer reaches the key. The pass here ends before delivering either of
-// two pauses, as such a guess can: the answer must still hold both, each as
-// the leader holds it — the amended one with its amendment.
-//
-// The consumer then delivers what a pass behind the leader would: the pause as
-// it stood BEFORE the amendment. That is not a change, and sent as one it
-// would undo the amendment on every node until the consumer caught up. A pause
-// taken after the answer is one, and is the next update.
+// The consumer then delivers the pause as it stood BEFORE the amendment, as a
+// pass behind the leader would: not a change, since sent as one it would undo
+// the amendment on every node. A pause taken after the answer is the next
+// update.
 func TestAPauseWatchsFirstAnswerIsCertifiedAndNotUndoneByAnOlderRevision(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)

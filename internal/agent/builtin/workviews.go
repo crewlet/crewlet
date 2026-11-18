@@ -15,29 +15,19 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The saved-view tools, and they are the OPERATOR's alone.
+// The saved-view tools, the operator's alone (registered only by
+// [OperatorTools]): a view is furniture arranged so a person finds the same
+// question tomorrow, and a seat that could rearrange a shared board is one
+// more thing a founder supervises for no delivery.
 //
-// A view is furniture: a name, a shape and a filter, arranged so a person
-// finds the same question tomorrow. A seat's job is the work rather than the
-// furniture around it, and a seat that could rearrange a shared board would be
-// one more thing a founder has to supervise for no delivery — so these are
-// registered by [OperatorTools] and by nothing else.
-//
-// # Why the container is one string
-//
-// `container=project:ENG`, exactly as [worklet.ParseQuery] reads it, because a
-// caller that lists a strip and then lists the work in it must not have to
-// write the same container two ways. The parse is shared for that reason.
+// The container is one string, `container=project:ENG`, as [worklet.ParseQuery]
+// reads it, so a caller listing a strip and then its work writes it one way.
 
-// ViewWriter is the tracker write side these tools need.
-//
-// ViewPrior is the read a save is decided on: a save replaces a view whole by
-// id, so who may make one is a question about the view it OVERWRITES as well
-// as the one it writes, and the write refuses a prior that no longer holds —
-// see [worklet.ViewPrior].
-//
-// DeleteView takes a view away against the same prior: who may delete one is
-// who may replace it, decided on the stored view (see [worklet.Writer.DeleteView]).
+// ViewWriter is the tracker write side these tools need. ViewPrior is the read
+// a save is decided on: a save replaces a view whole by id, so it is decided on
+// the view it overwrites too, and the write refuses a prior that no longer
+// holds ([worklet.ViewPrior]). DeleteView writes against the same prior: who
+// may delete a view is who may replace it ([worklet.Writer.DeleteView]).
 type ViewWriter interface {
 	ViewPrior(ctx context.Context, id string) (worklet.ViewPrior, error)
 	WriteView(ctx context.Context, opID string, view worklet.View,
@@ -79,13 +69,9 @@ func (t *listWorkViews) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *listWorkViews) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	// WHOSE STRIP IS THE CALLER'S, and never an argument. The tool took a
-	// free `viewer` once, so any caller rendered anybody's personal views
-	// and pins by naming them — an arrangement nobody else sees is that
-	// person's, and the read had no rule at all. The viewer is the name
-	// the caller's OWN pins and personal views are written under, which is
-	// the actor's handle: the same value `set_pins` and `save_work_view`
-	// write with, so a strip shows exactly what its reader arranged.
+	// The strip is the caller's, never an argument: personal views and pins
+	// are nobody else's to read. The viewer is the actor's handle, the name
+	// `set_pins` and `save_work_view` write under.
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
@@ -98,28 +84,26 @@ func (t *listWorkViews) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != "" {
 		return failed(refusal), nil
 	}
-	// READ WHOLE OR NOT AT ALL ([WorkReader.CarriedViews]): an id this lists
-	// is what save_work_view replaces a view whole by, with what the model
-	// re-sends of what this showed of it — so a view holding a field a newer
-	// build added, which this node's build would drop, is refused here rather
-	// than shown short and saved back without the field.
+	// Read whole or not at all ([WorkReader.CarriedViews]): save_work_view
+	// replaces a listed view whole with what the model re-sends, so a view
+	// holding a field a newer build added is refused here rather than shown
+	// short and saved back without it.
 	listing, err := t.deps.Reader.CarriedViews(ctx, worklet.ViewQuery{
 		Container: container,
 		Viewer:    actor.Handle,
-		// THE CHART, so `unit:engineering` and `unit:eng` are one
-		// strip rather than two (see [worklet.Units]).
+		// The chart, so `unit:engineering` and `unit:eng` are one strip
+		// ([worklet.Units]).
 		Units: t.deps.Units,
-		// THE SEAT'S OWN LEVEL, like every other tool read here: a
-		// caller that saves a view and then lists the strip sees the
-		// view it just saved — see [seatReadLevel].
+		// A caller that saves a view then lists the strip sees it
+		// ([seatReadLevel]).
 		Level: seatReadLevel,
 	})
 	if err != nil {
 		return readFailure(ctx, worklet.ListWorkViewsTool, err), nil
 	}
-	// A VIEW'S NAME AND ITS SAVED FILTER are words whoever saved it wrote
-	// (ADR-0040), and a row records the view's owner rather than who named
-	// it: a shared view is anybody's who may keep one in its container.
+	// A view's name and filter are words whoever saved it wrote (ADR-0040),
+	// and the row records its owner, not who named it: a shared view is
+	// anybody's who may keep one in its container.
 	read := newForeignRead(turn, actor.Handle)
 	if len(listing.Views) > 0 {
 		namesBy(read)
@@ -168,13 +152,8 @@ func (t *saveWorkView) Parameters() map[string]any {
 					"`table` for one field per column, compared down it. " +
 					"Saving a table with `removed: true` in `params` is a " +
 					"trash listing, which is what the builtin `trash` tab is.",
-				// THE ENGINE'S OWN CLOSED SET, read from it rather than
-				// copied. This was a literal naming three of the four the
-				// validator took: a seat could not save a timeline view
-				// although the refusal named it as one of them and the
-				// tracker ships a builtin timeline — the shape was reachable
-				// by reading and unreachable by writing, with the tool's own
-				// schema as the only thing saying otherwise.
+				// The engine's own closed set, read rather than copied, so the
+				// schema never omits a shape the validator takes.
 				"enum": worklet.ViewTypeNames(),
 			},
 			"params": map[string]any{
@@ -240,12 +219,10 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != "" {
 		return failed(refusal), nil
 	}
-	// A PERSONAL VIEW IS THE CALLER'S OWN RECORD, under the one name every
-	// personal record of theirs is kept under — the name `list_work_views`
-	// and the dashboard's strip read it back by. It was a free `owner`
-	// handle, so a bound person typing their login saved a view no strip of
-	// theirs reads, and one who marked it protected was then refused their
-	// own next save, which the tracker checks against the writer's name.
+	// A personal view is the caller's own record, under the name
+	// [iam.RecordOwner] gives every personal record of theirs, which
+	// `list_work_views`, the dashboard's strip and the tracker's protected
+	// check all read; a free `owner` argument saves one no strip reads.
 	var owner string
 	if argBool(args, "personal") {
 		principal, _ := iam.From(ctx)
@@ -255,52 +232,37 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				"it shared instead."), nil
 		}
 	}
-	// AND A UNIT CONTAINER IS STORED UNDER THE TEAM'S OWN KEY, exactly as
-	// a project container is stored upper-cased: a model writes the
-	// spelling it remembers, and a view saved under one spelling of a team
-	// is a view the strip asked for under the other never shows.
+	// A unit container is stored under the team's key, as a project's is
+	// upper-cased: a view saved under one spelling would be missing from the
+	// strip asked for under the other.
 	container = worklet.CanonicalContainer(t.deps.Units, container)
 	writer := t.deps.ViewWriter(actor)
-	// THE CALLER'S ID WHEN IT HAS ONE, and one derived from the call's
-	// operation when it does not. A verb that always minted would write a
-	// second view on every retry of an `unknown` outcome; one that always
-	// required an id could not create. And a new view's id minted per call
-	// made every retry of one — the `op_id` an operator brings back, an
-	// HTTP write's `Idempotency-Key`, a re-run turn — a second view: the id
-	// is the subject the write arbitrates on, so it has to be a function of
-	// the operation, exactly as a created task's is ([createdTaskID]).
+	// The caller's id, else one derived from the operation: the id is the
+	// subject the write arbitrates on, so a per-call mint would make every
+	// retry (a brought-back `op_id`, an `Idempotency-Key`, a re-run turn) a
+	// second view ([createdViewID], as [createdTaskID]).
 	id := strings.TrimSpace(argString(args, "id"))
-	// THE OPERATION IS THE CALL'S, not the view's. It was `view-<id>` — one
-	// fixed id for every save of one view, so inside the broker's duplicate
-	// window a second edit of the same view was collapsed into the first and
-	// answered `applied` without landing. Derived from the call ([opIDFor]),
-	// a retry is one write and a second edit is a second one.
+	// The operation is the call's ([opIDFor]), not the view's: one fixed id
+	// per view would let the broker's duplicate window collapse a second edit
+	// into the first, answered `applied` without landing.
 	opID := opIDFor(actor, t.Name(), "view", viewObjectKey(id), args)
 	var prior worklet.ViewPrior
 	if id == "" {
 		id = createdViewID(actor, t.Name(), args)
 	} else {
-		// A SAVE UNDER AN ID IT DID NOT MINT MAY REPLACE SOMEBODY ELSE'S
-		// VIEW, so the view it would overwrite is decided on as well as
-		// the one it writes. The gate decided the NEW view from the
-		// arguments; it could not decide the old one, which is a stored
-		// row — and decided on the arguments alone, anybody who may keep
-		// a view of their own could take over a project's shared tab or
-		// a colleague's personal one by naming its id. Asked here with
-		// the same action, on the stored owner and container, as
-		// `work.route` is asked on a task's stored project; the write
-		// then refuses if the view changes under this decision.
+		// A save under an existing id may replace somebody else's view.
+		// The gate decided the new view from the arguments; the stored
+		// one is decided here, on its owner and container (as
+		// `work.route` is on a task's stored project), or anybody could
+		// take over a shared tab by naming its id. The write refuses if
+		// the view changes under this decision.
 		if prior, err = writer.ViewPrior(ctx, id); err != nil {
 			return readFailure(ctx, worklet.SaveWorkViewTool, err), nil
 		}
 		if !prior.Held {
-			// AN ID IS ONLY EVER ONE THIS ENGINE MINTED: a view's id is
-			// its create's ([createdViewID]), answered back by the save
-			// that made it and listed by list_work_views. A save naming
-			// an id no view holds CREATED a view under whatever the
-			// caller typed — dots, spaces, a path — as its primary key
-			// and the subject its writes arbitrate on, where "the view
-			// to replace" was what the argument promised.
+			// An id is only ever one this engine minted ([createdViewID]);
+			// creating under one nobody holds would make whatever the
+			// caller typed a primary key and write subject.
 			return refused(tools.RefusalNotFound, fmt.Sprintf(
 				worklet.SaveWorkViewTool+": there is no view %q to replace. Name a "+
 					"view "+worklet.ListWorkViewsTool+" lists, or omit `id` to create a "+
@@ -329,8 +291,8 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return writeFailure(ctx, actor, worklet.SaveWorkViewTool, err), nil
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
-		// NEVER THE ID OF A VIEW NOBODY CAN SAY WAS SAVED: handed back to
-		// save it again, it names a view that may not exist.
+		// Never the id of a view nobody can say was saved: handed back, it
+		// names a view that may not exist.
 		where := container.Kind
 		if container.ID != "" {
 			where += ":" + container.ID
@@ -402,10 +364,9 @@ func (t *deleteWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"its `id`, as " + worklet.ListWorkViewsTool + " lists it."), nil
 	}
 	writer := t.deps.ViewWriter(actor)
-	// THE STORED VIEW IS WHAT IS DECIDED ON, as a save that replaces it
-	// is: the gate has no object to form from an id, so the tool reads
-	// the view and asks the same action of its owner and container, and
-	// the write refuses a view that moved or changed hands since.
+	// The stored view is decided on, as for a replacing save: the gate has no
+	// object to form from an id, and the write refuses a view that moved or
+	// changed hands since.
 	prior, err := writer.ViewPrior(ctx, id)
 	if err != nil {
 		return readFailure(ctx, worklet.DeleteWorkViewTool, err), nil
@@ -440,19 +401,17 @@ func (t *deleteWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // createdViewID is the id a new view is saved under: a UUIDv5 over the
-// operation that saves it as the work began, for [createdTaskID]'s reasons —
-// the same operation made again (a brought-back `op_id`, an `Idempotency-Key`
-// retried, a re-run turn, a rebased one included) addresses the view its first
-// attempt saved, and where the operation is fresh, so is the view.
+// operation as the work began, for [createdTaskID]'s reasons, so the same
+// operation made again (a rebased turn included) addresses the view its first
+// attempt saved, and a fresh operation a fresh view.
 func createdViewID(actor Actor, tool string, args map[string]any) string {
 	opID := opIDFor(actor.asBegun(), tool, "view", viewObjectKey(""), args)
 	return uuid.NewSHA1(createdViewNamespace, []byte(opID)).String()
 }
 
 // viewObjectKey is the object a save's operation is named for: the view it
-// names, or — for a new view, whose id is derived FROM the operation — the
-// fixed word `new`, which the digest of the call's own arguments beside it
-// tells apart from every other new view.
+// names, or `new` for a new view (whose id derives from the operation), told
+// apart from other new views by the digest of the call's arguments.
 func viewObjectKey(id string) string {
 	if id == "" {
 		return "new"
@@ -474,14 +433,9 @@ func containerParameter() map[string]any {
 }
 
 // parseContainerArg reads the container in the query grammar's own spelling,
-// or returns the refusal the model is shown.
-//
-// A REFUSAL STRING RATHER THAN AN ERROR, which is what every other argument
-// reader on this surface returns (`catalogueFields`, `resolveHandle`): both
-// callers render this straight into [failed] and
-// neither compares it, wraps it or propagates it, so the only reader is the
-// model. Shaped as an `error` it was prose no `errors.Is` would ever ask
-// about, written in a sentence style the error-string convention forbids.
+// or returns the refusal the model is shown. A string rather than an error, as
+// every argument reader here (`catalogueFields`, `resolveHandle`): its only
+// reader is the model, through [failed], and nothing compares or wraps it.
 func parseContainerArg(raw string) (worklet.Container, string) {
 	raw = strings.TrimSpace(raw)
 	if raw == worklet.ContainerWorkspace {

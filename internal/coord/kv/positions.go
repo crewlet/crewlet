@@ -16,9 +16,8 @@ import (
 
 // PutPositions writes this node's row in the register.
 //
-// A plain Put rather than a compare-and-set: the only writer of a node's row
-// is that node, so there is nothing to arbitrate, and a CAS would make a
-// heartbeat fail on a value only this process can have changed.
+// A plain Put, not a compare-and-set: a node's row has one writer, itself, so
+// a CAS would only fail a heartbeat on a value no other process can change.
 func (f *FleetStore) PutPositions(ctx context.Context, p coord.NodePositions) error {
 	if err := p.Validate(); err != nil {
 		return err
@@ -38,29 +37,22 @@ func (f *FleetStore) PutPositions(ctx context.Context, p coord.NodePositions) er
 
 // Positions reads every node's row.
 //
-// A DECODE FAILURE IS RAISED, not skipped. The trim takes a minimum across
-// these rows, so a row silently dropped raises that minimum — which is the
-// engine deleting records a node still needs, reported by nothing. "I could
-// not read node X" has to be louder than "there is no node X".
+// A DECODE FAILURE IS RAISED, not skipped: the trim takes a minimum across
+// these rows, so a dropped row raises it and silently deletes records a node
+// still needs.
 //
-// EACH ROW CARRIES THE INSTANT THE BROKER STORED IT
-// ([coord.NodePositions.StoredAt]): the entry's own timestamp, which the
-// stream's leader stamps from its clock and the walk already holds, so the one
-// reading of a node's clock against its broker's the fleet has costs this
-// listing nothing more. Never the row's own At, which is the writer's clock
-// and is what the instant is compared against.
+// Each row carries the instant the broker stored it
+// ([coord.NodePositions.StoredAt]), the entry's leader-stamped timestamp the
+// walk already holds: the fleet's one reading of a node's clock against its
+// broker's. Never the row's own At, which is the writer's clock it is
+// compared against.
 func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, error) {
 	var out []coord.NodePositions
-	// THE BUCKET HOLDS ELEVEN KEY CLASSES (a node's positions, a trim hold,
-	// a backup point, a domain's published floor, a wake feed's mark, a
-	// capacity operation, a node's admission, its maintenance
-	// acknowledgement, a seat pause, a model retry and a device sign-in),
-	// so the walk filters, and that filter is the load-bearing half of sharing a bucket:
-	// a hold decoded as a positions row yields an EMPTY node id and a
-	// domains map of zero values, which the trim reads as a node that has
-	// applied nothing, so the pin becomes a permanent floor at zero from a
-	// key nobody thinks of as a node. It is [FleetStore.eachPositionKey]'s
-	// single copy of that filter rather than a fifth hand-written one.
+	// The bucket holds many key classes, so the class filter is
+	// load-bearing: a hold decoded as a positions row has an EMPTY node id
+	// and zero domains, which the trim reads as a node that applied
+	// nothing, pinning the floor at zero forever. Hence
+	// [FleetStore.eachPositionKey], the filter's one copy.
 	err := f.eachPositionKey(ctx, "node", "the log positions",
 		func(key string, value []byte, stored time.Time) error {
 			var row coord.NodePositions
@@ -79,11 +71,9 @@ func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, erro
 
 // PutHold writes or renews a trim hold.
 //
-// IN THE POSITIONS BUCKET, under its own key class. That is a retention
-// decision: this is the one bucket with no age at all, and a hold that expired
-// on a timer would release the pin while its owner was still reading — the
-// exact hole the hold exists to close. What bounds a crashed holder is the
-// trim arithmetic's own stale window, which the trim can report.
+// IN THE POSITIONS BUCKET, the one with no age: a hold that expired on a timer
+// would release the pin while its owner was still reading, the hole it exists
+// to close. A crashed holder is bounded by the trim's own stale window.
 func (f *FleetStore) PutHold(ctx context.Context, h coord.TrimHold) error {
 	if err := h.Validate(); err != nil {
 		return err
@@ -103,10 +93,8 @@ func (f *FleetStore) PutHold(ctx context.Context, h coord.TrimHold) error {
 
 // Holds reads every live pin.
 //
-// A DECODE FAILURE IS RAISED, for the reason the positions listing gives and
-// with the sign reversed: a hold silently dropped RAISES the trim floor, which
-// deletes records the holder is in the middle of copying. "I could not read a
-// hold" has to be louder than "there are no holds".
+// A DECODE FAILURE IS RAISED: a dropped hold raises the trim floor, deleting
+// records its holder is in the middle of copying.
 func (f *FleetStore) Holds(ctx context.Context) ([]coord.TrimHold, error) {
 	var out []coord.TrimHold
 	err := f.eachPositionKey(ctx, "hold", "the trim holds",
@@ -125,8 +113,7 @@ func (f *FleetStore) Holds(ctx context.Context) ([]coord.TrimHold, error) {
 
 // ReleaseHold removes one.
 //
-// PURGED, on this estate's standing rule (markers.go, "Every removal is a
-// purge").
+// Purged (markers.go, "Every removal is a purge").
 func (f *FleetStore) ReleaseHold(ctx context.Context, owner string) error {
 	if err := f.positions.Purge(ctx, coord.HoldKey(owner)); err != nil &&
 		!errors.Is(err, jetstream.ErrKeyNotFound) {
@@ -137,10 +124,8 @@ func (f *FleetStore) ReleaseHold(ctx context.Context, owner string) error {
 
 // PutFloor writes one domain's published trim floor.
 //
-// IN THE POSITIONS BUCKET, under a third key class. The bucket's whole subject
-// is what the log may delete, and this row is that question's ANSWER — held
-// beside the two sets of inputs, under the same absence of any age, because a
-// floor that expired would read as a fleet that has never trimmed.
+// IN THE POSITIONS BUCKET, beside the trim's inputs and likewise with no age:
+// a floor that expired would read as a fleet that has never trimmed.
 func (f *FleetStore) PutFloor(ctx context.Context, floor coord.TrimFloor) error {
 	if err := floor.Validate(); err != nil {
 		return err
@@ -158,23 +143,15 @@ func (f *FleetStore) PutFloor(ctx context.Context, floor coord.TrimFloor) error 
 	return nil
 }
 
-// Floor reads one domain's published floor: ONE leader read of its key, the
-// package's one single-key read ([FleetStore.get]) — no key index, no
-// consumer, and so no proposal to the metadata group, which is what a listing
-// of the class would cost every caller and what [coord.FloorRegister.Floor]
-// gives the register no way to ask for.
+// Floor reads one domain's published floor: one leader read of its key
+// ([FleetStore.get]), never a listing of the class, which would cost every
+// caller a consumer and a metadata-group proposal.
 //
-// A DECODE FAILURE IS RAISED, not read as no floor: this row is what every
-// surface reports a blocked trim from and what the write fence compares a
-// cursor against, so a row skipped here renders as a domain whose trim is
-// advancing — the one answer that stops anybody looking — and clears a write
-// the trim may have left below the log. So is a row naming another domain
-// than its key: it is no domain's floor this read can vouch for.
-//
-// EITHER REFUSAL IS THAT DOMAIN'S ALONE, and the remedy it names is the true
-// one: nothing in the engine rewrites the row, because the trim carries each
-// floor forward from the row it reads and never publishes over one it cannot
-// ([unreadableFloor]).
+// A DECODE FAILURE IS RAISED, not read as no floor, and so is a row naming
+// another domain than its key: every surface reports a blocked trim from this
+// row and the write fence compares cursors against it, so a skipped row reads
+// as a trim advancing and clears a write the trim may have left below the
+// log. Either refusal is that domain's alone ([unreadableFloor]).
 func (f *FleetStore) Floor(ctx context.Context, domain string) (coord.TrimFloor, bool, error) {
 	key := coord.FloorKey(domain)
 	entry, err := f.get(ctx, f.positions, key)
@@ -201,20 +178,15 @@ func (f *FleetStore) Floor(ctx context.Context, domain string) (coord.TrimFloor,
 // unreadableFloor is the refusal of a row at key that is no floor of domain's
 // this read can vouch for, and what it takes to clear it.
 //
-// WHAT THE OPERATOR MUST DO, BECAUSE NOTHING ELSE WILL. The engine files every
-// floor under its own domain's key and in a form it decodes, so such a row was
-// written by hand or by a fault. The trim does not rewrite it: a floor never
-// moves down within a generation, so each tick carries the published one
-// forward, and over a row it cannot read it has nothing to carry — publishing
-// anyway could set the floor below a purge already licensed. Removed, the key
-// reads as a trim that has never run, and the next tick publishes the floor
-// afresh from the log's own first sequence. The refusal stops that one
-// domain's trim, its reads and its writes at an expectation of zero, and no
-// other domain's.
+// Only the operator can clear it. Such a row was written by hand or a fault,
+// and the trim never rewrites it: each tick carries the published floor
+// forward, and publishing over one it cannot read could set the floor below a
+// purge already licensed. Once the key is removed, the next tick publishes the
+// floor afresh from the log's first sequence.
 //
 // [coord.ErrFloorUnreadable], never [coord.ErrUnavailable]: the store
-// answered, and a refusal built on this one must send its reader to the row
-// rather than tell them it clears when coordination answers.
+// answered, so the refusal sends its reader to the row rather than promising
+// it clears when coordination answers.
 func (f *FleetStore) unreadableFloor(key, domain, why string) error {
 	bucket := f.positions.Bucket()
 	return fmt.Errorf("%w: the trim floor at %s in %s %s — refused rather than "+
@@ -230,13 +202,10 @@ func (f *FleetStore) unreadableFloor(key, domain, why string) error {
 // PutBackupPoint writes one node's newest backup, or the operator's newest
 // acknowledgement of one log, at the point's own key ([coord.BackupPointKey]).
 //
-// IN THE POSITIONS BUCKET, under a fourth key class — see [coord.BackupPoint]
-// for why an expiring row here would silently become a retention policy.
+// IN THE POSITIONS BUCKET, with no age: see [coord.BackupPoint].
 //
-// A PLAIN PUT, with no compare-and-set: every row has one writer whose newest
-// value is the whole of it. A node's next backup supersedes its last, and an
-// acknowledgement of one log is keyed by that log, so acknowledging another
-// writes another row rather than racing this one.
+// A PLAIN PUT: every row has one writer whose newest value is the whole of it,
+// and an acknowledgement is keyed by its log, so two never race.
 func (f *FleetStore) PutBackupPoint(ctx context.Context, p coord.BackupPoint) error {
 	if err := p.Validate(); err != nil {
 		return err
@@ -253,11 +222,9 @@ func (f *FleetStore) PutBackupPoint(ctx context.Context, p coord.BackupPoint) er
 
 // BackupPoints reads every row: one per node, one per acknowledged log.
 //
-// A DECODE FAILURE IS RAISED, for the reason its three neighbours give with
-// the sign of the hold's: a point silently dropped LOWERS the newest backup
-// the trim can see, which blocks it. That is the safe direction and still not
-// silence — a fleet whose log stopped trimming because a row would not decode
-// must say so, or the operator diagnoses a backup that is running fine.
+// A DECODE FAILURE IS RAISED: a dropped point lowers the newest backup the
+// trim sees, which blocks it. Safe, but it must not be silent, or the operator
+// diagnoses a backup that is running fine.
 func (f *FleetStore) BackupPoints(ctx context.Context) ([]coord.BackupPoint, error) {
 	var out []coord.BackupPoint
 	err := f.eachPositionKey(ctx, "backup", "the backup points",
@@ -278,8 +245,7 @@ func (f *FleetStore) BackupPoints(ctx context.Context) ([]coord.BackupPoint, err
 // ForgetBackupPoint removes every row one owner holds: its own key, and each
 // per-log key beneath it — which is where the operator's acknowledgements are.
 //
-// PURGED, on this estate's standing rule (markers.go, "Every removal is a
-// purge").
+// Purged (markers.go, "Every removal is a purge").
 func (f *FleetStore) ForgetBackupPoint(ctx context.Context, owner string) error {
 	keys := []string{coord.BackupPointKey(coord.BackupPoint{Owner: owner})}
 	if err := f.eachUnder(ctx, f.positions, coord.DocumentFilter("backup", owner),
@@ -300,11 +266,9 @@ func (f *FleetStore) ForgetBackupPoint(ctx context.Context, owner string) error 
 
 // OpenMaintenance takes the exclusion, first-writer-wins.
 //
-// CREATE-ONLY, so two coordinators cannot both believe they opened one. It
-// reports what IS there when the key is taken, because the caller has to tell
-// its OWN operation from somebody else's: the id is minted once and reused
-// across create attempts, so a create that finds the key holding that id has
-// won on an earlier attempt whose answer was lost.
+// CREATE-ONLY, so two coordinators cannot both believe they opened one. A taken
+// key answers what IS there: the id is reused across attempts, so finding the
+// caller's own id means an earlier attempt won and its answer was lost.
 func (f *FleetStore) OpenMaintenance(ctx context.Context, op coord.MaintenanceOperation) (
 	coord.MaintenanceOperation, bool, error) {
 
@@ -325,10 +289,9 @@ func (f *FleetStore) OpenMaintenance(ctx context.Context, op coord.MaintenanceOp
 		op.Revision = revision
 		return op, true, nil
 	case !errors.Is(err, jetstream.ErrKeyExists):
-		// AN UNKNOWN CREATE ESTABLISHES NOTHING. The request may never
-		// have been received and may still be outstanding, so the
-		// caller retries with the SAME id rather than concluding
-		// anything — see [coord.MaintenanceRegister].
+		// AN UNKNOWN CREATE ESTABLISHES NOTHING: it may still be
+		// outstanding, so the caller retries with the SAME id
+		// ([coord.MaintenanceRegister]).
 		return coord.MaintenanceOperation{}, false,
 			unavailable("open a maintenance window", err)
 	}
@@ -337,8 +300,7 @@ func (f *FleetStore) OpenMaintenance(ctx context.Context, op coord.MaintenanceOp
 		return coord.MaintenanceOperation{}, false, err
 	}
 	if !found {
-		// TAKEN AND GONE BETWEEN THE TWO CALLS, which is somebody
-		// else's window closing rather than this caller's opening.
+		// Taken and gone between the calls: somebody else's window closed.
 		return coord.MaintenanceOperation{}, false, nil
 	}
 	return held, false, nil
@@ -358,10 +320,8 @@ func (f *FleetStore) Maintenance(ctx context.Context, stream string) (
 	}
 	var op coord.MaintenanceOperation
 	if err := json.Unmarshal(entry.Value(), &op); err != nil {
-		// RAISED, NEVER SKIPPED, and here the direction is the worst in
-		// the estate: a record that does not decode read as "no
-		// maintenance" admits every publisher in the fleet while a
-		// resize is unresolved.
+		// RAISED, NEVER SKIPPED: read as "no maintenance", it would
+		// admit every publisher while a resize is unresolved.
 		return coord.MaintenanceOperation{}, false, fmt.Errorf(
 			"coord: the maintenance operation on %s does not decode: reading "+
 				"this as \"no maintenance\" admits every publisher in the fleet "+
@@ -401,8 +361,8 @@ func (f *FleetStore) UpdateMaintenance(ctx context.Context, op coord.Maintenance
 
 // CloseMaintenance releases the exclusion, conditional on the same revision.
 //
-// ONE WRITE. The operation IS the exclusion, so there is no second key to
-// order against and no crash-between-the-halves state to interpret.
+// One write: the operation IS the exclusion, so there is no second key to
+// order against.
 func (f *FleetStore) CloseMaintenance(ctx context.Context, stream, operationID string,
 	revision uint64) error {
 
@@ -478,10 +438,8 @@ func (f *FleetStore) ForgetAdmission(ctx context.Context, nodeID, incarnation st
 		return fmt.Errorf("coord: the admission at %s does not decode: %w", key, err)
 	}
 	if held.Incarnation != incarnation {
-		// A NEWER PROCESS HOLDS IT, which is not this caller's to
-		// withdraw. Silent rather than an error: the withdrawal did
-		// what it is for, which is that this incarnation's admission
-		// is gone.
+		// A newer process holds it. No error: this incarnation's
+		// admission is gone, which is all a withdrawal promises.
 		return nil
 	}
 	if err := f.positions.Purge(ctx, key, jetstream.LastRevision(entry.Revision())); err != nil &&
@@ -539,17 +497,13 @@ func (f *FleetStore) MaintenanceAcks(ctx context.Context, stream string) (
 // eachPositionKey walks one key class of the positions register, handing fn
 // each key, its value and the instant the broker stored that value.
 //
-// ONE WALK for the classes added after the first three, because the filter is
-// the load-bearing half of sharing a bucket and six copies of it is six
-// chances for one to be written with the wrong prefix — a positions row
-// decoded as an admission is a publisher nobody can see.
+// ONE WALK, because the class filter is load-bearing and each hand-written
+// copy is a chance for a wrong prefix: a positions row decoded as an admission
+// is a publisher nobody can see.
 //
-// THE INSTANT IS THE ENTRY'S OWN (`Created`), stamped by the stream's leader
-// when it stored the value and carried by every entry the walk hands on —
-// the pass's deliveries and its certifying leader reads alike — exactly as a
-// lease's claim reads the broker's time back ([Store.claimedAt]). In UTC,
-// as every instant this store answers is. A class whose rows want no broker
-// time ignores it; the positions rows want it ([FleetStore.Positions]).
+// The instant is the entry's own `Created`, stamped by the stream's leader and
+// carried by the pass's deliveries and certifying reads alike, as a lease's
+// claim reads the broker's time ([Store.claimedAt]); in UTC.
 func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 	fn func(key string, value []byte, stored time.Time) error) error {
 
@@ -563,26 +517,15 @@ func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 func (f *FleetStore) eachPositionPrefix(ctx context.Context, prefix []string, what string,
 	fn func(key string, value []byte, stored time.Time) error) error {
 
-	// THE CLASS IS A SUBJECT TOKEN, so the broker filters. A key here is
-	// coord.DocumentKey(class, id) — two segments, or three for an operator
-	// acknowledgement, which is filed under its log as well
-	// ([coord.BackupPointKey]), joined by the separator, which is a dot
-	// because a key IS a subject token path — and the class segment escapes
-	// to itself, so `<class>.>` is a filter the broker can match whatever
-	// depth follows it. EIGHT classes share this register, and reading all of
-	// them and discarding seven was the shape this replaced. The floors are
-	// the one class no longer listed at all: every reader names the domains it
-	// asks about, so [FleetStore.Floor] reads each by its key.
+	// THE BROKER FILTERS: a key is coord.DocumentKey's segments joined by
+	// dots, a subject token path whose class segment escapes to itself, so
+	// `<class>.>` matches whatever depth follows (three segments for an
+	// acknowledgement filed under its log, [coord.BackupPointKey]). `what`
+	// names the stalled duty in a failure, not just the bucket.
 	//
-	// `what` reaches the walk now rather than going nowhere: a store failure
-	// here used to say "read crewlet_positions" for all eight listings, which
-	// names the bucket an operator would inspect but never the duty that
-	// stalled.
-	//
-	// The decode below stays, and its class test with it. It is no longer
-	// what SELECTS the class — it is what catches a filter and a grammar
-	// that have drifted apart, along with a key this grammar did not write,
-	// which is the rule the rest of the package already follows.
+	// The segment check below no longer selects the class; it catches a
+	// filter and a key grammar that drifted apart, and a key this grammar
+	// did not write.
 	return f.eachUnder(ctx, f.positions, coord.DocumentFilter(prefix...), what,
 		func(kve jetstream.KeyValueEntry) error {
 			segments, ok := coord.DocumentSegments(kve.Key())
@@ -594,33 +537,16 @@ func (f *FleetStore) eachPositionPrefix(ctx context.Context, prefix []string, wh
 		})
 }
 
-// The CAS-race classifier, and why it lives beside the positions rather than
-// beside the caller that first needed it.
+// lostUpdateRace reports whether a conditional write lost its race, as
+// distinct from a store that could not be reached: every key class here is
+// written create-only or by compare-and-set, and an outage read as a lost race
+// is a lost update a caller retries into. A create needs no classifier:
+// [createKey] answers its one lost-race shape, ErrKeyExists.
 //
-// It arrived with the document families and outlived them: every key class the
-// fleet still writes — a position, a floor, a hold, a backup point, a capacity
-// operation — is a create-only or a compare-and-set append, and each one has to
-// tell "somebody else wrote first" from "the store could not be reached".
-// Reading the second as the first is a lost update reported as a conflict a
-// caller retries into, which is the failure the three-valued rule exists to
-// prevent.
-//
-// A CREATE needs no classifier of its own any more. It had one, because the
-// client's Create reported one lost race in three shapes — ErrKeyExists, a
-// revision mismatch when it stepped over a marker and lost, and on a
-// REPLICATED stream a bare API error matching neither, measured at a fifth of
-// the losers of a create over a marker — and a lost race read as an outage
-// makes a claim answer "unknown" and the caller process a delivery twice.
-// [createKey] reads the leader and answers the one shape, ErrKeyExists, for
-// every create in this package.
-
-// lostUpdateRace reports whether a conditional write lost its race.
-//
-// A deleted key lands here too: the record it was conditioned on is gone,
-// which is the same answer for the caller — re-read and re-decide. The
-// leader's in-flight answer never does: every bucket handle is [settled], so
-// by the time a refusal reaches here it is one the leader DECIDED, and
-// [isWrongLastSequence] matches that one alone.
+// A deleted key lands here too: the caller re-reads and re-decides either way.
+// The leader's in-flight answer never does: every bucket handle is [settled],
+// so a refusal here is one the leader DECIDED, which [isWrongLastSequence]
+// alone matches.
 func lostUpdateRace(err error) bool {
 	return errors.Is(err, jetstream.ErrKeyRevisionMismatch) ||
 		errors.Is(err, jetstream.ErrKeyNotFound) ||

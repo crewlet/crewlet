@@ -32,9 +32,8 @@ import (
 // tool.
 const laterSkill = "later-howto"
 
-// probeTool answers every call and remembers the value each one carried, and
-// the model it was made on ([toolloop.CallModel]). Named "probe" unless name
-// says otherwise.
+// probeTool answers every call, remembering its value and the model it was
+// made on ([toolloop.CallModel]). Named "probe" unless name says otherwise.
 type probeTool struct {
 	name   string
 	mu     sync.Mutex
@@ -75,8 +74,7 @@ func (p *probeTool) callModels() []string {
 	return append([]string(nil), p.models...)
 }
 
-// connect dials an executor run's bridge the way its box's harness does,
-// reporting the error rather than failing on it.
+// connect dials a run's bridge as its box's harness does, returning the error.
 func connect(t *testing.T, endpoint string) (*mcp.ClientSession, error) {
 	t.Helper()
 	client := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, nil)
@@ -91,10 +89,9 @@ func connect(t *testing.T, endpoint string) (*mcp.ClientSession, error) {
 	return session, err
 }
 
-// skillLoader stands for the seat's load_tool_skill builtin, which has a row
-// in the authority table (so the seat's surface offers it), and answers every
-// load: what a load unlocks is read off its arguments by the run's guard
-// ([skills.Guard.Observe]), never off the tool's answer.
+// skillLoader stands for the load_tool_skill builtin (which has an authority
+// row, so the surface offers it). The guard reads what a load unlocks off its
+// arguments ([skills.Guard.Observe]), never off the answer.
 type skillLoader struct{}
 
 func (skillLoader) Name() string        { return toolname.LoadToolSkill }
@@ -134,8 +131,8 @@ func contentText(res *mcp.CallToolResult) string {
 	return strings.Join(out, "\n")
 }
 
-// tryTool calls the tool named over a run's bridge and answers what the bridge
-// did with it, failing only where the call reached nothing.
+// tryTool calls the tool named over a run's bridge, failing only where the
+// call reached nothing.
 func tryTool(t *testing.T, session *mcp.ClientSession, name, value string) *mcp.CallToolResult {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -148,23 +145,19 @@ func tryTool(t *testing.T, session *mcp.ClientSession, name, value string) *mcp.
 	return res
 }
 
-// recoverableRun is an executor run launched over a bridge served at a test
-// server's address, its turn parked on it as the engine parks one, and the
-// box's own endpoints — the run a node that restarts has to serve again.
+// recoverableRun is an executor run launched over a bridge at a test server's
+// address, its turn parked on it: the run a restarted node must serve again.
 type recoverableRun struct {
 	e *Engine
-	// endpoint is the job's own endpoint, where the bridge serves the
-	// engine's tools; server is the probe's MCP server's beneath it, where
-	// the bridge serves that server's tools under the server's own name
-	// (mcpbridge.Servers): the two URLs the launch handed the box.
+	// endpoint is the job's own (the engine's tools); server is the probe's
+	// MCP server's beneath it (mcpbridge.Servers): the URLs the box was handed.
 	endpoint string
 	server   string
 	tool     *probeTool
-	// later is a tool of the probe's server that a required skill covers
-	// (laterSkill): the guard refuses it until the run loads that skill.
+	// later is refused by the guard until the run loads laterSkill.
 	later *probeTool
-	// restart puts a fresh process's bridge at the address the box dials,
-	// over the fleet's keyring, holding no session yet.
+	// restart puts a fresh process's bridge, holding no session, at the
+	// address the box dials, over the same keyring.
 	restart func()
 }
 
@@ -175,8 +168,7 @@ func launchRecoverable(t *testing.T) recoverableRun {
 	server := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(server.Close)
 	material := runtoken.OneKey("k", "test-key")
-	// THE ROUTES A NODE MOUNTS for the bridge (internal/api, mcp.go): the
-	// job's endpoint and each of its MCP servers beneath it.
+	// The routes a node mounts for the bridge (internal/api, mcp.go).
 	serve := func(b *mcpbridge.Bridge) {
 		mux := http.NewServeMux()
 		mux.Handle(mcpbridge.PathPrefix+"{token}", b.Handler())
@@ -190,12 +182,9 @@ func launchRecoverable(t *testing.T) recoverableRun {
 		model: "claude-golden", runIn: config.PlacementE2B})
 	tool := &probeTool{}
 	c.Tools = tools.NewRegistry()
-	// AN MCP SERVER'S TOOL, never a builtin: every builtin is decided by the
-	// authority table (builtin.TestEveryRegisteredToolHasAnAuthorityRule),
-	// and a seat's surface leaves off one the table refuses before any
-	// object is named ([Company.withheldFrom]) — which a builtin with no row,
-	// as the probe would be, always is. The recovery rebuilds the surface
-	// the seat is offered, so the probe has to be a tool it is offered.
+	// AN MCP SERVER'S TOOL, never a builtin: the surface the recovery rebuilds
+	// leaves off a builtin with no authority row ([Company.withheldFrom],
+	// builtin.TestEveryRegisteredToolHasAnAuthorityRule).
 	later := &probeTool{name: "later"}
 	for _, each := range []*probeTool{tool, later} {
 		if err := c.Tools.Register(each, tools.Origin("probe")); err != nil {
@@ -207,16 +196,14 @@ func launchRecoverable(t *testing.T) recoverableRun {
 	}
 	e, jobs := launchRig(t, c, launched)
 	e = withSessions(t, e)
-	// THE SKILL THE SEAT MUST LOAD BEFORE IT CALLS later, as the company's
-	// knowledge base would put it on the engine's registry: every surface
-	// the seat's turns rebuild arms a guard over it.
+	// The skill the seat must load before calling later; every surface the
+	// seat's turns rebuild arms a guard over it.
 	e.skills = skills.NewRegistry()
 	if _, err := e.skills.PutPage(skills.Skill{Key: laterSkill, Title: "Later", Summary: "how to call later",
 		Trigger: skills.Trigger{Tool: "later"}, Required: true, SourcePageID: "later-page"}); err != nil {
 		t.Fatalf("PutPage: %v", err)
 	}
-	// EVERY TOOL THE SEAT HOLDS, as the runner offers an executor its
-	// seat's whole surface from its launch.
+	// The seat's whole surface, as the runner offers an executor from launch.
 	active := []string{"probe", "later", toolname.LoadToolSkill}
 	turn := &turnctx.Turn{RunID: "t1", WorkKey: "wk-1", Reply: "tool",
 		WorkSince: time.Now().UTC().Add(-time.Minute),
@@ -228,7 +215,7 @@ func launchRecoverable(t *testing.T) recoverableRun {
 	}); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}
-	// THE SUSPENSION THE LAUNCHING TURN WRITES, as the engine persists it.
+	// The suspension the launching turn writes.
 	blob, err := execstate.Encode(execstate.State{
 		Version: execstate.Version, Round: 1,
 		ActiveTools: active, Task: "fix the failing test",
@@ -258,7 +245,7 @@ func launchRecoverable(t *testing.T) recoverableRun {
 	}
 }
 
-// calls is the run's bridged tool log as the seat's recovery reads it.
+// calls is the run's bridged tool log, as the seat's recovery reads it.
 func (r recoverableRun) calls(t *testing.T) sandbox.BridgeLog {
 	t.Helper()
 	log, err := r.e.sandbox.Load().pending.BridgeLog(t.Context(), r.row(t))
@@ -279,19 +266,15 @@ func (r recoverableRun) row(t *testing.T) sandbox.PendingRun {
 }
 
 // AN EXECUTOR'S RUN OUTLIVES THE PROCESS THAT LAUNCHED IT, AND SO DOES ITS BRIDGE.
-// The box goes on calling the seat's tools after its node restarts; the
-// restarted node holds no session until it takes the run's seat back, and
-// then — as it recovers the seat — it rebuilds the run's surface from the
-// run's own row and opens the run's JOB again, so the endpoints the box was
-// launched with reach it: the same URLs, the same token — the job's own and
-// each of the seat's MCP servers beneath it — the seat's tools, and the calls
-// recorded on the run's row under its own job, numbered after the ones before
-// the restart.
+// A restarted node holds no session until it takes the run's seat back; then it
+// rebuilds the run's surface from its row and reopens the run's JOB, so the
+// URLs and token the box was launched with (the job's and each MCP server's)
+// reach the seat's tools, and calls are logged under the job, numbered after
+// the ones before the restart.
 //
-// Mutation: open the recovered session under anything but the job the row
-// names, and the box's endpoint is refused; leave the hook out of the sandbox
-// runtime's wiring, and nothing is reopened when the seat is recovered (the
-// wiring is held by the coordinator test, this one by calling the hook).
+// Mutation: open the recovered session under any job but the row's, and the
+// box's endpoint is refused. (This test calls the hook; its wiring into the
+// sandbox runtime is held by the coordinator test.)
 func TestARunIsServedAgainByTheNodeThatRecoversIt(t *testing.T) {
 	t.Parallel()
 	run := launchRecoverable(t)
@@ -332,22 +315,17 @@ func TestARunIsServedAgainByTheNodeThatRecoversIt(t *testing.T) {
 	}
 }
 
-// A RECOVERED RUN'S SURFACE IS THE ONE ITS CALLS LEFT IT. The run holds every
-// tool its seat holds from its launch, and later is one a required skill
-// covers, so the run's guard refuses it until the run loads that skill; the run
-// loaded it over the bridge before its node restarted. The node that recovers
-// the run rebuilds the surface from the run's row AND the calls in the log
-// beside it ([runner.Runner.ReopenAgentRun]), so the guard it arms holds the
-// skill the run loaded and later is still the run's to call.
+// A RECOVERED RUN'S SURFACE IS THE ONE ITS CALLS LEFT IT. The run loaded
+// later's required skill over the bridge before its node restarted; recovery
+// rebuilds the surface from the row AND the log's calls
+// ([runner.Runner.ReopenAgentRun]), so the guard still holds that skill.
 //
-// Mutation: reopen the run without its log's calls, and later is refused after
-// the recovery for a skill the run already loaded.
+// Mutation: reopen without the log's calls, and later is refused.
 func TestARecoveredRunsSurfaceKeepsWhatItsCallsLoaded(t *testing.T) {
 	t.Parallel()
 	run := launchRecoverable(t)
 	row := run.row(t)
-	// THE LOAD THE RUN MADE before its node restarted, as the bridge logs a
-	// call under the run's job.
+	// The load the run made before its node restarted, as the bridge logs it.
 	if ok, err := run.e.sandbox.Load().pending.AppendBridgeCall(t.Context(), row.TurnID,
 		sandbox.BridgeAppend{Launch: row.LaunchID, Call: sandbox.BridgeCall{
 			Name: toolname.LoadToolSkill, Args: `{"key":"` + laterSkill + `"}`,
@@ -368,12 +346,11 @@ func TestARecoveredRunsSurfaceKeepsWhatItsCallsLoaded(t *testing.T) {
 	}
 }
 
-// A RECOVERED RUN'S GUARD STILL REFUSES WHAT ITS RUN NEVER UNLOCKED: the case
-// above passes only because the log's load unlocked later, never because the
-// recovery armed no guard at all.
+// A RECOVERED RUN'S GUARD STILL REFUSES WHAT ITS RUN NEVER UNLOCKED, so the
+// case above passes because of the log's load, not a missing guard.
 //
 // Mutation: rebuild the recovered surface with no skill registry, and later is
-// answered for a run that never loaded its skill.
+// answered.
 func TestARecoveredRunsGuardRefusesWhatItsRunNeverLoaded(t *testing.T) {
 	t.Parallel()
 	run := launchRecoverable(t)
@@ -391,13 +368,9 @@ func TestARecoveredRunsGuardRefusesWhatItsRunNeverLoaded(t *testing.T) {
 	}
 }
 
-// A RECOVERED RUN'S CALLS ARE MADE ON THE MODEL ITS LAUNCH NAMED. Every call a
-// box makes over the bridge carries the model the run's harness was pointed at
-// ([mcpbridge.Session.Model]), which a seat's code write names on its push. The
-// launch's session is given it from the launch; the session a recovering node
-// opens has only the run's row to give it from, and the row records it
-// ([sandbox.LaunchRecord.Model]) — so a call after the seat moved, or its node
-// restarted, is made on the same model as the call before.
+// A RECOVERED RUN'S CALLS ARE MADE ON THE MODEL ITS LAUNCH NAMED
+// ([mcpbridge.Session.Model], which a seat's code write names on its push). A
+// recovering node has only the row to take it from ([sandbox.LaunchRecord.Model]).
 //
 // Mutation: drop Model from the session reopenAgentRun builds, and the call
 // after the recovery carries no model.
@@ -436,11 +409,9 @@ func TestARecoveredRunsCallsCarryTheModelItsLaunchNamed(t *testing.T) {
 	}
 }
 
-// A RUN ON A SEAT A PERSON STOPPED IS NOT SERVED ITS TOOLS AGAIN by the node that
-// recovers it. The seat's acquisition ends the run right after its recovery
-// (prepareSeatSandbox), so a session opened in between would answer the box's
-// handshake and rebuild the seat's surface for a run the person asked to end;
-// none is opened, and the box's endpoint reaches nothing here.
+// A RUN ON A SEAT A PERSON STOPPED IS NOT SERVED ITS TOOLS AGAIN on recovery:
+// the seat's acquisition ends it right after (prepareSeatSandbox), and a
+// session opened in between would serve a run the person asked to end.
 //
 // Mutation: drop the stop check from reopenAgentRun, and the box's endpoint
 // reaches a session again.
@@ -472,12 +443,9 @@ func TestARunOnAStoppedSeatIsNotServedAgainByTheNodeThatRecoversIt(t *testing.T)
 	}
 }
 
-// A RUN WHOSE JOB WAS LOST IS NOT SERVED ITS TOOLS AGAIN by the node that
-// recovers it: its job went with its host — killed by the restart this node
-// is recovering from, its box gone, or its node gone from the fleet
-// ([sandbox.PendingRun.Lost]) — so nothing in a box is left to call anything,
-// and the completion announced for it carries its round on in a job of its
-// own the moment the seat's mailbox opens.
+// A RUN WHOSE JOB WAS LOST IS NOT SERVED ITS TOOLS AGAIN on recovery
+// ([sandbox.PendingRun.Lost]): no box is left to call, and its announced
+// completion carries the round on in a new job.
 //
 // Mutation: drop the verdict check from reopenAgentRun, and the recovery opens
 // a session for a job that is not there.

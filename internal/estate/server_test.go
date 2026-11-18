@@ -26,16 +26,11 @@ const askerSlack = 400 * time.Millisecond
 // and a deadline askerSlack and a reply's margin away, and answers the reply
 // it heard.
 //
-// INSIDE A SYNCTEST BUBBLE ([inBubble]), which every case asking through it
-// runs in, so the reply is held to the instant the margin puts it at: a
-// reply's margin before the deadline, to the nanosecond, the trip taking no
-// time. Heard later — or never — the node's wait ran on toward the deadline
-// and its answer reached nobody; heard sooner, the node did not wait out what
-// its asker left it. On the machine's clock the case allowed the reply half
-// the margin to be sealed, carried and opened, and a loaded race-detector run
-// spent more (CI run 41760587867: heard with 320 ms left). How late a busy
-// runner wakes a goroutine is the scheduler's latency, which the margin was
-// never sized for.
+// INSIDE A SYNCTEST BUBBLE ([inBubble]), so the reply is held to exactly a
+// reply's margin before the deadline, the trip taking no time: heard later or
+// never, the node's wait ran on toward the deadline; heard sooner, it did not
+// wait out what its asker left it. On the machine's clock a busy runner's
+// scheduler latency, which the margin is not sized for, decided the case.
 func askDirectly(t *testing.T, f *fleet, node string, floors []statelog.Position) reply {
 	t.Helper()
 	args, err := json.Marshal(tasksArgs{})
@@ -66,12 +61,10 @@ func askDirectly(t *testing.T, f *fleet, node string, floors []statelog.Position
 }
 
 // A NODE BEHIND ITS ASKER'S FLOOR SAYS SO WHILE ITS ASKER IS STILL LISTENING:
-// its wait for the floor ends a reply's margin short of the request's deadline
-// rather than at it (statelog.WithReplyMargin), here well inside the floor
-// wait's own budget (statelog.ReadBudget). Waited out to the deadline, the
-// node's honest `behind` reached nobody, and the asker heard a lagging node as
-// a wedged one: asked it last for suspectFor and told the placement it went
-// unanswered.
+// its floor wait ends a reply's margin short of the deadline
+// (statelog.WithReplyMargin), here well inside statelog.ReadBudget. Waited
+// out to the deadline, its `behind` reached nobody and the asker took a
+// lagging node for a wedged one.
 //
 // IN A SYNCTEST BUBBLE, for [askDirectly]'s reason.
 //
@@ -98,12 +91,10 @@ func TestANodeBehindItsAskersFloorSaysSoWhileItsAskerListens(t *testing.T) {
 }
 
 // A READ'S OWN WAITS END WHILE ITS ASKER IS STILL LISTENING TOO. The node has
-// its asker's floor; the read is a linearizable one through a REAL statelog
-// reader, whose barrier commits at once and whose position this node never
-// reaches — a node that lags the log's end. The reader's wait for it ends a
-// reply's margin short of the request's deadline, because the serving node
-// marks the request it answers (statelog.WithReplyMargin): refused `behind`,
-// and heard.
+// its asker's floor; the read is linearizable through a REAL statelog reader
+// whose barrier commits at once at a position this node never reaches. As the
+// serving node marks the request (statelog.WithReplyMargin), the reader's wait
+// ends a reply's margin short of the deadline: refused `behind`, and heard.
 //
 // IN A SYNCTEST BUBBLE, for [askDirectly]'s reason.
 //

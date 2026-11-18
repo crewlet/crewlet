@@ -63,13 +63,11 @@ func searchHit(repo, path string, line int, text string) codesearch.Hit {
 		Blob: blobOID}}
 }
 
-// A SEARCH'S LINES ARE A FILE'S TEXT, which a read by object id cannot
-// attribute: each hit's text goes out inside a fence of the turn's boundary at
-// trust `external`, naming no writer (`repo_file`, ADR-0040) — one fence a hit,
-// so a line spelling the turn's closer stays a line of the file — and the
-// envelope says so. Each line around a hit is fenced the same way, one fence
-// a line; a hit's matches, numbers, go out unfenced. A path spelling a marker,
-// outside the fences, is defused like every other string of the answer.
+// A SEARCH'S LINES ARE A FILE'S TEXT, which nobody can be named for: each hit's
+// text, and each line around it, goes out in its own fence at trust
+// `external`, naming no writer (`repo_file`, ADR-0040), so a line spelling the
+// turn's closer stays a line of the file, and the envelope says so; matches go
+// out unfenced, and a path spelling a marker is defused like any other string.
 //
 // Mutation: the fence dropped (the hits answered as they came) → no fence
 // holds the forged instruction, red; fenced at a trust its writers earn rather
@@ -114,10 +112,9 @@ func TestCodeSearchHitsAreFenced(t *testing.T) {
 	}
 }
 
-// A SEARCH IS JUDGED AS ITS CALLER, for whoever woke the turn too, and reads
-// the repositories at a seat's level: the search the tool asks names the seat
-// as its asker, the turn it is searched in and the rows' linearizable level —
-// the one asker a Gitlet node judges the grant of, never an argument's.
+// A SEARCH IS JUDGED AS ITS CALLER, for whoever woke the turn too: it names
+// the seat as its asker (never an argument's), its turn, and the rows'
+// linearizable level.
 //
 // Mutation: the asker taken from anything but the caller, or the rows read at
 // the question's stale default → red.
@@ -139,13 +136,12 @@ func TestCodeSearchIsAskedAsItsCaller(t *testing.T) {
 	}
 }
 
-// A SEARCH READS ONE GRAMMAR, in the text or beside it: `query` is parsed as
-// a person writes it, its filters first; `repo` and `path` widen it as one
-// more filter does and `ref` is its one ref, by the grammar's own rule
-// (codeindex.Query.Beside) — the rule the `code_search` question applies to
-// its parameters; `mode` and `ignore_case` set how the text is read. A ref
-// beside a different ref:, a mode the grammar does not know, and a regex
-// that does not compile are refused as invalid before anything is searched.
+// A SEARCH READS ONE GRAMMAR, in the text or beside it: `query` is parsed
+// filters first; `repo` and `path` add a filter and `ref` is its one ref, by
+// codeindex.Query.Beside, as the `code_search` question does; `mode` and
+// `ignore_case` set how the text is read. A ref beside a different ref:, an
+// unknown mode and a regex that does not compile are refused as invalid
+// before anything is searched.
 //
 // Mutations: the filters beside the text dropped, or a ref beside a
 // different ref: let replace it → red.
@@ -182,12 +178,11 @@ func TestCodeSearchReadsOneGrammar(t *testing.T) {
 	}
 }
 
-// A SEARCH ASKS FOR CONTEXT AND A PER-FILE BOUND as the call names them:
-// `context` and `per_file` reach the search, and a page asking context asks
-// for what one answer holds of hits carrying their lines; a value past its
-// bound or not a whole number is refused invalid before anything is searched;
-// and a cursor cut at one per_file is refused at another, since the bound
-// changes which lines a page answers.
+// A SEARCH ASKS FOR CONTEXT AND A PER-FILE BOUND as the call names them, a
+// page asking context asks what one answer holds of hits with their lines, a
+// value out of bound or not whole is refused before anything is searched, and
+// a cursor cut at one per_file is refused at another: the bound changes the
+// lines a page answers.
 //
 // Mutations: read `per_file` into Context, red; ask searchPageHits whatever
 // the context, red; leave per_file out of the cursor's search, red.
@@ -263,25 +258,18 @@ func tipOf(repo string) string {
 	return strings.Repeat(map[string]string{"aaa": "a", "api": "b", "web": "d"}[repo], 40)
 }
 
-// A SEARCH'S PAGES ARE CUT FROM ITS OWN ORDER, AND EACH IS ITS OWN SEARCH:
-// a search's lines come in the order of their repositories, paths and line
-// numbers, and a page holds the lines that fit, whole, under
-// builtin.ToolAnswerBytes as sent, `next` naming the last one sent; the next
-// page's search is ASKED AFTER that line — its codesearch.Key, the commit its
-// repository was searched at with it — and for no more lines than a page
-// asks, so the search answers that page's lines and never an earlier one's,
-// whatever it answers ahead of the key when asked again. Walked to its end,
-// the pages are every line once, in order, more than gitlet.MaxSearchHits of
-// them — every path here a file's name that is not UTF-8, which the search
-// orders by its BYTES (codesearch.CompareHits), so a cursor keeps the last
-// path sent as its bytes, not as the text its U+FFFD stands in. A cursor of
-// another search, or none at all, is refused.
+// A SEARCH'S PAGES ARE CUT FROM ITS OWN ORDER, AND EACH IS ITS OWN SEARCH: a
+// page holds the whole lines that fit under builtin.ToolAnswerBytes, `next`
+// naming the last; the next page's search is asked after that line's
+// codesearch.Key (with its commit), for one page, so a line a later push put
+// ahead of the key is never answered. Walked to the end, the pages are every
+// line once, in order, past gitlet.MaxSearchHits; every path is non-UTF-8,
+// ordered by its bytes (codesearch.CompareHits), so the cursor keeps bytes,
+// not the U+FFFD text. A cursor of another search, or no cursor, is refused.
 //
-// Mutations: the page uncut (every hit at once) → past the answer, red; the
-// cursor's key not handed to the search (Query.After) → every page is the
-// first, red; the key's commit not carried → red; the cursor keeping a path's
-// text alone → its U+FFFD's bytes sort before the path's own 0xff, the last
-// hit sent comes again, red; the cursor's search not compared → red.
+// Mutations: the page uncut, red; Query.After not set, red; the key's commit
+// dropped, red; the cursor keeping a path's text alone (U+FFFD sorts before
+// 0xff, the last hit comes again), red; the search not compared, red.
 func TestCodeSearchPagesByItsOwnOrder(t *testing.T) {
 	t.Parallel()
 	var every []codesearch.Hit
@@ -396,16 +384,14 @@ func TestCodeSearchPagesByItsOwnOrder(t *testing.T) {
 	}
 }
 
-// A SEAT'S SEARCH HOLDS WHAT IT NAMES, and is floored by it: every repository
-// it names is resolved once a turn, through the one resolution that holds a
-// scratch repository (TestEveryCodeToolHoldsItsScratchRepositoryBeforeIts-
-// Request), and a ref in each through the one ref read that holds a seat's
-// branch (TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest) — and the
-// search is floored at this node's own pushes to them, so a seat that pushed
-// finds what it pushed. A ref that could be a seat's branch in a search
-// naming no repository is refused before anything is searched: it would be
-// read everywhere and held nowhere. An unfiltered search is floored at
-// nothing, each copy as it stands.
+// A SEAT'S SEARCH HOLDS WHAT IT NAMES, and is floored by it: each repository
+// it names resolves through the holding resolution
+// (TestEveryCodeToolHoldsItsScratchRepositoryBeforeItsRequest), a ref in each
+// through the holding ref read
+// (TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest), and the floor
+// takes this node's own pushes to them. A possible seat's branch in a search
+// naming no repository is refused (read everywhere, held nowhere); an
+// unfiltered search floors at nothing.
 //
 // Mutations: the floor dropped → red; the seat's branch searched unnamed → red.
 func TestCodeSearchHoldsAndFloorsWhatItNames(t *testing.T) {
@@ -443,11 +429,10 @@ func TestCodeSearchHoldsAndFloorsWhatItNames(t *testing.T) {
 }
 
 // A PAGE RESOLVES WHAT IT SEARCHES, A REF ONCE A TURN: a page after a key
-// searches the key's repository at the key's commit, so it resolves no ref
-// there, even in a turn that has resolved nothing; and a ref a turn resolved
-// in a repository is resolved there again by no later search of that turn —
-// the resolution, its hold taken, floors them all — while the next turn
-// resolves it afresh. The search is floored there either way.
+// reads the key's repository at the key's commit, so resolves no ref there,
+// even in a fresh turn; a ref a turn resolved in a repository is not resolved
+// there again that turn (its hold floors every later search), while the next
+// turn resolves it afresh. Every search is floored.
 //
 // Mutations: resolve the ref in the key's repository (searchHolds' key
 // skip) — the second turn's page resolves main in site, red; resolve it on
@@ -496,9 +481,9 @@ func TestCodeSearchResolvesARefOnceATurn(t *testing.T) {
 	}
 }
 
-// A SEARCH THE SEARCHER REFUSES OVER ONE REPOSITORY is answered in
-// Gitlet's own words for that repository, and one it could not answer at all is
-// never an answer about the code.
+// A SEARCH THE SEARCHER REFUSES OVER ONE REPOSITORY is answered in Gitlet's
+// own words for it, and one it could not answer is never an answer about the
+// code.
 //
 // Mutation: every failure answered as this node's fault → the refusal's class
 // is lost, red.
@@ -520,9 +505,9 @@ func TestCodeSearchRefusalsNameTheirRepository(t *testing.T) {
 	}
 }
 
-// THE SEARCH GUIDANCE NAMES THE SEARCH: every tool the executor's guidance on
-// searching the company's code is gated on is the search this package
-// registers — prompts cannot import this package to read the name itself.
+// THE SEARCH GUIDANCE NAMES THE SEARCH: every tool the executor's code-search
+// guidance is gated on is the one this package registers, since prompts
+// cannot import this package for the name.
 func TestTheCodeSearchGuidanceNamesTheSearchTool(t *testing.T) {
 	t.Parallel()
 	if !slices.Equal(prompts.CodeSearchTools(), []string{builtin.CodeSearchTool}) {
@@ -531,10 +516,10 @@ func TestTheCodeSearchGuidanceNamesTheSearchTool(t *testing.T) {
 	}
 }
 
-// code_search IS ONE OF THE CODE TOOLS where a search is wired, and no tool
-// where none is: listed after the twelve reads and before the writes, the
-// same on a seat's registry and the operator catalogue, a proven, idempotent
-// read a worker may be handed, which delivers nowhere.
+// code_search IS ONE OF THE CODE TOOLS where a search is wired, and none
+// where none is: after the twelve reads, before the writes, alike on a seat's
+// registry and the operator catalogue; a proven, idempotent read a worker may
+// be handed, delivering nowhere.
 //
 // Mutation: CodeTools offering it over no searcher, or listing it among the
 // writes → red.

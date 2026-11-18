@@ -10,40 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A BYTE-BOUNDED REPLAY LEAVES NOTHING DELIVERED AND UNCONSUMED.
+// A BYTE-BOUNDED REPLAY LEAVES NOTHING DELIVERED AND UNCONSUMED. The client
+// cannot bound one pull by both bytes and count, and a record pulled but
+// dropped holds a place under the consumer's ack-pending cap until its ack
+// window returns it, wedging a node whose backlog outgrows one fetch. So the
+// count bound is the consumer's in-flight ceiling, which the broker enforces
+// per pull, and the fetch drains whatever a pull delivered. Driven as the
+// applier drives it, over a backlog past that ceiling: the replay must be
+// CONTIGUOUS and every record DELIVERED ONCE, by the broker's delivery count
+// rather than the clock, since it counts a redelivery too.
 //
-// # The wedge this guards against
-//
-// The applier pulls by bytes because the vendored client cannot bound one pull
-// by both bytes and count, and it used to apply the count itself: take the
-// first [statelog.FetchMessages] of what came back and drop the rest. The rest
-// had already been DELIVERED. The broker counted every dropped record against
-// the consumer's ack-pending cap — a thousand by default — handed over nothing
-// more until the thirty-second ack window expired, and then redelivered the
-// same prefix. Measured: the first pull returned records 1 to 256, thirteen
-// further pulls over the next six seconds returned nothing, and at thirty
-// seconds 1 to 256 came back. Every node with a backlog of 257 records wedged.
-//
-// So the count bound is the consumer's own in-flight ceiling, which the broker
-// enforces per pull, and the fetch drains whatever a pull delivered. This test
-// drives the consumer exactly as the applier does — the framework's own pull
-// constants, an acknowledgement after each batch — over a backlog larger than
-// that ceiling, and requires the replay to be CONTIGUOUS and every record of
-// it DELIVERED ONCE.
-//
-// # Once, by the broker's count rather than the clock
-//
-// A record a pull left delivered and unconsumed comes back only when its ack
-// window has run out, and the broker counts every delivery it makes, a
-// redelivery included: a replay that waited out a window took more deliveries
-// than it has records, however it reached the end. It used to be held to half
-// a window by the test's clock, which a runner that lost fifteen seconds in
-// the replay failed.
-//
-// Mutation: hand over every delivery but acknowledge none, and the in-flight
-// ceiling holds the rest back until the window returns the first of them;
-// hand the last record of a burst back rather than over, and it is delivered
-// twice.
+// Mutation: acknowledge nothing and the ceiling withholds the rest until the
+// window returns the first; hand a burst's last record back and it comes twice.
 func TestAByteBoundedReplayLeavesNothingDeliveredUnconsumed(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_REPLAY_LOG", "crewlet.replay.log")
@@ -62,10 +40,8 @@ func TestAByteBoundedReplayLeavesNothingDeliveredUnconsumed(t *testing.T) {
 		t.Fatalf("open the consumer: %v", err)
 	}
 
-	// LIVENESS: four ack windows. A replay that leaves nothing unconsumed
-	// ends at once, and one that waited out a window ends a window later,
-	// which the delivery count below tells apart; this only ends a replay
-	// that never ends, as the failure it is.
+	// LIVENESS: four ack windows, which only a replay that never ends reaches;
+	// one that waited out a window is caught by the delivery count below.
 	ctx, cancel := context.WithTimeout(t.Context(), 4*domainConsumerAckWait)
 	defer cancel()
 	var next uint64 = 1
@@ -114,14 +90,10 @@ func TestAByteBoundedReplayLeavesNothingDeliveredUnconsumed(t *testing.T) {
 	}
 }
 
-// A DOMAIN CONSUMER IS RESET IN PLACE, and the handle the applier holds keeps
-// working.
-//
-// An adoption moves a node's checkpoint to the artefact's position, and the
-// broker will not move a consumer's start sequence — so the consumer is
-// deleted and remade at the new position under the same handle. Left where it
-// was, it would deliver every record between the old position and the new one
-// for the applier to drop.
+// A DOMAIN CONSUMER IS RESET IN PLACE, and the applier's handle keeps working.
+// An adoption moves the checkpoint and the broker will not move a consumer's
+// start, so it is deleted and remade under the same handle; left in place it
+// would deliver every record in between for the applier to drop.
 func TestADomainConsumerIsResetToANewPosition(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_RESET_LOG", "crewlet.reset.log")
@@ -166,8 +138,7 @@ func seqsOf(msgs []statelog.Message) []uint64 {
 }
 
 // consumerInfo reads the broker's own view of a domain consumer, rebuilding
-// the handle if a reset left none — which is what every production caller
-// does too.
+// the handle if a reset left none, as every production caller does.
 func consumerInfo(t *testing.T, c *DomainConsumer) (*jetstream.ConsumerInfo, error) {
 	t.Helper()
 	cons, err := c.consumerFor(t.Context())
@@ -178,18 +149,9 @@ func consumerInfo(t *testing.T, c *DomainConsumer) (*jetstream.ConsumerInfo, err
 }
 
 // A RESET THAT DELETES AND THEN CANNOT CREATE LEAVES A HANDLE THAT REPAIRS
-// ITSELF.
-//
-// The two calls are separate and the broker can take the first and refuse the
-// second — a connection lost in between, a server that went away. What that
-// used to leave was a handle still naming the deleted consumer: every later
-// fetch failed against something that did not exist, for the life of the
-// process, and nothing retried the reset because its one caller only logs the
-// error and starts the appliers anyway.
-//
-// The interleaving is staged by taking the STREAM away between the two calls:
-// the delete is then a tolerated not-found and the create has nowhere to go,
-// which is the same half-done state a dropped connection leaves.
+// ITSELF. The broker can take the delete and refuse the create, and a handle
+// still naming the deleted consumer would fail every fetch for the life of
+// the process: nothing retries the reset, whose one caller only logs it.
 func TestAResetThatCannotRecreateLeavesARepairableHandle(t *testing.T) {
 	t.Parallel()
 	q, log := openDomain(t, "CREWLET_HALFRESET_LOG", "crewlet.halfreset.log")
@@ -203,9 +165,8 @@ func TestAResetThatCannotRecreateLeavesARepairableHandle(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	// A START SEQUENCE THE BROKER REFUSES: the delete lands, the create
-	// does not. Any refusal reaches the same half-done state — a dropped
-	// connection between the two calls is the one an operator will see.
+	// A START SEQUENCE THE BROKER REFUSES: the delete lands and the create
+	// does not, the half-done state a connection dropped between them leaves.
 	if err := cons.Reset(t.Context(), math.MaxUint64); err == nil {
 		t.Fatal("a reset whose create could not run reported success")
 	}
@@ -218,10 +179,9 @@ func TestAResetThatCannotRecreateLeavesARepairableHandle(t *testing.T) {
 			"of the process, and its one caller only logs this error")
 	}
 
-	// AND THE NEXT FETCH REBUILDS IT, at the position the consumer held
-	// before the reset — the applier resumes from its own checkpoint
-	// whatever the consumer says, so restoring the previous position
-	// costs redeliveries and not correctness.
+	// AND THE NEXT FETCH REBUILDS IT, at the position held before the reset:
+	// the applier resumes from its own checkpoint, so that costs
+	// redeliveries, not correctness.
 	got := fetchAll(t, cons, 2)
 	if len(got) != 2 || got[0].Seq != 1 {
 		t.Fatalf("after a half-done reset the handle delivered %v, want the log "+

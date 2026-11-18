@@ -16,41 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// WHAT THIS NODE'S OWN HARDWARE IS DOING, and why three alarms needed it.
+// This node's own hardware, for `volume_low`, `wal_large` and `pool_starved`.
 //
-// `volume_low`, `wal_large` and `pool_starved` are the three conditions in the
-// table that are about the MACHINE rather than about the log — and all three
-// read fields of [statelog.Reading] that nothing filled, so all three were
-// permanently silent. Each fails in the same quiet way: a volume fills and the
-// next backup, vacuum or peer join dies partway through; a write-ahead log a
-// checkpoint cannot pass grows until it takes the volume with it; a reader
-// pool too small for the node's domains makes every query slower with nothing
-// naming the queue in front of it.
+// A copy (store.DB.Copies) stops every checkpoint for its whole run, so the
+// reading names the copy holding the largest log and counts per volume what a
+// copy holds back (store.DB.CopyHoldsBack), for `volume_low` to keep room.
 //
-// # A copy holds the log, and the reading says so
-//
-// A backup's or a donor snapshot's copy of a file stops every checkpoint at
-// its moment for its whole run (store.DB.Copies), so two of the three see it:
-// the log grows under the copy, and the next copy needs room for the log it
-// will hold back as well as for itself. So the reading names the copy holding
-// the largest log, for `wal_large` to say the copy's end folds it back in, and
-// counts on each volume what the files there last measured a copy holding back
-// (store.DB.CopyHoldsBack), for `volume_low` to keep room for it.
-//
-// # Why the sizes are measured per read and the pool wait per tick
-//
-// A size is a LEVEL: four `os.Stat` calls and one `statfs`, microseconds
-// apiece, and correct whenever they are taken. So the reading measures them
-// directly and the trim tick publishes the same numbers as gauges.
-//
-// A wait is a DELTA: `sql.DBStats` counts since the process started, and the
-// interesting quantity is how long a caller queued RECENTLY. Consuming a delta
-// is destructive — whoever reads it clears it for everyone after — so it is
-// taken on the trim's tick alone ([statelog.TrimInterval]), at a cadence that
-// is regular by construction — never on the faster alarm evaluation
-// ([statelog.AlarmInterval]), which would change what the `pool_wait` alarm's
-// p95 is a percentile OF, and never on a request whose frequency an
-// operator's dashboard decides.
+// Sizes are LEVELS, cheap and correct whenever taken, so each reading measures
+// them. A pool wait is a DELTA of `sql.DBStats`, and consuming one clears it for
+// everyone after, so it is taken on the trim's tick alone
+// ([statelog.TrimInterval]): never on the alarm evaluation
+// ([statelog.AlarmInterval]), which would change what `pool_wait`'s p95 is a
+// percentile of, nor on a request whose frequency a dashboard decides.
 
 // capacity records what one trim tick can measure about this node's own
 // storage.
@@ -75,55 +52,36 @@ func (r *retention) capacity(ctx context.Context) {
 // backupGauges publishes how old this node's newest artefact is and how many
 // trim holds the fleet is carrying.
 //
-// # Why the age is read off the disk and not off the register
+// The age is read off the disk, not the register the trim and `backup_age`
+// read: only the disk shows a copy announced then deleted or never shipped. So
+// it reads the manifests of the points THIS NODE announced, the only ones it can
+// reach. No backup publishes nothing, never zero, the freshest age possible.
 //
-// The register says a backup was ANNOUNCED. The directory says one still
-// EXISTS. The trim's backup term and the `backup_age` alarm read the register —
-// they have to, since the node holding the duty can never see a directory on
-// another host — so this gauge is the one reading that notices the cases where
-// the two differ: a copy announced and then deleted, a volume that was never
-// mounted, a schedule pointing at a path nobody ships from. In every one of
-// those the register, and so the trim and the alarm, still count the copy, and
-// the disk says it is gone.
-//
-// So this walks the register for the points THIS NODE announced — the only
-// artefacts whose directory is reachable from this process — and reads their
-// manifests. A node that has never taken a backup publishes nothing rather
-// than zero: an age of zero is the freshest backup imaginable, and it is the
-// one value a fleet with no backup at all must never report.
-//
-// The HOLDS are fleet-wide and read here rather than on the trim's own tick
-// because the trim is a singleton: a gauge published only by the lease holder
-// disappears from a collector every time the lease moves, which reads as a
-// node that stopped reporting.
+// The holds are published by every node, not by the trim's singleton tick: a
+// gauge only the lease holder publishes vanishes whenever the lease moves.
 func (r *retention) backupGauges(ctx context.Context) {
 	if r.fleet == nil {
 		return
 	}
 	if holds, err := r.fleet.Holds(ctx); err == nil {
-		// A COUNT THAT DOES NOT RETURN TO ZERO IS A HOLDER THAT CRASHED
-		// — a backup mid-copy, or a join before its node was counted.
-		// Nothing but its owner removes a hold, and until the stale bound
-		// expires it the trim does not advance — which has no other
-		// symptom at all until the log walks into its ceiling.
+		// A count stuck above zero is a crashed holder: only its owner or
+		// the stale bound removes a hold, and until then the trim stalls
+		// with no other symptom.
 		r.metrics.Set(metrics.BackupHolds, float64(len(holds)), nil)
 	}
 	points, err := r.fleet.BackupPoints(ctx)
 	if err != nil {
 		return
 	}
-	// ONE INSTANT for every directory, and the duty's own: the age is a
-	// difference of two clocks, and reading the wall clock here put this
-	// gauge on a different clock from every report and evaluation beside it.
+	// One instant from the duty's clock, so this gauge shares the clock of
+	// every report and evaluation beside it.
 	now := r.clock()
 	youngest, found := time.Duration(0), false
 	for _, point := range points {
 		if point.Owner != r.nodeID || point.Dir == "" {
 			continue
 		}
-		// THROUGH [backup.Age], which states the clamp once: a manifest
-		// written on a host whose clock runs ahead is age zero rather than
-		// a negative age below every threshold.
+		// [backup.Age] clamps a manifest from a clock running ahead to zero.
 		age, ok, err := backup.Age(point.Dir, now)
 		if err != nil {
 			log.WarnContext(ctx, "backup_age_unreadable", "dir", point.Dir,
@@ -142,13 +100,9 @@ func (r *retention) backupGauges(ctx context.Context) {
 // poolWait observes how long a caller queued for a connection since the last
 // tick.
 //
-// THE MEAN OF THE INTERVAL, one observation per tick. `sql.DBStats` gives a
-// count and a total and not the individual waits, so the honest reading of a
-// tick in which twelve callers queued for three seconds between them is "a
-// quarter of a second each" — and the p95 the alarm takes over a day is then
-// the fifth-worst tick, which is the quantity an operator acts on. A total
-// divided by nothing is skipped rather than recorded as zero: a tick in which
-// nobody queued is not a tick in which somebody queued for no time.
+// One observation per tick, the interval's mean: `sql.DBStats` keeps only a
+// count and a total. A tick with no waits is skipped, not recorded as zero:
+// nobody queuing is not somebody queuing for no time.
 func (r *retention) poolWait(db *store.DB, file string) {
 	stats := db.SQL().Stats()
 	r.mu.Lock()
@@ -166,14 +120,12 @@ func (r *retention) poolWait(db *store.DB, file string) {
 }
 
 // walSuffix is the sidecar a database in WAL mode keeps its uncheckpointed
-// pages in. Named here rather than reached for from `internal/store`, whose
-// own list is unexported and is about REMOVING sidecars from a copy.
+// pages in; `internal/store`'s own list is unexported.
 const walSuffix = "-wal"
 
 // storeFiles is every database file this node holds, in a stable order: its
 // own, then the replicated estate where it holds one open. An estate an
-// adoption holds closed is not measured while it is closed — the file under
-// its name is the one being replaced.
+// adoption holds closed is not measured: its file is being replaced.
 func storeFiles(db *store.DB) []*store.DB {
 	if db == nil {
 		return nil
@@ -187,9 +139,8 @@ func storeFiles(db *store.DB) []*store.DB {
 
 // fileBytes is a file's size, and zero with no error when it does not exist.
 //
-// A MISSING -wal IS ZERO BYTES, not a failure: a database with nothing
-// uncheckpointed has no sidecar at all, which is the healthiest state the
-// `wal_large` alarm has and must not read as unmeasurable.
+// A missing -wal is zero bytes, not a failure: nothing uncheckpointed is the
+// healthiest state `wal_large` has.
 func fileBytes(path string) (int64, error) {
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
@@ -203,11 +154,8 @@ func fileBytes(path string) (int64, error) {
 
 // space fills the storage fields of a reading, at now.
 //
-// MEASURED RATHER THAN READ BACK OFF THE GAUGES. The gauges are published on
-// the trim's own tick, which is a quarter of an hour, while the alarms are
-// evaluated every [statelog.AlarmInterval]; a volume fills in less time than a
-// quarter hour, and an alarm evaluated against a fifteen-minute-old free count
-// is one that reports the space that was there before the thing that used it.
+// Measured, not read off the gauges: those are published on the trim's tick,
+// far slower than [statelog.AlarmInterval], and a volume fills faster.
 func (r *retention) space(out *statelog.Reading, now time.Time) {
 	if r.db == nil {
 		return
@@ -220,19 +168,14 @@ func (r *retention) space(out *statelog.Reading, now time.Time) {
 	var unmeasured []string
 	for _, db := range storeFiles(r.db) {
 		if wal, err := fileBytes(db.Path() + walSuffix); err == nil && wal > out.WALBytes {
-			// THE LARGEST, NOT THE SUM. The alarm is about ONE
-			// checkpoint that is not happening, and a gibibyte
-			// spread evenly over two estates is two healthy logs
-			// where a gibibyte in one is the fault. With the file it
-			// is beside, and the copy holding it there, if one is:
-			// a copy's log is one its end folds back in.
+			// The largest, not the sum: the alarm is about ONE
+			// checkpoint not happening. Named with the copy holding
+			// it, if any, whose end folds it back in.
 			out.WALBytes, out.WALFile = wal, filepath.Base(db.Path())
 			out.WALCopy, out.WALCopyFor = holdingCopy(db.Copies(), now)
 		}
-		// A FILE THAT CANNOT BE MEASURED IS SAID, never skipped: skipped,
-		// the node is judged on its other volume alone, which is the very
-		// blind spot measuring each file's own volume exists to close.
-		// Each error names the path it could not read.
+		// An unmeasurable file is reported, never skipped: skipped, the
+		// node is judged on its other volume alone.
 		size, err := fileBytes(db.Path())
 		if err != nil {
 			unmeasured = append(unmeasured, err.Error())
@@ -307,19 +250,10 @@ type storeVolume struct {
 // volume with the least room for the next copy of what it holds and the log
 // that copy holds back — the one `volume_low` has to be about.
 //
-// PER VOLUME, because the files need not share one. `store.replicated_path`
-// puts the replicated estate's file wherever an operator names — the fast
-// local disk for the node's own file and a large network volume for the
-// replicated one is the reason it exists — and the reading used to measure the
-// node estate's volume alone against every file's bytes: a replicated estate
-// filling its own volume never fired, and a node estate beside a nearly full
-// disk of somebody else's fired for bytes that were not there. Two files on
-// one volume are one volume's bytes, so the volumes are told apart by what the
-// filesystem says they are, never by their paths.
-//
-// Named by the directory of the first file found on it, in the files' order —
-// the node estate before the replicated one — so the same volume is named the
-// same way on every reading.
+// Per volume, since `store.replicated_path` may put the replicated estate on
+// another one. Volumes are told apart by the filesystem's device, never by
+// path, and each is named by its first file's directory in the files' order,
+// so it is named the same on every reading.
 func tightestVolume(files []storedFile) storeVolume {
 	var order []string
 	byVolume := map[string]*storeVolume{}
@@ -336,12 +270,9 @@ func tightestVolume(files []storedFile) storeVolume {
 	var out storeVolume
 	for i, id := range order {
 		v := byVolume[id]
-		// THE SMALLEST RATIO OF FREE TO NEEDED is the volume nearest the
-		// alarm's own condition — free below a multiple of stored, plus
-		// the log a copy holds back — and comparing across multiplies
-		// rather than divides, so an empty volume is never a division by
-		// zero. In floating point, because the cross products of tens of
-		// terabytes overflow an int64.
+		// The smallest free-to-needed ratio, compared by cross
+		// multiplying so an empty volume never divides by zero, in
+		// floating point since products of terabytes overflow int64.
 		if i == 0 || float64(v.free)*volumeNeed(out) < float64(out.free)*volumeNeed(*v) {
 			out = *v
 		}
@@ -358,21 +289,12 @@ func volumeNeed(v storeVolume) float64 {
 // measureCoverage takes the fraction of this node's sources carrying a current
 // vector, on the tick.
 //
-// ON THE TICK, UNCONDITIONALLY, and never on a report. The measurement is a
-// scan of the whole source corpus, and a report is assembled on every operator
-// request and every dashboard poll, so a report may only read what the tick
-// took. The form this replaced measured inside the report whenever the cached
-// figure was a whole [statelog.TrimInterval] old — which the NEXT tick's report
-// usually was not: the ticker fires on a fixed period, but the report starts
-// after the tick's other measurements, so whenever the previous tick's took
-// longer than this one's, the cached figure was a few milliseconds short of an
-// interval old, the scan was skipped, and the coverage the alarm read was half
-// an hour stale while every other input beside it was fifteen minutes old.
+// Every tick, unconditionally, and never on a report: it scans the whole
+// corpus, and a report runs on every request and dashboard poll. Gating the
+// scan on the cached figure's age skips it whenever the last tick ran long.
 //
-// A MEASUREMENT THAT FAILS LEAVES NOTHING rather than the last figure: an
-// unreadable corpus is not an uncovered one, and not a covered one either —
-// and that includes the gauge, which is withdrawn rather than left holding the
-// figure every other surface has stopped showing.
+// A failed measurement leaves nothing, the gauge withdrawn too: an unreadable
+// corpus is neither covered nor uncovered.
 func (r *retention) measureCoverage(ctx context.Context) {
 	if r.coverage == nil {
 		return
@@ -396,10 +318,9 @@ func (r *retention) measureCoverage(ctx context.Context) {
 
 // semanticCoverage is the tick's coverage measurement, read back.
 //
-// A POINTER, because zero coverage is the alarm and "no embeddings configured"
-// is a company that asked for none — see [statelog.Reading.SemanticCoverage].
-// A measurement that failed, and a node whose trim has not ticked yet, answer
-// nil for the same reason: an unmeasured corpus is not an uncovered one.
+// A pointer, as [statelog.Reading.SemanticCoverage] says: zero is the alarm.
+// A failed measurement or a trim that has not ticked answers nil, since an
+// unmeasured corpus is not an uncovered one.
 func (r *retention) semanticCoverage() *float64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()

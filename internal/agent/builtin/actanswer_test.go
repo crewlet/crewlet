@@ -25,19 +25,14 @@ import (
 )
 
 // The operator catalogue's WRITES are what the dashboard's act transport and
-// an operator's assistant both call, and both read the same two things off a
-// successful answer: the call's `outcome` and its `position`, at the TOP of
-// the answer. A tool that stated them only per record handed the act
-// transport nothing, and it reported `applied` at no position over records
-// whose outcome may have been `unknown`. And both retry an `unknown` write
-// under the same identity — the `Idempotency-Key` the dashboard sends again,
-// carried on the actor as the request's key, the `op_id` an assistant brings
-// back — which is one write only if every operation the call derives is
-// derived from it.
+// an operator's assistant call, and both read the call's `outcome` and
+// `position` at the TOP of a successful answer, not per record. Both retry an
+// `unknown` write under the same identity (the dashboard's `Idempotency-Key`,
+// carried on the actor as the request's key; an assistant's `op_id`), which is
+// one write only if every operation the call derives is derived from it.
 //
-// So these walk EVERY write the catalogue serves rather than the ones
-// somebody remembered: a tool added without an entry in [everyWriteCall]
-// fails here until it has one.
+// So these walk EVERY write the catalogue serves: a tool added without an
+// entry in [everyWriteCall] fails here until it has one.
 
 // everyWriteCall is one successful call of every operator write, against the
 // fakes [writeSurface] builds.
@@ -88,17 +83,14 @@ var everyWriteCall = map[string]map[string]any{
 }
 
 // appendsNoRecord are the operator writes that append nothing to any log, each
-// with why — and every gate below holds them to THAT, explicitly, rather than
-// leaving them out: an answer at the top is still what the act transport lifts,
-// so it must say `applied` at no position, and no record may reach a writer.
+// with why. Every gate below holds them to THAT explicitly: the act transport
+// still lifts their answer's top, so it must say `applied` at no position, and
+// no record may reach a writer.
 //
-// `mark_chat_read` writes a person's read state to the coordination store, a
-// compare-and-set that has landed when it answers: there is no record whose
-// outcome could be pending, no position a read could wait for, and no
-// operation to derive — a cursor only advances and a mute states one room's,
-// so the same flush twice is the same state. Its one `unknown` is a put whose
-// answer was lost, which is the store's to report rather than a record's
-// (TestAFlushWhoseAnswerWasLostIsUnknown).
+// `mark_chat_read` is a compare-and-set in the coordination store, landed when
+// it answers: nothing pending, no position, and nothing to derive, since a
+// cursor only advances and a mute states one room's. Its one `unknown` is a
+// put whose answer was lost (TestAFlushWhoseAnswerWasLostIsUnknown).
 var appendsNoRecord = map[string]string{
 	chatlet.MarkChatReadTool: "a read-state flush is a compare-and-set in the " +
 		"coordination store, on no log",
@@ -424,12 +416,11 @@ func writeSurface(w *ledgerFake) map[string]tools.Callable {
 			},
 		},
 		// THE BOUND SEAT AS AUTHOR, KIND HUMAN AND THE CREDENTIAL BESIDE
-		// IT, with the request's key on the actor — the attribution the
-		// operator surface's chat actor builds. A reader, which the
-		// gestures decided after a read are served with; every call here
-		// names its room by id, and the caller holds admin, so none reads.
-		// And a read-state store, so the one write that appends no record
-		// is served and held to that ([appendsNoRecord]).
+		// IT, with the request's key on the actor, as the operator
+		// surface's chat actor builds it. A reader, which gestures decided
+		// after a read need, though none reads here (every call names its
+		// room by id and the caller holds admin); a read-state store for
+		// the write that appends no record ([appendsNoRecord]).
 		Chat: builtin.ChatDeps{
 			Reader: newFakeChat(), Writer: w, Cursors: fakeCursors{},
 			Actor: func(ctx context.Context, _ *turnctx.Turn) (chatlet.Actor, error) {
@@ -710,14 +701,10 @@ func (f *ledgerFake) EnsureTags(_ context.Context, opID, _ string, tags []string
 	return tags, nil, nil
 }
 
-// The knowledge base's writes. Their operation is derived INSIDE the store
-// from the actor's key ([doclet.Actor.OpKey]), so the key is what is recorded,
-// keyed with the verb, so a save and its rename under one key are still two
-// entries.
-
-// The chat writes. Their operation is derived INSIDE the store from the
-// actor's key, as a page write's is, so the key is what is recorded — with the
-// verb, so a direct message's open and post under one key are two entries.
+// The knowledge base's and chat's writes derive their operation INSIDE the
+// store from the actor's key ([doclet.Actor.OpKey]), so the key is what is
+// recorded, with the verb, so a page's save and rename (or a direct message's
+// open and post) under one key are two entries.
 
 func (f *ledgerFake) chatWrite(verb string, actor chatlet.Actor) (chatlet.Written, error) {
 	r, err := f.record(verb + ":" + actor.OpKey)
@@ -837,14 +824,12 @@ func (f *ledgerFake) Comment(_ context.Context, actor doclet.Actor, _ string,
 }
 
 // TWO DIFFERENT CALLS UNDER ONE REQUEST ARE TWO OPERATIONS. A turn's calls
-// share its work key, and a verb that writes one shared object — a view, a
-// project's tags or policy, the catalogue's lists — derived its operation
-// from the object alone, so inside the broker's duplicate window the second
-// change was collapsed into the first and answered `applied` without landing.
-// save_work_view did it for EVERY caller: `view-<id>` was one fixed operation
-// for the life of the view. The same call sent again is still one operation —
-// a request's key is a unit of work as a turn's trigger is, and every id is
-// derived from it with a digest of the call's own arguments.
+// share its work key, so a verb writing one shared object (a view, a
+// project's tags or policy, the catalogue's lists) whose operation came from
+// the object alone would have its second change collapsed into the first in
+// the broker's duplicate window, answered `applied` without landing. The same
+// call sent again is still one operation: every id is derived from the
+// request's key with a digest of the call's own arguments.
 func TestTwoDifferentCallsUnderOneKeyAreTwoOperations(t *testing.T) {
 	t.Parallel()
 	cases := map[string][2]map[string]any{

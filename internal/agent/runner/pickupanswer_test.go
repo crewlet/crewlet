@@ -15,11 +15,10 @@ import (
 )
 
 // A PICKUP'S COLLECTED ROUND CARRIES THE ENGINE'S READ OF ITS ANSWER
-// (ADR-0122): the round's Work says what the tracker's rows say, which the
-// loop's checks then judge; an item that left the seat is carried as such and
-// accepted; a read that fails, or answers what this build does not know,
-// answers unread, so the turn falls back to the delivery every turn owes rather
-// than loop on a store it cannot reach; and an assignment's turn reads nothing.
+// (ADR-0122): Work says what the tracker's rows say; an item that left the seat
+// is carried as such; a failed or unknown read answers unread, so the turn falls
+// back to the delivery every turn owes rather than loop on an unreachable store;
+// and an assignment's turn reads nothing.
 //
 // Mutation: collect a pickup's round without reading its answer, and its
 // comment reads as no answer whatever its run put on the item.
@@ -51,8 +50,7 @@ func TestAPickupsCollectedRoundCarriesItsTypedAnswer(t *testing.T) {
 	answer := func(a types.PickupAnswer, err error) func(context.Context) (types.PickupAnswer, error) {
 		return func(context.Context) (types.PickupAnswer, error) { reads++; return a, err }
 	}
-	// A RUN THAT SUBMITTED NOTHING is a round the engine rescued, which the
-	// reviewer sees; its `done` is overturned for the same reason.
+	// A run that submitted nothing is a rescued round; its `done` is overturned.
 	if w := collect(pickup, answer(types.PickupUnanswered, nil)); w.Answer != types.PickupUnanswered {
 		t.Errorf("a pickup's round with nothing typed on its item collected as %q", w.Answer)
 	} else if override, correction := turn.OverrideDone(w, nil, pickup, turn.Surface{

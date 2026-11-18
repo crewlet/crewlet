@@ -33,86 +33,70 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The turn-level events, published around turn.Run.
+// The turn-level events, published around turn.Run (the phases publish their
+// own, internal/agent/runner/telemetry.go). agent_turn_started opens the turn
+// before its context is gathered ([Engine.publishTurnStarted]); two close it,
+// separate because their readers differ:
 //
-// The phases publish their own (internal/agent/runner/telemetry.go). One opens
-// the turn — agent_turn_started, before its context is gathered (see
-// [Engine.publishTurnStarted]) — and two close it, separate because they have
-// different readers:
+//   - agent_turn_completed is the DASHBOARD's summary and ends a seat's live
+//     row: a turn that fails to publish it leaves a working indicator up.
+//   - turn_completed is the LEARNING subsystem's record; one event serving
+//     both would be the union of two schemas.
 //
-//   - agent_turn_completed is the DASHBOARD's single-phase summary. It is what
-//     ends a seat's live row, so a turn that failed to publish it leaves a
-//     working indicator up until the next turn starts.
-//   - turn_completed is the LEARNING subsystem's own record of the same turn,
-//     described for a different consumer. One event
-//     serving both would have to be the union of two schemas, and every reader
-//     would then have to know which half applied to it.
-//
-// Published from the engine rather than from the loop because only this frame
-// knows the things that bound a turn from outside it: what woke it, which
-// conversation it served, how long it took, and that it ended at all — the
-// loop returns identically whether its caller goes on to publish or not.
+// Published from the engine, not the loop: only this frame knows what woke the
+// turn, which conversation it served, how long it took, and that it ended.
 
 // turnTelemetry is one turn's publishable identity, assembled once at the top
 // of the turn and used at both ends.
 type turnTelemetry struct {
 	handle string
 	role   string
-	// runID is THIS EXECUTION's identity — minted once at the top of the
-	// turn and used at both ends, so a turn's opening phase event and its
-	// completion name the same run. See ADR-0017.
+	// runID is THIS EXECUTION's identity, minted once so a turn's opening
+	// phase event and its completion name the same run (ADR-0017).
 	runID string
-	// workKey is the unit of work, stable across a re-run, and workSince
-	// when it began — the instant every operation id derived from the key
-	// carries, and so reproduced by a re-run exactly as the key is.
+	// workKey is the unit of work, stable across a re-run, and workSince when
+	// it began: the instant every operation id derived from the key carries,
+	// reproduced by a re-run as the key is.
 	workKey   string
 	workSince time.Time
-	// rebasedTo is the instant this attempt's operation ids carry in place
-	// of the start of the identity they are seeded from, zero where they
-	// carry that start — decided by [rebaseFor] as the telemetry is
-	// assembled, on both paths (see [turnctx.Turn.RebasedTo]).
+	// rebasedTo is the instant this attempt's operation ids carry in place of
+	// their identity's start, zero where they carry that start ([rebaseFor],
+	// [turnctx.Turn.RebasedTo]).
 	rebasedTo time.Time
 	agentID   string
 	trigger   types.Trigger
 
-	// convKey is the CONVERSATION IDENTITY — what every event this turn
-	// publishes is tagged with, what the episode row is filed under, and
-	// what matches a person's answer back to a detached run — while
-	// partKey is the inbox PARTITION the trigger arrived in, carried only
-	// so a detached executor's row can also state the batch it was
-	// launched from, which is what tells two runs parked on one direct
-	// message apart ([sandbox.ConversationRef.Best]).
+	// convKey is the CONVERSATION IDENTITY: what every event this turn
+	// publishes is tagged with, the episode row is filed under, and a person's
+	// answer is matched back to a detached run on. partKey is the inbox
+	// PARTITION the trigger arrived in, carried so a detached executor's row
+	// states its batch, which tells two runs parked on one direct message
+	// apart ([sandbox.ConversationRef.Best]).
 	convKey string
 	partKey string
-	// transport is the chat surface the trigger arrived on — see
-	// [turnctx.Turn.Transport] — and empty for a turn no chat woke.
+	// transport is the chat surface the trigger arrived on
+	// ([turnctx.Turn.Transport]), empty for a turn no chat woke.
 	transport string
 	startedAt time.Time
 	trace     events.TraceContext
 
-	// deadline is the instant the turn's wall-clock cap ends — see
-	// [turnctx.Turn.Deadline] — fixed when a dispatch begins the turn and
-	// read off the park on a resume. Zero for a turn with no cap.
+	// deadline is when the turn's wall-clock cap ends ([turnctx.Turn.Deadline]),
+	// fixed at dispatch and read off the park on a resume; zero for no cap.
 	deadline time.Time
 
 	// interactions is who spoke to this seat and what they said, one per
-	// constituent of the partition — read off the trigger on a dispatch and
-	// off the park on a resume. It rides the completed-turn event because
-	// the reflect dispatcher is a QUEUE CONSUMER: it can run on a node that
-	// never saw the trigger, so an interaction it cannot read off the
-	// payload is one it cannot reason about at all.
+	// constituent of the partition, read off the trigger or the park. It rides
+	// the completed-turn event because the reflect dispatcher is a QUEUE
+	// CONSUMER that may run on a node that never saw the trigger.
 	interactions []types.InboundInteraction
 
-	// ask is what the turn was ASKED ([turnAsk]) — read off the trigger on
-	// a dispatch and off the park on a resume, which re-reads no trigger —
-	// for the completed-turn event to carry where the interactions do not
-	// ([types.TurnCompleted.Ask]) and for a suspension to park.
+	// ask is what the turn was ASKED ([turnAsk]), read off the trigger or, on
+	// a resume, the park: for the completed-turn event where the interactions
+	// do not carry it ([types.TurnCompleted.Ask]) and for a suspension to park.
 	ask string
 
-	// askLabel is who wrote ask, as one label over the whole of it
-	// ([prefetch.Ask.Label]) — nil where it is the company's or the seat's
-	// own words — read and parked exactly as ask is, so the record of what
-	// the turn was asked says whose words they were (ADR-0040).
+	// askLabel is who wrote ask, as one label ([prefetch.Ask.Label]), nil for
+	// the company's or the seat's own words; read and parked as ask is (ADR-0040).
 	askLabel *provenance.Label
 
 	// askParts is the ask part by part, each with who wrote it
@@ -120,18 +104,15 @@ type turnTelemetry struct {
 	// resume, which runs none of them.
 	askParts prefetch.Ask
 
-	// task is the trigger as the executor is handed it ([DescribeTrigger]):
-	// the brief of every wake, with what a delivery fenced moved onto
-	// [turnTelemetry.boundary] — here beside the token rather than in the
-	// frame that builds the runner, so the ask and the fences the segment's
-	// tools write cannot be cut under two tokens. Empty on a resume, which
-	// re-reads no trigger and carries the parked task instead.
+	// task is the trigger as the executor is handed it ([DescribeTrigger]),
+	// with what a delivery fenced moved onto [turnTelemetry.boundary]: here
+	// beside the token, so the ask and the segment's tools' fences cannot be
+	// cut under two tokens. Empty on a resume, which carries the parked task.
 	task string
 
-	// title is what a person reads the turn's work by
-	// ([turnctx.Turn.Title]): on a dispatch the ask, or where the trigger
-	// stated none, the line a feed shows the trigger by; on a resume, which
-	// re-reads no trigger, the line its run is already listed under.
+	// title is what a person reads the turn's work by ([turnctx.Turn.Title]):
+	// the ask, else the trigger's feed line; on a resume, the line its run is
+	// already listed under.
 	title string
 
 	// senders is who spoke to this seat ([sendersSpoken] over the
@@ -139,20 +120,18 @@ type turnTelemetry struct {
 	// turn-start memory filter is judged against ([turnctx.Turn.Senders]).
 	senders []types.CanonicalIdentity
 
-	// requester is the seat whose wake started this turn — see
-	// [turnctx.Turn.Requester] — resolved off the same first event the
-	// trigger is described from, or off the parked row on a resume, by the
-	// seat's handle (ADR-0013).
+	// requester is the seat whose wake started this turn
+	// ([turnctx.Turn.Requester]), off the trigger's first event or, on a
+	// resume, the parked row, by handle (ADR-0013).
 	requester string
 	// workingFor is who a colleague's ask, or the answer to this seat's
 	// own ask, handed the turn on to work for ([turnctx.Turn.WorkingFor]).
 	workingFor *types.WorkingFor
 
 	// requesterLogin and requesterApps are the credential acting as no seat
-	// whose write started this turn, and the apps its writes carried — see
-	// [turnctx.Turn.RequesterLogin] — read as [requester] is: off the
-	// trigger at dispatch ([credentialRequesterOf]), off the parked row on a
-	// resume.
+	// whose write started this turn and the apps its writes carried
+	// ([turnctx.Turn.RequesterLogin]): off the trigger
+	// ([credentialRequesterOf]) or the parked row.
 	requesterLogin string
 	requesterApps  []iam.Grant
 
@@ -174,21 +153,18 @@ type turnTelemetry struct {
 	// back at completion for the one rule dispatch cannot decide.
 	written *turnctx.Written
 
-	// holds is what this turn has named that Gitlet's expiry could
-	// take from under it, shared with every tool call and delegate worker
-	// through the turn context ([turnctx.Turn.Holds]): a fresh set for a
-	// dispatched turn, the row's for a resumed one with the row's writer
-	// attached ([Engine.rowHolds]) — the one turn's, across every segment.
+	// holds is what this turn has named that Gitlet's expiry could take from
+	// under it, shared through the turn context ([turnctx.Turn.Holds]): fresh
+	// for a dispatched turn, the row's for a resumed one with its writer
+	// attached ([Engine.rowHolds]), so one set across every segment.
 	holds *turnctx.Holds
 
-	// resumed marks a segment that re-entered a parked run, and launchID
-	// the launch it collected — together they name the segment its
-	// charge is recorded under (see turnspend.go). jobInput and jobOutput
-	// are that run's tokens, which the segment pays, and jobCacheRead and
-	// jobCacheWrite their cached share; jobEngine what the
-	// engine spent on that run between segments (its bridged calls, the
-	// condensation of its collection), which it pays too; and uncharged what
-	// the segments before it spent and charged to nothing.
+	// resumed marks a segment that re-entered a parked run and launchID the
+	// launch it collected: together they name the segment its charge is
+	// recorded under (turnspend.go). jobInput/jobOutput are that run's tokens,
+	// which the segment pays, jobCacheRead/jobCacheWrite their cached share,
+	// jobEngine what the engine spent on the run between segments (paid here
+	// too), and uncharged what earlier segments spent and charged to nothing.
 	resumed                     bool
 	launchID                    string
 	jobInput, jobOutput         int
@@ -196,34 +172,26 @@ type turnTelemetry struct {
 	jobEngine                   sandbox.EngineSpend
 	uncharged                   *execstate.Uncharged
 
-	// soFar is what the turn's segments before this one measured — their
-	// spans and their reviews — carried on the parked conversation, nil on a
-	// turn that has not parked and on a resumed one whose park nobody
-	// measured ([turnTelemetry.measuredWhole]). The record that ends the turn
+	// soFar is what earlier segments measured (spans, reviews), carried on the
+	// parked conversation; nil before any park and on a resume whose park
+	// nobody measured ([turnTelemetry.measuredWhole]). The turn's last record
 	// states it whole ([turnTelemetry.measured]).
 	soFar *execstate.TurnSoFar
 
-	// auxSpent is what this segment's in-turn auxiliary calls have cost —
-	// its turn-start context, every rewrite its ledgers, its judge's
-	// evidence and its tools asked for — shared with every tool call and
-	// delegate worker through the turn context ([turnctx.Turn.AuxSpend]),
-	// and fresh for each segment, since each segment is charged what IT
-	// spent (turnspend.go).
+	// auxSpent is what this segment's in-turn auxiliary calls have cost,
+	// shared through the turn context ([turnctx.Turn.AuxSpend]); fresh per
+	// segment, since each is charged what IT spent (turnspend.go).
 	auxSpent *auxspend.Tally
 
-	// boundary is the token every fence this segment writes carries: the
-	// chat thread its prompt is handed and every foreign text its tools read
-	// ([turnctx.Turn.Boundary]). Minted fresh for each segment, a resumed one
-	// included, because the prompt and the tools must agree on it and both
-	// are assembled from here.
+	// boundary is the token every fence this segment writes carries
+	// ([turnctx.Turn.Boundary]): minted per segment, a resumed one included,
+	// and kept here because the prompt and the tools must agree on it.
 	boundary provenance.Boundary
 
-	// budget is the meter this segment is charged through — its rounds, its
-	// judge, its workers and, through [turnTelemetry.aux], every in-turn
-	// auxiliary call — or nil where there is no counter. Set by the frame
-	// that builds the segment's runner, BEFORE the first auxiliary call it
-	// makes: the context assembly is one, and a meter built after it would
-	// never hear of a window the assembly filled.
+	// budget is the meter this segment is charged through (rounds, judge,
+	// workers and, via [turnTelemetry.aux], every in-turn auxiliary call), nil
+	// without a counter. Set BEFORE the segment's first auxiliary call, the
+	// context assembly: a meter built after it never hears of that window.
 	budget *meter
 
 	// closesStop marks the segment that only CLOSES a turn a person
@@ -231,12 +199,11 @@ type turnTelemetry struct {
 	// ([segmentStop]) and counting no turn.
 	closesStop bool
 
-	// closing, where set, is the identity the records CLOSING a stopped
-	// parked turn are published under ([Engine.closeStoppedTurn]): each is
-	// stamped with an id derived from the run's ending and its type, and the
-	// instant the ending was decided, so the attempt that repeats the close
-	// after a crash publishes the same records rather than a second end of
-	// the turn. Nil for every segment that ran, whose records are minted.
+	// closing, where set, is the identity the records CLOSING a stopped parked
+	// turn are published under ([Engine.closeStoppedTurn]): ids derived from
+	// the run's ending and the record type, stamped at the ending's instant, so
+	// a retry after a crash republishes the same records rather than a second
+	// end. Nil for every segment that ran.
 	closing *closingIdentity
 }
 
@@ -274,41 +241,27 @@ func (t turnTelemetry) aux() auxspend.Use {
 
 // newRunID mints the identity of ONE EXECUTION of a turn.
 //
-// FRESH rather than anything derived, and that is the whole point: every
-// derivable identity a turn has — the trigger's ids, the conversation, the
-// seat, the clock rounded to anything useful — is something a redelivery
-// reproduces, and reproducing it is exactly the bug ADR-0017 records. Two runs
-// of one trigger must not be able to collide however hard they try.
+// FRESH, never derived: every derivable identity (the trigger's ids, the
+// conversation, the seat, the rounded clock) is one a redelivery reproduces,
+// the bug ADR-0017 records. Not a process counter: other processes read it,
+// so it is unique across the fleet.
 //
-// Not a package-level counter either: a run id is read by other processes (a
-// detached sandbox row, a peer's dashboard), so it has to be unique across the
-// fleet rather than within this process.
-//
-// TIME-ORDERED, and the instant it carries is read: a write a run with no unit
-// of work makes is seeded from the RUN, and the operation id derived from it
-// carries the run's start as its mint instant — which is what the state log
-// compares with its operation ledger's watermark before it will decide an
-// operation again (builtin.Actor.OperationSince). A resumed run keeps its id, so the
-// instant rides the pending row with no field of its own. Minted by the state
-// log's own grammar ([statelog.NewOpID]) so the one reader of that instant
-// needs no second parser; its random tail keeps two runs from colliding
-// exactly as a v4 did.
+// TIME-ORDERED, and the instant is read: a write by a run with no unit of
+// work is seeded from the run, so its operation id carries the run's start,
+// which the state log checks against its ledger's watermark
+// (builtin.Actor.OperationSince); a resumed run keeps it. Minted by
+// [statelog.NewOpID] so that reader needs no second parser.
 func newRunID() string { return statelog.NewOpID(time.Now(), "") }
 
 // describeTurn assembles the identity for one dispatch.
 //
-// The trigger is taken from the FIRST event of the partition. A coalesced
-// partition has several, and the first is the one whose thread the turn is
-// answering; branding the turn with the last would attribute it to whichever
-// message happened to arrive while the seat was busy.
+// The trigger is the partition's FIRST event, whose thread the turn answers;
+// the last would credit whichever message arrived while the seat was busy.
 //
-// AND WHERE ITS WRITES ARE MINTED, decided here because this is the one frame
-// the dispatch path builds the turn its tools read from: a trigger delivered
-// longer after its work began than the operation ledger remembers — a backlog
-// a seat nobody placed was handed a month late — has its writes rebased onto
-// this attempt, or onto the one before it a re-run inherits (see
-// [rebaseFor]). An error is a turn that does not run, and the dispatcher NAKs
-// it like any other failure that acted on nothing.
+// It also decides where the turn's writes are minted, as the one frame that
+// builds the turn its tools read: a trigger delivered later than the
+// operation ledger remembers has its writes rebased ([rebaseFor]). An error
+// is a turn that does not run, and the dispatcher NAKs it.
 func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request) (_ turnTelemetry, err error) {
 	defer origin.Stamp(&err)
 	t := turnTelemetry{
@@ -317,17 +270,12 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 		workKey:   req.WorkKey,
 		workSince: req.WorkSince,
 		convKey:   req.ConversationKey,
-		// READ OFF THE PARTITION'S OWN EVENTS rather than carried on the
-		// Request beside the identity, because every constituent already
-		// holds it and a field would be one more thing a second Request
-		// construction site could leave empty — which is exactly how the
-		// conversation reached the sandbox row as "" for the whole life of
-		// that feature. The identity has no such source: a resumed turn
-		// has no events at all, so it has to travel.
+		// Off the partition's own events, not a Request field a second
+		// construction site could leave empty; the identity travels on the
+		// Request because a resumed turn has no events.
 		partKey: partitionKeyOf(req.Events),
-		// THE CHAT SURFACE, read off the same metadata the working
-		// indicator raises on — see [chatMetadataOf] — so "was this turn
-		// woken by a chat message" has one answer.
+		// Off the metadata the working indicator reads ([chatMetadataOf]),
+		// so "woken by chat" has one answer.
 		transport: chatMetadataOf(req.Events)[notify.TransportField],
 		startedAt: time.Now().UTC(),
 	}
@@ -348,16 +296,9 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	t.requesterLogin, t.requesterApps = credentialRequesterOf(req.Events, req.Ask(),
 		t.interactions, req.Handle)
 	t.workingFor = workingForIn(req.Events)
-	// The turn's own span, not the trigger's ids copied forward.
-	//
-	// This used to read `TraceID: ev.TraceID, SpanID: ev.SpanID` straight off
-	// the trigger, which made every event the turn published claim the
-	// TRIGGER's span as its own — so `span_id` named a span that had already
-	// ended and the dashboard's tree collapsed the whole turn onto the wake
-	// that started it. The trace is still inherited, which was the right
-	// half: the dispatcher restored it onto ctx before runTurn opened the
-	// turn span beneath it, so the trace id is the trigger's and the span id
-	// is this turn's, with the trigger as its parent.
+	// The turn's own span, not the trigger's: the dispatcher restored the
+	// trigger's trace onto ctx before runTurn opened the turn span, so the trace
+	// id is the trigger's and the span id this turn's, parented on the trigger.
 	t.trace = tracing.TraceOf(ctx)
 	for _, ev := range req.Events {
 		if ev == nil {
@@ -366,10 +307,8 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 		t.trigger = types.DescribeTrigger(ev)
 		break
 	}
-	// WHAT A PERSON READS THE TURN'S WORK BY: its ask, or where the trigger
-	// stated none (a message that is only an attachment), the line a feed
-	// shows the trigger by, so a run the turn launches is never listed as
-	// nothing.
+	// The ask, or where the trigger stated none (an attachment-only message)
+	// its feed line, so a run the turn launches is never listed as nothing.
 	t.title = t.ask
 	if t.title == "" {
 		t.title = t.trigger.Summary
@@ -398,17 +337,14 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 
 // runnerTurn is the identity handed to the phase runner.
 //
-// TWO IDENTITIES, NEVER ONE. runID names this execution and is what every
-// event's turn_id carries; workKey names the unit of work and is what a write
-// has to be idempotent against. See ADR-0017 for what folding them into one
-// value cost.
-// Both identities come off the telemetry rather than off arguments, so the
-// events published at the two ends of a turn and the context its tools run
-// under cannot name different runs.
+// TWO IDENTITIES, NEVER ONE (ADR-0017): runID names this execution and is
+// every event's turn_id; workKey names the unit of work a write is
+// idempotent against. Both come off the telemetry, so the events at the
+// turn's two ends and its tools' context cannot name different runs.
 //
-// withheld is the identity directory's reading this turn pins beside its org —
-// see [turnctx.Turn.Withheld] — taken by the caller from [Engine.WithheldContacts]
-// at the turn's start.
+// withheld is the identity directory's reading pinned beside the org
+// ([turnctx.Turn.Withheld]), taken from [Engine.WithheldContacts] at the
+// turn's start.
 func (t turnTelemetry) runnerTurn(company *Company,
 	depth int, chain []string, task string, reply turn.Reply,
 	withheld func(handle string) bool,
@@ -423,27 +359,20 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			WorkKey:   t.workKey,
 			WorkSince: t.workSince,
 			RebasedTo: t.rebasedTo,
-			// EVERY RUN STARTS ITS OWN CALL LOG, which a derived operation
-			// id reads its repeat count from (see [turnctx.CallLog]). Empty
-			// for a new run, a re-run included: it makes its calls again,
-			// and each count comes out as it did. A RESUMED run passes
-			// through here too, and the runner seeds its log with what the
-			// run called before it parked.
+			// EVERY RUN STARTS ITS OWN CALL LOG ([turnctx.CallLog]), so a
+			// re-run's repeat counts come out as before; the runner seeds a
+			// RESUMED run's log with what it called before it parked.
 			Calls: turnctx.NewCallLog(),
-			// AND ITS OWN LOOKUPS, empty for every segment a resumed one
-			// included: a name the turn looked up before it parked may
-			// name something else by the time it resumes, and one lookup a
-			// segment is the whole cost (see [turnctx.Lookups]).
+			// Fresh per segment, a resumed one included: a name looked up
+			// before the park may name something else after it ([turnctx.Lookups]).
 			Lookups: turnctx.NewLookups(),
-			// AND WHAT ITS CALLS ANSWERED, empty for every segment too: a
-			// record in the atlas cites a call this segment made itself.
+			// Fresh per segment too: an atlas record cites a call this
+			// segment made.
 			Seen: turnctx.NewSeen(),
 			// The turn's deadline, for the runs it launches to carry.
 			Deadline: t.deadline,
-			// The seat and the ORG both come off the pinned epoch, so a
-			// colleague lookup mid-turn resolves against the roster this
-			// turn started under rather than one that changed underneath
-			// it.
+			// Both off the pinned epoch, so a colleague lookup mid-turn
+			// resolves against the roster the turn started under.
 			Seat: company.Org.AgentSeatByHandle(t.handle),
 			Org:  company.Org,
 			// AND WHO MAY BE REACHED, pinned with the org: the roster
@@ -451,21 +380,14 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// tools make leave out the same people.
 			Withheld: withheld,
 			Depth:    depth,
-			// The path that got here, so an ask this turn makes carries
-			// the whole provenance rather than only its immediate asker.
-			// It was set on the sandbox-resume path alone, so every
-			// ordinary turn's ask reported a one-element chain.
+			// The whole path that got here, so an ask this turn makes
+			// carries its full provenance.
 			Chain: chain,
-			// The conversation this turn owes an answer to, so work it
-			// detaches carries it: an executor's row is written from
-			// here, the resumed turn reports back through it, and a
-			// person's answer is MATCHED on it — because a person
-			// answers on the conversation rather than into the batch
-			// their reply lands in.
-			//
-			// The partition rides along so the row can state the batch
-			// the run was launched from: it tells two runs parked on
-			// one direct message apart.
+			// The conversation the turn owes an answer to, for work it
+			// detaches: the executor's row, the resumed turn's report, and the
+			// matching of a person's answer, which lands on the conversation
+			// rather than the batch. The partition lets the row tell two runs
+			// parked on one direct message apart.
 			ConversationKey: t.convKey,
 			PartitionKey:    t.partKey,
 			// AND THE SURFACE, so a task this turn files says where it
@@ -476,9 +398,8 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// this frame, so both have to reach the row from here.
 			Task:  task,
 			Reply: reply.String(),
-			// AND WHAT A PERSON READS ITS WORK BY: what a run it launches
-			// is listed under, where the brief above would show a person
-			// its fence lines.
+			// What a run it launches is listed under, where the brief above
+			// would show a person its fence lines.
 			Title: t.title,
 			// And who woke it, for a question a run it detaches puts to
 			// "the requester" long after this frame is gone.
@@ -487,11 +408,8 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// the turn may use for it is bounded by its apps (ADR-0109).
 			RequesterLogin: t.requesterLogin,
 			RequesterApps:  slices.Clone(t.requesterApps),
-			// AND WHO SPOKE, for a tool that re-runs the turn-start memory
-			// filter — see [turnctx.Turn.Senders]. Off the telemetry rather
-			// than the interactions, which a resumed segment does not have:
-			// read off them here, every resumed segment told the filter
-			// nobody was asking.
+			// Off the telemetry, not the interactions a resumed segment
+			// lacks ([turnctx.Turn.Senders]).
 			Senders: t.senders,
 			// THE ITEM THIS TURN IS ON, and the set its writes report
 			// into. The item rides every phase event and the row of any
@@ -516,35 +434,17 @@ func (t turnTelemetry) runnerTurn(company *Company,
 	}
 }
 
-// publishTurnStarted puts a turn — or one resumed segment of it — on the record
-// before it does anything slow: agent_turn_started.
+// publishTurnStarted puts a turn, or one resumed segment of it, on the record
+// before it does anything slow (agent_turn_started), so a seat gathering its
+// context is not read as idle and a turn that dies there leaves a row naming
+// its run. Dispatch publishes it before the prefetch, a resume once the
+// segment is certain to run ([Engine.resumeTurn]).
 //
-// EVERY OTHER TURN EVENT IS PUBLISHED FROM INSIDE A PHASE OR AFTER THE LAST
-// ONE, so until this existed nothing said a turn was running while it gathered
-// its context: a seat whose prefetch was reading a long thread was
-// indistinguishable from an idle one, and a turn that died there left no row
-// naming its run at all. So the dispatch path publishes this BEFORE the
-// prefetch, and the resume path once the segment is certain to run (see
-// [Engine.resumeTurn] for why that is later).
-//
-// EVERY START IS CLOSED. Each frame that publishes one publishes
-// [Engine.publishTurnCompleted] on every path out of it that returns, so a
-// reader pairing the two on `turn_id` never holds an open turn that ended. A
-// start with no completion is a turn that died in its own frames: a panic
-// recovered outside the loop, which the unhandled-exception breach under the
-// same `turn_id` says (see [panicBreach]), or a process that died under it —
-// the fact the unpaired row is there to state.
-//
-// The depth and the chain travel on the ENVELOPE, whose keys they are — a
-// payload field under an envelope key is dropped on the way out — and they are
-// arguments, on the terms [turnTelemetry.runnerTurn] takes them: the dispatch
-// reads them off the trigger and the resume off the parked row.
-//
-// It names the item dispatch resolved (see worksubject.go) and no other: a
-// turn that ends up charged by a sole write starts WITHOUT one, because at the
-// start that write has not happened. Neither key is present on a turn on
-// nothing, which is the documented shape of an unattributed turn rather than a
-// null.
+// EVERY START IS CLOSED by [Engine.publishTurnCompleted] on every path that
+// returns; an unpaired start is a recovered panic ([panicBreach]) or a dead
+// process. Depth and chain ride the ENVELOPE, whose keys they are (a payload
+// field under one is dropped). Only dispatch's item is named (worksubject.go):
+// a sole write has not happened yet, and a turn on nothing omits both keys.
 func (e *Engine) publishTurnStarted(ctx context.Context, t turnTelemetry,
 	depth int, chain []string, resumed bool,
 ) {
@@ -558,9 +458,8 @@ func (e *Engine) publishTurnStarted(ctx context.Context, t turnTelemetry,
 		ConversationKey: t.convKey,
 		WorkItem:        t.workItem,
 		WorkItemBasis:   t.workItemBasis,
-		// THE SAME INSTANT turn_completed reports as the turn's start, so
-		// the two records of one run can never disagree about when it
-		// began — both read it off the telemetry assembled once.
+		// THE SAME INSTANT turn_completed reports, both read off the
+		// telemetry, so the run's two records cannot disagree on its start.
 		StartedAt: t.startedAt,
 		Resumed:   resumed,
 	}, t.trace)
@@ -573,29 +472,24 @@ func (e *Engine) publishTurnStarted(ctx context.Context, t turnTelemetry,
 
 // publishTurnCompleted closes the turn for both readers.
 //
-// TELEMETRY NEVER FAILS THE WORK, so this returns nothing: the turn's
-// deliveries have already fired and its result is already the caller's answer.
-// A broker that refuses these events must not turn finished work into a failed
-// turn — the same rule the phase publisher states.
+// TELEMETRY NEVER FAILS THE WORK, so it returns nothing: a broker refusing
+// these events must not turn finished work into a failed turn.
 //
-// ENDED IS THE CALLER'S, never this function's clock: it is the instant the
-// segment ended, which the task's turn row is measured to as well, and the
-// publish can come seconds after it — see [Engine.endSegment].
+// ended is the caller's, not this function's clock: the segment's end, which
+// the task's turn row is measured to too and the publish may trail by seconds
+// ([Engine.endSegment]).
 func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	spend runner.Spend, res turn.Result, err error, ended time.Time,
 ) {
 	ended = ended.UTC()
-	// A TURN A PERSON STOPPED DID NOT FAIL, although it ended on an error:
-	// the error is how the stop reached this frame. Read as a failure it
-	// would be listed with the turns that broke, and its seat drawn as in
-	// trouble for being stopped by somebody who meant to.
+	// A STOPPED TURN DID NOT FAIL, though it ended on an error (how the stop
+	// reached here): read as failed, its seat would be drawn as in trouble.
 	stopped := turn.Stopped(err)
 	failed := !stopped && (err != nil || res.Decision == phase.Failed)
 	decision := string(res.Decision)
-	// THE ITEM THIS COMPLETION IS CHARGED TO: dispatch's, or — for a turn
-	// nothing named one for — the one item its writes committed to, which
-	// only a segment that FINISHED the turn may conclude. Both records carry
-	// the same answer, read once.
+	// THE ITEM CHARGED: dispatch's, else the one item its writes committed to,
+	// which only a segment that FINISHED the turn may conclude; both records
+	// carry it.
 	item, basis := completedWorkItem(t.workItem, t.workItemBasis, t.written, res.Suspended)
 	// THE TURN'S CALLS AS ITS RECORD LISTS THEM: every phase's, held to the
 	// one share a record has of its message (internal/agent/runner's
@@ -605,11 +499,9 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	summary := types.AgentTurnCompleted{
 		Agent:    t.agentID,
 		RoleName: t.role,
-		// The model that answered the LAST phase to run, which is what a
-		// one-line row names. The per-phase models are carried beside it
-		// rather than collapsed, because a seat with a fallback chain can
-		// legitimately have run the executor and the reviewer on two
-		// different models.
+		// The LAST phase's model, which a one-line row names; the per-phase
+		// models ride beside it, since a fallback chain can run executor and
+		// reviewer on two different models.
 		Model:          lastModel(spend),
 		Trigger:        t.trigger,
 		Prompt:         t.trigger.Summary,
@@ -624,17 +516,10 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		WorkKey:        t.workKey,
 		ExecuteModel:   spend.ExecuteModel,
 		ReviewModel:    spend.ReviewModel,
-		// What this turn DELEGATED, beside what it spent itself. Kept
-		// apart from TotalTokens on purpose: a worker's tokens are
-		// already charged through the shared meter, so folding them in
-		// would double-count them — and the split is the only thing that
-		// answers "how much of this turn was fan-out" when a seat's spend
-		// jumps and its own rounds did not.
-		//
-		// A RESUMED SEGMENT ADDS THE WORKERS ITS RUN DELEGATED TO over the
-		// tool bridge, because it is the segment that pays for them
-		// (turnspend.go): they ran while no segment was, and on no other
-		// segment's record.
+		// What this turn DELEGATED, kept apart from TotalTokens: a worker's
+		// tokens are already charged through the shared meter, and the split
+		// answers "how much was fan-out". A RESUMED SEGMENT adds the workers its
+		// run delegated over the tool bridge, since it pays for them (turnspend.go).
 		SubagentCount:        spend.Workers + t.jobEngine.Workers,
 		SubagentTokens:       spend.WorkerTokens() + t.jobEngine.WorkerInput + t.jobEngine.WorkerOutput,
 		SubagentInputTokens:  spend.WorkerInput + t.jobEngine.WorkerInput,
@@ -645,9 +530,8 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		CacheWriteTokens: spend.CacheWrite,
 		WorkItem:         item,
 		WorkItemBasis:    basis,
-		// A SEGMENT THAT PARKED says so, because the same turn id completes
-		// again when its launch is collected: read as an end, this
-		// record would list a parked turn as finished.
+		// A SEGMENT THAT PARKED says so: the same turn id completes again
+		// when its launch is collected.
 		Suspended:       res.Suspended,
 		Iterations:      res.Rounds,
 		Decision:        decision,
@@ -656,16 +540,11 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		ConversationKey: t.convKey,
 	}
 	if err != nil {
-		// Bounded only so the event is publishable at all; see
-		// events.MaxDiagnosticBytes. An event refused by the queue is
-		// logged and dropped, so an unbounded failure text costs the
-		// operator the whole record rather than its tail.
+		// Bounded so the event is publishable (events.MaxDiagnosticBytes):
+		// a refused event is dropped whole.
 		summary.Error = events.ClipDiagnostic(err.Error())
-		// The phase's own classifier, which is what the field's doc has
-		// always promised (the classified provider error) and what it
-		// never carried: every failed turn read `error`, so a turn whose
-		// plan was spent and one whose login was revoked were the same word
-		// on the Turn screen while their phase records said otherwise.
+		// The phase's own classifier, so a spent plan and a revoked login
+		// are not the same word on the Turn screen.
 		summary.ErrorKind = runner.ErrorKind(err)
 		if place, ok := origin.Of(err); ok && !stopped {
 			summary.ErrorFunction, summary.ErrorFile = place.Function, place.File
@@ -677,17 +556,11 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		}
 	}
 	if res.Breach != nil {
-		// A guard breach is not an error: the turn ran and was stopped by
-		// a rule. Naming the RULE is the whole value: "depth_cap" and
-		// "stall" send an operator to different places, and a bare "failed"
-		// sends them to neither.
-		//
-		// THE RULE WINS WHEN BOTH ARE SET, and a panic is the case that
-		// sets both: its error says what broke and its breach names the
-		// guard. Read the other way round, the one kind that says the
-		// engine itself is at fault reached the Turn screen as the generic
-		// "error". The error's own text is kept, since it names the phase
-		// and round the breach detail does not.
+		// A guard breach is not an error: the turn ran and a rule stopped it,
+		// and the RULE ("depth_cap", "stall") is what sends an operator somewhere.
+		// THE RULE WINS WHEN BOTH ARE SET, as a panic does, so the engine-at-fault
+		// kind is not read as "error"; the error's text, naming phase and round,
+		// is kept.
 		if summary.Error == "" {
 			summary.Error = events.ClipDiagnostic(res.Breach.Detail)
 		}
@@ -718,13 +591,10 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// exactly when the engine overrode the reviewer.
 		ReviewOutcome: decision,
 		Iterations:    res.Rounds,
-		// EVERYTHING THE REFLECT DISPATCHER GATES ON. Its workers run on
-		// whichever node holds the seat when the wake is taken, which a
-		// seat that moved makes another one, so a fact left off this
-		// payload is a fact no worker can consult — and the gates fail
-		// OPEN-LOOKING: an absent tool sequence reads
-		// as "the agent engaged with nothing", which silently skips every
-		// worker on exactly the successful turns worth learning from.
+		// EVERYTHING THE REFLECT DISPATCHER GATES ON: its workers may run on
+		// another node, so a fact left off this payload is one no worker can
+		// consult, and an absent tool sequence reads as "engaged with nothing",
+		// silently skipping the successful turns worth learning from.
 		ToolSequence:    spend.ExecuteTools,
 		AllToolNames:    spend.AllTools,
 		Outcome:         spend.Outcome,
@@ -735,15 +605,10 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		ConversationKey: t.convKey,
 	}
 	if !res.Suspended && t.measuredWhole() {
-		// THE WHOLE TURN, on the one record that ends it: what every
-		// segment measured, this one included, and whether it failed — the
-		// figures the usage domain reads a turn's statistics off, which
-		// summed from the turn's records came out short wherever those
-		// records were not all on one node (types.TurnTally). Only a turn
-		// that knows every segment before this one states it: one whose
-		// earlier segments nobody measured — parked by a build before the
-		// tally — states nothing, and the usage domain reads it off its
-		// records as it read every turn before ([turnTelemetry.measuredWhole]).
+		// THE WHOLE TURN, on the record that ends it: every segment's measurement
+		// and whether it failed, which the usage domain reads (types.TurnTally);
+		// summing records falls short when they span nodes. Stated only when every
+		// earlier segment was measured ([turnTelemetry.measuredWhole]).
 		whole := t.measured(spend, ended)
 		completed.Turn = &types.TurnTally{DurationMS: whole.DurationMS, Failed: failed,
 			Reviews: whole.Reviews, SentBack: whole.SentBack, Unaccepted: whole.Unaccepted,
@@ -776,25 +641,20 @@ func actedOutside(calls runner.RecordCalls, s turn.Surface) bool {
 }
 
 // measuredWhole reports whether this segment knows the whole turn before it: a
-// first segment does, and a resumed one only if the conversation it resumed
-// carried what the segments before it measured. A build that did not measure
-// parked it otherwise, so the earlier segments are UNKNOWN rather than zero —
-// and a tally stating only what came after the park would be read as the whole
-// turn, short of its first segment's span and reviews for good. Such a turn
-// states no tally on its end and hands none on at a park
-// ([turnTelemetry.chargeFor]), so every later segment knows it too.
+// first segment does, and a resumed one only if its park carried what the
+// earlier segments measured. Otherwise they are UNKNOWN, not zero, and a tally
+// of only what followed would be read as the whole turn; such a turn states no
+// tally at its end and hands none on at a park ([turnTelemetry.chargeFor]).
 //
-// The nil is a fact rather than an absence of one: every park on this build
-// hands on a measurement ([segmentCharge.soFar]), a zero one included, which
-// the parked row carries as `"so_far":{}`.
+// The nil is a fact: every park hands on a measurement ([segmentCharge.soFar]),
+// a zero one as `"so_far":{}`.
 func (t turnTelemetry) measuredWhole() bool { return !t.resumed || t.soFar != nil }
 
-// measured is the turn's own measurement through the end of this segment: what
-// the segments before it carried on the parked conversation, and this one's
-// span — its start to its end, the same arithmetic as the segment's own
-// `duration_ms`, and its reviews and its calls to MCP servers' tools, off the
-// runner's tally of its phase records. A segment that parks hands it on ([segmentCharge.soFar]); the one
-// that ends the turn states it ([Engine.publishTurnCompleted]).
+// measured is the turn's measurement through this segment's end: what earlier
+// segments carried on the park plus this one's span (computed as its own
+// `duration_ms` is), reviews and MCP tool calls off the runner's tally. A
+// parking segment hands it on ([segmentCharge.soFar]); the last states it
+// ([Engine.publishTurnCompleted]).
 func (t turnTelemetry) measured(spend runner.Spend, ended time.Time) execstate.TurnSoFar {
 	out := execstate.TurnSoFar{
 		DurationMS: int(max(ended.Sub(t.startedAt), 0) / time.Millisecond),
@@ -824,16 +684,14 @@ func (t turnTelemetry) measured(spend runner.Spend, ended time.Time) execstate.T
 	return out
 }
 
-// publishReflectionDue puts a finished turn in front of reflection ON THE
-// SEAT'S HOLDER: a [types.ReflectionDue] on the seat's own reflection subject,
-// which only the node holding the seat attaches — this one, unless the seat
-// moves before the wake is taken, and then the node it moved to, which has
-// hydrated its memory. A WAKE rather than turn_completed a second time: every
-// event is published once, by one node, and the turn already was.
+// publishReflectionDue wakes reflection ON THE SEAT'S HOLDER: a
+// [types.ReflectionDue] on the seat's reflection subject, which only the node
+// holding the seat attaches (this one, or the one it moved to, which has
+// hydrated its memory). A wake, not turn_completed again: every event is
+// published once, by one node.
 //
-// ADDRESSED BY THE SEAT'S ID, as every one of its mailboxes is (ADR-0013): a
-// turn whose seat the company it ran under does not name as an agent seat has
-// no id, and no reflection subject to be woken on.
+// ADDRESSED BY THE SEAT'S ID (ADR-0013): a seat the company does not name as
+// an agent seat has no id and no reflection subject.
 func (e *Engine) publishReflectionDue(ctx context.Context, completed types.TurnCompleted, t turnTelemetry) {
 	seat, err := uuid.Parse(t.agentID)
 	if err != nil {
@@ -852,28 +710,16 @@ func (e *Engine) publishReflectionDue(ctx context.Context, completed types.TurnC
 	}
 }
 
-// publishFailure publishes the DEDICATED record of why a turn stopped.
+// publishFailure publishes the DEDICATED record of why a turn stopped, as
+// [turn.Breach] and [toolloop.BudgetError] say their caller does: the live
+// projection's failure hold (internal/api/livestate) is taken from exactly
+// these three (llm_unavailable, turn.guard_breach, budget_exhausted), so
+// without them the attention queue's "the engine stopped it" row, the seat
+// banner and the `broken` rail are unreachable.
 //
-// [turn.Breach]'s own doc says it is "returned on the result rather than
-// published from inside the loop … carried on the breach the caller
-// publishes", and [toolloop.BudgetError]'s says "a phase that stopped because
-// the company ran out of tokens is a different event from one whose provider
-// failed, and they are reported differently". This frame is that caller, and
-// for a long time it published neither: the reason was folded into
-// agent_turn_completed's error/error_kind and the three dedicated types were
-// registered, categorised and documented with no producer.
-//
-// What that cost was a whole dashboard state. The live projection's failure
-// hold is taken from exactly these three types (internal/api/livestate:
-// llm_unavailable, turn.guard_breach, budget_exhausted) and from nothing else —
-// and `stopped`/`provider` from the first of them — so no seat could ever reach
-// it: the attention queue's "the engine stopped it" row, the seat screen's
-// banner and the `broken` rail were all unreachable branches.
-//
-// The summary event still carries error/error_kind, and that is not a second
-// copy to keep in step: it is the ONE-LINE reason on a row about the turn,
-// where these are the failure itself, with the chain that was tried, the
-// ceiling that refused and the guard that fired.
+// The summary's error/error_kind is not a copy to keep in step: it is the
+// one-line reason on a row about the turn, where these carry the chain tried,
+// the ceiling that refused and the guard that fired.
 func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 	res turn.Result, err error,
 ) {
@@ -893,10 +739,9 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 		return
 	}
 
-	// BUDGET BEFORE PROVIDER. A refused charge is reported by the phase as
-	// its own error and never reaches a provider at all, so the two are
-	// disjoint in practice — but ordering them makes that a property of this
-	// function rather than of whichever wrapper happened to be outermost.
+	// BUDGET BEFORE PROVIDER: disjoint in practice (a refused charge never
+	// reaches a provider), but ordered so it holds here rather than by
+	// whichever wrapper is outermost.
 	var budget *toolloop.BudgetError
 	if errors.As(err, &budget) {
 		e.publishEvent(ctx, events.New(types.BudgetExhausted{
@@ -914,10 +759,9 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 		return
 	}
 
-	// EVERY MEMBER FAILED RETRYABLY — the seat has no model left, which is
-	// what reads it as stopped on its provider. A non-retryable failure from one member is not this:
-	// it comes back as that backend's own error, the chain never wrapped it,
-	// and calling it "unavailable" would blame a chain that was never walked.
+	// EVERY MEMBER FAILED RETRYABLY: the seat has no model left. A
+	// non-retryable failure comes back as its backend's own error, unwrapped,
+	// and "unavailable" would blame a chain never walked.
 	var exhausted *chain.Error
 	if errors.As(err, &exhausted) {
 		e.publishEvent(ctx, events.New(types.LLMUnavailable{
@@ -933,12 +777,10 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 	}
 }
 
-// lastModel names the model that served the last phase to run.
-//
-// Read backwards through the loop's order rather than tracked separately: a
-// turn stopped by a guard mid-executor has no review model, and one that never
-// reached a provider has neither. Tracking "the last one" as its own field
-// would be a third copy of a fact these two already carry.
+// lastModel names the model that served the last phase to run, read off the
+// two models in loop order: a guard-stopped executor has no review model and
+// a turn that reached no provider has neither, so a third field would only
+// copy them.
 func lastModel(s runner.Spend) string {
 	for _, m := range []string{s.ReviewModel, s.ExecuteModel} {
 		if m != "" {
@@ -994,55 +836,31 @@ func (e *Engine) publishEvent(ctx context.Context, ev *events.Event, role string
 
 // describeResume is describeTurn for a re-entry.
 //
-// The trace comes from the SUSPENDED TURN's row rather than from the event
-// that woke this one, so the resumed phases join the span the original wake
-// started. The completion event that triggered the resume already carries that
-// trace, but a clarification ANSWER does not — it is an ordinary inbound on
-// the conversation, and taking its trace would file the second half of a turn
-// under a different root from its first half.
+// The trace comes from the SUSPENDED TURN's row, not the waking event, so the
+// resumed phases join the original wake's span: a clarification ANSWER is an
+// ordinary inbound whose trace would file the turn's second half under
+// another root.
 //
-// AND WHERE ITS WRITES ARE MINTED, on the same terms as a dispatch's and by the
-// same function ([rebaseFor]): a resume that comes longer after its work began
-// than the operation ledger remembers has its resumed half's writes rebased
-// onto this attempt — or onto the one an earlier attempt, or the half before
-// this one, recorded, while that is recent enough to inherit. Judged here, at
-// every attempt, against the attempt's own clock: a failed resume retried
-// weeks later is as far past the ledger as if nobody had judged it before.
+// Its writes are rebased as a dispatch's are ([rebaseFor]), judged at every
+// attempt against the attempt's own clock: a resume retried weeks later is
+// as far past the ledger as one never judged.
 func (e *Engine) describeResume(ctx context.Context, company *Company, in resumeInput) (turnTelemetry, error) {
 	t := turnTelemetry{
 		handle: in.Run.AgentHandle,
-		// THE SAME RUN, RESUMED — never a fresh one. A suspended executor
-		// is re-entered mid-round with the conversation it parked, so its
-		// remaining phases belong to the run that started them; minting a
-		// second id here would split one turn across two on every screen.
-		// The work key rides the row for the same reason its reply does:
-		// the resume sees no trigger and could not re-derive it — and so
-		// does the instant it began, without which the resumed half of the
-		// turn would derive different operation ids from the first half.
-		//
-		// OFF THE RESUMED TURN rather than the row, because the turn is
-		// where the row's identity was read into one shape (resumedTurn:
-		// the unit of work, and the instant it began), and a second read
-		// of the row here is a second chance to read it differently.
+		// THE SAME RUN, RESUMED: its remaining phases belong to the run that
+		// started them, and a second id would split one turn on every screen.
+		// The work key and its start ride the row, since the resume sees no
+		// trigger and a different start would derive different operation ids;
+		// read off the resumed turn (resumedTurn), which read the row once.
 		runID:     in.Run.TurnID,
 		workKey:   in.Turn.WorkKey,
 		workSince: in.Turn.WorkSince,
-		// AND EACH CONVERSATION VALUE FROM ITS OWN FIELD: the resumed
-		// turn's events are tagged with the conversation it reports back
-		// to and is answered on, while the partition it was launched from
-		// is carried forward so a run that suspends AGAIN writes the same
-		// pair a first launch would.
-		//
-		// PartitionKey rather than ConversationKey for the second one,
-		// which is the whole of it: the row's ConversationKey is the
-		// IDENTITY — that is the field the split moved the name onto —
-		// so reading it here collapsed the pair the moment a run parked
-		// twice. A re-parked row then held the bare DM channel where its
-		// first launch held the thread, and [sandbox.ConversationRef.Best]
-		// lost the one fact that tells two questions on one direct
-		// message apart: with no partition to agree with, both rows fall
-		// through to recency and the reply to the question in one thread
-		// resumes the run waiting in the other.
+		// EACH CONVERSATION VALUE FROM ITS OWN FIELD: events are tagged with
+		// the conversation it answers on, and the partition it launched from
+		// carries forward so a re-park writes the pair a first launch would.
+		// Reading ConversationKey (the IDENTITY) for both loses what tells two
+		// questions on one direct message apart ([sandbox.ConversationRef.Best]),
+		// and a reply in one thread resumes the run waiting in the other.
 		convKey:   in.Run.ConversationKey,
 		partKey:   in.Run.PartitionKey,
 		startedAt: time.Now().UTC(),
@@ -1073,11 +891,7 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// fixed when it began, never one measured from this segment.
 		deadline: in.State.Deadline,
 		// The resumed turn's OWN span, opened by resumeTurn under the
-		// reconstructed suspended one. This used to be built by hand as
-		// `{TraceID: run.TraceID, ParentSpanID: run.SpanID}` with SpanID
-		// left EMPTY, so every event the second half of a turn published
-		// carried span_id="" — unplaceable in the dashboard's tree and
-		// indistinguishable from every other resumed turn.
+		// reconstructed suspended one, so its events carry a placeable span_id.
 		trace: tracing.TraceOf(ctx),
 	}
 	if in.Trigger != nil {
@@ -1144,14 +958,10 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 // seatIdentity is the role name and agent id a seat's events are addressed
 // to, or two empty strings for a handle this company does not name.
 //
-// ONE DERIVATION for every frame that addresses a seat-level event: the
-// turn's own telemetry, the resumed turn's, and the guard breach a panic
-// outside either publishes. Written out at each, the three would have to
-// agree about a human seat (no agent id) and an unknown handle (no role)
-// without anything checking that they do.
-//
-// Nil-safe on the company, because the panic path can run on a node that has
-// no epoch yet.
+// ONE DERIVATION for the turn's telemetry, the resumed turn's and a panic's
+// guard breach, so they agree on a human seat (no agent id) and an unknown
+// handle (no role). Nil-safe on the company: the panic path can run on a node
+// with no epoch yet.
 func seatIdentity(company *Company, handle string) (role, agentID string) {
 	if company == nil || company.Org == nil {
 		return "", ""
@@ -1200,21 +1010,14 @@ func requesterIdentity(company *Company, handle string) string {
 // requesterOf is the seat whose wake started seat's turn, or "" when no other
 // seat's did.
 //
-// OFF THE FIRST EVENT, the one [Engine.describeTurn] describes the trigger
-// from: a colleague's ask names its asker, and a notification's first
-// constituent names the person whose thread the turn is answering — resolved
-// to a seat through the same registry the interactions were, so it is a
-// handle in the chart or nothing. The first speaker ONLY, even where a later
-// constituent's sender is known: "the requester" is who started the
-// conversation this turn answers, and a later voice in the same thread is not
-// them.
+// OFF THE FIRST EVENT, as [Engine.describeTurn] reads the trigger: a
+// colleague's ask names its asker; otherwise the first speaker of the
+// interactions, resolved to a handle in the chart or nothing. ONLY the first:
+// a later voice in the thread did not start the conversation.
 //
-// BUT NEVER THE SEAT ITSELF. The outcome of a seat's own act — a workflow or
-// a pipeline its own push failed, which a code host tells the actor of — wakes
-// it with itself as the sender, and asks it nothing: the requester is whoever
-// spoke first besides it, or nobody. Read as the requester, the seat put its
-// own handle on a run's row for that run's questions to reach, and a
-// colleague who asked in the same thread was no requester at all.
+// NEVER THE SEAT ITSELF: the outcome of its own act (a workflow its push
+// failed) wakes it as its own sender, and naming itself would route a run's
+// questions back to it; the requester is whoever spoke first besides it.
 func requesterOf(evs []*events.Event, interactions []types.InboundInteraction, seat string) string {
 	for _, ev := range evs {
 		if ev == nil {
@@ -1236,19 +1039,14 @@ func requesterOf(evs []*events.Event, interactions []types.InboundInteraction, s
 
 // credentialRequesterOf is the credential acting as no seat whose write
 // started seat's turn, by its login, and the apps every one of its writes in
-// the turn carried — or nothing, where the requester [requesterOf] reads is no
-// such credential.
+// the turn carried, or nothing where [requesterOf]'s speaker is no such
+// credential. A credential is never a seat's handle, so the two never both
+// answer.
 //
-// THE SAME SPEAKER [requesterOf] READS: a colleague's ask names a seat, and
-// otherwise the first interaction that is not the seat's own. A credential is
-// never a seat's handle, so where requesterOf names a seat this names nobody,
-// and the two never both answer.
-//
-// ITS APPS ARE EVERY WRITE'S, intersected, off the ask's own constituents (the
-// interactions carry no apps): a merge must not launder a constraint, so a
-// burst a token began before it was narrowed is held to the narrower record.
-// A write that carries none — an older build's — leaves none, and a
-// credential's turn with no apps is worked for as a stranger (ADR-0109).
+// ITS APPS ARE EVERY WRITE'S, intersected, off the ask's constituents (the
+// interactions carry no apps): a merge must not launder a constraint. A write
+// carrying none leaves none, and a credential's turn with no apps is worked
+// for as a stranger (ADR-0109).
 func credentialRequesterOf(evs, ask []*events.Event, interactions []types.InboundInteraction,
 	seat string) (string, []iam.Grant) {
 
@@ -1309,13 +1107,10 @@ func writersIn(evs []*events.Event) []*types.NotificationWriter {
 
 // workingForIn is who the wake that started a turn handed it on to work for
 // ([types.WorkingFor]), off the first event as [requesterOf] reads the asker:
-// a colleague's ask carries whoever the asking turn worked for, and the
-// answer to this seat's own ask carries whoever the answering turn worked
-// for, which is who this seat worked for when it asked; an agent's write
-// on Worklet, Doclet, Chatlet or Gitlet carries whoever the writing turn worked
-// for; and the engine's record on Gitlet about an agent's earlier enqueue —
-// the merge queue's ejection, a close it could not make — whoever that enqueue
-// was made for ([writtenForIn]).
+// a colleague's ask carries whom the asking turn worked for; the answer to
+// this seat's own ask, whom this seat worked for when it asked; an agent's
+// write on Worklet, Doclet, Chatlet or Gitlet, or the engine's Gitlet record
+// about an agent's earlier enqueue, whom that was made for ([writtenForIn]).
 // Nil for any other wake, and for one that carried nobody.
 func workingForIn(evs []*events.Event) *types.WorkingFor {
 	for _, ev := range evs {
@@ -1343,20 +1138,15 @@ func workingForIn(evs []*events.Event) *types.WorkingFor {
 
 // writtenForIn is whom the agent's write a notification announces was made
 // for ([types.NotificationWriter.WorkingFor]): its FIRST constituent's, since
-// the partition splits on it (notify.KeyOf) and every constituent of one turn
-// carries the same, or the notification's own where nothing was coalesced.
-// And the engine's, whose record about an agent's earlier act made for
-// somebody carries that act's carrier (ADR-0109's amendment: Gitlet's merge
-// queue's ejection and a close it could not make, notify.FirstPartyWriter),
-// so the turn it wakes works for them too. Nil for a vendor's notification,
-// which states no writer, and for a person's or a credential's writer: they
-// write for nobody but themselves, and a carrier read off one of them would
-// have the turn work for somebody that writer never spoke for.
+// the partition splits on it (notify.KeyOf), or the notification's own where
+// nothing was coalesced. The engine's writer counts too, carrying an agent's
+// earlier act's carrier (ADR-0109's amendment, notify.FirstPartyWriter). Nil
+// for a vendor's notification and for a person's or credential's writer, who
+// write for nobody but themselves.
 //
-// THE ONE READING, for every reader of whom a delivery was written for: the
-// turn it wakes ([workingForIn]), a parked run's reply ([replyWorkingFor]) and
-// a chat edit's worked-through key, so none of them drifts from the partition
-// that grouped the delivery (notify.KeyOf keys the engine's carrier too).
+// THE ONE READING for the turn it wakes, a parked run's reply
+// ([replyWorkingFor]) and a chat edit's worked-through key, so none drifts
+// from the partition that grouped the delivery.
 func writtenForIn(n *types.ExternalNotification) *types.WorkingFor {
 	w := n.Writer
 	if len(n.Messages) > 0 {

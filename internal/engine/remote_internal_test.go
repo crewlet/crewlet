@@ -25,16 +25,13 @@ import (
 )
 
 // AN AGENT'S TRACKER WRITE FROM A BUILD WITHOUT THE CARRIER RUNS FOR NOBODY on
-// this build's data node (ADR-0109's roll). A node of the build before the
-// carrier, crossing under the wire's rule for what an operation takes
-// (crewlet#910), sends an agent's actor whose provenance carries nothing as no
-// provenance at all — the merge queue's close of a landed change's item is
-// such a write — and this build's tracker refuses, for good, an agent's
-// writer that states nobody it writes for. So the actor's own decoder states
-// whom its writes are for whatever arrived, and the write runs on this node's
-// REAL tracker, through the very writer the node serves a routed tracker
-// request with ([Engine.estateBackend]), as the seat's own work: the actor it
-// runs as carries nobody.
+// this build's data node (ADR-0109's roll). An older node sends an agent's
+// actor whose provenance carries nothing as no provenance at all (the wire's
+// rule, crewlet#910), as the merge queue's close of a landed item does, and
+// this build's tracker refuses for good an agent's writer that states nobody.
+// So the actor's own decoder states whom it writes for whatever arrived, and
+// the write runs as the seat's own work on this node's REAL tracker, through
+// the writer it serves routed requests with ([Engine.estateBackend]).
 //
 // Mutation: state whom the writes are for only where a provenance arrives (in
 // a decode of worklet.Provenance rather than of estate.Actor), and the tracker
@@ -50,7 +47,7 @@ func TestAnAgentsTrackerWriteFromABuildWithoutTheCarrierRunsForNobody(t *testing
 				Name: "Roll " + key, CreatedAt: at, UpdatedAt: at}, worklet.ChangeProjectCreated, nil)
 	})
 
-	// AS A DATA NODE DECODES A REQUEST'S ACTOR, under the wire's rule, which
+	// AS A DATA NODE DECODES A REQUEST'S ACTOR: under the wire's rule, which
 	// refuses every member this build does not declare.
 	var actor estate.Actor
 	if err := jsonv2.Unmarshal([]byte(`{"handle":"ceo","kind":"agent"}`), &actor,
@@ -116,16 +113,13 @@ func TestTheTrimAndTheGateCountOnlyDataNodes(t *testing.T) {
 	}
 }
 
-// A DATA NODE IN A MAINTENANCE MODE TAKES NO WRITE FOR ANYBODY. The mode is
-// the evidence a capacity operation is established from — no publisher on
-// this node — and a write it took on another node's behalf, or its own seats',
-// would be the publish the mode rules out. Its reads are still served.
-//
-// THE CORE'S HALVES AS MUCH AS THE NATIVE ONES: the core runs its logs in every
-// mode, so its readers are served there, and its writers were handed out beside
-// them — a peer's artifacts write asked of a node in a maintenance mode was
-// published by it. Each writer is held to the mode on its own, so a node that
-// withheld one and offered another is named.
+// A DATA NODE IN A MAINTENANCE MODE TAKES NO WRITE FOR ANYBODY: the mode is
+// the evidence a capacity operation rests on (no publisher here), and a write
+// for a peer or its own seats would be the publish it rules out. Its reads are
+// still served. THE CORE'S HALVES AS MUCH AS THE NATIVE ONES: the core runs its
+// logs in every mode, so its readers are served, but not its writers. Each
+// writer is held to the mode on its own, so one offered among withheld ones is
+// named.
 //
 // Mutation: hand the artifacts writer out whatever the mode and the maintenance
 // rows go red naming it.
@@ -174,19 +168,12 @@ func TestAMaintenanceModeDataNodeServesNoWriter(t *testing.T) {
 	}
 }
 
-// A TOOL'S WRITE CROSSES TO ANOTHER NODE WITH ITS WHOLE PROVENANCE.
-//
-// It once carried the turn and the chain alone, written before a person's
-// credential, a task's chat origin and the turn's set of written items were
-// part of a provenance — and every write a router took to a peer lost the
-// three, with nothing to say so: an operator's gesture lost the credential it
-// was made under, a task filed from a thread forgot the thread, and a turn
-// that wrote one item was charged to none. A credential's apps are that kind
-// of field: the record keeps them for the turn the write wakes, which is held
-// to them (ADR-0109), and so is whom an agent's write was made for, which the
-// turn the write wakes works for. So the fixture sets EVERY field a
-// provenance has, and a field added to it later is one this test makes its
-// author carry across or explain.
+// A TOOL'S WRITE CROSSES TO ANOTHER NODE WITH ITS WHOLE PROVENANCE, or a
+// write routed to a peer silently loses what was left behind: an operator's
+// credential, a task's chat thread, the turn's written items, a credential's
+// apps (which the woken turn is held to, ADR-0109) or whom an agent's write was
+// for. So the fixture sets EVERY field a provenance has, and a field added
+// later is one this test makes its author carry across or explain.
 //
 // Mutation: drop WrittenFor from Actor.Provenance, and the agent's write
 // crosses written for nobody.
@@ -226,9 +213,9 @@ func TestAToolsActorCrossesWithItsWholeProvenance(t *testing.T) {
 		t.Errorf("an agent's write for ada crossed written for %+v", got.Carrier())
 	}
 
-	// A TURN WITH NO SET CROSSES WITH NONE: a nil set in the interface would
-	// be a log reporting into nothing, and the holder would collect every
-	// item it wrote only for the asker to drop them.
+	// A TURN WITH NO SET CROSSES WITH NONE: a typed nil in the interface
+	// would make the holder collect every item it wrote only for the asker to
+	// drop them.
 	actor.Written = nil
 	if got := remoteActor(actor); got.Provenance.Written != nil {
 		t.Errorf("a turn holding no set crossed with %#v", got.Provenance.Written)

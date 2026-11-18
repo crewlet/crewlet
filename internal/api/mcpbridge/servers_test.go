@@ -17,10 +17,8 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// serversFixture is a seat's surface holding the engine's own tool and the
-// tools of two of its MCP servers ([serversSurface]), opened on a bridge that
-// serves every route a box dials: the job's endpoint and each server beneath
-// it.
+// serversFixture is a job opened over [serversSurface] on a bridge serving
+// the job's endpoint and each server beneath it.
 type serversFixture struct {
 	surface  *tools.Surface
 	ledger   *ledger
@@ -28,9 +26,8 @@ type serversFixture struct {
 	endpoint string
 }
 
-// serversSurface is a seat's surface, bound to its turn, holding the engine's
-// own read_page and the tools of two of its MCP servers: github's two, which
-// the company describes, and jira's one, which it does not.
+// serversSurface holds the engine's read_page and two MCP servers' tools:
+// github's two, which the company describes, and jira's one, which it does not.
 func serversSurface(t *testing.T) *tools.Surface {
 	t.Helper()
 	reg := tools.NewRegistry()
@@ -54,9 +51,8 @@ func newServersFixture(t *testing.T) *serversFixture {
 	return openServers(t, serversSurface(t))
 }
 
-// openServers opens a job's session over surface, its servers' endpoints
-// beneath it, as [newServersFixture] does — each of configure readying the
-// session before it opens.
+// openServers opens a job's session over surface, each of configure readying
+// the session first.
 func openServers(t *testing.T, surface *tools.Surface, configure ...func(*mcpbridge.Session)) *serversFixture {
 	t.Helper()
 	f := &serversFixture{ledger: &ledger{}, surface: surface}
@@ -103,11 +99,10 @@ func listed(t *testing.T, url string) (names []string, instructions string) {
 }
 
 // EACH OF A SEAT'S MCP SERVERS IS SERVED UNDER ITS OWN NAME, beneath the job's
-// endpoint, listing its own tools alone and saying what it is for; the job's
-// endpoint lists the engine's own tools alone. A harness keeps a server's tools
-// out of its requests by the SERVER — Claude Code's tool search, OpenCode's
-// Code Mode — so the engine's own tools, which a run needs on every request,
-// and the seat's, which it needs a few of, are two kinds of server.
+// endpoint, listing its own tools and description; the job's endpoint lists the
+// engine's own alone. A harness defers tools per server (Claude Code's tool
+// search, OpenCode's Code Mode), so tools needed on every request and the
+// seat's, needed a few at a time, must be different servers.
 //
 // Mutation: list every tool at every endpoint, or the MCP tools at the job's
 // own, and this goes red; drop the server's description from its endpoint, and
@@ -140,9 +135,7 @@ func TestEachServerIsServedUnderItsOwnNameBeneathTheJob(t *testing.T) {
 }
 
 // A CALL ON A SERVER'S ENDPOINT IS THE OPENING'S: decided by the same surface
-// and written on the run's record as a call to the engine's own is, so the
-// delivery check and the reviewer see what the run did with a seat's MCP
-// server as they see everything else it did.
+// and on the run's record, so the delivery check and the reviewer see it.
 //
 // Mutation: dispatch a server endpoint's calls anywhere but the opening's
 // Call, and the run's record never holds them.
@@ -164,8 +157,7 @@ func TestACallOnAServersEndpointIsTheRunsCall(t *testing.T) {
 }
 
 // A SERVER THE OPENING DOES NOT SERVE IS NO ENDPOINT, never the engine's own
-// under another name: a box handed a URL for one dials a route that serves no
-// MCP server at all.
+// under another name.
 func TestAServerTheOpeningDoesNotServeIsNoEndpoint(t *testing.T) {
 	t.Parallel()
 	f := newServersFixture(t)
@@ -181,22 +173,18 @@ func TestAServerTheOpeningDoesNotServeIsNoEndpoint(t *testing.T) {
 	}
 }
 
-// holdingHolder holds every call it is handed, as an executor's holder records
-// a call to a tool at Needs approval as its run's question.
+// holdingHolder holds every call, as an executor's holder does a call to a
+// tool at Needs approval.
 type holdingHolder struct{}
 
 func (holdingHolder) Hold(context.Context, *turnctx.Turn, tools.HeldCall) (tools.Result, bool) {
 	return tools.Result{Output: "put to a person"}, true
 }
 
-// A HELD CALL IS RECORDED WITHOUT ITS ARGUMENTS OR THEIR DIGEST. A call to a
-// tool at Needs approval is the run's question: its arguments ride the run's row
-// sealed beside it (ADR-0077), and the call log is read in the clear by
-// everybody who reads the seat's trail — so a digest of them there, beside the
-// tool's name, would let any reader confirm a guess at what the seal hides. The
-// record says the call was held, which every later reader counts by, and keeps
-// neither. NOR DOES THE ENTRY WRITTEN AHEAD OF IT, before anything knows it will
-// be held: a tool that may ask a person first gets an entry with no digest.
+// A HELD CALL IS RECORDED WITHOUT ITS ARGUMENTS OR THEIR DIGEST, nor is the
+// entry written ahead of it: its arguments ride the run's row sealed
+// (ADR-0077), and a digest in the clear call log would let any reader of the
+// seat's trail confirm a guess at what the seal hides.
 //
 // Mutation: record a held call's digest, or its arguments, and both are on the
 // run's record in the clear; write every entry with its digest (`false &&`

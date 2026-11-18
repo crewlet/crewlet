@@ -12,13 +12,10 @@ import (
 
 // THE CODE TOOLS TELL THE FLEET'S TWO BUILDS AS WHAT THEY ARE, NOT AS A WAIT.
 // Where no Gitlet or data node's build can read a request whole, the router
-// answers estate.ErrUnknownKeys over the walk nobody served — and the code
-// tools read that walk first: a seat whose fleet was mid-upgrade was told that
-// Gitlet could not be reached right now, its home perhaps still filling its
-// copy, and to make the same call again — a refusal it met again for the rest
-// of its turn, while nobody was told an administrator has to finish the
-// upgrade. Each of the three answers names the two builds, and says trying
-// again won't clear it, over either walk.
+// answers estate.ErrUnknownKeys over the walk nobody served. A retry meets the
+// same refusal until an administrator finishes the upgrade, so each of the
+// three answers names the two builds and says trying again won't clear it,
+// over either walk.
 //
 // Mutation: drop the ErrUnknownKeys arm from codeFailure, codeWriteFailure or
 // unjudged, and that helper's rows are told to try again.

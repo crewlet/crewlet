@@ -2,11 +2,11 @@ package builtin
 
 import "github.com/crewlet/crewlet/internal/tools"
 
-// THE TARGET A WRITE ACTS ON, for the refusal-loop guard ([tools.Targeted]): a
-// run of policy refusals is counted per tool and per target, so refusals
-// across four artifacts are four first attempts rather than a loop, and a
-// success on one artifact does not reset a loop on another. A write with no
-// single target (create_artifact) is counted per tool.
+// THE TARGET A WRITE ACTS ON, for the refusal-loop guard ([tools.Targeted]):
+// refusals are counted per tool and target, so refusals across four artifacts
+// are four first attempts, not a loop, and a success on one does not reset a
+// loop on another. A write with no single target (create_artifact) is counted
+// per tool.
 
 // artifactTarget marks a tool whose every call acts on the artifact its
 // `artifact` argument names.

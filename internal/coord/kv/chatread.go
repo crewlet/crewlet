@@ -14,44 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// A person's chat read state, as one record per seat handle.
+// A person's chat read state: one record per seat handle.
 //
-// # Why the whole state is one key
+// One key, not a cursor per channel: a person's state stays one read rather
+// than a filtered bucket walk on every chat paint, and the mute list shares the
+// record, so "what does this person see" cannot disagree with itself. A flush
+// is a read-modify-write, safe to retry because the merge is forward-only.
 //
-// A cursor per channel would be the obvious shape and it is wrong twice. It
-// would make reading one person's state a bucket walk filtered by handle —
-// the listing this package spends a file explaining the cost of — on the path
-// of every chat screen paint. And it would put the mute list somewhere else
-// again, so "what does this person see" would be two reads that can disagree.
-//
-// One key costs a read-modify-write on every flush, which is what the forward
-// merge below is for: the write is idempotent, so the retry that a lost
-// compare-and-set forces cannot lose anything.
-//
-// # Every read and write is this package's own
-//
-// The read is the stream LEADER's ([FleetStore.get]), never the bucket
-// handle's direct get: a replica a write behind would hand the merge a record
-// that is already stale, and the compare-and-set built on it would lose round
-// after round to a write nobody else is making. The first write is [createKey]
-// rather than the handle's Create, because a record that was forgotten leaves
-// a purge marker the next flush has to write over (markers.go). And a lost
-// compare-and-set is told by the package's own answers — [jetstream.ErrKeyExists]
-// from that create, [lostUpdateRace] for an update or a purge — on a bucket
-// handle that is [settled]: the leader's in-flight answer, which a replicated
-// bucket gives two tabs flushing one record at once, is waited out inside the
-// write (settle.go), so a refusal that reaches this file is one the leader
-// DECIDED.
-//
-// # Why nothing ages a record out
-//
-// The bucket has NO age, for the reason [coord.ChatReads] states: an expired
-// cursor silently marks a channel unread, which is the opposite of the fact it
-// stores. Records leave only through [FleetStore.ForgetChatRead], which PURGES
-// — every removal in a bucket no clock ages is a purge (markers.go) — and the
-// marker that leaves is removed in its turn by [FleetStore.SweepMarkers] under
-// the maintenance duty, so a forgotten record costs the bucket nothing for
-// good.
+// Reads are the leader's ([FleetStore.get]: a stale replica would lose every
+// compare-and-set), a first write is [createKey], to write over a forgotten
+// record's purge marker (markers.go), and a refusal reaching this file is one
+// the leader DECIDED ([settled]). The bucket has no age ([coord.ChatReads]):
+// a record leaves only by [FleetStore.ForgetChatRead]'s purge.
 
 // chatReadClass is the key class, so a read record cannot collide with
 // anything else that might one day share this bucket.
@@ -80,20 +54,16 @@ func decodeChatRead(handle string, raw []byte, revision uint64) (coord.ChatReadS
 		return coord.ChatReadState{}, fmt.Errorf(
 			"coord/kv: decode the chat read state for %s: %w", handle, err)
 	}
-	// THE ENTRY'S OWN REVISION, which is the stream sequence the record was
-	// written at: strictly increasing across every write to the bucket and
-	// never reused, so it outlives a purge — see [coord.ChatReadState.Revision].
+	// The entry's own revision: a stream sequence, never reused, so it
+	// outlives a purge ([coord.ChatReadState.Revision]).
 	state.Revision = revision
 	return state, nil
 }
 
 // ChatRead reports one person's read state.
 //
-// A missing key is the ZERO STATE and no error: somebody who has not opened
-// chat is the ordinary case, not a failure, and making every caller tell that
-// from an unreachable store would push a three-valued answer onto a question
-// with two honest ones. An unreadable store still raises — that IS the third
-// fact, and it is the caller's to see.
+// A missing key is the zero state and no error: never having opened chat is
+// the ordinary case, not a failure. An unreadable store still raises.
 func (f *FleetStore) ChatRead(ctx context.Context, handle string) (coord.ChatReadState, error) {
 	if handle == "" {
 		return coord.ChatReadState{}, errors.New(
@@ -103,10 +73,9 @@ func (f *FleetStore) ChatRead(ctx context.Context, handle string) (coord.ChatRea
 	return state, err
 }
 
-// chatReadAt reads the record and the revision it was at, which is what the
-// merge's compare-and-set expects. A missing key — never written, forgotten,
-// or forgotten and swept — reads as revision zero, which is what
-// [FleetStore.putChatReadAt] takes to mean "create".
+// chatReadAt reads the record and its revision, for the merge's
+// compare-and-set. A missing key (never written, or forgotten) reads as
+// revision zero, which [FleetStore.putChatReadAt] takes to mean "create".
 func (f *FleetStore) chatReadAt(ctx context.Context, handle string) (coord.ChatReadState, uint64, error) {
 	entry, err := f.get(ctx, f.chatReads, chatReadKey(handle))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
@@ -125,11 +94,9 @@ func (f *FleetStore) chatReadAt(ctx context.Context, handle string) (coord.ChatR
 
 // AdvanceChatRead merges a flush into one person's record.
 //
-// THE MERGE IS FORWARD-ONLY AND THEREFORE RETRYABLE. Re-applying it is a
-// no-op, so losing a compare-and-set costs one more round trip and never a
-// flush — which is why the caller never writes against a revision and never
-// has to decide what a conflict means. Two tabs reading two rooms converge on the
-// same record whichever lands first.
+// The merge is forward-only, so re-applying it is a no-op: a lost
+// compare-and-set costs a round trip, never a flush, and the caller never
+// writes against a revision.
 func (f *FleetStore) AdvanceChatRead(ctx context.Context, handle string,
 	delta coord.ChatReadDelta) (coord.ChatReadState, error) {
 
@@ -149,9 +116,8 @@ func (f *FleetStore) AdvanceChatRead(ctx context.Context, handle string,
 // missing from the company the fleet is pointed at, reporting whether the
 // seat has a record.
 //
-// Through the same loop as a flush, so the two cannot lose each other: the
-// stamp is a field of the record a flush rewrites, and [coord.MergeChatRead]
-// carries it through untouched.
+// Through the flush's loop, so the two cannot lose each other: the stamp is a
+// field of the record, which [coord.MergeChatRead] carries through untouched.
 func (f *FleetStore) SetChatReadAbsence(ctx context.Context, handle string, since time.Time) (bool, error) {
 	if handle == "" {
 		return false, errors.New("coord/kv: stamp a person's chat absence needs a handle")
@@ -165,51 +131,17 @@ func (f *FleetStore) SetChatReadAbsence(ctx context.Context, handle string, sinc
 }
 
 // mutateChatRead applies change to one person's record under a
-// compare-and-set, reporting the state that resulted and whether the person
-// has a record.
+// compare-and-set, reporting the resulting state and whether a record exists.
+// create says whether a missing record gets one (a flush does, an absence
+// stamp does not); a change reporting nothing changed writes nothing; what
+// names a failure.
 //
-// create says whether a person with no record gets one — a flush does, an
-// absence stamp does not — and a change that reports nothing changed writes
-// nothing. what is the verb a failure names.
-//
-// # How long it races
-//
-// Within the bound every fleet key shares ([casRetry], [fleetCASAttempts]),
-// which is counted in the nodes that write a key rather than in the calls. A
-// person's record has writers nothing else bounds — every tab and device they
-// read in, and the reconcile — and each flushes again as soon as it has
-// landed, so a count sized for the calls measured how many of them were
-// flushing rather than whether the store answered: sixteen rounds held
-// sixteen writers with one to spare at three replicas, and a seventeenth tab
-// was an outage on a store answering every write. Twice [fleetWriters]
-// rounds, each after a loss waiting a window of the round trips this node
-// measures on the bucket, outlast every tab a person can hold open. Each
-// round reads the record again and applies the change again, which is safe
-// because a flush is an idempotent merge and a stamp keeps the first one: the
-// change is exactly as true against the winner's record as it was against
-// the one it lost to.
-//
-// A round is lost only to a write the leader DECIDED — the bucket handle
-// waits out its in-flight answer inside the write ([settled]) — so every round
-// lost is another writer's write that landed, and the jittered window between
-// rounds spreads the writers that lost to one winner rather than sending them
-// back together. Lost at every round, the change is [contended]: unavailable,
-// and a DEFINITE "did not land", since every write it made had been answered
-// and refused.
-//
-// # Which failures may have written
-//
-// ONE: a put whose answer never came, or that the leader still had not decided
-// when the write's budget ran out ([writeUnknown], marked
-// [coord.ErrWriteUnknown]). A read that failed, a merge that refused, a first
-// write's create that was refused and then could not re-read or was refused
-// on every round ([FleetStore.putChatReadAt]), every round lost and a
-// caller that hung up between rounds all return before any put landed —
-// every put made was refused — so they are this store's condition and nothing
-// more, and a caller told so may say nothing was recorded. A caller told the
-// first may not, which is the whole reason the mark exists: the method reads
-// before it writes, so its caller cannot tell the two apart by which call
-// failed.
+// Rounds ([casRetry]) are bounded in writers, not calls: twice [fleetWriters]
+// outlasts every tab a person holds open. Each round re-reads and
+// re-applies, safe because a flush merges and a stamp keeps the first; lost at
+// every round is [contended], a definite "did not land". Only a put never
+// answered or decided may have landed ([writeUnknown]): a caller cannot tell
+// it from a failed read by which call failed. Every other failure wrote nothing.
 func (f *FleetStore) mutateChatRead(ctx context.Context, what, handle string, create bool,
 	change func(coord.ChatReadState) (coord.ChatReadState, bool, error),
 ) (coord.ChatReadState, bool, error) {
@@ -236,8 +168,7 @@ func (f *FleetStore) mutateChatRead(ctx context.Context, what, handle string, cr
 			result, exists = next, true
 			return true, nil
 		}
-		// THE REVISION IS NOT PART OF THE RECORD: it is where the write
-		// lands, which only the answer to the write can say.
+		// The revision is not stored: only the write's answer says where it lands.
 		persisted := next
 		persisted.Revision = 0
 		raw, err := json.Marshal(persisted)
@@ -248,14 +179,10 @@ func (f *FleetStore) mutateChatRead(ctx context.Context, what, handle string, cr
 			fmt.Sprintf("%s the chat read state for %s", what, handle), key, raw, revision)
 		switch {
 		case err != nil:
-			// CLASSIFIED WHERE THE WRITE WAS MADE: marked
-			// [coord.ErrWriteUnknown] when the put may have landed, and
-			// unavailable alone when a first write's create was refused
-			// and could go no further — see [FleetStore.putChatReadAt].
+			// Already classified where the write was made ([FleetStore.putChatReadAt]).
 			return false, err
 		case !written:
-			// SOMEBODY ELSE GOT THERE FIRST — another tab, or the
-			// reconcile. Read again and apply again.
+			// Another tab or the reconcile won: read and apply again.
 			return false, nil
 		}
 		next.Revision = landed
@@ -272,30 +199,17 @@ func (f *FleetStore) mutateChatRead(ctx context.Context, what, handle string, cr
 }
 
 // putChatReadAt writes one person's record over the revision the caller read
-// — zero meaning it read no live record — reporting the revision it landed at,
-// or false with no error when another writer got there first: a create that
-// found the key held ([jetstream.ErrKeyExists]), or an update the leader
-// refused at a revision a peer had moved past ([lostUpdateRace]). what is the
-// verb and object a failure names.
+// (zero: no live record), reporting where it landed, or false and no error
+// when another writer got there first ([jetstream.ErrKeyExists] on a create,
+// [lostUpdateRace] on an update). what names a failure.
 //
-// IT CLASSIFIES EVERY OTHER FAILURE, because only here is it known whether a
-// write went out. Over a record, the one write is the Update, and anything
-// but a refusal from it may have landed ([writeUnknown]) — an update the leader
-// never decided ([settled]) among them. A FIRST WRITE IS A
-// CREATE, which is a loop that reads between its writes ([createKey]), so its
-// failures are two: one of its own writes going unanswered, which may have
-// landed and is marked the same way, and a refusal followed by a re-read that
-// failed or by a bound of refusals — after which every write it made had been
-// refused, so it is unavailable and nothing more. Marking those too would
-// have a person told that a flush which definitely did not land "may have
-// been recorded", which the [coord.ChatReads] contract promises every
-// unmarked error is not.
-//
-// AN EXHAUSTED CREATE IS A FAILURE, not a lost race for the caller's loop to
-// retry. Its bound is set well past anything the measured contention needs
-// ([createRounds]), so a create refused that often is behind something more
-// rounds of the same race would not outwait either, and the honest answer is
-// the one it gives: nothing was written, and the same flush may be sent again.
+// It classifies every other failure, since only here is it known whether a
+// write went out. An update's may have landed ([writeUnknown]); so may a
+// create ([createKey]) one of whose writes went unanswered. A create refused
+// and then unable to re-read, or refused past [createRounds], wrote nothing:
+// unavailable alone, as [coord.ChatReads] promises an unmarked error is, and a
+// failure rather than a lost race, since more rounds of the same race would
+// not outwait it.
 func (f *FleetStore) putChatReadAt(ctx context.Context, what, key string, raw []byte,
 	revision uint64) (uint64, bool, error) {
 
@@ -326,18 +240,12 @@ func (f *FleetStore) putChatReadAt(ctx context.Context, what, key string, raw []
 // ForgetChatRead removes a person's record if it has been stamped absent at
 // or before absentBy, reporting whether it did.
 //
-// A PURGE, as every removal in a bucket no clock ages is (markers.go), and as
-// [FleetStore.DeleteSecret] is: the record's older revisions go with it
-// whatever history the bucket was created with, and the one marker left is the
-// maintenance duty's to sweep.
-//
-// AT THE REVISION IT JUDGED ([FleetStore.purgeChatReadAt]), so the stamp it
-// read is the stamp it acts on: a person a peer's sweep has just found back,
-// or a flush landing between the read and the purge, moves the record on and
-// the purge is refused — and the next round ([casRetry], for
-// [FleetStore.mutateChatRead]'s reason) judges the record as it now stands
-// rather than removing one this call never read. A purge the leader never
-// decided ([settled]) is a removal that may have happened, and is marked so.
+// A purge, like every removal in a bucket no clock ages (markers.go): older
+// revisions go with it, and the marker left is the maintenance duty's to sweep.
+// It purges at the revision it judged ([FleetStore.purgeChatReadAt]), so a seat
+// a peer's sweep just found back, or a flush landing in between, refuses the
+// purge and the next round ([casRetry]) judges the record as it now stands. A
+// purge the leader never decided ([settled]) may have happened, and is marked so.
 func (f *FleetStore) ForgetChatRead(ctx context.Context, handle string, absentBy time.Time) (bool, error) {
 	if handle == "" {
 		return false, errors.New("coord/kv: forget a person's chat state needs a handle")
@@ -375,23 +283,15 @@ func (f *FleetStore) ForgetChatRead(ctx context.Context, handle string, absentBy
 }
 
 // purgeChatReadAt purges one person's record only if it is still at the
-// revision the caller judged, reporting whether it did.
+// revision the caller judged, reporting whether it did; false with no error is
+// a lost race ([lostUpdateRace]), not a failure.
 //
-// THE RULE [FleetStore.ForgetChatRead] IS BUILT FROM, in a unit that can be
-// driven directly, for [FleetStore.writeFollowAt]'s reason: the interleaving
-// it exists for opens INSIDE that method, between its read and its write, and
-// the memory twin — which checks and removes under one mutex — can never stage
-// it at all. It is the one thing standing between a seat a peer's sweep has
-// just found back in the company and the loss of every cursor it holds.
-//
-// `false` with no error is a LOST RACE, not a failure — the record moved or
-// went away under the read, which [lostUpdateRace] tells for a purge exactly
-// as it does for an update.
-//
-// REVISION ZERO REMOVES NOTHING. It is no revision at all to the client —
-// [jetstream.LastRevision] of zero sets no expectation, and the purge would
-// be unconditional — and a caller that judged no record has nothing to act
-// on.
+// A unit of its own, for [FleetStore.writeFollowAt]'s reason: the interleaving
+// it guards opens between [FleetStore.ForgetChatRead]'s read and write, which
+// the memory twin can never stage. It alone keeps a seat just found back in
+// the company from losing every cursor. Revision zero removes nothing:
+// [jetstream.LastRevision] of zero sets no expectation, so the purge would be
+// unconditional.
 func (f *FleetStore) purgeChatReadAt(ctx context.Context, key string, revision uint64) (bool, error) {
 	if revision == 0 {
 		return false, nil
@@ -408,15 +308,10 @@ func (f *FleetStore) purgeChatReadAt(ctx context.Context, key string, revision u
 }
 
 // ChatReaders lists every seat holding read state, each with its absence
-// stamp.
+// stamp, in one pass under the class's subject filter.
 //
-// ONE FILTERED PASS, like every other listing here: the class filter is a
-// subject wildcard the broker matches, so a bucket that one day holds a second
-// class does not turn this into a walk that decodes two shapes as one.
-//
-// A record it cannot decode is RAISED, as the mailbox registry's is: the
-// reconcile decides from this list, and a reader dropped from it is one it
-// never judges and so never forgets.
+// A record it cannot decode is raised: the reconcile decides from this list,
+// and a reader dropped from it is never judged and so never forgotten.
 func (f *FleetStore) ChatReaders(ctx context.Context) ([]coord.ChatReader, error) {
 	var readers []coord.ChatReader
 	err := f.eachUnder(ctx, f.chatReads, coord.DocumentFilter(chatReadClass),
@@ -424,11 +319,9 @@ func (f *FleetStore) ChatReaders(ctx context.Context) ([]coord.ChatReader, error
 		func(entry jetstream.KeyValueEntry) error {
 			handle, ok := chatReadHandle(entry.Key())
 			if !ok {
-				// A KEY THIS CLASS DID NOT WRITE. Skipped rather than
-				// raised: the filter already narrowed to the class, so
-				// anything left is a shape this build does not write, and
-				// an invented handle would send the reconcile to forget a
-				// seat nobody named.
+				// A shape this build does not write: skipped, since an
+				// invented handle would have the reconcile forget a seat
+				// nobody named.
 				return nil
 			}
 			stored, err := decodeChatRead(handle, entry.Value(), entry.Revision())
@@ -450,21 +343,13 @@ func (f *FleetStore) ChatReaders(ctx context.Context) ([]coord.ChatReader, error
 }
 
 // WatchChatReads streams every seat's read state, the marker, then every
-// change.
+// change, through [watchRecords]: a certified first answer, and late changes
+// filtered by revision. A purge is delivered as a forget.
 //
-// A KV watcher over the class filter, and [watchRecords]': the first answer
-// certified against the bucket's key index, so a consumer re-syncing from it
-// after watching again is never handed a record short, and a change the
-// consumer delivers late filtered by revision, so a lagging replica cannot put
-// an older state in front of a tab that has a newer one. A purge is a forget,
-// delivered as one: a record whose seat has left the company, whose sockets
-// are closed by then.
-//
-// The lag a replica's consumer can add is carried rather than closed with a
-// leader read per change: what it costs is a badge a moment stale on another
-// tab, which the tab's own next read replaces, and a read per change on every
-// node is a leader read per flush per node — the busiest record the fleet
-// writes, multiplied by the fleet.
+// A replica consumer's lag is carried rather than closed with a leader read
+// per change: it costs a badge a moment stale, which the tab's next read
+// replaces, where a read per change is a leader read per flush per node on the
+// fleet's busiest record.
 func (f *FleetStore) WatchChatReads(ctx context.Context) (<-chan coord.ChatReadUpdate, error) {
 	return watchRecords(ctx, f, f.chatReads, coord.DocumentFilter(chatReadClass),
 		recordWatch[coord.ChatReadUpdate]{

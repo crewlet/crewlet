@@ -10,15 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// A TRANSCRIPT LINKS THE ARTIFACT A PUBLISH WROTE.
-//
-// A turn's transcript draws a link to the artifact beside every call that
-// landed a version: it matches the call by the tool's NAME and reads the
-// artifact's id and the version's number out of the answer by two FIELDS, all
-// three declared once in `contract/artifactsworkspace.ts`. A rename of a tool or of
-// either field would leave every publish in every transcript as a bare tool
-// call, with nothing on any screen to say the link had gone, so this runs the
-// tools and reads their answers the way the dashboard does.
+// A TRANSCRIPT LINKS THE ARTIFACT A PUBLISH WROTE: the dashboard matches the
+// call by the tool's NAME and reads the artifact's id and the version's number
+// by two FIELDS, all three declared in `contract/artifactsworkspace.ts`. A
+// rename of any would silently leave every publish a bare tool call, so this
+// runs the tools and reads their answers the way the dashboard does.
 func TestATranscriptLinksTheArtifactAPublishWrote(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)

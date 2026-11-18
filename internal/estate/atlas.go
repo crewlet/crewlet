@@ -11,16 +11,13 @@ import (
 
 // THE ATLAS LOG AS OPERATIONS: what people record about what the company runs
 // on (ADR-0126), read and written from whichever node asks. A seat's turn reads
-// the atlas where its seat is held, a seats-only leaf included, and every read
-// is answered at the level its caller passes, on this node's floor on the log.
+// the atlas where its seat is held, a seats-only leaf included, at the level
+// its caller passes, on this node's floor on the log.
 //
-// A PERSON'S WRITES AND AN AGENT'S ARE ROUTED TOO, on the terms of every surface write: the
-// operator's catalogue, which the dashboard and the assistant write through,
-// is served wherever the API is, and a node holding no data reaches a data
-// node's writer through the router as it reaches its reader. Each write carries
-// the operation id its caller derived, so one no data node answered is asked of
-// the next under the same id. A value's purge crosses as its digest, never as
-// the value it erases ([atlasdomain.Writer.PurgeDigest]).
+// A person's writes and an agent's route on the terms of every surface write (package doc, "Who
+// originates a write: a surface, or the engine"): the operator's catalogue is
+// served wherever the API is, and each write carries the operation id its
+// caller derived, so one no data node answered is asked of the next under it.
 
 // AtlasReader is the atlas log's read side: the domain reader's methods a node
 // off the estate needs.
@@ -78,8 +75,8 @@ type atlasLiveArgs struct {
 	Fresh statelog.Freshness
 }
 
-// EVERY LIVE CLAIM, in one transaction on the node that answers: what the atlas
-// folds beside the claims it computes when it is read.
+// EVERY LIVE CLAIM, in one transaction on the node that answers, for the atlas
+// to fold beside the claims it computes at read time.
 var opAtlasLive = define("atlas.live", opRead, atlasDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a atlasLiveArgs) (atlasdomain.Live, error) {
 		r, err := b.atlasReader()
@@ -205,8 +202,9 @@ type atlasPurgeValueArgs struct {
 	Digest string
 }
 
-// A VALUE'S PURGE CROSSES AS ITS DIGEST: the value it erases is what somebody
-// must not keep, so no request between nodes carries it.
+// A VALUE'S PURGE CROSSES AS ITS DIGEST, never the value: what it erases is
+// what nobody may keep, so no request between nodes carries it
+// ([atlasdomain.Writer.PurgeDigest]).
 var opAtlasPurgeValue = define("atlas.purge_value", opIdempotentWrite, atlasDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a atlasPurgeValueArgs) (statelog.Result, error) {
 		w, err := b.atlasWriter()
@@ -257,8 +255,8 @@ func (x AtlasReads) Purges(ctx context.Context, fresh statelog.Freshness) ([]atl
 }
 
 // AtlasWrites is the atlas log's writes, made by a data node whose copy serves
-// and which publishes (this one where it does), so a person's write is the same
-// call from a node holding no data.
+// and publishes (this one where it does), so a write is the same call from a
+// node holding no data.
 type AtlasWrites struct{ r *Router }
 
 // AtlasWrites makes the atlas log's writes.

@@ -2,10 +2,12 @@ package scaleway_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/scaleway"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
@@ -198,5 +200,112 @@ func TestTheGrantCatalogueIsScalewaysLessTheNeverGranted(t *testing.T) {
 	}
 	if opts.GrantWhole != "the agent's own projects" || opts.GrantAccount != "the Organization" {
 		t.Errorf("a grant naming none reaches %q, an Organization one %q", opts.GrantWhole, opts.GrantAccount)
+	}
+}
+
+// A BUCKET'S SETTINGS ARE GRANTED FOR ONE CHANGE, NEVER ITS OBJECTS OR POLICY:
+// a four-hour write no level holds, saying what else it allows, refused for good
+// or longer. Mutation: drop it from oneChange and a permanent grant saves.
+func TestABucketsSettingsAreGrantedForOneChange(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "", projectWeb)
+	session, err := w.vendor.Open(t.Context(), w.open())
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := seataccess.ReadOptions(t.Context(), session, seataccess.LaneScaleway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, never := range []string{"ObjectStorageFullAccess", "ObjectStorageReadOnly", "ObjectStorageObjectsRead",
+		"ObjectStorageObjectsWrite", "ObjectStorageBucketPolicyFullAccess"} {
+		if _, ok := opts.Grantable(never); ok {
+			t.Errorf("%s is offered as a grant", never)
+		}
+	}
+	e, ok := opts.Grantable("ObjectStorageBucketsWrite")
+	if !ok || e.ScopeKind != "project" || !e.Write || e.InLevel != "" || e.MaxHours != 4 {
+		t.Fatalf("ObjectStorageBucketsWrite is offered as %+v (offered %v), want a four-hour project write", e, ok)
+	}
+	for _, says := range []string{"ACL and visibility", "creates buckets", "CORS, website, versioning, tags",
+		"lifecycle rules, which can expire and delete objects", "public-read-write lets anyone",
+		"every bucket in the projects", "reads no object", "writes no bucket policy"} {
+		if !strings.Contains(e.Note, says) {
+			t.Errorf("its note %q does not say %q", e.Note, says)
+		}
+	}
+	before := seataccess.Desired{Enabled: true, Level: config.ScalewayLevelRead, Scope: []string{projectWeb}}
+	for name, c := range map[string]struct {
+		expires time.Time
+		saves   bool
+	}{
+		"an hour":     {w.clock.Add(time.Hour), true},
+		"four hours":  {w.clock.Add(4 * time.Hour), true},
+		"five hours":  {w.clock.Add(5 * time.Hour), false},
+		"permanently": {time.Time{}, false},
+	} {
+		after := before
+		after.Grants = []seataccess.Grant{{Permission: "ObjectStorageBucketsWrite", ExpiresAt: c.expires,
+			Target: "user-uploads", Request: "aaaaaaaaaa", Reason: "make it private"}}
+		if err := seataccess.CheckGrants(opts, before, after, w.clock); (err == nil) != c.saves {
+			t.Errorf("granting it %s: %v, want saved %v", name, err, c.saves)
+		}
+	}
+}
+
+// A BUCKET GRANT RIDES THE POLICY FOR ITS HOURS AND LEAVES IT, key unchanged and
+// never read as drift; one stored for good is never applied. Mutation: skip the
+// one-change case in CheckGrant and the permanent grant reaches the policy.
+func TestABucketGrantRidesThePolicyForItsHoursAndLeaves(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "", projectWeb)
+	w.sync()
+	app := w.record().Account.ID
+	key, _ := w.sink.Held(sealedAccess)
+
+	expires := w.clock.Add(time.Hour)
+	g := grantOf("geeeeeeeeee", "ObjectStorageBucketsWrite", expires)
+	g.Target, g.Request = "user-uploads", "aaaaaaaaaa"
+	w.seat().Grants = []config.SeatGrant{g}
+	if report := w.sync(); len(report.Findings) != 0 {
+		t.Fatalf("granting reported %+v", report.Findings)
+	}
+	if projects, _, ok := ruleWith(w.policy(app), "ObjectStorageBucketsWrite"); !ok ||
+		!slices.Equal(projects, []string{projectWeb}) {
+		t.Fatalf("ObjectStorageBucketsWrite is on %v (held %v), want the seat's own project", projects, ok)
+	}
+	for _, never := range []string{"ObjectStorageObjectsRead", "ObjectStorageObjectsWrite",
+		"ObjectStorageBucketPolicyFullAccess"} {
+		if _, _, ok := ruleWith(w.policy(app), never); ok {
+			t.Errorf("the bucket grant brought %s with it", never)
+		}
+	}
+	lr := w.record().Lanes[seataccess.LaneScaleway]
+	if len(lr.Observed.Grants) != 1 || lr.Observed.Grants[0].Permission != "ObjectStorageBucketsWrite" {
+		t.Errorf("observed grants %+v, want the bucket grant", lr.Observed.Grants)
+	}
+	if len(w.drift) != 0 {
+		t.Errorf("the bucket grant read as drift: %+v", w.drift)
+	}
+
+	w.at(expires.Add(-seataccess.LapseLead + time.Second))
+	w.sync()
+	if _, _, ok := ruleWith(w.policy(app), "ObjectStorageBucketsWrite"); ok {
+		t.Fatal("the pass inside the lapse lead left ObjectStorageBucketsWrite on the policy")
+	}
+	if after, _ := w.sink.Held(sealedAccess); after != key {
+		t.Error("the bucket grant's lapse replaced the seat's key")
+	}
+
+	forGood := grantOf("gffffffffff", "ObjectStorageBucketsWrite", time.Time{})
+	w.seat().Grants = []config.SeatGrant{forGood}
+	report := w.sync()
+	if _, _, ok := ruleWith(w.policy(app), "ObjectStorageBucketsWrite"); ok {
+		t.Error("a bucket grant stored for good reached the policy")
+	}
+	if !slices.ContainsFunc(report.Findings, func(f integration.Finding) bool {
+		return strings.Contains(f.Detail, "never permanently")
+	}) {
+		t.Errorf("findings %+v, want the permanent bucket grant reported as not applied", report.Findings)
 	}
 }

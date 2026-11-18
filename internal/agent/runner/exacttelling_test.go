@@ -25,19 +25,16 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A CUT-OFF KEPT SESSION IS TOLD ONLY THE CALLS IT LACKS. A relaunch that
-// continues a kept capture whose harness was cut off asks a reading of the
-// capture's archive which of the calls after its save point the session holds
-// (runner.HoldingsAsker), and beside the briefs that tell every call after the
-// point hands the launch briefs told by that reading
-// (runner.SessionContinuation.Exact), which tell none the reading holds.
+// A CUT-OFF KEPT SESSION IS TOLD ONLY THE CALLS IT LACKS. Its relaunch asks a
+// reading of the capture's archive which calls after the save point the
+// session holds (runner.HoldingsAsker), and beside the briefs telling every
+// such call hands briefs told by that reading, which tell none it holds
+// (runner.SessionContinuation.Exact).
 
-// reading is a scripted reading of what a cut-off session holds, as a
-// launcher answers it ([runner.HoldingsAsker]), and every ask made of it: the
-// session holds the logged result of each asked call whose id held names, and
-// the records of each asked call whose id under names lie in the thread of the
-// subagent it names, which the session holds no report of, named as names
-// says.
+// reading is a scripted reading of a cut-off session ([runner.HoldingsAsker])
+// that records every ask: the session holds the logged result of each asked
+// call in held, and each asked call in under lies in the thread of the
+// subagent it maps to (named by names), whose report the session lacks.
 type reading struct {
 	held  []string
 	under map[string]string
@@ -121,9 +118,8 @@ func calledAs(name string, args map[string]any, seq int, id string) runner.Bridg
 	return c
 }
 
-// paths is a case's relaunch down each path that continues a kept capture:
-// a send-back, its round collected (no carry), and a person's answer carrying
-// the round on.
+// paths is each path a relaunch continues a kept capture down: a send-back
+// (round collected, no carry) and a person's answer carrying the round on.
 var paths = map[string]func(*runner.Resume){"a send-back": nil, "a carry-on": carriedOn}
 
 // relaunchDown is g relaunched down the path carry names ([paths]).
@@ -141,12 +137,11 @@ const readHeaderWords = "less any it found the session holds or lists below"
 // (prompts' subagentsHeader).
 const subagentsHeading = "## Calls subagents of this run made"
 
-// A CUT-OFF KEPT SESSION IS TOLD ONLY THE CALLS ITS READING DOES NOT HOLD. Its
-// save point holds the round's first call; of the two after it, the reading
-// finds the session holding the first's logged result. So beside the briefs
-// that tell both calls after the point, the relaunch hands briefs that tell
-// only the second, under words true of a list a reading thinned, read for the
-// release that wrote the session; on a send-back and a carry-on alike.
+// A CUT-OFF KEPT SESSION IS TOLD ONLY THE CALLS ITS READING DOES NOT HOLD. The
+// save point holds the first call and the reading the second, so beside the
+// briefs telling both calls after the point the relaunch hands briefs telling
+// only the third, under a thinned list's header, for the release that wrote
+// the session; on a send-back and a carry-on alike.
 //
 // Mutation: ignore the reading, or tell a held call, and both paths go red.
 func TestACutOffKeptSessionIsToldOnlyTheCallsItsReadingDoesNotHold(t *testing.T) {
@@ -183,21 +178,17 @@ func TestACutOffKeptSessionIsToldOnlyTheCallsItsReadingDoesNotHold(t *testing.T)
 }
 
 // A READING IS ASKED ONLY OF THE CALLS THE TELLING WOULD LIST. The ask carries
-// every listed call but the one a person approved, which the engine made on
-// its host; and asks about a call only where the telling would otherwise list
-// it after the point or among the owed reads and the reader can name it: never
-// a skipped meta-tool's, one the save point holds, a late or an abandoned one,
-// one whose id the log does not keep, one whose id another listed call
-// carries, nor a skill load its harness's hook reported, which carries no id
-// (an id a call in flight carries: [TestAnIDACallInFlightCarriesIsNeverAskedAbout]).
-// An owed read is asked. And it is asked for the release that wrote the
-// session, each asked call with its outcome as the log keeps it: a failed
-// call failed, its error its output, and a call whose output the log cut its
-// opening, beside the whole output's size; the reader holds a call only where
-// its records agree with that outcome.
+// every listed call but the approved one (the engine made it on its host), and
+// asks about a call only where the telling would list it after the point or
+// among the owed reads and the reader can name it: never a skipped meta-tool,
+// one the save point holds, a late or abandoned one, one whose id the log does
+// not keep or another listed call carries, nor a hook-reported skill load (no
+// id; for an id in flight, [TestAnIDACallInFlightCarriesIsNeverAskedAbout]).
+// It is asked for the session's release, each call's outcome as the log keeps
+// it (an error as output, a cut output beside its whole size); the reader
+// holds a call only where its records agree.
 //
-// Mutation: drop any one exclusion, or carry a call's failure, output or size
-// otherwise than the log keeps it, and this goes red.
+// Mutation: drop an exclusion, or carry an outcome otherwise, and this goes red.
 func TestAReadingIsAskedOnlyOfTheCallsTheTellingWouldList(t *testing.T) {
 	t.Parallel()
 	basis := cutOffClaude(far)
@@ -274,10 +265,9 @@ func relaunchWithFlight(t *testing.T, g guarded, flight []runner.BridgedCall) ru
 	return g.relaunch(t)
 }
 
-// AN ID A CALL IN FLIGHT CARRIES IS NEVER ASKED ABOUT. The reader sees only the
-// ask's calls, and a call in flight has no outcome to ask about, so it rides no
-// ask: a listed call whose id it carries names records nobody can say are
-// whose, and is told.
+// AN ID A CALL IN FLIGHT CARRIES IS NEVER ASKED ABOUT. A call in flight has no
+// outcome, so it rides no ask, and the reader sees only the ask's calls: a
+// listed call sharing its id names records nobody can attribute, and is told.
 //
 // Mutation: count the listed calls' ids alone, and this goes red.
 func TestAnIDACallInFlightCarriesIsNeverAskedAbout(t *testing.T) {
@@ -300,10 +290,8 @@ func TestAnIDACallInFlightCarriesIsNeverAskedAbout(t *testing.T) {
 	}
 }
 
-// A READING IS ASKED ONCE PER RELAUNCH. The kept path builds two tellings where
-// the brief decides its verdict, and a third by the reading, and asks the
-// reading once for the path, never once per telling; the copy in the job's box
-// asks none.
+// A READING IS ASKED ONCE PER RELAUNCH, never once per telling: the kept path
+// builds two tellings plus the reading's; the copy in the job's box asks none.
 //
 // Mutation: ask in keptSession, once per telling, and this goes red.
 func TestAReadingIsAskedOncePerRelaunch(t *testing.T) {
@@ -330,9 +318,8 @@ func TestNoReadingIsAskedOfACaptureWhoseHarnessEndedItsOwnRun(t *testing.T) {
 	basis := keptClaude(far, false)
 	basis.Release = "2.1.310"
 	reads := &reading{held: []string{"toolu_02"}}
-	// THE COPY ITS JOB'S BOX HOLDS counted as far as the capture, so the
-	// verdict before any brief is the brief's, and only the capture's own word
-	// keeps the reading out.
+	// The job box's copy counts as far as the capture, so the verdict is the
+	// brief's and only the capture's own word keeps the reading out.
 	req := relaunchDown(t, guarded{basis: basis, reads: reads, bridged: []runner.BridgedCall{
 		calledAs("jira_create", map[string]any{"summary": "at the point"}, 1, "toolu_01"),
 		calledAs("jira_create", map[string]any{"summary": "after it"}, 2, "toolu_02"),
@@ -344,12 +331,10 @@ func TestNoReadingIsAskedOfACaptureWhoseHarnessEndedItsOwnRun(t *testing.T) {
 }
 
 // AN OPENCODE RELAUNCH IS ASKED NO READING AND TOLD AS BEFORE. This build does
-// not judge an OpenCode session's first request, so no reading may be used for
-// it: its relaunch asks none and hands no brief told by one, and its brief is
-// the one this build told it before any reading, byte for byte: of a round
-// where no call is listed again, no told line is marked and no call the
-// session may show goes unlisted (ADR-0073, a told call is kept apart), as
-// this one is.
+// not judge an OpenCode session's first request, so it asks no reading, and
+// its brief is byte for byte the one this build tells without one, for a round
+// where nothing is listed again, marked, or left unlisted (ADR-0073, a told
+// call is kept apart).
 //
 // Mutation: ask a reading under every verdict but the brief's, and this goes
 // red.
@@ -391,10 +376,10 @@ func TestNoReadingIsAskedWhereTheFirstRequestCompactsWhatever(t *testing.T) {
 	}
 }
 
-// ONLY A FIRST REQUEST THIS BUILD JUDGES CARRIES A BRIEF TOLD BY A READING. An
-// OpenCode capture cut off, under a known window and a bounded count, is asked
-// no reading and carries none, and is told nothing of a summary whatever its
-// count; a Claude Code one beside it, the same in all else, carries one.
+// ONLY A FIRST REQUEST THIS BUILD JUDGES CARRIES A BRIEF TOLD BY A READING. A
+// cut-off OpenCode capture, under a known window and bounded count, is asked
+// no reading and told nothing of a summary whatever its count; a Claude Code
+// one, the same in all else, carries one.
 //
 // Mutation: judge every harness's first request, and this goes red.
 func TestOnlyAFirstRequestThisBuildJudgesCarriesABriefToldByAReading(t *testing.T) {
@@ -423,8 +408,7 @@ func TestOnlyAFirstRequestThisBuildJudgesCarriesABriefToldByAReading(t *testing.
 			t.Errorf("%s: carries a brief told by a reading %v, asked %d times, want %v", name, got,
 				len(reads.asked()), tc.exact)
 		}
-		// TOLD AS HELD: a cut-off session told as one that may be a summary
-		// is told the call at its save point too.
+		// Only a session told as a possible summary is told its save point's call.
 		if strings.Contains(req.Session.Replaced, "at the point") {
 			t.Errorf("%s: a session this build judges as sending whole, or does not judge, is told as one that "+
 				"may be a summary:\n%s", name, req.Session.Replaced)
@@ -462,9 +446,9 @@ func (b *lineBuffer) lines(t *testing.T, msg string) []map[string]any {
 	return out
 }
 
-// captureRunnerLogs sends the process's log lines to a buffer the case reads
-// for its duration. The process's logger is one, so a case that calls it is
-// never parallel.
+// captureRunnerLogs sends the process's log lines to a buffer for the case's
+// duration. The logger is process-wide, so a case that calls it is never
+// parallel.
 func captureRunnerLogs(t *testing.T) *lineBuffer {
 	t.Helper()
 	logs := &lineBuffer{}
@@ -489,15 +473,13 @@ func countAt(brief string) int64 {
 }
 
 // A BRIEF TOLD BY A READING IS OFFERED ONLY WHERE ITS OWN FIRST REQUEST SENDS
-// WHOLE, judged on its own brief and never by the held brief's verdict. Where
-// the reading moves a call under a subagent's name and holds none, its brief is
-// the longer, and under a count that sends the held brief whole but not it, it
-// is not offered, executor_session_holdings_unused says why, and the held
-// telling is handed. Where the reading holds calls, its brief is the shorter,
-// and under a count that compacts the held brief but sends it whole, it is
-// offered beside the telling told as a summary, and
-// executor_session_may_compact says the brief told by the reading may be
-// handed instead.
+// WHOLE, never by the held brief's verdict. A reading that moves a call under
+// a subagent and holds none makes the longer brief: under a count that sends
+// the held brief whole but not it, it is not offered, the held telling is
+// handed, and executor_session_holdings_unused says why. A reading that holds
+// calls makes the shorter: under a count that compacts the held brief but
+// sends it whole, it is offered beside the summary telling, and
+// executor_session_may_compact says it may be handed instead.
 //
 // Mutation: attach it unjudged, judge it on the held brief, or word the
 // may-compact line as before, and a case goes red.
@@ -525,8 +507,7 @@ func TestABriefToldByAReadingIsOfferedOnlyWhereItsOwnFirstRequestSendsWhole(t *t
 	if !standard200k.SendsWhole(countOf(count), probe.Session.Replaced) {
 		t.Fatalf("no count sends the held brief whole and not the one told by the reading")
 	}
-	// THE SUMMARIZED TELLING tells the call at the save point; the held one
-	// does not.
+	// Only the summary telling tells the save point's call.
 	req := relaunched(countOf(count), moved())
 	if req.Session.Exact != nil || strings.Contains(req.Session.Replaced, "at the point") {
 		t.Errorf("a brief told by a reading that may compact is offered, or the held telling is not handed: %+v",
@@ -561,11 +542,10 @@ func TestABriefToldByAReadingIsOfferedOnlyWhereItsOwnFirstRequestSendsWhole(t *t
 	}
 }
 
-// A CALL THE READING TELLS UNDER A SUBAGENT IS LISTED UNDER THAT SUBAGENT. The
-// reading finds the records of one call in the thread of a subagent whose
-// report the session does not hold: the call is told in a section of its own,
-// under a heading naming the subagent, after the calls after the point and
-// before the late calls, and in no other list.
+// A CALL THE READING TELLS UNDER A SUBAGENT IS LISTED UNDER THAT SUBAGENT. A
+// call whose records lie in a subagent's thread (its report unheld) is told
+// once, under a heading naming the subagent, after the calls after the point
+// and before the late calls.
 //
 // Mutation: ignore where the reading says it lies, and this goes red.
 func TestACallTheReadingTellsUnderASubagentIsListedUnderThatSubagent(t *testing.T) {
@@ -593,9 +573,8 @@ func TestACallTheReadingTellsUnderASubagentIsListedUnderThatSubagent(t *testing.
 }
 
 // A SUBAGENT'S SUBMISSION IS SAID NOT TO STAND UNDER ITS NAME. A successful
-// `submit_work` the reading tells under a subagent is no submission of the
-// work, said right after that subagent's calls, though the main list tells no
-// call at all.
+// `submit_work` told under a subagent is said, right after its calls, not to
+// submit the work, even when the main list tells no call.
 //
 // Mutation: fold the subagent's submission into the main list's, and this
 // goes red.
@@ -619,12 +598,10 @@ func TestASubagentsSubmissionIsSaidNotToStandUnderItsName(t *testing.T) {
 }
 
 // A SUBMISSION THE READING HOLDS IS SAID NOT TO STAND. The job submitted after
-// its session's save point and was cut off, and the reading finds the session
-// holding that successful `submit_work`: the brief told by it lists no such
-// call, so it opens by saying that a submission the session above shows is no
-// submission of the work, as it does of one the save point holds; read as
-// done, the run could end without its own, and the work be rescued as
-// incomplete.
+// the save point and was cut off, and the reading holds that `submit_work`, so
+// the brief lists no such call and opens by saying a submission the session
+// shows does not stand, as for one the save point holds: read as done, the run
+// could end without its own and the work be rescued as incomplete.
 //
 // Mutation: leave a held submission the reading finds unsaid, and this goes
 // red.
@@ -655,9 +632,9 @@ func TestASubmissionTheReadingHoldsIsSaidNotToStand(t *testing.T) {
 const heldSubmissionWords = "A `" + runner.SubmitWorkTool + "` the session above shows does NOT stand"
 
 // A SUBAGENT NAMED IN A BRIEF IS DEFUSED AND CUT. Its name is the box's words:
-// a fence marker in it is defused and the turn's fence token removed, every run
-// of whitespace is one space, so no newline opens a line of its own, and it is
-// cut to a value's length on a rune boundary.
+// fence markers are defused, the turn's fence token removed, whitespace runs
+// collapsed to one space (no newline opens a line), and it is cut to a value's
+// length on a rune boundary.
 //
 // Mutation: leave the name uncut, collapse no whitespace, or drop its defusal,
 // and this goes red.
@@ -695,11 +672,9 @@ func TestASubagentNamedInABriefIsDefusedAndCut(t *testing.T) {
 }
 
 // A SUBAGENT'S LEFT-OUT READS ARE OWED BY THE NEXT BRIEF. The one read cap is
-// spent on the late calls first, then each subagent's, then the calls after
-// the point: a subagent's reads past it are counted rather than listed, and the
-// brief records them as reads it left out, for the next brief to tell, as it
-// does the calls after the point; while the calls after the point lose their
-// reads first, the subagent's spent ahead of them.
+// spent on the late calls, then each subagent's, then the calls after the
+// point; reads past it are counted, not listed, and recorded as left out for
+// the next brief to tell, a subagent's as the main list's are.
 //
 // Mutation: record no subagent's left-out reads, or spend the cap on the
 // subagents after the calls after the point, and this goes red.
@@ -735,11 +710,9 @@ func TestASubagentsLeftOutReadsAreOwedByTheNextBrief(t *testing.T) {
 	}
 }
 
-// A CALL THE READING HOLDS IS LISTED AGAIN BESIDE A LIKE CALL. The reading
-// finds the session holding a call; a call the brief tells after the point
-// names the same tool with the same arguments. So the held one is listed
-// again, under words that say the session may show it, as a call the save
-// point holds would be.
+// A CALL THE READING HOLDS IS LISTED AGAIN BESIDE A LIKE CALL: one the brief
+// tells after the point with the same tool and arguments. The held one is
+// listed again as one the session may show, as a save point's call would be.
 //
 // Mutation: leave the reading's held calls off the held side of the calls
 // listed again, and this goes red.
@@ -758,11 +731,9 @@ func TestACallTheReadingHoldsIsListedAgainBesideALikeCall(t *testing.T) {
 }
 
 // A CALL THE READING HOLDS IS LISTED AGAIN BESIDE A LIKE CALL TOLD UNDER A
-// SUBAGENT. The reading finds the session holding a post, and finds a post of
-// the same words in the thread of a subagent whose report the session does
-// not hold: told under that subagent's name, the second could be taken for the
-// first, which the session may show, so the first is listed again, as it is
-// beside a like call after the point.
+// SUBAGENT. A same-worded post told under the subagent could be taken for the
+// held one the session may show, so the held one is listed again, as beside a
+// like call after the point.
 //
 // Mutation: leave the subagents' calls off the told side of the calls listed
 // again, and this goes red.
@@ -784,10 +755,9 @@ func TestACallTheReadingHoldsIsListedAgainBesideALikeCallUnderASubagent(t *testi
 	}
 }
 
-// A SUBAGENT'S CALL AND A LIKE CALL OF THE MAIN LIST ARE EACH MARKED. The
-// reading tells one post under a subagent's name and another of the same words
-// after the point: two calls of two told lists, either of which could be taken
-// for the other, so each line ends with the note that it is a call of its own.
+// A SUBAGENT'S CALL AND A LIKE CALL OF THE MAIN LIST ARE EACH MARKED. Two
+// same-worded posts, one under a subagent and one after the point, could be
+// taken for each other, so each line ends noting it is a call of its own.
 //
 // Mutation: leave the subagents' groups out of the marks, and this goes red.
 func TestASubagentsCallAndALikeCallOfTheMainListAreEachMarked(t *testing.T) {
@@ -809,11 +779,11 @@ func TestASubagentsCallAndALikeCallOfTheMainListAreEachMarked(t *testing.T) {
 	}
 }
 
-// A SUBAGENT'S TOOLS NAME NO CALL THE SESSION MAY SHOW THAT NO LIST HOLDS. Beside
-// a late call, whose words say a call may be shown twice, the brief names the
-// tools of the calls the round's log dropped that a told call could be taken
-// for: of the late call's tool, never of a tool only a call told under a
-// subagent's name calls, whose words say nothing of a call shown twice.
+// A SUBAGENT'S TOOLS NAME NO CALL THE SESSION MAY SHOW THAT NO LIST HOLDS.
+// Beside a late call (whose words say a call may be shown twice) the brief
+// names the dropped calls' tools a told call could be taken for: the late
+// call's, never a tool only a subagent's call uses, whose words say nothing
+// of a call shown twice.
 //
 // Mutation: name the subagents' tools among the told tools, and this goes red.
 func TestASubagentsToolsNameNoCallTheSessionMayShowThatNoListHolds(t *testing.T) {
@@ -854,23 +824,18 @@ func exactDecided(runner.AgentRunRequest) runner.SessionDecision {
 	return runner.SessionDecision{Continues: true, Kept: true, NewBox: true, Exact: true}
 }
 
-// A GUARD ARMS THE LOADS THE HANDED READING HOLDS, AND NO OTHER. A job loaded
-// the seat's skill after its session's save point. Where the reading finds the
-// session holding that load and the launch hands the brief told by the
-// reading, the guard holds the skill, which the session holds whole; where it
-// hands the brief told by the save point, it does not; and where the job
-// restarted the session after its brief, it holds nothing, whatever the
-// reading holds. Nor where the launch hands the brief told by the reading but
-// the reading does not hold the load: it holds another call of the job, and
-// tells the load in the list of calls the session lacks, or tells it under a
-// subagent whose report the session does not hold; nor where the load it holds
-// is no call of the job, made at or before the job's own start (its
-// BridgeFrom), so the skills its launch armed are the ones that count.
+// A GUARD ARMS THE LOADS THE HANDED READING HOLDS, AND NO OTHER. The job
+// loaded the seat's skill after the save point. The guard holds the skill
+// (the session holds it whole) only where the reading holds that load and the
+// launch hands its brief: not where the save point's brief is handed, the job
+// restarted the session after its brief, the reading holds another call and
+// tells the load as lacking or under a subagent, or the held load is no call
+// of the job (at or before its BridgeFrom, where its launch's armed skills
+// count).
 //
-// Mutation: arm the guard whatever the launch handed, read the reading's held
-// loads under a restart in the job, arm every load of the job where the brief
-// told by the reading is handed, arm a load told under a subagent, or arm a
-// held load at or before the job's start, and a case goes red.
+// Mutation: arm whatever the launch handed, read held loads under a restart
+// in the job, arm every load of the job, or one told under a subagent or at or
+// before the job's start, and a case goes red.
 func TestAGuardArmsTheLoadsTheHandedReadingHolds(t *testing.T) {
 	t.Parallel()
 	active := guarded{basis: inBoxBasis}.relaunch(t).Surface.Active()
@@ -915,10 +880,8 @@ func TestAGuardArmsTheLoadsTheHandedReadingHolds(t *testing.T) {
 }
 
 // THE RUN'S OPENING FRAME IS THE BRIEF TOLD BY THE READING WHERE IT WAS HANDED:
-// the phase's record states the prompt the run read, the brief told by the
-// reading where the launch decided it handed that one, for a new box or for
-// the box the session was last worked in, and the one told by the save point
-// where it did not.
+// the phase's record states the prompt the run read, the reading's brief where
+// the launch handed it (new box or its own) and the save point's where not.
 //
 // Mutation: publish the default brief whatever the launch handed, for either
 // box, and a case goes red.
@@ -952,12 +915,10 @@ func TestTheRunsOpeningFrameIsTheBriefToldByTheReadingWhereItWasHanded(t *testin
 }
 
 // A READING THINS THE CALLS OF A SESSION ITS JOB RESTARTED, and nothing else.
-// The job restarted the session after its brief, so the telling is that of a
-// session that may be a summary, every call of the round from its start: the
-// reading, asked of all of them, finds the session holding the round's first,
-// which the brief told by it leaves out, while it keeps every other word, the
-// cut-off section, every lead the record keeps and every note the turn has
-// read.
+// A restart after the brief tells the session as a possible summary, every
+// call from the round's start; the reading holds the first, which its brief
+// leaves out, keeping every other word: the cut-off section, every lead the
+// record keeps and every note the turn has read.
 //
 // Mutation: skip the reading under a restart in the job, and this goes red.
 func TestAReadingThinsTheCallsOfASessionItsJobRestarted(t *testing.T) {
@@ -986,12 +947,10 @@ func TestAReadingThinsTheCallsOfASessionItsJobRestarted(t *testing.T) {
 	}
 }
 
-// A CALL NO RECORD NAMES IS TOLD WHETHER OR NOT AN EARLIER BRIEF TOLD IT. A call
-// an earlier job made, which the job's own brief told as text before the job
-// opened (at or before its BridgeFrom), is in the session only as that text,
-// which no record of it holds: the reading names no record of it, and it is
-// told, with and without a restart in the job. No call is held by the text of
-// a brief.
+// A CALL NO RECORD NAMES IS TOLD WHETHER OR NOT AN EARLIER BRIEF TOLD IT. An
+// earlier job's call (at or before BridgeFrom) is in the session only as the
+// job's brief's text, which no record holds, so it is told, with and without
+// a restart in the job: no call is held by a brief's text.
 //
 // Mutation: count the calls through BridgeFrom held, and this goes red.
 func TestACallNoRecordNamesIsToldWhetherOrNotAnEarlierBriefToldIt(t *testing.T) {

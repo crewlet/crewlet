@@ -20,103 +20,61 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// WHO MAY CALL A TOOL, AND WHY THE DECISION IS TAKEN HERE.
+// WHO MAY CALL A TOOL. The same tools serve three callers (a seat's registry in
+// a turn, the operator's assistant over MCP, the HTTP write surface), so the
+// decision is a seam on the deps each constructs, populated from [authz.Decide]:
+// decided three ways, the answers would drift silently. Not [tools.Surface]'s
+// Guard: that carries no principal, object or arguments, is per phase session,
+// and the operator's assistant never builds a Surface (internal/tools' doc).
 //
-// # One decision, three surfaces
-//
-// The same tool implementations serve three callers: a seat's own registry
-// inside a turn, the operator's assistant over MCP, and the HTTP surface a
-// person writes through. If each decided for itself, the three would drift —
-// and they would drift silently, because the only way to notice is to ask the
-// same question three ways and compare the wording.
-//
-// So the decision is a SEAM on the deps every one of them constructs, and
-// every one populates it from [authz.Decide]. One table, one function, three
-// callers.
-//
-// # And why it is not tools.Surface's Guard
-//
-// That seam is `Check(tool, server) string`: it carries no principal, no
-// object and no arguments, it is per phase SESSION rather than per call, and
-// it is already occupied by the skill gate. The operator's assistant never
-// constructs a Surface at all, so a decision living there would cover one
-// caller of three. internal/tools' own doc states that; this is the other end
-// of it.
-//
-// # A nil Authorizer REFUSES
-//
-// The opposite of [tools.Surface]'s Guard, whose nil is documented to allow
-// everything — and the difference is what each one is FOR. A missing skill
-// gate means no skills are locked, which is a company that declared none. A
-// missing authority decision means nobody decided, and a surface that shipped
-// without wiring one would serve every verb to every caller while looking
-// exactly like a surface that had.
-//
-// # The arguments are decided here too, and first
-//
-// For the same reason the authority is: this wrapper is the one place every
-// call of every builtin passes, whichever of the three callers made it. A
-// call carrying an argument its tool does not declare is refused by name
-// before anybody's authority is asked ([ErrUndeclaredArgument]) — the HTTP
-// surface used to check that at its routes alone, so the other callers
-// dropped what it refused.
+// A nil Authorizer REFUSES, unlike the Guard's nil: a missing skill gate is a
+// company that locked no skills, a missing authority decision a surface that
+// would serve every verb to every caller. Undeclared arguments are refused here
+// too, first ([ErrUndeclaredArgument]): this wrapper is the one place every
+// call of every builtin passes.
 
 // Authorizer decides whether the party behind a call may make it.
 //
-// THE PRINCIPAL COMES FROM THE CONTEXT, on every call, and is never captured:
-// a seat's tools are cloned into its lease and an MCP session outlives any one
-// request, so a principal bound at construction would answer for whoever
-// happened to be there when the surface was built.
+// The principal comes from the context on every call, never captured: a
+// seat's tools are cloned into its lease and an MCP session outlives a request,
+// so one bound at construction would answer for whoever was there then.
 //
-// AN ERROR IS THE REFUSAL, and it carries which kind: [ErrRefused] is an
-// authority answer a retry will never change, and anything else is a node that
-// could not decide — which a surface answers 403 and 503 to. A nil error is
-// the allow.
+// A nil error allows. [ErrRefused] is an answer a retry never changes; any
+// other error is a node that could not decide (403 versus 503 on a surface).
 type Authorizer func(ctx context.Context, action authz.Action,
 	object authz.Object) error
 
-// ErrRefused reports a call the acting party may not make.
-//
-// DISTINCT FROM AN UNDECIDABLE ONE for internal/coord's reason, applied to
-// authority: "you may not", and "this node could not tell" are two answers,
-// and collapsing the second into the first tells somebody to go and ask for a
-// capability they already hold.
+// ErrRefused reports a call the acting party may not make. Kept distinct from
+// [ErrUndecidable]: collapsing "this node could not tell" into "you may not"
+// sends somebody to ask for a capability they already hold.
 var ErrRefused = errors.New("not allowed")
 
 // ErrUndecidable reports a call this node could not decide: the caller could
 // not be established, or the chart the rule reads could not be.
 //
-// A SENTINEL rather than "any error that is not [ErrRefused]", because the
-// surfaces that answer in status codes must tell three apart — refused,
-// undecidable, and a wiring that decided nothing ([ErrNoAuthorizer]) — and an
-// arm reading "everything else" would put the third in the second's 503,
-// telling a caller to retry a build that will never answer.
+// A sentinel rather than "any error but [ErrRefused]": status-code surfaces
+// tell three apart, and an "everything else" arm would answer
+// [ErrNoAuthorizer] 503, telling a caller to retry a build that never decides.
 var ErrUndecidable = errors.New("can't check access right now")
 
-// ErrNoAuthorizer reports deps nobody wired a decision into.
-//
-// ITS OWN SENTINEL so the refusal a caller sees names the WIRING rather than
-// the caller: "you may not create work items" sends somebody to ask for
-// access, and this is a build that never asked anybody anything.
+// ErrNoAuthorizer reports deps nobody wired a decision into. Its own sentinel
+// so the refusal names the wiring, not the caller: "you may not" would send
+// somebody to ask for access from a build that never asked anybody.
 var ErrNoAuthorizer = errors.New("builtin: no authority decision is wired, " +
 	"so nothing here may be called")
 
-// Decide is the Authorizer every surface builds, over one chart.
+// Decide is the Authorizer every surface builds, over one chart: one
+// constructor, because composing [authz.Decide] has two parts a caller can get
+// wrong — reading the principal three-valued, and turning an UNKNOWN decision
+// into an error rather than a refusal.
 //
-// ONE CONSTRUCTOR rather than three call sites composing [authz.Decide]
-// themselves, because the composition has two parts a caller can get wrong
-// independently: reading the principal three-valued, and turning an UNKNOWN
-// decision into an error rather than a refusal.
-//
-// A SEAT'S CALL IN A TURN SOMEBODY WOKE is decided for whoever woke it too, as
-// far as the apps go ([authz.DecideWithinApps], ADR-0109): every action the
-// call decides — the gate's of the tool's own row and every row the tool asks
-// inside itself — reads the ceiling its gate bound to the call
-// ([bindCeiling]), composed only when an action's row first names an app. A
-// seat's decision with nothing bound is REFUSED as undecidable, the closed end
-// as [authz.CeilingKind]'s zero is: every call a turn makes passes a gate,
-// which binds it, and a caller deciding a seat's call outside any turn on
-// purpose says so ([OutsideAnyTurn]).
+// A seat's call in a turn somebody woke is decided for whoever woke it too, as
+// far as the apps go ([authz.DecideWithinApps], ADR-0109): every action it
+// decides, the gate's and the tool's own asks, reads the ceiling its gate bound
+// ([bindCeiling]), composed only when the action's row names an app. A seat's
+// decision with nothing bound is refused as undecidable (the closed end, as
+// [authz.CeilingKind]'s zero); a caller deciding outside any turn on purpose
+// says so ([OutsideAnyTurn]).
 func Decide(chart authz.Chart) Authorizer {
 	return func(ctx context.Context, action authz.Action,
 		object authz.Object) error {
@@ -129,26 +87,19 @@ func Decide(chart authz.Chart) Authorizer {
 		case iam.Anonymous:
 			return ErrUnauthenticated
 		}
-		// AT THE INSTANT THE REQUEST WAS ROUTED ([authz.DecidedAt]): a tool
-		// a routed request calls on its own behalf — the work surface's
-		// tool-backed routes, which dispatch into this gate — is one more
-		// check of that request, so it is judged at the instant its route
-		// was, as every other check of it is. Judged at its own clock, a
-		// proof the route admitted could lapse while the body was read and
-		// the call be refused as stale on the request the route had just
-		// let through. A turn, and an operator call no route decided (the
-		// MCP surface, the act route), carry no such instant and are judged
-		// now.
+		// Judged at the instant the request was routed ([authz.DecidedAt]):
+		// a tool-backed route's call is one more check of that request, and
+		// judged at its own clock a proof the route admitted could lapse
+		// mid-body and the call be refused as stale. A turn, and a call no
+		// route decided (MCP, the act route), carry no instant: judged now.
 		now := authz.DecidedAt(ctx)
 		if principal.Kind != iam.KindSeat {
 			return DecisionError(action, authz.Decide(ctx, principal, action, object, chart, now))
 		}
 		bound, ok := ctx.Value(ceilingKey{}).(boundCeiling)
 		if !ok {
-			// THE CLOSED END: a seat's decision no gate bound a ceiling
-			// to is a path that skipped the gate, refused where somebody
-			// sees it rather than decided for nobody in silence — which
-			// would grant every app to whatever the path decided.
+			// THE CLOSED END: no gate bound a ceiling, so a path skipped
+			// the gate. Decided for nobody, it would grant every app.
 			return fmt.Errorf("%w: %w", ErrUndecidable, errNoCeiling)
 		}
 		if !authz.NamesApp(action) {
@@ -169,22 +120,19 @@ func Decide(chart authz.Chart) Authorizer {
 var errNoCeiling = errors.New("builtin: a seat's call reached the authority with nobody bound as whom it " +
 	"works for — no gate decided it, and nothing said it was made outside any turn")
 
-// ErrUnauthenticated reports a call nobody presented a credential for.
-//
-// A REFUSAL — it wraps [ErrRefused] — and its own sentinel beside it, because
-// the HTTP surface answers it 401 where every other refusal is 403: "present
-// a credential" and "you may not" send a person to opposite places.
+// ErrUnauthenticated reports a call nobody presented a credential for. It
+// wraps [ErrRefused] but is its own sentinel because the HTTP surface answers
+// it 401, not 403: "present a credential" and "you may not" send a person to
+// opposite places.
 var ErrUnauthenticated = fmt.Errorf("%w: sign in first", ErrRefused)
 
 // DecisionError is one authority decision as the error every surface reports
 // it with: nil for an allow, [ErrUndecidable] for a decision the node could
 // not take, [ErrRefused] for a refusal.
 //
-// EXPORTED so the one surface that decides before a tool runs — the HTTP
-// write surface, refusing at the route — words its refusal from the SAME
-// error the tool's own gate would have returned, through [Refusal]. Composed
-// twice, the two sentences would agree only for as long as nobody edited
-// either.
+// Exported so the HTTP write surface, refusing at the route, words its refusal
+// through [Refusal] from the same error the tool's gate returns: composed
+// twice, the two sentences would drift.
 func DecisionError(action authz.Action, d authz.Decision) error {
 	switch {
 	case d.Unknown():
@@ -197,17 +145,11 @@ func DecisionError(action authz.Action, d authz.Decision) error {
 
 // DecisionRefused is an authority refusal carrying the decision that made it.
 //
-// THE DECISION, NOT ONLY ITS SENTENCE, because a surface answering in status
-// codes renders the table's own refusal — `403 unauthorized` with the rule's
-// reason and the grants that would have admitted the caller, or
-// `step_up_required` naming the proof window — and a tool result's cause is
-// the one place that answer travels from the gate to the surface. Reduced to
-// prose there, the operator transport had to choose between parsing a sentence
-// written for a model and answering a refusal that could not say what would
-// change it.
-//
-// IT IS [ErrRefused], so every caller testing for a refusal with [errors.Is]
-// keeps working, and its text is the sentence [Refusal] has always embedded.
+// The decision, not only its sentence, so a status-code surface renders the
+// table's own refusal (`403 unauthorized` with the reason and the grants that
+// would admit, or `step_up_required` with the proof window); a tool result's
+// cause is the one carrier from the gate to the surface. It is [ErrRefused]
+// for [errors.Is], and its text is the sentence [Refusal] embeds.
 type DecisionRefused struct {
 	Action   authz.Action
 	Decision authz.Decision
@@ -216,16 +158,14 @@ type DecisionRefused struct {
 func (e *DecisionRefused) Error() string {
 	refusal := fmt.Sprintf("%s (%s)", ErrRefused, e.Decision.Reason)
 	if e.Decision.Reason == authz.ReasonUnseated {
-		// THE ONE REFUSAL WHOSE REMEDY NO GRANT NAMES, and so the one the
-		// sentence has to: what admits is a binding, and the envelope's
-		// `grants` is empty by design.
+		// The one refusal whose remedy (a binding) no grant names, and the
+		// envelope's `grants` is empty by design, so the sentence must.
 		refusal += ": it's made as a seat and this credential acts as none. " +
 			"Bind it to a human seat with `crewlet iam bind`"
 	}
 	if e.Decision.Reason == authz.ReasonRole && e.Decision.Role.Valid() {
-		// THE ROLE IS THE REMEDY, and the artifact's owner is who gives it:
-		// the envelope carries it as `role`, and the sentence beside it says
-		// the same, so a route's refusal and a tool's read alike.
+		// The role is the remedy and the artifact's owner gives it; the
+		// envelope carries it as `role`, and the sentence says the same.
 		refusal += ": it needs the " + string(e.Decision.Role) + " role on the " +
 			"artifact, which its owner can share with you"
 	}
@@ -238,15 +178,13 @@ func (e *DecisionRefused) Error() string {
 	return refusal
 }
 
-// ceilingWords is what a refusal of the requester ceiling says, by whom it was
-// decided for (ADR-0109): somebody the company does not know, a requester who
-// may not act in the company at all — told as such, since no app would admit
-// them — one who does not use the app the verb belongs to — the app named,
-// since an administrator giving it to them is what changes the answer, and
-// a person told so where a credential acting as no seat, which nobody can tell
-// anything, is not — or one who could not take the verb themselves. Never the
-// requester's name: the agent knows who woke its turn, and one sentence for
-// every requester of a kind is the rule [Refusal] keeps.
+// ceilingWords is what a refusal of the requester ceiling says (ADR-0109), by
+// whom it was decided for: a stranger to the company, a requester who may not
+// act in it at all (no app would admit them), one lacking the verb's app (named,
+// since an administrator granting it changes the answer; a person is to be told
+// so, a credential is not), or one who could not take the verb themselves.
+// Never the requester's name: the agent knows who woke its turn, and [Refusal]
+// keeps one sentence per kind of requester.
 func ceilingWords(d authz.Decision) string {
 	switch {
 	case d.Ceiling == authz.CeilingStranger:
@@ -282,157 +220,102 @@ func ceilingWords(d authz.Decision) string {
 // Unwrap makes every [DecisionRefused] an [ErrRefused].
 func (e *DecisionRefused) Unwrap() error { return ErrRefused }
 
-// subjectOf is what each tool is ABOUT, per tool, from its own arguments.
-//
-// A TABLE RATHER THAN A CHECK INSIDE EACH TOOL, for the reason internal/authz
-// keeps one: there are thirty verbs and half a dozen shapes of object, so a
-// decision written at each call site is the same sentence thirty times and
-// drifts on whichever copy somebody edited. What is here is only the
-// EXTRACTION — which argument names the project, the container, the person —
-// and never the rule, which is internal/authz's.
-//
-// FIELD NAMES AS DATA AND NOT CLOSURES, which is what the first shape got
-// wrong: `ownerFrom("handle")` on a tool that declares no `handle` argument
-// reads empty on every call, and every personal class refuses an empty
-// owner — so `my_work`, `mark_inbox`, `set_pins` and `save_work_view` were
-// gated shut for every caller but an admin, with the only symptom a refusal
-// naming a grant the caller already held. A closure can only be checked by
-// calling it with arguments somebody thought of; a field name is compared
-// against the tool's own JSON Schema, which is what
-// [TestEveryObjectFieldIsOneItsToolDeclares] does.
-//
-// A TOOL WITH NO ROW IS ABOUT NOTHING, which is correct rather than a gap:
-// every class that reads a field refuses an empty one, so a verb whose object
-// somebody forgot is refused rather than admitted. The classes that read no
-// field at all are the rows that are deliberately absent: an app's own verbs
-// ([authz.ClassApp] — filing an item, writing a page, keeping a file —
-// decided on whether the caller uses the app and on nothing about the
-// object), the overview's and the code tools' ([authz.ClassEverybody]; a code
-// read is judged by the repository's grant on the node that answers it, and
-// inside a turn somebody woke is decided again for them — the row through
-// [authz.DecideWithin], a colleague seat's grant beside the asker's: see
-// codetools.go), and the seat-only ask (`a2a_ask`), which the table bars a
-// person from before any class reads anything. `code_checkout` has no row at
-// all: only an executor run's bridge offers it, so no person and no registry
-// phase can call it, and [CodeDeps.ResolveRunRepos] decides what it may grant.
+// subjectOf is what each tool is ABOUT, as the names of its own arguments: one
+// table, not thirty drifting checks, and only the extraction; the rule is
+// internal/authz's. Field names rather than closures, so
+// [TestEveryObjectFieldIsOneItsToolDeclares] holds each against the tool's JSON
+// Schema: an undeclared field reads empty and gates the verb shut for all but
+// an admin. A tool with no row is about nothing, which every field-reading
+// class refuses. Rows deliberately absent read no field: an app's own verbs
+// ([authz.ClassApp], decided on the app alone), the overview's and the code
+// tools' ([authz.ClassEverybody]; see codetools.go), the seat-only `a2a_ask`
+// (the table bars a person before any class reads), and `code_checkout`,
+// offered only by an executor run's bridge, decided by [CodeDeps.ResolveRunRepos].
 var subjectOf = map[string]subject{
-	// AN ITEM AND ITS THREAD ARE DECIDED ON THE ITEM, because somebody
-	// without Worklet may still read the item an OPEN ASK on it names
-	// them on and post the answer — and which asks are open, and whom
-	// they name, is a stored row ([authz.ClassAppOrAsked]). A tracker
-	// holder is admitted before anything is read; anybody else is told
-	// [authz.ErrUnresolved], and the tool reads the item, probes its asks
-	// ([worklet.AskedOn]) and decides again. See [getWorkItem.CallForTurn]
-	// and [commentOnWorkItem.CallForTurn].
+	// An item and its thread are decided on the item: somebody without
+	// Worklet may still read and answer an item an OPEN ASK names them on,
+	// a stored row ([authz.ClassAppOrAsked]). A tracker holder is admitted
+	// at once; anybody else gets [authz.ErrUnresolved], and the tool probes
+	// the asks ([worklet.AskedOn]) and decides again. See
+	// [getWorkItem.CallForTurn] and [commentOnWorkItem.CallForTurn].
 	GetWorkItemTool:           {kind: authz.KindTask, inTool: true},
 	worklet.CommentOnWorkTool: {kind: authz.KindTask, inTool: true},
 
-	// THE PERSONAL ONES THAT TAKE NO NAME are about the caller: `my_work`,
-	// `mark_inbox` and `set_pins` take no handle, because a model that
-	// could name whose day to read could read anybody's. An unnamed owner
-	// is the CALLER — see [subject.objectFor].
+	// The personal ones that take no name are about the caller (a model
+	// that could name whose day to read could read anybody's); see
+	// [subject.objectFor].
 	worklet.MyWorkTool:    {kind: authz.KindPerson},
 	worklet.MarkInboxTool: {kind: authz.KindPerson},
 	worklet.SetPinsTool:   {kind: authz.KindPerson},
-	// AND THE CODE LOG'S AND THE ARTIFACTS LOG'S HALVES OF AN INBOX'S MARKS,
-	// a person's own alike.
+	// And the code log's and the artifacts log's halves of an inbox's marks.
 	CodeMarkInboxTool:     {kind: authz.KindPerson},
 	ArtifactMarkInboxTool: {kind: authz.KindPerson},
 	// And a person's viewed files of a change: the caller's own record, naming no handle.
 	CodeMarkViewedTool: {kind: authz.KindPerson},
 
-	// AND THE ONES THAT DO ARE DECIDED ON WHOSE RECORD THE NAME IS, NOT ON
-	// WHAT WAS TYPED. Each tool resolves its `handle` first
-	// ([WorkDeps.personRecord]): the caller's own names are their own
-	// record, somebody else's login is their holder's — a bound person's
-	// SEAT — and `set_priorities` resolves anything else against the chart,
-	// because a model types a name, a role or an email. Decided here on
-	// the raw argument, a lead who named their report by role or by login
-	// was refused as leading nobody called that, before the tool ever
-	// resolved it — and an administrator's decision on a login was a
-	// decision about a record nothing of that person's is under.
+	// The ones that do are decided on whose record the name resolves to,
+	// not on what was typed: each tool resolves its `handle` first
+	// ([WorkDeps.personRecord]) — somebody else's login is their holder's
+	// seat, and `set_priorities` resolves a name, role or email against the
+	// chart. Decided on the raw argument, a lead naming their report by
+	// role or login would be refused.
 	worklet.GetPersonTool:     {kind: authz.KindPerson, inTool: true},
 	worklet.WorkInboxTool:     {kind: authz.KindPerson, inTool: true},
 	worklet.SetPrioritiesTool: {kind: authz.KindPerson, inTool: true},
 
-	// A SAVED VIEW IS EITHER, and its own class reads whichever it
-	// names. Its container is a kind plus a key in ONE argument
-	// (`project:ENG`, `unit:eng`, `person:ana`, `workspace`), which is
-	// why this row states a parser rather than a kind. This decides the
-	// view being WRITTEN; the one a save REPLACES is a stored row, and
-	// the tool asks the same action on it once it has read it.
+	// A saved view is either; its container is a kind plus a key in ONE
+	// argument (`project:ENG`, `unit:eng`, `person:ana`, `workspace`),
+	// hence a parser rather than a kind. This decides the view being
+	// written; the tool asks the same action of the stored view a save
+	// replaces once it has read it.
 	//
-	// PERSONAL IS A FLAG AND NOT A NAME: the view's owner is the caller's
-	// own record — [iam.RecordOwner] — or nobody's. It was a free `owner`
-	// handle, so a bound person typing their login saved a view under a
-	// name no strip of theirs reads, and one that marked it protected was
-	// then refused their own next save.
+	// Personal is a flag, not a name: the owner is the caller's own record
+	// ([iam.RecordOwner]) or nobody's, so a typed login can never file a
+	// view under a name no strip of the caller's reads.
 	worklet.SaveWorkViewTool: {kind: authz.KindView, personal: "personal", container: "container"},
-	// AND A DELETE NAMES ONLY THE VIEW'S ID, so the view it takes away is
-	// a stored row the gate cannot form: the tool reads it and asks
-	// [authz.ActionViewDelete] of its owner and container, as a save asks
-	// of the view it replaces.
+	// A delete names only the view's id, so the tool reads the view and
+	// asks [authz.ActionViewDelete] of its owner and container.
 	worklet.DeleteWorkViewTool: {kind: authz.KindView, inTool: true},
 
-	// THE TRASH IS DECIDED BY THE TASK'S OWN ROW — its project and its
-	// reporter — which is stored and never an argument: the tools take a
-	// key or an id, and an id names no project and no author. So the gate
-	// cannot form the object, and these tools ask the same action
-	// themselves once they have read it ([authz.ClassTidy]: the project's
-	// lead, whoever filed the item, or an admin).
-	//
-	// Decided here with the empty object they had, every caller but an
-	// admin was refused as naming no project — a project's own lead could
-	// not take an item out of their own board, which is the one thing the
-	// relation exists to let them do.
-	//
-	// The read the tool decides on is OUTSIDE the write's snapshot, so the
-	// project is passed to the writer as a PRECONDITION and the tracker
-	// refuses a task filed elsewhere by then with a conflict — the same
-	// holds for `update_work_item`'s re-route.
+	// The trash is decided on the task's stored row (its project and
+	// reporter), which no argument states, so the tool reads it and asks
+	// itself ([authz.ClassTidy]: the project's lead, the item's filer, or
+	// an admin); decided here on an empty object, a lead could not tidy
+	// their own board. That read is outside the write's snapshot, so the
+	// project goes to the writer as a PRECONDITION and a task re-filed
+	// meanwhile is a conflict (as with `update_work_item`'s re-route).
 	worklet.RemoveWorkItemTool:  {kind: authz.KindTask, inTool: true},
 	worklet.RestoreWorkItemTool: {kind: authz.KindTask, inTool: true},
 
-	// AND SO IS A FILE'S REMOVAL, decided by the project it is kept in —
-	// which the tool settles before it asks, since a call that names no
-	// project means the caller's own team's, and the gate cannot know
-	// whose that is. Decided here on the argument, every removal from the
-	// caller's own project was refused as naming none.
+	// So is a file's removal, decided on the project it is kept in, which
+	// the tool settles first: a call naming no project means the caller's
+	// own team's, which the gate cannot know.
 	worklet.RemoveProjectFileTool: {kind: authz.KindProject, inTool: true},
 
-	// AND SO IS A MOVE, for the same reason and against the same project:
-	// the item's own, read off the row. Moving work to another project is
-	// a re-route with a re-key, so it is the lead's of the project the
-	// item is LEAVING — see workmove.go.
+	// So is a move, against the item's own project read off the row: a
+	// move is a re-route with a re-key, so it is the lead's of the project
+	// the item is leaving (workmove.go).
 	worklet.MoveWorkItemTool: {kind: authz.KindTask, inTool: true},
 
-	// A SEAT'S WORK IS DECIDED ON THE SEAT, and the seat is never quite
-	// what the arguments state. A pause and a resume name it by a handle
-	// somebody typed — `@sre` — which the tool resolves through the org
-	// and decides on the seat's handle, the one the lead relation is asked
-	// about. A note names a
-	// TURN, whose seat only the node running it can say, so steer_turn
-	// asks that node first (a probe that offers nothing). And a run's
-	// answer is decided on the run's own row: its requester through the
-	// self arm, its seat's lead otherwise. And a schedule run now names a
-	// schedule, whose seats only the org resolves, and is decided on every
-	// one of them. See seatpause.go, steer.go, answerexecutor.go and
-	// runschedule.go.
+	// A seat's work is decided on the seat, never quite what the arguments
+	// state: a pause or resume resolves a typed handle (`@sre`) through the
+	// org; a note names a turn, whose seat only its running node can say,
+	// so steer_turn asks it first; a run's answer is decided on the run's
+	// row (its requester, else its seat's lead); a schedule run on every
+	// seat the schedule resolves to. See seatpause.go, steer.go,
+	// answerexecutor.go and runschedule.go.
 	PauseSeatTool:      {kind: authz.KindPerson, inTool: true},
 	ResumeSeatTool:     {kind: authz.KindPerson, inTool: true},
 	SteerTurnTool:      {kind: authz.KindPerson, inTool: true},
 	AnswerExecutorTool: {kind: authz.KindPerson, inTool: true},
 	RunScheduleTool:    {kind: authz.KindPerson, inTool: true},
 
-	// AN ARTIFACT IS DECIDED BY ITS STORED ROW (its owner, its shares and
-	// whether an agent owns it), which no argument states, and inside a
-	// turn somebody woke a second time for whoever the turn is acting for.
-	// So each tool reads the row and asks [authz.DecideWithin] itself (see
-	// artifacts.go). The listing and the creates are not here: one is a
-	// filter every row of which is decided as a read, and the others (an
-	// artifact, a folder) are the app's own verbs, which the gate decides
-	// on the app alone and the tool again with its caller as the owner,
-	// beside the parent folder's role. Nor is the brand, everybody's read.
+	// An artifact is decided on its stored row (owner, shares, whether an
+	// agent owns it) and, in a turn somebody woke, again for them, so each
+	// tool reads the row and asks [authz.DecideWithin] itself
+	// (artifacts.go). Absent: the listing (each row decided as a read), the
+	// creates (app verbs, decided again by the tool with the caller as
+	// owner beside the parent folder's role), and the brand (everybody's).
 	GetArtifactTool:         {kind: authz.KindArtifact, inTool: true},
 	RenderArtifactTool:      {kind: authz.KindArtifact, inTool: true},
 	PublishArtifactTool:     {kind: authz.KindArtifact, inTool: true},
@@ -440,51 +323,43 @@ var subjectOf = map[string]subject{
 	ShareArtifactTool:       {kind: authz.KindArtifact, inTool: true},
 	UnshareArtifactTool:     {kind: authz.KindArtifact, inTool: true},
 	UploadArtifactAssetTool: {kind: authz.KindArtifact, inTool: true},
-	// A MOVE IS DECIDED PER ARTIFACT by each one's stored row, and its
-	// destination by the folder's top-level owner and shares, neither of
-	// which any argument states (see artifacts_folders.go).
+	// A move is decided per artifact on each stored row, and its
+	// destination on the folder's top-level owner and shares
+	// (artifacts_folders.go).
 	MoveArtifactTool: {kind: authz.KindArtifact, inTool: true},
-	// A COMMENT IS DECIDED BY THE SAME STORED ROW, and the writer keeps an
-	// edit to the remark's author (see artifacts_comments.go).
+	// A comment is decided on the same row; the writer keeps an edit to
+	// the remark's author (artifacts_comments.go).
 	ListArtifactCommentsTool:   {kind: authz.KindArtifact, inTool: true},
 	CommentOnArtifactTool:      {kind: authz.KindArtifact, inTool: true},
 	ResolveArtifactCommentTool: {kind: authz.KindArtifact, inTool: true},
 	EditArtifactCommentTool:    {kind: authz.KindArtifact, inTool: true},
 	RemoveArtifactCommentTool:  {kind: authz.KindArtifact, inTool: true},
 
-	// AND ITS DATASTORE, decided by the same stored row and then by each
-	// collection's own rules, which the tool settles once it has read the
-	// row (see artifactdata.go).
+	// And its datastore: the same row, then each collection's own rules
+	// (artifactdata.go).
 	ReadArtifactDataTool:  {kind: authz.KindArtifact, inTool: true},
 	QueryArtifactDataTool: {kind: authz.KindArtifact, inTool: true},
 	WriteArtifactDataTool: {kind: authz.KindArtifact, inTool: true},
 	SetArtifactSchemaTool: {kind: authz.KindArtifact, inTool: true},
 
-	// A CHAT MESSAGE IS DECIDED ON WHOSE WORDS IT IS, which is its stored
-	// row and never an argument: the tools name a message by its id. An
-	// admin is admitted on the unread message — moderation, which takes a
-	// message down in a room the moderator cannot read without showing it
-	// to them — and anybody else is told [authz.ErrUnresolved], read as
-	// themselves, and decided again on its author. See
-	// [ChatDeps.remarkAuthority].
+	// A chat message is decided on its author, a stored row (the tools
+	// name it by id). An admin is admitted on the unread message
+	// (moderation, without showing it to them); anybody else gets
+	// [authz.ErrUnresolved], reads it as themselves and is decided again on
+	// its author. See [ChatDeps.remarkAuthority].
 	chatlet.EditMessageTool:   {kind: authz.KindMessage, inTool: true},
 	chatlet.DeleteMessageTool: {kind: authz.KindMessage, inTool: true},
 
-	// AND A READ CURSOR IS THE CALLER'S OWN RECORD, as an inbox's marks
-	// are: `mark_chat_read` takes no handle, so its owner is the caller.
+	// And a read cursor is the caller's own record: `mark_chat_read` takes
+	// no handle.
 	chatlet.MarkChatReadTool: {kind: authz.KindPerson},
 }
 
 // ownBookkeeping are the tools whose every write is the CALLER'S OWN
-// BOOKKEEPING and nothing else: a room's read cursor, an inbox's read and
-// snooze marks on either log, the pins on their own strip. Each is one of the
-// personal tools that take no name ([subjectOf]), so it can only ever act for
-// whoever called it, and what it writes is read by no one else's work.
-//
-// DECLARED HERE, beside the table that says whose record each tool is about,
-// because the runtime audit files a call to one under a type of its own that
-// the company's activity feed leaves out (internal/api/operator): a person
-// reading their rooms is not something the company did.
+// BOOKKEEPING (read cursors, inbox marks on either log, pins), each a personal
+// tool taking no name ([subjectOf]), so it acts only for its caller. Declared
+// beside [subjectOf] because the runtime audit files these under a type of
+// their own that the company's activity feed leaves out (internal/api/operator).
 var ownBookkeeping = map[string]bool{
 	worklet.MarkInboxTool:    true,
 	worklet.SetPinsTool:      true,
@@ -516,27 +391,21 @@ type subject struct {
 	// the call is inside.
 	container string
 
-	// inTool marks a verb whose object its arguments do not STATE — a
-	// stored row (which project a task is filed under), or a name the tool
-	// resolves to a record (whose inbox a login means, whose priorities a
-	// typed `handle` means). The gate does not decide it, and the tool asks
-	// the same action through [WorkDeps.mayWrite] once it knows the object.
-	// A tool marked so and asking nothing would be ungated — which is why
+	// inTool marks a verb whose object its arguments do not state (a
+	// stored row, or a name the tool resolves to a record). The gate skips
+	// it; the tool asks the same action through [WorkDeps.mayWrite] once it
+	// knows the object. One asking nothing would be ungated, which
 	// [TestARowDecidedToolAsksAfterItReads],
 	// [TestALeadNamesAReportTheWayAModelTypesThem] and
-	// [TestSomebodyElsesLoginNamesTheirHoldersRecord] call each one as a
-	// caller the table refuses and require the refusal.
+	// [TestSomebodyElsesLoginNamesTheirHoldersRecord] catch.
 	inTool bool
 }
 
 // objectFor is one call's object, from the caller and the arguments.
 //
-// AN ABSENT OWNER IS THE CALLER, on the PERSONAL kind and on no other. Three
-// of those verbs take no handle at all and the rest default to yours, so an
-// empty one is the shape of the verb rather than a caller who forgot — and
-// reading it as [authz.ReasonUnnamed] refuses every one of them. A view is
-// deliberately not that kind for exactly this reason: a view naming no owner
-// is SHARED, not mine.
+// An absent owner is the caller on the PERSONAL kind only: those verbs take no
+// handle or default to yours, so [authz.ReasonUnnamed] would refuse them all.
+// A view is deliberately not that kind: an owner-less view is SHARED.
 func (s subject) objectFor(p iam.Principal, args map[string]any) authz.Object {
 	o := authz.Object{Kind: s.kind}
 	if s.owner != "" {
@@ -548,11 +417,9 @@ func (s subject) objectFor(p iam.Principal, args map[string]any) authz.Object {
 	if s.personal != "" && argBool(args, s.personal) {
 		o.Owner = iam.RecordOwner(p)
 		if o.Owner == "" {
-			// A PERSONAL OBJECT NOBODY CAN OWN NAMES NOTHING, which every
-			// class refuses. Left with its container it would be decided
-			// as SHARED — the one reading an owner-less view has — and
-			// the caller who has no record would be admitted to write a
-			// tab everybody sees.
+			// A personal object nobody can own names nothing, which every
+			// class refuses; left with its container it would be decided
+			// SHARED, admitting a recordless caller to a tab all see.
 			return authz.Object{Kind: s.kind}
 		}
 	}
@@ -565,12 +432,9 @@ func (s subject) objectFor(p iam.Principal, args map[string]any) authz.Object {
 	return o
 }
 
-// containerArg reads a container argument as its kind and its key.
-//
-// TWO SPELLINGS IN ONE FUNCTION, because the tools have two: `write_project`
-// takes a bare project key, and `save_work_view` takes the tracker's own
-// `kind:id` container grammar. A bare value is a PROJECT, which is what every
-// caller of the first spelling means.
+// containerArg reads a container argument as its kind and its key, in both
+// spellings the tools use: `write_project`'s bare project key and
+// `save_work_view`'s `kind:id` grammar. A bare value is a PROJECT.
 func containerArg(args map[string]any, field string) (authz.ObjectKind, string) {
 	raw := strings.TrimSpace(stringArg(args, field))
 	if raw == "" {
@@ -584,19 +448,16 @@ func containerArg(args map[string]any, field string) (authz.ObjectKind, string) 
 		return authz.KindProject, worklet.ProjectKey(raw)
 	}
 	if kind == worklet.ContainerWorkspace {
-		// THE WORKSPACE CARRIES NO ID, so `workspace:x` names nothing —
-		// the tool refuses the spelling with the grammar in its message.
+		// The workspace carries no id, so `workspace:x` names nothing;
+		// the tool refuses it with the grammar in its message.
 		return "", ""
 	}
 	return containerObject(worklet.Container{Kind: kind, ID: id})
 }
 
 // containerObject is a tracker container as the authority table's kind and
-// key.
-//
-// ONE MAPPING for both of the places a view's container reaches a decision —
-// the argument the gate reads and the STORED view `save_work_view` asks about
-// once it has read it — so the two cannot decide one container two ways.
+// key: one mapping for the gate's argument and the stored view `save_work_view`
+// reads, so one container is never decided two ways.
 func containerObject(c worklet.Container) (authz.ObjectKind, string) {
 	switch c.Kind {
 	case worklet.ContainerWorkspace:
@@ -608,10 +469,8 @@ func containerObject(c worklet.Container) (authz.ObjectKind, string) {
 	case worklet.ContainerPerson:
 		return authz.KindPerson, c.ID
 	}
-	// A KIND THIS BUILD DOES NOT KNOW NAMES NOTHING, which every class
-	// refuses. The tool parses the same string and refuses it too, with a
-	// message that says what the grammar is — and the refusal a caller
-	// reads should be that one, not an authority answer.
+	// A kind this build does not know names nothing; the tool refuses the
+	// same string with the grammar, the message a caller should read.
 	return "", ""
 }
 
@@ -624,32 +483,21 @@ func viewObject(owner string, c worklet.Container) authz.Object {
 	return o
 }
 
-// stringArg is one argument as a string, or empty.
-//
-// EMPTY RATHER THAN AN ERROR, because an absent argument is the tool's own
-// business: every class that reads a field refuses an empty one, and a
-// personal class reads an empty owner as the caller themselves. Deciding here
-// what an absent project means would be this table holding an opinion the
-// rules already hold.
+// stringArg is one argument as a string, or empty, never an error: what an
+// absent argument means is the rules' to say (a field-reading class refuses
+// it, a personal class reads the caller), not this table's.
 func stringArg(args map[string]any, field string) string {
 	held, _ := argval.String(args[field])
 	return held
 }
 
-// gated wraps one tool with the authority decision.
+// gated wraps one tool with the authority decision. A wrapper rather than a
+// call in each tool: the action IS the tool's name (this package's walks hold
+// the table and the tools together), so there is one place to miss the check.
 //
-// IT WRAPS RATHER THAN BEING CALLED FROM EACH TOOL, because the action IS the
-// tool's name — internal/authz's table is keyed on it, and the walk in this
-// package's tests holds the two against each other in both directions. So
-// there is exactly one place the check can be forgotten, and it is a place
-// nothing else goes through.
-//
-// A POINTER, AND THAT IS LOAD-BEARING: a registered tool is compared with `==`
-// — internal/engine asserts a seat's builtins are the applied epoch's OBJECTS
-// and not merely its names — and a struct holding a func field is
-// UNCOMPARABLE, so the first shape turned that assertion into a runtime panic
-// at the comparison. A pointer is comparable whatever it points at, and
-// pointer identity is exactly what "the same object" means there.
+// A POINTER, load-bearing: internal/engine compares a seat's builtins with `==`
+// against the applied epoch's objects, and a struct holding a func field is
+// uncomparable, a runtime panic at that comparison.
 type gated struct {
 	tools.Callable
 	authorize Authorizer
@@ -660,12 +508,10 @@ type gated struct {
 	requesters Requesters
 }
 
-// gatedSeat is [gated] for the OPTIONAL interface a tool may also satisfy.
-//
-// TWO TYPES rather than one with a nil check, because [tools.Invoke] dispatches
-// on which interface a tool satisfies — and a single wrapper implementing
-// both would make every read-only builtin look seat-scoped, so the phase
-// surface would refuse each one outside a turn.
+// gatedSeat is [gated] for a tool that is also [tools.SeatCallable]. Two types,
+// not a nil check: [tools.Invoke] dispatches on the interface, and one wrapper
+// implementing both would make every read-only builtin look seat-scoped,
+// refused outside a turn.
 type gatedSeat struct {
 	gated
 	seat tools.SeatCallable
@@ -706,16 +552,11 @@ func (g *gated) CallInTurn(ctx context.Context, turn *turnctx.Turn, args map[str
 }
 
 // CallForTurn derives the acting principal FROM THE TURN when the context
-// carries none.
-//
-// THE TURN IS THE AUTHORITY on these calls, and deriving it here rather than
-// only at [tools.Surface] is what makes the gate correct for every caller: a
-// seat tool invoked with a turn and no principal — which is what a direct
-// call, a resumed loop and any surface added later look like — would otherwise
-// reach the decision as NOBODY and be refused, naming an identity problem
-// where there is none. [turnctx.WithPrincipal] leaves an answer already in the
-// context alone, so an operator calling through their own credential is never
-// overwritten by a turn they happen to be carrying.
+// carries none, here rather than only at [tools.Surface]: a direct call, a
+// resumed loop or a later surface would otherwise reach the decision as nobody
+// and be refused. [turnctx.WithPrincipal] leaves a principal already in the
+// context alone, so an operator's own credential is never overwritten by a
+// turn they carry.
 func (g *gatedSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (mcp.Result, error) {
 
@@ -726,15 +567,11 @@ func (g *gatedSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return g.seat.CallForTurn(ctx, turn, args)
 }
 
-// admit is what every call of a gated tool passes, on all three of its
-// paths — the ARGUMENTS, then the AUTHORITY — answering nil to run the tool
-// or the result it is answered with instead.
-//
-// THE ARGUMENTS HERE, at the one place every call of every builtin passes:
-// a seat's turn, a worker's slice of it, an executor run's bridge, the operator's
-// assistant and the HTTP write surface all reach a builtin through this
-// wrapper. The HTTP surface used to check them at its routes alone, so the
-// other four dropped what the route refused — see [ErrUndeclaredArgument].
+// admit is what every call of a gated tool passes on all three paths — the
+// ARGUMENTS, then the AUTHORITY — answering nil to run the tool or the result
+// to answer instead. Arguments are checked here because every caller (a turn,
+// a worker, an executor's bridge, the operator's assistant, the HTTP surface)
+// reaches a builtin through this wrapper ([ErrUndeclaredArgument]).
 func (g *gated) admit(ctx context.Context, args map[string]any) *mcp.Result {
 	if unread := undeclared(g.Callable, args); len(unread) > 0 {
 		refusal := undeclaredRefusal(g.Callable, unread)
@@ -750,19 +587,13 @@ func (g *gated) admit(ctx context.Context, args map[string]any) *mcp.Result {
 // ErrUndeclaredArgument reports a call carrying an argument its tool does not
 // declare.
 //
-// REFUSED, NEVER DROPPED. A builtin reads the arguments its schema declares
-// and nothing else, so an undeclared one was DROPPED — and a dropped argument
-// is not a no-op, it is a call answered as though somebody had asked for
-// less. `save_work_view` lost its free `owner` when a personal view became
-// the caller's own (`personal: true`), and an assistant still sending the old
-// shape had its PERSONAL view saved as a SHARED tab on the container,
-// visible to everybody on it, under an answer saying it had worked. The
-// model, the assistant and the client each fix a misspelt or retired argument
-// the moment they are told its name; told nothing, none of them can.
+// Refused, never dropped: a builtin reads only its schema's arguments, and a
+// dropped one answers the call as though less were asked (a retired argument
+// can turn a personal view into a shared tab, reported as done). Told its
+// name, the model, assistant or client fixes it at once.
 //
-// ITS OWN SENTINEL, not [ErrRefused]: nobody's authority was asked, and a
-// surface answering in status codes answers it 400 — the request is the
-// caller's to change — where a refusal is 403.
+// Its own sentinel, not [ErrRefused]: nobody's authority was asked, and a
+// status-code surface answers it 400 (the caller's to change), not 403.
 var ErrUndeclaredArgument = errors.New("builtin: this call carries an " +
 	"argument its tool does not read")
 
@@ -784,13 +615,8 @@ func (e *UndeclaredArguments) Error() string {
 func (e *UndeclaredArguments) Is(target error) bool { return target == ErrUndeclaredArgument }
 
 // undeclared is the arguments a call carries that its tool's schema does not
-// declare, sorted, or nil when there are none.
-//
-// THE SCHEMA IS THE LIST, read off the tool rather than typed beside it, so an
-// argument a tool gains is accepted the moment it can be read and one it loses
-// is refused the moment it cannot. A second list anywhere would be the copy
-// that drifts — which is what the HTTP surface's own copy of this check was,
-// until it became this one.
+// declare, sorted, or nil when there are none. The schema is the list, read off
+// the tool, so no second copy can drift from it.
 func undeclared(tool tools.Callable, args map[string]any) []string {
 	properties, _ := tool.Parameters()["properties"].(map[string]any)
 	var unread []string
@@ -836,16 +662,13 @@ func (g *gated) check(ctx context.Context, args map[string]any) error {
 	if g.authorize == nil {
 		return ErrNoAuthorizer
 	}
-	// THE PRINCIPAL IS READ TWICE AND DECIDED ONCE. What it is needed for
-	// here is only the personal default — whose record an unnamed verb is
-	// about — and a read that answers nothing leaves the owner empty,
-	// which is exactly what [Authorizer] is about to refuse on.
+	// The principal is read here only for the personal default; a read
+	// answering nothing leaves the owner empty, which [Authorizer] refuses.
 	about := subjectOf[g.Name()]
 	if about.inTool {
-		// THE TOOL ASKS, with the same action and the object it resolved
-		// — see [subject.inTool]. Deciding here as well, on an object the
-		// arguments do not state, would refuse everybody the tool is
-		// about to admit.
+		// The tool asks with the object it resolves ([subject.inTool]);
+		// deciding here on an object the arguments do not state would
+		// refuse everybody the tool admits.
 		return nil
 	}
 	principal, _ := iam.From(ctx)
@@ -854,40 +677,17 @@ func (g *gated) check(ctx context.Context, args map[string]any) error {
 }
 
 // Admits reports whether the authority table could admit the party on ctx to
-// tool at all — the question a person's surface asks to decide which of a
-// catalogue's verbs to offer them, before anybody has named an object.
+// tool at all, before any object is named: which verbs a surface offers. The
+// object is the gate's own for an argument-less call ([subject.objectFor]), or
+// for a tool-decided verb the UNRESOLVED object of its kind
+// ([authz.Object.Unresolved], [unresolvedName]).
 //
-// THE OBJECT IS THE ONE A CALL NAMING NOTHING IS ABOUT. For a verb the gate
-// decides, it is the gate's own object for a call with no arguments
-// ([subject.objectFor]): the caller, for a personal verb that takes no name;
-// the kind alone, for an app's own verb, decided on the app alone. For a verb its
-// tool decides ([subject.inTool]) it is the UNRESOLVED object of its kind
-// ([authz.Object.Unresolved], under [unresolvedName]), because what that
-// verb is about is a stored row or a name the call has not given.
-//
-// AN UNRESOLVED ANSWER ADMITS. [authz.ErrUnresolved] is the table saying that
-// whose record it is decides it — a caller who leads somebody, asked about a
-// verb a lead may take on a report — and that caller can be admitted on the
-// record they lead, which is exactly what offering the verb means. It is not
-// the node failing to decide, and reporting it as [ErrUndecidable] would
-// answer every lead's question with a retry.
-//
-// A STEP-UP ADMITS TOO. [authz.ReasonStepUp] is the table admitting the
-// caller on a proof of identity older than the verb's window — the one
-// refusal the caller clears themselves — so the verb is offered, and a press
-// of it is answered `step_up_required`, which the surface's step-up ceremony
-// turns into a fresh proof and the same press again. Refused here instead, a
-// verb that asks a step-up (code_purge_unreachable) would be offered to
-// nobody who had not just signed in, and its control would stay disabled
-// with nothing to say why.
-//
-// nil admits; otherwise the error is the [Authorizer]'s own — [ErrRefused],
-// [ErrUndecidable] or [ErrNoAuthorizer] — so a surface tells "not offered"
-// from "this node cannot say" exactly as a call does.
-//
-// OUTSIDE ANY TURN, said so ([OutsideAnyTurn]): what a party is offered is
-// asked before any call, so for a seat it is the seat's own authority, and
-// whoever later wakes a turn bounds each of its calls, never the offer.
+// [authz.ErrUnresolved] admits: whose record it is decides, so a lead can be
+// admitted on a report (as [ErrUndecidable] it would answer leads with a
+// retry). [authz.ReasonStepUp] admits too: the caller clears it, and a press
+// is answered `step_up_required` for the step-up ceremony. Otherwise the error
+// is the [Authorizer]'s own. Decided [OutsideAnyTurn]: an offer is the seat's
+// own authority; whoever later wakes a turn bounds its calls, not the offer.
 func Admits(ctx context.Context, authorize Authorizer, tool string) error {
 	if authorize == nil {
 		return ErrNoAuthorizer
@@ -908,28 +708,19 @@ func Admits(ctx context.Context, authorize Authorizer, tool string) error {
 	return err
 }
 
-// unresolvedName is the owner an object nobody has resolved yet is decided
-// under where the call names no record at all — a turn a note is for, a verb
-// offered before anything is named.
-//
-// NO LOGIN AND NO SEAT HANDLE CAN EQUAL IT: a login carries a dot or a colon
-// and a seat handle only lowercase letters, digits and hyphens, and this has
-// parentheses and neither separator. So the table's self arm can never match
-// it, and with [authz.Object.Unresolved] the lead arm asks only whether the
-// caller leads anybody. Empty would not do: every personal class refuses an
-// empty owner as naming nobody, before it reads Unresolved at all.
+// unresolvedName is the owner an unresolved object is decided under when the
+// call names no record (a turn a note is for, a verb offered before anything is
+// named). No login (it carries a dot or a colon) or seat handle (lowercase,
+// digits, hyphens) can equal it, so the self arm never matches and, with
+// [authz.Object.Unresolved], the lead arm asks only whether the caller leads
+// anybody. Not empty: personal classes refuse an empty owner first.
 const unresolvedName = "(unresolved)"
 
-// mayWrite is the ask a WORK tool makes once it has read what it needs.
-//
-// A NIL ANSWER IS THE ALLOW and a non-nil one is the result to return. It is
-// [gated.check]'s body without the table lookup, because these calls name
-// their own action and their own object — the table cannot form either from
-// the arguments alone.
-//
-// A NIL AUTHORIZER REFUSES, on [Deps.Authorize]'s rule: the field is pushed
-// down by [Register] and [OperatorTools], so a nil here is a surface that
-// wired no decision rather than one that decided to allow.
+// mayWrite is the ask a WORK tool makes once it has read what it needs: nil
+// allows, otherwise the result to return. These calls name their own action
+// and object, which the table cannot form from the arguments. A nil Authorizer
+// refuses ([Deps.Authorize]'s rule): [Register] and [OperatorTools] push the
+// field down, so nil is a surface that wired no decision.
 func (d WorkDeps) mayWrite(ctx context.Context, action authz.Action,
 	object authz.Object) *tools.Result {
 
@@ -972,31 +763,20 @@ func askAuthority(ctx context.Context, authorize Authorizer,
 }
 
 // authorityRefusal is what a call the authority refused answers the MODEL
-// with.
-//
-// A FAILED RESULT AND NOT AN ERROR, which is internal/mcp's own contract: an
-// error means the turn is being torn down and nothing is reported, while a
-// refusal is something the model should see and reason about — "I may not do
-// that, so I will ask somebody who can" is a legitimate next move and an
-// invisible refusal is a round spent finding out nothing.
-//
-// THE REFUSAL RIDES AS THE CAUSE, beneath its class ([authorityClass]), so a
-// surface answering in status codes reads which of the three it was from the
-// value rather than from the sentence — [errors.Is] against [ErrRefused],
-// [ErrUndecidable] or [ErrNoAuthorizer], or [mcp.RefusalOf] for the class.
+// with: a failed result, not an error (internal/mcp's contract: an error tears
+// the turn down unreported, a refusal is something the model can reason about
+// and route around). The refusal rides as the cause beneath its class
+// ([authorityClass]), so a status-code surface reads it with [errors.Is] or
+// [mcp.RefusalOf] rather than from the sentence.
 func authorityRefusal(name string, why error) mcp.Result {
 	return mcp.Result{Failed: true, Output: Refusal(name, why),
 		Cause: mcp.Classify(authorityClass(why), why)}
 }
 
 // authorityClass is the class an authority answer reads as on a surface that
-// is not a model.
-//
-// UNDECIDABLE IS UNAVAILABLE, because waiting can clear it — the chart a rule
-// reads was behind, the caller's identity could not be read — and FORBIDDEN is
-// everything else: a refusal, a caller nobody identified (the HTTP surface
-// tells that one apart with [ErrUnauthenticated] beneath the class), and a
-// surface wired with no decision at all, which no retry clears either.
+// is not a model: [ErrUndecidable] is unavailable, since waiting can clear it;
+// everything else is forbidden — a refusal, an unidentified caller (told apart
+// by [ErrUnauthenticated]), or a surface wired with no decision.
 func authorityClass(why error) mcp.Refusal {
 	if errors.Is(why, ErrUndecidable) {
 		return mcp.RefusalUnavailable
@@ -1005,21 +785,11 @@ func authorityClass(why error) mcp.Refusal {
 }
 
 // Refusal is the ONE sentence an authority refusal reads as, on every surface
-// that serves these verbs: a seat's own turn, the operator's assistant over
-// MCP, and the HTTP write surface.
-//
-// EXPORTED FOR THE THIRD. The first two reach it through the gate, because
-// they call the tools; the HTTP surface refuses at its ROUTE — before the
-// tool runs, where the object is knowable from the path — and a route that
-// composed its own sentence would be where "you may not" first read two ways.
-// That is not cosmetic: a person told one thing by the dashboard and another
-// by their assistant about the same verb asks which of them is wrong, and the
-// answer is neither — so the only way to keep the question from arising is to
-// have one sentence and nowhere else to write one.
-//
-// IT NAMES THE VERB AND THE REASON AND NEVER THE CALLER. A wording that said
-// who was refused would differ for every caller asking the same question, and
-// the caller already knows who they are.
+// that serves these verbs: a seat's turn, the operator's assistant over MCP,
+// and the HTTP write surface. Exported for the last, which refuses at its route
+// before the tool runs; a sentence of its own would let the dashboard and the
+// assistant word one refusal two ways. It names the verb and the reason, never
+// the caller, so every caller asking the same question reads the same answer.
 func Refusal(verb string, why error) string {
 	return fmt.Sprintf("%s didn't run: %s", verb, why.Error())
 }

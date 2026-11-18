@@ -16,27 +16,24 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A SEAT'S BACKLOG, CARRIED A PAGE AT A TIME AND MARKED PER ROW (#1033).
+// A SEAT'S BACKLOG, CARRIED A PAGE AT A TIME AND MARKED PER ROW.
 //
-// The cases below publish to a changelog of their own (roundTripJS), so a case
-// states each row's round trip, refuses the row it names, or acts inside the
-// publish of the row it names. The ones about a bound run on a synctest
-// bubble's clock, where a round trip is exactly publishTrip and a bound cuts a
-// publish at exactly the row the arithmetic says. The store is opened and
-// seeded outside the bubble, and inside it only the case's own goroutine
-// reads and writes it.
+// The cases publish to a changelog of their own (roundTripJS), so a case
+// states each row's round trip, refuses the row it names, or acts inside that
+// row's publish. The bound cases run on a synctest bubble's clock, where a
+// round trip is exactly publishTrip and a bound cuts at exactly the row the
+// arithmetic says. The store is opened and seeded outside the bubble; inside
+// it only the case's own goroutine touches it.
 
-// publishTrip is one row's broker round trip in the cases on a bubble's clock:
-// a leaf link across regions, the deployment #1033 reports, and a value that
-// divides neither bound, so no row lands on one. A cycle then has 428 rows
-// acknowledged, the 429th landing at 30.03 s, and a flush 71.
+// publishTrip is one row's broker round trip on a bubble's clock: a leaf link
+// across regions, and a value dividing neither bound, so no row lands on one.
+// A cycle then acknowledges 428 rows (the 429th lands at 30.03 s), a flush 71.
 const publishTrip = 70 * time.Millisecond
 
 const (
-	// cycleBound is the memory sync's cycle and flushBound its release
-	// flush: the engine's memorySyncInterval and memoryFlushTimeout, which
-	// this package cannot import. The cases claim how a backlog relates to
-	// them, not the numbers.
+	// cycleBound and flushBound are the engine's memorySyncInterval and
+	// memoryFlushTimeout, which this package cannot import. The cases claim
+	// how a backlog relates to them, not the numbers.
 	cycleBound = 30 * time.Second
 	flushBound = 5 * time.Second
 
@@ -47,27 +44,23 @@ const (
 )
 
 // noteWidth is a vector's width in float32s: text-embedding-3-small's 1 536,
-// 6 KiB stored and 8 KiB carried as base64, so a page holds about 125 notes
-// that carry one.
+// 6 KiB stored and 8 KiB as base64, so a page holds about 125 such notes.
 const noteWidth = 1536
 
-// roundTripJS is a changelog that acknowledges each row it is handed once
-// trip, when set, lets it through, and records the row's subject. on, when
-// set, is called with the count acknowledged so far, inside the publish of
-// the row that made it, so a case acts at the row it names.
-//
-// Embedded rather than stubbed, as openFailsJS is: a publish of a seat calls
-// nothing else, and anything else called on it is a nil interface's panic.
+// roundTripJS is a changelog that acknowledges each row once trip, when set,
+// lets it through, recording its subject. on, when set, is called with the
+// count acknowledged so far, inside that row's publish, so a case acts at the
+// row it names. Embedded rather than stubbed, as openFailsJS is: a publish
+// calls nothing else, and anything else is a nil interface's panic.
 type roundTripJS struct {
 	jetstream.JetStream
 	trip  func(ctx context.Context) error
 	acked []string
 	on    func(n int)
 
-	// most, when above 0, is the most rows it acknowledges: every publish
-	// past them is refused ([errPastMost]), so a case whose call goes on
-	// re-reading a page it can no longer mark fails on its own terms rather
-	// than running until the test binary times out.
+	// most, when above 0, caps the rows it acknowledges ([errPastMost]), so
+	// a call re-reading a page it can no longer mark fails on its own terms,
+	// not at the test binary's timeout.
 	most int
 }
 
@@ -92,15 +85,15 @@ func (j *roundTripJS) Publish(ctx context.Context, subject string, _ []byte,
 	return &jetstream.PubAck{}, nil
 }
 
-// syncerOver is a syncer of the seat over db whose changelog is js, which
-// answers publishes and nothing else, so it publishes and never hydrates: it
-// HOLDS the seat as the node that has held it all along ([heldFromEmpty]).
+// syncerOver is a syncer of the seat over db publishing to js, which answers
+// publishes only, so it never hydrates: it HOLDS the seat as the node that
+// has held it all along ([heldFromEmpty]).
 func syncerOver(db *store.DB, js jetstream.JetStream) *Syncer {
 	return heldFromEmpty(newSyncer(db, js, func(string) string { return seat.AgentID }), seat.Handle)
 }
 
-// registered is the registry's entry for the table named, so a case says
-// which table it means rather than where the registry lists it.
+// registered is the registry's entry for the table named, so a case names a
+// table rather than its position in the registry.
 func registered(t *testing.T, name string) table {
 	t.Helper()
 	for _, spec := range tables {
@@ -113,17 +106,17 @@ func registered(t *testing.T, name string) table {
 }
 
 // writeNotes writes n diary notes for the seat in one transaction, each with
-// a vector of width float32s (none at 0), and answers their ids in the order
-// they were stamped. The i-th written is note i, under the id n<n-i>, zero
-// padded, so the stamps rise as the ids fall: an export in key order is not
-// one in stamp order.
+// a vector of width float32s (none at 0), and answers their ids in stamp
+// order. Note i, the i-th written, has the id n<n-i>, zero padded, so the
+// stamps rise as the ids fall: an export in key order is not one in stamp
+// order.
 func writeNotes(t *testing.T, db *store.DB, n, width int) []string {
 	t.Helper()
 	return writeNotesUnder(t, db, "n", n, width)
 }
 
 // writeNotesUnder is [writeNotes] with the ids under prefix rather than n, so
-// a case writes notes more than once.
+// a case can write notes more than once.
 func writeNotesUnder(t *testing.T, db *store.DB, prefix string, n, width int) []string {
 	t.Helper()
 	var vector, model any
@@ -148,14 +141,12 @@ func writeNotesUnder(t *testing.T, db *store.DB, prefix string, n, width int) []
 	return ids
 }
 
-// subjectOf is a row's subject on the changelog, by the id its table is keyed
-// on.
+// subjectOf is a row's subject on the changelog, by its table's key.
 func subjectOf(spec table, id string) string {
 	return spec.subject(seat.AgentID, map[string]any{spec.key[0]: id})
 }
 
-// noteNumbers maps each note's subject on the changelog to its number in the
-// order ids lists them, from 1.
+// noteNumbers maps each note's subject to its 1-based position in ids.
 func noteNumbers(t *testing.T, ids []string) map[string]int {
 	t.Helper()
 	diary := registered(t, "agent_diary")
@@ -166,8 +157,7 @@ func noteNumbers(t *testing.T, ids []string) map[string]int {
 	return numbers
 }
 
-// numbersOf is the notes the changelog acknowledged, by number, in the order
-// it acknowledged them.
+// numbersOf is the notes the changelog acknowledged, by number, in order.
 func numbersOf(t *testing.T, acked []string, numbers map[string]int) []int {
 	t.Helper()
 	out := make([]int, 0, len(acked))
@@ -190,8 +180,8 @@ func span(first, last int) []int {
 	return out
 }
 
-// runsOf says which notes were acknowledged, as runs in the order they were
-// ("1-428, 1-71"): a thousand numbers read as nothing.
+// runsOf renders note numbers as runs ("1-428, 1-71"): a thousand numbers
+// read as nothing.
 func runsOf(ns []int) string {
 	if len(ns) == 0 {
 		return "none"
@@ -217,10 +207,9 @@ func runsOf(ns []int) string {
 	return strings.Join(runs, ", ")
 }
 
-// publishFor is one own pass of the seat under bound, which on a bubble's
-// clock is exactly bound: the rows the changelog acknowledged in it, in
-// order, and what it answered. The seat here has no boundary, so every row is
-// its own, as every row was a publish's before the boundary.
+// publishFor is one own pass of the seat under bound (exactly bound on a
+// bubble's clock): the rows acknowledged in it, in order, and what it
+// answered. The seat has no boundary, so every row is its own.
 func publishFor(t *testing.T, s *Syncer, js *roundTripJS, bound time.Duration) ([]string, Carried, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), bound)
@@ -232,22 +221,16 @@ func publishFor(t *testing.T, s *Syncer, js *roundTripJS, bound time.Duration) (
 
 // A BACKLOG LONGER THAN ONE CYCLE IS CARRIED ACROSS CYCLES, NOT RESTARTED.
 //
-// The mark moved only once a table was published whole (#1033), so a cycle
-// its bound cut kept nothing of what the changelog had acknowledged: the next
-// cycle read the same rows above the same mark and was cut at the same row,
-// for as long as the backlog outlasted a cycle. A mark per acknowledged row
-// keeps each cycle's progress, and 1 000 notes at publishTrip a row are
-// carried in two cycles and part of a third, each note once. Each cycle says
-// so in what it answers, which is how the memory sync tells a backlog
-// draining from a cycle that carried nothing that stays carried: a cut cycle
-// answers the rows it had acknowledged, each of which moved the diary's mark,
-// and the diary as the table it stopped in, which keeps what it carried.
+// A mark per acknowledged row keeps a cut cycle's progress; a mark moved only
+// after a whole table would reread and recut the same rows every cycle. 1 000
+// notes at publishTrip a row take two cycles and part of a third, each once.
+// A cut cycle answers the rows it acknowledged, each marked, and the diary as
+// the table it stopped in, so the memory sync sees the backlog draining.
 //
-// Mutation: move the mark back after the table, to the page's last row at
-// its first acknowledgement, or read a page from the mark's own row (>= for
-// >); read the page in key order; or count a cut table's marked rows only
-// once it completes, or call every table a cut stopped in a whole one: this
-// goes red.
+// Mutation: move the mark back after the table, to the page's last row at its
+// first acknowledgement, or read a page from the mark's own row (>= for >);
+// read the page in key order; or count a cut table's marked rows only once it
+// completes, or call every table a cut stopped in a whole one: this goes red.
 func TestABacklogLongerThanACycleIsCarriedAcrossCyclesNotRestarted(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -320,11 +303,9 @@ func TestABacklogLongerThanACycleIsCarriedAcrossCyclesNotRestarted(t *testing.T)
 
 // THE RELEASE FLUSH CONTINUES WHERE THE CYCLES STOPPED.
 //
-// The flush is one more publish, under a bound of its own. With the mark
-// moving only after a whole table it began at the mark the cycles had left
-// unmoved, and was cut inside the same prefix they were (#1033), carrying
-// again what they had already had acknowledged. It begins at the first row
-// they did not reach.
+// The flush is one more publish, under a bound of its own, and begins at the
+// first row the cycles did not reach, never again at what they had
+// acknowledged.
 //
 // Mutation: move the mark back after the table, and this goes red.
 func TestTheReleaseFlushContinuesWhereTheCyclesStopped(t *testing.T) {
@@ -360,10 +341,8 @@ func TestTheReleaseFlushContinuesWhereTheCyclesStopped(t *testing.T) {
 // A ROW WRITTEN AFTER A CUT IS CARRIED WITH THE REST OF THE BACKLOG.
 //
 // A note the seat writes is stamped above every row before it, so it waits
-// behind the backlog, and behind a mark that never moved it waited for good:
-// nothing a seat learned on a node whose backlog outlasted a cycle reached
-// the changelog (#1033). It is carried, once, by the cycle that carries the
-// last of the backlog.
+// behind the backlog, for good if the mark never moves. It is carried, once,
+// by the cycle that carries the last of the backlog.
 //
 // Mutation: move the mark back after the table, and this goes red.
 func TestARowWrittenAfterACutIsCarriedWithTheRestOfTheBacklog(t *testing.T) {
@@ -414,12 +393,11 @@ func TestARowWrittenAfterACutIsCarriedWithTheRestOfTheBacklog(t *testing.T) {
 
 // A ROW WHOSE PUBLISH FAILED IS WHERE THE NEXT PUBLISH STARTS.
 //
-// The mark moves past a row only once the changelog has acknowledged it, so
-// a publish the broker refused at its fifth row keeps the four before it and
-// nothing after, and the seat's next publish, a cycle's or its release's
-// flush, starts at the fifth: not at the first, which republishes what was
-// carried, and not at the sixth, which leaves the refused row behind for as
-// long as this node holds the seat.
+// The mark moves past a row only once the changelog acknowledged it, so a
+// publish refused at its fifth row keeps the four before it, and the next
+// publish starts at the fifth: not the first, which republishes what was
+// carried, nor the sixth, which leaves the refused row behind for as long as
+// this node holds the seat.
 //
 // Mutation: move the mark before the publish, back after the table, or to
 // the page's last row at its first acknowledgement, and this goes red.
@@ -453,13 +431,11 @@ func TestARowWhosePublishFailedIsWhereTheNextPublishStarts(t *testing.T) {
 // A PUBLISH SKIPS WHAT ANOTHER PUBLISH OF THE SEAT HAD ACKNOWLEDGED.
 //
 // Two publishes of one seat's range can overlap: a cycle takes no seat's
-// lock, and the row it was sending as the seat's release began is
-// acknowledged, and moves the mark, while the release's flush carries the
-// range. Each page is read above the seat's mark, read again at each page, so
-// a page read after the other call has had rows acknowledged starts above
-// them, and the two send again at most the page each already held. The case
-// holds that to a wider overlap than the one row, under one holding: it runs
-// the second publish, whole, inside the first's publish of its first row.
+// lock, so the row it was sending as the release began moves the mark while
+// the release's flush carries the range. The mark is reread at each page, so
+// a page starts above what the other call had acknowledged, and each sends
+// again at most the page it already held. The case widens the overlap: it
+// runs the second publish whole inside the first's publish of its first row.
 //
 // Mutation: read the mark once per table rather than at each page, and the
 // first publish sends the table again from where its first page ended.
@@ -518,11 +494,10 @@ func TestAPublishSkipsWhatARacingPublishOfTheSeatHadAcknowledged(t *testing.T) {
 
 // A PUBLISH HOLDS ONE PAGE OF A BACKLOG, NOT ALL OF IT.
 //
-// The export read every row above the mark into memory before the first was
-// published (#1033), so a publish held the backlog whole: after a hydration,
-// everything the changelog keeps of the seat. A publish reads a page, sends it
-// and reads the next, so a row deleted before its page is read is never
-// published, which is what shows the later pages were not already in memory.
+// After a hydration the backlog is everything the changelog keeps of the
+// seat, so a publish reads a page, sends it and reads the next. A row deleted
+// before its page is read is never published, which shows the later pages
+// were not already in memory.
 //
 // Mutation: drop the page's budget, so a page is the whole backlog, and this
 // goes red.
@@ -550,15 +525,12 @@ func TestAPublishHoldsOnePageOfABacklogNotAllOfIt(t *testing.T) {
 
 // A ROW LARGER THAN A PAGE IS NEVER LEFT BEHIND.
 //
-// A row is bounded only by the transport, and an episode keeps its ask whole,
-// so one row can hold more than a page's budget. A page takes the row that
-// passes its budget and stops after it, so such a row ends the page it is
-// read into, and a page is never empty: one that stopped short of it would
-// read the same nothing for ever, and the rows after it with it. The case
-// watches each page of the episodes through the syncer's seam, and stops the
-// publish at a page read after one that took no row and said there were
-// more, so that publish fails here, naming what it did, rather than at the
-// test binary's timeout.
+// An episode keeps its ask whole, so one row can exceed a page's budget. A
+// page takes the row that passes its budget and stops after it, so a page is
+// never empty: one that stopped short would read the same nothing for ever,
+// stranding every row after it. The case watches the episodes' pages through
+// the syncer's seam and stops a publish that reads a page after an empty one
+// that said there were more, so it fails here, not at the binary's timeout.
 //
 // Mutation: stop a page before the row that passes its budget, and this goes
 // red.
@@ -577,9 +549,8 @@ func TestARowLargerThanAPageIsNeverLeftBehind(t *testing.T) {
 	s := syncerOver(db, js)
 	ctx, stop := context.WithCancel(t.Context())
 	defer stop()
-	// read is how many rows had been acknowledged when the episodes' last
-	// page was read. A page read with none acknowledged since follows a page
-	// that took no row and said there were more.
+	// read is the rows acknowledged when the episodes' last page was read;
+	// none acknowledged since means the page before took no row.
 	read, stuck := -1, false
 	s.beforePage = func(_ markRange, table string) {
 		if table != "episodes" {
@@ -610,14 +581,13 @@ func TestARowLargerThanAPageIsNeverLeftBehind(t *testing.T) {
 
 // A PUBLISH SAYS WHAT IT CARRIED AND WHERE IT STOPPED.
 //
-// What a publish answers is how the memory sync tells a backlog draining from
-// a sync that carries nothing that stays carried: every row the changelog
-// acknowledged, the rows among them that moved a mark, and, for a publish that
-// stopped short, the table it stopped in and whether that table is carried
-// whole, keeping nothing of a cut publish. The seed is one row in each table,
-// so the first publish carries six and marks the three of the watermark
-// tables, the second carries only the whole tables again, and the third,
-// refused at its first row, stops in the first whole table the registry lists.
+// The answer is how the memory sync tells a draining backlog from a sync that
+// keeps nothing: every row acknowledged, those that moved a mark, and, for a
+// publish that stopped short, the table it stopped in and whether that table
+// is carried whole (keeping nothing of a cut publish). With one row in each
+// table, the first publish carries six and marks the three watermark tables'
+// rows, the second carries only the whole tables, and the third, refused at
+// its first row, stops in the first whole table the registry lists.
 //
 // Mutation: count the whole tables' rows as marked, and this goes red.
 func TestAPublishSaysWhatItCarriedAndWhereItStopped(t *testing.T) {

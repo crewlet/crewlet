@@ -99,12 +99,9 @@ func decode(t *testing.T, res tools.Result) map[string]any {
 
 // A PATH THE FILE-PATH RULE REFUSES IS TOLD WITHOUT A PACKAGE'S NAME: a
 // version's paths are held to the tracker's rule through manifest.CleanPath,
-// and get_artifact printed the error whole, so a model read "manifest:
-// invalid: tracker: the path …".
-//
-// Mutation: print CleanPath's error with %v again in get_artifact, or drop
-// "worklet: " or the manifest's class word from the artifacts' Sentence, and
-// this goes red.
+// whose error, printed whole, reads "manifest: invalid: tracker: …".
+// Mutation: print CleanPath's error with %v in get_artifact, or drop "worklet: "
+// or the manifest's class word from the artifacts' Sentence, and this goes red.
 func TestAPathTheFilePathRuleRefusesIsToldInItsWords(t *testing.T) {
 	t.Parallel()
 	r := newArtifactRig(t, artifactChart{}, requesters{"founder": founderPrincipal(iam.Apps...)}, nil)
@@ -267,10 +264,9 @@ func TestAStalePublishHandsBackTheLiveVersionToMerge(t *testing.T) {
 // live version too wide for one tool answer — here every one of its files
 // changed, under paths long enough that their names alone pass the limit — is
 // told as one sentence naming the live version and the base to publish on,
-// and never the artifact's id, which the model named itself and the sentence
-// used to repeat. The fallback is the one branch no other test reaches.
-// Mutations: put the id back into the sentence, or drop the base it names, and
-// this fails.
+// and never the artifact's id, which the model named itself. No other test
+// reaches this fallback. Mutations: put the id into the sentence, or drop the
+// base it names, and this fails.
 func TestAStalePublishTooWideToHandBackStillSaysWhatToDo(t *testing.T) {
 	t.Parallel()
 	r := newArtifactRig(t, artifactChart{}, requesters{}, nil)
@@ -303,11 +299,10 @@ func TestAStalePublishTooWideToHandBackStillSaysWhatToDo(t *testing.T) {
 	}
 }
 
-// AND A TURN THAT MAY NOT READ THE LIVE VERSION IS NOT SENT TO READ IT: the
-// fallback told every turn to read it with get_artifact, which the requester
-// ceiling refuses for one whose requester the artifact is not shared with, as
-// the whole answer's `live_files_withheld` already said. Mutation: drop the
-// withheld wording from the fallback and this fails.
+// AND A TURN THAT MAY NOT READ THE LIVE VERSION IS NOT SENT TO READ IT with
+// get_artifact, which the requester ceiling refuses when the artifact is not
+// shared with the turn's requester (as `live_files_withheld` says). Mutation:
+// drop the withheld wording from the fallback and this fails.
 func TestAStalePublishTooWideToHandBackSendsNoTurnToARefusedRead(t *testing.T) {
 	t.Parallel()
 	r := newArtifactRig(t, artifactChart{}, requesters{"founder": founderPrincipal(iam.Apps...)}, nil)
@@ -693,12 +688,7 @@ func TestABoxSourceIsReadForASeatsOwnRunAlone(t *testing.T) {
 // caller's argument to change, a provider that did not answer is a wait, one
 // that refused the company's key is a person's to fix, and what nothing classed
 // is the fault of this node it is — each in the tool's words, never the
-// error's.
-//
-// Every one of those used to be told as "a fault in this node itself, not
-// something trying again clears": a model whose box E2B was slow to answer
-// gave up on a publish a retry would have landed.
-//
+// error's. Told as a fault, a model gives up on a publish a retry would land.
 // Mutation: tell a box read through nodeFailure, or drop the regular-file
 // arm, and a case goes red.
 func TestABoxReadIsToldByWhyItFailed(t *testing.T) {
@@ -785,9 +775,8 @@ func TestABoxReadIsToldByWhyItFailed(t *testing.T) {
 	}
 
 	// AND A DIRECTORY THE WORKSPACE DOES NOT HOLD AS ONE is the caller's to
-	// name again, as a path naming no file is: it was told as a fault of
-	// this node. Mutation: drop the ErrNotADirectory arm and this row is
-	// a fault.
+	// name again, as a path naming no file is. Mutation: drop the
+	// ErrNotADirectory arm and this row is a fault.
 	r = newArtifactRig(t, artifactChart{}, requesters{}, func(d *builtin.ArtifactDeps) {
 		d.Boxes = boxes{box: &fakeBox{listErr: fmt.Errorf("engine: list dist: %w",
 			builtin.ErrNotADirectory)}}
@@ -830,12 +819,9 @@ func TestABoxReadIsToldByWhyItFailed(t *testing.T) {
 
 // A BOX READ A CONDITION STOPPED IS WRITTEN TO THE LOG: the model is told the
 // condition in its own words, and the error that names the store and its host
-// goes to the node's log. [builtin.nodeFailure] writes only a fault, so a
-// read a coordination store or a deadline stopped left nothing in the log
-// saying what stopped it.
-//
+// goes to the node's log: [builtin.nodeFailure] logs only a fault, so nothing
+// else records what stopped the read.
 // NOT PARALLEL: it reads the process's log, which [logging.Configure] owns.
-//
 // Mutation: drop the log line for an unclassed condition and this fails.
 func TestABoxReadAConditionStoppedIsLogged(t *testing.T) {
 	logs := &lockedBuffer{}
@@ -903,14 +889,12 @@ func TestATurnPastItsGuardrailIsToldToStop(t *testing.T) {
 
 // A PUBLISH THE OBJECT STORE HAS NO ROOM FOR IS REFUSED AS FULL: the store
 // refuses the same file the same way until an operator makes room, so the seat
-// is told that — the file, nothing published, and the room the store named —
-// under the class a person's surface answers 507, never the fault ("a fault in
-// this node itself") a failure nothing classified reads as, and never an
-// invitation to make the call again. The store's own words name its bucket and
-// stay in the node's log.
-//
-// Mutation: drop publishFailure's StoreFull case and this fails on the class
-// and the sentence; splice a room of the tool's own and it fails on the room.
+// is told the file, that nothing published, and the room the store named,
+// under the class a person's surface answers 507 — never a fault, never an
+// invitation to call again. The store's own words name its bucket and stay in
+// the node's log. Mutation: drop publishFailure's StoreFull case and this
+// fails on the class and the sentence; splice a room of the tool's own and it
+// fails on the room.
 func TestAPublishTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
 	t.Parallel()
 	r := newArtifactRig(t, artifactChart{}, requesters{}, nil)
@@ -937,8 +921,8 @@ func TestAPublishTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
 }
 
 // A STORE THAT DID NOT ANSWER A PUBLISH IS A CONDITION, invited back as
-// write_project_file invites it, where this tool told it as a fault of the
-// node. Mutation: drop the store's classification and this fails.
+// write_project_file invites it, never a fault of the node. Mutation: drop the
+// store's classification and this fails.
 func TestAPublishTheStoreDidNotAnswerIsACondition(t *testing.T) {
 	t.Parallel()
 	r := newArtifactRig(t, artifactChart{}, requesters{}, nil)

@@ -6,32 +6,16 @@ import (
 	"unicode/utf8"
 )
 
-// Prompt is a built prompt: the text a model is sent, and the OUTLINE of it —
-// the parts it was assembled from, in order, each with the byte length it
-// occupies in the text.
-//
-// # Why the builder states the outline rather than a reader deriving it
-//
-// A reader that wants to show a prompt as its parts has one thing to go on
-// without this: the text's own `##` lines. That is right for the builder's
-// headings and wrong for every heading INSIDE embedded content — a chat
-// trigger's own "## Triage — decide BEFORE replying" and "## Thread context", a
-// pull request description's "# Title", a model's "## Summary" quoted back in
-// review evidence or a ledger reply. Split on those, an embedded heading
-// escapes the section it belongs to, or swallows the rest of the prompt under
-// a title nobody wrote. Only the frame that appended a part knows where the
-// part begins and ends, so the frame that appends it records it.
-//
-// # The invariants a reader may rely on
+// Prompt is a built prompt: the text a model is sent, and its OUTLINE — the
+// parts it was assembled from, in order, each with its byte length in the text
+// (package doc, "Every builder returns its outline beside its text").
 //
 // The sections TILE Text exactly and in order: Text is valid UTF-8, their byte
 // lengths sum to len(Text), every boundary falls on a rune boundary, every
-// section is at least one byte, and no key repeats within one prompt. A
-// separator between two parts belongs to the section BEFORE it, so a headed
-// section starts with its own heading line — and [Section.Headed] says which
-// sections those are. A reader that finds a map breaking any of these must
-// fall back to the text's own headings rather than slice by it; [Valid] is
-// that check.
+// section is at least one byte, and no key repeats. A separator belongs to the
+// section BEFORE it, so a headed section ([Section.Headed]) starts with its own
+// heading line. A reader finding a map that breaks any of these falls back to
+// the text's own headings rather than slice by it; [Valid] is that check.
 type Prompt struct {
 	Text     string
 	Sections []Section
@@ -39,10 +23,9 @@ type Prompt struct {
 
 // Section is one part of a [Prompt].
 type Section struct {
-	// Key is a stable snake_case identifier the builder chose for this
-	// part, unique within the prompt: what a reader keys a part on across
-	// two prompts of the same phase, where Title may carry a seat's own
-	// words (a unit's name).
+	// Key is a stable snake_case identifier, unique within the prompt: what a
+	// reader keys a part on across two prompts of one phase, since Title may
+	// carry a seat's own words (a unit's name).
 	Key string
 
 	// Title is the part's heading text without its leading #'s, inline
@@ -54,28 +37,21 @@ type Section struct {
 	Bytes int
 
 	// Headed is true when the part BEGINS WITH ITS OWN HEADING LINE, whose
-	// text is Title: a part opened by [Builder.Heading]. False for one
-	// opened by [Builder.Lead], whatever its text begins with.
-	//
-	// A reader cannot tell the two apart from the text, and that is the
-	// point. A lead part carrying somebody else's markdown — a worker's
-	// persona, a task prompt the executor wrote, a trigger's body — very
-	// often OPENS with a heading ("## Goal", "# Fix the login bug"), and a
-	// reader that took that line for the part's own heading drew the
-	// builder's title in its place and lost the quoted heading's words.
-	// Only the builder knows which kind of part it appended.
+	// text is Title: a part opened by [Builder.Heading]. False for one opened
+	// by [Builder.Lead], whatever its text begins with: a lead part carrying
+	// somebody else's markdown (a persona, a task prompt, a trigger's body)
+	// often opens with a heading of its own, which a reader must not mistake
+	// for the builder's. Only the builder knows which kind it appended.
 	Headed bool
 }
 
 // Valid reports whether the outline tiles the text — see [Prompt]. A prompt
 // with no outline at all is valid: there is simply nothing to slice by.
 //
-// INVALID UTF-8 FAILS IT, though every byte count would still add up. A
-// prompt carries external content — a vendor's webhook body, a quoted reply —
-// and the text travels as JSON, whose encoder rewrites each invalid byte to
-// U+FFFD, three bytes for one: the text a reader receives is then longer than
-// the map that claims to tile it, and every section after the bad byte is cut
-// in the wrong place.
+// INVALID UTF-8 FAILS IT, though the byte counts add up: the text travels as
+// JSON, whose encoder rewrites each invalid byte to U+FFFD (three bytes for
+// one), so every section after an invalid byte in external content would be
+// cut in the wrong place.
 func (p Prompt) Valid() bool {
 	if len(p.Sections) == 0 {
 		return true
@@ -104,16 +80,13 @@ func (p Prompt) Valid() bool {
 // Builder assembles a [Prompt] from parts joined by one separator, recording
 // where each section the caller opens begins.
 //
-// It produces EXACTLY the text strings.Join(parts, sep) would: the outline is
-// carried beside the prompt and never changes a byte of it, because a prompt's
-// bytes are its prefix-cache key and its behaviour (see the package doc).
+// It produces EXACTLY the text strings.Join(parts, sep) would, because a
+// prompt's bytes are its cache key and its behaviour (package doc).
 //
-// A section is opened by the part that begins it — [Builder.Heading] for a
-// part that starts with its own heading line, [Builder.Lead] for one with none
-// — and runs until the next one opens; [Builder.Add] continues the section in
-// progress. The boundary is placed at the opening part's first byte that is
-// not a newline, so the blank line a builder writes before a heading ("\n##")
-// stays with the section before it, as every separator does.
+// A section is opened by [Builder.Heading] or [Builder.Lead] and runs until
+// the next opens; [Builder.Add] continues it. The boundary is the opening
+// part's first byte that is not a newline, so a blank line before a heading
+// ("\n##") stays with the section before it, as every separator does.
 type Builder struct {
 	sep   string
 	parts []string
@@ -134,9 +107,8 @@ func NewBuilder(sep string) *Builder { return &Builder{sep: sep} }
 // Heading opens a section whose first part begins with its heading line, and
 // appends parts. The title is that heading's text.
 //
-// NO PARTS, NO SECTION: a section builder that returns nil for "does not
-// apply" leaves nothing behind, in the outline exactly as in the text — and
-// parts holding only newlines open nothing either (see [blank]).
+// NO PARTS, NO SECTION: a builder's nil for "does not apply" leaves nothing in
+// the outline as in the text, and newline-only parts open nothing ([blank]).
 func (b *Builder) Heading(key string, parts ...string) {
 	if blank(parts) {
 		b.parts = append(b.parts, parts...)
@@ -146,8 +118,7 @@ func (b *Builder) Heading(key string, parts ...string) {
 }
 
 // Lead opens a section with no heading of its own, under the title given, and
-// appends parts. Parts that are all empty open nothing, so an absent identity
-// line does not become a section of blank lines (see [blank]).
+// appends parts. Blank parts open nothing ([blank]).
 func (b *Builder) Lead(key, title string, parts ...string) {
 	if blank(parts) {
 		b.parts = append(b.parts, parts...)
@@ -157,9 +128,8 @@ func (b *Builder) Lead(key, title string, parts ...string) {
 }
 
 // blank reports whether parts hold nothing but newlines. Such parts are
-// appended — the text is the text — but open no section: a section of blank
-// lines has no content of its own to name, and its newlines are separators,
-// which belong to the section before them.
+// appended but open no section: their newlines are separators, which belong to
+// the section before them.
 func blank(parts []string) bool {
 	return strings.Trim(strings.Join(parts, ""), "\n") == ""
 }
@@ -174,17 +144,14 @@ func (b *Builder) open(key, title string, headed bool, parts []string) {
 
 // Build joins the parts and measures the outline.
 //
-// The first section always starts at byte 0, so anything appended before it —
-// an empty part a builder keeps for its separator — belongs to it rather than
-// to no section at all. A section that would measure zero bytes is dropped;
-// [blank] already keeps a newline-only part from opening one, so this is the
-// guarantee rather than a case any builder reaches.
+// The first section always starts at byte 0, so anything appended before it
+// belongs to it rather than to no section. A zero-byte section is dropped:
+// [blank] already prevents one, so this is the guarantee, not a reached case.
 func (b *Builder) Build() Prompt {
 	text := strings.Join(b.parts, b.sep)
 	if len(b.opens) == 0 {
 		return Prompt{Text: text}
 	}
-	// Where every part starts in the joined text.
 	offsets := make([]int, len(b.parts))
 	at := 0
 	for i, part := range b.parts {
@@ -218,10 +185,8 @@ func (b *Builder) Build() Prompt {
 	return Prompt{Text: text, Sections: sections}
 }
 
-// Then is p with one more section after it — part, which opens with its own
-// heading line, keyed key — joined by a blank line: what a [Builder] joining
-// its parts with one would have built with part as its last section, the blank
-// line staying with the section before it as every separator does. A prompt
+// Then is p with part, a headed section keyed key, appended after a blank line:
+// what a [Builder] joining on "\n\n" would have built with part last. A prompt
 // with no outline gains none, and a blank part adds nothing.
 func (p Prompt) Then(key, part string) Prompt {
 	switch {
@@ -242,28 +207,16 @@ func (p Prompt) Then(key, part string) Prompt {
 	return out
 }
 
-// Nested is p as a part of another prompt, told under a heading of its own:
-// every heading its builder opened a section with one level down, so its
-// sections read as parts of the message they are told under and never as
-// sections of the prompt that tells them, and NOT ANOTHER BYTE MOVED. How a
-// later brief tells again a send-back or a turn's task that a session may lack
+// Nested is p told under a heading of another prompt: each heading its builder
+// opened a section with goes one level down, and NOT ANOTHER BYTE MOVES
 // (internal/agent/runner's leadAgain).
 //
-// THE OUTLINE SAYS WHICH LINES ARE THE BUILDER'S HEADINGS, and nothing else
-// can. The text holds somebody else's words under them: a trigger's body with
-// its own "## Triage" or a pull request's "# Title", a reviewer's notes, an
-// output the prior-work ledger quotes, a code block's "#include". Moving every
-// line that begins with a '#' would rewrite those words, inside the very fence
-// that says who wrote them, and a run that copied a line from them would copy
-// the rewritten one. So only a section marked [Section.Headed] moves, by its
-// first line, which is its own heading by the outline's invariant; an entry a
-// section holds under a heading of its own (an iteration of the prior-work
-// ledger, a turn of the conversation's endings) is that section's content, and
-// keeps its level.
-//
-// A prompt with no outline, or one whose outline does not tile its text, names
-// no heading of its builder's that can be found, and is returned as it is:
-// nothing nested rather than a word rewritten.
+// Only the outline says which lines are the builder's headings. The text
+// holds somebody else's words too (a trigger's "## Triage", a code block's
+// "#include"), and demoting every '#' line would rewrite them inside the fence
+// that says who wrote them. So only a [Section.Headed] section's first line
+// moves; headings within a section's content keep their level. A prompt whose
+// outline is absent or does not tile its text is returned as it is.
 func (p Prompt) Nested() Prompt {
 	total := 0
 	for _, s := range p.Sections {
@@ -282,9 +235,8 @@ func (p Prompt) Nested() Prompt {
 	for i, s := range p.Sections {
 		part := p.Text[at : at+s.Bytes]
 		at += s.Bytes
-		// THE FIRST SECTION STARTS AT BYTE 0 whatever precedes its heading
-		// ([Builder.Build]), so its heading is its first line that is not
-		// blank.
+		// The first section starts at byte 0 ([Builder.Build]), so its
+		// heading is its first non-blank line.
 		if heading := len(part) - len(strings.TrimLeft(part, "\n")); s.Headed &&
 			strings.HasPrefix(part[heading:], "#") {
 			part = part[:heading] + "#" + part[heading:]

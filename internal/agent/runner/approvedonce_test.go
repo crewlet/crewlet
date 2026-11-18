@@ -12,31 +12,27 @@ import (
 )
 
 // approvedFor is the call a person approved for held call heldID, as the round's
-// log keeps it: named its tool, its arguments and output withheld, which ride
-// the run's row sealed, the seq'th the bridge admitted and the appended'th the
-// log took.
+// log keeps it: arguments and output withheld (they ride the run's row
+// sealed), the seq'th the bridge admitted and the appended'th the log took.
 func approvedFor(tool, heldID string, seq, appended int) runner.BridgedCall {
 	return runner.BridgedCall{Call: ledger.Call{Name: tool, Withheld: true}, Seq: seq, Appended: appended,
 		Approved: true, HeldID: heldID}
 }
 
 // heldFor is the call the run held for a person's approval, as the round's log
-// keeps it: named its tool, its arguments withheld, recorded failed though
-// nothing failed — it is the run's question — the seq'th the bridge admitted
-// and the appended'th the log took.
+// keeps it: arguments withheld, recorded failed though it is the run's
+// question, the seq'th the bridge admitted and the appended'th the log took.
 func heldFor(tool string, seq, appended int) runner.BridgedCall {
 	return runner.BridgedCall{Call: ledger.Call{Name: tool, Withheld: true, Failed: true,
 		Result: "held for a person's approval"}, Seq: seq, Appended: appended, Held: true}
 }
 
 // laterAttemptBrief is the brief a later attempt at an answer carries the round
-// on with: the answer allowed a call to `tr_close_issue` once, an earlier
-// attempt marked and made it, recording what it returned ("closed #7"), and its
-// relaunch was refused after; this attempt reads the round's log as bridged. The
-// relaunch continues the kept session basis names, and the brief is that
-// continuation's; where basis names none, it continues the copy in the asking
-// job's own box, whose harness ended as end says. refused, where set, is the
-// question's outcome a reply too large to take, beside the held call.
+// on with: an earlier attempt made the once-approved `tr_close_issue` call
+// ("closed #7") and its relaunch was refused; this one reads the round's log as
+// bridged. It continues the kept session basis names, else the asking job's
+// box copy, whose harness ended as end says. refused, where set, is a reply
+// too large to take, beside the held call.
 func laterAttemptBrief(t *testing.T, basis runner.SessionBasis, end sandbox.HarnessEnd,
 	bridged []runner.BridgedCall, refused *runner.RefusedReply) string {
 
@@ -70,31 +66,22 @@ func laterAttemptBrief(t *testing.T, basis runner.SessionBasis, end sandbox.Harn
 	return again.Continue.Brief
 }
 
-// A LATER ATTEMPT AT AN ANSWER TELLS THE CALL IT APPROVED ONCE, IN ITS LEAD. The
-// first attempt made the call a person allowed and recorded what it returned,
-// and its relaunch was refused after, so the answer is attempted again. This
-// attempt reads the call in the round's log, placed after every call the log
-// took, so past the save point of every capture taken before it was made, and
-// answers it from its mark: its lead says what the call returned. So neither a
-// kept session's continuation, whatever its save point, nor the copy in the
-// asking job's own box, which may have been cut off and is told every call of
-// the round, lists that call again — while the call the run held for the
-// person's approval, its question, is listed as any call of the round is, and so
-// is a call an earlier answer of the round approved, which no lead of this
-// relaunch tells, once each. A reply refused as too large tells no held call,
-// whatever the question was: its lead tells the refusal alone, and the approved
-// call is listed as any call is.
+// A LATER ATTEMPT AT AN ANSWER TELLS THE CALL IT APPROVED ONCE, IN ITS LEAD.
+// An earlier attempt made the approved call and its relaunch was refused; this
+// one reads the call last in the round's log and tells what it returned in the
+// lead, so neither a kept session's continuation nor the box's copy lists it
+// again. The held call and a call an earlier answer approved are listed once
+// each. A refused reply's lead tells the refusal alone, no held call, and the
+// approved call is listed as any call is.
 //
-// Mutation: list the lead's approved call among the round's calls of a kept
-// session's continuation, or of the copy in its box, or of both; leave out every
-// call a person approved, or the held one; read no held call off the answer; or
-// name the held call for a refused reply's lead, and a case goes red.
+// Mutation: list the lead's approved call among a continuation's or the box
+// copy's calls; leave out every approved call, or the held one; read no held
+// call off the answer; or name the held call in a refused reply's lead, and a
+// case goes red.
 func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnce(t *testing.T) {
 	t.Parallel()
-	// THE ROUND'S LOG AS THE LATER ATTEMPT READS IT: the asking job's posts
-	// either side of its kept capture's save, a call an earlier answer of the
-	// round approved, and the call this answer approved, which the first
-	// attempt made and the log took last.
+	// The round's log: posts either side of the kept capture's save, a call an
+	// earlier answer approved, and, last, the call this answer approved.
 	bridged := []runner.BridgedCall{
 		numbered("slack_post", map[string]any{"text": "posted before the save"}, 1, 1),
 		approvedFor("jira_transition", "held-earlier", 2, 2),

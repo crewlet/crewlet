@@ -36,14 +36,10 @@ func dayUsed(ctx context.Context, t *testing.T, fleet *coordmem.Fleet, scope str
 	return u.In(period.Day).Used
 }
 
-// A COLLECTED RUN'S SPEND IS RECORDED EVEN WHEN IT OVERRAN THE CAP.
-//
-// The run already spent it, minutes or hours earlier and possibly on another
-// node, so no answer can un-spend it. Charging it through the gate, when a
-// refused charge counted nothing, recorded NOTHING whenever it did not fit,
-// which is exactly when the cap binds: the counter under-stated the company's
-// spend by the whole run and the next round was admitted against room the run
-// had already used. It is post-charged, which records it with no verdict.
+// A COLLECTED RUN'S SPEND IS RECORDED EVEN WHEN IT OVERRAN THE CAP: it is
+// already spent, possibly on another node, so it is post-charged, with no
+// verdict. Charged through the gate, a run that did not fit would count nothing
+// exactly when the cap binds, admitting the next round against room it used.
 func TestACollectedRunIsRecordedEvenPastTheCap(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -124,13 +120,10 @@ func TestACollectedRunInsideTheCapIsNotOver(t *testing.T) {
 	}
 }
 
-// A RUN IS COUNTED IN THE WINDOWS IT IS COLLECTED IN, on the company's clock.
-//
-// The collection is the only instant the counter is told about, so that is the
-// day the run's spend lands in — and it is the company's day: collected at
-// 23:30 in Los Angeles, the run is the 22nd's spend there, although UTC's clock
-// reached the 23rd hours earlier. Cut on UTC, a company's evening would be
-// charged to a day it has not started.
+// A RUN IS COUNTED IN THE WINDOWS IT IS COLLECTED IN, on the company's clock:
+// the collection is the only instant the counter is told, and collected at
+// 23:30 in Los Angeles the run is the 22nd's spend, though UTC reached the 23rd.
+// Cut on UTC, a company's evening would be charged to a day it has not started.
 func TestACollectedRunIsCountedInTheCompanysCollectionDay(t *testing.T) {
 	t.Parallel()
 	la, err := time.LoadLocation("America/Los_Angeles")
@@ -181,13 +174,11 @@ func TestTheEnginesAccountantCountsOnTheEnginesClock(t *testing.T) {
 	}
 }
 
-// A RUN THE COMPANY ALREADY HOLDS IS CHARGED TO THE SEAT ALONE.
-//
-// A post-charge whose seat write failed keeps the company's share
-// (coord.SeatUncountedError), and the coordinator records that on the run. The
-// retry a failed resume brings is told so, and must finish the seat's share
-// without counting the company a second time — and say whether THAT took the
-// seat past its own ceiling, which is the one figure it wrote.
+// A RUN THE COMPANY ALREADY HOLDS IS CHARGED TO THE SEAT ALONE: a post-charge
+// whose seat write failed keeps the company's share (coord.SeatUncountedError),
+// recorded on the run, so the retry finishes the seat's share without counting
+// the company twice, and reports over only if that took the seat past its own
+// ceiling, the one figure it wrote.
 func TestARunTheCompanyAlreadyHoldsIsChargedToTheSeatAlone(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

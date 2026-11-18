@@ -7,13 +7,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A REQUEST'S KEY GOES ON ITS ACTOR AT ITS OWN INSTANT, in one place.
-//
-// Every tracker id a request's writes derive carries the instant on its actor,
-// and the ledger vouches for a retry by it. The rule was written twice — once
-// per surface — and each copy dropped OpMintedAt's second value, so a key that
-// carried no instant dated every id at the epoch, read as older than any loss
-// the ledger ever had, while the knowledge base and chat refused the same key.
+// A REQUEST'S KEY GOES ON ITS ACTOR AT ITS OWN INSTANT, in one place: every
+// tracker id a request's writes derive carries that instant, and the ledger
+// vouches for a retry by it. A key with no instant is refused, or every id
+// would date at the epoch, older than any loss the ledger had.
 //
 // Mutations: Keyed dating the key at time.Now() moves the ids off the key's
 // instant; dropping its refusal takes a key with no instant.

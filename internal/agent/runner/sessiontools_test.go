@@ -13,8 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// sessionTools registers the seat's session tools, as reads, as the builtins
-// annotate them.
+// sessionTools registers the seat's session tools with the builtins'
+// annotations.
 func sessionTools(t *testing.T, reg *tools.Registry) {
 	t.Helper()
 	for _, name := range []string{builtin.ListSessionsTool, builtin.ReadSessionTool} {
@@ -26,10 +26,8 @@ func sessionTools(t *testing.T, reg *tools.Registry) {
 }
 
 // THE REVIEWER IS OFFERED NO SESSION TOOL. It judges the turn's engine-side
-// record — the run's bridged calls, what the run reported delivering — and
-// never the executor's memory (#519), so a seat whose registry holds the
-// session tools offers its reviewer its submission alone, and a reviewer that
-// calls one anyway is refused by its harness, which was never offered it.
+// record, never the executor's memory, so it is offered only its submission
+// and a call to a session tool is refused by its harness.
 //
 // Mutation: activate the seat's registry on the review's surface, and every
 // review request offers the session tools.

@@ -8,11 +8,9 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// The transcript line's bound keeps its cap and its marker; what it used not
-// to keep is its own arithmetic. `line[:limit-1] + "…"` emits limit+2 BYTES —
-// limit-1 of content plus a three-byte ellipsis — so the constant bounded
-// nothing it named, and the byte slice split whatever multi-byte character
-// straddled the cut, putting invalid UTF-8 into the event store.
+// A transcript line stays within its bound in BYTES, marker included, and is
+// never cut through a rune: a byte slice plus the three-byte ellipsis overshoots
+// the bound and can split a character, putting invalid UTF-8 into the event store.
 func TestATranscriptLineHonoursItsOwnBound(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("x", 400)
@@ -25,10 +23,9 @@ func TestATranscriptLineHonoursItsOwnBound(t *testing.T) {
 		t.Errorf("the cut is unmarked: %q", got)
 	}
 
-	// A short line is untouched, and only the FIRST line is taken — the
-	// transcript is line-structured and a spilled entry reads as two — but
-	// the lines after it are COUNTED, so a heredoc does not read as the one
-	// command on its first line.
+	// A short line is untouched; only the FIRST line is taken (the transcript
+	// is line-structured), but the lines after it are COUNTED, so a heredoc
+	// does not read as the one command on its first line.
 	if got := firstLine("git status", transcriptDetailLimit); got != "git status" {
 		t.Errorf("firstLine = %q", got)
 	}
@@ -45,9 +42,8 @@ func TestATranscriptLineHonoursItsOwnBound(t *testing.T) {
 		t.Errorf("a non-ASCII command was cut through a rune")
 	}
 
-	// Degenerate limits must not panic: `limit - len("…")` is negative for
-	// anything under 3, and a negative slice index is a crash on a path
-	// that only ever runs while a run is already failing.
+	// Degenerate limits must not panic: `limit - len("…")` is negative under
+	// 3, on a path that runs only while a run is already failing.
 	for _, limit := range []int{-1, 0, 1, 2, 3} {
 		func() {
 			defer func() {
@@ -60,11 +56,9 @@ func TestATranscriptLineHonoursItsOwnBound(t *testing.T) {
 	}
 }
 
-// Unparseable output is the case where the text IS the account: there is no
-// structured field to fall back to, and the useful part of it — the actual
-// error, after the banner — is at the END. It is carried WHOLE, as the
-// failure's detail rather than as a report, because the coordinator condenses
-// a failure past the record's bound keeping its cause, and a head cut or a
+// Unparseable output is carried WHOLE, as the failure's detail rather than a
+// report: its actual error comes at the END, after the banner, and the
+// coordinator condenses an oversized failure keeping its cause, so a head or
 // tail cut here would decide by size what survives.
 func TestUnparseableCodingOutputIsCarriedWholeAsTheFailure(t *testing.T) {
 	t.Parallel()

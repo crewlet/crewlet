@@ -67,33 +67,15 @@ func mutedPastBehind(s *Syncer) int {
 // A REPLAY HEARING NOTHING ON A MOVING LINK IS PLACED AGAIN PAST ONE TRANSPORT
 // PULL, AND REFUSED AT ITS TIME CAP.
 //
-// Across a link, the diary's copies say nothing at all — no delivery, no
-// heartbeat, no answer to their consumer's info — while the link moves:
+// The diary's copies say nothing while the link moves. Moving past one
+// transport message and a window a stall, the replay is placed again each
+// stall (arming no behind clock) past [behindWait] until a copy hands the notes
+// over; creeping under that, it is refused at one transport pull's stall; still,
+// at its pull's stall; falling still 1.5 s past the stall, for silence at the
+// next judgment, 2 s past it. Each refusal names the link's movement.
 //
-//   - on a link reading ten megabytes a second, past one message at the
-//     transport's bound and a window at each stall, the replay is placed
-//     again at each stall on copies that say nothing, as many times as span
-//     more than [behindWait] from the first placement to the last (eight at
-//     the window's 9.1 s stall), and the next hands the notes over: the
-//     hydration completes, a minute and more after it last heard anything,
-//     since a placement for the link's movement arms no behind clock;
-//   - on a link reading a kilobyte a second, never past that, the replay is
-//     neither placed again nor refused for silence: it is refused at the stall
-//     of one pull at the transport's bound since it was placed, and not a
-//     nanosecond before, naming the link's movement;
-//   - on a still link, the replay is refused at its pull's stall, as it is
-//     where no link is metered, naming the link's stillness;
-//   - on a link that falls still a second and a half past the stall, the
-//     replay is refused for silence at the first judgment after, two
-//     seconds past the stall, judged every second while the link moved.
-//
-// Mutant: no byte cap — the fast link's replay is never placed again, and is
-// refused at its time cap. Mutant: a placement for the link's movement arms
-// the behind clock — the fast link's replay is refused a minute after its
-// first. Mutant: no time cap — the creeping link's replay runs on past it.
-// Mutant: silence judged by words alone — every link's replay is refused at
-// its stall. Mutant: a held replay judged again a stall later — the link that
-// falls still runs on to twice the stall.
+// Mutants, each turning a row red: no byte cap; a link's placement arming the
+// behind clock; no time cap; silence by words alone; a held replay rejudged.
 func TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -208,8 +190,8 @@ func TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull(t *
 // end barrier, a replay's consumer create — is answered here only a hundred
 // seconds after it is asked, past its ceiling, as one held behind a message of
 // megabytes on the link is. Across a link that moves meanwhile the answer is
-// taken; across a still link the request is refused at its ceiling, as it was,
-// naming how long it was asked for.
+// taken; across a still link the request is refused at its ceiling, naming
+// how long it was asked for.
 //
 // Mutant: any of the three asked at its plain ceiling — refused across the
 // moving link.

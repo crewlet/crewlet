@@ -13,9 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 )
 
-// mcpStatusCompany is a company with one shared and one per-role server, both
-// pointing at a binary that does not exist — so every start fails the way a
-// vendor harness missing from an image fails.
+// mcpStatusCompany has one shared and one per-role server, both naming a
+// missing binary, so every start fails as a harness missing from an image does.
 func mcpStatusCompany(t *testing.T, withShared bool) *Company {
 	t.Helper()
 	shared := ""
@@ -54,12 +53,11 @@ roles:
 	return company
 }
 
-// A SERVER THAT WOULD NOT START IS ON THE STATUS RECORD, which is the one row an
-// operator opening the settings screen is looking for. A seat's bridge keeps
-// nothing of a failed start, so a status read off the bridge alone would show
-// that server as never configured; the shared bridge keeps it to retry, and
-// reports it down with why — and a released seat's failures, and a server the
-// next revision dropped, must leave the record with them.
+// A SERVER THAT WOULD NOT START IS ON THE STATUS RECORD, the row an operator
+// looks for. A seat's bridge keeps nothing of a failed start, so a status read
+// off the bridge alone would show it as never configured; the shared bridge
+// keeps it to retry and reports it down with why. A released seat's failures,
+// and a server the next revision dropped, leave the record with them.
 func TestAFailedMCPStartReachesTheStatusRecordAndLeavesWithItsOwner(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -98,15 +96,14 @@ func TestAFailedMCPStartReachesTheStatusRecordAndLeavesWithItsOwner(t *testing.T
 	}
 }
 
-// ONE ROW PER SERVER, its instances counted. A per-role template has a child
-// per seat this node holds, and a row per child would put the company's seat
-// count on a record rewritten at least every reconcile interval. The reported
-// failure is the first by the seat's agent id, so two passes with the same
-// facts build the same bytes and the record is not written again.
+// ONE ROW PER SERVER, its instances counted: a row per child would put the
+// seat count on a record rewritten at least every reconcile interval. The reported
+// failure is the first by agent id, so the same facts build the same bytes and
+// the record is not rewritten.
 func TestMCPStatusIsOneRowPerServerWithItsInstancesCounted(t *testing.T) {
 	t.Parallel()
-	// Ids ordered swe < pm, the reverse of their handles, so a first
-	// failure picked by handle would name the other seat.
+	// Ids ordered swe < pm, the reverse of their handles, so a failure
+	// picked by handle would name the other seat.
 	swe := uuid.MustParse("00000000-0000-7000-8000-000000000001")
 	pm := uuid.MustParse("00000000-0000-7000-8000-000000000002")
 	ceo := uuid.MustParse("00000000-0000-7000-8000-000000000003")
@@ -135,12 +132,11 @@ func TestMCPStatusIsOneRowPerServerWithItsInstancesCounted(t *testing.T) {
 	}
 }
 
-// A KEY IS THE SERVER'S UNLISTED KEY ONLY WHERE NO STARTED INSTANCE LISTS IT.
-// Each seat's child serves what that seat's credentials reach — the jira-only
-// seat's mcp-atlassian lists no Confluence tool — so its unlisted
-// confluence_create_page is the entry being right for a sibling, and only a
-// key every started child lacks (the typo) reaches the row. A failed start
-// lists nothing and is not counted: it would make every key look unlisted.
+// A KEY IS THE SERVER'S UNLISTED KEY ONLY WHERE NO STARTED INSTANCE LISTS IT:
+// each child serves what its seat's credentials reach (a jira-only seat lists
+// no confluence_create_page), so only a key every started child lacks (the
+// typo) reaches the row. A failed start lists nothing and is not counted, or
+// every key would look unlisted.
 func TestMCPStatusNamesOnlyKeysNoStartedInstanceLists(t *testing.T) {
 	t.Parallel()
 	swe := uuid.MustParse("00000000-0000-7000-8000-000000000001")

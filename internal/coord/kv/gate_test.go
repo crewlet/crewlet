@@ -13,10 +13,9 @@ import (
 )
 
 // olderProtocol and newerProtocol are a mixed fleet's two builds, SPELLED
-// rather than derived from coord.ProtocolVersion: this build is version 1, the
-// first there has been, so "one below this build" is a protocol no lease can
-// hold. The gate's arithmetic is relative, and so are these cases — the
-// coordtest suite's protocol cases are written the same way.
+// rather than derived from coord.ProtocolVersion: this build is version 1, so
+// "one below this build" is a protocol no lease can hold. The gate's
+// arithmetic is relative, as are the coordtest suite's protocol cases.
 const (
 	olderProtocol = 1
 	newerProtocol = 2
@@ -48,16 +47,12 @@ func delivered(ns *server.Server) int64 {
 
 // A GATED CLAIM COSTS THE SAME WITH TWO THOUSAND LEASES HELD AS WITH TEN.
 //
-// The gate judged every lease in the fleet by LISTING both buckets, on every
-// gated claim twice and in every FleetProtocolFloor — so a claim's cost grew
-// with the leases already held, and a fleet claiming its seats from cold grew
-// with their square (gate.go has the measurements).
-// What a listing costs is its records, delivered to the claimant one by one,
-// and the broker counts every message it delivers: so the case holds a number
-// of seats, claims more gated, and compares what a claim was delivered at the
-// two sizes. The view's watch is started, and its load of the seat lease
-// bucket paid, by one claim BEFORE the ones counted — that load is the view's
-// cost once per run, not a claim's.
+// A gate that LISTED the lease buckets made a claim's cost grow with the
+// leases held, and a fleet claiming from cold grow with their square. A
+// listing costs its records, delivered one by one, and the broker counts every
+// message it delivers, so the case compares what a claim was delivered at the
+// two sizes. One claim BEFORE the counted ones starts the view and pays its
+// load of the seat lease bucket, a cost once per run, not per claim.
 func TestAGatedClaimCostsTheSameWhateverIsHeld(t *testing.T) {
 	t.Parallel()
 	const claims = 20
@@ -94,15 +89,13 @@ func TestAGatedClaimCostsTheSameWhateverIsHeld(t *testing.T) {
 
 // A LEASE WRITTEN THE INSTANT BEFORE A GATE IS JUDGED IS IN THE GATE.
 //
-// The view is a watch, and a watch is behind the store by whatever it has not
-// yet been delivered; the barrier is what makes a gate exact rather than
-// recent. The view is started first, by a claim, so that what follows is not
-// its initial load: an older build's lease lands, and the very next gated
-// claim must be refused because of it — and the floor must name it.
+// A watch lags the store by what it has not yet been delivered; the barrier
+// makes a gate exact rather than recent. A claim starts the view first, so
+// what follows is not its initial load: an older build's lease lands, and the
+// very next gated claim must be refused for it, and the floor must name it.
 //
-// A HUNDRED TIMES, because the defect is a race: a gate that judged the view
-// without waiting for it lost to the watch about once in fifteen attempts, so
-// a hundred leave a missing barrier no realistic way through.
+// A HUNDRED TIMES, because the defect is a race: a gate judged without the
+// barrier lost to the watch about once in fifteen attempts.
 func TestALeaseWrittenJustBeforeAGateIsInIt(t *testing.T) {
 	t.Parallel()
 	for attempt := range 100 {
@@ -200,7 +193,7 @@ func TestTheViewStopsWhenIdleAndStartsAgainWhenAsked(t *testing.T) {
 }
 
 // BenchmarkAGatedClaim is what a gated seat claim costs with ten leases held
-// and with ten thousand — the fleet the gate used to list on every claim.
+// and with ten thousand.
 func BenchmarkAGatedClaim(b *testing.B) {
 	for _, held := range []int{10, 10_000} {
 		b.Run(fmt.Sprintf("held=%d", held), func(b *testing.B) {
@@ -233,15 +226,13 @@ func BenchmarkAGatedClaim(b *testing.B) {
 	}
 }
 
-// THE POST-WRITE RE-CHECK GIVES BACK ONLY A NEW CLAIM. A claim judged clear
-// before its write is judged again after it, because a lower-protocol lease can
-// land in between; refused then, a FRESH claim is released at once, so the
-// newer node does not hold a seat beside a peer whose build means something
-// else by holding it — while a RE-claim, the holder renewing what it already
-// held, is kept, so a lower-protocol node appearing never pulls a seat out from
-// under a turn mid-flight. TryAcquire's own pre-check refuses before any write
-// whenever the gate is already blocked, so this is the one path that reaches
-// the give-back, and it is driven directly.
+// THE POST-WRITE RE-CHECK GIVES BACK ONLY A NEW CLAIM. A lower-protocol lease
+// can land between the check and the write; refused on the re-check, a FRESH
+// claim is released at once, so the newer node holds no seat beside a peer
+// whose build means something else by holding it, while a RE-claim is kept, so
+// a lower node appearing never pulls a seat from under a turn mid-flight.
+// TryAcquire's pre-check refuses before any write when the gate is already
+// blocked, so the give-back is reached only here, driven directly.
 func TestTheProtocolReCheckGivesBackOnlyANewClaim(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

@@ -22,14 +22,13 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// changeHost is Gitlet as a collection asks it of the changes a run's
-// branches head: each repository's live changes by branch, an open that
-// lands one — numbered from 7 — unless its branch heads one, and a read by
-// object id answering one commit's subject; every question recorded. Set to
-// answer opens together, it holds each until that many are being asked at
-// once ([changeHost.meet]). Given the run's push rows, it answers its push
-// record's read with them, one page read at firstPageAt; given a refusal,
-// it answers every open with it, landing nothing.
+// changeHost is Gitlet as a collection asks it about a run's branches: live
+// changes by branch, an open that lands one (numbered from 7) unless its branch
+// heads one, and a read by object id answering one commit's subject, every
+// question recorded. Set to answer opens together, it holds each until that
+// many are asked at once ([changeHost.meet]). Given push rows, it answers the
+// push record's read with them, one page at firstPageAt; given a refusal, it
+// answers every open with it, landing nothing.
 type changeHost struct {
 	mu       sync.Mutex
 	heads    map[pushKey]gitlet.BranchChange
@@ -155,21 +154,16 @@ func openingRun() sandbox.PendingRun {
 	return run
 }
 
-// A RUN OPENS ITS CHANGE ONCE, AT ITS COLLECTION (M4-decisions D33): a run that
-// asked to open a change from its branch, and pushed it, has the change
-// opened by the collection — as the seat it ran for, from that branch into
-// the target its launch resolved, titled by the subject of the commit it
-// delivered, carrying the work item it was charged to and naming its turn and
-// its run, decided at or past the read that found the branch heading none —
-// under an operation that is a step of the launch's own, so the same
-// collection asked again opens nothing twice and names the change it opened
-// as its own; and the ref it was opened from names it. A collection not asked
-// to open opens nothing, and a run that pushed nothing to its branch is told
-// so.
+// A RUN OPENS ITS CHANGE ONCE, AT ITS COLLECTION (M4-decisions D33): as the
+// seat it ran for, from its branch into the launch's target, titled by the
+// delivered commit's subject, carrying its work item, turn and run, decided at
+// or past the read that found the branch heading none, under a step of the
+// launch's own operation — so a collection asked again opens nothing twice and
+// names the change as its own — and the ref it opened from names it. A
+// collection not asked to open opens nothing; a run that pushed nothing is told so.
 //
 // Mutation: mint the open's operation at the collection (a fresh id each
-// time) — the second collection's open is another operation, and the change
-// the first opened is named as not this run's, red.
+// time) — the second collection names the first's change as not this run's, red.
 func TestARunOpensItsChangeOnceAtCollect(t *testing.T) {
 	t.Parallel()
 	run := openingRun()
@@ -250,13 +244,11 @@ func TestARunOpensItsChangeOnceAtCollect(t *testing.T) {
 }
 
 // A RUN'S OPEN IS HELD TO WHOEVER WOKE ITS TURN (M4-decisions D30, U40 (a)):
-// a run whose launching turn a colleague seat woke — its row naming that seat
-// (sandbox.PendingRun.CodeCeiling), which the box's admission holds every
-// push of the run to — asks its open at collection carrying that colleague as
-// the write's ceiling, as a code_open_change of the same turn would, so the
-// repository's committer judges the open for the colleague from its own chart
-// when it decides it, never from the launch's one resolution. A run no
-// colleague bounds asks it for its seat alone.
+// a run whose turn a colleague seat woke (sandbox.PendingRun.CodeCeiling, which
+// every push of the run is held to) asks its open under that colleague as the
+// ceiling, as the turn's code_open_change would, so the committer judges it
+// from its own chart, never the launch's resolution. A run no colleague bounds
+// asks it for its seat alone.
 //
 // Mutation: leave the ceiling off the open (openOne) — the colleague's run
 // asks its open as the seat alone, red.
@@ -291,20 +283,16 @@ func TestARunsOpenIsHeldToWhoeverWokeItsTurn(t *testing.T) {
 	}
 }
 
-// A RUN'S OPEN IS MADE FOR WHOM ITS TURN WORKS FOR (ADR-0109): the change a
-// run's collection opens is its launching turn's write, made late, so it is
-// asked made for whom that turn works for as the run's checkout composed it and
-// its row carries it (sandbox.PendingRun.CodeWorkingFor) — a colleague's seat,
-// a person's, a credential acting as no seat with its apps — and for nobody,
-// stated, the seat's own work, where the run works for its seat or its row
-// was written by a build before the field. A credential's is asked under the
-// ceiling of nobody, as the turn's own code writes for it are: it pushes to
-// no repository itself, so its run opens a change of the seat's own work
-// alone, which the committer judges.
+// A RUN'S OPEN IS MADE FOR WHOM ITS TURN WORKS FOR (ADR-0109): the open is the
+// launching turn's write made late, so it carries the row's
+// sandbox.PendingRun.CodeWorkingFor (a colleague's seat, a person's, a
+// credential with its apps), and nobody, stated, where the run works for its
+// seat or its row predates the field. A credential's is asked under the
+// ceiling of nobody, as the turn's own code writes for it are: it pushes
+// nowhere itself, so its run opens only the seat's own work.
 //
 // Mutations: the open stating nobody whatever the row carries — every row but
-// nobody's, red; a credential's open asked under no ceiling — the
-// credential's row, red.
+// nobody's, red; a credential's open under no ceiling — its row, red.
 func TestARunsOpenIsMadeForWhomItsTurnWorksFor(t *testing.T) {
 	t.Parallel()
 	branch := "refs/heads/seats/swe/ENG-42"
@@ -457,23 +445,17 @@ func collectFinished(t *testing.T, host pushReader, run sandbox.PendingRun) []st
 }
 
 // A RUN'S OPEN THAT RAN NOWHERE COMES BACK NOT OPENED, ASKED ONCE, its report
-// naming why (ADR-0109's roll windows). The estate's walk finds no committer
-// to run the open, none gone silent, so nothing of it ran: mid-roll, a
-// repository's committers of an older build refuse an open that states whom
-// it is made for, as nodes of this build refuse one whose carrier names what
-// they do not know; and at any time, every committer may answer that it
-// cannot take it, its copy out of service or behind. The collection, which
-// holds the run's seat until its turn resumes, does not wait for a committer
-// to take it: the turn resumes at once, and its report says exactly what
-// became of the open — the change was not opened, why (the node that answered
-// runs a build that cannot read the request, or no Gitlet node could take it),
-// nothing of the open ran, the commits the run pushed are kept, and the change
-// is the seat's to open again with code_open_change — never that whether it
-// opened is unknown, which sends the seat to look for a change no node made.
+// naming why (ADR-0109's roll windows): the walk found no committer to run it,
+// none gone silent — mid-roll every committer's build refused it unread, or at
+// any time each could not take it. The collection holds the run's seat, so it
+// does not wait: the turn resumes at once, its report saying the change was not
+// opened and why, nothing ran, the commits are kept and the seat may open it
+// again with code_open_change — never that whether it opened is unknown, which
+// sends the seat looking for a change no node made.
 //
-// Mutations: give either walk the unknown outcome's words (ranNowhere false
-// for it) — its row's report says whether it opened is unknown, red; ask the
-// open again where either walk ran nowhere — its row's two opens, red.
+// Mutations: give either walk the unknown outcome's words (ranNowhere false)
+// — its row's report says unknown, red; ask the open again where either walk
+// ran nowhere — its row's two opens, red.
 func TestARunsOpenThatRanNowhereComesBackNotOpenedAskedOnce(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -513,32 +495,18 @@ func TestARunsOpenThatRanNowhereComesBackNotOpenedAskedOnce(t *testing.T) {
 	}
 }
 
-// ONLY AN OPEN THAT RAN NOWHERE SAYS SO, AND WHY: a run's report says nothing
-// of its open ran for the answer the estate gives as its claim that nothing
-// ran — the walk in which every committer it asked refused the open unread or
-// could not take it, none gone silent — however that answer was wrapped; it
-// names the build that could not read the open where a committer refused it
-// so, and otherwise says that no Gitlet node could take it. A committer's
-// refusal of the open as no proposal it can decide — whom it is made for, on a
-// chart that has moved since the run's checkout — is as definite, however
-// wrapped, in the refusal's own words. Every failure that may have run keeps
-// saying whether it opened is unknown, so the seat looks for the change before
-// it opens one: a committer never heard from, which may have landed it,
-// whatever else stopped the walk, a refusal included; a walk in which one went
-// silent, whether another refused the open unread or could not take it; an
-// answer this node's build could not read, which the node that gave it ran;
-// and a failure of the caller's own. Each open asked once.
+// ONLY AN OPEN THAT RAN NOWHERE SAYS SO, AND WHY, however its answer is wrapped:
+// a walk with no committer gone silent names the build that could not read the
+// open, or else that no Gitlet node could take it; a committer's refusal as no
+// proposal it can decide is as definite, in its own words. Anything that may
+// have run says whether it opened is unknown, so the seat looks before opening
+// again: a committer never heard from (a refusal after it included), a silent
+// walk, an answer this build could not read, a caller's own failure. Each open
+// asked once.
 //
-// Mutations: the definite words for every failure — every row that may have
-// run, red; a refusal of keys that wraps no walk read as an open no node could
-// read — the answer's row, red; a silent walk read as one that ran nowhere —
-// both silent rows, red; an unknown outcome read as one that ran nowhere where
-// it wraps a walk — that row, red; the walk no committer could take given the
-// unknown outcome's words, or the build's — its two rows, red; the walk no
-// build could read given the other walk's words — its two rows, red; a
-// committer's refusal given the unknown outcome's words — its two rows, red;
-// that refusal read as definite behind a committer never heard from — that
-// row, red.
+// Mutations: each misreading [ranNowhere] could make — definite words for an
+// open that may have run, a walk or refusal given other words, a refusal read
+// as definite behind a silent committer — turns its rows red.
 func TestARunsOpenSaysItRanNowhereOnlyWhereTheEstateSaysSo(t *testing.T) {
 	t.Parallel()
 	branch := "refs/heads/seats/swe/ENG-42"
@@ -658,18 +626,15 @@ func TestARunsAsksAreOpenedAtOnce(t *testing.T) {
 }
 
 // A DELIVERED REF NAMES ITS CHANGE (M4-decisions D33): every branch a collected
-// run pushed is named by the live change it heads — the run's own, or one
-// anybody opened — in ONE read of every repository's branches, at session at
-// the push record's position, so the collection pays the record's barrier
-// and no second; a tag, a deleted branch and a branch heading no change name
-// none, and a repository the run was given to read is never asked. A run that
-// pushed more branches than one read answers is read in as few as hold them,
-// each at the record's position, every branch named.
+// run pushed is named by the live change it heads, anybody's, in ONE read of
+// every repository at session at the push record's position (no second
+// barrier); a tag, a deleted branch and a branch heading no change name none,
+// and a repository given only to read is never asked. Past one read's branches,
+// as few reads as hold them, each at the record's position, name every branch.
 //
-// Mutations: read the changes linearizable — the read's level, red; read
-// each repository on its own — two reads, red; name a deleted branch by the
-// change its name heads — red; drop the branches past one read — the last
-// branch's change unnamed, red.
+// Mutations: read linearizable — the read's level, red; read each repository
+// on its own — two reads, red; name a deleted branch by the change its name
+// heads — red; drop the branches past one read — the last one unnamed, red.
 func TestADeliveredRefNamesItsChange(t *testing.T) {
 	t.Parallel()
 	host := newChangeHost()

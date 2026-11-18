@@ -29,38 +29,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE RELEASE REQUESTS (ADR-0125): an agent asks to merge a change or to
-// deploy a commit with a tool that holds the call on its run, as ssh_operate
-// does, so a merge and a deploy are put to a delegate or a person through the
-// one path every held call takes: delegated, hidden until escalated, bound by
-// the deadline, the kill switch, the audit and the digest.
+// THE RELEASE REQUESTS (ADR-0125): ask_to_merge and ask_to_deploy hold the call
+// on its run, as ssh_operate does, so it reaches a delegate or a person by the
+// one held-call path (hidden until escalated; deadline, kill switch, audit, digest).
 //
-// # What an approval carries out
-//
-// ask_to_merge's approval MERGES, by the engine, exactly the head the call
-// named, as the requesting seat: a Gitlet change through code_merge_change
-// (its target's own gate still decides, so no approval makes a seat a person
-// the gate asks for), a GitHub pull request through GitHub's merge with that
-// head's SHA, as the seat's own app. A change pushed to since is not merged.
-//
-// ask_to_deploy's approval is the approval itself, handed back to the run:
-// Crewlet has no deploy path of its own, so the agent deploys with its own
-// tools, and what was approved (the commit, the changes, the environment and
-// the rollback) is the digest the verdict is bound to.
-//
-// # What a delegate's allow needs
-//
-// Read from the code host when the verdict is given ([ReleaseDeps.unmet]): for
-// a merge, the head asked about, open, every check its target requires and
-// every one its rule declares for that repository and branch passed on that
-// head, mergeable, every other precondition of the target's gate met, an
-// approving review of that head by somebody other than its authors and the
-// requester, and no always-escalate path; for a deploy, every change merged
-// into one branch, the commit holding each and on that branch, every check the
-// branch requires and the rule declares passed on the commit, and no
-// always-escalate path in any change. A target with no check of either kind
-// is unmet. GitLab merge requests are not release requests: GitLab records no
-// approval of one commit, so nothing could bind an allow to the head shown.
+// ask_to_merge's approval MERGES exactly the head named, by the engine, as the
+// requesting seat: on Gitlet through code_merge_change, whose target gate still
+// decides (no approval stands in for a person the gate asks for); on GitHub at
+// that head's SHA, as the seat's app. ask_to_deploy's approval is handed back
+// to the run, which deploys with its own tools (Crewlet has no deploy path),
+// bound to the digest of the commit, changes, environment and rollback. A
+// delegate's allow needs every condition [ReleaseDeps.unmet] reads. No GitLab:
+// it records no approval of one commit, so nothing binds an allow to a head.
 
 // The release tools' names, each its authority row's action.
 const (
@@ -76,8 +56,7 @@ const (
 	// command or commit to go back to and how to tell it worked.
 	rollbackMaxRunes = 1000
 	// deployMaxChanges bounds the changes one deploy names: a release train
-	// is a handful; twenty is a week of merges, past which a deploy is a
-	// person's to approve whole.
+	// is a handful; past twenty, a week of merges, a person approves it whole.
 	deployMaxChanges = 20
 	// environmentMaxBytes bounds an environment's name.
 	environmentMaxBytes = 64
@@ -95,7 +74,7 @@ const (
 	releaseSquash = "squash"
 )
 
-// environmentName is an environment's name, compiled at first use.
+// environmentName is an environment's name; its length bound is environmentMaxBytes.
 var environmentName = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 })
@@ -156,8 +135,8 @@ type PullFacts struct {
 }
 
 // PullRequests are the company's GitHub pull requests as the release requests
-// read and merge them, each as the requesting seat's own app: declared by its
-// consumer, the engine's GitHub wiring satisfies it.
+// read and merge them, each as the requesting seat's own app; the engine's
+// GitHub wiring satisfies it.
 type PullRequests interface {
 	// Ref is the pull request address names on the company's GitHub under an
 	// owner it names; false for any other address.
@@ -495,7 +474,7 @@ func (t *askToMerge) CallForTurn(ctx context.Context, turn *turnctx.Turn, args m
 		return *refusal, nil
 	}
 	if !a.github {
-		// THE CODE TOOLS' OWN MERGE, as the seat: the target's gate, the
+		// The code tools' own merge, as the seat: the target's gate, the
 		// seat's grant and the head named decide it there.
 		merge := &codeMergeChange{deps: t.deps.Code}
 		res, _, err := tools.Invoke(ctx, tools.Invocation{Name: merge.Name(), Tool: merge,
