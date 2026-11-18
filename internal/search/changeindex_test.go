@@ -149,10 +149,9 @@ func TestAMoveThatLeavesTheTextWritesNoPosting(t *testing.T) {
 	}
 }
 
-// A BATCH IS READ WHOLE AT ITS LAST POSITION: changes at one position past the row bound are indexed
-// by the forward walk in one batch, and descriptions past the byte budget are cut into forward batches
-// each ending on a position, and into backward batches each ending on a row whose id is the floor.
-// Mutation: cut a forward batch at a row count, or cut a backward batch one row past the budget.
+// A BATCH IS READ WHOLE AT ITS LAST POSITION: one position past the row bound is one forward batch;
+// descriptions past the byte budget cut into forward batches ending on a position and backward ones
+// ending on the floor's row. Mutation: cut forward at a row count, or backward past the budget.
 func TestAChangeBatchIsReadWholeAtItsLastPosition(t *testing.T) {
 	t.Parallel()
 	f := newChangeFixture(t)
