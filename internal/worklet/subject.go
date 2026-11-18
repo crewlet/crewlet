@@ -124,7 +124,8 @@
 // options, and the engine enforces exactly its shape, that the choice names an
 // option of the ask it answers, and that a promised inform is kept — never an
 // approval chain, a quorum or a state machine. decision.go holds the type and
-// the rules; the ADR says why the engine stops there.
+// the rules; the ADR says why the engine stops there. ADR-0160: a url this
+// engine handed out for one of its artifacts is cited as the artifact.
 //
 // # A question and a review say whom they wait on
 //

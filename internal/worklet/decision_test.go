@@ -441,6 +441,13 @@ func decisionFixture() *decision.Decision {
 type fakeEvidence struct {
 	tasks map[string]worklet.CitedTask
 	pages map[string]string
+	// own is the addresses this engine handed out, by the artifact each names.
+	own map[string]string
+}
+
+func (f fakeEvidence) OwnArtifact(ref string) (string, bool) {
+	id, ok := f.own[ref]
+	return id, ok
 }
 
 func (f fakeEvidence) Task(_ context.Context, ref string) (worklet.CitedTask, error) {
@@ -531,5 +538,37 @@ func TestOnlyAnApproverChoosesAnActsApprovingOption(t *testing.T) {
 			AuthorKind: worklet.AuthorAgent, Body: "run it?", Ask: "ana", Decision: decisionFixture(),
 			Act: &bad, CreatedAt: wednesday}}, worklet.ChangeComment, nil); !errors.Is(err, worklet.ErrInvalid) {
 		t.Fatalf("an act approving by an option its decision does not offer: %v", err)
+	}
+}
+
+// A URL THIS ENGINE HANDED OUT FOR ONE OF ITS ARTIFACTS IS CITED AS THE ARTIFACT
+// (ADR-0160): on a deployment reached over http it is not https, and a decision
+// citing the link a publish just answered was refused. Any other http address
+// is still refused.
+//
+// Mutation: drop the resolution, and the engine's own link is refused.
+func TestAnArtifactLinkThisEngineHandedOutIsCitedAsTheArtifact(t *testing.T) {
+	t.Parallel()
+	const id = "0f2a6c3e-6b1d-4e0a-9d6f-2b4c8a1e7f30"
+	own := "http://crewlet.test/dashboard#/artifacts/" + id
+	lookup := fakeEvidence{own: map[string]string{own: id}}
+	d := *decisionFixture()
+	d.Evidence = []decision.Evidence{{Kind: decision.EvidenceURL, Ref: own, Label: "version 8"}}
+	got, err := worklet.ValidateDecision(t.Context(), d, worklet.AuthorAgent, lookup)
+	if err != nil {
+		t.Fatalf("a decision citing the engine's own artifact link was refused: %v", err)
+	}
+	if want := (decision.Evidence{Kind: decision.EvidenceArtifact, Ref: id, Label: "version 8"}); got.Evidence[0] != want {
+		t.Errorf("the evidence is stored as %+v, want %+v", got.Evidence[0], want)
+	}
+	if d.Evidence[0].Kind != decision.EvidenceURL {
+		t.Error("ValidateDecision rewrote its caller's evidence in place")
+	}
+
+	d.Evidence = []decision.Evidence{{Kind: decision.EvidenceURL,
+		Ref: "http://elsewhere.test/dashboard#/artifacts/" + id}}
+	if _, err := worklet.ValidateDecision(t.Context(), d, worklet.AuthorAgent, lookup); !errors.Is(err, worklet.ErrInvalid) ||
+		!strings.Contains(err.Error(), "https://") {
+		t.Errorf("another host's http address answered %v, want the https refusal", err)
 	}
 }
