@@ -351,8 +351,8 @@
 // calls the run's log had taken when it was read once the job was over, for a
 // job whose harness ended its own run ([SessionCapture.Through]; every call the
 // log takes is numbered as it is appended, [BridgeCall.Appended]), or, for
-// the take of a job still working or one cut off, the newest its launch is
-// known to hold (savepoint.go) — and the last note read the record says it
+// the take of a job still working or one cut off, zero, raised once its take
+// is counted (savepoint.go) — and the last note read the record says it
 // holds, none for a session cut off and none from a take the record marks
 // unanswered on ([SessionCapture.NoteCursor]): what a launch that continues the
 // session would need to know of what came after it.
@@ -715,8 +715,8 @@
 // save of the turn was left begun by a gone taker or unanswered, and held to
 // the license's pre-check; the fleet's policy, the seat's allowance, what the
 // box was handed and the taker lease; and only then the pack. The place, the
-// save point and the cursor all come from that one read, made before the
-// pack, for "The place order is the content order".
+// cursor and what raises the save point all come from that one read, made
+// before the pack, for "The place order is the content order".
 //
 // THE BOX PHASE IS THE DUTY'S, nothing after it: the attach, the stream's read
 // and the pack end with the stint of duty the offer came under (an E2B duty
@@ -740,11 +740,61 @@
 // superseded one within its grace and two of its passes, and the entry's end is
 // read on another node's clock, so twice the engine's assumed skew.
 //
-// A SAVE CONTINUES NOTHING ([savePlaces.continued] nil): a run's row records no
-// capture its launch continued, the saver is often not the launching process,
-// and the launch's request names what it ASKED for, which a failed restore
-// replaced with a fresh session. So a save is placed at its launch's newest
-// landed save's point, or zero, which tells more, never less.
+// # A capture no read places is reserved at zero, and raised after its take
+//
+// Kept by savepoint.go. A save, the take of a job still working and a capture
+// cut off may lack calls their harness had answered and never written, so no
+// read of the log places them. Each is RESERVED AT ZERO
+// ([SessionCapture.placeAtZero]): the ledger's compare-and-swap, then the
+// stamp, then its instant last, then the reservation, with nothing that waits
+// between the instant and the reservation; then the spool, the check against
+// what the ledger counted, and the spool's whole read, which stamps the take's
+// count and then RAISES the point ([SessionCapture.placeAtNewest]), pure
+// computation on that count and the one row read; then the keep, whose outcome
+// stamp, at the same instant, carries the raised point. A take of a job still
+// working or cut off follows the same order. A standby's takeover reserves the
+// next place after its own take, so at the point that take raised: the one
+// reservation above zero. A log's settle that lands a begun capture lands it as
+// the store holds it, at zero, which loses the raise and tells more, never
+// less.
+//
+// THE RAISE: once the take's count names the session's newest compaction (its
+// identity, [ResumedCount.Restart]), the point rises to the newest a held
+// capture states whose own newest compaction is that one, both identities read
+// and equal ([sameRestart], never [RestartedSince], which reads an unknown
+// basis as no restart): the launch's own landed capture ([launchKept]), and the
+// capture it continued ([LaunchRecord.Continued]), read only where its launch
+// is the job before's, the box took that session up ([SessionStartContinued])
+// and [LaunchRecord.BasisRestart], written from the same capture, is that
+// compaction. Omitted becomes the places of the launch's
+// [LaunchRecord.OmittedCalls] at or below the point, a read the brief left out
+// past it being told as a call after the point anyway; BridgeSeq and BridgeOpen
+// stay zero and nil, so an older build that reads them is told every call. A
+// raise the stamp's bounds refuse is dropped, never the capture.
+//
+// WHY IT IS SOUND. The continued capture C1 states p1; the save's take names
+// C1's newest compaction, so the job made none after C1. Where C1's own job
+// made none after its brief, the session only grows between two captures with
+// one newest compaction, so the save's archive holds C1's prefix through p1.
+// Where it did, C1 holds some calls at or below p1 only in a summary, and the
+// launcher that continued it told it as one, every call from the round's start
+// (internal/agent/runner's keptRestarted), so the save holds those calls as
+// that brief told them; only a build whose runner judges the harness writes
+// [LaunchRecord.Continued]. Chains follow by induction: a raised save is a C1
+// for the next launch. A relaunch then tells, and asks a reading of, only the
+// calls past the point, so the identity check stands in for a reading of the
+// calls at or below it.
+//
+// THE SESSION ONLY GROWS is the premise, so a raise is gated where it is read.
+// An OpenCode count names its compaction only on a release whose count is read
+// (internal/sandbox/executor's openCodeCountRead), and a Claude Code capture is
+// raised only where its archive's release is one whose resume this build read
+// ([TakenSession.ResumeRead], internal/sandbox/executor's claudeResumeRead):
+// Claude Code rewrites its transcript in place to withdraw a message, and on
+// 2.1.112, 2.1.310 and 2.1.322, read in their shipped code, a withdrawal
+// reaches only the request attempt in flight, whose calls lie past the point,
+// while a trim follows a compaction, which moves the identity. Outside the set
+// the capture stays at zero.
 //
 // # A save is offered by the poll, from memory
 //
@@ -841,10 +891,11 @@
 // ([Coordinator.continueKept]). And only one whose stamp states its SAVE
 // POINT ([SessionCapture.Through]), a count of the round's calls the session is
 // known to hold — the run's log as the capture read it once its job was over,
-// where its harness ended its own run, and else the newest point its launch
-// was known to hold (savepoint.go) — which is what the continuation is told the
-// calls after by: one an older build stamped states only the places it read
-// the log at, which cannot say which calls came after it.
+// where its harness ended its own run, and else zero raised after its take to
+// a point its launch's session holds (savepoint.go) — which is what the
+// continuation is told the calls after by: one an older build stamped states
+// only the places it read the log at, which cannot say which calls came after
+// it.
 //
 // AND NEVER OVER A COPY THAT WENT ON PAST IT ([copyWentPast]): a capture taken
 // while its job still worked is a point the job's session passed through, so

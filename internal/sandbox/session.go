@@ -323,15 +323,14 @@ type SessionCapture struct {
 	// cleanly by itself, its script packing it — that read is the capture's
 	// own, made once the job was over, after its script packed the archive
 	// and before the take ([Coordinator.takeCapture], savepoint.go);
-	// every other capture — a save, the take of a job still working, and one
-	// cut off ([SessionCapture.Interrupted]) — is placed by an EARLIER read,
-	// the save point of the newest capture its launch is known to hold, or
-	// zero (savepoint.go), since its harness may have made, and had answered,
-	// calls it never wrote. Every call the log takes after that read is
-	// numbered past it ([BridgeCall.Appended]), and is one the session may not
-	// have been answered, as is a late call ([BridgeCall.Late]) whatever its
-	// number, or a dropped late one ([BridgeLog.LateElided]), counted: a
-	// launch that continues the session is told each,
+	// every other capture — a save, the take of a job still working, and one cut
+	// off ([SessionCapture.Interrupted]) — is reserved at zero and raised after
+	// its take (savepoint.go), since its harness may have made, and had
+	// answered, calls it never wrote. Every call the log takes after that read
+	// is numbered past it ([BridgeCall.Appended]), and is one the session may
+	// not have been answered, as is a late call ([BridgeCall.Late]) whatever its
+	// number, or a dropped late one ([BridgeLog.LateElided]), counted: a launch
+	// that continues the session is told each,
 	// with its outcome — whatever its place in the order the calls were made,
 	// so a call in flight at the read is told however many places the log's
 	// bound dropped below it — and how many of them the bound dropped from the
@@ -359,8 +358,8 @@ type SessionCapture struct {
 	// a count, by their places in the round's log ([BridgeCall.Appended]):
 	// the reads the brief its job's run read counted without listing them, its
 	// read cap spent ([BriefTold], [LaunchRecord.OmittedCalls]). A capture
-	// placed by its own read states its job's; one placed at an earlier
-	// capture's point states that capture's, with the point
+	// placed by its own read states its job's; one raised to an earlier
+	// capture's point, its launch's at or below that point
 	// ([SessionCapture.placeAtNewest]). A launch that continues the session
 	// tells each of them (internal/agent/runner's keptSession): placed by its
 	// read, the session counts every call the log had taken as held, and
@@ -370,8 +369,8 @@ type SessionCapture struct {
 	Omitted []int `json:"bridge_omitted,omitempty"`
 
 	// BridgeSeq and BridgeOpen are the same read's save point AS AN OLDER BUILD
-	// READS IT — copied off the capture whose save point Through takes, where
-	// the capture is placed by an earlier read — written for a fleet
+	// READS IT — zero and nil on a capture no read places, raised or not, so a
+	// build that reads them is told every call — written for a fleet
 	// mid-upgrade and read by nothing of this build: the last bridged call
 	// ([BridgeCall.Seq]) the log held ([BridgeLog.LastSeq]), and the places at
 	// or below it the log held no call at ([openPlaces]) — a call the bridge
@@ -381,7 +380,7 @@ type SessionCapture struct {
 	// but BridgeOpen keeps only the highest [maxOpenPlaces] of them, which a
 	// long round's dropped middle fills, so a call in flight below them reads
 	// to it as answered, which no count of places can mend and Through does.
-	// FROM THE SAME READ AS THROUGH, so the two state one save point. On a
+	// From the same read as Through on a capture its read places. On a
 	// REFUSED stamp a BridgeSeq of zero is "not known", as a nil Through is.
 	BridgeSeq  int   `json:"bridge_seq,omitempty"`
 	BridgeOpen []int `json:"bridge_open,omitempty"`
@@ -1290,6 +1289,11 @@ type spooledCapture struct {
 	// keep first waits to see whether to take the next one
 	// ([Coordinator.takeOver]).
 	standby bool
+
+	// places is what the capture is raised by once its take is counted
+	// ([SessionCapture.placeAtNewest]): set for a capture no read places, nil
+	// for one its read placed.
+	places *savePlaces
 }
 
 // spoolPrefix names this package's spools in the node's spool directory
@@ -1464,27 +1468,19 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		place = current.Capture.CaptureSeq
 	}
 	stamp := captureStamp(current, run.LaunchID, place, at.final, at.cutOff, hold, taken, box, policy)
-	// PLACED BY THE READ ABOVE, made ONLY WHERE ITS HARNESS ENDED ITS OWN RUN —
-	// the job over, its harness gone cleanly by itself and its script packing
-	// it, nothing cut off — which wrote every call it made before it exited.
-	// EVERY OTHER CAPTURE IS PLACED AS A SAVE IS, AT THE NEWEST SAVE POINT ITS
-	// LAUNCH IS KNOWN TO HOLD ([SessionCapture.placeAtNewest]): a job still
-	// working, and one CUT OFF ([readCapture]) — its harness killed, crashed
-	// or told to stop, or gone with a loss whose read cannot say how. A harness
-	// may make a call, and have it answered, before it writes the call to its
-	// record — Claude Code 2.1.310 writes a message only once the whole of it
-	// has streamed (measured) — and one killed in that window never writes it;
-	// its end's SIGTERM was measured only with the call's message already
-	// written. So the calls the log had taken before the pack are no measure of
-	// what such an archive holds, and a continuation told only the calls after
-	// them was never told those (savepoint.go).
-	// AND THE READS ITS JOB'S BRIEF COUNTED WITHOUT LISTING THEM, off the job's
-	// record by the brief its run read ([LaunchRecord.OmittedCalls]): placed by
-	// its read, the session holds every call the log had taken but those.
+	// PLACED BY THE READ ABOVE, made ONLY WHERE ITS HARNESS ENDED ITS OWN RUN,
+	// which wrote every call it made before it exited, with the reads its
+	// job's brief counted without listing them ([LaunchRecord.OmittedCalls]).
+	// EVERY OTHER CAPTURE, a job still working or one CUT OFF ([readCapture]),
+	// IS RESERVED AT ZERO AS A SAVE IS, AND RAISED AFTER ITS TAKE
+	// ([SessionCapture.placeAtNewest] says why): its harness may have had a
+	// call answered that it never wrote (savepoint.go).
+	var places *savePlaces
 	if calls != nil {
 		stamp.placeAt(*calls, current.Launch.OmittedCalls())
 	} else {
-		stamp.placeAtNewest(savePlaces{run: current})
+		stamp.placeAtZero()
+		places = &savePlaces{run: current, resumeRead: taken.ResumeRead}
 	}
 	stamp.At = c.now().UTC()
 	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME — the room its context
@@ -1495,7 +1491,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	// before by ([Coordinator.takeContext]).
 	reserveBy, _ := ctx.Deadline()
 	if standing {
-		return c.standBy(ctx, by, reserveBy, run, stamp, taken, at)
+		return c.standBy(ctx, by, reserveBy, run, stamp, taken, at, places)
 	}
 	for {
 		took, stampErr := c.reserveCapture(ctx, reserveBy, run.TurnID, stamp)
@@ -1512,7 +1508,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 				return nil, kept
 			}
 		case took:
-			spooled, err := c.spool(ctx, run, stamp, taken)
+			spooled, err := c.spool(ctx, run, stamp, taken, places)
 			if err != nil {
 				return nil, c.finishCapture(ctx, by, run, stamp, CaptureRefused, takeRefusal(ctx, err))
 			}
@@ -1526,7 +1522,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		// the row already holds as taken ([PendingStore.StampCapture]).
 		placed, after := c.besideAnother(ctx, run, stamp)
 		if !after {
-			return c.standBy(ctx, by, reserveBy, run, placed, taken, at)
+			return c.standBy(ctx, by, reserveBy, run, placed, taken, at, places)
 		}
 		stamp = placed
 	}
@@ -1534,7 +1530,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 
 // captureStamp is the begun stamp of a take of row's launch at place, with
 // what the take found in box: unplaced ([SessionCapture.placeAt],
-// [SessionCapture.placeAtNewest]) and with no instant, which its caller stamps
+// [SessionCapture.placeAtZero]) and with no instant, which its caller stamps
 // last, right before the reservation, so the instant a peer reads the take by
 // ([SessionCapture.sameTake]) comes after every step the take made before it.
 func captureStamp(row PendingRun, launch string, place int64, final, interrupted bool, hold takerHold,
@@ -1620,6 +1616,12 @@ func (c *Coordinator) spooledWhole(ctx context.Context, by time.Time, run Pendin
 			spooled.stamp.ResumedCount, spooled.stamp.CountProvider = count.provided(provider)
 		}
 	}
+	// AND, FOR A CAPTURE NO READ PLACES, ITS POINT RAISED by that count, on
+	// every path: a save, a take, a standby's spool, whose takeover reserves
+	// at it ([SessionCapture.placeAtNewest]).
+	if spooled.places != nil {
+		spooled.stamp.placeAtNewest(*spooled.places)
+	}
 	digestCtx, digestCancel := stampContext(ctx, by)
 	keepErr := taken.Keep(digestCtx)
 	digestCancel()
@@ -1661,7 +1663,7 @@ func (c *Coordinator) spooledWhole(ctx context.Context, by time.Time, run Pendin
 // goes on as any standby; not, it keeps nothing and withdraws what may still be
 // on its way.
 func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run PendingRun, stamp SessionCapture,
-	taken TakenSession, at capturePoint) (*spooledCapture, *SessionKept) {
+	taken TakenSession, at capturePoint, places *savePlaces) (*spooledCapture, *SessionKept) {
 
 	stood, _, err := c.askStamp(ctx, reserveBy, run.TurnID, stamp, c.pending.StandBy)
 	switch {
@@ -1676,7 +1678,7 @@ func (c *Coordinator) standBy(ctx context.Context, by, reserveBy time.Time, run 
 				"the capture's place, and the store never answered this one's standing by for it; it keeps "+
 				"the session it took spooled until its keep reads whether the run's record names it")
 	}
-	spooled, err := c.spool(ctx, run, stamp, taken)
+	spooled, err := c.spool(ctx, run, stamp, taken, places)
 	if err != nil {
 		c.standDown(ctx, by, run, stamp, takeRefusal(ctx, err))
 		return nil, nil
@@ -2080,7 +2082,7 @@ func takeRefusal(ctx context.Context, err error) string {
 // long as it stalls, which no check of ctx between reads can interrupt, so the
 // body is closed the moment ctx ends.
 func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCapture,
-	taken TakenSession) (*spooledCapture, error) {
+	taken TakenSession, places *savePlaces) (*spooledCapture, error) {
 
 	// A TAKE WHOSE TIME HAS ENDED SPOOLS NOTHING: its close would race the
 	// first read, and a box's stream is cut at that end whichever wins. Its
@@ -2104,7 +2106,7 @@ func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCa
 		_ = os.Remove(file.Name())
 		return nil, err
 	}
-	return &spooledCapture{run: run, stamp: stamp, spool: sealed, file: file.Name()}, nil
+	return &spooledCapture{run: run, stamp: stamp, spool: sealed, file: file.Name(), places: places}, nil
 }
 
 // spoolDirectory is where this coordinator's spools wait:

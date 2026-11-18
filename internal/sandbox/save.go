@@ -487,7 +487,7 @@ func paceSave(row PendingRun, job saveJob, room int64, now time.Time) (time.Time
 }
 
 // takeSave is a save's steps past its charge, on ctx: the take, its stamp at
-// the launch's newest save point, its reservation, its spool and its keep.
+// zero, its reservation, its spool and its raise, and its keep.
 // passed marks the spool passed and the keep counted; inflight hands the task
 // from c.inflight to the keeps.
 func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, in *saveTaken, out saveOutcome,
@@ -541,7 +541,9 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 		return end(saveNotYet, takerUnheld)
 	}
 	stamp := captureStamp(row, run.LaunchID, nextCaptureSeq(row), false, true, hold, taken, in.box, in.policy)
-	stamp.placeAtNewest(savePlaces{run: row})
+	// RESERVED AT ZERO, its instant last, and raised once its spool is
+	// counted ([SessionCapture.placeAtNewest] says why), off this one row read.
+	stamp.placeAtZero()
 	stamp.At = c.now().UTC()
 	reserveBy, _ := take.Deadline()
 	took, _, err := c.askStamp(take, reserveBy, run.TurnID, stamp, c.pending.ReserveSave)
@@ -555,7 +557,7 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	case !took:
 		return end(saveNotYet, "the run's row refused the save's place")
 	}
-	spooled, err := c.spool(take, row, stamp, taken)
+	spooled, err := c.spool(take, row, stamp, taken, &savePlaces{run: row, resumeRead: taken.ResumeRead})
 	if err != nil {
 		c.finishCapture(take, by, row, stamp, CaptureRefused, takeRefusal(take, err))
 		return end(saveFailed, takeRefusal(take, err))

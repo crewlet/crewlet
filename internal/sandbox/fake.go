@@ -1165,6 +1165,10 @@ type FakeSession struct {
 	// ([TakenSession.CountProvider]), "" for none.
 	CountProvider string
 
+	// ResumeRead is what the take says of the archive's release
+	// ([TakenSession.ResumeRead]).
+	ResumeRead bool
+
 	// Taking, where set, runs with the take's context as a take reads the
 	// box, after the capture placed the session from the run's log and before
 	// the archive is handed over: a case lands a call between the two there,
@@ -1245,11 +1249,12 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 		body.stall = func() { session.Streaming(ctx) }
 	}
 	return TakenSession{
-		Archive: archive,
-		Body:    body,
-		Context: func() int64 { return session.ContextTokens },
-		Next:    func() NextRequest { return session.NextRequest },
-		Count:   count,
+		Archive:    archive,
+		Body:       body,
+		ResumeRead: session.ResumeRead,
+		Context:    func() int64 { return session.ContextTokens },
+		Next:       func() NextRequest { return session.NextRequest },
+		Count:      count,
 		CountProvider: func() string {
 			return session.CountProvider
 		},

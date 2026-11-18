@@ -173,7 +173,8 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return keepDigest(ctx, box, paths, archive.SessionID, digest)
 	}
 	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
-		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next}, nil
+		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next,
+		ResumeRead: r.resumeRead(archive.Version)}, nil
 }
 
 // keptRunStart is where an archive's run began in its session as the take

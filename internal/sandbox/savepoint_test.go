@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -326,143 +327,178 @@ func TestAKeptStampWithNoSavePointIsNotContinued(t *testing.T) {
 	}
 }
 
-// A CUT-OFF CAPTURE IS PLACED AT THE NEWEST SAVE POINT ITS LAUNCH IS KNOWN TO
-// HOLD, AND AT NONE IT IS NOT (see savepoint.go's file comment): its launch's
-// own newest landed capture's point — the row's kept capture only where its job
-// and its ordinal both are that launch's — or zero. The places an older build
-// reads come from the same capture as the point, copied rather than shared.
+// A CAPTURE POINT RISES ONLY WHERE ITS TAKE NAMES THE HELD CAPTURE'S NEWEST
+// COMPACTION (savepoint.go). A capture no read places, reserved at zero, is
+// raised once its take's count is stamped to the newest point a capture its
+// launch's session holds states, where that capture names the same newest
+// compaction: the launch's own landed capture, and the capture it continued,
+// read only where its launch is the job before's and the box took that
+// session up. Its Omitted is the launch's own at or below the point, and the
+// places an older build reads stay zero and nil. Every other case stays at
+// zero: an identity not read on either side, two that differ, a box that never
+// said it took the session up or said it in a word this build does not know,
+// a point that outlived its launch, and a raise past the stamp's bounds.
 //
-// Mutation: take an earlier launch's kept capture, match the launch on its job
-// or its ordinal alone, or read a kept capture stating no save point as zero,
-// and a case goes red; share the open places rather than copy them, and the
-// copied case does; keep places a stamp already carried where no capture
-// places it, and every case placed at zero does.
-func TestACutOffCaptureIsPlacedAtTheNewestSavePointItsLaunchIsKnownToHold(t *testing.T) {
+// Mutation: compare counts rather than identities, drop the SessionStart
+// check, accept an unknown basis (RestartedSince's arm), carry launchKept's
+// point unchecked, take Omitted off the carried capture, keep Omitted's places
+// past the point, drop the launch check, copy BridgeSeq, or keep a raise the
+// bounds refuse, and a row goes red.
+func TestACapturePointRisesOnlyWhereItsTakeNamesTheHeldCapturesNewestCompaction(t *testing.T) {
 	t.Parallel()
-	// landed is a capture of the job launch (its ordinal seq) at save point
-	// through, placed for an older build at seq of the highest call and open
-	// at the places below it.
-	landed := func(launch string, seq int64, through *int, highest int, open ...int) *SessionCapture {
-		return &SessionCapture{LaunchSeq: seq, CaptureSeq: 1, Launch: launch, State: CaptureLanded,
-			Through: through, BridgeSeq: highest, BridgeOpen: open}
+	const job = "job-2"
+	// own is the launch's own landed capture at through, naming newest.
+	own := func(through int, newest *string) *SessionCapture {
+		return &SessionCapture{LaunchSeq: 2, CaptureSeq: 1, Launch: job, State: CaptureLanded,
+			Through: new(through), BridgeSeq: 11, BridgeOpen: []int{10}, Omitted: []int{4},
+			ResumedCount: &ResumedCount{Tokens: 1, Restart: newest}}
 	}
-	const job1, job2 = "job-1", "job-2"
+	// continued is the launch's record of a continued capture at 7 of the job
+	// before, taken up by its box, naming basis.
+	continued := func(basis *string) LaunchRecord {
+		return LaunchRecord{Brief: BriefContinued, SessionStart: SessionStartContinued, BasisRestart: basis,
+			BriefOmitted: []int{3, 12}, Continued: &ContinuedPoint{LaunchSeq: 1, Through: 7}}
+	}
+	past := make([]int, MaxBridgeCalls+1)
+	for i := range past {
+		past[i] = i + 1
+	}
 	for name, tc := range map[string]struct {
+		harness string
+		take    *string
+		launch  LaunchRecord
 		kept    *SessionCapture
 		through int
-		highest int
-		open    []int
+		omitted []int
 	}{
-		"a launch that has landed no capture": {},
-		"a launch whose own capture landed": {kept: landed(job2, 2, new(9), 11, 10), through: 9, highest: 11,
-			open: []int{10}},
-		"the turn's kept capture an earlier launch took":                 {kept: landed(job1, 1, new(9), 11, 10)},
-		"another job's capture at this launch's ordinal":                 {kept: landed(job1, 2, new(9), 11, 10)},
-		"this job's capture at another ordinal":                          {kept: landed(job2, 1, new(9), 11, 10)},
-		"its own landed capture stating no save point, an older build's": {kept: landed(job2, 2, nil, 11, 10)},
+		"the continued capture, neither compacted": {take: new(""), launch: continued(new("")), through: 7,
+			omitted: []int{3}},
+		"the continued capture, one compaction": {take: new("msg_1"), launch: continued(new("msg_1")),
+			through: 7, omitted: []int{3}},
+		"an OpenCode capture, one compaction": {harness: OpenCodeHarness, take: new("msg_1"),
+			launch: continued(new("msg_1")), through: 7, omitted: []int{3}},
+		"a compaction since the continued capture": {take: new("msg_2"), launch: continued(new("msg_1"))},
+		"a take whose identity was not read":       {launch: continued(new("msg_1"))},
+		"a basis not known":                        {take: new(""), launch: continued(nil)},
+		"a box that started a session of its own": {take: new("msg_1"), launch: func() LaunchRecord {
+			l := continued(new("msg_1"))
+			l.SessionStart = SessionStartFresh
+			return l
+		}()},
+		"a box that never said": {take: new("msg_1"), launch: func() LaunchRecord {
+			l := continued(new("msg_1"))
+			l.SessionStart = ""
+			return l
+		}()},
+		"a word this build does not know": {take: new("msg_1"), launch: func() LaunchRecord {
+			l := continued(new("msg_1"))
+			l.SessionStart = "a-later-builds-start"
+			return l
+		}()},
+		"a point of a launch before the job before": {take: new("msg_1"), launch: func() LaunchRecord {
+			l := continued(new("msg_1"))
+			l.Continued.LaunchSeq = 0
+			return l
+		}()},
+		"a point of this very launch": {take: new("msg_1"), launch: func() LaunchRecord {
+			l := continued(new("msg_1"))
+			l.Continued.LaunchSeq = 2
+			return l
+		}()},
+		"its own landed capture, newer and agreeing": {take: new("msg_1"), launch: continued(new("msg_1")),
+			kept: own(9, new("msg_1")), through: 9, omitted: []int{3}},
+		"its own landed capture, of another compaction": {take: new("msg_1"), launch: continued(new("msg_1")),
+			kept: own(9, new("msg_0")), through: 7, omitted: []int{3}},
+		"its own landed capture alone": {take: new("msg_1"), launch: LaunchRecord{BriefOmitted: []int{3, 12}},
+			kept: own(12, new("msg_1")), through: 12, omitted: []int{3, 12}},
+		"its own landed capture, its identity not read": {take: new("msg_1"), launch: LaunchRecord{},
+			kept: own(9, nil)},
+		"a raise past what a stamp holds": {take: new("msg_1"), launch: func() LaunchRecord {
+			l := continued(new("msg_1"))
+			l.BriefOmitted = past
+			l.Continued.Through = len(past)
+			return l
+		}()},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			run := PendingRun{TurnID: "t1", LaunchID: job2, LaunchSeq: 2, Kept: tc.kept, Capture: tc.kept}
-			// A STAMP THAT ALREADY CARRIES PLACES, as one built from a copy of
-			// another capture would: placed at zero, it carries none of them.
-			capture := SessionCapture{BridgeSeq: 99, BridgeOpen: []int{98}}
-			capture.placeAtNewest(savePlaces{run: run})
-			through, placed := capture.SavePoint()
-			if !placed || through != tc.through {
-				t.Fatalf("the capture is placed at %d (stated %v), want %d, stated", through, placed, tc.through)
+			run := PendingRun{TurnID: "t1", LaunchID: job, LaunchSeq: 2, Launch: tc.launch, Kept: tc.kept,
+				Capture: tc.kept}
+			capture := SessionCapture{Harness: cmp.Or(tc.harness, ClaudeCodeHarness), BridgeSeq: 99,
+				BridgeOpen: []int{98}, Omitted: []int{97}}
+			capture.placeAtZero()
+			capture.ResumedCount = &ResumedCount{Tokens: 1, Restart: tc.take}
+			capture.placeAtNewest(savePlaces{run: run, resumeRead: true})
+			if through, stated := capture.SavePoint(); !stated || through != tc.through {
+				t.Errorf("the capture is placed at %d (stated %v), want %d", through, stated, tc.through)
 			}
-			if capture.BridgeSeq != tc.highest || !slices.Equal(capture.BridgeOpen, tc.open) {
-				t.Errorf("the capture carries %d and %v for an older build, want %d and %v: the places of the "+
-					"capture its point is", capture.BridgeSeq, capture.BridgeOpen, tc.highest, tc.open)
+			if !slices.Equal(capture.Omitted, tc.omitted) {
+				t.Errorf("the capture states %v left out, want %v", capture.Omitted, tc.omitted)
 			}
-			if len(capture.BridgeOpen) > 0 {
-				capture.BridgeOpen[0] = -1
-				if tc.kept != nil && slices.Contains(tc.kept.BridgeOpen, -1) {
-					t.Error("the capture shares its open places with the capture it was placed by")
-				}
+			if capture.BridgeSeq != 0 || capture.BridgeOpen != nil {
+				t.Errorf("the capture carries %d and %v for an older build, want zero and none, which tells it "+
+					"every call", capture.BridgeSeq, capture.BridgeOpen)
 			}
 		})
 	}
 }
 
-// A SAVE IS PLACED AT THE NEWEST SAVE POINT ITS LAUNCH IS KNOWN TO HOLD, AND AT
-// NONE IT IS NOT: the newest of its launch's own landed capture and the capture
-// the launch continued, where that one counts this round's calls, or zero. The
-// places an older build reads come from the same capture, copied.
+// EVERY CAPTURE NO READ PLACES IS RESERVED AT ZERO, whatever places its stamp
+// already carries: a stated zero, no place an older build reads and no read
+// left out, so a continuation of it is told every call of the round.
 //
-// Mutation: take an earlier launch's kept capture, the continued capture's
-// point across a new round or from a row naming none, or the first candidate
-// rather than the newest, and a case goes red; take the older build's places
-// off another capture, or share its slice, and the copied case does; keep
-// places a stamp already carried where no capture places it, and every case
-// placed at zero does.
-func TestASaveIsPlacedAtTheNewestSavePointItsLaunchIsKnownToHold(t *testing.T) {
+// Mutation: keep a stamp's places, or state no point, and this goes red.
+func TestEveryCaptureNoReadPlacesIsReservedAtZero(t *testing.T) {
 	t.Parallel()
-	// saved is a capture of the job launch (its ordinal seq) at save point
-	// through, placed for an older build at seq of the highest call and open
-	// at the places below it.
-	saved := func(launch string, seq int64, through *int, highest int, open ...int) *SessionCapture {
-		return &SessionCapture{LaunchSeq: seq, CaptureSeq: 1, Launch: launch, State: CaptureLanded,
-			Through: through, BridgeSeq: highest, BridgeOpen: open}
+	capture := SessionCapture{Through: new(9), BridgeSeq: 11, BridgeOpen: []int{10}, Omitted: []int{3}}
+	capture.placeAtZero()
+	if through, stated := capture.SavePoint(); !stated || through != 0 || capture.BridgeSeq != 0 ||
+		capture.BridgeOpen != nil || capture.Omitted != nil {
+		t.Errorf("the capture is reserved at %d (stated %v), %d, %v and %v, want a stated zero and nothing else",
+			through, stated, capture.BridgeSeq, capture.BridgeOpen, capture.Omitted)
 	}
-	const job1, job2 = "job-1", "job-2"
+}
+
+// A CLAUDE CODE SAVE OUTSIDE THE RESUME READ SET IS NEVER RAISED. Its session
+// stands for the calls at or below a raised point only while it grows between
+// two captures with one newest compaction, and a Claude Code release withdraws
+// messages in place in ways this build read only for the releases whose
+// resume it read. So a capture whose archive another release wrote stays at
+// zero, its identities read and equal and a continued point above zero
+// notwithstanding; the gate is Claude Code's alone.
+//
+// Mutation: drop the release gate, and the first case is raised.
+func TestAClaudeCodeSaveOutsideTheResumeReadSetIsNeverRaised(t *testing.T) {
+	t.Parallel()
+	run := PendingRun{TurnID: "t1", LaunchID: "job-2", LaunchSeq: 2, Launch: LaunchRecord{
+		SessionStart: SessionStartContinued, BasisRestart: new("u-1"),
+		Continued: &ContinuedPoint{LaunchSeq: 1, Through: 7}}}
 	for name, tc := range map[string]struct {
-		round     string
-		kept      *SessionCapture
-		continued *SessionCapture
-		through   int
-		highest   int
-		open      []int
+		harness    string
+		resumeRead bool
+		through    int
 	}{
-		"a launch that continued nothing and has saved nothing": {round: job2},
-		"a launch that carried its round on from the job before's capture": {round: job1,
-			continued: saved(job1, 1, new(5), 7, 6), through: 5, highest: 7, open: []int{6}},
-		"a launch that began a new round from the job before's capture": {round: job2,
-			continued: saved(job1, 1, new(5), 7, 6)},
-		"a launch whose own save landed": {round: job1, kept: saved(job2, 2, new(9), 11),
-			continued: saved(job1, 1, new(5), 7), through: 9, highest: 11},
-		"the turn's kept capture an earlier launch took": {round: job2, kept: saved(job1, 1, new(9), 11)},
-		"its own landed save stating no save point, an older build's": {round: job1,
-			kept: saved(job2, 2, nil, 11), continued: saved(job1, 1, new(5), 7), through: 5, highest: 7},
-		"a row that names no round, an older build's": {continued: saved(job1, 1, new(5), 7)},
-		"a continued capture newer than its own landed save": {round: job1, kept: saved(job2, 2, new(4), 4),
-			continued: saved(job1, 1, new(6), 8, 7), through: 6, highest: 8, open: []int{7}},
+		"Claude Code, a release whose resume was not read": {harness: ClaudeCodeHarness},
+		"Claude Code, a release whose resume was read":     {harness: ClaudeCodeHarness, resumeRead: true, through: 7},
+		"OpenCode": {harness: OpenCodeHarness, through: 7},
 	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			run := PendingRun{TurnID: "t1", LaunchID: job2, LaunchSeq: 2, Round: tc.round, Kept: tc.kept,
-				Capture: tc.kept}
-			// A STAMP THAT ALREADY CARRIES PLACES, as one built from a copy of
-			// another capture would: placed at zero, it carries none of them.
-			save := SessionCapture{BridgeSeq: 99, BridgeOpen: []int{98}}
-			save.placeAtNewest(savePlaces{run: run, continued: tc.continued})
-			through, placed := save.SavePoint()
-			if !placed || through != tc.through {
-				t.Fatalf("the save is placed at %d (stated %v), want %d, stated", through, placed, tc.through)
-			}
-			if save.BridgeSeq != tc.highest || !slices.Equal(save.BridgeOpen, tc.open) {
-				t.Errorf("the save carries %d and %v for an older build, want %d and %v: the places of the "+
-					"capture its point is", save.BridgeSeq, save.BridgeOpen, tc.highest, tc.open)
-			}
-			if len(save.BridgeOpen) > 0 {
-				save.BridgeOpen[0] = -1
-				for _, source := range []*SessionCapture{tc.kept, tc.continued} {
-					if source != nil && slices.Contains(source.BridgeOpen, -1) {
-						t.Error("the save shares its open places with the capture it was placed by")
-					}
-				}
-			}
-		})
+		save := SessionCapture{Harness: tc.harness, Interrupted: true,
+			ResumedCount: &ResumedCount{Tokens: 1, Restart: new("u-1")}}
+		save.placeAtZero()
+		save.placeAtNewest(savePlaces{run: run, resumeRead: tc.resumeRead})
+		if through, _ := save.SavePoint(); through != tc.through {
+			t.Errorf("%s: the save is placed at %d, want %d", name, through, tc.through)
+		}
 	}
 }
 
 // A CAPTURE IS PLACED BY ITS LOG READ ONLY WHERE ITS HARNESS ENDED ITS OWN RUN
 // (see savepoint.go's file comment). Every other one — a job still working, and
 // every job CUT OFF: killed, told to stop by its end, ended before its script
-// packed, or lost — is placed at its own launch's landed capture with that
-// capture's places, or zero, so a relaunch continuing it is told every call its
-// archive may lack.
+// packed, or lost — is reserved at zero, and raised after its take to its own
+// launch's landed capture's point where both name one newest compaction, with
+// no place an older build reads, so a relaunch continuing it is told every
+// call its archive may lack.
 //
 // Mutation: place a cut-off capture at its log read, and its cases count calls
 // its archive may lack; place every capture at its launch's newest save point,
@@ -520,7 +556,7 @@ func TestACaptureIsPlacedByItsLogReadOnlyWhereItsHarnessEndedItsOwnRun(t *testin
 			ended: func(a *SessionArchive) Result {
 				return Result{SessionID: "s-1", Captured: a, HarnessCutOff: true, JobEnd: JobEndKilled}
 			},
-			final: true, cutOff: true, through: 2, highest: 2, open: []int{1}},
+			final: true, cutOff: true, through: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -545,7 +581,11 @@ func TestACaptureIsPlacedByItsLogReadOnlyWhereItsHarnessEndedItsOwnRun(t *testin
 					own := SessionCapture{LaunchSeq: launched.LaunchSeq, CaptureSeq: 1, Launch: launched.LaunchID,
 						State: CaptureLanded, At: rig.now, Through: new(2), BridgeSeq: 2, BridgeOpen: []int{1},
 						Object: objstore.KeyAt(rig.now).String(), Harness: "claude-code", SessionID: "s-1",
-						ArchiveFormat: FakeArchiveFormat}
+						ArchiveFormat: FakeArchiveFormat, ResumedCount: &ResumedCount{Tokens: 1, Restart: new("u-1")}}
+					// THE TAKE NAMES THE SAME NEWEST COMPACTION, of a release whose
+					// resume was read.
+					rig.runner.Session.Count = &ResumedCount{Tokens: 1, Restart: new("u-1")}
+					rig.runner.Session.ResumeRead = true
 					if took, err := rig.pending.StampCapture(t.Context(), "t1", own); err != nil || !took {
 						t.Fatalf("landing the launch's own capture = %v, %v", took, err)
 					}

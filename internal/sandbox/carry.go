@@ -353,6 +353,12 @@ type TakenSession struct {
 	// ([SessionCapture.CountProvider]): "" for a Claude Code count and where
 	// no reply anchored one. Nil from a taker that names none.
 	CountProvider func() string
+
+	// ResumeRead says Archive.Version is a release whose resume this build
+	// read, as [CarryCheck.ResumeRead] says of a box's (the executor's
+	// claudeResumeRead), false for every other harness's: only such a Claude
+	// Code capture is raised ([SessionCapture.placeAtNewest]).
+	ResumeRead bool
 }
 
 // SessionPackWait bounds a runner's on-demand pack of a session in its box
