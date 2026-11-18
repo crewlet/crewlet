@@ -8,10 +8,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/advisor/analyst"
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // maxAnalysisAnswerBytes bounds an answer's body: a fingerprint and a word.
@@ -42,7 +42,10 @@ func (a *App) serveAnalysisRun(w http.ResponseWriter, r *http.Request) {
 	if a.noAnalyst(w) {
 		return
 	}
-	principal, _ := iam.From(r.Context())
+	principal, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
 	run, err := a.analyst.Start(r.Context(), "person", principal.Seat)
 	switch {
 	case errors.Is(err, analyst.ErrRunning):
@@ -62,6 +65,10 @@ func (a *App) serveAnalysisAnswer(w http.ResponseWriter, r *http.Request) {
 	if a.noAnalyst(w) {
 		return
 	}
+	principal, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
 	raw, err := httpjson.ReadBody(w, r, maxAnalysisAnswerBytes)
 	if err != nil {
 		return
@@ -75,7 +82,6 @@ func (a *App) serveAnalysisAnswer(w http.ResponseWriter, r *http.Request) {
 			"detail": "send a finding's fingerprint and a verdict of useful, wrong or known"})
 		return
 	}
-	principal, _ := iam.From(r.Context())
 	switch err := a.analyst.Answer(r.Context(), body.Fingerprint, body.Verdict, principal.Seat); {
 	case errors.Is(err, analyst.ErrNoFinding):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, map[string]string{
