@@ -46,10 +46,14 @@ func workletWake(id string, reason worklet.Reason, kind worklet.ChangeKind) *eve
 	return ev
 }
 
-// AN ASSIGNMENT WAKE WHOSE ITEM MOVED ON STARTS NO TURN; a comment, another
-// reason and an unread item still run. Mutation: drop by the reason alone, and
-// a comment on a finished item goes unanswered; skip the floor, and it fails.
-func TestAnAssignmentWakeWhoseItemMovedOnStartsNoTurn(t *testing.T) {
+// A WAKE ABOUT WORK THE SEAT NO LONGER HOLDS STARTS NO TURN: an assignment, a
+// new dependent on the seat's item (`blocking`) or its blocker's close
+// (`unblocked`), once the item was finished, removed or handed on. A comment,
+// another reason and an unread item still run. Mutation: drop by the reason
+// alone, and a comment on a finished item goes unanswered; check `assignee`
+// alone, and a day-old relation notice on finished work costs a turn; skip the
+// floor, and it fails.
+func TestAWakeAboutWorkTheSeatNoLongerHoldsStartsNoTurn(t *testing.T) {
 	t.Parallel()
 	tasks := &staleTasks{tasks: map[string]worklet.Task{
 		"open":     {Assignee: "cy", Status: worklet.StatusTodo},
@@ -58,16 +62,24 @@ func TestAnAssignmentWakeWhoseItemMovedOnStartsNoTurn(t *testing.T) {
 		"archived": {Assignee: "cy", Status: worklet.StatusTodo, Removed: &worklet.Tombstone{}},
 	}}
 	keep := map[string]*events.Event{
-		"an open item of the seat's":      workletWake("open", worklet.ReasonAssignee, worklet.ChangeStatus),
-		"a comment on a finished item":    workletWake("done", worklet.ReasonAssignee, worklet.ChangeComment),
-		"a mention on a finished item":    workletWake("done", worklet.ReasonMention, worklet.ChangeComment),
-		"a watched item handed to others": workletWake("handed", worklet.ReasonWatcher, worklet.ChangeAssignee),
+		"an open item of the seat's":         workletWake("open", worklet.ReasonAssignee, worklet.ChangeStatus),
+		"a new dependent on an open item":    workletWake("open", worklet.ReasonBlocking, worklet.ChangeRelations),
+		"an open item unblocked":             workletWake("open", worklet.ReasonUnblocked, worklet.ChangeRelations),
+		"a comment on a finished item":       workletWake("done", worklet.ReasonAssignee, worklet.ChangeComment),
+		"a mention on a finished item":       workletWake("done", worklet.ReasonMention, worklet.ChangeComment),
+		"a watched item handed to others":    workletWake("handed", worklet.ReasonWatcher, worklet.ChangeAssignee),
+		"the reporter of a finished item":    workletWake("done", worklet.ReasonReporter, worklet.ChangeStatus),
+		"an answer on an item handed to dee": workletWake("handed", worklet.ReasonAnswered, worklet.ChangeComment),
 	}
 	drop := map[string]*events.Event{
-		"a finished item":        workletWake("done", worklet.ReasonAssignee, worklet.ChangeStatus),
-		"an item handed to dee":  workletWake("handed", worklet.ReasonAssignee, worklet.ChangeCreated),
-		"a removed item":         workletWake("archived", worklet.ReasonAssignee, worklet.ChangeFields),
-		"an item gone from here": workletWake("purged", worklet.ReasonAssignee, worklet.ChangeStatus),
+		"a finished item":                  workletWake("done", worklet.ReasonAssignee, worklet.ChangeStatus),
+		"an item handed to dee":            workletWake("handed", worklet.ReasonAssignee, worklet.ChangeCreated),
+		"a removed item":                   workletWake("archived", worklet.ReasonAssignee, worklet.ChangeFields),
+		"an item gone from here":           workletWake("purged", worklet.ReasonAssignee, worklet.ChangeStatus),
+		"a new dependent on finished work": workletWake("done", worklet.ReasonBlocking, worklet.ChangeRelations),
+		"a new dependent on handed work":   workletWake("handed", worklet.ReasonBlocking, worklet.ChangeRelations),
+		"finished work unblocked":          workletWake("done", worklet.ReasonUnblocked, worklet.ChangeRelations),
+		"handed work unblocked":            workletWake("handed", worklet.ReasonUnblocked, worklet.ChangeRelations),
 	}
 	var evs []*events.Event
 	for _, ev := range keep {
@@ -76,7 +88,7 @@ func TestAnAssignmentWakeWhoseItemMovedOnStartsNoTurn(t *testing.T) {
 	for _, ev := range drop {
 		evs = append(evs, ev)
 	}
-	got := staleAssignments(t.Context(), tasks, "cy", evs)
+	got := staleWakes(t.Context(), tasks, "cy", evs)
 	for name, ev := range keep {
 		if !slices.Contains(got, ev) {
 			t.Errorf("%s: the wake was dropped, want it to run", name)
@@ -95,12 +107,12 @@ func TestAnAssignmentWakeWhoseItemMovedOnStartsNoTurn(t *testing.T) {
 
 	// A READ THAT FAILS, OR A WAKE THAT NAMES NO CHANGE, KEEPS THE WAKE.
 	unread := &staleTasks{err: errors.New("the estate did not answer")}
-	if got := staleAssignments(t.Context(), unread, "cy", []*events.Event{drop["a finished item"]}); len(got) != 1 {
-		t.Error("an assignment wake whose item could not be read was dropped")
+	if got := staleWakes(t.Context(), unread, "cy", []*events.Event{drop["a finished item"]}); len(got) != 1 {
+		t.Error("a wake whose item could not be read was dropped")
 	}
 	bare := workletWake("done", worklet.ReasonAssignee, worklet.ChangeStatus)
 	bare.Payload = nil
-	if got := staleAssignments(t.Context(), tasks, "cy", []*events.Event{bare}); len(got) != 1 {
-		t.Error("an assignment wake with no committing position was dropped")
+	if got := staleWakes(t.Context(), tasks, "cy", []*events.Event{bare}); len(got) != 1 {
+		t.Error("a wake with no committing position was dropped")
 	}
 }
