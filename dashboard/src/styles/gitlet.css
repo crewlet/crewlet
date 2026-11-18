@@ -3472,6 +3472,107 @@
   color: var(--color-text-tertiary);
 }
 
+/* THE BOXES: each group a card, its heading the head band, its rows on a spine through the leads. */
+.code-list--boxes {
+  --code-list-spine: var(--spacing-7);
+}
+
+.code-list--boxes .code-list__group {
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.code-list__band {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-3);
+  padding: var(--spacing-2) var(--row-inline);
+}
+
+.code-list__band > .code-list__heading {
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: var(--font-size-md);
+  color: var(--color-text-primary);
+}
+
+.code-list__band > .code-list__aside {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-list__band + * {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-list--boxes .code-list__rows {
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.code-list--boxes .code-list__first,
+.code-list--boxes .code-list__row {
+  position: relative;
+}
+
+.code-list--boxes .code-list__first {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+  padding: var(--spacing-2) var(--row-inline);
+  background: var(--color-surface-inset);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-list--boxes .code-list__lead {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  align-self: center;
+  min-inline-size: var(--code-list-spine);
+}
+
+/* THE SPINE, a segment a part, so it runs through every lead's centre however tall a row grows. */
+.code-list--boxes .code-list__first:has(+ .code-list__rows)::before,
+.code-list--boxes .code-list__row::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: calc(var(--row-inline) + var(--code-list-spine) / 2 - 1px);
+  border-inline-start: 2px solid var(--color-border-strong);
+}
+
+.code-list--boxes .code-list__first::before,
+.code-list--boxes .code-list__band + .code-list__rows > .code-list__row:first-child::before {
+  inset-block-start: 50%;
+}
+
+.code-list--boxes .code-list__row:last-child::before {
+  inset-block-end: 50%;
+}
+
+.code-list--boxes .code-list__first > * {
+  position: relative;
+  z-index: 1;
+}
+
+.code-list--boxes .code-list__last {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--row-inline);
+}
+
+.code-list--boxes .code-list__rows + .code-list__last {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
 /* THE PHONE, BY THE LIST'S OWN WIDTH: the facts under the words, the timeline's track given back. */
 @container code-list (width < 640px) {
   .code-list__row {
@@ -3501,6 +3602,227 @@
 
   .code-list--timeline .code-list__heading {
     margin-inline-start: 0;
+  }
+}
+
+/* ---- Gitlet › Queue (`routes/gitlet/Queue.tsx`, `queue/`) ---------------- */
+
+.code-queue__repo {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+  text-decoration: none;
+}
+
+.code-queue__repo:hover {
+  text-decoration: underline;
+}
+
+.code-queue__required {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.code-queue__required strong {
+  color: var(--color-text-primary);
+}
+
+/* THE SPINE'S MARKS: a node and the place badges, each a circle in the card's ground. */
+.code-queue__node,
+.code-queue__place {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--code-list-spine);
+  block-size: var(--code-list-spine);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
+}
+
+.code-queue__place {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.code-queue__base {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-width: 0;
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+.code-queue__oid {
+  padding: 0 var(--spacing-1);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
+.code-queue__subject {
+  color: var(--color-text-secondary);
+}
+
+.code-queue__ref {
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-secondary);
+}
+
+.code-queue__by {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--spacing-1);
+}
+
+/* AN ENTRY'S FACTS IN COLUMNS: the state, the checks cell, Take out, aligned down the box. */
+.code-queue__facts {
+  display: grid;
+  grid-template-columns: 6rem 17rem auto;
+  align-items: center;
+  gap: var(--spacing-4);
+}
+
+.code-queue__checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: normal;
+}
+
+.code-queue__line {
+  display: grid;
+  grid-template-columns: 4rem minmax(0, 1fr);
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.code-queue__mark {
+  display: flex;
+  min-width: 0;
+}
+
+/* A bar takes no width of its own, so it fills the mark's column. */
+.code-queue__mark > * {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.code-queue__words strong {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+
+.code-queue__note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.code-queue__open {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.code-queue__why,
+.code-queue__who {
+  margin: 0;
+}
+
+.code-queue__who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--spacing-1);
+  color: var(--color-text-secondary);
+}
+
+.code-queue__ejection-acts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+/* At the toolbar's end; under the picker, full width, on a phone. */
+.code-queue__summary {
+  margin: 0 0 0 auto;
+  font-size: var(--font-size-sm);
+}
+
+@media (width < 640px) {
+  .code-queue__summary {
+    flex-basis: 100%;
+    margin-inline-start: 0;
+  }
+}
+
+.code-queue__refused {
+  margin: 0;
+  font-weight: var(--font-weight-medium);
+}
+
+/* THE PHONE: the facts drop under the entry's words, the state and Take out on one line. */
+@container code-list (width < 640px) {
+  .code-list--boxes .code-list__row {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "lead body" "lead facts" "lead below";
+  }
+
+  .code-list--boxes .code-list__facts {
+    margin-block-start: var(--spacing-2);
+    white-space: normal;
+  }
+
+  .code-queue__facts {
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas: "state . out" "checks checks checks";
+    inline-size: 100%;
+    gap: var(--spacing-2);
+  }
+
+  .code-queue__state {
+    grid-area: state;
+  }
+
+  .code-queue__cell {
+    grid-area: checks;
+  }
+
+  .code-queue__out {
+    grid-area: out;
+  }
+
+  /* More stays at the end of the heading's line; Required checks wraps alone under it. */
+  .code-list__band > .code-list__aside:has(> .code-queue__required) {
+    display: contents;
+  }
+
+  .code-queue__required {
+    flex-basis: 100%;
+    order: 1;
+  }
+
+  .code-queue__more {
+    margin-inline-start: auto;
   }
 }
 

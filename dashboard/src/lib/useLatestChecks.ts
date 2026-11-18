@@ -33,6 +33,8 @@ import type { CodeCheckRow } from "~/protocol/index.ts";
 export interface LatestChecks {
   rows: readonly CodeCheckRow[] | undefined;
   error: QueryErrorCode | null;
+  /** The engine's sentence for a refusal, where it wrote one. */
+  detail: string | undefined;
 }
 
 /**
@@ -80,5 +82,9 @@ export function useLatestChecks(params: CodeParams, pollMs?: number): LatestChec
     return () => abort.abort();
   }, [first.data, key, question]);
 
-  return { rows: held?.key === key ? held.rows : undefined, error: first.error };
+  return {
+    rows: held?.key === key ? held.rows : undefined,
+    error: first.error,
+    detail: first.detail,
+  };
 }
