@@ -11,10 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// refsThroughEveryPath is what each of the three places a run's account is
-// read from makes of text: the report the agent wrote (a whole collection),
-// Claude Code's result message, and OpenCode's event stream and plain output.
-// Each is one reading of the same rule, so every case runs through all four.
+// refsThroughEveryPath is what every reader of a run's account makes of text:
+// the report (a whole collection), Claude Code's result message, and OpenCode's
+// event stream and plain output. All four read one rule.
 func refsThroughEveryPath(t *testing.T, text string) map[string][]string {
 	t.Helper()
 	runner := executor.NewClaudeCode()
@@ -42,11 +41,9 @@ func refsThroughEveryPath(t *testing.T, text string) map[string][]string {
 	}
 }
 
-// A PULL REQUEST IS RECOGNISED BY ITS SHAPE, ON ANY HOST. Which hosts a box
-// can push to is set by the seat's own environment and setup steps, which the
-// engine never names — so a GitHub Enterprise, a self-managed GitLab on a port
-// of its own, or the walkthrough's own GitLab at gitlab.local:8929 delivered
-// nothing at all while the pattern knew two hosts by name.
+// A PULL REQUEST IS RECOGNISED BY ITS SHAPE, ON ANY HOST: the hosts a box can
+// push to are set by the seat's own environment and setup steps, which the
+// engine never names, so no host list can know them.
 func TestADeliveredPullRequestIsRecognisedOnAnyCodeHost(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -98,10 +95,10 @@ func TestTheReportsDeliveredLinesAreItsRefs(t *testing.T) {
 	}
 }
 
-// A `Delivered:` line is read however a report lays it out — a list marker,
-// emphasis, a ref in backticks — and one that does not hold a ref alone is not
-// a ref line: prose after the label, nothing after it, a branch longer than a
-// ref can be, or a URL that carries a credential.
+// A `Delivered:` line is read whatever its markup (a list marker, emphasis,
+// backticks), and one that does not hold a ref alone is no ref line: prose
+// after the label, nothing, a branch longer than a ref can be, or a URL
+// carrying a credential.
 func TestADeliveredLineIsReadWhateverItsMarkup(t *testing.T) {
 	t.Parallel()
 	longest := strings.Repeat("b", gitref.MaxBranchBytes)
@@ -132,16 +129,14 @@ func TestADeliveredLineIsReadWhateverItsMarkup(t *testing.T) {
 	}
 }
 
-// A REF IS HANDED ON AS THE ACCOUNT WROTE IT, a URL that is not UTF-8
-// included — on a `Delivered:` line, or in the host a scrape reads — because
-// whether the run's record can carry a ref is the coordinator's to judge, for
-// every runner alike, and it can judge only the bytes it is handed: mended
-// into UTF-8 here, as a decode mends one, the ref would reach the record as a
-// URL nobody delivered, with nothing left to tell it from one somebody did.
+// A REF IS HANDED ON AS THE ACCOUNT WROTE IT, a non-UTF-8 URL included, on a
+// `Delivered:` line or in a scraped host: whether the run's record can carry
+// it is the coordinator's to judge for every runner, from the bytes it is
+// handed. Mended into UTF-8 here, it would reach the record as a URL nobody
+// delivered, indistinguishable from one somebody did.
 //
-// The two paths that read an account raw: the report, and OpenCode's plain
-// output. Claude Code's result and OpenCode's event stream are JSON decoded
-// before any ref is read from them, and JSON is UTF-8 throughout.
+// Only the report and OpenCode's plain output read an account raw; the other
+// two paths decode JSON, which is UTF-8 throughout.
 func TestADeliveredRefIsHandedOnAsTheAccountWroteIt(t *testing.T) {
 	t.Parallel()
 	for text, want := range map[string]string{
@@ -218,10 +213,8 @@ func TestACollectionPrefersANamedRefWhereverItIs(t *testing.T) {
 }
 
 // THE BRIEF AND THE READER AGREE: every example of the line the report
-// instruction shows the agent is a line the collection reads as the ref it
-// names. Two halves of one protocol written in two places drift, and a drift
-// here is silent — the agent writes what it was shown and the run delivers
-// nothing.
+// instruction shows is read as the ref it names. A drift between them is
+// silent: the agent writes what it was shown and the run delivers nothing.
 func TestTheReportInstructionsExamplesAreReadAsTheirRefs(t *testing.T) {
 	t.Parallel()
 	// With and without the native half, whose own words about the line must
@@ -251,12 +244,10 @@ func TestTheReportInstructionsExamplesAreReadAsTheirRefs(t *testing.T) {
 	}
 }
 
-// WHAT THE ENGINE REPORTS FOR A RUN, THE RUN IS TOLD: its pushes to the
-// repositories it was given on Gitlet are read from the
-// push record and handed to the executor, so the report is asked for lines
-// only for what it delivered elsewhere — a line for each such push is the
-// same delivery said twice, once by the record and once by the box. A run
-// given none of them is told nothing of it.
+// WHAT THE ENGINE REPORTS FOR A RUN, THE RUN IS TOLD: its pushes to its Gitlet
+// repositories come from the push record, so the report is asked for lines
+// only for what it delivered elsewhere (a line per such push says one delivery
+// twice). A run given none is told nothing of it.
 func TestTheFindingsInstructionSaysWhatIsReported(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

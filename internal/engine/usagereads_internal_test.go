@@ -11,12 +11,9 @@ import (
 )
 
 // A NODE WHOSE USAGE COPY IS WRONG ANSWERS NO SPEND SCREEN FROM IT, on a real
-// node through the reads the engine hands the API (ADR-0079): its spend and
-// activity reads go to a data node whose usage copy serves, and a node with
-// no such peer says it served nothing — naming its own copy — rather than
-// drawing a screen from rows its applier stopped writing. Read straight off
-// the node's own estate, they answered from that copy whatever its verdict,
-// while the only trace of it was the line announcing it out of service.
+// node through the reads the engine hands the API (ADR-0079): its reads go to
+// a peer whose usage copy serves, and with no such peer it answers unserved,
+// naming its own copy, rather than from rows its applier stopped writing.
 func TestAWrongUsageCopyAnswersNoSpendRead(t *testing.T) {
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)

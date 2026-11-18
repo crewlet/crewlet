@@ -12,53 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A person's answer to a parked run is sealed onto the run's row.
-//
-// # Why the answer is sealed and the rest of the row is not
-//
-// The coordination store decides between writers of a row by compare-and-set,
-// and that is all ADR-0031 asks of it: almost everything on a run's row is the
-// coordinator's own bookkeeping — statuses, leases, counts, the box — which it
-// reads to decide what to do next. The answer is not bookkeeping. The resumed
-// turn hands its text to the run's harness as the person's words, and tells
-// it who gave them ([AskedRun]); its announcement names that person too. That
-// makes it what ADR-0031 calls an instruction, the same as a note to a running
-// turn, so it is sealed under the fleet keyring like every other instruction
-// channel: by the node that records it ([Coordinator.record]), in a key domain
-// of its own ([AnswerSealDomain]), and opened by every reader before anything
-// of it is used ([Coordinator.attemptOwed]).
-//
-// # What the seal binds
-//
-// The words and who gave them — the text, the route it came by and the three
-// halves of the answerer iam.ActorFor makes of a principal — and WHERE THEY
-// GO: the run's turn id, the launch whose question they answer and the
-// deliveries they were made of. An answer sealed for one run's question opens
-// as an answer to that question alone; carried onto another run's row, or onto
-// the same run's next question, it does not open as an answer there.
-//
-// The answer's words and its answerer live ONLY inside the seal. A record that
-// carried them in the clear beside it would have a copy that some reader, some
-// day, used without opening, so the type keeps no such copy: [RecordedAnswer]
-// has no text and no answerer, and the only way to them is [AnswerSeal.Open].
-// The deliveries the answer was made of ride beside the seal as the messages
-// they are ([RecordedAnswer.Events]) — the newest raises the working
-// indicator, and a let-go hands them back to the seat the way each came, a chat
-// reply to its inbox and an answer by turn to its control topic — and no reader
-// takes the answer or its answerer from them.
-//
-// # Two failures, and only one of them waits
-//
-// The frame is internal/recordseal's, the one every state-log record carries,
-// judged by its three verdicts with their dispositions. A seal under a key
-// this node does not hold is a fact about THIS NODE: the answer is kept, owed,
-// and waits — logged with the keys this node holds — until a node that holds
-// the key takes the seat, or this one is restarted with it
-// ([ConditionAnswerKey]). A seal that does not open under a key it holds, or
-// opens as an answer to some other question, is a fact about the ROW: no node
-// will ever open it, so it is never handed to the run or attributed to anybody
-// — it is logged at error and let go of, with nothing handed back, and the run
-// waits on its question again ([Coordinator.dropUnopened]).
+// A person's answer to a parked run is sealed onto its row. The resumed turn
+// hands the text to the harness as that person's words ([AskedRun]), so under
+// ADR-0031 it is an instruction, not bookkeeping: sealed by the node that
+// records it ([Coordinator.record]) in [AnswerSealDomain], and opened by every
+// reader before any of it is used ([Coordinator.attemptOwed]). The seal binds
+// the words, answerer and route to the turn, the launch whose question they
+// answer and the deliveries, so it opens nowhere else. Words and answerer live
+// ONLY in the seal: a clear copy would one day be read unopened.
+// [RecordedAnswer.Events] ride beside it, never read as the answer. An unknown
+// key is a fact about THIS NODE: the answer waits ([ConditionAnswerKey]). A
+// seal that does not open is a fact about the ROW: let go, handed to no run and
+// back to nobody, and the run waits on its question again ([Coordinator.dropUnopened]).
 
 // AnswerSealDomain is the key domain a person's answer to a parked run is
 // sealed in: its own, so that no frame from a state log or another channel
@@ -66,13 +31,10 @@ import (
 const AnswerSealDomain = "seat.run.answer"
 
 // ConditionAnswerKey is what an owed answer whose seal names a key this node
-// does not hold waits on.
-//
-// THE ONE CONDITION THIS PACKAGE NAMES ITSELF, and nothing signals it: Tier A's
-// keyring changes only with a restart, so this node never comes to hold the
-// key while it runs. The wait is re-checked on [answerWaitBackstop] alone,
-// which re-states the keys this node holds every five minutes for as long as
-// the seat is here; the seat moving to a node that holds the key ends it.
+// does not hold waits on. Nothing signals it: Tier A's keyring changes only
+// with a restart, so only [answerWaitBackstop] re-checks it (re-stating the
+// keys this node holds), and the seat moving to a node that holds the key
+// ends it.
 const ConditionAnswerKey Condition = "answer_key"
 
 // ErrAnswerKeyUnknown is an answer sealed under a key this node does not hold.
@@ -104,9 +66,8 @@ func NewAnswerSeal(ring recordseal.Keyring) (*AnswerSeal, error) {
 	return &AnswerSeal{signer: signer, verifier: verifier}, nil
 }
 
-// Domain is the key domain answers are sealed in, for the gate that holds
-// every instruction channel's domains apart from every other's and from every
-// state log's.
+// Domain is the key domain answers are sealed in, for the gate that keeps
+// every instruction channel's and state log's domains apart.
 func (s *AnswerSeal) Domain() string { return AnswerSealDomain }
 
 // KeyIDs is every key id this node opens answers under, sorted, for the line
@@ -126,48 +87,38 @@ type AnswerWords struct {
 	// two together ([AnswerText]), and the answer's record announces both.
 	Choice string
 
-	// Via is the route it came by ([RecordedAnswer.Via], which carries it in
-	// the clear for the store and must agree with it).
+	// Via is the route it came by; [RecordedAnswer.Via], the store's clear
+	// copy, must agree with it.
 	Via types.AnswerVia
 
-	// By, ByKind and OperatorID are who gave it, in the three halves
-	// iam.ActorFor makes of a principal — the author, what sort of author
-	// that is, and the credential the answer came through — exactly as the
-	// answer's own record states them ([types.ExecutorAnswered]). For a
-	// chat reply, the sender as the delivery's envelope names them, a
-	// person, and no credential: the chat surface vouched for the sender and
-	// nothing of this engine's was presented ([chatAnswerer]). For an answer
-	// by turn, the author is the seat of a principal the identity directory
-	// binds to one and the login of anybody else, and the credential is the
-	// one the answer was given under.
+	// By, ByKind and OperatorID are who gave it — author, kind of author and
+	// credential, as iam.ActorFor splits a principal and the answer's record
+	// states it ([types.ExecutorAnswered]). A chat reply carries the
+	// envelope's sender, a person, and no credential: the chat surface
+	// vouched for them ([chatAnswerer]). An answer by turn carries the bound
+	// seat, else the login, and the credential it was given under.
 	By, ByKind, OperatorID string
 
-	// Label is who wrote Text as the fence around the delivery's message
-	// labelled it for the run's seat ([Reply.Label]): a chat reply's, which
-	// the run reads inside a fence of its turn's token under it
-	// ([AskedRun]). Nil for an answer by turn, which is the answering
-	// person's own instruction to the run (ADR-0068), defused rather than
-	// fenced, and for a reply whose words no surface labelled. SEALED WITH
-	// THE WORDS, so what the run is told about who wrote them comes out of
-	// the seal like everything else it is handed.
+	// Label is who wrote Text, as the delivery's fence labelled it for the
+	// run's seat ([Reply.Label]); the run reads a chat reply fenced under it
+	// ([AskedRun]). Nil for an answer by turn, the person's own instruction,
+	// defused rather than fenced (ADR-0068), and for words no surface
+	// labelled. SEALED WITH THE WORDS, so who the run is told wrote them
+	// comes out of the seal too.
 	Label *provenance.Label
 
-	// Refusal is set where what was recorded is no answer but the REFUSAL of
-	// a reply too large to be one ([PendingRun.AnswerRefusal]): its
-	// deliveries and figures, which the resumed run is told, and nothing of
-	// its words — Text, Choice and Label are empty beside it. SEALED, as
-	// everything the run is handed is, and held by [AnswerSeal.Open] to the
-	// refusal the row records in the clear: a row that records a refusal
-	// opens only to one sealed as that refusal, and an answer only to one
-	// sealed as no refusal, so a refusal is never read as an answer with no
-	// words, nor an answer as a refusal (ADR-0114).
+	// Refusal is set where what was recorded is the REFUSAL of a reply too
+	// large to be an answer ([PendingRun.AnswerRefusal]): its deliveries and
+	// figures, which the resumed run is told, and none of its words (Text,
+	// Choice and Label are empty). [AnswerSeal.Open] holds it to the refusal
+	// the row records in the clear, so a refusal never reads as a wordless
+	// answer, nor an answer as a refusal (ADR-0114).
 	Refusal *AnswerRefusal
 }
 
-// attribution is who the resumed turn is told gave this answer: the author an
-// answer by turn names — the seat of a bound principal, the login of anybody
-// else, as iam.ActorFor named them — and nobody for a chat reply, whose sender
-// is already in the conversation the resumed turn reports back to.
+// attribution is who the resumed turn is told gave this answer: an answer by
+// turn's author, and nobody for a chat reply, whose sender is already in the
+// conversation the resumed turn reports back to.
 func (w AnswerWords) attribution() string {
 	if w.Via != types.AnswerViaOperator {
 		return ""
@@ -203,9 +154,8 @@ type sealedAnswer struct {
 // Seal is answer recording words as the answer to the question run's job
 // asked: sealed to run's turn, its launch and the deliveries answer names,
 // under this node's active key, with [RecordedAnswer.Via] set from words so
-// the clear copy and the sealed one agree. What the coordinator records
-// ([Coordinator.record]); exported for a case that seeds a recorded answer the
-// way a node would have.
+// the clear and sealed copies agree. Exported for a case that seeds a
+// recorded answer as [Coordinator.record] would.
 func (s *AnswerSeal) Seal(run PendingRun, words AnswerWords, answer RecordedAnswer) (RecordedAnswer, error) {
 	body, err := json.Marshal(sealedAnswer{
 		TurnID: run.TurnID, LaunchID: run.LaunchID, EventIDs: answer.EventIDs, Via: words.Via,
@@ -220,14 +170,13 @@ func (s *AnswerSeal) Seal(run PendingRun, words AnswerWords, answer RecordedAnsw
 }
 
 // Open is the answer recorded on run, once its seal opens as the answer to the
-// question the row's own job asked: [ErrAnswerKeyUnknown] where it is sealed
-// under a key this node does not hold, and [ErrAnswerUnopened] where it does
-// not open — not a frame, a MAC that fails, or a body bound to another run,
-// another question, other deliveries or another route than the row names.
+// question the row's own job asked: [ErrAnswerKeyUnknown] under a key this
+// node does not hold, and [ErrAnswerUnopened] where it does not open — not a
+// frame, a failing MAC, or a body bound to another run, question, deliveries
+// or route than the row names.
 //
-// THE ROW SUPPLIES ONLY WHERE THE ANSWER MUST BELONG, never what it says: the
-// turn, the launch, the deliveries and the route are compared, and everything
-// a reader is handed comes out of the seal.
+// THE ROW SUPPLIES ONLY WHERE THE ANSWER MUST BELONG, never what it says:
+// everything a reader is handed comes out of the seal.
 func (s *AnswerSeal) Open(run PendingRun) (AnswerWords, error) {
 	if run.Answer == nil {
 		return AnswerWords{}, fmt.Errorf("%w: run %s records no answer", ErrAnswerUnopened, run.TurnID)

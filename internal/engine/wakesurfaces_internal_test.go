@@ -45,8 +45,8 @@ const promptlessSource = "an-extension"
 // from it is built: through the source's own prompt, delivered by the
 // notification service exactly as a live delivery is.
 type wakeSurface struct {
-	// prompt is the prompt the engine registers for the source — the
-	// engine's own constructor, so a case cannot quietly test another.
+	// prompt is the engine's own constructor for the source's prompt, so a
+	// case cannot quietly test another.
 	prompt notify.Prompt
 	// wake delivers a wake whose body says what it is given.
 	wake func(t *testing.T, o *org.Organization, reg *notify.Registry, said string) *events.Event
@@ -171,24 +171,15 @@ func wakeSurfaces() map[string]wakeSurface {
 // EVERY SURFACE A SEAT CAN BE WOKEN FROM HANDS IT WHAT SOMEBODY WROTE INSIDE A
 // FENCE OF THE TURN'S OWN TOKEN (ADR-0040).
 //
-// A wake's body is the one part of its trigger the engine did not write — a
-// comment, a description, a message, a monitor's text — and on every surface
-// but chat it reached the turn's user message bare, so a body spelling a closer
-// and an instruction addressed the seat in the voice of its own trigger. The
-// spine fences it under the wake's token before the source's prompt sees it,
-// and the turn moves that onto its own; this drives each surface's prompt
-// through the notification service and the turn's description of its trigger,
-// and requires the body inside exactly the turn's fences, labelled as the
-// surface it came from.
-//
-// A GATE, NOT A LIST: the surfaces are held to every source the engine hosts
-// ([firstPartySources]) and every integration kind ([integration.Kinds]) in
-// both directions, so a surface added to either fails here until its wake is
-// shown to be fenced.
+// The spine fences a wake's body under the wake's token before the source's
+// prompt sees it, and the turn re-keys it; through the notification service
+// and the turn's description, the body must sit inside exactly the turn's
+// fences, labelled with its surface. A GATE, NOT A LIST: held both ways to
+// every source the engine hosts ([firstPartySources]) and every integration
+// kind ([integration.Kinds]).
 //
 // Mutation: hand a prompt the raw body ([notify.Render]) and every surface
-// fails; describe the turn without re-keying and the fences are the wake's,
-// not the turn's.
+// fails; describe the turn without re-keying and the fences are the wake's.
 func TestEveryWakeSurfaceFencesWhatSomebodyWrote(t *testing.T) {
 	t.Parallel()
 	surfaces := wakeSurfaces()
@@ -261,14 +252,10 @@ func TestEveryWakeSurfaceFencesWhatSomebodyWrote(t *testing.T) {
 
 // EVERY WAKE SURFACE READS A WRITER ITS RECORD DOES NOT NAME BY WHO HOSTS IT
 // (ADR-0040): on a surface the engine hosts ([firstPartySources]) such a body
-// is a colleague's — only company principals write there, which is how the
-// same text reads as a search hit and through a read tool — and on a vendor's
-// it is nothing anybody vouches for. A GATE OVER [wakeSurfaces], which is held
-// to every source the engine wakes seats from, so a surface added there is
+// is a colleague's, as the same text reads as a search hit and through a read
+// tool, since only company principals write there; on a vendor's nobody
+// vouches for it. A GATE OVER [wakeSurfaces], so a surface added there is
 // read here too.
-//
-// It was not one rule: a Doclet page whose change named no writer woke a seat
-// as `external` while the same page came back from a search as `colleague`.
 //
 // Mutation: drop [notify.Provenance.Hosted] from Worklet's, Doclet's
 // or Chatlet's prompt and its case reads `external`; set it on a vendor's and
@@ -343,14 +330,11 @@ func TestEveryWakeSurfaceReadsAnUnnamedWriterByWhoHostsIt(t *testing.T) {
 
 // EVERY PROMPT BUILDER IN THE TREE IS ONE OF THE SURFACES ABOVE.
 //
-// The gate above holds the surfaces to the sources the engine wakes seats from,
-// which a prompt nobody wired to one of those sources slips past: a second
-// prompt for a source, a wrapper around another's, a builder written for a
-// surface the lists do not name yet. So the tree's source is walked for every
-// type that BUILDS a wake's trigger — a method `Build(notify.Inbound, …)`,
-// which is the one method [notify.Prompt] adds that nothing else in the tree
-// declares — and each must be the prompt some surface above drives, so a new
-// one fails here until its wake is shown to be fenced.
+// The gate above misses a prompt nobody wired to a source (a second prompt for
+// a source, a wrapper, a builder for a surface not listed yet). So the tree is
+// walked for every type that BUILDS a wake's trigger, a method
+// `Build(notify.Inbound, …)` (the one method [notify.Prompt] adds that nothing
+// else declares), and each must be a prompt some surface above drives.
 //
 // Mutation: drop a surface's case (its prompt is then a builder no surface
 // drives), or add a builder type anywhere under internal/, and this fails.

@@ -13,9 +13,8 @@ import (
 )
 
 // slackCompany is a company whose agents each carry their own Slack app, one
-// at the top level and one inside a unit — because a teardown that walked
-// `roles:` alone would leave every seat in an org chart untouched, which in a
-// company with units is most of them.
+// at the top level and one inside a unit, because a teardown that walked
+// `roles:` alone would miss every seat in a unit.
 const slackCompany = `
 name: Acme
 providers:
@@ -94,12 +93,9 @@ func slackEngine(t *testing.T) (*Engine, *seatWriter) {
 }
 
 // seatWriterFor seeds the package's config-surface fake from a whole company
-// document, so the entity route serves the seats a teardown will actually
-// walk rather than one hand-built literal.
-//
-// A REAL ROUND TRIP matters here: what is under test is what the written body
-// CONTAINS, and a recorder that only counted writes would pass a teardown
-// that wrote each seat back unchanged.
+// document, so the entity route serves the seats a teardown actually walks.
+// A real round trip, because the cases check what each written body contains:
+// a write counter would pass a teardown that wrote each seat back unchanged.
 func seatWriterFor(t *testing.T, cfg *config.Company) *seatWriter {
 	t.Helper()
 	w := &seatWriter{seats: map[string]map[string]any{}}
@@ -126,20 +122,15 @@ func (w *seatWriter) block(handle, kind string) (map[string]any, bool) {
 	return got, ok
 }
 
-// A SLACK DISCONNECT THAT REMOVES THE ACCOUNTS CLEARS EVERY SEAT'S BLOCK.
-//
-// The access sync turns each seat off and deletes each app the engine made,
-// clearing its sealed values once Slack confirms the deletion. What the
-// teardown adds is the document: a block naming an app that no longer exists
-// would ask the next connect to create one nobody chose again. The
-// credentials these seats name were handed in from outside Crewlet, so they
-// are not the teardown's to delete.
+// A SLACK DISCONNECT THAT REMOVES THE ACCOUNTS CLEARS EVERY SEAT'S BLOCK: one
+// naming a deleted app would have the next connect create one nobody chose.
+// The apps and their sealed values are the access sync's; the credentials
+// these seats name came from outside Crewlet, so the teardown deletes none.
 func TestASlackDisconnectClearsEachSeatsBlock(t *testing.T) {
 	t.Parallel()
 	e, writer := slackEngine(t)
 
-	// THROUGH THE MAP THE LOOP READS, so the step is the one the loop
-	// reaches.
+	// Through the map the loop reads, so this is the step the loop reaches.
 	removed, err := e.disconnectors()[integration.KindSlack].Disconnect(t.Context(),
 		integration.TeardownRequest{RemoveSeats: true, By: testParty})
 	if err != nil {
@@ -174,12 +165,9 @@ func TestASlackDisconnectClearsEachSeatsBlock(t *testing.T) {
 	}
 }
 
-// LEAVING THE ACCOUNTS MEANS LEAVING THE CREDENTIALS THAT REACH THEM.
-//
-// "Also remove the accounts Crewlet created" is off by default and never
-// inferred. Unticked, the apps go on working and the seats go on holding
-// their credentials — so a teardown that reported removals anyway would
-// delete the sealed values behind apps this very call decided to keep.
+// LEAVING THE ACCOUNTS MEANS LEAVING THE CREDENTIALS THAT REACH THEM: removing
+// them is off by default and never inferred, and a teardown that reported
+// removals anyway would delete the sealed values behind apps the operator kept.
 func TestASlackDisconnectKeepsTheAppsTheOperatorKept(t *testing.T) {
 	t.Parallel()
 	e, writer := slackEngine(t)
@@ -213,13 +201,11 @@ func TestAFailedSlackSeatWriteIsRetried(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO CONFIG SURFACE DEFERS RATHER THAN REPORTING A CLEAN REMOVAL.
-//
-// The loop is armed when the engine is constructed and the config surface is
-// installed a few hundred milliseconds later, so a tick can land in between.
-// Answered as NOT YET, on the sentinel the loop keys on, the row is left alone
-// and a node that has one finishes the disconnect. Answered as success, the
-// block drops with every seat's credentials still sealed and still pointed at.
+// A NODE WITH NO CONFIG SURFACE DEFERS RATHER THAN REPORTING A CLEAN REMOVAL:
+// the loop is armed before the config surface is installed, so a tick can land
+// in between. On the sentinel the loop keys on, the row waits for a node that
+// has one; answered as success, the block would drop with every seat's
+// credentials still sealed and still pointed at.
 func TestASlackTeardownWithNoConfigSurfaceDefers(t *testing.T) {
 	t.Parallel()
 	e, _ := slackEngine(t)
@@ -229,8 +215,8 @@ func TestASlackTeardownWithNoConfigSurfaceDefers(t *testing.T) {
 	if !errors.Is(err, integration.ErrDisconnectUnavailable) {
 		t.Fatalf("error = %v, want %v", err, integration.ErrDisconnectUnavailable)
 	}
-	// AND IT NAMES THE SEAT, because an operator reading the row's last
-	// error needs to know which seat is still holding its block.
+	// It names the seat, so the row's last error says which still holds
+	// its block.
 	if !strings.Contains(err.Error(), "ceo") {
 		t.Errorf("error = %q, want the seat it could not clear named", err)
 	}

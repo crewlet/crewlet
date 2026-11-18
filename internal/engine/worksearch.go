@@ -10,13 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// Ranking work items over the node's own index.
-//
-// ONE INDEX, TWO CORPORA, TWO VERBS. The lexical index covers pages and work
-// items together — see [search.LexicalSource] — and which of them a search
-// answers from is a filter on the fan-out rather than a second index. So this
-// is the same scan the knowledge search makes, with `task` where that one puts
-// `page`, and the two rankings cannot drift because there is only one.
+// Ranking work items over the node's own index. The lexical index covers pages
+// and work items together ([search.LexicalSource]) and the corpus is a filter
+// on the fan-out, so this is the knowledge search's scan with `task` for
+// `page`, and the two rankings cannot drift.
 
 // itemRanker is [worklet.Ranker] over this node's index and fan-out.
 type itemRanker struct {
@@ -28,20 +25,17 @@ type itemRanker struct {
 // its top candidates over this node's corpus of work items, the item behind
 // each with the index's excerpt, and what the ranking did.
 //
-// PARTIAL IS NOT REFUSED, for the reason the knowledge search gives: an
-// answer over part of the corpus beats none. It is not swallowed either — the
-// coverage rides in the answer's outcome to whichever surface asked, which is
-// where a person or a seat can act on it. It used to be a log line, which
-// nobody asking could see.
+// PARTIAL IS NOT REFUSED, as in the knowledge search: an answer over part of
+// the corpus beats none. The coverage rides in the answer's outcome to the
+// surface that asked, where a person or a seat can act on it.
 func (r itemRanker) Candidates(ctx context.Context, q worklet.SearchQuery) (worklet.RankedCandidates, error) {
 	if r.fan == nil || r.index == nil {
 		return worklet.RankedCandidates{}, nil
 	}
 	if strings.TrimSpace(q.Text) == "" {
-		// THE PROBE, as the knowledge search answers it: nothing runs and nothing
-		// is read, but the answer says which modes this node serves as asked and
-		// how the asked one would degrade, so a screen can offer the modes
-		// honestly before anybody has typed.
+		// THE PROBE: nothing runs or is read, but the answer says which modes this
+		// node serves and how the asked one would degrade, so a screen can offer
+		// the modes honestly before anybody types.
 		return worklet.RankedCandidates{Outcome: knowledge.Outcome{
 			Modes:    r.fan.Modes(),
 			Degraded: r.fan.ProbeDegradation(q.Mode),
@@ -52,9 +46,8 @@ func (r itemRanker) Candidates(ctx context.Context, q worklet.SearchQuery) (work
 		Text:    q.Text,
 		Sources: []string{string(search.SourceTask)},
 		Mode:    q.Mode,
-		// NOT THE CALLER'S LIMIT: what this answers is the candidates,
-		// each method's top FuseN whatever the limit, and the fused cut
-		// the fan-out also makes is not read here.
+		// NOT THE CALLER'S LIMIT: this answers each method's top FuseN
+		// candidates; the fan-out's fused cut is not read here.
 		Limit: search.FuseN,
 	})
 	if err != nil {
@@ -83,9 +76,8 @@ func (r itemRanker) Building(_ context.Context) bool {
 
 // WorkSearch is this node's ranked item search, or nil where there is no
 // Worklet to search (a company whose tracker is a vendor's or none, or a node
-// that has not met its company yet). The lexical index is built wherever
-// Worklet or Doclet runs, so a nil here is decided by Worklet rather than by
-// whether an index exists.
+// that has not met its company yet). The index is built wherever Worklet or
+// Doclet runs, so Worklet decides the nil, not the index.
 func (e *Engine) WorkSearch() *worklet.Searcher {
 	n := e.native.Load()
 	if n == nil || n.itemSearch == nil {
@@ -94,29 +86,17 @@ func (e *Engine) WorkSearch() *worklet.Searcher {
 	return n.itemSearch
 }
 
-// WorkSearcher is [Engine.WorkSearch] as the tool layer's seam — the shape
-// both the seat tools and a surface assembled outside this package take, the
-// operator's MCP endpoint being the one that is.
+// WorkSearcher is [Engine.WorkSearch] as the tool layer's seam, taken by the
+// seat tools and by surfaces outside this package (the operator's MCP
+// endpoint). It answers through the router on every node, so a node holding no
+// data asks one that does, the same verb over the same fleet-wide index.
 //
-// IT ANSWERS AN UNTYPED NIL for a node with no index, rather than a non-nil
-// interface holding a nil [worklet.Searcher], because that is the shape a
-// `deps.Search != nil` gate reads correctly: handed the other one it registers
-// a search tool that can only fail.
-//
-// ONE FUNCTION FOR BOTH CALLERS. It was two — an unexported one here and a
-// one-line exported wrapper around it — which is two places for the typed-nil
-// rule above to be stated and one of them to stop matching.
-//
-// THROUGH THE ROUTER ON EVERY NODE, like every other tool seam: a data node's
-// router answers from its own index, and a node that holds no data asks a node
-// that has one — the same verb over the same fleet-wide index.
-//
-// AND ONLY WHERE THE COMPANY RUNS WORKLET, on a data node as on a
-// node without `data`: the index is built under either backend
-// ([indexedCorpora]), so on a company whose tracker is a vendor's it holds
-// pages and no task, and a searcher handed out there ranks nothing and reads
-// as "nothing matched". That rule is [OperatorNative]'s, stated once for every
-// operator read seam and read here from the same one reading.
+// IT ANSWERS AN UNTYPED NIL, not an interface holding a nil [worklet.Searcher]:
+// a `deps.Search != nil` gate handed the latter registers a tool that can only
+// fail. And ONLY WHERE THE COMPANY RUNS WORKLET: the index is built under
+// either backend ([indexedCorpora]), so under a vendor's tracker a searcher
+// ranks nothing and reads as "nothing matched". [OperatorNative] decides that
+// once for every operator read seam.
 func WorkSearcher(e *Engine) builtin.WorkSearcher {
 	if reads := OperatorNative(e); reads.Search {
 		return e.router.Work()
@@ -125,24 +105,16 @@ func WorkSearcher(e *Engine) builtin.WorkSearcher {
 }
 
 // indexedCorpora is which corpora a node with these two backends indexes, and
-// it is what the startup actually builds the index over.
-//
-// A FUNCTION rather than three lines inside the startup, because the defect it
-// replaces could not be reached from a test without standing a whole company
-// up: the index was built inside the block gated on the WIKI's backend, so a
-// company with `tracker.backend: worklet` and Confluence for its knowledge
-// indexed none of its own work items and served no ranked item search — while
-// the embedding duty, armed on EITHER backend, went on paying for a vector on
-// every one of them.
-//
-// IT FOLLOWS THE BACKENDS rather than covering both unconditionally: a company
-// on Jira has no `tracker_tasks` worth walking, and a walk over a table its
-// backend never fills is a cursor cycling over nothing on every tick.
+// what the startup builds the index over: a function so
+// TestTheIndexFollowsEitherNativeBackend reaches it without a whole company.
+// It follows the tracker's backend as well as the wiki's, and no further: a
+// company on Jira has no `tracker_tasks` worth walking, and a walk over a
+// table its backend never fills cycles a cursor over nothing on every tick.
 //
 // CHAT IS NEVER ONE OF THEM: a conversation has an index of its own
-// ([search.ChatIndexer]) with a forward-only walk and statistics it maintains
-// rather than counts (ADR-0071), so a room's chatter never moves the BM25
-// statistics a page or a work item is ranked by.
+// ([search.ChatIndexer]) with a forward-only walk and maintained statistics
+// (ADR-0071), so a room's chatter never moves the BM25 statistics a page or a
+// work item is ranked by.
 func indexedCorpora(runTracker, wiki bool) []string {
 	var out []string
 	if runTracker {

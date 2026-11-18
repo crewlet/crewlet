@@ -7,23 +7,17 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// TestAStaleRewireCannotWriteTheCurrentRegistry is the race that made a
-// rotated credential route to nobody.
+// TestAStaleRewireCannotWriteTheCurrentRegistry holds that a rewire resolved
+// from a replaced revision is never handed the live registry.
 //
-// A seat's third-party identity is resolved from ONE revision's credentials
-// and then written into the LIVE registry — by refreshParties on the apply,
-// and by the reconcile loop's identity retry on its own tick, which holds
-// whatever company was current when it began. Nothing orders the two. A retry
-// that started before an apply can finish after it and put the PREVIOUS
-// revision's account back over the one the apply just installed, and the next
-// webhook naming the new account then reaches nobody, with no error anywhere.
-//
-// It was found through internal/e2e's TestARotatedCredentialIsReresolved,
-// which went red the moment this branch's native runtime made an apply take
-// seconds instead of microseconds — the window was always there, and was
-// simply too narrow to lose before. That case proves the SYMPTOM through a
-// whole engine; this one pins the rule directly, so a refactor that keeps the
-// symptom away by accident still fails here.
+// A seat's third-party identity is resolved from ONE revision's credentials and
+// written into the LIVE registry, by refreshParties on an apply and by the
+// reconcile loop's identity retry, which holds the company current when it
+// began. Nothing orders the two: a retry finishing after an apply would put the
+// previous account back, and the next webhook naming the new one reaches
+// nobody, silently. internal/e2e's TestARotatedCredentialIsReresolved shows the
+// symptom through a whole engine; this pins the rule, so a refactor that hides
+// the symptom by accident still fails here.
 func TestAStaleRewireCannotWriteTheCurrentRegistry(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
@@ -36,8 +30,7 @@ func TestAStaleRewireCannotWriteTheCurrentRegistry(t *testing.T) {
 		t.Fatal("the pass that built the live registry cannot write it")
 	}
 
-	// AN APPLY PUBLISHES A NEW PAIR, which is the instant the retry's
-	// work goes stale.
+	// AN APPLY PUBLISHES A NEW PAIR: the retry's work is stale from here.
 	fresh := notify.NewRegistry(current.Org, nil)
 	e.notify.registry, e.notify.registryFor = fresh, current
 
@@ -52,8 +45,8 @@ func TestAStaleRewireCannotWriteTheCurrentRegistry(t *testing.T) {
 	if got := e.registryOf(current); got != fresh {
 		t.Fatal("the pass holding the current revision was refused")
 	}
-	// A NIL COMPANY IS NOT A MATCH, which is the shape a surface reaches
-	// here with before any revision has been applied.
+	// A NIL COMPANY IS NOT A MATCH: a surface arrives with one before any
+	// revision has been applied.
 	if got := e.registryOf(nil); got != nil {
 		t.Fatal("a nil company matched the live registry")
 	}

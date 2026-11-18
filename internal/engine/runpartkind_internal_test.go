@@ -34,13 +34,11 @@ func TestEveryRunPartIsCondensedAsWhatItIs(t *testing.T) {
 }
 
 // THE SANDBOX COMPOSES WHAT ONE CONDENSATION READS. The coordinator holds a
-// run's failure to sandbox.MaxCondenseBytes before handing it to this
-// engine's compactor, and a runner composes its own to what is left of that
-// — a figure the sandbox package declares because it cannot import the
-// compactor, and that is the compactor's own: its MaxChunks first-pass pieces
-// of ChunkBytes. Here the two meet, so the figure is held to the compactor in
-// both directions: a text of exactly that size is taken (it reaches the
-// model), and one byte more is refused before any model is asked.
+// run's failure to sandbox.MaxCondenseBytes before this engine's compactor
+// condenses it, a figure the sandbox declares because it cannot import the
+// compactor, whose own it is (MaxChunks first-pass pieces of ChunkBytes). So it
+// is held both ways: exactly that size reaches the model, and one byte more is
+// refused before any model is asked.
 func TestTheSandboxComposesWhatOneCondensationReads(t *testing.T) {
 	t.Parallel()
 	if want := compact.MaxChunks * compact.ChunkBytes; sandbox.MaxCondenseBytes != want {

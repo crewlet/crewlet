@@ -18,10 +18,10 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
-// An executor run's own environment, held to the rule a tool server's values
-// are (toolcredentials.go): every reference resolves, or the run starts
-// without it and a line says why — unless its key is declared optional, and
-// then it is left out without a word.
+// An executor run's own environment is held to a tool server's rule
+// (package doc, "Tool server credentials"): every reference resolves, or the
+// run starts without it and a line says why, unless its key is declared
+// optional and is left out silently.
 
 // runEnvDoc is a company whose engineer runs code in a fake remote cell, with
 // a code-host token nothing has sealed and a test database it may go without.
@@ -61,13 +61,11 @@ func launchExecutor(t *testing.T, e *Engine, c *Company, seat *org.Role, turnID 
 	return err
 }
 
-// AN EXECUTOR'S RUN CARRIES WHAT ITS ENVIRONMENT RESOLVES, and leaves out what
-// it declared it may go without — and once a value it lacked is sealed, the
-// next launch carries that too.
+// AN EXECUTOR'S RUN CARRIES WHAT ITS ENVIRONMENT RESOLVES, leaves out what it
+// declared it may go without, and carries a value it lacked once it is sealed.
 //
-// It started with the sealed code-host token, the seat's own optional keys
-// left out WHOLE rather than written empty: an empty DATABASE_URL is a run
-// pointed at no database where an absent one is a run that knows it has none.
+// Optional keys are left out WHOLE, never written empty: an empty DATABASE_URL
+// is a run pointed at no database, an absent one a run that knows it has none.
 func TestAnExecutorRunCarriesWhatItsEnvironmentResolves(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, runEnvDoc)
@@ -175,13 +173,11 @@ func TestARunWaitingForAMintedCredentialSaysWhatItWaitsFor(t *testing.T) {
 }
 
 // A MINT GITHUB DID NOT ANSWER IS A WAIT, AND ONE IT REFUSED IS A PERSON'S, in
-// the sentence the run's gap is logged with and a seat's tool server is held
-// back with. The seat's GitHub App token is issued as the run's environment is
-// read, and a mint that met GitHub failing on its side, at its rate limit or
-// not reached at all is asked for again on the restart schedule, which the gap
-// says. One GitHub refused (a suspended installation, a revoked key) is
-// refused again at every ask until somebody fixes the app, and the gap says
-// that rather than a wait that ends nothing; beside a variable nobody set, the
+// the sentence both the run's gap and a held-back tool server say. A mint that
+// met a GitHub-side failure, its rate limit or no answer is asked again on the
+// restart schedule; one GitHub refused (a suspended installation, a revoked
+// key) is refused at every ask until somebody fixes the app, so the gap says
+// that rather than a wait that ends nothing. Beside a variable nobody set, the
 // gap tells both.
 //
 // Mutation: read every unissued mint as passing and the refused rows go red;
@@ -243,14 +239,11 @@ func TestAMintGitHubDidNotAnswerIsAWaitAndOneItRefusedIsAPersons(t *testing.T) {
 	}
 }
 
-// OPTIONAL KEYS WRITTEN IN THE DOCUMENT REACH THE RUN, on a provider-wide
-// step and on a seat's own: each crosses a conversion — the config into the
-// org chart, the org chart or the config into the box's steps — and a field
-// one of them dropped would leave every declared key required and every run
-// started without it said as a gap, on a document that reads as though it said
-// otherwise.
-// And a seat step's gap names the seat's step as where to declare it, not a
-// provider-wide one that does not hold it.
+// OPTIONAL KEYS WRITTEN IN THE DOCUMENT REACH THE RUN, on a provider-wide step
+// and on a seat's own: each crosses conversions (config to org chart, chart or
+// config to box steps), and one that dropped the field would make every
+// declared key a gap. A seat step's gap names the seat's step as where to
+// declare it, not a provider-wide one.
 func TestOptionalKeysWrittenInTheDocumentReachTheRun(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, `
@@ -301,12 +294,10 @@ roles:
 	}
 }
 
-// A RUN STARTED WITHOUT THE SEAT'S EMAIL SAYS SO.
-//
-// The engine's identity facts never refuse a run, and a seat's `email:` naming
-// a variable nobody set is left out of CREWLET_AGENT_EMAIL. Left out with
-// nothing said, a setup step's `git config user.email "$CREWLET_AGENT_EMAIL"`
-// committed as nobody and no line said why.
+// A RUN STARTED WITHOUT THE SEAT'S EMAIL SAYS SO. Identity facts never refuse
+// a run, so an `email:` naming an unset variable is left out of
+// CREWLET_AGENT_EMAIL; unsaid, a setup step's `git config user.email
+// "$CREWLET_AGENT_EMAIL"` commits as nobody with no line saying why.
 func TestARunStartedWithoutTheSeatsEmailSaysSo(t *testing.T) {
 	logs := captureEngineLogs(t)
 	c := specCompany(t, runEnvDoc)
@@ -339,14 +330,12 @@ func TestARunStartedWithoutTheSeatsEmailSaysSo(t *testing.T) {
 }
 
 // A RUN'S OPTIONAL KEYS AND FILES ARE LEFT OUT WHOLE, BY THE DECLARATION OF
-// THE LAYER WHOSE VALUE WON — and the engine's own identity facts are never
-// a gap.
+// THE LAYER WHOSE VALUE WON, and the engine's identity facts are never a gap.
 //
-// The seat's block writes the step's NPM_TOKEN over again: the seat's value
-// is the run's, so the step's declaration no longer covers the key and its
-// unset reference is the run's gap — named with the seat block as where to
-// declare it. A file the step lists is not written; one it does not is the
-// gap, named by its step and path.
+// The seat's block overrides the step's NPM_TOKEN, so the step's declaration
+// no longer covers it and its unset reference is the gap, naming the seat
+// block as where to declare it. A file the step lists is not written; one it
+// does not is the gap, named by its step and path.
 func TestARunsOptionalValuesAreLeftOutByTheLayerThatWroteThem(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, runEnvDoc)
@@ -386,12 +375,9 @@ func TestARunsOptionalValuesAreLeftOutByTheLayerThatWroteThem(t *testing.T) {
 	}
 }
 
-// AN EXECUTOR STARTS WITHOUT WHAT ITS ENVIRONMENT LACKS, AND SAYS SO.
-//
-// The executor is the turn itself: refused, the phase fails and the turn with
-// it, so every message the seat could answer through its bridge would fail for
-// a token a pass may mint in a minute. So it starts, and the lines say what it
-// started without.
+// AN EXECUTOR STARTS WITHOUT WHAT ITS ENVIRONMENT LACKS, AND SAYS SO: the
+// executor is the turn, so refusing it would fail every message the seat could
+// answer through its bridge, for a token a pass may mint in a minute.
 func TestAnExecutorStartsWithoutWhatItsEnvironmentLacks(t *testing.T) {
 	logs := captureEngineLogs(t)
 	c, seat := executorCompany(t)
@@ -434,11 +420,9 @@ func TestAnExecutorStartsWithoutWhatItsEnvironmentLacks(t *testing.T) {
 }
 
 // A FILE WHOSE SECRET IS SET TO NOTHING IS NOT WRITTEN EMPTY: it is the run's
-// gap, said as empty rather than unset, as an env value set to nothing is.
-//
-// secrets.ReadContent answers an empty value as resolved — it reads CONTENT,
-// and an empty body is a body — so an .npmrc whose secret was stored empty
-// reached the box as an empty file and the registry as no credential.
+// gap, said as empty rather than unset, as an empty env value is.
+// secrets.ReadContent answers an empty value as resolved (an empty body is a
+// body), which would hand the registry an empty .npmrc and no credential.
 func TestASetupFileWhoseSecretIsEmptyIsTheRunsGap(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, runEnvDoc)

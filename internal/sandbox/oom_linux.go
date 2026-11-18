@@ -16,12 +16,11 @@ import (
 const selfOOMScoreAdjFile = "/proc/self/oom_score_adj"
 
 // boxOOMScore is the oom_score_adj every box on this host runs at
-// ([boxOOMScoreAdj] of the engine's), and false where the engine's own could
-// not be read, which is said once and leaves every box at the engine's.
-//
-// READ ONCE: whatever started the engine set its value before it ran — the
-// kubelet for its pod's QoS class, systemd's OOMScoreAdjust=, a container
-// runtime's --oom-score-adj — and nothing in the engine moves it.
+// ([boxOOMScoreAdj] of the engine's), or false where the engine's could not be
+// read, said once and leaving every box at the engine's. READ ONCE: whatever
+// started the engine set it (the kubelet's QoS class, systemd's
+// OOMScoreAdjust=, a runtime's --oom-score-adj) and nothing in the engine
+// moves it.
 var boxOOMScore = sync.OnceValues(func() (int, bool) {
 	engine, err := readOOMScoreAdj(selfOOMScoreAdjFile)
 	if err != nil {
@@ -47,27 +46,18 @@ func readOOMScoreAdj(path string) (int, error) {
 	return value, nil
 }
 
-// oomFirst is argv started by a shell that first raises its own
-// oom_score_adj to the box's ([boxOOMScore]) and then becomes argv, so argv
-// and everything it ever starts run at it.
+// oomFirst is argv started by a shell that first raises its own oom_score_adj
+// to [boxOOMScore] and then execs argv, so argv and all it starts run at it.
 //
 // WRITTEN BY THE PROCESS ITSELF, BEFORE IT EXECS: a value set on a running
-// process reaches only what that process starts afterwards, so a write the
-// engine made to the child's /proc entry after starting it would race the
-// child's first fork. The exec keeps the pid and the kernel start time, which
-// are what a direct job's record names it by.
-//
-// AHEAD OF ANY CONFINEMENT: a confined box's argv starts with the
-// confinement's helper, and under Landlock the box may write nothing but its
-// home, /proc included. So the raise is made by the one process that runs
-// before the confinement does, and it runs nothing of the box's: a fixed
-// script that execs argv's first word, an absolute path ([directBox.argv]),
-// so no PATH the box's environment sets is searched.
-//
-// A WRITE THAT FAILS is said on the command's stderr and the command runs at
-// the engine's value, as every box once did. Raising its own value is never
-// refused by the kernel and the engine read its own from the same /proc, so
-// only a host that took /proc away after the engine started gets there.
+// process reaches only what it starts afterwards, so an engine write to the
+// child's /proc entry would race its first fork; the exec keeps the pid and
+// start time a direct job's record names it by. AHEAD OF ANY CONFINEMENT,
+// since Landlock leaves a box nothing writable but its home, and running
+// nothing of the box's: a fixed script exec'ing argv's absolute first word
+// ([directBox.argv]), so no box PATH is searched. A failed write is said on the
+// command's stderr and it runs at the engine's value; raising is never
+// refused, so only a host that took /proc away since the engine started fails.
 func oomFirst(argv []string) []string {
 	score, ok := boxOOMScore()
 	if !ok {

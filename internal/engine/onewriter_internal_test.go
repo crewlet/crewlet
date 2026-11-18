@@ -117,16 +117,14 @@ func TestASeatAnswersOnlyWhileItsHolderMayAct(t *testing.T) {
 
 // ONE TURN WORKS FOR ONE WRITER, END TO END (ADR-0109). A person's comment and
 // a stranger's on one work item reach the seat in one drain, and the partition
-// function makes them two turns. The person's acts for the person, and the
-// stranger's for nobody the company holds. It is never one turn acting for
-// whoever spoke first: that handed the stranger's words the person's apps, or,
-// with the stranger first, read the person's as a stranger's.
+// function makes them two turns: the person's acts for the person, the
+// stranger's for nobody the company holds. One turn acting for whoever spoke
+// first would hand the stranger's words the person's apps, or read the
+// person's as a stranger's.
 //
-// THROUGH THE REAL PATH: each record as the feed relays it, the tracker's own
-// parser, the notification service's wake and its stamped key, the partition
-// function the node drains by, and the interactions a turn reads its
-// requester and its senders off.
-//
+// THROUGH THE REAL PATH: the feed's records, the tracker's parser, the
+// notification wake and its stamped key, the node's partition function, and
+// the interactions a turn reads its requester and senders off.
 // Mutation: drop the writer from notify.KeyOf, and the two comments are one
 // turn acting for the person.
 func TestAPersonAndAStrangerInOneThreadAreTwoTurns(t *testing.T) {

@@ -28,12 +28,10 @@ import (
 // A NODE A PEER RE-ANCHORED PAST IS SENT TO ADOPT, BY THE JOIN AND BY THE
 // HEARTBEAT ALIKE — and only on a domain whose nodes must agree on their rows.
 //
-// A reanchor opens its generation from ONE node's rows, so every other node
-// left in the generation before holds a history the log no longer continues
-// from, and nothing on the log can bring it level. Neither of the two things
-// that sent a node to adopt could see it: its checkpoint is not below the log's
-// first record, and it has one, so the fleet's generation was never asked. The
-// only way out was deleting its database.
+// A reanchor opens its generation from ONE node's rows, so every other node's
+// history is one the log no longer continues and nothing on it can bring
+// level. Its checkpoint is not below the log's first record and it has one,
+// so only the fleet's generation shows it.
 func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -141,12 +139,10 @@ func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 // FOLLOWS THE NEW GENERATION, WITH NO RESTART.
 //
 // The whole path, on a real broker: the log is rebuilt, a peer re-anchors it
-// and publishes its position, and this node — stopped on the recreated log,
-// refused by the guard that names that peer — is told by its heartbeat, adopts
-// the peer's snapshot through the ordinary join, and its runner is re-keyed to
-// the checkpoint the adoption installed. Before this the runner kept its
-// verdict through the adoption and stopped again on the very checkpoint the
-// join had installed.
+// and publishes its position, and this node, stopped on the recreated log and
+// refused by the guard that names that peer, is told by its heartbeat, adopts
+// the peer's snapshot through the ordinary join, and has its runner re-keyed to
+// the checkpoint the adoption installed rather than stopping on it again.
 func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
@@ -239,13 +235,11 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 // A NODE A RESTORED-BROKER REANCHOR LEFT BEHIND STOPS ON THE PEER'S RECORD AND
 // ADOPTS.
 //
-// The case neither the instant nor the log's end can show: a broker restored
-// from an older copy keeps its stream, and a node whose checkpoint was below the
-// restored end is not ahead of anything — its log looks like its own history,
-// and the re-anchoring peer's generation record arrives as the next record. It
-// is that record that stops it, before anything of the new generation lands on
-// rows missing what the peer held past the copy; the heartbeat then sends it to
-// adopt.
+// A broker restored from an older copy keeps its stream, so a node whose
+// checkpoint was below the restored end sees its own history, and the
+// re-anchoring peer's generation record arrives as the next record. That record
+// must stop it before anything of the new generation lands on rows missing what
+// the peer held past the copy; the heartbeat then sends it to adopt.
 func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
@@ -262,18 +256,15 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 	}
 	stance := running.runner.Stance()
 	rows := copyEstate(t, back)
-	// THE RUNNER'S STANCE ACROSS THE COPY is what tells apart the two ways the
-	// copy can miss the write below: a stance that moved is an estate rejoined
-	// or reloaded under the case, and one that did not is a copy read at a
-	// view older than the write — which store.DB.Backup holds a view of its
-	// own to rule out.
+	// THE RUNNER'S STANCE ACROSS THE COPY tells apart the two ways the copy can
+	// miss the write below: a stance that moved is an estate rejoined or
+	// reloaded under the case; one that did not is a copy read at a view older
+	// than the write, which store.DB.Backup's own view rules out.
 	moved := running.runner.Stance() != stance
-	// THE DONOR STANDS WHERE THE COPY DOES — on the copy's own checkpoint row,
-	// never the live runner's read after the copy, which may already have
-	// moved past the rows copied: the donor's artefact would then name that
-	// later sequence beside the record the copy's checkpoint names, and the
-	// adoption stops on the mismatch as a diverged log. And the copy holds
-	// the write: a copy taken once the write answered applied has its rows.
+	// THE DONOR STANDS ON THE COPY'S OWN CHECKPOINT ROW, never the live
+	// runner's read after the copy, which may have moved past the rows copied
+	// and would make the adoption stop on the mismatch as a diverged log. A copy
+	// taken once the write answered applied holds it.
 	copied := copiedCheckpoint(t, rows, running.spec.Name)
 	if copied.Seq != res.Position.Seq {
 		t.Fatalf("the copy's checkpoint is at %d, want the write's own %d — a copy "+
@@ -379,16 +370,11 @@ func copiedCheckpoint(t *testing.T, rows, stream string) statelog.Position {
 	return statelog.Position{Stream: stream, Generation: uint32(gen), Seq: uint64(seq)}
 }
 
-// standUpDonor serves a snapshot of rows — with one domain's checkpoint moved to
-// at, keyed to created — on the node's broker, the way a peer that re-anchored
-// that domain would, until the test ends.
-//
-// AS A LIVE DATA NODE OF e's FLEET, which is what every donor is: a join waits
-// for the live data nodes to answer and no longer, so a donor nobody's
-// presence names is one a join may stop before hearing ([presentAsDataNode]).
-//
-// IT RETURNS ONCE THE DONOR ANSWERS AN ASK, and not merely once it has been
-// started: see [awaitDonor].
+// standUpDonor serves a snapshot of rows, with one domain's checkpoint moved to
+// at and keyed to created, on the node's broker as a peer that re-anchored that
+// domain would, until the test ends. The donor is presented as a live data node
+// of e's fleet ([presentAsDataNode]), since a join waits for those and no
+// longer, and it returns once the donor answers an ask ([awaitDonor]).
 func standUpDonor(t *testing.T, e *Engine, q *jetstream.Queue, rows string,
 	at statelog.Position, created time.Time) {
 
@@ -478,14 +464,10 @@ func serveDonor(t *testing.T, e *Engine, nc *nats.Conn, deps statelog.DonorDeps)
 }
 
 // A DONOR IS AWAITED ON ITS DIAL'S OWN BUDGET, and only its answer on the offer
+// window: a handshake longer than [statelog.OfferWindow], which the embedded
+// broker's listener budget allows on a loaded host, must not fail a case whose
+// joins would all be answered. This donor's dial takes a second longer than the
 // window.
-//
-// [awaitDonor] once bounded its whole wait by one [statelog.OfferWindow] from
-// the moment Serve was started, so a donor whose handshake ran longer than that
-// — which the embedded broker's listener budget exists to allow on a loaded host
-// — failed every case standing it up, as a donor no join would hear, while
-// every join asked once its connection was open would have been answered. This
-// donor's dial takes a second longer than the window and has to be awaited.
 func TestADonorWithASlowDialIsAwaitedOnItsDialsOwnBudget(t *testing.T) {
 	t.Parallel()
 	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: brokertest.TempDir(t),
@@ -511,52 +493,17 @@ func TestADonorWithASlowDialIsAwaitedOnItsDialsOwnBudget(t *testing.T) {
 }
 
 // awaitDonor returns once the donor named node answers an offer request on
-// nc's broker — the condition every caller of [standUpDonor] depends on.
+// nc's broker, which every caller of [standUpDonor] depends on: a joiner asks
+// ONCE ([statelog.CollectOffers]), so a donor whose subscription lands after
+// that publish never hears it, and only the donor's own answer proves the
+// broker holds its subscription. It asks the subject rather than any responder
+// (this node's own donor answers first), repeats the ask since one sent too
+// early is lost, and reads every answer from one inbox.
 //
-// # Why started is not serving
-//
-// [statelog.Donor.Serve] dials its own connection and subscribes from its own
-// goroutine, and a joiner asks ONCE: [statelog.CollectOffers] publishes one
-// request and collects for a window, so a donor whose subscription the broker
-// registers after that publish never hears it, however long the window runs.
-// A case that stood a donor up and then called [Engine.rejoin] directly ran
-// exactly that race. Measured, the donor dials within milliseconds of being
-// started and the rejoin asks fifty milliseconds to a second after, so the
-// case passed whenever the donor won; one that loses it fails the case as `no
-// peer could donate a usable snapshot`, which a donor dialling four hundred
-// milliseconds late reproduces exactly. The heartbeat-driven callers asked
-// again a heartbeat later and only ran slow.
-//
-// # Why this is the condition
-//
-// A donor's own answer is the only thing that proves the broker holds its
-// subscription: an answer to an ask published on the same subject means every
-// later ask reaches it too. Asking the subject rather than any responder,
-// because this node's own donor listens on it as well and answers first. The
-// ask is REPEATED, since one published before the subscription landed is lost
-// rather than delivered late, and every answer is read from one inbox, so an
-// answer arriving after the next ask went out still counts.
-//
-// # The bounds, one per half
-//
-// THE CONNECTION is waited for on the dial's own budget, and on no clock of
-// this function's: up is closed once the donor's dial hands back a connection
-// ([serveDonor]), and a dial that fails or runs out its handshake timeout ends
-// Serve, which served reports by name. For [jetstream.Queue.DialOwned], which
-// every donor here dials through, that timeout is the embedded broker's accept
-// budget — thirty seconds, because nats's own two seconds failed boots on a
-// loaded host against a server that was up — so a clock here would be a
-// second, shorter opinion about the same handshake. It was one: the whole wait
-// was once bounded by a single offer window, and a donor whose dial took six
-// seconds, well inside the budget it is actually given, failed this helper
-// while every join asked after it would have been answered.
-//
-// THE ANSWER is waited for one [statelog.OfferWindow] from the moment the
-// connection is open: subscribing and answering is the same local work a
-// connected donor does for a joiner's ask, and that window is what the
-// framework gives a donor to do it. One that cannot fails the case here,
-// naming the donor, rather than in the adoption with an error that names
-// nothing.
+// The connection is awaited on the dial's own budget (up, closed by
+// [serveDonor]; for [jetstream.Queue.DialOwned] the broker's 30 s accept
+// budget), never a clock here; the answer for one [statelog.OfferWindow], a
+// connected donor's time to answer, so a slow one fails here by name.
 func awaitDonor(t *testing.T, nc *nats.Conn, node string, up <-chan struct{},
 	served <-chan error) {
 

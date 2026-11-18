@@ -8,10 +8,8 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A NOTE IS MEASURED AS CLAUDE CODE MEASURES IT: JavaScript's length, in UTF-16
-// code units, where a character outside the Basic Multilingual Plane is two. A
-// budget counted in characters lets through an answer the harness moves into a file
-// and previews, which reaches the model as a pointer to the note.
+// A NOTE IS MEASURED AS CLAUDE CODE MEASURES IT, in UTF-16 code units: a
+// budget in characters lets through an answer the harness moves into a file.
 func TestANoteIsMeasuredInUTF16Units(t *testing.T) {
 	t.Parallel()
 	for in, want := range map[string]int{
@@ -30,9 +28,8 @@ func TestANoteIsMeasuredInUTF16Units(t *testing.T) {
 	}
 }
 
-// AN ANSWER CARRIES THE OLDEST NOTES THAT FIT, and always at least one: the
-// budget is counted on the notes joined as the answer joins them, and a note
-// past the budget on its own is still carried rather than left to wait for ever.
+// AN ANSWER CARRIES THE OLDEST NOTES THAT FIT, counted as joined, and always
+// at least one, or an oversized note would wait for ever.
 func TestAHookAnswerCarriesTheOldestNotesThatFit(t *testing.T) {
 	t.Parallel()
 	half := strings.Repeat("a", executor.ClaudeContextBudget/2-1)
@@ -54,9 +51,8 @@ func TestAHookAnswerCarriesTheOldestNotesThatFit(t *testing.T) {
 	}
 }
 
-// THE ANSWER IS CONTEXT AND A TRANSCRIPT LINE, NEVER A DECISION: a hook answer
-// that carried `decision`, `continue` or `reason` could stop the run's loop or
-// block its step, and a note must only ever add to what the model reads.
+// THE ANSWER IS CONTEXT AND A TRANSCRIPT LINE, NEVER A DECISION: `decision`,
+// `continue` or `reason` could stop the loop or block a step.
 func TestAHookAnswerIsContextAndNeverADecision(t *testing.T) {
 	t.Parallel()
 	got := executor.ClaudeHookAnswer("Stop", []executor.HookNote{
@@ -93,9 +89,7 @@ func TestAHookAnswerIsContextAndNeverADecision(t *testing.T) {
 	}
 }
 
-// AN INBOX ID IS THE JOB'S AND THE NOTE'S, AND STABLE: OpenCode's message ids are
-// unique across a box's whole database, which a relaunch in the same box
-// shares, and a second admission under the same id is the first one.
+// AN INBOX ID IS THE JOB'S AND THE NOTE'S, AND STABLE ([executor.OpenCodeInboxID]).
 func TestAnOpenCodeInboxIDIsStableAndTheJobsOwn(t *testing.T) {
 	t.Parallel()
 	id := executor.OpenCodeInboxID("job-1", "note-1")

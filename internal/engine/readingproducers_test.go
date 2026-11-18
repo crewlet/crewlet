@@ -14,50 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree/decltype"
 )
 
-// EVERY FIELD OF THE ALARM READING HAS A PRODUCER: something the reading's
-// assembly reaches writes it.
+// EVERY FIELD OF statelog.Reading HAS A PRODUCER the reading's assembly
+// REACHES: an unfilled field reads zero, which every alarm reads as "nothing to
+// report", so its alarm is silent forever and indistinguishable from health.
 //
-// # Why a gate
-//
-// An alarm reads one field of statelog.Reading, and a field nothing fills
-// reads as zero, which every condition in the table reads as "nothing to
-// report". So an alarm whose input has no producer is permanently silent — and
-// silent is exactly what a healthy node looks like, so no test of the table,
-// no screen and no operator can tell. It happened twice: the git cache's
-// AlarmReading filled the code half and nothing called it, so
-// `code_maintenance_refused` never fired; and PrefetchP95 was written by no
-// code at all, so `prefetch_slow` never fired, while the metrics reference
-// described the series that should have fed it. Each was found by reading; a
-// third would be found the same way, or not at all.
-//
-// # What it checks
-//
-// The walk starts where a reading is assembled — retention.reading, the node's
-// whole reading, and statelog's ReportInputs.alarms, which builds each
-// domain's half — and follows every call that hands the reading on: a call
-// with an argument that is a Reading or points at one, and a call whose
-// result is one. A call is followed to the function a package names, the
-// method a value's type declares, and, for a call through a FUNCTION-VALUED
-// FIELD (retention.code, retention.index, retention.objects), to every value
-// its package assigns that field — a method value, a function, a literal. A
-// field is produced where a reached body assigns it, increments it, takes its
-// address or names it in a composite literal. Every field of Reading must be.
-// Reachability is the point: AlarmReading wrote its three fields all along,
-// in a function nothing on this path called.
-//
-// # Coverage boundary, stated rather than assumed
-//
-// A call through an interface, a function value held in a variable or a
-// parameter, or a function-valued field assigned outside its own package is
-// not followed; nor is a write through a pointer to one field handed to a
-// helper (`fill(&out.X)` counts as the write, the helper is not read). Each of
-// those makes the gate report a field as unproduced that is produced — the
-// loud direction: never a field passed that nothing fills. The failure names
-// the calls it could not follow, so the next reader knows where to look.
-//
-// Mutation: drop r.code(&out) from the reading's assembly, or the code field
-// from startRetention's retention literal, and the code half has no producer;
-// drop PrefetchP95 from retention.observed, and it has none either.
+// The walk starts at retention.reading and statelog's ReportInputs.alarms and
+// follows each call handing a Reading on (as argument, pointer or result) to the
+// named function, the concrete method, or every value its package assigns a
+// function-valued field. A write is an assignment, increment, address-of or
+// composite-literal key. Interface calls, held function values, a field assigned
+// abroad and a helper given `&out.X` are not followed: the loud direction, named
+// on failure. Mutation: drop r.code(&out), the code field from startRetention's
+// literal, or PrefetchP95 from retention.observed.
 func TestEveryAlarmReadingFieldHasAProducer(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -67,12 +35,9 @@ func TestEveryAlarmReadingFieldHasAProducer(t *testing.T) {
 			"nothing. Check the roots %v and the module root %s", len(walk.reached), len(walk.written),
 			productionRoots, root)
 	}
-	// A GATE ASSERTING PRESENCE PASSES IDENTICALLY WHEN A FIELD IS FILLED AND
-	// WHEN THE WALK GOES WIDER THAN THE PATH: the git cache's half, and the
-	// compactor's and the mirrors' beside it, are reached only through a
-	// function-valued field and a method on another package's type, so a walk
-	// that stopped following either would pass this by following something
-	// else.
+	// Presence also passes when the walk strays off the path: the gitlet halves
+	// are reached only through a function-valued field and another package's
+	// method, so a walk that stopped following either must fail here.
 	for _, must := range []string{"gitlet/cache.Cache.AlarmReading", "gitlet/compact.Compactor.AlarmReading",
 		"gitlet/mirror.Mirrors.AlarmReading"} {
 		if !slices.Contains(walk.reached, must) {
@@ -203,10 +168,9 @@ type producerWalker struct {
 
 // readingProducers walks the module under root from roots.
 //
-// IT READS sync/atomic beside the module, located by `go list` (which builds
-// nothing): the published runtime every half reads its source from is an
-// atomic.Pointer, and a value only an unread package can type is one the walk
-// cannot follow a method of.
+// It reads sync/atomic beside the module, located by `go list` (which builds
+// nothing): every half reads its source from an atomic.Pointer, whose methods
+// the walk can follow only with that package read.
 func readingProducers(t *testing.T, root string, roots []producerRoot) producerWalk {
 	t.Helper()
 	dirs, err := decltype.Locate(t.Context(), sourcetree.Root(t), "sync/atomic")

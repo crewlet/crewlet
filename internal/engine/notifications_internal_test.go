@@ -13,14 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// THE INGRESS CONSUMER COMES BACK WHEN THE POSTURE DOES.
-//
-// A deferral has two halves: the delivery returns to the broker AND the
-// attachment quiesces. A seat's mailbox has something to undo the second half
-// — its own lease admission, on the next successful renew — and the ingress
-// topic has no lease and no seat. Without this convergence a node that shed a
-// single webhook would keep accepting deliveries and reading none of them for
-// the life of the process, while reporting a perfectly healthy config.
+// THE INGRESS CONSUMER COMES BACK WHEN THE POSTURE DOES. A deferral returns
+// the delivery to the broker AND quiesces the attachment; the ingress topic
+// has no lease admission to resume it, so without [Engine.resumeInbound] a
+// node that shed one webhook would read nothing for the life of the process.
 func TestTheIngressConsumerResumesWhenThePostureAdmitsAgain(t *testing.T) {
 	t.Parallel()
 	q := memory.New()
@@ -65,17 +61,12 @@ func TestResumingTheIngressConsumerWithoutABrokerIsHarmless(t *testing.T) {
 
 // THE REBUILD FINGERPRINT COVERS EVERY INPUT THE TRANSPORT IS BUILT FROM.
 //
-// A field on [mattermost.SeatConfig] that the fingerprint does not write is a
-// change [Engine.reconcileMattermost] reads as "nothing to do": the revision
-// lands, the socket keeps running on the old value, and the only way back is a
-// process restart. Nothing but this ties the two together — the write list is
-// positional, so adding a field to the struct compiles and says nothing.
-//
-// The inverse cost is what made this worth writing down. `Channel` was on that
-// struct and in this list while no part of the transport read it, so renaming a
-// seat's channel — a provisioning input, joined by the reconcile off the live
-// org — dropped and re-opened every seat's websocket and replayed each one's
-// backfill window, to rebuild a transport that could not tell the difference.
+// A [mattermost.SeatConfig] field the fingerprint does not write is a change
+// [Engine.reconcileMattermost] reads as "nothing to do", leaving the socket
+// on the old value until a restart; the write list is positional, so a new
+// struct field compiles silently. Conversely, a field the transport does not
+// read must not be on the struct, or changing it drops and reopens every
+// seat's websocket for nothing.
 func TestTheChatFingerprintCoversEverySeatInput(t *testing.T) {
 	t.Parallel()
 	const url, team, status = "https://chat.example.com", "acme", "always"
@@ -96,10 +87,8 @@ func TestTheChatFingerprintCoversEverySeatInput(t *testing.T) {
 		}
 	}
 
-	// LENGTH-PREFIXED, which is the whole reason the writer is not a join:
-	// with a separator, a seat named "a" holding token "b:c" and one named
-	// "a:b" holding "c" hash the same, and a token rotation that happened to
-	// land on that shape would be read as no change at all.
+	// LENGTH-PREFIXED, not joined: with a separator, seat "a" holding token
+	// "b:c" and seat "a:b" holding "c" hash the same.
 	straddle := chatFingerprint(url, team, status, []mattermost.SeatConfig{
 		{Handle: "a", Token: "b:c", Username: "u"},
 	})

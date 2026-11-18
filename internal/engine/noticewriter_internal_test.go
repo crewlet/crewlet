@@ -18,17 +18,12 @@ import (
 
 // A WORK ITEM'S OR A PAGE'S NOTICE IS FROM WHOEVER WROTE IT, as the engine's
 // own tracker and knowledge base recorded them — never from a stranger.
-//
-// A vendor names its sender by an id in its own namespace, and the party
-// registry maps the ids it knows to seats: a sender it cannot map is somebody
-// the company does not know, and a turn such a sender woke reads nothing for
-// them (builtin.ceilingOf). The engine's own surfaces have no such namespace:
-// their writer is a seat's handle, a credential's login or the engine itself.
-// Read as vendor ids, none of them resolved, so every turn a colleague's or a
-// person's comment on a work item or a page woke was a stranger's — every code
-// read and every artifact refused in it, the counterparty profiled under a
-// platform id rather than their handle — and so was the engine's own repair,
-// which nobody sent.
+// A vendor sender is an id the party registry maps to a seat; an unmapped one
+// is a stranger, whose turn reads nothing for them (builtin.ceilingOf). The
+// engine's own writers are a seat's handle, a credential's login or the engine
+// itself: read as vendor ids none resolve, so a colleague's comment, or the
+// engine's own write nobody sent, would wake a stranger's turn: every read
+// refused, the counterparty profiled under a platform id, not their handle.
 //
 // THROUGH THE REAL PATH: the record as the feed relays it, the source's own
 // parser, the notification service's wake, and the interactions a turn reads
@@ -142,13 +137,9 @@ func TestAFirstPartyNoticeIsFromWhoeverWroteIt(t *testing.T) {
 
 // workItemNotice is a comment on a work item recipient is assigned that
 // mentions them, written by actor as kind, encoded as the tracker's feed
-// relays it.
-//
-// MENTIONED, as the page's comment is, because only a comment that names its
-// assignee wakes them whoever wrote it: unnamed, an agent's, a credential's or
-// the engine's comment reaches the assignee's inbox and starts no turn
-// (worklet's ownerAsked), and a notice that wakes nobody has no writer for a
-// turn to read.
+// relays it. MENTIONED because only a comment naming its assignee wakes them
+// whoever wrote it (worklet's ownerAsked), and a notice that wakes nobody has
+// no writer for a turn to read.
 func workItemNotice(t *testing.T, actor string, kind worklet.AuthorKind, apps []iam.Grant,
 	recipient string) []byte {
 	t.Helper()
@@ -202,10 +193,9 @@ func pageNotice(t *testing.T, actor string, kind doclet.AuthorKind, apps []iam.G
 	return payload
 }
 
-// noticeOf is the one wake a first-party record puts on recipient's inbox: the
-// record delivered as its feed delivers it, routed by the source's own parser
-// and woken by the notification service, read back off the recipient's
-// mailbox.
+// noticeOf is the one wake a first-party record puts on recipient's inbox:
+// delivered as its feed delivers it, routed by the source's own parser, woken
+// by the notification service and read back off the recipient's mailbox.
 func noticeOf(t *testing.T, reg *notify.Registry, parser notify.Parser, prompt notify.Prompt,
 	payload []byte, recipient string) *events.Event {
 

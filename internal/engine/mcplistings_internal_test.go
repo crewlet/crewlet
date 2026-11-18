@@ -70,10 +70,9 @@ roles:
 		ToolServerLaunchesEnv, t.TempDir(), procgrouptest.GORACE, procgrouptest.StandInRaceOptions()))
 }
 
-// A NODE'S LISTING OF A SERVER IS THE UNION OF ITS INSTANCES': a per-agent
-// server's children list what each seat's credentials reach, so the node
-// names every tool any of them lists, each counted by the instances listing
-// it, with the schemas each names; and a shared server is one instance.
+// A NODE'S LISTING OF A SERVER IS THE UNION OF ITS INSTANCES': every tool any
+// per-agent child lists (each reaches what its seat's credentials do), counted
+// by the instances listing it, with its schema; a shared server is one instance.
 //
 // Mutation: keep the first instance's listing alone, or count a tool once
 // however many instances list it, and this is red.
@@ -187,11 +186,10 @@ func (c *countingFleet) CreateMCPToolDefinition(ctx context.Context, s coord.MCP
 	return c.innerFleet.CreateMCPToolDefinition(ctx, s)
 }
 
-// A LISTING IS WRITTEN WHEN IT MOVES, AND AGAIN UNDER A NEW EPOCH: a quiet
-// company writes nothing beat after beat; a listing that changed is written
-// with its schemas first; a server the node stops listing is removed; and a
-// new presence epoch, which a sweep may have removed everything under the
-// last one for, writes everything again.
+// A LISTING IS WRITTEN WHEN IT MOVES, AND AGAIN UNDER A NEW EPOCH: a quiet beat
+// writes nothing; a changed listing is written after its schemas; a server the
+// node stops listing is removed; and a new presence epoch, under which a sweep
+// may have removed everything of the last, writes everything again.
 //
 // Mutation: rewrite on every beat, skip the schemas, keep a server the node
 // no longer lists, or forget the epoch, and this is red.
@@ -246,11 +244,10 @@ func TestAListingIsWrittenWhenItMovesAndAgainUnderANewEpoch(t *testing.T) {
 	}
 }
 
-// A DEFINITION IS TRUSTED AS STORED ONLY WHILE A STORED LISTING NAMES IT: when
-// a listing gains a tool and its write fails, the store still holds the old
-// listing, which does not name the new tool's definition, so the sweep may
-// remove it before the write is tried again; the write that finally lands
-// stores it again first rather than naming a definition that is gone.
+// A DEFINITION IS TRUSTED AS STORED ONLY WHILE A STORED LISTING NAMES IT: a
+// failed write of a listing that gained a tool leaves the old listing, which
+// does not name the new definition, so the sweep may remove it; the retried
+// write stores it again first rather than name a definition that is gone.
 //
 // Mutation: keep every digest the desired listings name as stored, and this
 // is red.
@@ -291,13 +288,12 @@ func TestADefinitionIsStoredAgainWhenTheListingNamingItWasNeverWritten(t *testin
 }
 
 // A LISTING KEEPS ITS DEFINITIONS WITHIN ITS BUDGET, A CHANGE WAITING FOR A
-// REVIEW FIRST, THEN IN NAME ORDER: each definition is bounded alone, and a
-// server listing many large ones (or minting new ones at every restart) would
-// otherwise store up to 256 of them per listing. Its words weigh as its schemas
-// do. Past the budget a tool is listed without its definition, which is not
-// stored; a later tool small enough for what remains is still kept; and a tool
-// whose definition waits for a review is kept before any other, so the change
-// a person is asked about can be shown whole.
+// REVIEW FIRST, THEN IN NAME ORDER: each definition is bounded alone, so without
+// this a server listing many large ones (or new ones every restart) would store
+// up to 256 per listing. Words weigh as schemas do. Past the budget a tool is
+// listed without its definition, which is not stored; a later tool that fits
+// what remains is still kept; and one waiting for a review comes first, so the
+// change a person is asked about shows whole.
 //
 // Mutation: drop the budget, weigh the schemas alone, keep a tool's flag once
 // it is past it, or keep in name order alone, and this is red.
@@ -357,8 +353,8 @@ func TestAListingKeepsItsDefinitionsWithinItsBudgetAChangeFirst(t *testing.T) {
 
 // A DEFINITION THE STORE DOES NOT HOLD IS READ ONCE, NOT ON EVERY READ OF A
 // SERVER'S PAGE: the miss is remembered until a listing naming the digest as
-// kept arrives, since a node stores a definition before the listing that says
-// so; then it is read again and found.
+// kept arrives (a node stores a definition before such a listing), then read
+// again and found.
 //
 // Mutation: read every missing digest from the store each time, or keep the
 // miss after a listing says it was kept, and this is red.
@@ -438,15 +434,13 @@ func liveNode(t *testing.T, backend coord.Backend, node string) int64 {
 }
 
 // A PER-AGENT SERVER'S TOOLS REACH EVERY NODE'S CATALOGUE THROUGH THE WATCH,
-// and a node that drained stops counting: what another node publishes arrives
-// on this node's watched copy, counts while its node holds its presence at the
-// epoch it was written under, and the surfaces rendering the catalogue are
-// told when what they would render moved.
+// and a drained node's tools stop counting: another node's listing counts while
+// that node holds its presence at the epoch it was written under, and the
+// surfaces rendering the catalogue are told when what they render moved.
 //
-// What is held is what a surface reads WHEN IT IS TOLD. The notice follows the
-// state it announces, on the goroutine that stored it, so that state can be
-// read a moment before any surface hears of it; the promise is only that a
-// surface told reads what it was told of.
+// What is held is what a surface reads WHEN IT IS TOLD: the notice follows the
+// state, on the goroutine that stored it, so the state can be read before any
+// surface hears of it.
 //
 // Mutation: count a listing whatever its node's presence, skip the notice, or
 // send it before the schemas the listing names are read, and this is red.
@@ -486,8 +480,7 @@ func TestAnotherNodesListingReachesThisNodesCatalogueWhileItsNodeIsLive(t *testi
 	e.startMCPListings(ctx)
 	t.Cleanup(func() { e.listings.cancel(); <-e.listings.done })
 
-	// The publisher's first beat reads the presence; this engine has no
-	// node, so it publishes nothing of its own.
+	// This engine has no node, so its beats publish nothing of its own.
 	pollUntil(t, 10*time.Second, "the catalogue's surfaces told of node-b's listing", func() bool {
 		return len(told()) > 0
 	})
@@ -500,12 +493,10 @@ func TestAnotherNodesListingReachesThisNodesCatalogueWhileItsNodeIsLive(t *testi
 			first.schemas)
 	}
 
-	// ONE BEAT AT A TIME, as a node runs them on its publisher's goroutine
-	// alone: the loop stops, and the case's beat stands in for its next one.
-	// Left running, a tick between the release and the case's beat would
-	// announce the drain before the count below is taken, and two beats
-	// reading the presence either side of the release could store their
-	// readings in the opposite order.
+	// ONE BEAT AT A TIME, as a node runs them on its publisher's goroutine:
+	// the case's beat stands in for the loop's next. Left running, a tick could
+	// announce the drain before the count below, or two beats either side of
+	// the release could store their readings out of order.
 	e.listings.cancel()
 	<-e.listings.done
 
@@ -628,14 +619,13 @@ func (d *deadlinedRemovals) DeleteMCPListing(ctx context.Context, server, node s
 	return d.innerFleet.DeleteMCPListing(ctx, server, node, version)
 }
 
-// A STOPPING NODE'S LISTING REMOVAL IS A STEP OF THE STOP'S ONE ALLOWANCE.
-// Its fallback is the sweep, and nothing counts the listings once the presence
-// has gone, so running out of the allowance costs no more than not trying:
-// the removal is handed what the stop has left ([seat.StopStep]), never a
-// bound of its own beside it, which on an unreachable store was a reconcile
-// interval more for the stop to wait out. Read off the deadline the removal
-// was handed, against the instant the removal began, in a bubble: its clock
-// does not move while the case runs, so the arithmetic is exact.
+// A STOPPING NODE'S LISTING REMOVAL IS A STEP OF THE STOP'S ONE ALLOWANCE: its
+// fallback is the sweep, and nothing counts the listings once the presence is
+// gone, so running out costs no more than not trying: it is handed what the
+// stop has left ([seat.StopStep]), never a bound of its own that an unreachable
+// store would add to the stop's wait. Read in a
+// bubble, whose clock stands still while the case runs, so the arithmetic of
+// the deadline handed against the instant the removal began is exact.
 //
 // Mutation: give the removal a bound of its own, and its deadline is past the
 // stop's allowance.
@@ -691,30 +681,18 @@ func (h *heldRemovals) DeleteMCPListing(ctx context.Context, server, node string
 	return h.innerFleet.DeleteMCPListing(ctx, server, node, version)
 }
 
-// A SLOW LISTING WRITE HOLDS NO BEAT, AND WAITS AS LONG AS ITS BYTES TAKE.
-//
-// A beat's listing writes are made on a pass of their own, in the publisher's
-// own context, with no deadline of the beat's: each waits as long as the
-// coordination store's rule gives the bytes it carries, which for a listing at
-// its bound across a link at the floor is past the beat's fifteen seconds. And
-// one pass at a time: a beat that finds a pass in flight leaves its listings
-// to it. Here a node holding its presence has one listing its last beat wrote
-// to remove, and the store holds the removal until the case releases it: the
-// beat returns with the write in flight on its pass, carrying no deadline of
-// the beat's; the next beat returns too, and the store is asked for the
-// removal once, by the pass in flight; and once released, that pass removes
-// the listing.
-//
-// THE BEATS RUN IN A BUBBLE, the node they read outside it: a pass a beat
-// starts is a goroutine of the bubble, so once every goroutine in it is
-// blocked (synctest.Wait), a pass the next beat started has reached the store
-// with its removal. Outside a bubble such a pass could still be starting when
-// the case released the first, and read the listing as already removed, so a
-// beat that started one could pass.
+// A SLOW LISTING WRITE HOLDS NO BEAT, AND WAITS AS LONG AS ITS BYTES TAKE: a
+// beat's writes run on a pass of their own, in the publisher's context, each
+// waiting what the coordination store's rule gives its bytes (past the beat's
+// fifteen seconds for a listing at its bound on a link at the floor), and a
+// beat finding a pass in flight leaves its listings to it. A pass is a goroutine
+// of the beats' bubble (the node is outside it), so after synctest.Wait it has
+// reached the store; outside one it could start after the release, read the
+// listing as removed, and let a beat that started one pass.
 //
 // Mutation: hold the pass's writes to the beat's fifteen seconds, and the write
-// carries the beat's deadline; start a pass on every beat, and the next beat's
-// pass asks the store for the removal a second time while the first is held.
+// carries the beat's deadline; start a pass on every beat, and the store is
+// asked for the removal a second time while the first is held.
 func TestASlowListingWriteHoldsNoBeat(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

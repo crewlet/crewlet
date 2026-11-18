@@ -14,16 +14,13 @@ func catalogue(t *testing.T, opts ManagerOptions) (*Manager, error) {
 }
 
 // A CATALOGUE WITH MORE THAN ONE CELL AND NO DEFAULT RESOLVES NOTHING BY
-// ITSELF — and is not refused, because it is the shape a company takes when
-// every executor entry names its own cell, which is what the catalogue exists
-// for.
+// ITSELF, and is not refused: it is the shape of a company whose every
+// executor entry names its own cell.
 //
-// What it must never do is resolve a run that names none by taking whichever
-// key the map happened to yield: map order is randomised per run, so the
-// company would run that seat on the engine host one restart and in a remote
-// box the next, with nothing in the config changing and nothing anywhere
-// saying which. Config validation refuses the silent seat; this is the belt
-// to that brace for a row or a spec built by hand.
+// It must never resolve a run naming none by map order, which is randomised
+// per run: the seat would move between the engine host and a remote box across
+// restarts with nothing saying so. Config validation refuses the silent seat;
+// this is the backstop for a row or a spec built by hand.
 func TestACatalogueWithNoDefaultNeverPicksOne(t *testing.T) {
 	t.Parallel()
 	m, err := catalogue(t, ManagerOptions{Providers: map[Placement]Provider{
@@ -71,10 +68,9 @@ func TestASingleBackendNeedsNoDefault(t *testing.T) {
 	}
 }
 
-// A DEFAULT NAMING A BACKEND NOBODY CONFIGURED IS THE FAILURE THIS RESHAPE
-// EXISTS TO MAKE IMPOSSIBLE, and it is caught at construction: left to the
-// first launch, it fails hours after the config was applied, inside a turn
-// that has already spent its rounds.
+// A DEFAULT NAMING A BACKEND NOBODY CONFIGURED IS REFUSED AT CONSTRUCTION:
+// left to the first launch, it fails hours after the config was applied,
+// inside a turn that has already spent its rounds.
 func TestADefaultWithNoBackendIsRefusedAtConstruction(t *testing.T) {
 	t.Parallel()
 	_, err := catalogue(t, ManagerOptions{
@@ -87,9 +83,8 @@ func TestADefaultWithNoBackendIsRefusedAtConstruction(t *testing.T) {
 	}
 }
 
-// A VALUE OFF THE WIRE IS A VALUE, NOT A PANIC: a placement arrives on a
-// pending run's row written by a peer that may be a newer build, and a row
-// from the future must fail the one run rather than the node reading it.
+// A PLACEMENT THIS BUILD DOES NOT KNOW IS A VALUE, NOT A PANIC: it fails the
+// one run ([Placement.Valid]).
 func TestAPlacementThisBuildDoesNotKnowIsRefused(t *testing.T) {
 	t.Parallel()
 	_, err := catalogue(t, ManagerOptions{Providers: map[Placement]Provider{
@@ -109,10 +104,8 @@ func TestAPlacementThisBuildDoesNotKnowIsRefused(t *testing.T) {
 	}
 }
 
-// EACH CELL REACHES ITS OWN BACKEND. The whole point of the catalogue is that
-// two seats on one company run in different places, and a manager that handed
-// every caller one provider would put them both wherever the last one built
-// happened to be.
+// EACH CELL REACHES ITS OWN BACKEND, so two seats of one company run in
+// different places rather than wherever the last provider built happened to be.
 func TestEachPlacementReachesItsOwnBackend(t *testing.T) {
 	t.Parallel()
 	local, remote := NewFakeProvider(), NewFakeProvider()
@@ -171,14 +164,8 @@ func TestTheSeatsPlacementOverlaysTheCompanyDefault(t *testing.T) {
 	}
 }
 
-// A RUN RECONNECTS THROUGH THE BACKEND THAT CREATED IT, read off its own row.
-//
-// This is the load-bearing reason the placement is persisted rather than
-// re-derived: the completion turn may be a different process on a different
-// node, days later, with the company configuration applied again in between.
-// Reconnecting to a remote box through the local backend does not error
-// usefully — it reports a box that has vanished, so a job that is still
-// running is abandoned as gone.
+// A RUN RECONNECTS THROUGH THE BACKEND THAT CREATED IT, read off its own row:
+// why the placement is persisted rather than re-derived ([Placement]).
 func TestARunReconnectsThroughTheBackendThatCreatedIt(t *testing.T) {
 	t.Parallel()
 	local, remote := NewFakeProvider(), NewFakeProvider()
@@ -239,14 +226,10 @@ func TestASpecNamingNoCellTakesTheDefault(t *testing.T) {
 }
 
 // THE ROW REMEMBERS WHERE THE RUN IS, written with the row and before the box
-// exists.
-//
-// It is not re-derived, and that is the point: the process that collects this
-// run may not be the one that started it, may be on another node, and may be
-// reading a company configuration applied since. A row that forgot its cell
-// reconnects through whichever backend the default names — which, for a run in
-// a remote box, reports a box that has vanished and abandons a job that is
-// still going.
+// exists, never re-derived: the process collecting the run may be another node
+// reading a configuration applied since, and a row that forgot its cell
+// reconnects through the default's backend, abandoning a still-running remote
+// job as gone.
 func TestALaunchRecordsWhereTheRunIs(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)

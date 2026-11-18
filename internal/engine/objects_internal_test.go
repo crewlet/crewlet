@@ -29,14 +29,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY DECLARED TABLE IS READ BY THE COLLECTOR THIS ENGINE STARTS.
-//
-// The declarations are one list (internal/objstore/references) and the
-// estates the collector reads them through are this engine's. A consumer
-// declaring a table in a domain the engine hands no estate for would have the
-// collector refuse to start at boot, logged and nothing more, and the fleet
-// would stop collecting and auditing — so the mismatch fails here, at build
-// time, instead.
+// EVERY DECLARED TABLE IS READ BY THE COLLECTOR THIS ENGINE STARTS: a table
+// (internal/objstore/references) declared in a domain the engine hands no
+// estate for makes the collector refuse to start at boot, only logged, and
+// the fleet stops collecting and auditing, so the mismatch fails here instead.
 func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 	t.Parallel()
 	if _, err := collect.Sources(references.All, collectorEstates()...); err != nil {
@@ -45,10 +41,9 @@ func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 }
 
 // objectsRuntime is a runtime as [Engine.startNative] leaves every one that
-// runs a state log: each domain whose rows name objects readable — the
-// tracker's whatever its tools are, and the code log's, which has no backend
-// to choose. Its readers are zero values, because only the estates' names are
-// read here.
+// runs a state log: the tracker's and the code log's estates readable whatever
+// the company's backends. Its readers are zero values: only the estates' names
+// are read here.
 func objectsRuntime() *native {
 	return &native{trackerFiles: &worklet.Reader{}, codeReader: &gitlet.Reader{}}
 }
@@ -63,13 +58,11 @@ func collectorEstates() []collect.Estate {
 }
 
 // EVERY REQUIRED TABLE NAMES ITS OWN DOMAIN'S LOG (ADR-0082). A backup reads
-// the log a declaration names past its store copy, and the deferred records of
-// the table it names, to carry the objects a restore's replay names — so a
-// declaration naming another domain's stream or table would have the backup
-// read records that never write it and miss the ones that do, with nothing
-// failing. The registered domain is the authority on both names; the
-// declaration restates them only because the backup cannot import every
-// domain, and this is what holds the two together.
+// the named log past its store copy, and the named deferred records, for the
+// objects a restore's replay names; another domain's names would have it read
+// records that never write the table and miss those that do, with nothing
+// failing. The registered domain is the authority; the declaration restates
+// its names only because the backup cannot import every domain.
 func TestEveryRequiredTableNamesItsDomainsLog(t *testing.T) {
 	t.Parallel()
 	byName := map[string]statelog.Domain{}
@@ -95,12 +88,10 @@ func TestEveryRequiredTableNamesItsDomainsLog(t *testing.T) {
 	}
 }
 
-// A RUNTIME THAT RUNS NO STATE LOG OFFERS NO ESTATE — a zero runtime, a
-// test's, holds no domain's rows — and the collector over it is REFUSED, by
-// name, and the refusal reaches the caller that logs it: never a collector
-// over nothing, which would read every object as unreferenced, and never a
-// collector skipped without a word, which is how every company whose tracker
-// was not native went without one and nothing said so.
+// A RUNTIME THAT RUNS NO STATE LOG OFFERS NO ESTATE, and the collector over it
+// is REFUSED, naming the tables, with the refusal returned to the caller that
+// logs it: a collector over nothing would read every object as unreferenced,
+// and one skipped silently leaves the node uncollected with nothing said.
 func TestARuntimeThatRunsNoStateLogOffersNoEstate(t *testing.T) {
 	t.Parallel()
 	n := &native{}
@@ -147,26 +138,15 @@ roles:
 // EVERY DOMAIN A DECLARATION NAMES HAS AN ESTATE THE COLLECTOR READS, WHATEVER
 // BACKENDS THE COMPANY CHOSE — and the collector runs over them.
 //
-// The register runs every domain's log or none, so a domain's rows exist
-// because its log runs, never because its tool surface does: a company that
-// keeps its pages here and its work in Jira, or nowhere, still applies the
-// tracker's log and still holds every `tracker_files` row it ever wrote — a
-// company that moved its tracker off native holds all of its project files'.
-// [collect.Sources] refuses a declared table whose domain has no estate,
-// because its objects would read as unreferenced. So an estate built only
-// where the tracker's TOOLS are left such a node with no collector at all —
-// nothing audited, nothing collected — and with NOTHING SAYING SO: the empty
-// list never reached Sources, because the collector's start returned before
-// building them, so no warning was written and no status line showed it.
+// The register runs every domain's log or none, so a company with its work in
+// Jira, or nowhere, still holds every `tracker_files` row its log wrote, and
+// [collect.Sources] refuses a declared table whose domain has no estate. An
+// estate built only where the tracker's TOOLS are served leaves such a node
+// with no collector, and nothing saying so.
 //
-// EACH ARM NAMES THE BRANCH IT COVERS and holds its premise: the native
-// tracker's arm the estate read through the tools' own reader, the others the
-// estate built for the object store alone, where no tool reader exists. Those
-// cover that branch only while the company each boots is served no tracker
-// tools — so that is asserted, not assumed. And Gitlet's estate is
-// offered on every arm, whatever `code.backend: gitlet` says, because its log runs in
-// every register: the arm whose state log runs on Gitlet alone, and the
-// others, which host no code, alike.
+// EACH ARM ASSERTS ITS PREMISE: the native tracker's reads the estate through
+// the tools' reader, the others build it for the object store alone. Gitlet's
+// estate is offered on every arm, since its log runs in every register.
 func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
 	t.Parallel()
 	declared := map[string]bool{}
@@ -181,10 +161,8 @@ func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
 	}{
 		"Worklet":               {doc: companyWithoutSandboxDoc, toolReader: true},
 		"no tracker, on Doclet": {doc: noTrackerDoc, toolReader: false},
-		// THE STATE LOG ON GITLET ALONE: no Worklet and no
-		// Doclet, so nothing but code.backend: gitlet
-		// starts the register — and every declaring domain's estate is
-		// still offered, the tracker's built for the object store alone.
+		// THE STATE LOG ON GITLET ALONE: only code.backend: gitlet starts
+		// the register, and every declaring domain's estate is still offered.
 		"Gitlet alone": {doc: gitletHostAlone, toolReader: false},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -199,9 +177,7 @@ func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
 					"tracker's tools are served = %v, and this node serves them = %v",
 					arm.toolReader, n.trackerReader != nil)
 			}
-			// THE ESTATES THE COLLECTOR IS BUILT OVER, as [Engine.startCollectorOver]
-			// builds them: the native half's and the artifacts, assistant and
-			// executor logs', which every data node runs ([objectEstatesFor]).
+			// The estates as [Engine.startCollectorOver] builds them.
 			estates := objectEstatesFor(n, e.ArtifactsReader(), e.AssistantReader(),
 				e.ExecutorReader())
 			offered := map[string]bool{}
@@ -219,9 +195,8 @@ func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
 			if _, err := collect.Sources(references.All, estates...); err != nil {
 				t.Fatalf("the collector cannot be built from this runtime's estates: %v", err)
 			}
-			// AND IT RUNS: the duty's first pass is taken as the node boots,
-			// so a collection is recorded where every node reads it — over
-			// the estates above, pinned through each one's own log.
+			// AND IT RUNS: the duty's first pass, taken at boot, records a
+			// collection where every node reads it.
 			if e.objects == nil || e.objects.duty.Load() == nil {
 				t.Fatal("the node started no object collector")
 			}
@@ -258,20 +233,16 @@ func TestANodeMissingADeclaredTablesEstateBuildsNoReferences(t *testing.T) {
 	}
 }
 
-// THE COLLECTOR RUNS ON A COMPANY THAT KEEPS ITS TRACKER ELSEWHERE.
-//
-// The tracker's log is the core's, applied on every data node whatever
-// `tracker.backend` says, so a company that moved off Worklet still holds the
-// rows naming its project files — and every company's artifacts and Ask
-// Crewlet files name objects besides. The collector starts only with every
-// declared table's estate, and the tracker's was built only where the company
-// ran Worklet: on a company on Jira, or with no tracker, nothing was ever
-// collected or audited, and `crewlet objects migrate` refused, saying the node
-// held no copy of the company's records.
+// THE COLLECTOR RUNS ON A COMPANY THAT KEEPS ITS TRACKER ELSEWHERE: the
+// tracker's log is the core's, applied on every data node whatever
+// `tracker.backend` says, so its rows still name project files, and the
+// collector starts only with every declared table's estate. Without the
+// tracker's, nothing is collected or audited and `crewlet objects migrate`
+// refuses.
 //
 // Mutation: build the tracker's file reader only where the company runs
-// Worklet again (inside `runTracker` in [Engine.startNative]), and the first
-// case starts no collector and builds no references.
+// Worklet (inside `runTracker` in [Engine.startNative]), and the first case
+// starts no collector and builds no references.
 func TestTheCollectorRunsWhateverTheCompanysTracker(t *testing.T) {
 	t.Parallel()
 	for name, doc := range map[string]string{
@@ -318,17 +289,13 @@ func (*namedNothing) Required(statelog.Position) []objstore.Walk { return nil }
 
 func (*namedNothing) Moved(statelog.Position) []objstore.Walk { return nil }
 
-// A NODE NAMING ANOTHER OBJECT STORE IS REFUSED, NAMING BOTH.
-//
-// The fleet records the store its first node opened, and a node whose
-// store.objects names another would split the company's files between the two
-// with nothing failing. The refusal is TYPED, carrying both identities, because
-// the setting fails in other ways that name it too — the record unreadable,
-// the bucket unreachable — and a caller asking whether a boot was refused for
-// this reason (a restore that put the old store's record back) must not be
-// answered by one of those. And it comes BEFORE the backend is opened: the
-// store named here listens nowhere, and reaching for it would answer the
-// open's failure instead.
+// A NODE NAMING ANOTHER OBJECT STORE IS REFUSED, NAMING BOTH: a node whose
+// store.objects differs from the one the fleet recorded would split the
+// company's files between the two, with nothing failing. The refusal is TYPED,
+// carrying both identities, so a caller (a restore that put the old store's
+// record back) tells it from the setting's other failures, which name it too.
+// And it comes BEFORE the backend opens: the store named here listens nowhere,
+// and opening it would answer with that failure instead.
 func TestANodeNamingAnotherObjectStoreIsRefusedNamingBoth(t *testing.T) {
 	t.Parallel()
 	fleet := coordmemory.NewFleet()
@@ -363,23 +330,18 @@ func TestANodeNamingAnotherObjectStoreIsRefusedNamingBoth(t *testing.T) {
 	}
 }
 
-// THE OBJECT STORE'S BUCKET COUNTS INTO THE NODE'S RECORDER, from its first
-// request: the probe that opening it makes is attempts and requests like any
-// other, so an `s3` node handed its recorder holds them once the store is
-// open. The probe stores one object under the prefix (PutObject), deletes it
-// (DeleteObject), makes three presigned puts of its own through the plain
-// transport — no SDK operation, so nothing the counter labels — and deletes
-// the object once more as it ends, however it ended (a second DeleteObject).
-// A recorder that stopped at the engine — never handed to the client's
-// constructor — leaves every S3 series the catalogue publishes empty, which
-// reads as a bucket that never throttled anybody.
+// THE OBJECT STORE'S BUCKET COUNTS INTO THE NODE'S RECORDER from its first
+// request, the probe at open: it puts one object (PutObject), deletes it
+// (DeleteObject), makes three presigned puts through the plain transport (no
+// SDK operation, so uncounted) and deletes it again however it ended (a second
+// DeleteObject). A recorder never handed to the client's constructor leaves
+// every S3 series empty, which reads as a bucket that never throttled anybody.
 func TestTheObjectStoresBucketCountsIntoTheNodesRecorder(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")
 	boot := config.DefaultBootstrap()
-	// STATIC KEYS: with none the SDK's own chain looks for credentials on
-	// the machine — the instance's metadata endpoint among them — before
-	// the first request.
+	// STATIC KEYS: with none the SDK's chain probes the machine for
+	// credentials (the instance metadata endpoint among them) first.
 	boot.Store.Objects = config.StoreObjects{Backend: config.ObjectBackendS3, S3: config.ObjectsS3{
 		Endpoint: srv.URL, Region: "us-east-1", Bucket: srv.Bucket(), PathStyle: true,
 		AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
@@ -432,12 +394,11 @@ func collectorNodeHolding(t *testing.T, source collect.Source) (*Engine, *collec
 	return collectorNodeOn(t, source, backend)
 }
 
-// agedUploads is a memory store, and a put of one object into it uploaded two
-// days ago under a key minted then — past the grace by both instants, so the
-// next collection judges it and pins its estate to do so. A pass that finds
-// nothing past the grace decides nothing and takes no barrier
-// (internal/objstore/collect), so a case about what a pass does while it runs
-// gives it something to judge.
+// agedUploads is a memory store and a put into it of one object uploaded two
+// days ago under a key minted then: past the grace by both instants, so the
+// next collection judges it and pins its estate. A pass with nothing past the
+// grace takes no barrier (internal/objstore/collect), so a case about a
+// running pass needs something to judge.
 func agedUploads(t *testing.T) (objstore.Backend, func()) {
 	t.Helper()
 	then := time.Now().Add(-2 * collect.PendingGrace)
@@ -500,12 +461,11 @@ func collectionRecorded(t *testing.T, fleet *coordmemory.Fleet) (CollectionRepor
 	return CollectionReport(r), true
 }
 
-// EACH TURN RUNS AT MOST ONE PASS, the one that is due, and RECORDS what it
-// found where every node reads it: a collection first (a node that never
-// collected owes one), the audit on the next turn, and then nothing until one
-// of them is due again. One pass a turn because a pass lists or walks the
-// whole store, and a turn that ran both would hold the duty's lease through
-// two of them.
+// EACH TURN RUNS AT MOST ONE PASS, the one due, and RECORDS it where every
+// node reads it: a collection first (a node that never collected owes one),
+// the audit next turn, then nothing until one is due again. One a turn because
+// a pass lists or walks the whole store, and two would hold the duty's lease
+// through both.
 func TestTheCollectorRunsThePassThatIsDueAndRecordsIt(t *testing.T) {
 	t.Parallel()
 	source := &namedNothing{}
@@ -531,9 +491,8 @@ func TestTheCollectorRunsThePassThatIsDueAndRecordsIt(t *testing.T) {
 		t.Fatalf("the second turn recorded audit %+v, want a completed audit", r.Status.Audit)
 	}
 
-	// SOMETHING PAST THE GRACE, so a pass that ran where none is due would
-	// judge it and take a barrier: over a store holding nothing to judge, a
-	// pass takes none, and the count below could not move either way.
+	// SOMETHING PAST THE GRACE, so a pass run where none is due would take a
+	// barrier and move the count below.
 	upload()
 	barriers := source.barriers
 	for range 3 {
@@ -591,10 +550,9 @@ func TestATakenDutyResumesTheScheduleItsLastHolderRecorded(t *testing.T) {
 	}
 }
 
-// A FAILED PASS IS DUE AGAIN AFTER THE RETRY, NOT THE INTERVAL: the failures
-// that stop one are usually over in minutes, and a collection that failed
-// waiting the full hour leaves a whole hour of garbage behind it — an audit,
-// a whole day of not knowing what was lost.
+// A FAILED PASS IS DUE AGAIN AFTER THE RETRY, NOT THE INTERVAL: what stops a
+// pass is usually over in minutes, and waiting the full interval leaves an
+// hour of garbage, or for an audit a day of not knowing what was lost.
 func TestAFailedPassIsDueAgainAfterTheRetry(t *testing.T) {
 	t.Parallel()
 	for _, interval := range []time.Duration{collect.CollectInterval, collect.AuditInterval} {
@@ -787,14 +745,12 @@ func TestATakenDutyKeepsTheFindingsItsLastHolderRecorded(t *testing.T) {
 	}
 }
 
-// ANOTHER STORE'S REPORT IS NOTHING TO RESUME. A fleet whose files moved — the
-// documented move, which deletes the backend record and leaves the report
-// beside it, or a restore into a new bucket that brought the bucket back —
-// holds a report about the OLD store. Resumed, the new holder waited out the
-// old store's schedule before auditing the new one, which is the one check
-// that the copy is whole; raised the old store's lost files as the new
-// store's; and at its next pass wrote both into the fleet's record under the
-// new store's name, an audit of one store reported as an audit of another.
+// ANOTHER STORE'S REPORT IS NOTHING TO RESUME. After the files move (the
+// documented move deletes the backend record and leaves the report; a restore
+// into a new bucket can bring an old one back) the report is about the OLD
+// store. Resumed, it would delay the new store's audit, the one check that the
+// copy is whole, and raise and then record the old store's lost files under
+// the new store's name.
 func TestATakenDutyResumesNothingFromAnotherStoresReport(t *testing.T) {
 	t.Parallel()
 	source := &namedNothing{}
@@ -841,19 +797,16 @@ func TestATakenDutyResumesNothingFromAnotherStoresReport(t *testing.T) {
 }
 
 // A RECORD THAT CANNOT BE READ RESUMES NOTHING OF IT, not the half that
-// decoded: JSON fills every field it can before it reports one it could not,
-// and a schedule taken from a record nobody could read waits out a pass on
-// the strength of a timestamp beside a field that would not decode.
+// decoded: JSON fills every field it can before reporting one it could not.
 //
 // AND IT IS AN ANSWER, unlike a record the store did not give up: the passes
-// run from nothing over it, since waiting on a record that will never decode
-// would skip every pass.
+// run from nothing, since waiting on a record that never decodes would skip
+// every pass.
 func TestARecordThatCannotBeReadResumesNothing(t *testing.T) {
 	t.Parallel()
 	source := &namedNothing{}
 	// AN AGED UPLOAD, so a pass that runs judges something and takes the
-	// barrier this case reads: a pass over a store holding nothing past the
-	// grace decides nothing and takes none.
+	// barrier this case reads.
 	e, duty, fleet := collectorNodeHolding(t, source)
 	now := time.Now()
 	// A WELL-FORMED DOCUMENT with a recent collection beside an audit of the
@@ -869,9 +822,8 @@ func TestARecordThatCannotBeReadResumesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// THE COLLECTION IS DUE AT ONCE, as it is with no record at all; taken
-	// from the half that decoded, it waited out the hour and the turn ran the
-	// audit in its place.
+	// THE COLLECTION IS DUE AT ONCE, as with no record at all, not after the
+	// hour the half that decoded would wait.
 	e.collectorTurn(t.Context(), func(context.Context) (bool, error) { return true, nil }, duty)
 	if source.barriers == 0 {
 		t.Fatal("the turn ran no pass over a record that does not decode, as though the " +
@@ -898,13 +850,11 @@ func (f *unansweredRecord) ObjectCollection(ctx context.Context) ([]byte, bool, 
 }
 
 // A RECORD THE STORE DID NOT GIVE UP IS UNKNOWN, NOT EMPTY (ADR-0005). A node
-// taking the duty whose read of the fleet's record goes unanswered — the
-// objects bucket's leader moving, a store blip — runs NO pass and records
-// nothing, and reads the record again at its next turn. Run from nothing, as a
-// record that does not decode is, it collected at once and recorded a status
-// with no audit half: the last holder's findings written out of the fleet's
-// record, and objects_missing cleared, until a whole audit of the store found
-// them again — a day later.
+// taking the duty whose read of the fleet's record goes unanswered (a leader
+// moving, a store blip) runs NO pass, records nothing, and reads it again next
+// turn. Run from nothing, it would record a status with no audit half,
+// erasing the last holder's findings and clearing objects_missing until the
+// next whole audit, a day later.
 func TestARecordTheStoreDidNotGiveUpRunsNoPass(t *testing.T) {
 	t.Parallel()
 	// recordLost has data-b, which held the duty in between, record an audit
@@ -936,10 +886,8 @@ func TestARecordTheStoreDidNotGiveUpRunsNoPass(t *testing.T) {
 	}
 	// unanswered is a node over source whose fleet withholds the record the
 	// next time it is asked, over a store holding an aged upload, and the put
-	// of another: a pass judges an object past the grace and takes a barrier,
-	// so a turn that ran one where none may run moves the count [unchanged]
-	// reads. Over a store holding nothing to judge, no pass takes a barrier
-	// and the count could not move either way.
+	// of another: something past the grace, so a pass run where none may run
+	// takes a barrier and moves the count [unchanged] reads.
 	unanswered := func(t *testing.T, source collect.Source) (*Engine, *collectorDuty,
 		*coordmemory.Fleet, *unansweredRecord, func()) {
 		t.Helper()
@@ -1045,14 +993,12 @@ func TestARecordTheStoreDidNotGiveUpRunsNoPass(t *testing.T) {
 }
 
 // A CLAIM THAT CANNOT BE ANSWERED IS NEITHER HELD NOR LOST: the node runs no
-// pass, and keeps the alarm its last audit raised, rather than clearing an
-// alarm about lost files over a store blip.
+// pass and keeps the alarm its last audit raised, rather than clearing it
+// over a store blip.
 //
-// AND IT RESUMES AGAIN when a claim next answers held: while nobody could say
-// who held the duty, another node may have taken it and recorded an audit
-// that found more files lost, and a node running on from its own older status
-// would write those findings — and the alarm — out of the fleet's record with
-// its next pass.
+// AND IT RESUMES AGAIN when a claim next answers held: meanwhile another node
+// may have held the duty and recorded more files lost, which this node's next
+// pass from its own older status would write out of the fleet's record.
 func TestAnUnknownClaimKeepsTheAlarm(t *testing.T) {
 	t.Parallel()
 	source := &namedObject{k: objstore.KeyAt(time.Now())}
@@ -1164,11 +1110,10 @@ func turnAside(t *testing.T, e *Engine, claim func(context.Context) (bool, error
 	}
 }
 
-// heldDutyNode is collectorNode over a source that holds every pass until it
-// is released, whose duty is renewed on a test's clock — and which has run a
-// collection and an audit already, so the fleet holds a record, the alarm
-// reads the one object the store lost, and the next pass is a collection the
-// test forces due.
+// heldDutyNode is [collectorNode] over a source that holds every pass until
+// released, its duty renewed on a test's clock. It has run a collection and an
+// audit, so the fleet holds a record and the alarm reads the one lost object;
+// the next pass is a collection the test forces due.
 func heldDutyNode(t *testing.T) (*Engine, *collectorDuty, *coordmemory.Fleet, *fakeDutyClock) {
 	t.Helper()
 	source := newHeldPass()
@@ -1194,10 +1139,9 @@ func heldDutyNode(t *testing.T) (*Engine, *collectorDuty, *coordmemory.Fleet, *f
 }
 
 // A COLLECTOR'S PASS KEEPS ITS DUTY FOR AS LONG AS IT RUNS: a pass five leases
-// long is renewed throughout, no peer can claim the duty at any point of it,
-// and what it found is recorded as this node's when it ends. Renewed only
-// between passes, the lease lapsed under a long audit, a peer ran its own
-// beside it, and the two wrote the fleet's one record in turn.
+// long is renewed throughout, no peer can claim the duty during it, and its
+// findings are recorded as this node's. Renewed only between passes, a long
+// audit's lease would lapse and a peer's pass would write the one record too.
 func TestACollectorPassLongerThanItsLeaseKeepsTheDuty(t *testing.T) {
 	t.Parallel()
 	source := newHeldPass()
@@ -1319,12 +1263,10 @@ func TestACollectorPassStopsWhenItsDutyCannotBeConfirmed(t *testing.T) {
 	}
 }
 
-// A RENEWAL THE STORE DID NOT ANSWER COSTS A PASS NOTHING — refused at once,
-// or held on to until its call gives up, which is what a request to a
-// coordination stream whose leader is moving meets: the next is asked inside
-// the window the last confirmation bought, answers held, and the pass runs to
-// its end and is recorded — a coordination store's leader election does not
-// throw away half an hour of audit.
+// A RENEWAL THE STORE DID NOT ANSWER COSTS A PASS NOTHING, whether refused at
+// once or held until its call gives up (a coordination stream's leader
+// moving): the next, asked inside the window the last confirmation bought,
+// answers held, and the pass runs to its end and is recorded.
 func TestACollectorPassSurvivesARenewalTheStoreDidNotAnswer(t *testing.T) {
 	t.Parallel()
 	for _, heldOn := range []bool{false, true} {
@@ -1416,12 +1358,11 @@ func TestTheBucketUsageIsReportedOnlyByTheDutyHolder(t *testing.T) {
 }
 
 // A HOLDER THAT DECLINES THE DUTY AND GIVES IT BACK LETS THE BUCKET'S GAUGES
-// GO, as a holder told by its claim that another node holds the duty does: it
-// stopped reading the bucket, and a gauge holds its last write, so kept they
-// went on exporting this node's last reading — and raising the near-ceiling
-// alarm from it — beside the reading of the node that took the duty over. A
-// give-back the store did not answer is no answer about who holds the duty,
-// and keeps them, as an unknown claim does.
+// GO, as one told another node holds the duty does: a gauge holds its last
+// write, so kept they would export this node's stale reading, and raise the
+// near-ceiling alarm from it, beside the new holder's. A give-back the store
+// did not answer says nothing about who holds the duty, and keeps them, as an
+// unknown claim does.
 func TestADecliningHolderLetsTheBucketsGaugesGo(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

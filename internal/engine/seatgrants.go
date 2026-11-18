@@ -109,8 +109,8 @@ func (a *SeatAccessAPI) GrantRequests(ctx context.Context, kind integration.Kind
 }
 
 // RecordGrants implements setupapi.Access: one event per grant a save added or
-// removed, as the person who saved it, and each request a grant answered
-// dropped, since the grant now carries it.
+// removed, as the saver, and each answered request dropped, since its grant
+// now carries it.
 func (a *SeatAccessAPI) RecordGrants(ctx context.Context, kind integration.Kind, by iam.Actor,
 	changes []seataccess.GrantChange) {
 
@@ -261,11 +261,10 @@ func (d grantDesk) Declined(ctx context.Context, id, by string) error {
 	return nil
 }
 
-// LapsedGrants is every grant of the running company that has lapsed and that
-// no agent's credential still holds, as the access ledger last read it back:
-// what the sweep drops from the document. One still held waits for the pass
-// that takes it off the credential, so the document never forgets a grant a
-// token still carries.
+// LapsedGrants is every lapsed grant of the running company that no agent's
+// credential still holds, per the access ledger: what the sweep drops from the
+// document. One still held waits for the pass that removes it, so the document
+// never forgets a grant a token carries.
 func (e *Engine) LapsedGrants(ctx context.Context, now time.Time) ([]seataccess.GrantChange, error) {
 	company := e.Company()
 	if company == nil {

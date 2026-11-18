@@ -74,7 +74,7 @@ var (
 	firstPageAt = statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 90}
 )
 
-// oid is a whole object id of one repeated hex digit.
+// oidOf is a whole object id of one repeated hex digit.
 func oidOf(digit string) string { return strings.Repeat(digit, 40) }
 
 // pushedRun is a run given web and api to push to and docs to read, launched
@@ -105,14 +105,11 @@ func cmdNG(ref, from, to string) gitlet.Command {
 	return gitlet.Command{Ref: ref, Old: from, New: to, Result: gitlet.ResultNG, Reason: "stale"}
 }
 
-// A RUN GIVEN ITS MOST REPOSITORIES HAS ITS PUSHES READ WHOLE: the bound a
-// run's repositories are admitted to — the job's `code_checkout` grants
-// on its row, sandbox.MaxRunRepos — never passes the bound a `run_pushes` read may
-// name, gitlet.MaxRunRepos, which Gitlet refuses a read past. The two are
-// spelled in two packages that do not import each other, and a raise of the
-// first alone would refuse the "what it pushed" read of every collected run
-// given more, surfacing only as the sentence that its push record was unread.
-// Here, the one package that imports both.
+// A RUN GIVEN ITS MOST REPOSITORIES HAS ITS PUSHES READ WHOLE: the most a run
+// is given, sandbox.MaxRunRepos, never passes the most a `run_pushes` read may
+// name, gitlet.MaxRunRepos, which Gitlet refuses a read past. The two packages
+// do not import each other, and raising the first alone would leave every run
+// given more with its push record unread; held here, where both are imported.
 //
 // Mutation: sandbox.MaxRunRepos raised to 9 → red.
 func TestARunGivenItsMostRepositoriesHasItsPushesReadWhole(t *testing.T) {
@@ -142,20 +139,17 @@ func TestARunGivenItsMostRepositoriesHasItsPushesReadWhole(t *testing.T) {
 }
 
 // WHAT A RUN PUSHED IS READ FROM ITS LAUNCH'S PUSH ROWS, every page to the
-// last: the first LINEARIZABLE — one barrier a collected run, so "it pushed
-// nothing" is never a stale answer — and every later one at session at the
-// first page's position, so no node behind that snapshot answers one. The
-// repositories are the run's own it may push to, by id in its order, read
-// above its launch; each ref collapses to the old value of its first push and
-// the new value of its last, in the order the run first pushed it; a command
-// the decide refused moved nothing; a ref is named as the run was given its
-// repository; and the record is the first page's position's, where its one
-// barrier put it.
+// last: the first linearizable (one barrier per collected run, so "it pushed
+// nothing" is never stale), every later one at session floored at the first
+// page's position. The repositories are the run's writable ones, by id in its
+// order, read above its launch; each ref collapses to its first push's old
+// value and its last's new, in first-push order; a refused command moved
+// nothing; a ref is named by the run's name for its repository; and the record
+// stands at the first page's position, where its barrier put it.
 //
-// Mutations: list every push rather than collapse — four web entries, red;
-// read every page linearizable — the second page's level, red; keep refused
-// commands — the ng ref listed, red; name the repository by id — red; answer
-// the record at its last page's position — red.
+// Mutations, each red: list every push rather than collapse; read every page
+// linearizable; keep refused commands; name the repository by id; answer the
+// record at its last page's position.
 func TestRunPushesReadsTheRunsLaunchInOrder(t *testing.T) {
 	t.Parallel()
 	branch := "refs/heads/seats/swe/ENG-42"
@@ -231,10 +225,9 @@ func TestRunPushesReadsTheRunsLaunchInOrder(t *testing.T) {
 }
 
 // A READER HOLDS NO MORE REFS THAN A RESULT CAN LIST, whatever the run pushed:
-// a box chooses how many refs it moves, and the reader's memory follows what a
-// record can carry. The refs past sandbox.MaxPushedRefs are counted, never
-// held, each once for every push that moved it; the held ones still take
-// their later pushes.
+// a box chooses how many refs it moves. Refs past sandbox.MaxPushedRefs are
+// counted, never held, once for every push that moved each; the held ones
+// still take their later pushes.
 //
 // Mutation: drop the cap — every ref held, red.
 func TestRunPushesHoldsAtMostTheRefsAResultCanList(t *testing.T) {
@@ -267,11 +260,10 @@ func TestRunPushesHoldsAtMostTheRefsAResultCanList(t *testing.T) {
 }
 
 // A RECORD THE READER CANNOT READ IS AN ERROR, never "nothing pushed": Gitlet
-// not served here, a launch position it cannot read or on another log, a read
-// Gitlet refused, a page that did not move, a first page answered at no
-// position of the code log — a record of one page among them, since the
-// record's position is what the run's changes are read at — and a row of a
-// repository the run was not given.
+// not served here, a launch position unreadable or on another log, a refused
+// read, a page that did not move, a first page at no position of the code log
+// (a one-page record too: the run's changes are read at the record's
+// position), and a row of a repository the run was not given.
 //
 // Mutation: check the first page's position only where a page follows it —
 // the whole record at no position, red.

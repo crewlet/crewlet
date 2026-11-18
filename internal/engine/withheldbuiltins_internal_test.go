@@ -33,21 +33,17 @@ roles:
 `
 
 // AN AGENT IS COUNTED THE BUILTINS ITS TURN IS SHOWN. WithheldBuiltins, asked
-// as the API asks it — over a chart and a registry snapshot, never the epoch's
-// handle — leaves out, of every builtin the registry holds, exactly what the
-// executor of the same seat's turn is not handed: the two readers of what a
-// seat is not offered, a turn's surfaces and the per-agent count on Settings ›
-// MCP & tools, cannot part. One seat carries the health grant and full_access
-// and the other neither, so the two really are withheld different builtins.
+// as the API asks it (a chart and a registry snapshot, not the epoch), leaves
+// out exactly what the same seat's executor is not handed, so a turn's
+// surfaces and Settings › MCP & tools' per-agent count cannot part. One seat
+// carries the health grant and full_access and the other neither, so they are
+// withheld different builtins. mark_onboarded is left out: the one builtin a
+// phase scopes (the runner's phaseScoped), offered to onboarding and never to
+// the executor shownTools reads.
 //
-// mark_onboarded is left out of the comparison: it is the one builtin a phase
-// scopes (the runner's phaseScoped), offered to a seat's onboarding pass and
-// never to its executor, which is what shownTools reads.
-//
-// Mutation: move the code-tier layer out of WithheldBuiltins into
-// withheldFrom alone, and dev's executor is not shown code_commit_files while
-// WithheldBuiltins counts it offered; a layer added to WithheldBuiltins alone
-// is red the other way.
+// Mutation: move the code-tier layer into withheldFrom alone and dev is not
+// shown code_commit_files that WithheldBuiltins counts; a layer added to
+// WithheldBuiltins alone is red the other way.
 func TestAnAgentIsCountedTheBuiltinsItsTurnIsShown(t *testing.T) {
 	t.Parallel()
 	c, err := NewCompany(parseCompany(t, withheldCompany))

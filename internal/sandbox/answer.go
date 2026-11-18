@@ -8,112 +8,69 @@ import (
 )
 
 // AnswerDisposition is what the engine must DO with a delivery it offered to a
-// parked executor — never what happened inside the coordinator.
+// parked executor, never what happened inside the coordinator: a bool beside an
+// error carried four outcomes, and a caller reading any error as "not handled"
+// spent the answer on an unrelated turn. Each constant names its action and what
+// choosing it wrongly costs. The asymmetry decides every ambiguous case: an
+// answer that arrives twice is recoverable and one that is spent is not, so
+// where the coordinator cannot establish that nothing is owed the delivery, it
+// defers.
 //
-// The offer's caller is holding somebody's chat message with one question:
-// this arrived, what do I do with it. It was a bool beside an error, and those
-// two values carried FOUR outcomes — nothing matched, the answer resumed the
-// run, the claim was taken and given back, the store could not say whether the
-// claim landed — which the dispatcher collapsed into two by reading any error
-// as "not handled". So the delivery fell through to the ordinary route and was
-// consumed as an unrelated turn ON THE VERY MESSAGE THAT CARRIED THE ANSWER,
-// while the run that asked the question waited out its pause TTL for a further
-// message that may never come. It was worst on [ErrResumeUnavailable], whose
-// whole purpose is "send this to a node that can read it": the message was
-// spent here instead.
-//
-// FOUR ANSWERS, each mapped onto an action the inbox already has, and what
-// each costs when it is chosen wrongly:
-//
-//   - [AnswerConsumed] — ack, run no turn. The delivery is the answer and it
-//     is RECORDED on the run it answers, which owns its resume from here (see
-//     [RecordedAnswer]). Wrong here, the person's message is dropped
-//     outright: no turn runs, no run is resumed, and nothing ever tells them
-//     so — which is why nothing answers it before the record has landed.
-//   - [AnswerDeferred] — hand the delivery back so this node or the seat's
-//     next owner is offered it again: the record could not be made. Wrong
-//     here, the message circles the seat's own inbox instead of being worked
-//     — which is why it is bounded ([MaxAnswerAttempts]) and handed back by
-//     DEFERRAL, which keeps its place at the head of the inbox, never by a
-//     Nak, which puts it behind the person's next message.
-//   - [AnswerNotMine] — fall through to the ordinary route and let it be the
-//     turn it looks like. Wrong here, the answer is SPENT on an unrelated turn
-//     while an executor is still owed it, which is the defect this type
-//     exists to end.
-//   - [AnswerRefused] — hand the delivery back by deferral, UNSPENT, and run
-//     no turn: it is a reply too large to be its run's answer, recorded on
-//     the run as the question's REFUSAL, which resumes the run told so
-//     (ADR-0114). Wrong here (acked), a refusal let go of loses the reply
-//     outright, since the row carries none of it; run as a turn, the seat
-//     answers a reply its run was owed — the defect, again.
-//
-// The asymmetry decides every ambiguous case: an answer that arrives twice is
-// recoverable, and an answer that is spent is not — so where the coordinator
-// cannot establish that nothing is owed the delivery, it defers.
-//
-// NOT [inbox.Action] itself. This package must not depend on the inbox's
-// guard vocabulary to say what it knows, and the two answer different
-// questions: an Action is the screening's decision about a SEAT, this is the
-// coordinator's decision about one delivery's relationship to one parked run.
-// The mapping between them belongs to the dispatcher, which is the frame that
-// holds both.
+// Not [inbox.Action]: that is the screening's decision about a SEAT, this the
+// coordinator's about one delivery and one parked run, and this package must not
+// depend on the inbox's vocabulary. The dispatcher maps one onto the other.
 type AnswerDisposition string
 
 const (
-	// AnswerConsumed — the delivery WAS the answer and is spent: the
-	// suspended turn was resumed with it, or another inbound had already
-	// claimed the run it answers — or it is a reply too large to be the
-	// answer whose refusal a turn kept, the run told of it ([AnswerRefused]).
-	// Either way no turn runs on it.
+	// AnswerConsumed — ack and run no turn: the delivery WAS the answer and is
+	// spent. It is RECORDED on the run it answers, which owns its resume from
+	// here ([RecordedAnswer]); or another inbound had already claimed that run;
+	// or it is a too-large reply whose refusal a turn kept ([AnswerRefused]).
+	// Chosen wrongly, the person's message is dropped and nobody is told, so
+	// nothing answers it before the record has landed.
 	AnswerConsumed AnswerDisposition = "consumed"
 
-	// AnswerDeferred — a run was matched and the answer is STILL OWED to
-	// it: the claim was taken and given back, or the store could not say
-	// whether it was taken at all. The delivery has to come back.
+	// AnswerDeferred — hand the delivery back by DEFERRAL: a run was matched and
+	// the answer is STILL OWED (the claim was taken and given back, or the store
+	// could not say whether it was taken). Deferral keeps its place at the
+	// inbox's head, where a Nak would put it behind the person's next message.
+	// Chosen wrongly, it circles the seat's inbox instead of being worked:
+	// [MaxAnswerAttempts] bounds it.
 	AnswerDeferred AnswerDisposition = "deferred"
 
-	// AnswerNotMine — nothing here is owed this delivery: no run was
-	// awaiting the conversation, the lookup failed and this seat has no
-	// awaiting run for one to have matched, or — for an answer BY TURN —
-	// the run it named is gone, no longer waiting on the question it
-	// answers, or let this very answer go. A chat reply is an ordinary
-	// message and is handled as one; an answer by turn is spent. An answer
-	// RECORDED on a run is never this, on either route, whatever becomes of
-	// the run: an ending that reaches it before any turn took it hands it
-	// back through the run's row ([PendingStore.OweHandBack]), and the
+	// AnswerNotMine — fall through to the ordinary route: nothing here is owed
+	// this delivery. No run awaited the conversation; the lookup failed and this
+	// seat has no awaiting run; or, for an answer BY TURN, its run is gone, no
+	// longer waiting on the question, or let this answer go (a chat reply is
+	// then an ordinary message, an answer by turn is spent). Chosen wrongly, the
+	// answer is SPENT on an unrelated turn while an executor is still owed it.
+	// An answer RECORDED on a run is never this: an ending that reaches it first
+	// hands it back through the run's row ([PendingStore.OweHandBack]), and the
 	// delivery is spent.
 	AnswerNotMine AnswerDisposition = "not_mine"
 
-	// AnswerRefused — the delivery is a reply too large to be the answer to
-	// the question a run is parked on ([ErrAnswerTooLarge]), and the
-	// question's REFUSAL is recorded on the run in its place
-	// ([PendingStore.RecordRefusal]): the run is owed a resume with it,
-	// which tells it the person replied and the reply did not reach it, and
-	// while it is owed the question takes nothing written after it
-	// (ADR-0114). Run no turn,
-	// and hand the delivery back by DEFERRAL, UNSPENT: the row carries none
-	// of the reply, so the delivery is its only copy, and it waits at the
-	// head of the seat's inbox, behind the hold the owed refusal keeps on it,
-	// until the refusal leaves the run. A turn that takes the refusal and
-	// keeps it records the delivery as worked ([Coordinator.spendRefused]),
-	// and it is dropped when it comes round; a refusal let go of spends
-	// nothing, and it comes round as the ordinary message it is — back to
-	// the seat the way it came, as an answer let go of goes. A chat reply
-	// only: an answer by turn
-	// past what a run may take is spent unrecorded ([AnswerNotMine]), its
-	// author told by its tool before it was ever delivered.
+	// AnswerRefused — run no turn, and hand the delivery back by DEFERRAL,
+	// UNSPENT: it is a chat reply too large to be the answer a run is parked on
+	// ([ErrAnswerTooLarge]), so the question's REFUSAL is recorded on the run
+	// ([PendingStore.RecordRefusal]), owing it a resume saying the reply did not
+	// reach it; while owed, the question takes nothing written after it
+	// (ADR-0114). The row holds none of the reply, so the delivery, its only
+	// copy, waits held at the inbox's head until the refusal leaves the run. A
+	// turn that keeps the refusal records it worked ([Coordinator.spendRefused])
+	// and it is dropped when it comes round; a refusal let go of returns it to
+	// the seat as an ordinary message. Acked, the reply is lost; run as a turn,
+	// the seat answers a reply its run was owed. An answer by turn past the
+	// bound is [AnswerNotMine], its author told by its tool.
 	AnswerRefused AnswerDisposition = "refused"
 )
 
 func (d AnswerDisposition) String() string { return string(d) }
 
-// Valid reports whether d is one of the four this package defines.
-//
-// EMPTY IS NOT VALID: the zero value is what a seam that answered nothing
-// returns, and a delivery's disposition is exactly the thing no caller may
-// guess at. What a caller does with an invalid one is the caller's own rule —
-// see [Dispatcher.answered], which falls back to the behaviour of a node with
-// no coordinator at all rather than to a requeue nothing would bound.
+// Valid reports whether d is one of the four this package defines. Empty is not:
+// it is what a seam that answered nothing returns, and no caller may guess a
+// delivery's disposition. What a caller does with an invalid one is its own rule
+// ([Dispatcher.answered] acts as a node with no coordinator rather than requeue
+// without bound).
 func (d AnswerDisposition) Valid() bool {
 	switch d {
 	case AnswerConsumed, AnswerDeferred, AnswerNotMine, AnswerRefused:
@@ -123,206 +80,71 @@ func (d AnswerDisposition) Valid() bool {
 	}
 }
 
-// MaxAnswerTextBytes bounds what an answer BY TURN says, measured as its
-// author gave it: trimmed, and BEFORE ANY SECRET IN IT IS REDACTED. The ONE
-// STRING both ends measure — `answer_executor` at its source
-// (internal/agent/builtin), refusing past it with why and the figure before
-// anything is delivered, and [Coordinator.AnswerByTurn] where it records, which
-// holds an answer that did not come through that tool to the same bound — so
-// an answer the source accepted is never refused after it. Measured after
-// redaction at the record, it could be: a redaction's marker
-// ([redact.Secrets]) is longer than many a secret it replaces, so an answer a
-// few bytes under the bound that named a password came out over it.
-//
-// THE PAGE ITS QUESTION'S CONTEXT IS HELD TO ([MaxAskContextBytes]), because
-// the answer travels where the question does, beside it. It is sealed onto the
-// run's coordination row with the delivery it came in, which every status flip
-// and every listing of active runs reads whole until the run is carried on;
-// and then it is that run's prompt — the asking run's next message in its own
-// harness session, after the question it answers, or, where that session
-// cannot go on, a fresh run's brief beside the round's own — which the run's
-// harness re-sends with every request it makes from then on, each charged to
-// the budget in full, cached or not. So every byte of an answer is paid for
-// again at every step the run takes after it.
-//
-// A person's answer to a harness's question is a sentence or a paragraph. One
-// past a page is a document, and belongs on a page or the work item, which the
-// run reads with its own tools when it needs it rather than at every step.
-//
-// NOT A REPLY'S BOUND: a reply in the conversation the question was asked in
-// is held to what the run's row carries as an answer ([MaxAnswerBytes]),
-// which a page of words at its worst stays far inside, so a pasted log or
-// configuration is taken whole; one past that is refused as the question's
-// outcome, and the run told so ([AnswerRefused]). And not
-// internal/agent/builtin's ToolAnswerBytes, which bounds what a tool answers a
-// model: no tool's answer carries this one.
+// MaxAnswerTextBytes bounds an answer BY TURN, measured trimmed and BEFORE
+// redaction, the one measure both ends take: `answer_executor`
+// (internal/agent/builtin) refuses past it before delivery, and
+// [Coordinator.AnswerByTurn] holds any other answer to it where it records, so an
+// answer the source accepted is never refused after ([redact.Secrets]'s marker
+// outgrows many a secret, so measuring after redaction would). It is the page
+// [MaxAskContextBytes] holds the question to: the answer is sealed onto the run's
+// row, which every status flip and listing reads whole, then becomes the run's
+// prompt, re-sent and charged at every later step. Past a page is a document, for
+// a page or the work item. Not a chat reply's bound ([MaxAnswerBytes],
+// [AnswerRefused]), nor internal/agent/builtin's ToolAnswerBytes.
 const MaxAnswerTextBytes = MaxAskContextBytes
 
-// MaxAnswerAttempts is how many times ONE PROCESS tries to hand one answer to
-// ONE parked run before it lets the answer go and the reply becomes the
-// ordinary message it looks like.
-//
-// TWO SERIES, and it bounds both. The resume of an answer RECORDED on its run
-// is retried by the coordinator ([Coordinator.owedFailed]) — this many
-// attempts, the first inline and every later one on [answerRetryDelay] — and
-// then the answer is declined ([Coordinator.declineAnswer]). A delivery the
-// coordinator could not even RECORD (the store failed) is handed back by
-// deferral this many times ([Coordinator.deferAnswer]) and then run as the
-// ordinary message it is. It counts ATTEMPTS, not hand-backs, so the last of
-// them is not handed back.
-//
-// WHY A BOUND AT ALL. Nothing else ends the loop within a process: a run
-// parked on a question stays matchable for ever — the pause reaper moves it to
-// [StatusReseed], which is still [Awaiting] — and a resume that fails the same
-// way every time would be retried for the life of the process, holding the
-// seat's inbox behind it.
-//
-// THE OTHER CLAUSE IS THE ONE THE MESSAGE CARRIES, and it is not this one:
-// see [AnswerDeliveryReserve]. This count is PER NODE AND PER PROCESS and the
-// broker's delivery budget is per MESSAGE, so nothing here can make a claim
-// about that budget — and this doc made one once. It said ten attempts stay
-// "well under the broker's 25-delivery dead-letter budget" fourteen lines
-// above the paragraph saying a restart or a seat handoff resets the count.
-// Both cannot be true, and it was the headroom claim that was false: the
-// count the broker enforces rides on the message and survives every handoff,
-// so three nodes of ten attempts each hand ONE reply back twenty-seven times
-// (measured) and the twenty-fifth dead-letters it — the one ending this route
-// must never take. The headroom is now stated where it can be true, on the
-// delivery count itself.
-//
-// WHY TEN, AND WHAT EACH ATTEMPT COSTS. The retries are spaced a second
-// apart, doubling to thirty — the queue's own failure backoff, deliberately
-// ([answerRetrySeed]) — so ten attempts span about two and a half minutes.
-// That span is what the failures reaching this path actually need: a seat
-// lease moving to a node that can resume the run takes at most one seat lease
-// TTL (45 s, see internal/seat), a config apply that brings a missing runner
-// arrives on the reconcile poll, and a store blip heals in seconds.
-//
-// THE THIRD CLAUSE IS TIME, and it is the run's own: see [answerWindow].
-//
-// PER NODE AND PER PROCESS, deliberately: every failure that reaches here is a
-// statement about THIS node — no resumer, a parked turn's state this build
-// cannot decode, a seat that is not in this node's company — so a restart or a
-// seat handoff is exactly the event that makes a further attempt worth making,
-// and both reset the count. It is also why the run is NOT settled when the
-// budget is spent: the turn is still resumable somewhere, so this node hands
-// the reply to the ordinary route rather than destroying work a peer or a
-// later build could still finish.
+// MaxAnswerAttempts is how many times ONE PROCESS tries to hand one answer to ONE
+// parked run before letting it go as the ordinary message it looks like: a
+// RECORDED answer's resume, retried ([Coordinator.owedFailed]) on
+// [answerRetryDelay] then declined ([Coordinator.declineAnswer]), and a delivery
+// the store could not record, deferred then run ([Coordinator.deferAnswer]). It
+// counts attempts, so the last is not handed back. Unbounded, a parked run stays
+// matchable for ever ([StatusReseed] is still [Awaiting]) and a failing resume
+// holds the seat's inbox. Ten span about 2.5 min at the queue's backoff
+// ([answerRetrySeed]): a seat lease TTL (45 s), a config reconcile, a store
+// blip. PER NODE AND PROCESS, since each such failure is this node's: a restart
+// or handoff resets it, and the run stays parked for a peer. The broker's
+// budget is [AnswerDeliveryReserve]'s, and time is [answerWindow]'s.
 const MaxAnswerAttempts = 10
 
-// AnswerDeliveryReserve is how many of a message's remaining deliveries are
-// left to the ordinary route: once a delivery is within this many of the
-// backend's dead-letter budget, it is no longer offered to a parked run.
-//
-// THE CLAUSE THAT MAKES THE HEADROOM CLAIM TRUE, because it is measured on
-// what the MESSAGE carries — queue.DeliveriesLeftFor, stated per message by
-// the backend at the handler boundary — rather than on what any one process
-// remembers. Every bound in this file resets when a seat moves or a node
-// restarts, and the broker's does not; see [MaxAnswerAttempts] for the reply
-// that was dead-lettered by the gap between those two facts.
-//
-// PER MESSAGE, which is the whole of what it measures and was briefly not:
-// gated on the PARTITION's number instead — the smallest of its messages' —
-// the reserve refused a person's clarification reply that was on its first
-// delivery with a full budget in hand, because some other message on the same
-// conversation happened to be near its own. That is the original defect from
-// the other side: the reply spent on an ordinary turn while a parked run was
-// still owed it. See [MayOfferAnswer].
-//
-// FIVE, AND WHAT CONSUMES THEM. The reserve is exactly what the ordinary
-// route is left holding, since the offer stops with this many deliveries
-// still on the message, and that route spends them one at a time on this same
-// reply (the offer itself spends one only when the answer could not be
-// recorded, which hands the delivery back by deferral):
-//
-//   - a seat handoff while the delivery is in flight. The dispatcher defers,
-//     which on this broker is a Nak and costs a delivery, and placement
-//     converges within one seat lease TTL (45 s, internal/seat) — so a
-//     company whose seats are moving spends one or two here.
-//   - a partition that would not merge, and a park whose requeue failed:
-//     one each, and both are the paths that hand a delivery back rather than
-//     republish it.
-//   - the turn's own retries. A turn that broke before it reached outside the
-//     engine is Naked and run again, and it is the whole point of falling
-//     through to the ordinary route that those retries exist.
-//
-// Five of them span about two minutes at the queue's backoff ceiling (30 s,
-// internal/queue/jetstream), which covers a seat lease TTL and several config
-// reconcile intervals (15 s, internal/configplane) — the same transients the
-// attempts above are sized for, which is the point: what is left over must be
-// worth as much as what was spent.
-//
-// It is deliberately NOT derived from the broker's budget. That number is a
-// backend's, configurable, and counted in two conventions (see
-// queue.DeliveriesLeft); a reserve expressed as a fraction of it would move
-// when an operator shrank it, which is the one moment the ordinary route can
-// least afford to have less.
+// AnswerDeliveryReserve is how many of a message's remaining deliveries are left
+// to the ordinary route: a delivery within this many of the backend's dead-letter
+// budget is no longer offered to a parked run. It is measured per MESSAGE
+// (queue.DeliveriesLeftFor), which survives a seat move or restart as no
+// per-process bound does, never per partition ([MayOfferAnswer]). Five is what
+// the ordinary route then spends on the same reply: a seat handoff's deferral (a
+// Nak on this broker; one or two while seats move), a partition that would not
+// merge or a failed park requeue (one each), and the turn's own retries. At the
+// 30 s backoff ceiling they span about two minutes, the transients
+// [MaxAnswerAttempts] is sized for. Not a fraction of the broker's configurable
+// budget: an operator shrinking it must not shrink the reserve.
 const AnswerDeliveryReserve = 5
 
-// AnswerHeadroom is what the transport said about ONE message of a delivery:
-// how many further deliveries it has, and whether the transport said at all.
-//
-// The pair queue.DeliveriesLeftFor returns, carried as a value so the rule
-// below is exercisable without a queue, a broker or a partition — the same
-// separation internal/agent/extension's Policy is built on and for the same
-// reason: a policy that can only be reached through live machinery is a
-// policy nobody re-measures.
+// AnswerHeadroom is what the transport said about ONE message of a delivery: the
+// pair queue.DeliveriesLeftFor returns, as a value so [MayOfferAnswer] is
+// exercisable without a queue, a broker or a partition.
 type AnswerHeadroom struct {
 	// Left is how many further deliveries this message has before the
 	// transport dead-letters it.
 	Left int
 
-	// Known is whether the transport stated Left at all. FALSE IS NOT A
-	// ZERO: see [MayOfferAnswer].
+	// Known is whether the transport stated Left at all. FALSE IS NOT A ZERO:
+	// see [MayOfferAnswer].
 	Known bool
 }
 
 // MayOfferAnswer reports whether a delivery may still be offered to a parked
-// executor, given what each of its messages has left before the transport
-// dead-letters it.
-//
-// PER MESSAGE, AND ANY OF THEM IS ENOUGH. A delivery is a partition, and its
-// messages sit at different counts as a matter of course: a conversation
-// whose earlier message has been handed back a dozen times keeps collecting
-// fresh replies, and each of those arrives with a whole budget. The question
-// this answers is whether the answer route can still afford an attempt at the
-// reply it may be owed — so it is enough that ONE message here still has the
-// deliveries, because that is the one an answer would come on.
-//
-// THE SMALLEST IS THE WRONG FOLD HERE, and it was what this read: the
-// partition's number, [queue.DeliveriesLeft], which is the right answer to a
-// different question ("will handing this batch back dead-letter something").
-// Gated on it, a fresh reply was refused the answer route outright whenever
-// any co-partitioned message was near its own budget — and once one message
-// on a conversation is spent, EVERY later reply on it is refused, so the
-// route is poisoned for that conversation for good. The cost of that refusal
-// is the defect this whole route exists to end: the reply is consumed by an
-// ordinary turn while a run is still parked on the question it answers.
-//
-// WHAT THE OTHER FOLD WOULD HAVE BOUGHT, stated plainly because it is a real
-// trade and not an oversight: a hand-back returns the whole partition, so
-// offering on one message's headroom can spend the last delivery of another
-// and dead-letter it. That message is not saved by refusing — the ordinary
-// route hands the same partition back on its own failures at exactly the same
-// cost — and the two endings are not equal even when it is. A dead-letter is
-// LOUD: a copy on the dead-letter subject and a `dead_lettered` line naming
-// the deliveries it took. A reply spent on an unrelated turn is SILENT, and
-// what it leaves behind is a paused box waiting out its pause TTL for an
-// answer that already arrived. Where the quiet failure is the worse one, the
-// route offers; the dispatcher says so on the log when the partition's own
-// number is inside the reserve, so the loud one is never a surprise either.
-//
-// AN ABSENT COUNT IS NOT A SPENT ONE: a transport that did not say leaves the
-// route exactly as it was before this clause existed, bounded by
-// [MaxAnswerAttempts] and [answerWindow] alone. The alternative — reading
-// silence as "no headroom" — would turn every delivery on a node whose
-// metadata is unreadable into an ordinary turn, which spends the reply on the
-// one failure this whole type exists to prevent. An EMPTY list is the same
-// silence: nothing was stated about anything.
-//
-// Here rather than in the dispatcher because the rule belongs with the number
-// it reads, and because a rule stated in a frame that also holds a queue, a
-// screening and a turn is one nobody can exercise on its own.
+// executor: whether ANY of its messages has more than [AnswerDeliveryReserve]
+// deliveries left, since a fresh reply arrives with a whole budget beside a
+// sibling handed back a dozen times. The smallest ([queue.DeliveriesLeft])
+// would refuse every later reply on that conversation for good, each spent on an
+// ordinary turn. The trade: a hand-back returns the whole partition and can
+// dead-letter a sibling, but the ordinary route risks the same, and a dead-letter
+// is LOUD where a spent reply is SILENT; the dispatcher logs when the partition's
+// own number is inside the reserve. An unstated count or an empty list is not a
+// spent one (read so, a node with unreadable metadata spends every reply on a
+// turn): [MaxAnswerAttempts] and [answerWindow] alone bound the route. Here, not
+// in the dispatcher, so the rule sits with its number and is testable alone.
 func MayOfferAnswer(perMessage []AnswerHeadroom) bool {
 	if len(perMessage) == 0 {
 		return true
@@ -336,49 +158,31 @@ func MayOfferAnswer(perMessage []AnswerHeadroom) bool {
 }
 
 // maxAnswerDeliveries is how many of one run's deliveries this node keeps a
-// budget for at once.
-//
-// THE BOUND ON THE TABLE ITSELF. A budget is per (run, delivery), so without
-// this a long-lived parked run on a busy conversation accumulates one entry
-// per message it was ever offered, for as long as the run lives. A parked run
-// has ONE open question, and what can be in hand-back for it at any moment is
-// the replies a person sent while this node was failing to record the first
-// one — within one store outage (minutes) that is a handful. Four covers
-// that and caps one run's whole exposure at four budgets of
-// [MaxAnswerAttempts] attempts.
-//
-// A FULL TABLE DOES NOT EVICT A LIVE BUDGET. Spent entries go first, and when
-// every slot holds a live one the new delivery is refused a budget and handled
-// as the ordinary message it looks like: N live budgets evicting each other is
-// precisely the loop the per-delivery budget replaced, at N messages instead
-// of two. Dropping a SPENT entry is safe by comparison — its delivery has
-// already been let go to the ordinary route, so a copy of it arriving later
-// costs at most one further series.
+// budget for at once, bounding a table kept per (run, delivery). A parked run has
+// one open question, and what is in hand-back for it is the replies sent during
+// one store outage, a handful; four caps a run at four budgets of
+// [MaxAnswerAttempts]. A full table drops SPENT entries (their delivery already
+// went to the ordinary route, so a late copy costs one series) but never evicts
+// a LIVE one: the new delivery is refused a budget and handled as an ordinary
+// message, since live budgets evicting each other would loop for ever.
 const maxAnswerDeliveries = 4
 
-// answerKey names what a delivery is owed to.
-//
-// The handle rides along with the turn id so [Coordinator.releaseAnswerAttempts]
-// can drop what a seat handed on leaves behind with a scan over keys rather
-// than a second index from seat to run.
+// answerKey names what a delivery is owed to. The handle rides beside the turn id
+// so [Coordinator.releaseAnswerAttempts] can drop a seat's entries by scanning
+// keys, with no index from seat to run.
 type answerKey struct {
 	handle string
 	turnID string
 }
 
-// answerBudget is one delivery's series of failed handoffs to one run.
-//
-// ONE PER (RUN, DELIVERY), which is what a slot per run could not deliver: a
-// single slot holding the delivery it was counting RESET whenever a different
-// message arrived, so two replies circling one parked run reset each other on
-// every pass and neither budget ever ended. Two messages were enough to make
-// the bound unreachable and the loop infinite.
+// answerBudget is one delivery's series of failed handoffs to one run. One per
+// (run, delivery): a single slot per run resets on each different message, so
+// two replies circling one run would reset each other and never reach the bound.
 type answerBudget struct {
 	// failures is how many handoffs of this delivery have failed.
 	failures int
 
-	// first is when the first of them failed, which is what the window in
-	// [answerWindow] is measured from.
+	// first is when the first of them failed: [answerWindow] runs from it.
 	first time.Time
 }
 
@@ -388,27 +192,18 @@ func (b answerBudget) live(now time.Time, window time.Duration) bool {
 	if b.failures >= MaxAnswerAttempts {
 		return false
 	}
-	// A window of zero is NOT "give up now". pause_ttl_seconds: 0 means
-	// "never hold a paused box", so such a run was torn down and re-seeds
-	// from git when its answer lands — it waits for the person with no
-	// deadline at all, and the attempt ceiling above is the whole bound.
+	// A window of zero is NOT "give up now": pause_ttl_seconds: 0 tears the box
+	// down and re-seeds from git when the answer lands, with no deadline, so the
+	// attempt ceiling is the whole bound.
 	return window <= 0 || now.Sub(b.first) < window
 }
 
 // answerWindow is how long this node keeps handing one message back to a run,
-// beside the attempt ceiling.
-//
-// THE RUN'S OWN AWAITING WINDOW, because that is the tolerance the run itself
-// declares: pause_ttl_seconds is how long the engine holds a box paused for
-// the person to reply, the same number [Waiter.reapOne] enforces on
-// it. A seat whose role sets a short one has said a reply is worth little
-// after it, and bouncing that reply around the inbox for longer than the
-// engine was willing to wait for it costs the person an answer on a failure
-// that is plainly not transient.
-//
-// Measured from the FIRST FAILED HANDOFF rather than from the park, so a run
-// whose window has already lapsed — reaped, re-seeded, still awaiting — gets
-// the same attempts as any other for the reply that finally arrives.
+// beside the attempt ceiling: the run's own pause_ttl_seconds, the wait
+// [Waiter.reapOne] enforces, since a role that sets it short has said a reply is
+// worth little after it. Measured from the FIRST FAILED HANDOFF, not the park, so
+// a run whose window lapsed (reaped, re-seeded, still awaiting) gets the same
+// attempts for the reply that finally arrives.
 func answerWindow(run PendingRun) time.Duration {
 	if run.PauseTTLSeconds <= 0 {
 		return 0
@@ -425,16 +220,10 @@ func deliveryOf(trigger *events.Event) string {
 }
 
 // deferAnswer counts one delivery the coordinator could not RECORD as a run's
-// answer, and reports what the caller must do with the delivery now.
-//
-// [AnswerDeferred] while the budget holds, and [AnswerNotMine] once it is
-// spent — the point at which this node stops offering a message to a run it
-// cannot record it against and lets it be the ordinary message it looks like.
-// The run is left waiting on its question: see [MaxAnswerAttempts] for why a
-// spent budget does not end it.
-//
-// The error travels either way, because it is the explanation and never the
-// decision: the caller logs it and acts on the disposition.
+// answer: [AnswerDeferred] while the budget holds, [AnswerNotMine] once it is
+// spent, the run left waiting ([MaxAnswerAttempts] says why). The error travels
+// either way as the explanation, never the decision: the caller logs it and acts
+// on the disposition.
 func (c *Coordinator) deferAnswer(ctx context.Context, run PendingRun, trigger *events.Event, cause error) (AnswerDisposition, error) {
 	delivery := deliveryOf(trigger)
 	window := answerWindow(run)
@@ -452,46 +241,21 @@ func (c *Coordinator) deferAnswer(ctx context.Context, run PendingRun, trigger *
 			"that asked is waiting on, in every one of its attempts, so the message is run "+
 			"as the ordinary message it looks like; the executor stays parked on its question "+
 			"and its box is bounded by pause_ttl_seconds")
-	// THE BUDGET STAYS SPENT, so this delivery does not start a second one
-	// if another copy of it reaches this node — the park a held seat makes
-	// republishes, so same-id copies do exist. A different message gets its
-	// own budget, and the whole table goes when the run ends or the seat
-	// does.
+	// THE BUDGET STAYS SPENT, so another copy of this delivery (a held seat's park
+	// republishes it under the same id) does not start a second one. A different
+	// message gets its own; the table goes when the run or the seat does.
 	return AnswerNotMine, cause
 }
 
-// answerLookupFailed decides a delivery whose match could not be READ.
-//
-// A failed lookup is exactly the state this type's own asymmetry is about —
-// the coordinator could not establish that nothing is owed the delivery — and
-// it was classified [AnswerNotMine] anyway, so on the one failure where a
-// retry seconds later would have matched the run, the person's reply was spent
-// on an ordinary turn instead. The original fail-open reasoning is right too:
-// an unreadable store must not swallow a message that has nothing to do with
-// any executor, which on a company with no parked runs at all is every
-// message the seat receives. Both hold, and they resolve on a question this
-// node can answer WITHOUT the store that just failed.
-//
-// THE SEAT'S OWN AWAITING COUNT is that question — [Coordinator.SeatRuns]'s
-// second value. It is in memory: seeded from the store when this node claimed
-// the seat, and moved since by the transitions this process itself made. That
-// is precisely why it is the right source here — it needs no read from the
-// store the read just failed against, so it still answers when the alternative
-// is a guess.
-//
-//   - NO AWAITING RUN ON THIS SEAT: [AnswerNotMine], as before. Nothing is
-//     owed the delivery, so there would be nothing for a hand-back to come
-//     back to, and the message is the ordinary one it looks like. The error is
-//     resolved here rather than reported, because the caller has nothing left
-//     to decide about it.
-//   - AN AWAITING RUN: [AnswerDeferred]. Something on this seat IS waiting for
-//     somebody's reply and only WHICH row could not be read — an answer that
-//     arrives twice is recoverable and an answer that is spent is not.
-//
-// The bound is the ordinary one, under a key naming the SEAT rather than a
-// run, because the run is the thing this path could not read. Its window is
-// the run's, and no run was read, so the attempt ceiling is the whole of it —
-// the same ceiling, reached at the same spacing.
+// answerLookupFailed decides a delivery whose match could not be READ. Not
+// [AnswerNotMine] outright (a retry seconds later could match the run, and the
+// reply would be spent on an ordinary turn), nor deferred outright (an unreadable
+// store must not swallow messages on a seat with no parked runs). It resolves on
+// the seat's in-memory awaiting count ([Coordinator.SeatRuns]), which needs no
+// read from the store that just failed: none awaiting is [AnswerNotMine], the
+// error resolved here; one awaiting is [AnswerDeferred], since only WHICH row is
+// unknown. The budget is keyed by the SEAT ([lookupAnswerKey]), as no run was
+// read, so no window applies and the attempt ceiling is the whole bound.
 func (c *Coordinator) answerLookupFailed(ctx context.Context, handle string,
 	trigger *events.Event, cause error,
 ) (AnswerDisposition, error) {
@@ -533,18 +297,10 @@ func answerKeyFor(run PendingRun) answerKey {
 }
 
 // spendAnswerAttempt charges one failed handoff of one delivery to one run and
-// reports whether the delivery should come back.
-//
-// Under the same lock as the seat counts, because both are read on the hot
-// path of a delivery and a second mutex would be a second thing to order.
-//
-// CHARGED WHETHER OR NOT ANOTHER RUN HOLDS THE SEAT, which it once was not:
-// a held seat PARKED a delivery it did not consume — an immediate republish —
-// so charging there spent a message's whole budget inside one held run's park
-// loop. An answer still owed is never parked now (a republish lands behind the
-// person's next message), so on a held seat it is handed back by deferral like
-// anywhere else, spaced by the seat host's renew, and counted like anywhere
-// else.
+// reports whether the delivery should come back. Under the seat counts' lock:
+// both are read on a delivery's hot path, and a second mutex would need an order.
+// Charged on a held seat too, where an owed answer is deferred, never parked (a
+// republish lands behind the person's next message), spaced by the host's renew.
 func (c *Coordinator) spendAnswerAttempt(key answerKey, delivery string, window time.Duration) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -557,9 +313,8 @@ func (c *Coordinator) spendAnswerAttempt(key answerKey, delivery string, window 
 	}
 	at, known := budgets[delivery]
 	if !known && !roomForAnswerBudget(budgets, now, window) {
-		// Every slot holds a live budget, so this run already has as many
-		// messages in hand-back as it is allowed. See [maxAnswerDeliveries]
-		// for why a live one is never evicted to make room.
+		// Every slot holds a live budget: [maxAnswerDeliveries] says why none
+		// is evicted to make room.
 		return false
 	}
 	if !known {
@@ -596,13 +351,9 @@ func (c *Coordinator) clearAnswerAttempts(handle, turnID string) {
 	delete(c.attempts, answerKey{handle: handle, turnID: turnID})
 }
 
-// releaseAnswerAttempts drops what a seat's runs were counting, for a seat
-// this node no longer holds.
-//
-// A LINEAR SWEEP over a table holding at most [maxAnswerDeliveries] budgets
-// per parked run this node failed to resume, which is a handful at the very
-// most; an index from seat to run would be a second structure to keep true for
-// a scan that costs nothing.
+// releaseAnswerAttempts drops a seat's budgets once this node no longer holds it:
+// a linear sweep over at most [maxAnswerDeliveries] per failing parked run,
+// cheaper than keeping an index from seat to run true.
 func (c *Coordinator) releaseAnswerAttempts(handle string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

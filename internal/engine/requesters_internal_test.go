@@ -83,11 +83,10 @@ func (d oneSeatDirectory) MachineToken(context.Context, string) (credential.Toke
 
 // A PERSON'S SEAT IS COMPOSED FROM THAT SEAT'S HOLDER ALONE, asked of the data
 // node by its handle: the person at their stage, a removed holder as nobody
-// acting, a seat the directory binds to nobody as the chart's — and never by
-// reading the whole directory, which a turn would otherwise pay on every call
-// of a tool that reads or writes for somebody, at a cost growing with every
-// person the company has hired or removed. An unreadable directory is
-// unknown, never a seat nobody holds.
+// acting, a seat the directory binds to nobody as the chart's. Never by
+// reading the whole directory, a cost growing with everyone the company ever
+// hired or removed. An unreadable directory is unknown, never a seat nobody
+// holds.
 func TestAPersonRequesterIsComposedFromThatSeatsHolderAlone(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Acme", Roles: []*org.Role{
@@ -142,16 +141,13 @@ func TestAPersonRequesterIsComposedFromThatSeatsHolderAlone(t *testing.T) {
 }
 
 // A PERSON REQUESTER USES THE APPS THEIR GRANTS NAME, AND NO MORE (ADR-0109):
-// every app admin includes where they hold admin, never admin itself — which
-// no ceiling carries — and never a name this build does not know, which
-// grants nothing; none at all at a stage that may not act, for a removed
-// holder, or on a seat the directory binds to nobody, since a permission is a
-// person's and a seat nobody holds has nobody to hold one. An agent seat uses
-// every app. Composed with every app for every person, as it was, the ceiling
-// held no app verb to anybody.
+// every app admin includes where they hold admin, never admin itself nor a
+// name this build does not know; none at a stage that may not act, for a
+// removed holder, or on a seat the directory binds to nobody. An agent seat
+// uses every app.
 //
-// Mutation: give every person every app (the composition before ADR-0109) —
-// the worklet-only person reads as using Doclet.
+// Mutation: give every person every app, and the worklet-only person reads as
+// using Doclet.
 func TestTheRequesterCarriesTheirApps(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Acme", Roles: []*org.Role{

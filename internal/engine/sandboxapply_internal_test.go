@@ -48,22 +48,17 @@ roles:
 
 // A NODE THAT BOOTED WITH NO COMPANY BRINGS THE CODE SANDBOX UP WITH THE FIRST
 // ONE THAT CONFIGURES IT — the coordinator, the completion poll, and the seat's
-// own preparation — with no restart.
-//
-// The coordinator was built at boot or never, so a node started the way the
-// quickstart starts one served a company with no executor runtime until its
-// process restarted, and a run a peer had left on one of its seats was
-// polled, collected and resumed by nobody here.
+// own preparation — with no restart, so a run left on one of its seats is
+// polled, collected and resumed here.
 func TestAFirstCompanyWithASandboxBringsTheCoordinatorUpWithoutARestart(t *testing.T) {
 	t.Parallel()
 	e := sandboxNode(t, nil)
 	if e.sandbox.Load() != nil {
 		t.Fatal("the premise: a node with no company runs no sandbox")
 	}
-	// A RUN LEFT ON THE SEAT, still going, before this node has a company
-	// at all — this node's own, from before a restart, since a box in the
-	// direct cell is polled by the node that launched it: its recovery is
-	// part of what the apply has to bring.
+	// A run still going on the seat before this node has a company: its own,
+	// from before a restart, since a direct-cell box is polled by the node that
+	// launched it. Recovering it is part of what the apply brings.
 	seedRunningRun(t, e, "wk-before", "box-1")
 
 	status, applied, err := e.Apply(t.Context(), parseCompany(t, sandboxDoc("")), time.Now())
@@ -111,11 +106,8 @@ func TestAFirstCompanyWithASandboxBringsTheCoordinatorUpWithoutARestart(t *testi
 
 // A LATER REVISION THAT CHANGES providers.sandbox RECONFIGURES THE RUNTIME IN
 // PLACE: the same coordinator, so the busy set survives, and a manager the
-// completion poll reaches on its next tick.
-//
-// The poll captured the manager it was started with, so after a reload it kept
-// reconnecting through the backends of the catalogue the node first ran — a job
-// launched after the reload was on a backend the poll had never heard of.
+// completion poll reaches on its next tick, so a job launched after the reload
+// is polled on its new backend.
 func TestALaterSandboxRevisionReconfiguresTheRunningRuntime(t *testing.T) {
 	t.Parallel()
 	e := sandboxNode(t, nil)
@@ -158,11 +150,8 @@ func TestALaterSandboxRevisionReconfiguresTheRunningRuntime(t *testing.T) {
 
 // A NODE ALREADY HOLDING SEATS WHEN A REVISION FIRST ADDS providers.sandbox
 // PREPARES THOSE SEATS — their control topics, their runs — rather than only the
-// seats it takes afterwards.
-//
-// Its seats were taken before there was anything to attach, so a run launched
-// under the new revision published its completion to a topic nothing on this
-// node consumed, and the turn suspended into it never resumed.
+// seats it takes afterwards: otherwise a run launched under the new revision
+// completes to a topic nothing here consumes, and its turn never resumes.
 func TestASandboxAddedByALaterRevisionPreparesTheSeatsAlreadyHeld(t *testing.T) {
 	t.Parallel()
 	e := sandboxNode(t, parseCompany(t, companyWithoutSandboxDoc))
@@ -250,11 +239,8 @@ func TestARevisionWithoutASandboxKeepsTheRuntimeForTheRunsInFlight(t *testing.T)
 }
 
 // A CATALOGUE THAT CANNOT BE BUILT IS REFUSED ON A NODE THAT RUNS NO SANDBOX
-// YET, as on one that does — before anything changes.
-//
-// It was built only where a coordinator already existed, so on every other
-// node a revision whose providers.sandbox could never mint a box was published,
-// and every seat's executor launched into a catalogue that had none.
+// YET, as on one that does — before anything changes — so no revision whose
+// providers.sandbox can never mint a box is published.
 func TestABrokenSandboxCatalogueIsRefusedOnANodeWithoutOne(t *testing.T) {
 	t.Parallel()
 	e := sandboxNode(t, nil)
@@ -277,11 +263,10 @@ func TestABrokenSandboxCatalogueIsRefusedOnANodeWithoutOne(t *testing.T) {
 // over this node's own chain, and it changes nothing.
 //
 // `crewlet run` holds the Tier B file it imports to [Engine.Buildable] before
-// the file is stored or activated, because nothing else builds it until an
-// apply does, after the whole fleet has been pointed at it. A check that built
-// less than an apply — the company, without the sandbox catalogue — passed
-// exactly the file whose every apply is refused; one that resolved from the
-// environment alone refused a key the node keeps in its secret store.
+// storing or activating it, since nothing else builds it before the fleet is
+// pointed at it. Building less than an apply (no sandbox catalogue) passes a
+// file every apply refuses; resolving from the environment alone refuses a key
+// the node's secret store holds.
 //
 // Mutations: drop the catalogue from [buildRevision] and the unset key builds;
 // resolve from the environment alone and the stored key does not.
@@ -304,12 +289,9 @@ func TestBuildableIsTheApplysBuildOverThisNodesChain(t *testing.T) {
 }
 
 // A POLL INTERVAL NO DUTY CAN BE GRANTED FOR IS REFUSED AT BOOT, on a node with
-// no sandbox, as on one that has one.
-//
-// It was checked only where the poll started, which was boot or never. Once an
-// apply can start it, a node that booted empty would carry the bad interval
-// until its first sandbox company — and there it would refuse a revision that
-// was itself fine, with the runtime already published and no poll behind it.
+// no sandbox, as on one that has one: an apply can start the poll later, and
+// would then refuse a revision that was itself fine, with the runtime already
+// published and no poll behind it.
 func TestAPollIntervalNoDutyAdmitsIsRefusedAtBootWithoutASandbox(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -330,12 +312,8 @@ func TestAPollIntervalNoDutyAdmitsIsRefusedAtBootWithoutASandbox(t *testing.T) {
 }
 
 // EVERY SEAT A NODE TAKES IS ANNOUNCED, on a node that runs no sandbox as on
-// one that does.
-//
-// The announcement sat behind the sandbox half of the seat's preparation, whose
-// first line returned on a node with no coordinator — so on the ordinary node
-// no seat was ever announced, and each stayed on whatever state its last owner
-// left behind (`terminated`, `offline`) until it happened to do some work.
+// one that does: an unannounced seat stays on whatever state its last owner
+// left (`terminated`, `offline`) until it happens to do some work.
 func TestASeatIsAnnouncedOnANodeThatRunsNoSandbox(t *testing.T) {
 	t.Parallel()
 	e := newSandboxNode(t, parseCompany(t, companyWithoutSandboxDoc))
@@ -394,10 +372,10 @@ func newSandboxNodeIn(t testing.TB, company *config.Company, environment config.
 	brokertest.GitletCacheIn(&b.Gitlet)
 	SeedStore(t, &b)
 	RequireNodeGit(t, &b, company)
-	// ACTIVATED, as the revision `crewlet run` boots on always is: a company
-	// no activation has named reconciles nothing it declares at boot — no
-	// project, no container, no repository of code.repos — and leaves it to
-	// its first activation ([Engine.applyCodeRepos]).
+	// Activated, as the revision `crewlet run` boots on always is: a company
+	// no activation named reconciles nothing it declares (no project,
+	// container or code.repos repository) until its first activation
+	// ([Engine.applyCodeRepos]).
 	e, err := New(t.Context(), Options{
 		Bootstrap: &b, Company: company,
 		ActivatedAt:         time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
@@ -462,18 +440,16 @@ func applyOK(t *testing.T, e *Engine, doc string) []string {
 	return applied
 }
 
-// seedRunningRun records a running executor on the swe seat, as e itself
-// launched it — before a restart, say — in the direct cell: no command id, so
-// the job never reports itself done and every tick of the poll is a keepalive.
-//
-// e's OWN, because a box in the direct cell is on the host of the node that
-// launched it and is polled there alone (internal/sandbox, boxhost.go).
+// seedRunningRun records a running executor on the swe seat as e launched it
+// (before a restart, say) in the direct cell: e's own, since a direct box is
+// polled only by its launching node (internal/sandbox, boxhost.go). No command
+// id, so the job never reports done and every poll tick is a keepalive.
 func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	t.Helper()
 	store := sandbox.NewCoordStore(e.backends.Fleet)
 	ctx := t.Context()
-	// THE SEAT'S ID, as every launch records it: what a reply handed back
-	// is published to, the seat's inbox being named by it (ADR-0013).
+	// The seat's ID, as every launch records it: it names the seat's inbox,
+	// where a reply handed back is published (ADR-0013).
 	agentID, _ := org.DeriveAgentID("Nimbus", "swe")
 	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: turnID, AgentID: agentID.String(), AgentHandle: "swe", Role: "SWE",

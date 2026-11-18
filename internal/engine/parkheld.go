@@ -17,46 +17,21 @@ import (
 )
 
 // WHETHER A PARK HOLDS A SEAT'S INBOX, asked of the node holding the seat: the
-// last question the idle sweep asks before it closes a quiet channel
-// ([colleagueOwed]).
-//
-// # Asked of the holder, never decided where the question lands
-//
-// A park is a hold in the holding node's queue client and an alarm in its
-// memory (seatpark.go): WHO HAS TO AGREE ON IT is that node alone, so only that
-// node can say it holds one. The sweep runs once across the fleet, under the
-// maintenance duty, on whichever node holds the duty — seldom the seat's — and
-// two parks it must see are a recount of nothing it can read: a seat parked on
-// a floor its first launch was refused below that is larger than the static
-// one (its brief beside the static floor, or the context of the conversation's
-// session it continues beside its brief), whose window has room for the static
-// floor all the while (budgetpark.go; a launch held at the static floor, or at
-// the room below it, was refused in a window the recount reads as short of the
-// static floor too), and a seat every model of whose chain is limited, which no
-// counter records (providerpark.go). Judged by the duty node's own parks,
-// either was no park at all on every node but its holder, and an ask waiting
-// behind it was closed under the answer still coming: a reply the asker never
-// sees, refused on a closed channel.
-//
-// So the question goes to the holder, as what a launch of a seat's turns is
-// launched on does (relaunchtarget.go): this node's own parks where it holds
-// the seat, and otherwise the incarnation the seat's lease names, over an
-// ephemeral scatter only that incarnation answers ([topics.HeldPark]).
-//
-// # Unknown is never "not owed"
-//
-// A lease that cannot be read, and a holder that does not answer within the
-// fleet read budget — one that stopped, or a build that does not serve the
-// question — are an error, which the sweep spares the channel on for the tick:
-// closing is the step nothing can undo. A seat NO NODE HOLDS is in no park: a
-// park lives in its holder's process, and the node that takes the seat decides
-// again from the shared counters on the first delivery it is handed, which the
-// sweep's own recount of them answers for ([Engine.budgetParked]).
+// idle sweep's last question before it closes a quiet channel ([colleagueOwed]).
+// A park is a hold in the holder's queue client and an alarm in its memory
+// (seatpark.go), so only the holder can say it holds one. The sweep runs on
+// whichever node has the maintenance duty, whose recount sees neither a budget
+// park on a launch floor above the static one in a window with room for the
+// static floor (budgetpark.go) nor a provider park (providerpark.go), and would
+// close an ask under the reply still coming. So the lease's incarnation is asked
+// ([topics.HeldPark]), as relaunchtarget.go does. UNKNOWN IS NEVER "NOT OWED":
+// an unreadable lease or a silent holder is an error, sparing the channel for
+// the tick, since closing cannot be undone. A seat no node holds is in no park:
+// its next holder decides afresh from the shared counters ([Engine.budgetParked]).
 
-// heldParkBudget bounds how long the sweep waits for the holder's answer: the
-// fleet read budget every scatter in this engine answers inside
-// ([eventfan.FleetReadBudget]) — a round trip on the broker and a look at the
-// holder's own parks, which a healthy node answers in milliseconds.
+// heldParkBudget bounds the sweep's wait for the holder's answer: the fleet
+// read budget every scatter here answers inside ([eventfan.FleetReadBudget]),
+// for a broker round trip a healthy holder answers in milliseconds.
 const heldParkBudget = eventfan.FleetReadBudget
 
 // heldParkWireVersion is the request and reply shape this build speaks.
@@ -205,8 +180,8 @@ func (p heldParks) answer(raw []byte) ([]byte, error) {
 //
 // EVERY NODE SERVES, in every mode, and only the addressed incarnation
 // answers: a seat can be held by a node that holds no maintenance duty, and
-// the duty can be on any node. After the node, whose incarnation a seat's
-// lease names.
+// the duty can be on any node. Armed after the node, whose incarnation a
+// seat's lease names.
 func (e *Engine) armHeldParks(ctx context.Context) error {
 	if e.backends == nil || e.backends.Queue == nil || e.node == nil {
 		return nil

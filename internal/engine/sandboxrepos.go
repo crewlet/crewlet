@@ -16,11 +16,9 @@ import (
 )
 
 // launchRepos is what an executor's checkout resolves to on Gitlet
-// (ADR-0093): its grants, the code floor they were read at, the
-// engine's steps giving the box each one — the client-floor check, then one
-// clone each, then, in a cell whose boxes own their kernel, git's file-system
-// monitor ([sandbox.CodingSteps]) — the colleague whose grant bounds the
-// box, and whom its turn works for. Empty for a request naming none.
+// (ADR-0093): its grants, the code floor they were read at, the steps giving
+// the box each one ([sandbox.CodingSteps]), the colleague whose grant bounds
+// the box, and whom its turn works for. Empty for a request naming none.
 type launchRepos struct {
 	repos []sandbox.RunRepo
 	// heads are where each grant's branch stood as the resolution read it,
@@ -33,49 +31,24 @@ type launchRepos struct {
 	// bounds the box's on every repository (builtin.RunRepos.Ceiling); "" for
 	// none.
 	ceiling string
-	// workingFor is whom the turn works for, as its own code writes carry it
-	// (builtin.RunRepos.WorkingFor): what the box pushes, and the change the
-	// run's collection opens, are the turn's writes made late, and carry it
-	// too. Nil for a turn that works for its own seat.
+	// workingFor is whom the turn works for (builtin.RunRepos.WorkingFor):
+	// the box's pushes and the change its collection opens are the turn's
+	// writes made late, and carry it too. Nil for the turn's own seat.
 	workingFor *types.WorkingFor
 }
 
-// resolveRunRepos resolves the repositories an executor of turn t checks out
-// into launchRepos, or refuses — as a [*builtin.RefusedCheckout] the seat
-// reads, naming the repository and the reason — anything the seat may not be
-// given:
-//
-//   - the company hosts no code (code.backend is not gitlet), or this node does not
-//     serve it now — named by why, a restart owed, an apply in flight;
-//   - this node has no CREWLET_BOX_GIT_URL: the box would be given a
-//     repository and no address to clone it from, so the request is refused
-//     naming the node and the variable, and WARN sandbox_git_url_unset says
-//     so where an operator reads it;
-//   - a repository the code tools' resolution refuses
-//     ([builtin.CodeDeps.ResolveRunRepos]: the seat's grant, the requester it
-//     works for, a deletion, an archive under `write`, a base it does not hold).
-//
-// A turn a colleague seat woke names that seat on the run's row
-// ([sandbox.RepoGrant.Ceiling]), and Gitlet's box admission holds the
-// box to its grant as well as to the seat's. And whom the turn works for —
-// that colleague, a person, a credential acting as no seat, or nobody — goes on
-// the row beside it ([sandbox.RepoGrant.WorkingFor]), as the resolution
-// composed it for the turn's own code writes, never derived again from the
-// row: what the box pushes and the change the run's collection opens carry it,
-// and a credential's holds the box to the credential's own grant, which pushes
-// nothing, so the box changes the seat's own work alone (ADR-0110).
-//
-// deps are the code tools' seams on this node — [CodeToolDeps] in a running
-// engine, read by the caller at the checkout rather than held, so a checkout
-// resolves through exactly what the seat's own code tools resolve through on
-// the epoch it runs in. Their zero value serves none: a company that hosts no
-// code, whose request naming repositories is refused.
-//
-// THE SEAMS ARE AN ARGUMENT, not state: they are what a test replaces, and
-// the resolution is the same whatever carries the request to it.
-//
-// placement is the cell the box runs in, as the run's row names it: whether
-// the box may run git's file-system monitor is the cell's to decide.
+// resolveRunRepos resolves the repositories an executor of turn t checks out,
+// or refuses as a [*builtin.RefusedCheckout] naming the repository and why: no
+// code hosted or none served here now, no CREWLET_BOX_GIT_URL on this node
+// (also WARN sandbox_git_url_unset), or a [builtin.CodeDeps.ResolveRunRepos] refusal.
+// A colleague who woke the turn bounds the box by its grant too
+// ([sandbox.RepoGrant.Ceiling]); whom the turn works for goes on the row as the
+// resolution composed it, never re-derived ([sandbox.RepoGrant.WorkingFor]), and
+// a credential's holds the box to its own grant, which pushes nothing (ADR-0110).
+// deps are the seat's own code-tool seams on this epoch ([CodeToolDeps] in a
+// running engine), an argument rather than state so a test replaces them; their
+// zero value serves no code. placement is the box's cell, which decides whether
+// git's file-system monitor runs.
 func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *turnctx.Turn,
 	reqs []builtin.RepoRequest, placement sandbox.Placement) (launchRepos, error) {
 
@@ -109,15 +82,12 @@ func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *
 	if err != nil {
 		return launchRepos{}, err
 	}
-	// EVERY READ OF THE RESOLUTION ANSWERED AT A CHECKPOINT OF THE CODE LOG,
-	// so the run's floor is one: a floor elsewhere, or none, would have its
-	// box read past nothing it was shown.
+	// The resolution's reads answer at a code-log position, the run's floor:
+	// any other floor, or none, would not hold the box's reads to what it was shown.
 	if resolved.Floor.IsZero() || resolved.Floor.Stream != topics.CodeLogStream {
 		return launchRepos{}, fmt.Errorf("engine: Gitlet answered this checkout's reads at %s, no "+
 			"position of the code log", resolved.Floor)
 	}
-	// THE STEPS ARE THE CELL'S: whether the box may run git's file-system
-	// monitor is decided by where it runs (sandbox.CodingSteps).
 	clone, err := sandbox.CodingSteps(placement, resolved.Repos)
 	if err != nil {
 		return launchRepos{}, fmt.Errorf("engine: %w", err)
@@ -128,24 +98,22 @@ func (e *Engine) resolveRunRepos(ctx context.Context, deps builtin.CodeDeps, t *
 
 // runCheckouts is where `code_checkout` gives a running job a repository
 // (ADR-0093): resolved for the turn's seat ([Engine.resolveRunRepos]) and
-// granted on the job's own row, through the pending-run store of the sandbox
-// runtime this node holds at the moment of the call — READ PER CALL, for
-// [runAsks]' reason.
+// granted on the job's row through this node's sandbox runtime's pending-run
+// store, read per call for [runAsks]' reason.
 type runCheckouts struct {
 	engine *Engine
-	// deps are the code tools' seams a checkout resolves through; nil is
-	// [CodeToolDeps] of the engine, read per call. A test's fake of Gitlet.
+	// deps are the seams a checkout resolves through: nil is the engine's
+	// [CodeToolDeps], read per call; a test sets a fake of Gitlet.
 	deps func() builtin.CodeDeps
 }
 
 var _ builtin.RunCheckouts = runCheckouts{}
 
-// Checkout resolves req for turn's seat and grants it to job launch, then
-// answers the grant the row holds with the steps that clone it in the job's
-// box. The row is read first, for the cell the box runs in and to refuse a
-// job that is over before anything is resolved — the resolution takes the
-// turn's holds — and the grant is written by a compare-and-set that asks the
-// job again ([sandbox.PendingStore.GrantRepo]).
+// Checkout resolves req for turn's seat, grants it to job launch, and answers
+// the row's grant with the steps that clone it in the job's box. The row is
+// read first, for the box's cell and to refuse a finished job before the
+// resolution takes the turn's holds; the grant is a compare-and-set that asks
+// the job again ([sandbox.PendingStore.GrantRepo]).
 func (d runCheckouts) Checkout(ctx context.Context, turn *turnctx.Turn, launch string,
 	req builtin.RepoRequest) (builtin.Checkout, error) {
 
@@ -176,8 +144,8 @@ func (d runCheckouts) Checkout(ctx context.Context, turn *turnctx.Turn, launch s
 			len(resolved.repos))
 	}
 	floor := resolved.floor
-	// A FLOOR THIS BUILD CANNOT READ IS RAISED OVER, as boxRuns' raise does:
-	// the box reads at a floor it can be served at.
+	// A floor this build cannot read is raised over, as boxRuns' raise does,
+	// so the box reads at a floor it can be served at.
 	raise := func(current string) (string, bool) {
 		if cur, perr := statelog.ParsePosition(current); perr == nil && holds(cur, floor) {
 			return "", false
@@ -196,25 +164,18 @@ func (d runCheckouts) Checkout(ctx context.Context, turn *turnctx.Turn, launch s
 	case sandbox.GrantAdded:
 		out.Steps = resolved.clone
 	case sandbox.GrantHeld:
-		// THE ROW'S GRANT, CLONED WHERE ITS BRANCH STANDS NOW. A box asking
-		// again lost its clone — a fresh one that a round carried on was
-		// launched in, whether or not the session it continues was restored
-		// there — and continues the job before it, whose work is what that
-		// job pushed to the branch: so the clone starts from the head the
-		// resolution just read, and from the base the first checkout
-		// resolved only where nothing was pushed and the branch does not
-		// exist yet. Started at the first base whatever was pushed since, the
-		// box's branch stood behind its own job's pushes, and a push from it
-		// was refused as no fast-forward or, in the seat's own namespace,
-		// forced over them. A box that kept its clone runs none of this
-		// ([sandbox.CloneRecipe] skips a checkout that is there).
+		// The row's grant, cloned where its branch stands now: a box asking
+		// again lost its clone (a fresh box of a carried round) and continues
+		// the job before it, whose work is what it pushed. So the clone starts
+		// at the head just read, and at the first base only where the branch
+		// does not exist yet; from the first base the box stands behind its
+		// own job's pushes, refused as no fast-forward or, in the seat's
+		// namespace, forced over them. A kept clone skips this
+		// ([sandbox.CloneRecipe]).
 		//
-		// ITS FLOOR IS RAISED TO THAT READ FIRST, as an added grant's is, so
-		// the node that serves the box's fetch of the head has applied it. It
-		// shows the box nothing its grant does not: the same repository and
-		// branch, read for the same seat and the colleague it works for, and
-		// a floor says only how fresh the box's reads are, never what they
-		// may read.
+		// Its floor is raised to that read first, as an added grant's is, so
+		// the node serving the box's fetch has applied the head. A floor says
+		// only how fresh reads are, never what they may read: this widens nothing.
 		if head := resolved.heads[0]; head != "" && head != granted.Base {
 			if _, err = rt.pending.RaiseCodeFloor(ctx, turn.RunID, launch, raise); err != nil {
 				return builtin.Checkout{}, err
@@ -241,11 +202,10 @@ type runGrants struct {
 }
 
 // carriedGrants are the grants a launch of turn turnID opens its job with:
-// for a round carried on (carries), the ones its row holds — the job it
-// continues checked them out, and the work it continues is on their branches
-// — and none for any other launch, whose box checks out what it needs. A row
-// that holds no repository carries nothing, and a row that is gone carries
-// nothing either: the launch then opens a new one.
+// for a round carried on (carries), the ones its row holds, since the work it
+// continues is on their branches; none for any other launch, whose box checks
+// out what it needs, nor for a row with no repository or gone (the launch
+// then opens a new one).
 func carriedGrants(ctx context.Context, pending sandbox.PendingStore, turnID string,
 	carries bool) (_ runGrants, err error) {
 	defer origin.Stamp(&err)

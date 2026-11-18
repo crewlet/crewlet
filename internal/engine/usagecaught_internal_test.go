@@ -12,18 +12,15 @@ import (
 
 // THE USAGE PUBLISHER WAITS FOR THE USAGE APPLIER, AND FOR NO OTHER.
 //
-// Every day a node publishes is joined with the usage rows its applier wrote,
-// which right after a restore are the copy's until that applier has replayed
-// what the fleet published since — so the publisher derives nothing until the
-// USAGE runner has drained its log ([stateLog.usageCaught]). The usage
-// package's own cases hand the publisher a gate of their own, so nothing there
-// reaches the engine's: read off another domain's runner, or not read at all,
-// a restored node would publish days joined with rows the fleet has since
-// moved past, and every one of those cases would stay green.
+// A day is joined with the usage rows this node's applier wrote, which after a
+// restore lag what the fleet published since, so nothing is derived until the
+// USAGE runner has drained ([stateLog.usageCaught]). The usage package's cases
+// use a gate of their own, so only this case holds the engine's: read off
+// another domain's runner, a restored node would publish stale days.
 //
-// Mutation: open the gate whatever the runner says, or read the tracker's
-// runner rather than the usage domain's, and the gate reads open before the
-// usage runner has drained; let it never open, and the control goes red.
+// Mutation: open the gate regardless, or read the tracker's runner, and it
+// opens before the usage runner drains; let it never open, and the control
+// goes red.
 func TestTheUsagePublisherWaitsForTheUsageApplierAlone(t *testing.T) {
 	t.Parallel()
 	s := seamsStateLog(t)

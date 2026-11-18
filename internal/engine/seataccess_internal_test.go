@@ -20,11 +20,11 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// A PASS FLUSHES TWICE, once after its vendor's company-level work and once
-// after its seats' access sync, and the second flush's seals reach this node
-// too: it asks for a re-activation again, which the republisher's window turns
-// into the trailing run. So does a value an off cleared: a seat turned off must
-// not go on starting its tool with the credential its off revoked.
+// A PASS FLUSHES TWICE (after its company-level work and after its seats'
+// sync), and the second flush's seals reach this node too: it asks for a
+// re-activation again, which the republisher's window makes the trailing run.
+// So does a value an off cleared: a seat turned off must not go on starting its
+// tool with the credential its off revoked.
 func TestEveryFlushAfterASealOrAClearRebuilds(t *testing.T) {
 	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
@@ -209,11 +209,10 @@ func TestEveryAccessPassRunsThroughTheSeatAccessWrapper(t *testing.T) {
 }
 
 // AN INTEGRATION WHOSE CREDENTIALS ARE HANDED IN IS NEVER SYNCED AT THE VENDOR
-// (D4b): the engine does not hold the authority there, so the sync opens no
-// session, writes no ledger record, and says once that the agents' accounts
-// are managed outside Crewlet. The same company on a deployment the engine
-// writes is synced. GitHub on a managed deployment is the case: its apps are
-// made outside Crewlet whatever the block says.
+// (D4b): the sync opens no session, writes no ledger record, and says once that
+// the agents' accounts are managed outside Crewlet; the same company on a
+// deployment the engine writes is synced. GitHub on a managed deployment is
+// the case: its apps are made outside Crewlet whatever the block says.
 //
 // Mutation: drop the mode gate, and the managed deployment's sync reaches the
 // ledger and the vendor.
@@ -266,12 +265,11 @@ roles:
 
 // ONLY A CONNECTED INTEGRATION WAITS ON THE MIGRATION, AND IT SAYS WHY.
 //
-// The company connects Jira (so Atlassian) and not Datadog. Datadog's pass
-// reports nothing about a migration: it is not configured, and there is
-// nothing for it to wait on. Atlassian's pass names Atlassian, says its access
-// migration has not finished, and gives the reason the migration's last attempt
-// here left; once an attempt moves it, the reason is forgotten. Mutation: gate
-// on the marker alone, or drop the reason, and a case here fails.
+// The company connects Jira (so Atlassian) and not Datadog. Datadog's pass,
+// not configured, reports no migration. Atlassian's pass names Atlassian and
+// says its access migration has not finished, with the reason the last attempt
+// left; once an attempt moves it, the reason is forgotten. Mutation: gate on
+// the marker alone, or drop the reason, and a case here fails.
 func TestOnlyAConnectedIntegrationReportsTheUnfinishedMigration(t *testing.T) {
 	t.Parallel()
 	e, c := sealingEngine(t, "https://jira.example.com")

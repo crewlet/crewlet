@@ -9,15 +9,13 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
-// WHAT THIS NODE KNOWS ABOUT ITS MODELS, as its status record publishes it (M9 of
-// the Models design): one row per entry of the active revision, built from the
-// entry's sign-in [harness.Plan] (its sit-out, last answer and last failure),
-// the provider park (the seats waiting on it), and the login watcher.
+// WHAT THIS NODE KNOWS ABOUT ITS MODELS, as its status record publishes it: one
+// row per entry of the active revision, from the entry's sign-in [harness.Plan]
+// (sit-out, last answer, last failure), the provider park and the login watcher.
 //
-// ON THE STATUS RECORD, for the reason [coord.NodeStatusRecord.MCP] is: each of
-// these is this node's own memory, and one listing of the records answers the
-// Models page for the whole fleet, where asking each node in turn would be a
-// fan-out whose partial answers the status design refused.
+// On the status record for the reason [coord.NodeStatusRecord.MCP] is: this is
+// the node's own memory, and one listing of the records answers the Models page
+// for the fleet, with no per-node fan-out and its partial answers.
 //
 // Read within a pass of the record's writer: every input is in memory, the
 // sign-in route reads the login's files, and nothing here runs a process.
@@ -65,9 +63,8 @@ func (e *Engine) modelStatus(ctx context.Context) []coord.ModelStatus {
 }
 
 // sitOutFor is the window an entry on model sits out: the plan-wide one, which
-// holds every model, else the one scoped to the entry's own model argument. A
-// window scoped to another model does not hold this entry, so it is not this
-// entry's sit-out.
+// holds every model, else the one scoped to the entry's own model argument; a
+// window scoped to another model does not hold this entry.
 func sitOutFor(state harness.PlanState, model string) *coord.ModelSitOut {
 	for _, out := range state.SittingOut {
 		if out.Model != "" && out.Model != model {

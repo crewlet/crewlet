@@ -56,20 +56,17 @@ units:
 }
 
 // A SEAT'S LIMITS HOLD EVERY SURFACE IT IS OFFERED TOOLS ON TO THE STRICTER OF
-// ITS ENTRY AND ITS LIMITS, and never loosen one. Proved against real servers,
-// a shared one and each seat's own child of a per-agent one: a tool a limit
-// blocks is on no surface of the seat, a tool it holds at approve waits for a
-// person's answer, a tool the entry blocks stays off though a limit holds it
-// only at approve (a limit cannot bring back what an administrator blocked),
-// a tool the entry holds at approve keeps waiting, and a server a limit turns
-// off offers the seat nothing. The seat at the root, held to nothing, is
-// offered each tool at its entry's own level, and the epoch's registry keeps
-// it there: a seat's cut is its own copy. The executor's box is given neither
-// server for a seat whose limits hold one of its tools back.
+// ITS ENTRY AND ITS LIMITS, and never loosen one, on a shared server and each
+// seat's own child of a per-agent one: a tool a limit blocks is on no surface,
+// one it holds at approve waits for a person, one the entry blocks stays off
+// though a limit holds it at approve, one the entry holds at approve keeps
+// waiting, and a server a limit turns off offers nothing. The root seat, held
+// to nothing, keeps each tool at its entry's level in the epoch's registry: a
+// seat's cut is its own copy. The executor's box gets neither server for a seat
+// whose limits hold one of its tools back.
 //
 // Mutation: drop limitSurface from grantedSurface or seatSurface, let a limit
-// at approve re-file a blocked tool, or drop the limits from sandboxMCP, and
-// this is red.
+// at approve re-file a blocked tool, or drop the limits from sandboxMCP: red.
 func TestASeatsLimitsHoldItsSurfaceToTheStricterOfEntryAndLimit(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

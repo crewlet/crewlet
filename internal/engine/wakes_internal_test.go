@@ -21,10 +21,9 @@ import (
 // A WAKE NEVER LANDS ON A SUBJECT WITH NO CONSUMER.
 //
 // A seat's inbox and the inbound edge are both interest-retention: what is
-// published before the consumer exists is discarded and reported as sent. The
-// cases here hold the two engine-side orders that keep a wake out of that
-// window; the node's wake queue, which holds the rest, is covered in
-// internal/node.
+// published before the consumer exists is discarded and reported as sent.
+// These cases hold the two engine-side orders that keep a wake out of that
+// window; internal/node covers the node's wake queue.
 
 // wakesCompany is a company of two seats; wakesCompanyPlusCFO adds a third.
 const wakesCompany = `
@@ -50,9 +49,9 @@ var wakesCompanyPlusCFO = wakesCompany + `  - name: CFO
 
 // ensureWatch is the engine's queue, with a hook on every mailbox it makes.
 //
-// The concrete backend embedded, not the contract: a boot asks the broker for
-// what the contract does not carry (a state log's conditional append), and a
-// wrapper over the interface would fail the boot on that instead.
+// The concrete backend is embedded, not the contract: a boot asks the broker
+// for what the contract does not carry (a state log's conditional append),
+// which a wrapper over the interface would fail the boot on.
 type ensureWatch struct {
 	*jetstream.Queue
 	mu       sync.Mutex
@@ -108,11 +107,10 @@ func parseWakesCompany(t *testing.T, doc string) *config.Company {
 // A SEAT A REVISION ADDS HAS A MAILBOX BEFORE ANYTHING CAN WAKE IT.
 //
 // An apply indexes the revision's parties before it publishes the revision,
-// so a delivery naming the new seat resolves from that moment and its wake is
-// published to the seat's inbox. The mailbox used to be made only after the
-// publish, by the list every published company follows, so every wake routed
-// in between was discarded by the stream. Observed at the moment the new
-// seat's mailbox is made: the registry must not be answering for the seat yet.
+// so a delivery naming the new seat resolves, and its wake is published, from
+// that moment: the mailbox must already exist, or the stream discards the
+// wake. Observed when the new seat's mailbox is made: the registry must not be
+// answering for the seat yet.
 //
 // Mutation: drop the revision's ensure from the apply and the seat's mailbox
 // is first made after the registry already resolves it, which fails here.
@@ -176,9 +174,8 @@ func TestASeatARevisionAddsHasAMailboxBeforeItCanBeWoken(t *testing.T) {
 //
 // The change feeds and the Mattermost transport publish onto the edge before
 // the router attaches to it, so the boot makes the edge's mailbox itself,
-// ahead of them, rather than leaving it to the router's own subscribe. A
-// refusal stops the boot exactly as a refused router subscribe always has: a
-// node that cannot hold its inbound mail routes nothing while looking healthy.
+// ahead of them. A refusal stops the boot: a node that cannot hold its inbound
+// mail routes nothing while looking healthy.
 //
 // Mutation: drop the edge's own ensure from the boot and from
 // [Engine.startNotifications], and the first to ask is the router's subscribe,

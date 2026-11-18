@@ -9,27 +9,21 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A DECLARED PUSH MIRROR'S SEAT READS WHAT THE DOMAIN GRANTS IT: validation
-// refuses a code.repos push mirror whose `as` seat does not read the
-// repository by config's reading of the grant (CodeRepo.mirrorSeatReads, which
-// cannot import the domain), and a person's create or settings change is
-// refused by the domain's own (gitlet.MirrorSeatRefusal over the chart's
-// roster). The two are one rule: for every seat of a chart with every relation
-// a grant reads — a root seat, a human seat, a led unit with a led child and a
-// child inheriting its lead, a unit with no lead above it, a unit led from
-// outside it (Sales, by the root seat ceo), tiers from read_only to
-// full_access — asked of a repository owned by every unit and by seats inside
-// and outside them, at both visibilities, the document is refused at
-// mirror_to.as exactly where the domain refuses the seat.
+// A DECLARED PUSH MIRROR'S SEAT READS WHAT THE DOMAIN GRANTS IT: config's copy
+// of the grant (CodeRepo.mirrorSeatReads, which cannot import the domain) and
+// the domain's (gitlet.MirrorSeatRefusal over the chart's roster) are one
+// rule. For every seat of a chart with every relation a grant reads (root and
+// human seats, led units and inherited leads, a unit with no lead above it,
+// Sales led from outside by ceo, tiers read_only to full_access), against a
+// repository owned by every unit and by seats inside and outside them, at both
+// visibilities, validation refuses at mirror_to.as exactly where the domain does.
 //
-// Mutations: let config's rule read a lead chain from the owner's PARENT
-// rather than the owner — the rows of ceo, who leads Sales from outside it,
-// disagree, red; let it read every agent at `visibility: unit` — the
-// outsiders' rows disagree, red.
+// Mutations: walk the lead chain from the owner's PARENT (ceo's rows disagree,
+// red); let every agent read at `visibility: unit` (outsiders' rows, red).
 func TestADeclaredMirrorSeatReadsWhatTheDomainGrantsIt(t *testing.T) {
 	t.Parallel()
-	// SALES LED FROM OUTSIDE IT: the one relation where only the owning
-	// unit's own lead reads, so a lead walk begun above the owner misses it.
+	// Sales led from outside: only the owning unit's own lead reads, so a lead
+	// walk begun above the owner misses it.
 	chart := strings.Replace(rosterChart(""), "  - name: Sales\n    roles:",
 		"  - name: Sales\n    lead: ceo\n    roles:", 1)
 	if !strings.Contains(chart, "lead: ceo") {
@@ -84,9 +78,9 @@ func TestADeclaredMirrorSeatReadsWhatTheDomainGrantsIt(t *testing.T) {
 					configRefuses = true
 				}
 				repo := gitlet.RepoRef{ID: "web", Name: "web", Owner: owner.owner, Visibility: visibility}
-				// THE CHART ALONE, as the configuration reads it: no identity
-				// directory answers a Tier B validation, so a person's app is the
-				// push's to judge (gitlet.MirrorSeatRefusal's noGitlet).
+				// The chart alone: no identity directory answers a Tier B
+				// validation, so a person's app is the push's to judge
+				// (gitlet.MirrorSeatRefusal's noGitlet).
 				domainRefuses := gitlet.MirrorSeatRefusal(as, repo, roster, false) != ""
 				if configRefuses != domainRefuses {
 					t.Errorf("a push mirror of a repository owned by %s at visibility %s, as %s: validation "+

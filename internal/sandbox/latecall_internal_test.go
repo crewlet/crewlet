@@ -11,11 +11,10 @@ import (
 )
 
 // A LONG RUN'S LOG KEEPS A LATE CALL WHILE AN ORDINARY ONE IS LEFT. Past
-// [MaxBridgeCalls] the log drops from its middle, and a call it drops keeps
-// nothing but its identity — so not the mark that tells every continuation of
-// the round a late call ([BridgeCall.Late]), whose number any save point past
-// it would then hold. So the middle gives up a late call as it gives up a call
-// that ended its job: only once no ordinary call is left there.
+// [MaxBridgeCalls] the log drops from its middle, and a dropped call keeps
+// only its identity, not the [BridgeCall.Late] mark every continuation of the
+// round is told. So the middle gives up a late call, as it does a call that
+// ended its job, only once no ordinary call is left there.
 //
 // Mutation: drop the middle's oldest ordinary call whatever its mark, and the
 // late call is lost.
@@ -52,13 +51,11 @@ func TestALongRunsLogKeepsALateCallWhileAnOrdinaryOneIsLeft(t *testing.T) {
 	}
 }
 
-// A LATE CALL'S MARK SURVIVES A BUILD THAT DOES NOT KNOW IT. In a fleet
-// mid-upgrade an older build rewrites the run's log whole on every append it
-// makes, decoding each call into a struct with no such field: it keeps the mark
-// only as a key it does not know, carried in the call's Extra and written back
-// verbatim (wirekeys.go). So the mark is a wire key of its own, `late`, and a
-// decode that declares every key of the call but that one — that build's —
-// writes it back, for this build to read as the mark again.
+// A LATE CALL'S MARK SURVIVES A BUILD THAT DOES NOT KNOW IT. Mid-upgrade an
+// older build rewrites the run's log whole on every append, keeping a key it
+// does not know in the call's Extra and writing it back verbatim (wirekeys.go).
+// So the mark is a wire key of its own, `late`, which a decode declaring every
+// other key of the call carries back for this build to read.
 //
 // Mutation: write the mark under no wire key (json:"-"), and the log never
 // carries it.
@@ -98,13 +95,11 @@ func TestALateCallsMarkSurvivesABuildThatDoesNotKnowIt(t *testing.T) {
 	}
 }
 
-// A LAUNCH NAMES ITS JOB'S ROUND BESIDE THE JOB. What serves the job's box
-// appends every call the box makes under the job and the round it works in, so
-// a call still running when a relaunch carries the round on is listed in the
-// round's log, marked late ([BridgeCall.Late]), rather than dropped: a job
-// carrying a round on is told the round it carries — the asking job's — and a
-// job that starts a new round is told its own, as the row the launch opened
-// names them.
+// A LAUNCH NAMES ITS JOB'S ROUND BESIDE THE JOB, so a call still running when
+// a relaunch carries the round on lands in the round's log, marked late
+// ([BridgeCall.Late]), rather than dropped. A job carrying a round on is told
+// the asking job's round, and a job starting a new round its own, as the row
+// the launch opened names them.
 //
 // Mutation: name the job without its round, and this goes red.
 func TestALaunchNamesItsJobsRound(t *testing.T) {
@@ -140,13 +135,11 @@ func TestALaunchNamesItsJobsRound(t *testing.T) {
 	}
 }
 
-// A LATE CALL THE MIDDLE DROPS IS COUNTED LATE. Past [MaxBridgeCalls] the log
-// drops from its middle, and only once no ordinary call is left there does it
-// give up a late one ([appendBounded]); a dropped call keeps its identity and
-// nothing else, so not its mark, and a save point past its number would hold
-// it. So the log counts each late call it drops ([BridgeLog.LateElided]),
-// which every continuation of the round is told past whatever its save point —
-// and an ordinary call it drops is not counted.
+// A LATE CALL THE MIDDLE DROPS IS COUNTED LATE. A call [appendBounded] drops
+// keeps no mark, and a save point past its number would hold it, so the log
+// counts each late call it drops ([BridgeLog.LateElided]) for every
+// continuation of the round to be told whatever its save point. An ordinary
+// call it drops is not counted.
 //
 // Mutation: drop a late call without counting it, and the log keeps no record
 // that a late call is among the dropped.
@@ -177,12 +170,9 @@ func TestALateCallTheMiddleDropsIsCountedLate(t *testing.T) {
 }
 
 // A LOG'S COUNT OF ITS DROPPED LATE CALLS SURVIVES A BUILD THAT DOES NOT KNOW
-// IT. In a fleet mid-upgrade an older build rewrites the run's log whole on
-// every append it makes, decoding it into a struct with no such field: it keeps
-// the count only as a key it does not know, carried in the log's Extra and
-// written back verbatim (wirekeys.go). So the count is a wire key of its own,
-// `late_elided`, which a decode declaring every other key of the log carries
-// back for this build to read.
+// IT, as a call's mark does (TestALateCallsMarkSurvivesABuildThatDoesNotKnowIt):
+// the count is a wire key of its own, `late_elided`, which an older build's
+// decode declaring every other key of the log carries back in its Extra.
 //
 // Mutation: write the count under no wire key (json:"-"), and the log never
 // carries it.

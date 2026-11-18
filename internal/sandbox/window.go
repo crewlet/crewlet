@@ -23,15 +23,13 @@ type ExecutorWindow struct {
 	// session under ([ExecutorWindow.Carries]).
 	Tokens int
 	// Standard is the least window Claude Code 2.1.310 and 2.1.322 hold a
-	// run of the model to, where nothing served to the account or opted into
-	// raises it, on the route the run reaches it by ([ClaudeCodeWindowOn]):
-	// what a continuation's telling is judged under
-	// ([ExecutorWindow.SendsWhole]). Claude Code holds claude-opus-4-6 and
-	// claude-sonnet-4-6 to 200,000 tokens unless the account is served more or
-	// the argument opts in with `[1m]`, though the pin is their 1,000,000;
-	// an alias can name an older model on a cloud platform or a gateway; and
-	// no model, or `default`, is the account's default model, which may be
-	// one of those. Zero, with Known true, is a window this build cannot say.
+	// run of the model to on its route ([ClaudeCodeWindowOn]) where nothing
+	// served to the account or opted into raises it: what a continuation's
+	// telling is judged under ([ExecutorWindow.SendsWhole]). It can be below
+	// Tokens: claude-opus-4-6 and claude-sonnet-4-6 are held to 200,000
+	// unless served more or opted in with `[1m]`, an alias can name an older
+	// model off Anthropic's API, and no model or `default` is the account's
+	// default. Zero, with Known true, is a window this build cannot say.
 	Standard int
 	// Known is false where this build does not know the model, and Tokens
 	// and Standard are [FallbackExecutorWindow].
@@ -55,15 +53,13 @@ const claudeLongWindow = 1_000_000
 const claudeStandardWindow = 200_000
 
 // claudeReplyReserve is the most of a window Claude Code keeps back for a reply:
-// min(maxOutputTokens, 20000), 2.1.310 and 2.1.322 alike, and every model in
-// the table has a default output of at least 32,000 tokens, so 20,000 it is
-// (a lower CLAUDE_CODE_MAX_OUTPUT_TOKENS only raises the compaction point). A
-// request past the rest is one the harness cannot send whole: it reaches its
-// blocked level and compacts first, dropping its oldest messages where even the
-// summary's request cannot carry them. The launch floor keeps a continued
-// session below it ([ExecutorWindow.Carries]), so one request can carry it and
-// the budget holds it whole; the point the harness compacts at is lower
-// ([claudeCompactBuffer]).
+// min(maxOutputTokens, 20000) on 2.1.310 and 2.1.322, and every model in the
+// table defaults to at least 32,000 output tokens (a lower
+// CLAUDE_CODE_MAX_OUTPUT_TOKENS only raises the compaction point). A request
+// past the rest cannot be sent whole: the harness compacts first, dropping its
+// oldest messages where even the summary's request cannot carry them. The
+// launch floor keeps a continued session below it ([ExecutorWindow.Carries]);
+// the compaction point is lower still ([claudeCompactBuffer]).
 const claudeReplyReserve = 20_000
 
 // claudeCompactBuffer is the room Claude Code keeps between its compaction
@@ -76,22 +72,17 @@ const claudeReplyReserve = 20_000
 // one of 167,834 compacted, on both releases (docs/concepts/code-sandbox.md).
 const claudeCompactBuffer = 13_000
 
-// claudeTurnAttachments is what a resumed run adds to its session beside its
-// brief before its first request, at most, in tokens at [ClaudeCharge]: the
-// records a resume writes that the session's thread does not hold yet, and its
-// turn's attachments.
+// claudeTurnAttachments is the most, in tokens at [ClaudeCharge], a resumed run
+// adds to its session beside its brief before its first request: the records a
+// resume writes that the session's thread does not hold yet, and its turn's
+// attachments.
 //
-// TWENTY THOUSAND, measured: beside its brief a resume added at most 2,597
-// bytes of records the archive does not hold (the synthetic result for its open
-// call, the `<synthetic>` reply and the token reminder), 1,301 tokens at
-// ClaudeCharge, and its turn's attachments alone came to at most 2,232 bytes (a
-// deferred-tools reminder and the token reminder), 1,118 tokens, on 2.1.310 and
-// 2.1.322 alike. NOT COVERED, stated: those runs' boxes were unchanged, and a
-// box whose skills changed lists them again, up to 40,000 characters at a
-// 1,000,000-token window (about 13,333 tokens at three a character) and up to
-// 100,000 where a listing budget is served, beside other large deltas; a whole
-// first turn's set was at most 39,064 bytes in the census, 19,532 tokens at
-// ClaudeCharge.
+// TWENTY THOUSAND, measured on 2.1.310 and 2.1.322: a resume's records beyond
+// the archive came to at most 2,597 bytes (1,301 tokens), its turn's
+// attachments to 2,232 bytes (1,118 tokens), and a whole first turn's set to
+// 39,064 bytes (19,532 tokens). NOT COVERED: a box whose skills changed lists
+// them again, up to 40,000 characters at a 1,000,000-token window (about
+// 13,333 tokens) or 100,000 where a listing budget is served.
 const claudeTurnAttachments = 20_000
 
 // ClaudeCharge is the most tokens n bytes of a Claude Code session can count
@@ -171,22 +162,18 @@ var claudeWindows = map[string]int{
 	"fable":             claudeLongWindow,
 }
 
-// claudeStandardWindows is, for each model argument whose least window
-// ([ExecutorWindow.Standard]) is less than its pin on some route, that window
-// by route; every other known argument's is its pin on every route. Read in the
-// model catalogs and alias tables of Claude Code 2.1.310 and 2.1.322:
+// claudeStandardWindows is, by route, the least window
+// ([ExecutorWindow.Standard]) of each model argument it is below the pin for
+// on some route; every other known argument's is its pin. Read in Claude Code
+// 2.1.310's and 2.1.322's model catalogs and alias tables:
 //
-//   - claude-opus-4-6 and claude-sonnet-4-6 are held to 200,000 unless the
-//     account is served a larger window or the argument opts in (`[1m]`);
-//   - `opus` names claude-opus-5-5, but claude-opus-4-6 on Foundry, and `best`
-//     names `opus` on 2.1.322 (`fable` on 2.1.310);
-//   - `sonnet` names claude-sonnet-5-5 on Anthropic's API, and claude-sonnet-4-5
-//     or claude-sonnet-4-6 on every other route, `haiku` claude-haiku-4-5 off
-//     Anthropic's API, and `opusplan` plans on `opus` and works on `sonnet`;
-//   - no model, and `default`, is the account's default, which an organization,
-//     ANTHROPIC_DEFAULT_MODEL or the account's tier can make claude-opus-4-6 or
-//     claude-sonnet-4-6 on any route;
-//   - `fable` names a long-window model on every route.
+//   - claude-opus-4-6 and claude-sonnet-4-6: 200,000 unless served more or `[1m]`;
+//   - `opus` is claude-opus-5-5 but claude-opus-4-6 on Foundry; `best` is `opus`
+//     on 2.1.322 and `fable` (long on every route) on 2.1.310;
+//   - `sonnet` is claude-sonnet-5-5 on Anthropic's API, claude-sonnet-4-5 or 4-6
+//     elsewhere; `haiku` is claude-haiku-4-5 off it; `opusplan` plans on `opus`
+//     and works on `sonnet`;
+//   - no model or `default` is the account's default, either 4-6 on any route.
 var claudeStandardWindows = map[string]map[ClaudeRoute]int{
 	"claude-opus-4-6":   allRoutes(claudeStandardWindow),
 	"claude-sonnet-4-6": allRoutes(claudeStandardWindow),
@@ -280,21 +267,16 @@ func (w ExecutorWindow) Carries(context int64, brief int) bool {
 }
 
 // SendsWhole reports whether Claude Code, holding a run to w, sends a resumed
-// session's first request without compacting the session first: its count of
-// the conversation it resumes, at most count's bound, with the brief and what
-// the resume's own turn attaches ([claudeTurnAttachments]), below its
-// threshold: the window it holds the run to less its reply reserve and its
-// compaction buffer (Claude Code compacts where its count reaches that point,
-// 2.1.310 and 2.1.322 alike). That window is w's standard one, or the window
-// the run that left the copy reported where that is less ([ResumedCount.Window]).
-// False where the count has no bound ([ResumedCount.Bound]) and under a window
-// this build does not know: one of an unknown model, and a known one whose
-// standard window is not stated (zero).
+// session's first request without compacting first: whether count's bound,
+// the brief and the resume's own attachments ([claudeTurnAttachments]) stay
+// below [CompactionPoint] of w's standard window, or of the window the run
+// that left the copy reported where that is less ([ResumedCount.Window]).
+// False where the count has no bound ([ResumedCount.Bound]) or the window is
+// unknown (an unknown model, or a known one whose Standard is zero).
 //
-// STRICTLY BELOW: the harness compacts where its count is at least the
-// threshold, and the bound is at least its count, so only a bound below the
-// point proves it sends the session whole. Monotone in the brief: a longer
-// brief never sends whole where a shorter one does not.
+// STRICTLY BELOW: the harness compacts where its count is at least the point,
+// and the bound is at least its count. Monotone in the brief: a longer brief
+// never sends whole where a shorter one does not.
 func (w ExecutorWindow) SendsWhole(count *ResumedCount, brief string) bool {
 	bound, ok := count.Bound()
 	if !ok || !w.Known || w.Standard <= 0 {

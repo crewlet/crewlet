@@ -25,21 +25,19 @@ var writeBackLogins = []map[string]string{
 	{"auth.json": `{"token":"second"}`, "config.toml": `provider = "second"`},
 }
 
-// writeBackScript is what the run of boxes writes back after its setup, as
-// the kill matrix judges it: the login the setup's box writes back over the
-// second login the case leaves in the shared directory, then the login each of
-// the next two boxes writes back.
+// writeBackScript is the logins the run writes back, as the kill matrix
+// judges them: the setup box's, over the second login the case leaves in the
+// shared directory, then each of the next two boxes'.
 var writeBackScript = hostboxtest.Script{
 	Names:  []string{"auth.json", "config.toml"},
 	Logins: []map[string]string{writeBackLogins[0], writeBackLogins[1], writeBackLogins[0]},
 }
 
-// runWriteBackWriter is an engine's local boxes, one after another, each
-// seeded with the shared login in dir, its run rewriting both files to the
-// next login of writeBackScript, and its teardown writing them back, with the
-// kill matrix's observer on every write-back ([hostboxtest.Writer]), for
-// TestABoxTeardownKilledPartWayNeverLeavesHalfALogin to kill at each step.
-// The first box is the setup.
+// runWriteBackWriter runs local boxes one after another, each seeded with the
+// shared login in dir, rewriting both files to writeBackScript's next login and
+// writing them back at teardown, under the kill matrix's observer
+// ([hostboxtest.Writer]) so TestABoxTeardownKilledPartWayNeverLeavesHalfALogin
+// can kill at each step. The first box is the setup.
 func runWriteBackWriter(dir string) {
 	fail := func(err error) {
 		fmt.Fprintln(os.Stderr, err)

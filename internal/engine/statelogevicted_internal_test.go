@@ -13,27 +13,14 @@ import (
 
 // EVICTING A PEER THAT RE-ANCHORED AND VANISHED RELEASES THE FLEET IT STRANDED.
 //
-// A peer re-anchored the tracker's log and was decommissioned before anybody
-// adopted from it. Its generation record and one more record it wrote in that
-// generation are on the log, and — in the first case — its position row names
-// the new generation for ever, since an eviction deliberately keeps a row. Read
-// as the fleet's, that row held this node in two traps: it stopped and asked
-// for a donor at a generation nobody could give, and its reanchor refused,
-// force or no force, on a peer that had already re-anchored. In the second case
-// the peer died between its append and its row, so only the log says what it
-// opened: this node stops on the record, and its reanchor finds nothing to
-// re-anchor, since the log holds everything its rows are missing.
-//
-// The operator's eviction of the peer, run on this very node, is the remedy in
-// both: it lands although the node is refusing every other write; the peer
-// then counts toward neither the fleet's generation nor the reanchor guards;
-// and the reanchor is the ABANDONED case — the generation after the peer's,
-// from this node's own checkpoint — which voids the peer's records while
-// keeping a live peer's record written in this node's generation after the
-// peer's move, and the eviction itself. The refusals say so as it happens:
-// before the eviction they name the adoption and, beside it, the eviction and
-// reanchor for a peer that is gone; after it, only the reanchor — there is no
-// snapshot at that generation left to adopt.
+// With the peer's row naming its new generation (an eviction keeps the row),
+// this node waits for a donor nobody can be and its reanchor refuses even
+// forced; with no row, it stops on the peer's record and finds nothing to
+// re-anchor, the log holding all its rows lack. Evicting the peer here lands
+// though the node refuses other writes and uncounts the peer, and the ABANDONED
+// reanchor (past the peer's generation, from this node's checkpoint) voids the
+// peer's records but keeps a live peer's record in this node's generation and
+// the eviction. The refusal names adoption and eviction before, reanchor after.
 func TestEvictingAPeerThatReanchoredAndVanishedReleasesTheFleet(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

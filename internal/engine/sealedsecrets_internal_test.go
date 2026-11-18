@@ -29,32 +29,19 @@ var (
 		OperatorID: testParty.OperatorID}
 )
 
-// WHAT A PROVISIONING PASS SEALS HAS TO REACH THE WIRING THAT WAS ALREADY
-// BUILT, and nothing about sealing a credential does that on its own.
-//
-// `${VAR}` resolves from a snapshot taken at apply time. A pass that mints a
-// seat's tracker token therefore lands in a company where every consumer of
-// that token — the seat identities, the parsers, the transports, the provider
-// clients, the MCP children — already resolved it, to nothing, minutes ago.
-// Refreshing the snapshot fixes the NEXT read and not one of those, and there
-// is no next read: every vendor reconciler is called from the apply and from
-// nowhere else.
-//
-// Measured on a fresh single-node install, which is what these cases are
-// built out of: connecting Atlassian created the agent's service account and
-// sealed its API token, the reconcile reported the surface ready from its own
-// independent check, and Jira's live routing held seat_identities=0 for ever.
-// Every issue naming that agent fell through to its project lead while the
-// dashboard said the integration was fine.
+// WHAT A PROVISIONING PASS SEALS HAS TO REACH THE WIRING ALREADY BUILT, and
+// sealing alone does not: `${VAR}` resolves from a snapshot taken at apply
+// time, so every consumer of a minted seat token (seat identities, parsers,
+// transports, provider clients, MCP children) resolved it to nothing at the
+// last apply. Refreshing the snapshot fixes only the next read, and every
+// vendor reconciler runs only from an apply, so the tracker would route the
+// agent's issues to its project lead while reporting itself ready.
 
 // jiraInstance is a tracker that answers /myself for exactly one credential.
 //
-// The credential is the whole point: a seat's account is not declared
-// anywhere, it is whatever the seat's OWN token authenticates as, so a lookup
-// made with the wrong token (or with none) resolves to nobody rather than to
-// the wrong person. Answering 401 for anything else is what makes the case
-// below turn on the token reaching the lookup, rather than on the lookup
-// happening at all.
+// A seat's account is whatever its OWN token authenticates as, so answering
+// 401 to any other makes the case below turn on the token reaching the
+// lookup, not on the lookup happening at all.
 func jiraInstance(t *testing.T, token, account string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,10 +60,9 @@ func jiraInstance(t *testing.T, token, account string) *httptest.Server {
 	return srv
 }
 
-// sealingEngine is a node with a fleet secret store, a keyring to seal with,
-// and nothing resolved yet — a company whose Jira block points every seat at
-// a variable that does not exist, which is the state a connect dialog leaves
-// behind the instant before its first pass runs.
+// sealingEngine is a node with a fleet secret store and a keyring, and a
+// company whose Jira block points every seat at a variable not yet set: the
+// state a connect dialog leaves just before its first pass.
 func sealingEngine(t *testing.T, instance string) (*Engine, *Company) {
 	t.Helper()
 	cipher, err := secrets.NewCipher(secrets.Keyring{
@@ -120,25 +106,20 @@ roles:
 // A SEALED SEAT TOKEN REACHES THE TRACKER'S ROUTING WITH NO FURTHER CONFIG
 // CHANGE.
 //
-// The apply here is the two calls [Engine.applyEpoch] makes for this surface —
-// [Engine.refreshParties] and [Engine.startJira] — behind the one thing that
-// triggers them in production, the activation pointer moving. That is what
-// [ConfigWriter.Reload] does, and wiring it to the same two calls is what
-// makes this case the field report rather than a mock of it: the pass seals a
-// credential, and the question is whether anything re-resolves.
-//
-// It fails without [Engine.rebuildForSealedSecrets]: the snapshot carries the
-// token, the registry carries nothing, and no further gesture from the
-// operator is coming.
+// The apply is the two calls [Engine.applyEpoch] makes for this surface,
+// [Engine.refreshParties] and [Engine.startJira], wired to
+// [ConfigWriter.Reload], which moves the activation pointer that triggers them
+// in production. It fails without [Engine.rebuildForSealedSecrets]: the
+// snapshot carries the token, the registry nothing, and no further operator
+// gesture is coming.
 func TestASealedSeatTokenReachesTheTrackerWithoutAConfigChange(t *testing.T) {
 	t.Parallel()
 	const token = "seat-token-minted-by-the-pass"
 	instance := jiraInstance(t, token, "agent-ceo")
 	e, company := sealingEngine(t, instance.URL)
 
-	// GUARDED AND AWAITED, because the re-activation runs off the goroutine
-	// that asked for it now: the asker is a pass holding the surface lease,
-	// and the minute inside it belongs to that pass's own status write.
+	// GUARDED AND AWAITED: the re-activation runs off the asking pass's
+	// goroutine (see [reloadingWriter]'s mu).
 	var appliesMu sync.Mutex
 	var applies int
 	countApplies := func() int {
@@ -151,9 +132,8 @@ func TestASealedSeatTokenReachesTheTrackerWithoutAConfigChange(t *testing.T) {
 		if _, err := e.startJira(ctx, company, company.Config.Integrations.Jira); err != nil {
 			return err
 		}
-		// COUNTED LAST, so a count of two means two applies that FINISHED.
-		// Counted first it meant two that had started, and the registry
-		// read below then raced the work it is the outcome of.
+		// COUNTED LAST, so a count of two means two applies that FINISHED
+		// and the registry read below does not race them.
 		appliesMu.Lock()
 		applies++
 		appliesMu.Unlock()
@@ -161,10 +141,9 @@ func TestASealedSeatTokenReachesTheTrackerWithoutAConfigChange(t *testing.T) {
 	}
 	e.UseConfigWriter(&reloadingWriter{reload: apply})
 
-	// THE APPLY THAT CAME FIRST. A company connects its tracker before any
-	// seat has an account on it — that is what connecting is for — so the
-	// wiring this node is running was built against a variable that
-	// resolved to nothing.
+	// THE APPLY THAT CAME FIRST: a company connects its tracker before any
+	// seat has an account on it, so the running wiring resolved the
+	// variable to nothing.
 	if err := apply(t.Context()); err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
@@ -202,31 +181,26 @@ func TestASealedSeatTokenReachesTheTrackerWithoutAConfigChange(t *testing.T) {
 		t.Errorf("account agent-ceo resolved to %q, want ceo", party.Handle)
 	}
 
-	// AND THE REVISION IS THEIRS. Reload writes a NEW revision rather than
-	// re-pointing the old one so that "the credentials were reloaded at
-	// 04:12" is a fact somebody can find later — which a revision credited
-	// to a constant answers only half of. This pass ran because a person
-	// pressed Connect, and the sink is already carrying their name.
+	// AND THE REVISION IS THEIRS: Reload writes a new revision so the
+	// reload can be found later, credited to the person who pressed
+	// Connect, whose name the sink carries.
 	writer, _ := e.configWriterOrNil().(*reloadingWriter)
 	if writer == nil {
 		t.Fatal("the config surface is not the one this test installed")
 	}
 	// WHOLE: the person, their kind and the credential they pressed
-	// Connect through, which is what the revision the rebuild writes keeps.
+	// Connect through.
 	if got := writer.lastOperator(); got != founderParty {
 		t.Errorf("the rebuild was credited to %+v, want the party the pass "+
 			"ran for, %+v", got, founderParty)
 	}
 }
 
-// A PASS THAT SEALED NOTHING RE-ACTIVATES NOTHING.
-//
-// This is the whole of why the rebuild is safe to do automatically. An apply
-// marks the reconcile loop stale, which brings the next pass forward — so a
-// pass that reloaded unconditionally would apply, wake itself, apply again,
-// for the life of the deployment. What stops it is that `sealed` is set by an
-// actual Record and by nothing else, and that every reconciler is certified
-// against integrationtest's "a converged pass writes nothing".
+// A PASS THAT SEALED NOTHING RE-ACTIVATES NOTHING, which is what makes the
+// automatic rebuild safe: an apply brings the next pass forward, so an
+// unconditional reload would loop for ever. `sealed` is set by an actual
+// Record alone, and every reconciler is certified against integrationtest's
+// "a converged pass writes nothing".
 func TestAPassThatSealedNothingDoesNotReactivateTheRevision(t *testing.T) {
 	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
@@ -241,9 +215,8 @@ func TestAPassThatSealedNothingDoesNotReactivateTheRevision(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	// SETTLED BEFORE THE ABSENCE IS CLAIMED. The re-activation is
-	// asynchronous now, so reading the counter straight after Flush would
-	// pass whether or not one was asked for.
+	// SETTLED BEFORE THE ABSENCE IS CLAIMED: the re-activation is
+	// asynchronous, so a read straight after Flush would pass either way.
 	time.Sleep(50 * time.Millisecond)
 	if got := w.reloads(); got != 0 {
 		t.Errorf("Reload calls = %d: a converged pass re-activated the "+
@@ -252,13 +225,8 @@ func TestAPassThatSealedNothingDoesNotReactivateTheRevision(t *testing.T) {
 }
 
 // A FLUSH THAT FAILED STILL REBUILDS, and a second one does not rebuild
-// again.
-//
-// The sink is write-through: by the time Flush is reached every value it
-// recorded is already durable in the fleet's store, so what a failing Flush
-// reports is an incomplete COMPLETION over credentials that are out there
-// either way. Leaving them unpublished would be the field report again, with
-// an error log to explain it.
+// again. The sink is write-through, so every recorded value is durable
+// whatever Flush reports, and leaving it unpublished strands it.
 func TestAFailedFlushStillRebuildsAndDoesNotRebuildTwice(t *testing.T) {
 	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
@@ -284,15 +252,11 @@ func TestAFailedFlushStillRebuildsAndDoesNotRebuildTwice(t *testing.T) {
 
 // THE REBUILD OUTLIVES THE PASS THAT EARNED IT, AND IS STILL BOUNDED.
 //
-// This runs at the tail of a provisioning pass, on that pass's own context —
-// which carries the pass's deadline, may have all but spent it, and is
-// cancelled the moment the pass returns. The credentials are durable by then,
-// so abandoning the re-activation because the work that produced them finished
-// is exactly how the stale wiring survives: sealed, resolvable, and read by
-// nothing that is running.
-//
-// Detached is not unbounded, though. A re-activation against an unreachable
-// control plane must end, or a pass leaks a goroutine per run.
+// It runs at a pass's tail, on a context that may be spent or cancelled as the
+// pass returns; the credentials are durable by then, so abandoning the
+// re-activation leaves the stale wiring running. Detached is not unbounded: a
+// re-activation against an unreachable control plane must end, or each pass
+// leaks a goroutine.
 func TestTheRebuildSurvivesTheCancelledPassAndStaysBounded(t *testing.T) {
 	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
@@ -329,12 +293,10 @@ func TestTheRebuildSurvivesTheCancelledPassAndStaysBounded(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO CONFIG SURFACE DOES NOT DIE ON THE REBUILD IT CANNOT DO.
-//
-// A worker-only node, or any node in the few hundred milliseconds between the
-// engine being constructed and the API installing the surface. The values are
-// durable and the snapshot is refreshed; what is missing is the rebuild, and
-// the operator is told which gesture supplies it.
+// A NODE WITH NO CONFIG SURFACE DOES NOT DIE ON THE REBUILD IT CANNOT DO: a
+// worker-only node, or one before the API installs the surface. The values
+// are durable and the snapshot refreshed; the operator is told which gesture
+// supplies the rebuild.
 func TestSealingOnANodeWithNoConfigSurfaceIsLoggedRatherThanFatal(t *testing.T) {
 	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
@@ -362,24 +324,19 @@ type reloadingWriter struct {
 	noopWriter
 	reload func(context.Context) error
 
-	// mu guards everything below, because the re-activation no longer runs
-	// on the goroutine that asked for it: the caller is a pass inside the
-	// surface lease, and the minute [setup.PassDeadline] leaves inside
-	// [setup.LeaseTTL] belongs to that pass's own status write. See
-	// [republisher.request].
+	// mu guards everything below: the re-activation runs off the asking
+	// goroutine, since the asker is a pass inside the surface lease and the
+	// minute [setup.PassDeadline] leaves inside [setup.LeaseTTL] is that
+	// pass's own status write ([republisher.request]).
 	mu    sync.Mutex
 	calls int
 
-	// operator is who the last re-activation was credited to. Read through
-	// [reloadingWriter.lastOperator] and never directly: it is written on
-	// a TIMER's goroutine, so a bare field read from the test's own is a
-	// race with no happens-before edge to make it safe.
+	// operator is who the last re-activation was credited to, written on a
+	// timer's goroutine: read it only through [reloadingWriter.lastOperator].
 	operator iam.Actor
 
-	// err is what the reload reported. The engine LOGS a failed
-	// re-activation rather than returning it — nothing above Flush can act
-	// on one — so a case that asserts something about the call itself has
-	// to read it back from here or assert nothing at all.
+	// err is what the reload reported: the engine logs a failed
+	// re-activation rather than returning it, so a case reads it back here.
 	err error
 }
 
@@ -393,9 +350,8 @@ func (w *reloadingWriter) reloads() int {
 
 // awaitReloads blocks until this writer has served n re-activations.
 //
-// A POLL RATHER THAN A CHANNEL, because the cases below also assert that a
-// second flush does NOT re-activate — a claim about an absence, which needs a
-// settle either way, and one idiom for both reads better than two.
+// A poll rather than a channel: the cases also assert that a second flush
+// does NOT re-activate, an absence that needs a settle either way.
 func (w *reloadingWriter) awaitReloads(t *testing.T, n int) {
 	t.Helper()
 	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
@@ -409,10 +365,8 @@ func (w *reloadingWriter) awaitReloads(t *testing.T, n int) {
 
 // lastOperator is who the most recent re-activation was credited to.
 //
-// UNDER THE LOCK, which is the whole reason it exists: the re-activation runs
-// on a timer's goroutine, so a case reading [reloadingWriter.operator]
-// directly races the write with nothing ordering the two. One did, and this
-// accessor sat unused beside it — a guard nobody took.
+// Under the lock: the re-activation runs on a timer's goroutine, so reading
+// [reloadingWriter.operator] directly races the write.
 func (w *reloadingWriter) lastOperator() iam.Actor {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -431,9 +385,8 @@ func (w *reloadingWriter) Reload(ctx context.Context, summary string, operator i
 	w.calls++
 	w.operator = operator
 	w.mu.Unlock()
-	// The summary is what an operator reads on the revision this gesture
-	// creates, beside the ones a person wrote. A blank one is a revision
-	// nobody can account for.
+	// The summary is what an operator reads on the revision this creates;
+	// a blank one is a revision nobody can account for.
 	if strings.TrimSpace(summary) == "" {
 		return fmt.Errorf("the re-activation carried no summary")
 	}
@@ -475,34 +428,24 @@ func (*failingFlushSink) NextStep() string { return "nothing" }
 
 // A CREDENTIAL A PASS SEALED IS ONE EVERY SURFACE CAN SEE.
 //
-// `${VAR}` resolves from a snapshot taken at apply time, which keeps the
-// secret store off the path of every config read, and nothing about minting a
-// credential advances an epoch. So a pass created a GitLab service account,
-// minted its token and sealed it under the name the seat pointed at, and
-// every surface went on reporting that seat as waiting for an account: the
-// resolver was still holding the snapshot from before the seal. The pass then
-// ran again on the next tick, found the same unresolved variable, and minted
-// a second token, for ever.
-//
-// THIS IS THE FIRST OF TWO HALVES and was shipped as though it were both.
-// Making the value resolvable fixes every read that happens FROM NOW ON, and
-// the wiring a company actually routes through is not one of those: it was
-// built at the last apply out of the snapshot standing then. See
-// [TestASealedSeatTokenReachesTheTrackerWithoutAConfigChange] for the half
-// that was missing, and what it cost in production.
+// `${VAR}` resolves from a snapshot taken at apply time, and minting a
+// credential advances no epoch, so without a refresh every surface goes on
+// reporting the seat as waiting for an account, and each tick's pass mints
+// another token. This is only the read half: wiring built at the last apply
+// needs the rebuild [TestASealedSeatTokenReachesTheTrackerWithoutAConfigChange]
+// holds.
 func TestASealedCredentialIsVisibleWithoutAnApply(t *testing.T) {
 	t.Parallel()
 	e, _ := engineWithSecrets(t)
-	// THE FLEET'S STORE, which is where a sealed credential goes and where
-	// the resolver's snapshot is read from.
+	// The fleet's store: where a sealed credential goes and the snapshot
+	// is read from.
 	e.backends.Fleet = coordmem.NewFleet()
 
 	sink, err := e.SetupSink(testParty)
 	if err != nil {
-		// NOT A SKIP. Nothing here is environmental: the fixture always
-		// opens a temp-dir store and always installs a cipher, so a sink
-		// that cannot be built is a regression in the code under test —
-		// and skipping turned the whole mint-every-tick guard green.
+		// NOT A SKIP: the fixture always opens a store and installs a
+		// cipher, so a sink that cannot be built is a regression, and a skip
+		// would turn the mint-every-tick guard green.
 		t.Fatalf("SetupSink: %v", err)
 	}
 	if got := e.resolver().Value("${SEAT_TOKEN}"); got != "" {
@@ -537,10 +480,9 @@ func TestAPassThatSealedNothingLeavesTheSnapshotAlone(t *testing.T) {
 	e.backends.Fleet = coordmem.NewFleet()
 	sink, err := e.SetupSink(testParty)
 	if err != nil {
-		// NOT A SKIP. Nothing here is environmental: the fixture always
-		// opens a temp-dir store and always installs a cipher, so a sink
-		// that cannot be built is a regression in the code under test —
-		// and skipping turned the whole mint-every-tick guard green.
+		// NOT A SKIP: the fixture always opens a store and installs a
+		// cipher, so a sink that cannot be built is a regression, and a skip
+		// would turn the mint-every-tick guard green.
 		t.Fatalf("SetupSink: %v", err)
 	}
 
@@ -558,19 +500,12 @@ func TestAPassThatSealedNothingLeavesTheSnapshotAlone(t *testing.T) {
 
 // TWO PASSES SEALING IN ONE BURST RE-ACTIVATE ONCE.
 //
-// The rebuild goes through [republisher] rather than straight to
-// [Engine.rebuildForSealedSecrets], and that wiring is the whole of the
-// coalescing: connecting a third-party app from the dashboard writes one
-// request per surface — Atlassian's alone applies three revisions in a row —
-// and each seal used to be a whole-company rebuild and a permanent config
-// revision. Twenty of one deployment's fifty-six revisions were these.
-//
-// Worse, an apply marks every surface stale and brings the reconcile loop's
-// next tick forward, so a pass that cannot converge seals as fast as an apply
-// completes. One did: GitLab minted a year-long `api`-scoped token every five
-// seconds, 144 of them from a single connect.
-//
-// THE SINK'S `flushed` FLAG DOES NOT COVER THIS. That stops one sink
+// The rebuild goes through [republisher], not straight to
+// [Engine.rebuildForSealedSecrets], and that is the whole of the coalescing:
+// one dashboard connect writes a request per surface, and each seal is a
+// whole-company rebuild and a permanent config revision. An apply also brings
+// the reconcile tick forward, so an unconverging pass would seal (and mint) as
+// fast as applies complete. The sink's `flushed` flag stops one sink
 // rebuilding twice; this is two sinks, which is what a burst is.
 func TestASecondPassSealingInTheSameBurstDoesNotRebuildAgain(t *testing.T) {
 	t.Parallel()
@@ -579,8 +514,7 @@ func TestASecondPassSealingInTheSameBurstDoesNotRebuildAgain(t *testing.T) {
 	e.UseConfigWriter(w)
 
 	for _, name := range []string{"JIRA_AGENT_TOKEN", "CONFLUENCE_AGENT_TOKEN"} {
-		// A SINK PER PASS, which is what the engine hands out: SetupSink
-		// builds a fresh one for every request.
+		// A SINK PER PASS, as SetupSink builds for every request.
 		sink, err := e.SetupSink(founderParty)
 		if err != nil {
 			t.Fatalf("sink: %v", err)
@@ -594,9 +528,9 @@ func TestASecondPassSealingInTheSameBurstDoesNotRebuildAgain(t *testing.T) {
 	}
 
 	w.awaitReloads(t, 1)
-	// SETTLED, because what is being claimed is that a SECOND one does not
-	// happen: the coalescing window is fifteen seconds, so anything the
-	// burst asked for beyond the first is owed rather than immediate.
+	// SETTLED, because the claim is that a SECOND one does not happen:
+	// the coalescing window is fifteen seconds, so any later one the
+	// burst asked for is owed, not immediate.
 	time.Sleep(50 * time.Millisecond)
 	if got := w.reloads(); got != 1 {
 		t.Errorf("re-activations = %d from one burst of two seals, want 1: "+

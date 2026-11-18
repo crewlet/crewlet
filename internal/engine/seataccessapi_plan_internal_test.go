@@ -9,9 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
-// accessCompany is a company with the SRE on Datadog at the Standard Role and
-// the CTO on nothing, under the integrations and migration marker a case
-// gives, as kind's access query.
+// accessCompany is kind's access query over a company with the SRE on Datadog
+// at the Standard Role and the CTO on nothing, under a case's integrations and
+// migration marker.
 func accessCompany(t *testing.T, kind integration.Kind, integrations,
 	migrated string) setupapi.AccessQuery {
 	t.Helper()
@@ -44,13 +44,11 @@ const datadogProvisioned = `{"datadog": {"enabled": true, "route_to": "sre",
 
 // A PLAN IS DRAWN ONLY WHERE THE SYNC TAKES STEPS (H3).
 //
-// Datadog provisioned and migrated: the CTO's turn-on is planned. The same
-// Datadog before its migration has finished: the sync takes no step yet, so
-// neither the tab nor the draft's plan lists any, and the turn-on still asks
-// a step-up, since the saved setting is the one the sync applies once the
-// migration finishes. GitLab connected without provisioning: the engine
-// grants nothing there, so no plan and no step-up at all. Mutation: plan
-// regardless of the mode or the marker, and a case here fails.
+// Datadog provisioned and migrated: the CTO's turn-on is planned. Before its
+// migration: no steps on the tab or the draft's plan, but the turn-on still
+// asks a step-up, since the sync applies it after. GitLab managed outside:
+// no plan and no step-up. Mutation: plan regardless of the mode or the marker,
+// and a case here fails.
 func TestAPlanIsDrawnOnlyWhereTheSyncTakesSteps(t *testing.T) {
 	t.Parallel()
 	e, _ := sealingEngine(t, "https://jira.example.com")
@@ -113,9 +111,9 @@ func TestAPlanIsDrawnOnlyWhereTheSyncTakesSteps(t *testing.T) {
 // AN OFFER THAT COULD NOT BE READ VOUCHES FOR NOTHING, AND IS NEVER KEPT.
 //
 // Datadog's keys are unset, so its vendor cannot be opened: the lane offers no
-// levels (a turn-on on it asks a step-up) and nothing is cached, so the next
-// read asks again. GitLab managed outside Crewlet needs no vendor, so its
-// offer is whole and is kept, its reach read from the document. Mutation: cache what failed, and the first case
+// levels (a turn-on asks a step-up) and nothing is cached. GitLab managed
+// outside Crewlet needs no vendor, so its offer is whole and kept, its reach
+// read from the document. Mutation: cache what failed, and the first case
 // fails.
 func TestAFailedOfferReadIsNeverKept(t *testing.T) {
 	t.Parallel()
@@ -149,9 +147,9 @@ func TestAFailedOfferReadIsNeverKept(t *testing.T) {
 	}
 }
 
-// A VENDOR'S ANSWER KEEPS THE CATALOG'S FACTS, and marks a scoped lane's scope
-// as read, so an empty list then means none rather than unread. Mutation: take
-// the vendor's answer whole, and a scoped lane reads as unscoped and unread.
+// A VENDOR'S ANSWER KEEPS THE CATALOG'S FACTS and marks a scoped lane's scope
+// read, so an empty list means none, not unread. Mutation: take the vendor's
+// answer whole, and a scoped lane reads as unscoped and unread.
 func TestALiveOfferKeepsTheCatalogsFactsAndMarksItsScopeRead(t *testing.T) {
 	t.Parallel()
 	base := seataccess.Options{Lane: seataccess.LaneGitLab, Rotatable: true, Scoped: true, ScopeRequired: true}

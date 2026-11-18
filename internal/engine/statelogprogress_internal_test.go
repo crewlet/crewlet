@@ -17,49 +17,26 @@ import (
 
 // EVERY FIELD A DECISION READS IS ASSIGNED BY health().
 //
-// This is the test whose absence let the whole readiness path be dead code.
-// [statelog.Health] has thirteen fields; [stateLog.health] assembled seven of
-// them, and the four the decisions actually turn on — Err, Stalled, Evicted
-// and Floor — were assigned by nothing at all. Every arm of
-// [statelog.Health.Refusal] was therefore unreachable and
-// [statelog.Health.Healthy] could never go false, so a halted applier kept
-// answering reads and the `deferred_old` alarm's promise that "its seats have
-// already moved" was false on every node.
-//
-// # Why it reads the SOURCE rather than calling health()
-//
-// Calling it needs a store, a broker, a fleet and three running appliers —
-// which is why the gap was never covered by an ordinary test: the honest
-// version is an integration test nobody writes for a struct field. The
-// property being protected is not what the function returns for some input,
-// it is that the function MENTIONS each field, and an AST walk asserts
-// exactly that for the cost of parsing one file.
-//
-// It cannot prove the assignment is CORRECT — the behavioural cases below and
-// TestEveryFieldTheDecisionsReadCanChangeTheAnswer in internal/statelog do
-// that. It proves the field is not silently forgotten, which is the failure
-// that actually happened.
+// Read from the SOURCE rather than by calling health(), which needs a store, a
+// broker, a fleet and three running appliers: the property is that the
+// functions assembling a health MENTION each field, and an AST walk asserts
+// exactly that. It cannot prove an assignment correct (the cases below and
+// TestEveryFieldTheDecisionsReadCanChangeTheAnswer in internal/statelog do);
+// it proves no field is silently forgotten, leaving its decision on a zero value.
 func TestEveryHealthInputIsPopulated(t *testing.T) {
 	t.Parallel()
 
-	// The fields [statelog.Health.Refusal], [statelog.Health.Healthy] and
-	// the snapshot gate read. Listed here rather than derived, because the
-	// list IS the claim: a field added to a decision and not to this list
-	// is a field nobody asked to be produced.
-	//
-	// THREE DECISIONS RATHER THAN TWO, because `Drained` has no other
-	// reader: the shed deliberately does not turn on it — a copy that is
-	// behind is not a copy that is wrong — and a list scoped to the two
-	// readiness functions would let the one thing that DOES need it, the
-	// gate deciding whether this node may donate a snapshot, go back to
-	// reading a zero value.
+	// The fields [statelog.Health.Refusal], [statelog.Health.Healthy] and the
+	// snapshot gate read, listed rather than derived because the list IS the
+	// claim. `Drained` is read only by the gate deciding whether this node may
+	// donate a snapshot (the shed deliberately ignores it), so a list of the two
+	// readiness functions alone would let it go back to a zero value.
 	want := []string{"Err", "Stalled", "Evicted", "Floor", "Drained", "Deferred",
 		"LastSeq", "StreamRecreated", "GenerationPassed"}
 
-	// THE FUNCTIONS A HEALTH IS ASSEMBLED IN: the entry point, the half a
-	// reading takes before the published floors land, and the floor that
-	// completes it ([readHealthsWith] reads the logs and the floors at once),
-	// whether the log's ends are read now or served from memory
+	// THE FUNCTIONS A HEALTH IS ASSEMBLED IN: the entry point, the half read
+	// before the published floors land, and the floor that completes it
+	// ([readHealthsWith]), the log's ends read now or from memory
 	// ([stateLog.observeWith]). A field any of them sets is set.
 	assemblers := map[string]bool{"health": false, "observeWith": false, "floored": false}
 
@@ -106,12 +83,9 @@ func TestEveryHealthInputIsPopulated(t *testing.T) {
 	}
 }
 
-// THE STALL CLOCK RESTARTS WHEN THERE IS NOTHING TO APPLY, which is what
-// separates a stalled node from an idle one.
-//
-// Without it a company between two writes would declare every node stalled
-// one StallGrace after its last record — refusing reads on a fleet whose only
-// fault is that nobody has filed anything for a minute.
+// THE STALL CLOCK RESTARTS WHEN THERE IS NOTHING TO APPLY, which separates a
+// stalled node from an idle one: without it a company between two writes would
+// refuse reads on every node one StallGrace after its last record.
 func TestAnIdleNodeIsNotAStalledOne(t *testing.T) {
 	t.Parallel()
 	var p progress
@@ -142,9 +116,8 @@ func TestAnIdleNodeIsNotAStalledOne(t *testing.T) {
 	}
 }
 
-// BEFORE THE FIRST OBSERVATION NOTHING IS STALLED. A node whose heartbeat has
-// not run yet has measured nothing, and a refusal derived from no measurement
-// is a refusal derived from the zero instant — which is every node, always.
+// BEFORE THE FIRST OBSERVATION NOTHING IS STALLED: a refusal derived from no
+// measurement is derived from the zero instant, which is every node, always.
 func TestAnUnobservedDomainIsNotStalled(t *testing.T) {
 	t.Parallel()
 	var p progress
@@ -157,11 +130,8 @@ func TestAnUnobservedDomainIsNotStalled(t *testing.T) {
 }
 
 // THE DEFERRAL CLOCK IS THE OLDEST ARRIVAL, and it clears the moment the
-// record does.
-//
-// Both halves matter. Restarting it on every observation would mean the grace
-// never elapsed and the shed never fired; leaving it set after the record
-// applied would shed a node that had just been upgraded — punishing the fix.
+// record does: restarted on every look the grace would never elapse, and left
+// set after the record applied it would shed a node that had just been upgraded.
 func TestTheDeferralClockStartsOnceAndClearsAtOnce(t *testing.T) {
 	t.Parallel()
 	var p progress
@@ -182,17 +152,10 @@ func TestTheDeferralClockStartsOnceAndClearsAtOnce(t *testing.T) {
 	}
 }
 
-// A STOP THIS PROCESS ASKED FOR IS NOT A FAULT.
-//
-// Every applier returns its run context's error when the node shuts down, and
-// reading that as a halt makes a node declare itself broken on the way out:
-// `Health.Err` set means `Refusal` returns `stalled`, so it refuses the reads
-// it is still serving, and `Healthy` goes false, so the serviceability gate
-// sheds seats a drain is already handing back in order.
-//
-// Measured on the three-node e2e the moment `Err` was first populated: six
-// `statelog_applier_stopped` at `context canceled` and four
-// `seats_shed_unserviceable` behind them, all during teardown.
+// A STOP THIS PROCESS ASKED FOR IS NOT A FAULT. Every applier returns its run
+// context's error on shutdown; read as a halt, `Health.Err` makes `Refusal`
+// answer `stalled` for reads the node still serves and `Healthy` go false, so
+// the serviceability gate sheds seats a drain is already handing back in order.
 func TestACancelledApplierIsNotAHaltedOne(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -218,15 +181,11 @@ func TestACancelledApplierIsNotAHaltedOne(t *testing.T) {
 // A WEDGED APPLIER READS AS STALLED ON THE REQUEST PATH, AND NOT ONLY ON A
 // HEALTH READ.
 //
-// The request path — every session validated, every seat a bound credential
-// acts as — compares [runningLog.Lag] against [statelog.StallGrace], and
-// the lag was a backlog over a drain rate alone. That rate is measured over
-// apply time and nothing re-measures it while no batch runs, so an applier
-// that wedged with five records outstanding kept reading as a fraction of a
-// second behind for as long as it stayed wedged: the session table's
-// `stalled` row never fired and a revocation stuck in that backlog was never
-// honoured on this node. How long the prefix has been frozen is the figure a
-// wedge cannot hold down.
+// That path compares [runningLog.Lag] against [statelog.StallGrace], and a
+// backlog over the drain rate stays a fraction of a second while a wedged
+// applier runs no batch to re-measure the rate, so a revocation stuck in the
+// backlog would never be honoured here. The frozen term ([progress.frozenFor])
+// is the figure a wedge cannot hold down.
 func TestAWedgedApplierReadsAsStalledOnTheRequestPath(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
@@ -257,12 +216,9 @@ func TestAWedgedApplierReadsAsStalledOnTheRequestPath(t *testing.T) {
 	}
 }
 
-// A QUIET COMPANY IS NOT A WEDGE: nothing owed, nothing frozen.
-//
-// The frozen term is gated on the last look having found work outstanding.
-// Without the gate every node's lag would climb between two writes, and a
-// company nobody had filed anything in for a minute would answer 503 to every
-// session on every node.
+// A QUIET COMPANY IS NOT A WEDGE: nothing owed, nothing frozen. The frozen term
+// is gated on the last look having found work outstanding; without the gate
+// every node would answer 503 to every session after a minute without writes.
 func TestACaughtUpNodeCarriesNoFrozenLag(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
@@ -278,12 +234,10 @@ func TestACaughtUpNodeCarriesNoFrozenLag(t *testing.T) {
 	}
 }
 
-// A LOOK THAT CANNOT READ THE LOG CARRIES THE LAST ONE FORWARD.
-//
-// Read as "nothing owed", a failed statistics read restarted the stall clock
-// on every heartbeat — and an applier and its broker connection failing
-// together is the ordinary shape of a wedge, so exactly that wedge never read
-// as stalled.
+// A LOOK THAT CANNOT READ THE LOG CARRIES THE LAST ONE FORWARD: read as
+// "nothing owed", a failed statistics read restarts the stall clock every
+// heartbeat, so an applier and its broker connection failing together, the
+// ordinary shape of a wedge, never reads as stalled.
 func TestAnUnreadableLogKeepsTheLastBacklogAnswer(t *testing.T) {
 	t.Parallel()
 	unreadable := errors.New("stream info: nats: timeout")
@@ -334,16 +288,12 @@ func seen(seq uint64, deferred bool) coord.DomainPosition {
 
 // A RECORD THIS NODE HOLDS IS NOT A WEDGE.
 //
-// A node holding a record it cannot decode — a newer peer's during a rolling
-// upgrade, one signed under a key it was not restarted with — publishes its
-// applied-through pinned below that record for as long as it holds it, while
-// its checkpoint moves past it and on through everything after. The stall
-// used to be measured on applied-through, so a node catching up, or on a busy
-// log with a record in flight at every look, read as frozen a minute after
-// the record arrived: every session, machine token and seat binding on it
-// answered 503 and `Health.Stalled` shed its seats — the whole-node outage
-// [statelog.Health.Healthy] says a deferral must never cause inside its own
-// grace, and one no reader needed, since what the record withholds is scoped.
+// A node holding a record it cannot decode (a newer peer's mid-upgrade, or one
+// under a key it was not restarted with) pins its applied-through below it
+// while its checkpoint moves on. Measured on applied-through, a busy log read
+// as frozen a minute after the record arrived, and the whole node answered 503
+// and shed its seats, which [statelog.Health.Healthy] says a deferral must
+// never cause inside its grace; what the record withholds is scoped.
 //
 // Mutation: measure movement on AppliedThrough and both halves read stalled.
 func TestAHeldRecordIsNotAWedge(t *testing.T) {

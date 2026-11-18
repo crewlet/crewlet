@@ -22,27 +22,20 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
-// What these tests protect.
-//
-// This backend talks to a service no test here can reach, so what is pinned
-// is THE WIRE: every request shape, every header, and the framing of the one
-// streaming call. A field spelled differently from what E2B expects fails
-// only against the real API, minutes into a launch, with a message from
-// the vendor rather than from us — so the assertions are written as "the
-// request carries X", not as "the method returns Y".
+// What these tests protect: E2B is out of a test's reach, so they pin THE
+// WIRE — every request shape, every header, and the framing of the streaming
+// call. A misspelled field fails only against the real API, minutes into a
+// launch, so assertions read "the request carries X", not "the method returns Y".
 
-// e2bStub is a fake E2B: one server standing in for both planes, which is
-// what lets a whole create-exec-kill round trip be driven in a test.
-//
-// The two planes are different HOSTS in production — api.<domain> and
-// <port>-<box>.<domain> — and one server answers both here because the
-// client reaches them through the same round-tripper. The paths are
-// disjoint, so nothing is conflated.
+// e2bStub is a fake E2B answering both planes, so a whole create-exec-kill
+// round trip runs in a test. In production the planes are different hosts
+// (api.<domain>, <port>-<box>.<domain>); one server serves both here because
+// the client reaches them through one round-tripper, and their paths are disjoint.
 type e2bStub struct {
 	mu sync.Mutex
 
-	// requests is every path the client asked for, in order. The record
-	// IS the assertion for the calls whose only job is to be made.
+	// requests is every path the client asked for, in order: the assertion
+	// for a call whose only job is to be made.
 	requests []string
 	// bodies is the decoded JSON body of each control-plane write.
 	bodies map[string]map[string]any
@@ -62,11 +55,9 @@ type e2bStub struct {
 	connectStatus int
 	// clientID is what create reports; empty exercises the short hostname.
 	clientID string
-	// envdToken is the box's envd access token, answered by the create, a
-	// connect and a read of the box, and REQUIRED by envd on every request
-	// it serves, as a secured box's is. Empty is a box made without secured
-	// access, whose envd requires nothing — what E2B makes for a create that
-	// does not ask for `secure`.
+	// envdToken is the box's envd access token, answered by a create, a connect
+	// and a read of the box, and required by envd on every request, as a secured
+	// box's is. Empty is a box made without `secure`, whose envd requires nothing.
 	envdToken string
 	// refused counts the envd requests refused for their token.
 	refused int
@@ -103,9 +94,9 @@ type e2bStub struct {
 	halfWritten chan string
 }
 
-// uploadGap is how long the stub's in-place upload holds the file empty, and
-// then half written, standing in for the network an upload's body crosses
-// while envd writes it ([e2bStub.serveFiles]).
+// uploadGap is how long the stub's in-place upload holds the file empty, then
+// half written: the network an upload's body crosses while envd writes it
+// ([e2bStub.serveFiles]).
 const uploadGap = time.Millisecond
 
 func newE2BStub() *e2bStub {
@@ -132,8 +123,8 @@ func (s *e2bStub) boxJSON(extra string) string {
 
 // envdAdmits is a secured envd's own check (WithAuthorization in
 // packages/envd/internal/api/auth.go, e2b-dev/infra): with a token set, a
-// request without it is refused 401 — a /files call may present a signature
-// instead, which this client never does, so for it the header is the rule.
+// request without it is refused 401. A /files call may present a signature
+// instead, which this client never does, so here the header is the rule.
 func (s *e2bStub) envdAdmits(w http.ResponseWriter, r *http.Request) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -178,11 +169,9 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/sandboxes" && r.Method == http.MethodPost:
 		s.capture(r)
-		// AS E2B'S CREATE DOES (packages/api/internal/handlers/
-		// sandbox_create.go in e2b-dev/infra): a token is minted only for a
-		// box asked for with `secure: true`, and a box made without one has
-		// an envd that requires nothing — so a client that stopped asking
-		// would be caught reaching a box nobody secured.
+		// AS E2B'S CREATE DOES (packages/api/internal/handlers/sandbox_create.go,
+		// e2b-dev/infra): a token is minted only for `secure: true`, and an unsecured
+		// box's envd requires nothing — so a client that stopped asking is caught.
 		s.mu.Lock()
 		if s.bodies[r.URL.Path]["secure"] != true {
 			s.envdToken = ""
@@ -195,18 +184,15 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.capture(r)
 		w.WriteHeader(http.StatusNoContent)
 
-	// /connect answers 200 when the box was already running and 201 when it
-	// had to be woken, and returns the sandbox either way — which is why the
-	// client needs no second call and no conflict to swallow.
+	// /connect answers 200 for a running box and 201 for a woken one, with the
+	// sandbox either way, so the client needs no second call.
 	case strings.HasSuffix(r.URL.Path, "/connect"):
 		s.capture(r)
 		if s.connectStatus >= 400 {
 			w.WriteHeader(s.connectStatus)
 			return
 		}
-		// 201 still carries the sandbox — a woken box is returned just
-		// like an already-running one, which is the whole point of the
-		// endpoint.
+		// 201 carries the sandbox too: a woken box is returned like a running one.
 		if s.connectStatus != 0 {
 			w.WriteHeader(s.connectStatus)
 		}
@@ -242,9 +228,8 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/connect+json")
 		for _, frame := range s.frames {
 			if s.streamDelay > 0 {
-				// Flushed, so the client sees each frame as it lands
-				// rather than in one buffered write at the end — which
-				// is what makes the gap between them real.
+				// Flushed, so the client sees each frame as it lands and the gap
+				// between them is real.
 				if flusher, ok := w.(http.Flusher); ok {
 					flusher.Flush()
 				}
@@ -288,8 +273,8 @@ func (s *e2bStub) capture(r *http.Request) {
 	s.bodies[r.URL.Path] = body
 }
 
-// captureStart un-frames the Connect request, which is how the test reads
-// what a command actually asked envd to run.
+// captureStart un-frames the Connect request, to read what a command asked
+// envd to run.
 func (s *e2bStub) captureStart(r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	if len(raw) < 5 {
@@ -320,10 +305,9 @@ func (s *e2bStub) serveFiles(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write(content)
 			return
 		}
-		// THROUGH ServeContent, as envd itself serves /files
-		// (packages/envd/internal/api/download.go in e2b-dev/infra), so a
-		// Range request is answered with 206 and Content-Range by the same
-		// code the real box runs.
+		// THROUGH ServeContent, as envd serves /files
+		// (packages/envd/internal/api/download.go, e2b-dev/infra), so a Range
+		// request gets 206 and Content-Range from the code the real box runs.
 		http.ServeContent(w, r, path, time.Time{}, bytes.NewReader(content))
 	case http.MethodPost:
 		form, err := r.MultipartReader()
@@ -345,10 +329,10 @@ func (s *e2bStub) serveFiles(w http.ResponseWriter, r *http.Request) {
 		s.uploads = append(s.uploads, path)
 		failWith := s.uploadStatus
 		s.mu.Unlock()
-		// IN PLACE, AS ENVD WRITES AN UPLOAD: its handler opens the path
-		// with O_TRUNC and copies the body in as it arrives (processFile in
+		// IN PLACE, AS ENVD WRITES AN UPLOAD: it opens the path O_TRUNC and
+		// copies the body in as it arrives (processFile in
 		// packages/envd/internal/api/upload.go, e2b-dev/infra), so a read
-		// made meanwhile finds the file empty, then half written.
+		// meanwhile finds the file empty, then half written.
 		s.hold(path, nil)
 		s.hold(path, content[:len(content)/2])
 		s.mu.Lock()
@@ -382,10 +366,10 @@ func (s *e2bStub) hold(path string, content []byte) {
 }
 
 // serveFilesystem answers envd's filesystem Move and Remove as Connect unary
-// calls in JSON, as envd does: a rename of the source over the destination
-// (os.Rename in packages/envd/internal/services/filesystem/move.go) and a
-// removal that does not mind a path that is not there (os.RemoveAll in its
-// remove.go). An error is Connect's: its code and message in a JSON body.
+// calls in JSON, as envd does: a rename over the destination (os.Rename in
+// packages/envd/internal/services/filesystem/move.go) and a removal that
+// tolerates a missing path (os.RemoveAll in remove.go). An error is Connect's:
+// its code and message in a JSON body.
 func (s *e2bStub) serveFilesystem(w http.ResponseWriter, r *http.Request) {
 	var call map[string]string
 	if err := json.NewDecoder(r.Body).Decode(&call); err != nil {
@@ -472,11 +456,9 @@ func trailerError(code, message string) any {
 	return map[string]any{"error": map[string]any{"code": code, "message": message}}
 }
 
-// newE2B points a provider at the stub.
-//
-// THE ROUND-TRIPPER IS THE REDIRECTION, not a base-URL option, because the
-// two planes' addresses are DERIVED from the domain — that derivation is
-// part of what these tests check, so overriding it would test nothing.
+// newE2B points a provider at the stub through the round-tripper, not a
+// base-URL option: the two planes' addresses are derived from the domain, and
+// that derivation is under test.
 func newE2B(t *testing.T, stub *e2bStub) (*sandbox.E2BProvider, *httptest.Server) {
 	t.Helper()
 	server := httptest.NewServer(stub)
@@ -493,8 +475,8 @@ func newE2B(t *testing.T, stub *e2bStub) (*sandbox.E2BProvider, *httptest.Server
 }
 
 // A KEYLESS PROVIDER IS REFUSED AT CONSTRUCTION, so an apply fails rather
-// than every launch: the API authenticates every call, including against
-// a self-hosted cluster.
+// than every launch: the API authenticates every call, a self-hosted
+// cluster's included.
 func TestE2BRefusesToBuildWithoutAKey(t *testing.T) {
 	t.Parallel()
 	if _, err := sandbox.NewE2B(sandbox.E2BOptions{Domain: "cluster.example"}); err == nil {
@@ -502,11 +484,8 @@ func TestE2BRefusesToBuildWithoutAKey(t *testing.T) {
 	}
 }
 
-// THE CONTROL PLANE CARRIES THE KEY AS X-API-KEY.
-//
-// E2B accepts a bearer only for a user-scoped access token; the key from the
-// dashboard is refused under that scheme — the same credential rejected
-// purely on which header carried it.
+// THE CONTROL PLANE CARRIES THE KEY AS X-API-KEY: E2B accepts a bearer only
+// for a user-scoped access token, and refuses the dashboard's key under it.
 func TestE2BCreateSendsTheDocumentedRequest(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
@@ -531,9 +510,9 @@ func TestE2BCreateSendsTheDocumentedRequest(t *testing.T) {
 	}
 
 	body := stub.body("/sandboxes")
-	// THE TEMPLATE IS THE HARNESS'S. A bare box has no harness
-	// harness in it, so the run would fail at its first command with "command
-	// not found" — a template problem that reads as a broken runner.
+	// THE TEMPLATE IS THE HARNESS'S: a bare box has no harness, so the run
+	// fails at its first command with "command not found" — a template
+	// problem that reads as a broken runner.
 	if body["templateID"] != "claude" {
 		t.Errorf("templateID = %v, want the claude-code template", body["templateID"])
 	}
@@ -557,11 +536,10 @@ func TestE2BCreateSendsTheDocumentedRequest(t *testing.T) {
 	}
 }
 
-// EVERY ENVD REQUEST CARRIES THE BOX'S ACCESS TOKEN, on a box reached by each
-// of the three calls that answer one — a create, a connect and a read — and
-// for every kind of request envd serves: a command, a file read whole, read
-// from its end and streamed, and a write. A secured box refuses each of them
-// without it; the stub refuses them as envd does.
+// EVERY ENVD REQUEST CARRIES THE BOX'S ACCESS TOKEN — a command, a file read
+// whole, from its end and streamed, and a write — on a box reached by a
+// create, a connect or a read. The stub refuses each without it, as a secured
+// envd does.
 //
 // Mutation: drop the header, and every call here is refused 401.
 func TestE2BSendsTheBoxsAccessTokenOnEveryEnvdRequest(t *testing.T) {
@@ -615,13 +593,9 @@ func TestE2BSendsTheBoxsAccessTokenOnEveryEnvdRequest(t *testing.T) {
 	}
 }
 
-// THE TEMPLATE FALLS BACK IN ORDER: the company's, then the harness's
-// own.
-//
-// There is no per-run template, and that is the point of the pair: sizing is a
-// property of the template, the template is configured on the BACKEND, and the
-// Spec field that used to sit in front of this was set by nobody while looking
-// exactly like a wired knob.
+// THE TEMPLATE FALLS BACK IN ORDER: the company's, then the harness's own.
+// There is no per-run template: sizing is a property of the template, which
+// is configured on the backend.
 func TestE2BPicksATemplateInOrder(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -630,10 +604,9 @@ func TestE2BPicksATemplateInOrder(t *testing.T) {
 		{"the company's wins", "company-box", "claude-code", "company-box"},
 		{"then the agent's own", "", "claude-code", "claude"},
 		{"opencode has its own", "", "opencode", "opencode"},
-		// An agent this build does not know gets E2B's bare image, on
-		// which the run fails — which is honest: the config names an
-		// agent nothing here can run, and inventing a template would
-		// hide that behind a runtime error further in.
+		// An agent this build does not know gets E2B's bare image, and the run
+		// fails: inventing a template would hide a config naming an agent
+		// nothing here can run behind a runtime error further in.
 		{"an unknown agent gets the bare image", "", "cursor", "base"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -661,11 +634,8 @@ func TestE2BPicksATemplateInOrder(t *testing.T) {
 }
 
 // THE BOX IS REACHED ON ITS OWN HOSTNAME, derived from the sandbox id, the
-// client id and the domain.
-//
-// The client id is the field most easily mistaken for bookkeeping: a
-// reconnect that kept only the sandbox id can kill the box and can never talk
-// to it again.
+// client id and the domain. The client id is not bookkeeping: a reconnect
+// that kept only the sandbox id could kill the box but never talk to it.
 func TestE2BTalksToTheBoxOnItsDerivedHost(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
@@ -695,9 +665,8 @@ func TestE2BTalksToTheBoxOnItsDerivedHost(t *testing.T) {
 		t.Errorf("the box was not addressed on its own hostname: %v", transport.Hosts())
 	}
 
-	// A BOX WITH NO CLIENT ID takes the short hostname. Building the long
-	// form unconditionally produces `49983-sbx1-.domain`, which resolves
-	// to nothing.
+	// A BOX WITH NO CLIENT ID takes the short hostname: the long form would
+	// be `49983-sbx1-.domain`, which resolves to nothing.
 	stub.clientID = ""
 	short, err := provider.Create(context.Background(), sandbox.Spec{Harness: "opencode"})
 	if err != nil {
@@ -712,8 +681,8 @@ func TestE2BTalksToTheBoxOnItsDerivedHost(t *testing.T) {
 	}
 }
 
-// A DOMAIN WRITTEN AS A URL IS THE OBVIOUS MISTAKE, and taking it at face
-// value produces "https://https://…" with nothing naming the cause.
+// A DOMAIN WRITTEN AS A URL IS THE OBVIOUS MISTAKE, and taken at face value
+// it produces "https://https://…" with nothing naming the cause.
 func TestE2BNormalisesTheDomain(t *testing.T) {
 	t.Parallel()
 	for _, domain := range []string{
@@ -739,11 +708,9 @@ func TestE2BNormalisesTheDomain(t *testing.T) {
 	}
 }
 
-// A COMMAND IS FRAMED AS CONNECT AND RUN THROUGH A SHELL.
-//
-// Every caller hands over a shell line — pipes, redirects, `&&` — because
-// that is what a setup step and a harness invocation are. envd's API
-// takes an argv, so the shell has to be named.
+// A COMMAND IS FRAMED AS CONNECT AND RUN THROUGH A SHELL: every caller hands
+// over a shell line (pipes, redirects, `&&`), and envd's API takes an argv,
+// so the shell has to be named.
 func TestE2BExecSendsAFramedShellCommand(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
@@ -805,19 +772,15 @@ func TestE2BExecSendsAFramedShellCommand(t *testing.T) {
 	}
 }
 
-// A DETACHED START RETURNS AS SOON AS THE PID IS KNOWN.
-//
-// This is the whole of "start and walk away": the process keeps running
-// because envd owns it, not because anything here is still listening. Reading
-// on would block the turn for the length of the job.
+// A DETACHED START RETURNS AS SOON AS THE PID IS KNOWN: envd owns the
+// process, so reading on would only block the turn for the length of the job.
 func TestE2BStartBackgroundReturnsAtTheFirstFrame(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
 	stub.frames = []any{startEvent(4242)}
-	// AND THEN GARBAGE. A real detached job sends no end frame for hours,
-	// so "it returned" alone would pass for a client that read to EOF as
-	// well as for one that stopped at the pid. An unreadable frame after
-	// the pid separates them: only a client that kept reading sees it.
+	// AND THEN GARBAGE: a detached job sends no end frame for hours, so "it
+	// returned" would also pass a client that read to EOF. Only a client
+	// that kept reading past the pid reaches the unreadable frame.
 	stub.trailingGarbage = true
 	provider, _ := newE2B(t, stub)
 	box, err := provider.Create(context.Background(), sandbox.Spec{})
@@ -835,11 +798,8 @@ func TestE2BStartBackgroundReturnsAtTheFirstFrame(t *testing.T) {
 }
 
 // A STREAM THAT ENDS WITHOUT A VERDICT IS REPORTED, NOT CLAIMED AS SUCCESS.
-//
-// envd closes the connection when a box is paused or reclaimed mid-command.
-// Returning exit 0 would have the caller treat an abandoned command as one
-// that worked — and for a setup step, carry on into a box that is not
-// provisioned.
+// envd closes the connection when a box is paused or reclaimed mid-command;
+// exit 0 would have a setup step carry on into a box that is not provisioned.
 func TestE2BExecWithNoVerdictIsAFailure(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
@@ -868,14 +828,11 @@ func TestE2BExecWithNoVerdictIsAFailure(t *testing.T) {
 }
 
 // A COMMAND A SIGNAL ENDED REPORTS 128 PLUS THE SIGNAL, AS A SHELL DOES.
-//
-// envd waits on the shell a command runs as, and when a signal ends that shell
-// itself — `kill -9 $$`, or an out-of-memory kill of the one program it
-// exec'd into — its end event carries an exit code of -1 and the signal in its
-// status. Read as a missing verdict, a box that was still there was reported
-// as one that went away mid-command, and a setup step as a command with no
-// exit status at all. Each case is a status envd writes; mutate the signal
-// reading out and every one goes red.
+// When a signal ends the shell envd waits on (`kill -9 $$`, or an OOM kill of
+// the program it exec'd into), the end event carries exit code -1 and the
+// signal in its status. Read as a missing verdict, a live box was reported
+// gone and a setup step as having no exit status. Each case is a status envd
+// writes; mutate the signal reading out and every one goes red.
 func TestE2BExecReadsASignalAsAShellReportsOne(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -922,12 +879,9 @@ func TestE2BExecReadsASignalAsAShellReportsOne(t *testing.T) {
 }
 
 // A COMMAND THAT OUTLIVED ITS TIMEOUT REPORTS 124, AS A LOCAL BOX DOES.
-//
-// The command's timeout_seconds travels as Connect-Timeout-Ms, and when it runs
-// out envd closes the stream with `deadline_exceeded` — usually before any end
-// event, at best after one reporting the kill. Read as a missing verdict, a
-// setup step that ran past its budget was reported as a box that went away,
-// sending the operator to the box rather than to the step's timeout.
+// timeout_seconds travels as Connect-Timeout-Ms, and envd ends the stream with
+// `deadline_exceeded`, usually before any end event. Read as a missing
+// verdict, it sent the operator to the box rather than to the step's timeout.
 func TestE2BExecReadsATimeoutAsALocalBoxReportsOne(t *testing.T) {
 	t.Parallel()
 	cases := map[string][]any{
@@ -1014,18 +968,16 @@ func TestE2BRefusesAnImpossibleFrameLength(t *testing.T) {
 		t.Fatal("a 1 GiB frame length was accepted")
 	}
 	// THE CAP IS WHAT MUST HAVE REFUSED IT, not the read that fails
-	// afterwards anyway: without the cap the length is allocated first,
-	// and a desync becomes an out-of-memory rather than an error.
+	// afterwards anyway: uncapped, the length is allocated first and a desync
+	// becomes an out-of-memory.
 	if !strings.Contains(err.Error(), "out of frame") {
 		t.Errorf("the frame was allocated before it was refused: %v", err)
 	}
 }
 
-// FILES ROUND-TRIP, and a missing one reads as empty.
-//
-// The detached runner polls for a done marker and a result file that do not
-// exist until the job finishes, so "not there yet" is the ordinary answer on
-// most calls — an error there would make every poll tick look like a failure.
+// FILES ROUND-TRIP, and a missing one reads as empty: the detached runner
+// polls for a done marker and a result file that exist only once the job
+// finishes, so an error there would make every poll tick a failure.
 func TestE2BFilesRoundTripAndMissingIsEmpty(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
@@ -1056,14 +1008,11 @@ func TestE2BFilesRoundTripAndMissingIsEmpty(t *testing.T) {
 	}
 }
 
-// A FILE'S PATH MEANS IN AN E2B BOX WHAT IT MEANS IN EVERY OTHER CELL.
-//
-// envd cleans a relative or `~/` path by joining it onto the home, and takes
-// an absolute one verbatim — so `/home/user/.npmrc/`, sent as written, made
-// `.npmrc` a directory and was refused as one, on a key both local cells
-// clean and write as a file and the setup-file rule admits. What reaches
-// envd is the cleaned path, the `~/` form kept for envd to expand and cleaned
-// only after its tilde.
+// A FILE'S PATH MEANS IN AN E2B BOX WHAT IT MEANS IN EVERY OTHER CELL. envd
+// joins a relative or `~/` path onto the home and takes an absolute one
+// verbatim, so `/home/user/.npmrc/` sent as written makes `.npmrc` a
+// directory. What reaches envd is the cleaned path, a `~/` form cleaned only
+// after its tilde, which envd expands.
 func TestE2BWritesAFileAtItsCleanedPath(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
@@ -1076,15 +1025,14 @@ func TestE2BWritesAFileAtItsCleanedPath(t *testing.T) {
 		"/home/user/.npmrc/":         "/home/user/.npmrc",
 		"/home/user/./tools/../.pip": "/home/user/.pip",
 		"~/.config/tool.toml/":       "~/.config/tool.toml",
-		// Cleaned AFTER the tilde, never across it: a lexical clean of
-		// the whole path removes `~` as an ordinary element, and envd
-		// would then join `user/.npmrc` onto the home rather than expand
-		// the tilde to the home and resolve `..` above it.
+		// Cleaned AFTER the tilde, never across it: a lexical clean of the
+		// whole path drops `~` as an ordinary element, and envd would join
+		// `user/.npmrc` onto the home rather than resolve `..` above it.
 		"~/../user/.npmrc": "~/../user/.npmrc",
 		"~/a/../../x":      "~/../x",
-		// A relative path goes to envd as written: cleaned here, this one
-		// would become the `~/x` envd expands to the home, while every
-		// other cell and validation place it at <home>/~/x.
+		// A relative path goes as written: cleaned here, this one would
+		// become the `~/x` envd expands to the home, while every other cell
+		// and validation place it at <home>/~/x.
 		"a/../~/x": "a/../~/x",
 	} {
 		if err := box.WriteFile(context.Background(), written, []byte(written)); err != nil {
@@ -1100,14 +1048,12 @@ func TestE2BWritesAFileAtItsCleanedPath(t *testing.T) {
 	}
 }
 
-// A FILE IS REPLACED, NEVER UPLOADED OVER. envd writes an upload in place —
-// the path truncated, then filled as the body arrives — so a file a run is
-// reading (the token file the poll keeps current, under the git credential
-// helper) read empty or part written for as long as the body took to cross
-// the network. The content is uploaded under a fresh name beside the path and
-// moved over it by envd's own rename, as the account every file call names,
-// with the box's token; the path itself is never an upload's destination, and
-// nothing staged is left.
+// A FILE IS REPLACED, NEVER UPLOADED OVER. envd writes an upload in place
+// (truncate, then fill), so a file a run is reading — the token file the poll
+// keeps current — would read empty or part written meanwhile. The content is
+// uploaded under a fresh name beside the path and moved over it by envd's
+// rename, as the account every file call names, with the box's token; nothing
+// staged is left.
 //
 // Mutation: upload to the path itself, and the path is an upload's destination.
 func TestE2BReplacesAFileItNeverUploadsOver(t *testing.T) {
@@ -1163,16 +1109,14 @@ func TestE2BReplacesAFileItNeverUploadsOver(t *testing.T) {
 	}
 }
 
-// THE CONTENT IS STAGED IN THE DIRECTORY ENVD WRITES THE PATH IN, whatever
-// form the path takes, so the move is a rename within one directory and never
-// crosses a filesystem. envd resolves a relative or `~/` path against the
-// account's home and only then cleans it ([envdResolve]), so a staged name
-// made by cleaning the path here first could land somewhere else: `a/../~/x`
-// is <home>/~/x to envd, while its clean, `~/x`, is <home>/x.
+// THE CONTENT IS STAGED IN THE DIRECTORY ENVD WRITES THE PATH IN, so the
+// move is a rename within one directory. envd resolves a relative or `~/`
+// path against the home before cleaning it ([envdResolve]), so a staged name
+// made from a clean here could land elsewhere: `a/../~/x` is <home>/~/x to
+// envd, while its clean, `~/x`, is <home>/x.
 //
 // Mutation: stage at path.Dir of the path joined with the fresh name, and the
-// tilde forms and a trailing slash are staged in another directory than the
-// path's.
+// tilde forms and a trailing slash are staged in another directory.
 func TestE2BStagesAWriteInTheDirectoryEnvdWritesThePathIn(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
@@ -1233,11 +1177,10 @@ func envdResolve(p string) string {
 	return path.Join(home, p)
 }
 
-// A FAILED WRITE LEAVES NOTHING STAGED, AND THE FILE AS IT WAS. An upload envd
-// refuses part way — the disk filled — leaves the staged file half written,
-// and a move envd refuses leaves it whole; either way it is removed, as the
-// account that wrote it, and the path keeps the file it had. The error names
-// the path and what failed.
+// A FAILED WRITE LEAVES NOTHING STAGED, AND THE FILE AS IT WAS. An upload
+// refused part way (the disk filled) or a refused move leaves the staged file,
+// which is removed as the account that wrote it. The error names the path and
+// what failed.
 //
 // Mutation: return the upload's or the move's error without removing what was
 // staged, and the box keeps a file nothing reads.
@@ -1286,12 +1229,10 @@ func TestE2BAFailedWriteLeavesNothingStaged(t *testing.T) {
 	}
 }
 
-// A WRITE WHOSE CALLER GAVE UP LEAVES NOTHING STAGED EITHER. A caller's context
-// that ends while the upload's body is crossing — a poll past its bound, a
-// node shutting down — is the commonest way an upload fails, and a removal
-// made under that same context would be refused before it was sent. So the
-// staged file is removed whatever became of the caller's context, and the
-// path keeps the file it had.
+// A WRITE WHOSE CALLER GAVE UP LEAVES NOTHING STAGED EITHER. A context that
+// ends mid-upload (a poll past its bound, a node shutting down) is the
+// commonest failure, and a removal under it would never be sent, so the staged
+// file is removed whatever became of that context.
 //
 // Mutation: remove the staged file under the write's own context, and the
 // removal is never sent.
@@ -1338,14 +1279,12 @@ func TestE2BAWriteItsCallerGaveUpOnLeavesNothingStaged(t *testing.T) {
 	}
 }
 
-// THE FILE CONTRACT, against a fake envd that serves downloads the way envd
-// does — through ServeContent, so a range is answered by the same code.
-//
-// AT THE REAL CAP, unlike the in-process backends: a read here crosses envd's
-// HTTP body, its 32 KiB pieces and the idle bound around them, and a limit
-// written against [sandbox.MaxFileBytes] anywhere on that path — on the whole
-// read, the stream or the tail — is the regression the two cap cases exist
-// to catch, and a smaller file would pass beneath it.
+// THE FILE CONTRACT, against a fake envd that serves downloads through
+// ServeContent as envd does. At the real cap, unlike the in-process backends:
+// a read crosses envd's HTTP body, its 32 KiB pieces and their idle bound, and
+// a limit written against [sandbox.MaxFileBytes] anywhere on that path — whole
+// read, stream or tail — is what the cap cases catch; a smaller file would
+// pass beneath it.
 func TestE2BKeepsTheFileContract(t *testing.T) {
 	t.Parallel()
 	sandboxtest.Box(t, sandbox.MaxFileBytes, func(t *testing.T) sandbox.Sandbox {
@@ -1358,9 +1297,8 @@ func TestE2BKeepsTheFileContract(t *testing.T) {
 	})
 }
 
-// A TAIL IS A SUFFIX RANGE, so the cost of asking a running job what it last
-// wrote is the window and not the whole stream — every poll, for as long as
-// the run lasts.
+// A TAIL IS A SUFFIX RANGE, so asking a running job what it last wrote costs
+// the window, not the whole stream, on every poll.
 func TestE2BReadsATailAsASuffixRange(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
@@ -1386,10 +1324,9 @@ func TestE2BReadsATailAsASuffixRange(t *testing.T) {
 	}
 }
 
-// AN ENVD THAT IGNORES THE RANGE IS STILL ANSWERED RIGHT. Its 200 carries the
-// whole file, which is read through keeping only the end, so the answer is
-// the same and only its cost differs — a box's envd version is not something
-// this engine gets to choose.
+// AN ENVD THAT IGNORES THE RANGE IS STILL ANSWERED RIGHT: its 200 carries the
+// whole file, read through keeping only the end — the same answer at a higher
+// cost, since a box's envd version is not this engine's to choose.
 func TestE2BReadsATailFromAnEnvdThatIgnoresTheRange(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
@@ -1491,11 +1428,8 @@ func TestE2BLifecycleCallsAreDistinct(t *testing.T) {
 	}
 }
 
-// A BOX THAT IS ALREADY GONE IS A SUCCESSFUL KILL.
-//
-// The reaper runs against boxes it believes are orphaned, and most of the
-// time something already reclaimed them. Raising would turn the ordinary case
-// into an error on every tick.
+// A BOX THAT IS ALREADY GONE IS A SUCCESSFUL KILL: the reaper targets boxes it
+// believes orphaned, most already reclaimed, so raising would error every tick.
 func TestE2BKillingAGoneBoxSucceeds(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
@@ -1506,7 +1440,7 @@ func TestE2BKillingAGoneBoxSucceeds(t *testing.T) {
 		t.Fatalf("killing an already-gone box raised: %v", err)
 	}
 	// AND A REAL REFUSAL STILL RAISES, or a permissions problem would read
-	// as a successful reclaim and the box would bill for ever.
+	// as a reclaim and the box would bill for ever.
 	stub.killStatus = http.StatusForbidden
 	err := provider.Kill(context.Background(), "sbx1")
 	if err == nil {
@@ -1518,11 +1452,9 @@ func TestE2BKillingAGoneBoxSucceeds(t *testing.T) {
 	}
 }
 
-// CONNECT IS ONE CALL, and "already running" is a success status rather than
-// the conflict the deprecated /resume reported.
-//
-// The pair this replaced — GET the box, then POST /resume — was two round
-// trips on the completion path and raced a reaper between them.
+// CONNECT IS ONE CALL, and "already running" is a success status. GET then
+// the deprecated POST /resume was two round trips on the completion path that
+// raced a reaper between them.
 func TestE2BConnectWakesABoxAndToleratesARunningOne(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
@@ -1539,15 +1471,14 @@ func TestE2BConnectWakesABoxAndToleratesARunningOne(t *testing.T) {
 	if !stub.saw("POST /sandboxes/sbx1/connect") {
 		t.Errorf("connect never called: %v", stub.requests)
 	}
-	// THE DEPRECATED ENDPOINT IS NOT CALLED AT ALL — not as a fallback, not
-	// as a second leg. /resume cannot express "already running" as anything
-	// but an error, which is what made the old path need a 409 workaround.
+	// THE DEPRECATED ENDPOINT IS NOT CALLED AT ALL, not even as a fallback:
+	// /resume can say "already running" only as an error (409).
 	if stub.saw("POST /sandboxes/sbx1/resume") {
 		t.Errorf("the deprecated resume endpoint was called: %v", stub.requests)
 	}
-	// A FRESH TTL: a snapshot has no kill timer running, so a box woken
-	// without one carries whatever remained of the timer it was paused with
-	// — for a run parked overnight, nothing. The API requires the field.
+	// A FRESH TTL: a snapshot has no kill timer, so a box woken without one
+	// keeps what remained of the timer it was paused with — overnight,
+	// nothing. The API requires the field.
 	if got := stub.body("/sandboxes/sbx1/connect")["timeout"]; got == nil || got == float64(0) {
 		t.Errorf("connect gave the box no TTL: %v", got)
 	}
@@ -1558,10 +1489,9 @@ func TestE2BConnectWakesABoxAndToleratesARunningOne(t *testing.T) {
 		t.Fatalf("a resumed box was reported as a failure: %v", err)
 	}
 
-	// AND A CONNECT THAT REALLY FAILED IS NOT SWALLOWED. Handing back a
-	// handle to a box that is still paused makes every command on it fail
-	// one layer further in, with envd's message rather than the control
-	// plane's.
+	// AND A CONNECT THAT REALLY FAILED IS NOT SWALLOWED: a handle to a
+	// still-paused box fails every command one layer further in, with
+	// envd's message rather than the control plane's.
 	stub.connectStatus = http.StatusInternalServerError
 	if _, err := provider.Connect(context.Background(), "sbx1"); err == nil {
 		t.Fatal("a failed connect handed back a handle to a paused box")
@@ -1592,11 +1522,10 @@ func TestE2BConnectToAVanishedBoxFails(t *testing.T) {
 	}
 }
 
-// A READER NEVER WAKES A BOX. Attach READS the box (`GET /sandboxes/{id}`):
-// a running one is reached through envd exactly as a connected one is, and a
-// paused one is refused — never /connect, which resumes a paused box and
-// moves its timer, so a peek that raced the collection's pause woke the box,
-// and nothing renewed it again.
+// A READER NEVER WAKES A BOX. Attach reads the box (`GET /sandboxes/{id}`):
+// a running one is reached through envd, a paused one refused. /connect would
+// resume a paused box and move its timer, so a peek racing the collection's
+// pause would wake a box nothing renews.
 //
 // Mutation: attach through /connect, and the box is woken.
 func TestE2BAttachReadsTheBoxAndNeverWakesIt(t *testing.T) {
@@ -1693,19 +1622,15 @@ func TestE2BKindMatchesTheConfigValue(t *testing.T) {
 }
 
 // A LONG COMMAND IS NOT KILLED BY THE CONTROL PLANE'S CLOCK.
-//
-// http.Client.Timeout covers the whole exchange INCLUDING reading the body.
-// Sharing one client between the two planes therefore capped every command at
-// whatever bound was right for minting a VM — so a build that took longer
-// than that died mid-stream, reported as a box that went away. What bounds a
-// command is the gap BETWEEN frames, not the call.
+// http.Client.Timeout covers the whole exchange, body included, so one client
+// for both planes would cap every command at the bound right for minting a
+// VM. What bounds a command is the gap BETWEEN frames, not the call.
 func TestE2BACommandOutlivesTheControlPlaneTimeout(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
-	// THE RATIO IS THE PROPERTY, THE ABSOLUTE IS THE HEADROOM. Three frames
-	// at this delay is a 1.5 s stream against the 1 s bound below, so the
-	// command is demonstrably still running when that bound would have
-	// fired — which is the whole assertion.
+	// THE RATIO IS THE PROPERTY: three frames at this delay is a 1.5 s
+	// stream against the 1 s bound below, so the command is still running
+	// when that bound would have fired.
 	stub.streamDelay = 500 * time.Millisecond
 	stub.frames = []any{startEvent(1), dataEvent("still going", ""), endEvent(0)}
 	server := httptest.NewServer(stub)
@@ -1713,17 +1638,11 @@ func TestE2BACommandOutlivesTheControlPlaneTimeout(t *testing.T) {
 
 	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 		APIKey: "k", Domain: "test.invalid",
-		// A SMALL overall bound, standing in for the control plane's: the
-		// command below runs longer than it.
-		//
-		// Small, not tiny. http.Client.Timeout is an OVERALL deadline, so
-		// it also has to cover the Create round trip on the line after
-		// this one — and at 100 ms that round trip was the fragile half of
-		// a test about something else entirely: CI failed here with
-		// "Client.Timeout exceeded while awaiting headers" on POST
-		// /sandboxes, in a suite where every package runs in parallel
-		// under -race. One second is ~200x a healthy local round trip and
-		// still well inside the stream above.
+		// A SMALL overall bound, standing in for the control plane's, that the
+		// command below outlives. Not tiny: it also covers the Create round trip
+		// below, which must not flake in a suite running every package in
+		// parallel under -race. One second is ~200x a healthy local round trip
+		// and still well inside the stream above.
 		HTTP: &http.Client{
 			Timeout:   time.Second,
 			Transport: httpxtest.Rewrite(t, server),

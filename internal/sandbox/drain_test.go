@@ -56,10 +56,10 @@ func (e *endedTurns) all() []string {
 	return slices.Clone(e.turns)
 }
 
-// finishOnEnd makes call's update once the coordinator ends its job's session
-// ([CoordinatorOptions.Ended]) — as the node still running the call makes it,
-// another node's for all this one knows, through the store — and answers a
-// channel closed once the update has landed, and the sessions ended.
+// finishOnEnd makes call's update through the store, as the node still running
+// it would, once the coordinator ends its job's session
+// ([CoordinatorOptions.Ended]); it answers a channel closed once the update has
+// landed, and the sessions ended.
 func finishOnEnd(t *testing.T, rig *coordRig, run PendingRun, call BridgeCall) (<-chan struct{}, *endedTurns) {
 	t.Helper()
 	landed := make(chan struct{})
@@ -81,19 +81,15 @@ func finishOnEnd(t *testing.T, rig *coordRig, run PendingRun, call BridgeCall) (
 }
 
 // EVERY COLLECTION WAITS FOR A CALL IN FLIGHT BEFORE IT READS THE LOG. A call
-// its harness left running — the harness ended its own run around it, or the
-// job was lost with its host — is on the run's log by its entry, written before
-// it ran, and its update lands once it returns, made by whichever node runs it:
-// so a collection ends the job's session to new calls, waits on the run's log
-// until the entry is gone, and only then reads it, and the resume judges the
-// round on the call and settles the turn's outcome by what it committed — here
-// the work item it filed. The update is made through the store, as a node other
-// than the one collecting makes it, so nothing of the bridge's own memory is
-// read.
+// the harness left running (its run ended around it, or its host was lost) is
+// on the log by the entry written before it ran, and its update lands when it
+// returns, from whichever node runs it. So a collection ends the job's session
+// to new calls, waits until the entry is gone, then reads, and the resume
+// settles the turn's outcome by what the call committed — here a work item. The
+// update goes through the store, so nothing of the bridge's own memory is read.
 //
-// Mutation: read the log without waiting for the calls in flight
-// (collection-reads-without-the-drain), and the resume reads the work item's
-// call as still in flight, its commit in no outcome.
+// Mutation: read the log without waiting (collection-reads-without-the-drain),
+// and the resume reads the call as still in flight, its commit in no outcome.
 func TestEveryCollectionWaitsForACallInFlightBeforeItReadsTheLog(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -157,19 +153,16 @@ func TestEveryCollectionWaitsForACallInFlightBeforeItReadsTheLog(t *testing.T) {
 }
 
 // A WAIT STOPS AT THE TURN'S CAP, AT A CALL'S OWN BOUND, AND AT ITS PROCESS GONE,
-// AND NAMES THE CALL. A collection holds the run's seat while it waits, so the
-// wait is bounded: by the turn's wall-clock cap where it has one, by the call's
-// own bound, which its entry carries since most turns have no cap, and by its
-// runner's taker lease held at no epoch — a crash's calls are never recorded,
-// and are given up within a lease's lifetime rather than at their bound, read
-// as the runner first appears rather than a tick later. A call given up on is
-// handed back, with why, for the read that follows to read as one whose outcome
-// is unknown; never dropped unseen. And a runner whose lease is held is waited
-// for.
+// AND NAMES THE CALL. A collection holds the seat while it waits, so the wait is
+// bounded: by the turn's wall-clock cap, by the call's own bound (on its entry,
+// since most turns have no cap), and by its runner's taker lease held at no
+// epoch — a crash's calls are never recorded, so they are given up within a
+// lease's lifetime, read as the runner first appears. A call given up on is
+// handed back with why, read as one whose outcome is unknown, never dropped
+// unseen; a runner whose lease is held is waited for.
 //
-// Mutation: ignore the turn's cap (drain-ignores-the-turns-cap), or a call's own
-// bound (drain-ignores-a-calls-own-bound), and the wait for that case runs to
-// the case's own deadline.
+// Mutation: ignore the turn's cap (drain-ignores-the-turns-cap) or a call's own
+// bound (drain-ignores-a-calls-own-bound), and that case waits to its deadline.
 func TestAWaitStopsAtTheCapAtACallsBoundAndAtItsProcessGone(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -389,15 +382,13 @@ func TestAnEndingThatMayNotWaitHandsACallStillWaitedForToItsRetry(t *testing.T) 
 
 // A SEAT'S RETIREMENT LEAVES A RUN WHOSE CALL STILL RUNS TO ITS NEXT TICK. A
 // retirement ends every run of its seat in one loop, under the seat's lease and
-// its own budget, and gives the seat up after it — this node's retry of an
-// ending with it — so a run whose log holds a call a collection would still
-// wait for is neither waited for in the loop, which would hold every later run
-// of the seat behind it, nor handed to that retry, which would end it never:
-// its session is ended to new calls and it is answered as WAITING, its ending
-// undecided — not as a failure, which the mailbox duty logged at warning and
-// failed its tick on for as long as the call ran — naming the call and the
-// latest instant it is waited for, which keeps the retirement for its next
-// tick; and that tick ends it once the call is recorded.
+// its own budget, then gives the seat up with this node's retry of an ending.
+// So a run whose log holds a call a collection would wait for is neither waited
+// for in the loop (holding every later run behind it) nor handed to that retry
+// (which would never end it): its session is ended to new calls and it is
+// answered as WAITING — not a failure, which would fail the mailbox duty's tick
+// while the call ran — naming the call and the latest instant it is waited for;
+// the next tick ends it once the call is recorded.
 //
 // Mutation: end the run whatever its log holds (calls-still-running-says-none),
 // and the retirement decides its ending with the call still running.

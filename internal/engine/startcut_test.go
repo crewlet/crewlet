@@ -13,32 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
-// A START WHOSE CONTEXT ENDS BEGINS THE DRAIN.
+// A START WHOSE CONTEXT ENDS BEGINS THE DRAIN: the seat host's first placement
+// pass runs on a context detached from Start's
+// ([TestCancellingTheStartContextDoesNotStopTheEngine]), so otherwise it would
+// claim the node's whole share onto a stopping node and run every hook out.
 //
-// The node's loops run on a context detached from Start's
-// ([TestCancellingTheStartContextDoesNotStopTheEngine] says why), and so does
-// the seat host's first placement pass, which runs each seat's acquire hook
-// inline. A signal that arrives while that pass runs used to cut nothing: the
-// caller's shutdown, and with it the drain, begins only once Start returns, so
-// the pass went on claiming the node's whole share onto a node already
-// stopping and ran every claimed seat's hook to its end, however long a hook
-// takes. Now the caller's context ending while the node starts is a stop
-// already decided: the host begins its drain at once, so the pass claims
-// nothing more and cuts what it is establishing.
+// The pass is caught at its presence claim, the one store call the host's
+// Start always makes first (the claim gate may open only after Start returns).
+// Held there, the case cancels and waits for the drain before the claim
+// answers: the pass must claim nothing, and the presence is given back. The
+// lease TTL is [startedLeaseTTL], the floor every started engine is held to.
 //
-// THE PASS IS CAUGHT AT ITS PRESENCE CLAIM, the one store call the seat host's
-// Start always makes before its first pass: whether that pass gets to claim a
-// seat depends on the claim gate, which on a fresh node opens when its logs
-// are level and so sometimes after Start has returned. Held there, the case
-// cancels Start's context and waits for the drain to begin before letting the
-// claim answer. The pass that follows must claim nothing, and the presence the
-// host was granted meanwhile is given straight back.
-//
-// The lease TTL is [startedLeaseTTL], the floor every started engine is held
-// to.
-//
-// Mutation: arm no AfterFunc in [engine.Engine.Start], and the drain never
-// begins while the start runs.
+// Mutation: arm no AfterFunc in [engine.Engine.Start]; no drain during start.
 func TestAStartWhoseContextEndsBeginsTheDrain(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -71,8 +57,8 @@ func TestAStartWhoseContextEndsBeginsTheDrain(t *testing.T) {
 		defer close(started)
 		startErr = e.Start(ctx)
 	}()
-	// BEFORE THE STOP, so a case that fails below lets the start finish
-	// rather than leaving it held for the stop to wait on.
+	// Registered after the stop's cleanup so it runs first: a failing case
+	// lets the start finish rather than leaving the stop waiting on it.
 	t.Cleanup(func() { leases.release(); <-started })
 
 	select {

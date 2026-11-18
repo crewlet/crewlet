@@ -14,9 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
-// noModelsDoc is an org chart written before its credentials exist: valid,
-// and configuring no providers.llm at all. It is what a company created from
-// the dashboard is until somebody adds a provider.
+// noModelsDoc is a valid org chart configuring no providers.llm: a company
+// created from the dashboard until somebody adds a provider.
 const noModelsDoc = `
 name: Acme
 roles:
@@ -25,9 +24,9 @@ roles:
 `
 
 // THE EPOCH BUILDS, AND IT CANNOT THINK. Validation accepts a company with no
-// models, so a build that refused it made every node refuse a revision its own
-// dry run had called valid. What the epoch cannot do is build a runner, and the
-// refusal names the seat and the one field that fixes it.
+// models, so refusing it at build would make every node refuse a revision its
+// own dry run called valid. Only building a runner fails, naming the seat and
+// the field that fixes it.
 func TestACompanyWithNoModelsBuildsAnEpochThatCannotTakeATurn(t *testing.T) {
 	t.Parallel()
 	c, err := engine.NewCompany(parsedCompany(t, noModelsDoc))
@@ -52,10 +51,9 @@ func TestACompanyWithNoModelsBuildsAnEpochThatCannotTakeATurn(t *testing.T) {
 	}
 }
 
-// THE REAL APPLY PATH TAKES IT. The defect this pins: `PUT /config` and its
-// dry run accepted a company with no providers.llm, and the reconcile tick on
-// every node then refused it with "phase: no LLM providers configured", so a
-// company created from the dashboard was stored, activated and run by nobody.
+// THE REAL APPLY PATH TAKES IT. `PUT /config` and its dry run accept a company
+// with no providers.llm, so a reconcile tick refusing it would leave the
+// company stored and activated but run by nobody.
 func TestACompanyWithNoModelsIsApplied(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
@@ -74,11 +72,9 @@ func TestACompanyWithNoModelsIsApplied(t *testing.T) {
 	if p.engine.Company().Models != nil {
 		t.Error("the applied epoch carries a model registry for a company with none")
 	}
-	// THE SEATS ARE THE CHART'S and the apply does not touch them, so what
-	// this checks is that the company still HAS them: an apply that
-	// published an epoch composed with no view would leave a node serving a
-	// company of nobody, which is the failure a model-less revision is
-	// most likely to be mistaken for.
+	// The company still HAS its seats: an epoch composed with no view would
+	// serve a company of nobody, the failure most easily mistaken for a
+	// model-less revision.
 	if got := p.seats(t); len(got) == 0 {
 		t.Error("the applied epoch carries no seats at all — a company with " +
 			"no models still has its chart, and a node serving nobody looks " +
@@ -87,13 +83,11 @@ func TestACompanyWithNoModelsIsApplied(t *testing.T) {
 }
 
 // NOTHING IS LOST WHILE THERE IS NO MODEL, AND NOTHING WAITS AFTER ONE ARRIVES.
-//
-// A delivery to a seat of a company with no models must not run a turn (there
-// is nothing to run it on), must not be consumed (the work would be lost), and
-// must not spin (a requeue with no pause loops at broker speed). So the inbox
-// is paused and the delivery parked. The half this pins as well is the one
-// that was missing: the apply that brings a provider lifts that pause, and the
-// parked delivery runs. Without it the seat stayed deaf until a restart.
+// A delivery to a seat with no model runs no turn, is not consumed (the work
+// would be lost) and does not spin (a pauseless requeue loops at broker
+// speed): the inbox pauses and the delivery parks. The apply that brings a
+// provider lifts the pause and the parked delivery runs; otherwise the seat
+// stays deaf until a restart.
 func TestACompanyWithNoModelsHoldsItsWorkUntilAProviderArrives(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex

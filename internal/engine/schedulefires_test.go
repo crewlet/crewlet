@@ -20,9 +20,9 @@ import (
 )
 
 // scheduledFire is one fire of a schedule as the scheduler publishes it: its
-// own trace, the instant it came due, and the schedule's conversation — the
-// partition every fire of the schedule shares and the identity its turn is
-// filed under — stamped as both keys, as the scheduler stamps them.
+// own trace, its due instant, and the schedule's conversation (the partition
+// every fire shares and the identity its turn is filed under) stamped as both
+// keys.
 func scheduledFire(name, label string, due time.Time) *events.Event {
 	return fireOf("a-1", "sre", name, label, due)
 }
@@ -46,22 +46,16 @@ func fireOf(agent, handle, name, label string, due time.Time) *events.Event {
 }
 
 // FIRES THAT WAITED TOGETHER RUN ONCE, AS THE LATEST, ON THE SCHEDULE'S ONE
-// CONVERSATION.
-//
-// On a live company an SRE's five-hourly health check fired three times into
-// an inbox held by a provider limit, and when the limit cleared the three
-// fires ran as three turns within four minutes, each reporting the same thing.
-// They reach the seat as one partition now, and the seat runs only the latest:
-// told how many earlier fires it stands for, under the latest fire's own
-// trace, with each earlier fire recorded as superseded under its own. The run
-// serves the schedule's conversation, the one every fire carries, so it reads
-// the head the schedule's last run left once for all three, and the merged
-// fire carries it on.
+// CONVERSATION. Fires held behind a provider limit reach the seat as one
+// partition, and it runs only the latest: told how many earlier fires it
+// stands for, under the latest fire's trace, each earlier fire recorded as
+// superseded under its own. The run serves the schedule's conversation, so it
+// reads the last run's head once for all, and the merged fire carries it on.
 //
 // Mutation: run each waiting fire as its own turn, leave the run with no
 // conversation, or merge the fires into one that carries none, and a check
-// goes red. (A fire's partition and its identity are one key, so whether a
-// run's conversation is read off the identity rather than the partition is
+// goes red. (Partition and identity are one key here, so reading the
+// conversation off the identity rather than the partition is
 // TestADirectMessagesThreadReplyServesTheBurstsConversation's to hold.)
 func TestFiresOfOneScheduleThatWaitedTogetherRunOnce(t *testing.T) {
 	t.Parallel()
@@ -79,8 +73,7 @@ func TestFiresOfOneScheduleThatWaitedTogetherRunOnce(t *testing.T) {
 	fifth := scheduledFire("health-check", "20261030T1800", clock.Add(5*time.Hour))
 	sixth := scheduledFire("health-check", "20261031T0800", clock.Add(19*time.Hour))
 
-	// IN DELIVERY ORDER, oldest first, which is how a held inbox hands
-	// them back.
+	// Oldest first, as a held inbox hands them back.
 	if got := d.Dispatch(context.Background(), "sre",
 		[]*events.Event{fourth, fifth, sixth}); got.Outcome != queue.OutcomeAck {
 		t.Fatalf("outcome = %v (%s)", got.Outcome, got.Reason)
@@ -139,9 +132,9 @@ func TestFiresOfOneScheduleThatWaitedTogetherRunOnce(t *testing.T) {
 			if rec.SupersededBy != kept.TaskID || rec.TargetHandle != "sre" {
 				t.Errorf("superseded record = %+v", rec)
 			}
-			// FILED UNDER THE SCHEDULE'S WHOLE IDENTITY, which is what
-			// the seat's node publishes it under in its own usage day:
-			// a name alone could be either of two units' standups.
+			// Filed under the schedule's whole identity, as the seat's
+			// node publishes it in its usage day: a name alone could be
+			// either of two units' standups.
 			if rec.ScopeType != types.ScheduleScopeRole || rec.ScopeID != "a-1" ||
 				rec.ScheduleName != "health-check" {
 				t.Errorf("the superseded record names the schedule %s/%s/%s, want role/a-1/health-check",
@@ -186,14 +179,11 @@ func TestFiresOfTwoSchedulesAreNeverMerged(t *testing.T) {
 
 // A FIRE IS NEVER TAKEN AS THE ANSWER TO THE LAST FIRE.
 //
-// Every fire of a schedule carries the schedule's conversation, the very one
-// the last fire's run parked under when its job asked a question — so offered
-// as a reply, the next fire would be recorded as that question's answer, posted
-// after it was asked, and resume the run with the schedule's own task text in
-// place of a person's word. A schedule's conversation is nobody's to reply
-// into, so the fire is never offered: it runs as the turn it is, and the run
-// waits on for its answer. The parked run and the fire are the coordinator's
-// and the dispatcher's own, wired as a node wires them.
+// Every fire carries the schedule's conversation, the one the last fire's run
+// parked under when it asked a question, so offered as a reply it would resume
+// that run with the schedule's task text as a person's answer. A schedule's
+// conversation is nobody's to reply into: the fire runs as its own turn and
+// the run waits on. The coordinator and dispatcher are wired as a node's.
 //
 // Mutation: drop the notify.Derived gate from the dispatcher's offer, or let
 // Derived read a schedule's key as one somebody could reply into, and the fire
@@ -230,10 +220,9 @@ func TestAFireIsNeverTakenAsTheAnswerToTheLastFire(t *testing.T) {
 	eventually(t, "the next fire to be handled", func() bool {
 		return len(s.ordinary.ran()) == 1 || mustRun(t, s.store, "f1").Answer != nil
 	})
-	// SETTLED, so what follows is final: every event published to the seat's
-	// mail and its control topic acknowledged, and nothing in flight — an
-	// answer recorded, or a resume, only after the fire's turn would have
-	// been published first.
+	// SETTLED, so what follows is final: everything on the seat's mail and
+	// control topic acknowledged, and an answer or a resume would have been
+	// published only after the fire's turn.
 	s.mail.settled(t, s.inbox(), s.control())
 	if run := mustRun(t, s.store, "f1"); run.Status != sandbox.StatusAwaiting || run.Answer != nil {
 		t.Fatalf("the last fire's run is %q with the answer %+v, want it still waiting on its question",

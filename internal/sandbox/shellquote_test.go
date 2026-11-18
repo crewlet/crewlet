@@ -10,13 +10,11 @@ import (
 )
 
 // A QUOTED WORD IS READ BACK AS IT WAS WRITTEN, whatever it holds: a POSIX
-// shell given `printf %s <word>` prints exactly the value — its quotes, a
-// command substitution, a backquote, a separator, a glob, a newline — and
-// runs none of it. The values are the shapes a box's commands carry: a path a
-// model named, a branch spelled from a tracker's key, a box home under an
-// operator's state_dir.
+// shell given `printf %s <word>` prints exactly the value (quotes, a command
+// substitution, a backquote, a separator, a glob, a newline) and runs none of
+// it.
 //
-// Mutation: quote without escaping the single quote inside — the quote rows
+// Mutation: quote without escaping the inner single quote and the quote rows
 // end the word early and fail (and the substitution row runs `touch`).
 func TestAShellWordIsReadBackLiterally(t *testing.T) {
 	t.Parallel()

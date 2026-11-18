@@ -24,21 +24,19 @@ import (
 )
 
 // The trailer cases: the hook a run is handed ([executor.AttributionHook]),
-// run by real gits — the pinned one and the client floor's — over every way a
-// commit is made and rewritten. What the wrapper and Start do around it is
-// attribution_test.go's.
+// run by the pinned git and the client floor's over every way a commit is made
+// and rewritten. The wrapper and Start around it are attribution_test.go's.
 
-// boxRun is one executor's attribution: the seat, the run (its turn) and the
-// work item, as the launch asks its runner for them
-// ([sandbox.CommitAttribution]).
+// boxRun is one executor's attribution ([sandbox.CommitAttribution]): the
+// seat, the run (its turn) and the work item.
 type boxRun struct {
 	seat, run string
 	item      *types.WorkItem
 }
 
-// The runs the cases commit as: this run, on a native item, and another run
-// of the same seat on no item at all. Both commit as the seat's one identity,
-// so each credits the other's commits it rewrites.
+// This run, on a native item, and another run of the same seat on none. Both
+// commit as the seat's one identity, so each credits the other's commits it
+// rewrites.
 var (
 	thisRun  = boxRun{seat: "swe", run: "0190d8f0-1111-7000-8000-000000000001", item: &engItem}
 	otherRun = boxRun{seat: "swe", run: "0190d8f0-2222-7000-8000-000000000002"}
@@ -60,8 +58,7 @@ func (r boxRun) want() []string {
 		executor.WorkItemTrailer + ": " + item}
 }
 
-// boxGit is one git a box may run: the pinned client, and the client floor's
-// own build.
+// boxGit is one git a box may run: the pinned client or the client floor.
 type boxGit struct {
 	name string
 	path string
@@ -88,8 +85,8 @@ func eachGit(t *testing.T, fn func(t *testing.T, g boxGit)) {
 }
 
 // boxClone is a repository on main with one commit made outside any run, and
-// the client that runs git there. It holds no hook: a run's is its own,
-// reached through the run's environment ([in]).
+// its client. It holds no hook: a run reaches its own through its environment
+// ([in]).
 func boxClone(t *testing.T, g boxGit) (*gittest.Client, string) {
 	t.Helper()
 	client := gittest.NewClientWith(t, g.path)
@@ -98,13 +95,12 @@ func boxClone(t *testing.T, g boxGit) (*gittest.Client, string) {
 	return client, dir
 }
 
-// installed is a hooks directory holding the hook run is handed, linked as
+// installed is a hooks directory holding run's hook, linked as
 // prepare-commit-msg the way Start links it.
 //
-// WRITTEN BY A SHELL, never by this process, as Start has the box's own
-// process put it in place: a file this process opened for writing is held
-// open by any child another case forks meanwhile until that child execs, and
-// git's exec of the hook would fail ETXTBSY.
+// WRITTEN BY A SHELL, as Start has the box write it: a file this process
+// opened for writing stays open in any child another case forks until that
+// child execs, and git's exec of the hook would fail ETXTBSY.
 func installed(t *testing.T, run boxRun) string {
 	t.Helper()
 	hook, err := executor.AttributionHook(run.attribution())
@@ -122,7 +118,7 @@ func installed(t *testing.T, run boxRun) string {
 }
 
 // pointedAt is client with its git pointed at hooks, as the run's wrapper
-// points the run's: one GIT_CONFIG_COUNT entry naming the directory.
+// does: one GIT_CONFIG_COUNT entry.
 func pointedAt(client *gittest.Client, hooks string) *gittest.Client {
 	return client.Env("GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0="+hooks)
 }
@@ -153,11 +149,10 @@ func mustTrail(t *testing.T, client *gittest.Client, dir, rev, what string, want
 	}
 }
 
-// The editors the cases hand git, as the commands git runs them by — through a
-// shell, the file to edit appended — so no case writes an executable of its
-// own: the sequence editors turn a rebase's first pick into a reword and its
-// second into a squash, and writes is an editor that writes a message from
-// nothing.
+// The editors the cases hand git, as shell commands git appends the file to,
+// so no case writes an executable: the sequence editors turn a rebase's first
+// pick into a reword and its second into a squash; writes writes a message
+// from nothing.
 const (
 	rewordFirst  = "sed -i.orig -e '1s/^pick /reword /'"
 	squashSecond = "sed -i.orig -e '2s/^pick /squash /'"
@@ -269,8 +264,7 @@ func TestARewrittenCommitCarriesOneOfEachTrailer(t *testing.T) {
 		run.Run(t, dir, "commit", "--allow-empty", "-C", "theirs")
 		mustTrail(t, client, dir, "HEAD", "commit -C another run's commit", thisRun.want())
 
-		// THE HOOK RUN TWICE over one message leaves it as the first run left
-		// it.
+		// THE HOOK RUN TWICE over one message leaves it as the first left it.
 		file := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
 		if err := os.WriteFile(file, []byte("twice\n"), 0o600); err != nil {
 			t.Fatal(err)
@@ -291,10 +285,9 @@ func TestARewrittenCommitCarriesOneOfEachTrailer(t *testing.T) {
 	})
 }
 
-// runHook runs the hook as git runs it for a message given whole — sh, the
-// message file, `message` — under client's environment with g's git first on
-// PATH, in dir, failing t unless it exits 0; it answers what it printed on
-// standard error.
+// runHook runs the hook as git does for a message given whole (sh, the file,
+// `message`) under client's environment with g's git first on PATH, failing t
+// unless it exits 0; it answers the hook's standard error.
 func runHook(t *testing.T, g boxGit, client *gittest.Client, dir, hook, file string) string {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "/bin/sh", hook, file, "message")
@@ -486,16 +479,14 @@ func TestNoTrailerValueCanInject(t *testing.T) {
 	}
 }
 
-// NOTHING BUT THE ATTRIBUTION SPELLS A TRAILER KEY. The trailers are a claim
-// a box can forge, so no reader of a pushed commit's trailers may exist in the
-// engine: no string of a Go file the binary is built from, outside
-// attribution.go, holds a Crewlet trailer key in any case (git matches keys
-// without it), and the keys' constants are unexported, so no other package
-// can name them either. A struct tag is no reader — a config field's
-// description names the trailers to the person who sets it — and a comment is
-// none, so neither counts. The binary is what `go list -deps ./cmd/crewlet`
-// names; a test-support package, which may forge them to show the host
-// ignores them, is outside it. Every non-test Go file of a listed directory is
+// NOTHING BUT THE ATTRIBUTION SPELLS A TRAILER KEY. A box can forge the
+// trailers, so the engine may not read a pushed commit's: no string of a Go
+// file the binary is built from, outside attribution.go, holds a Crewlet
+// trailer key in any case (git matches keys without it), and the keys'
+// constants are unexported, so no other package names them. A struct tag (a
+// config field's description) and a comment are no reader. The binary is what
+// `go list -deps ./cmd/crewlet` names, so test-support packages, which may
+// forge them, are outside it; every non-test Go file of a listed directory is
 // read, whatever its build constraints.
 //
 // Mutation: a file of internal/gitlet/host reading `Crewlet-Run:` from a pushed
@@ -512,10 +503,9 @@ func TestNothingButTheAttributionSpellsATrailerKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("go list -deps ./cmd/crewlet: %v: %s", err, stderr.String())
 	}
-	// A KEY AS A READER SPELLS ONE: followed by a separator (`:`, `=`), a
-	// format's `,` or `)`, a quote, a space or the string's end — never by a
-	// word character, `-` or `.`, so a file named crewlet-seat.md (an agent
-	// definition's example in harnessprofile) is not one.
+	// A KEY AS A READER SPELLS ONE: followed by anything but a word character,
+	// `-` or `.`, or by the string's end, so a file named crewlet-seat.md (in
+	// harnessprofile) is not one.
 	key := regexp.MustCompile(`(?i)crewlet-(?:seat|run|work-item)(?:[^.\w-]|$)`)
 	own := filepath.Join(root, "internal", "sandbox", "executor", "attribution.go")
 	read, inOwn := 0, false
@@ -555,8 +545,8 @@ func TestNothingButTheAttributionSpellsATrailerKey(t *testing.T) {
 	}
 }
 
-// spellsKey reports whether a string literal of the Go file at path — a
-// struct tag aside — holds key.
+// spellsKey reports whether a string literal of the Go file at path, struct
+// tags aside, holds key.
 func spellsKey(t *testing.T, path string, key *regexp.Regexp) bool {
 	t.Helper()
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)

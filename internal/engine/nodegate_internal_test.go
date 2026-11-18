@@ -17,15 +17,10 @@ import (
 
 // AN EVICTION STOPS EVERY IDENTITY-CLAIMING LOG COUNTING THE NODE ONCE ITS
 // FENCE WINDOW HAS PASSED, AND THE PAGES APPLIER DROPS WHAT THE NODE WRITES
-// AFTER IT — on real streams, through the gesture the route calls.
-//
-// The gesture used to be the tracker writer's alone. It wrote the tracker's
-// log and nothing else, so the pages log's eviction table stayed empty for the
-// life of the fleet: the trim — reading the tracker's table filtered on the
-// pages stream — counted an evicted node on the pages log for ever, the pages
-// log's applied term stayed pinned at that node's last position, and the log
-// grew toward the ceiling that refuses writes. And the pages applier's own gate
-// read the same empty table, so the node's pages records applied everywhere.
+// AFTER IT — on real streams, through the gesture the route calls. A gesture
+// that wrote only the tracker's log would leave the node counted on the pages
+// log for ever, its applied term pinned until the log hit its ceiling, and the
+// node's pages records applying everywhere.
 func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
@@ -217,13 +212,9 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 	requireRow(t, back, "pages_containers", "key", "STILL", true)
 }
 
-// A READMISSION IS THE INVERSE COMMIT ON EVERY IDENTITY-CLAIMING LOG.
-//
-// The documentation said readmission puts back exactly the pin the eviction
-// lifted; for the pages log no pin had ever been lifted, and no readmission
-// was ever written there either. Both logs now hold both records, and each
-// log's own rows say the node is back from the position its own readmission
-// landed at.
+// A READMISSION IS THE INVERSE COMMIT ON EVERY IDENTITY-CLAIMING LOG: each log
+// holds both records, and its own rows say the node is back from the position
+// its own readmission landed at.
 func TestAReadmissionWritesTheInverseCommitToEveryLog(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
@@ -273,10 +264,8 @@ func TestAReadmissionWritesTheInverseCommitToEveryLog(t *testing.T) {
 
 // AN EVICTION IS JUDGED ONCE, BEFORE ANY LOG IS WRITTEN: a node still holding
 // its presence lease is refused on every log, and only force overrides it.
-//
-// The judgement existed and nothing called it, so an eviction of a running
-// machine — a mistyped node id — went through, moved its seats and dropped its
-// records everywhere.
+// Otherwise evicting a running machine (a mistyped node id) moves its seats
+// and drops its records everywhere.
 func TestAnEvictionOfALiveNodeIsRefusedBeforeAnyLogIsWritten(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
@@ -367,14 +356,10 @@ func containerRecord(t *testing.T, key, writer string) []byte {
 }
 
 // THE NODE BLOCK SHOWS A NODE EVICTED ONLY WHERE EVERY LOG HOLDS ITS TOMBSTONE,
-// AS OF THE LATEST OF THEM.
-//
-// The trim counts nodes per log, so "evicted" beside a node is a claim about
-// every log at once. Built by appending every log's tombstones — the last one
-// read winning — a node evicted on the tracker's log and not yet on the pages
-// log read as evicted and uncounted while the pages log's applied term waited
-// on it; and a window measured from the earliest tombstone calls the eviction
-// effective while one log still counts the node.
+// AS OF THE LATEST OF THEM: the trim counts nodes per log, so "evicted" is a
+// claim about every log at once. A node evicted on the tracker's log alone is
+// still counted on the pages log, and a window measured from the earliest
+// tombstone calls the eviction effective while one log still counts the node.
 func TestTheReportShowsANodeEvictedOnlyOnceEveryLogHoldsIt(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
@@ -401,16 +386,13 @@ func TestTheReportShowsANodeEvictedOnlyOnceEveryLogHoldsIt(t *testing.T) {
 	}
 }
 
-// THE GATE'S BUDGETS COVER WHAT EACH PHASE WAITS ON.
-//
-// The judgement reads coordination — which one complete election of the
-// coordination store's group may stall once, for jsprovision's clustered ask
-// term — and then this node's own copy. Each log is one append through this
-// node's own write authority, whose two waits are each a resolve budget, behind
-// at most one election of the log's stream group. A budget at or under what
-// its phase waits on cuts short a gesture that would have finished — for the
-// logs, one left half-written — and the answer budget, which the command line
-// and the dashboard wait past, is the two phases end to end.
+// THE GATE'S BUDGETS COVER WHAT EACH PHASE WAITS ON: the judgement's
+// coordination reads, which one election of that group may stall once
+// (jsprovision's clustered ask term); each log's append, two resolve budgets
+// behind at most one election of its stream group. A budget at or under its
+// phase's wait cuts short a gesture that would have finished, leaving logs
+// half-written; the answer budget, which the command line and the dashboard
+// wait past, is the two phases end to end.
 func TestTheGateBudgetsCoverWhatEachPhaseWaitsOn(t *testing.T) {
 	t.Parallel()
 	election := jsprovision.AskTerm(true)

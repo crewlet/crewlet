@@ -10,26 +10,17 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// AN EXECUTOR AND GITLET'S CHANGES (M4-decisions
-// D33): a run may be launched ON a change — given the change's source branch
-// to work on, from its head ([RunRepo.Change]) — and may ask to OPEN one from
-// the branch it delivers ([RunRepo.Open]), which the engine does at the run's
-// collection, once a launch, from what the push record says the run pushed.
-// Every ref a collected run moved is named by the live change its branch
-// heads ([PushedRef.Change]), and what became of each ask to open one is the
-// run's result ([Result.Opened]): both read by the engine ([RunPushes.Changes])
-// and both stated in the run's report ([runReport]), so its reviewer and the
-// record read the change rather than a branch, and nobody opens one twice.
-//
-// AT THE COLLECTION, NOT BY THE BOX: a box could open a change itself — `git
-// push -o change` — but a harness pushes as it goes, and a change opened
-// at its first push asks its reviewers to read work in progress. The engine
-// opens it once the work is done, from where the branch ended up, as the
-// seat the run is for, carrying the work item its launch was charged to.
+// A run may be launched on a change ([RunRepo.Change]) and may ask to open
+// one from the branch it delivers ([RunRepo.Open]). The engine opens it at the
+// run's collection, once a launch, from what the push record says was pushed:
+// not by the box (`git push -o change`), because a harness pushes as it goes
+// and a change opened at its first push asks reviewers to read work in
+// progress. Each moved ref names the change its branch heads
+// ([PushedRef.Change]) and each ask's fate is [Result.Opened]; both reach the
+// run's report ([runReport]), so reviewers read a change, not a branch.
 
-// RunChange is the change an executor works on: its id, which the change is
-// named by on Gitlet, and its number on its repository, which a person
-// and a seat name it by (web!42).
+// RunChange is the change an executor works on: its Gitlet id, and its
+// number on its repository, which a person names it by (web!42).
 type RunChange struct {
 	ID     string `json:"id"`
 	Number int64  `json:"number"`
@@ -46,15 +37,12 @@ func (c RunChange) problem() string {
 	return ""
 }
 
-// OpenChange is an executor's ask to open a change from the branch it works
-// on once it finishes: the branch it proposes the run's work into — whole,
-// under refs/heads/, RESOLVED AT LAUNCH (the one asked, or the repository's
-// default branch then), so the collection proposes what the run was told —
-// its title, "" for the subject of the commit the run delivered its branch
-// at, and whether it opens as a draft. The title is held to Gitlet's
-// rule at the launch that resolves it and again by the open's decide; this
-// package holds it to valid UTF-8, which the run's row's JSON needs, and to
-// [MaxChangeTitleBytes], which the row's budget needs (rowbytes.go).
+// OpenChange is an executor's ask to open a change from its branch once it
+// finishes. Target is the whole refs/heads/ ref, resolved at launch (the
+// default branch then, if none was asked), so the collection proposes what the
+// run was told; Title "" takes the delivered commit's subject. Gitlet's title
+// rule is applied at launch and at the open; this package holds the title to
+// valid UTF-8 (the row's JSON) and [MaxChangeTitleBytes] (rowbytes.go).
 type OpenChange struct {
 	Target string `json:"target"`
 	Title  string `json:"title,omitempty"`
@@ -78,39 +66,31 @@ func (o OpenChange) problem(branch string) string {
 	return ""
 }
 
-// MaxChangeTitleBytes bounds the title an executor asks a change to open with
-// ([OpenChange.Title]): Gitlet's own bound on a change's title
-// (internal/gitlet's MaxChangeTitleBytes), which the launch resolving the ask
-// holds it to and this package imports nothing of — the engine's
-// TestARunsChangeTitleIsBoundAsGitletBoundsIt holds the two equal. HERE
-// TOO, because the title rides the run's row in each of its repositories
-// ([PendingRun.Repos]), which the row's budget counts at this bound, and a
-// grant that reaches the row ([PendingStore.GrantRepo]) is held to it by the
-// store itself rather than by whatever resolved it.
+// MaxChangeTitleBytes bounds [OpenChange.Title]: Gitlet's own bound
+// (internal/gitlet's MaxChangeTitleBytes, which this package does not import;
+// the engine's TestARunsChangeTitleIsBoundAsGitletBoundsIt holds them equal).
+// It is enforced here too because the title rides the run's row
+// ([PendingRun.Repos]), whose budget counts it at this bound, so
+// [PendingStore.GrantRepo] holds it rather than trusting the resolver.
 const MaxChangeTitleBytes = 256
 
 // branchRoot is where a repository's branches are, as a ref names them.
 const branchRoot = "refs/heads/"
 
 // OpenedChange is what became of one repository's ask to open a change
-// ([RunRepo.Open]), in the order the run was given its repositories: the
-// change the run's branch heads, named as a person names it — opened by this
-// run's launch, or one the branch already headed — or why none was.
+// ([RunRepo.Open]), in the run's repository order: the change the branch
+// heads (opened by this launch or already there), or why none was.
 type OpenedChange struct {
-	// Repo and Branch are the repository and the branch as the run was given
-	// them.
+	// Repo and Branch are as the run was given them.
 	Repo   string
 	Branch string
-	// Change is the change the branch heads, web!42, and "" where none was
-	// opened and the branch heads none.
+	// Change is the change the branch heads (web!42), "" for none.
 	Change string
-	// Opened is a change this run's launch opened; false beside Change, a
-	// change the branch already headed — the run's own pushes may have
-	// opened it with `git push -o change`, or anybody may have.
+	// Opened is true when this launch opened Change; false when the branch
+	// already headed it (the run's own `git push -o change`, or anybody).
 	Opened bool
-	// Unopened is why none was opened, "" where Change names one: a run
-	// that did not finish its work, a branch it never pushed, Gitlet's
-	// refusal in its own words, or an open whose fate is unknown.
+	// Unopened is why none was opened, "" where Change names one; it may be
+	// Gitlet's refusal in its own words.
 	Unopened string
 }
 
@@ -125,9 +105,8 @@ func (o OpenedChange) line() string {
 	return fmt.Sprintf("- %s: no change opened from %s — %s", o.Repo, o.Branch, o.Unopened)
 }
 
-// asked is the changes run asked to open: one entry each, in the order it
-// was given its repositories, each saying why it was not opened — for a
-// collection that opens none of them.
+// asked is one entry per change run asked to open, in repository order, each
+// unopened for why: for a collection that opens none.
 func asked(run PendingRun, why string) []OpenedChange {
 	var out []OpenedChange
 	for _, r := range run.Repos {
@@ -138,30 +117,27 @@ func asked(run PendingRun, why string) []OpenedChange {
 	return out
 }
 
-// Why an ask to open a change was not, for the run that did not get as far as
-// its collection opening it.
+// Why an ask was not opened, for a run that never reached the open.
 const (
 	unopenedAsked = "the run stopped to ask a question before it finished, so its work was not " +
 		"proposed for review: the job that carries it on opens the change"
 	unopenedFailed = "the run did not succeed, so its work was not proposed for review"
 )
 
-// unopenedUnread is why no ask of a run whose push record could not be read
-// was opened.
+// unopenedUnread is why no ask was opened when the push record was unreadable.
 func unopenedUnread(why string) string {
 	return "what the run pushed could not be read (" + why + "), so no change was opened from it"
 }
 
-// unopenedNoChanges is why no ask of a run was opened when Gitlet's
-// changes of its branches could not be read.
+// unopenedNoChanges is why no ask was opened when Gitlet's changes of the
+// run's branches could not be read.
 func unopenedNoChanges(why string) string {
 	return "the changes its branches head could not be read (" + why + "), so none was opened"
 }
 
-// fitOpened holds what became of a run's asks to the record's bounds: each
-// sentence redacted — a refusal quotes a branch, a name the box chose — and
-// clipped to the bound one diagnostic a record carries has. At most one entry
-// a repository the run was given, so at most [MaxRunRepos] of them.
+// fitOpened holds the asks to the record's bounds: redacted (a refusal quotes
+// a branch, a name the box chose) and clipped as a diagnostic. There is at most
+// one entry per repository, so at most [MaxRunRepos].
 func fitOpened(opened []OpenedChange) []OpenedChange {
 	for i := range opened {
 		opened[i].Branch = redact.Secrets(opened[i].Branch)
@@ -170,8 +146,7 @@ func fitOpened(opened []OpenedChange) []OpenedChange {
 	return opened
 }
 
-// openedText is what the run's report states of the changes the run asked to
-// open, "" for a run that asked for none.
+// openedText is the report's account of the asks, "" for a run with none.
 func openedText(result Result) string {
 	if len(result.Opened) == 0 {
 		return ""
