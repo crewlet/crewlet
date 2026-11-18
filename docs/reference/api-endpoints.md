@@ -7347,10 +7347,12 @@ kind of step (`boundary`) and, for a read by the executor in its box, its
 launch (`launch_id`), with `retold` where a later launch's brief told it again
 after a step that took it never handed it over; `expired` if the turn ended
 first; `missed`, at the step that took it, where that step's reader never had
-it (a take whose answer was lost) and no later launch whose job started told
-it; or
+it (a take whose answer was lost, or a note whose every serve to a Claude Code
+hook was lost) and no later launch whose job started told it; or
 `unconfirmed`, at the job, where the executor's harness was handed it and never
-confirmed reading it. `note_id` is the request's
+confirmed reading it. A Claude Code run's note is recorded `delivered` at its
+hook's step only once the job's session shows the hook took it, when the job's
+box is read at its collection, a stop or a loss. `note_id` is the request's
 own id, so a retry of one request is one note however often it is sent.
 
 **Where it goes**: a turn whose executor has launched in its box keeps its
