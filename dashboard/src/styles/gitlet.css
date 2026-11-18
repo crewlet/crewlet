@@ -3752,6 +3752,20 @@
   color: var(--color-text-primary);
 }
 
+/* EACH FILTER ITS OWN SIZE on one row, wrapping on a narrow screen, rather
+   than a field the row's full width each. */
+.code-search-filter {
+  flex: 1 1 12rem;
+  max-width: 20rem;
+  min-width: 0;
+}
+
+/* The picker keeps its own width, so the typed filters sit beside it. */
+.code-search-filter--repo {
+  flex: none;
+}
+
+/* A phone: the grammar hint goes and each filter takes a row. */
 @container page (width < 640px) {
   .code-search-grammar {
     display: none;
@@ -3765,14 +3779,6 @@
   .code-search-rule {
     margin-inline-start: 0;
   }
-}
-
-/* EACH FILTER ITS OWN SIZE on one row, wrapping on a narrow screen, rather
-   than a field the row's full width each. */
-.code-search-filter {
-  flex: 1 1 12rem;
-  max-width: 20rem;
-  min-width: 0;
 }
 
 .code-search-results {
@@ -3896,7 +3902,7 @@
   white-space: pre;
 }
 
-/* The hidden lines between two blocks, in a diff's hunk tone, its control in the gutter. */
+/* The hidden lines between two blocks, on the head's quiet ground, its control in the gutter. */
 .code-search-gap {
   display: grid;
   grid-template-columns: 6ch minmax(0, 1fr);
@@ -3904,7 +3910,7 @@
   gap: var(--spacing-3);
   margin-block: var(--spacing-1);
   padding-inline: var(--spacing-3);
-  background: var(--color-diff-hunk-row);
+  background: var(--color-surface-subtle);
 }
 
 .code-search-gap > :first-child {

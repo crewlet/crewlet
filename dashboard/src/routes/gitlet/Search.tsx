@@ -149,7 +149,7 @@ export function Search() {
           </Button>
         </div>
         <div className="code-search-filters">
-          <div className="code-search-filter">
+          <div className="code-search-filter code-search-filter--repo">
             <RepoPicker
               repo={repo}
               onChoose={setRepo}

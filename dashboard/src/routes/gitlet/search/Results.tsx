@@ -1,6 +1,6 @@
 /** Gitlet › Search's results: each repository's files as cards of blocks, a hit with the lines around it. */
 
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button, IconButton, IconButtonLink } from "@crewlethq/ui";
 import {
   ChevronDownGlyph,
@@ -20,6 +20,7 @@ import {
   markedSegments,
   matchingLines,
   matchRanges,
+  fileOnlyPattern,
   SEARCH_CONTEXT,
   type CodeSearchHit,
   type FileHits,
@@ -143,7 +144,8 @@ function FileResult({
   const fileHref = first ? href(repoPath(repo), fileOnly(first)) : null;
   const at = tip ? ` at ${shortOID(tip)}` : "";
 
-  useEffect(() => {
+  // In the commit that draws the line, so focus never lands a frame late.
+  useLayoutEffect(() => {
     if (!focus) return;
     const row = card.current?.querySelector<HTMLElement>(`[data-line="${focus.line}"]`);
     (focus.link ? (row?.querySelector<HTMLElement>("a") ?? row) : row)?.focus();
@@ -178,7 +180,7 @@ function FileResult({
         q: asked.q,
         mode: asked.mode,
         repo,
-        path: `/${file.path}`,
+        path: fileOnlyPattern(file.path),
         ...(asked.ref ? { ref: asked.ref } : {}),
         context: SEARCH_CONTEXT,
       });

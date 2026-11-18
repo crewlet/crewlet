@@ -10,6 +10,13 @@ export const SEARCH_CONTEXT = 3;
 /** Lines of one file a search answers; the rest are behind Show N more. */
 export const SEARCH_PER_FILE = 3;
 
+/** A `path:` pattern's leading slash, which anchors it at the repository's root. */
+const ROOT = "/";
+/** The `path` a search of exactly one file sends: a query value, not a request path. */
+export function fileOnlyPattern(path: string): string {
+  return `${ROOT}${path}`;
+}
+
 /** One matching line, as the engine answers it (`codesearch.Hit`). */
 export type CodeSearchHit = CodeSearchAnswer["hits"][number];
 type Coverage = CodeSearchAnswer["coverage"];
