@@ -278,7 +278,7 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
   },
   "routes/gitlet/commit/CommitWrites.tsx": {
-    why: "a commit's Revert and Cherry-pick (code_revert, code_cherry_pick) and their dialogs",
+    why: "a commit reverted or picked from the page bar (code_revert, code_cherry_pick)",
     suite: "routes/gitlet/commit/CommitPage.test.tsx",
   },
   "routes/gitlet/change/ChangeWrites.tsx": {
