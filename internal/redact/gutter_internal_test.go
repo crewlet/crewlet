@@ -349,18 +349,18 @@ func TestAClaimReadsInAWindowAsNamingWhatItNames(t *testing.T) {
 	text := strings.Repeat("x", 100)
 	for _, c := range []struct {
 		name  string
-		w     [5]int
+		w     [7]int
 		value bool
 	}{
-		{"no value, its separator's end past the window", [5]int{90, 150, 150, 150, 0}, false},
-		{"no value, its separator's end to come", [5]int{90, -1, -1, -1, 0}, false},
-		{"no value, its separator's end set past the window since", [5]int{90, 150, -1, 150, 0}, false},
-		{"no value, its separator's end set in the window since", [5]int{90, 95, -1, 95, 0}, false},
-		{"a value past the window", [5]int{90, 95, 150, 160, 0}, true},
-		{"a value read open past the window", [5]int{90, 95, 150, -1, 0}, true},
+		{"no value, its separator's end past the window", [7]int{90, 150, 150, 150, 0, 0, 0}, false},
+		{"no value, its separator's end to come", [7]int{90, -1, -1, -1, 0, 0, 0}, false},
+		{"no value, its separator's end set past the window since", [7]int{90, 150, -1, 150, 0, 0, 0}, false},
+		{"no value, its separator's end set in the window since", [7]int{90, 95, -1, 95, 0, 0, 0}, false},
+		{"a value past the window", [7]int{90, 95, 150, 160, 0, 0, 0}, true},
+		{"a value read open past the window", [7]int{90, 95, 150, -1, 0, 0, 0}, true},
 	} {
 		k := &keyStage{}
-		k.sources = []*claimSource{{keys: k, words: [][5]int{c.w}}}
+		k.sources = []*claimSource{{keys: k, words: [][7]int{c.w}}}
 		p := k.claimsIn(text, 0).passwords[0]
 		if got := p[3] > p[2]; got != c.value {
 			t.Errorf("%s: the window reads %v as naming a value: %v, want %v", c.name, p, got, c.value)
@@ -383,7 +383,7 @@ func TestAKeyABlockHoldsCutsNoOtherBlock(t *testing.T) {
 	key := strings.Index(text, "passwd:")
 	value := strings.LastIndex(text, g+testKeyLine) + len(g)
 	spans := [][2]int{{0, line + len(g+testEnd)}, {strings.LastIndex(text, testBegin), len(text) - 1}}
-	c := &claims{text: text, read: true, passwords: [][5]int{{key, key + len("passwd:"), value, value + len(testKeyLine), line + len(g)}}}
+	c := &claims{text: text, read: true, passwords: [][7]int{{key, key + len("passwd:"), value, value + len(testKeyLine), line + len(g), 0, 0}}}
 	c.build()
 	if got := c.apartIn(slices.Clone(spans), spans); !slices.Equal(got, spans) {
 		t.Errorf("the blocks %v were written as %v", spans, got)
@@ -439,12 +439,142 @@ func TestAClaimEndedNamesWhatItNamedOpen(t *testing.T) {
 	k := &keyStage{}
 	src := &claimSource{keys: k}
 	k.sources = []*claimSource{src}
-	src.valued([3]int{10, 15, -1}, 16, 0)
+	src.valued([3]int{10, 15, -1}, 16, [3]int{})
 	src.endWord(-1, 30)
 	src.word([3]int{40, -1, -1})
 	src.endWord(45, 45)
 	got := k.claimsIn(strings.Repeat("x", 100), 0).passwords
 	if len(got) != 2 || got[0][3] <= got[0][2] || got[1][3] > got[1][2] {
 		t.Errorf("the claims read %v: want a value from 16 to 30 for the first key and none for the second", got)
+	}
+}
+
+// seamShapes is every way a key's block comes to change a line a password's
+// value is read by other than at its key line's opening (the package doc's "A
+// key's block beside a password"), gutterValue the value: a block that runs on
+// from the value's line, from a key's piece or a BEGIN, under four wrappings
+// that end every line alike; and a table's row whose key's label a block
+// stands in, or whose opening one takes, the value below it.
+func seamShapes() []gutterShape {
+	pc := testKeyLine[:56]
+	wrap := func(g, s string, lines ...string) string {
+		var b strings.Builder
+		for _, l := range lines {
+			b.WriteString(g + l + s + "\n")
+		}
+		return b.String()
+	}
+	var shapes []gutterShape
+	add := func(name, text string) {
+		shapes = append(shapes, gutterShape{name: name, text: text, joins: []int{strings.Index(text, gutterValue), strings.Index(text, testEnd) - 1}})
+	}
+	for _, w := range []struct{ name, g, s string }{
+		{"concatenation", "\t\"", `\n" +`}, {"echo", `echo "`, `" >> k`}, {"table", "| ", " |"}, {"list", `"`, `",`},
+	} {
+		add("a piece on the value's line, "+w.name, wrap(w.g, w.s, "Password:", gutterValue+" "+pc, testEnd+"|passwd:", "hunter2x9"))
+		add("a body between, "+w.name, wrap(w.g, w.s, "Password:", gutterValue+" "+pc, testKeyLine, testEnd+"|passwd:", "hunter2x9"))
+		add("a BEGIN on the value's line, "+w.name, wrap(w.g, w.s, "Password:", gutterValue+" "+testBegin, testKeyLine, testEnd+"|passwd:", "hunter2x9"))
+	}
+	plus := testKeyLine[:20] + "+" + testKeyLine[21:]
+	add("a row, a key's END before its key", "| "+testKeyLine+" "+testEnd+" pwd= |\n     7→"+gutterValue+"\n")
+	add("a row, a key's text holding a +", "| "+plus+" "+testEnd+" pwd= |\n     7→"+gutterValue+"\n")
+	add("a row, a key's piece below it", "| "+testKeyLine+" "+testEnd+"\tpwd= |\n    \n    "+pc+" "+testEnd+"\n    Retype password: "+gutterValue+"\n")
+	add("a row opening a BEGIN's body", testBegin+"\n| "+testKeyLine+" pwd= |\n     7→"+gutterValue+"\n")
+	add("a row opening after a BEGIN's body", testBegin+"\n"+testKeyLine+" | "+testKeyLine[8:]+testKeyLine[:8]+" pwd= |\n     7→"+gutterValue+"\n")
+	return shapes
+}
+
+// NO VALUE IS PUBLISHED WHERE A BLOCK RUNS ON FROM ITS LINE OR STANDS IN ITS
+// KEY'S ROW, and a second pass changes nothing: over every shape of
+// [seamShapes], Secrets shows neither gutterValue nor a value the text holds
+// once that the rule reads in it as written ([gutterValues]), nor, on a row,
+// the middle of a key's line, and Secrets of its answer is its answer.
+//
+// Mutation: write a block whole across a value's line's ending
+// ([claims.endingApart]), stop a label at a key's marker ([labelStart]), or
+// write a block whole across a row's opening ([claims.openingApart]), and a
+// shape publishes its value.
+func TestNoValueIsPublishedWhereABlockRunsOnFromItsLineOrStandsInItsKeysRow(t *testing.T) {
+	t.Parallel()
+	for _, c := range seamShapes() {
+		if strings.Count(c.text, gutterValue) != 1 {
+			t.Fatalf("%s: the shape holds gutterValue %d times, not once", c.name, strings.Count(c.text, gutterValue))
+		}
+		once := Secrets(c.text)
+		for _, v := range append(gutterValues(c.text), gutterValue) {
+			if strings.Count(c.text, v) == 1 && strings.Contains(once, v) {
+				t.Errorf("%s: the value %q is published:\n text %q\n once %q", c.name, v, c.text, once)
+			}
+		}
+		if strings.HasPrefix(c.name, "a row") && strings.Contains(once, testKeyLine[8:40]) {
+			t.Errorf("%s: a key's line is published:\n text %q\n once %q", c.name, c.text, once)
+		}
+		if twice := Secrets(once); twice != once {
+			t.Errorf("%s: a second pass changed\n%q\nto\n%q", c.name, once, twice)
+		}
+	}
+}
+
+// A STREAM WRITES A BLOCK APART FROM A VALUE'S LINE AS THE WHOLE TEXT DOES:
+// over every shape of [seamShapes], placed at random, with the keys' stage's
+// read boundary at the value, and at the END the block is read back from, at
+// the stream's own hold Close answers nil and the stream wrote Secrets and the
+// whole text's blocks.
+//
+// Mutation: hand a value's claim without where its line's ending begins
+// ([ruleStage.seamsAt]), or leave it out of the window's claims
+// ([keyStage.claimsIn]), and a shape is written otherwise.
+func TestAStreamWritesABlockApartFromAValuesLineAsTheWholeTextDoes(t *testing.T) {
+	t.Parallel()
+	r := rand.New(rand.NewPCG(1170, 73))
+	for _, c := range seamShapes() {
+		for _, at := range append([]int{r.IntN(len(c.text))}, c.joins...) {
+			text := gutterStream(c.text, max(0, at))
+			got := readHolding(text, holdBytes(), r, 96<<10)
+			if got.err != nil {
+				t.Errorf("%s, the boundary at %d: Close answered %v at the stream's own hold", c.name, at, got.err)
+				continue
+			}
+			checkReading(t, c.name, text, got)
+		}
+	}
+}
+
+// A BLOCK WRITTEN APART FROM A ROW'S OPENING LEAVES THE KEY'S LINE A LINE OF
+// ITS OWN: a BEGIN's block that takes a table row's opening, the row only
+// spaces before it, is written apart from the line break before the row too,
+// so the rule reads the key's line from where the claims read it, and not
+// from the BEGIN's line.
+//
+// Mutation: keep the row's markup alone apart from the block
+// ([claims.openingApart]), and the row is joined to the BEGIN's line.
+func TestABlockWrittenApartFromARowsOpeningLeavesTheKeysLineALineOfItsOwn(t *testing.T) {
+	t.Parallel()
+	for _, open := range []string{"| ", "  | ", "|"} {
+		text := testBegin + "\n" + open + testKeyLine + " pwd= |\n     7→" + gutterValue + "\n"
+		once := Secrets(text)
+		if !strings.Contains(once, "\n"+open[:len(open)-len(strings.TrimLeft(open, " "))]+"|"+keyMarker) {
+			t.Errorf("the row opening %q: the key's line is not a line of its own:\n text %q\n once %q", open, text, once)
+		}
+		if strings.Contains(once, gutterValue) {
+			t.Errorf("the row opening %q: the value is published:\n text %q\n once %q", open, text, once)
+		}
+	}
+}
+
+// A BLOCK WHOSE FIRST LINE OPENS AS THE KEY'S ROW STAYS ONE MARKER: a table's
+// rows from a BEGIN's down to an END's before a password's key, the value's
+// row below, the key's row's opening inside the gutter the value's row
+// spells: the key's row opens, to the rule, with the BEGIN row's opening, so
+// the block is written whole ([claims.opensAlike]) and the value read.
+//
+// Mutation: write a block apart from a row's opening the gutter holds
+// ([claims.openingApart]), and the block is two markers.
+func TestABlockWhoseFirstLineOpensAsTheKeysRowStaysOneMarker(t *testing.T) {
+	t.Parallel()
+	text := "| " + testBegin + " |\n| " + testKeyLine + " |\n| " + testKeyLine + " " + testEnd + " pwd= |\n| " + gutterValue + " |\n"
+	once := Secrets(text)
+	if strings.Count(once, keyMarker) != 1 || strings.Contains(once, gutterValue) {
+		t.Errorf("want one key's marker and the value redacted:\n text %q\n once %q", text, once)
 	}
 }

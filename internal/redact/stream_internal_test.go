@@ -399,7 +399,7 @@ func (p *pipeline) held() streamHeld {
 			h.stageText = max(h.stageText, st.in.held())
 			h.entries += 16 * len(st.prior)
 			if st.raw != nil {
-				h.entries += 32*len(st.raw.edits) + 16*len(st.src.tokens) + 40*len(st.src.words)
+				h.entries += 32*len(st.raw.edits) + 16*len(st.src.tokens) + 56*len(st.src.words)
 				h.stageEdits = max(h.stageEdits, len(st.raw.edits))
 			}
 			if st.to != nil {
@@ -450,7 +450,7 @@ func longestMarker() int {
 // Token's and one byte), at 32 bytes; a value the password's stage and reader
 // keep, six bytes (a key, its operator, a byte and a space), at 16, as many
 // again while it trims them; a claim the keys' stage may still ask of, five
-// bytes of what it holds (`pwd:` and a break), at 40; and the windows it
+// bytes of what it holds (`pwd:` and a break), at 56; and the windows it
 // decided early, [earlyWindows] at 32 in each of its two lists.
 func streamBound() (text, entries int) {
 	table := len(rules())
@@ -464,7 +464,7 @@ func streamBound() (text, entries int) {
 	keys := pieceBytes + 4*keyReach + stageAdvance + keyAhead
 	lag := (table - 1 + 1) * (stageStep + pieceBytes + longestMarker())
 	text = (table+tracking)*streamWindow + keys + lag + pieceBytes
-	entries = tracking*streamWindow*32/15 + 2*2*16*((stageReach+8)/6+1) + (keys+stageStep)*40/5 + 2*32*earlyWindows
+	entries = tracking*streamWindow*32/15 + 2*2*16*((stageReach+8)/6+1) + (keys+stageStep)*56/5 + 2*32*earlyWindows
 	return text, entries
 }
 
