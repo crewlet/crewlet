@@ -28,6 +28,10 @@ type lineFacts struct {
 	// taskDelivery is whether the record carries `taskDelivery`, whatever it
 	// holds.
 	taskDelivery bool
+	// estimating is whether the line's reader asked for its estimate
+	// ([threadReader.Estimating]), which the estimate's accessors answer
+	// [errNotEstimated] without.
+	estimating bool
 
 	message      messageFacts
 	result       toolResultFacts
@@ -68,10 +72,15 @@ type messageFacts struct {
 	// record.
 	content    threadMessage
 	contentErr error
-	// estimate is what Claude Code estimates the record at, and estimateErr
-	// why its own estimate throws on the content ([threadLine.Estimate]),
-	// read only of a content its rule reads, so neither is filled where
-	// contentErr is.
+	// charge is its content's charge, and emptyText whether that content is
+	// the empty string, as the line's pass read them. estimate is what Claude
+	// Code estimates the record at, and estimateErr why its estimate does not
+	// read ([threadLine.Estimate]), from them and the images the record's task
+	// delivery carries once the line ends ([lineDecoder.finishEstimate]):
+	// filled only of an object whose content its rule reads, so not where
+	// contentErr is, and only for a reader that asked.
+	charge      estimateCharge
+	emptyText   bool
 	estimate    threadEstimate
 	estimateErr error
 }
@@ -128,9 +137,14 @@ type attachmentFacts struct {
 	// entriesKept is whether `entries` is a list whose every element is an
 	// entry a withheld memory keeps ([withheldKept]).
 	entriesKept bool
-	// estimate is what Claude Code estimates the record at, by what the
-	// record stores as its rendering or, of a PDF read, its pages, and
-	// estimated whether that reads ([threadLine.AttachmentEstimate]).
+	// pdf is its `reads` as a PDF read's pages, and images how many images
+	// its `taskDelivery` carries, as the line's pass read them. estimate is
+	// what Claude Code estimates the record at, by what the record stores as
+	// its rendering or, of a PDF read, its pages, and estimated whether that
+	// reads ([threadLine.AttachmentEstimate]), once the line ends
+	// ([lineDecoder.finishEstimate]); only for a reader that asked.
+	pdf       pdfPages
+	images    int64
 	estimate  threadEstimate
 	estimated bool
 }

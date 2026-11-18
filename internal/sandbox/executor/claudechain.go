@@ -281,10 +281,10 @@ type chainCallID int32
 // cores, BenchmarkAThreadChainAtItsBounds): 43 MiB at both, End 33 to 34 ms of
 // a 2.0 to 2.2 s read, 41 MiB with a line at [threadLineMax] filling both;
 // End's worst, windows merging at the spread's bound, 1.8 to 1.9 s. THE
-// COLLECTION'S PASS reads the chain and the hook receipts ([hookReading]) in
-// one walk ([walkThread]) in 2.2 to 2.4 s, within MainThreadReadWait, holding
-// 43 MiB at worst, the chain at both bounds (a_collections_pass: 39 MiB), in
-// its own large slot ([CollectionLargeReadsAtOnce]; the package doc says why).
+// COLLECTION'S PASS reads the chain, the count and the next request's estimate
+// in one walk ([walkThread]) in 2.6 to 2.9 s, within MainThreadReadWait,
+// holding 43 MiB at worst (a_collections_pass: 33 to 35 MiB), in its own large
+// slot ([CollectionLargeReadsAtOnce]; the package doc says why).
 const (
 	// threadChainMaxRecords is the most items the chain files of one thread:
 	// its records, the retraction prefixes they carry, and the uuids its

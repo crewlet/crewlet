@@ -76,7 +76,31 @@ func scanAnswer(line threadLine, err error) string {
 	b.WriteString(scanRecord(line))
 	b.WriteString(scanMessage(line))
 	b.WriteString(scanPayloads(line))
+	b.WriteString(scanEstimate(line))
 	return b.String()
+}
+
+// scanEstimate is what a line's estimate's accessors answer, and the facts
+// behind them field by field, as text: a message's figure always, its
+// content's charge where the figure is filled (an object whose content its
+// rule reads; a list refused part way charges what it read), an attachment's
+// facts always.
+func scanEstimate(line threadLine) string {
+	f := line.facts()
+	e, err := line.Estimate()
+	ae, read, aerr := line.AttachmentEstimate()
+	m := f.message
+	s := fmt.Sprintf("estimate %+v, %v; attachment estimate %+v %t, %v; estimating %t\nmessage estimate %+v, %v\n",
+		e, err, ae, read, aerr, f.estimating, m.estimate, m.estimateErr)
+	if m.kind == '{' && m.err == nil && m.contentErr == nil {
+		// A fault by its words: a number's kind is its first byte as written
+		// in the whole decode, '0' in the pass, both "a number".
+		s += fmt.Sprintf("message charge %+v, %v, empty text %t\n", m.charge.est, m.charge.fault.err(),
+			m.emptyText)
+	}
+	a := f.attachment
+	return s + fmt.Sprintf("attachment estimate facts: pages %+v, images %d, estimate %+v, estimated %t\n", a.pdf,
+		a.images, a.estimate, a.estimated)
 }
 
 // scanRecord is every answer the accessors of line's head and of its small
@@ -270,6 +294,7 @@ func checkScanReadsAsDecode(t testing.TB, text []byte, chunk int) {
 		if err := r.Asking(scanAsked); err != nil {
 			t.Fatal(err)
 		}
+		r.Estimating()
 		got := scanReading(t.Context(), r)
 		if len(got) != len(wants)+1 || got[len(wants)] != end {
 			t.Fatalf("lines %d to %d, the last %.300q, read in pieces of %d bytes at most, read as %d answers "+
@@ -384,7 +409,7 @@ func FuzzTheScanReadsEveryLineAsTheDecodeReadsIt(f *testing.F) {
 		ctResult(ctUUID(4), ctUUID(5), ctResultBody, ctResultOwn), ctLastPrompt, ctMeta,
 		`{"type":"user","type":7}`, `{"type":7,"type":"user"}`, `{"\u0074ype":"user","Type":7}`,
 		`{"parentUuid":"x","parentUuid":null,"isSidechain":"no","isSidechain":true}`)
-	for _, line := range append(scanMessageLines(), scanPayloadLines()...) {
+	for _, line := range slices.Concat(scanMessageLines(), scanPayloadLines(), scanEstimateLines()) {
 		seeds = append(seeds, string(line))
 	}
 	for i, seed := range seeds {
@@ -401,12 +426,11 @@ func FuzzTheScanReadsEveryLineAsTheDecodeReadsIt(f *testing.F) {
 // cases ([byteFactLines]); the scanner's own fuzz seeds ([scanSeeds]), split
 // at their breaks; every line the layer's tests read as no record
 // ([ctBrokenLines], [ctRefusedLines]) and a record nested as deep as a line
-// is read; records whose messages hold what the message's readers read at
-// its edges ([scanMessageLines]), and whose payloads and lists hold what
-// theirs read at theirs ([scanPayloadLines]); each kind of record and each
-// frame below it mutated at every key the pass reads ([scanMutations]); and
-// lines whose
-// keys, a key written twice or a fault fall across the edge of what the
+// is read; records whose messages, payloads and lists hold what their
+// readers read at their edges ([scanMessageLines], [scanPayloadLines]), and
+// the estimate's ([scanEstimateLines]); each kind of record and each frame
+// below it mutated at every key the pass reads ([scanMutations]); and lines
+// whose keys, a key written twice or a fault fall across the edge of what the
 // member hands at once ([scanAcrossAFill]).
 func scanCorpus(t *testing.T) [][]byte {
 	t.Helper()
@@ -422,6 +446,7 @@ func scanCorpus(t *testing.T) [][]byte {
 	lines = append(lines, []byte(ctDeep(10000)))
 	lines = append(lines, scanMessageLines()...)
 	lines = append(lines, scanPayloadLines()...)
+	lines = append(lines, scanEstimateLines()...)
 	lines = append(lines, scanMutations(lines)...)
 	return append(lines, scanAcrossAFill()...)
 }
@@ -431,7 +456,7 @@ func scanCorpus(t *testing.T) [][]byte {
 var scanReadKeys = []string{"type", "subtype", "agentId", "parentUuid", "isSidechain", "replacesSpan", "uuid",
 	"version", "origin", "isApiErrorMessage", "leafUuid", "explicit", "rewound", "isVirtual", "interruptedByShutdown",
 	"isCompactSummary", "timestamp", "isMeta", "sourceToolAssistantUUID", "taskDelivery", "message", "toolUseResult",
-	"attachment", "compactMetadata", "retractedMessageUuids", "replacements", "batchToolUses"}
+	"attachment", "compactMetadata", "retractedMessageUuids", "replacements", "batchToolUses", "rendered"}
 
 // scanKinds is a value of every kind JSON has, and an empty object and an
 // empty string, each a value a key may be written with where another is
@@ -476,13 +501,27 @@ func scanSpellings(key string) []string {
 // key a reading reads of it.
 var scanFrames = []struct{ path, keys []string }{
 	{[]string{"message"}, []string{"content", "id", "model", "stop_reason", "usage", "context_management"}},
-	{[]string{"message", "content", "*"},
-		[]string{"type", "id", "name", "input", "tool_use_id", "is_error", "content", "text"}},
+	{[]string{"message", "content", "*"}, []string{"type", "id", "name", "input", "tool_use_id", "is_error",
+		"content", "text", "thinking", "data", "title", "source"}},
 	{[]string{"message", "content", "*", "input"}, []string{"to"}},
 	{[]string{"message", "content", "*", "content", "0"}, []string{"type", "text"}},
+	{[]string{"message", "content", "*", "content", "*"}, []string{"type", "text", "thinking", "data", "name",
+		"input", "title", "source", "content"}},
+	{[]string{"message", "content", "*", "source"}, []string{"type", "data", "content"}},
+	{[]string{"message", "content", "*", "content", "*", "source"}, []string{"type", "data", "content"}},
+	{[]string{"message", "content", "*", "source", "content", "*"}, []string{"type", "text", "title", "source",
+		"content"}},
+	{[]string{"taskDelivery"}, []string{"mcpTaskSnapshot", "result"}},
+	{[]string{"taskDelivery", "mcpTaskSnapshot"}, []string{"result"}},
+	{[]string{"taskDelivery", "result"}, []string{"content"}},
+	{[]string{"taskDelivery", "result", "content", "*"}, []string{"type"}},
+	{[]string{"attachment", "taskDelivery"}, []string{"mcpTaskSnapshot", "result"}},
+	{[]string{"attachment", "reads", "*"}, []string{"pages"}},
+	{[]string{"rendered", "*"}, []string{"content"}},
+	{[]string{"rendered", "*", "content", "*"}, []string{"type", "text"}},
 	{[]string{"toolUseResult"}, []string{"handback", "handbackReport", "status", "agentId", "success"}},
 	{[]string{"attachment"}, []string{"type", "toolUseID", "by", "hookEvent", "content", "stdout", "skills", "names",
-		"entries"}},
+		"entries", "reads", "taskDelivery"}},
 	{[]string{"attachment", "entries", "*"}, []string{"path", "displayPath", "why"}},
 	{[]string{"compactMetadata"}, []string{"preservedMessages", "preservedSegment"}},
 	{[]string{"compactMetadata", "preservedMessages"}, []string{"anchorUuid", "uuids"}},
@@ -1081,7 +1120,11 @@ func TestALineIsReadAlikeInAnyPieces(t *testing.T) {
 	t.Parallel()
 	lines := append(byteFactLines(t), scanAcrossAFill()...)
 	text := append(bytes.Join(lines, []byte("\n")), '\n')
-	want := scanReading(t.Context(), newThreadReader(bytes.NewReader(text), threadPlainMax))
+	estimating := func(r *threadReader) *threadReader {
+		r.Estimating()
+		return r
+	}
+	want := scanReading(t.Context(), estimating(newThreadReader(bytes.NewReader(text), threadPlainMax)))
 	if len(want) != len(lines)+1 {
 		t.Fatalf("the corpus reads as %d answers, want one a line and its end", len(want))
 	}
@@ -1094,7 +1137,8 @@ func TestALineIsReadAlikeInAnyPieces(t *testing.T) {
 			if name == "a byte at once" && chunk != 17 && chunk != lineChunkBytes {
 				continue
 			}
-			got := scanReading(t.Context(), newThreadReaderSize(member(bytes.NewReader(text)), threadPlainMax, chunk))
+			got := scanReading(t.Context(), estimating(newThreadReaderSize(member(bytes.NewReader(text)),
+				threadPlainMax, chunk)))
 			for i := range min(len(got), len(want)) {
 				if got[i] != want[i] {
 					t.Fatalf("pieces of %d bytes at most, the member read %s: answer %d reads\n%swant\n%s", chunk,

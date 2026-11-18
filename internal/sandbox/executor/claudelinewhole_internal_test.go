@@ -17,8 +17,10 @@ import (
 // ([decodeThreadLine]), which the layer's one scanner pass is held to line by
 // line (claudelinescan_internal_test.go). Its facts are filled by the layer's
 // own rules of each small value and its own automata, so the two readings
-// differ in how a line is read, never in what is read of it. A member is read
-// by [wholeReader].
+// differ in how a line is read, never in what is read of it; its estimate by
+// the estimate's own rules (claudelineestimate.go) over each value walked
+// whole ([estimateWalk]), every length read off the value as written. A
+// member is read by [wholeReader].
 
 // wholeReader reads a member a whole line at a time through the scrub's
 // [readLine], each line decoded whole: the member's ends the layer's reader
@@ -180,7 +182,7 @@ func factsOf(w *threadWire, h threadHead, asked []string) *lineFacts {
 		leafUUID: w.LeafUUID, explicit: w.Explicit, rewound: w.Rewound,
 		isVirtual: w.IsVirtual, interruptedByShutdown: w.Shutdown, isCompactSummary: w.Summary,
 		timestamp: w.Timestamp, isMeta: w.IsMeta, sourceToolAssistantUUID: w.Source,
-		taskDelivery: w.TaskDelivery != nil,
+		taskDelivery: w.TaskDelivery != nil, estimating: true,
 	}
 	switch h.Type {
 	case recordUser:
@@ -209,8 +211,8 @@ func factsOf(w *threadWire, h threadHead, asked []string) *lineFacts {
 // messageOf reads a user or assistant record's `message`, raw, by ONE decode
 // of its object that every accessor of the message reads; its blocks of kind
 // call are its calls ([messageContent]), and Claude Code's estimate of the
-// record counts the images its `taskDelivery`, delivery, carries
-// ([messageEstimate]).
+// record, its content walked whole within [estimateNestMax], counts the
+// images its `taskDelivery`, delivery, carries ([messageCharge]).
 func messageOf(raw json.RawMessage, call string, delivery json.RawMessage) messageFacts {
 	m := messageFacts{kind: kindOfValue(raw)}
 	if m.kind != '{' {
@@ -230,8 +232,12 @@ func messageOf(raw json.RawMessage, call string, delivery json.RawMessage) messa
 	m.id, m.model, m.stopReason, m.usage, m.contextManagement = wire.ID, wire.Model, wire.StopReason, wire.Usage,
 		wire.ContextManagement
 	m.content, m.contentErr = messageContent(wire.Content, call)
-	if m.contentErr == nil {
-		m.estimate, m.estimateErr = messageEstimate(wire.Content, delivery)
+	if m.contentErr != nil {
+		return m
+	}
+	if m.charge, m.estimateErr = estimateContent(wire.Content, estimateNestMax); m.estimateErr == nil {
+		m.emptyText = string(wire.Content) == `""`
+		m.estimate, m.estimateErr = messageCharge(m.charge, m.emptyText, taskImages(delivery))
 	}
 	return m
 }
@@ -247,7 +253,7 @@ func toolResultOf(raw json.RawMessage) toolResultFacts {
 // attachmentOf reads an attachment record's `attachment`, raw, once, answering
 // every attachment type's shape rule at once, so the accessor picks by the
 // attachment's type ([threadLine.AttachmentWellFormed]), Claude Code's
-// estimate of the record by its own `rendered` ([attachmentEstimate]), and
+// estimate of the record by its own `rendered` ([attachmentCharge]), and
 // which of the asked take tokens a hook record's words name ([takesOf]).
 func attachmentOf(raw, rendered json.RawMessage, asked []string) attachmentFacts {
 	a := attachmentFacts{kind: kindOfValue(raw)}
@@ -287,7 +293,8 @@ func attachmentOf(raw, rendered json.RawMessage, asked []string) attachmentFacts
 	a.skillsShaped = everyElement(wire.Skills, func(raw json.RawMessage) bool { return raw[0] == '{' || raw[0] == '[' })
 	a.namesKept, a.namesErr = skillNamesKept(wire.Names)
 	a.entriesKept = everyElement(wire.Entries, withheldEntryKept)
-	a.estimate, a.estimated = attachmentEstimate(wire.Type, wire.Reads, wire.TaskDelivery, rendered)
+	a.pdf, a.images = pdfPagesOf(wire.Reads), taskImages(wire.TaskDelivery)
+	a.estimate, a.estimated = attachmentCharge(wire.Type, a.pdf, a.images, renderedEstimate(rendered))
 	return a
 }
 
@@ -792,4 +799,475 @@ func preservedList(raw json.RawMessage) (threadPreserved, error) {
 	}
 	p.Named, p.Kept, p.Anchor = true, p.Listed > 0, anchor
 	return p, nil
+}
+
+// quotedUnits is how many UTF-16 code units JavaScript counts raw, one JSON
+// string as written with its quotes, as long once it is decoded: an escape one
+// unit (a character past the basic plane is written as two `\u` escapes, its
+// two units), a character past the basic plane written as itself two, every
+// other character one, and each byte that is no UTF-8 one, as the line's
+// decode reads each as U+FFFD; JavaScript's decoder reads a run of such bytes
+// as fewer characters, so the count is never under the harness's. It is
+// [textUnits] over the decoded text with no cap, read where the string lies,
+// so a text of any length costs no copy.
+func quotedUnits(raw []byte) int64 {
+	if len(raw) < 2 {
+		return 0
+	}
+	var n int64
+	for p := raw[1 : len(raw)-1]; len(p) > 0; {
+		switch {
+		case p[0] == '\\':
+			// The line decoded whole, so every escape is whole: `\uXXXX`
+			// six bytes, every other two.
+			if len(p) > 1 && p[1] == 'u' {
+				p = p[min(6, len(p)):]
+			} else {
+				p = p[min(2, len(p)):]
+			}
+			n++
+		case p[0] < utf8.RuneSelf:
+			p = p[1:]
+			n++
+		default:
+			r, size := utf8.DecodeRune(p)
+			p = p[size:]
+			n++
+			if r > 0xffff {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// writtenUnits is how many UTF-16 code units the text p, JSON as written, is
+// long: what the harness counts a value at where it charges the value's
+// JSON.stringify, which writes the value as the line holds it.
+func writtenUnits(p []byte) int64 {
+	var n int64
+	for len(p) > 0 {
+		if p[0] < utf8.RuneSelf {
+			p = p[1:]
+			n++
+			continue
+		}
+		r, size := utf8.DecodeRune(p)
+		p = p[size:]
+		n++
+		if r > 0xffff {
+			n++
+		}
+	}
+	return n
+}
+
+// estimateWalk walks one JSON value once, as its decoder reads it, charging
+// each element as it passes ([estimateWalk.element]). The length of what an
+// element writes is read off raw, the value walked, from where the last
+// length read ended (at) to where the element ends, so every byte of the value
+// is counted once however deeply its elements nest: units is the length of
+// raw[:at].
+// Objects past nestMax element lists, where it is above zero, are passed over
+// as the nesting fault, as the line's pass reads them.
+type estimateWalk struct {
+	dec     *jsontext.Decoder
+	raw     []byte
+	at      int
+	units   int64
+	nestMax int
+}
+
+// estimateContent is a message's content, raw, as the harness estimates it
+// (EX), in one walk: a string at its length, a list element by element,
+// anything else nothing, and nothing where raw is absent, the harness's
+// `!e`.
+func estimateContent(raw json.RawMessage, nestMax int) (estimateCharge, error) {
+	if len(raw) == 0 {
+		return estimateCharge{}, nil
+	}
+	w := &estimateWalk{dec: jsontext.NewDecoder(bytes.NewBuffer(raw), threadDecoding), raw: raw, nestMax: nestMax}
+	l, err := w.list(1)
+	return l.all, err
+}
+
+// unitsTo is the length of raw[:off], read on from where the last read ended:
+// off is never before it, as the decoder reads the value in order.
+func (w *estimateWalk) unitsTo(off int) int64 {
+	w.units += writtenUnits(w.raw[w.at:off])
+	w.at = off
+	return w.units
+}
+
+// offset is where the decoder has read to.
+func (w *estimateWalk) offset() int { return int(w.dec.InputOffset()) }
+
+// list reads the next value as a list of elements at level ([estimateList]).
+func (w *estimateWalk) list(level int) (estimateList, error) {
+	l := estimateList{kind: valueKind(w.dec.PeekKind())}
+	switch l.kind {
+	case '"':
+		v, err := w.dec.ReadValue()
+		l.all.est = estimateUnits(quotedUnits(v))
+		return l, err
+	case '[':
+	default:
+		return l, w.dec.SkipValue()
+	}
+	if _, err := w.dec.ReadToken(); err != nil {
+		return l, err
+	}
+	for w.dec.PeekKind() != ']' {
+		object := w.dec.PeekKind() == '{'
+		c, err := w.element(level)
+		if err != nil {
+			return l, err
+		}
+		l.add(object, c)
+	}
+	_, err := w.dec.ReadToken()
+	return l, err
+}
+
+// element reads the next value as one element of a content list (n7e): a
+// string at its length, an object by its type ([estimateObject]), anything
+// else nothing.
+func (w *estimateWalk) element(level int) (estimateCharge, error) {
+	switch w.dec.PeekKind() {
+	case '"':
+		v, err := w.dec.ReadValue()
+		return estimateCharge{est: estimateUnits(quotedUnits(v))}, err
+	case '{':
+		if w.nestMax > 0 && level > w.nestMax {
+			return estimateCharge{fault: estimateFault{what: estimateFaultNested}}, w.dec.SkipValue()
+		}
+		return w.object(level)
+	}
+	return estimateCharge{}, w.dec.SkipValue()
+}
+
+// text reads the next value as a text.
+func (w *estimateWalk) text() (estimateText, error) {
+	v, err := w.dec.ReadValue()
+	if err != nil || kindOfValue(v) != '"' {
+		return estimateText{kind: kindOfValue(v)}, err
+	}
+	return estimateText{kind: '"', units: quotedUnits(v)}, nil
+}
+
+// object reads the next value, an object, as one element, and charges it by
+// its type ([estimateObject.charge]), handed the length it writes.
+func (w *estimateWalk) object(level int) (estimateCharge, error) {
+	if _, err := w.dec.ReadToken(); err != nil {
+		return estimateCharge{}, err
+	}
+	start := w.unitsTo(w.offset() - 1)
+	var o estimateObject
+	for w.dec.PeekKind() != '}' {
+		name, err := w.dec.ReadValue()
+		if err != nil {
+			return estimateCharge{}, err
+		}
+		if err = w.key(&o, name, level); err != nil {
+			return estimateCharge{}, err
+		}
+	}
+	if _, err := w.dec.ReadToken(); err != nil {
+		return estimateCharge{}, err
+	}
+	return o.charge(w.unitsTo(w.offset()) - start), nil
+}
+
+// key reads the value of the key name, as written, into o, where a rule reads
+// it; every other key's value is passed over. name is compared before the
+// value is read, since the decoder hands it out only until its next read.
+func (w *estimateWalk) key(o *estimateObject, name []byte, level int) error {
+	var (
+		v   jsontext.Value
+		err error
+	)
+	switch {
+	case quotedIs(name, "type"):
+		if v, err = w.dec.ReadValue(); err == nil {
+			o.typ = estimateTypeOf(v, estimateElementTypes[:])
+		}
+	case quotedIs(name, "text"):
+		o.text, err = w.text()
+	case quotedIs(name, "thinking"):
+		o.thinking, err = w.text()
+	case quotedIs(name, "data"):
+		o.data, err = w.text()
+	case quotedIs(name, "name"):
+		o.name, err = w.text()
+	case quotedIs(name, "title"):
+		if v, err = w.dec.ReadValue(); err == nil {
+			o.titleKind, o.titleJSON = kindOfValue(v), jsonTitled(v)
+		}
+	case quotedIs(name, "input"):
+		if v, err = w.dec.ReadValue(); err == nil {
+			end := w.offset()
+			from := w.unitsTo(end - len(v))
+			o.input, o.inputSet = w.unitsTo(end)-from, kindOfValue(v) != 'n'
+		}
+	case quotedIs(name, "source"):
+		o.sourceKind, o.source, err = w.source(level)
+	case quotedIs(name, "content"):
+		o.content, err = w.list(level + 1)
+	default:
+		err = w.dec.SkipValue()
+	}
+	return err
+}
+
+// source reads the next value as a document's source: its kind, and where it
+// is an object its type, data and content.
+func (w *estimateWalk) source(level int) (valueKind, estimateSource, error) {
+	kind := valueKind(w.dec.PeekKind())
+	if kind != '{' {
+		return kind, estimateSource{}, w.dec.SkipValue()
+	}
+	var s estimateSource
+	if _, err := w.dec.ReadToken(); err != nil {
+		return kind, s, err
+	}
+	for w.dec.PeekKind() != '}' {
+		name, err := w.dec.ReadValue()
+		if err != nil {
+			return kind, s, err
+		}
+		switch {
+		case quotedIs(name, "type"):
+			var v jsontext.Value
+			if v, err = w.dec.ReadValue(); err == nil {
+				s.typ = estimateTypeOf(v, estimateSourceTypes[:])
+			}
+		case quotedIs(name, "data"):
+			s.data, err = w.text()
+		case quotedIs(name, "content"):
+			s.content, err = w.list(level + 1)
+		default:
+			err = w.dec.SkipValue()
+		}
+		if err != nil {
+			return kind, s, err
+		}
+	}
+	_, err := w.dec.ReadToken()
+	return kind, s, err
+}
+
+// jsonTitled reports whether raw, a document's title as written, is a string
+// whose last part after a dot, lower-cased, is `json`, `jsonl` or `jsonc`
+// (`e.title?.split(".").pop()?.toLowerCase()`): the harness counts such a
+// document's text at two characters a token. A title of no dot is its own
+// last part. Read where the title lies, character by character, holding at
+// most the five of its last part a match needs: no character past ASCII
+// lower-cases to one of those letters.
+func jsonTitled(raw []byte) bool {
+	if len(raw) < 2 || raw[0] != '"' {
+		return false
+	}
+	var (
+		part [len("jsonl")]byte
+		n    int
+		long bool
+	)
+	for p := raw[1 : len(raw)-1]; len(p) > 0; {
+		r, size := rune(p[0]), 1
+		switch {
+		case p[0] == '\\':
+			r, size = quotedEscape(p)
+		case p[0] >= utf8.RuneSelf:
+			r, size = utf8.DecodeRune(p)
+		}
+		p = p[size:]
+		switch {
+		case r == '.':
+			n, long = 0, false
+		case long:
+		case n == len(part) || r >= utf8.RuneSelf:
+			long = true
+		default:
+			if r >= 'A' && r <= 'Z' {
+				r += 'a' - 'A'
+			}
+			part[n] = byte(r)
+			n++
+		}
+	}
+	if long {
+		return false
+	}
+	switch string(part[:n]) {
+	case "json", "jsonl", "jsonc":
+		return true
+	}
+	return false
+}
+
+// quotedEscape is the character the escape p opens stands for, and how many
+// bytes it takes: a `\u` escape its code unit (a surrogate standing alone,
+// which is no ASCII character either way), every other its character.
+func quotedEscape(p []byte) (rune, int) {
+	if len(p) < 2 {
+		return utf8.RuneError, len(p)
+	}
+	if p[1] != 'u' || len(p) < 6 {
+		switch p[1] {
+		case 'b':
+			return '\b', 2
+		case 'f':
+			return '\f', 2
+		case 'n':
+			return '\n', 2
+		case 'r':
+			return '\r', 2
+		case 't':
+			return '\t', 2
+		}
+		return rune(p[1]), 2
+	}
+	var r rune
+	for _, h := range p[2:6] {
+		switch {
+		case h >= '0' && h <= '9':
+			r = r<<4 | rune(h-'0')
+		case h >= 'a' && h <= 'f':
+			r = r<<4 | rune(h-'a'+10)
+		case h >= 'A' && h <= 'F':
+			r = r<<4 | rune(h-'A'+10)
+		}
+	}
+	return r, 6
+}
+
+// taskImages is how many images a task delivery, raw, carries (S
+// @292454728): the elements of its MCP task snapshot's result's content,
+// where it carries a snapshot, else of its own result's, that are objects of
+// type image; none where any of those is no object, or the content no list.
+func taskImages(delivery json.RawMessage) int64 {
+	var d struct {
+		Snapshot json.RawMessage `json:"mcpTaskSnapshot"`
+		Result   json.RawMessage `json:"result"`
+	}
+	if !wireObject(delivery) || wireDecode(delivery, &d) != nil {
+		return 0
+	}
+	result := d.Result
+	if wireObject(d.Snapshot) {
+		var snapshot struct {
+			Result json.RawMessage `json:"result"`
+		}
+		if wireDecode(d.Snapshot, &snapshot) != nil {
+			return 0
+		}
+		result = snapshot.Result
+	}
+	var r struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if !wireObject(result) || wireDecode(result, &r) != nil || kindOfValue(r.Content) != '[' {
+		return 0
+	}
+	var images int64
+	_ = eachElement(r.Content, func(element json.RawMessage, _ int) error {
+		var e struct {
+			Type json.RawMessage `json:"type"`
+		}
+		if wireObject(element) && wireDecode(element, &e) == nil && quotedIs(e.Type, estimateImage) {
+			images++
+		}
+		return nil
+	})
+	return images
+}
+
+// errNotRendered is a stored rendering that does not hold to the shape the
+// harness reads one by ([renderedEstimate]), and a PDF read whose pages do
+// not read ([pdfPagesOf]).
+var errNotRendered = errors.New("no rendering the harness reads")
+
+// renderedEstimate is an attachment record's stored rendering, raw, charged as
+// the harness charges it: a list of at least one message, each an object
+// whose `content` is a non-empty string or a non-empty list of objects of
+// type `text` whose text is a non-empty string, every content at its length,
+// each text block on its own; false for any other value, absent among them
+// (Cje's schema @298645370, whose objects keep any other key).
+func renderedEstimate(rendered json.RawMessage) renderedCharge {
+	if kindOfValue(rendered) != '[' {
+		return renderedCharge{}
+	}
+	var (
+		sum      threadEstimate
+		messages int
+	)
+	err := eachElement(rendered, func(element json.RawMessage, _ int) error {
+		messages++
+		var m struct {
+			Content json.RawMessage `json:"content"`
+		}
+		if !wireObject(element) || wireDecode(element, &m) != nil {
+			return errNotRendered
+		}
+		e, ok := renderedContent(m.Content)
+		if !ok {
+			return errNotRendered
+		}
+		sum = sum.plus(e)
+		return nil
+	})
+	return renderedCharge{est: sum, ok: err == nil && messages > 0}
+}
+
+// renderedContent is one rendered message's content, raw, charged
+// ([renderedEstimate]); false where it does not hold to the shape.
+func renderedContent(content json.RawMessage) (threadEstimate, bool) {
+	switch kindOfValue(content) {
+	case '"':
+		return estimateUnits(quotedUnits(content)), string(content) != `""`
+	case '[':
+	default:
+		return threadEstimate{}, false
+	}
+	var (
+		sum    threadEstimate
+		blocks int
+	)
+	err := eachElement(content, func(element json.RawMessage, _ int) error {
+		blocks++
+		var b struct {
+			Type json.RawMessage `json:"type"`
+			Text json.RawMessage `json:"text"`
+		}
+		if !wireObject(element) || wireDecode(element, &b) != nil || !quotedIs(b.Type, blockText) ||
+			kindOfValue(b.Text) != '"' || string(b.Text) == `""` {
+			return errNotRendered
+		}
+		sum = sum.plus(estimateUnits(quotedUnits(b.Text)))
+		return nil
+	})
+	return sum, err == nil && blocks > 0
+}
+
+// pdfPagesOf is a PDF read's `reads`, raw, as its pages ([pdfPages]).
+func pdfPagesOf(reads json.RawMessage) pdfPages {
+	if kindOfValue(reads) != '[' {
+		return pdfPages{}
+	}
+	var pages int64
+	err := eachElement(reads, func(element json.RawMessage, _ int) error {
+		var r struct {
+			Pages json.RawMessage `json:"pages"`
+		}
+		if !wireObject(element) || wireDecode(element, &r) != nil || r.Pages == nil {
+			return errNotRendered
+		}
+		n, err := wireCount("pages", r.Pages)
+		if err != nil || n < 1 {
+			return errNotRendered
+		}
+		pages = min(pages+n, threadEstimateMax)
+		return nil
+	})
+	return pdfPages{pages: pages, ok: err == nil}
 }

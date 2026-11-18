@@ -1130,12 +1130,26 @@ func benchLines(plain int) []byte {
 }
 
 // BenchmarkTheMeterAtItsBounds measures the take's meter (one walk of a kept
-// main thread for the floor's figure and the count) against the take's scrub of
-// the same archive, at a 32 MiB archive's plaintext (about 118 MiB): fed by the
-// take's pipe, the meter must take no longer than the scrub.
+// main thread for the floor's figure, the count and the next request's
+// estimate) against the take's scrub of the same archive, at a 32 MiB
+// archive's plaintext (about 118 MiB): fed by the take's pipe, the meter must
+// take no longer than the scrub. Of ordinary lines, and as _text_blocks of
+// results of text blocks, each an element the estimate walks.
 func BenchmarkTheMeterAtItsBounds(b *testing.B) {
+	benchMeterAndScrub(b, "", benchLines(118<<20))
+	blocks := `[{"type":"tool_result","tool_use_id":"toolu_1","content":[` +
+		strings.Repeat(`{"type":"text","text":"a few words of a tool's output"},`, 2000) + `""]}]`
+	var body bytes.Buffer
+	for n := 0; body.Len() < 118<<20; n += 2 {
+		body.WriteString(cntUser(fmt.Sprintf("u%d", n), fmt.Sprintf("u%d", n+1), blocks) + "\n")
+	}
+	benchMeterAndScrub(b, "_text_blocks", body.Bytes())
+}
+
+// benchMeterAndScrub measures the meter and the scrub of an archive of body,
+// the main thread, each named with suffix.
+func benchMeterAndScrub(b *testing.B, suffix string, body []byte) {
 	thread, _ := claudeMainThread(ctSession)
-	body := benchLines(118 << 20)
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(zw)
@@ -1154,7 +1168,7 @@ func BenchmarkTheMeterAtItsBounds(b *testing.B) {
 	}
 	archive := buf.Bytes()
 	b.Logf("an archive of %d bytes, %d of plaintext", len(archive), len(body))
-	b.Run("meter", func(b *testing.B) {
+	b.Run("meter"+suffix, func(b *testing.B) {
 		for b.Loop() {
 			if _, count, _, err := meterArchive(b.Context(), bytes.NewReader(archive), ctSession,
 				"2.1.322", testPass(b)); err != nil || count == nil {
@@ -1162,7 +1176,7 @@ func BenchmarkTheMeterAtItsBounds(b *testing.B) {
 			}
 		}
 	})
-	b.Run("scrub", func(b *testing.B) {
+	b.Run("scrub"+suffix, func(b *testing.B) {
 		for b.Loop() {
 			reopen := func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(archive)), nil }
 			if err := scrubArchive(archiveTar, bytes.NewReader(archive), reopen, io.Discard,
@@ -1196,8 +1210,11 @@ func (r *repeating) Read(p []byte) (int, error) {
 // internal/sandbox's MainThreadReadWait, which holds twice this figure on a
 // loaded host within its fifteen seconds; the slowest measured, a line of
 // blocks of an empty kind to that bound, and lines of such blocks to it and
-// [threadLinesMax] at once, each past that wait; and tiny lines to
-// [threadLinesMax].
+// [threadLinesMax] at once, each past that wait; tiny lines to
+// [threadLinesMax]; and a line of one result whose content is text blocks, or
+// empty strings, to the bound, the most elements the estimate walks. Each case
+// runs with the count alone, and as _next with the next request's estimate
+// beside it ([nextReading]), which a collection asks with the count.
 func BenchmarkTheMainThreadReadAtItsBound(b *testing.B) {
 	lines := benchLines(1 << 20)
 	lines = lines[bytes.IndexByte(lines, '\n')+1:]
@@ -1210,11 +1227,21 @@ func BenchmarkTheMainThreadReadAtItsBound(b *testing.B) {
 	// of them fill [threadPlainMax].
 	short := []byte(head + strings.Repeat(block, int(threadPlainMax/threadLinesMax-int64(len(head)+len(tail)))/
 		len(block)) + tail)
-	for _, bc := range []struct {
+	result := head + `{"type":"tool_result","tool_use_id":"toolu_1","content":[`
+	resultTail := `""]}]},"uuid":"u1","version":"2.1.310"}` + "\n"
+	elements := func(element string) func() io.Reader {
+		n := (threadPlainMax - int64(len(result)+len(resultTail))) / int64(len(element))
+		return func() io.Reader {
+			return io.MultiReader(strings.NewReader(result), &repeating{lines: []byte(element),
+				left: n * int64(len(element))}, strings.NewReader(resultTail))
+		}
+	}
+	type benchCase struct {
 		name   string
 		thread func() io.Reader
 		whole  int64
-	}{
+	}
+	cases := []benchCase{
 		{"ordinary_lines", func() io.Reader {
 			return &repeating{lines: lines, left: threadPlainMax - threadPlainMax%int64(len(lines))}
 		}, threadPlainMax - threadPlainMax%int64(len(lines))},
@@ -1228,16 +1255,32 @@ func BenchmarkTheMainThreadReadAtItsBound(b *testing.B) {
 		{"tiny_lines_to_the_lines_bound", func() io.Reader {
 			return &repeating{lines: tiny, left: threadLinesMax * int64(len(tiny))}
 		}, threadLinesMax * int64(len(tiny))},
-	} {
-		b.Run(bc.name, func(b *testing.B) {
-			for b.Loop() {
-				var r resumedReading
-				walkThread(b.Context(), bc.thread(), threadPlainMax, testPass(b), &r)
-				if r.unread {
-					b.Fatal("the thread was not read whole")
-				}
+		{"a_result_of_text_blocks_to_the_bound", elements(`{"type":"text","text":"a"},`), threadPlainMax},
+		{"a_result_of_empty_strings_to_the_bound", elements(`"",`), threadPlainMax},
+	}
+	for _, bc := range cases {
+		for _, next := range []bool{false, true} {
+			name := bc.name
+			if next {
+				name += "_next"
 			}
-			b.SetBytes(bc.whole)
-		})
+			b.Run(name, func(b *testing.B) {
+				for b.Loop() {
+					var (
+						r resumedReading
+						n nextReading
+					)
+					readings := []threadReading{&r}
+					if next {
+						readings = append(readings, &n)
+					}
+					walkThread(b.Context(), bc.thread(), threadPlainMax, testPass(b), readings...)
+					if r.unread || next && n.unread {
+						b.Fatal("the thread was not read whole")
+					}
+				}
+				b.SetBytes(bc.whole)
+			})
+		}
 	}
 }

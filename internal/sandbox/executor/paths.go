@@ -242,9 +242,9 @@
 // trace as BenchmarkAThreadChainAtItsBounds says): a main thread whose chain
 // files 2^13 items, one a user's line growing every scratch buffer to its most
 // beside results under ids of 32,769 bytes whose facts charge the base exactly,
-// read by the chain and the count in one walk, in 0.12 to 0.17 s, holding 4 MiB
-// at most at GOGC=10 and its heap peaking at 5 MiB at the default, within the
-// arithmetic, and taking no slot.
+// read by the chain, the count and the next request's estimate in one walk,
+// in 0.13 to 0.17 s, holding 4 MiB at most at GOGC=10 and its heap peaking at
+// 5 to 8 MiB at the default, within the arithmetic, and taking no slot.
 //
 // THE BASE TIER'S COUNT: no token holds it, so it is every read in flight at
 // once, each about 5.3 MiB at its worst: one per seat collecting on this node,
@@ -253,29 +253,31 @@
 // its peers, 341 MiB.
 //
 // THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
-// holds 43 MiB at most, the chain at both bounds; a take's piece at the
-// scrub's bound, its meter beside it under the same slot, 89 MiB
+// holds 43 MiB at most, the chain at both bounds; a take's piece at the scrub's
+// bound, its meter beside it under the same slot, 89 MiB
 // (BenchmarkATakeAtItsLargeTier: a main-thread line and a `.json` string each
 // at [scrubPieceMaxBytes] of bytes the decode triples, both readings and the
-// meter, read as above, 1.7 to 1.8 s on two cores, its heap peaking at
-// 142 MiB at the default GOGC against the pass's 62 MiB). Shared with
-// [TranscriptReadsAtOnce]'s two, a collection's large pass waits behind two
-// transcript reads of up to about 22 s each and spends internal/sandbox's
-// MainThreadReadWait (15 s), so a person paging a transcript would decide how
-// a turn's relaunch is told; apart, it never does. One slot, not two: the
-// process's thread readers then hold at worst 2 x 133 + 89 = 355 MiB beside
-// the base tier. One waiter behind a pass over ordinary lines at the bound
-// (2.4 s, 4.8 s loaded) is through in 9.6 s, within the 15 s. Behind the
-// slot's slowest holder it is not: a pass keeping more than
-// [collectionBaseRecords] records holds the slot to its end whatever its
-// lines, so a collection whose chain keeps the records of 2^20 short lines of
-// blocks of an empty kind, at the bound (16.4 to 17.5 s with the count alone,
-// BenchmarkTheMainThreadReadAtItsBound), holds it until its own
-// MainThreadReadWait cuts it. One such line to the bound, 17.5 to 17.7 s, one
-// record of few facts, holds none. That waiter, a later one, or one behind a
-// take's piece streaming from a slow box ends with [errLargeWait] and reads as
-// no reading (count unread), the safe side, as a read past MainThreadReadWait
-// already is. The wait is spent inside that wait, never added to it.
+// meter, read as above, the meter estimating, 1.7 to 2.3 s on two cores, its
+// heap peaking at 137 MiB at the default GOGC against the pass's 62 MiB).
+// Shared with [TranscriptReadsAtOnce]'s two, a collection's large pass waits
+// behind two transcript reads of up to about 22 s each and spends
+// internal/sandbox's MainThreadReadWait (15 s), so a person paging a transcript
+// would decide how a turn's relaunch is told; apart, it never does. One slot,
+// not two: the process's thread readers then hold at worst 2 x 133 + 89 = 355
+// MiB beside the base tier. One waiter behind a pass over ordinary lines at the
+// bound (2.6 to 2.8 s with the count and the next request's estimate, 5.7 s
+// loaded) is through in 11.4 s, within the 15 s. Behind the slot's slowest
+// holder it is not: a pass keeping more than [collectionBaseRecords] records
+// holds the slot to its end whatever its lines, so a collection whose chain
+// keeps the records of 2^20 short lines of blocks of an empty kind, at the
+// bound (18.3 to 19.7 s with the count alone, 20.7 to 21.6 s with the next
+// request's estimate, BenchmarkTheMainThreadReadAtItsBound), holds it until its
+// own MainThreadReadWait cuts it. One such line to the bound, 18.6 to 18.8 s
+// (20.8 to 21.7 s estimating), one record of few facts, holds none. That
+// waiter, a later one, or one behind a take's piece streaming from a slow box
+// ends with [errLargeWait] and reads as no reading (count unread), the safe
+// side, as a read past MainThreadReadWait already is. The wait is spent inside
+// that wait, never added to it.
 //
 // # A hook's note, confirmed off its job's main thread
 //
@@ -386,7 +388,10 @@
 // has been met. A text its readers ask a property of STREAMS into the
 // automaton that answers it at any length ([textSays], [textNotice],
 // [textHandback], [textResult]), and a hook's words into the asked take
-// tokens they name ([textTakes], [threadReader.Asking]). A list is read an
+// tokens they name ([textTakes], [threadReader.Asking]). A length the estimate
+// reads is COUNTED as the scanner takes the value ([jsonscan.Scanner.Units],
+// [jsonscan.Scanner.TextUnits]), for a reading that asks
+// ([threadReader.Estimating]), at any length. A list is read an
 // element at a time by the layer's one rule of an element, up to the first it
 // refuses, the rest passed over; an entry read by its first characters (a
 // retraction's, a kept uuid) is read one byte past them
@@ -428,29 +433,51 @@
 // (bufio's 64 KiB, the scanner's 67,072 bytes, two text buffers of 4 KiB, the
 // automata) hold about 146 KiB, and what no reader reads of a line costs
 // nothing more, whatever its length (BenchmarkAReaderAtALineOfAnyLength): a
-// whole PDF's Read, 55,924,056 bytes on one line, reads in 26 to 35 ms holding
-// 146.5 to 151.5 KiB, and a 64 MiB prompt in 264 to 268 ms holding 145.8 KiB.
-// Between lines a reader keeps two buffers more once a line's values grow
-// them, the scanner's capture to [threadValueMax] and its scratch up to
-// [lineScratchKeep] each, about 280 KiB in all; within a line that grows every
-// scratch buffer it holds up to 1.7 MiB ("A collection's read of a thread",
-// THE COEFFICIENTS). A line of the smallest results, which no release writes,
-// holds 16,384 of them within the bound, the
-// reader and its facts 2,450 KiB, read in 34 to 42 ms, and one more is
-// refused, a line of about 656 KiB, since a list is charged at every size it
-// doubles through. A reading's coincident worst is the resume's model of the
-// thread at both its bounds ([threadChain]) alone, 43 MiB held, peaking at
-// 62 MiB: that line as the record that fills both, read while End decides,
-// holds 41 MiB at most, its heap peaking at 55 MiB, since its results replace
-// calls of longer ids (BenchmarkAThreadChainAtItsBounds); within the about
-// 133 MiB a seat's read for words holds in the same transcript slot
-// ([SeatTranscriptReadsAtOnce]). Lines cost a reading time, not memory, about
-// 2.5 µs a line at the least: tiny lines to [threadLinesMax] read in 2.5 to
-// 2.8 s, a line of blocks of an empty kind to [threadPlainMax] in 17.7 to
-// 18.0 s, and the slowest measured, a subagent's thread of 256-byte lines of
-// such blocks to both bounds at once, which the reading reads on past every
-// line that leaves it not whole, in 21.4 to 22.6 s holding 15 MiB
-// (BenchmarkAReadingAtItsBounds).
+// whole PDF's Read, 55,924,056 bytes on one line, reads in 32 to 47 ms holding
+// 147.1 to 152.2 KiB, 31 to 38 ms with its estimate, and a 64 MiB prompt in 238
+// to 262 ms holding 146.4 KiB, 246 to 259 ms with its estimate, 344 to 369 ms
+// for one of CJK and emoji, every character counted. A content nested as deep
+// as a line is read, through results or documents' sources, is read with its
+// estimate in 3 to 8 ms holding 147.5 KiB, its estimate the nesting fault, and
+// no case moves the stack in use (352 to 384 KiB in all). Between lines a
+// reader keeps two buffers more once a line's values grow them, the scanner's
+// capture to [threadValueMax] and its scratch up to [lineScratchKeep] each,
+// about 280 KiB in all; within a line that grows every scratch buffer it holds
+// up to 1.7 MiB ("A collection's read of a thread", THE COEFFICIENTS). A line
+// of the smallest results, which no release writes, holds 16,384 of them within
+// the bound, the reader and its facts 2,451 to 2,456 KiB, read in 26 to 48 ms,
+// 40 to 52 ms with its estimate, and one more is refused, a line of about 656
+// KiB, since a list is charged at every size it doubles through. A reading's
+// coincident worst is the resume's model of the thread at both its bounds
+// ([threadChain]) alone, 43 MiB held, peaking at 62 MiB: that line as the
+// record that fills both, read while End decides, holds 41 MiB at most, its
+// heap peaking at 55 MiB, since its results replace calls of longer ids
+// (BenchmarkAThreadChainAtItsBounds); within the about 133 MiB a seat's read
+// for words holds in the same transcript slot ([SeatTranscriptReadsAtOnce]).
+// Lines cost a reading time, not memory, about 2.5 µs a line at the least: tiny
+// lines to [threadLinesMax] read in 2.5 to 2.8 s, a line of blocks of an empty
+// kind to [threadPlainMax] in 17.7 to 18.0 s, and the slowest measured, a
+// subagent's thread of 256-byte lines of such blocks to both bounds at once,
+// which the reading reads on past every line that leaves it not whole, in 21.4
+// to 22.6 s holding 15 MiB (BenchmarkAReadingAtItsBounds).
+//
+// THE ESTIMATE COSTS ITS PASS what counting costs (jsonscan's package doc),
+// and a walk of every element of a result, which a pass that does not ask
+// passes over unread. A collection's walk with the count and the next
+// request's estimate (BenchmarkTheMainThreadReadAtItsBound, one case a
+// process on a dedicated two-core slot, three runs, against the count alone):
+// ordinary lines to [threadPlainMax] in 2.6 to 2.8 s against 1.8 to 2.2; a
+// tool result of text blocks to it, the slowest shape a session writes, 9.45
+// to 9.49 s against 6.7 to 6.8; tiny lines to [threadLinesMax] 2.9 to 3.0 s
+// against 2.4 to 2.9; and the shapes no release writes, a result of empty
+// strings 17.7 to 18.0 s against 16.4 to 16.7, a line of blocks of an empty
+// kind 20.8 to 21.7 s against 18.6 to 18.8, and such lines to both bounds 20.7
+// to 21.6 s against 18.3 to 19.7. The same machine read the holdings' slowest,
+// which never estimates, in 23.5 to 25.3 s against the 21.4 to 22.6 above, so
+// it ran about a tenth slower than when those were taken. The take's meter,
+// which estimates, stays under the scrub (BenchmarkTheMeterAtItsBounds): 1.64
+// to 1.66 s against 11.8 to 12.0 s on ordinary lines, 2.17 to 2.23 s against
+// 39.9 to 41.2 s on results of text blocks.
 //
 // # A run's harness session, carried between boxes
 //
@@ -547,16 +574,20 @@
 // the conversation: the last reply whose usage counts, and an ESTIMATE of every
 // record after it (2.1.322's Xh and k7o @294311543, 2.1.310's Zg and KFo
 // @247646809). These are the facts a reader of that count reads of a line
-// ([threadLine.Estimate], [threadLine.AttachmentEstimate]), filled once, as the
-// line is read ([factsOf]), by the harness's own rules:
+// ([threadLine.Estimate], [threadLine.AttachmentEstimate]), filled as the line
+// is read, for a reading that asks ([threadReader.Estimating]), by the
+// harness's own rules:
 //
 //   - A USER OR ASSISTANT RECORD is its message's content (EX, 2.1.322
 //     @292455010; zY in 2.1.310): a string at its length, a list element by
 //     element (n7e @292455428; GJn): a string or a `text` block at its text's
 //     length; `thinking` at its text, `redacted_thinking` at its data (the
 //     signature is not charged); a `tool_use` at its name's length plus its
-//     input's JSON, which is the input as the line writes it, since the
-//     harness writes a line with JSON.stringify; a `tool_result` at its
+//     input's JSON, which is the input as the line writes it, JSON.stringify's
+//     own on every line the harness writes, since it writes a line with
+//     JSON.stringify (on a line written otherwise, blanks, a key written twice,
+//     a needless escape and `\/` count longer, an exponent's number shorter:
+//     `1e20` is 4 units, JavaScript's 21); a `tool_result` at its
 //     content, by these rules again; a `document` whose source is text at its
 //     data, at TWO characters a token where its title's last dotted part is
 //     `json`, `jsonl` or `jsonc` in any case, and whose source is content at
@@ -583,9 +614,9 @@
 //     the five does.
 //
 // LENGTH IS JAVASCRIPT'S: a string's length in UTF-16 code units, two for a
-// character past the basic plane, never capped ([quotedUnits]; the skill
-// listing's [textUnits] stops past a name's bound). And EACH ELEMENT IS
-// ROUNDED AS THE HARNESS ROUNDS IT, Math.round(length / n) (y @292454158),
+// character past the basic plane, never capped ([jsonscan.Scanner.TextUnits];
+// the skill listing's [textUnits] stops past a name's bound). And EACH ELEMENT
+// IS ROUNDED AS THE HARNESS ROUNDS IT, Math.round(length / n) (y @292454158),
 // half up, before the elements are summed, so a list of short texts charges
 // less than their summed length would ([estimateUnits]).
 //
@@ -594,11 +625,21 @@
 // @286842850, 2.1.310's ry @240809635), and which model counts is the reader's
 // to say, so the facts hold the two sums.
 //
-// ONE PASS OVER A VALUE, HOLDING NO TEXT: a content value is walked once, as
-// its decoder reads it ([estimateWalk]), each element's charge read as it
-// passes and the length of what an element writes read off the value where it
-// lies, so a value nested a thousand levels deep costs its bytes once, never
-// once a level, and nothing of a text is kept but its length.
+// IN THE LINE'S ONE PASS, HOLDING NO TEXT (claudelineestimatescan.go): each
+// length is the scanner's count as the value passes ([jsonscan.Scanner.Units]
+// as written, [jsonscan.Scanner.TextUnits] decoded), at any length, so a value
+// costs its bytes once however deeply its elements nest, and nothing of it is
+// kept but its length (and a PDF read's pages, 20 bytes at most). Every key a
+// rule reads is read by its decoded name and last occurrence whatever the
+// type written before it, since an element's type is known only at its end.
+// NESTED TO [estimateNestMax] ELEMENT LISTS, through a result's content or a
+// document's source's, the only two the rules recurse through: past it an
+// object a rule charges is no figure, never a guess, where the harness would
+// charge it; the walk recurses a frame a list, so the bound holds a read's
+// stack to kilobytes. And READ ONLY FOR A READING THAT ASKS
+// ([threadReader.Estimating], the next request's): counting costs the pass
+// (MEASURED in "A thread line is read in one scanner pass"), and a line read
+// otherwise answers [errNotEstimated], never an estimate of nothing.
 //
 // # What Claude Code estimates a session's next request at
 //
@@ -636,17 +677,18 @@
 // ([sandbox.NextRequest.At]); the anchor's counts are the same at both.
 //
 // NO FIGURE, where the thread was not read whole (a line the layer refused, a
-// walk ended on an error, no chained line), where a reply's usage does not
-// read since the last boundary, where a record after the anchor holds a
-// content the harness's own estimate throws on or a PDF read whose pages do
-// not read, where the release that wrote the thread is none the count's
-// rules were read in ([claudeCountFloor]), and where the box's read marked
-// the count before it opened the thread ([claudePrecompact]): the floor then
-// reads the last request's input. A server's clearing
-// of old tool results is not charged: the figure is what the request the
-// server is sent carries once the clearing has dropped them, which is what a
-// window has to hold, while the harness counts them back only to decide when
-// to compact.
+// walk ended on an error, no chained line), where a reply's usage does not read
+// since the last boundary, where a record after the anchor holds a content the
+// harness's own estimate throws on, one nesting an object a rule charges past
+// [estimateNestMax], a PDF read whose pages do not read, or a line its walk did
+// not ask the estimate of ([errNotEstimated]), where the release that wrote the
+// thread is none the count's rules were read in ([claudeCountFloor]), and where
+// the box's read marked the count before it opened the thread
+// ([claudePrecompact]): the floor then reads the last request's input. A
+// server's clearing of old tool results is not charged: the figure is what the
+// request the server is sent carries once the clearing has dropped them, which
+// is what a window has to hold, while the harness counts them back only to
+// decide when to compact.
 //
 // WHAT IT KEEPS FROM LINE TO LINE IS BOUNDED, whatever a line holds: its sums,
 // the digest of its run's message id, and of the records since the last

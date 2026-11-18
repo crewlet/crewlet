@@ -62,7 +62,7 @@ func walkThread(ctx context.Context, r io.Reader, maxBytes int64, large *passBud
 	reader.Gate(gate)
 	defer reader.dropGate()
 	for _, reading := range readings {
-		if asker, ok := reading.(takeAsker); ok {
+		if asker, ok := reading.(lineAsker); ok {
 			asker.ask(reader)
 		}
 	}
@@ -108,10 +108,12 @@ type recordKeeper interface {
 	records() int
 }
 
-// takeAsker is a reading that asks which take tokens a hook's words name
-// ([threadReader.Asking]) of reader, before its first line, and keeps a
-// refusal as its own: the receipts' ([hookReading]).
-type takeAsker interface {
+// lineAsker is a reading that asks reader for what it reads of every line,
+// before its first line: the receipts' the take tokens a hook's words name
+// ([hookReading], [threadReader.Asking]), keeping a refusal as its own, and
+// the next request's every line's estimate ([nextReading],
+// [threadReader.Estimating]).
+type lineAsker interface {
 	ask(reader *threadReader)
 }
 

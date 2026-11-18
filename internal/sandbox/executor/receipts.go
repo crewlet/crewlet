@@ -85,7 +85,7 @@ type hookReading struct {
 	err, askErr              error
 }
 
-var _ takeAsker = (*hookReading)(nil)
+var _ lineAsker = (*hookReading)(nil)
 
 // unreadTakes is why no walk is made for ask's takes, "" where one is: none
 // can be held off a release whose resume was not read, and so none absent;

@@ -198,8 +198,8 @@ func (r *benchChain) end(_ bool, err error) { r.err = err }
 func (r *benchChain) records() int { return r.c.items() }
 
 // benchReadThread reads file into a chain of agent's in one walk, then End;
-// where count is set, the resumed count reads the same walk after the chain,
-// as a node's collection does. The chain goes first so the message See hands
+// where count is set, the resumed count and the next request's estimate read
+// the same walk after the chain, as a node's collection does. The chain goes first so the message See hands
 // back is held while the count reads the same line: the costlier order.
 func benchReadThread(b *testing.B, file, agent string, count bool) benchRead {
 	b.Helper()
@@ -212,8 +212,9 @@ func benchReadThread(b *testing.B, file, agent string, count bool) benchRead {
 	chain := &benchChain{c: read.c}
 	readings := []threadReading{chain}
 	if count {
+		// A collection that counts asks the next request's estimate beside it.
 		read.count = new(resumedReading)
-		readings = append(readings, read.count)
+		readings = append(readings, read.count, new(nextReading))
 	}
 	large := new(passBudget)
 	walkThread(b.Context(), f, threadPlainMax, large, readings...)
