@@ -389,13 +389,14 @@ func TestAKeyABlockHoldsCutsNoOtherBlock(t *testing.T) {
 }
 
 // A STEP THAT WRITES A BLOCK AND READS NO ARMOUR READS THE CLAIMS AS THE WHOLE
-// TEXT DOES: a value whose key a block read forward takes is no claim past
-// that block ([claims.take]), so the opening of the line a later block begins
-// on, which the value runs into, reads as the gutter, and the later block is
-// written whole. The keys' stage's first read boundary falls past the last
-// END, and plain lines follow it, so at every placement the text is longer
-// than a stream redacts whole ([wholeBytes]) and the step after it writes
-// that block and reads no armour.
+// TEXT DOES: a block read forward takes a password's key and its value's first
+// line, a key's line below it, and a value whose key a block takes is no claim
+// past that block ([claims.take]), so the opening of the line a later block
+// begins on, which the value runs into, reads as the gutter, and the later
+// block is written whole. The keys' stage's first read boundary falls past the
+// last END, and plain lines follow it, so at every placement the text is
+// longer than a stream redacts whole ([wholeBytes]) and the step after it
+// writes that block and reads no armour.
 //
 // Mutation: take no forward block into such a step ([keyStage.step]), and the
 // stream cuts a block the whole text writes whole.
@@ -404,7 +405,7 @@ func TestAStepThatOnlyWritesReadsTheClaimsAsTheWholeTextDoes(t *testing.T) {
 	r := rand.New(rand.NewPCG(1170, 1))
 	tested := false
 	for _, g := range []string{"KL20 ", "Ab3x "} {
-		shape := `{"log": "` + testBegin + `\n` + testKeyLine + ` password: \nu1SU1Lf9x.Ab3x\n` + g + testBegin + `\n` +
+		shape := `{"log": "` + testBegin + `\n` + testKeyLine + ` password: \nu1SU1Lf9x.Ab3x\n` + testKeyLine[:20] + `\n` + g + testBegin + `\n` +
 			g + testKeyLine + `\n` + g + testEnd + `|passwd:\n` + g + gutterValue + `\n"}` + "\n" + strings.Repeat("ok\n", 60<<10)
 		spans, _, c := readKeys(shape)
 		bare := &claims{text: shape}
