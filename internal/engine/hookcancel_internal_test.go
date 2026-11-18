@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -388,4 +390,77 @@ func TestAJobsPendingSettleKeepsItsNewestLosses(t *testing.T) {
 	if got := held.settle.Cancelled; len(got) != steerLossesKept || got[0].ID != "8" {
 		t.Errorf("the pending settle holds %d cancelled calls, want the newest %d", len(got), steerLossesKept)
 	}
+}
+
+// servesLostSaid is the count of notes each steer_serve_lost line logs holds
+// for turnID says.
+func servesLostSaid(logs *bundleLog, turnID string) []int {
+	var out []int
+	for _, line := range strings.Split(logs.String(), "\n") {
+		var rec struct {
+			Msg    string `json:"msg"`
+			TurnID string `json:"turn_id"`
+			Notes  int    `json:"notes"`
+		}
+		if json.Unmarshal([]byte(line), &rec) == nil && rec.Msg == "steer_serve_lost" && rec.TurnID == turnID {
+			out = append(out, rec.Notes)
+		}
+	}
+	return out
+}
+
+// A SERVE LOST TO A CANCEL IS SAID WHERE IT IS LOST, AND ONLY IT: by the settle
+// loop, counting the notes its write lost to a cancel and never those a take
+// answered nothing merged into the same settle; and by a serve's own write
+// that loses one, which no loop then says. NOT PARALLEL: it reads the
+// process's log.
+//
+// Mutation: count every note the merged settle answered, or say nothing where
+// a serve's write lost one, and a case goes red.
+func TestAServeLostToACancelIsSaidWhereItIsLost(t *testing.T) {
+	logs := captureSteerLogs(t)
+	ctx := t.Context()
+	t.Run("by the settle loop", func(t *testing.T) {
+		store := sandbox.NewCoordStore(coordmem.NewFleet())
+		runs, _ := steersOver(t, steerRing, store)
+		runs.stopped = ctx.Done()
+		launch := workingRun(t, store, runs, "run-lost-1")
+		calls := map[string]*sandbox.NoteCall{}
+		for _, id := range []string{"n-1", "n-2"} {
+			fileSealed(t, runs, "run-lost-1", steer.Note{ID: id, Text: "the note " + id, By: "founder"})
+			calls[id] = hookCall()
+			if _, err := store.ServeHook(ctx, "run-lost-1", sandbox.HookServe{IDs: []string{id}, Launch: launch,
+				Statuses: steerTakeStatuses, Serve: sandbox.HookServed{Take: "take-" + id,
+					Boundary: string(types.SteerBoundaryFinish), Call: calls[id]}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		runs.settleHook(ctx, "run-lost-1", sandbox.HookSettle{Launch: launch, Unanswered: []string{"take-n-1"},
+			Cancelled: []sandbox.NoteCall{*calls["n-2"]}})
+		eventually(t, "the settle answered", func() bool {
+			runs.settleMu.Lock()
+			defer runs.settleMu.Unlock()
+			return len(runs.settling) == 0
+		})
+		if said := servesLostSaid(logs, "run-lost-1"); !slices.Equal(said, []int{1}) {
+			t.Errorf("steer_serve_lost said %v notes, want once, of the one note a cancel lost", said)
+		}
+	})
+	t.Run("by a serve's own write", func(t *testing.T) {
+		store := sandbox.NewCoordStore(coordmem.NewFleet())
+		held := &lostServeStore{PendingStore: store, held: make(chan struct{})}
+		t.Cleanup(func() { close(held.held) })
+		runs, _ := steersOver(t, steerRing, held)
+		runs.stopped = ctx.Done()
+		launch := workingRun(t, store, runs, "run-lost-2")
+		fileSealed(t, runs, "run-lost-2", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+		inbox := boundInbox(t, runs, store, "run-lost-2", launch)
+		call := hookCall()
+		takeOf(t, inbox.Take(ctx, mcpbridge.SteerEventFinish, call))
+		inbox.Cancelled(ctx, *call)
+		takeOf(t, inbox.Take(ctx, mcpbridge.SteerEventFinish, hookCall()))
+		if said := servesLostSaid(logs, "run-lost-2"); !slices.Equal(said, []int{1}) {
+			t.Errorf("steer_serve_lost said %v notes as the serve's write lost one, want once, of one", said)
+		}
+	})
 }

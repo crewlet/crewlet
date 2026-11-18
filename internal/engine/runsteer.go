@@ -649,11 +649,8 @@ func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettl
 				continue
 			}
 			settled = append(settled, settle)
-			if len(settle.Cancelled) > 0 && len(lost) > 0 {
-				log.InfoContext(base, "steer_serve_lost", "turn_id", turnID, "launch_id", settle.Launch,
-					"why", "cancelled", "notes", len(lost), "detail", "the run's harness gave up a hook's "+
-						"call whose answer served notes: they wait to be served again at the job's next step")
-			}
+			sayServesLost(base, turnID, settle.Launch,
+				servesOfCalls(lost, settle.Launch, settle.Cancelled, sandbox.ServeCancelled))
 		}
 		s.settleMu.Lock()
 		run.answered(answered, settled)
@@ -687,6 +684,37 @@ func (s *runSteers) settleRun(base context.Context, turnID string, run *runSettl
 			timer.Stop()
 		}
 	}
+}
+
+// servesOfCalls counts the unread notes of notes holding a serve to launch
+// that answered one of calls and whose loss is lost: "" for a live serve,
+// what a serve's write naming the calls loses ([sandbox.HookServe.Cancelled]),
+// and [sandbox.ServeCancelled] for one a settle's answer shows lost.
+func servesOfCalls(notes []sandbox.RunNote, launch string, calls []sandbox.NoteCall,
+	lost sandbox.ServeLoss) int {
+	n := 0
+	for _, note := range notes {
+		if note.Read != nil || (lost == "" && note.Served != launch) {
+			continue
+		}
+		if slices.ContainsFunc(note.Serves, func(h sandbox.HookServed) bool {
+			return h.Launch == launch && h.Lost == lost && h.Call != nil && slices.ContainsFunc(calls, h.Call.Is)
+		}) {
+			n++
+		}
+	}
+	return n
+}
+
+// sayServesLost says that notes of launch's serves were lost to its harness's
+// cancels, where any were: by the settle loop's write or a serve's own.
+func sayServesLost(ctx context.Context, turnID, launch string, notes int) {
+	if notes == 0 {
+		return
+	}
+	log.InfoContext(ctx, "steer_serve_lost", "turn_id", turnID, "launch_id", launch, "why", "cancelled",
+		"notes", notes, "detail", "the run's harness gave up a hook's call whose answer served notes: they "+
+			"wait to be served again at the job's next step")
 }
 
 // asks is what a round asks of run's settles: every review take and every
@@ -1789,6 +1817,7 @@ func (i *runInbox) Take(ctx context.Context, event string, call *sandbox.NoteCal
 		ids = append(ids, c.held.ID)
 	}
 	take := takeName()
+	cancelLost := servesOfCalls(notes, launch, cancelled, "")
 	served, err := i.steers.store.ServeHook(ctx, i.ident.turn.TurnID, sandbox.HookServe{
 		IDs: ids, Launch: launch, Statuses: steerTakeStatuses,
 		Serve:     sandbox.HookServed{Take: take, Boundary: string(boundary), Iteration: i.round, Call: call},
@@ -1802,6 +1831,7 @@ func (i *runInbox) Take(ctx context.Context, event string, call *sandbox.NoteCal
 		i.answeredNothing(ctx, launch, take)
 		return ""
 	}
+	sayServesLost(ctx, i.ident.turn.TurnID, launch, cancelLost)
 	// A HOOK GIVEN UP WHILE ITS TAKE RAN takes nothing from it: its call
 	// heard cancelled, or its request cancelled, by the SDK's canceller or the
 	// harness aborting it. The take's own budget ends it DeadlineExceeded,
