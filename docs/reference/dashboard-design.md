@@ -1475,7 +1475,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/gitlet/repos/{name}/compare` | **A comparison** of two revisions: how they relate (ahead, behind, their merge base), what merging the compared into the base would do (merges cleanly, or conflicts in which paths), what it changed since the two parted in the one `DiffView`, and the page bar's **Open change**, which proposes the compared branch into the base branch, prefilled with its head's subject and the work item its push was charged to *(hidden where the company hosts no code)* | `base=` (none is the default branch) · `head=` (none asks for it) · `file=` · `line=` (a line of `file=`'s newer side, marked and scrolled to, the patch read on to the page holding it; opening another file drops it; a failed check links one) · `layout=unified\|split` |
 | `#/gitlet/repos/{name}/changes/{n}` | **A change**, `web!42` in full, laid out as a code host lays one out: its header (reference and title, and one sentence: its state pill, who wants to merge which revision of which branch into which, or merged or closed it, with the branch's copy, when it was opened, merged or closed, and its work item) and the page bar's **Close change** and **Review** (a menu of the three verdicts and Request review) on a live change, a draft's **Ready for review**, **Reopen** alone on a closed one and nothing on a merged one; tabs, each with its glyph, the head's diffstat at the row's end: **Conversation** (one timeline in the order its records landed: its description, a card its owner opened with Edit, Copy link and Quote; each revision pushed, each review with its disc in its verdict's tone and the verdict in words, each ask for review that stands and each thread; then the merge box on the timeline's spine, on a live change a section per condition to merge, each on a disc in where it stands, its latest checks with how long each ran and whether it is required, and the merge controls (**Merge** or **Add to queue** with its method, **Delete its branch** and **Close** its work item, **Override** and a line saying what the press will do, **Re-request**, **Re-run failed checks**, **Rebase** and **Take out of the queue** in their sections), on a merged one into what, by whom and how, with **Revert**; a comment of the reader's own in the markdown editor; and beside them a rail of whom it asked for a review with Request and re-request, its readiness meter, work item, owner, branches with the target's protected tag, head, checks, participants, reference and whether it notified the reader), **Revisions** (its revisions as cards, each with its facts and the way to its files and to what it changed), **Checks** (the attempts that judge it: its head's, checked for its target, each opening in the check pane), **Files changed** (every file of the revision as one stack, each under a head that sticks below the files' toolbar in its own `DiffView`, beside the files' tree in its own scroller, every finding and thread under the line it is on as a card, the outdated ones under a Disclosure, a finding drafted on picked lines and sent with a review, and **Apply suggestion** on an open finding of the head) and **More** (where it came from: who opened it, from which turn and executor, for which work item, and how it ended; and whom each record about it reached, and why) *(hidden where the company hosts no code)*. A number that is not a whole number from 1 is Not Found | `tab=conversation\|revisions\|checks\|files\|more` · on Files changed, `rev=` (a revision; none is the head), `since=` (an earlier revision, to read what changed since it), `file=` (a path, scrolled to), `layout=unified\|split`, `q=` (words a path holds) · `ext=` (extensions shown) · `only=findings\|unviewed`, `thread=` (a thread on a line, opening its file and its revision) |
 | `#/gitlet/search` | **Gitlet › Search**: the lines of the repositories the reader reads that match a search, by repository and then file, each file a card of its path and its lines, each line opening its file at the commit it was searched at with the line picked, under a Callout of what was not searched — asked when the reader presses Search | `q=` (the search, in Gitlet's grammar), `mode=literal\|regex\|word`, `repo=`, `path=`, `ref=` |
-| `#/gitlet/pushes` | **Gitlet › Pushes**: one repository's pushes, newest first in log order — when, who pushed (the seat, or the credential and the seat it acts as), what became of its refs (five at most, its refusals first, the rest counted, every ref one press away; each a branch's or a tag's glyph, its name, the word for what became of it and the commits it moved between, a moved ref's the way to the comparison of what the push changed on it), the commits it brought, the turn and work item behind a seat's push, how it was built and its pack — with Load older | `repo=` (a repository's name; without one, the section asks for it) |
+| `#/gitlet/pushes` | **Gitlet › Pushes**: one repository's pushes as a feed of sentences on the reader's days, each day's heading counting its pushes ("Yesterday 2 of 13"), each push who pushed and what it did to which refs, the change a merge landed and what a refused push offered, its run, credential and how it was built, its time and pack, and its refs below (five at most, every ref one press away), with Load older pushes | `repo=` (a repository's name; without one, the section asks for it) |
 | `#/gitlet/queue` | **Gitlet › Queue**: the merge queues of gated branches, a band per repository and branch, its entries in queue order — the place, the change, who enqueued it and its state — and, once a repository is named, each entry's train base, a `SegmentedMeter` of the required checks of what it is tested in, its time queued against the slowest of their declared timeouts, and what the queue put out in the last day, in the danger tone with the reason and the checks or paths the engine found | `repo=` (a repository's name; without one, every repository's live entries) |
 | `#/gitlet/checks` | **Gitlet › Checks**: every repository's attempts that ended in the window, newest ended first — under a `TimeRangePicker`, the state and check-name `FacetRail`s and a `Histogram` of when they ended (the failed ones its foot), each counted over the attempts loaded — each row opening the **check pane**: what it was checking, its commit and branch, how long it ran, its exit code and why it ended, its failures (each `path:line` a link into the comparison of its base and its commit on that file, its line marked — `line=` — and, outside what the diff changes, the file at its commit offered on that line), its tail, and its log a page at a time on demand | `window=` (`1d` by default, `7d`, `30d`, or two instants) · `state=` · `name=` |
 | `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): the mission and the vision as two equal cards side by side, then the standing policies every agent reads on every turn, numbered in one card across the page, each card under its own glyph (a target, a telescope, a scroll), then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so inside its card. Each card carries its own Edit, and each unwritten part its Add, for a reader who may write the charter, and nothing for anybody else; either opens the part for writing in place in its card (`?edit=mission`, `vision` or `policies`, a comma list for several). Read from the org projection by every reader | |
@@ -9263,38 +9263,17 @@ wakes](../concepts/gitlet.md#who-a-change-wakes)).
   this section, a repository's Checks tab (its own listing, which takes no
   window) and a change's (`change=`). The log is read by its object — an
   immutable answer — a page at a time, never until the reader asks.
-- **Pushes** is one repository's history, `code_pushes`, newest first in the
-  order the pushes landed. The engine keeps a history per repository and none
-  that spans them, so the section is narrowed to one by `repo=` — chosen from
-  the repositories in its bar, or arriving from a link — and a
-  name no repository can have (`REPO_NAME`, held to `gitlet.ValidName`) is said
-  in place rather than asked about. A row is when it landed, who pushed (the
-  seat, or the credential a person pushed through with the seat it acts as),
-  what became of its refs (created, moved, forced, deleted, unchanged, or
-  refused, in the danger tone with the engine's reason) — each ref its glyph,
-  a branch's or a tag's, and the commits it moved between, a moved ref's two
-  ids the way to the comparison of what the push changed on it and a created
-  ref's the way to the commit it was made at — the commits it
-  brought, a seat's turn and work item as the engine stamped them, how it was
-  built (a client's `git push`, or a commit the engine built from a tool's
-  call) and its pack. **The history is asked in brief** (`brief`): a push
-  carries up to a thousand ref updates — `crewlet gitlet import -local` sends that many
-  at a time — and the commits it introduced, which no row draws, so read whole
-  a page of an imported repository was megabytes that every poll sent again,
-  and twenty thousand lines a render. A row draws five refs at most, its
-  refused ones first, and says what became of the rest in one line ("and 995
-  more: 990 created, 5 deleted", a refusal in the danger tone); **Show all**
-  reads that one push whole (`push`) at its own position — a copy behind the
-  page waits for it rather than answering that it holds no such push — and
-  draws every ref until **Show fewer**; a push that could not be read is said
-  beside **Show all**, which asks it again. The time a push landed reads the
-  clock itself and the refs are memoised on their row, so the second hand
-  re-renders one cell a row and no ref. It is a log, so it reaches its older
-  rows by fetching them and holds its first page still from the press of Load
-  older
-  ([A log is an axis, then its rows](#a-log-is-an-axis-then-its-rows)). It
-  draws no axis: the engine counts no series of pushes, and one folded from
-  the pages held would be true of those pages alone.
+- **Pushes** is one repository's history, `code_pushes` in brief, as a feed on the reader's
+  days: each push one sentence (who, what it did to which refs, the change a merge landed, what
+  a refused push offered), its run, credential and how it was built, its refs below. Each day's
+  heading counts its pushes from the engine's day counts (`day_bounds`), "Yesterday 2 of 13"
+  where the page holds part of it.
+  The section is narrowed to one repository by `repo=`, and a name no repository can have
+  (`REPO_NAME`, held to `gitlet.ValidName`) is said in place rather than asked about.
+  A row draws five refs at most, its refusals first, the rest counted in one line; **Show all**
+  reads that one push whole at its own position, and the clock re-renders no ref.
+  It is a log, so Load older pushes fetches its older rows
+  ([A log is an axis, then its rows](#a-log-is-an-axis-then-its-rows)).
 
 **Code is read over REST, never on the socket** (`lib/useCodeQuery.ts`). Its
 questions are the registry's like every other, one answer on every transport,
