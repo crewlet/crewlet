@@ -4569,6 +4569,29 @@ var ACTIONS = {
 		refreshes: [],
 		scope: "person"
 	},
+	code_create_tag: {
+		args: [
+			"repo",
+			"tag",
+			"at",
+			"message"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_delete_tag: {
+		args: [
+			"repo",
+			"tag",
+			"expected_target"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
 	code_commit_files: {
 		args: [
 			"repo",
