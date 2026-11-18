@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/activityline"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -165,8 +166,9 @@ func (t *transcriptLines) flushSkipped() {
 	if t.skipped == 0 {
 		return
 	}
-	t.lines = append(t.lines, fmt.Sprintf("(%d line(s) of output, %s, not read: past the %s one "+
-		"line of a run's output may hold)", t.skipped, humanSize(t.skippedBytes), humanSize(int64(t.skippedBound))))
+	t.lines = append(t.lines, activityline.Words(activityline.TagNote, fmt.Sprintf("%d line(s) of output, %s, "+
+		"not read: past the %s one line of a run's output may hold", t.skipped, humanSize(t.skippedBytes),
+		humanSize(int64(t.skippedBound)))))
 	t.skipped, t.skippedBytes = 0, 0
 }
 

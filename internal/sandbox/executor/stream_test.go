@@ -162,7 +162,7 @@ func TestACollectionReadsAStreamPastTheCap(t *testing.T) {
 	if !res.Success || !strings.HasPrefix(res.Text, "Outcome: succeeded") {
 		t.Errorf("success %v, report %.40q; want the report collected", res.Success, res.Text)
 	}
-	if !strings.Contains(res.Transcript, "[tool] bash: go test ./...") || !strings.Contains(res.Transcript, "All green.") {
+	if !strings.Contains(res.Transcript, "] bash: go test ./...\n[ok ") || !strings.Contains(res.Transcript, "All green.") {
 		t.Errorf("the transcript lost the stream's end: …%q", tailOf(res.Transcript, 200))
 	}
 	if strings.Contains(res.Transcript, "ooooooooo") {
@@ -193,12 +193,12 @@ func TestALinePastTheBoundIsSkippedAndSaid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if !strings.Contains(res.Transcript, "1 line(s) of output") || !strings.Contains(res.Transcript, "not read") ||
+	if !strings.Contains(res.Transcript, "[note] 1 line(s) of output") || !strings.Contains(res.Transcript, "not read") ||
 		!strings.Contains(res.Transcript, "past the 64 KiB one line of a run's output may hold") {
 		t.Errorf("the skipped line is not said, with the bound it was past: %q", res.Transcript)
 	}
 	before := strings.Index(res.Transcript, "make build")
-	note := strings.Index(res.Transcript, "1 line(s) of output")
+	note := strings.Index(res.Transcript, "[note] 1 line(s) of output")
 	after := strings.Index(res.Transcript, "Built it.")
 	if before < 0 || after < 0 || before > note || note > after {
 		t.Errorf("the note is not where the line was: %q", res.Transcript)

@@ -500,7 +500,7 @@ could do none of it well without reading what those agents did. It is
 that seat launched, and that executor's sessions). An
 executor session reaches nobody the executor's live output did not, but it
 holds **more** than that output showed: the live output names a tool call's
-subject on one line and a failed result's first line, and a session's
+subject, whole only within 8 KiB, and a failed result's first line, and a session's
 transcript holds every call's whole input and each result's text to an entry's
 bound — the contents of the files the run read and what its commands printed —
 and every subagent's thread. A lead reads all of it, as they read the prompts

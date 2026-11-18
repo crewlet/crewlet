@@ -78,6 +78,7 @@ import { deliveredLine, fromPhaseEvent, type PhaseRecord, type PushedRef } from 
 import { changePath, parseChangeRef, refName } from "~/lib/code.ts";
 import { AnswerRunButton } from "~/components/writes.tsx";
 import { LiveOutput } from "./trace/Waterfall.tsx";
+import { ActivityLog } from "~/components/ActivityLog.tsx";
 import {
   elapsedMs,
   fmtBytes,
@@ -1183,13 +1184,7 @@ function CollectedRun({
           </div>
         )}
         {record.transcript ? (
-          <CodeBlock
-            plain
-            selectable
-            copyable
-            label="What the executor did"
-            code={record.transcript}
-          />
+          <ActivityLog label="What the executor did" text={record.transcript} />
         ) : (
           <span className="t-caption">The launch&rsquo;s record carries no transcript.</span>
         )}
