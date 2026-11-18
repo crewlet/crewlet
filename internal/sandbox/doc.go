@@ -288,6 +288,41 @@
 // would under-state it. And never on the executor log: a stamp settled off
 // the log carries the last request's input alone.
 //
+// AND AN E2B BOX IS PRIVATE, AND SECURED ([e2bAPI.createBox]). Its create
+// turns public traffic off, so E2B's proxy forwards a request to any port of
+// the box but envd's only with the box's traffic access token, which the
+// engine neither keeps nor sends ([e2bBox.TrafficToken]); the setting is
+// create-only, and the box keeps it through pause and resume. envd's port is
+// exempt and keeps its own check: secured, envd answers every request but its
+// health check only with the box's access token ([e2bBox.EnvdAccessToken]),
+// which every envd call carries. E2B mints the traffic token only for a box
+// made private, so a create answered without one came from an API that
+// ignored the field. On a self-hosted cluster that is a release below
+// e2b-dev/infra 2025.46 ([e2bPrivateFloor]), the first to carry both #1474,
+// which mints the token for a private box, and #1482, which exempts envd's
+// port from it; a cluster built from e2b-dev/infra's main in the hour between
+// the two, which no release carries, guards envd's port too, so its boxes pass
+// this check and fail at their first envd call. On E2B's cloud it would be the
+// create no longer answering the token, which no setting mends. Either way the
+// box is public, so it is killed and the launch refused as configuration
+// ([e2bAPI.refusePublic]): no wait the engine can see clears it, and a class
+// that waits would mint and kill a billed box on every retry. `secure` is
+// still sent, for a cluster from before E2B secured every box itself
+// (e2b-dev/infra 315a94e737), which honours the field, and E2B refuses a
+// template whose envd is below 0.2.0, saying to rebuild it. maskRequestHost is
+// never set: it rewrites the Host header a box's service sees, and nothing the
+// engine runs needs it. A box's ports are reached at the domain E2B answers
+// for it, where it answers one (a team on a cluster of its own), else at the
+// deployment's ([e2bBox.Domain]). Sources: E2B's "Restricting public access"
+// (https://docs.e2b.dev/network/restrict-public-access) and "Secured access"
+// (https://docs.e2b.dev/sandbox/secured-access); in e2b-dev/infra,
+// packages/shared/pkg/proxy/ingress.go (ResolveIngress),
+// packages/api/internal/orchestrator/create_instance.go,
+// packages/api/internal/handlers/sandbox_create.go, envd's WithAuthorization
+// in packages/envd/internal/api/auth.go, and spec/openapi.yml
+// (NewSandbox.secure, SandboxNetworkConfig, Sandbox.trafficAccessToken). See
+// e2b_api.go.
+//
 // See docs/concepts/code-sandbox.md.
 //
 // # A launch's harness session is kept, and a turn's end recorded

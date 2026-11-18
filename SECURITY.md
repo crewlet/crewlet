@@ -460,8 +460,10 @@ A few things worth knowing when deploying Crewlet:
   [Code Sandbox § Local sandboxes](docs/concepts/code-sandbox.md#local-sandboxes).
   E2B boxes are created with secured access, so a box's in-box agent runs a
   command or serves a file only for a holder of that box's access token,
-  which the engine reads from E2B and never stores
-  (`docs/concepts/code-sandbox.md#sandbox-backends`).
+  which the engine reads from E2B and never stores, and with public traffic
+  off, so a service a run starts in its box answers a request from outside
+  the box only when it carries that box's traffic token, which the engine
+  never keeps (`docs/concepts/code-sandbox.md#sandbox-backends`).
 - **A deck runs nothing, and its renderer is a trust boundary.** A `slides`
   artifact is drawn on the dashboard's own origin, so it is held to a closed
   subset at publish (no script, no event attribute, no embedded page, no style

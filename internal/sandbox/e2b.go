@@ -113,9 +113,11 @@ func (p *E2BProvider) templateFor(spec Spec) string {
 
 // Create implements [Provider].
 //
-// EVERY BOX IS SECURED ([e2bAPI.createBox]): its envd refuses any request
-// without the box's access token, which every handle this backend builds
-// carries ([e2bBox.EnvdAccessToken]) and every envd call presents.
+// EVERY BOX IS PRIVATE AND SECURED ([e2bAPI.createBox]): E2B's proxy passes a
+// request to a port but envd's only with the box's traffic token, and envd
+// refuses a request without the box's access token, which every handle this
+// backend builds carries ([e2bBox.EnvdAccessToken]) and every envd call
+// presents.
 func (p *E2BProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	template := p.templateFor(spec)
 	box, err := p.api.createBox(ctx, template, spec.TimeoutSec, spec.Env)
