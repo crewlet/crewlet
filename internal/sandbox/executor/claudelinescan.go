@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"slices"
+	"strings"
 	"unicode/utf8"
 	"unsafe"
 
@@ -1182,8 +1183,9 @@ func (d *lineDecoder) clearHeld() (*[]byte, *[]byte, *[]byte) {
 // an object, its `type`, `toolUseID`, `by` and `hookEvent` kept as written;
 // what every shape rule asks of its lists, every rule's at once, since its
 // type may be its last key ([threadLine.AttachmentWellFormed]); and which
-// asked take tokens a string `content`, and a hook_success's string `stdout`,
-// name ([lineDecoder.takes]). No element of a list is held.
+// asked take tokens a hook record's string `content` ([hookRecordPrefix]), and
+// a hook_success's string `stdout`, name ([lineDecoder.takes]). No element of
+// a list is held.
 func (d *lineDecoder) attachment(scan *jsonscan.Scanner, k jsonscan.Kind, a *attachmentFacts) error {
 	a.kind = scannedKind(k)
 	if k != jsonscan.ObjectStart {
@@ -1250,9 +1252,13 @@ func (d *lineDecoder) attachment(scan *jsonscan.Scanner, k jsonscan.Kind, a *att
 		}
 		return err
 	})
-	// A STDOUT'S TOKENS ARE A HOOK_SUCCESS'S ALONE, by its last type, which
-	// may come after it.
-	if typ, typErr := wireRequiredString("type", a.typ); typErr != nil || typ != hookSuccess {
+	// A CONTENT'S TOKENS ARE A HOOK RECORD'S ALONE, and a stdout's a
+	// hook_success's, by its last type, which may come after them.
+	typ, typErr := wireRequiredString("type", a.typ)
+	if typErr != nil || !strings.HasPrefix(typ, hookRecordPrefix) {
+		a.contentTokens = 0
+	}
+	if typErr != nil || typ != hookSuccess {
 		a.stdoutTokens = 0
 	}
 	return err

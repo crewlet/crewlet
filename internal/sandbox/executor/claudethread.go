@@ -1286,6 +1286,11 @@ const (
 // hook's note reached its session reads it ([threadLine.HookTakes]).
 const hookSystemMessage = "hook_system_message"
 
+// hookRecordPrefix begins the type of every attachment a hook's firing
+// writes: only such a record's words are read for takes
+// ([threadLine.HookTakes]), so an asking read decodes no skill listing.
+const hookRecordPrefix = "hook_"
+
 // The attachments whose payloads Claude Code's resume holds to a shape
 // ([threadLine.AttachmentWellFormed]): two of the records of a hook's firing,
 // its success and its additional context, and the others.
@@ -2406,8 +2411,8 @@ func (l threadLine) HookEvent() (string, error) {
 // ([threadReader.Asking]) a hook record's words name: content of its
 // attachment's `content`, stdout of a hook_success's `stdout`, each where it
 // is a string; bit i for token i, each whole and exactly ([textTakes]). Zero
-// on every other record. A hook's words leave the layer only so, never as
-// bytes.
+// on every other record, an attachment no hook wrote ([hookRecordPrefix])
+// among them. A hook's words leave the layer only so, never as bytes.
 func (l threadLine) HookTakes() (content, stdout uint64) {
 	a := &l.facts().attachment
 	return a.contentTokens, a.stdoutTokens
