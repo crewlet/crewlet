@@ -2,7 +2,6 @@ package redact
 
 import (
 	"math/rand/v2"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -12,13 +11,10 @@ const gutterValue = "placeholder9x"
 
 // gutterShape is a text in which a key's block holds the opening of a password
 // key's line, and, where its blocks are read or written in two windows, where
-// in the text the keys' stage's read boundary falls between the two; stamp
-// where the claims read another word than gutterValue as the value (a stamp
-// the value's line alone opens with).
+// in the text the keys' stage's read boundary falls between the two.
 type gutterShape struct {
 	name, text string
 	joins      []int
-	stamp      bool
 }
 
 // gutterShapes is every way a key's block comes to hold the opening of a
@@ -27,8 +23,9 @@ type gutterShape struct {
 // wrapping's lines above, a piece before the END, a bare BEGIN, a prompt above
 // a value and a piece, an escaped string, a BEGIN no END closes with and
 // without a body, a blank line between, and one key read as two blocks that
-// join, its BEGIN's line and its body's opening differently; then seven
-// shapes the wrappings do not vary.
+// join, its BEGIN's line and its body's opening differently; then the shapes
+// the wrappings do not vary, a key's line with no gutter under a block whose
+// first line opens as the value's line does among them.
 func gutterShapes() []gutterShape {
 	pc := testKeyLine[:56]
 	wrap := func(g, s string, lines ...string) string {
@@ -92,31 +89,34 @@ func gutterShapes() []gutterShape {
 	add("no gutter under a stamped block", "2026-10-06T09:00:00.123Z hunter2x9 u1SU1Lf9x+\n"+testEnd+"|passwd:\n"+gutterValue+"\n")
 	add("an AWS secret's key after", "u1SU1Lf=\necho \""+testEnd+"|passwd:\" >> k\necho \""+gutterValue+"\" >> k\naws_secret_access_key = z6jmCqAkeYL1pRDxqWFVRmPZf+tiEOTNLBkMi2Yu\n")
 	add("a blank line of the wrapping, then none", "u1SU1Lf=\n     7\u2192"+testEnd+"|passwd:\n     7\u2192\n"+gutterValue+"\n")
-	add("a gutter on the value's line alone", "2026-10-06T09:00:00.123Z hunter2x9 u1SU1Lf9x+\n"+testEnd+"|passwd:\n2026-10-06T09:00:00.123Z "+gutterValue+"\n")
-	shapes[len(shapes)-1].stamp = true
+	add("a gutter on the value's line alone", ts+"hunter2x9 u1SU1Lf9x+\n"+testEnd+"|passwd:\n"+ts+gutterValue+"\n")
+	add("a stamped BEGIN over a bare body and END", ts+testBegin+"\n"+testKeyLine+"\n"+testEnd+"|passwd:\n"+ts+gutterValue+"\n")
+	add("a table's row over a bare END", "| "+testKeyLine+" |\n"+testEnd+"|passwd:\n| "+gutterValue+" fAt0gun+ |\n")
+	add("stamps over a bare END, a prompt above", ts+testKeyLine[:30]+"\n"+ts+"Password: |\n"+testEnd+"|passwd:\n"+ts+gutterValue+"\n"+ts+testBegin+"\n")
 	add("a value before the block on its line", "Password:\n"+wrap("2026-10-06T09:00:00.123Z ", "", testKeyLine[:30], testEnd+"|passwd:", gutterValue+" "+testEnd))
 	return shapes
 }
 
 // NO VALUE UNDER A KEY LINE WHOSE OPENING A BLOCK HOLDS IS PUBLISHED, and a
 // second pass changes nothing: over every shape of [gutterShapes], Secrets
-// shows no value the rule reads in the text as written ([gutterValues]),
-// gutterValue among them, and Secrets of its answer is its answer.
+// shows neither gutterValue nor a value the text holds once that the rule
+// reads in it as written ([gutterValues]), and Secrets of its answer is its
+// answer.
 //
 // Mutation: write a key's block whole ([claims.apart]), and the wrapping's
-// word is read as the value under every wrapping but the stamped one;
-// ignore what the line a block begins on opens with ([claims.opensAlike]), or
-// let a block no END closes take a key without its value
-// ([claims.shortOfValues]), and a shape here publishes the value.
+// word is read as the value under every wrapping but the stamped one; cut it
+// at a key's line that has no gutter ([valueRead.gutterOf]), ignore what the
+// line a block begins on opens with ([claims.opensAlike]), or let a block no
+// END closes take a key without its value ([claims.shortOfValues]), and a
+// shape here publishes the value.
 func TestNoValueUnderAKeyLineWhoseOpeningABlockHoldsIsPublished(t *testing.T) {
 	t.Parallel()
 	for _, c := range gutterShapes() {
-		values := gutterValues(c.text)
-		if !c.stamp && (strings.Count(c.text, gutterValue) != 1 || !slices.Contains(values, gutterValue)) {
-			t.Fatalf("%s: the claims read no value of the shape's own, so it tests nothing", c.name)
+		if strings.Count(c.text, gutterValue) != 1 {
+			t.Fatalf("%s: the shape holds gutterValue %d times, not once", c.name, strings.Count(c.text, gutterValue))
 		}
 		once := Secrets(c.text)
-		for _, v := range values {
+		for _, v := range append(gutterValues(c.text), gutterValue) {
 			if strings.Count(c.text, v) == 1 && strings.Contains(once, v) {
 				t.Errorf("%s: the value %q is published:\n text %q\n once %q", c.name, v, c.text, once)
 			}

@@ -169,7 +169,8 @@
 // The keys' blocks are read beside what the rules claim in the text as
 // written ([claims]), and the rules then read the text the blocks leave, so a
 // password's value is read twice: by the claims, as written, and by the rule,
-// past the keys' markers, and the two readings must name one value.
+// past the keys' markers, and the two readings must name one value, but under
+// a key's line with no gutter (below).
 //
 // A PASSWORD IS CLAIMED AS ITS KEY AND ITS VALUE, never the stretch between
 // them. A value read on a line below its key ([readValue]) has between the two
@@ -204,7 +205,12 @@
 // the gutter where it begins on the key's line, unless the line it begins on
 // opens, before it, with text shaped as the gutter ([claims.opensAlike]):
 // written whole, the key's line opens so still, which is how a block read
-// under a log's timestamp on every line stays one marker. So a gutter the
+// under a log's timestamp on every line stays one marker. A key's line whose
+// value's line spells none of it has no gutter to write a block apart from,
+// and its block is written whole ([valueRead.gutterOf]): the rule then reads
+// the value past the opening of the block's first line where the value's
+// line opens alike, and the word the claims, reading the key's line as
+// written, take for the value is the wrapping's, and shown. So a gutter the
 // value's line repeats letter for letter is the wrapping's, and is shown,
 // though it be a run of base64, even a key's last run where the line below
 // its END repeats it.
@@ -283,6 +289,14 @@
 //     over `"hunter2x9 <a key's piece>\n" +` over an END): the key's block
 //     takes the run and the suffix, so the rule reads the value's line as
 //     ending in a marker and takes the wrapping's closing for the value;
+//   - a key's piece below a key's line that spells none of the piece's line,
+//     under a block whose first line opens with a run of base64 that the
+//     piece's line repeats before a key's END: written whole, the block
+//     leaves the key's line opening with that run, so the rule reads it as
+//     the wrapping's and the END as no value, while the claims, reading the
+//     key's line as written, took the run for the value and kept the keys
+//     from reading it back; a second pass reads it as a key's and redacts it,
+//     and there redacting twice is not redacting once;
 //   - and a value below a key on a table's row that holds a key's END before
 //     the key (`| <a key's line> -----END RSA PRIVATE KEY----- pwd= |` over
 //     the value): the key's marker hides the row's opening from the key's
@@ -1775,7 +1789,9 @@ func (r *valueRead) gutterEnd(content string, crossed bool) int {
 }
 
 // gutterOf is [valueRead.gutterEnd], and where on the key's line the gutter
-// the line spells ends, in the text, or 0 where it spells none of it.
+// the line spells ends, in the text, or 0 where it spells none of it: a key's
+// line with no gutter has none to write a key's block apart from
+// ([claims.apart]), and its block is written whole.
 func (r *valueRead) gutterOf(content string, crossed bool) (int, int) {
 	g := r.gutter(crossed)
 	k := gutterIndex(crossed)
@@ -1783,6 +1799,9 @@ func (r *valueRead) gutterOf(content string, crossed bool) (int, int) {
 		return leadingMarkers(content), 0
 	}
 	n, at := gutterLen(content, g)
+	if at == 0 {
+		return n, 0
+	}
 	return n, keyPrefixAt(r.text, r.los[k], r.start, r.prior, at)
 }
 
@@ -2953,8 +2972,8 @@ const maxKeyLine = 76 + 1
 // read and written beside a password's value as the rule reads that value
 // (the package doc's "A key's block beside a password"); and what a rule
 // leaves of a run of base64 it replaced some of, written straight onto its
-// marker, is read as the run it claimed ([claims.glued]). The one exception is
-// the table's row the package doc lists last as still published.
+// marker, is read as the run it claimed ([claims.glued]). The exceptions are
+// the last two the package doc lists as still published.
 //
 // THE TEXT IS READ WHOLE, the keys' blocks and then each rule over what the
 // one before it wrote, however long it is: its caller holds it whole already,
