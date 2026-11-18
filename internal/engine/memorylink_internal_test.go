@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/learning/memsync"
@@ -100,9 +99,9 @@ func TestANodesHydrationReadsItsLinksMeter(t *testing.T) {
 		want     memsync.Link
 		acrossIt bool
 	}{
-		{"the member", memoryConfig(&member, onMember, time.Second), nil, false},
-		{"the leaf", memoryConfig(&leaf, onLeaf, time.Second), q.LinkMeter(), true},
-		{"the external node", memoryConfig(&external, onExternal, time.Second), eq.LinkMeter(), true},
+		{"the member", memoryConfig(&member, onMember), nil, false},
+		{"the leaf", memoryConfig(&leaf, onLeaf), q.LinkMeter(), true},
+		{"the external node", memoryConfig(&external, onExternal), eq.LinkMeter(), true},
 	} {
 		if c.cfg.Link != c.want || c.cfg.AcrossLink != c.acrossIt {
 			t.Errorf("%s's memory sync reads a link %t (its queue's meter: %t), across a link %t; "+
