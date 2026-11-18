@@ -19,6 +19,20 @@ func bounded(t testing.TB) context.Context {
 	return ctx
 }
 
+// step is one wait's context under a liveness bound of its own, for a case
+// whose volume makes its whole run long: the bound restarts with each wait, so
+// a slow runner that keeps delivering passes, and a wait nothing ends fails.
+func step(t testing.TB) context.Context {
+	ctx, cancel := context.WithTimeout(t.Context(), stepBound)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+// stepBound is step's bound. A wait moves at most one ReadLimit's message,
+// and a loaded race shard moved these cases' events at about a second a
+// mebibyte, so a wait still open after two minutes is one that never ends.
+const stepBound = 2 * time.Minute
+
 // A PIPE MESSAGE IS ONE NUL-TERMINATED FRAME, each way, as Chromium's
 // --remote-debugging-pipe frames them: a message split across reads waits for
 // the rest, two in one read are two, and each command the client writes is

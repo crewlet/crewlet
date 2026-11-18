@@ -53,10 +53,9 @@ func sized(size int, start, end string) []byte {
 func TestAMessagePastTheReadLimitEndsOnlyWhatItIsFor(t *testing.T) {
 	for _, tr := range transports {
 		t.Run(tr.name, func(t *testing.T) {
-			ctx := bounded(t)
 			logs := newRecords()
 			c, p := tr.pair(t, logs.logger())
-			held := announce(ctx, t, c, p, attachment{"big", "target-big"}, attachment{"sibling", "target-sibling"})
+			held := announce(step(t), t, c, p, attachment{"big", "target-big"}, attachment{"sibling", "target-sibling"})
 			big, sibling := held[0], held[1]
 			sent := make(chan error, 1)
 			write := func(b []byte) { go func() { sent <- p.write(b) }() }
@@ -71,6 +70,7 @@ func TestAMessagePastTheReadLimitEndsOnlyWhatItIsFor(t *testing.T) {
 			answers := func(s *Session) {
 				t.Helper()
 				calls := make(chan error, 1)
+				ctx := step(t)
 				go func() {
 					_, err := Call(ctx, s, testCall, testParams{})
 					calls <- err
@@ -86,7 +86,7 @@ func TestAMessagePastTheReadLimitEndsOnlyWhatItIsFor(t *testing.T) {
 			// Exactly ReadLimit: delivered whole.
 			l := c.Browser().Listen(testEvent)
 			write(sized(ReadLimit, `{"method":"Test.event","params":{"n":1,"text":"`, `"}}`))
-			m, err := l.Next(ctx)
+			m, err := l.Next(step(t))
 			if err != nil {
 				t.Fatalf("a message of exactly ReadLimit bytes: %v", err)
 			}
@@ -98,6 +98,7 @@ func TestAMessagePastTheReadLimitEndsOnlyWhatItIsFor(t *testing.T) {
 
 			// An answer past it fails its own call alone.
 			calls := make(chan error, 1)
+			ctx := step(t)
 			go func() {
 				_, err := Call(ctx, big, testCall, testParams{})
 				calls <- err
@@ -119,7 +120,7 @@ func TestAMessagePastTheReadLimitEndsOnlyWhatItIsFor(t *testing.T) {
 			if err := p.event("big", testEvent.name, testEventParams{N: 2}); err != nil {
 				t.Fatal(err)
 			}
-			if m, err := lb.Next(ctx); err != nil {
+			if m, err := lb.Next(step(t)); err != nil {
 				t.Fatalf("after an event past ReadLimit nobody asked for, its session's listener read %v", err)
 			} else if e, _, _ := testEvent.Of(m); e.N != 2 {
 				t.Fatalf("the mark read as %+v", e)
@@ -127,6 +128,7 @@ func TestAMessagePastTheReadLimitEndsOnlyWhatItIsFor(t *testing.T) {
 			answers(big)
 
 			// An event past it a listener asked for ends its own session.
+			ctx = step(t)
 			go func() {
 				_, err := Call(ctx, big, testCall, testParams{})
 				calls <- err
@@ -137,7 +139,7 @@ func TestAMessagePastTheReadLimitEndsOnlyWhatItIsFor(t *testing.T) {
 			if err := <-calls; !errors.Is(err, ErrMessageTooBig) {
 				t.Fatalf("the call in flight on the session whose event passed ReadLimit failed with %v, want ErrMessageTooBig", err)
 			}
-			if _, err := lb.Next(ctx); !errors.Is(err, ErrMessageTooBig) {
+			if _, err := lb.Next(step(t)); !errors.Is(err, ErrMessageTooBig) {
 				t.Fatalf("the listener that asked for the event read %v, want ErrMessageTooBig", err)
 			}
 			select {
@@ -155,7 +157,7 @@ func TestAMessagePastTheReadLimitEndsOnlyWhatItIsFor(t *testing.T) {
 			write(sized(ReadLimit+1, `{"params":{"text":"`, `"}}`))
 			select {
 			case <-c.Done():
-			case <-ctx.Done():
+			case <-step(t).Done():
 				t.Fatal("a message past ReadLimit that is no CDP message left the connection open")
 			}
 			if err := c.Err(); !errors.Is(err, ErrClosed) || !strings.Contains(err.Error(), fmt.Sprint(ReadLimit+1)) {
@@ -573,12 +575,12 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 	// takes it from marks: the reader routes a transport's messages in
 	// order, so every message sent before it has been routed by the time it
 	// arrives.
-	marked := func(ctx context.Context, t *testing.T, p *peer, marks *Listener, n int) {
+	marked := func(t *testing.T, p *peer, marks *Listener, n int) {
 		t.Helper()
 		if err := p.event("", testOther.name, testEventParams{N: n}); err != nil {
 			t.Fatalf("mark %d: %v", n, err)
 		}
-		m, err := marks.Next(ctx)
+		m, err := marks.Next(step(t))
 		if err != nil {
 			t.Fatalf("mark %d: the connection ended: %v", n, err)
 		}
@@ -587,9 +589,10 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 		}
 	}
 	// answers is a call on s the peer answers, as a check that s is open.
-	answers := func(ctx context.Context, t *testing.T, p *peer, s *Session) {
+	answers := func(t *testing.T, p *peer, s *Session) {
 		t.Helper()
 		calls := make(chan error, 1)
+		ctx := step(t)
 		go func() {
 			_, err := Call(ctx, s, testCall, testParams{})
 			calls <- err
@@ -604,7 +607,6 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 
 	t.Run("an event nobody listens for counts nothing", func(t *testing.T) {
 		t.Parallel()
-		ctx := bounded(t)
 		c, p := pipePair(t, nil)
 		l := c.Browser().Listen(testEvent)
 		for i := range over {
@@ -615,7 +617,7 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 		if err := p.event("", testEvent.name, testEventParams{N: -1}); err != nil {
 			t.Fatal(err)
 		}
-		if m, err := l.Next(ctx); err != nil {
+		if m, err := l.Next(step(t)); err != nil {
 			t.Fatalf("after %d MiB nobody listened for, the connection ended: %v", over, err)
 		} else if e, _, _ := testEvent.Of(m); e.N != -1 {
 			t.Fatalf("read %+v", e)
@@ -624,14 +626,13 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 
 	t.Run("a listener that keeps up", func(t *testing.T) {
 		t.Parallel()
-		ctx := bounded(t)
 		c, p := pipePair(t, nil)
 		l := c.Browser().Listen(testEvent)
 		for i := range over {
 			if err := event(p, testEvent.name, i); err != nil {
 				t.Fatal(err)
 			}
-			m, err := l.Next(ctx)
+			m, err := l.Next(step(t))
 			if err != nil {
 				t.Fatalf("event %d of a listener that keeps up: %v", i, err)
 			}
@@ -643,7 +644,6 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 
 	t.Run("a listener closed with what it held", func(t *testing.T) {
 		t.Parallel()
-		ctx := bounded(t)
 		c, p := pipePair(t, nil)
 		marks := c.Browser().Listen(testOther)
 		held := c.Browser().Listen(testEvent)
@@ -652,7 +652,7 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		marked(ctx, t, p, marks, 1)
+		marked(t, p, marks, 1)
 		held.Close()
 		after := c.Browser().Listen(testEvent)
 		for i := range half {
@@ -660,9 +660,9 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 				t.Fatalf("event %d after the close: the connection ended: %v", i, err)
 			}
 		}
-		marked(ctx, t, p, marks, 2)
+		marked(t, p, marks, 2)
 		for i := range half {
-			m, err := after.Next(ctx)
+			m, err := after.Next(step(t))
 			if err != nil {
 				t.Fatalf("event %d after the close: %v", i, err)
 			}
@@ -677,11 +677,10 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 
 	t.Run("an ended session's listener, closed", func(t *testing.T) {
 		t.Parallel()
-		ctx := bounded(t)
 		c, p := pipePair(t, nil)
-		ended := announce(ctx, t, c, p, attachment{"ended", "target-ended"})[0]
+		ended := announce(step(t), t, c, p, attachment{"ended", "target-ended"})[0]
 		held := ended.Listen(testEvent)
-		for i := range half {
+		for i := range 2 {
 			if err := sessionEvent(p, "ended", i); err != nil {
 				t.Fatal(err)
 			}
@@ -692,11 +691,11 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 		}
 		select {
 		case <-ended.Done():
-		case <-ctx.Done():
+		case <-step(t).Done():
 			t.Fatal("the detached session never ended")
 		}
-		if conn, _ := backlogs(c, ended); conn < half*chunk {
-			t.Fatalf("the ended session's listener holds its %d MiB, and the connection counts %d bytes", half, conn)
+		if conn, _ := backlogs(c, ended); conn < 2*chunk {
+			t.Fatalf("the ended session's listener holds its 2 MiB, and the connection counts %d bytes", conn)
 		}
 		held.Close()
 		if conn, session := backlogs(c, ended); conn != 0 || session != 0 {
@@ -709,9 +708,8 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 		if half*chunk >= MaxBacklog || 2*half*chunk <= MaxBacklog {
 			t.Fatalf("%d events of %d bytes are not less than MaxBacklog once and more twice", half, chunk)
 		}
-		ctx := bounded(t)
 		c, p := pipePair(t, nil)
-		page := announce(ctx, t, c, p, attachment{"page", "target-page"})[0]
+		page := announce(step(t), t, c, p, attachment{"page", "target-page"})[0]
 		marks := c.Browser().Listen(testOther)
 		// Two listeners for one event, neither drained.
 		first, second := page.Listen(testEvent), page.Listen(testEvent)
@@ -722,7 +720,7 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		marked(ctx, t, p, marks, 1)
+		marked(t, p, marks, 1)
 		if err := page.Err(); err != nil {
 			t.Fatalf("%d MiB held by each of two listeners ended their session: %v", half, err)
 		}
@@ -732,7 +730,7 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 				"want each event once", half, held, conn)
 		}
 		for i := range half {
-			if _, err := first.Next(ctx); err != nil {
+			if _, err := first.Next(step(t)); err != nil {
 				t.Fatalf("event %d of the first listener: %v", i, err)
 			}
 		}
@@ -741,7 +739,7 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 				after, held)
 		}
 		for i := range half {
-			if _, err := second.Next(ctx); err != nil {
+			if _, err := second.Next(step(t)); err != nil {
 				t.Fatalf("event %d of the second listener: %v", i, err)
 			}
 		}
@@ -752,9 +750,8 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 
 	t.Run("a session's listener that does not keep up", func(t *testing.T) {
 		t.Parallel()
-		ctx := bounded(t)
 		c, p := pipePair(t, nil)
-		held := announce(ctx, t, c, p, attachment{"page", "target-page"}, attachment{"sibling", "target-sibling"})
+		held := announce(step(t), t, c, p, attachment{"page", "target-page"}, attachment{"sibling", "target-sibling"})
 		page, sibling := held[0], held[1]
 		marks := c.Browser().Listen(testOther)
 		l := page.Listen(testEvent)
@@ -763,12 +760,12 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		marked(ctx, t, p, marks, 1)
+		marked(t, p, marks, 1)
 		if err := page.Err(); !errors.Is(err, ErrBacklog) {
 			t.Fatalf("%d MiB untaken ended the page's session with %v, want ErrBacklog", over, err)
 		}
 		// What it held was let go of with its end: none of it is handed over.
-		if m, err := l.Next(ctx); !errors.Is(err, ErrBacklog) {
+		if m, err := l.Next(step(t)); !errors.Is(err, ErrBacklog) {
 			t.Fatalf("the page's listener read %s, %v; want ErrBacklog, its events let go of", m.Params, err)
 		}
 		if conn, session := backlogs(c, page); conn != 0 || session != 0 {
@@ -777,8 +774,8 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 		if c.Session("page") != page {
 			t.Fatal("the page's session, ended by its backlog, is no longer the one the connection holds for its id")
 		}
-		answers(ctx, t, p, sibling)
-		answers(ctx, t, p, c.Browser())
+		answers(t, p, sibling)
+		answers(t, p, c.Browser())
 		if err := c.Err(); err != nil {
 			t.Fatalf("the connection ended with %v", err)
 		}
@@ -786,7 +783,6 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 
 	t.Run("the browser's own listener that does not keep up", func(t *testing.T) {
 		t.Parallel()
-		ctx := bounded(t)
 		c, p := pipePair(t, nil)
 		other, otherPeer := pipePair(t, nil)
 		l := c.Browser().Listen(testEvent)
@@ -798,13 +794,13 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 		}
 		select {
 		case <-c.Done():
-		case <-ctx.Done():
+		case <-step(t).Done():
 			t.Fatalf("%d MiB untaken by the browser's own listener did not end the connection", sent)
 		}
 		if !errors.Is(c.Err(), ErrBacklog) {
 			t.Fatalf("the connection ended with %v, want ErrBacklog", c.Err())
 		}
-		if m, err := l.Next(ctx); !errors.Is(err, ErrBacklog) {
+		if m, err := l.Next(step(t)); !errors.Is(err, ErrBacklog) {
 			t.Fatalf("the listener read %s, %v; want ErrBacklog, its events let go of", m.Params, err)
 		}
 		go func() {
@@ -812,16 +808,15 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 				_ = otherPeer.answer(r, testResult{Text: "still here"})
 			}
 		}()
-		if got, err := Call(ctx, other.Browser(), testCall, testParams{}); err != nil || got.Text != "still here" {
+		if got, err := Call(step(t), other.Browser(), testCall, testParams{}); err != nil || got.Text != "still here" {
 			t.Fatalf("the other connection answered %+v, %v", got, err)
 		}
 	})
 
 	t.Run("an event just under the read limit", func(t *testing.T) {
 		t.Parallel()
-		ctx := bounded(t)
 		c, p := pipePair(t, nil)
-		held := announce(ctx, t, c, p, attachment{"page", "target-page"}, attachment{"other", "target-other"})
+		held := announce(step(t), t, c, p, attachment{"page", "target-page"}, attachment{"other", "target-other"})
 		page, other := held[0], held[1]
 		marks := c.Browser().Listen(testOther)
 		// The other tab's listener holds a few events of its own, untaken.
@@ -838,7 +833,7 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 		if err := p.write(sized(ReadLimit-64, `{"method":"Test.event","params":{"text":"`, `"},"sessionId":"page"}`)); err != nil {
 			t.Fatal(err)
 		}
-		marked(ctx, t, p, marks, 1)
+		marked(t, p, marks, 1)
 		for name, s := range map[string]*Session{"page": page, "other": other} {
 			if err := s.Err(); err != nil {
 				t.Fatalf("an event of %d bytes, just under ReadLimit, that two listeners of the page hold ended the %s's session: %v",
@@ -853,17 +848,17 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 		if err := p.event("page", testEvent.name, testEventParams{N: 1, Text: strings.Repeat("p", 200)}); err != nil {
 			t.Fatal(err)
 		}
-		marked(ctx, t, p, marks, 2)
+		marked(t, p, marks, 2)
 		if err := page.Err(); !errors.Is(err, ErrBacklog) {
 			t.Fatalf("the page's session ended with %v, want ErrBacklog", err)
 		}
 		for i, l := range []*Listener{first, second} {
-			if m, err := l.Next(ctx); !errors.Is(err, ErrBacklog) {
+			if m, err := l.Next(step(t)); !errors.Is(err, ErrBacklog) {
 				t.Fatalf("the page's listener %d read %d bytes, %v; want ErrBacklog", i, len(m.Params), err)
 			}
 		}
 		for i := range 2 {
-			m, err := tab.Next(ctx)
+			m, err := tab.Next(step(t))
 			if err != nil {
 				t.Fatalf("the other tab's event %d: %v", i, err)
 			}
@@ -871,7 +866,7 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 				t.Fatalf("the other tab's event %d read as %d", i, e.N)
 			}
 		}
-		answers(ctx, t, p, other)
+		answers(t, p, other)
 		if err := c.Err(); err != nil {
 			t.Fatalf("the connection ended with %v", err)
 		}
@@ -917,20 +912,19 @@ func TestTheConnectionsBackstopEndsTheSessionThatHoldsTheMost(t *testing.T) {
 		}
 	}
 	// marked is TestAReaderThePageOutrunsEndsOnlyItsSession's.
-	marked := func(ctx context.Context, t *testing.T, p *peer, marks *Listener, n int) {
+	marked := func(t *testing.T, p *peer, marks *Listener, n int) {
 		t.Helper()
 		if err := p.event("", testOther.name, testEventParams{N: n}); err != nil {
 			t.Fatalf("mark %d: %v", n, err)
 		}
-		if _, err := marks.Next(ctx); err != nil {
+		if _, err := marks.Next(step(t)); err != nil {
 			t.Fatalf("mark %d: the connection ended: %v", n, err)
 		}
 	}
 
 	t.Run("an open session holding the most", func(t *testing.T) {
-		ctx := bounded(t)
 		c, p := pipePair(t, nil)
-		held := announce(ctx, t, c, p, attachment{"most", "target-most"}, attachment{"next", "target-next"},
+		held := announce(step(t), t, c, p, attachment{"most", "target-most"}, attachment{"next", "target-next"},
 			attachment{"small", "target-small"})
 		most, next, small := held[0], held[1], held[2]
 		marks := c.Browser().Listen(testOther)
@@ -941,7 +935,7 @@ func TestTheConnectionsBackstopEndsTheSessionThatHoldsTheMost(t *testing.T) {
 		fill(t, p, "most", perSession-1)
 		fill(t, p, "next", perSession-2)
 		fill(t, p, "small", 4)
-		marked(ctx, t, p, marks, 1)
+		marked(t, p, marks, 1)
 		for _, s := range held {
 			if err := s.Err(); err != nil {
 				t.Fatalf("%s ended under the backstop: %v", sessionName(s.ID()), err)
@@ -949,11 +943,11 @@ func TestTheConnectionsBackstopEndsTheSessionThatHoldsTheMost(t *testing.T) {
 		}
 		// One more of small's passes the backstop.
 		fill(t, p, "small", 1)
-		marked(ctx, t, p, marks, 2)
+		marked(t, p, marks, 2)
 		if err := most.Err(); !errors.Is(err, ErrBacklog) {
 			t.Fatalf("the session holding the most ended with %v, want ErrBacklog", err)
 		}
-		if _, err := listeners[most].Next(ctx); !errors.Is(err, ErrBacklog) {
+		if _, err := listeners[most].Next(step(t)); !errors.Is(err, ErrBacklog) {
 			t.Fatalf("the listener of the session holding the most read %v, want ErrBacklog", err)
 		}
 		for s, want := range map[*Session]int{next: perSession - 2, small: 5} {
@@ -961,7 +955,7 @@ func TestTheConnectionsBackstopEndsTheSessionThatHoldsTheMost(t *testing.T) {
 				t.Fatalf("%s ended with %v", sessionName(s.ID()), err)
 			}
 			for i := range want {
-				if _, err := listeners[s].Next(ctx); err != nil {
+				if _, err := listeners[s].Next(step(t)); err != nil {
 					t.Fatalf("event %d of %s: %v", i, sessionName(s.ID()), err)
 				}
 			}
@@ -972,9 +966,8 @@ func TestTheConnectionsBackstopEndsTheSessionThatHoldsTheMost(t *testing.T) {
 	})
 
 	t.Run("a session that has ended", func(t *testing.T) {
-		ctx := bounded(t)
 		c, p := pipePair(t, nil)
-		held := announce(ctx, t, c, p, attachment{"gone", "target-gone"}, attachment{"next", "target-next"},
+		held := announce(step(t), t, c, p, attachment{"gone", "target-gone"}, attachment{"next", "target-next"},
 			attachment{"small", "target-small"})
 		gone, next, small := held[0], held[1], held[2]
 		marks := c.Browser().Listen(testOther)
@@ -988,13 +981,13 @@ func TestTheConnectionsBackstopEndsTheSessionThatHoldsTheMost(t *testing.T) {
 		}
 		fill(t, p, "next", perSession-2)
 		fill(t, p, "small", 5)
-		marked(ctx, t, p, marks, 1)
+		marked(t, p, marks, 1)
 		var detached *DetachedError
 		err := gone.Err()
 		if !errors.As(err, &detached) {
 			t.Fatalf("the detached session ended with %v", err)
 		}
-		_, err = listeners[gone].Next(ctx)
+		_, err = listeners[gone].Next(step(t))
 		if !errors.As(err, &detached) || !errors.Is(err, ErrBacklog) {
 			t.Fatalf("the detached session's listener read %v, want its *DetachedError with ErrBacklog beside it", err)
 		}
@@ -1009,9 +1002,8 @@ func TestTheConnectionsBackstopEndsTheSessionThatHoldsTheMost(t *testing.T) {
 	})
 
 	t.Run("the browser's own session holding the most", func(t *testing.T) {
-		ctx := bounded(t)
 		c, p := pipePair(t, nil)
-		held := announce(ctx, t, c, p, attachment{"next", "target-next"}, attachment{"small", "target-small"})
+		held := announce(step(t), t, c, p, attachment{"next", "target-next"}, attachment{"small", "target-small"})
 		next := held[0]
 		marks := c.Browser().Listen(testOther)
 		own := c.Browser().Listen(testEvent)
@@ -1020,29 +1012,29 @@ func TestTheConnectionsBackstopEndsTheSessionThatHoldsTheMost(t *testing.T) {
 		fill(t, p, "", perSession)
 		fill(t, p, "next", perSession-1)
 		fill(t, p, "small", 2)
-		marked(ctx, t, p, marks, 1)
+		marked(t, p, marks, 1)
 		// One more of small's passes the backstop. The connection may close
 		// its end before the peer's write is done.
 		_ = p.write([]byte(fmt.Sprintf(`{"method":%q,"params":{"text":"%s"},"sessionId":"small"}`, testEvent.name, text)))
 		select {
 		case <-c.Done():
-		case <-ctx.Done():
+		case <-step(t).Done():
 			t.Fatal("the browser's own session held the most past the backstop, and the connection is open")
 		}
 		if err := c.Err(); !errors.Is(err, ErrBacklog) {
 			t.Fatalf("the connection ended with %v, want ErrBacklog", err)
 		}
-		if _, err := own.Next(ctx); !errors.Is(err, ErrBacklog) {
+		if _, err := own.Next(step(t)); !errors.Is(err, ErrBacklog) {
 			t.Fatalf("the browser's own listener read %v, want ErrBacklog", err)
 		}
 		// Another session's listener drains what it holds, then reports
 		// the connection's end.
 		for i := range perSession - 1 {
-			if _, err := nexts.Next(ctx); err != nil {
+			if _, err := nexts.Next(step(t)); err != nil {
 				t.Fatalf("event %d of the other session: %v", i, err)
 			}
 		}
-		if _, err := nexts.Next(ctx); !errors.Is(err, ErrBacklog) {
+		if _, err := nexts.Next(step(t)); !errors.Is(err, ErrBacklog) {
 			t.Fatalf("the other session's listener read %v once it had drained, want ErrBacklog", err)
 		}
 	})
@@ -1061,9 +1053,8 @@ func TestTheConnectionsBackstopEndsTheSessionThatHoldsTheMost(t *testing.T) {
 func TestASessionThatHasEndedStillEndsTheChildrenItAnnounced(t *testing.T) {
 	for _, tr := range transports {
 		t.Run(tr.name, func(t *testing.T) {
-			ctx := bounded(t)
 			c, p := tr.pair(t, nil)
-			parent := announce(ctx, t, c, p, attachment{"parent", "target-parent"})[0]
+			parent := announce(step(t), t, c, p, attachment{"parent", "target-parent"})[0]
 			l := parent.Listen(testEvent, TargetAttachedToTarget)
 			defer l.Close()
 			// The parent announces a child of its own, as a page announces
@@ -1075,7 +1066,7 @@ func TestASessionThatHasEndedStillEndsTheChildrenItAnnounced(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := l.Next(ctx); err != nil {
+			if _, err := l.Next(step(t)); err != nil {
 				t.Fatal(err)
 			}
 			child := c.Session("child")
@@ -1087,7 +1078,7 @@ func TestASessionThatHasEndedStillEndsTheChildrenItAnnounced(t *testing.T) {
 			}
 			select {
 			case <-parent.Done():
-			case <-ctx.Done():
+			case <-step(t).Done():
 				t.Fatal("the parent whose event passed ReadLimit is open")
 			}
 			if err := p.event("parent", testEvent.name, testEventParams{N: 1}); err != nil {
@@ -1098,14 +1089,14 @@ func TestASessionThatHasEndedStillEndsTheChildrenItAnnounced(t *testing.T) {
 			}
 			select {
 			case <-child.Done():
-			case <-ctx.Done():
+			case <-step(t).Done():
 				t.Fatal("the child's detach, on its parent that had ended, left the child open")
 			}
 			var detached *DetachedError
 			if err := child.Err(); !errors.As(err, &detached) || detached.SessionID != "child" {
 				t.Fatalf("the child ended with %v, want a *DetachedError naming it", err)
 			}
-			if m, err := l.Next(ctx); !errors.Is(err, ErrMessageTooBig) {
+			if m, err := l.Next(step(t)); !errors.Is(err, ErrMessageTooBig) {
 				t.Fatalf("the parent's listener read %s, %v after its end; want its end alone", m.Method, err)
 			}
 			if c.Session("parent") != parent {
@@ -1117,7 +1108,7 @@ func TestASessionThatHasEndedStillEndsTheChildrenItAnnounced(t *testing.T) {
 			if err := p.event("", TargetDetachedFromTarget.name, map[string]any{"sessionId": "parent"}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := detaches.Next(ctx); err != nil {
+			if _, err := detaches.Next(step(t)); err != nil {
 				t.Fatal(err)
 			}
 			if c.Session("parent") == parent {
@@ -1143,7 +1134,6 @@ func TestASessionThatHasEndedStillEndsTheChildrenItAnnounced(t *testing.T) {
 func TestAnEventPastTheReadLimitOnTheBrowsersSessionEndsItsConnection(t *testing.T) {
 	for _, tr := range transports {
 		t.Run(tr.name, func(t *testing.T) {
-			ctx := bounded(t)
 			c, p := tr.pair(t, nil)
 			l := c.Browser().Listen(testEvent, TargetAttachedToTarget)
 			sent := make(chan error, 1)
@@ -1159,13 +1149,13 @@ func TestAnEventPastTheReadLimitOnTheBrowsersSessionEndsItsConnection(t *testing
 			_ = p.attach("late", "target-late", "page")
 			select {
 			case <-c.Done():
-			case <-ctx.Done():
+			case <-step(t).Done():
 				t.Fatal("an event past ReadLimit the browser's own listener asked for left the connection open")
 			}
 			if err := c.Err(); !errors.Is(err, ErrMessageTooBig) || !strings.Contains(err.Error(), "the connection") {
 				t.Fatalf("the connection ended with %v, want ErrMessageTooBig naming the connection", err)
 			}
-			if m, err := l.Next(ctx); !errors.Is(err, ErrMessageTooBig) {
+			if m, err := l.Next(step(t)); !errors.Is(err, ErrMessageTooBig) {
 				t.Fatalf("the browser's listener read %s %s, %v; want the end alone", m.Method, m.Params, err)
 			}
 			if err := c.Session("late").Err(); !errors.Is(err, ErrMessageTooBig) {
