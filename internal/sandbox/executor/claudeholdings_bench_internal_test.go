@@ -63,7 +63,7 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 		{"a_whole_pdf_read", benchWholePDFSession(measured), benchReads, 1},
 		{"a_line_of_the_smallest_results", benchBlocks(benchSmallest, benchFactsHeld), benchReads, 0},
 		{"a_line_of_unknown_blocks", benchBlocks(`{"type":"x"}`, benchFilling(8<<20)), benchReads, 0},
-		{"legs_of_ids_a_mebibyte_long", benchLongLegs, benchReads, 0},
+		{"legs_of_ids_at_the_value_bound", benchLongLegs, benchReads, 0},
 		{"metadata_of_ids_most_of_their_bound", benchLongMetas, benchReads, 0},
 		{"a_thread_at_its_records_bound", benchChainThread(benchAtTheBound, recordsCall), benchReadsEither, 0},
 		{"a_thread_at_its_retraction_and_kept_bound", benchChainThread(benchRetractionsAndKept, nil),
@@ -332,14 +332,14 @@ func benchAt(record string, ms int) string {
 	return strings.Replace(record, `"timestamp":"`+ctStamp+`"`, `"timestamp":"`+rcAt(ms)+`"`, 1)
 }
 
-// benchLongLegs writes a main thread of 96 Agent calls, each under an id of a
-// mebibyte the call-id rule refuses, so the reading must keep none of them
-// ([holdingsWalk.leg]).
+// benchLongLegs writes a main thread of 96 Agent calls, each under an id as
+// long as a value the layer reads whole ([threadValueMax]), which the call-id
+// rule refuses, so the reading must keep none of them ([holdingsWalk.leg]).
 func benchLongLegs(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 	var main strings.Builder
 	main.WriteString(ctBrief(ctUUID(1)) + "\n")
 	for i := range 96 {
-		id := fmt.Sprintf("toolu_%02d_", i) + strings.Repeat("l", 1<<20)
+		id := fmt.Sprintf("toolu_%02d_", i) + strings.Repeat("l", threadValueMax-len(`"toolu_00_"`))
 		main.WriteString(ctAssistant(ctUUID(1+i), ctUUID(2+i), hsCallOf(id, claudeToolAgent, hsAgentInput)) + "\n")
 	}
 	benchMember(b, tw, hsMain, main.String())
