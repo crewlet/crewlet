@@ -39,7 +39,7 @@ import (
 //     held call, what became of it, which tells the call a person approved
 //     once: no list below tells it again ([carried.tellsHeld]) — or what cut it
 //     off;
-//   - that it may end mid-call, where its harness was cut off when it was saved;
+//   - that it may end mid-call where cut off when saved ([prompts.SavedSession]);
 //   - where it may lack its job's brief ([SessionBasis.MayLackBrief]), what
 //     that brief opened with: the leads it told, told again in words of their
 //     own ([Runner.leadsAgain]), as messages it may already show;
@@ -262,6 +262,14 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 	b := r.cfg.Turn.Context.FenceBoundary()
 	var after []string
 	switch {
+	case basis.WentOn:
+		// A SESSION SAVED WHILE ITS RUN STILL WORKED, told so, when, and that
+		// the run went on after it, in words that say too that it may end
+		// mid-call: always cut off, its calls, leads and notes are told as a
+		// cut-off session's are, and only its own words differ. Told only the
+		// cut-off words, its run took the session's end for where its work
+		// stopped.
+		after = append(after, prompts.SavedSession(basis.CapturedAt))
 	case holds.cutOff:
 		after = append(after, prompts.InterruptedSession)
 	case holds.summarized():

@@ -398,8 +398,8 @@ func TestACaptureTheLogTookAfterARelaunchSettledItStaysTheTurnsSession(t *testin
 
 		// THE RELAUNCH'S WAIT FOR THE JOB IT FOLLOWS settles node-a's capture, and
 		// the late record lands after it.
-		if _, found, err := rig.coordinator.awaitCapture(ctx, rig.get(turn), rig.coordinator.relaunchWait); err != nil ||
-			!found {
+		if _, found, err := rig.coordinator.awaitCapture(ctx, rig.get(turn), rig.coordinator.relaunchWait,
+			relaunchWaits); err != nil || !found {
 			t.Fatalf("the relaunch's wait = found %v, %v", found, err)
 		}
 		switch settled, landed, landErr := late.late(); {
@@ -599,7 +599,8 @@ func TestALastWordTheLogTookAfterItsSettleIsReadAsTheTurnsLastWord(t *testing.T)
 					Outcome: executorkeep.OutcomeCompleted, Decision: "done"}); err != nil {
 					t.Fatalf("OweEnd: %v", err)
 				}
-				waited, found, err := rig.coordinator.awaitCapture(ctx, rig.get(turn), SessionCaptureBudget)
+				waited, found, err := rig.coordinator.awaitCapture(ctx, rig.get(turn), SessionCaptureBudget,
+					captureInFlight)
 				if err != nil || !found {
 					t.Fatalf("the end's wait = found %v, %v", found, err)
 				}

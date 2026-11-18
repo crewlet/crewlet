@@ -1299,6 +1299,18 @@ type PendingRun struct {
 	Capture *SessionCapture `json:"session_capture,omitempty"`
 	Kept    *SessionCapture `json:"session_kept,omitempty"`
 
+	// Saving is the turn's SAVE UNDER WAY, a capture of a job still working,
+	// from its reservation ([PendingStore.ReserveSave]) until it can no longer
+	// become the turn's kept capture: Capture alone loses sight of it once a
+	// final take of the job replaces it there. A READING, NOT A ROW INVARIANT:
+	// a build without the field writes it back unchanged from Extra, so it is
+	// read only through one rule ([PendingRun.savingTake], [PendingRun.saving]),
+	// which a source walk holds every reader to, beside the stamps that keep it
+	// ([stampOnto], [savingAfter], [holdsStamp], [holdsSave], [stillBegun]).
+	// The turn's, kept by every relaunch; a section with an Extra of its own
+	// (wirekeys.go). The package doc's "A save under way" has the argument.
+	Saving *SessionCapture `json:"session_saving,omitempty"`
+
 	// Base is the read the turn's FIRST launch made of its conversation —
 	// where its head was read, the turns it handed out that the brief told,
 	// and the head itself, which the turn's launches continue while the turn
@@ -2716,53 +2728,39 @@ type PendingStore interface {
 
 	// StampCapture records one capture of the turn's harness session on its
 	// row ([PendingRun.Capture], [PendingRun.Kept]), answering whether it was
-	// taken.
-	//
-	// THE PLACE ONLY GROWS, which is what reserves it. A capture placed after
-	// the row's newest is taken, whatever its state — that is how a capture
-	// reserves its place before its archive leaves the box, so two reads of
-	// one run at once never take the same one. A capture at the newest's own
-	// place is taken only where it is the same take's — its job, and the
-	// instant the take stamped it at ([SessionCapture.At]) — and moves that
-	// capture on — begun to an outcome, unresolved to an answer — so a late
-	// write never takes an answer back, and no read settles a place another
-	// read holds. Anything older is refused. And a capture that LANDED is the
-	// turn's kept one wherever it is newer than the kept one, so an
-	// unresolved capture answered after a newer one began still counts.
-	//
-	// A STAMP THE ROW ALREADY HOLDS, the same take's in the same state, is
-	// answered taken, and nothing is written: a store that applied an earlier
-	// ask and whose answer never came back leaves the place its asker's, and
-	// asked again the asker learns so, rather than reading its own
-	// reservation as another read's and leaving it begun with nobody to
-	// settle it.
-	//
-	// ON A ROW IN ANY STATE, its ending decided included: a stop's capture is
-	// taken after the stop is decided and before the box is reclaimed, and
-	// what it came to is a fact about the turn whoever holds the row. A row
-	// that is gone takes nothing and is no error.
-	//
-	// A STAMP PAST ITS BOUNDS IS REFUSED, before anything is written, with
-	// [ErrCaptureUnbounded] ([SessionCapture.Bounded]): what a box says of
-	// its session is the box's own doing, which nothing else holds to the
-	// row's share, and a stamp the row could not carry would leave it taking
-	// no later write that adds a byte.
+	// taken, by the row's own rule ([stampOnto]): THE PLACE ONLY GROWS, which
+	// is what reserves it, so two reads of one run never take the same one; a
+	// capture at the newest's place only as the same take moving on; a LANDED
+	// one newer than the kept one is kept. A stamp the row already holds in any
+	// capture section ([holdsStamp]) is answered taken and nothing is written,
+	// so an asker whose answer was lost learns its place is its own. On a row in
+	// any state, its ending decided included, since a stop's capture is taken
+	// after the stop is decided; a gone row takes nothing. A stamp past its
+	// bounds is refused before any write ([ErrCaptureUnbounded]), since a row
+	// that could not carry it would take no later write that adds a byte.
 	StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
 
 	// SettleBegun is [PendingStore.StampCapture] held to one more condition,
-	// decided on the row as it stands: the row's newest capture is the
-	// settled capture's own take ([SessionCapture.sameTake]), still BEGUN.
-	// It is the write of a node that did not take the capture and settles it
-	// from the executor log once its taker is gone
-	// ([Coordinator.settleGoneTaker]) — a decision made from a copy of the
-	// row on which the take stood begun, so where the row has moved on since
-	// — the taker's own outcome stamped, an unresolved record it sent among
-	// them, or a newer take's place — nothing is written and false is
-	// answered, and what the row holds stands. A stamp the row already holds
-	// is answered taken, as StampCapture answers it; a row that is gone takes
-	// nothing and is no error; and a stamp past its bounds is refused as
-	// there.
+	// decided on the row as it stands: the row's newest capture, or its save
+	// under way ([PendingRun.Saving]), is the settled capture's own take, still
+	// BEGUN. It is the write of a node that settles another's capture from the
+	// executor log ([Coordinator.settleGone]), decided from a copy on which the
+	// take stood begun: where the row has moved on since (the taker's own
+	// outcome, an unresolved record among them, or a newer take), nothing is
+	// written and false is answered. Otherwise answered as StampCapture.
 	SettleBegun(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
+
+	// ReserveSave reserves the place of save, the capture of a job still
+	// working, on its row as its newest capture and its save under way
+	// ([PendingRun.Saving]) at once, answering whether it was taken: ONLY WHILE
+	// ITS JOB RUNS UNDECIDED ([licensesSave]), decided on the row as it stands
+	// with now this node's clock, and at the next place after the newest. Every
+	// final take writes its decision before it reads for its place, so A FINAL
+	// TAKE NEVER LOSES ITS PLACE TO A SAVE. Refused, nothing is written. A
+	// reservation the row already holds is answered taken; a save that is not
+	// one, or past its bounds, is an error before any write ([reservable]); a
+	// gone row takes nothing. The package doc's "A save's license" says why.
+	ReserveSave(ctx context.Context, turnID string, save SessionCapture) (bool, error)
 
 	// StandBy records capture's take — a read whose place another read of
 	// the same job holds, begun at that place — as the read STANDING BY for
@@ -4817,9 +4815,10 @@ type LaunchRecord struct {
 	// the resume ([Release.Hold]), only where none is owed yet; cleared by the
 	// write that settles the completion. On the record, because the holder's
 	// memory does not survive its restart or the seat's move
-	// ([Coordinator.RecoverSeat]). An obligation, never a hold; an older build
-	// keeps both keys in [LaunchRecord.Extra]. See the package doc, "Re-arming
-	// owed refusals and holds".
+	// ([Coordinator.RecoverSeat]). An obligation, never a hold, though a save's
+	// license reads it as the completion announced ([PendingRun.jobOver]); an
+	// older build keeps both keys in [LaunchRecord.Extra]. See the package doc,
+	// "Re-arming owed refusals and holds".
 	RefusalOwed      Condition `json:"refusal_owed,omitempty"`
 	RefusalOwedSince time.Time `json:"refusal_owed_since,omitzero"`
 

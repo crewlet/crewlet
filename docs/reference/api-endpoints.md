@@ -11136,7 +11136,7 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   decided by the one decision that launch takes, of the member of the seat's
   executor chain it would be launched on now, the first not sitting out its
   plan. **A relaunch** decides it as a relaunch does — the turn live and not
-  ending, the newest capture of the job a relaunch would follow kept, stating
+  ending, the newest kept capture of the job a relaunch would follow, stating
   its save point and named by the row, and a runner that restores its harness,
   format and release
   ([A relaunch continues the turn's
@@ -11155,7 +11155,9 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   comes: the node answering asks it, once a page, a live turn's session by its
   turn and a head by none, itself where it holds the seat. **`continues_in`**
   says where: `any_box`, in whichever box the launch gets — a relaunch from the
-  turn's kept capture, the next turn from the head, in a box of its own; or
+  turn's kept capture (in the box its job parked in, where that capture was
+  taken while the job still worked, from the copy that box holds, which went on
+  past it), the next turn from the head, in a box of its own; or
   `parked_box`, a relaunch's alone, where the kept capture is not continued but
   a person's answer would carry the turn's parked run on in the box it parked
   in, which still holds that box, ran the row's own session there, and runs
@@ -11180,11 +11182,16 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   has neither taken its final capture nor begun its turn; its capture is still
   being kept, or its record was sent and never answered, which a relaunch asks
   the executor log for again before it decides, continuing the capture where it
-  landed (until fourteen hours have passed since the capture's object was
-  minted, on the reading node's clock: the twelve a record may name it in,
-  past which the executor log refuses the record on its own clock, and the two
-  any two machines' clocks may stand apart); what the launch is launched on
-  cannot be said (every member of
+  landed, and otherwise the newest capture that job kept before it (until
+  fourteen hours have passed since the capture's object was minted, on the
+  reading node's clock: the twelve a record may name it in, past which the
+  executor log refuses the record on its own clock, and the two any two
+  machines' clocks may stand apart); a capture of an earlier job of the
+  turn is still being kept while the turn has kept none of its own, since once
+  one lands a relaunch no longer continues the session the turn's first launch
+  was handed (beside a capture the turn kept, an earlier job's keep changes
+  nothing a relaunch decides, and the row is decided); what the launch is
+  launched on cannot be said (every member of
   the seat's chain sitting out its plan, no node holding the seat, the node
   holding it not answering); only the resume of a collected job decides the
   relaunch, and its turn has not begun (a round lost a second time, or carried
@@ -13406,8 +13413,8 @@ it, for a person's stop. Such a run is over, and its `status` is the one it
 was ended in: its record waits only for the ending's last steps, which on an
 engine that records every turn's end include [recording that
 end](../concepts/turn-engine.md#how-a-turn-ends-on-the-executor-log) once the
-turn's captures have settled, and can take minutes, and up to about three
-hours and fifty minutes from the moment the end first sees a read standing
+turn's captures have settled, and can take minutes, and up to about four
+hours and seventeen minutes from the moment the end first sees a read standing
 by for one of them, where a store answers each change of a run's record at
 the slowest pace a link is allowed. The seat's next work
 waits behind it. `answerable_in_chat` is `false`

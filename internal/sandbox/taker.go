@@ -11,10 +11,10 @@ import (
 )
 
 // TakerLeases is the coordination store as a coordinator holds its own taker
-// lease in it and reads another process's ([coord.ClassTaker]; session.go, "A
-// capture whose taker stopped is settled from the log, not waited out"). Its
+// lease in it and reads another process's ([coord.ClassTaker]; the package doc,
+// "A capture whose taker stopped is settled from the log, not waited out"). Its
 // answers are three-valued: an error, nothing known, reads as no lease to a
-// fence and no answer to a settle, each the direction that never refuses a
+// fence and no taker gone to a settle, each the direction that never refuses a
 // capture under a taker still keeping it.
 type TakerLeases interface {
 	TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error)
