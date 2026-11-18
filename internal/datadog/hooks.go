@@ -71,28 +71,17 @@ type WebhookResult struct {
 }
 
 // Unregistered is why a pass left NO definition of this deployment's
-// delivering at Datadog, said in the shared finding vocabulary rather than as
-// prose.
+// delivering at Datadog, in the shared finding vocabulary rather than prose.
 //
-// # A NOTE WAS NOT ENOUGH, and what it cost was the whole integration
+// A NOTE WAS NOT ENOUGH: the two configuration cases (no public base URL, no
+// webhook token) must produce a finding, or the pass reports nothing, the loop
+// classifies the surface Ready, and every monitor fires into an address never
+// registered; alerts reaching nobody look like coverage.
 //
-// This was a bare sentence on [WebhookResult], and [Result.Findings] reported
-// only the FAILURE case beside it. So the two configuration cases — no public
-// base URL to point a definition at, no webhook token for one to carry — left
-// a pass with nothing to report, the loop classified the surface Ready, and
-// every monitor this company has fired into an address that was never
-// registered. This package's own doc calls that shape out by name: an
-// alerting integration whose alerts reach nobody is strictly worse than one
-// that is switched off, because it looks like coverage.
-//
-// # The KIND travels with the sentence, because the two are not one finding
-//
-// [setup.Requirement.Blocks] is the join a status row picks a field from, and
-// `webhook_token`'s requirement declares that its absence produces
-// [integration.FindingCredentialMissing] — which nothing in this package
-// produced. A single kind for both cases would offer an operator the fallback
-// seat to fix a missing token, which is what that requirement's own comment
-// says the join exists to stop.
+// The KIND travels with the sentence: [setup.Requirement.Blocks] is the join a
+// status row picks a field from, and `webhook_token`'s requirement declares
+// that its absence produces [integration.FindingCredentialMissing]. One kind
+// for both cases would offer the fallback seat to fix a missing token.
 type Unregistered struct {
 	// Kind is the finding this becomes.
 	Kind integration.FindingKind
@@ -136,24 +125,16 @@ const TokenHeader = "X-Crewlet-Token"
 
 // ensureWebhook brings the inbound definition at Datadog into line.
 //
-// # Why the engine owns this at all
+// The engine owns this because an address written once by hand goes stale
+// when the deployment moves: monitors keep firing, Datadog reports the webhook
+// healthy, and alerts land nowhere. The organization credentials already
+// carried for provisioning are the pair its webhook API takes.
 //
-// Datadog delivers to whatever URL its Webhooks integration holds, and
-// nothing else at Datadog decides whether an alert reaches this engine. Left
-// to a person, that address is written once by hand and then goes stale the
-// first time the deployment moves: the monitors keep firing, Datadog keeps
-// reporting the webhook healthy, and the alerts land at an address that no
-// longer answers. The organization credentials this block already carries for
-// provisioning identities are the same pair Datadog's webhook API takes, so
-// there was never a reason for a person to be the one holding this.
-//
-// # It reads before it writes, and writes only a difference
-//
-// The definition is addressed by NAME, which is Datadog's own primary key for
-// one, and Datadog hands the whole shape back on a read including the header
-// it carries. So a pass can tell "already correct" from "points somewhere
-// else" exactly, and a company whose address has not moved spends one GET per
-// tick rather than a write.
+// It reads before it writes, and writes only a difference: the definition is
+// addressed by NAME, Datadog's own primary key, and a read hands back the
+// whole shape including the header. So a pass tells "already correct" from
+// "points elsewhere" exactly, and an unmoved company spends one
+// GET per tick rather than a write.
 func ensureWebhook(ctx context.Context, opts Options) WebhookResult {
 	name := WebhookNameOf(opts.Config)
 	out := WebhookResult{Name: name}
@@ -266,31 +247,15 @@ func sameWebhook(current, want Webhook) bool {
 // sameJSONText compares two fields Datadog stores as TEXT and this engine
 // writes as a JSON DOCUMENT, by the document rather than by the bytes.
 //
-// # Both fields, for one reason
+// `custom_headers` and `payload` are authored as JSON and kept by Datadog in
+// its own encoding (key order, spacing, a re-indent). Byte comparison would
+// PUT on every tick for ever, an audit-log edit per tick over a correct
+// definition, which [ensureWebhook]'s read-before-write exists to avoid and
+// which the engine never sees, as it does not re-read what it wrote.
 //
-// `custom_headers` and `payload` are the two the engine authors as JSON and
-// Datadog keeps as a string, and Datadog hands back its own encoding of what
-// it was given — a different key order, different spacing, a re-indent.
-// Compared byte for byte, any of those reads as a difference this pass then
-// "fixes" with a PUT, on every tick, for ever: an edit per tick in the
-// organization's audit log over a definition that was already correct, which
-// is precisely the loop the read-before-write in [ensureWebhook] exists to
-// avoid. It is also invisible from inside this engine, because nothing here
-// ever re-reads what it wrote — the only place it shows is somebody else's
-// audit log.
-//
-// The header half of that was already true and written down. The payload was
-// compared with `==` beside it, on no stated reasoning, and it is the larger
-// document of the two: [WebhookPayload] is ten keys of literal JSON, so it is
-// the one a region has more to normalise in.
-//
-// # Unreadable falls back to the text
-//
-// Something else wrote it, and the shape this engine wants is the only one
-// that delivers — so a definition carrying a payload that is not JSON at all
-// is rewritten. But two identical unparseable strings are still the same
-// string, and rewriting on those would be the every-tick loop again under
-// another name, so the comparison drops to text rather than to "different".
+// Unreadable falls back to the text: a payload that is not JSON is rewritten,
+// but two identical unparseable strings are the same string, and rewriting
+// them is the every-tick loop again.
 func sameJSONText(current, want string) bool {
 	var here, there any
 	if json.Unmarshal([]byte(current), &here) != nil ||

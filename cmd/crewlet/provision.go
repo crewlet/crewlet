@@ -30,38 +30,21 @@ import (
 // # Why the sink is a required choice
 //
 // A run with nowhere to put what it mints creates live credentials at the
-// third-party app and prints none of them, the worst outcome available,
-// because every one has to be found and revoked by hand. So there is no
-// default: the operator says where, up front, and a run with no answer is
-// refused before it touches anything.
-//
+// third-party app and prints none, the worst outcome, since each must be found
+// and revoked by hand. So there is no default: a run with no answer is refused
+// before it touches anything.
+
 // # A sink the company's store outranks
 //
-// `-env-file` and `-print` hand what a run mints to the operator, for the
-// engine to read from its environment — and the engine resolves every `${VAR}`
-// from the company's secret store FIRST. So where the store holds a name the
-// run mints into, what the run records is never read: the vendor holds the new
-// value and the engine goes on with the stored one. For a seat's token that is
-// the outage the re-run rule exists to prevent — GitLab retires a seat's
-// earlier tokens once a new one is recorded, so a seat the engine runs on the
-// stored token is locked out — and for a webhook secret it is a hook re-keyed
-// with a key the engine does not hold, every delivery refused. A `gitlab
-// provision -rotate -env-file`, the remedy for a leaked key, would re-key the
-// hook while the engine went on verifying with the leaked one.
-//
-// So a run with one of those sinks that has a store to ask — the running node
-// or the one -api names, or the fleet's store reached directly with this
-// node's engine stopped — is refused before it reaches
-// the vendor where the store holds any name it can mint into
-// ([sinkFlags.refuseOutranked]): every planned seat's token, since whether a
-// seat is kept or re-minted is settled against the vendor, part way through
-// the run; and a webhook secret the run would mint, under its flag for a fresh
-// one or where the reference resolves to nothing. Asking the sink instead
-// would not do: an env file's value for a name the store also holds is not the
-// one the engine runs on, so a seat kept because that value still
-// authenticates is reported healthy on a token the engine does not use.
-// `-secret-store` is the one sink the store does not outrank: it reads each
-// stored value back, and records over it.
+// `-env-file` and `-print` hand what a run mints to the operator for the engine
+// to read from its environment, but the engine resolves every `${VAR}` from the
+// company's secret store FIRST. Where the store holds a name the run mints
+// into, the vendor holds the new value and the engine goes on with the stored
+// one: a locked-out seat, or a hook re-keyed with a key the engine does not
+// hold. So such a run with a store to ask is refused before the vendor
+// ([sinkFlags.refuseOutranked]); asking the sink would not do, as an env
+// file's value is not what the engine runs on. `-secret-store` is the one
+// sink the store does not outrank: it reads each stored value back.
 
 // sinkFlags is the shared --secret-store / --env-file / --print choice, and the
 // store a run reads the company's values from and records into.
@@ -475,21 +458,17 @@ func unionReads(lists ...[]string) []string {
 }
 
 // operatorCredential reads the human operator's own credential, from the
-// invocation's ENVIRONMENT ALONE ([runIn]): the process's, for every run of
-// the binary.
+// invocation's ENVIRONMENT ALONE ([runIn]), not the process's variable.
 //
-// Deliberately NOT through [companyStore.resolver], which every company value
-// goes through. This is the operator's credential rather than the company's, and
-// the difference is not bookkeeping: a GitLab admin PAT carries `api` scope
-// over the whole group, and the secret store is held on the coordination KV,
-// which every node reads and every node's keyring opens. Crewlet never
-// persists one, and reading one back from the store would imply it may be
-// kept there — which is how the most powerful credential in the deployment
-// ends up in the shared store beside the seat tokens it exists to mint.
+// Deliberately NOT through [companyStore.resolver]. A GitLab admin PAT carries
+// `api` scope over the whole group, and the secret store is held on the
+// coordination KV, which every node reads and every node's keyring opens.
+// Crewlet never persists one, and reading one back would imply it may be kept
+// there, beside the seat tokens it exists to mint.
 //
-// THE INVOCATION'S, NOT THE PROCESS'S, as the node credential is: a case that
-// reads the process's runs on whatever the machine running the suite exports,
-// and a Slack refresh token is spent by the rotation a run makes with it.
+// THE INVOCATION'S, NOT THE PROCESS'S: a case reading the process's runs on
+// whatever the machine exports, and a Slack refresh token is spent by the
+// rotation a run makes with it.
 func operatorCredential(environ config.Source, name string) string {
 	value, _ := environ.Lookup(name)
 	return strings.TrimSpace(value)
@@ -939,21 +918,16 @@ func printDoctor(w io.Writer, report *mattermost.Report) {
 }
 
 // skillsContainer resolves the tool-skills container one CLI run writes to
-// or reads from.
-//
-// Three sources, most specific first: the -space flag, then the environment
-// variable, then the company config — which is itself three-valued,
-// distinguishing "unset, take the reserved default" from an explicit empty
-// string meaning tool skills are OFF for this company.
+// or reads from: the -space flag, then the environment variable, then the
+// company config, which is three-valued ("unset, take the reserved default"
+// versus an explicit empty string meaning tool skills are OFF).
 //
 // # The variable is a FLAG DEFAULT, and nothing more
 //
 // The engine never reads it. A running node's watched container comes from
-// the versioned company document and only from there, because a fleet whose
-// nodes each read a variable out of whoever's shell started them would
-// disagree about which space holds the skills — and the symptom is agents on
-// one node following guidance the others have never heard of. Here, in a
-// command an operator types, a variable is just a way not to retype a flag.
+// the versioned company document alone, because nodes each reading a variable
+// from whoever's shell started them would disagree about which space holds the
+// skills. Here it only saves an operator retyping a flag.
 func skillsContainer(flagValue, envVar, fromConfig string) string {
 	if v := strings.TrimSpace(flagValue); v != "" {
 		return strings.ToUpper(v)
@@ -973,17 +947,13 @@ const publicURLDefault = "api.public.external_url where api.public is set, " +
 
 // noPublicBase says what to change when a run needs an address and has none.
 //
-// TWO WAYS TO BE EMPTY NOW, WHERE THERE WERE THREE. While the address was a
-// Tier B pointer, a company could also name one that this process could not
-// resolve — a `${VAR}` nothing exported, which read back as "" rather than as
-// the text of the variable — so the message had to tell an operator who had
-// already set the field that their variable was the problem. Tier A is
-// resolved before the document is decoded, so what is left is the honest pair:
-// no Tier A file was read, or it names no webhook address.
+// TWO WAYS TO BE EMPTY: no Tier A file was read, or it names no webhook
+// address. Tier A is resolved before the document is decoded, so an
+// unresolvable `${VAR}` is not a third.
 //
 // THE KEY THE FILE WOULD BE READ FROM, never a literal: with `api.public` set
 // the address is `api.public.external_url`, and naming `api.external_url`
-// there sent an operator to set a key that was already set and that nothing
+// there would send an operator to set a key already set and that nothing
 // building a vendor URL reads.
 func noPublicBase(boot *config.Bootstrap) string {
 	const why = "every app's Events API request URL and OAuth redirect URL " +
@@ -1000,28 +970,17 @@ func noPublicBase(boot *config.Bootstrap) string {
 }
 
 // webhookBase is the address a third-party app reaches this deployment on,
-// which this run builds vendor URLs on: the `-public-url` flag when it was
-// given, and otherwise Tier A's webhook address ([config.API.WebhookBase]) —
-// the public listener's `api.public.external_url` once `api.public` is set,
-// and `api.external_url` otherwise.
+// which this run builds vendor URLs on: the `-public-url` flag when typed,
+// otherwise Tier A's webhook address ([config.API.WebhookBase]).
 //
-// THE VENDORS' ADDRESS, NEVER THE PERSON'S. Once `api.public` is set every
+// THE VENDORS' ADDRESS, NEVER THE PERSON'S. With `api.public` set every
 // webhook route is served only on that listener and `api.external_url` answers
-// 404 for each of them, so a hook, a manifest or a redirect built on the
-// person's address delivers nowhere — and the reconcile loop, which builds on
-// this same accessor, re-pointed every hook this command registered on its
-// next tick.
+// 404 for each, so a hook built on the person's address delivers nowhere (and
+// the reconcile loop, on this accessor, would re-point every hook registered).
 //
-// THE FLAG WINS ONLY WHEN IT WAS TYPED. It is the one-off override — a staging
-// tunnel, a run against a second site — while Tier A's address is what every
-// other reader of it sees, the reconcile loop included. One that won even when
-// unset would let an operator who simply forgot it silently re-point a working
-// hook at "".
-//
-// NOTHING IS RESOLVED HERE, for either: somebody typing `-public-url` typed an
-// address, and Tier A's `${VAR}` references are expanded before the file is
-// decoded — so by the time this reads it, it is an address too. With no Tier A
-// file at all there is only the flag.
+// THE FLAG WINS ONLY WHEN TYPED: it is a one-off override (staging tunnel,
+// second site), and winning when unset would silently re-point a working hook
+// at "". NOTHING IS RESOLVED HERE: Tier A's `${VAR}`s expand before decode.
 func webhookBase(flagValue string, boot *config.Bootstrap) string {
 	if v := strings.TrimSpace(flagValue); v != "" {
 		return strings.TrimRight(v, "/")

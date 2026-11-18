@@ -2,58 +2,29 @@ package livestate
 
 import "reflect"
 
-// A live call's HEAVY fields, and the versions that let an `agents` push leave
-// them out.
+// A live call's HEAVY fields (prompt, narration, tool calls, timings) change
+// once a round or call while the row moves five times a second; resent whole
+// they cost 185 MiB per tab over one phase (`internal/api/stream`'s weight test).
 //
-// # What a push used to carry, and why
-//
-// A running phase moves its seat's row on every progress frame — twice a
-// round, once a tool call, and five times a second while a round streams —
-// and every push carried the whole row: the prompt the opening frame brought,
-// carried forward for the length of the phase; every committed round's
-// narration; every tool call's arguments and the tail of its result; every
-// round's timing. Measured over one long executor phase (thirty rounds, 1 311
-// frames — `internal/api/stream`'s weight test): 185 MiB to every open tab,
-// 144 KiB a push on average and 245 KiB at its largest, almost all of it text
-// the tab already held. Only the round being written and the call in flight
-// move at five a second; the rest moves once a round or once a call.
-//
-// # Why versions, and not deltas
-//
-// The socket hub drops a client's OLDEST envelope when the client falls behind
-// (`stream.QueueDepth`), and that is why the frames were whole: a push that
-// carried only what changed, dropped, would leave the tab wrong with nothing
-// to say so. A VERSION survives the drop. Every push names, for each heavy
-// field, the version of the copy it describes, and carries the field itself
-// only when that version moved since the last push for the same call. A
-// version is never handed out twice ([CallVersions]), so "moved" and "newer"
-// are the same question for any two copies a tab can compare. A tab
-// whose copy is at the version the push names keeps it; one whose copy is
-// older — the push that moved it was dropped — knows it is behind from the
-// very next push, and asks for the call whole (`live_call`). Snapshots, the
-// `agent` and `live_call` answers and `GET /agents` carry every field always.
+// Versions, not deltas: the hub drops a client's OLDEST envelope when it falls
+// behind (`stream.QueueDepth`), and a dropped delta leaves the tab silently
+// wrong. A push names each heavy field's version and carries the field only
+// when it moved. A version is never handed out twice ([CallVersions]), so a
+// tab holding an older one knows it is behind and asks for the call whole
+// (`live_call`). Snapshots, answers and `GET /agents` always carry every field.
 
-// CallVersions numbers the copy a live call holds of each of its heavy fields:
-// a number this projection NEVER HANDS OUT TWICE, taken from its own sequence
-// whenever the field is written — every field of a call of its own when it
-// begins, and after that each field a frame changes. So a version only grows,
-// for every call under every key, for as long as the projection runs; and it
-// is a fact about this node's projection, which is the only one a tab's socket
-// reads — a tab that reconnects, to this node or another, is sent a snapshot,
+// CallVersions numbers the copy a live call holds of each heavy field: a number
+// this projection NEVER HANDS OUT TWICE, taken from its own sequence whenever
+// the field is written. So a version only grows, for every call under every
+// key. It is per node's projection: a tab that reconnects is sent a snapshot,
 // which replaces every copy it holds.
 //
 // NEVER TWICE, rather than counted per call, because a call is cleared and
-// built again under the SAME key. A parked turn's resume can run more than
-// once — held until its seat's budget has room for the relaunch its reviewer
-// sent back, or handed back for a retry after an attempt that broke — and each
-// attempt collects the same run into the same turn and round, so its review
-// opens again under the turn, phase and iteration of the attempt before it,
-// whose completion cleared the call. Counted per call, the rebuilt call
-// numbered its fields from one again, and a tab still holding the earlier
-// attempt's copy — one that missed the push clearing it and the first push
-// after — took every lower version for a push overtaken by what it held: it
-// kept the old response, narration and tool calls, and asked for nothing,
-// until the new count passed the old one, which it might never do.
+// built again under the SAME key: a parked turn's resume can run more than
+// once, and each attempt's review opens under the turn, phase and iteration of
+// the one before. Counted per call, the rebuilt call restarted at one, and a
+// tab still holding the earlier attempt's copy took every lower version for a
+// stale push, kept the old response and narration, and asked for nothing.
 type CallVersions struct {
 	// Prompt numbers `prompt` and `prompt_messages`, which move together:
 	// once, when the phase's opening frame lands.

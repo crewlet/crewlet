@@ -28,24 +28,14 @@ import (
 // ActPattern is the route the act transport is mounted at: ONE catalogue tool
 // per request, named in the path, as the principal the request resolved to.
 //
-// POST ONLY, because every tool it serves writes — a read is refused
-// `read_only_tool` rather than served, since the socket already answers every
-// question the dashboard asks and a second read path would be a second answer
-// to them.
+// POST ONLY: every tool it serves writes, and a read is refused
+// `read_only_tool`, since the socket answers every dashboard question. REST
+// RATHER THAN A SOCKET FRAME, so a lost answer is retried under the same key.
 //
-// REST RATHER THAN A SOCKET FRAME, because a write has to be able to say
-// whether it happened: a frame sent into a socket that drops has no answer at
-// all, while a request that loses its answer is retried under the same
-// operation key, as the same operations as the first attempt.
-//
-// ANY PRINCIPAL THE GUARD RESOLVED MAY CALL IT (ADR-0024), and every tool is
-// decided by the authority table exactly as on every other surface: a person
-// signed in writes as the seat the identity directory binds them to, a token
-// bound to a seat writes as that seat, and a credential nobody is bound through
-// writes under its own login. Nobody is refused for being unbound — that rule
-// existed only while a token's binding lived in the chart, and a write
-// attributed to a credential acting as itself is a write an audit can still
-// ask about.
+// ANY PRINCIPAL THE GUARD RESOLVED MAY CALL IT (ADR-0024), every tool decided
+// by the authority table as on every other surface: a person writes as the
+// seat the directory binds them to, a seat-bound token as that seat, a
+// credential bound to nobody under its own login, which an audit can ask about.
 const ActPattern = "POST " + ActPathPrefix + "{tool}"
 
 // ActPathPrefix is the path every act request starts with.
@@ -54,35 +44,25 @@ const ActPathPrefix = "/operator/act/"
 // MaxActBody bounds one act request's body: twice the largest legal page, plus
 // sixty-four kibibytes for everything else a request carries.
 //
-// DERIVED FROM THE LARGEST THING ANY ACT CARRIES, which is a page body on
-// `write_page` or `save_page`. A page is capped at [doclet.MaxBody] as TEXT,
-// and the request carries it as a JSON STRING, where every quote, backslash
-// and newline is two bytes — so a legal page of nothing but those encodes to
-// twice its length, and a cap at the page's own size refused the page the
-// knowledge base would have accepted. The browser's JSON.stringify escapes
-// nothing else to more than two bytes but the other C0 controls, which are
-// six, and a document is not made of them. The sixty-four kibibytes cover the
-// envelope, a title at [doclet.MaxTitle], labels, a message and a parent, with
-// room to spare: every other tool's arguments are bounded far below it (a work
-// item's description is 64 KiB of text).
+// DERIVED FROM THE LARGEST ACT, a page body on `write_page` or `save_page`.
+// A page is capped at [doclet.MaxBody] as TEXT, but the request carries a JSON
+// STRING, where every quote, backslash and newline is two bytes, so a legal
+// page of nothing but those encodes to twice its length (other C0 controls
+// take six, and a document is not made of them). The 64 KiB cover the
+// envelope, a title at [doclet.MaxTitle], labels, a message and a parent;
+// every other tool's arguments are bounded far below it.
 const MaxActBody = 2*doclet.MaxBody + 64<<10
 
 // ActTransportCodes is every `error` the act transport can answer with that
-// is NOT a tool's refusal class: its own three, the operation key's, the
-// shared body refusals, the guard's, the identity estate's, the authority
-// table's, the drain gate's, a starting node's and the unknown outcome's.
+// is NOT a tool's refusal class.
 //
 // THE ONE LIST, so the client's table of what it may be told is held against
-// the engine's rather than against a copy: a code the client does not know is
-// a refusal it renders as a generic failure, and one it knows that nothing
-// sends is a sentence it will never show. No code here is also a refusal
-// class's — [TestEveryRefusalCodeMapsToOneStatus] holds that, because a caller
-// branching on `error` must never need to know which half it came from —
-// except the four classes the envelope already spelled (`not_found`,
-// `forbidden`, `unavailable`, `internal_error`), which are listed with the
-// classes. `internal_error` is also what a failure that carried NO class is
-// answered with, and a wiring that decided nothing: all three say the engine
-// broke, and none has a remedy the caller can apply.
+// the engine's: an unknown code renders as a generic failure, a known one
+// nothing sends is never shown. No code here is also a refusal class's
+// ([TestEveryRefusalCodeMapsToOneStatus]: a caller branching on `error` must
+// not need to know which half it came from), except the four classes the
+// envelope already spelled (`not_found`, `forbidden`, `unavailable`,
+// `internal_error`). `internal_error` also answers a failure with NO class.
 var ActTransportCodes = []httpjson.Code{
 	// The request guard's: nobody, an identity this node could not read, a
 	// seat the chart no longer holds, a session that may only enrol a
@@ -111,25 +91,16 @@ var ActTransportCodes = []httpjson.Code{
 
 // ActAnswer is what a write that went through answers.
 //
-// Outcome is the three-valued write outcome, and Position where its record
-// landed — the floor a caller hands back as `min_position` so the read after
-// the write includes it. A write that appended nothing (an update naming no
-// change) answers `applied` at no position: the state asked for already
-// holds, and there is nothing to wait for. OpID is the operation the request
-// was made under — the key a retry sends back. Receipt is the tool's own
-// answer, verbatim but for its `warnings`, and Caveats is what those warnings
-// say, in a person's words.
+// Position is where the record landed (the floor a caller hands back as
+// `min_position`); a write that appended nothing answers `applied` at none.
+// OpID is the key a retry sends back.
 //
 // # Caveats, never the receipt's warnings (ADR-0060)
 //
-// The tools are shared: a seat's model calls them too, and a tool's answer
-// carries its caveats under `warnings` in the MODEL'S words, naming the tool
-// and the argument it would call next ("Use ask: ana"). This route answers a
-// person, so it answers each caveat's PERSON phrasing ([caveat.Caveat.Person])
-// with the action it asks of them, and takes the model's list off the receipt
-// ([builtin.WarningsKey]): a screen reading the receipt can then never show a
-// person advice written for a model, however it is written. Caveats is always
-// a list, empty when the write has nothing to add.
+// A seat's model gets caveats under `warnings` in the MODEL'S words ("Use ask:
+// ana"). This route answers a person, so Caveats holds each one's PERSON
+// phrasing ([caveat.Caveat.Person]) and the model's list is taken off the
+// receipt ([builtin.WarningsKey]). Always a list, empty when none.
 type ActAnswer struct {
 	Tool     string           `json:"tool"`
 	Outcome  statelog.Outcome `json:"outcome"`
@@ -342,15 +313,12 @@ func RefuseOperationArg(w http.ResponseWriter, tool string) {
 // transport takes, and answers the tool's arguments it carries — never nil.
 //
 // A KEY THIS TRANSPORT DOES NOT READ IS REFUSED rather than ignored: a client
-// naming its operation in the body (`op_id`) rather than in the
-// Idempotency-Key header would otherwise send every write believing it named
-// an operation it did not, and its retry would be a second write.
+// naming its operation in the body (`op_id`) instead of the Idempotency-Key
+// header would believe it named one, and its retry would be a second write.
 //
-// THE ARGUMENTS' NUMBERS ARRIVE AS json.Number ([toolargs.Decode]), as
-// they do on every other path into these tools. Decoded by this envelope's
-// own decoder they were float64s, so an integer past 2^53 — a vendor's
-// 19-digit id, a whole-number custom-field value — was rounded before any tool
-// saw it, and a person's press recorded a value they never sent.
+// THE ARGUMENTS' NUMBERS ARRIVE AS json.Number ([toolargs.Decode]), as on
+// every other path into these tools: as float64s an integer past 2^53 (a
+// vendor's 19-digit id) would be rounded before any tool saw it.
 func decodeAct(raw []byte) (map[string]any, error) {
 	var req actRequest
 	switch err := httpjson.DecodeStrict(raw, &req); {
@@ -409,24 +377,17 @@ func receiptOf(name string, result tools.Result) ActAnswer {
 }
 
 // PersonsReceipt is a tool call that landed, as every surface answering a
-// PERSON answers it (ADR-0060): the tool's receipt with every key that holds
-// its model's words taken off ([builtin.ModelOnlyKeys]: its caveats under
-// `warnings`, a partial outcome's sentence under its own key, and the
-// `provenance` envelope a fenced answer carries for its model), the rest
-// as the tool wrote it, and its caveats in a person's words, always a list. The act route and the
-// human write surface both answer through it, so neither can come to hand a
-// person what the other strips.
+// PERSON answers it (ADR-0060): the receipt with every key holding its model's
+// words taken off ([builtin.ModelOnlyKeys]), and its caveats in a person's
+// words. The act route and the human write surface both answer through it, so
+// neither hands a person what the other strips.
 //
-// A RECEIPT THAT IS NOT A JSON OBJECT is not readable: every first-party
-// write answers one, so this is a tool that changed shape, and what it said
-// instead is written for a model. It is logged here, under the tool's name,
-// and never answered; the caller says what the write came to without it.
+// A RECEIPT THAT IS NOT A JSON OBJECT is not readable (every first-party write
+// answers one, so the tool changed shape): it is logged and never answered.
 //
-// THE WORDS OTHER PRINCIPALS WROTE, AS THEY WERE STORED: where the tool wrote
-// its answer for a person apart ([tools.Result.PersonReceipt]), that is the
-// receipt answered, never Output, whose fences, escapes and envelope are a
-// model's framing of those words (ADR-0040). Read off Output, a room's topic
-// reached a person between a fence's two lines.
+// WORDS OTHER PRINCIPALS WROTE ARE ANSWERED AS STORED: where the tool wrote its
+// answer for a person apart ([tools.Result.PersonReceipt]), that is the
+// receipt, never Output, whose fences are a model's framing (ADR-0040).
 func PersonsReceipt(tool string, result tools.Result) (json.RawMessage, []caveat.Shown, bool) {
 	caveats := caveat.ForPeople(result.Caveats)
 	receipt, readable := builtin.ForPerson(result)

@@ -81,6 +81,17 @@ var addressedReasons = []Reason{
 // answer. For which reasons lead a PERSON's inbox, see [DefaultPrimaryReasons].
 func (r Reason) Addressed() bool { return slices.Contains(addressedReasons, r) }
 
+// heldReasons are the reasons a seat hears under because it holds the task the
+// wake is about, as its assignee: `assignee`; `blocking`, written on the
+// blocker for its assignee; and `unblocked`, written on the dependent for its
+// assignee. Such a wake asks nothing of a seat that no longer holds the task
+// open, however late it arrives.
+var heldReasons = []Reason{ReasonAssignee, ReasonBlocking, ReasonUnblocked}
+
+// Held reports whether a wake under this reason reaches its seat because the
+// seat holds the task the wake is about ([heldReasons]).
+func (r Reason) Held() bool { return slices.Contains(heldReasons, r) }
+
 // turnReasons are the reasons whose notice starts a turn whatever the change
 // was: each puts something to this seat (`mention`, `prioritised`, `asked`),
 // replies to its ask (`answered`), moves work it owns (`unblocked`,

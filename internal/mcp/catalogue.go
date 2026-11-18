@@ -18,20 +18,15 @@ import "strings"
 // CatalogueLine renders one "- name: description" catalogue entry with the
 // description WHOLE.
 //
-// Continuation lines are indented under the bullet rather than dropped. The
-// shape a model reads a catalogue as is one entry per bullet, and keeping only
-// the first line was paying for that shape with the description's content: a
-// tool whose usage rules, argument meanings or "call X first" precondition sit
-// below its opening sentence was advertised without them, and the model then
-// called it wrong. Vendor-authored MCP descriptions are routinely several
-// paragraphs, and a catalogue is the only place they are ever shown.
+// Continuation lines are indented under the bullet, not dropped: usage rules,
+// argument meanings or a "call X first" precondition below the opening
+// sentence are the only place a model sees them, and without them it calls
+// the tool wrong.
 //
-// HERE, in the deepest package that needs it, because two callers render this
-// same line — a snapshot's discoverable tools (the onboarding pass's and a
-// worker's prompt) and list_mcp_server_tools' listing — and a model sees both
-// in a single turn. Two renderers is how one of them starts cutting again;
-// internal/tools re-exports this rather than keeping a copy, since it already
-// imports this package and the dependency cannot run the other way.
+// It lives HERE because two callers render the line (a snapshot's discoverable
+// tools and list_mcp_server_tools) and a model sees both in one turn; two
+// renderers is how one starts cutting again. internal/tools re-exports it, as
+// the dependency cannot run the other way.
 func CatalogueLine(name, description string) string {
 	description = strings.TrimSpace(description)
 	if description == "" {

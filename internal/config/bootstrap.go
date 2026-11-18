@@ -27,18 +27,14 @@ import (
 
 // Bootstrap is Tier A — ops-owned, on disk, restart-only.
 //
-// It carries only what the engine needs to bring its own infrastructure up.
-// Everything about the company lives in [Company], versioned in the store
-// and delivered to a running engine.
+// It carries only what the engine needs to bring its own infrastructure up;
+// everything about the company lives in [Company], versioned in the store.
 //
-// A Tier A naming a broker, a database DSN and a vector store under one
-// `providers:` block is the obvious shape, and none of it is what this engine
-// runs on: the stream is NATS JetStream (embedded by
-// default, so a company needs no external service at all), the store is two
-// local files, and coordination is its own slot. Tier A therefore names the
-// two SLOTS and the store directly rather than a provider bag — see
-// [Stream], [Coordination] and [Store], and [Bootstrap.Validate] for the
-// combinations that are refused.
+// Tier A names the two SLOTS and the store directly rather than one `providers:`
+// bag (broker, DSN, vector store): the stream is NATS JetStream (embedded by
+// default), the store is two local files, and coordination is its own slot. See
+// [Stream], [Coordination], [Store] and [Bootstrap.Validate] for the refused
+// combinations.
 type Bootstrap struct {
 	// Node is this process's identity within the fleet.
 	Node Node `yaml:"node,omitempty" json:"node"`
@@ -101,15 +97,12 @@ func (r Retention) IsZero() bool { return strings.TrimSpace(r.BackupOwner) == ""
 //
 // # Why the colour is NOT here
 //
-// It is $CREWLET_LOG_COLOR and $NO_COLOR instead, because colour is a
-// property of the TERMINAL SOMEONE IS LOOKING AT rather than of the
-// deployment. The same file is applied to a container with no terminal and
-// run on a laptop with one, and a field that had to be edited between those
-// two would be describing the reader rather than the node. Colour is the
-// only one of these knobs with NO file form: `node.roles`, `api.host` and
-// `logging.level` are all Tier A fields that `-roles`, `-api-host` and
-// $CREWLET_LOG_LEVEL merely override for one invocation.
-// The console format works this out from its sink; see internal/logging.
+// It is $CREWLET_LOG_COLOR and $NO_COLOR instead: colour is a property of the
+// TERMINAL SOMEONE IS LOOKING AT, not of the deployment. The same file is
+// applied to a container with no terminal and run on a laptop with one, so a
+// field to edit between them would describe the reader, not the node. It is
+// the only knob with NO file form; the console format works it out from its
+// sink (internal/logging).
 type Logging struct {
 	// Level is how loud this node is. Empty is info.
 	//
@@ -128,53 +121,33 @@ type Logging struct {
 	// every deployment whose platform already captures stderr.
 	File LogFile `yaml:"file,omitempty" json:"file,omitempty"`
 
-	// Stderr is whether the ordinary log stream reaches stderr at all.
-	// Unset is true, and true is what every deployment without a log file
-	// must have — a node with neither writes its log nowhere, which this
-	// validator refuses by name.
+	// Stderr is whether the ordinary log stream reaches stderr at all. Unset is
+	// true; false needs a log file, as a node with neither writes its log nowhere.
 	//
 	// # Why this exists rather than `2>/dev/null`
 	//
-	// Because the shell redirect is not the same thing, and the
-	// difference is the whole point. Three kinds of line reach stderr
-	// without passing through the configured handler: everything emitted
-	// before this document had been read (the log file is named BY it, so
-	// it cannot be open yet), the seat watchdog's hard-exit notice, which
-	// goes to os.Stderr directly because a wedged process has not earned
-	// a configured handler, and the engine's own report that the log file
-	// cannot be written. A redirect throws all three away and they are
-	// the three an operator most needs; this field keeps them and
-	// silences only the stream the file already has.
+	// Three kinds of line reach stderr without the configured handler: those emitted
+	// before this document was read (it names the log file), the seat watchdog's
+	// hard-exit notice (a wedged process has not earned a handler), and the report
+	// that the log file cannot be written. A redirect discards all three, the ones an
+	// operator most needs; this field silences only the stream the file already has.
 	//
-	// A POINTER because `false` is the setting and also the zero value:
-	// read as "nothing was said" it would silence the console of every
-	// node that wrote the field at all.
+	// A POINTER because `false` is also the zero value: unset must not silence.
 	Stderr *bool `yaml:"stderr,omitempty" json:"stderr,omitempty" desc:"Whether the ordinary log stream reaches stderr. Unset = true. false needs logging.file.path, and never silences a boot failure or the watchdog's exit notice."`
 }
 
 // LogFile is the durable copy of this node's log.
 //
-// # It is a SECOND destination by default
-//
-// Naming a file never silences stderr on its own: stderr is the only sink
-// that exists before this document has been read, it is what a container
-// platform captures, and it is where a boot failure is watched. A node that
-// fell silent there the moment a path was configured would look like one
-// that had stopped.
-//
-// A deployment whose platform already captures stderr is paying for every
-// line twice, and says so with [Logging.Stderr] — which hands this file the
-// stream and keeps the three kinds of line that never pass through a
-// configured handler at all. That is a deliberate choice made in the
-// document, not something a path silently implies.
+// Naming a file never silences stderr: it is the only sink that exists before
+// this document is read, and where a container platform and a boot failure are
+// watched. Hand the stream to this file alone with [Logging.Stderr].
 //
 // # Rotation is not optional, and there is no "never" spelling
 //
-// A log file with no ceiling fills the disk the engine's own store is on,
-// and it does it on the deployments least likely to be watched. The caps
-// below have defaults rather than an off switch for that reason; an operator
-// who already runs logrotate(8) over this path with `copytruncate` sets a
-// size this process will never reach. See [logging.File].
+// A log file with no ceiling fills the disk the store is on, on the deployments
+// least watched, so the caps default rather than switch off; logrotate(8) with
+// `copytruncate` over this path means a size this process never reaches. See
+// [logging.File].
 type LogFile struct {
 	// Path is the live log file. `${VAR}` works here as everywhere in
 	// Tier A, and a relative path is relative to the process's working
@@ -263,19 +236,14 @@ func (f *LogFile) validate(path Path) error {
 		p.add(at(path, "level"), ErrUnknownValue, "%q (want %s)",
 			f.Level, words.Or(logging.Levels))
 	}
-	// THE CAPS ARE CHECKED WHETHER OR NOT A PATH IS SET. A block carrying
-	// `max_size_mb: 0` and no path is a half-written setting, and reporting
-	// it only once the path is filled in means the operator finds it on the
-	// deploy that was meant to turn the file on.
-	// BOUNDED AT BOTH ENDS. The floor is the obvious one; the CEILING is
-	// there because both numbers stop meaning what they say long before
-	// int64 does. The size cap is held in bytes, so a value at or above
-	// 1<<43 MB wraps negative and the file rotates on EVERY line — the
-	// precise opposite of the large number an operator wrote. The backup
-	// count is a rename count per rotation, so a huge one stalls the
-	// rotation instead of keeping more history. Refused here so
-	// `crewlet validate` catches it, and again in logging.OpenFile, which
-	// is what a `-log-file` run reaches.
+	// THE CAPS ARE CHECKED WHETHER OR NOT A PATH IS SET: a block with
+	// `max_size_mb: 0` and no path is a half-written setting, and reporting it only
+	// once the path is filled in finds it on the deploy meant to turn the file on.
+	// BOUNDED AT BOTH ENDS: at or above 1<<43 MB the byte-held size cap wraps
+	// negative and the file rotates on EVERY line, and a huge backup count stalls
+	// each rotation's renames instead of keeping history. Refused here for
+	// `crewlet validate` and again in logging.OpenFile, which a `-log-file` run
+	// reaches.
 	if f.MaxSizeMB != nil && (*f.MaxSizeMB < 1 || *f.MaxSizeMB > logging.MaxSizeMBCeiling) {
 		p.add(at(path, "max_size_mb"), ErrOutOfRange,
 			"%d (want 1..%d). Rotation cannot be disabled, since a log file with no "+
@@ -424,44 +392,16 @@ type listener struct {
 
 // ValidateListeners refuses the sockets this node cannot open as configured.
 //
-// EXPORTED FOR THE ONE CALLER THAT CHANGES THEM AFTER [Bootstrap.Validate] HAS
-// RUN: `crewlet run -roles`, `-api-host` and `-api-port` are applied to a loaded
-// file, and a flag that moved api.port onto api.public.port, or to 0 under a
-// public listener on an ingress node, would otherwise bind what validation never
-// saw. It reads the roles, so the caller runs it once every flag is applied.
+// Exported for `crewlet run`, whose `-roles`, `-api-host` and `-api-port` change
+// a loaded file after [Bootstrap.Validate]; run it once every flag is applied.
 //
-// # A public listener on an ingress node needs api.port
+// A public listener on an ingress node needs api.port: 0 is the hard off switch
+// and api.public MOVES routes off that surface, leaving no probe. Other nodes
+// serve probes on api.port alone, so port 0 stays valid for them.
 //
-// api.port 0 is the hard off switch — no HTTP surface at all — and api.public
-// MOVES routes off that surface rather than adding one beside it. An ingress
-// node serving only the public routes would answer no probe, so an
-// orchestrator could neither steer traffic from it while it drains nor tell it
-// from a dead one.
-//
-// ONLY ON AN INGRESS NODE. A node without the role serves its probes on
-// api.port and never on api.public, so with api.port 0 it serves none whatever
-// api.public says: the reason does not reach it, and refusing it there broke
-// the one file every role reads — the documented
-// `-roles data,seats,workers -api-port 0` for a node that binds nothing was
-// refused the moment the shared file set api.public for its ingress peer. On
-// such a node api.port 0 is still the hard off switch — it binds no tool
-// bridge on api.public either.
-//
-// # No two listeners on one port
-//
-// Every one of them binds on the same host, so a shared port is a bind that
-// fails at boot — the second of the API's two listeners, or the broker's
-// route or leaf port behind an API listener already holding it — long after
-// `crewlet validate` called the file good. Worse is the pair that does NOT
-// fail: nothing here can bind a port twice, but an operator who wrote
-// api.public.port equal to api.port meant two sockets, and the admin API and
-// the routes published to the internet would have been one.
-//
-// Two listeners on DIFFERENT specific addresses may share a port — an
-// interface each is a real deployment — so a port is refused only when the
-// hosts are equal or either binds every interface. A host name that resolves
-// to another listener's address cannot be compared here without a lookup, and
-// fails at bind naming the address.
+// Two listeners may not share a port unless their hosts are different specific
+// addresses: a clash fails at bind after validation, and api.public.port equal to
+// api.port would make the admin API and the public routes one socket.
 func (b *Bootstrap) ValidateListeners() error {
 	var p problems
 	// An unreadable role list is Node.validate's to report, naming the
@@ -542,34 +482,16 @@ func bindLabel(a, b string) string {
 
 // ValidateRoles refuses the settings a node's roles contradict.
 //
-// EXPORTED FOR THE ONE CALLER THAT CHANGES THE ROLES AFTER [Bootstrap.Validate]
-// HAS RUN: `crewlet run -roles` is applied to a loaded file, and a flag that
-// turned a data node's roles into `seats` would otherwise boot a node that
+// Exported for `crewlet run -roles`, applied after [Bootstrap.Validate]: a flag
+// turning a data node's roles into `seats` would otherwise boot a node that
 // believes itself stateless on a store it has not agreed to lose.
 //
-// # Two questions, asked apart
-//
-// `data` is a promise about the DISK: a node with it keeps the company's
-// durable state, and one without it keeps nothing that has to outlive it — its
-// store is scratch, deleted at every boot, and it holds no estate and no
-// share of the object store. The rules below that turn on `data` are the ones
-// about that disk, and each is refused naming the field to change, because
-// each is otherwise a node that boots and then loses the company's history at
-// its next restart.
-//
-// The BROKER is the other question, and it is not the roles': a node's
-// [Bootstrap.BrokerKind] is what its stream block makes it. The rules about
-// the broker itself — what a leaf may not carry, what a member of a fleet has
-// to persist — are asked of that, whatever the roles (see
-// [Bootstrap.validateTopology] and [StreamLeaf]).
-//
-// # And the pairings that are refused
-//
-// Separating the two questions admits three pairings the estate cannot run on:
-// a data node on a leaf, a broker member that holds no data, and ingress or
-// workers on a node without it. Every data node holds the WHOLE estate and is
-// a member of the broker, and a node without data reaches the estate through
-// one, so each is refused, by [Bootstrap.checkRolesAndBroker], naming why.
+// `data` is a promise about the DISK: a node with it keeps the company's durable
+// state; one without keeps a scratch store, deleted at every boot, and no estate
+// or object-store share. The BROKER is a separate question, asked of
+// [Bootstrap.BrokerKind] whatever the roles ([Bootstrap.validateTopology],
+// [StreamLeaf]). [Bootstrap.checkRolesAndBroker] refuses a data node on a leaf, a
+// broker member without data, and ingress or workers without it.
 func (b *Bootstrap) ValidateRoles() error {
 	var p problems
 	roles, err := b.Node.RoleSet()
@@ -672,23 +594,16 @@ var needsData = map[placement.NodeRole]string{
 		"replicated estate and act on its own state log",
 }
 
-// otherMembers is how many OTHER broker members this file names, and the
-// list they were counted from.
+// otherMembers is how many OTHER broker members this file names, and the list
+// they were counted from.
 //
-// COUNTED ONLY FOR AN EMBEDDED STREAM, because those are the members this
-// file names. An external cluster's membership is not here and cannot be —
-// `stream.url` is an address, and how many servers answer behind it is the
-// operator's business — so a peer list written against one is refused
-// outright by [Stream.validate] rather than counted into a quorum the engine
-// never sees. Counted anyway, it refused a one-peer external config as a
-// two-node fleet: an error naming a quorum that is not this file's, whose only
-// remedy was to delete a line that was already doing nothing.
-//
-// And counted as the OTHER members the list names, which is what it is for:
-// an entry recognisably this node's own route, or a repeat of one already
-// counted, is not another member ([StreamCluster.members]), and counting it
-// passed a two-node fleet as three and let replicas 3 onto two members.
-// [Bootstrap.Warnings] names every entry discounted here.
+// Counted ONLY FOR AN EMBEDDED STREAM: an external cluster's membership is not in
+// this file (`stream.url` is an address), so a peer list written against one is
+// refused outright by [Stream.validate] rather than counted into a quorum the
+// engine never sees. An entry that is this node's own route, or repeats one
+// already counted, is not another member ([StreamCluster.members]); counting it
+// passed a two-node fleet as three. [Bootstrap.Warnings] names every entry
+// discounted.
 func (b *Bootstrap) otherMembers() (int, clusterMembers) {
 	if b.Stream.Type == StreamNATS {
 		return 0, clusterMembers{}
@@ -697,23 +612,18 @@ func (b *Bootstrap) otherMembers() (int, clusterMembers) {
 	return len(members.Others), members
 }
 
-// clustered reports whether this node is in a FLEET, as this file says: it
-// names other members, a cluster name or an external broker; it is a leaf; or
-// it is a member that opens a leaf listener.
+// clustered reports whether this node is in a FLEET, as this file says: it names
+// other members, a cluster name or an external broker; it is a leaf; or it is a
+// member that opens a leaf listener.
 //
-// ONE PREDICATE, for every rule that asks "is this node in a fleet"
-// (ADR-0008: two copies of the question are two answers): the topology's
-// refusal of local coordination ([Bootstrap.validateTopology]). The warning
-// about a `container` coding box beside the broker asks a narrower question —
-// is the broker an external cluster this engine cannot see the admission of —
-// and reads the broker's kind instead ([tierWarnings]).
+// ONE PREDICATE for every rule asking "is this node in a fleet" (ADR-0008: two
+// copies of the question are two answers), such as [Bootstrap.validateTopology]'s
+// refusal of local coordination. The `container` box warning asks a narrower
+// question ([tierWarnings]).
 //
-// A LEAF IS IN A FLEET by definition — it holds nothing of its own, so the
-// broker it reaches is always somebody else's members. And so is a member
-// that OPENS a leaf listener, even one with no peers: the nodes that join it
-// claim seats and hold presence leases, and a lease kept in this process is
-// one they can never see — each would read the fleet as having no data node
-// and claim every seat for itself.
+// A leaf holds nothing of its own, so its broker is always others' members. So is
+// a member opening a leaf listener, even with no peers: the nodes joining it hold
+// presence leases a lease kept in this process could never show them.
 func (b *Bootstrap) clustered() bool {
 	peers, _ := b.otherMembers()
 	leaf := b.BrokerKind() == placement.BrokerLeaf
@@ -731,33 +641,17 @@ func (b *Bootstrap) clustered() bool {
 func (b *Bootstrap) validateTopology() error {
 	var p problems
 
-	// THE KEYRING IS REQUIRED ON EVERY NODE, whatever its roles, whatever
-	// its broker and whether or not it serves the API.
-	//
-	// It used to be required only once `api.port` was set, which is where
-	// it signs every session cookie and derives the key each per-run token
-	// is verified with. That left a node serving no API free to leave it
-	// out — and every data node runs every state-log domain, whatever its
-	// other roles (the identity directory included), and every record on
-	// every one of those logs is signed and verified under this keyring,
-	// because the broker's admission vouches for a connection and never a
-	// record (ADR-0031). An embedded fleet's broker admits only keys derived
-	// from this keyring too (ADR-0094). A node WITHOUT data needs it
-	// just as much: the company document it fetches from the coordination
-	// store is authenticated by its seal, a seats node mints and verifies
-	// the per-run tokens its executors carry, and every request it sends
-	// a data node's estate service, and every answer, is signed under it
-	// for the reason the records are — as is every request ANY node asks a
-	// peer to carry out, a broker member's removal of a voter and a note to
-	// the node running a turn among them (internal/signedask). So a keyless
-	// satellite validated here
-	// and was then refused by the engine at its door, which is a
-	// configuration this command called sound and the node could not run.
-	//
-	// A CROSS-BLOCK RULE ONLY IN WHERE IT USED TO BE: the refusal no longer
-	// reads `api:`, and it sits here beside the other deployment-shape
-	// rules rather than inside `secrets:`'s own validator so that the
-	// message can name the whole deployment rather than the block.
+	// THE KEYRING IS REQUIRED ON EVERY NODE, whatever its roles or broker and
+	// whether or not it serves the API: every data node runs every state-log domain,
+	// and every record on them is signed and verified under it, since the broker's
+	// admission vouches for a connection and never a record (ADR-0031). An embedded
+	// fleet's broker admits only keys derived from it (ADR-0094). A node WITHOUT data
+	// needs it as much: the company document it fetches is authenticated by its seal,
+	// a seats node mints and verifies per-run tokens, and its estate-service requests
+	// and answers, like every request a node asks a peer to carry out, are signed
+	// under it (internal/signedask). A keyless satellite would pass here and then be
+	// refused by the engine at its door. The rule sits here, beside the other
+	// deployment-shape rules, so the message can name the whole deployment.
 	if len(b.Secrets.Keys) == 0 {
 		p.add(field("secrets.keys"), ErrMissing,
 			"required on every node, and every node in a fleet needs the same "+
@@ -815,25 +709,16 @@ func (b *Bootstrap) validateTopology() error {
 			members.discountedList())
 	}
 
-	// Only an EMBEDDED stream is refused for this. Its members are the
-	// peers named right here, so a replica count above their number — this
-	// node and its peers — is a statement this file contradicts on its own:
-	// JetStream keeps at most one copy per member, so every stream and
-	// bucket this node provisions would be refused at boot, after the
-	// broker had started and before a single seat had.
+	// Only an EMBEDDED stream is refused: its members are the peers named here, so a
+	// replica count above this node plus its peers contradicts the file itself, as
+	// JetStream keeps one copy per member and every stream and bucket would be
+	// refused at boot after the broker started.
 	//
-	// An external cluster's membership is not in this file and cannot be:
-	// `stream.url` names an address, and how many servers answer behind it
-	// is the operator's business. Refusing replicas there capped every
-	// external-NATS fleet at one copy of everything — not only the streams
-	// but the lease and fleet KV buckets, which take the same number (see
-	// engine.attachCoordination) — so a deployment that ran three brokers
-	// for availability kept its seat mailboxes and every lease on whichever
-	// single server happened to hold them, and lost them with it.
-	//
-	// NOR A LEAF: it provisions the fleet's streams on the members it
-	// reaches, so its replica count is the fleet's, and this file names none
-	// of those members.
+	// An external cluster's membership is not in this file (`stream.url` is an
+	// address), and refusing replicas there capped every external-NATS fleet at one
+	// copy, including the lease and fleet KV buckets that take the same number
+	// (engine.attachCoordination). NOR A LEAF: it provisions on the members it
+	// reaches, so its replica count is the fleet's and this file names none of them.
 	if b.Stream.Type != StreamNATS && !leaf && b.Stream.Replicas > peers+1 {
 		if peers == 0 {
 			p.add(field("stream.replicas"), ErrConflict,
@@ -883,24 +768,16 @@ type discountedPeer struct {
 
 // members is who this peer list names besides this node.
 //
-// An entry is DISCOUNTED when it is recognisably this node's own route — its
-// host and port, with the scheme dropped, the host lower-cased and an IP
-// literal read in canonical form, equal to this member's route listener
-// (cluster.host and cluster.port, when the listener is bound to one address)
-// or to the address it advertises (cluster.advertise, whose bare host keeps
-// cluster.port) — or when it names the same address as an entry before it.
+// An entry is DISCOUNTED when it is recognisably this node's own route (host and
+// port, scheme dropped, host lower-cased, IP literals canonical, equal to the
+// route listener or to cluster.advertise with cluster.port) or repeats an
+// earlier entry's address.
 //
-// RECOGNISABLY, and only that. An entry that reaches this node under another
-// name — a DNS alias of this host, `localhost` for an advertised
-// `10.0.0.11`, the listener of a node bound to every interface — cannot be
-// told apart from another member in this file, and is COUNTED as one. The
-// broker is not misled, since nats-server drops a route to itself however it
-// was named; what is misled is every rule here that counts members, which is
-// why the list's documented shape is the OTHER members and never this one.
-//
-// An entry that is not a route URL at all is counted, as written: it is
-// refused on its own by [Stream.validate], and discounting what cannot be
-// read would change a count the refusal is about to make moot.
+// RECOGNISABLY, only: an entry reaching this node under another name (a DNS
+// alias, `localhost` for `10.0.0.11`, a node bound to every interface) is COUNTED
+// as another member. The broker is not misled (nats-server drops a route to
+// itself); the rules counting members are, so the list documents the OTHER
+// members. A non-URL entry is counted as written and refused by [Stream.validate].
 func (c StreamCluster) members() clusterMembers {
 	own := c.ownRoutes()
 	var out clusterMembers
@@ -978,47 +855,34 @@ func routeAddress(raw string) (string, bool) {
 	return joinRoute(u.Hostname(), port), true
 }
 
-// carriesCredential reports whether a fleet URL — a peer's route or a member's
-// leaf listener — carries a userinfo: `user:pass@`, or a bare `token@`, with
-// a scheme or without one.
+// carriesCredential reports whether a fleet URL (a peer's route or a member's
+// leaf listener) carries a userinfo, `user:pass@` or a bare `token@`, with or
+// without a scheme.
 //
-// REFUSED IN A FLEET URL, because a fleet's credentials are DERIVED from
-// secrets.keys, never written (ADR-0094): the engine sets each route's
-// userinfo itself, so one written there is overwritten and is a password
-// sitting in a config file for nothing, and a leaf link presents an nkey,
-// beside which nats-server would also send a URL's userinfo, in clear.
+// REFUSED IN A FLEET URL: its credentials are DERIVED from secrets.keys
+// (ADR-0094), so a written one is overwritten, and a leaf link presenting an nkey
+// would also send the URL's userinfo in clear.
 //
-// ANY `@` IS ONE, read off the text rather than off a parse. A route or a
-// leaf URL is a scheme, a host and a port, so a userinfo is the only thing
-// an `@` in one can be — and a parse misses the entries most likely to hold
-// one: `ops:s3cret@node-b:6222`, written without its scheme, parses as the
-// scheme `ops` with no userinfo at all, `s3cret@node-b:6222` does not parse,
-// and neither does a userinfo beside a mistyped port. Each of those fell
-// through to the shape refusal, whose sentence quoted the credential this
-// rule exists to keep out of one. An empty userinfo (`nats://@host`) is
-// refused too: it sends nothing a member could check, and is never what a
-// fleet URL means.
+// ANY `@` IS ONE, read off the text, not a parse, which misses the likeliest
+// entries: `ops:s3cret@node-b:6222` parses as scheme `ops` with no userinfo, and
+// others do not parse, so they fell through to a shape refusal quoting the
+// credential this rule keeps out. An empty userinfo is refused too.
 func carriesCredential(raw string) bool {
 	return strings.Contains(raw, "@")
 }
 
 // withoutUserinfo is a fleet URL as a sentence may quote it: as written, with
-// everything between its scheme and its last `@` dropped — or everything up
-// to that `@`, where the entry opens with no scheme.
+// everything between its scheme and its last `@` dropped, or everything up to
+// that `@` where the entry has no scheme.
 //
-// EVERY SENTENCE THAT QUOTES A PEER OR A LEAF URL QUOTES IT THROUGH THIS —
-// a refusal, a count's clause, an advisory — because those sentences reach
-// `crewlet validate`, a refused boot's stderr and a config_advisory log line.
-// An entry that carries a credential is refused for it ([carriesCredential])
-// BESIDE the rules that count it (its own route, a repeat), whose sentences
-// name it too; the shape refusals are reached only by an entry with no `@`,
-// and quote through this all the same, so no reordering of the checks can
-// put a credential back into one.
+// EVERY SENTENCE THAT QUOTES A PEER OR A LEAF URL QUOTES IT THROUGH THIS: they
+// reach `crewlet validate`, a refused boot's stderr and a config_advisory log line.
+// The shape refusals, reached only by entries with no `@`, quote through it all the
+// same, so no reordering of the checks can put a credential back into one.
 //
-// A SCHEME IS ONLY WHAT RFC 3986 CALLS ONE — a letter, then letters, digits,
-// `+`, `-` or `.` — and not merely whatever precedes the first `://`: in
-// `ops:pa://ss@node-b:6222`, a schemeless entry whose password holds `://`,
-// keeping that prefix would quote `ops:pa`.
+// A SCHEME IS ONLY WHAT RFC 3986 CALLS ONE (a letter, then letters, digits, `+`,
+// `-` or `.`), not whatever precedes the first `://`: keeping that prefix of
+// `ops:pa://ss@node-b:6222` would quote `ops:pa`.
 func withoutUserinfo(raw string) string {
 	entry := strings.TrimSpace(raw)
 	at := strings.LastIndex(entry, "@")
@@ -1195,22 +1059,18 @@ type Node struct {
 	// and then DefaultNodeID, so nothing has to be set to run one engine.
 	ID string `yaml:"id,omitempty" json:"id,omitempty" js:"pattern=^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" desc:"Stable identity of this process. Empty reads CREWLET_NODE_ID, then defaults to node-0."`
 
-	// Roles is what this process is willing to do: data, gitlet, ingress,
-	// seats, workers. Omit the key to run every role — the single-process
-	// default, and the shape every company starts as.
+	// Roles is what this process is willing to do: data, gitlet, ingress, seats,
+	// workers. Omit it to run every role.
 	//
-	// `data` is the one role that is a promise about the DISK rather than
-	// about work: a node without it keeps nothing that has to outlive it,
-	// which is what a small, disposable agent node wants — see
-	// [Bootstrap.ValidateRoles] for everything it then requires. It says
-	// nothing about the broker, which the stream block decides
-	// ([Bootstrap.BrokerKind]).
+	// `data` is the one role that is a promise about the DISK: a node without it
+	// keeps nothing that has to outlive it, which a small, disposable agent node wants
+	// (see [Bootstrap.ValidateRoles]). It says nothing about the broker, which the
+	// stream block decides ([Bootstrap.BrokerKind]).
 	//
-	// Subtracting a role subtracts it from THIS node, never from the
-	// company: a fleet with no workers node runs no scheduler and no
-	// retention sweep, and one with no ingress node never hears a webhook.
-	// Neither is visible in any single node's config, so the engine checks
-	// it against live node presence at runtime.
+	// Subtracting a role subtracts it from THIS node, never the company: a fleet with
+	// no workers node runs no scheduler or retention sweep, and one with no ingress
+	// node never hears a webhook. No single node's config shows that, so the engine
+	// checks live node presence at runtime.
 	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"What this node does: data, gitlet, ingress, seats, workers. Omit for all five. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers. gitlet needs ingress."`
 
 	// Labels are free-form facts about where this process runs (zone: eu,
@@ -1227,27 +1087,17 @@ type Node struct {
 	// schema counts characters.
 	Labels map[string]string `yaml:"labels,omitempty" json:"labels,omitempty" js:"maxkeys=16" desc:"Free-form node facts a seat's placement selector matches on: at most 16, each value at most 64 bytes of printable text."`
 
-	// MaxConcurrent bounds how many agent turns this PROCESS runs at
-	// once. Zero — the shape an absent key takes — means the engine's
-	// own default, node.DefaultMaxConcurrent, which is where the number
-	// and its rationale live: the layer that enforces a limit is the one
-	// that gets to say what it is when nobody said. Same arrangement as
-	// coordination.lease_ttl_seconds and seat.SeatLeaseTTL.
+	// MaxConcurrent bounds how many agent turns this PROCESS runs at once. Zero (an
+	// absent key) means node.DefaultMaxConcurrent, where the number and its rationale
+	// live (as with coordination.lease_ttl_seconds).
 	//
-	// Per node, deliberately, which is why it is Tier A: a fleet's ceiling
-	// is N × this value, so it is sized against the host a process runs on
-	// rather than against the company. It is the one knob a fleet genuinely
-	// changes the meaning of.
+	// Per node, hence Tier A: a fleet's ceiling is N × this, sized against the host,
+	// not the company. There is no "unbounded"; zero is unset.
 	//
-	// There is no "unbounded". Zero is unset rather than a setting — a cap
-	// of zero turns is not a thing an operator can want — and somebody who
-	// wants effectively no bound writes a large number they can see.
-	//
-	// It bounds the turn SEGMENTS this process runs itself — the onboarding
-	// pass, a launch, the collect and the review — and not the executor
-	// runs between them: a turn suspends at its launch and frees its slot,
-	// and a seat runs at most one executor run at a time, so the seats this
-	// node holds are what bound those.
+	// It bounds the turn SEGMENTS this process runs itself (onboarding, a launch, the
+	// collect, the review), not the executor runs between them: a turn suspends at its
+	// launch and frees its slot, and a seat runs one executor run at a time, so the
+	// seats this node holds bound those.
 	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty" js:"min=0" desc:"Turn segments this process runs at once (a seat's executor run is not one of them: each seat runs at most one); 0 takes the engine default. Per node, so a fleet's ceiling is N times this."`
 }
 
@@ -1304,20 +1154,16 @@ func (n *Node) validate(path Path) error {
 			err, words.Or(nodeRoleNames))
 	}
 
-	// THE KEY GRAMMAR IS THE PLACEMENT VOCABULARY'S, not this file's: a
-	// role's placement selector names these keys and matches them exactly,
-	// and a key this accepted and the selector refused would be a label no
-	// seat could ever be placed by.
+	// THE KEY GRAMMAR IS THE PLACEMENT VOCABULARY'S, not this file's: a role's
+	// placement selector matches these keys exactly, so a key accepted here and
+	// refused there would be a label no seat could be placed by. Sorted, so bad keys
+	// report in the same order every run, as role.placement's selector does.
 	//
-	// Sorted, so a file with several bad keys reports them in the same order
-	// on every run rather than in map order — as role.placement's selector
-	// does, the other half of the same match.
-	//
-	// THE COUNT AND THE VALUES ARE BOUNDED TOO, by the same package: every
-	// label rides this node's presence lease, rewritten on every heartbeat
-	// and held to coord.MaxLeaseMetaBytes, so an unbounded map would be a
-	// presence the store refuses — this node gone from its peers' count —
-	// rather than a refusal here, where the file names the fix.
+	// THE COUNT AND THE VALUES ARE BOUNDED TOO, by the same package: every label
+	// rides this node's presence lease, rewritten each heartbeat and held to
+	// coord.MaxLeaseMetaBytes, so an unbounded map would be a presence the store
+	// refuses (this node gone from its peers' count) rather than a refusal here,
+	// where the file names the fix.
 	if len(n.Labels) > placement.MaxLabels {
 		p.add(at(path, "labels"), ErrOutOfRange,
 			"%d labels, at most %d: every label is re-sent on each heartbeat of this "+
@@ -1374,18 +1220,14 @@ func (b *Bootstrap) Profile(id string) placement.NodeProfile {
 }
 
 // BrokerKind is how this node's broker takes part in the fleet's, derived from
-// the stream block and from nothing else: `type: nats` is a client of a cluster
-// somebody else runs, an embedded broker that joins through `leaf.urls` is a
-// leaf, and every other embedded broker is a member — a solo node's included,
-// since it runs JetStream and holds every replica there is.
+// the stream block and nothing else: `type: nats` is a client of a cluster
+// somebody else runs, an embedded broker joining through `leaf.urls` is a leaf,
+// and every other embedded broker is a member, a solo node's included (it runs
+// JetStream and holds every replica there is).
 //
-// THE ONE DERIVATION, so the rules that are about the broker, the kind a node
-// advertises on its presence and the broker it actually starts cannot
-// disagree: every rule below that asks "is this node a leaf" asks this.
-//
-// The kind is never set, only derived. A setting could say `member` over a
-// stream block that starts a leaf, and every question asked of the setting
-// would then be answered about a broker the process does not run.
+// THE ONE DERIVATION, so the broker rules, the kind a node advertises on its
+// presence and the broker it starts cannot disagree. Never a setting: one could
+// say `member` over a stream block that starts a leaf.
 func (b *Bootstrap) BrokerKind() placement.BrokerKind {
 	switch {
 	case b.Stream.Type == StreamNATS:
@@ -1432,28 +1274,15 @@ func ResolveNodeID(b *Bootstrap, r *Resolver) (string, error) {
 // NewIncarnation mints a holder identity for one running process:
 // "{nodeID}:{random}".
 //
-// The counterpart to [ResolveNodeID] and deliberately the opposite
-// property. A node id is stable across restarts because it names a
-// PLACEMENT — a pod, a host — and what registers under it must survive a
-// restart. A lease holder needs the reverse: it names one INCARNATION, so a
-// replacement process is never mistaken for its predecessor. Conflating
-// them is a real hole: a lease is renewable by its own owner string, so a
-// restarted pod reusing a still-draining predecessor's identity would have
-// both holding the seat at one fencing epoch — and with the default id
-// being the shared constant node-0, so would any two engines started
-// against one store.
+// The opposite property to [ResolveNodeID]: a node id is stable across restarts
+// because it names a PLACEMENT; a lease holder names one INCARNATION, so a
+// replacement is never mistaken for its predecessor. A lease renews by owner
+// string, so reusing a draining predecessor's identity would hold the seat beside
+// it at one fencing epoch.
 //
-// Caching this in a process global needs a second function to bypass the
-// cache, because two engines in one process are two holders and handing them
-// one identity recreates exactly that hole. There is no cache here: each holder calls this once and keeps what it got,
-// which is the property the cache was emulating. Minting a second one
-// mid-run fences an engine out of its own seats.
-// The uuid is carried WHOLE. It was cut to eight hex characters, which is 32
-// bits — a birthday collision at a few tens of thousands of incarnations, on
-// the one string the paragraph above spends nineteen lines explaining must
-// never be confused between two of them. Nothing wants it short: it is
-// compared for equality by the lease renewal and never rendered in a
-// width-constrained slot.
+// No process-global cache: two engines in one process are two holders. Each calls
+// this once and keeps the result, since a second mid-run fences an engine out of
+// its own seats. The uuid is carried WHOLE: 32 bits collide at tens of thousands.
 func NewIncarnation(nodeID string) string {
 	return nodeID + incarnationSep + uuid.NewString()
 }
@@ -1540,19 +1369,16 @@ type Store struct {
 	// transaction that did not end. See internal/store's writequeue.go.
 	BusyTimeoutSeconds float64 `yaml:"busy_timeout_seconds,omitempty" json:"busy_timeout_seconds,omitempty" js:"min=0" desc:"Lock wait before a write gives up, whether it waits in the driver or in the store's own queue, and the anchor for the one retry it then gets; 0 takes the store default."`
 
-	// Scratch declares this node's store DISPOSABLE: the engine deletes
-	// whatever is at `path` every time it boots, under the store's own
-	// lock, before opening it fresh.
+	// Scratch declares this node's store DISPOSABLE: the engine deletes whatever is
+	// at `path` every boot, under the store's own lock, before opening it fresh.
 	//
-	// REQUIRED on a node without the `data` role and REFUSED on one with
-	// it, so the deletion is never a surprise in either direction: a node
-	// that holds no durable state writes its seats' memory, its working
-	// rows and its record of its own turns here only for as long as it
-	// runs, and everything that matters travels on the broker; while a
-	// node holding data would lose the company's history to a restart.
-	// Explicit rather than derived from the roles because it is the one
-	// setting here that deletes something, and an operator who removes
-	// `data` from a node that had it must say so twice.
+	// REQUIRED on a node without the `data` role and REFUSED on one with it, so the
+	// deletion is never a surprise: a node holding no durable state writes its seats'
+	// memory, working rows and turn record here only while it runs (everything that
+	// matters travels on the broker), while a data node would lose the company's
+	// history to a restart. Explicit rather than derived from roles because it is the
+	// one setting here that deletes something, so an operator removing `data` from a
+	// node must say so twice.
 	Scratch bool `yaml:"scratch,omitempty" json:"scratch,omitempty" desc:"Delete this node's store at every boot. Required on a node without the data role, refused on one with it."`
 
 	// Objects is where the company's files are kept — see [StoreObjects].
@@ -1625,56 +1451,29 @@ type Stream struct {
 	// is the classic "I configured it and nothing happened".
 	URL string `yaml:"url,omitempty" json:"url,omitempty" desc:"External NATS URL. Required for nats, refused for embedded."`
 
-	// StoreDir is where an EMBEDDED broker MEMBER persists its streams, and
-	// it is REQUIRED on one, solo included ([Stream.Durable]): empty selects
-	// an in-memory server, and a member keeps the estate's state logs on its
-	// stream from boot — every domain's, the identity estate's included,
-	// company or none — so a restart would recreate every log empty and the
-	// node would refuse to serve for good. In a fleet a member also holds
-	// the fleet's streams for every node that reaches it, a leaf that keeps
-	// nothing included. No member is an exception for its roles or for
-	// having no company yet.
+	// StoreDir is where an EMBEDDED broker MEMBER persists its streams, REQUIRED on
+	// one, solo included ([Stream.Durable]): empty selects an in-memory server, but a
+	// member keeps every domain's state logs (the identity estate's included, company
+	// or none) on its stream from boot, so a restart would recreate each empty and the
+	// node would refuse to serve for good. In a fleet it also holds the streams of
+	// every node reaching it, leaves included.
 	//
 	// REFUSED ON A LEAF, which runs no JetStream and so has no stream store
-	// at all ([StreamLeaf.validate]); an external client's streams are its
-	// cluster's.
+	// ([StreamLeaf.validate]); an external client's streams are its cluster's.
 	StoreDir string `yaml:"store_dir,omitempty" json:"store_dir,omitempty" desc:"Embedded stream persistence directory. Required on an embedded broker member, solo included: it keeps every state log from boot. Refused on a leaf."`
 
-	// StoreMaxBytes is how much of that directory's volume this node's
-	// EMBEDDED broker may hold — the ONE number every stream ceiling on it
-	// is bounded by, and the one an operator divides when more than one
-	// engine shares a filesystem.
+	// StoreMaxBytes is how much of that directory's volume this node's EMBEDDED
+	// broker may hold: the ONE number every stream ceiling on it is bounded by, which
+	// an operator divides when several engines share a filesystem.
 	//
-	// WHY IT HAS TO BE DECLARED RATHER THAN INFERRED. A stream's ceiling is
-	// a RESERVATION: the broker refuses to create a stream whose ceiling it
-	// cannot back, and the number it compares against is this limit. With
-	// nothing declaring one, each engine sized its own logs from the
-	// volume's FREE SPACE — which is true for one engine and false for two,
-	// because the disk bounds their SUM and not each of them. Two engines
-	// on one filesystem each believed they might have half of the same free
-	// space; three over-committed it by half again, and the symptom was
-	// `insufficient storage resources available` — `no suitable peers for
-	// placement, insufficient storage` on a clustered member, where the
-	// limit is applied by the metadata leader placing the stream — naming
-	// whichever stream happened to be provisioned last.
+	// DECLARED, NOT INFERRED: a stream's ceiling is a RESERVATION the broker refuses
+	// unless this limit backs it. Sized from FREE SPACE, each engine believed it had
+	// the same space though the disk bounds their SUM (`insufficient storage
+	// resources available`).
 	//
-	// SO N ENGINES ON ONE FILESYSTEM DIVIDE IT. Give each of them its own
-	// share — the whole point of the field — and each one's ceilings are
-	// bounded by what it was given rather than by what it can see.
-	//
-	// UNSET, THE BROKER SIZES ITSELF: three quarters of the free space on
-	// `store_dir` when its JetStream came up, plus whatever it already
-	// occupies there, which is nats-server's own derivation and what a
-	// single-engine host should have. Either way the engine READS BACK the
-	// number in force rather than guessing it, so a refusal can name it.
-	//
-	// MEASURED ONCE, AT BOOT, on both paths. A volume that later grows or
-	// shrinks does not move this limit, and a node that should see a
-	// resized disk is restarted.
-	//
-	// EMBEDDED ONLY, for the reason `store_dir` and `debug` are: it is
-	// handed to the server this process STARTS. An external cluster's
-	// account limits are its own operator's to set.
+	// UNSET, the broker takes three quarters of `store_dir`'s free space at boot plus
+	// what it occupies. READ BACK once at boot, so a refusal can name it and a resized
+	// disk needs a restart. EMBEDDED ONLY: an external cluster's limits are its own.
 	StoreMaxBytes int64 `yaml:"store_max_bytes,omitempty" json:"store_max_bytes,omitempty" js:"min=6442450944;max=70368744177664" desc:"How much of store_dir's volume the EMBEDDED broker may hold; unset lets it take three quarters of that volume's free space at boot. Divide it when several engines share one filesystem."`
 
 	// Cluster makes the embedded server a MEMBER of a cluster with its
@@ -1709,33 +1508,18 @@ type Stream struct {
 	// shorter than.
 	EventRetentionHours float64 `yaml:"event_retention_hours,omitempty" json:"event_retention_hours,omitempty" js:"min=0" desc:"Event stream retention; 0 takes the queue default, otherwise at least 0.25 (the dead letters' fifteen-minute duplicate window)."`
 
-	// Debug turns on the EMBEDDED broker's own debug logging, which is a
-	// different and much larger population than the boot narration the
-	// bridge already carries.
+	// Debug turns on the EMBEDDED broker's own debug logging.
 	//
-	// SEPARATE FROM `logging.level`, and that separation is the whole
-	// field. It used to be derived from it, so `-debug` — asked for to
-	// watch turns, prompts and tool calls — also subscribed the operator
-	// to nats-server's per internal-client lifecycle trace. The engine's
-	// own coordination reads drive that: a KV key listing is an ordered
-	// ephemeral consumer created and deleted, and deleting a consumer
-	// closes the two internal JetStream clients it was built on, so every
-	// listing writes two "JetStream connection closed: Client Closed"
-	// lines. Two of this node's 15-second duty loops list keys on every
-	// tick, so an idle node produced a permanent stream of them.
+	// SEPARATE FROM `logging.level`, which is the whole field: `-debug` would
+	// otherwise also subscribe the operator to nats-server's per-client lifecycle
+	// trace. A KV key listing creates and deletes an ephemeral consumer, writing two
+	// "JetStream connection closed" lines, and two duty loops of this node list keys
+	// every 15 seconds.
 	//
-	// It does NOT gate the broker's warnings and errors, which reach the
-	// log at their own severity whatever this says — that half is what the
-	// bridge exists for. The lines it unlocks are still DEBUG lines, so
-	// they also need a destination at `debug` to be recorded;
-	// [Bootstrap.Warnings] says so when this is set and none is — in
-	// `crewlet validate`, and in the `config_advisory` lines every
-	// `crewlet run` logs at its start, judged with that run's own logging
-	// flags folded in.
-	//
-	// Refused for `type: nats`: an external cluster logs wherever its own
-	// operator configured it to, and a flag recorded here would reach
-	// nothing.
+	// It does NOT gate the broker's warnings and errors. Its lines are DEBUG, so they
+	// need a destination at `debug`; [Bootstrap.Warnings] (and the `config_advisory`
+	// lines of `crewlet run`) says so when none is. Refused for `type: nats`: an
+	// external cluster logs where its operator says.
 	Debug bool `yaml:"debug,omitempty" json:"debug,omitempty" desc:"Turn on the EMBEDDED broker's own debug logging. Separate from logging.level, which is the engine's; refused for type: nats. Its warnings and errors are never gated by this."`
 
 	// Credentials is a path to a NATS credentials file.
@@ -1756,169 +1540,86 @@ type Stream struct {
 	// simply unreachable.
 	TLS NATSTLS `yaml:"tls,omitempty" json:"tls,omitzero"`
 
-	// Sync decides what an acknowledged publish has actually reached, and
-	// it is the one Tier A field that changes what durability MEANS here.
+	// Sync decides what an acknowledged publish has reached: the one Tier A field
+	// that changes what durability MEANS here.
 	//
-	// `always` fsyncs every write before acknowledging it. `<duration>`
-	// declines the fsync and names the window instead — the most an
-	// acknowledged write can be behind the disk. Unset takes `always`,
-	// which is the strong value at every replica count, because the
-	// alternative is a default that is silently weaker on exactly the
-	// deployments that matter most.
+	// `always` fsyncs every write before acknowledging it. `<duration>` declines the
+	// fsync and names the window instead, the most an acknowledged write can be
+	// behind the disk. Unset takes `always`, strong at every replica count, since the
+	// alternative is weaker on exactly the deployments that matter most.
 	//
-	// IT IS NOT INFERRED FROM replicas, and the inference it replaces is
-	// the reason this field exists. "A replicated member has a quorum
-	// instead of a disk" is true when one host loses power and false when
-	// a rack does — and a three-node fleet in one rack, which is what a
-	// first production deployment looks like, is exposed to the second by
-	// construction. Three copies of the same unflushed page cache is one
-	// copy.
+	// NOT INFERRED FROM replicas: "a quorum instead of a disk" holds when one host
+	// loses power and not when a rack does, and a three-node fleet in one rack, a
+	// first production deployment, is exposed to the second. Three copies of one
+	// unflushed page cache is one copy.
 	Sync string `yaml:"sync,omitempty" json:"sync,omitempty" desc:"always (default) fsyncs every write before acknowledging it; a duration (30s) declines the fsync and names the window an acknowledged write may be behind the disk. A duration is refused for type: nats and on a leaf, which have no file store of this node's to configure."`
 
-	// TrackerLogMaxBytes is the byte ceiling on the mutation log — the
-	// ordered stream a state-log domain writes through.
+	// TrackerLogMaxBytes is the byte ceiling on the mutation log.
 	//
-	// UNSET DERIVES IT from the volume the STREAMS live on: a quarter of
-	// that volume's free space, clamped to 4 GiB..64 GiB. That is the one
-	// holding StoreDir where an embedded broker has one, and the one
-	// holding Store.Path otherwise — an external cluster writes its
-	// streams on a disk this node cannot measure at all, so the volume it
-	// CAN measure is the honest bound there. The two are the same disk in
-	// every layout but one an operator built deliberately, which is why
-	// the field says which. A fixed default is
-	// wrong in both directions — the same number is five years of history
-	// on the modelled write rate and one boot on a small disk — and the
-	// boot that creates the stream logs what it derived the value from
-	// (`statelog_ceilings`).
-	//
-	// EVERY STATE LOG SHARES ONE BUDGET, and a derived value is only what
-	// this log asks for within it. The broker reserves each ceiling in full
-	// when it creates the stream, so the derived ceilings of every state
-	// log being created are scaled down together to fit what the logs that
-	// already exist leave of five eighths of what the broker can grant them
-	// (engine.StreamBudgetShare); a value set here is never scaled, and a
-	// boot that cannot reserve it fails naming this field.
-	//
-	// WHAT THIS FIELD DOES IS NARROWER THAN IT LOOKS. It is the value the
-	// stream is CREATED with, and thereafter a DECLARATION the engine
-	// checks the broker's actual ceiling against and reports on. Editing
-	// it on a running fleet changes nothing by itself: a stream's
-	// configuration has one writer and a booting node is not it, so
-	// re-applying it at boot would let restart order decide a shared limit
-	// and let a late node lower a ceiling an emergency grant had just
-	// raised.
-	//
-	// CROSSING IT REFUSES; IT DOES NOT SHED. There is no age bound on this
-	// stream, so a full log drops no history — the append is refused,
-	// loudly, naming this field and whatever is blocking the trim.
+	// UNSET DERIVES IT from the volume the streams live on (StoreDir's with an
+	// embedded broker, else Store.Path's: an external cluster's disk is not
+	// measurable): a quarter of its free space, clamped to 4 GiB..64 GiB (a fixed
+	// default is wrong both ways; boot logs the source, `statelog_ceilings`). State
+	// logs share one budget, so derived ceilings scale down together
+	// (engine.StreamBudgetShare); a set value never does, and a boot that cannot
+	// reserve it names this field.
+	// It is the value the stream is CREATED with, then a DECLARATION: editing it on a
+	// running fleet changes nothing, as re-applying at boot would let restart order
+	// decide a shared limit. CROSSING IT REFUSES THE APPEND, never sheds history.
 	TrackerLogMaxBytes int64 `yaml:"tracker_log_max_bytes,omitempty" json:"tracker_log_max_bytes,omitempty" js:"min=1073741824;max=1099511627776" desc:"Byte ceiling on the mutation log; unset derives a quarter of the free space on the volume the streams live on - stream.store_dir where an embedded broker has one, store.path otherwise - clamped to 4 GiB..64 GiB."`
 
 	// TrackerVectorsMaxBytes is the byte ceiling on the vector changelog.
 	//
-	// SIZED FOR THE PEAK, NOT THE STEADY STATE, and the two differ by 93×.
-	// The stream keeps one message per source and bounds their age, so a
-	// week's minting is about 91 MB at the reference company. But changing
-	// the embedding model or its width rewrites EVERY source in a few
-	// hours, and for the following week every source's current message is
-	// inside the window: the whole corpus, 1.69 GB per 100 seats per year
-	// of it — 8.46 GB at the reference company's fifth year. Sizing this
-	// field from the steady state would refuse the one operation it exists
-	// to survive.
+	// SIZED FOR THE PEAK, NOT THE STEADY STATE (93× apart): a week's minting is about
+	// 91 MB at the reference company, but changing the embedding model or its width
+	// rewrites EVERY source in hours, putting the whole corpus in the age window: 8.46
+	// GB at its fifth year (1.69 GB per 100 seats per year). Sizing from the steady
+	// state would refuse the one operation this field exists to survive.
 	//
-	// UNSET DERIVES FROM THE VOLUME, as the mutation log does: the same
-	// quarter of the free space the streams live on, clamped to 4 GiB..64
-	// GiB, whatever tracker_log_max_bytes is set to. Never from the
-	// mutation log's ceiling, because the two hold different things: that
-	// ceiling bounds a trailing window of records, and this log's peak is
-	// the company's whole history, which grows every year it trims
-	// healthily. At the 64 GiB clamp it holds a model change twice over for
-	// about 2 000 seat-years of corpus (400 seats in their fifth year); a
-	// larger or older company sets it, at about 34 MB per agent seat per
-	// year of history. The same share of the one budget, scaling and
-	// refusals the mutation log's field describes apply here unchanged.
+	// UNSET DERIVES FROM THE VOLUME as the mutation log does, never from that log's
+	// ceiling, which bounds a trailing window while this peak is the whole history.
+	// The 64 GiB clamp holds a model change twice over for about 2 000 seat-years of
+	// corpus; a larger company sets it, at about 34 MB per agent seat per year.
 	TrackerVectorsMaxBytes int64 `yaml:"tracker_vectors_max_bytes,omitempty" json:"tracker_vectors_max_bytes,omitempty" js:"min=1073741824;max=2199023255552" desc:"Byte ceiling on the vector changelog, sized for a model change rather than the steady state; unset derives what the mutation log derives from the volume, a quarter of its free space clamped to 4 GiB..64 GiB, whatever tracker_log_max_bytes is set to."`
 
-	// PagesLogMaxBytes is the byte ceiling on Doclet's log, the ordered
-	// stream every page write goes through.
+	// PagesLogMaxBytes is the byte ceiling on Doclet's log, the ordered stream every
+	// page write goes through.
 	//
-	// UNSET DERIVES IT beside the mutation log's, at a quarter of that
-	// log's ceiling as set or derived (1 GiB..16 GiB from a volume alone,
-	// up to 256 GiB beside a mutation log an operator sized). The ratio is
-	// the corpus rather than a guess: a knowledge base is a few thousand
-	// pages against a tracker's hundreds of thousands of items and
-	// comments, and a page's records are dominated by saves, so its log
-	// grows at about a quarter of the rate and a blocked trim reaches
-	// either ceiling in the same time.
-	//
-	// It shares the state logs' one budget, and what the mutation log's
-	// field says about it holds here unchanged: the value is the one the
-	// stream is CREATED with, a derived value is scaled with the others to
-	// fit the broker and a set one is not, and crossing it refuses the
-	// append rather than shedding history.
+	// UNSET DERIVES IT beside the mutation log's, at a quarter of that log's ceiling
+	// as set or derived (1 GiB..16 GiB from a volume alone, up to 256 GiB beside a
+	// mutation log an operator sized). The ratio is the corpus, not a guess: a
+	// knowledge base is a few thousand pages against a tracker's hundreds of
+	// thousands of items and comments, and page records are mostly saves, so the log
+	// grows at about a quarter of the rate and a blocked trim reaches either ceiling
+	// in the same time. Budget and refusals are TrackerLogMaxBytes's.
 	PagesLogMaxBytes int64 `yaml:"pages_log_max_bytes,omitempty" json:"pages_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."`
 
-	// IamLogMaxBytes is the byte ceiling on the identity estate's log —
-	// the ordered stream every person, credential, invitation and session
-	// goes through.
+	// IamLogMaxBytes is the byte ceiling on the identity estate's log.
 	//
-	// UNSET TAKES A FLAT 512 MiB, and like the usage log's it is NOT
-	// derived from the disk: what this log grows with is the company's
-	// HEADCOUNT and how often people sign in, neither of which the
-	// operator's volume has anything to say about.
+	// UNSET TAKES A FLAT 512 MiB, not derived from the disk: this log grows with
+	// HEADCOUNT and sign-ins, not volume. A session is one record at open and one at
+	// close (a re-issue moves a deadline inside the signed bearer and records
+	// nothing), so about people × sign-ins a day × 2; at the reference company's
+	// three a day that is about 285 MB a year, so the default is eighteen months of a
+	// COMPLETELY BLOCKED trim, five years at a realistic rate.
 	//
-	// SESSIONS ARE WHAT SIZE IT. People, credentials and invitations are
-	// hundreds of records a year at any company that fits on one broker. A
-	// session is one record when it opens and one when it closes and
-	// nothing in between — a re-issue moves a deadline inside the signed
-	// bearer and records nothing — so the rate is roughly (people ×
-	// sign-ins a day × 2). At the reference company a pessimistic three
-	// sign-ins per person per day is about 285 MB a year with everything
-	// else folded in, so this default is around eighteen months of a
-	// COMPLETELY BLOCKED trim at that rate and about five years at a
-	// realistic one.
-	//
-	// THE FLOOR IS 64 MiB rather than the gibibyte the corpus-sized logs
-	// take, because the broker grants a stream its whole ceiling
-	// when it creates it: this number is free space a node must have before
-	// it can boot at all, and a ten-person company writing a fiftieth of
-	// the reference rate should not have to reserve half a gibibyte to
-	// start. The ceiling is a TYPO GUARD rather than a policy, like the
-	// store limit's.
-	//
-	// It shares the state logs' one budget, and what the mutation log's
-	// field says about it holds here unchanged: the value is the one the
-	// stream is CREATED with, a derived value is scaled with the others to
-	// fit the broker and a set one is not, and crossing it refuses the
-	// append rather than shedding history — which here would be shedding
-	// the authentication trail.
+	// THE FLOOR IS 64 MiB: the broker grants the whole ceiling at creation, and a
+	// ten-person company should not need half a gibibyte free to boot. The ceiling is
+	// a TYPO GUARD. Shedding here would shed the authentication trail.
 	IamLogMaxBytes int64 `yaml:"iam_log_max_bytes,omitempty" json:"iam_log_max_bytes,omitempty" js:"min=67108864;max=17179869184" desc:"Byte ceiling on the identity estate's log; unset takes a flat 512 MiB, 64 MiB..16 GiB."`
 
-	// UsageLogMaxBytes is the byte ceiling on the usage log — the compacted
-	// stream every data node publishes its own company days to (a node
-	// without `data` publishes none: its events are kept in one data node's
-	// log by custody and counted in that node's day), so that spend, turn
-	// and read history is answered fleet-wide and outlives the node that
-	// spent it.
+	// UsageLogMaxBytes is the byte ceiling on the usage log, the compacted stream
+	// every data node publishes its own company days to, so spend history outlives the
+	// node that spent it.
 	//
-	// SIZED BY A CENSUS, NOT A RATE: the stream keeps one message per
-	// (node, day, seat, schedule or person) for 181 days, so its size is the
-	// number of those objects rather than how busy they were. A three-node
-	// fleet of forty seats and twenty schedules is about 320 MB; the 1 GiB
-	// default is three times that. Unset takes the default rather than a
-	// share of the disk, because a census is a property of the fleet's
-	// seats and schedules and a larger volume buys no more of them.
+	// SIZED BY A CENSUS, NOT A RATE: one message per (node, day, seat, schedule or
+	// person) for 181 days, so size is the number of those objects: a three-node fleet
+	// of forty seats and twenty schedules is about 320 MB, the 1 GiB default three
+	// times that. Unset takes the default, not a disk share: a larger volume buys no
+	// more seats.
 	//
-	// THE FLOOR IS 64 MiB rather than the gibibyte the corpus-sized logs
-	// take, because the broker grants a stream its whole
-	// ceiling when it creates it: this number is free space a node must
-	// have before it can boot at all, and a ten-seat node's 181-day census
-	// is about 18 MB. See [UsageLogMaxBytesFloor].
-	//
-	// It shares the state logs' one budget, and what the mutation log's
-	// field says about it holds here: the value is the one the stream is
-	// CREATED with, and crossing it refuses the append — the day's figures
-	// stop replicating and the log's headroom alarm names this domain —
-	// rather than dropping the oldest day.
+	// THE FLOOR IS 64 MiB: the broker grants the whole ceiling at creation, and a
+	// ten-seat node's census is about 18 MB ([UsageLogMaxBytesFloor]).
 	UsageLogMaxBytes int64 `yaml:"usage_log_max_bytes,omitempty" json:"usage_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the usage log, the compacted stream each data node's company days replicate on; default 1 GiB, sized for 181 days of a fleet's seats and schedules, 64 MiB..64 GiB."`
 
 	// ArtifactsLogMaxBytes is the byte ceiling on the artifacts log, the
@@ -1945,150 +1646,56 @@ type Stream struct {
 	// artifacts log's bound.
 	ArtifactDataLogMaxBytes int64 `yaml:"artifact_data_log_max_bytes,omitempty" json:"artifact_data_log_max_bytes,omitempty" js:"min=1073741824;max=549755813888" desc:"Byte ceiling on the artifact datastore's log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."`
 
-	// CodeLogMaxBytes is the byte ceiling on the code log — the ordered
-	// stream a repository's refs, packs and settings move on.
+	// CodeLogMaxBytes is the byte ceiling on the code log.
 	//
-	// UNSET DERIVES IT beside the mutation log's, at two thirds of that
-	// log's ceiling as set or derived, clamped to 1 GiB..1 TiB. Two thirds
-	// is not the byte rate, at which a blocked trim would reach either
-	// ceiling in the same time: the log is reserved on every node whether or
-	// not the company hosts code (below), so its share is weighed against
-	// what the other logs give up for it — a first boot's mutation log
-	// about a fifth shorter — and a share at the byte rate would cost every
-	// company far more ([DerivedCodeLogNumerator] has both). By the byte
-	// rate, two thirds is the least of what a company
-	// whose seats only push writes here, and BELOW what a company whose
-	// seats work through changes writes: its push records, the records that
-	// compact their packs, publish their layers and sweep what each
-	// compaction retired, the barriers its git clients' reads append, and
-	// its changes' records — opens, reviews, comments, merges, every
-	// revision's facts and mergeability, and its queue's and checks' where
-	// they run — take nearly twice to about eight times what its tracker
-	// writes and its seats' reads take a day. Such a company sizes the log
-	// in two steps. Before the first boot neither log exists, so it sets
-	// this field from the reference company's day: twice the mutation log's
-	// ceiling, that day's least, which a set ceiling takes from the derived
-	// logs' share whole ([DerivedCodeLogNumerator] prints what that costs
-	// them on 100 GiB free). Once the streams exist, its own ratio is the
-	// two logs' crewlet.statelog.log.bytes_per_day, and `crewlet retention
-	// set-capacity` moves the log to it.
-	//
-	// It shares the state logs' one budget, and what the mutation log's
-	// field says about it holds here unchanged: the value is the one the
-	// stream is CREATED with, a derived value is scaled with the others to
-	// fit the broker and a set one is not, and crossing it refuses the
-	// append rather than shedding history. The log runs on every node that
-	// runs a state log, whether or not the company hosts code, as every
-	// domain's log does — so its derived ask is paid by every company:
-	// below about 653 GiB free it comes out of the other logs' share (at
-	// 100 GiB the mutation log is created at 9.0 GiB rather than 11.0;
-	// docs/guides/replication.md, "What the code log's reservation costs",
-	// has the other volumes, and internal/engine's
-	// TestThePagesPrintTheCeilingsAFirstBootCreates holds both to what a
-	// first boot creates). A company that hosts no code and is short of
-	// broker room sets the floor here before the first boot, which the
-	// other logs then divide.
+	// UNSET DERIVES IT at two thirds of the mutation log's ceiling, clamped to
+	// 1 GiB..1 TiB ([DerivedCodeLogNumerator]). By the byte rate, two thirds
+	// is the least of what a company whose seats only push writes here, and BELOW what
+	// a company whose seats work through changes writes: its push, compaction, barrier
+	// and change records take nearly twice to about eight times what its tracker
+	// writes and its seats' reads take a day. Before the first boot neither log
+	// exists, so it sets this field from the reference company's day: twice the
+	// mutation log's ceiling, that day's least. Every company pays its ask: below
+	// about 653 GiB free it comes out of the other logs' share (at 100 GiB the
+	// mutation log is created at 9.0 GiB rather than 11.0; docs/guides/replication.md).
 	CodeLogMaxBytes int64 `yaml:"code_log_max_bytes,omitempty" json:"code_log_max_bytes,omitempty" js:"min=1073741824;max=1099511627776" desc:"Byte ceiling on the code log, the ordered stream a repository's refs, packs and settings move on; unset derives two thirds of the mutation log's ceiling, set or derived, 1 GiB..1 TiB. Reserved whether or not the company hosts code: one that hosts none and is short of broker room sets 1073741824 before the first boot."`
 
-	// AssistantLogMaxBytes is the byte ceiling on the Dashboard Assistant's
-	// log, where every person's conversations, turns and proposals are
-	// recorded before they are applied.
+	// AssistantLogMaxBytes is the byte ceiling on the Dashboard Assistant's log,
+	// where every person's conversations, turns and proposals are recorded before
+	// they are applied.
 	//
-	// UNSET TAKES 512 MiB ([DefaultAssistantLogMaxBytes]), sized by how many
-	// people ask the assistant rather than by the disk: about two weeks of a
-	// completely blocked trim at the reference company's rate. Where the
-	// broker is short it is scaled down as far as its 64 MiB floor, so a
-	// fresh node reserves only the floor for it. It shares the state logs'
-	// one budget, and crossing it refuses the append
-	// (the assistant cannot record the turn) rather than shedding history. A
-	// conversation's own retention is set in the company document and does
-	// not depend on this.
+	// UNSET TAKES 512 MiB ([DefaultAssistantLogMaxBytes]), sized by how many people
+	// ask the assistant, not by the disk: about two weeks of a completely blocked
+	// trim at the reference company's rate. A short broker scales it down to its
+	// 64 MiB floor. Crossing it refuses the append (the assistant cannot record the
+	// turn) rather than shedding history. A conversation's retention is set in the
+	// company document, not here.
 	AssistantLogMaxBytes int64 `yaml:"assistant_log_max_bytes,omitempty" json:"assistant_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on Ask Crewlet's log; unset takes 512 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."`
 
-	// ChatLogMaxBytes is the byte ceiling on the chat log, the ordered
-	// stream every Chatlet message, reaction and membership change goes
-	// through.
-	//
-	// UNSET ASKS FOR 8 GiB, capped at a quarter of what an unset mutation
-	// log derives from the stream volume ([DerivedChatLogDivisor]) — a
-	// sixteenth of its free space, so 4 GiB is asked on a 64 GiB volume
-	// and the whole 8 GiB from 128 GiB free, never below
-	// [ChatLogMaxBytesFloor]. What is asked is then scaled with every other
-	// derived ask to fit the one budget, so a 64 GiB first boot creates the
-	// log at about 1.3 GiB and the whole 8 GiB is created only where the
-	// broker can back every derived ask unscaled (about 664 GiB free under
-	// an embedded broker that sizes itself). The cap is what keeps this
-	// log's ask from taking more of the vector changelog's room for a model
-	// change than it must; the constant states the figures and what it
-	// costs this log.
-	//
-	// IT DOES NOT FOLLOW THE MUTATION LOG'S CEILING, and that is a
-	// departure, not an oversight. This log holds what the mutation log and
-	// the knowledge base's hold — a trailing window of records, as long as
-	// a blocked trim lasts — and the knowledge base's follows the mutation
-	// log's ceiling, set or derived, so that a blocked trim fills both in
-	// the same time. Chat does not, because of the ONE BUDGET: it grows
-	// faster than the mutation log (about 32 MB a day at the census below,
-	// its read barriers included, against the reference company's 22), so
-	// following it at that ratio makes this the largest ask of the ten —
-	// nearly half as much again as the mutation log's, 93 GiB beside its
-	// 64 GiB clamp — and the budget scales every derived ask in proportion.
-	// On a 64 GiB volume that creates the vector changelog at 3.8 GiB, half
-	// the 7.9 GiB the reference company's fifth-year model change puts in
-	// it, which is the one failure that log is sized to rule out, and a
-	// first boot gives it room for that change clear of the headroom alarm
-	// only from about 138 GiB free; with this log's ask capped as above it
-	// is created at 5.4 GiB on that volume, and has the room from about
-	// 100 GiB free.
-	//
-	// WHAT THAT COSTS, stated: an operator who sizes tracker_log_max_bytes
-	// for a long blocked trim has to size this field for the same horizon,
-	// or this log refuses first — beside a 512 GiB mutation log, which
-	// outlasts decades of blocked trim, an unset chat log lasts about eight
-	// months, and on a small volume less ([DerivedChatLogDivisor]).
-	//
-	// WHY EIGHT GIBIBYTES, when the steady state is two orders below it.
-	// At the declared census (`chatlet.ChatMessagesPerDay`, 20 000 messages a
-	// day) and a mean record near a kibibyte and a half, the log grows
-	// about 31 MB a day, and its read barriers add about 1.7 MB more
-	// (`chatlet.LinearizableReadsPerSeatDay` × the reference company's 100
-	// seats × the ≈ 140 bytes a signed barrier costs) — about 32 MB a day,
-	// so a healthily-trimming fleet holds roughly 225 MB, one `min_age`
-	// window's worth, the same order as the mutation log's own. This
-	// ceiling is therefore not sized for the steady state: it is what a
-	// COMPLETELY BLOCKED TRIM may spend before appends start being refused
-	// — at fifteen sixteenths of it, since the log keeps the gate reserve
-	// every identity-claiming log keeps — which is about eight months at
-	// the declared census and about three and a half at the 50 000/day
-	// supported ceiling, on a volume that creates the whole of it. Both are
-	// far past any backup gap or donor outage the retention gates tolerate,
-	// which is what makes a blocked trim here an alarm somebody answers
-	// rather than a company that cannot talk to itself.
-	//
-	// It shares the state logs' one budget, and everything the mutation
-	// log's field says about that holds here unchanged: the value is what
-	// the stream is CREATED with, a derived value is scaled with the
-	// others to fit the broker and a set one is not, and crossing it
-	// refuses the append rather than shedding history — which for a
-	// transcript is the only acceptable direction, since the pruning of
-	// old messages is a RECORD every data node applies and never a stream
-	// bound.
+	// ChatLogMaxBytes is the byte ceiling on the chat log, the ordered stream every
+	// Chatlet message, reaction and membership change goes through.
+	// UNSET ASKS FOR 8 GiB, capped at a quarter of what an unset mutation log derives
+	// ([DerivedChatLogDivisor]) and never below [ChatLogMaxBytesFloor]; the ask is then
+	// scaled with the other derived asks to the one budget. It does NOT follow the
+	// mutation log's ceiling: chat grows faster (about 32 MB a day at the census),
+	// so that ratio made it the largest ask and starved the vector changelog of
+	// room for a model change; the constant states the figures. 8 GiB is not the
+	// steady state (about 225 MB) but what a COMPLETELY BLOCKED TRIM may spend
+	// before appends refuse, about eight months at 20 000 messages a day, so whoever
+	// sizes tracker_log_max_bytes for a longer horizon sizes this field to match.
+	// Refuses, never sheds: pruning is a RECORD every data node applies.
 	ChatLogMaxBytes int64 `yaml:"chat_log_max_bytes,omitempty" json:"chat_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the chat log; unset asks for 8 GiB, capped at a sixteenth of the stream volume's free space (a quarter of what an unset tracker_log_max_bytes derives, so the whole 8 GiB is asked from 128 GiB free), 1 GiB..256 GiB, and does not follow tracker_log_max_bytes - size it for the same blocked-trim horizon, about 32 MB a day at the declared census."`
 
-	// ExecutorLogMaxBytes is the byte ceiling on the executor log, where
-	// every capture of a seat's executor session, every turn's ending and
-	// every retention delete of them is recorded before it is applied.
+	// ExecutorLogMaxBytes is the byte ceiling on the executor log, where every
+	// capture of a seat's executor session, every turn's ending and every retention
+	// delete of them is recorded before it is applied.
 	//
-	// UNSET TAKES 512 MiB ([DefaultExecutorLogMaxBytes]), sized by the turns
-	// the company's seats run rather than by the disk: about seventeen days of
-	// a completely blocked trim at the reference company's rate. Where the
-	// broker is short it is scaled down as far as its 64 MiB floor, so a
-	// fresh node reserves only the floor for it. It shares the state logs'
-	// one budget, and crossing it refuses the append (a session is not
-	// recorded and the turn's next launch starts fresh) rather than shedding
-	// history. How long a session is kept is the company's own
-	// `turn_engine.conversation_session.retention_days`, and does not depend
-	// on this.
+	// UNSET TAKES 512 MiB ([DefaultExecutorLogMaxBytes]), sized by the turns the
+	// company's seats run, not the disk: about seventeen days of a completely blocked
+	// trim at the reference company's rate. A short broker scales it down to its
+	// 64 MiB floor. Crossing it refuses the append (a session is not recorded and
+	// the next launch starts fresh) rather than shedding history. How long a session
+	// is kept is `turn_engine.conversation_session.retention_days`, not this.
 	ExecutorLogMaxBytes int64 `yaml:"executor_log_max_bytes,omitempty" json:"executor_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the executor log, where seats' executor sessions are named; unset takes 512 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."`
 
 	// AccessLogMaxBytes is the byte ceiling on the access log, where what
@@ -2122,39 +1729,28 @@ type Stream struct {
 
 // TrackerRetention is the operator's half of the log trim.
 //
-// # Why these are Tier A and not the company's config
+// Tier A, not the company's config: every one is a statement about the OPERATOR's
+// estate (backups, how long the disk holds a replay window, I/O budget, how long
+// to wait for a complete replica), and Tier B is edited live, so lowering a
+// durability gate there would move it under a trim that had already computed
+// against it.
 //
-// Every one of them is a statement about the OPERATOR's estate rather than
-// about the company: how they back up, how long their disk should hold a
-// replay window, how much I/O their machines can spend, how long they will
-// wait for a node to become a complete replica. None is a policy a founder
-// sets, and Tier B is edited live — so lowering a durability gate there would
-// move it underneath a trim that had already computed against it.
-//
-// # Why the duration fields carry a Raw suffix
-//
-// The Go name and the YAML key are allowed to differ, and here they must: the
-// operator writes `min_age: 7d` and every reader wants a [time.Duration], so
-// the field holds the text and the method holds the value. A field and a
-// method cannot share a name, and of the two the METHOD should have the plain
-// one — the parsed value is what the engine uses everywhere and the text is
-// read in exactly one place.
+// The duration fields carry a Raw suffix: the operator writes `min_age: 7d` and
+// readers want a [time.Duration], so the field holds the text and the method,
+// which gets the plain name, holds the value.
 type TrackerRetention struct {
-	// MinAgeRaw is the age floor no trim may cross, whatever the other terms
-	// say. It can only make a trim MORE conservative, so it is a LOWER
-	// bound on how long the log keeps a record and never a ceiling — and
-	// it says nothing at all about any node's own store file.
+	// MinAgeRaw is the age floor no trim may cross, whatever the other terms say.
+	// It can only make a trim MORE conservative: a LOWER bound on how long the log
+	// keeps a record, never a ceiling, and nothing about any node's own store file.
 	//
-	// Seven days is the horizon this fleet already treats as how long a
-	// node may be away, and a retention floor that disagreed with it would
-	// be a second answer to one question.
+	// Seven days is the horizon this fleet already treats as how long a node may be
+	// away; a floor that disagreed would be a second answer to one question.
 	//
-	// THE 24-HOUR FLOOR HAS THREE REASONS: a value below a day cannot
-	// outlast a nightly backup cycle; it is the margin that keeps a quiet
-	// object writable, because an object whose last record has been
-	// trimmed away has to be recognised as trimmed rather than as absent;
-	// and it is the age bound on the vector changelog, so lowering it
-	// shortens the window a joining node's vector gap is refilled from.
+	// THE 24-HOUR FLOOR HAS THREE REASONS: a value below a day cannot outlast a
+	// nightly backup cycle; it is the margin that keeps a quiet object writable (one
+	// whose last record was trimmed must be recognised as trimmed, not absent); and
+	// it is the age bound on the vector changelog, so lowering it shortens the window
+	// a joining node's vector gap is refilled from.
 	MinAgeRaw string `yaml:"min_age,omitempty" json:"min_age,omitempty" desc:"Age floor no trim may cross (default 7d, 24h..90d)."`
 
 	// BackupMaxAge is how stale the newest complete backup may be before
@@ -2408,41 +2004,15 @@ func (c StreamCluster) IsZero() bool {
 // Durable refuses an embedded broker MEMBER with nowhere to persist, naming
 // `stream.store_dir`, and passes every other stream.
 //
-// # A Tier A rule, because the core runtime runs from boot
-//
-// A state log's records live on the stream, and an embedded server with no
-// store directory keeps its streams in MEMORY — so a restart recreates every
-// log empty, and a node whose durable tables are ahead of a stream that
-// restarted from nothing cannot tell "the log was trimmed" from "the log is a
-// different log", refuses to serve, and stays refused: every snapshot it could
-// adopt is above the recreated stream too.
-//
-// This was a CROSS-TIER rule (`config.CheckTiers`, now gone) while a node's
-// state log waited for its first company: only a company started one, so
-// only the pair could say whether one would run. Every data node runs the core
-// runtime from boot now — every domain's log and the identity estate on it,
-// company or none — and every member is a data node
-// ([Bootstrap.ValidateRoles]), so the answer is Tier A's alone, and the pair's
-// check let exactly the node it should refuse through: one started with no
-// company, which put its first person's invitation on a stream its first
-// restart emptied.
-//
-// A SOLO MEMBER AS MUCH AS A FLEET'S. A member of a fleet holds the fleet's
-// streams besides — the seats' mailboxes and every coordination bucket, for
-// every node that reaches it, a leaf that keeps nothing included — so one kept
-// in memory comes back from its next restart holding none of them; but the
-// state logs alone already decide it, and a solo member keeps those too.
-//
-// THE BROKER'S RULE, NOT THE ROLES'. Only a MEMBER runs JetStream in this
-// process: a LEAF runs none — every stream its clients use is a member's, kept
-// in that member's store directory — and is refused a store directory outright
-// ([StreamLeaf.validate]), and a CLIENT's streams are its external cluster's.
-// So both pass here, and a correct stateless node is never told to set the one
-// field it may not.
-//
-// ASKED TWICE, from ONE implementation: by [Bootstrap.Validate], and by the
-// engine at its own door for a Bootstrap that did not come through that one —
-// before anything opens, as the keyring is.
+// A Tier A rule: an embedded server with no store directory keeps its streams in
+// MEMORY, so a restart recreates every state log empty and a node whose durable
+// tables are ahead of them cannot tell "trimmed" from "a different log", refuses
+// to serve, and stays refused. Every member is a data node
+// ([Bootstrap.ValidateRoles]) running every domain's log from boot, company or
+// none, so a solo member needs it as much as a fleet's. Only a MEMBER runs
+// JetStream here: a LEAF's streams are a member's ([StreamLeaf.validate] refuses
+// it a directory) and a CLIENT's are its cluster's, so both pass. Asked from this
+// one implementation by [Bootstrap.Validate] and the engine's own door.
 func (s *Stream) Durable() error { return s.durable(field("stream")) }
 
 // durable is [Stream.Durable] at a caller's path.
@@ -2551,44 +2121,17 @@ func (s *Stream) validate(path Path) error {
 	if s.Cluster.Port < 0 || s.Cluster.Port > 65535 {
 		p.add(at(path, "cluster.port"), ErrOutOfRange, "must be 0..65535, got %d", s.Cluster.Port)
 	}
-	// A CLUSTER BLOCK WITHOUT A NAME DOES NOTHING, and doing nothing
-	// SILENTLY is what this refuses.
-	//
-	// The embedded server's options are built only when the cluster is
-	// NAMED: without it the route port, the bind interface, the advertise
-	// address and the peer list are all dropped on the floor, so a node
-	// configured with them still starts solo, binds no route listener and
-	// forms no cluster — while every other reading of the same file (the
-	// provisioning budgets, the topology validation below) calls it
-	// clustered. An operator who wrote that block did not ask for a solo
-	// node, and the only honest answers are to cluster or to say why not.
-	//
-	// ASKED AS "is anything else set", THROUGH IsZero, rather than as a
-	// list of the fields that matter. Written as a list it named two of
-	// the four and the other two — cluster.host, which is the answer to
-	// this block's own warning about publishing the route port, and the
-	// traffic it carries in clear, on a public interface, and
-	// cluster.advertise, which a NAT'd member cannot cluster without —
-	// went silently unvalidated. IsZero is the one place that
-	// enumerates this struct, so a field added later is covered by having
-	// been added there.
-	//
-	// AND THE SAME RULE `url`, `store_dir`, `debug` and `sync` keep, for
-	// the same reason, once the stream is EXTERNAL: the whole block
-	// configures the server this process starts. Against `stream.type:
-	// nats` not one field of it is read — the embedded options are built
-	// on a branch an external stream never reaches, and the engine already
-	// answers "clustered" from the URL alone (see engine.clusteredStream)
-	// — so accepting it records a membership, a route port and an
-	// advertise address that never reach the thing forming the cluster.
-	// Until this refused it, `stream.cluster.peers` on an external stream
-	// was worse than inert: validateTopology COUNTED those peers, so two
-	// of them were refused as a fleet with no quorum on the strength of a
-	// block nobody reads.
-	//
-	// ONE problem rather than both, because the two answers contradict
-	// each other: an external cluster is told to remove the block, and
-	// there is nothing to be gained by also telling it to name it.
+	// A CLUSTER BLOCK WITHOUT A NAME DOES NOTHING, and doing nothing SILENTLY is
+	// what this refuses: the embedded server's options are built only when the
+	// cluster is NAMED, so the route port, bind interface, advertise address and
+	// peers are dropped and the node starts solo, while every other reading of the
+	// file (budgets, topology validation) still calls it clustered.
+	// ASKED AS "is anything else set" through IsZero, the one place that enumerates
+	// this struct: a list named two of the four fields and left cluster.host and
+	// cluster.advertise unvalidated.
+	// THE SAME RULE `url`, `store_dir`, `debug` and `sync` keep once the stream is
+	// EXTERNAL: no field of the block is read, and validateTopology COUNTED external
+	// peers, refusing two as a quorumless fleet. ONE problem, not also "name it".
 	switch {
 	case external && !s.Cluster.IsZero():
 		p.add(at(path, "cluster"), ErrConflict,
@@ -2659,33 +2202,18 @@ func (s *Stream) validate(path Path) error {
 		AtlasLogMaxBytesFloor, AtlasLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
 		StoreMaxBytesFloor, StoreMaxBytesCeiling)
-	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal
-	// waiting for a boot: the broker compares each stream's ceiling against
-	// this number, so one of these logs cannot be created at all and the
-	// node fails naming whichever one it reached last. Every value is the
-	// operator's own, on the same page of the same file, so the honest
-	// moment to say so is now.
-	//
-	// EVERY STATE LOG IS IN THE SUM, the identity, usage, chat, executor,
-	// code, access and atlas logs included. The sum is what the broker will be asked to back, so a log
-	// left out of it is a limit this check passes and the boot refuses —
-	// which is the one outcome the check exists to prevent, arriving with a
-	// message that says the configuration was fine.
-	//
-	// ONLY THE EXPLICIT ONES ARE SUMMED. A derived ceiling is already
-	// scaled to fit inside whatever limit is in force (see
-	// engine.sizeCeilings), so it cannot conflict with one.
-	//
-	// IT IS NECESSARY AND NOT SUFFICIENT, and the message says so rather
-	// than implying a clean bill of health. The state logs get a SHARE of
-	// what the broker can grant rather than all of it
-	// (engine.StreamBudgetShare), because every other object on that
-	// broker — the seats' mailboxes, the event log, the dead-letter
-	// stream, the memory changelog and every coordination bucket — reserves
-	// nothing at create time and grows against this same limit. So a limit
-	// these ceilings exactly fill still fails at boot; what covers that is
-	// the refusal itself, which names this limit, what was already spoken
-	// for, and the field the ceiling came from.
+	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal waiting for
+	// a boot: the broker compares each stream's ceiling to it, so a log cannot be
+	// created and the node fails naming whichever it reached last.
+	// EVERY STATE LOG IS IN THE SUM (identity, usage, chat, executor, code, access
+	// and atlas included): a log left out is a limit this check passes and the boot
+	// refuses. Only EXPLICIT ceilings are summed; a derived one is scaled to fit
+	// (engine.sizeCeilings).
+	// NECESSARY, NOT SUFFICIENT: the state logs get a SHARE of what the broker can
+	// grant (engine.StreamBudgetShare), and every other object on it (mailboxes,
+	// event log, dead-letter stream, memory changelog, coordination buckets) reserves
+	// nothing at create time and grows against the same limit, so a limit exactly
+	// filled still fails at boot; that refusal names this limit and the field.
 	declared := s.DeclaredLogCeilings()
 	if s.StoreMaxBytes > 0 && declared > s.StoreMaxBytes {
 		p.add(at(path, "store_max_bytes"), ErrConflict,
@@ -2784,78 +2312,47 @@ type Coordination struct {
 	// network.
 	Type CoordinationType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=local|embedded-kv" desc:"local (single node, default) or embedded-kv (a fleet)."`
 
-	// LeaseTTLSeconds overrides how long a seat or presence lease survives
-	// without a renew. 0 takes the coordination layer's own measured
-	// default; shortening it speeds up failover at the cost of shedding
-	// seats over a store blip. Anything else is at least [MinLeaseTTL],
-	// and a fraction above it is as good as a whole number: the engine
-	// reads the duration it spells, once, at the edge.
+	// LeaseTTLSeconds overrides how long a seat or presence lease survives without a
+	// renew. 0 takes the coordination layer's measured default; shortening speeds
+	// failover at the cost of shedding seats over a store blip. Anything else is at
+	// least [MinLeaseTTL]; a fraction is fine, read once at the edge.
 	//
-	// It bounds nothing else (coord.HeldToSeatTTL): a fleet duty's TTL
-	// follows its own tick and a tracker walk's claim its own heartbeat, each
-	// up to coord.MaxDutyTTL, which is why every lease but a seat's and a
-	// presence lease is kept in a lease bucket of its own. The one other
-	// lease that follows it does so by choice: an engine process's taker
-	// lease (coord.ClassTaker) asks for this TTL as its own, so a stopped
-	// process's executor sessions settle as fast as its seats move, and the
-	// store holds it as any caller's class: to coord.MaxDutyTTL, which the
-	// sandbox asks for instead once this is longer.
+	// It bounds nothing else (coord.HeldToSeatTTL): a fleet duty's TTL follows its own
+	// tick and a tracker walk's claim its own heartbeat, up to coord.MaxDutyTTL, which
+	// is why every lease but a seat's and a presence lease has a bucket of its own.
+	// The one exception is by choice: an engine process's taker lease
+	// (coord.ClassTaker) asks for this TTL so a stopped process's executor sessions
+	// settle as fast as its seats move, held to coord.MaxDutyTTL like any class (the
+	// sandbox asks for that instead once this is longer).
 	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL, which each engine process's taker lease follows up to three hours; 0 takes the measured default, anything else is at least 15. Every other lease (a fleet duty, a Worklet walk's claim) sizes its own."`
 }
 
-// MinLeaseTTL is the shortest seat and presence lease TTL a deployment may
-// set: fifteen seconds.
+// MinLeaseTTL is the shortest seat and presence lease TTL a deployment may set.
 //
-// THE TTL IS FOUR THINGS AT ONCE, and the floor is where the first one stops
-// being survivable:
+// THE TTL IS FOUR THINGS AT ONCE: THE WATCHDOG'S THRESHOLD (a node a TTL without
+// a beat ends itself with status 75, internal/seat's Watchdog, so it must clear a
+// busy healthy node's longest gap, 5.1 s measured under load; at 3 s a quarter of
+// starts exceeded it); THE STORE OUTAGE A LEASE RIDES OUT (a third of the TTL
+// plus two beats, 7 s here, covering the coordination bucket's leader election,
+// four seconds by default and up to nine); THE BEAT, a full second from a 5 s
+// TTL up; and FAILOVER, about 20 s here against 50 s at the shipped 45.
 //
-//   - THE WATCHDOG'S THRESHOLD. A node whose heartbeat goes a TTL without a
-//     beat ends itself with status 75 (internal/seat's Watchdog says why the
-//     two are one number), so the TTL has to sit well past the longest a
-//     busy but healthy node goes between beats. Measured across 126 started
-//     engines under the race detector on four CPUs at a load average of 10
-//     to 33: 5.1 s at worst, every gap past 2 s the start's first placement
-//     pass — which the heartbeat no longer sits out — and 2.0 s at worst
-//     between beats. Fifteen seconds is nearly three times the first and more
-//     than seven times the second; at three, a quarter of those starts went
-//     longer than their TTL without a beat.
-//   - A STORE OUTAGE A LEASE RIDES OUT. Renews go out every heartbeat less a
-//     beat (a third of the TTL, less a second), so in its worst phase a lease
-//     survives an outage of a third of the TTL plus two beats: 7 s here,
-//     which covers the coordination bucket's own leader election at its
-//     shortest (four seconds, nats-server's raft default; it may take nine)
-//     with room, where a TTL of 6 s would only just cover it.
-//   - THE BEAT AT ITS FULL SECOND. From a 5 s TTL up a beat is the watchdog's
-//     whole second and the renew is given that second to land in; below it
-//     both shrink with the TTL, which is a regime for a test's host, not a
-//     deployment's.
-//   - FAILOVER. A dead node's seats move a TTL and a sweep after it died:
-//     about 20 s here, against about 50 s at the shipped 45.
-//
-// A floor rather than a warning, because what a TTL below it costs is a node
-// that ends itself under load, which a warning nobody reads does not prevent.
-// A judgment call on the margin: a deployment that measures its own beat gaps
-// may defend less, but nothing here has measured a shorter one safe.
+// A floor, not a warning: a TTL below it makes a node end itself under load. The
+// margin is a judgment call; nothing here has measured a shorter one safe.
 const MinLeaseTTL = 15 * time.Second
 
 // NATSTLS is the transport material for an external NATS server.
 //
-// # Why it exists beside `credentials` and `token`
+// It sits beside `credentials` and `token`, which authenticate the CLIENT at the
+// NATS protocol layer: this is the TCP layer under it, which CA to trust for the
+// server and which certificate to present. A server configured with
+// `tls { verify: true }`, the hardened default, rejects a connection without a
+// client certificate whatever credentials follow.
 //
-// Those authenticate the CLIENT to the server at the NATS protocol layer.
-// This is the TCP layer underneath: which CA to trust for the server's own
-// certificate, and which certificate to present when the server demands one.
-// A NATS deployment configured with `tls { verify: true }` — the hardened
-// default every operator guide recommends — rejects a connection that
-// presents no client certificate, whatever credentials follow.
-//
-// # It cannot express "do not verify"
-//
-// Deliberately, and it is the one option a struct like this normally grows.
-// A skip-verify switch is set once during a bring-up and never unset, and the
-// connection it leaves behind carries every one of this company's events and
-// its coordination traffic to whoever answers on that address. A private CA
-// is one file and is the actual answer.
+// It cannot express "do not verify", deliberately: a skip-verify switch is set
+// once during a bring-up and never unset, and the connection it leaves carries
+// every event and coordination message to whoever answers on that address. A
+// private CA is one file and the actual answer.
 type NATSTLS struct {
 	// CA is the PATH to a PEM bundle to verify the server's certificate
 	// against — the file itself, never its contents. Empty uses the host's
@@ -2926,17 +2423,15 @@ var secretKeyIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // Secrets is the Tier A keyring every node of a fleet holds.
 //
-// The keyring is the SOLE ROOT OF TRUST: the store holds only ciphertext,
-// and the key material lives here — on disk or in the environment, never in
-// the database it opens. It is REQUIRED ON EVERY NODE ([Bootstrap.Validate]
-// refuses a file without one), because far more than the company's
-// credentials rest on it: every state-log record is signed and verified
-// under it, the company document a node fetches from its peers is
-// authenticated by its seal, a node serving the API signs every session
-// cookie and per-run token with it, and an embedded fleet's broker admits
-// only a route, a leaf link or an operator presenting a credential derived
-// from it (ADR-0094). There is no default: a key the engine invented would be
-// one no other node holds.
+// The keyring is the SOLE ROOT OF TRUST: the store holds only ciphertext and the
+// key material lives here, on disk or in the environment, never in the database it
+// opens. It is REQUIRED ON EVERY NODE ([Bootstrap.Validate]) because far more than
+// credentials rest on it: every state-log record is signed and verified under it,
+// the company document a node fetches from its peers is authenticated by its seal,
+// an API node signs every session cookie and per-run token with it, and an
+// embedded fleet's broker admits only a route, leaf link or operator presenting a
+// credential derived from it (ADR-0094). There is no default: a key the engine
+// invented would be one no other node holds.
 type Secrets struct {
 	// ActiveKeyID names the key that seals new writes. Required, and it
 	// must name one of Keys.
@@ -3018,18 +2513,14 @@ func (s *Secrets) Enabled() bool { return len(s.Keys) > 0 }
 
 // TokenMaterial is this keyring as a per-run token issuer reads it.
 //
-// ONE BUILDER FOR EVERY ISSUER, because it was three: the engine built this
-// list for the OTLP receiver, the engine built it again for the MCP bridge,
-// and the CLI built it a third time for a GitHub App state signer the setup
-// surface has since replaced with the keyring's own cipher. Copies of one rule
-// about which keys a fleet agrees on, in files that nothing compares.
+// ONE BUILDER FOR EVERY ISSUER: the OTLP receiver, the MCP bridge and a CLI signer
+// each built this list, copies of one rule about which keys a fleet agrees on in
+// files nothing compares.
 //
-// THE MATERIAL IS ALREADY RESOLVED, as [Secrets.Cipher]'s is: Tier A expands
-// its whole document from the environment before decoding, so two nodes that
-// spell one key differently — a `${K}` on one, the literal on the other —
-// derive the same signing key, because both read the same bytes. (This said
-// the opposite, which would have split every per-run token across such a
-// fleet.)
+// THE MATERIAL IS ALREADY RESOLVED, as [Secrets.Cipher]'s is: Tier A expands its
+// whole document from the environment before decoding, so two nodes spelling one
+// key differently (`${K}` on one, the literal on the other) derive the same
+// signing key. Otherwise per-run tokens would split across such a fleet.
 func (s *Secrets) TokenMaterial() runtoken.Material {
 	if s == nil {
 		return runtoken.Material{}
@@ -3046,21 +2537,15 @@ func (s *Secrets) TokenMaterial() runtoken.Material {
 
 // Cipher builds the sealing cipher this Tier A configures.
 //
-// AN EMPTY KEYRING IS REFUSED, and it used to be a posture: a deployment with
-// no keyring stored its company document in plaintext and read peers'
-// documents in plaintext, which was the documented opt-out. The keyring is
-// required on every node now ([Bootstrap.Validate]), and a nil cipher handed
-// back here was the one way a caller could still reach that posture — a
-// document read unauthenticated off the coordination store, or a revision
-// written in the clear — so the value that would have produced it is
-// refused where it is built rather than at every caller. What also fails
-// here is a keyring that is configured and unusable: key material that is not
-// 32 bytes of base64 is an operator error, and booting past it would seal the
-// next revision under a key nobody can reproduce.
-//
-// ${VAR} references in the material are already resolved: Tier A expands its
-// document before decoding, because the values it carries are needed the
-// instant the process starts.
+// AN EMPTY KEYRING IS REFUSED: the keyring is required on every node
+// ([Bootstrap.Validate]), and a nil cipher here was the one way a caller could
+// still reach plaintext (a document read unauthenticated off the coordination
+// store, a revision written in the clear), so the value that would produce it is
+// refused where it is built, not at every caller. A configured but unusable
+// keyring fails too: key material that is not 32 bytes of base64 is an operator
+// error, and booting past it would seal the next revision under a key nobody can
+// reproduce. ${VAR} references are already resolved: Tier A expands its document
+// before decoding, as its values are needed at process start.
 func (s *Secrets) Cipher() (secrets.Cipher, error) {
 	ring, err := s.Keyring()
 	if err != nil {

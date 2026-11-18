@@ -122,21 +122,13 @@ func convergedChatOn(t *testing.T, tb integrationtest.TB, tune func(*chatServer)
 
 // outstandingChat is the same world after the instance was locked down.
 //
-// # What is wrong, and why a person owes it
-//
-// A Mattermost administrator tightened two things after this company was
-// provisioned: the account whose token this engine provisions with lost its
-// system_admin role, and bot account creation was switched off in the System
-// Console. Nothing the engine can do fixes either, and neither shows up until
-// the day a seat is turned on, because a pass over a converged company writes
-// nothing and so is never refused at all. That window is the whole reason
-// this is reported rather than discovered.
-//
-// # Why it is not quietly converged
-//
-// The suite has a clause for exactly that ("an outstanding world actually
-// reports something"), and [TestTheOutstandingWorldIsBlockedOnAPerson] pins
-// the specific shape rather than the mere count.
+// An administrator tightened two things after provisioning: the provisioning
+// account lost system_admin, and bot creation was switched off in the System
+// Console. The engine can fix neither, and neither shows until a seat is turned
+// on, since a pass over a converged company writes nothing and is never
+// refused; hence it is reported, not discovered. The suite's clause "an
+// outstanding world actually reports something" covers it, and
+// [TestTheOutstandingWorldIsBlockedOnAPerson] pins the shape, not the count.
 func outstandingChat(t *testing.T, tb integrationtest.TB) *chatWorld {
 	t.Helper()
 	tb.Helper()
@@ -152,20 +144,16 @@ func chatContract(t *testing.T) integrationtest.Reconciler {
 	t.Helper()
 	// EVERY CONVERGED WORLD THE SUITE BUILDS, summed.
 	//
-	// Mutations is documented as sampled only around a pass over the
-	// CONVERGED world, as a delta — but this closure is the harness's, and
-	// a closure that reads "whichever world was built last" is a nil
-	// dereference until the first build and answers for the wrong estate
-	// afterwards. Summing every converged world can never be nil, and it
-	// fails in the SAFE DIRECTION: a clause that sampled before building
-	// would see the new world's own converging writes land inside its
-	// delta and go red, where a counter following the latest world would
-	// answer zero-to-zero and pass over whatever the pass did.
+	// Mutations is sampled only around a pass over the CONVERGED world, as a
+	// delta; a closure reading "the world built last" is a nil dereference
+	// before the first build and the wrong estate afterwards. Summing never
+	// is nil and fails in the SAFE DIRECTION: a clause sampling before
+	// building sees the new world's converging writes in its delta and goes
+	// red, where a latest-world counter would answer zero-to-zero and pass.
 	//
-	// The outstanding world is deliberately not in the sum. It is ALLOWED
-	// to write — it has work to do — and folding it in would make a
-	// converged pass's delta depend on how many outstanding worlds
-	// happened to be built between the two samples.
+	// The outstanding world is not in the sum: it is ALLOWED to write, and
+	// folding it in would make a converged delta depend on how many were built
+	// between the samples.
 	var converged []*chatWorld
 	return integrationtest.Reconciler{
 		Converged: func(tb integrationtest.TB) integration.Reconciler {
@@ -196,17 +184,13 @@ func TestTheMattermostReconcilerMeetsTheContract(t *testing.T) {
 // THE WRITE COUNTER ANSWERS BEFORE A WORLD EXISTS, AND LOUDLY AFTER ONE IS
 // BUILT.
 //
-// Today every clause samples Mutations only after Converged, inside one
-// sequential case — so a counter that followed the latest world would work,
-// right up until a clause sampled it first, and then it would PANIC on a nil
-// world rather than fail a test. A panic takes the whole test binary with it
-// and names nothing.
+// Every clause samples Mutations only after Converged, so a counter following
+// the latest world would work until a clause sampled first, then PANIC on a
+// nil world, taking the test binary down and naming nothing.
 //
-// The two halves are one property. A cold read must answer rather than
-// explode, and it must not answer in a way that makes the delta across a
-// world's construction look like zero: that is the direction that quietly
-// certifies a pass nobody counted, which is the one thing this counter
-// exists to prevent.
+// The halves are one property: a cold read must answer rather than explode,
+// and not in a way that makes the delta across a world's construction look
+// like zero, which would quietly certify a pass nobody counted.
 func TestTheWriteCounterSurvivesBeingSampledEarly(t *testing.T) {
 	t.Parallel()
 	r := chatContract(t)

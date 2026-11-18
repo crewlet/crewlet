@@ -10,16 +10,14 @@ import (
 // EACH COMMAND HANDS ITS PASS ITS OWN FLAG, SPELLED AS IT DECLARES IT.
 //
 // A pass refuses its recreate switch over a secret the company document holds
-// as a literal, and the refusal names the switch, because dropping it is one
-// of the two ways on. A pass spells nothing itself: it could spell only one
-// surface's switch, and the setup route's caller, who sends a body field and
-// has no flag, would be told to re-run with one. So each command is what
-// spells it, and a command handing the wrong spelling, or none, would name
-// another surface's switch or a blank.
+// as a literal, and the refusal names the switch, because dropping it is one of
+// the two ways on. A pass spells nothing itself (the setup route's caller has a
+// body field, not a flag), so each command spells it, and one handing the wrong
+// spelling, or none, would name another surface's switch or a blank.
 //
-// Each run reaches its vendor only for the credential probe, which the fake
-// below answers for every product, and is refused before anything is listed,
-// minted or registered.
+// Each run reaches its vendor only for the credential probe, which the fake below
+// answers for every product, and is refused before anything is listed, minted or
+// registered.
 func TestEachRecreateFlagReachesItsPassAsDeclared(t *testing.T) {
 	t.Parallel()
 	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -17,14 +17,12 @@ import (
 
 // A TOKENS ANSWER'S LIVE WINDOW IS LABELLED ON THE CLOCK IT WAS AGED ON.
 //
-// It read the wall clock while `token_series` beside it read this package's,
-// so the breakdown and the chart a screen draws from the same window were
-// dated by two clocks. The live window is the PROJECTION's now: it ages its
-// records on its own clock ([livestate.WithClock]) and names the two instants
-// it cut the window at ([livestate.LiveState.Spend]), so the label is the
-// window the records were actually kept for — a second reading of any clock
-// here would label a window the projection never cut. The API builds the
-// projection on the app's one clock, which is the sources' too.
+// The live window is the PROJECTION's now: it ages its records on its own
+// clock ([livestate.WithClock]) and names the two instants it cut the window at
+// ([livestate.LiveState.Spend]), so the label is the window the records were
+// kept for; a second clock reading would label a window never cut, and the
+// breakdown and `token_series` chart would be dated by two clocks. The API
+// builds the projection on the app's one clock, which is the sources' too.
 //
 // Mutation: label the window from [queries.Sources.Now] instead of the
 // projection's own instants, and the edges below move to the other clock.

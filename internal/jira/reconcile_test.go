@@ -105,26 +105,15 @@ func (i *instance) drops(auth string) bool {
 // mutations is how many requests this instance received that a person would
 // have to UNDO.
 //
-// COUNTED BY ROUTE, which is what [integrationtest.Reconciler.Mutations]
-// asks for and is not the same question as the HTTP method. This instance
-// serves four routes and each was classified on its own:
+// COUNTED BY ROUTE ([integrationtest.Reconciler.Mutations]), not by method:
 //
-//   - GET /rest/api/N/myself — a read, and the only route the seat walk
-//     touches.
-//   - GET /rest/api/N/project/{key} — a read.
-//   - GET /rest/webhooks/1.0/webhook — a LISTING. It is the route that makes
-//     the distinction matter for other third-party apps (Atlassian models its
-//     workspace discovery as a POST), and here it is an ordinary GET.
-//   - POST /rest/webhooks/1.0/webhook, and PUT and DELETE on .../{id} — the
-//     three writes. Registering, repointing or removing an inbound hook is
-//     the whole of what a Jira pass can change at an instance: it creates no
-//     account, issues no credential and edits no project.
+//   - GET /rest/api/N/myself, /project/{key} and the webhook LISTING: reads.
+//   - POST /rest/webhooks/1.0/webhook, PUT and DELETE on .../{id}: the three
+//     writes, the whole of what a Jira pass can change (no account, no
+//     credential, no project).
 //
-// So on THIS third-party app the two rules coincide, and that is a fact about
-// Jira's admin API established route by route above rather than a shortcut.
-// Anything that is not a GET counts, including a write onto a route this fake
-// does not model, so a pass that grew a new write shows up as a mutation
-// rather than as silence.
+// Anything that is not a GET counts, including a write onto an unmodelled
+// route, so a new write shows up rather than passing in silence.
 func (i *instance) mutations() int { return int(i.writes.Load()) }
 
 func (i *instance) serve(w http.ResponseWriter, req *http.Request) {
@@ -757,24 +746,11 @@ func TestAForeignHookIsLeftAlone(t *testing.T) {
 	}
 }
 
-// CLOUD HAS NO WEBHOOK ENDPOINT FOR AN API TOKEN, and that is not something
-// a better credential fixes: on Cloud a dynamic webhook belongs to an app.
-// A run that reported a 403 there would send an operator to rotate a token
-// that is fine.
-// CLOUD REGISTERS ITS OWN WEBHOOK, and this test is the inversion of the one
-// it replaces.
-//
-// The reconcile used to skip registration on Cloud and tell the operator to
-// install a Forge app, on the premise that "on Cloud a dynamic webhook
-// belongs to an app, so this endpoint refuses an API token". That is true of
-// /rest/api/3/webhook and false of /rest/webhooks/1.0/webhook, which is the
-// endpoint this client actually calls. Verified against a live Cloud site:
-// GET answers 200, POST answers 201 with isSigned true, and the app-only
-// endpoint answers 403 "Only Connect and OAuth 2.0 apps can use this
-// operation".
-//
-// The cost of the wrong premise was total: a Cloud company got no webhook at
-// all from the command whose job is to register one.
+// CLOUD REGISTERS ITS OWN WEBHOOK. The app-only restriction ("Only Connect and
+// OAuth 2.0 apps can use this operation") belongs to /rest/api/3/webhook, not
+// to /rest/webhooks/1.0/webhook, which this client calls: on a live Cloud site
+// GET answers 200 and POST 201 with isSigned true. Skipping registration on
+// Cloud would give a Cloud company no webhook at all.
 func TestCloudRegistersItsOwnWebhook(t *testing.T) {
 	t.Parallel()
 	inst := newInstance(t)

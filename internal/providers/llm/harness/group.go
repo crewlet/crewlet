@@ -54,17 +54,12 @@ func recordGroup(cmd *exec.Cmd) (harnessGroup, error) {
 // reason says why the group is being signalled.
 //
 // THE KERNEL'S ANSWER DECIDES, in its three values. No: the group is gone or
-// its id leads another's processes, and nothing is sent. An error: the
-// process table could not be read (a `/proc` mounted with hidepid hides
-// other users' records), so the group cannot be shown to be the one
-// recorded, and the signal is withheld and logged as
-// `harness_group_signal_withheld`, as the sandbox and gitproc withhold
-// theirs. An unreadable record grants no permission to signal.
-//
-// The window left is procgroup's own: the check and the signal are two
-// system calls, and a reap may land between them. The kernel hands the pid
-// out again only after cycling through every pid, so no stranger can lead a
-// group under it within two adjacent calls.
+// its id leads another's processes, and nothing is sent. An error: the process
+// table could not be read (`/proc` mounted with hidepid), so the group cannot
+// be shown to be the one recorded; the signal is withheld and logged as
+// `harness_group_signal_withheld`, as the sandbox and gitproc do. The window
+// left is procgroup's own: a reap may land between the check and the signal,
+// but the kernel reuses a pid only after cycling through every pid.
 func (g harnessGroup) signal(ctx context.Context, reason, signal string, send func(pid int) error) bool {
 	live, err := g.current()
 	if err != nil {

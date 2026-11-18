@@ -2122,8 +2122,9 @@ was until a pass can read it
 
 **Every row says what it waits on.** A listed task carries `blocked` — one bit,
 "something is holding this up" — and `waiting_on`, the same edges carrying
-*which* task, whether that blocker is still `open`, and whether the edge is
-`one_sided` or `one_sided_final`. The two are computed from one set of rows in
+*which* task, whether that blocker is still `open` (stated on every edge,
+`false` once the blocker finishes), and whether the edge is `one_sided` or
+`one_sided_final`. The two are computed from one set of rows in
 one statement, so `blocked` is exactly "some entry in `waiting_on` is open" and
 a screen can never show a blocked badge beside no dependencies. A blocker your
 own filter excluded is an id you hold no row for — the honest answer, since the

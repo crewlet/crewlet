@@ -289,21 +289,14 @@ func (r engineRuntime) Builtins() queries.BuiltinOffer {
 }
 
 // builtinOffer is snapshot's built-ins as catalogue rows with the discovery
-// pair, and the engine's one decision of what each agent seat is not offered of
-// them, taken against that same snapshot.
+// pair, and the engine's one decision of what each agent seat is not offered.
 //
-// THE REGISTRY'S BUILT-INS, not a list of every tool the engine could offer,
-// because a company on Jira holds no Worklet tool and a catalogue listing one
-// would tell a reader its agents can call what they are never offered.
-//
-// THE PAIR READ OFF THE RUNNER, which builds it, bound to no surface: this
-// reads each one's name, description and schema and calls nothing, and a
-// second description of either written here would drift from the one the
-// model is shown. No registry holds it, so nothing withholds it.
-//
-// THE WITHHOLDING IS engine.WithheldBuiltins, the answer every turn's surfaces
-// are cut by, against the snapshot the rows were read off, so an agent is
-// counted against exactly the built-ins it was decided on.
+// THE REGISTRY'S BUILT-INS, not every tool the engine could offer: a company on
+// Jira holds no Worklet tool, and listing one would claim what agents are never
+// offered. THE PAIR IS READ OFF THE RUNNER, which builds it and binds it to no
+// registry, so nothing withholds it; a description written here would drift.
+// THE WITHHOLDING IS engine.WithheldBuiltins, which every turn's surfaces are
+// cut by, against the same snapshot the rows were read off.
 func builtinOffer(snapshot tools.Snapshot) queries.BuiltinOffer {
 	delivers := snapshot.Deliveries()
 	var rows []queries.ToolRow

@@ -81,31 +81,20 @@ func Requirements(
 			Label:      "Atlassian user account email",
 			Kind:       setup.KindEmail,
 			ConfigPath: "integrations.confluence.email",
-			// REQUIRED ON CLOUD, which authenticates an API token as
-			// email and token together and refuses it as a bearer. It was
-			// optional for the Data Center case, which made it optional on
-			// every form including the one where it is the difference
-			// between a working credential and a 401.
-			// REQUIRED UNLESS THIS IS KNOWN TO BE DATA CENTER.
+			// REQUIRED UNLESS THIS IS KNOWN TO BE DATA CENTER. Cloud
+			// authenticates an API token as Basic base64(email:token) and
+			// refuses it as a bearer: without the address the engine sends a
+			// bearer, Atlassian answers 403 and the webhook is never created.
+			// Data Center takes a bearer and wants no address.
 			//
-			// Cloud authenticates an API token as Basic base64(email:token)
-			// and refuses it as a bearer: without the address the engine
-			// sends a bearer and Atlassian answers 403, so the webhook this
-			// integration exists to register is never created. Data Center
-			// takes the token as a bearer and wants no address at all.
-			//
-			// An UNKNOWN deployment counts as Cloud here, and that is the
-			// case this got wrong: with no site typed yet DeploymentOf
-			// answers DataCenter for the empty string, so the one field a
-			// fresh Cloud connect cannot do without was marked optional.
-			// THE DECLARED DEPLOYMENT, not a guess from an address.
+			// An UNKNOWN deployment counts as Cloud: DeploymentOf answers
+			// DataCenter for an empty site, which would mark the field
+			// optional on a fresh Cloud connect. THE DECLARED DEPLOYMENT,
+			// not a guess from an address.
 			Required: cloud,
-			// WHERE TO READ IT. The address belongs to the account whose
-			// API token is in the field below, so it is the one on that
-			// account's own profile rather than anything in the
-			// organization's directory. That a Data Center instance needs
-			// none is what the optional marker already says, from the same
-			// rule that decides it.
+			// WHERE TO READ IT: the address is on the profile of the account
+			// whose API token is in the field below, not in the
+			// organization's directory.
 			Hint:      "Shown at the end of your {link}.",
 			LinkText:  "Profile and visibility page",
 			VendorURL: "https://id.atlassian.com/manage-profile/profile-and-visibility",

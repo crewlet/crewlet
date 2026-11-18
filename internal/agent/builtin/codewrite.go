@@ -23,10 +23,10 @@ import (
 	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
-// THE CODE WRITE TOOLS: five branch writes, each an engine write the
-// repository's Gitlet node builds and lands as one push (ADR-0092); five
-// repository lifecycle requests a data node decides; and a change's writes
-// (codechangewrite.go), all in [CodeTools] beside the reads.
+// THE CODE WRITE TOOLS: five branch writes and two tag writes (codetag.go),
+// each an engine write the repository's Gitlet node builds and lands as one
+// push (ADR-0092); five repository lifecycle requests a data node decides; and
+// a change's writes (codechangewrite.go), all in [CodeTools] beside the reads.
 //
 // The gate admits everybody (`authz.ClassEverybody`): who may write is the
 // caller's grant on the repository (ADR-0088), judged by the deciding node
@@ -51,12 +51,12 @@ const (
 )
 
 // CodeWrites are the write tools in catalogue order: the five branch writes,
-// the five lifecycle tools, then [ChangeWrites], [CheckWrites], [PurgeWrites]
+// the two tag writes, the five lifecycle tools, then [ChangeWrites], [CheckWrites], [PurgeWrites]
 // and [ImportWrites]. [Register]'s delivery switch and [codeAnnotations] read it.
 func CodeWrites() []string {
 	return append([]string{CodeCommitFilesTool, CodeRevertTool, CodeCherryPickTool, CodeCreateBranchTool,
-		CodeDeleteBranchTool, CodeCreateRepoTool, CodeUpdateRepoTool, CodeDeleteRepoTool, CodeRestoreRepoTool,
-		CodeProtectBranchTool}, append(append(append(ChangeWrites(), CheckWrites()...), PurgeWrites()...),
+		CodeDeleteBranchTool, CodeCreateTagTool, CodeDeleteTagTool, CodeCreateRepoTool, CodeUpdateRepoTool,
+		CodeDeleteRepoTool, CodeRestoreRepoTool, CodeProtectBranchTool}, append(append(append(ChangeWrites(), CheckWrites()...), PurgeWrites()...),
 		ImportWrites()...)...)
 }
 
@@ -134,6 +134,8 @@ func codeWriteTools(deps CodeDeps) []tools.Callable {
 		&codeBranchWrite{deps: deps, kind: gitlet.WriteCherryPick},
 		&codeBranchWrite{deps: deps, kind: gitlet.WriteCreateBranch},
 		&codeBranchWrite{deps: deps, kind: gitlet.WriteDeleteBranch},
+		&codeTagWrite{deps: deps, kind: gitlet.WriteCreateTag},
+		&codeTagWrite{deps: deps, kind: gitlet.WriteDeleteTag},
 		&codeRepoWrite{deps: deps, tool: CodeCreateRepoTool},
 		&codeRepoWrite{deps: deps, tool: CodeUpdateRepoTool},
 		&codeRepoWrite{deps: deps, tool: CodeDeleteRepoTool},
@@ -1216,8 +1218,13 @@ func pushRefused(ctx context.Context, tool, repo, branch string, cmd gitlet.Comm
 	said := fmt.Sprintf("%s did not land the write to %s on %s: %s (%s).", tool, branch, repo, detail, cmd.Reason)
 	switch class {
 	case tools.RefusalStaleVersion:
-		said += fmt.Sprintf(" Read the branch again with %s and make the change on the head it answers.",
-			CodeResolveTool)
+		if strings.HasPrefix(cmd.Ref, tagRoot) {
+			said += fmt.Sprintf(" A tag never moves: read it again with %s, and delete it at the value it "+
+				"answers or name another tag.", CodeResolveTool)
+		} else {
+			said += fmt.Sprintf(" Read the branch again with %s and make the change on the head it answers.",
+				CodeResolveTool)
+		}
 	case tools.RefusalUnavailable:
 		if again := sameCall(actor, tool); again != "" {
 			said += " Nothing was committed: " + again + " — it is the same write."

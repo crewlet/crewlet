@@ -24,20 +24,16 @@ const (
 	CodePrefix = "/gitlet/"
 )
 
-// BoxGitPrefix is where a BOX reaches Gitlet's git with its own
-// credential: HTTP Basic, the user name host.BoxUser (`run`) with an
-// executor's token as the password (ADR-0093), or gitlet.CheckUser (`check`) with a
-// check's.
+// BoxGitPrefix is where a BOX reaches Gitlet's git with its own credential:
+// HTTP Basic, host.BoxUser (`run`) with an executor's token (ADR-0093), or
+// gitlet.CheckUser (`check`) with a check's.
 //
 // A PUBLIC prefix ([publicPrefixes]), unlike [GitPrefix]: a box holds no
-// person's or deployment's credential and is reached from wherever its
-// sandbox runs, so it is served on api.public when one is set — beside /mcp/
-// and /otlp/, a coding box's other two edges — and EXEMPT from the guard, the
-// box's token being the credential and Gitlet's box admission the
-// check. It does not begin with [GitPrefix], so no reader of where a PERSON'S
-// git starts takes a box's request for one: neither transport admits the
-// other's credential. [GitAccess] classifies a request under either prefix
-// alike — one classifier, every doubt a push.
+// person's credential and is reached from wherever its sandbox runs, so it is
+// served on api.public beside /mcp/ and /otlp/ and EXEMPT from the guard, its
+// token being the credential and Gitlet's box admission the check. It does not
+// begin with [GitPrefix], so neither transport admits the other's credential.
+// [GitAccess] classifies both alike.
 const BoxGitPrefix = "/box/git/"
 
 // BoxGitletPrefix is where a CHECK'S BOX reads the one commit its check
@@ -104,47 +100,26 @@ const serviceKey = "service"
 // GitAccess classifies r: THE ONE CLASSIFIER of a git request, asked by the
 // guard's credential reader, the drain gate and Gitlet's admission.
 //
-// Which requests are fetches decides two things a mistake turns into a hole: a
-// draining node finishes a fetch and refuses a push, and a token bound to
-// nobody may fetch and never push. Read twice, the two readings would agree
-// the day they were written and drift one commit at a time — and the day one
-// of them took a push for a fetch, a drain would admit it. So nothing else
-// CLASSIFIES a request (TestGitAccessIsTheOneClassifier). The one other reader
-// of a request's service is Gitlet, which runs a different git process
-// for each and so has to know which one was asked for — and it reads it only
-// after asking GitAccess what the request is, which is why that gate allows a
-// reading in internal/gitlet/host and in no other place.
-//
-// A CODING BOX'S REQUEST IS CLASSIFIED AS A PERSON'S: a path under
-// [BoxGitPrefix] answers exactly what the same path under [GitPrefix] does, so
-// the drain gate and Gitlet read one answer for both transports.
-//
-// EVERY DOUBT IS A PUSH, the more restrictive answer — refused while draining,
-// a person required — because a fetch misread as a push costs a retry and a
-// push misread as a fetch costs the guarantee:
-//
-//   - any path under either prefix that is not one of the two fetch shapes,
-//     which the mux then answers 404 (an unknown path, a dumb-protocol file, a
-//     POST to info/refs, a path whose repository segment holds a slash);
-//   - an advertisement asking for any service but git-upload-pack;
-//   - an advertisement whose query does not parse, or that names the service
-//     more than once. url.Values drops a pair it cannot read and answers the
-//     FIRST of two, so a reader of the query other than this one could keep a
-//     receive-pack this reading did not see — and a classifier must never
-//     answer fetch for a request another reader may serve as a push.
-//
-// No service at all is a fetch: it is the dumb protocol's request for a
-// read-only file, which Gitlet answers by refusing it.
-//
-// A DOWNLOAD is a GET or HEAD of exactly one of the two download tails, its
-// query never read; any other method or path near them stays a push.
+// A draining node finishes a fetch and refuses a push, and a token bound to
+// nobody may fetch and never push, so two readings drifting would let a drain
+// admit a push. Nothing else CLASSIFIES a request
+// (TestGitAccessIsTheOneClassifier); Gitlet reads the service only after asking
+// GitAccess, to pick its git process. A box's request is classified as a
+// person's: [BoxGitPrefix] answers what the same path under [GitPrefix] does.
 func GitAccess(r *http.Request) GitOp {
+	// EVERY DOUBT IS A PUSH: a fetch misread as a push costs a retry, a push
+	// misread as a fetch costs the guarantee. That covers any path under
+	// either prefix that is not a fetch shape, any service but
+	// git-upload-pack, and a query that does not parse or names the service
+	// twice (url.Values answers the FIRST, so another reader could serve a
+	// receive-pack this one did not see).
 	tail, under := gitTail(r)
 	if !under {
 		return GitNone
 	}
 	switch {
 	case downloads(r, tail):
+		// A GET or HEAD of exactly one download tail, its query never read.
 		return GitDownload
 	case advertises(r, tail):
 		query, err := url.ParseQuery(r.URL.RawQuery)
@@ -153,6 +128,7 @@ func GitAccess(r *http.Request) GitOp {
 		}
 		switch service := query[serviceKey]; {
 		case len(service) == 0:
+			// The dumb protocol, which Gitlet refuses.
 			return GitFetch
 		case len(service) == 1 && (service[0] == uploadPack || service[0] == ""):
 			return GitFetch
@@ -168,17 +144,14 @@ func GitAccess(r *http.Request) GitOp {
 // a repository's info/refs, the request every git exchange OPENS with, a
 // fetch's and a push's alike.
 //
-// The drain gate asks it beside [GitAccess], because it is what tells the two
-// halves of a fetch apart. An advertisement BEGINS a fetch, and a draining node
-// begins none: a fetch is new work — an upload-pack process tree, and the
-// cache's sync from the object store before it — which the node's shutdown
-// would then have to wait out. Every later request of the exchange is an RPC,
-// a POST, that CONTINUES a fetch already begun — here or on a peer, since
-// git's smart HTTP keeps no state between an exchange's requests — and a
-// refusal there would break a fetch half done.
+// The drain gate asks it beside [GitAccess] to tell a fetch's halves apart. An
+// advertisement BEGINS a fetch, which is new work (an upload-pack tree and a
+// cache sync) a draining node must not start. Later RPCs, POSTs, CONTINUE a
+// fetch begun here or on a peer (smart HTTP keeps no state between requests),
+// and refusing one would break a fetch half done.
 //
-// A question about where a request falls in its exchange, never about the
-// service it asks for: what a request is FOR stays [GitAccess]'s answer alone.
+// It says where a request falls in its exchange, never what it is FOR, which
+// stays [GitAccess]'s answer alone.
 func GitAdvertisement(r *http.Request) bool {
 	tail, under := gitTail(r)
 	return under && advertises(r, tail)
@@ -216,30 +189,16 @@ func downloads(r *http.Request, tail string) bool {
 }
 
 // GitText answers a git client in the one form it prints: text/plain, the
-// sentence, and a newline.
+// sentence, and a newline. git's remote-curl shows an HTTP refusal's body only when it is text/plain
+// (show_http_message), each line prefixed `remote: `; the API's JSON prints
+// nothing to a person at a terminal. So every refusal on a git route (the
+// guard's 401, 403 ([Refusal]) and identity 503, the drain gate's 503, and
+// Gitlet's before git runs) is written here, in no other form.
 //
-// git's remote-curl shows an HTTP refusal's body only when it is text/plain
-// (show_http_message), each line prefixed `remote: `; the API's JSON, which
-// every other client reads, prints nothing at all to a person at a terminal.
-// So every refusal the guard writes on a git route — its 401 challenge, a
-// resolved credential's 403 ([Refusal]) and its identity 503 — the drain
-// gate's 503 and every refusal Gitlet makes before git runs are
-// written here, and in no other form.
-//
-// The response is never sniffed into anything else, and never cached in front
-// of the node: a refusal is about this moment — a drain, a credential — and a
-// proxy that kept one would go on refusing a request the node now serves.
-//
-// A SENTENCE IS ONE LINE, because git prints each line of the body as a
-// `remote:` line of its own and a sentence spanning two reaches a person as a
-// refusal broken in two. Every caller passes a sentence of its own making —
-// a literal, or error text it has already folded onto one line — and one that
-// still carries a newline inside it is folded onto one line (oneLine) rather
-// than fail a refusal over its punctuation. Never refused in a test binary
-// alone: telling one apart takes the `testing` package, which the binary must
-// not link (cmd/crewlet's TestTheBinaryLinksNoTestScaffolding), and what a
-// person reads is one line either way. Trailing newlines are trimmed, and one
-// written.
+// Never sniffed, and never cached in front of the node: a refusal is about this
+// moment, and a proxy keeping one would go on refusing a request now served.
+// A SENTENCE IS ONE LINE, as git prints each body line as its own `remote:`
+// line; see [oneLine].
 func GitText(w http.ResponseWriter, status int, sentence string) {
 	line := oneLine(sentence)
 	h := w.Header()
@@ -251,7 +210,10 @@ func GitText(w http.ResponseWriter, status int, sentence string) {
 }
 
 // oneLine is sentence as the one line [GitText] writes: its trailing newlines
-// trimmed, and any newline left inside it folded into a space.
+// trimmed, and any newline left inside it folded into a space rather than
+// failing a refusal over punctuation. A newline is not refused in a test
+// binary, as telling one apart needs `testing`, which the binary must not link
+// (cmd/crewlet's TestTheBinaryLinksNoTestScaffolding).
 func oneLine(sentence string) string {
 	return strings.ReplaceAll(strings.TrimRight(sentence, "\n"), "\n", " ")
 }

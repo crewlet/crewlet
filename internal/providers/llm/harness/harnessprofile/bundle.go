@@ -6,19 +6,13 @@ import "strings"
 // the one entry that is not a login file, naming the harness the bundle was
 // exported from — `{"harness": "codex"}`.
 //
-// A BUNDLE NAMES ITS HARNESS BECAUSE A LOGIN FILE'S NAME DOES NOT. Six harnesses keep
-// a login in an `auth.json` and two in an `oauth_creds.json`, and a bundle is
-// keyed by the entry rather than by its harness, so after an entry moved from
-// codex to pi its configured bundle still held codex's `auth.json` — a name pi
-// keeps too. Restored by file name alone, it was written into pi's empty
-// login, which then held a credential pi cannot read and turned every later
-// restore away as a login already present, the right bundle included.
+// A BUNDLE NAMES ITS HARNESS BECAUSE A LOGIN FILE'S NAME DOES NOT: harnesses
+// share `auth.json`, and a bundle is keyed by the entry, so one restored by file
+// name after an entry changed harness writes a credential the new harness cannot
+// read and blocks every later restore as a login already present.
 //
-// ONE NAME FOR EVERY PROFILE, and the engine's rather than any vendor's, as
-// [CredentialStoreDocument] is: no profile may keep a login file under it
-// ([Profile.Validate]), because a bundle keeps each login file under its file
-// name beside this one, so a credential path by this name would be one entry
-// read as two.
+// ONE NAME FOR EVERY PROFILE, the engine's as [CredentialStoreDocument] is: no
+// profile may keep a login file under it ([Profile.Validate]).
 const BundleManifest = "crewlet-bundle.json"
 
 // LoginInstallFile is the name the engine keeps a login's install record under

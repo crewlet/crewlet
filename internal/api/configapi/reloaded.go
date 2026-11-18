@@ -13,17 +13,13 @@ import (
 // and sentence of why it did not, beside a value that is sealed whatever
 // happened (ADR-0070).
 //
-// ONE SHAPE FOR EVERY SURFACE THAT SEALS AND THEN RELOADS (`PUT /secrets`,
-// `PUT /secrets/{name}`, `DELETE /secrets/{name}` and the model credential
-// route), because crewlet-operator, `crewlet secrets set` and the dashboard
-// read the same `reload` member off all of them, and a field spelled one way
-// on one route and another on the next is a reader that is right on one.
+// ONE SHAPE FOR EVERY SURFACE THAT SEALS AND THEN RELOADS (`/secrets` routes,
+// the model credential route): crewlet-operator, `crewlet secrets set` and the
+// dashboard read the same `reload` member off all of them.
 //
-// A FAILED RELOAD IS NOT A FAILED WRITE. The value is sealed before the
-// reload is asked for, so the write's own status stays 200 and this says what
-// the person still has to do: re-activate by hand (`POST /config/reload`) once
-// the cause is fixed. The codes are the ones the config surface answers the
-// same failure with, so a reader branches on one vocabulary.
+// A FAILED RELOAD IS NOT A FAILED WRITE: the value is sealed first, the status
+// stays 200, and re-activating by hand (`POST /config/reload`) is what is
+// left. The codes are the config surface's own.
 type Reloaded struct {
 	// RevisionID and Epoch are the revision the reload stored and
 	// activated, set when it landed.

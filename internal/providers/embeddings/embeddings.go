@@ -88,19 +88,14 @@ import (
 
 // Embedder turns text into a vector.
 //
-// One method that embeds, and text-at-a-time rather than a batch: most callers
-// embed exactly one thing — a query, a turn's ask, an episode — and a batch
-// API would have each build a slice of one ([BatchEmbedder] is the other
-// shape).
+// Text-at-a-time, because most callers embed one thing and a batch API would
+// have each build a slice of one ([BatchEmbedder] is the other shape).
 //
-// # Why the model and the limits are on the narrowest interface
-//
-// Every holder of an embedder needs both, which is what puts them here rather
-// than on a wider interface beside it: a caller storing a vector must tag it
-// with the space it is in — two models at one width are two spaces, and a
-// vector compared across them ranks nothing — and a caller sending text must
-// know where the bound is, to represent a longer text by its own policy
-// rather than have it refused.
+// The model and the limits sit on this narrowest interface because every
+// holder needs both: a caller storing a vector must tag it with its space (two
+// models at one width are two spaces, and a vector compared across them ranks
+// nothing), and a caller sending text must know the bound to handle a longer
+// text by its own policy rather than have it refused.
 type Embedder interface {
 	// Embed returns the vector for text. An input whose prepared bytes
 	// exceed [Limits.InputBytes] is refused before any request
@@ -121,56 +116,36 @@ type Embedder interface {
 
 // BatchEmbedder embeds many texts in one call, in the order they were given.
 //
-// # Why this is a second interface rather than a wider Embedder
-//
-// Most callers embed exactly one thing, and a batch API would have them build a
-// slice of one. The knowledge corpus is the caller that changed the arithmetic:
-// filling a company's 110 000 sources one at a time is 110 000 round trips,
-// which at a tenth of a second apiece does not fit in the tick it runs on, let
-// alone in the eight hours a cold fill is budgeted at. Batched it is ≈ 860
-// calls covering the same inputs, billed identically because the provider
-// bills per input TOKEN.
-//
-// Kept apart from [Embedder] so a backend that cannot batch is still a
-// complete embedder: the caller asks for this interface and falls back to the
-// one-at-a-time path, rather than every provider growing a method most of them
-// would implement as a loop.
+// It is apart from [Embedder] so a backend that cannot batch is still a
+// complete embedder and the caller falls back to one at a time. The knowledge
+// corpus needs it: 110 000 sources are 110 000 round trips at ~0.1 s, too long
+// for its tick or an eight-hour cold fill; batched ≈ 860 calls, billed
+// identically since the provider bills per input TOKEN.
 type BatchEmbedder interface {
 	Embedder
 
-	// EmbedBatch returns one vector per input, IN ORDER and one-to-one:
-	// a caller matches results to inputs positionally, so a provider that
-	// dropped an empty input would silently re-file every vector after it
-	// onto the wrong document. An input with nothing to embed keeps its
-	// slot as a nil vector and is never sent.
-	//
-	// The inputs are sent in as many requests as the model's limits need
-	// ([Limits.Requests]), one after another, and the answer is one
-	// ordered result or an error: a request that fails fails the call,
-	// and no vector the call already paid for is returned beside the
-	// error. Every input is checked against [Limits.InputBytes] BEFORE the
-	// first request, so an input past the bound costs no request at all
-	// ([TooLongError] names it). A caller that needs to see each request —
-	// to report progress between them, or to set aside the one input a
-	// provider refuses without losing its neighbours — plans them with
-	// [Limits.Requests] and sends each through its own call.
+	// EmbedBatch returns one vector per input, IN ORDER and one-to-one: callers
+	// match positionally, so dropping an empty input would re-file every later
+	// vector onto the wrong document. Such an input keeps a nil slot, unsent.
+	// Inputs go in as many sequential requests as [Limits.Requests] says; one
+	// failing fails the call, returning no vector already paid for. Every input
+	// is checked against [Limits.InputBytes] BEFORE the first request
+	// ([TooLongError]). A caller needing per-request progress plans with
+	// [Limits.Requests] itself.
 	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
 }
 
 // Limits is what one model accepts, in the unit this package counts without a
 // tokenizer: BYTES of [Prepare]d text.
 //
-// A vendor documents its limits in tokens; config.EmbeddingProvider.Limits
-// resolves these from them through config.EmbeddingProvider.InputBound, the one
-// conversion, and its argument is that every tokenizer these models use
-// emits at most one token per byte of its input plus the special tokens a
-// server wraps it in — so a text of N bytes is at most N tokens plus
-// [Limits.InputOverhead], with no tokenizer anywhere.
+// Vendors document tokens; config.EmbeddingProvider.InputBound is the one
+// conversion, since these tokenizers emit at most one token per byte plus
+// wrapper tokens: N bytes is at most N tokens plus [Limits.InputOverhead].
 //
-// THE ZERO VALUE IS REFUSED, never read as "unlimited": [New] will not build
-// a provider over it, and [Limits.Validate] says which field is missing. A
-// limit of zero would refuse every input; an absent one would send whatever a
-// caller had, which is the provider refusing it instead.
+// The zero value is refused, never "unlimited": [New] will not build over it
+// and [Limits.Validate] names the missing field. Zero would refuse every
+// input; absent would send whatever a caller had and leave the provider to
+// refuse it.
 type Limits struct {
 	// InputBytes is the most prepared bytes one input may hold.
 	InputBytes int
@@ -271,32 +246,13 @@ func (l Limits) requests(sizes []int) ([][]int, error) {
 // of a valid UTF-8 encoding replaced by U+FFFD — so the result is always valid
 // UTF-8, and it is exactly the text the server decodes from the request.
 //
-// Collapsing is not cosmetic: the callers pass rendered tasks, pages and
-// summaries, all of which carry the newlines and indentation of whatever
-// produced them, and an embedding of the same sentence formatted two ways is
-// two different vectors. It is the same rule the provider has always applied at
-// send time, unchanged to the byte — so a vector already stored for an
-// unchanged text is the vector this would compute again.
-//
-// THE REPLACEMENT IS WHAT THE WIRE ALREADY DID, made visible here. A request
-// is JSON, and the SDK encodes every string with encoding/json (its vendored
-// copy, openai-go's internal/encoding/json, appendString), which writes
-// � in place of each byte that does not begin a valid encoding — so a
-// server was never sent an invalid byte, it was sent three bytes of U+FFFD
-// for each one. Left to the encoder, every measurement here was of a
-// different text from the one embedded: a run of 300 stray continuation
-// bytes passed a 400-byte bound as 300 bytes and arrived as 900, a digest was
-// of bytes no server saw, and [Chunks] cut a run longer than its bound into
-// empty pieces for ever, because no prefix of it is a whole character. ONE
-// REPLACEMENT PER BYTE, as the encoder makes them, rather than one per run as
-// strings.ToValidUTF8 would: anything else is again not the text sent. Valid
-// text — everything that reached the engine through a JSON body, which
-// encoding/json had already made valid on the way in — is unchanged, so no
-// stored vector and no digest moves.
-//
-// Exported so a caller can see what is sent: a digest stored beside a vector
-// must be over these bytes, and a bound is measured on them ([Limits]).
-// Idempotent: Prepare(Prepare(s)) == Prepare(s).
+// Collapsing is unchanged from send time, so stored vectors stay valid. The
+// replacement is what the wire already did: the SDK's vendored encoding/json
+// writes U+FFFD per invalid byte, so a server got three bytes each. Measuring
+// the raw text measured another: 300 stray bytes passed a 400-byte bound and
+// arrived as 900, and [Chunks] cut such a run into empty pieces for ever. One
+// replacement PER BYTE, never per run as strings.ToValidUTF8. Exported because
+// stored digests and bounds ([Limits]) are over these bytes. Idempotent.
 func Prepare(text string) string {
 	// Collapsing first and replacing second gives the same text as the
 	// other order: an invalid byte is not whitespace to strings.Fields
@@ -334,17 +290,11 @@ func asSent(s string) string {
 // removed — so the result is itself prepared, and is EXACTLY the bytes an
 // embedder sends for it.
 //
-// That last property is the reason this exists rather than a cut at each
-// caller: a prepared text cut between two words ends in a space that the
-// embedder's own preparation then drops, so a digest taken over the cut would
-// be of one byte more than was embedded — and two openings that differ only by
-// that space would be two digests of one vector.
-//
-// Whether a text too long for one input is represented by its opening is a
-// caller's POLICY — the knowledge corpus does, because a document's opening is
-// what a search for it is about, and a turn's ask does not ([EmbedWhole]).
-// Unmarked: what this produces is embedding input no reader sees, and a marker
-// would be a token in the vector rather than a note about it.
+// This exists rather than a cut at each caller: a cut between words ends in a
+// space the embedder drops, so a digest over it would cover one byte more than
+// was embedded. Representing a too-long text by its opening is the caller's
+// policy: the knowledge corpus does, a turn's ask does not ([EmbedWhole]).
+// Unmarked, since a marker would be a token in the vector.
 func Opening(text string, maxBytes int) string {
 	prepared := Prepare(text)
 	if len(prepared) <= maxBytes {

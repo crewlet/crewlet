@@ -23,31 +23,16 @@ import (
 
 // THE SESSIONS SCREEN READS WHAT THE ANSWERS SEND.
 //
-// The Sessions view under a seat's Memory is typed by `contract/sessions.ts`,
-// and this holds it to both answers in both directions: every member it
-// declares is a key some row sends, a required one on every row, and every key
-// sent is declared — over the whole list and a page of it with a page after it,
-// rows whose endings carry every field (a delivery not known, a newest capture
-// not kept), a transcript page that is cut and one that could not be read,
-// entries of every optional key (a subagent's, which only Claude Code's archive
-// has, read as the entry type itself encodes), and the bounds, and the log
-// position both answers carry — and a live row a relaunch would continue, which
-// alone says where and is in progress, with the domain's sentence for one,
-// beside the head of a conversation — a session its turn went on past, whose
-// note says so — which the next turn decides, the newest fire of a schedule,
-// which its next fire decides, a row whose first launch was handed a session,
-// and one no launch continues — every launch the screen names words for sent by
-// some row, and a row in progress beside rows that are not. And the six closed
-// sets the screen names words for are the engine's: the transcript's states,
-// the entries' kinds, a page's cuts, an ending's outcomes, where a launch
-// continues a session and which launch; and the two words it says as the
-// engine does, a schedule's conversation's prefix and what it tells a reader of
-// a session in progress captured since it was read (executorread.LiveKept).
+// `contract/sessions.ts` types the Sessions view; every member it declares is
+// a key some row sends (a required one on every row) and every key sent is
+// declared. Fixtures cover a page with a page after it, every ending and
+// optional entry key, a cut and an unreadable transcript, and each launch
+// kind the screen words beside a row in progress. The closed sets and the
+// words the screen says as the engine does are the engine's.
 //
 // Mutation: rename a JSON key on either answer, add one, add a state or a kind
-// on one side only, drop the schedule's row or the row in progress from the
-// fixture, or respell the schedule's prefix or the live words on one side, and
-// this names it.
+// on one side only, drop the schedule's row or the row in progress, or respell
+// the schedule's prefix or the live words on one side, and this names it.
 func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 	t.Parallel()
 	store, backend := sessionObjectStore(t)

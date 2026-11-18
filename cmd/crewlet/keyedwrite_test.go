@@ -84,19 +84,17 @@ func keyedCommands(base string) map[string][]string {
 	}
 }
 
-// EVERY KEYED WRITE FINISHES AN OPEN OUTCOME BY ONE RULE, whichever command
-// made it.
+// EVERY KEYED WRITE FINISHES AN OPEN OUTCOME BY ONE RULE, whichever command made
+// it.
 //
-// Five answers leave a write's outcome open — none at all, a 503 that is an
-// unknown this node can settle, one it cannot, or a refusal that wrote
-// nothing, and a 2xx whose outcome is none this build can read — and each
-// FAILS, sending the operator one way, always under the operation THIS
-// COMMAND SENT: the node scopes the key it is sent by the caller's own
-// identity, so the scoped id an answer echoes is the same operation, and a
-// fresh one would be a second write. And a reused key's 409 is offered no
-// retry under it at all, since the node's own sentence sends that one to a new
-// key. Mutation: drop the unvouched arm, the refusal arm, or the 503 bound,
-// or read a 2xx's outcome as landed, and a row fails for every command.
+// Five answers leave an outcome open (no answer; a 503 that is an unknown this
+// node can settle, one it cannot, or a refusal that wrote nothing; a 2xx whose
+// outcome this build cannot read) and each FAILS, always under the operation THIS
+// COMMAND SENT: the node scopes the key by the caller's identity, so the scoped id
+// an answer echoes is the same operation, and a fresh one would be a second
+// write. A reused key's 409 is offered no retry under it, since the node sends
+// that one to a new key. Mutation: drop the unvouched arm, the refusal arm or the
+// 503 bound, or read a 2xx as landed, and a row fails for every command.
 func TestEveryKeyedWriteFinishesAnOpenOutcomeUnderItsOwnOperation(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

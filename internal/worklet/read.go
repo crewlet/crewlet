@@ -161,8 +161,9 @@ type Blocker struct {
 	KeyCollision bool `json:"key_collision,omitempty"`
 
 	// Open is whether the blocker still holds this task up. FALSE is a
-	// settled fact: the blocker has finished.
-	Open bool `json:"open,omitempty"`
+	// settled fact, the blocker has finished, so it is always stated: a
+	// reader cannot tell an absent value from either one.
+	Open bool `json:"open"`
 
 	// OneSided is the blocker not listing this task back: a dependency
 	// gesture whose mirror did not land, which the repair duty is still

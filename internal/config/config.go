@@ -6,7 +6,9 @@
 // changing it means restarting the process. It carries only what the engine
 // needs to bring its own infrastructure up — the store file, the stream and
 // coordination slots, the API socket and its auth posture, the secret
-// keyring, and this node's identity. Nothing in it describes the company.
+// keyring, and this node's identity — and the retention estate (backups, the
+// replay window its disk holds), the operator's facts rather than the
+// company's. Nothing in it describes the company.
 //
 // [Company] (Tier B) is founder-owned: it lives in the store as a versioned
 // revision and is edited live. It carries what the company IS — identity,
@@ -62,6 +64,30 @@
 //
 // How people sign in is the company's ([SignIn]), held by each node within its
 // operator's [SignInLimits]; [APIAuth.SignInPolicy] is the one reading. ADR-0152.
+//
+// # Runnable rules, admission rules and warnings
+//
+// A Tier B rule is RUNNABLE when no revision breaking it could run, and is
+// held on every write and every apply ([Company.ValidateRunnable]). Any other
+// rule is an ADMISSION rule: it refuses a submitted document and only warns on
+// a stored one ([Company.ValidateAdmission]), because during a rolling upgrade
+// this build applies revisions a newer peer admitted under rules it does not
+// share, and refusing them would split the fleet's epoch. What is valid but
+// worth knowing is a WARNING ([Bootstrap.Warnings], [Company.Warnings],
+// [TierWarnings]): printed by `crewlet validate`, and logged by `crewlet run`
+// at start and by every node once per applied epoch, since most deployments
+// never run validate; never an exit code, since a warning that can fail a
+// build gets suppressed.
+//
+// # Rules a domain shares
+//
+// This package is the leaf every other imports, so a rule a domain enforces
+// too (a check's name, a merge gate's bounds, a repository's visibility, the
+// code access tiers) is defined here and the domain reads it; where the domain
+// keeps its own copy, an engine test holds the two together both ways. Each
+// default is applied in one method ([CodeLimits.Resolved],
+// [CodeProtection.Gate], [Company.CheckRunIn]) that validation and the runtime
+// both read, so the document judged is the document run.
 //
 // # No validation framework
 //
@@ -137,16 +163,13 @@ func fault(path Path, kind error, detail string, args ...any) error {
 //
 // # Why a type rather than a formatted string
 //
-// Because two consumers need the parts back. `crewlet validate -json` and
-// the API's write surface both report a [Problem] per failure, with its path,
-// its kind and its message, so an authoring loop can jump to the field. Both
-// used to re-derive them by splitting the rendered message on colons, which a
-// detail containing a colon breaks, and details routinely contain one,
-// because they name settings.
+// `crewlet validate -json` and the API's write surface both report a [Problem]
+// per failure (path, kind, message) so an authoring loop can jump to the field.
+// Splitting the rendered message on colons breaks on a detail containing one,
+// and details routinely do.
 //
-// It renders EXACTLY as the formatted string did, because that text is what
-// an operator reads at a prompt and reflowing it would churn every test that
-// asserts on a message.
+// It renders EXACTLY as the formatted string did: operators read that text at a
+// prompt, and reflowing it would churn every test asserting on a message.
 type Fault struct {
 	// Path is the AUTHORED path (providers.llm.default.model), never a Go
 	// field name the operator has never seen. Empty at the document root.
@@ -206,23 +229,18 @@ func leafFault(err error) (*Fault, bool) {
 	return f, ok
 }
 
-// Path is a place in an authored document, held as its SEGMENTS: a string
-// for a field or a map key, an int for a list index.
+// Path is a place in an authored document, held as its SEGMENTS: a string for a
+// field or a map key, an int for a list index.
 //
 // # Why segments rather than the rendered string
 //
-// Because the string cannot be taken apart again. A path renders as dotted
-// keys with `[i]` indexes (roles[0].mcp_env.jira.API_TOKEN), and a map key is
-// the operator's own text, which may itself hold a dot or a bracket: a
-// provider called `claude-3.5` renders as providers.llm.claude-3.5.model, and
-// nothing reading that string can tell where the key ends. A consumer that
-// has to find the field (an editor pointing at a line, a form marking the
-// input a problem is about) needs the segments, so they are what every
-// validator builds and the string is only ever rendered from them.
+// The string cannot be taken apart again: a path renders as dotted keys with
+// `[i]` indexes (roles[0].mcp_env.jira.API_TOKEN), and a map key is the
+// operator's own text, which may hold a dot (`claude-3.5` renders as
+// providers.llm.claude-3.5.model). Consumers that must find the field need the
+// segments.
 //
-// It is a value: every helper that extends a path returns a new one and never
-// writes into the parent's backing array, because sibling fields are built
-// from one parent and a shared array would make each overwrite the other.
+// It is a value: extending a path never writes into the parent's backing array.
 type Path []any
 
 // String renders the path as an operator reads it in their file: fields and

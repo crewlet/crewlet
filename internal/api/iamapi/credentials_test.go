@@ -230,16 +230,13 @@ func TestAMintTheDomainRefusesIsAnsweredForWhatItIs(t *testing.T) {
 
 // AN ADMIN MINTS A SERVICE ACCOUNT AN ADMIN TOKEN.
 //
-// A token may carry admin (ADR-0033): it acts as its owner, cut on every
-// request to what they still hold and to the node's admin posture, and what
-// keeps it off a gesture that needs a person is that gesture's own row. So an
-// admin minting for a service account that holds admin reaches the domain
-// asking for exactly that — the owner the route names, the minter the caller,
-// the permissions as typed — and the answer names them. An OMITTED list
-// reaches it as nil, which the domain reads as everything the owner holds that
-// the minting party may confer; `[]` as an empty set, a token that reads the
-// overview alone; and a name this build does not know is refused `400` naming
-// the set before the owner is read or the domain asked.
+// A token may carry admin (ADR-0033); what keeps it off a person-only gesture
+// is that gesture's own row. So an admin minting for a service account that
+// holds admin reaches the domain asking for exactly that (owner the route
+// names, minter the caller, permissions as typed). An OMITTED list reaches it
+// as nil, read as everything the owner holds that the minting party may
+// confer; `[]` as an empty set (the overview alone); an unknown name is
+// refused `400` naming the set before the owner is read or the domain asked.
 //
 // Mutation: default an omitted list here rather than in the domain and the
 // nil case goes red; forward an unknown name and the writer is asked.
@@ -394,21 +391,14 @@ func TestATierATokenNamesWhoATokenIsFor(t *testing.T) {
 	}
 }
 
-// A TOKEN REVOKES TOKENS, ITSELF INCLUDED, AND NEVER ITS OWNER'S PROOF — and
-// says so the same way whichever node it asks.
+// A TOKEN REVOKES TOKENS, ITSELF INCLUDED, AND NEVER ITS OWNER'S PROOF.
 //
-// A token acts as its owner and is stepped up by construction, so the route's
-// own verb admits it as it admits them — and without the proof verb's row
-// needing a person present, a leaked token could withdraw the owner's second
-// factor: the first half of taking the account. The listed password is
-// refused by the table's own word (`token_refused`) before anything is
-// written. And a password this node's directory did not list yet is refused
-// INSIDE the snapshot that revokes, with the same answer and nothing
-// published: it used to be stepped over there, landing a record on the person
-// (a version, and a trail row saying a credential was revoked, as the token)
-// and answering 200 "nothing changed" about a credential that exists and is
-// live. The control is the owner at a keyboard, who revokes the same unlisted
-// password.
+// Without the proof verb's person-present row a leaked token could withdraw
+// the owner's second factor. The listed password is refused by the table's own
+// word (`token_refused`) before anything is written. One this node's directory
+// did not list yet is refused INSIDE the revoking snapshot, same answer,
+// nothing published: stepping over it answered 200 "nothing changed" about a
+// live credential. The control is the owner at a keyboard.
 //
 // Mutations: read the proof verb as admitted before the write and the listed
 // password is revoked by a request carrying the token; step over the unlisted
@@ -666,12 +656,10 @@ func (noSeats) Seat(context.Context, string) (session.Seat, bool, error) {
 
 // THE LAST AUTHENTICATOR TAKES ITS RECOVERY CODES WITH IT.
 //
-// Recovery codes stand in for an authenticator app, and held alone they are a
-// second factor every sign-in asks for with ten single-use answers — the state
-// `POST /auth/totp/recovery` refuses to create. Revoking a person's only
-// authenticator here left the codes live, so the Account page said signing in
-// asked for a password alone while every sign-in asked for a code. The
-// second-factor reset takes both; so does revoking the last authenticator,
+// Recovery codes stand in for an authenticator app; held alone they are a
+// second factor every sign-in asks for, the state `POST /auth/totp/recovery`
+// refuses to create (the Account page would say a password alone suffices). The
+// second-factor reset takes both, and so does revoking the last authenticator,
 // each withdrawal announced. The CONTROL is one of two authenticators, whose
 // revocation leaves the codes standing beside the other.
 //

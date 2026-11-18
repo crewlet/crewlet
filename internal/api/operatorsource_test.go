@@ -19,16 +19,12 @@ import (
 
 // THE OPERATOR SURFACE READS ITS HALVES ON EVERY REQUEST.
 //
-// The catalogue is the native halves', which a node meets at its first company
-// — by an apply, long after its API started serving. It was a server taken
-// ONCE when the API was wired, so a node that booted with no company served
-// no /operator/mcp for the life of the process. Now the route is mounted once
-// and each request reads the halves: before the company it is `503
-// no_active_revision` with the reconcile poll as its wait and the halves'
-// words, and once the company has come up — even one keeping neither native
-// half here, which is still served the seat controls every node can serve —
-// it is the MCP transport's own answer — one App, the same route, told apart
-// only by what the halves say NOW.
+// The catalogue is the native halves', met at the first company, by an apply
+// long after the API serves. A server taken once at wiring would leave a node
+// booted with no company without /operator/mcp for the process's life. So the
+// route is mounted once and each request reads the halves: `503
+// no_active_revision` before the company, the MCP transport's own answer after
+// it (even with neither native half, which still gets the seat controls).
 //
 // Mutation: read the halves once, when the server is built, and the second
 // request is the first one's 503 again.

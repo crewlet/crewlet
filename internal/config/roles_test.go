@@ -174,19 +174,18 @@ roles:
 	}
 }
 
-// THE OTHER HALF OF THAT TRANSFORM: the per-seat identities, which are three
-// different things wearing one shape.
+// THE OTHER HALF OF THAT TRANSFORM: the per-seat identities, three different
+// things in one shape.
 //
-// A seat's Slack block is a CREDENTIAL — the webhook route resolves each
-// seat's signing secret out of org.Role.Slack, so a seat that lost it stops
-// verifying its own app's deliveries. Its Jira and Confluence blocks are
-// ROUTING IDENTITY: where the seat files work, and where activity with no
-// better recipient lands. All three are read off the authored config and
-// none is declared anywhere else, so a transform that dropped one leaves a
-// seat that looks complete and is unreachable.
+// A seat's Slack block is a CREDENTIAL: the webhook route resolves each
+// seat's signing secret from org.Role.Slack. Its Jira and Confluence blocks
+// are ROUTING IDENTITY: where the seat files work, and where activity with
+// no better recipient lands. All three are read off the authored config and
+// declared nowhere else, so a transform that dropped one leaves a seat that
+// looks complete and is unreachable.
 //
-// Through YAML rather than a struct literal, because the authored document
-// is the surface this is a transform OF.
+// Through YAML rather than a struct literal: the authored document is the
+// surface this transform is OF.
 func TestSeatTransformCarriesEveryPerSeatIdentity(t *testing.T) {
 	t.Parallel()
 	cfg := mustCompany(t, `

@@ -6,19 +6,17 @@ import (
 )
 
 // TurnEngine configures the two-stage turn: an executor that decides and acts
-// in one agentic run — the seat's harness's own, in a box — and a reviewer
-// that judges the record it left, in the engine's own tool loop.
+// in one agentic run (the seat's harness's own, in a box) and a reviewer that
+// judges the record it left, in the engine's own tool loop.
 //
-// Almost every field here is a CAP, and every cap is a trade between a turn
-// that gives up too early and one that burns a budget thrashing. The
-// numbers are defaults an operator can move; what they must not be is
-// absent, which is what a zero would mean if these were read raw. Every
-// accessor below applies the default, so a config that says nothing and a
-// config that says `turn_engine:` behave identically.
+// Almost every field is a CAP, a trade between a turn that gives up too early
+// and one that burns a budget thrashing. The numbers are defaults an operator
+// can move but never absent, which is what a raw zero would mean, so every
+// accessor applies the default and a config saying nothing behaves like one
+// saying `turn_engine:`.
 //
-// Unvalidated, a max_iterations of 0 parses cleanly and fails every turn in
-// the company on the first guard check, with nothing in the file looking
-// wrong. Hence the bounds below.
+// Unvalidated, a max_iterations of 0 parses cleanly and fails every turn on the
+// first guard check with nothing in the file looking wrong. Hence the bounds.
 type TurnEngine struct {
 	// MaxIterations caps execute-review rounds per turn. Review returning
 	// self_iterate increments it; on breach the turn is terminated as
@@ -76,18 +74,15 @@ type TurnEngine struct {
 	// again, so this is per extension rather than per turn.
 	ExtensionRoundStep int `yaml:"extension_round_step,omitempty" json:"extension_round_step,omitempty" js:"min=0" desc:"Maximum onboarding rounds one extension call may grant."`
 
-	// ExecutorMinBudgetTokens is the fixed part of a pre-flight floor on
-	// EVERY executor launch, a turn's first and each relaunch after a
-	// self_iterate: what a run's first request carries before its brief,
-	// which the launch counts beside it (internal/engine's launchFloor).
-	// Below that much budget left, or when the budget cannot be read, the
-	// launch is refused and the seat parks until the window turns over or a
-	// ceiling moves, rather than launching a run that dies mid-way having
-	// produced nothing; a launch that continues a session whose context a
-	// capture measured is held to the larger of this and that context with
-	// its brief. 0 turns the floor off for a launch whose context is not
-	// known. See [defaultExecutorMinBudgetTokens] for where the default comes
-	// from, and read it through [TurnEngine.ExecutorFloor].
+	// ExecutorMinBudgetTokens is the fixed part of a pre-flight floor on EVERY
+	// executor launch, first and each relaunch after a self_iterate: what a
+	// run's first request carries before its brief (internal/engine's
+	// launchFloor). Below that budget, or when it cannot be read, the launch is
+	// refused and the seat parks until the window turns over or a ceiling moves,
+	// rather than launching a run that dies having produced nothing. A launch
+	// continuing a measured session is held to the larger of this and that
+	// context. 0 turns the floor off for an unknown context. Default
+	// [defaultExecutorMinBudgetTokens]; read it via [TurnEngine.ExecutorFloor].
 	//
 	// A POINTER for onboarding_max_tool_rounds' reason: an explicit 0 must
 	// survive the store, which decodes a revision onto the defaults.
@@ -222,19 +217,15 @@ func (t *TurnEngine) validate(path Path) error {
 type ConversationSession struct {
 	// Enabled keeps each executor launch's harness session in the object
 	// store (internal/executordomain), continues it in the turn's relaunches
-	// and in the conversation's next turn, and tells that next turn how the
+	// and in the conversation's next turn, and tells that turn how the
 	// conversation's earlier turns ended.
 	//
-	// On by default. Turning it off keeps no session — none is captured or
-	// stamped, and no launch seals what it handed its box for a scrub —
-	// continues none, reads no conversation's head, tells no turn how its
-	// conversation's earlier turns ended, and offers no seat the tools that
-	// read its sessions back, those kept before it went off included — a
-	// launch already running is refused at its next call to one, which asks
-	// the revision its node runs — which is what makes it one safe live kill
-	// switch for everything a conversation carries between turns.
-	// How each turn ended is still recorded on the executor log either way:
-	// that is the account of the turn, not its session.
+	// On by default. Off, no session is captured, continued or offered back
+	// (kept ones included; a running launch is refused at its next call to a
+	// session tool, which asks the revision its node runs), no conversation head
+	// is read, and no turn is told how earlier ones ended: one safe live kill
+	// switch for everything a conversation carries between turns. How each turn
+	// ended is still recorded on the executor log, the account of the turn.
 	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Keep each executor launch's harness session, continue it in the turn's relaunches and the conversation's next turn, and tell that turn how the conversation's earlier turns ended (default on; off keeps and continues no session, offers no tool to read them, and still records how each turn ended)."`
 
 	// RetentionDays is how long a seat's executor sessions are kept past
@@ -283,20 +274,17 @@ type ConversationSession struct {
 // The per-seat session budget's default and bounds.
 const (
 	// DefaultSessionBytesPerSeat is what an unset max_bytes_per_seat takes:
-	// SIXTY-FOUR MEBIBYTES. A captured session compresses to one or two
-	// mebibytes for a day's work and is bounded at thirty-two
-	// (executorkeep.SessionMaxBytes), so 64 MiB holds a live turn's
-	// session at that bound beside about twenty ordinary ones, or thirty to
-	// forty ordinary sessions alone — a month of one conversation's head a
-	// working day. (A live turn's capped session never needs the head it
-	// continued beside it: its own capture holds that transcript and more,
-	// so releasing the head then loses nothing.) It is shared with every
-	// other object: on the default nats backend the bucket is a quarter of
-	// the broker's limit, about 2.6 GiB at the smallest data volume
-	// crewlet-operator admits, beside project files, artifacts and Ask
-	// Crewlet's files. A seat at its budget holds up to twice it while its
-	// superseded saves wait for the collector: five seats take a quarter of
-	// the bucket, and twenty or more belong on S3 (store.objects.backend).
+	// SIXTY-FOUR MEBIBYTES. A captured session compresses to one or two MiB for
+	// a day's work and is bounded at thirty-two (executorkeep.SessionMaxBytes),
+	// so 64 MiB holds a live turn's session at that bound beside about twenty
+	// ordinary ones, or thirty to forty ordinary sessions alone. (A live turn's
+	// capped session never needs the head it continued beside it: its own
+	// capture holds that transcript.) It is shared with every other object: on
+	// the default nats backend the bucket is a quarter of the broker's limit,
+	// about 2.6 GiB at the smallest data volume crewlet-operator admits. A seat
+	// at its budget holds up to twice it while its superseded saves wait for the
+	// collector: five seats take a quarter of the bucket, and twenty or more
+	// belong on S3 (store.objects.backend).
 	DefaultSessionBytesPerSeat int64 = 64 << 20
 
 	// SessionBytesPerSeatFloor is the least a seat may be given: ONE

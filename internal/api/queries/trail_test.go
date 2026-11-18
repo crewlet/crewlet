@@ -61,12 +61,10 @@ func trailFixture(t *testing.T) queries.Sources {
 // ONE SEAT'S TURNS AND PHASES ARE ITS TRAIL, AND EVERY SEAT'S ARE ADMIN'S
 // (ADR-0033).
 //
-// A listing naming no seat is the company-wide trail — every prompt every
-// agent was given — and only an admin reads it, whatever apps anybody else
-// holds or whoever they lead. A listing naming a seat is that seat's trail,
-// read by its lead holding no permission at all, and refused to them for a
-// seat they do not lead, each refusal naming admin; and a chart this node
-// cannot read is unavailable rather than a refusal.
+// A listing naming no seat is the company-wide trail, read only by an admin
+// whatever apps anybody holds. One naming a seat is that seat's trail, read by
+// its lead with no permission, refused (naming admin) for a seat they do not
+// lead; a chart this node cannot read is unavailable, not a refusal.
 //
 // Mutation: drop [queries.Sources.trailOf]'s company-wide decision and the
 // lead reads every seat's turns; decide `seat=` on the caller instead of the

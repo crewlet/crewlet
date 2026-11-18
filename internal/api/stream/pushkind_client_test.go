@@ -15,22 +15,13 @@ import (
 
 // THE DASHBOARD KNOWS EXACTLY THE FRAME KINDS THIS SOCKET SENDS.
 //
-// `LiveSocket.onMessage` switches on a frame's kind and falls silently through
-// one its `PushKind` union does not name — which is right for a kind a newer
-// peer added and wrong for one this build sends, where it is a push the store
-// never applies and a screen that never updates, with nothing anywhere saying
-// so. The other direction is a dispatch branch nothing can reach. So the union
+// `LiveSocket.onMessage` falls silently through a kind its `PushKind` union
+// does not name: right for a kind a newer peer added, wrong for one this build
+// sends, a push the store never applies with nothing saying so. The other
+// direction is a dispatch branch nothing can reach. So the union
 // (`contract/wire.ts`) is held against every constant of type [stream.Kind] in
 // this package's source, read from the source so a new kind is covered the
-// moment it is declared rather than when somebody remembers to list it here.
-//
-// `inbox_changed` was the kind that drifted first: the engine declared and
-// routed it before anything published it, and the union never named it. And
-// the engine used to have a fourth spelling of four of these: the
-// company-publish hook in cmd/crewlet broadcast the roster, the org tree, the
-// tool catalogue and the schedules under string literals. Kind is a named type
-// now and the one method that re-sends them ([stream.Service.CompanyPublished])
-// names the constants, so the set this reads is every kind a frame can carry.
+// moment it is declared; no string literal can add a kind this misses.
 func TestTheDashboardKnowsExactlyThePushKindsTheEngineSends(t *testing.T) {
 	t.Parallel()
 	engine := engineKinds(t)

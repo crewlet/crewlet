@@ -23,30 +23,16 @@ import (
 
 // `crewlet config` — the Tier B company configuration, in the store.
 //
-// # The store is authoritative at runtime; the file is a seed
+// The store is authoritative at runtime and the file only seeds it: without the
+// seed a first run has nothing to activate, without the store a change is
+// invisible to the rest. Revisions are immutable and the pointer append-only,
+// so re-activating an unchanged one mints a new epoch every node watches, which
+// is how a rotated secret reaches a running fleet.
 //
-// Both halves matter. Without the seed a first run has nothing to activate
-// and the node serves a company no peer can see; without the store a change
-// on one node would be invisible to every other. The company is the revision
-// the fleet's activation pointer names, and a running node applies it.
-//
-// # Offline, a command chooses what this node boots on
-//
-// These commands run with the engine stopped, and the pointer lives in the
-// coordination store, which they do not open. So what `import`, `activate` and
-// `rekey` write is an OFFER: this node boots on it at its next start and
-// publishes it to the fleet only while the fleet still runs the revision it
-// was built on — the company as this node last knew it
-// ([store.Configs.Restorable]) — so a change made on a node that was behind is
-// never published over what the fleet moved on to (bootpublish.go). Through a
-// running node (`import -api`, or the API), a write is the fleet's at once.
-//
-// # Revisions are immutable and the pointer is append-only
-//
-// Nothing here edits a revision. Importing writes a new one; activating
-// appends to the pointer. That is what makes re-activating an unchanged
-// revision a meaningful gesture — it mints a new epoch every node is
-// watching, which is how a rotated secret reaches a running fleet.
+// Offline, `import`, `activate` and `rekey` write an OFFER: the pointer lives in
+// the coordination store they do not open, so this node boots on it at its next
+// start and publishes it only while the fleet still runs the revision it was
+// built on ([store.Configs.Restorable], bootpublish.go). Via the API: at once.
 
 const configUsage = `crewlet config: the company configuration in the store
 
@@ -123,19 +109,12 @@ func runConfig(environ config.Source, args []string, stdout, stderr io.Writer) e
 	fs.SetOutput(stderr)
 	bootstrapPath := fs.String("config", defaultBootstrapPath,
 		"Tier A config: this node's store and its secret keyring")
-	// EACH SUBCOMMAND REGISTERS ONLY THE FLAGS IT READS.
-	//
-	// One shared set is how `crewlet config import company.yaml -dry-run`
-	// parsed cleanly and wrote the revision anyway: -dry-run is `rekey`'s,
-	// and every other subcommand silently ignored it — an operator asking
-	// for no write, being told nothing, and getting one. The same held for
-	// -revision, -against, -limit and -redact on every command but their
-	// own.
-	//
-	// Go's flag package refuses a flag it was not given, so registering per
-	// subcommand turns each of those silent no-ops into a usage error. It is
-	// the rule `run` already follows for a leftover positional: an argument
-	// that cannot mean anything here is REFUSED rather than ignored.
+	// EACH SUBCOMMAND REGISTERS ONLY THE FLAGS IT READS. One shared set let
+	// `config import company.yaml -dry-run` parse cleanly and write the revision
+	// anyway: -dry-run is rekey's, and every other subcommand silently ignored it
+	// (likewise -revision, -against, -limit, -redact). Go's flag package refuses a
+	// flag it was not given, so registering per subcommand turns each silent no-op
+	// into a usage error, as `run` refuses a leftover positional.
 	var (
 		revision string
 		against  = "active"
@@ -384,22 +363,15 @@ func sayWhatBoots(ctx context.Context, cs *configStore, about string, out io.Wri
 // offlinePublishNote is what an OFFLINE write that chooses what this node boots
 // on can and cannot do, and every such note opens with it.
 //
-// The fleet's activation pointer lives in the coordination store, which a
-// command run while the engine is stopped does not open for it: a revision is
-// this node's to hold, in its own database, and the node publishes the one it
-// boots on at its next boot, over the revision it was built on (bootpublish.go)
-// — so the command starts no broker, and needs none. (`crewlet secrets` is
-// different: a secret has no home on the node, so that command reaches the
-// fleet's store itself.)
+// The activation pointer lives in the coordination store, which a command run
+// with the engine stopped does not open: the node publishes the revision it boots
+// on at its next boot, over the revision it was built on (bootpublish.go).
+// (`crewlet secrets` reaches the fleet's store itself: a secret has no home on
+// the node.) Said out loud: an operator who saw nothing change would conclude
+// the import failed, or not guess a behind node's change is withheld.
 //
-// Said out loud rather than left to be discovered: an operator who imported a
-// revision and saw nothing change would reasonably conclude the import
-// failed, and one whose node was behind its fleet would not guess that the
-// change is withheld rather than published over what the fleet moved on to.
-//
-// WHAT REACHES A RUNNING FLEET IS EACH COMMAND'S OWN, which is why the notes
-// below add to this one: `PUT /config` stores and activates a document, but it
-// activates nothing that is already stored and re-seals nothing.
+// WHAT REACHES A RUNNING FLEET IS EACH COMMAND'S OWN, so the notes below add to
+// this one: `PUT /config` activates nothing already stored and re-seals nothing.
 func offlinePublishNote(over store.Offer) string {
 	return "This node boots on it at its next start and publishes it to the fleet " +
 		publishedWhile(over) + "; if the fleet has moved on, it runs the fleet's " +
@@ -546,23 +518,13 @@ func revisionState(r store.Revision) string {
 // diffRevisions compares two revisions, REDACTED on both sides.
 //
 // Always redacted, with no flag to turn it off: a diff is what an operator
-// pastes into a ticket or a chat thread to ask a colleague whether a change
-// looks right, and that is the single most likely way a credential leaves
-// the machine. `export -revision ID` is there for the rare case that needs
-// the real values, and it takes a deliberate act.
+// pastes into a ticket or chat, the likeliest way a credential leaves the
+// machine. `export -revision ID` is the deliberate act for real values.
 //
-// # Paths and values, not lines
-//
-// The same differ the API's /config/revisions/{id}/diff serves, and for one
-// reason: the stored form is JSON produced by marshalling a
-// struct, so re-ordering a map or adding a field with a default rewrites
-// lines that mean nothing. What an operator asks is "what changed about the
-// company", and that is answered by paths and values.
-//
-// The CLI rendered a unified line diff over YAML instead — the shape the
-// project had recorded a decision against, while the same binary's HTTP
-// surface answered structurally. One product cannot ship both answers to one
-// question.
+// By paths and values, not lines, with the same differ as the API's
+// /config/revisions/{id}/diff: the stored form is marshalled JSON, so
+// re-ordering a map or adding a defaulted field rewrites lines that mean
+// nothing. One product cannot ship two answers to "what changed".
 func diffRevisions(ctx context.Context, cs *configStore, revisionID, against string,
 	stdout io.Writer,
 ) error {
@@ -600,18 +562,12 @@ func diffRevisions(ctx context.Context, cs *configStore, revisionID, against str
 
 // writeChanges renders a structural diff.
 //
-// ONE LINE PER PATH, with the marker in the first column so the shape is
-// scannable the way a line diff was — an operator reading this in a terminal
-// is looking for "what moved", and a block per change buries that under
-// formatting.
+// ONE LINE PER PATH, marker in the first column, so "what moved" is scannable in
+// a terminal.
 //
-// EVERY change, however many there are. The API's own answer is cut at
-// configapi.MaxChanges because a response body and a socket frame have a
-// size budget; a terminal has none, and this is the one reader who can pipe
-// the output into a pager, a file or a grep. A diff that stopped at the same
-// 500 lines here would hide the rest from exactly the caller equipped to
-// read them — and it stopped with a PATHLESS entry every renderer then had
-// to recognise as not-a-change.
+// EVERY change, however many. The API cuts its answer at configapi.MaxChanges for
+// its body and frame budget; a terminal has none and can pipe to a pager or grep,
+// so stopping here would hide the rest from the caller equipped to read it.
 func writeChanges(stdout io.Writer, from, to string, changes []configapi.Change) error {
 	fmt.Fprintf(stdout, "--- %s\n+++ %s\n", from, to)
 	for _, c := range changes {
@@ -819,43 +775,15 @@ type importTarget struct {
 // importCompany writes a company document as a new revision, through whichever
 // route can actually reach the fleet.
 //
-// # Two routes, and the difference is not cosmetic
+// OFFLINE it offers the revision to boot on and cannot move the fleet's pointer
+// (in the engine's process). PUT /config stores AND activates, so every node
+// converges. -api skips the store (also off-node, where the local path would
+// create an empty database); else the API is tried only on [store.ErrLocked],
+// since any other failure is a broken node HTTP would hide.
 //
-// The OFFLINE route opens this node's store directly and makes the revision
-// what this node boots on, as an offer built on the company this node knows. It
-// cannot move the fleet's activation pointer, because on the default topology
-// that pointer lives inside the engine's own process — so it takes effect when
-// this node next starts, and reaches the fleet only while the fleet still runs
-// what it was built on.
-//
-// The API route is PUT /config on a running node, which stores the revision
-// AND activates it, so every node converges with no restart. That is what an
-// operator editing a live company wants, and until now the CLI had no way to
-// do it: the store is exclusive to one process, so `config import` against a
-// running engine simply refused and told them to write the curl themselves.
-//
-// # Which one it picks
-//
-// An explicit -api is an instruction and skips the store entirely — it is also
-// how this works from a machine that is not the node, where opening the local
-// path would create an empty database nothing ever reads. Otherwise it tries
-// the store, and falls through to the API only on [store.ErrLocked], which
-// means the engine is up, which is precisely when its API is the way in. Every
-// other failure — a missing keyring, an unreadable path — is a broken node,
-// and answering one of those with HTTP would replace an accurate message with
-// a connection refused.
-//
-// # A redacted read imports over the company it was read from
-//
-// `GET /config`, the dashboard's Copy as YAML and `crewlet config show` mask
-// every inline credential, and a file kept in sync from them is written back
-// with this command. Each route restores the masks from the revision the
-// import replaces, as `PUT /config` restores a document sent back to it: the
-// API route IS that PUT, and the offline route restores from the company this
-// node knows, the one it parents the new revision on ([config.LoadCompany]). Both validate after the restore, because a mask is
-// judged as the credential it stands for — the import's own check before
-// either route used to refuse every redacted copy, on both, for carrying the
-// marker in a field nobody touched.
+// A redacted read imports over the company it came from: each route restores
+// the masks from the revision it replaces ([config.LoadCompany] offline), and
+// validates AFTER, since a mask is judged as the credential it stands for.
 func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error {
 	if t.path == "" {
 		return errors.New("config import needs a company document to read")

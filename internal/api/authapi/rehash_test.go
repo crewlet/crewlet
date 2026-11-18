@@ -27,30 +27,14 @@ var stronger = credential.Params{Memory: 128, Time: 2, Threads: 1, KeyLen: 32}
 
 // A PASSWORD IS RE-HASHED UP BY THE SIGN-IN THAT PRESENTS IT, AND NEVER DOWN.
 //
-// The parameters ride in the stored verifier so a cost raise is possible at
-// all: the plaintext is not stored, and the one instant a stronger digest can
-// be computed is a successful sign-in. The verification reported the stale
-// verifier and every caller discarded the report, so raising the cost reached
-// new passwords only and left every existing one at the old cost for ever.
-// Both routes that present a password — the sign-in and the step-up — now
-// rewrite it at the current cost, keeping the credential's id, once they have
-// answered. [authapi.Service.Stop] waits for that work, which is what makes
-// the store readable here — waited for, since the stop here is given all the
-// time the case has.
-//
-// And ONLY UP. A cost moves only with a build, so a raised one arrives as a
-// rolling upgrade, and a node still on this build meets the verifiers the
-// newer one wrote: read as stale because they DIFFERED, each was rewritten
-// here at this build's weaker cost, and back up on the next sign-in an
-// upgraded node served — every person's verifier flapping for the whole
-// rollout, part of it at the cost being retired. A verifier stronger than this
-// build's is left exactly as it is, with no record asked for.
-//
-// The CONTROL is a verifier already at the current cost: no rewrite, and no
-// record asked for — so the first row is about the weaker verifier and not
-// about every sign-in writing one. Mutation: drop the rehash call from either
-// route and its older-cost row keeps the old parameters; report a verifier
-// stale whenever its cost differs and the newer build's row is rewritten down.
+// The plaintext is not stored, so a successful sign-in is the one instant a
+// stronger digest can be computed: the sign-in and the step-up rewrite it at
+// the current cost once answered ([authapi.Service.Stop] waits for that work).
+// ONLY UP: a raised cost arrives as a rolling upgrade, so rewriting verifiers a
+// newer build wrote for merely DIFFERING would flap them all rollout long.
+// The CONTROL is a verifier at the current cost: no rewrite, no record.
+// Mutation: drop the rehash call from either route, or report stale whenever
+// the cost differs, and the older-cost or newer-build row goes red.
 func TestAPasswordIsRehashedUpByTheSignInThatPresentsItAndNeverDown(t *testing.T) {
 	t.Parallel()
 	for _, route := range []struct {
@@ -96,20 +80,14 @@ func TestAPasswordIsRehashedUpByTheSignInThatPresentsItAndNeverDown(t *testing.T
 
 // A STALE VERIFIER IS REWRITTEN AT THE COST THAT SHIPS.
 //
-// The rewrite was given what was left of the refusal pad — four hundred
-// milliseconds from arrival — after a full 64 MiB verification had spent most
-// of it, and then ran a second full derivation past that deadline, so the write
-// that followed ran on an expired context and failed: on real hardware the
-// verifier was never rewritten, and every such sign-in paid for a second
-// derivation. The suite above runs at a cost a test can afford and could not
-// see it. This one's hasher is the SHIPPED cost ([credential.Default]) over a
-// verifier stored at a cheaper one, and the rewrite has budgets of its own:
-// none of the request's, which ends when the sign-in answers — as the rig's
-// does ([signInRig.signIn]) — and nothing spent before the write.
-//
-// Mutation: run the rewrite on the request's context rather than one detached
-// from it, and the write meets a cancelled context and the verifier stays at
-// the cheaper cost.
+// The rewrite must not borrow the refusal pad (400 ms from arrival, mostly
+// spent by a full 64 MiB verification): the derivation would overrun it and the
+// write fail on an expired context. The suite above runs at a cost a test can
+// afford and cannot see that; this hasher is the SHIPPED cost
+// ([credential.Default]) over a cheaper stored verifier, and the rewrite has
+// budgets of its own: none of the request's, which ends when the sign-in
+// answers. Mutation: run the rewrite on the request's context and the write
+// meets a cancelled one, leaving the cheaper cost.
 func TestAStaleVerifierIsRewrittenAtTheCostThatShips(t *testing.T) {
 	t.Parallel()
 	r := newSignInRigWith(t, func(o *authapi.Options) {
@@ -125,15 +103,14 @@ func TestAStaleVerifierIsRewrittenAtTheCostThatShips(t *testing.T) {
 
 // A SIGN-IN NEVER WAITS FOR ITS VERIFIER'S REWRITE, AND STOPPING ENDS IT.
 //
-// The person is waiting for a session, not for a stronger digest: the rewrite
-// starts once the sign-in has answered and nothing the answer carries depends
-// on it. And it is the surface's own work, so [authapi.Service.Stop] cancels
-// it and returns — a goroutine nobody can stop would go on writing to an engine
-// the node is tearing down.
+// The rewrite starts once the sign-in has answered, as nothing the answer
+// carries depends on it. It is the surface's own work, so
+// [authapi.Service.Stop] cancels it and returns; a goroutine nobody can stop
+// would write to an engine being torn down.
 //
-// Here the rewrite's write never lands on its own: the sign-in must have
-// answered while it is still in flight, and a Stop with no time left must cut
-// it and return with the verifier untouched. Mutation: run the rewrite inline
+// The rewrite's write never lands on its own here: the sign-in must answer
+// while it is in flight, and a Stop with no time left must cut it with the
+// verifier untouched. Mutation: run the rewrite inline
 // and the sign-in answers only once it has ended; leave it outside Stop's
 // reach and Stop never returns.
 func TestASignInNeverWaitsForItsVerifiersRewrite(t *testing.T) {
@@ -308,14 +285,11 @@ func (b *budgetedRewrite) SetCredentials(ctx context.Context,
 // IT COST.
 //
 // The budget is the publisher's own resolve budget, sized for what the write
-// waits on — and it was started before the argon2id derivation at the shipped
-// cost that precedes the write, so the derivation spent it: on a loaded host
-// the write began on a context already expired, and the verifier was never
-// rewritten on exactly the host that most needed the time (the case above
-// failed that way under the race detector with the suites beside it). The
-// write is now bounded from where it starts. Measured against what one
-// derivation at that cost takes on this host, so the case holds on a fast
-// machine and a slow one alike.
+// waits on. Started before the argon2id derivation it would be spent by it, and
+// on a loaded host the write would begin on an expired context and the verifier
+// never be rewritten. It is bounded from where the write starts, measured
+// against one derivation on this host so the case holds on fast and slow
+// machines alike.
 //
 // Mutation: start the budget before the derivation again and the write is
 // handed the budget less a derivation.

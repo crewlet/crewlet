@@ -1338,28 +1338,13 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 // A STORE, A PLANE, A KEYRING AND THE NODE'S NAME ARE REQUIRED, and a missing
 // one is refused by name.
 //
-// The engine beside every API holds all three, so a nil is a wiring mistake,
-// and a narrower surface built around it (an unregistered /config, every write
-// answering 503) would hide the mistake behind an answer that looks
-// deliberate. The keyring most of all: a surface built without one stored
-// every revision in plaintext and answered 201, and every node refused to
-// apply what it wrote — the e2e harness was built that way until it was
-// noticed by hand.
-//
-// NO TIER A any more: the surface took one only to judge a document against
-// the stream it would log to, and that rule is Tier A's alone now — a node
-// on an in-memory stream does not boot, so no surface is ever asked.
-//
-// THE NODE'S NAME TOO: a write stores its revision in this node's history
-// alone, and an answer that cannot say whether its activation landed sends
-// the caller to this node to diff or revert it — by a name an empty one is
-// not.
-//
-// AND THE CREDENTIAL STORE: a removal of an MCP server deletes the values only
-// it read, and a surface built without the store would answer that removal by
-// keeping them.
-//
-// The control is the same options with all of them: built.
+// The engine beside every API holds all of them, so a nil is a wiring mistake
+// a narrower surface (every write answering 503) would hide. The keyring most
+// of all: without one, revisions were stored in plaintext and no node applied
+// them. THE NODE'S NAME: an unknown-outcome answer sends the caller to diff or
+// revert on this node, by a name an empty one is not. THE CREDENTIAL STORE: an
+// MCP server's removal deletes the values only it read. The control is the
+// same options with all of them: built.
 //
 // Mutation: drop any one refusal and its row builds a surface.
 func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {

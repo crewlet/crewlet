@@ -355,14 +355,11 @@ func TestARecordStampedAheadAgesNothing(t *testing.T) {
 
 // A RECORD STAMPED AHEAD LEAVES A DAY AFTER IT ARRIVED.
 //
-// Aged by its own stamp, a record from a node whose clock is badly wrong — a
-// garbled year — was held until the clock passed that stamp plus a day: in the
-// rollup labelled "the last 24 hours" for the life of the process, under a
-// window that excluded it. It is aged from its arrival on the projection's
-// clock, it leaves when a record that arrived beside it would, and the expiry
-// reports it leaving so the rollup is pushed again. It keeps the stamp it was
-// published with, which is how an operator finds the node with the wrong
-// clock.
+// Aged by its own stamp, a record from a badly wrong clock (a garbled year)
+// would sit in the "last 24 hours" rollup for the life of the process. It ages
+// from its arrival on the projection's clock, the expiry reports it leaving so
+// the rollup is pushed again, and it keeps its published stamp, which is how an
+// operator finds the node with the wrong clock.
 //
 // Mutation: age a record by its stamp alone ([ageingStamp] returning
 // newStamp), and the record is still held a day after it arrived.

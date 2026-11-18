@@ -27,35 +27,14 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
-// TESTING A SERVER, AND CHECKING AN ADDRESS BEFORE ONE IS ADDED.
-//
-// Three routes, each [authz.ActionToolsCheck], and each audited as one
-// `mcp_server_acted`:
-//
-//   - `POST /mcp-servers/{name}/check` tests the entry the company runs, on
-//     every node, or for a per-agent server on the node holding the seat
-//     the body names. The test is recorded as the server's latest, which its
-//     detail answers to every administrator.
-//   - `POST /mcp-checks` tests a DRAFT, an entry not written yet, in the
-//     company it would join. It runs what a write would (a command on the
-//     engine's host, an address dialled with the values the entry names
-//     resolved from the secret store), so it is decided as that write too,
-//     `config.write` and `secrets.write`, before anything is read past the
-//     body ([mayRunDraft]); the draft is held to the configuration's own dry
-//     run, and a refused one is answered as its write would be. The values
-//     typed for its keys and not stored yet are tested with it, each read
-//     through the variable `PUT /mcp-servers/{name}/values/{key}` would store
-//     it under in the company the draft makes, and sealed across the fleet as
-//     that route's value is. Never recorded.
-//   - `POST /mcp-probe` checks an address before a server is added at it:
-//     what the server is, and how it is signed in to. The address is the
-//     caller's, dialled as the server would be once added, so it is decided
-//     as the write that would make the engine dial it, `config.write` on
-//     top; it resolves no secret and sends no credential.
-//
-// OUTSIDE /mcp-servers/{name} for the two that name no saved server, for the
-// catalogue's reason: a literal segment there would win over a server it
-// spells.
+// Three routes, each [authz.ActionToolsCheck] and audited as one
+// `mcp_server_acted`: `POST /mcp-servers/{name}/check` tests the entry the
+// company runs (on the seat's node for a per-agent server), recorded as the
+// latest test; `POST /mcp-checks` tests a DRAFT ([DraftChecker]);
+// `POST /mcp-probe` checks an address before a server is added: the engine
+// dials it, so it is `config.write` on top, and it resolves no secret.
+// The two naming no saved server sit OUTSIDE /mcp-servers/{name}: a literal
+// segment there would win over a server it spells.
 //
 // A TEST NEVER CALLS A TOOL (internal/mcp's test.go), and its answer carries
 // no header or variable value and no address with its credentials in it.
@@ -71,6 +50,13 @@ type Checker interface {
 // DraftChecker holds a draft entry to the configuration's own dry run: the
 // company it would join, or the refusal a write of it would get
 // ([configapi.Service.CheckEntity]).
+//
+// A draft runs what a write would (a command on the host, an address dialled
+// with secret-store values), so it is decided as that write, `config.write`
+// and `secrets.write`, before anything past the body is read ([mayRunDraft]).
+// Typed values not yet stored are tested with it, read through the variable
+// `PUT /mcp-servers/{name}/values/{key}` would use and sealed across the fleet
+// as that route's value is. Never recorded.
 type DraftChecker interface {
 	CheckEntity(ctx context.Context, kind, id string, body []byte, create bool, by iam.Actor) (*config.Company, error)
 }

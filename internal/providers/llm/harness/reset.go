@@ -13,17 +13,12 @@ import (
 // the harness ran in ([childZone]), which a time of day named with no zone of its
 // own is in; nil reads UTC.
 //
-// ZERO IS AN ANSWER, not a failure: [Provider.bench] reads it as "the vendor
-// did not say" and sits the entry out a bounded, growing window, which is
-// honest where an instant read wrongly is not. That includes an instant
-// already past: a limit reported after its own reset says the window turned
-// over a moment ago, and waiting for it again would wait a day.
-//
-// THE SEPARATOR IS MATCHED WITHOUT CASE. It is a separator, not a sentinel: it
-// classifies nothing, and only says where the reset begins in a line already
-// taken as the vendor's report. Codex writes "or try again at" in mid-sentence
-// and "Try again at" opening one (both in 0.150.1's own strings), and a
-// case-sensitive cut read only one of them.
+// ZERO IS AN ANSWER, not a failure: [Provider.bench] reads it as "the vendor did
+// not say" and sits the entry out a bounded, growing window, honest where a
+// wrongly read instant is not. A past instant is zero too: the window just
+// turned over, and waiting again would wait a day. THE SEPARATOR IS MATCHED
+// WITHOUT CASE (it only says where the reset begins): Codex writes "or try again
+// at" mid-sentence and "Try again at" opening one.
 func resetAt(said string, r harnessprofile.ResetReading, now time.Time, zone *time.Location) time.Time {
 	if r.Separator == "" {
 		return time.Time{}
@@ -75,42 +70,27 @@ func leadingInt(rest string) (int64, bool) {
 // clockResetGrace is how far before now a named time of day still reads as the
 // occurrence that has just gone by, rather than tomorrow's.
 //
-// FIVE MINUTES. The vendor names a time, rounded to the minute or the hour,
-// that the window turns over at on its own clock, and this reads it against
-// the engine host's clock when the run ended: the two clocks can disagree by a
-// minute or two on a host whose time is not disciplined, and the run's exit can
-// trail the line it printed. A reset that has passed by less than that is the
-// window turning over as the report was read, which [resetAt] answers as no
-// instant at all. Anything further back cannot be today's (a vendor does not
-// report a limit whose reset passed a quarter of an hour ago), so it is
-// tomorrow's.
+// FIVE MINUTES. The vendor's time is rounded to the minute or hour on its own
+// clock and read against the engine host's clock at the run's end: the two can
+// disagree by a minute or two, and the run's exit can trail the line it printed.
+// A reset passed by less than that is the window turning over as the report was
+// read, which [resetAt] answers as no instant. Further back cannot be today's (a
+// vendor does not report a limit whose reset passed a quarter hour ago), so it
+// is tomorrow's.
 const clockResetGrace = 5 * time.Minute
 
 // clockReset reads a reset written as a time of day, a weekday and a time, or a
 // date and a time, each optionally followed by the zone it is in:
 //
 //	4:30pm (America/Vancouver)    4pm    16:30 (Asia/Tokyo)    4:31 PM
-//	Mon 9am (Europe/Berlin)       Monday 9:00 am
-//	Nov 3rd, 2026 3:45 PM         Nov 3, 9am (America/New_York)
+//	Mon 9am (Europe/Berlin)       Nov 3rd, 2026 3:45 PM
 //
-// A TIME ALONE is its NEXT occurrence: the first no more than
-// [clockResetGrace] before now, because the vendor names a time and not a
-// date, and a reset is always ahead of the report that names it. A reset named
-// at 11 pm for "2am" is the coming night's; one named at 4:16 pm for "5am" is
-// tomorrow's, which the nearest occurrence read as this morning's and so as no
-// instant; and one named for "4:30pm" a minute after half past four is the one
-// that has just gone by (no instant), not tomorrow's.
-//
-// A WEEKDAY is that day's next occurrence STRICTLY AFTER the report: a weekly
-// window that resets "Mon 9am", reported on a Monday at ten, resets next
-// Monday. A DATE carries its own day, and its year where it names one; with
-// none, the year whose occurrence is the next.
-//
-// THE ZONE is the parenthesised one where the sentence names it, else zone,
-// the zone the harness ran in: the engine hands every child, on its host and in a
-// box, an explicit TZ ([childZone]), so a sentence without a zone is read in
-// the zone it was written in rather than guessed. A parenthesised zone the
-// system's zone database does not know is no instant.
+// A TIME ALONE is its NEXT occurrence: the first no more than [clockResetGrace]
+// before now, since a reset is always ahead of its report. "2am" at 11 pm is the
+// coming night's; "5am" at 4:16 pm is tomorrow's (the nearest would read this
+// morning's: no instant); "4:30pm" a minute late has just gone by. A WEEKDAY is
+// STRICTLY AFTER the report: "Mon 9am" reported Monday at ten is next Monday. A
+// DATE carries its own day and any year it names, else the next occurrence's.
 func clockReset(rest string, now time.Time, zone *time.Location) time.Time {
 	rest = strings.TrimLeft(rest, " ")
 	var (
@@ -126,6 +106,9 @@ func clockReset(rest string, now time.Time, zone *time.Location) time.Time {
 	if !ok {
 		return time.Time{}
 	}
+	// THE ZONE is the parenthesised one where named, else zone: the engine hands
+	// every child an explicit TZ ([childZone]), so a sentence without one is read
+	// in the zone it was written in. An unknown zone name is no instant.
 	if trimmed := strings.TrimLeft(rest, " "); strings.HasPrefix(trimmed, "(") {
 		shut := strings.Index(trimmed, ")")
 		if shut < 0 {

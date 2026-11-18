@@ -47,9 +47,12 @@
 //
 // # Urgent work
 //
-// An urgent first item is handed without waiting for a turn to end, for mail
-// or for the settle ([UrgentMayJump], ADR-0159), on the inbox's priority lane,
-// so the seat's next turn takes it ahead of the background wakes queued first.
+// An urgent first item is handed without waiting for a turn or its executor's
+// run to end, for mail or for the settle ([UrgentMayJump], ADR-0159), on the
+// inbox's priority lane, so the seat's next turn takes it ahead of the
+// background wakes queued first. A seat whose turns run in an executor box is
+// held by a run nearly all the time it works, so a pass waiting for a gap
+// between runs would hand it nothing for as long as its backlog lasts.
 //
 // # The cooldown
 //

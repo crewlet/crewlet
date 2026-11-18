@@ -17,24 +17,12 @@ import (
 //
 // # Why there is exactly one of them
 //
-// Everything a company does to its tasks is done by seats, through their own
-// tools, and a person does the rest through the HTTP write surface the
-// dashboard is built on — the same tools again, under a person's own name. The
-// one gesture that belongs on a SHELL is the operation no seat may ever
-// perform: a purge, which destroys a task and every row it produced on every
-// data node, which the write path restricts to a person or an operator token
-// precisely because nothing else can be asked to confirm it, and which an
-// operator acting on an erasure request runs from a terminal and a runbook
-// rather than from a screen. It goes through that same surface's own route.
-//
-// That operation had no caller anywhere. `worklet.Writer.PurgeTask` existed,
-// the applier handled its record, the deletion marker stopped a redelivery
-// resurrecting anything — and no CLI verb, no route and no tool reached it. So
-// a company could not destroy a task under any circumstances: an erasure
-// request had no mechanism, and a credential pasted into a task body stayed in
-// the durable rows of every data node for ever. `remove` only hides a task and
-// `delete` only stops later records about it; neither takes the body out of a
-// single database.
+// Seats act through their own tools; a person does the rest through the HTTP
+// write surface. The one gesture that belongs on a SHELL is the purge, which
+// no seat may perform: it destroys a task and its rows on every data node, the
+// write path restricts it to a person or operator token, and an erasure
+// request is run from a runbook. `remove` only hides a task and `delete` only
+// stops later records; neither takes a pasted credential out of a database.
 
 // runWorklet dispatches `crewlet worklet`.
 func runWorklet(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -57,26 +45,15 @@ const workletPurgeUsage = "usage: crewlet worklet purge <item> -reason TEXT " +
 
 // workletPurge is `crewlet worklet purge`.
 //
-// # The confirmation is the item's KEY, and the node checks it
+// The confirmation is the item's KEY, which the node checks: the item may be
+// named by an unreadable uuid, but the key is what a person sees on the board,
+// so asking for it makes them look. A mismatch destroys nothing.
 //
-// The item may be named by its id, a uuid nobody reads; the KEY is what a
-// person sees on the board and in the ticket they were asked to act on, so it
-// has to be looked up — which is the whole point of asking. The node compares
-// it against the item the first argument resolves to and destroys nothing if
-// they differ.
+// There is no project flag: the record is filed under the item's own project,
+// which only the stored row says, so a caller cannot set it wrong.
 //
-// # The project is the node's to know
-//
-// The record is filed under the item's own project, and the stored row is the
-// one place that says which that is, so the command no longer asks for it: a
-// flag the caller could set wrong was a flag that could file a purge under a
-// project it was not about.
-//
-// # The reason is required
-//
-// It is the only thing that survives. The rows are destroyed; what remains is
-// the deletion marker, and its reason is the entire account of what used to be
-// at that key for whoever reads it a year later.
+// The reason is required: the rows are destroyed, and the deletion marker's
+// reason is the whole account of what used to be at that key.
 func workletPurge(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	item, rest := splitSubject(args)
 	var reason, confirm, opID *string
@@ -175,14 +152,11 @@ func reportDestruction(stdout io.Writer, what, outcome, position, operation stri
 // that is ONE RECORD ON A STATE LOG: a purge, a chat post, an erase, a prune, a
 // room's horizon.
 //
-// SIX RESOLVE BUDGETS. What such a write can legitimately wait on is the write
-// path's own: the wait for the answering node to reach the caller's previous
-// write, the wait for it to reach a peer's record on the same object, and the
-// resolution of its own append — each bounded at
-// [statelog.DefaultResolveBudget]. Three of those back to back is fifteen
-// seconds, past the ten every other verb waits, which is where a working purge
-// was abandoned and reported with no operation id to retry it under; twice
-// that leaves room for the arbitration rounds between them and the request
-// around them. A coordination write — a seat's pause — is a compare-and-set,
-// not a record, and keeps the ordinary ceiling.
+// SIX RESOLVE BUDGETS. Such a write can wait on the answering node reaching the
+// caller's previous write, reaching a peer's record on the same object, and
+// resolving its own append, each bounded at [statelog.DefaultResolveBudget].
+// Three is fifteen seconds, past the ten every other verb waits, which
+// abandoned a working purge with no operation id to retry; twice that leaves
+// room for arbitration rounds. A coordination write (a seat's pause) is a
+// compare-and-set, not a record, and keeps the ordinary ceiling.
 const logWriteTimeout = 6 * statelog.DefaultResolveBudget

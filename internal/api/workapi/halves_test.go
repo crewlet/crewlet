@@ -11,30 +11,17 @@ import (
 )
 
 // A ROUTE IS SERVED BY THE HALVES ITS REQUEST FINDS, NOT BY THE ONES THE
-// SURFACE WAS BUILT WITH.
+// SURFACE WAS BUILT WITH: the halves come up with a node's FIRST COMPANY,
+// after its API is serving. One surface answers three things over its life:
 //
-// # Why this is the case that matters
-//
-// A node's tracker and knowledge base come up with its FIRST COMPANY, which a
-// node that booted with none meets at an apply — after its API is serving.
-// The surface used to take its halves once, at construction, so such a node
-// mounted none of these routes and served no /worklet and no /doclet/pages until it was
-// restarted. Read per request, one surface built before the company answers
-// three different things over its life:
-//
-//   - before any company: `503 no_active_revision` carrying the reconcile poll
-//     as its Retry-After, because the halves are coming and a client that
-//     waits is served;
-//   - a half this company does not run: the route's ABSENCE, in the very bytes
-//     the mux answers a route nothing registered with, because no wait brings
-//     it;
+//   - before any company: `503 no_active_revision`, reconcile poll as
+//     Retry-After (a waiting client is served);
+//   - a half this company does not run: the route's ABSENCE, the mux's own
+//     bytes (no wait brings it);
 //   - the halves up: the route, served.
 //
-// Mutations, each run: read the halves once in New and the third phase is the
-// first's 503; answer an absent half with the 503 and the second phase reads
-// as a node still waiting; answer the not-up case with the route's absence and
-// a client waiting for its node's first company is told the route does not
-// exist.
+// Mutations: read the halves once in New, or swap the 503 and the absence, and
+// a phase answers another's.
 func TestARouteIsServedByTheHalvesItsRequestFinds(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, chart{})

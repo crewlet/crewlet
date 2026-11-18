@@ -169,15 +169,12 @@ func (s *Service) intendPublish(w http.ResponseWriter, r *http.Request) {
 // /artifacts/uploads/{upload}/files/{path...}`): the body is one declared
 // file's bytes, put under the key its intent minted, paced as it arrives.
 //
-// THE INTENT'S OWN VERB, DECIDED AGAIN: the upload names what it is for, and
-// the caller must still hold that verb on it now (a create, the artifact's
-// publish, or its assets), so a share revoked since the intent stops the
-// bytes.
+// THE INTENT'S OWN VERB, DECIDED AGAIN: the caller must still hold the verb the
+// upload names (create, the artifact's publish, or its assets), so a share
+// revoked since the intent stops the bytes.
 //
-// NO OPERATION KEY: a client follows the transfer the intent handed it
-// verbatim, and the upload's record makes the put idempotent by itself (a
-// file is claimed before a byte is read, and a second put of it is refused
-// `upload_consumed`).
+// NO OPERATION KEY: the upload's record makes the put idempotent (a file is
+// claimed before a byte is read; a second put is refused `upload_consumed`).
 func (s *Service) transfer(w http.ResponseWriter, r *http.Request) {
 	p, ok := caller(w, r, authz.ActionArtifactPublish)
 	if !ok {

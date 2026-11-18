@@ -12,19 +12,16 @@ import (
 
 // A PATH THAT IS NOT CANONICAL IS REFUSED BEFORE ANYTHING READS IT.
 //
-// internal/authz's CanonicalPath was written for exactly this frame, and its
-// own doc said it belonged in the outer middleware — and it was mounted
-// nowhere, so the refusal the authz package documented never happened on a
-// running node. What stood in for it was ServeMux's redirect, which kept a
-// path like `/webhooks/../config` harmless only by accident: the guard read
-// it as the EXEMPT webhook prefix and waved it through, and the mux read it as
-// `/config` and redirected. Two layers deciding about two different paths is
-// the thing a gate must never depend on.
+// authz.CanonicalPath belongs in the outer middleware. Without it, ServeMux's
+// redirect kept a path like `/webhooks/../config` harmless only by accident: the
+// guard read it as the EXEMPT webhook prefix and waved it through, and the mux
+// read it as `/config` and redirected. A gate must never depend on two layers
+// deciding about two different paths.
 //
 // Each case names a guarded route reached through an exempt prefix, spelled
 // both ways the dot segment can arrive, plus a doubled slash. Every one must be
-// the envelope's 400 — not the mux's redirect, and not whatever the exempt
-// prefix would have let through.
+// the envelope's 400, not the mux's redirect and not what the exempt prefix
+// would have let through.
 func TestANonCanonicalPathIsRefusedBeforeTheGuardReadsIt(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{})

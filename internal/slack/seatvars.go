@@ -7,17 +7,15 @@ import (
 
 // The variables a seat's Slack app is sealed under, named by the engine.
 //
-// NEVER BY A WRITER. A seat's bot token used to live wherever its
-// `bot_token: ${VAR}` pointed, so a document edit could point it at a company
-// credential and the next install would overwrite that credential with the
-// seat's token (the class of the Datadog incident). The names are derived
-// here, from the handle, with [seataccess.SinkName], the one naming function
-// the access sync seals under and every reader derives from, so they agree by
-// construction (design 3).
+// NEVER BY A WRITER: a name a document could set could point at a company
+// credential, and the next install would overwrite it with the seat's token.
+// The names derive from the handle through [seataccess.SinkName], the one
+// naming function the access sync seals under and every reader derives from
+// (design 3).
 //
-// ONE TOKEN, TWO READERS. The bot token sealed under [FieldBotToken] is what
-// the transport authenticates with and what the seat's Slack tool server is
-// handed, so the two can never hold different tokens (design 12.1).
+// ONE TOKEN, TWO READERS: the token under [FieldBotToken] is what the
+// transport authenticates with and what the seat's Slack tool server is
+// handed, so the two never differ (design 12.1).
 
 // The fields a seat's app keeps under its own name ([SeatVar]).
 const (

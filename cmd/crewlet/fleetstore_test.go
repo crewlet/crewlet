@@ -78,16 +78,14 @@ func TestAClusterMemberWithItsEngineStoppedIsSentToARunningOne(t *testing.T) {
 	}
 }
 
-// A COMMAND HOLDS THE STORE DIRECTORY IT USES, AND NOT THE DATABASE IT DOES
-// NOT. The database's lock is how the command learns the engine is stopped, so
-// it only asks; a claim kept there would make a second command read the first
-// as a running engine, and send it to an API nobody serves. The broker the
-// command starts holds the store directory, which is what keeps an engine — or
-// a second command — off the files it is using.
+// A COMMAND HOLDS THE STORE DIRECTORY IT USES, AND NOT THE DATABASE IT DOES NOT.
+// The database's lock is how the command learns the engine is stopped, so it only
+// asks: a kept claim would make a second command read the first as a running
+// engine. The broker it starts holds the store directory, keeping an engine or a
+// second command off those files.
 //
-// Asked of each lock file with a lock of the kind every taker uses
-// ([flock.Try]): it excludes a second taker in this process as firmly as in
-// another, so it answers what another process would meet.
+// Asked of each lock file with a lock of the kind every taker uses ([flock.Try]),
+// which excludes a second taker in this process as firmly as in another.
 //
 // Mutation: keep the database's claim for the session, and the database probe
 // is refused; let the store directory go before the broker stops, and the

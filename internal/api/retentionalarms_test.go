@@ -61,23 +61,18 @@ func counted(seq uint64) []statelog.NodePosition {
 	return []statelog.NodePosition{{NodeID: "node-a", Seq: seq, At: retentionAlarmsAt}}
 }
 
-// retentionAlarmsScenarios is one report per state the backup alarm takes,
-// each over every log this build registers ([engine.Domains]), so a log the
-// register gains is in every one of them.
+// retentionAlarmsScenarios is one report per backup-alarm state over every log
+// ([engine.Domains]), so a log the register gains is in each.
 //
-//   - `young`: a deployment minutes old with no backup at all. Every log is
-//     named, none is held past its window, so no entry carries a term — and
-//     every log measured the missing backup in the same words, so they are
-//     one entry naming them all.
-//   - `held`: no backup at all, and every log's trim held by the backup term
-//     for longer than the window while keeping a count of its own past it.
-//     Each entry carries the term, the instant and its hold's measurement
-//     after its backup's.
+//   - `young`: minutes old, no backup. Every log is named, none held past its
+//     window, so no term, and one entry names them all.
+//   - `held`: no backup, every log's trim held by the backup term past the
+//     window while keeping a count of its own. Each entry carries the term, the
+//     instant and its hold's measurement after its backup's.
 //   - `held_beside_a_blocked_trim`: as `held`, but the THIRD log is backed up
-//     and held by a counted set nobody could read, so it is `trim_blocked`'s.
-//   - `stale`: the first log's backup is older than the policy and its trim
-//     has not yet been held past the window; every other log is covered. One
-//     log, no term.
+//     and held by an unreadable counted set, so it is `trim_blocked`'s.
+//   - `stale`: the first log's backup is older than the policy, its trim not
+//     yet held past the window; every other log is covered. One log, no term.
 func retentionAlarmsScenarios() map[string]statelog.Report {
 	report := func(domains []statelog.DomainInputs) statelog.Report {
 		return statelog.NewReport(statelog.ReportInputs{

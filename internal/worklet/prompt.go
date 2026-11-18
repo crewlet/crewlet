@@ -799,12 +799,11 @@ func promptHandling(b *strings.Builder, meta map[string]string, reason Reason) {
 	b.WriteString("\n")
 }
 
-// holdsTask reports the reasons whose seat holds the task the wake is about,
-// the only ones a decline by reassignment is open to. `blocking` is one: the
-// wake is written on the blocker and goes to its assignee. Both are
-// [Reason.Addressed]; a seat nobody waits on has nothing to decline.
+// holdsTask reports the reasons a decline by reassignment is open to: those
+// whose seat holds the task the wake is about ([Reason.Held]) and is waited on
+// ([Reason.Addressed]); a seat nobody waits on has nothing to decline.
 func holdsTask(reason Reason) bool {
-	return reason == ReasonAssignee || reason == ReasonBlocking
+	return reason.Held() && reason.Addressed()
 }
 
 // promptSender renders the actor as a colleague: through the party registry

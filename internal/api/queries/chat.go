@@ -2,41 +2,13 @@
 //
 // # The viewer is the PRINCIPAL's seat, and a caller may never name one
 //
-// Every other personal question here takes a handle and falls back to the
-// caller's own record — see [Sources.recordHandle], where naming somebody
-// else's is what a lead's or an administrator's authority buys. Chat has no
-// such arm, and the difference is deliberate: a transcript is the most
-// sensitive thing a deployment holds, so who is asking is the request's
-// principal and there is nowhere to write a handle at all. A `handle=` on one
-// of these requests is an ignored parameter, not a filter.
-//
-// The viewer is the seat [iam.ActorFor] names the principal as — the SAME
-// function a chat write's author comes from, so whoever may post in a room is
-// exactly whoever is shown it — and every chat verb is SEATED: a credential
-// acting as itself (a Tier A token, a service account bound to no seat) is
-// refused by the authority table's own row, `unauthorized` with reason
-// `unseated` and no grant named, as the chat tools refuse it. The remedy is a
-// binding in the identity directory (`crewlet iam bind`), not a credential. It
-// is never derived from the principal's record owner: for an unbound machine
-// that is its LOGIN, and [chatlet.Visible] reads any non-empty viewer as somebody
-// who may read every public room.
-//
-// # The rooms come from the log and the badges do not
-//
-// A room, its membership and its messages are the state log's, read through
-// the estate router — this node's own copy where it serves, a data node's
-// otherwise — so every answer here carries the position it was true as of,
-// and a copy that has not caught up says so rather than drawing an empty room.
-// Where each person's eye has reached, what they have muted and whether they
-// are in do-not-disturb is NOT on that log: it is one reader's attention, it
-// lives in coordination, and it reaches the rail as a value
-// ([chatlet.ChannelsQuery.Cursors]).
-//
-// That is why the rail's answer carries `read_state`. A coordination store
-// that could not be read leaves the badges UNKNOWN, which is a third state
-// beside "read" and "unread" — and reporting an unknown cursor as a cursor at
-// zero would badge every room in the company with its whole history the moment
-// a bucket read failed.
+// Other personal questions take a handle ([Sources.recordHandle]); chat has no
+// such arm, since a transcript is the most sensitive thing a deployment holds:
+// a `handle=` is ignored. The viewer is the seat [iam.ActorFor] names, as for a
+// chat write's author, and every verb is SEATED: a credential bound to no seat
+// is refused (`unauthorized`, reason `unseated`; remedy `crewlet iam bind`).
+// Never the record owner (an unbound machine's LOGIN): [chatlet.Visible] reads
+// any non-empty viewer as able to read every public room.
 
 package queries
 
@@ -91,16 +63,14 @@ type ChatReader interface {
 // ChatSearcher is the keyword search over the company's chat, as this surface
 // asks it: FOR A VIEWER, never over a set of rooms.
 //
-// WHICH ROOMS SOMEBODY MAY READ IS AN AUTHORIZATION FACT, and it is resolved
-// by the data node that answers ([estate.ChatSearch]) from the viewer this
-// surface resolved — on the copy whose index it then reads, in one operation.
-// Resolved here and handed over, it would be a set read from one copy and
-// searched on another's index, and a seam that took the rooms would be a seam
-// a caller could hand the wrong ones. What this surface keeps is the request's
-// own parts: the level the visible set is read at, which is the DASHBOARD's
-// rather than a seat's (a seat reads at `linearizable`, which would put a
-// quorum barrier on every keystroke of a search box), and a narrowing to one
-// room, which the serving node intersects with what the viewer may read.
+// WHICH ROOMS SOMEBODY MAY READ IS AN AUTHORIZATION FACT, resolved by the data
+// node that answers ([estate.ChatSearch]) from the viewer, on the copy whose
+// index it then reads, in one operation. Resolved here and handed over, it
+// would be read from one copy and searched on another's index, and a seam
+// taking rooms could be handed the wrong ones. This surface keeps the request's
+// own parts: the read level, the DASHBOARD's rather than a seat's (`linearizable`
+// would put a quorum barrier on every keystroke), and a narrowing to one room,
+// which the serving node intersects with what the viewer may read.
 type ChatSearcher interface {
 	Search(ctx context.Context, q estate.ChatQuery) (estate.ChatSearchAnswer, error)
 }
@@ -287,14 +257,12 @@ type chatRail struct {
 // only those with something unread.
 //
 // THE CURSORS TRAVEL INTO THE READ rather than the badge being counted
-// afterwards, which is what makes an unread count cost a bounded range scan
-// per room: the reader counts above this person's own cursor and stops at
-// [chatlet.UnreadLimit].
+// afterwards, so an unread count is a bounded range scan per room: the reader
+// counts above this person's cursor and stops at [chatlet.UnreadLimit].
 //
 // `unread` OVER A READ STATE NOBODY COULD READ IS REFUSED, unavailable: the
-// counts are unknown, and answering the rooms with something unread out of
-// counts zeroed for it would say nothing is unread, which is a different
-// answer, and a wrong one.
+// counts are unknown, and filtering over zeroed counts would say nothing is
+// unread, a different and wrong answer.
 func (s Sources) chatChannels(ctx context.Context, p Params) (any, error) {
 	who, err := s.chatViewer(ctx, authz.ActionChatList)
 	if err != nil {
@@ -365,10 +333,15 @@ func (s Sources) chatChannels(ctx context.Context, p Params) (any, error) {
 // chatReadState is the viewer's cursors and mutes, and whether they could be
 // read at all.
 //
-// A FAILURE HERE DOES NOT REFUSE THE RAIL. The rooms, the previews and the
-// order are the log's and are still true; only the badges are unknown, and
-// taking the whole screen away to say so would cost a person their whole
-// conversation over a bucket read.
+// Rooms, membership and messages are the state log's, read through the estate
+// router, so every answer carries the position it was true as of. Read cursors,
+// mutes and do-not-disturb are NOT on that log: they live in coordination and
+// reach the rail as a value ([chatlet.ChannelsQuery.Cursors]).
+//
+// A FAILURE HERE DOES NOT REFUSE THE RAIL. The rooms, previews and order are
+// the log's and still true; only the badges are UNKNOWN (`read_state`), a third
+// state beside read and unread, since a cursor reported as zero would badge
+// every room with its whole history.
 func (s Sources) chatReadState(ctx context.Context, who string) (coord.ChatReadState, bool) {
 	if s.ChatReads == nil {
 		return coord.ChatReadState{}, false
@@ -407,16 +380,15 @@ func (s Sources) chatRooms(ctx context.Context, p Params) (any, error) {
 // chatRoomNames answers the name of every room the viewer may READ, joined or
 // not, the archived ones included: each room's id, name and kind, and no more.
 //
-// FOR PROSE, which names a room as `#launch`. A room's name may be spelled
-// exactly as a colour (`#e2e`) or an issue's number (`#2026`), and the only
-// way a reader tells which a sentence means is to know which rooms there are.
-// The rail cannot say: it is the rooms somebody is IN, and the room an agent
-// names in an ask is as often a public room the reader never joined. The room
-// finder offers the same rooms, so a room nobody has spoken in is still found.
+// FOR PROSE, which names a room as `#launch`. A name may be spelled exactly as
+// a colour (`#e2e`) or an issue number (`#2026`), so a reader tells which a
+// sentence means only by knowing which rooms exist. The rail cannot say: it is
+// the rooms somebody is IN, and an agent's ask names a public room the reader
+// never joined as often. The room finder offers the same rooms.
 //
-// THE RAIL'S VERB, and seated as every chat question is: the set is
-// [chatlet.Reader.RoomNames]', resolved by the serving reader from this
-// viewer, so a private room is named only to a member of it.
+// SEATED as every chat question is: the set is [chatlet.Reader.RoomNames]',
+// resolved by the serving reader from this viewer, so a private room is named
+// only to a member of it.
 func (s Sources) chatRoomNames(ctx context.Context, p Params) (any, error) {
 	who, err := s.chatViewer(ctx, authz.ActionChatList)
 	if err != nil {
@@ -439,16 +411,14 @@ func (s Sources) chatRoomNames(ctx context.Context, p Params) (any, error) {
 // by its id or by its name ("launch", or "#launch" as people write it,
 // [chatlet.RoomRef]).
 //
-// A ROOM THIS VIEWER MAY NOT READ IS NOT FOUND, which is [chatlet.Reader]'s own
-// answer: a private room's EXISTENCE is information, so "no such room" and
-// "not yours" must read identically from outside, by name as by id.
+// A ROOM THIS VIEWER MAY NOT READ IS NOT FOUND ([chatlet.Reader]'s own
+// answer): a private room's EXISTENCE is information, so "no such room" and
+// "not yours" must read identically, by name as by id.
 //
-// BY NAME, because a name is the room's address and what every sentence about
-// it says, while the rail lists only the rooms somebody is in: a caller that
-// knows "#launch" and is not in it has no other way to reach the room. A name
-// is read once, by the reader's by-name read, which answers the room itself;
-// the room's transcript and its threads resolve one the same way
-// ([chatRoomID]).
+// BY NAME, because the rail lists only the rooms somebody is in: a caller that
+// knows "#launch" and is not in it has no other way to reach it. A name is
+// read once, by the reader's by-name read; the room's transcript and threads
+// resolve one the same way ([chatRoomID]).
 func (s Sources) chatChannel(ctx context.Context, p Params) (any, error) {
 	who, err := s.chatViewer(ctx, authz.ActionChatRead)
 	if err != nil {
@@ -614,17 +584,14 @@ const chatIndexBuilding = "the node that answered is still indexing chat, so a m
 // read.
 //
 // THE VISIBLE SET IS WIDER THAN THE RAIL: a public room and a unit's room are
-// readable by any seat, joined or not, so a search driven off somebody's
-// membership would answer nothing from exactly the rooms a company does most
-// of its talking in. It is resolved by the serving node from the viewer, and
-// never handed in. A NARROWING IS INTERSECTED, NEVER TRUSTED: naming a room
-// the viewer may not read answers nothing rather than refusing, because a
-// refusal confirms the room exists.
+// readable by any seat, joined or not, so a search driven off membership would
+// miss the rooms a company talks in most. The serving node resolves it; it is
+// never handed in. A NARROWING IS INTERSECTED, NEVER TRUSTED: an unreadable
+// room answers nothing, because a refusal confirms the room exists.
 //
-// THE PAGE IS THE INDEX'S OWN — [search.ChatSearchLimit] by default and
-// [search.MaxChatSearchLimit] at most, the bounds the index clamps every query
-// to — rather than a pair of this surface's, which the index would clamp
-// silently below whatever this one promised.
+// THE PAGE IS THE INDEX'S OWN ([search.ChatSearchLimit] by default,
+// [search.MaxChatSearchLimit] at most), which the index would clamp silently
+// below any pair of this surface's.
 func (s Sources) chatSearch(ctx context.Context, p Params) (any, error) {
 	who, err := s.chatViewer(ctx, authz.ActionChatSearch)
 	if err != nil {

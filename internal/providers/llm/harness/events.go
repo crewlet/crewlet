@@ -14,23 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// classifyEvents finds the harness's own structured report of how the run ended:
-// a limit ([harnessprofile.LimitEvent]) or, in a run the harness reported failed, a
+// classifyEvents finds the harness's own structured report of how the run
+// ended: a limit ([harnessprofile.LimitEvent]) or, in a run reported failed, a
 // refused sign-in ([harnessprofile.AuthEvent]). Read before every sentinel,
-// because a status code survives the rewording that silently retires one.
+// because a status code survives the rewording that retires one.
 //
-// THE LAST REPORT WINS. A stream is the run's history, and its last word is
-// how the run ended: Claude Code retries a 401 in `api_retry` events, and a
-// run whose token was refreshed and that then met a spent plan ended on the
-// plan. Read in a fixed order, auth first, it read as a refused sign-in and set
-// a verdict on every entry on the account while the limit sat nothing out.
+// THE LAST REPORT WINS: Claude Code retries a 401 in `api_retry` events, so a
+// run refreshed and then spent ended on the plan; read auth first, it set a
+// refused-sign-in verdict on every entry on the account.
 //
-// ONLY IN A FAILED RUN FOR A REFUSAL. A run that answered was signed in,
-// whatever its stream said on the way.
-//
-// Every line is decoded and none is searched as text, for the reason
-// [classifyFailureEvents] gives: a model writes inside an event's strings,
-// never the fields the match reads.
+// A refusal counts only in a failed run: one that answered was signed in. Every
+// line is decoded, none searched as text ([classifyFailureEvents]): a model
+// writes inside an event's strings.
 func classifyEvents(p harnessprofile.Profile, out harnessOutput) (markerHit, bool) {
 	if len(p.LimitEvents) == 0 && (len(p.AuthEvents) == 0 || !out.failed) {
 		return markerHit{}, false

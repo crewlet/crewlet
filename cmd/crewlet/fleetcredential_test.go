@@ -112,19 +112,15 @@ func brokerAnswerServer(t *testing.T, status int, edit func(map[string]any)) (*h
 // THE CREDENTIAL IS THE ACTIVE KEY'S OPERATOR KEY, WRITTEN WHERE ONLY ITS
 // OWNER READS IT, AND POINTED AT THIS HOST'S OWN LISTENER.
 //
-// The file holds the seed whose public key is the operator key the broker
-// derives from the ACTIVE key, created 0600; the seed never reaches the
-// terminal; the invocation names the listener this host's node answered with.
-// An existing file is refused and left as it was. A node that is not this
-// host's — an -api naming a balancer or a peer — is refused before anything is
-// written, since a loopback listener is its own host's; a node with no client
-// listener says why; a node that serves no API is asked nothing and points at
-// its broker_keys line; and a 401 names the variable the token comes from.
+// The file holds the seed whose public key is the operator key derived from the
+// ACTIVE key, created 0600, never on the terminal; the invocation names the
+// listener this host's node answered with. An existing file is refused. A node
+// that is not this host's is refused before anything is written; no client
+// listener says why; an api-less node is asked nothing; a 401 names the variable.
 //
 // Mutations: derive under the leaf domain → the key row, red; write the seed to
-// stdout → the terminal row, red; overwrite the path → the existing-file row,
-// red; trust another node's listener → its row, red; send an api-less node to
-// the API → its row, red.
+// stdout → the terminal row; overwrite the path → the existing-file row; trust
+// another node's listener → its row; send an api-less node to the API → its row.
 func TestTheBrokerCredentialIsTheActiveKeysOperatorKey(t *testing.T) {
 	t.Parallel()
 	t.Run("the active key's operator key, 0600, never on the terminal", func(t *testing.T) {

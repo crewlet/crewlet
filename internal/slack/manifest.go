@@ -18,25 +18,16 @@ import (
 
 // BotScopes are the token scopes every agent app gets.
 //
-// TWO CONSUMERS SHARE THE TOKEN: the notification transport (auth.test,
-// assistant.threads.setStatus) and the Slack MCP server the agent's tools
-// run against. Almost the whole list is the second one's — the transport
-// resolves an identity and raises an indicator, and every message an agent
-// sends is the MCP server's call on this same token.
+// Two consumers share the token: the transport (auth.test, setStatus) and the
+// Slack MCP server, whose calls are almost the whole list.
 //
 // The groups:* and mpim:* scopes are required EVEN IF agents never join a
-// private channel. The MCP server's startup channel-cache refresh is one
-// conversations.list call across all four conversation types, and a single
-// missing scope fails the whole call — with no cache left by an earlier run
-// the server then exits at startup, taking every Slack tool the seat has with
-// it, and the cause is in its stderr rather than in anything Slack reports.
+// private channel: the MCP server's startup cache refresh is one
+// conversations.list across all four types, and one missing scope fails it
+// and the server exits, taking every Slack tool with it (cause only in stderr).
 //
-// NOTHING HERE IS FOR A CALL NO CONSUMER MAKES, which is why
-// search:read.public is absent although it reads like the bot-token search
-// scope: the MCP server registers its one search tool only for a user token
-// (Slack's search.messages refuses a bot's) and the transport searches
-// nothing, so the scope would grant every app a read of the workspace's
-// public messages that no call uses.
+// Nothing here is for a call no consumer makes: search:read.public is absent
+// because the MCP search tool is registered only for a user token.
 var BotScopes = []string{
 	"app_mentions:read", // app_mention events — the thread-follow trigger
 	"channels:history",  // read public-channel messages
@@ -98,17 +89,14 @@ func OAuthRedirectURL(base string) string {
 
 // Manifest builds the app manifest for one agent.
 //
-// The APP is named for the role and the BOT for the handle, which is not
-// interchangeable: the app name is what an operator sees in the workspace's
-// app directory ("Engineering Lead"), and the bot display name is what
-// appears beside every message it posts — and it has to be the handle,
-// because that is the identity the rest of the engine addresses.
+// The APP is named for the role ("Engineering Lead", what an operator sees in
+// the app directory) and the BOT for the handle, which is the identity the
+// rest of the engine addresses and appears beside every message it posts.
 //
-// AN OVER-LONG NAME IS REFUSED, not truncated. Slack's limits are real, but
-// silently cutting to them puts an app in the operator's workspace under a
-// name their config does not contain — and two roles sharing a 35-character
-// prefix become two apps a person cannot tell apart. The operator can shorten
-// a role name; only they can decide which words to lose.
+// AN OVER-LONG NAME IS REFUSED, not truncated: cutting silently puts an app in
+// the workspace under a name the config does not contain, and two roles
+// sharing a 35-character prefix become indistinguishable. Only the operator
+// can decide which words to lose.
 func Manifest(roleName, handle, base string) (map[string]any, error) {
 	description := "Crewlet agent @" + handle
 	switch {

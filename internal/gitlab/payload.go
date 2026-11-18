@@ -26,16 +26,12 @@ const Backend = "gitlab"
 //
 // # Typed, where the tracker's is not
 //
-// A parser reads its payloads through map lookups when the third-party app's
-// serializer shapes are not something it can rely on. GitLab's webhook
-// payloads are the opposite: documented, versioned, and stable across
-// releases — so they decode into structs, and every field a branch reads is
-// declared where the next reader can see it rather than spelled as a string
-// at the point of use.
+// GitLab's webhook payloads are documented, versioned and stable across
+// releases, so they decode into structs and every field a branch reads is
+// declared in one place rather than spelled as a string at the point of use.
 //
-// A field GitLab adds is ignored rather than fatal, which is what makes an
-// upgrade a non-event: encoding/json drops unknown keys by default and this
-// deliberately does not turn that off.
+// A field GitLab adds is ignored rather than fatal, which makes an upgrade a
+// non-event: encoding/json drops unknown keys and this deliberately keeps that.
 
 // hook is one delivery, across every object kind this parser handles.
 //

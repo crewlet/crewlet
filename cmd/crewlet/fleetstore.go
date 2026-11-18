@@ -18,41 +18,17 @@ import (
 )
 
 // The fleet's secret store, reached by this command itself while the node's
-// engine is stopped.
+// engine is stopped. The company's values live on the coordination KV alone; a
+// running engine is reached through its API, for a stopped one the command
+// reaches the store the engine keeps: on a solo node it starts the node's own
+// broker on its store directory, on an external broker it dials it
+// ([engine.OpenFleetStore]).
 //
-// # One store, whether or not the engine runs
-//
-// The company's values live on the coordination KV, and nowhere else. A
-// running engine is reached through its API, as before; a stopped one no
-// longer sends a command to a table of the node's own that the fleet never
-// read — which is how a provisioning run once read a working signing secret
-// as unset and minted over it. Instead the command reaches the store the
-// engine keeps: on a solo node it starts the node's own broker on its store
-// directory, and on an external broker it dials it ([engine.OpenFleetStore]).
-//
-// # Each lock guards what it names, and the command holds only what it uses
-//
-// The node's database is ASKED, never held ([store.Probe]): its lock says
-// whether the engine is running — or starting, from the read its boot decides
-// on ([bootEngine]) — and [store.ErrLocked] routes the command to its API
-// instead, which a node still starting answers `503 starting`. The command
-// does not use the file, so keeping the claim would only make a second
-// command read the first as a running engine, and refuse an engine over a
-// database nobody had open. What the command does use
-// is a broker on the node's store directory, and that broker holds the
-// directory's own lock ([jetstream.StoreDirLock]) until it stops: an engine
-// started part way through is refused there, naming the command, as is a
-// second command on the same node. On an external broker the command starts
-// nothing and holds nothing — an engine starting beside it is one more client
-// of a store built for many.
-//
-// # Read directly, so read only by whoever could anyway
-//
-// No node logs these reads, as it logs each reveal through its API. A read here
-// is made by a process holding the node's Tier A — its keyring, and the broker's
-// own files or credentials — which open every value without any API; an audit
-// line this process wrote about itself would record nothing that holder could
-// not have done unrecorded.
+// The node's database is ASKED, never held ([store.Probe]): its lock says whether
+// the engine runs ([store.ErrLocked] routes to its API, `503 starting` while it
+// boots), and holding it would make a second command read the first as
+// an engine. What is held is the broker's directory ([jetstream.StoreDirLock]):
+// an engine started part way through, or a second command, is refused there.
 
 // openFleetStore reaches the fleet's store for the node boot configures, with
 // that node's engine stopped, and hands back its release, which may be called
@@ -107,6 +83,10 @@ func fleetStoreRemedy(err error, bootstrapPath string) error {
 
 // fleetBackend is the fleet's store, reached directly, as the secrets
 // commands' backend.
+//
+// Its reads write no audit line, as a node's reveal does: the process holds the
+// node's Tier A, which opens every value without any API, so a line it wrote
+// about itself would record nothing it could not have done unrecorded.
 type fleetBackend struct{ *fleetsecrets.Store }
 
 // Set writes the row under the author and source offered, which — written
