@@ -14,10 +14,11 @@ var advisorRecordCases = []fleetCase{
 		if err != nil || !found || string(value) != `{"n":1}` || read == 0 {
 			h.t.Fatalf("read back %q at %d (%v, %v)", value, read, found, err)
 		}
-		if ok, err := h.f.UpdateAdvisorRecord(h.ctx, "last_run", []byte(`{"n":2}`), read); err != nil || !ok {
+		ok, err := h.f.UpdateAdvisorRecord(h.ctx, "last_run", []byte(`{"n":2}`), read)
+		if err != nil || !ok {
 			h.t.Fatalf("an update at the revision read answered %v (%v)", ok, err)
 		}
-		if ok, err := h.f.UpdateAdvisorRecord(h.ctx, "last_run", []byte(`{"n":3}`), read); err != nil || ok {
+		if ok, err = h.f.UpdateAdvisorRecord(h.ctx, "last_run", []byte(`{"n":3}`), read); err != nil || ok {
 			h.t.Fatalf("an update at a revision that moved answered %v (%v), want refused", ok, err)
 		}
 		if value, _, _, err = h.f.AdvisorRecord(h.ctx, "last_run"); err != nil || string(value) != `{"n":2}` {
