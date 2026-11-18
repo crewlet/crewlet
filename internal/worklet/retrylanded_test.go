@@ -18,12 +18,11 @@ import (
 // A RETRY OF A WRITE THAT LANDED IS ANSWERED WITH THE WRITE, NOT DECIDED AGAIN
 // — through the real writer, the real publisher and the real ledger.
 //
-// The retry takes a snapshot that already holds the first application. Decided
-// again there, it is refused for reasons the write itself caused: a purge finds
-// its task gone and answers "not on this node", an update conditioned on a
-// version finds that version moved by its own first copy and answers "stale".
-// The caller of an `unknown` was told to retry under the same operation id,
-// and did — and is then told the operation failed when it succeeded.
+// The retry's snapshot already holds the first application, so decided again
+// it is refused for reasons the write itself caused: a purge finds its task
+// gone ("not on this node"), an update conditioned on a version finds it moved
+// by its own first copy ("stale"). A caller told `unknown` retries under the
+// same operation id and would be told it failed when it succeeded.
 func TestARetryOfAWriteThatLandedIsAnsweredWithIt(t *testing.T) {
 	t.Parallel()
 
@@ -249,10 +248,9 @@ func (r *roundTrip) writerOver(t *testing.T, appender statelog.Appender) *workle
 // FIRST TASK'S RECORD — through the real writer, publisher and ledger.
 //
 // The snapshot answers a retry from the ledger row under the operation's id
-// before anything is decided. The purge's id sent with a purge of a second
-// task found the first purge's row there and was answered `applied`, at the
-// first task's position, with the second task never touched: the operator was
-// told a destruction happened that did not.
+// before anything is decided. A purge of a second task under the first purge's
+// id, answered `applied` from that row, would tell the operator a destruction
+// happened that did not.
 func TestAnOperationIDCarriedToAnotherTaskIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -288,12 +286,11 @@ func TestAnOperationIDCarriedToAnotherTaskIsRefused(t *testing.T) {
 // A CREATE'S OPERATION CARRIED TO ANOTHER PROJECT IS REFUSED, NOT FILED AS A
 // SECOND ITEM — through the real writer, publisher and ledger.
 //
-// A caller holding an operation id can send it with any task. The task's id is
-// a function of the operation, so it is the same task; but the first append of
-// a create is on its project's COUNTER, so a create in another project meets
-// the record the ledger holds for that step on the first project's counter,
-// and is refused `op_reused` before anything is decided: no counter moves, no
-// task is filed. The same project is the retry, answered with its item.
+// A task's id is a function of its operation, but a create's first append is
+// on its project's COUNTER, so the operation in another project meets the
+// ledger's record for that step on the first project's counter and is refused
+// `op_reused` before anything is decided: no counter moves, no task is filed.
+// The same project is the retry, answered with its item.
 func TestACreatesOperationCarriedToAnotherProjectIsRefused(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t)
@@ -347,9 +344,8 @@ type lossyLog struct {
 	refused string
 
 	// landed runs after an append to a subject ending in its suffix
-	// LANDS, on the appending goroutine — which is where a case puts
-	// somebody else's write that has to fall between two steps of one
-	// sequence.
+	// LANDS, on the appending goroutine: where a case puts somebody
+	// else's write that must fall between two steps of one sequence.
 	landedOn string
 	landed   func()
 

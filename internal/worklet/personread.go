@@ -10,21 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// Reading a person's own state.
-//
-// # Why this is one read and not three
-//
-// The three verbs write disjoint parts of one document, and a screen renders
-// all of them at once: the inbox beside the priority list beside the pins is
-// what "my day" IS. Three reads would let the strip show a pinned view the
-// inbox write had just removed.
-//
-// # A person nobody has written is an EMPTY person, not a missing one
-//
-// Every human starts with no inbox, no pins and no priorities, and there is no
-// gesture that creates the record — the first write does. So a read that found
-// nothing answers the empty state rather than a not-found, which is what makes
-// a fresh company's first screen render instead of erroring.
+// Reading a person's own state: ONE read, not one per verb, because a screen
+// renders the inbox, priorities and pins together, and three reads could show
+// a pinned view the inbox write had just removed. A person nobody has written
+// is EMPTY, not missing (see [PersonState.Held]): the first write creates the
+// record, so a fresh company's first screen renders instead of erroring.
 
 // PersonState is one human's own state, plus what a screen needs beside it.
 type PersonState struct {
@@ -33,10 +23,8 @@ type PersonState struct {
 	// Unread, Read and Snoozed are the inbox's EXCEPTIONS to the
 	// seen-through position: Read holds notices above it marked read out
 	// of order, Unread notices at or below it marked unread again — see
-	// [Writer.MarkInbox]. Snoozed entries whose time has come are reported
-	// as DUE rather than silently promoted: putting one back is a write,
-	// and a read that performed it would be a read that changed the
-	// fleet's state.
+	// [Writer.MarkInbox]. Snoozes whose time has come are reported as Due,
+	// never promoted (see splitSnoozes).
 	Unread  []inbox.Entry `json:"unread,omitempty"`
 	Read    []inbox.Entry `json:"read,omitempty"`
 	Snoozed []inbox.Entry `json:"snoozed,omitempty"`
@@ -56,15 +44,12 @@ type PersonState struct {
 	Version     uint64         `json:"version"`
 
 	// MaxSnoozeAhead is how far ahead a snooze may be set, in SECONDS —
-	// [inbox.MaxSnoozeAhead], served so a screen offers only the presets the
-	// write will accept. A preset past it is a button that is refused
-	// every time it is pressed, and the bound is the engine's to state
-	// rather than a number a client copies and lets drift.
+	// [inbox.MaxSnoozeAhead], served so a screen offers only presets the
+	// write accepts, rather than copying a number that drifts.
 	MaxSnoozeAhead int64 `json:"max_snooze_ahead"`
 
-	// Held is false for a person nobody has written yet, which is an
-	// EMPTY state rather than a missing one — every other field is the
-	// zero value and a screen renders it as a clean inbox.
+	// Held is false for a person nobody has written yet: an EMPTY state,
+	// every other field zero, rendered as a clean inbox.
 	Held bool `json:"held"`
 
 	Level          statelog.ReadLevel `json:"read_level"`
@@ -84,10 +69,9 @@ type PersonQuery struct {
 	Floors  []statelog.Position
 	MaxLag  time.Duration
 
-	// MaxLagSeq is the same bound counted in RECORDS, which is what
-	// the broker actually answers — the duration above is derived
-	// from it through this node's own drain rate. Both may be set
-	// and the read refuses past whichever is reached first.
+	// MaxLagSeq is the same bound in RECORDS, what the broker answers;
+	// MaxLag is derived from it through this node's drain rate. The read
+	// refuses past whichever is reached first.
 	MaxLagSeq uint64
 }
 
@@ -157,10 +141,9 @@ func personScope() statelog.ScopeSet {
 
 // splitSnoozes separates what is still asleep from what is due.
 //
-// REPORTED, NEVER PROMOTED. Putting a due item back in the unread list is a
-// WRITE, and a read that performed one would change the fleet's state from a
-// path with no operation id, no arbitration and no record — so this says which
-// are due and the caller's next inbox write is what moves them.
+// REPORTED, NEVER PROMOTED: putting a due item back is a WRITE, and a read
+// performing one would change the fleet's state with no operation id, no
+// arbitration and no record. The caller's next inbox write moves them.
 func splitSnoozes(entries []inbox.Entry, now time.Time) (asleep, due []inbox.Entry) {
 	for _, entry := range entries {
 		if entry.Until != nil && !entry.Until.After(now) {

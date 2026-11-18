@@ -16,31 +16,20 @@ import (
 )
 
 // A KEY TWO TASKS HOLD IS FLAGGED ON THE ONES THAT DID NOT CLAIM IT, and the
-// key goes on opening the one that did.
-//
-// The broker cannot refuse the shape: a counter and a task are different
-// subjects, so a counter restored beside tasks minted after it hands out
-// numbers those tasks already hold, and each create arbitrates only against
-// itself. So the applier writes every task, and the attention set is the only
-// place anybody learns that one key names several — which it did not, because
-// the flag's only producer was a cross-project move nothing called.
-//
-// The CLAIMANT keeps the key because it is the task every earlier reference,
-// link and chat message was written against. Resolving the key to whichever
-// row the key index returns first is a different answer wherever the row
-// order differs from the claim order, which is exactly what a purge that
-// hands the key on produces here — and what a donated snapshot's copy does to
-// row order in general. A purge of the claimant HANDS THE KEY ON, or the
-// survivors stay flagged, and the key unclaimed, for good: only a create, a
-// re-key and a purge write the directory, so no later edit of theirs claims
-// it.
+// key goes on opening the one that did. The broker cannot refuse the shape (a
+// restored counter hands out numbers tasks minted after it already hold, and
+// each create arbitrates only against itself), so the attention set is the
+// only place a duplicate key is named. The CLAIMANT keeps the key: every
+// earlier reference was written against it, and the key index's first row
+// differs from claim order after a purge or a donated snapshot. A purge of the
+// claimant HANDS THE KEY ON, or the survivors stay flagged for good: only a
+// create, a re-key and a purge write the directory.
 func TestAKeyTwoTasksHoldIsFlaggedOnTheOnesThatDidNotClaimIt(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
 	at := time.Unix(1_700_000_100, 0).UTC()
 	// CREATED OUT OF ID ORDER, so the task a purge hands the key to (the
-	// lowest id) is not the one the key index lists first (the earliest
-	// row).
+	// lowest id) is not the one the key index lists first (the earliest row).
 	for _, id := range []string{"t-1", "t-3", "t-2"} {
 		task := newTask(id)
 		task.Key = "ENG-7"
@@ -87,9 +76,8 @@ func TestAKeyTwoTasksHoldIsFlaggedOnTheOnesThatDidNotClaimIt(t *testing.T) {
 		t.Errorf("ENG-7 opens %s, want t-1 — the claimant", got)
 	}
 
-	// A LATER WRITE TO A DUPLICATE KEEPS ITS FLAG: the flag is derived from
-	// the directory, and an edit moves neither the directory nor who holds
-	// the key, so it leaves the flag as the create derived it.
+	// A LATER WRITE TO A DUPLICATE KEEPS ITS FLAG: an edit moves neither the
+	// directory the flag is derived from nor who holds the key.
 	patch := taskRecord("t-3", worklet.OpPatch,
 		worklet.TaskPatch{Title: ptr("still a duplicate")}, nil)
 	patch.OpID = "t-3-rename"
@@ -147,22 +135,16 @@ func (f fixedRanking) Candidates(context.Context, worklet.SearchQuery) (worklet.
 
 func (fixedRanking) Building(context.Context) bool { return false }
 
-// EVERY ROW AN ITEM IS OPENED FROM SAYS WHEN ITS KEY OPENS ANOTHER TASK.
+// EVERY ROW AN ITEM IS OPENED FROM SAYS WHEN ITS KEY OPENS ANOTHER TASK. A
+// shared key resolves to its claimant (the case above), so a flagged task is
+// reached by its id, and only the row it is opened FROM can say so: board
+// rows, a ranked hit, the item and its links, the feed, the inbox and every
+// block of somebody's own work.
 //
-// A key two tasks hold resolves to the one that claimed it, on every read
-// (see the case above). So a flagged task is reached by its ID, and the only
-// way a screen or a model can know to use the id is that the row it is
-// opening FROM says so: a row without the flag hands its key onward, and the
-// gesture that names the duplicate opens the claimant instead. That held for
-// the attention queue's own filter and for nothing a person clicks — the
-// board rows, a ranked hit, the item and its links, the feed, the inbox and
-// every block of somebody's own work all carried the key alone.
-//
-// AND A NOTICE IS ASKED ABOUT ITS OWN KEY. A notice stores the key its subject
-// held when it was written, so a duplicate moved to another project since
-// answers to a fresh key nobody shares — while the key its notice carries
-// still opens the claimant. The task's own flag describes the new key; the
-// notice's has to describe the one a reader would follow.
+// AND A NOTICE IS ASKED ABOUT ITS OWN KEY: it stores the key its subject held
+// when written, so a duplicate moved since answers to a fresh key while the
+// notice's key still opens the claimant. The notice's flag describes the key
+// a reader would follow.
 func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
@@ -210,10 +192,9 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 		comment.Actor = "bo"
 		apply(comment)
 	}
-	// A LEAD PUTS A HOLDER AT THE TOP OF SOMEBODY'S PRIORITIES — the one
-	// notice whose SUBJECT is not the task it is about: the subject is the
-	// person, and the key beside it is the task's. bo puts the duplicate at
-	// the top of ana's list and the claimant at the top of cy's.
+	// A LEAD PUTS A HOLDER AT THE TOP OF SOMEBODY'S PRIORITIES: the one notice
+	// whose SUBJECT is a person, the task's key beside it. bo puts the duplicate
+	// at the top of ana's list and the claimant at the top of cy's.
 	prioritise := func(person, top string) worklet.MutationRecord {
 		body, err := json.Marshal(worklet.Person{V: 1, Handle: person,
 			Priorities: []string{top}})
@@ -253,9 +234,8 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 	}
 	ctx, now := t.Context(), at.Add(time.Hour)
 	stale := statelog.Freshness{Level: statelog.ReadStale}
-	// WHAT EACH HOLDER'S FLAG MUST BE, which is the whole expectation: the
-	// claimant answers to its key, the duplicate does not, and the moved
-	// duplicate answers to its NEW key.
+	// WHAT EACH HOLDER'S FLAG MUST BE: the claimant answers to its key, the
+	// duplicate does not, and the moved duplicate answers to its NEW key.
 	want := map[string]bool{"t-1": false, "t-2": true, "t-3": false}
 	check := func(surface, id string, got bool) {
 		t.Helper()
@@ -303,8 +283,8 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 		check("a ranked hit", hit.ID, hit.KeyCollision)
 	}
 
-	// THE ITEM ITSELF, by its id and by its key — the two addresses reach
-	// two different tasks, and each answer says which it is.
+	// THE ITEM ITSELF, by its id and by its key: the two addresses reach two
+	// different tasks, and each answer says which it is.
 	for ref, id := range map[string]string{"t-2": "t-2", "ENG-7": "t-1"} {
 		detail, err := reader.Task(ctx, ref, worklet.DetailWants{}, stale)
 		if err != nil {
@@ -344,15 +324,13 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 		t.Fatalf("the feed carries records about %v, want every holder of ENG-7", fed)
 	}
 
-	// THE INBOX ASKS ABOUT THE KEY IT STORED: every notice here carries
-	// ENG-7, and ENG-7 opens t-1 — so the moved duplicate's notice is
-	// flagged although the task's own flag, about OPS-1, is not.
+	// THE INBOX ASKS ABOUT THE KEY IT STORED: every notice here carries ENG-7,
+	// which opens t-1, so the moved duplicate's notice is flagged although its
+	// task's own flag, about OPS-1, is not.
 	//
 	// AND IT ASKS ABOUT THE TASK THE NOTICE NAMES, never the subject: a
-	// prioritised notice's subject is a PERSON, so a flag asked of the
-	// subject read every one of them as a collision and sent the reader to
-	// the person's handle as though it were a task. The answer names the
-	// task, which is what a reader opens when the key opens another.
+	// prioritised notice's subject is a PERSON, which must not read as a
+	// collision. The answer names the task a reader opens.
 	inboxOf := func(handle string) []worklet.InboxNotice {
 		t.Helper()
 		answer, err := reader.Inbox(ctx, worklet.InboxQuery{

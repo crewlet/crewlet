@@ -27,7 +27,7 @@ func TestDecisionsCountsEveryAskPutToThePerson(t *testing.T) {
 	r := newRoundTrip(t)
 	assign(t, r, "a", "bo")
 	older := wednesday.Add(-3 * time.Hour)
-	// TWO PUT TO JANE BY TWO ASKERS, one to somebody else: one asker asking
+	// Two put to jane by two askers, one to somebody else: one asker asking
 	// her twice on one item would supersede the first.
 	askOn(t, r, "op-1", "a", worklet.Comment{ID: "c-1", Task: "a", Author: "bo",
 		AuthorKind: worklet.AuthorAgent, Body: "ship?", Ask: "jane", CreatedAt: wednesday})
@@ -74,10 +74,9 @@ func TestDecisionsTotalExceedsThePage(t *testing.T) {
 	}
 }
 
-// AN ASK A PERSON PUT THROUGH THEIR OWN TOKEN NAMES THE PERSON. Bound to a seat
-// they write AS it (iam.ActorFor), so the asker is the seat and the token
-// rides beside it as the operator id — a screen drawing the asker draws a
-// person rather than a credential, with no second field to reconcile.
+// An ask a person put through their own token names the person: a token bound
+// to a seat writes as it (iam.ActorFor), the token riding beside it as the
+// operator id, so a screen draws a person rather than a credential.
 func TestAnAskWrittenThroughAPersonsTokenNamesThePerson(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -89,7 +88,7 @@ func TestAnAskWrittenThroughAPersonsTokenNamesThePerson(t *testing.T) {
 		AuthorKind: worklet.AuthorHuman, Body: "ship?", Ask: "jane", CreatedAt: wednesday}
 	if _, err := maya.UpdateTask(t.Context(), "op-ask", "a", "ENG", worklet.NoIfMatch,
 		worklet.TaskPatch{Comment: &comment}, worklet.ChangeComment,
-		// AS EVERY ASK IS WRITTEN: it wakes the person asked, and the
+		// As every ask is written: it wakes the person asked, and the
 		// notification names the comment the history row resolves to.
 		&worklet.Notify{Kind: worklet.ChangeComment, CommentID: "c-1"}); err != nil {
 		t.Fatalf("ask: %v", err)

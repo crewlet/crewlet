@@ -64,19 +64,17 @@ func (r *roundTrip) marks(handle string, at time.Time) (read, snoozed map[string
 
 // AN INBOX IS WRITTEN ONLY ON BEHALF OF THE PERSON WHOSE IT IS.
 //
-// Somebody else marking your work read is the one thing an inbox must never
-// allow: the item is then gone from the only place you would have looked for
-// it, and nothing anywhere says who removed it.
+// Somebody else marking your work read removes it from the one place you
+// would look, and nothing says who did.
 func TestNobodyElseWritesYourInboxOrYourPins(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	notices := noticesFor(t, r, "ana", 1)
 	bob := r.writer.As("bob", worklet.AuthorHuman, worklet.Provenance{})
 
-	// THE AUTHORITY IS THE ZERO VALUE, which is what a colleague carries:
-	// [authz.ClassOwnRecord] admits the owner and the admin path and has
-	// no lead arm at all, so a caller who is neither arrives here with
-	// nothing and the comparison below is the whole of the refusal.
+	// THE AUTHORITY IS THE ZERO VALUE, what a colleague carries:
+	// [authz.ClassOwnRecord] has no lead arm, so the comparison below is the
+	// whole of the refusal.
 	for name, write := range map[string]func() error{
 		"the inbox": func() error {
 			_, err := bob.MarkInbox(t.Context(), "op-inbox", "ana", statelog.Position{},
@@ -102,10 +100,9 @@ func TestNobodyElseWritesYourInboxOrYourPins(t *testing.T) {
 		})
 	}
 
-	// AND AN AGENT THE TABLE ADMITTED STILL DOES NOT, which is the bar
-	// this package keeps of its own: a seat that LEADS somebody is
-	// admitted by [authz.ClassOwnOrLead] and marking their mail read is
-	// still not a gesture anybody asked an agent to make.
+	// AND AN AGENT THE TABLE ADMITTED STILL DOES NOT, this package's own bar:
+	// a lead seat is admitted by [authz.ClassOwnOrLead], yet marking somebody's
+	// mail read is no gesture an agent was asked to make.
 	agent := r.writer.As("pm", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
 	if _, err := agent.WritePins(t.Context(), "op-agent-pins", "ana",
 		worklet.PinGesture{Views: worklet.SetChange[string]{Add: []string{"v-1"}}},
@@ -144,8 +141,7 @@ func TestALeadsPriorityWriteSaysWhoSetIt(t *testing.T) {
 	r := newRoundTrip(t)
 	bob := r.writer.As("bob", worklet.AuthorHuman, worklet.Provenance{})
 
-	// WITHOUT THE AUTHORITY IT IS REFUSED, which is what stops "a lead
-	// may" from meaning "anybody may".
+	// WITHOUT THE AUTHORITY IT IS REFUSED, or "a lead may" means "anybody may".
 	_, err := bob.WritePriorities(t.Context(), "op-nope", "ana",
 		[]string{"t-1"}, nil, worklet.PersonAuthority{})
 	if err == nil {
@@ -190,10 +186,8 @@ func TestALeadsPriorityWriteSaysWhoSetIt(t *testing.T) {
 
 // EACH VERB CARRIES THE OTHER PARTS THROUGH UNCHANGED.
 //
-// The three write disjoint parts of one document, so a verb that took the
-// whole thing from its caller would let an inbox write clear somebody's pins
-// by omission — the ordinary shape of a lost update, and the one a
-// whole-document object invites.
+// The three write disjoint parts of one document; a verb taking the whole
+// document from its caller would let an inbox write clear pins by omission.
 func TestOnePartOfAPersonDoesNotClearTheOthers(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -234,10 +228,8 @@ func TestOnePartOfAPersonDoesNotClearTheOthers(t *testing.T) {
 
 // ONE NOTICE MARKED READ IS ONE NOTICE MARKED READ.
 //
-// The verb this replaced took all three lists and the watermark and REPLACED
-// each, so a screen that sent only the notice somebody pressed Done on erased
-// every other mark they had made, every snooze, and the position they had read
-// to — the inbox came back full of everything they had already dealt with.
+// A gesture naming one notice leaves every other mark, snooze and the
+// watermark as they were.
 func TestMarkingOneNoticeReadLeavesEveryOtherMarkAndTheWatermark(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -278,12 +270,11 @@ func TestMarkingOneNoticeReadLeavesEveryOtherMarkAndTheWatermark(t *testing.T) {
 
 // TWO SCREENS MARKING TWO NOTICES AT ONCE BOTH LAND.
 //
-// The second gesture is decided against a record that does not yet hold the
-// first: it is published while the first is still unapplied, so its first
-// round reads the older record. The broker refuses that round, and the gesture
-// is applied AGAIN to the record that won — which is only true because it is
-// resolved inside the decide. A gesture resolved against a read taken before
-// it publishes the stale lists on every round and the snooze is lost.
+// The second is published while the first is unapplied, so its first round
+// reads the older record; the broker refuses that round and the gesture is
+// applied AGAIN to the record that won. That holds only because the gesture is
+// resolved inside the decide: resolved against an earlier read, it republishes
+// the stale lists and the snooze is lost.
 func TestAConcurrentSnoozeAndReadBothLand(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -316,11 +307,10 @@ func TestAConcurrentSnoozeAndReadBothLand(t *testing.T) {
 
 // THE POSITION ONLY MOVES FORWARD, and forward is the generation first.
 //
-// "Mark all read" from a tab opened yesterday names an older position than the
-// one a newer tab already read to; taken as given it would un-read everything
-// in between. And a sequence from before a reanchor is below every sequence
-// after it however large — which the stored row could not honour while it kept
-// the bare sequence, so the generation is asserted after a real apply.
+// "Mark all read" from yesterday's tab names an older position than a newer
+// tab read to; taken as given it would un-read everything between. A sequence
+// from before a reanchor is below every one after it however large, so the
+// generation is asserted after a real apply: the stored row must keep it.
 func TestReadThroughNeverMovesBackwards(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -401,15 +391,14 @@ func allNoticesFor(t *testing.T, r *roundTrip, handle string, n int) []worklet.I
 // A LIST ALREADY AT ITS CAP REFUSES ONE MORE inbox_full, AGAINST THE RECORD
 // THE DECIDE READS — never trimmed to make room, and never accepted past it.
 //
-// Every gesture here is small; what fills the list is the STORED record, so
-// only the check the decide makes against the list the gesture would leave
-// can see it. A refusal must leave the record exactly as it was.
+// Every gesture here is small and the STORED record fills the list, so only
+// the decide's check of the list a gesture would leave sees it. A refusal
+// leaves the record exactly as it was.
 func TestAListAtItsCeilingRefusesOneMoreInboxFull(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	// ONE NOTICE BELOW, which the position reads through, and a list's worth
-	// plus one above it — so every read mark is an exception the list has
-	// to hold rather than one the position already answers.
+	// ONE NOTICE BELOW the position and a list's worth plus one above it, so
+	// every read mark is an exception the list holds.
 	n := allNoticesFor(t, r, "ana", inbox.MaxEntries+2)
 	mark := func(op string, g inbox.Gesture[worklet.Reason]) error {
 		t.Helper()
@@ -485,8 +474,7 @@ func TestAListAtItsCeilingRefusesOneMoreInboxFull(t *testing.T) {
 
 // A STAR FROM ONE TAB DOES NOT DROP A PIN FROM ANOTHER.
 //
-// Both lists used to be replaced whole, so the call that only meant to star a
-// project cleared every view it did not restate.
+// A star changes the favorites alone; the pinned views it does not restate stay.
 func TestAStarFromOneTabDoesNotDropAPinFromAnother(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -521,8 +509,8 @@ func TestAStarFromOneTabDoesNotDropAPinFromAnother(t *testing.T) {
 			got.PinnedViews, got.Favorites)
 	}
 
-	// A WHOLE SET AND A CHANGE TO IT AT ONCE is refused: whichever won
-	// would discard the other.
+	// A WHOLE SET AND A CHANGE TO IT AT ONCE is refused: either would
+	// discard the other.
 	set := []string{"v-3"}
 	if _, err := r.writer.WritePins(t.Context(), "op-both", "ana", worklet.PinGesture{
 		Views: worklet.SetChange[string]{Set: &set, Add: []string{"v-4"}},
@@ -562,11 +550,9 @@ func TestAPriorityReorderFromAStaleScreenIsRefused(t *testing.T) {
 
 // AN UNREAD MARK BRINGS BACK A NOTICE THE POSITION COVERS.
 //
-// After "mark all read", every notice sits at or below the position, so the
-// position alone answers read for all of them — and a reader that consulted
-// only it and the read list made "mark unread" a mark nothing could see. And
-// moving the position forward clears the mark again, because "I have read
-// everything up to here" is the gesture that says so.
+// After "mark all read" the position covers every notice, so a reader
+// consulting only it and the read list would hide the unread mark. Moving the
+// position forward clears the mark again: "read everything up to here" says so.
 func TestAnUnreadMarkBringsBackANoticeThePositionCovers(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -612,10 +598,8 @@ func TestAnUnreadMarkBringsBackANoticeThePositionCovers(t *testing.T) {
 
 // A MARK NAMES A RECORD THE COMPANY HOLDS, and its position is the record's own.
 //
-// The caller used to supply the position beside the id, and a mark sent with
-// none — which is what a copied call did — was pruned on the write that made
-// it. The position is now read from the history row inside the decide, so an
-// id that names nothing is refused rather than stored.
+// The position is read from the history row inside the decide, never taken
+// from the caller, so an id that names nothing is refused rather than stored.
 func TestAMarkNamingNoRecordIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -648,9 +632,7 @@ func TestAMarkNamingNoRecordIsRefused(t *testing.T) {
 
 // A DUE SNOOZE IS REPORTED, NEVER PROMOTED.
 //
-// Putting one back in the unread list is a WRITE, and a read that performed
-// one would change the fleet's state from a path with no operation id, no
-// arbitration and no record.
+// Putting one back is a WRITE; see splitSnoozes.
 func TestADueSnoozeIsReportedRatherThanPromoted(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -665,7 +647,7 @@ func TestADueSnoozeIsReportedRatherThanPromoted(t *testing.T) {
 	r.drain()
 
 	// THE READ'S OWN CLOCK DECIDES, so the same rows answer differently as
-	// the hour passes — which is the whole point of a snooze.
+	// the hour passes.
 	state, err := r.reader.Person(t.Context(), worklet.PersonQuery{
 		Handle: "ana", Level: statelog.ReadStale,
 	}, wednesday.Add(2*time.Hour))
@@ -686,8 +668,7 @@ func TestADueSnoozeIsReportedRatherThanPromoted(t *testing.T) {
 
 // A PERSON NOBODY HAS WRITTEN IS AN EMPTY PERSON, not a missing one.
 //
-// Every human starts with no inbox, no pins and no priorities, and there is no
-// gesture that creates the record — the first write does.
+// No gesture creates the record; the first write does.
 func TestAPersonNobodyHasWrittenReadsEmpty(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -804,13 +785,11 @@ func TestAGenerationZeroPositionIsTheBareSequence(t *testing.T) {
 // A PERSON'S MARKS AND PINS LAND ON ONE RECORD, UNDER THE NAME
 // [iam.RecordOwner] GIVES THEM — and the audit trail still names the credential.
 //
-// A person acts AS the seat the identity directory binds them to
-// ([iam.ActorFor]): the writer's actor is the seat and the credential is the
-// operator id. So the record a person's own gestures land on is the seat's,
-// whichever surface they used, and the screen that asks under the seat finds
-// it with no second name to fall back to. A writer keyed on the credential grew
-// a second record under its label, invisible to every screen asking under the
-// seat while the call answered `applied`.
+// A person acts AS their bound seat ([iam.ActorFor]): the writer's actor is the
+// seat and the credential the operator id. So a person's gestures land on the
+// seat's record from any surface; keyed on the credential, they would land on
+// a second record no screen asking under the seat finds, while answering
+// `applied`.
 func TestAPersonsOwnGesturesLandOnTheirSeatsRecord(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

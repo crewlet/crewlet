@@ -9,14 +9,12 @@ import (
 
 // A SETTLE MOVES EVERY ROW TO THE SIDE ITS DECLARATION SAYS, AND NO OTHER ROW.
 //
-// [settleStatements] writes each side of `hidden` through the index that holds
-// that side, so it reads only what can move — and this is what holds the split
-// to the answer the single statement it replaced gave: through each shape of
-// declaration in turn, every native row of the field ends hidden exactly when
-// the field is archived, or applies to types its task's is not (case-folded),
-// or has no task at all; another field's rows and a foreign row are left as
-// they were. Hundreds of rows, so a side whose writes moved rows out of the
-// index it was walking would be seen leaving some behind.
+// [settleStatements] writes each side of `hidden` through the index holding
+// that side, reading only what can move. Through each shape of declaration, a
+// native row of the field ends hidden exactly when the field is archived,
+// applies to types its task's is not (case-folded), or has no task; another
+// field's rows and a foreign row stay put. Hundreds of rows, so a side whose
+// writes moved rows out of the index it walked would leave some behind.
 func TestASettleMovesEveryRowToTheSideItsDeclarationSays(t *testing.T) {
 	t.Parallel()
 	const tasks = 600

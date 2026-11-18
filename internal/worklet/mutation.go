@@ -14,68 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// RecordVersion is the highest record version this build READS — never the
-// version it stamps on what it writes.
+// RecordVersion is the highest record version this build READS, never the one
+// it stamps: a writer stamps the lowest version that reads the record
+// ([minimumRecordVersion], computed by [MutationRecord.Encode]), so an old node
+// in a rolling upgrade holds back only the records it would apply lossily.
 //
-// A record at a HIGHER version leaves the envelope decoded and everything else
-// opaque, and is RETAINED at its position rather than skipped — which is the
-// whole reason the decode is two passes. The one exception is a record that
-// installs a gate: there an unknown version stops the applier, because a
-// deferred gate licenses every later record on this node and the eviction gate
-// has no inverse that repairs it.
-//
-// # A record carries the LOWEST version that reads it, not this one
-//
-// What a writer stamps is [minimumRecordVersion] — the highest version among
-// the fields in [versionedFields] that the record actually carries, or 1 when
-// it carries none — which [MutationRecord.Encode] computes. Stamped at this
-// constant instead, the day it moves every record a new node writes would be
-// unreadable to an old one, the ones carrying nothing new included, so the old
-// half of a rolling upgrade would retain every write in the company and refuse
-// every read its scopes met. Stamped by content, an old node holds back
-// exactly the records it would otherwise apply lossily and applies everything
-// else.
-//
-// It moves ONLY with the table, and exactly to the table's highest version:
-// statelogtest's declaration case refuses a build that reads a version no
-// field introduced, because such a build would accept a newer peer's record
-// at that version and drop the field it was minted for.
-//
-// Version 2 is a credential's apps beside its actor ([MutationRecord.ActorApps]).
-// Version 3 is a comment thread's stakes: who owes an answer in it and who
-// awaits one ([Snapshot.ThreadOwing], [Snapshot.ThreadAwaiting], ADR-0113).
-// Version 4 is a history row that keeps its writer's apps
-// ([MutationRecord.ActorAppsKept]).
-// Version 5 is an agent's comment stating whether it asks
-// ([Snapshot.CommentAsks]) and which seats it names are agents
-// ([Snapshot.MentionedAgents]).
-// Version 6 is a notice row that keeps that statement
-// ([MutationRecord.NoticeAsksKept]).
-// Version 7 is a notice row that keeps whether the change woke its recipient
-// ([MutationRecord.NoticeWokeKept]).
-// Version 8 is a task's watchers a question added ([TaskPatch.AskWatch]).
-// Version 9 is why a task waits until its start ([TaskPatch.WaitReason]).
-// Version 10 is a task patch taking a date off by its flag
-// ([TaskPatch.ClearStart], [TaskPatch.ClearDue]): a build reading 9 decodes
-// neither, and would apply the patch as one that names no date — keeping a
-// date every newer node cleared.
-// Version 11 is a change the task waits on settling ([TaskPatch.ChangeSettled]).
-// Version 12 is a question its asker withdrew saying why ([Comment.Withdrawal]):
-// a build reading 11 would resolve it and drop the reason.
-// Version 13 is whom an agent's record a later turn reads was written for
-// ([MutationRecord.WorkingFor], ADR-0109).
-// Version 14 is an ask the engine stamped with its act ([Comment.Act]): a
-// build reading 13 would keep the question and drop what approving it means.
-// Version 15 is a change the task waits on that nothing moves
-// ([TaskPatch.DeadWait], [TaskPatch.DeadWaitEnded], ADR-0128).
-// Version 16 is a task naming an atlas entry ([RelationEntry], ADR-0140): a
-// build reading 15 would keep the edge and leave it out of the history row's
-// deltas, which are derived from the kinds it knows.
-// Version 17 is a saved view somebody deleted ([View.DeletedAt]): a build
-// reading 16 would apply the record as a save and keep the view listed.
-// Version 18 is a remark taken down ([Comment.Removed], [Writer.RemoveComment]):
-// a build reading 17 would apply the removal as nothing, keeping the words
-// every newer node blanked.
+// A record above it is RETAINED at its position, envelope decoded, never
+// skipped (package doc, "Why the record decodes in two passes"); one installing
+// a gate stops the applier instead, since a deferred gate licenses every later
+// record on this node and the eviction gate has no inverse that repairs it.
+// It moves ONLY with [versionedFields], whose rows name each version's fields,
+// to that table's highest version: statelogtest refuses a build reading a
+// version no field introduced, which would drop the field it was minted for.
 const RecordVersion = 18
 
 // AppsKeptVersion is the version from which the applier keeps a record's
@@ -95,47 +45,28 @@ const NoticeAsksVersion = 6
 // whether the change woke its recipient; every older record reads it as woken.
 const NoticeWokeVersion = 7
 
-// baseRecordVersion is version 1, the base format: what every build there has
-// ever been reads, and what a record carrying no versioned field is stamped at.
+// baseRecordVersion is version 1: what every build reads, and what a record
+// carrying no versioned field is stamped at.
 //
-// THE BARRIER AND A REANCHOR'S GENERATION ARE PINNED AT IT FOR EVER, as every
-// gate is ([GateRecordVersion]) — never at [RecordVersion], and never left to
-// the table that could one day raise them — because of what an older node does
-// with a record it cannot read: it retains it. A retained barrier is one more
-// deferral row on that node for every linearizable read anybody makes, and a
-// node holding a deferral declines to snapshot until it upgrades; a retained
-// generation is a transition that node never makes. Neither has anything a
-// later version could add to it, and [MutationRecord.Encode] refuses either one
-// carrying a versioned field ([RecordEnvelope.readByEveryBuild]).
+// THE BARRIER AND A REANCHOR'S GENERATION ARE PINNED AT IT FOR EVER, as a gate
+// is at [GateRecordVersion], never left to the table: an older node retains a
+// record it cannot read, a retained barrier is a deferral row for every
+// linearizable read (and blocks its snapshots until it upgrades), and a
+// retained generation is a transition it never makes. [MutationRecord.Encode]
+// refuses either carrying a versioned field ([RecordEnvelope.readByEveryBuild]).
 const baseRecordVersion = 1
 
 // versionedFields is every field a tracker record has gained since the base
-// format, and the version a reader must be at to apply a record carrying it.
+// format, with the version a reader must be at to apply a record carrying it
+// (package doc, "Every new field is version-gated, and every new derived
+// column re-derived").
 //
-// # Adding a field to any record, payload or document is adding a row here
-//
-// A field an older build has no home for is decoded AROUND: the build reads
-// the version, finds it readable, applies what it understands and drops the
-// rest — so its rows for that object differ from every upgraded node's for
-// good, on tables a fleet compares byte for byte, and nothing ever reports
-// it. The row is what makes the writer stamp a version that build retains
-// instead. So a new field takes the next version above [RecordVersion] (the
-// constant moves with it) — NEVER a version a build already reads, which that
-// build would apply without the field; TestAClosedRecordVersionGainsNoField
-// lists every version with the fields it closed on and fails a row that joins
-// one — a row naming its JSON path from the record's root
-// — through `mutation` for a payload field — and a record in the domain's
-// statelogtest candidate that carries it, which is what certifies the path is
-// the one the encoder actually writes.
-//
-// A change to how the applier treats a field it ALREADY copies is the same
-// hazard with no new field to carry it, and takes the same gate: a marker the
-// writer sets, a row that stamps it, and the new rule applied only to a record
-// at that version or above.
-//
-// A field that no tag has shipped is still a field two builds of one rolling
-// upgrade disagree about, so "nothing has been released" does not exempt a new
-// field from its row.
+// A new field on any record, payload or document, shipped by a tag or not,
+// takes the next version above [RecordVersion], never one a build already
+// reads (TestAClosedRecordVersionGainsNoField). Its row names the JSON path
+// from the record's root (through `mutation` for a payload field), and a record
+// in the domain's statelogtest candidate carrying it certifies that path. A
+// changed rule for a field the applier already copies takes the same gate.
 var versionedFields = statelog.RecordFields{
 	{Name: "MutationRecord.ActorApps", Since: 2, Path: []string{"actor_apps"}},
 	{Name: "Snapshot.ThreadOwing", Since: 3, Path: []string{"notify", "snapshot", "thread_owing"}},
@@ -254,25 +185,14 @@ var AuthorKinds = []AuthorKind{
 // Valid reports whether an author kind off the wire is one this build knows.
 func (a AuthorKind) Valid() bool { return slices.Contains(AuthorKinds, a) }
 
-// Person reports an actor acting through a PERSON's own credential rather
-// than as a seat: somebody at the dashboard, or the token they run the company
-// through.
+// Person reports an actor acting through a PERSON's own credential rather than
+// as a seat: somebody at the dashboard, or the token they run the company
+// through. It is the one predicate every authority gate asks, so no two gates
+// can disagree on who is a person, and it sits on the closed set so a fifth
+// kind is decided here.
 //
-// IT IS THE PREDICATE EVERY AUTHORITY GATE ASKS, and it is here because it was
-// written out at each of them and they did not agree: `set_priorities` tested
-// both kinds, while `write_project` tested only `operator`. So a human
-// teammate could arrange somebody's priority list from the dashboard and could
-// not declare their own team's fields — one rule, two answers, and no single
-// place a reader could go to find out which was meant.
-//
-// (`doclet` carries its own `Actor.IsHuman` over its own three-valued
-// `AuthorKind`. That is a different closed set answering a different question,
-// who a NOTIFICATION treats as a person, and folding the two would make one
-// name mean both.)
-//
-// A METHOD ON THE CLOSED SET rather than a helper beside one caller, for
-// [AuthorKind.Valid]'s reason: a fifth kind is added here, and a predicate
-// over the set belongs where the set is.
+// `doclet`'s `Actor.IsHuman` is a different closed set answering who a
+// NOTIFICATION treats as a person; folding the two would make one name mean both.
 func (a AuthorKind) Person() bool {
 	return a == AuthorHuman || a == AuthorOperator
 }
@@ -323,24 +243,14 @@ const WorkspaceContainer = "workspace"
 
 // The scope path alphabet.
 //
-// # Why the paths NEST, when the term kinds look flat
-//
-// The framework knows exactly one thing about a scope path: that it is a
-// hierarchy written left to right with a separator, from which it computes
-// CONTAINMENT. Everything the scope field is for rests on that — a record
-// deferred on a project must block a write to a task in that project, and a
-// record deferred on one task must NOT block a write to its neighbour.
-//
-// Written flat — "container/ENG" beside "object/<uuid>" — neither holds:
-// the container path is not an ancestor of the object path, so the first
-// blocks nothing; and adding the container beside the object on every write
-// would make one un-decodable task record block its entire project.
-//
-// So an object's path is written UNDER its container, and that is why
-// [ScopeTerm] carries a container for the two term kinds that have one. The
-// plan's own sentence — "the uuid ALONE" — is about the KIND being absent
-// from the path, which it is: a turn commit and its task's create both name
-// o/<uuid> and therefore collide, exactly as they must.
+// The paths NEST although the term kinds look flat: the framework computes only
+// CONTAINMENT from a path, and a record deferred on a project must block a
+// write to a task in it while one deferred on a task must not block its
+// neighbour. Written flat ("container/ENG" beside "object/<uuid>") the first
+// blocks nothing, and naming the container beside every object would make one
+// undecodable task record block its whole project. So an object's path sits
+// UNDER its container, which is why [ScopeTerm] carries one, and holds no KIND:
+// a turn commit and its task's create both name o/<uuid>, and must collide.
 const (
 	pathDomain    = "t"
 	pathContainer = "c"
@@ -384,11 +294,9 @@ func (t ScopeTerm) Path() string {
 	case TermDomain:
 		return pathDomain
 	}
-	// AN UNKNOWN TERM KIND IS THE DOMAIN, NOT A SKIPPED TERM. A term this
-	// build cannot interpret is a claim about a blast radius it cannot
-	// bound, and the only safe reading of an unbounded claim is the widest
-	// one. Dropping it would silently narrow a newer peer's scope to
-	// whatever this build happened to recognise.
+	// AN UNKNOWN TERM KIND IS THE DOMAIN, NOT A SKIPPED TERM: it claims a
+	// blast radius this build cannot bound, and dropping it would narrow a
+	// newer peer's scope to what this build recognises.
 	return pathDomain
 }
 
@@ -400,12 +308,9 @@ func (t ScopeTerm) container() string {
 	return t.Container
 }
 
-// named is the container a CONTAINER term names.
-//
-// THE CONTAINER TERM'S OWN NAME IS ITS ID, not its Container field:
-// "container(ENG)" names ENG, and reading the field would resolve every
-// container term to the workspace and make a project-wide deferral cover the
-// whole company. One with no ID names the container its field does.
+// named is the container a CONTAINER term names: its ID, not its Container
+// field, which would resolve every container term to the workspace and widen a
+// project-wide deferral to the whole company. One with no ID names its field's.
 func (t ScopeTerm) named() string {
 	if t.ID == "" {
 		return t.container()
@@ -413,54 +318,35 @@ func (t ScopeTerm) named() string {
 	return t.ID
 }
 
-// MaxScopeTerms is the cap on a record's declared scope.
-//
-// NOT A NEW NUMBER: it is this design's universal fan-out batch — 64
-// descendants per move batch, 64 children per merge batch, 64 dependents, 64
-// watchers, 64 of a caller's own moves per rank order. A writer whose
-// affected set would exceed it emits the smallest COVERING container or family
-// term instead, so the field is bounded by construction rather than by a cap a
-// writer can hit and then have to handle.
-//
-// Priced, so the cap reads as load-bearing: if every loud record enumerated 64
-// ids it would cost ≈ 1 068 MB/yr, +31 % of the whole log. An unbounded
-// cascade is expressed in O(1) bytes or not at all.
+// MaxScopeTerms is the cap on a record's declared scope: this design's
+// universal fan-out batch (64 descendants per move batch, children per merge
+// batch, dependents, watchers, a caller's moves per rank order). A writer whose
+// affected set is larger states the smallest COVERING container or family term
+// ([ScopeSet.capped]), so the field is bounded by construction; 64 ids on
+// every loud record would cost ≈ 1 068 MB/yr, +31 % of the whole log.
 const MaxScopeTerms = 64
 
 // ScopeSet is the COMPLETE set of objects a record's apply may write, stated
 // by the WRITER and readable at every version.
 //
-// NEVER EMPTY. The exactly-the-subject case — almost every record — encodes
-// as the one-byte sentinel, so the common case costs thirteen bytes and the
-// field can never be absent by accident. An absent or unreadable scope on a
-// record this build cannot decode is the DOMAIN term, never "just the
-// subject": assuming a V1 convention holds for a V2 operation is the bug this
-// field exists to close.
+// NEVER EMPTY: the exactly-the-subject case encodes as a one-byte sentinel, so
+// the field cannot be absent by accident. An absent or unreadable scope is the
+// DOMAIN term, never "just the subject": assuming a V1 convention holds for a
+// V2 operation is the bug this field closes.
 type ScopeSet struct {
 	// Subject is true for the sentinel: this record touches exactly the
 	// object its subject names, and nothing else.
 	Subject bool
 
-	// Container is the project the subject lives in, and rides the
-	// sentinel.
+	// Container is the project the subject lives in, riding the sentinel;
+	// empty is [WorkspaceContainer].
 	//
-	// # Why the container is ON THE RECORD and not derived from the subject
-	//
-	// A subject names an object, not its home: a task's subject is its
-	// uuid, and which project it lives in is a fact about the row — one
-	// that CHANGES, because a task can move between projects. So the path
-	// a record's scope resolves to cannot be computed from the subject
-	// alone, and the only party that knows it at the moment the record is
-	// written is the writer.
-	//
-	// Leaving it out is silent rather than wrong-looking. Every task
-	// record would file its deferral under the workspace container while
-	// every project-scoped read probed its own, and the two-clause
-	// containment probe — the one piece of SQL here where a wrong clause
-	// is data loss and not a wrong answer — would simply never match.
-	//
-	// Empty is [WorkspaceContainer], which is what the objects that
-	// genuinely live at the top of the company resolve to.
+	// ON THE RECORD, not derived from the subject: a subject names an object,
+	// not its home, and a task can move between projects, so only the writer
+	// knows it when the record is written. Left out, every task record would
+	// file its deferral under the workspace while project-scoped reads probe
+	// their own, and the containment probe, where a wrong clause is data loss,
+	// would never match.
 	Container string
 
 	// Terms is the enumeration, when the record touches more than its own
@@ -508,12 +394,8 @@ func (s *ScopeSet) UnmarshalJSON(b []byte) error {
 	}
 	var terms []ScopeTerm
 	if err := json.Unmarshal(b, &terms); err != nil || len(terms) == 0 {
-		// A SCOPE THIS BUILD CANNOT DECODE WIDENS TO THE DOMAIN rather
-		// than failing the decode: a record from a newer peer carries a
-		// scope shape this build has never seen, and the whole point of
-		// the domain term is to be the answer that is never wrong — it
-		// defers against everything, which is slow and correct where a
-		// refused record is neither.
+		// Widened for the reason above: the domain term defers against
+		// everything, slow and correct where a refused record is neither.
 		*s = ScopeSet{Terms: []ScopeTerm{{Kind: TermDomain}}}
 		//nolint:nilerr // Deliberate: the widened scope IS the answer.
 		return nil
@@ -524,11 +406,8 @@ func (s *ScopeSet) UnmarshalJSON(b []byte) error {
 
 // Resolve renders the scope as the framework's own path set.
 //
-// ONE ARGUMENT, deliberately: the container used to be passed in beside the
-// subject, and a scope resolved with it on the write path and without it on
-// the decode path is two different paths for one record — the writer probing
-// the project's closure and the applier filing under the workspace's. It takes
-// the subject alone now, and the container comes from the record itself.
+// It takes the subject alone, the container coming from the record itself, so
+// the write path and the decode path cannot resolve one record to two paths.
 func (s ScopeSet) Resolve(subject Subject) statelog.ScopeSet {
 	if s.Subject || len(s.Terms) == 0 {
 		return statelog.ScopeSet{Paths: []string{subjectPath(subject, s.Container)}}
@@ -561,12 +440,10 @@ func subjectPath(s Subject, container string) string {
 	case KindPerson:
 		return ScopeTerm{Kind: TermFamily, ID: string(KindPerson)}.Path()
 	case KindBarrier, KindTrimmed:
-		// THE ONE-BYTE SENTINEL OF THE FRAMEWORK'S OWN SCOPE, so a
-		// framework record never intersects any read's closure. Neither
-		// writes a row of this domain's anywhere, so a scope that
-		// intersected anything would make every read of it wait behind
-		// a record that changed none of its rows — for a barrier, every
-		// linearizable read behind every other.
+		// THE FRAMEWORK'S OWN SCOPE, which intersects no read's closure:
+		// neither writes a row of this domain's, so a wider scope would make
+		// reads wait on a record that changed none of their rows (for a
+		// barrier, every linearizable read behind every other).
 		return statelog.FrameworkScope
 	case KindGeneration, KindEviction:
 		// A GATE IS ABOUT THE WHOLE DOMAIN. It licenses or drops
@@ -598,12 +475,10 @@ func (s ScopeSet) Validate() error {
 				"things about the same record", len(s.Terms))
 		}
 		if s.Container != "" {
-			// THE SEPARATOR IS WHAT THE SENTINEL ENCODING RESTS ON, and a
-			// blank segment is what the path join drops. A container
-			// carrying either decodes as a DIFFERENT container and files
-			// the record's deferral under a path no probe reaches — so
-			// both are refused where the value is accepted rather than
-			// trusted where it is split.
+			// The sentinel encoding splits on the separator and the path
+			// join drops a blank segment, so either decodes as a DIFFERENT
+			// container and files the deferral where no probe looks: refused
+			// where accepted rather than trusted where split.
 			switch {
 			case strings.Contains(s.Container, statelog.ScopeSeparator):
 				return fmt.Errorf("worklet: container %q contains %q, which is "+
@@ -661,17 +536,12 @@ func (s ScopeSet) Validate() error {
 // whose affected set is larger states the smallest COVERING term instead.
 //
 // THE LARGEST CONTAINERS FOLD FIRST, the name breaking a tie, each into its
-// own container term, until the enumeration fits — so the same set always
-// states the same scope — and one spread over more containers than the cap
-// is the DOMAIN. An object or a key already under a container the scope names
-// whole is dropped, and so is a term named twice.
-//
-// EVERY ENUMERATION A WRITER WIDENS PASSES THROUGH IT, because each widening
-// is bounded on its own and their sum is not: a task's sixty-four dependents
-// are one cap's worth and its own term is a sixty-fifth, which
-// [ScopeSet.Validate] refused — so every write to a blocker somebody had
-// filled was refused inside its decide, for ever. A sentinel is returned as
-// it is.
+// container term until the enumeration fits, so one set always states one
+// scope; one spread over more containers than the cap is the DOMAIN. A term
+// under a container named whole, or named twice, is dropped; a sentinel is
+// returned as it is. Every widened enumeration passes through it, since each
+// widening is bounded alone and their sum is not: a task's 64 dependents plus
+// its own term would fail [ScopeSet.Validate] inside every decide.
 func (s ScopeSet) capped() ScopeSet {
 	if s.Subject || len(s.Terms) == 0 {
 		return s
@@ -809,21 +679,16 @@ func (e RecordEnvelope) InstallsGate() bool {
 	return e.Subject.Kind.InstallsGate() || e.Op == OpPurge
 }
 
-// readByEveryBuild reports a record every build there will ever be must read:
-// a gate ([RecordEnvelope.InstallsGate]), the read index's barrier, the trim's
-// trimmed record, and a reanchor's generation.
+// readByEveryBuild reports a record every build must read, each pinned at a
+// version every build reads: a gate ([RecordEnvelope.InstallsGate]), the read
+// index's barrier, the trim's trimmed record and a reanchor's generation.
 //
-// Each is pinned at a version every build reads for its own reason, and all
-// four reasons are what an older node does with a record it cannot read. A
-// gate it cannot defer — a deferred gate would license every record above it,
-// with no inverse that repairs it — so it halts there and leaves service; a
-// barrier it retained is one more deferral row for every linearizable read; a
-// trimmed record it retained keeps every anchor it names; a generation it
-// retained is a transition it never makes. So none of them may
-// carry a versioned field, and [MutationRecord.Encode] refuses one that does —
-// a field such a record needs is a field that belongs somewhere else. The one
-// exception is a gate's own APPLY changing ([statelog.VersionedField.Gate]),
-// where halting an older node is the only answer that is not a divergence.
+// An older node cannot defer a gate (it would license every record above it,
+// irreparably), so it halts there; a barrier it retained defers every
+// linearizable read, a trimmed record keeps every anchor it names, and a
+// generation is a transition never made. So none may carry a versioned field
+// ([MutationRecord.Encode] refuses one), save a gate's own changed APPLY
+// ([statelog.VersionedField.Gate]), where halting is the only non-divergence.
 func (e RecordEnvelope) readByEveryBuild() bool {
 	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpTrimmed || e.Op == OpGeneration
 }
@@ -846,17 +711,15 @@ type MutationRecord struct {
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 
-	// ActorApps are the apps the credential behind an [AuthorOperator]
-	// record a later turn reads used when the node that took the write
-	// resolved it (iam.ActorApps): an item's creation and every move of its
-	// assignee, whatever they wake, and any other record whose wake may start
-	// an agent's turn ([Writer.carries]); absent on every other record, a
-	// gate always among them. The change feed reads it, and so does the work
-	// pickup off the history row, and a turn the record wakes or hands work
-	// to uses no app outside it (ADR-0109, ADR-0112,
-	// notify.FirstPartyWriter). Version 2: an older build retains a record
-	// carrying it rather than waking a seat for a credential it would read as
-	// a stranger.
+	// ActorApps are the apps the credential behind an [AuthorOperator] record
+	// used, as the node that took the write resolved them (iam.ActorApps), on
+	// every record a later turn reads: an item's creation, every move of its
+	// assignee, and any other record whose wake may start an agent's turn
+	// ([Writer.carries]); absent otherwise, a gate always. The change feed and
+	// the work pickup read it, and a turn the record wakes or hands work to
+	// uses no app outside it (ADR-0109, ADR-0112, notify.FirstPartyWriter).
+	// Version 2: an older build retains such a record rather than wake a seat
+	// for a credential it would read as a stranger.
 	ActorApps []iam.Grant `json:"actor_apps,omitempty"`
 
 	// ActorAppsKept marks a record whose [MutationRecord.ActorApps] its
@@ -865,20 +728,15 @@ type MutationRecord struct {
 	ActorAppsKept bool `json:"actor_apps_kept,omitempty"`
 
 	// WorkingFor is whom an [AuthorAgent] record a later turn reads was
-	// written for (ADR-0109): whoever the turn that wrote it worked for,
-	// composed from that turn's own bound ceiling, on an item's creation and
-	// every move of its assignee, whatever they wake, and on any other record
-	// whose wake may start an agent's turn ([Writer.carries]), and absent on
-	// every other record: an
-	// agent's write made for nobody else, every other author's, and one no
-	// later turn reads (a gate always among them). The change feed reads
-	// it, and the turn the record wakes works for them
-	// (notify.FirstPartyWriter), never for the writing seat, which holds every
-	// app. KEPT ON THE RECORD'S HISTORY ROW (`tracker_history.working_for`,
-	// [WorkingForVersion]), applied on every node from the carrier's first
-	// build on, which the work pickup reads. Version 13: an older build
-	// retains a record carrying it rather than waking a seat for the writing
-	// agent.
+	// written for (ADR-0109): whoever the writing turn worked for, composed
+	// from its bound ceiling, on the records [MutationRecord.ActorApps] rides;
+	// absent on an agent's write made for nobody else, every other author's,
+	// and any no later turn reads (a gate always). The change feed reads it,
+	// and the turn the record wakes works for them (notify.FirstPartyWriter),
+	// never for the writing seat, which holds every app. KEPT ON THE HISTORY
+	// ROW (`tracker_history.working_for`, [WorkingForVersion]) for the work
+	// pickup. Version 13: an older build retains such a record rather than
+	// wake a seat for the writing agent.
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// NoticeAsksKept marks a record whose comment author's statement its notice
@@ -895,48 +753,21 @@ type MutationRecord struct {
 	TurnID string   `json:"turn_id,omitempty"`
 	Chain  []string `json:"chain,omitempty"`
 
-	// Kind is WHAT THIS RECORD DID, stated by the writer, and it is a
-	// different fact from whether anybody was told about it.
+	// Kind is WHAT THIS RECORD DID, stated by the writer, and a different fact
+	// from whether anybody was told. Not read off the Notify: the history
+	// row's `kind` is what the feed's `kinds=` filter, the report windows and
+	// the unblocked repair select on, and the feed is a complete account of
+	// what HAPPENED rather than of what was ANNOUNCED (`notified` tells the
+	// two apart).
 	//
-	// # Why it is not simply read off the Notify
-	//
-	// Because it was, and that made the activity feed's own vocabulary a
-	// property of whether the change happened to have an audience. A
-	// history row's `kind` is what the feed's `kinds=` filter, the report
-	// windows and the unblocked repair's own scan all select on; when a
-	// record carried no Notify the applier fell back to guessing one from
-	// the OPERATION, which is a different vocabulary altogether. A quiet
-	// catalogue edit filed as `patch`, a purge as `purge` — and `patch`
-	// and `purge` are not
-	// [ChangeKind]s at all, so no filter could name them and nothing
-	// noticed.
-	//
-	// The file that writes the history row opens by stating the principle
-	// this field exists to make true: "the activity feed is a complete
-	// account of what HAPPENED rather than an account of what was
-	// ANNOUNCED, and `notified` is how a reader tells 'nothing was
-	// announced' from 'nothing happened'". A kind read off the
-	// announcement could not deliver that.
-	//
-	// REQUIRED exactly where [ObjectKind.RecordsHistory] is true, and
-	// refused everywhere else — a barrier, a turn or a rank order writes
-	// no row for a kind to describe. [Writer.decide] enforces both, and
-	// the applier stores it verbatim.
+	// REQUIRED exactly where [ObjectKind.RecordsHistory] is true and refused
+	// everywhere else (a barrier, a turn or a rank order writes no row);
+	// [Writer.decide] enforces both, and the applier stores it verbatim.
 	Kind ChangeKind `json:"kind,omitempty"`
 
-	// Notify is the routing snapshot, and NIL is what "wakes nobody"
-	// means.
-	//
-	// A NIL POINTER RATHER THAN A quiet FLAG, so the wake filter is "has a
-	// Notify" — a question about the record's own shape — instead of a
-	// boolean a writer can forget to set. A quiet commit is a full record,
-	// arbitrated exactly like a loud one, and writes its history row like
-	// every other: quiet means it wakes nobody, and nothing else.
-	//
-	// IT NO LONGER CARRIES THE KIND ALONE — see [MutationRecord.Kind].
-	// When both are present they must agree, which [Writer.decide]
-	// checks: one fact with two carriers is one fact that can disagree
-	// with itself.
+	// Notify is the routing snapshot; NIL means the commit wakes nobody, and
+	// nothing else (see [Notify]). When it and [MutationRecord.Kind] are both
+	// present they must agree, which [Writer.decide] checks.
 	Notify *Notify `json:"notify,omitempty"`
 
 	// Extra carries fields a newer build wrote, so a record round-trips
@@ -944,14 +775,10 @@ type MutationRecord struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// What is NOT in the envelope, deliberately: the BROKER'S instant.
-//
-// The effective instant every duration is measured against derives from the
-// broker's own store timestamp, which the replication loop stamps onto the
-// record before calling the applier. A writer must not be able to author it,
-// and a field a writer could set is a field a writer could lie about — so it
-// reaches the applier as an argument rather than as a key in the format.
-// Stated here so nobody "completes" the envelope by adding it.
+// What is NOT in the envelope, deliberately: the BROKER'S instant. Every
+// duration is measured against the broker's store timestamp, which the
+// replication loop hands the applier as an argument; a field a writer could set
+// is one it could lie about, so nobody "completes" the envelope with it.
 
 // DecodeEnvelope is the FIRST pass, and it never fails on version.
 //
@@ -1009,17 +836,9 @@ func Decode(payload []byte) (MutationRecord, error) {
 }
 
 // knownKeys are the top-level keys this build writes, so Extra holds exactly
-// what it does not.
-//
-// LISTED RATHER THAN REFLECTED, because the list is the format's own reserved
-// set: a key added to the struct and not here would be carried in Extra as
-// well as in its field, and re-encoded twice.
-//
-// AND ASSERTED IN BOTH DIRECTIONS, which is what the list needed and did not
-// have. `kind` was added to the record and not here, so every record carrying
-// one decoded with it in Extra as well as in its own field and took the
-// merge path on every relay — a drift with no symptom, which is the shape a
-// hand-maintained list fails in.
+// what it does not. LISTED RATHER THAN REFLECTED, because the list is the
+// format's own reserved set; TestTheRecordsOwnKeysAreExactlyTheKnownSet holds
+// it to the struct in both directions.
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
 	"expect", "mutation", "actor", "actor_kind", "actor_apps", "actor_apps_kept",
@@ -1041,21 +860,15 @@ func (e *ErrFutureVersion) Error() string {
 
 // Encode writes a record, stamping it with the lowest version that reads it.
 //
-// A ZERO VERSION IS "STAMP IT": every writer leaves V unset and this computes
-// [minimumRecordVersion] over the bytes it is about to publish, so the stamp
-// cannot drift from what the record carries. A version the caller DID set is
-// kept — a relay re-encodes a record at the version its writer gave it, a
-// gate record carries [GateRecordVersion] for ever, and a barrier and a
-// generation their pinned [baseRecordVersion] — but is refused when it is
-// below what the record's own fields need, because that record would be
-// applied, lossily, by exactly the builds the stamp exists to hold it back
-// from. A record every build must read ([RecordEnvelope.readByEveryBuild]) is
-// refused whenever it carries a versioned field at all, stamped or set — save
-// a gate's own changed apply ([statelog.VersionedField.Gate]).
-//
-// The scope is validated HERE rather than at the applier, because a scope that
-// under-states a record's blast radius is only ever a writer's mistake and the
-// applier has nothing to compare it against.
+// A ZERO VERSION IS "STAMP IT": this computes [minimumRecordVersion] over the
+// bytes it publishes, so the stamp cannot drift from the content. A version the
+// caller set is kept (a relay's, a gate's [GateRecordVersion], a barrier's or
+// generation's [baseRecordVersion]) but refused below what the record's fields
+// need, since the builds the stamp holds back would apply it lossily. A record
+// every build must read ([RecordEnvelope.readByEveryBuild]) is refused carrying
+// any versioned field, save [statelog.VersionedField.Gate]. The scope is
+// validated here, not at the applier: an under-stated scope is a writer's
+// mistake the applier has nothing to compare against.
 func (r MutationRecord) Encode() ([]byte, error) { return r.encodeWith(versionedFields) }
 
 // encodeWith is [MutationRecord.Encode] under a named field table — the seam
@@ -1064,11 +877,8 @@ func (r MutationRecord) Encode() ([]byte, error) { return r.encodeWith(versioned
 func (r MutationRecord) encodeWith(fields statelog.RecordFields) ([]byte, error) {
 	stamp := r.V == 0
 	if stamp {
-		// THE LOWEST, never [RecordVersion]: a record nobody stated a
-		// version for is one nobody decided needs a newer reader, and
-		// defaulting it to the newest would have every older node
-		// retain it. The table below raises it to what the record's
-		// own fields need.
+		// THE LOWEST, never [RecordVersion], which would have every older
+		// node retain it; the table raises it to what the fields need.
 		r.V = baseRecordVersion
 	}
 	if err := r.Subject.Validate(); err != nil {
@@ -1094,14 +904,10 @@ func (r MutationRecord) encodeWith(fields statelog.RecordFields) ([]byte, error)
 	}
 	switch {
 	case r.readByEveryBuild() && minimum > baseRecordVersion && len(refused) > 0:
-		// A GATE, A BARRIER OR A GENERATION NEVER CARRIES A VERSIONED
-		// FIELD, stamped or set — see [RecordEnvelope.readByEveryBuild] —
-		// save the one kind a gate may: a change to what the gate's own
-		// apply does ([statelog.VersionedField.Gate]), at which an older
-		// node HALTS. Anything else a gate needs a newer reader for would
-		// take every older node out of service for a field rather than for
-		// a rule it cannot honour. A barrier or a generation an older node
-		// cannot read is one it retains.
+		// See [RecordEnvelope.readByEveryBuild]: anything else a gate needs
+		// a newer reader for would halt every older node over a field rather
+		// than a rule it cannot honour, and a barrier or a generation would
+		// be retained.
 		return nil, fmt.Errorf("worklet: the %s record on %s must be readable "+
 			"by every build for ever — an older node halts at a gate, and retains "+
 			"a barrier or a generation, that it cannot read — and it carries "+
@@ -1132,21 +938,12 @@ func (r MutationRecord) marshal() ([]byte, error) {
 		return body, err
 	}
 
-	// A RECORD FROM A NEWER BUILD RE-ENCODES WITH ITS UNKNOWN FIELDS.
-	//
-	// [Extra] is what the decoder kept and this is what puts it back:
-	// without it a relayed record loses everything the writer wrote that
-	// this build has no field for, and the "decodes, round-trips and
-	// re-publishes losslessly" contract that makes a rolling upgrade
-	// possible is false. The change feed is where it shows: a parser on a
-	// newer node reads a record an older node relayed, and sees only the
-	// half its relay understood.
-	//
-	// The map path is taken ONLY when there is something to add. A record
-	// this build wrote has no unknown fields, so its bytes are the
-	// struct's own — which is what keeps the barrier's literal
-	// byte-identical, and its size is the figure the read index's whole
-	// cost model rests on.
+	// A RECORD FROM A NEWER BUILD RE-ENCODES WITH ITS UNKNOWN FIELDS: without
+	// [Extra] put back, a relayed record loses what this build has no field
+	// for, and a newer node's change-feed parser sees only what the relay
+	// understood. Taken ONLY when there is something to add, so a record this
+	// build wrote keeps the struct's own bytes: the barrier's literal stays
+	// byte-identical, and its size is what the read index's cost model rests on.
 	var merged map[string]json.RawMessage
 	if err := json.Unmarshal(body, &merged); err != nil {
 		return nil, fmt.Errorf("worklet: re-encode a record carrying %d "+
@@ -1209,20 +1006,12 @@ const (
 	ChangeCatalogue   ChangeKind = "catalogue_updated"
 	ChangePrioritised ChangeKind = "prioritised"
 
-	// ChangePersonUpdated is every OTHER write to a person's own record —
-	// a pin, an inbox mark, a snooze.
-	//
-	// ITS OWN KIND BECAUSE THE ROW EXISTS EITHER WAY. A person record's
-	// apply writes a history row like every other document's, so the
-	// choice was never "name this or write nothing"; it was "name this or
-	// file it under the OPERATION", which is what it did — every pin
-	// toggle landing in the company's account of itself as a `patch`, a
-	// word no filter can select and no card can render.
-	//
-	// IT IS NOT ROUTABLE and carries no notification: a person's own
-	// bookkeeping wakes nobody, which is what separates it from
-	// [ChangePrioritised] — the one person write that announces itself,
-	// because somebody else reordered your day.
+	// ChangePersonUpdated is every OTHER write to a person's own record — a
+	// pin, an inbox mark, a snooze. Its own kind because the history row is
+	// written either way, and would otherwise land under the OPERATION
+	// (`patch`), which no filter can select and no card can render. NOT
+	// ROUTABLE: a person's own bookkeeping wakes nobody, unlike
+	// [ChangePrioritised], where somebody else reordered your day.
 	ChangePersonUpdated ChangeKind = "person_updated"
 
 	// ChangeFileWritten is a file put at its path — created, or its content
@@ -1268,18 +1057,13 @@ func (k ChangeKind) Valid() bool { return slices.Contains(ChangeKinds, k) }
 // ([TaskDeltas]), for the kinds that name one field of a task or one family of
 // its sets, and nil for every other kind.
 //
-// A RECORD CARRIES ONE KIND, and a write that moves several of these fields at
-// once is filed under one of them: update_work_item's is the assignee's, then
-// the status's, and the tags', the watchers', the team's or a link's only
-// where nothing before them set it. So the change of one of these kinds is
-// found by its delta, whatever kind its record ended with, as the pickup finds
-// an assignment by its assignee delta (readyAssignedArm, #930), the router
-// tells a hand-off and the finished edge ([Notify.moved], #953) and a wake's
-// prompt names every kind of change its write made ([Notify.movedKinds]). A
-// kind that names no single field, `fields` among them, is found by its kind
-// alone, and a checklist's move is not always a delta (a renamed or reassigned
-// item moves no list's done count), so its holders are told by the items it
-// touched ([Snapshot.ChecklistAssignees]) and never by this.
+// A record carries ONE kind (update_work_item's is the assignee's, then the
+// status's, then the others' only where nothing before set it), so a change of
+// these kinds is found by its delta, whatever its record's kind: the pickup
+// (readyAssignedArm), the router ([Notify.moved]) and a wake's prompt
+// ([Notify.movedKinds]) all do. A kind naming no single field, `fields` among
+// them, is found by kind; a checklist move is not always a delta, so its
+// holders are told by [Snapshot.ChecklistAssignees], never by this.
 func (k ChangeKind) MovedFields() []string {
 	switch k {
 	case ChangeStatus:
@@ -1306,19 +1090,10 @@ func (k ChangeKind) MovedFields() []string {
 	return nil
 }
 
-// MaxDeltas caps what a notification DISPLAYS, and governs nothing else.
-//
-// THIRTY-TWO IS A DISPLAY LIMIT. It must never govern the mutation: a write
-// touching 128 field values carries all 128 in its payload — that is what
-// makes the record reproducible — and shows 32. Letting one number do both
-// jobs is how a record becomes structurally unable to represent a write the
-// tools accept.
-//
-// NOR THE HISTORY ROW, which it used to: the applier's delta set was trimmed
-// to these thirty-two by field name too, so a commit moving more recorded
-// only the alphabetically first of them, saying nothing about the rest, in a
-// table nothing repairs. The row now carries every field that moved; only a
-// card is trimmed, and it says by how many ([Notify.FieldsOmitted]).
+// MaxDeltas caps what a notification DISPLAYS, and governs nothing else: a
+// write touching 128 field values carries all 128 in its payload, which keeps
+// the record reproducible, and the history row carries every field that moved.
+// Only a card is trimmed, and it says by how many ([Notify.FieldsOmitted]).
 const MaxDeltas = 32
 
 // MaxExcerpt is how much of a body or a comment a card carries.
@@ -1328,24 +1103,14 @@ const MaxDeltas = 32
 // record that carried an excerpt could not rebuild the row.
 const MaxExcerpt = 600
 
-// Delta is one field's move, AS TEXT.
+// Delta is one field's move, AS TEXT: a card, a person and a model all want
+// "todo → in_progress", and the typed value is on the row.
 //
-// Text rather than the typed value, because a change record is read by a
-// notification card, a person and a model, and every one of them wants
-// "todo → in_progress". The typed value is on the row for anything that
-// needs it.
-//
-// TWO SHAPES, by what the field holds. A value moves FROM one text TO
-// another. A SET — the watchers, an edge kind, the tags — gains and loses
-// members, and its delta says which: [Delta.Added] and [Delta.Removed], each
-// sorted and each member whole, with From and To empty. It used to carry both
-// whole sides joined with ", " and cut to six hundred bytes with a "+N more"
-// count, so the member a commit added was off the end of both sides whenever
-// the set was large — a task waiting on forty others that gained a forty-first
-// recorded two equal-looking lists differing only in their counts, which a
-// renderer read as a member called "+19 more" joining and one called
-// "+18 more" leaving. What a set's commit changed is what joined and what
-// left, and that is always small; the whole set is on the row's document.
+// TWO SHAPES. A value moves From one text To another. A SET (the watchers, an
+// edge kind, the tags) says what joined and what left ([Delta.Added],
+// [Delta.Removed]), each sorted and each member whole, with From and To empty:
+// that is always small, where both whole sides cut to a byte cap drop the
+// member that moved from any large set. The whole set is on the row's document.
 type Delta struct {
 	From string `json:"from" untrusted:"name"`
 	To   string `json:"to" untrusted:"name"`
@@ -1394,21 +1159,16 @@ type Snapshot struct {
 	RoutingUnitLead string `json:"routing_unit_lead,omitempty"`
 
 	// Unblocked names the dependent a late relations commit tells is now
-	// workable, with its assignee. [Writer.TellUnblocked] — the unblocked
-	// repair — is the one writer that fills it, on the DEPENDENT's own
-	// subject, and its record names nobody else. A close fills nothing
-	// here; the repair is how the tasks it held up hear.
+	// workable, with its assignee. [Writer.TellUnblocked], the unblocked
+	// repair, is its one writer, on the DEPENDENT's own subject; a close
+	// fills nothing.
 	//
-	// NOBODY ELSE, because the notice takes its place in the precedence
-	// like any other reason ([Candidates]), and a record reaches one handle
-	// once — one notice row per record and recipient, one wake id per
-	// record and handle — with the row and the prompt naming the record's
-	// own task. On a record that also routed the assignee under an earlier
-	// reason, or one about another task, they would hear that reason, or
-	// about the wrong task, while the applier still stamped the dependent
-	// told, so the repair would never tell them again.
-	//
-	// A WAKE, not a safeguard: nothing was refused, somebody was told.
+	// It names NOBODY ELSE: the notice takes its place in the precedence like
+	// any other reason ([Candidates]), and a record reaches one handle once,
+	// its row and prompt naming the record's own task. Beside another reason
+	// or task the assignee would hear that instead while the applier stamped
+	// the dependent told, so the repair would never tell them again. A wake,
+	// not a safeguard: nothing was refused.
 	Unblocked []TaskParty `json:"unblocked,omitempty"`
 
 	// Dependents names every dependent this change added or removed, for
@@ -1497,34 +1257,23 @@ type Snapshot struct {
 	PrioritisedBy string `json:"prioritised_by,omitempty"`
 	Position      int    `json:"position,omitempty"`
 
-	// Task is the task this wake POINTS AT when the record's own subject
-	// is not one.
-	//
-	// It exists for exactly one wake today: `prioritised` is written on a
-	// person's object and is about the task that reached the top of their
-	// list, so without this the one useful pointer in the whole
-	// notification would be missing. Every task-subject wake leaves it
-	// empty and [Snapshot.TaskID] falls back to the subject, because
-	// duplicating the id a record already carries is a second place for it
-	// to disagree with itself.
+	// Task is the task this wake POINTS AT when the record's subject is not
+	// one: `prioritised` is written on a person's object about the task that
+	// reached the top of their list. A task-subject wake leaves it empty and
+	// [Snapshot.TaskID] falls back to the subject, so the id has one carrier.
 	Task string `json:"task,omitempty"`
 
-	// KeyCollision says [Snapshot.Key] opens ANOTHER task — one that claimed
-	// the key first — so the task this wake points at is reached only by its
-	// id ([Snapshot.Address]). Without it a seat woken about the duplicate of
-	// a key was told the key, read it with get_work_item, and answered on the
+	// KeyCollision says [Snapshot.Key] opens ANOTHER task, one that claimed the
+	// key first, so this wake's task is reached only by its id
+	// ([Snapshot.Address]); without it a woken seat reads and answers on the
 	// claimant.
 	//
-	// DERIVED BY THE WRITER, never stated by a caller: [Writer.decide] reads
-	// the key directory in the decide's own snapshot ([keyHeldByAnother]) for
-	// every record that carries a notification, and overwrites whatever the
-	// caller's wake held. A writer's reading, which a concurrent create can
-	// overtake — see that function for what that costs.
-	//
-	// READ BY THE PARSER AND NEVER BY THE APPLIER: the inbox derives its own
-	// `subject_key_collision` from the directory at read, so no row depends
-	// on it — the wake is rendered from the record by whichever node wins
-	// its delivery, and that is the reader this field is for.
+	// DERIVED BY THE WRITER, never a caller: [Writer.decide] reads the key
+	// directory in its own snapshot ([keyHeldByAnother]) for every record
+	// carrying a notification and overwrites the caller's value, a reading a
+	// concurrent create can overtake (see that function). READ BY THE PARSER,
+	// NEVER THE APPLIER: the inbox derives `subject_key_collision` from the
+	// directory at read, so no row depends on it.
 	KeyCollision bool `json:"key_collision,omitempty"`
 }
 
@@ -1552,34 +1301,20 @@ func (s Snapshot) TaskID(subject Subject) string {
 
 // Notify is the routing snapshot a wake is derived from.
 //
-// # Why it is a pointer, and what nil means
-//
-// Nil means the commit wakes nobody, and nothing else. A quiet commit is a
-// full mutation record, is arbitrated exactly like a loud one, and writes its
-// history row like every other — so the tracker's activity feed is a complete
-// account of what happened rather than an account of what was announced.
-//
-// A POINTER RATHER THAN A quiet FLAG, so the wake filter asks "does this
-// record have a Notify" — a question about the record's own shape — instead
-// of reading a boolean a writer can forget to set. The flag was set by hand in
-// six places and missed in one.
+// Nil means the commit wakes nobody, and nothing else: a quiet commit is a full
+// record, arbitrated like a loud one and writing its history row, so the
+// activity feed accounts for what happened rather than what was announced. A
+// POINTER RATHER THAN A quiet FLAG, so the wake filter asks about the record's
+// own shape instead of reading a boolean a writer can forget to set.
 type Notify struct {
 	Kind ChangeKind `json:"kind"`
 
-	// Fields is what this change MOVED, capped at MaxDeltas.
-	//
-	// It reaches the woken seat as the wake prompt's "What changed"
-	// block: the parser renders it with [changedText] and stamps it as
-	// [MetaDeltas], because the notification spine's envelope is a string
-	// map and the prompt is handed one of those rather than this record.
-	// It is also the history row's fallback for a record whose apply
-	// found nothing to compare — see `apply_history.go`, which prefers
-	// the applier's own comparison and reaches for this only where the
-	// two builds differ.
-	//
-	// The comment here used to say "the deltas a card renders" while
-	// nothing rendered them at all, and the wake that told a seat its
-	// task had moved status named neither side of the move.
+	// Fields is what this change MOVED, capped at MaxDeltas. It reaches the
+	// woken seat as the wake prompt's "What changed" block: the parser renders
+	// it with [changedText] and stamps it as [MetaDeltas], since the spine's
+	// envelope is a string map. It is also the history row's fallback where
+	// the apply found nothing to compare (`apply_history.go` prefers its own
+	// comparison and reaches for this only where the two builds differ).
 	Fields map[string]Delta `json:"fields,omitempty"`
 
 	// FieldsOmitted is how many more fields this change moved than
@@ -1637,17 +1372,14 @@ func (a *AnsweredDecision) check() error {
 
 // AnsweredDecision is what an answer to a decision tells the person who asked.
 //
-// ON THE NOTIFICATION rather than looked up, for the reason the snapshot is:
-// the question, the options' labels and the channel the asker promised to
-// report in live on the ASK's row, and the node that wins the wake's delivery
-// may not have applied it. The comment names its choice by id alone, and an
-// id tells the asker nothing it can act on at a glance.
-//
-// NOT A ROUTING FACT AND NOT A ROW: [Candidates] never reads it and no
-// applier stores it — the history row keeps the mutation and the inbox row the
-// excerpt — so a build that does not know the key decodes around it and every
-// node's rows still agree. What such a build loses is the prompt's rendering
-// of the choice, which the excerpt (`Chose “<label>”: …`) still carries.
+// ON THE NOTIFICATION rather than looked up, for the snapshot's reason: the
+// question, the options' labels and the promised channel live on the ASK's
+// row, which the node delivering the wake may not have applied, and the
+// comment names its choice by id alone. NOT A ROUTING FACT AND NOT A ROW:
+// [Candidates] never reads it and no applier stores it, so a build that does
+// not know the key decodes around it with every node's rows agreeing, losing
+// only the prompt's rendering of the choice, which the excerpt
+// (`Chose “<label>”: …`) still carries.
 type AnsweredDecision struct {
 	// Question is the decision's own question, at most
 	// [MaxDecisionQuestion] bytes.
@@ -1693,26 +1425,13 @@ func (n *Notify) Validate() error {
 
 // checkSnapshot bounds every collection the routing snapshot carries.
 //
-// # Why this is at the publish boundary and not at each builder
-//
-// Because the record is what the cost lives on. A snapshot is COPIED onto the
-// log, held by each of the stream's replicas for its whole retention window,
-// and applied into every data node's rows — so a collection that grew without
-// a bound is not one screen rendering badly, it is bytes every replica and
-// every data node stores for a year. The design's own arithmetic sums these
-// eleven caps to about 19 KiB worst and sizes [MaxCommitBytes] from it, and
-// until this existed [Notify.Validate] read `Kind`, `Fields` and `Excerpt` and
-// NOTHING on the snapshot: the caps that held were incidental properties of
-// whichever builder happened to read a bounded table, and the ones that did
-// not hold were invisible.
-//
-// # And it is a REFUSAL rather than a trim
-//
-// A trim would publish a notification that silently told fewer people than
-// the writer named — which is the failure this whole family exists to
-// prevent, arriving at the one place nobody is watching. The bound is the
-// same one the object itself is held to, so a caller that hits it is a caller
-// whose object is already refused, and the message names the field.
+// AT THE PUBLISH BOUNDARY, not at each builder, because the cost lives on the
+// record: a snapshot is held by each stream replica for its retention window
+// and applied into every data node's rows. These caps sum to about 19 KiB
+// worst, which sizes [MaxCommitBytes]. A REFUSAL, not a trim: a trim would
+// silently tell fewer people than the writer named, and the bound is the one
+// the object itself is held to, so a caller hitting it already has a refused
+// object; the message names the field.
 func (n *Notify) checkSnapshot() error {
 	for _, c := range []struct {
 		field string
@@ -1742,32 +1461,18 @@ func (n *Notify) checkSnapshot() error {
 	return nil
 }
 
-// The two folds, and what each one saves.
+// TurnSpend is a turn's cost, riding the turn record it is computed from: a
+// FOLD, a record class this design does not have. It makes a task's running
+// total a FUNCTION of the applied records: the applier adds these counters
+// only when the turn's insert affected a row, in the same transaction, so a
+// redelivery cannot double-count and a zero-row update is a malformed record
+// that stops the loop.
 //
-// A FOLD is a record class this design does NOT have because its content
-// rides one it already has. Both are stated here because both were separate
-// record classes first, and both were removed on arithmetic rather than on
-// taste.
-
-// TurnSpend is a turn's cost, and it rides the turn record it is computed
-// from.
-//
-// THE FIRST FOLD. Carried as its own class it was 1 095 000 records a year —
-// a third of a naive census — and it made a task's running total a separately
-// transmitted number that could disagree with the turns it was meant to
-// summarise. Riding the turn makes the total a FUNCTION of the applied
-// records: the applier inserts the turn, and adds these counters only when
-// that insert affected a row, in the same transaction. A redelivery therefore
-// cannot double-count, and an update affecting zero rows is a malformed record
-// that stops the loop rather than a rounding error nobody sees.
-//
-// WHAT A TURN'S TOKENS ARE is the engine's to decide (see ADR-0022): its own
-// phases, the workers it delegated to and the extension judge, plus a
-// collected executor's tokens on the segment that resumed from it. Workers
-// and SentBack are COUNTS beside those tokens, not more tokens — how many
-// delegated tasks ran and how many reviews sent the work back — and both are
-// OMITTED AT ZERO, like every counter here, so a turn that delegated nothing
-// and passed its first review says nothing it has no value for.
+// WHAT A TURN'S TOKENS ARE is the engine's to decide (ADR-0022): its own
+// phases, its delegated workers and the extension judge, plus a collected
+// executor's tokens on the segment that resumed from it. Workers and SentBack
+// are COUNTS (delegated tasks run, reviews that sent work back), not tokens,
+// and like every counter here are omitted at zero.
 type TurnSpend struct {
 	Turns      int `json:"turns,omitempty"`
 	Rounds     int `json:"rounds,omitempty"`
@@ -1784,20 +1489,14 @@ type TurnSpend struct {
 func (s TurnSpend) Tokens() int { return s.Input + s.Output }
 
 // EncodeBarrier renders a read index's barrier as a record this domain's
-// applier decodes.
+// applier decodes, which [statelog.NewReadIndex] needs: the read index owns
+// WHEN a barrier is appended and what it proves, the domain what a record on
+// its log looks like.
 //
-// The read index owns WHEN a barrier is appended and what it proves; the
-// domain owns what a record on its log LOOKS like, and the two meet here.
-// Without it [statelog.NewReadIndex] cannot be built for this domain at all,
-// which is why the barrier — and with it every `linearizable` read — had no
-// production caller: the level was parsed, validated, echoed back in the
-// answer and never honoured.
-//
-// NO OP ID, carried through from the envelope and asserted rather than
-// assumed. An op id becomes the Nats-Msg-Id, a repeat inside the duplicate
-// window is served out of that window with no quorum round trip, and the
-// acknowledgement's sequence is then a position nothing confirmed — which is
-// the entire proof a linearizable read rests on.
+// NO OP ID, asserted rather than assumed: an op id becomes the Nats-Msg-Id, a
+// repeat inside the duplicate window is served with no quorum round trip, and
+// its sequence is then a position nothing confirmed, which is the whole proof
+// a linearizable read rests on.
 func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	if env.Kind != statelog.BarrierKind {
 		return nil, fmt.Errorf("worklet: %q is not a barrier envelope", env.Kind)
@@ -1822,19 +1521,15 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 }
 
 // EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
-// ADR-0080) as a record this domain's applier decodes.
+// ADR-0080) as a record this domain's applier decodes: the barrier's split of
+// ownership, met here.
 //
-// The framework owns WHEN one is appended, what it removes and the floor its
-// subject names; the domain owns what a record on its log looks like — the
-// barrier's split, met here.
-//
-// THE WRITER TRAVELS, unlike a barrier's: a trimmed record removes rows, so the
-// eviction gate must be able to drop an evicted node's. NO OP ID, asserted
-// rather than assumed — one becomes a message id and a ledger row nothing
-// resolves. And the floor is CHECKED here, at the write, rather than in
-// [Subject.Validate], which runs on the READ path too: a refusal there would
-// turn one malformed record into an applier that stops on every node, where
-// the framework's apply faults on it instead.
+// THE WRITER TRAVELS, unlike a barrier's: the record removes rows, so the
+// eviction gate must be able to drop an evicted node's. NO OP ID: one becomes a
+// message id and a ledger row nothing resolves. The floor is CHECKED here at
+// the write, not in [Subject.Validate], which runs on the read path too: a
+// refusal there would stop the applier on every node, where the framework's
+// apply faults the record instead.
 func EncodeTrimmed(env statelog.Envelope) ([]byte, error) {
 	if env.Kind != statelog.TrimmedKind || env.Subject.Kind != statelog.TrimmedKind {
 		return nil, fmt.Errorf("worklet: a %q envelope on %q is not a trimmed record",

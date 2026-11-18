@@ -16,47 +16,20 @@ import (
 
 // A project's files: the record, the rules a path follows, and the write.
 //
-// # What a file is here, and what it is not
-//
-// A file is a ROW — its project, its path, its content type, its size, the
-// hash of its content and the OBJECT its bytes were uploaded into. The bytes
-// themselves are in the object store (internal/objstore, ADR-0026) — one
-// store the whole fleet shares, the broker's own bucket or an S3 bucket,
-// rather than a copy in every data node's database — and nothing in this
-// package ever reads one. What this package owns is the fact that the file
-// exists and which object holds it: the object's key on the row IS the
-// reference that keeps that object alive, so a file written here is a file
-// whose bytes the collector will never delete, and a file removed or
-// rewritten here is one whose old object it may.
-//
-// # The bytes go first, and the write that names them is bounded
-//
-// A writer uploads the object BEFORE it writes the record naming it, and the
-// object store keeps an unnamed object for a day for exactly that window. The
-// other order would publish a file whose content is not anywhere yet, and a
-// reader in the gap would be told a file exists and then fail to read it.
-//
-// AND THE WRITE IS REFUSED once the key it names was minted more than
-// [objstore.RecordWithin] ago, by the clock of the node deciding it
-// ([ErrUploadStale]): the collector judges an object by its key's minting
-// instant as well as by its age in the store, so a write naming an older key
-// could land after a collection read it as nobody's — and name bytes that
-// collection had just deleted. ADR-0027.
-//
-// # A removal is a stamp, and it drops the object
-//
-// The row stays, with who removed it and when, for the reason a task's does:
-// every upsert here is guarded by the record's version and SKIPS an older one,
-// and a guard needs a row to compare against — a deleted row would let a
-// redelivered put bring the file back. What a removal does take away is the
-// object, which is the whole point of removing a file from a store whose
-// bytes are the expensive part.
+// A file is a ROW (project, path, content type, size, hash, and the OBJECT
+// holding its bytes in the fleet's object store, ADR-0026); this package never
+// reads the bytes. The row's object key IS the reference that keeps the object
+// from the collector. The writer uploads the object BEFORE the record naming
+// it (the store keeps an unnamed object a day for that window), and a write
+// naming a key minted more than [objstore.RecordWithin] ago is refused
+// ([ErrUploadStale], ADR-0027): a collection may already have judged it
+// nobody's and deleted it. A removal stamps the row rather than deleting it,
+// so the version guard still skips a redelivered older put, and drops the
+// object.
 
-// ErrNoFile reports a file this node has no row for, or holds removed.
-//
-// ITS OWN SENTINEL for [ErrNoTask]'s reason: a tool says "no such file" and an
-// API says 404, and neither should when what actually happened is a mistyped
-// project key — which is [ErrNoProject].
+// ErrNoFile reports a file this node has no row for, or holds removed. Its own
+// sentinel for [ErrNoTask]'s reason: a mistyped project key is [ErrNoProject],
+// not a "no such file" or a 404.
 var ErrNoFile = errors.New("worklet: no such file")
 
 // ErrUploadStale reports a write naming an object whose key was minted more
@@ -64,20 +37,16 @@ var ErrNoFile = errors.New("worklet: no such file")
 // too old to be named safely, and the file has to be uploaded again.
 var ErrUploadStale = errors.New("worklet: the upload is too old to be recorded")
 
-// The file caps. Refused at WRITE naming the value, never cut.
+// The file caps, refused at WRITE naming the value, never cut.
 const (
-	// MaxFileBytes is the largest file a project holds.
-	//
-	// A GIBIBYTE: the largest upload one request is expected to carry to
-	// completion — a gibibyte at 100 Mbit/s is under a minute and a half —
-	// and what one download streams back through one node. Larger artefacts
-	// belong in a store built for them, with a link in the project.
+	// MaxFileBytes is the largest file a project holds: a gibibyte, the
+	// largest upload one request is expected to finish (under 90 s at
+	// 100 Mbit/s) and one node streams back. Larger artefacts belong in a
+	// store built for them, linked from the project.
 	MaxFileBytes = 1 << 30
 
-	// MaxFilePath is a path's length in bytes.
-	//
-	// 1 024, the PATH_MAX-shaped bound every filesystem an agent will
-	// export to agrees with, and what keeps a listing's row a row.
+	// MaxFilePath is a path's length in bytes: the PATH_MAX-shaped bound
+	// every filesystem an agent exports to accepts.
 	MaxFilePath = 1024
 
 	// MaxContentType is a content type's length, which is RFC 6838's own
@@ -131,21 +100,14 @@ func (f File) Content() (objstore.Object, bool) {
 }
 
 // FileObjectReferences is the table whose rows keep a file's object alive —
-// the declaration internal/objstore/references collects. See
-// [objstore.ReferenceTable] for why a table missing from that list is the
-// mistake that deletes files.
+// the declaration internal/objstore/references collects; see
+// [objstore.ReferenceTable] for why a table missing from it deletes files.
 //
-// REQUIRED: a file's bytes are the company's, so the audit asks after them
-// and a backup carries them. A file never retires its object: a replaced
-// file's object goes at the collector's first hourly pass once nothing names
-// it and it was uploaded more than a day ago, by both the store's clock and
-// its key's own (ADR-0027).
-//
-// LOG, DEFERRED AND RECORDS ARE WHAT A BACKUP READS PAST ITS COPY: a restore
-// replays the tracker's log from the copy's position — and a build that can
-// read a record this node deferred applies it — so every file a record of
-// either writes is a file the restored rows name, and its object is one the
-// backup owes (ADR-0082).
+// REQUIRED, because a file's bytes are the company's: the audit asks after
+// them and a backup carries them. A replaced file's object goes once nothing
+// names it and it is a day old by the store's clock and its key's (ADR-0027).
+// LOG, DEFERRED AND RECORDS let a backup carry the objects named by records a
+// restore replays past its copy, deferred ones included (ADR-0082).
 var FileObjectReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "tracker_files",
 	Key: "object", Hash: "hash", Size: "size",
@@ -157,27 +119,17 @@ var FileObjectReferences = objstore.ReferenceTable{
 }
 
 // fileRecordReferences answers the tracker_files row one record of the
-// tracker's log writes, and the object it names once the record applies —
+// tracker's log writes and the object it names once applied —
 // [objstore.ReferenceTable.Records] for [FileObjectReferences].
 //
-// A RECORD THIS BUILD READS is answered by this build's applier: only a file
-// subject writes the table ([documentTable] maps KindFile alone to it), so
-// every other kind answers none, and a file record's post-state is read by
-// [decodeFile], the applier's own reading — a record the applier would refuse
-// is refused here rather than read another way.
-//
-// A RECORD THIS BUILD CANNOT READ — a version above [RecordVersion], or a kind
-// it has never heard of at any version, which its applier has no case for —
-// is answered from what EVERY build reads of it ([mayWriteFiles]), because
-// what this build's applier does with a kind says nothing about what a newer
-// build's does. One that may write a file row is
-// [objstore.ErrRecordUnreadable], since it may name an object nobody here can
-// tell; one whose writer's own scope reaches no file answers none.
-//
-// THE ROW IS SPELLED IN THE ORDER [FileObjectReferences] LISTS ITS OWNER
-// COLUMNS — project_key, then path — through [objstore.JoinOwner], as the walk
-// of the table spells it; the declaration itself is not read here, which would
-// be an initialisation cycle.
+// A record this build reads is answered as its applier reads it: only KindFile
+// writes the table ([documentTable]), read by [decodeFile], so a record the
+// applier would refuse is refused here too. One it cannot read (a version
+// above [RecordVersion], or an unknown kind) is answered from what EVERY build
+// reads of it ([mayWriteFiles]): if it may write a file row it is
+// [objstore.ErrRecordUnreadable]. The row is spelled in the owner order
+// [FileObjectReferences] lists, through [objstore.JoinOwner] as the walk
+// spells it; reading the declaration here would be an initialisation cycle.
 func fileRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 	env, err := DecodeEnvelope(payload)
 	if err != nil {
@@ -213,21 +165,14 @@ func fileRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 }
 
 // mayWriteFiles reports whether a record this build cannot read may write a
-// tracker_files row, from the two things every build reads of it: its kind and
-// its scope, which its WRITER states as the complete set of objects its apply
-// may write ([RecordEnvelope.Scope]) — the one statement of what a record
-// touches that holds across versions.
-//
-// AN UNKNOWN KIND MAY, whatever its scope says: this build cannot place the
-// object a kind it has never heard of names, so even the exactly-the-subject
-// sentinel is a claim it cannot bound. A KNOWN KIND under the sentinel writes
-// its own subject's object alone, which is a file row only on a file subject.
-// AN ENUMERATION reaches a file through the domain, a container (a project's
-// files are filed under it), a family with no name (which is the domain), a
-// term kind this build cannot interpret (which [ScopeTerm.Path] reads as the
-// domain), or a file's own object term — the term [subjectPath] files a file
-// under, whose id is a file token. A task's object, a key and a named family
-// reach none.
+// tracker_files row, from what every build reads of it: its kind and the scope
+// its WRITER states ([RecordEnvelope.Scope]). An UNKNOWN KIND may, whatever its
+// scope: this build cannot place the object it names, even under the
+// exactly-the-subject sentinel. A known kind under the sentinel reaches a file
+// only on a file subject. An enumeration reaches one through the domain, a
+// container, an unnamed family (the domain), a term kind this build cannot
+// interpret ([ScopeTerm.Path] reads it as the domain), or a file's own object
+// term ([subjectPath]); a task's object, a key and a named family reach none.
 func mayWriteFiles(env RecordEnvelope) bool {
 	if !env.Subject.Kind.Valid() {
 		return true
@@ -254,14 +199,10 @@ func mayWriteFiles(env RecordEnvelope) bool {
 }
 
 // NormalizeFilePath is a path as it is stored and addressed: slash-separated
-// segments, no leading slash, and nothing a filesystem an agent exports to
-// would read differently.
-//
-// REFUSED RATHER THAN REPAIRED where a repair would be a guess: an empty
-// segment, `.` and `..` are three spellings a caller meant something by, and
-// `a/../b` stored as `b` is a file somebody will look for under the name they
-// typed. A leading slash and surrounding space are the one repair, because
-// every caller means the same thing by them.
+// segments, no leading slash, nothing an exported filesystem reads otherwise.
+// It REFUSES where a repair would be a guess (an empty segment, `.`, `..`:
+// `a/../b` stored as `b` is lost to whoever typed it), and repairs only a
+// leading slash and surrounding space, which every caller means alike.
 func NormalizeFilePath(raw string) (string, error) {
 	p := strings.TrimLeft(strings.TrimSpace(raw), "/")
 	switch {
@@ -310,22 +251,18 @@ type FilePut struct {
 	Path        string
 	ContentType string
 
-	// Object is the content as the object store holds it — uploaded
-	// BEFORE this write, under a key minted for that upload alone (see the
-	// file's head).
+	// Object is the content as the object store holds it, uploaded BEFORE
+	// this write under a key minted for that upload alone.
 	Object objstore.Object
 
 	// IfMatch conditions the write on the version the caller read, or is
-	// [NoIfMatch]. A file that does not exist, or was removed, is at
-	// version zero only to NoIfMatch: conditioned on a version, a put
-	// onto nothing is refused, because the caller read something that is
-	// no longer there.
+	// [NoIfMatch]. Conditioned on a version, a put onto a missing or
+	// removed file is refused: the caller read something no longer there.
 	IfMatch uint64
 }
 
-// checkFilePut normalises a put and refuses one that could not be stored —
-// which is what keeps every refusal the applier could make
-// ([fileMatches]) unreachable.
+// checkFilePut normalises a put and refuses one that could not be stored,
+// which keeps every refusal the applier could make ([fileMatches]) unreachable.
 func checkFilePut(put *FilePut) error {
 	put.Project = ProjectKey(put.Project)
 	if err := checkFileProject(put.Project); err != nil {
@@ -354,18 +291,13 @@ func checkFilePut(put *FilePut) error {
 }
 
 // checkUploadAge refuses a put whose object's key was minted more than
-// [objstore.RecordWithin] before now — the instant the write is DECIDED, on
-// the node deciding it.
-//
-// NOTHING IS REFUSED FOR BEING MINTED IN THE FUTURE. A key that a fast clock
-// minted ahead of this one protects itself: the collector deletes nothing
-// whose minting instant is inside its grace, so the only effect of refusing it
-// would be uploads failing from a node whose clock runs ahead.
+// [objstore.RecordWithin] before now, the instant the write is DECIDED on this
+// node. A key minted in the future is not refused: the collector deletes
+// nothing whose minting instant is inside its grace, so refusing would only
+// fail uploads from a node whose clock runs ahead.
 func checkUploadAge(put FilePut, now time.Time) error {
 	if age := now.Sub(put.Object.Key.Minted()); age > objstore.RecordWithin {
-		// SAID TO THE PERSON WHO UPLOADED IT, in hours rather than a key's
-		// minting instant: the bound is [objstore.RecordWithin], the most a
-		// write may lag the upload its object was minted for.
+		// In hours, to the person who uploaded it, not a minting instant.
 		return fmt.Errorf("%w: %s was uploaded more than %d hours before this "+
 			"write, so its upload has expired. Upload it again", ErrUploadStale,
 			put.Path, int(objstore.RecordWithin.Hours()))
@@ -373,11 +305,9 @@ func checkUploadAge(put FilePut, now time.Time) error {
 	return nil
 }
 
-// PutFile writes a file at its path, creating it or replacing its content.
-//
-// WHOLE POST-STATE, like every document here, and the ADDRESS IS THE SUBJECT:
-// two writers putting one path contend at the broker and exactly one wins,
-// which is the whole of what makes a path one file.
+// PutFile writes a file at its path, creating it or replacing its content, as
+// a whole post-state. The ADDRESS IS THE SUBJECT: two writers putting one path
+// contend at the broker and one wins, which is what makes a path one file.
 func (w *Writer) PutFile(ctx context.Context, opID string, put FilePut) (WriteResult, error) {
 	if err := checkFilePut(&put); err != nil {
 		return WriteResult{}, err
@@ -391,9 +321,8 @@ func (w *Writer) PutFile(ctx context.Context, opID string, put FilePut) (WriteRe
 		OpID:    opID,
 		Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			// THE DECIDE'S OWN CLOCK, read here rather than before the
-			// publish: a write retried after its key aged past the bound
-			// is judged at the instant it is decided again.
+			// Read in the decide, so a retry after the key aged past the
+			// bound is judged when it is decided again.
 			if err := checkUploadAge(put, w.Now()); err != nil {
 				return statelog.Decision{}, err
 			}
@@ -418,9 +347,8 @@ func (w *Writer) PutFile(ctx context.Context, opID string, put FilePut) (WriteRe
 				CreatedBy: w.Actor, CreatedAt: at, UpdatedBy: w.Actor, UpdatedAt: at,
 			}
 			if live {
-				// THE CREATION FACTS ARE THE STORED ROW'S, for the view's
-				// reason: a put that carried them would let a second
-				// writer re-attribute a file somebody else made.
+				// The creation facts stay the stored row's, so a second
+				// writer cannot re-attribute a file somebody else made.
 				post.CreatedBy, post.CreatedAt = current.CreatedBy, current.CreatedAt
 			}
 			return w.decide(ctx, tx, stamp, subject, OpPatch, ChangeFileWritten, scope, opID,
@@ -429,11 +357,9 @@ func (w *Writer) PutFile(ctx context.Context, opID string, put FilePut) (WriteRe
 	})
 }
 
-// RemoveFile takes a file away. Its object stops being named, and the object
-// store's collector deletes it once it is past the grace.
-//
-// A FILE THAT IS NOT THERE IS [ErrNoFile], never a quiet success: a caller
-// removing the wrong path should hear that the one it named did not exist.
+// RemoveFile takes a file away; the collector deletes its object once it is
+// unnamed and past the grace. A missing file is [ErrNoFile], never a quiet
+// success, so a caller removing the wrong path hears it.
 func (w *Writer) RemoveFile(ctx context.Context, opID, project, path string,
 	ifMatch uint64) (WriteResult, error) {
 
@@ -502,12 +428,9 @@ func (w *Writer) refuseFileProject(ctx context.Context, tx *sql.Tx, key string) 
 }
 
 // AcceptFiles refuses a new file into project when it is archived, marked
-// [ErrState]: the project's state, which the same request meets until
-// somebody unarchives it — the change that lets it land.
-//
-// EXPORTED FOR THE UPLOAD ROUTE, which asks before it streams a body that
-// could be a gibibyte into the store only for the write naming it to be
-// refused here — one sentence for both, so the two refusals cannot drift.
+// [ErrState] until somebody unarchives it. Exported for the upload route,
+// which asks before streaming up to a gibibyte into the store, so the two
+// refusals share one sentence.
 func AcceptFiles(project string, archived bool) error {
 	if archived {
 		return refusedByState("project %s is archived, so it takes no new files. "+

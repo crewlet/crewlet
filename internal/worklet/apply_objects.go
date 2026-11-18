@@ -10,19 +10,13 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The whole-document objects, and why they take one upsert each.
+// The whole-document objects (a view, a tag set, a person, a project, the two
+// catalogues) are small enough to travel as FULL POST-STATE: one upsert, so a
+// replay is one statement whose result cannot depend on what the row held.
 //
-// A view, a tag set, a person, a project and the two catalogues are small
-// enough to travel as FULL POST-STATE — one document field, one upsert, and no
-// patch semantics to get wrong. What that buys is
-// that a replay of one of them is a single statement whose result cannot
-// depend on what the row held before, which is the property a task's patch has
-// to work for.
-//
-// EVERY ONE OF THEM CARRIES THE SAME VERSION GUARD, and the guard is a SKIP
-// rather than an error: a redelivered record is ordinary traffic, and a
-// constraint violation inside this transaction would abort it identically on
-// every node and stall the whole fleet's log.
+// EVERY ONE CARRIES THE SAME VERSION GUARD, and it is a SKIP rather than an
+// error: a redelivered record is ordinary traffic, and a constraint violation
+// would abort this transaction identically on every node and stall the log.
 
 // applyDocument writes one whole-document object.
 func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
@@ -31,15 +25,9 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 	if err != nil {
 		return 0, err
 	}
-	// WHAT THIS RECORD MOVES, READ BEFORE THE UPSERT REPLACES IT.
-	//
-	// The same frame [Applier.applyTask] computes its own deltas in, and
-	// the same rule: the delta is the APPLIER's, on every commit, loud or
-	// quiet. A document write carries no notification on almost every path
-	// — a project is reconciled from the chart, a view save and a person's
-	// bookkeeping wake nobody, and a catalogue edit is deliberately quiet
-	// — so a delta taken from the wake would have been no delta at all,
-	// which is exactly what this column held. See `deltas.go`.
+	// WHAT THIS RECORD MOVES, READ BEFORE THE UPSERT REPLACES IT: the
+	// applier's delta, as in [Applier.applyTask], since a document write
+	// almost never carries a wake to take one from. See `deltas.go`.
 	moved, err := documentDeltas(ctx, tx, subject, c.record.Mutation)
 	if err != nil {
 		return 0, err
@@ -48,36 +36,22 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 	if err != nil {
 		return 0, err
 	}
-	// THE CHILDREN FOLLOW THE DOCUMENT'S OWN VERSION GUARD.
-	//
-	// Every upsert above carries `WHERE excluded.version > <table>.version`
-	// and SKIPS a record it is not newer than — which is ordinary traffic:
-	// a redelivery, or a record this build retained and reprocessed at its
-	// original position after a newer one had already applied. The explode
-	// below DELETES and re-inserts, and until this guard existed it did so
-	// unconditionally: a stale reprocess left the document saying one
-	// thing and its child rows saying another, with nothing to notice.
-	//
-	// Zero rows affected is exactly "this record did not write the
-	// document", because an upsert that runs always affects one.
+	// THE CHILDREN FOLLOW THE DOCUMENT'S OWN VERSION GUARD: the explode
+	// below DELETES and re-inserts, so running it for a record the upsert
+	// skipped (a redelivery, a stale reprocess) would leave the children
+	// disagreeing with the document. Zero rows is exactly "this record did
+	// not write the document", since an upsert that runs affects one.
 	extra := 0
 	if rows > 0 {
 		if extra, err = a.explode(ctx, tx, subject, c); err != nil {
 			return 0, err
 		}
 	} else {
-		// THE VERSION GUARD SKIPPED THIS RECORD, so it wrote no
-		// document. [Applier.applyTask] says the same thing on its own
-		// redelivery branch: the history row is still written, because
-		// a record that produced no object change is still something
-		// that happened — and a delta computed against a document a
-		// NEWER record has already replaced would name a move this
-		// record never made, so the row takes the writer's own
-		// statement instead ([statedDeltas]).
+		// SKIPPED, yet the history row is still written, from the
+		// writer's own statement ([statedDeltas]).
 		moved = statedDeltas(c)
 	}
-	// A PROJECT, A VIEW OR A PERSON — none of which has an item key or a
-	// containing project, so both are honestly empty.
+	// None of these has an item key or a containing project.
 	history, err := a.writeHistory(ctx, tx, c, subjectKeys{}, moved)
 	if err != nil {
 		return 0, err
@@ -85,12 +59,10 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 	return rows + extra + history, nil
 }
 
-// documentTable maps a subject to the table and key its document lives at.
-//
-// A TABLE PER KIND rather than one polymorphic document table, because every
-// one of them is FILTERED differently: a saved view is found by its container,
-// a tag set and a project by their key, a person by their handle. One table
-// would make every one of those a scan.
+// documentTable maps a subject to the table and key its document lives at: a
+// table per kind, because each is FILTERED differently (a view by container, a
+// project by key, a person by handle) and one polymorphic table would make
+// every one of those a scan.
 func documentTable(s Subject) (table, key string, err error) {
 	switch s.Kind {
 	case KindProject:
@@ -109,21 +81,16 @@ func documentTable(s Subject) (table, key string, err error) {
 	return "", "", fmt.Errorf("worklet: %s is not a whole-document object", s.Kind)
 }
 
-// upsertDocument writes the object's own row.
-//
-// The statement is built per table rather than shared, because the key column
-// and the extracted columns differ — and a single generic statement would mean
-// every table carrying the same columns, which is the polymorphic document
-// table this design does not have.
+// upsertDocument writes the object's own row, with a statement per table since
+// each table's key and extracted columns differ.
 func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key string,
 	c applyContext) (int, error) {
 
 	var res sql.Result
 	var err error
-	// extra is what a document's own EXPLOSION wrote — the child rows that
-	// are not columns on the object's row. Counted with the upsert rather
-	// than instead of it, because the applier's row count is what the
-	// drain rate is measured in.
+	// extra is what a document's own explosion wrote, counted with the
+	// upsert because the applier's row count is what the drain rate is
+	// measured in.
 	extra := 0
 	switch table {
 	case "tracker_projects":
@@ -132,21 +99,15 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 		if err := decodePayload(c.record.Mutation, &project); err != nil {
 			return 0, fmt.Errorf("worklet: decode the project at %s: %w", c.position, err)
 		}
-		// A PROJECT'S OWN FIELD DECLARATIONS EXPLODE INTO NOTHING, on
-		// [Applier.explodeCatalogue]'s rule: a declaration is read
-		// through the project DOCUMENT, which this same upsert writes,
-		// and the relational copy that used to hold both scopes'
-		// declarations was rewritten per apply and read by nothing.
+		// A project's field declarations explode into nothing
+		// ([Applier.explodeCatalogue]): they are read through the
+		// document this upsert writes.
 		//
 		// THE MAINTAINED COLUMNS ARE LITERALS ON THE INSERT AND ABSENT
-		// FROM THE UPDATE, which is the whole of how a project document
-		// and the work filed into it stay separate: a create starts the
-		// census at zero and the last-change stamp at NOTHING — a
-		// project somebody has just declared has no work, and stamping
-		// its own creation would report every empty project as freshly
-		// active — and a later rename, a move between units or an
-		// archive leaves both alone, because the project's settings
-		// changing is not its work changing.
+		// FROM THE UPDATE, keeping the document apart from its work: a
+		// create starts the census at zero and the last-change stamp at
+		// NOTHING (a new project has no work), and a rename, move or
+		// archive leaves both alone, since settings are not work.
 		res, err = tx.ExecContext(ctx, `
 			INSERT INTO tracker_projects
 				(key, name, purpose, unit, chart_epoch, default_assignee,
@@ -257,8 +218,8 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 			jsonOf(person.Favorites), person.PrioritiesSetBy,
 			store.EncodeTime(person.PrioritiesSetAt), c.packed)
 	case "tracker_files":
-		// THE ONE READING OF A FILE RECORD, which a backup's reader of
-		// the log shares ([decodeFile]).
+		// The one reading of a file record, shared with a backup's
+		// reader of the log ([decodeFile]).
 		file, ferr := decodeFile(c.record.Mutation, key)
 		if ferr != nil {
 			return 0, fmt.Errorf("worklet: the file record at %s: %w", c.position, ferr)
@@ -306,11 +267,9 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 	return int(n) + extra, nil
 }
 
-// applyCounter writes a project's key sequence.
-//
-// ITS OWN SUBJECT, so a key mint never contends with an edit to that project's
-// settings — which is what stops the busiest write in the company sharing an
-// arbitration unit with the rarest.
+// applyCounter writes a project's key sequence, on its own subject so a key
+// mint, the busiest write, never contends with an edit to the project's
+// settings, the rarest.
 func (a *Applier) applyCounter(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	var counter Counter
 	if err := decodePayload(c.record.Mutation, &counter); err != nil {
@@ -370,15 +329,11 @@ func (a *Applier) applyRoster(ctx context.Context, tx *sql.Tx, c applyContext) (
 	return rows + n + written, nil
 }
 
-// placeTask writes one placement of a rank order.
-//
-// INTO THE MOVED TASK'S DOCUMENT, not its rank column alone ([rewriteOther]):
-// the document is what the task's own next record is merged from, and a rank
-// written only to the column was put back by it — every drag undone by the
-// next edit to the card that was dragged. And only a task in the order's
-// project: a placement is a position in one project's order, which is the
-// container the record's scope names, so a task filed elsewhere has no
-// position in it and a write to it would be outside what the record declared.
+// placeTask writes one placement of a rank order INTO THE MOVED TASK'S
+// DOCUMENT, not its rank column alone ([rewriteOther]): the task's next record
+// is merged from the document, so a column-only rank would be undone by the
+// next edit. Only a task in the order's project: a task filed elsewhere has no
+// position in it, and writing one would exceed the record's declared scope.
 func placeTask(ctx context.Context, tx *sql.Tx, c applyContext, project string,
 	placement Placement) (int, error) {
 
@@ -409,13 +364,10 @@ var respreadPendingStatement = `
 			  AND ` + longRank("t.rank") + `)
 		WHERE key = ?`
 
-// applyRankOrder writes a project's manual order.
-//
-// THE OBJECT IS THE ORDER, so the version lands on the order's own row and
-// every moved task takes `scoped_through` instead — a rank move stamping a
-// task's `version` would make that task's next write form an expectation the
-// broker refuses, permanently, because the expectation is about the task's own
-// subject and the record was published on another.
+// applyRankOrder writes a project's manual order. The version lands on the
+// order's own row and every moved task takes `scoped_through`: stamping a
+// task's `version` would make its next write form an expectation the broker
+// refuses for ever, since this record was published on another subject.
 func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	var order RankOrder
 	if err := decodePayload(c.record.Mutation, &order); err != nil {
@@ -435,9 +387,8 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 		return 0, err
 	}
 	if rows == 0 {
-		// The order's own row refused the version, so every placement in
-		// this record is already reflected. Applying them anyway would
-		// move ranks backwards on a redelivery.
+		// The order's row refused the version: applying the placements
+		// anyway would move ranks backwards on a redelivery.
 		return 0, nil
 	}
 	for _, placement := range order.Placements {
@@ -448,19 +399,12 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 		}
 		rows += n
 	}
-	// A DUPLICATE RANK IS A REPAIRABLE OBSERVABLE, not a refusal, and the
-	// probe is ONE INDEXED LOOKUP PER KEY THIS RECORD WROTE — never a
-	// GROUP BY over the project.
-	//
-	// The distinction is the whole point of the decision that added the
-	// column: a company-wide aggregate on every drag is the per-minute
-	// scan no index answers, moved onto the apply path where it costs
-	// every node rather than one. A duplicate can only involve a rank this
-	// record just wrote, so those are the only ranks worth asking about,
-	// and each is an equality seek on (project_key, rank, id).
-	//
-	// A unique index instead would turn a rare cosmetic anomaly into a
-	// deterministic fleet-wide stalled log.
+	// A DUPLICATE RANK IS A REPAIRABLE OBSERVABLE, not a refusal (a unique
+	// index would turn a cosmetic anomaly into a fleet-wide stalled log).
+	// The probe is ONE INDEXED SEEK PER KEY THIS RECORD WROTE, on
+	// (project_key, rank, id), never a GROUP BY over the project: a
+	// duplicate can only involve a rank this record just wrote, and an
+	// aggregate on every drag would cost every node an unindexed scan.
 	for _, placement := range order.Placements {
 		if _, err := tx.ExecContext(ctx, rankDuplicateStatement,
 			order.Project, order.Project, string(placement.Rank),
@@ -469,18 +413,12 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 				"in %s: %w", placement.Rank, order.Project, err)
 		}
 	}
-	// AND THE RE-SPREAD HAND-OFF, SET AND CLEARED FROM THE SAME PROBE.
-	//
-	// A key past the renormalisation threshold is one the mint could not
-	// shorten inline, so the project's order needs the duty's paced walk.
-	// The applier owns the column in both directions — the walk's own last
-	// batch is what clears it — because a RECORD clearing it would be a
-	// second owner: the flag is derived from the rows this node holds, and
-	// a node whose applier had not yet caught up would clear a flag its
-	// own rows still justify.
-	//
-	// One indexed probe on the partial index over long keys, which is a
-	// fraction of the project rather than a scan of it ([longRank]).
+	// THE RE-SPREAD HAND-OFF, SET AND CLEARED FROM ONE PROBE: a key past
+	// the renormalisation threshold needs the duty's paced walk. The
+	// applier owns the flag both ways, since it is derived from this
+	// node's rows and a RECORD clearing it would let a lagging node clear
+	// a flag its own rows still justify. The probe uses the partial index
+	// over long keys ([longRank]), a fraction of the project.
 	if _, err := tx.ExecContext(ctx, respreadPendingStatement,
 		order.Project, order.Project); err != nil {
 		return 0, fmt.Errorf("worklet: set %s's re-spread hand-off: %w",
@@ -489,11 +427,9 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 	return rows, nil
 }
 
-// applyEviction writes the gate that drops a node's records.
-//
-// A READMISSION IS THE INVERSE COMMIT rather than a delete, so an eviction's
-// whole history survives a replay — and a node that was evicted, readmitted
-// and evicted again reads correctly rather than as one long absence.
+// applyEviction writes the gate that drops a node's records. A readmission is
+// the inverse commit rather than a delete, so an eviction's history survives a
+// replay and an evicted, readmitted and re-evicted node is not one long absence.
 func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	var eviction Eviction
 	if err := decodePayload(c.record.Mutation, &eviction); err != nil {
@@ -530,11 +466,9 @@ func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, c applyContext)
 	return affected(res)
 }
 
-// applyGeneration records a reanchor.
-//
-// CREATE-ONLY: two operators deriving the same number race at the broker and
-// exactly one wins, so the row is written once and never updated — which is
-// what makes the table an audit trail rather than a mutable pointer.
+// applyGeneration records a reanchor, CREATE-ONLY: two operators deriving the
+// same number race at the broker and one wins, so the table is an audit trail
+// rather than a mutable pointer.
 func (a *Applier) applyGeneration(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	var gen Generation
 	if err := decodePayload(c.record.Mutation, &gen); err != nil {
@@ -557,24 +491,17 @@ func (a *Applier) applyGeneration(ctx context.Context, tx *sql.Tx, c applyContex
 	return affected(res)
 }
 
-// applyAlias claims a key for a task.
+// applyAlias claims a key for a task: upserted, never deleted by a task apply
+// and never lowered from current, since a former key pasted into chat must go
+// on resolving. A key another task holds is LEFT AS IT IS, rather than
+// silently re-pointing every reference to it.
 //
-// UPSERTED, NEVER DELETED BY A TASK APPLY, AND NEVER LOWERED FROM CURRENT: a
-// former key must go on resolving for the life of the deployment, because it
-// is pasted into chat and typed into tool calls. A key another task already
-// holds is LEFT AS IT IS — because the alternative, taking the key, silently
-// re-points every reference anybody ever wrote.
-//
-// IT WRITES NO COLLISION FLAG. `key_collision` is derived from the directory
-// by every apply that re-keys the task ([Applier.maintainKeys]) and describes
-// the key the task holds NOW: a claim on a key the task is leaving says
-// nothing about the one it is moving to, and a flag written here would be
-// overwritten by the move's own apply, which lands after this one. Nor does
-// the claim move anybody else's flag: its writer publishes it only for a key
-// nobody else holds ([Writer.claimAlias]).
-//
-// Its subject is the key's own address ([subjectPath]), so it is ordered
-// with every other record that claims, frees or hands that key on.
+// It writes no collision flag: `key_collision` describes the key the task
+// holds NOW and is derived by the re-keying apply ([Applier.maintainKeys]),
+// which lands after this one; and its writer claims only a key nobody else
+// holds ([Writer.claimAlias]). Its subject is the key's own address
+// ([subjectPath]), ordering it with every record that claims, frees or hands
+// that key on.
 func (a *Applier) applyAlias(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	var alias KeyAlias
 	if err := decodePayload(c.record.Mutation, &alias); err != nil {
@@ -617,9 +544,8 @@ func nullableTime(t *time.Time) any {
 }
 
 // jsonOf encodes a value for a JSON column, answering "null" rather than
-// failing: a column that could not be encoded is a row this node writes and
-// its peer does not, and the identity claim would report the divergence
-// without ever naming the value that caused it.
+// failing: a failure would be a row this node skips and its peer writes, a
+// divergence the identity claim reports without naming its cause.
 func jsonOf(v any) string {
 	body, err := json.Marshal(v)
 	if err != nil {

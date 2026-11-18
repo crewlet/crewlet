@@ -4,11 +4,9 @@ import "testing"
 
 // A CHOOSING ANSWER'S EXCERPT IS RECOGNISED BY WHAT WROTE IT: the reader that
 // labels an excerpt as quoting an asker's option ([ExcerptQuotesAChoice]) asks
-// of exactly the line [choiceExcerpt] composes, with a body and without one,
-// and of nothing an answerer writes in their own words.
-//
-// Mutation: change [choicePrefix] in one of the two and the other stops
-// matching it — which is why there is one constant.
+// of exactly the line [choiceExcerpt] composes, with or without a body, and of
+// nothing an answerer writes. Mutation: change [choicePrefix] in one of the
+// two and the other stops matching it, hence one constant.
 func TestAChoosingAnswersExcerptIsRecognisedByWhatWroteIt(t *testing.T) {
 	t.Parallel()
 	for _, line := range []string{choiceExcerpt("Ship it", ""), choiceExcerpt("Ship it", "agreed")} {

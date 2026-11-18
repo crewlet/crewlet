@@ -50,11 +50,8 @@ func seedBoard(t *testing.T, r *roundTrip) {
 	}
 }
 
-// A GROUPED ANSWER IS COLUMNS, and each column's count is over the WHOLE set.
-//
-// Rows with a group label on each would make the count a property of the PAGE:
-// a column with four hundred tasks and a fifty-row page would render twelve,
-// and nothing in the answer would say the number was of what happened to fit.
+// A GROUPED ANSWER IS COLUMNS, and each column's count is over the WHOLE set:
+// rows labelled with a group would make the count a property of the page.
 func TestAGroupedAnswerCountsTheWholeColumn(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -84,10 +81,8 @@ func TestAGroupedAnswerCountsTheWholeColumn(t *testing.T) {
 	}
 }
 
-// AN ABSENT VALUE IS ITS OWN COLUMN, labelled.
-//
-// "Nobody is assigned" is a question a board answers rather than a row it
-// hides.
+// AN ABSENT VALUE IS ITS OWN COLUMN, labelled: "nobody is assigned" is a
+// column a board answers, not rows it hides.
 func TestAnUnsetValueIsItsOwnColumn(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -141,18 +136,14 @@ func TestAColumnFilterNarrowsToThatColumn(t *testing.T) {
 	}
 }
 
-// A LABEL BOARD PUTS ONE TASK ON SEVERAL COLUMNS, and the answer SAYS SO.
-//
-// A task with three labels is on three columns, which is what a label board
-// is. What it changes is that the counts no longer sum to the answer's own
-// total — so a reader is told rather than left to conclude the answer is
-// wrong.
+// A LABEL BOARD PUTS ONE TASK ON SEVERAL COLUMNS, and the answer SAYS SO, since
+// the counts no longer sum to the answer's own total.
 func TestALabelBoardSaysItsColumnsOverlap(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	// THE TAGS ARE DECLARED FIRST, because a create refuses a label the
-	// project does not have (see internal/worklet/tags.go).
+	// THE TAGS ARE DECLARED FIRST: a create refuses a label the project does not
+	// have (internal/worklet/tags.go).
 	r.declareTags("urgent", "api")
 
 	task := newTask("t-1")
@@ -206,15 +197,10 @@ func TestASecondAxisIsSubgroups(t *testing.T) {
 	}
 }
 
-// A SWIMLANE ON A CLOSED SET IS IN THE SET'S DECLARED ORDER, as a column is.
-//
-// A lane is the second axis drawn inside a column, and the reason a closed
-// set's columns keep its declared order ([TestAClosedSetsColumnsAreInItsDeclaredOrder])
-// is the reason its lanes do: ordered by size, a status lane board reshuffles
-// every time work moves between statuses, and nobody can learn its shape. The
-// lanes were counted over an axis rebuilt from the inner one without its
-// order, so they came back largest first. Here a column holds more in-progress
-// work than to-do work, so the two orders disagree.
+// A SWIMLANE ON A CLOSED SET IS IN THE SET'S DECLARED ORDER, for the reason a
+// column is ([TestAClosedSetsColumnsAreInItsDeclaredOrder]). Here a column holds
+// more in-progress work than to-do work, so a size order and the declared one
+// disagree.
 func TestASwimlaneOnAClosedSetIsInItsDeclaredOrder(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -266,9 +252,8 @@ func TestAGroupingThatMeansNothingIsRefused(t *testing.T) {
 			"same as the first"},
 		"a second axis with no first": {
 			map[string]any{"group_by2": "status"}, "without group_by"},
-		// THE RESOLUTION REFUSES IT FIRST, before the axis is
-		// compiled — one refusal for a ref nothing resolved, whether it
-		// was a filter, a sort, a total or an axis that named it.
+		// THE RESOLUTION REFUSES IT FIRST, before the axis compiles: one refusal for
+		// an unresolved ref, whether a filter, a sort, a total or an axis named it.
 		"a field nothing resolves": {
 			map[string]any{"group_by": "f.nonesuch"}, "names no field"},
 	} {
@@ -296,10 +281,8 @@ func TestAGroupingThatMeansNothingIsRefused(t *testing.T) {
 	}
 }
 
-// GROUPING ON A CUSTOM FIELD LABELS ITS COLUMNS.
-//
-// A dropdown's stored value is the option's ID, so a board grouped on one
-// would draw columns headed by uuids without the label beside the key.
+// GROUPING ON A CUSTOM FIELD LABELS ITS COLUMNS: a dropdown stores the
+// option's ID, so without the label beside the key a column is headed by a uuid.
 func TestGroupingOnACustomFieldLabelsItsColumns(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -322,11 +305,9 @@ func TestGroupingOnACustomFieldLabelsItsColumns(t *testing.T) {
 	}
 }
 
-// A COLUMN FILTER NARROWS A JOINED AXIS TOO, in its join-free form.
-//
-// A tag or a custom field reaches its value through a join, and the count hint
-// and the totals carry no join — so an axis expressed only as one would leave a
-// header adding up the whole board while the rows showed one column of it.
+// A COLUMN FILTER NARROWS A JOINED AXIS TOO, in its join-free form: the count
+// hint and the totals carry no join, so a join-only axis would leave the header
+// totalling the whole board while the rows showed one column of it.
 func TestAColumnFilterOnAJoinedAxisNarrowsTheTotals(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -380,17 +361,14 @@ func TestAColumnFilterOnAJoinedAxisNarrowsTheTotals(t *testing.T) {
 	}
 }
 
-// A CLOSED SET'S COLUMNS ARE IN ITS DECLARED ORDER, not by size.
-//
-// A status board whose columns re-shuffled every time work moved between them
-// is a board nobody can learn the shape of — and, worse, one where the cap
-// would drop whichever column happened to be smallest that minute.
+// A CLOSED SET'S COLUMNS ARE IN ITS DECLARED ORDER, not by size: a size order
+// reshuffles as work moves, and the cap would drop whichever column was
+// smallest that minute.
 func TestAClosedSetsColumnsAreInItsDeclaredOrder(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	// MORE in_progress THAN todo, so a size ordering and a declared one
-	// disagree.
+	// MORE in_progress THAN todo, so a size order and the declared one disagree.
 	for i, status := range []worklet.Status{
 		worklet.StatusTodo,
 		worklet.StatusInProgress, worklet.StatusInProgress,
@@ -404,10 +382,9 @@ func TestAClosedSetsColumnsAreInItsDeclaredOrder(t *testing.T) {
 		r.drain()
 	}
 
-	// EVERY STATUS IS A COLUMN under show_closed, the four nothing was
-	// filed under at count 0 — see TestAClosedAxisDrawsEveryColumnTheQueryAdmits
-	// — and the order is the declared one, which puts the smaller todo
-	// column ahead of the larger in_progress one.
+	// EVERY STATUS IS A COLUMN under show_closed, the four unused ones at count 0
+	// (TestAClosedAxisDrawsEveryColumnTheQueryAdmits), in declared order: the
+	// smaller todo column ahead of the larger in_progress one.
 	answer := r.ask(map[string]any{
 		"container": "project:ENG", "group_by": "status", "show_closed": "true",
 	})
@@ -423,8 +400,7 @@ func TestAClosedSetsColumnsAreInItsDeclaredOrder(t *testing.T) {
 		t.Fatalf("the board counts %v, want %v", got, want)
 	}
 
-	// AND A PRIORITY BOARD TOO, whose order is the one a person reads it
-	// in rather than the one this week's work produced.
+	// AND A PRIORITY BOARD TOO, in the order a person reads it.
 	for i := range 3 {
 		task := newTask("p-" + itoa(i))
 		task.Priority = worklet.PriorityLow
@@ -440,11 +416,9 @@ func TestAClosedSetsColumnsAreInItsDeclaredOrder(t *testing.T) {
 	for _, group := range byPriority.Groups {
 		order = append(order, group.Key)
 	}
-	// ALL FIVE, LOW BEFORE NORMAL, which is the declared order — and the
-	// OPPOSITE of the size order, since four tasks are normal and three are
-	// low. The three priorities nothing was filed under are columns at zero,
-	// because a priority board is the shape of the scale rather than of this
-	// week's rows.
+	// ALL FIVE, LOW BEFORE NORMAL as declared — the OPPOSITE of size order (four
+	// normal, three low) — and the three unused priorities as columns at zero: a
+	// priority board is the shape of the scale.
 	want := declared(worklet.Priorities)
 	if !equalKeys(order, want) {
 		t.Fatalf("the priority columns are %v, want %v — the declared "+
@@ -455,14 +429,11 @@ func TestAClosedSetsColumnsAreInItsDeclaredOrder(t *testing.T) {
 	}
 }
 
-// A BOARD IS THE SHAPE OF THE PROCESS, NOT OF THIS WEEK'S ROWS.
-//
-// A GROUP BY emits a column per value present, so a company with one task got
-// a board with one lane, and nothing on it said whether In review was empty or
-// missing. The columns are the values the query itself admits, in the declared
-// order, empty ones included — and ONLY those: an open-work board must not
-// draw a Done lane the query excluded, because "nothing is done" said about a
-// set that was never asked is a claim rather than an absence.
+// A BOARD IS THE SHAPE OF THE PROCESS, NOT OF THIS WEEK'S ROWS: its columns are
+// the values the query admits, in declared order, empty ones included, so an
+// empty In review is drawn rather than missing. And ONLY those: an open-work
+// board draws no Done lane, since "nothing is done" about a set never asked is
+// a claim rather than an absence.
 func TestAClosedAxisDrawsEveryColumnTheQueryAdmits(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -484,8 +455,7 @@ func TestAClosedAxisDrawsEveryColumnTheQueryAdmits(t *testing.T) {
 		}
 	}
 
-	// THE DEFAULT SCOPE IS OPEN WORK, so the three open statuses are the
-	// board and the three finished ones are not on it.
+	// THE DEFAULT SCOPE IS OPEN WORK: the three open statuses, not the finished.
 	open := ask(map[string]any{"group_by": "status"})
 	expect("open work", open, []string{"todo", "in_progress", "in_review"}, []int{1, 0, 0})
 	// AN EMPTY COLUMN CARRIES AN EMPTY LIST ON THE WIRE, never null: every
@@ -498,8 +468,8 @@ func TestAClosedAxisDrawsEveryColumnTheQueryAdmits(t *testing.T) {
 		t.Fatalf("an empty column reached the wire as %s, want \"rows\":[]", raw)
 	}
 
-	// THE FILTERS THAT NARROW THE PREDICATE NARROW THE BOARD, in the same
-	// terms: a group, a negated status, a named status.
+	// THE FILTERS THAT NARROW THE PREDICATE NARROW THE BOARD: a group, a negated
+	// status, a named status.
 	expect("active only", ask(map[string]any{"group_by": "status", "status_group": "active"}),
 		[]string{"in_progress", "in_review"}, []int{0, 0})
 	expect("not todo", ask(map[string]any{"group_by": "status", "status": "!todo"}),
@@ -513,22 +483,20 @@ func TestAClosedAxisDrawsEveryColumnTheQueryAdmits(t *testing.T) {
 	expect("overdue", ask(map[string]any{
 		"group_by": "status", "show_closed": "true", "due": "overdue",
 	}), []string{"todo", "in_progress", "in_review"}, []int{0, 0, 0})
-	// ONE COLUMN ASKED FOR IS ONE COLUMN ANSWERED, even an empty one: the
-	// reader who followed "N more →" into it is looking at that column.
+	// ONE COLUMN ASKED FOR IS ONE COLUMN ANSWERED, even an empty one: it is the
+	// column a reader followed "N more →" into.
 	expect("one column", ask(map[string]any{"group_by": "status", "group": "in_review"}),
 		[]string{"in_review"}, []int{0})
 	// THE GROUP AXIS FOLLOWS THE SAME ADMISSION.
 	expect("by group", ask(map[string]any{"group_by": "status_group"}),
 		[]string{"not_started", "active"}, []int{1, 0})
-	// A PRIORITY BOARD CARRIES THE WHOLE SCALE, and a priority filter
-	// narrows it.
+	// A PRIORITY BOARD CARRIES THE WHOLE SCALE; a priority filter narrows it.
 	expect("by priority", ask(map[string]any{"group_by": "priority"}),
 		declared(worklet.Priorities), []int{0, 0, 1, 0, 0})
 	expect("two priorities", ask(map[string]any{"group_by": "priority", "priority": "high,urgent"}),
 		[]string{"high", "urgent"}, []int{0, 0})
-	// AN OPEN AXIS IS LEFT AS IT WAS — the values present and no more —
-	// because every seat in the company as an empty column is a roster
-	// rather than a board.
+	// AN OPEN AXIS IS LEFT AS IT WAS, the values present and no more: every seat
+	// as an empty column is a roster, not a board.
 	expect("by assignee", ask(map[string]any{"group_by": "assignee"}), []string{""}, []int{1})
 }
 
@@ -580,11 +548,8 @@ func equalCounts(got, want []int) bool {
 	return true
 }
 
-// A MULTI-VALUED CUSTOM FIELD IS A LABEL BOARD, and says so.
-//
-// Pinned to its first value it would show every task under one column and
-// declare no overlap — a board that is quietly wrong rather than one that is
-// differently shaped.
+// A MULTI-VALUED CUSTOM FIELD IS A LABEL BOARD, and says so: pinned to its
+// first value it would put each task in one column and declare no overlap.
 func TestAMultiValuedFieldBoardPutsATaskOnEveryColumnItChose(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -611,10 +576,8 @@ func TestAMultiValuedFieldBoardPutsATaskOnEveryColumnItChose(t *testing.T) {
 	}
 }
 
-// A COLUMN HEADING IS THE OPTION'S NAME, every time.
-//
-// Inverting the two-key option map picked the slug or the name by Go's
-// randomised iteration, so one node answered two requests with two headings.
+// A COLUMN HEADING IS THE OPTION'S NAME, every time: the option map is keyed by
+// both slug and name, so inverting it picks either by Go's map iteration.
 func TestAColumnHeadingIsTheSameOnEveryRequest(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -642,13 +605,10 @@ func TestAColumnHeadingIsTheSameOnEveryRequest(t *testing.T) {
 	}
 }
 
-// bulkTasks files n minimal rows straight into the replicated estate.
-//
-// DIRECTLY RATHER THAN THROUGH THE WRITER, because what the gate below is
-// about is a corpus of twenty thousand and a broker round trip per task is a
-// test nobody would ever run. The rows carry exactly the columns the gate's
-// own count reads — it counts and never decodes — so `document` is empty and
-// the rows are deliberately not readable as tasks.
+// bulkTasks files n minimal rows straight into the replicated estate: the gate
+// below needs twenty thousand, too many for a broker round trip each. The rows
+// carry only the columns the gate counts (it never decodes), so `document` is
+// empty and they are deliberately not readable as tasks.
 func bulkTasks(t *testing.T, r *roundTrip, n int, project string) {
 	t.Helper()
 	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
@@ -669,14 +629,9 @@ func bulkTasks(t *testing.T, r *roundTrip, n int, project string) {
 	}
 }
 
-// A GROUPING IS REFUSED ON WHAT IT WOULD SORT, never on which keys are present.
-//
-// The gate this replaces asked for "a narrowing filter — a status_group, an
-// assignee, a unit or a date bound", and `status_group=not_started`
-// satisfies it while narrowing nothing: every open task is already in it. So
-// the case files one row past the ceiling, asks WITH that filter, and expects
-// the refusal anyway — which is the whole difference between a gate on a name
-// and a gate on a count.
+// A GROUPING IS REFUSED ON WHAT IT WOULD SORT, never on which keys are present:
+// `status_group=not_started` narrows nothing (every open task is in it), so one
+// row past the ceiling asked WITH it is refused all the same.
 func TestAGroupingIsRefusedOnTheRowsItWouldSortRatherThanOnAKey(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -698,10 +653,8 @@ func TestAGroupingIsRefusedOnTheRowsItWouldSortRatherThanOnAKey(t *testing.T) {
 			"tell how much narrowing is enough", err)
 	}
 
-	// AN ABSENT CONTAINER IS NOT A NARROWER ONE. It adds no predicate at
-	// all, so it scans exactly what `workspace` scans, and a gate spelled
-	// against the literal key would let the identical query straight
-	// through.
+	// AN ABSENT CONTAINER IS NOT A NARROWER ONE: it adds no predicate, so it scans
+	// what `workspace` scans, and a gate keyed on the literal would let it through.
 	if err := r.askErr(map[string]any{"group_by": "status"}); !errors.Is(err, worklet.ErrTooBroad) {
 		t.Fatalf("a grouping with NO container answered %v, want ErrTooBroad: "+
 			"an omitted container adds no predicate and scans the same rows "+
@@ -709,9 +662,8 @@ func TestAGroupingIsRefusedOnTheRowsItWouldSortRatherThanOnAKey(t *testing.T) {
 	}
 }
 
-// AND THE GATE DOES NOT RUN AT PROJECT SCOPE, because there the input is an
-// index range on `(project_key, status, rank)` whose width is one project's
-// own size rather than the company's.
+// AND THE GATE DOES NOT RUN AT PROJECT SCOPE: there the input is an index range
+// on `(project_key, status, rank)`, one project's size, not the company's.
 func TestAProjectScopedGroupingIsNotGated(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -726,9 +678,9 @@ func TestAProjectScopedGroupingIsNotGated(t *testing.T) {
 	}
 }
 
-// AND A COMPANY UNDER THE CEILING IS SERVED AT WORKSPACE SCOPE, which is what
-// stops the case above from passing against a gate that simply refuses every
-// grouping that names no project.
+// AND A COMPANY UNDER THE CEILING IS SERVED AT WORKSPACE SCOPE, so the case
+// above cannot pass against a gate refusing every grouping that names no
+// project.
 func TestAWorkspaceGroupingUnderTheCeilingIsServed(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -743,14 +695,10 @@ func TestAWorkspaceGroupingUnderTheCeilingIsServed(t *testing.T) {
 	}
 }
 
-// A SECOND AXIS IS BOUNDED BY CELLS, not by either axis alone.
-//
-// One axis is 1 + G statements; a second repeats that pattern inside every
-// column, so it is 1 + G × (2 + S). At MaxGroups on both that is 4 225 ordered
-// statements with two joins each, inside one read transaction, for one board
-// poll — and checkGroupBreadth cannot see it, because that gate measures the
-// row count of a single pass and does not run at project scope, which is
-// exactly where a swimlane board is opened.
+// A SECOND AXIS IS BOUNDED BY CELLS, not by either axis alone: one axis is
+// 1 + G statements, two are 1 + G × (2 + S) — 4 225 at MaxGroups on both, in
+// one read transaction per poll. checkGroupBreadth cannot see it: it measures
+// one pass's rows and does not run at project scope, where swimlanes open.
 func TestASwimlaneBoardIsBoundedByItsCells(t *testing.T) {
 	t.Parallel()
 	if worklet.MaxGroupsWithSubgroups*worklet.MaxSubgroups > 256 {
@@ -761,11 +709,9 @@ func TestASwimlaneBoardIsBoundedByItsCells(t *testing.T) {
 	r := newRoundTrip(t)
 	seedBoard(t, r)
 
-	// THE COLUMN CAP DROPS when a second axis is asked for, so a board
-	// with lanes draws fewer columns than the same board without them.
-	// The fixture is small, so what this asserts is that the answer still
-	// carries both axes and reports its own overflow rather than that the
-	// cap bit here.
+	// THE COLUMN CAP DROPS when a second axis is asked for. The fixture is too
+	// small for the cap to bite, so this asserts the answer carries both axes and
+	// reports its own overflow.
 	answer := r.ask(map[string]any{
 		"container": "project:ENG", "group_by": "status",
 		"group_by2": "assignee", "show_closed": "true",
@@ -789,13 +735,10 @@ func TestASwimlaneBoardIsBoundedByItsCells(t *testing.T) {
 
 // ---- the relative due bands ------------------------------------------- //
 
-// berlinAt is a wall-clock instant in the COMPANY's own zone.
-//
-// SPELLED AS A CALENDAR rather than resolved through [period.Resolve]:
-// these cases exist to pin where the bands cut, and a case that asked the
-// resolver for its own boundary would move with whatever it was asked to
-// hold. `wednesday` is 16:30 on Wednesday 2031-04-16 in Berlin, so the day is
-// the 16th and the Monday-anchored week runs 14–20 April.
+// berlinAt is a wall-clock instant in the COMPANY's own zone, spelled as a
+// calendar rather than resolved through [period.Resolve], so a case pinning
+// where a band cuts does not move with the resolver. `wednesday` is 16:30 on
+// Wednesday 2031-04-16 in Berlin; the Monday-anchored week runs 14–20 April.
 func berlinAt(t *testing.T, day, clock string) time.Time {
 	t.Helper()
 	at, err := time.ParseInLocation("2006-01-02 15:04:05.999999",
@@ -831,22 +774,17 @@ func bandOf(t *testing.T, answer worklet.Answer, id string) (string, bool) {
 	return "", false
 }
 
-// THE BANDS CUT ON THE QUERY'S OWN DAY, AND ON ITS OWN WEEK.
-//
-// This is the whole of why the axis exists. The row's `overdue` flag and every
-// `due=` filter are already derived against the company's day start; the bands
-// a person reads their day in were cut in the browser, on the browser's
-// midnight and the browser's Monday. Two boundaries for one fact, and for
-// anybody whose local day differs from the company's they disagree by a whole
-// band. Every boundary below is stated in Berlin wall-clock, which is the
-// company's zone in this suite, so a band that moved to UTC midnight — or to
-// a rolling seven days — fails here rather than on somebody's screen.
+// THE BANDS CUT ON THE QUERY'S OWN DAY, AND ON ITS OWN WEEK: the company's day
+// start, as the row's `overdue` flag and every `due=` filter are, never the
+// browser's midnight or Monday. Every boundary is in Berlin wall-clock, the
+// suite's company zone, so a band cut at UTC midnight or over a rolling seven
+// days fails here.
 func TestTheDueBandsCutOnTheCompanysOwnCalendar(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
 
-	// ONE TABLE, SEEDED AND THEN ASSERTED, so a case's expectation cannot
-	// drift from the row it was written for.
+	// ONE TABLE, SEEDED AND THEN ASSERTED, so an expectation cannot drift from its
+	// row.
 	cases := []struct {
 		id    string
 		day   string
@@ -854,31 +792,29 @@ func TestTheDueBandsCutOnTheCompanysOwnCalendar(t *testing.T) {
 		group worklet.StatusGroup
 		want  string
 	}{
-		// THE LAST INSTANT BEFORE THE DAY START, twice: the band that
-		// means "you missed this" is the one that also asks whether the
-		// work is still open.
+		// THE LAST INSTANT BEFORE THE DAY START, twice: the missed band also asks
+		// whether the work is still open.
 		{"open-yesterday", "2031-04-15", "23:59:59.999999",
 			worklet.GroupActive, "overdue"},
 		{"done-yesterday", "2031-04-15", "23:59:59.999999",
 			worklet.GroupDone, "earlier"},
 		// THE DAY START ITSELF is today, not yesterday.
 		{"day-start", "2031-04-16", "00:00:00", worklet.GroupNotStarted, "today"},
-		// AND THE LAST SECOND OF THE SAME DAY is still today — the case
-		// a browser cutting on its own midnight gets wrong first.
+		// AND THE LAST SECOND OF THE SAME DAY is still today, which a browser cutting
+		// on its own midnight gets wrong first.
 		{"day-end", "2031-04-16", "23:59:59", worklet.GroupNotStarted, "today"},
 		// THE FIRST INSTANT AFTER IT is this week.
 		{"tomorrow", "2031-04-17", "00:00:00", worklet.GroupNotStarted, "this_week"},
-		// THE LAST INSTANT OF THE WEEK is still this week: the week is
-		// Monday-anchored, so it ends as Sunday the 20th does.
+		// THE LAST INSTANT OF THE WEEK is still this week: the Monday-anchored week
+		// ends with Sunday the 20th.
 		{"week-end", "2031-04-20", "23:59:59.999999",
 			worklet.GroupNotStarted, "this_week"},
 		// AND THE FIRST INSTANT AFTER IT is later.
 		{"next-monday", "2031-04-21", "00:00:00", worklet.GroupNotStarted, "later"},
-		// A FINISHED TASK IS NOT AUTOMATICALLY `earlier`: that band is
-		// work past its date, and this one's date has not come.
+		// A FINISHED TASK IS NOT AUTOMATICALLY `earlier`: that band is work past its
+		// date, and this one's has not come.
 		{"done-ahead", "2031-04-18", "09:00:00", worklet.GroupDone, "this_week"},
-		// AND ONE WITH NO DATE AT ALL, which is a column rather than a
-		// row the board hides. Its empty clock is what says so.
+		// AND ONE WITH NO DATE: a column, not a row the board hides.
 		{"undated", "", "", worklet.GroupNotStarted, ""},
 	}
 	for _, tc := range cases {
@@ -892,9 +828,8 @@ func TestTheDueBandsCutOnTheCompanysOwnCalendar(t *testing.T) {
 
 	answer := h.ask(map[string]any{
 		"container": "project:ENG", "group_by": "due:bucket",
-		// THE FINISHED WORK HAS TO BE IN THE ANSWER for `earlier` to be
-		// reachable at all — it is empty on an open-only read by
-		// construction, which is the point of it being its own band.
+		// THE FINISHED WORK HAS TO BE IN THE ANSWER for `earlier` to be reachable: an
+		// open-only read leaves that band empty by construction.
 		"show_closed": "true",
 	})
 
@@ -912,8 +847,7 @@ func TestTheDueBandsCutOnTheCompanysOwnCalendar(t *testing.T) {
 		}
 	}
 
-	// THE UNDATED COLUMN IS LABELLED, because a board draws a heading
-	// over it and an empty string is not one.
+	// THE UNDATED COLUMN IS LABELLED: a board heads it, and "" is no heading.
 	undated := groupOf(t, answer, "")
 	if undated.Label != "No due date" {
 		t.Errorf("the undated band reads %q, want the sixth heading",
@@ -921,12 +855,9 @@ func TestTheDueBandsCutOnTheCompanysOwnCalendar(t *testing.T) {
 	}
 }
 
-// AND THE OVERDUE BAND IS THE ROW'S OWN OVERDUE FLAG.
-//
-// `overdue` means open AND past its date — which is exactly what
-// [worklet.TaskRow.Overdue] and the `due=overdue` filter mean, from the same
-// instant. A band derived from the date alone would put work somebody
-// delivered late under a heading claiming they still owe it.
+// AND THE OVERDUE BAND IS THE ROW'S OWN OVERDUE FLAG: open AND past its date,
+// as [worklet.TaskRow.Overdue] and `due=overdue` mean, from the same instant. A
+// band on the date alone would file late-delivered work as still owed.
 func TestTheOverdueBandIsTheRowsOverdueFlag(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -953,8 +884,7 @@ func TestTheOverdueBandIsTheRowsOverdueFlag(t *testing.T) {
 		t.Fatal("the finished task is in no band, so this case would pass " +
 			"against a reader that never returned it")
 	}
-	// AND AN OPEN-ONLY READ HAS NO `earlier` BAND, because nothing in it
-	// can be past its date and finished.
+	// AND AN OPEN-ONLY READ HAS NO `earlier` BAND: nothing in it is finished.
 	open := h.ask(map[string]any{
 		"container": "project:ENG", "group_by": "due:bucket",
 	})
@@ -966,12 +896,9 @@ func TestTheOverdueBandIsTheRowsOverdueFlag(t *testing.T) {
 	}
 }
 
-// A BAND IS A COLUMN, so `group=` narrows to it — including the hint.
-//
-// The count hint and the totals share the query's compiled predicate and carry
-// no join, so the axis has to be expressible as one join-free expression. An
-// axis that needed a join would leave the header adding up the whole board
-// while the rows showed a single band of it.
+// A BAND IS A COLUMN, so `group=` narrows to it — including the hint: the count
+// hint and the totals share the compiled predicate and carry no join, so an
+// axis needing a join would leave the header totalling the whole board.
 func TestADueBandNarrowsTheWholeQuery(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -1010,16 +937,15 @@ func TestADueBandNarrowsTheWholeQuery(t *testing.T) {
 	if band.Count != 2 {
 		t.Errorf("the today column counts %d, want 2", band.Count)
 	}
-	// THE HINT IS THE NARROWED SET'S, which is what makes the header of a
-	// single-column view describe that column.
+	// THE HINT IS THE NARROWED SET'S, so a single-column view's header describes
+	// that column.
 	if answer.TotalHint != 2 {
 		t.Errorf("group=today reports a total hint of %d over the whole "+
 			"query, want the 2 rows the column holds — the hint and the "+
 			"column disagree, so the axis is not narrowing the shared "+
 			"predicate", answer.TotalHint)
 	}
-	// AND THE UNDATED BAND NARROWS BY THE SAME SPELLING every other axis's
-	// absent value takes.
+	// AND THE UNDATED BAND NARROWS BY THE SPELLING every axis's absent value takes.
 	undated := h.ask(map[string]any{
 		"container": "project:ENG", "group_by": "due:bucket",
 		"group": "",
@@ -1030,20 +956,13 @@ func TestADueBandNarrowsTheWholeQuery(t *testing.T) {
 	}
 }
 
-// THE BANDS HOLD THEIR DECLARED ORDER, and the empty ones are drawn too.
+// THE BANDS HOLD THEIR DECLARED ORDER (Overdue, Earlier, Today, This week,
+// Later, No due date), not size, so the fixture makes the LAST drawn band the
+// biggest and a size-ordered axis fails here.
 //
-// A day is read Overdue, Earlier, Today, This week, Later, No due date. Order
-// the columns by size instead and the headings re-shuffle every time work
-// moves between them, which is a board nobody can learn the shape of — so the
-// fixture makes the LAST drawn band the biggest, and a size-ordered axis fails
-// here.
-//
-// AND THE AXIS IS A CLOSED SET, so it pads: nothing is due this week in the
-// fixture and the lane is drawn at nought anyway, because a day with nothing
-// in it is a fact about the week rather than a gap in the board. `earlier` is
-// the one band that is NOT drawn, and for the reason the admission rule gives
-// — it holds work that was finished late, and this answer carries open work
-// only, so nothing could have landed in it.
+// AND THE AXIS IS A CLOSED SET, so it pads: nothing is due this week and that
+// lane is drawn at nought. `earlier` alone is not drawn, by the admission rule:
+// it holds work finished late, and this answer carries open work only.
 func TestTheDueBandsKeepTheirDeclaredOrder(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -1065,8 +984,8 @@ func TestTheDueBandsKeepTheirDeclaredOrder(t *testing.T) {
 	for _, group := range answer.Groups {
 		drawn = append(drawn, group.Key)
 	}
-	// FIVE OF THE SIX, IN THE AXIS'S OWN ORDER — `this_week` empty among
-	// them, and `earlier` absent because no finished status is admitted.
+	// FIVE OF THE SIX, IN THE AXIS'S OWN ORDER: `this_week` empty among them,
+	// `earlier` absent because no finished status is admitted.
 	want := []struct {
 		key   string
 		count int
@@ -1087,9 +1006,8 @@ func TestTheDueBandsKeepTheirDeclaredOrder(t *testing.T) {
 		if got.Count != band.count {
 			t.Errorf("the %q band counts %d, want %d", band.key, got.Count, band.count)
 		}
-		// AN EMPTY BAND CARRIES AN EMPTY LIST, never a null: a renderer
-		// mapping a column's rows would fall over on exactly the column
-		// the padding exists to draw.
+		// AN EMPTY BAND CARRIES AN EMPTY LIST, never null: a renderer mapping a
+		// column's rows would fail on exactly the padded column.
 		if got.Rows == nil {
 			t.Errorf("the %q band carries no row list at all", band.key)
 		}
@@ -1097,8 +1015,8 @@ func TestTheDueBandsKeepTheirDeclaredOrder(t *testing.T) {
 	// AND EACH HEADING IS THE WORD A PERSON READS, not the stored slug.
 	for _, want := range []struct{ key, label string }{
 		{"overdue", "Overdue"}, {"today", "Today"},
-		// THE PADDED ONE TOO: a lane minted from a bare key is headed
-		// from the same table as the ones the count statement returned.
+		// THE PADDED ONE TOO: a lane minted from a bare key is headed from the same
+		// table as the counted ones.
 		{"this_week", "This week"},
 		{"later", "Later"}, {"", "No due date"},
 	} {
@@ -1108,14 +1026,11 @@ func TestTheDueBandsKeepTheirDeclaredOrder(t *testing.T) {
 	}
 }
 
-// AND THE BANDS SURVIVE BEING THE INNER AXIS OF A SWIMLANE BOARD.
-//
-// The bands are the one axis whose EXPRESSION carries values of its own —
-// three instants, four placeholders — and a placeholder binds in textual
-// order. As a lane the expression is written into the SELECT of a statement
-// that already carries the outer axis's join and the outer column's own
-// predicate, so an arrangement that bound the expression's values with the
-// join's silently cuts the bands on whatever number happened to be next.
+// AND THE BANDS SURVIVE BEING THE INNER AXIS OF A SWIMLANE BOARD: theirs is the
+// one axis expression with values of its own, and placeholders bind in textual
+// order. As a lane it sits in a SELECT already carrying the outer axis's join
+// and predicate, so binding its values with the join's would cut the bands on
+// whatever number came next.
 func TestTheDueBandsAreAnInnerAxisToo(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -1157,17 +1072,11 @@ func TestTheDueBandsAreAnInnerAxisToo(t *testing.T) {
 	}
 }
 
-// THE ABSENT-VALUE COLUMN LOADS LIKE EVERY OTHER ONE.
-//
-// A board draws "nobody is assigned" as a column with its own count, and
-// `group=<value>` is the ONLY way to load a column further — a grouped answer
-// mints no cursor, so there is nothing else to page with. Read as a plain
-// string, `group=` and an absent `group` were one request, so the one column
-// a board could not load was the one holding everything nobody had filled in:
-// the ask answered the whole board instead, which is the widest possible
-// reading of a narrowing somebody typed. [worklet.Params] already draws that
-// line — "a filter set to empty asks for rows with no value" — and this is
-// the grammar keeping it.
+// THE ABSENT-VALUE COLUMN LOADS LIKE EVERY OTHER ONE: `group=<value>` is the
+// only way to load a column further (a grouped answer mints no cursor), so a
+// bare `group=` asks for the no-value column, never the whole board — the
+// line [worklet.Params] draws: "a filter set to empty asks for rows with no
+// value".
 func TestTheAbsentValueColumnLoadsLikeEveryOther(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -1200,8 +1109,7 @@ func TestTheAbsentValueColumnLoadsLikeEveryOther(t *testing.T) {
 			"the hint shares the narrowed predicate or a header adds up the "+
 			"whole board while the rows show one column of it", answer.TotalHint)
 	}
-	// AND AN ABSENT `group` IS STILL THE WHOLE BOARD, which is the other
-	// half of the same distinction.
+	// AND AN ABSENT `group` IS STILL THE WHOLE BOARD.
 	whole := h.ask(map[string]any{
 		"container": "project:ENG", "group_by": "assignee",
 	})
@@ -1210,12 +1118,8 @@ func TestTheAbsentValueColumnLoadsLikeEveryOther(t *testing.T) {
 	}
 }
 
-// AND A BARE `group=` WITH NO AXIS IS STILL REFUSED.
-//
-// A column filter with no board is a narrowing that would silently answer
-// everything, and that is true of the empty spelling exactly as it is of a
-// named one — the pointer is what makes the empty one reachable, not what
-// makes it legal on its own.
+// AND A BARE `group=` WITH NO AXIS IS STILL REFUSED: a column filter with no
+// board would silently answer everything, empty or named.
 func TestAColumnFilterWithNoAxisIsRefusedEmptyToo(t *testing.T) {
 	t.Parallel()
 	_, err := worklet.ParseQuery(worklet.MapParams(map[string]any{
@@ -1231,12 +1135,9 @@ func TestAColumnFilterWithNoAxisIsRefusedEmptyToo(t *testing.T) {
 	}
 }
 
-// TWO CUSTOM FIELDS MAKE A SWIMLANE BOARD.
-//
-// A lane is read in one statement with its column's join, and both field axes
-// joined `tracker_field_values` under one alias — a statement the engine
-// refuses — so a board grouped on one field with lanes on another failed its
-// read on every poll. The lane axis carries its own alias.
+// TWO CUSTOM FIELDS MAKE A SWIMLANE BOARD: a lane is read in one statement with
+// its column's join, so the lane axis joins `tracker_field_values` under its
+// own alias; one alias for both is a statement the engine refuses.
 func TestTwoFieldAxesDrawASwimlaneBoard(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -1263,13 +1164,9 @@ func TestTwoFieldAxesDrawASwimlaneBoard(t *testing.T) {
 	}
 }
 
-// A PARENT COLUMN IS HEADED BY ITS PARENT, never by the id it is keyed on.
-//
-// The column's key is the parent's id, a uuid nobody reads, and a board or a
-// list grouped by parent headed every column with one — so nothing on screen
-// said whose subtasks a column held. The heading is the parent's key and title,
-// read off the parent's own row: the parent itself is a root, and a filter
-// that admits only subtasks still names it.
+// A PARENT COLUMN IS HEADED BY ITS PARENT, never by the uuid it is keyed on:
+// the parent's key and title, read off its own row, which a filter admitting
+// only subtasks still names.
 func TestAParentColumnIsHeadedByItsParent(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -1298,8 +1195,8 @@ func TestAParentColumnIsHeadedByItsParent(t *testing.T) {
 
 	answer := r.ask(map[string]any{
 		"container": "project:ENG", "group_by": "parent", "subtasks": "separate",
-		// ONLY THE SUBTASKS: the parent's own row is not in the answer, and
-		// its column is headed from that row all the same.
+		// ONLY THE SUBTASKS: the parent's row is not in the answer, yet heads its
+		// column.
 		"has_parent": "true",
 	})
 	column := groupOf(t, answer, "epic")

@@ -249,7 +249,7 @@ func TestReadyWorkSaysWhomTheWorkIsFor(t *testing.T) {
 }
 
 // THE PICKUP READS AN ASSIGNMENT BY ITS ASSIGNEE DELTA, WHATEVER KIND ITS
-// RECORD ENDED WITH (ADR-0112, #930). A write that hands an item over and moves
+// RECORD ENDED WITH (ADR-0112). A write that hands an item over and moves
 // another field in the same call is filed under the other change's kind, and
 // the turn the pickup starts works for that write's writer, not for whoever
 // assigned the item before it. Another agent's reassertion to the seat that

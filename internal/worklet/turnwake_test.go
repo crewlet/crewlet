@@ -63,15 +63,11 @@ func TestEveryReasonDecidesWhetherItStartsATurn(t *testing.T) {
 	}
 }
 
-// THE NOTICES A LIVE COMPANY SPENT ITS TURNS ON, AND WHAT EACH WAKES NOW.
-//
-// The quiet cases are changes that woke a seat into a turn which ended
-// `turn_no_action` with a summary saying the change asked it nothing ("a
-// status note asks nothing of QA", "an acknowledgement to backend-engineer",
-// "a watcher change with no request"); the rest are changes the same
-// company's seats acted on (a person's instruction, a status move by somebody
-// else, a new dependency, a reassignment, a finished task to verify), which
-// must still reach the seats that answer for the task.
+// ONLY A NOTICE THAT ASKS SOMETHING STARTS A TURN: a status note, an
+// acknowledgement or a watcher change wakes nobody, while a person's
+// instruction, a status move by somebody else, a new dependency, a
+// reassignment or a finished task to verify still reaches the seats that
+// answer for the task.
 func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 	t.Parallel()
 	agentComment := worklet.Snapshot{
@@ -253,11 +249,10 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 
 // A REASON THAT STARTS NO TURN DOES NOT SWALLOW ONE THAT DOES.
 //
-// The first reason per handle is what the handle is told, and the precedence
-// puts several reasons that start no turn ahead of several that do. The
-// reporter who also wrote in the thread a reply lands in, and the assignee who
-// also leads the unit a task was routed to, are each told the first fact and
-// woken by the second.
+// A handle is told its first reason, and the precedence puts some reasons that
+// start no turn ahead of some that do: a reporter in the thread a reply lands
+// in, and an assignee leading the unit a task was routed to, are told the first
+// and woken by the second.
 func TestAShadowedReasonStillWakesItsHandle(t *testing.T) {
 	t.Parallel()
 	for name, n := range map[string]worklet.Notify{

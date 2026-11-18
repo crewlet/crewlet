@@ -12,21 +12,15 @@ import (
 
 // THE MAXIMAL COMMIT IS A TASK PATCH, NOT A BODY EDIT.
 //
-// Stating it as a body edit understates the real maximum by more than 3×, and
-// three constants are sized from this number — the applier's fetch, its
-// ack-pending window and the reorder buffer — so quoting the wrong class is
-// how a batch ceiling ends up 2.4× its stated bound.
-//
-// The fixture is what the caps actually permit: a patch that touches every
-// collection at every cap, carrying a body whose bytes escape six-fold,
-// alongside a maximal notification. It is a MEASUREMENT rather than an
-// assertion about one number, which is why it prints what it found.
+// A body edit understates the maximum by more than 3×, and the applier's
+// fetch, ack-pending window and reorder buffer are sized from it. The fixture
+// is every collection at every cap, a body escaping six-fold and a maximal
+// notification; it logs the size it measured.
 func TestTheMaximalCommitFitsItsDesignMaximum(t *testing.T) {
 	t.Parallel()
 
-	// Control characters escape as \u00XX — six bytes for one — which is
-	// the worst case a body can reach and the multiplier the bound is
-	// derived from.
+	// Control characters escape as \u00XX, six bytes for one: the worst case
+	// and the bound's multiplier.
 	escaping := strings.Repeat("\x01", worklet.MaxBody)
 
 	fields := make(map[string]json.RawMessage, worklet.MaxFieldValues)
@@ -142,10 +136,8 @@ func TestTheMaximalCommitFitsItsDesignMaximum(t *testing.T) {
 			"moves it moves them", len(body), worklet.MaxCommitBytes)
 	}
 
-	// AND IT IS NOT ABSURDLY UNDER IT EITHER. A bound the real maximum
-	// cannot approach is a bound nobody is checking: it would pass just as
-	// well if the patch stopped carrying its collections whole, which is
-	// the property that makes a record able to rebuild the row.
+	// AND NOT ABSURDLY UNDER IT: a bound the maximum cannot approach would
+	// still pass if the patch stopped carrying its collections whole, which lets a record rebuild the row.
 	if len(body) < worklet.MaxCommitBytes/2 {
 		t.Fatalf("the maximal commit is only %d bytes against a %d maximum — "+
 			"either a collection stopped travelling whole, or the maximum is "+

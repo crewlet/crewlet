@@ -12,18 +12,11 @@ import (
 
 // THE PURGE'S OWN RECORD IS NOT GATED BY THE MARKER IT WROTE.
 //
-// # The failure this exists to catch
-//
 // The deletion gate drops every commit about a purged task WHATEVER ITS
-// POSITION — which is what makes the destruction permanent rather than a race
-// a redelivery can undo. Its one exception is the record that wrote the
-// marker, keyed on that record's own id.
-//
-// Without the exception, a purge whose acknowledgement was lost resolves as
-// "the record was durable and applied nowhere": the caller is told the
-// destruction it asked for did not happen, when it did. Keyed on the op KIND
-// instead, a second purge of the same task would pass the gate too — and a
-// purge is the one operation that destroys rows.
+// POSITION; its one exception is the record that wrote the marker, keyed on
+// that record's own id. Without it, a purge whose acknowledgement was lost
+// resolves as "applied nowhere" and its caller is told the destruction did not
+// happen. Keyed on the op KIND instead, a second purge would pass the gate too.
 func TestAPurgeIsNotGatedByItsOwnMarker(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -75,16 +68,11 @@ func TestAPurgeIsNotGatedByItsOwnMarker(t *testing.T) {
 // EVERY WRITE ON A PURGED TASK IS REFUSED AS PURGED, which is final — never as
 // "not on this node".
 //
-// It is a refusal rather than an outcome and never a re-decide: republishing
-// produces another durable record nothing applies, and the caller burns its
-// whole round budget to a conflict a model reads as a colleague editing. And
-// it is the FINAL refusal, [worklet.ErrNoTask] naming the purge, because the
-// other one — [statelog.ErrUnavailable], "not on this node" — is what the
-// CALLER retries (the estate's router hands it back as the holder gave it),
-// and every node holding the task's deletion marker would say it again: a seat
-// editing a task somebody purged was told to try again for ever. The purge and
-// a turn's spend had the final answer; every other gesture on a task answered
-// the retryable one until each was held here.
+// A refusal, never a re-decide: republishing produces another durable record
+// nothing applies. And the FINAL one, [worklet.ErrNoTask] naming the purge,
+// because [statelog.ErrUnavailable] is what the CALLER retries (the estate's
+// router hands it back as the holder gave it), and every node holding the
+// task's deletion marker would say it again, for ever.
 func TestEveryWriteOnAPurgedTaskIsRefusedAsPurged(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -149,14 +137,9 @@ func TestEveryWriteOnAPurgedTaskIsRefusedAsPurged(t *testing.T) {
 }
 
 // A SECOND PURGE OF A PURGED TASK IS REFUSED AS PURGED, which is final — never
-// as "not on this node".
-//
-// That refusal is the one the CALLER retries — the estate's router hands it
-// back as the holder gave it — and every data node holding the task's deletion
-// marker would say it again: an operator re-running a purge to be sure was
-// told the node was behind, of a task every data node had destroyed. The
-// purge's own retry, under its own id, is answered by the first purge's
-// outcome instead, and nothing is appended.
+// as "not on this node", the refusal a caller retries and every data node
+// holding the marker would repeat. The purge's own retry, under its own id, is
+// answered by the first purge's outcome, and nothing is appended.
 func TestASecondPurgeOfAPurgedTaskIsRefusedAsPurged(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -186,13 +169,10 @@ func TestASecondPurgeOfAPurgedTaskIsRefusedAsPurged(t *testing.T) {
 	}
 }
 
-// THE GATE COUNTS WHAT IT DROPS.
-//
-// The residual producers are replay-shaped — a deferred record reprocessed
-// after an upgrade, a snapshot adopter replaying forward — and those are hits
-// worth counting rather than writes worth attributing. A counter is the
-// strictest form of the envelope-only rule: it stores neither envelope nor
-// payload.
+// THE GATE COUNTS WHAT IT DROPS. Its residual producers are replay-shaped
+// (a deferred record reprocessed, a snapshot adopter replaying forward), hits
+// worth counting rather than writes worth attributing; a counter stores
+// neither envelope nor payload.
 func TestTheDeletionGateCountsItsHits(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -211,9 +191,8 @@ func TestTheDeletionGateCountsItsHits(t *testing.T) {
 	}
 	r.drain()
 
-	// THE PATCH AGAIN, after the marker exists. That is the replay shape
-	// the counter is for: a redelivery, a reprocess after an upgrade, or
-	// a snapshot adopter replaying forward past a purge it never saw.
+	// THE PATCH AGAIN, after the marker exists: the replay shape the
+	// counter is for.
 	r.redeliver(patch.Position.Seq)
 
 	var rejects int
@@ -234,16 +213,11 @@ func TestTheDeletionGateCountsItsHits(t *testing.T) {
 
 // A READMISSION IS THE INVERSE COMMIT, AND THIS LOG'S OWN ROWS SAY SO.
 //
-// The eviction's whole history survives a replay because a readmission is a
-// second record rather than a delete — so a node that was evicted, readmitted
-// and evicted again reads as three facts rather than as one long absence. And
+// A readmission is a second record rather than a delete, so evicted,
+// readmitted and evicted again reads as three facts, not one long absence.
 // [worklet.Domain.Evictions] is what the trim reads to stop counting a node on
-// THIS log, so what it answers after each step is the contract: evicted and
-// not back, then back, then evicted again with the readmission cleared.
-//
-// Whether the readmission is PERMITTED is not this writer's to judge any more:
-// it is one fleet gesture over every identity-claiming log, judged once by the
-// engine's node gate before any log is written, and certified there.
+// THIS log, so its answer after each step is the contract. Whether a
+// readmission is PERMITTED is judged by the engine's node gate, not here.
 func TestAReadmissionIsTheInverseCommitOnThisLog(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -420,10 +394,9 @@ func TestEveryGateTableIsCoveredByThePredicate(t *testing.T) {
 	}
 }
 
-// A PURGE'S REASON IS CARRIED WHOLE OR THE PURGE IS REFUSED. It used to be cut
-// to fit the lead's one-line notice — so the only account of an irreversible
-// act could stop half way through the sentence that explained it. A reason
-// that does not fit is now refused before anything is destroyed.
+// A PURGE'S REASON IS CARRIED WHOLE OR THE PURGE IS REFUSED, before anything
+// is destroyed: a cut reason would leave an irreversible act's only account
+// stopping half way.
 func TestAPurgeReasonIsWholeOrThePurgeIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

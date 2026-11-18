@@ -243,7 +243,7 @@ var excessInventory = map[string]int{
 	"internal/trashreap":                            6,
 	"internal/usage":                                574,
 	"internal/words":                                66,
-	"internal/worklet":                              4885,
+	"internal/worklet":                              166,
 	"static":                                        53,
 }
 
@@ -480,5 +480,4 @@ var rowInventory = map[string]int{
 	"version":                                1492,
 	"whsec":                                  374,
 	"words":                                  3660,
-	"worklet":                                16270,
 }

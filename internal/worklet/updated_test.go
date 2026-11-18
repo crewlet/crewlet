@@ -11,10 +11,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// updatedOf is a task's last-change instant as the COLUMN holds it — what a
-// list's Updated column and its "recently updated" order read — beside the
-// same instant as the DOCUMENT holds it, which is what a task page reads, and
-// the newest `effective_at` among the task's history rows.
+// updatedOf is a task's last-change instant as the COLUMN holds it (a list's
+// Updated column and "recently updated" order), as the DOCUMENT holds it (a
+// task page), and the newest `effective_at` among its history rows.
 func (r *roundTrip) updatedOf(id string) (column, document, newest int64) {
 	r.t.Helper()
 	if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
@@ -38,13 +37,9 @@ func (r *roundTrip) updatedOf(id string) (column, document, newest int64) {
 	return column, document, newest
 }
 
-// A CHANGE MOVES THE TASK'S LAST-CHANGED INSTANT.
-//
-// Only the create had ever stamped `updated_at`, so a task changed a hundred
-// times read as last updated the day it was filed: every list's Updated column
-// said so, and "recently updated" ordered the company's work by when it was
-// FILED. The stamp is the applier's, at the fleet-agreed instant of the record
-// that changed the task — the one its history row carries.
+// A CHANGE MOVES THE TASK'S LAST-CHANGED INSTANT, not only the create. The
+// applier stamps it at the fleet-agreed instant of the record that changed the
+// task, the one its history row carries.
 func TestAChangeMovesTheTasksLastChangedInstant(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -75,11 +70,10 @@ func TestAChangeMovesTheTasksLastChangedInstant(t *testing.T) {
 	}
 }
 
-// THE BACKFILL EQUALS THE REPLAY, for the last-changed instant as for every
-// derived column: rows a different rule set derived — a checkpoint a reanchor
-// created at derivation 0, or rows adopted from a build with different rules —
-// re-derive to exactly what the incremental rule reached, and rows this build
-// wrote re-derive to themselves.
+// THE BACKFILL EQUALS THE REPLAY, as for every derived column: rows a
+// different rule set derived (a reanchor's checkpoint at derivation 0, or rows
+// adopted from a build with other rules) re-derive to exactly what the
+// incremental rule reached, and rows this build wrote re-derive to themselves.
 func TestTheLastChangedBackfillEqualsAReplay(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -139,11 +133,10 @@ func TestTheLastChangedBackfillEqualsAReplay(t *testing.T) {
 // A LATE RECORD MOVES THE LAST-CHANGED INSTANT AS A REPLAY WOULD.
 //
 // A record reprocessed BELOW a task's version changes no document, but its
-// history row raises every successor's effective instant — so a node that
-// applied the same records in log order holds the raised instant as the
-// task's last change. Left on the stamp the task already had, the two nodes
-// disagree for good about when it last changed, and the re-derive an upgrade
-// runs would "repair" one of them.
+// history row raises every successor's effective instant, which a node that
+// applied the records in log order holds as the last change. Left on the old
+// stamp, the two nodes disagree for good and an upgrade's re-derive would
+// "repair" one of them.
 func TestALateRecordMovesTheLastChangedInstantAsAReplayWould(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
