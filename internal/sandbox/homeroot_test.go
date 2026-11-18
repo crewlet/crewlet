@@ -17,11 +17,10 @@ import (
 
 // The cases here hold the engine's host-side access to a local box's files to
 // the box's home: every read, write, directory made and file removed goes
-// through the home opened as an os.Root ([boxLayout.openHome]), so a directory
-// on the way that the box made a link — to anywhere outside it, absolute or
-// climbing out — leads the access nowhere. Each plants such a link where the
-// engine is about to reach and asserts the access was refused and nothing
-// outside the box was read, written or made.
+// through the home opened as an os.Root ([boxLayout.openHome]), so a link the
+// box put in place of a directory on the way, absolute or climbing out, leads
+// nowhere. Each plants one where the engine is about to reach and asserts the
+// access was refused and nothing outside the box was read, written or made.
 
 // outsideTheBox is a directory on the engine host beside the box, holding one
 // file, `beside`, which a case holds every access to leave unread and unchanged.
@@ -71,8 +70,8 @@ var links = map[string]func(t *testing.T, home, outside string) string{
 	},
 }
 
-// localBoxes are the two cells' boxes, each with the wording its escapes
-// have always been refused in.
+// localBoxes are the two cells' boxes, each with the wording its escapes are
+// refused in.
 var localBoxes = map[string]struct {
 	fresh  func(t *testing.T) Sandbox
 	escape string
@@ -90,11 +89,10 @@ var localBoxes = map[string]struct {
 	},
 }
 
-// A LOCAL BOX'S FILES ARE REACHED ONLY BENEATH ITS HOME, whatever the box made
-// of a directory on the way: a link in place of .crewlet/ — absolute, or
-// climbing out — refuses every read, write and directory made through it,
-// in the words an escape has always been refused in, and the engine host
-// beside the box is neither read nor written.
+// A LOCAL BOX'S FILES ARE REACHED ONLY BENEATH ITS HOME: a link in place of
+// .crewlet/, absolute or climbing out, refuses every read, write and directory
+// made through it, in the cell's escape wording, and the engine host beside the
+// box is neither read nor written.
 //
 // Mutation: open the file or make the directory by its joined path rather
 // than through the home's root, and the accesses reach the directory beside
@@ -183,11 +181,10 @@ func TestADirectBoxMakesACommandsDirectoryOnlyBeneathItsHome(t *testing.T) {
 
 // A COMMAND STARTS IN ITS BOX'S HOME AND ENTERS ITS WORKING DIRECTORY ITSELF.
 // The engine makes the directory through the home's root and never walks into
-// it by name: the command's own shell does, relative to the home, so where it
-// starts is the box's own walk, made in the box's own process — and every
-// confinement starts it where it was asked to, bubblewrap included, which
-// enters the home whatever directory it was handed. A name the shell must
-// quote, a quote in it included, is entered whole.
+// it by name: the command's own shell does, relative to the home, so the walk
+// is the box's own, in the box's own process. Every confinement starts it where
+// asked, bubblewrap included, which enters the home whatever it is handed, and
+// a name the shell must quote, a quote in it included, is entered whole.
 //
 // Mutation: hand the joined directory to the process rather than to its
 // shell, and the command starts in it with no home behind it to have left;
@@ -357,13 +354,12 @@ func TestTheMountProofWritesNothingThroughALinkTheContainerMade(t *testing.T) {
 }
 
 // A DIRECTORY ON THE WAY THAT IS NOT ONE IS REFUSED AT ONCE. The root opens
-// every directory on a path as a directory, the one the file is in too, so
-// anything else the box put in its place — a named pipe where `.crewlet` was, or
-// a file — is refused before anything is opened, saying what it is: an open of
-// a pipe there waits for a writer, uncancellably, and every read, write and
-// teardown behind it waits too. Every access answers at once — the reads with
-// [ErrNotRegularFile] naming the path and what it is — and so does the
-// teardown's write-back with a pipe in place of the login's directory, leaving
+// every directory on a path as a directory, the file's own too, so anything
+// else the box put there (a named pipe where `.crewlet` was, a file) is refused
+// before anything is opened: an open of a pipe waits uncancellably for a
+// writer, and everything behind it waits too. Every access answers at once, a
+// read with [ErrNotRegularFile] naming the path and what it is, and the
+// teardown's write-back with a pipe in place of the login's directory leaves
 // the shared login as it was.
 //
 // Mutation: open the directory the file is in as root.Open does — as it is,

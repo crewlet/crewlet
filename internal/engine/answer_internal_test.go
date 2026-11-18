@@ -21,10 +21,9 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// answerEngine is an engine holding one epoch and an in-memory fleet, which is
-// all a person's answer budget reads, on a clock pinned to budgetNow: the
-// answer cuts its windows at the engine's instant, and the case cuts the ones
-// it reads back in at the same one.
+// answerEngine is an engine holding one epoch and an in-memory fleet, all a
+// person's answer budget reads, on a clock pinned to budgetNow so the answer
+// and the case cut their windows at the same instant.
 func answerEngine(t *testing.T, c *Company) (*Engine, *coordmem.Fleet) {
 	t.Helper()
 	fleet := coordmem.NewFleet()
@@ -33,12 +32,10 @@ func answerEngine(t *testing.T, c *Company) (*Engine, *coordmem.Fleet) {
 	return e, fleet
 }
 
-// A PERSON'S ANSWER IS THE COMPANY'S SPEND, and nobody's seat's. Resolved
-// through the seam on the operator stage, it reaches the company's day, week
-// and month — so the next turn is judged against room the answer already used
-// — and no seat's counter, nor any new scope, because a person has no seat
-// budget and a row for them would be one no ceiling can ever judge. Even when
-// the seat the person's credential is bound to runs as an agent.
+// A PERSON'S ANSWER IS THE COMPANY'S SPEND, and nobody's seat's: it reaches
+// the company's day, week and month, and no seat's counter nor any new scope,
+// since a person has no seat budget and a row for them no ceiling could judge.
+// Even when the seat the person's credential is bound to runs as an agent.
 func TestAnAnswerIsChargedToTheOrgWindow(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -79,10 +76,9 @@ func TestAnAnswerIsChargedToTheOrgWindow(t *testing.T) {
 	}
 }
 
-// THE GATE IS THE COMPANY'S WINDOWS, by the rule the budget park uses: a
-// spent company window refuses an answer, naming the window that ends last and
-// when it resets — and a SEAT's spent ceiling does not, since the person
-// asking is not that seat.
+// THE GATE IS THE COMPANY'S WINDOWS, by the budget park's rule: a spent
+// company window refuses an answer, naming the window that ends last and when
+// it resets; a SEAT's spent ceiling does not, since the asker is not that seat.
 func TestAnAnswerIsRefusedOnlyByASpentCompanyWindow(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -117,15 +113,11 @@ func TestAnAnswerIsRefusedOnlyByASpentCompanyWindow(t *testing.T) {
 }
 
 // A REFUSED ANSWER IS THE GATE'S REFUSAL, AND THE COMPANY'S COUNTER RECORDS IT.
-//
-// The company's day was filled by post-charges — a person's earlier answers,
-// an executor launch, a background pass — which refuse nothing and stamp
-// nothing, so no charge was ever refused there. The gate refuses the question
-// before any call is made, and that is the call the window turned away:
-// unrecorded, a company refusing every question asked of it read, on every
-// screen and in `crewlet budgets show`, as one that had refused nothing. Only
-// the company is stamped, since a person has no seat budget; nothing is
-// counted; and a question the company has room for records nothing at all.
+// Post-charges fill the day but stamp nothing, so the gate's refusal before
+// any call is the only one: unrecorded, a company refusing every question
+// reads in `crewlet budgets show` as one that refused nothing. Only the
+// company is stamped (a person has no seat budget), nothing is counted, and a
+// question the company has room for records nothing.
 //
 // Mutation: drop the gate's record, and the company's day carries no stamp.
 func TestARefusedAnswerIsRecordedAsTheGatesRefusal(t *testing.T) {
@@ -169,8 +161,7 @@ func TestARefusedAnswerIsRecordedAsTheGatesRefusal(t *testing.T) {
 }
 
 // A REFUSED ANSWER STAYS REFUSED WHEN ITS RECORD CANNOT BE WRITTEN: the stamp
-// is the report of the refusal, and a counter that could not take it changes
-// nothing about the question it was asked of.
+// only reports the refusal.
 func TestARefusedAnswerStandsWhenItsRecordFails(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -191,8 +182,8 @@ func TestARefusedAnswerStandsWhenItsRecordFails(t *testing.T) {
 	}
 }
 
-// NO FLEET, NO TOOL: an answer that could spend against no counter at all is
-// the shape the budget exists to refuse, so there is no budget to wire.
+// NO FLEET, NO TOOL: an answer spending against no counter is what the budget
+// exists to refuse, so there is no budget to wire.
 func TestWithNoFleetThereIsNoAnswerBudget(t *testing.T) {
 	t.Parallel()
 	if AnswerBudget(&Engine{backends: &Backends{}}) != nil {
@@ -201,14 +192,10 @@ func TestWithNoFleetThereIsNoAnswerBudget(t *testing.T) {
 }
 
 // THE KNOWLEDGE CORPUS MOVES WITH A WRITE AND WITH NO READ, on a real node.
-//
-// The answer cache keys an answer on where Worklet's, Doclet's and the
-// vectors' rows last changed. A linearizable read on a log appends a barrier
-// there, which every data node applies and which changes no row: keyed on how
-// far the logs were applied, every read anywhere in the fleet retired every
-// cached answer — an answer's own reads of its sources the key it was stored
-// under — and a repeated question paid the answering model again. A page
-// written moves it.
+// The answer cache keys on where Worklet's, Doclet's and the vectors' rows last
+// changed, not on how far the logs applied: a linearizable read appends a
+// barrier that changes no row, and keyed on it every read in the fleet would
+// retire every cached answer.
 func TestTheKnowledgeCorpusMovesWithAWriteAndWithNoRead(t *testing.T) {
 	t.Parallel()
 	e := newSandboxNode(t, parseCompany(t, trashCompanyDoc))
@@ -225,8 +212,7 @@ func TestTheKnowledgeCorpusMovesWithAWriteAndWithNoRead(t *testing.T) {
 		s.Domain(worklet.Domain{}.Name()), s.Domain(doclet.Domain{}.Name()),
 		s.Domain(search.Domain{}.Name()),
 	}
-	// AT REST: every log applied through its end, the page's write and the
-	// boot's included.
+	// AT REST: every log applied through its end.
 	caughtUp := func() bool {
 		for _, running := range logs {
 			stats, err := running.log.Stats(t.Context())

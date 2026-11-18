@@ -35,8 +35,8 @@ func checked() sandbox.RunRepo {
 	return r
 }
 
-// THE BOX'S GIT IS HELD TO THE CLIENT FLOOR: sandbox spells the floor as text,
-// because it imports nothing of Gitlet, and this holds it to gitproc's.
+// THE BOX'S GIT IS HELD TO THE CLIENT FLOOR: sandbox spells it as text, since
+// it imports nothing of Gitlet, and this holds it to gitproc's.
 //
 // Mutation: spell the floor 2.39.0 — red.
 func TestTheSandboxClientFloorIsGitprocs(t *testing.T) {
@@ -48,12 +48,11 @@ func TestTheSandboxClientFloorIsGitprocs(t *testing.T) {
 }
 
 // A RUN REPOSITORY IS HELD TO ITS GRAMMAR, the one every reader of a run's
-// grants takes: a repository name of either form, a canonical id, a base that
-// is empty or a whole commit, a branch git and Gitlet both take, a
-// known access, and a cone of clean directories inside the repository —
-// relative, no "." or ".." component, no control character, no space at
-// either end (git trims one), valid UTF-8, at most MaxConePathBytes each and
-// MaxConePaths in all.
+// grants takes: a repository name of either form, a canonical id, a base empty
+// or a whole commit, a branch git and Gitlet both take, a known access, and a
+// cone of clean directories inside the repository — relative, no "." or ".."
+// component, no control character, no space at either end (git trims one),
+// valid UTF-8, at most MaxConePathBytes each and MaxConePaths in all.
 //
 // Mutation: drop the space rule — " src" is taken, red.
 func TestARunRepoIsHeldToItsGrammar(t *testing.T) {
@@ -160,12 +159,11 @@ func TestARunRepoIsHeldToItsPurpose(t *testing.T) {
 	}
 }
 
-// A CHANGE'S TITLE IS HELD TO ITS BOUND ON THE ROW. An executor's ask to open a
-// change rides its run's row in each repository it is given, and the row's
-// budget counts its title at [sandbox.MaxChangeTitleBytes] (rowbytes.go): so
-// the grammar every writer of a repository holds it to — the launch, and a
-// grant the job's box asks for — takes a title at the bound, in the bytes that
-// escape the most, and refuses one a byte past it, naming the bound.
+// A CHANGE'S TITLE IS HELD TO ITS BOUND ON THE ROW: an executor's ask to open a
+// change rides its run's row, whose budget counts the title at
+// [sandbox.MaxChangeTitleBytes] (rowbytes.go), so the grammar every writer
+// holds it to takes a title at the bound, in the bytes that escape the most,
+// and refuses one a byte past it, naming the bound.
 //
 // Mutation: drop the title's bound from the grammar — the long title is taken,
 // red.
@@ -256,11 +254,9 @@ func syntax(t *testing.T, name, command string) {
 // a stand-in git that records every call, a branch holding a command
 // substitution and a quote, and cone directories holding a quote, glob
 // characters and a leading '!', reach git as one argument each, and nothing in
-// them runs. Neither recipe writes a commit hook: what a commit made in the
-// box carries is the run's own attribution, which its runner gives every
-// repository the run commits in (internal/sandbox/executor's attribution.go),
-// never a property of one checkout. A box that already holds the checkout runs
-// nothing at all.
+// them runs. Neither recipe writes a commit hook (attribution is the run's:
+// internal/sandbox/executor's attribution.go). A box that already holds the
+// checkout runs nothing at all.
 //
 // Mutations: interpolate the branch unquoted — the stand-in's arguments and a
 // file named x, red; write a hook in either recipe — red; drop the checkout's
@@ -371,14 +367,13 @@ func sameCalls(t *testing.T, got, want [][]string) {
 	}
 }
 
-// budgets puts a stand-in cat in dir, a directory a case puts first on PATH:
-// asked for one of the kernel's per-user inotify budgets, it answers the
-// case's — $STUB_WATCHES and $STUB_INSTANCES (128, Linux's default, unless
-// set) for the host's, $STUB_NS_WATCHES and $STUB_NS_INSTANCES for the box's
-// user namespace's, failing where one is unset as a kernel without the file
-// does — so a case decides what the kernel says whatever kernel runs it;
-// anything else it reads as cat does. It is written where no fork can hold it
-// open ([sandbox.WriteExecutable]), since the step execs it at once.
+// budgets puts a stand-in cat in dir, which a case puts first on PATH, so a
+// case decides the kernel's per-user inotify budgets whatever kernel runs it:
+// $STUB_WATCHES and $STUB_INSTANCES (default 128, Linux's) for the host's,
+// $STUB_NS_WATCHES and $STUB_NS_INSTANCES for the box's user namespace's, an
+// unset one failing as a missing file does; anything else it reads as cat.
+// Written where no fork can hold it open ([sandbox.WriteExecutable]), since
+// the step execs it at once.
 func budgets(t *testing.T, dir string) {
 	t.Helper()
 	sandbox.WriteExecutable(t, filepath.Join(dir, "cat"), `#!/bin/sh
@@ -394,29 +389,18 @@ printf '%s\n' "$v"
 `)
 }
 
-// GIT'S MONITOR IS ON WHERE THE BOX CAN KEEP IT, AND ONLY THERE: in the
-// checkouts the step names, each in its own configuration, where the box's
-// git is 2.55.0 or newer and EVERY checkout at the top of the box — an
-// earlier job's too — takes at most half of each budget its daemons spend:
-// their directories together half the watches, the least of the host's and
-// the box's namespace's, and their count half the instances. Anywhere else it
-// is turned off in the step's checkouts, a daemon an earlier launch started
-// stopped, and a checkout the step does not name is never touched. Never a
-// failure of the step, whatever a budget reads as — the monitor is speed.
-// Run under a shell against stand-ins: a git of each version, and a cat
-// answering the kernel's budgets.
+// GIT'S MONITOR IS ON WHERE THE BOX CAN KEEP IT, AND ONLY THERE: on in each
+// named checkout's own configuration where git is 2.55.0 or newer and EVERY
+// checkout at the top (an earlier job's too) takes at most half the watches
+// (the least of host and namespace) and half the instances; otherwise off in
+// the named checkouts, an earlier daemon stopped, an unnamed checkout never
+// touched; never a failure, whatever a budget reads. The box holds web (4
+// directories) and api (2), named, and old (3), an earlier job's.
 //
-// The box holds web (four directories: itself, .git, src, src/lib) and api
-// (two), which the step names, and old (three), an earlier job's: nine
-// directories in three checkouts.
-//
-// Mutations: drop the version check — 2.54.0 turns it on, red; compare with
-// `>` — 2.55.0 leaves it off, red; count only the step's checkouts — 14
-// watches turn it on, red; drop the half — 17 watches turn it on, red; read
-// the host's watches alone — the namespace's 17 turns it on, red; drop the
-// instance check — 5 instances turn it on, red; drop the guard on a budget's
-// digits — "lots" fails the step, red; leave a step's checkout as it was when
-// off — no unset and no stop, red.
+// Mutations, each red: drop the version check (2.54.0 on); compare with `>`
+// (2.55.0 off); count only named checkouts (14 watches on); drop the half (17
+// on); read the host's watches alone (namespace's 17 on); drop the instance
+// check (5 on); drop the digits guard ("lots" fails); no unset or stop when off.
 func TestTheMonitorIsOnWhereTheBoxCanKeepIt(t *testing.T) {
 	t.Parallel()
 	web, api := cloned(), cloned()
@@ -493,10 +477,9 @@ exit 0`)
 
 // THE CELL DECIDES WHETHER A BOX IS GIVEN GIT'S MONITOR: every cell's coding
 // steps are the version check and each repository's coding clone, in order,
-// and only a cell whose boxes own their kernel — the remote one — runs the
-// monitor's step after them, over every repository; a direct or container box
-// spends the engine user's inotify budget, which no box can see the rest of.
-// A repository the coding recipe refuses is refused, named.
+// and only a cell whose boxes own their kernel (the remote one) runs the
+// monitor's step after them, over every repository: a direct or container box
+// spends the engine user's inotify budget. A refused repository is named.
 //
 // Mutation: append the monitor's step in every cell — the direct and container
 // rows, red.
@@ -629,12 +612,12 @@ func TestCloneRecipeRefusesWhatItCannotClone(t *testing.T) {
 	}
 }
 
-// THE WORST CLONE STEP IS ONE SHELL ARGUMENT. A box runs a setup command as one
-// argument of its shell, and Linux refuses an argument past MAX_ARG_STRLEN —
-// 32 pages, 131 072 bytes with its NUL — before the shell starts. The longest
-// step a RunRepo can make for each purpose — the longest name, a branch, and
-// MaxConePaths directories of MaxConePathBytes each, all of single quotes,
-// which quoting makes four times their length — fits, and a shell takes it.
+// THE WORST CLONE STEP IS ONE SHELL ARGUMENT: a box runs a setup command as
+// one argument of its shell, and Linux refuses one past MAX_ARG_STRLEN (32
+// pages, 131 072 bytes with its NUL) before the shell starts. The longest step
+// a RunRepo can make for each purpose — the longest name, a branch, and
+// MaxConePaths directories of MaxConePathBytes each, all single quotes, which
+// quoting quadruples — fits, and a shell takes it.
 //
 // Mutation: raise MaxConePathBytes to 1 024 — the step is past the limit, and
 // the exec is refused, red.
@@ -680,12 +663,11 @@ func TestTheWorstCloneStepIsOneShellArgument(t *testing.T) {
 	}
 }
 
-// THE VERSION STEP HOLDS A BOX'S GIT TO THE CLIENT FLOOR, read as gitproc reads
-// a version: a git below it — Apple's 2.39.3 among them — fails the step with
-// exit 3 and a sentence naming the git and the floor, and so does a box with no
-// git, or one that does not say its version; the floor itself, a vendor's
-// suffix and a wrapper's own line before git's pass, and so do the pinned git
-// and the client floor's own build.
+// THE VERSION STEP HOLDS A BOX'S GIT TO THE CLIENT FLOOR, read as gitproc
+// reads a version: a git below it (Apple's 2.39.3 among them), no git, or one
+// not saying its version fails the step with exit 3 and a sentence naming the
+// git and the floor; the floor itself, a vendor's suffix, a wrapper's own line
+// before git's, the pinned git and the client floor's build pass.
 //
 // Mutations: compare against 2.39.0 — Apple's git passes, red; read the first
 // line whatever it is — the wrapped git fails, red.

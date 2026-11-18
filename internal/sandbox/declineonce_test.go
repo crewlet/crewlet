@@ -14,11 +14,10 @@ import (
 
 // LETTING AN ANSWER GO IS EXACTLY ONCE, ACROSS A CRASH AT EACH STEP.
 //
-// A decline is a write to the run's row and a publish to the seat's inbox. It
-// used to publish first, so a crash between the two left the answer recorded
-// AND its copy on the inbox: the next holder resumed the run with the reply
-// that had also been worked as an ordinary message. Each case below stops the
-// node at one step — by refusing that step and then handing the seat to a
+// A decline writes the run's row and publishes to the seat's inbox; a crash
+// between the two must never leave the answer recorded AND its copy on the
+// inbox, or the reply is both resumed with and worked as a message. Each case
+// stops the node at one step — refusing that step, then handing the seat to a
 // successor over the same store — and counts what the seat was given.
 
 // owedAnAnswerItCannotResume records R1 on t1 and fails every resume of it
@@ -81,13 +80,12 @@ func successorOf(t *testing.T, rig *coordRig, store PendingStore) *coordRig {
 	return next
 }
 
-// A DECLINE SPENDS THE REPLY'S OWN DELIVERY BEFORE THE WRITE THAT LETS THE REPLY
-// GO: the copy is the reply from then on, and the original coming round
-// afterwards — a node that recorded the answer and stopped before acknowledging
-// it — must be dropped by the completion ledger rather than worked beside the
-// copy. Before the WRITE and not merely before the publish, because the write
-// takes the answer off the row: a node that stops between a write that landed
-// and a spend that had not leaves nobody anything to spend.
+// A DECLINE SPENDS THE REPLY'S OWN DELIVERY BEFORE THE WRITE THAT LETS IT GO:
+// the copy is the reply from then on, so the original redelivered (by a node
+// that recorded the answer and stopped before acknowledging it) must be dropped
+// by the completion ledger. Before the write, not merely the publish: the write
+// takes the answer off the row, so a stop between it and the spend leaves
+// nothing to spend.
 func TestADeclineSpendsTheReplyBeforeItsWrite(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -204,12 +202,11 @@ func TestADeclineStoppedBeforeItsClearRepublishesTheSameMessage(t *testing.T) {
 }
 
 // WHAT A RUN OWES THE SEAT IS BOUNDED BY ONE DECLINE. R1 is let go of and its
-// copy published, but clearing it from the row keeps failing; R2 is recorded,
-// fails every resume and is let go of in turn. Its decline WAITS for R1's copy
-// to be cleared — the answer stays recorded and owed, the row carries R1's copy
-// and nothing more — and lands the moment it is, handing R2 back once. Without
-// the bound, every answer let go of while the broker or the store kept failing
-// grew the row by one more batch of copies.
+// copy published, but clearing it keeps failing; R2 is recorded, fails every
+// resume and is let go of in turn. Its decline WAITS for R1's copy to be
+// cleared — R2 stays recorded and owed, the row carries R1's copy alone — and
+// lands the moment it is, handing R2 back once. Unbounded, every answer let go
+// of while the broker or store kept failing would grow the row by more copies.
 func TestADeclineWaitsForTheCopiesAlreadyOwed(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)

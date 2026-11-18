@@ -11,15 +11,11 @@ import (
 
 // THE ENGINE FILES AN EVENT UNDER EVERY AGENT IT NAMES, BY AGENT ID.
 //
-// The event log's related-agent index is keyed on agent ids, and an event
-// names its participants by HANDLE — an A2A channel's two ends, the seat a
-// vendor delivery was addressed to. The store cannot turn one into the other:
-// an id is derived from the company's name and the handle a seat was created
-// under, which only a process holding the chart knows. So the engine installs
-// the resolution, off its live epoch, and a record appended to this node's log
-// by any writer is filed under the agent it reaches.
-//
-// A human seat has no agent id and a stranger none either; neither is a party.
+// The related-agent index is keyed on agent ids, and an event names its
+// parties by HANDLE. Only a process holding the chart can derive the id
+// (company name plus the handle a seat was created under), so the engine
+// installs the resolution off its live epoch, and any writer's record is
+// filed under the agent it reaches. A human seat or a stranger is no party.
 //
 // Mutation: drop the SetEventSeats call in engine.New and the delivery is
 // filed under nobody.

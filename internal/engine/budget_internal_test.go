@@ -16,13 +16,10 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 )
 
-// budgetNow is the instant every case that charges through an engine pins the
-// engine's clock to ([Engine.clock]), and the one it cuts the windows it reads
-// back in at.
-//
-// PINNED, because a charge and the read that checks it are two clock reads,
-// and with each on the wall clock a midnight between them put the charge in
-// one day and the read in the next — which reads the charge's day as unspent.
+// budgetNow is the instant every case that charges through an engine pins
+// [Engine.clock] to, and cuts the windows it reads back in at. PINNED: a charge
+// and the read that checks it are two clock reads, and a midnight between them
+// on the wall clock reads the charge's day as unspent.
 var budgetNow = time.Date(2026, time.June, 14, 12, 0, 0, 0, time.UTC)
 
 // fixedClock is a clock that always reads at.
@@ -31,10 +28,9 @@ func fixedClock(at time.Time) func() time.Time { return func() time.Time { retur
 // spentIn is what scope has spent in the p window of windows, failing the case
 // when the counter is on a different window of that period.
 //
-// THE WINDOW AS WELL AS THE FIGURE. A counter never rolls back, so a read of an
-// EARLIER window than the one a charge landed in answers the later window with
-// its spend (coord.Tally.Usage): a charge cut on any clock but the pinned one
-// lands on today's real date and still reads back as the right number.
+// THE WINDOW AS WELL AS THE FIGURE: a counter never rolls back, so a read of an
+// EARLIER window answers the later one's spend (coord.Tally.Usage), and a charge
+// cut on the wall clock would still read back as the right number.
 func spentIn(t *testing.T, fleet *coordmem.Fleet, scope string, windows coord.Windows, p period.Period) int {
 	t.Helper()
 	u, err := fleet.Used(t.Context(), scope, windows)
@@ -81,10 +77,9 @@ func (c counters) Refuse(context.Context, string, coord.Caps, coord.Windows) (co
 
 // THE HEADROOM IS THE TIGHTEST WINDOW OF EITHER SCOPE.
 //
-// A charge is admitted only while every capped window of both scopes has room,
-// so a seat with a week to spare and nothing left in the company's day has no
-// room. Reporting any looser window would let a fan-out size itself against
-// an allowance it cannot spend.
+// A charge is admitted only while every capped window of both scopes has room;
+// reporting any looser window lets a fan-out size itself against an allowance
+// it cannot spend.
 func TestTheHeadroomIsTheTightestCappedWindow(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -108,10 +103,9 @@ func TestTheHeadroomIsTheTightestCappedWindow(t *testing.T) {
 		{"only the seat is capped",
 			nil, coord.Caps{period.Day: 300},
 			map[string]map[period.Period]int{"agent:x": {period.Day: 100}}, 200},
-		// A window that has spent its whole allowance HAS zero headroom.
-		// Reading that as "not set yet" would let another window's room
-		// overwrite it — an exhausted company reading as an uncapped one
-		// at exactly the moment the cap matters.
+		// An exhausted window HAS zero headroom: read as "not set yet",
+		// another window's room would overwrite it and an exhausted company
+		// would read as uncapped.
 		{"an exhausted window is zero, not unset",
 			coord.Caps{period.Day: 500}, coord.Caps{period.Month: 10_000},
 			map[string]map[period.Period]int{coord.OrgScope: {period.Day: 500}}, 0},
@@ -139,9 +133,7 @@ func TestTheHeadroomIsTheTightestCappedWindow(t *testing.T) {
 // AN UNREACHABLE COUNTER IS AN ERROR, NEVER A ZERO.
 //
 // subagent reads a ParentRemaining of zero as UNCAPPED, so collapsing an
-// unreadable store to 0 would hand a fan-out no ceiling on exactly the failure
-// a budget exists for — the fail-OPEN direction, on the one path where money
-// leaves the building per token.
+// unreadable store to 0 would fail OPEN, handing a fan-out no ceiling.
 func TestAnUnreachableCounterRefusesRatherThanReportingZero(t *testing.T) {
 	t.Parallel()
 	m := &meter{
@@ -172,9 +164,8 @@ func TestAnUncappedSeatNeedsNoCounterRead(t *testing.T) {
 // A ROUND IS CHARGED TO THE DAY ON THE COMPANY'S CLOCK, the one the turn's
 // epoch names, at the moment it is charged.
 //
-// 23:30 in Los Angeles is 06:30 the next day in UTC. A meter that cut its day
-// on UTC would charge a company's late evening to tomorrow — and hand back
-// today's allowance seven hours early every day.
+// 23:30 in Los Angeles is 06:30 the next day in UTC: a day cut on UTC charges
+// the evening to tomorrow and hands back the allowance seven hours early.
 func TestARoundIsChargedToTheCompanysDay(t *testing.T) {
 	t.Parallel()
 	la, err := time.LoadLocation("America/Los_Angeles")
@@ -225,10 +216,9 @@ func TestTheBasisIsReadOffTheEpoch(t *testing.T) {
 
 // EVERY SEAT IS COUNTED, A COMPANY THAT CAPS NOTHING INCLUDED.
 //
-// The meter used to be nil for such a company, so nothing counted its spend: a
-// ceiling added mid-window started from zero, handing the window back the
-// whole allowance the morning had already spent, and every reader of the
-// counters showed an uncapped company as having spent nothing.
+// With no meter, a ceiling added mid-window would start from zero, handing back
+// the allowance the morning already spent, and every reader of the counters
+// would show an uncapped company as having spent nothing.
 func TestAnUncappedCompanyIsCounted(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -269,13 +259,10 @@ func TestAMeterPinsItsTurnsCapsAndClock(t *testing.T) {
 	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 100}}
 	pinned := meteredCompany(config.TokenBudget{}, lead)
 	pinned.Config.Timezone = "Asia/Tokyo"
-	// AN INSTANT WHOSE TOKYO DATE IS NOT ITS UTC DATE — 20:00 on the 22nd in
-	// UTC is 05:00 on the 23rd in Tokyo — so a day cut on the wrong zone
-	// names the wrong date. Pinned on the engine, because the two charges
-	// and the expectation below are three clock reads, and on the wall
-	// clock Tokyo's midnight (15:00 UTC) between any two of them put the
-	// refused charge in a fresh day or named a day the expectation was not
-	// in.
+	// AN INSTANT WHOSE TOKYO DATE IS NOT ITS UTC DATE (20:00 UTC on the 22nd
+	// is 05:00 on the 23rd in Tokyo), so a day cut on the wrong zone names the
+	// wrong date. Pinned on the engine: the two charges and the expectation
+	// are three clock reads, which Tokyo's midnight could split.
 	at := time.Date(2026, time.September, 22, 20, 0, 0, 0, time.UTC)
 	e := &Engine{backends: &Backends{Fleet: fleet}, clock: fixedClock(at)}
 	m := e.meterFor(pinned, lead.Handle())
@@ -309,11 +296,10 @@ func TestAMeterPinsItsTurnsCapsAndClock(t *testing.T) {
 
 // A REFUSED ROUND IS ON BOTH COUNTERS, AND LEAVES NO ROOM FOR A SMALLER ONE.
 //
-// The meter is handed a round once its reply is in, so the round it refuses
-// has been billed. A counter that dropped it read short of the invoice, and
-// since the gate decides on room, the next round smaller than the room left
-// was admitted on top of tokens the refused one had already spent: at 98 of a
-// 100-token day, a 3-token round refused and then a 1-token round let through.
+// A round reaches the meter once its reply is in, so a refused round was
+// billed. Dropping it reads the counter short, and a smaller next round is
+// admitted on top: at 98 of 100, a 3-token round refused, then a 1-token one
+// let through.
 func TestARefusedRoundIsCountedAndLeavesNoRoomForASmallerOne(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -347,12 +333,10 @@ func TestARefusedRoundIsCountedAndLeavesNoRoomForASmallerOne(t *testing.T) {
 
 // A ROUND CHARGED AFTER ITS TURN ENDED IS STILL RECORDED, AND THE TURN IS TOLD.
 //
-// The round was billed when its reply arrived. A turn cancelled between that
-// reply and the charge — a node draining, the turn's own deadline — used to
-// lose the round from the counter with the charge, because the write ran on
-// the turn's dead context. The record now outlives it, and the caller is still
-// answered with its own ending, so it stops where it always did and runs none
-// of the round's tools.
+// The round was billed when its reply arrived, so a turn cancelled before the
+// charge (a node draining, the turn's deadline) must not lose it: the record
+// outlives the turn's context, while the caller is still answered with its
+// own ending and runs none of the round's tools.
 func TestARoundChargedAfterItsTurnEndedIsStillRecorded(t *testing.T) {
 	t.Parallel()
 	fleet := coordmem.NewFleet()
@@ -389,11 +373,9 @@ func clockedMeter(t *testing.T, fleet *coordmem.Fleet, c *Company, seat *org.Rol
 
 // A METER HOLDS THE REFUSAL IT ANSWERED UNTIL THE WINDOW TURNS OVER.
 //
-// The refused round is counted, so the window reads past its ceiling, and the
-// turn's ceilings are pinned: every later charge in that window is refused,
-// whatever its size. The meter is what every call of the turn charges, so it
-// is the one place that can say so before the next call is made — and only
-// for as long as that is true, which ends when the window does.
+// The refused round is counted and the turn's ceilings are pinned, so every
+// later charge in that window is refused. The meter every call charges through
+// is the one place that can say so before the next call, until the window ends.
 func TestAMeterHoldsTheRefusalItAnsweredUntilTheWindowTurnsOver(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -431,9 +413,9 @@ func TestAMeterHoldsTheRefusalItAnsweredUntilTheWindowTurnsOver(t *testing.T) {
 
 // AN ADMITTED ROUND THAT FILLS A WINDOW LEAVES NOTHING TO ADMIT.
 //
-// Nothing refused it — it fitted exactly — but the window has no room left for
-// a single token, which is the same "refusing" the budget park parks a seat
-// on (windowRefuses), and the next call would be billed and refused.
+// It fitted exactly, but the window has no room for a token: the "refusing"
+// the budget park parks a seat on (windowRefuses), so the next call would be
+// billed and refused.
 func TestAnAdmittedRoundThatFillsAWindowIsHeld(t *testing.T) {
 	t.Parallel()
 	fleet := coordmem.NewFleet()
@@ -454,13 +436,10 @@ func TestAnAdmittedRoundThatFillsAWindowIsHeld(t *testing.T) {
 // AN AUXILIARY CALL'S POST-CHARGE THAT FILLS A WINDOW IS HELD, as a round's
 // answer is.
 //
-// The turn's auxiliary calls reach the same counters as its rounds, by a
-// post-charge that refuses nothing. Charged beside the meter, a window one of
-// them took past its ceiling was one the meter had never seen, so the turn's
-// next round was sent, billed and then refused. Charged through it, the answer
-// is kept: the next round, and the next auxiliary call, are held before they
-// are made. The spend itself is counted whole on both scopes, past the ceiling
-// included.
+// Auxiliary calls reach the same counters by a post-charge that refuses
+// nothing. Charged through the meter, its answer is kept, so the next round and
+// auxiliary call are held rather than sent, billed and refused. The spend is
+// counted whole on both scopes, past the ceiling included.
 func TestAnAuxiliaryPostChargeThatFillsAWindowIsHeld(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -498,17 +477,15 @@ func TestAnAuxiliaryPostChargeThatFillsAWindowIsHeld(t *testing.T) {
 				u.In(period.Day), err)
 		}
 	}
-	// And the counter agrees: the next round is refused, so the hold saved
-	// a call rather than invented a refusal.
+	// The counter agrees: the hold saved a call, not invented a refusal.
 	if next, err := m.Spend(ctx, 1); err != nil || next.OK {
 		t.Errorf("Spend(1) after the hold = (%+v, %v), want it refused", next, err)
 	}
 }
 
-// AN AUXILIARY CALL IS COUNTED IN THE WINDOWS OF THE INSTANT IT RETURNED, on
-// the turn's pinned clock — the instant the seam read once for the counter and
-// the record alike — not in whichever window the meter's clock reads when the
-// charge is written.
+// AN AUXILIARY CALL IS COUNTED IN THE WINDOWS OF THE INSTANT IT RETURNED, read
+// once for the counter and the record alike, not in whichever window the
+// meter's clock reads when the charge is written.
 func TestAnAuxiliaryPostChargeIsCountedWhenItsCallReturned(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -526,8 +503,7 @@ func TestAnAuxiliaryPostChargeIsCountedWhenItsCallReturned(t *testing.T) {
 	if err != nil || u.In(period.Day).Used != 150 || u.In(period.Day).Window.Label != "2026-03-14" {
 		t.Fatalf("the 14th = (%+v, %v), want the 150 spent before its midnight", u.In(period.Day), err)
 	}
-	// The window it filled has turned over on the meter's clock, so the
-	// turn's next call is judged on the 15th, which has room.
+	// On the meter's clock the next call is judged on the 15th, with room.
 	if got, held := m.Refused(t.Context()); held {
 		t.Errorf("Refused = %+v, want nothing held on a day that has turned over", got)
 	}
@@ -590,13 +566,10 @@ func stampOf(t *testing.T, fleet *coordmem.Fleet, scope string, p period.Period,
 
 // A CALL THE METER HOLDS IS A REFUSAL THE COUNTER RECORDS.
 //
-// The turn's auxiliary calls post-charged the seat past its day — a
-// post-charge refuses nothing and stamps nothing — and the meter then held the
-// turn's next call rather than send it. That held call is the one whose charge
-// used to stamp the window, so before the meter recorded its own refusals the
-// window refused every call of the turn while its refused_at, "last refused"
-// and `crewlet budgets show` said nothing had ever been refused. The stamp is
-// the counter's, judged by it, and spends nothing.
+// Post-charges refuse and stamp nothing, so once they take the seat past its
+// day the call the meter holds is the only refusal. Unrecorded, the window
+// refuses every call while refused_at, "last refused" and `crewlet budgets
+// show` say nothing was refused. The stamp is the counter's and spends nothing.
 func TestAHeldCallIsRecordedAsTheGatesRefusal(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -636,12 +609,9 @@ func TestAHeldCallIsRecordedAsTheGatesRefusal(t *testing.T) {
 
 // A REFUSAL IS ONE EVENT, NOT ONE WRITE PER QUESTION.
 //
-// Every caller asks before every call — the loop each round, the judge, each
-// worker of a fan-out at once — so a meter that wrote on every true answer
-// would write the counter as often as the turn asks. It writes once per window,
-// however many ask and however concurrently, and again only for a window it
-// has not recorded: here the next day, once the first has turned over and the
-// seat filled the new one too.
+// Every caller asks before every call (the loop, the judge, each fan-out
+// worker at once), so the meter writes once per window however many ask, and
+// again only for a window it has not recorded: here the next day's.
 func TestAHeldWindowIsRecordedOnce(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -690,11 +660,9 @@ func TestAHeldWindowIsRecordedOnce(t *testing.T) {
 
 // A HELD REFUSAL STAMPS THE SCOPE IT NAMES, THE COMPANY BEFORE THE SEAT.
 //
-// Both scopes' days are full. The counter judges the company first, so every
-// charge would be the company's refusal and would stamp the company alone,
-// counting the round on the seat with no verdict of its own; the meter's
-// record follows the same rule, or the seat's screens would say the seat was
-// refusing calls the company turned away.
+// Both scopes' days are full. The counter judges the company first, so a
+// charge would stamp the company alone; the meter's record follows the same
+// rule, or the seat's screens would show refusals the company made.
 func TestAHeldRefusalStampsTheScopeItNames(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -722,9 +690,9 @@ func TestAHeldRefusalStampsTheScopeItNames(t *testing.T) {
 // A HELD REFUSAL'S RECORD IS JUDGED BY THE COUNTER, NOT BY THE METER'S MEMORY.
 //
 // A peer whose clock leads moved the seat's slot onto the next day, which has
-// room. The meter holds on through its own day (TestAHeldRefusalLastsTheTurnsOwnCalendar
-// says why), but the window the counter now holds is not refusing, and a stamp
-// there would tell every screen the gate is refusing a day nobody has refused.
+// room. The meter holds on through its own day
+// (TestAHeldRefusalLastsTheTurnsOwnCalendar), but a stamp on the counter's day
+// would tell every screen it is refusing a day nobody has refused.
 func TestAHeldRefusalStampsNoWindowTheCounterHasRoomIn(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -754,10 +722,9 @@ func TestAHeldRefusalStampsNoWindowTheCounterHasRoomIn(t *testing.T) {
 
 // A HELD REFUSAL IS RECORDED HOWEVER ITS CALLER ENDS, AND STANDS IF IT CANNOT BE.
 //
-// The refusal happened whether or not the caller is still listening, so the
-// record outlives a caller that hung up. And the record is the report of a
-// refusal, never the refusal: a counter that cannot take it leaves the call
-// refused exactly as it was, and is not asked again on every question.
+// The record outlives a caller that hung up. It reports a refusal, never makes
+// one: a counter that cannot take it leaves the call refused, and is not asked
+// again on every question.
 func TestAHeldRefusalIsRecordedOnAContextThatOutlivesItsCaller(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -805,11 +772,10 @@ func TestAHeldRefusalIsRecordedOnAContextThatOutlivesItsCaller(t *testing.T) {
 
 // A HELD REFUSAL REPORTS THE COUNTER'S FIGURE AT THE REFUSAL.
 //
-// The record answers the scope's counter as it stands, which includes spend
-// the meter never saw — another node's seat on the same company, a background
-// pass — so the refusal the turn reports (its budget_exhausted's used_tokens)
-// is the window's spend when the call was turned away, not when the meter was
-// last answered.
+// The record answers the counter as it stands, spend the meter never saw
+// included (another node, a background pass), so budget_exhausted's
+// used_tokens is the window's spend at the refusal, not at the meter's last
+// answer.
 func TestAHeldRefusalReportsTheCountersFigureAtTheRefusal(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -835,13 +801,9 @@ func TestAHeldRefusalReportsTheCountersFigureAtTheRefusal(t *testing.T) {
 // IT WAITS ON.
 //
 // The company's day and the seat's month are both full. A park waits on the
-// month, which ends last; but a charge is judged against the company first,
-// so the company is the one that refuses it, stamped alone, and the seat
-// counted with no verdict of its own. A gate that turns the work away
-// records exactly that — or the seat's screens would say the seat refused
-// calls the company turned away, and the company's would say it refused none.
-// Once the company has room, the seat is what refuses, and its full month is
-// what is stamped.
+// month, which ends last, but a charge is judged against the company first, so
+// the company refuses and is stamped alone; otherwise the screens would blame
+// the seat. Once the company has room, the seat's month is what is stamped.
 //
 // Mutation: record the refusal on the scope the park waits on, and the
 // company's day carries no stamp while the seat's month carries one.
@@ -873,8 +835,7 @@ func TestAGatesRefusalStampsTheScopeAChargeIsRefusedBy(t *testing.T) {
 		}
 	}
 
-	// The next day the company has room, and the seat's month is what
-	// refuses.
+	// The next day the company has room, and the seat's month refuses.
 	clock = time.Date(2026, time.March, 15, 9, 0, 0, 0, time.UTC)
 	windows = coord.WindowsAt(clock, time.UTC)
 	r, refusing, err = m.refusing(ctx)
@@ -922,9 +883,8 @@ func TestAHeldRefusalNamesTheCompanyFirst(t *testing.T) {
 //
 // The seat refuses a round that leaves the company's day exactly at its
 // ceiling. The counter judges the company first, so the next charge is the
-// COMPANY's refusal; held from the refusal it was answered alone, the meter
-// named the seat — and the turn's budget_exhausted sent an operator to raise
-// a ceiling that changes nothing while the company's day is spent.
+// COMPANY's refusal; naming the seat would send an operator to raise a ceiling
+// that changes nothing while the company's day is spent.
 func TestASeatRefusalThatFillsTheCompanyIsHeldAsTheCompanys(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -952,11 +912,10 @@ func TestASeatRefusalThatFillsTheCompanyIsHeldAsTheCompanys(t *testing.T) {
 
 // A REFUSAL HOLDS EVERY WINDOW ITS ROUND FILLED, OF EITHER SCOPE.
 //
-// The company refuses a round, which is counted on the seat with no verdict
-// of its own — and takes the seat's week past its ceiling. While the
-// company's day lasts, that is the refusal named; once the day turns over the
-// seat's week still refuses every charge, and a meter that kept only the
-// refusal it was answered held nothing there and paid for a call to find out.
+// The company refuses a round that also takes the seat's week past its
+// ceiling. While the company's day lasts its refusal is the one named; once the
+// day turns over the seat's week still refuses, and a meter that kept only the
+// refusal it was answered would pay a call to learn it.
 func TestARefusalHoldsEveryWindowItsRoundFilled(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -990,15 +949,12 @@ func TestARefusalHoldsEveryWindowItsRoundFilled(t *testing.T) {
 
 // A HELD REFUSAL LASTS THE TURN'S OWN CALENDAR, NOT A PEER'S.
 //
-// The one edge of a held refusal's certainty, pinned here so it stays a
-// decision rather than drifting into one. A peer whose clock is ahead — or one
-// on a newer epoch after the company's timezone moved east — rolls the shared
-// slot onto the next day while this turn's pinned clock is still on the full
-// one. The counter then counts this turn's next charge in that next day and
-// would admit it; the meter holds on until its own day ends, because on the
-// calendar the turn's rounds are counted by the day is full, and the error is
-// in the closed direction: the turn stops, and nothing is billed for the stop.
-// See meter.Refused.
+// The one edge of a held refusal's certainty, pinned as a decision. A peer
+// whose clock leads (or on a newer epoch whose timezone moved east) rolls the
+// shared slot onto the next day while this turn's clock is on the full one; the
+// counter would admit the next charge, but the meter holds until its own day
+// ends: that day is full on the turn's calendar, and the error is closed, the
+// turn stopping with nothing billed (meter.Refused).
 func TestAHeldRefusalLastsTheTurnsOwnCalendar(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -1037,9 +993,8 @@ func TestAHeldRefusalLastsTheTurnsOwnCalendar(t *testing.T) {
 	}
 }
 
-// A REFUSAL ANSWERED TO A CALLER THAT HUNG UP IS HELD ALL THE SAME. The window
-// is full whether or not that caller is listening, and the turn's next call is
-// made by somebody else.
+// A REFUSAL ANSWERED TO A CALLER THAT HUNG UP IS HELD ALL THE SAME: the window
+// is full, and the turn's next call is made by somebody else.
 func TestARefusalAnsweredToACallerThatHungUpIsHeld(t *testing.T) {
 	t.Parallel()
 	fleet := coordmem.NewFleet()
@@ -1060,13 +1015,11 @@ func TestARefusalAnsweredToACallerThatHungUpIsHeld(t *testing.T) {
 
 // A RESUMED TURN'S METER KNOWS WHAT THE COUNTER ALREADY REFUSES.
 //
-// A launch's completion resumes its turn straight from the sandbox
-// coordinator, with no budget park asked first, and the coordinator has just
-// post-charged the launch — which never refuses, so it can take a window past
-// its ceiling with no refusal answered to anybody. The resumed executor's
-// first round was then sent, billed and refused. Its meter reads the counter
-// once now and holds the full window before any call is made; a counter it
-// cannot read leaves it holding nothing, so the first charge stays the gate.
+// A launch's completion resumes its turn from the sandbox coordinator with no
+// budget park asked, just after a post-charge that refuses nothing may have
+// taken a window past its ceiling. So the meter reads the counter once and
+// holds a full window before any call is sent, billed and refused; a counter
+// it cannot read leaves it holding nothing, and the first charge is the gate.
 func TestAResumedTurnsMeterHoldsWhatTheCounterAlreadyRefuses(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -1132,13 +1085,10 @@ func (d deadContextRefused) Used(ctx context.Context, scope string, w coord.Wind
 	return d.budgets.Used(ctx, scope, w)
 }
 
-// A METER KNOWS WHAT ITS TURN SPENT, WINDOW BY WINDOW. An executor launch's
-// floor is measured against the most room a window can leave it, each ceiling
-// less what the launch's own turn charged there first ([windowRoom]), so the
-// meter the turn charges through answers that spend: every round it charged, a
-// refused one too, since the counter counts it, and every auxiliary call it
-// posted, each in the window it was charged in and never in the one current
-// after a turnover.
+// A METER KNOWS WHAT ITS TURN SPENT, WINDOW BY WINDOW, for an executor launch's
+// floor ([windowRoom]): every round, a refused one too since the counter counts
+// it, and every auxiliary call, each in the window it was charged in, never the
+// one current after a turnover.
 //
 // Mutation: tally no round, no refused round or no auxiliary call, or tally a
 // charge by its period alone, and the case goes red.

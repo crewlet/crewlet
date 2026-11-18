@@ -20,80 +20,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A TOOL CALL THAT NEEDS APPROVAL PARKS ITS RUN IN THE SHAPE A RUN'S ASK DOES:
-// ADR-0077.
-//
-// A seat's executor that calls an MCP tool at Needs approval (an `mcp_servers`
-// entry's `tools` level `approve`, or a tool its hints start there) does not
-// run it. Its bridge records the call on the run's row as the job's question
-// ([PendingStore.RecordAsk], an [Ask] carrying a [HeldCall]), tells the harness
-// to end its turn, and the collection parks the run on it with the seat freed,
-// exactly as it parks on `ask_and_wait` (ADR-0068): one question per job, no
-// replay of anything the job did after it, and an answer pinned to the job
-// that asked. A person answers it with `POST /mcp-approvals/{id}`, choosing
-// one of the three options every held call offers ([HeldChoices]); the run's
-// resume makes the call for `once` and `always` and hands the result to the
-// job that carries the work on, and answers `forbidden` for `deny`.
-//
-// # Who may answer it, and how
-//
-// Only the route's people (an administrator, or a lead of the seat's unit, a
-// person and never the assistant), through the route alone. A chat reply on
-// the conversation the run was launched from never answers a held call
-// ([ConversationRef.Answers]), and `answer_executor` refuses one: either would
-// let anybody the run reports to approve a call their own grant does not
-// reach. The seat holding the run spends an answer that does not name the held
-// call by its id ([HeldCall.ID], [types.ExecutorAnswerGiven.Approval]), and
-// one that names it for a question that is not one.
-//
-// # The arguments are sealed, and so is the result
-//
-// What the call would send is the run's own business and often a credential's
-// worth: an issue body, a query, an address. So the arguments ride the row
-// encrypted under the fleet keyring ([CallSeal], AEAD, bound to the run, the
-// job and the call), opened only for a person who may answer it and for the
-// resume that makes the call. What the call returned is sealed beside them
-// once it is made, for the job that carries the work on.
-//
-// # The call is made at most once
-//
-// A resume can be attempted more than once for one answer: a failed attempt
-// gives its claim back, and a node that took the seat over revives an answer
-// no resume holds. So the resume marks the call on the row as being made
-// before it makes it ([PendingStore.MarkHeldCall]), under the claim's fence,
-// and records its result after ([PendingStore.RecordHeldResult]). Neither is
-// cleared by anything but the next job's opening. A resume that finds the call
-// marked and its result recorded hands the job that result; one that finds it
-// marked and no result says so, and the call is never made again, since it may
-// or may not have taken effect.
-//
-// IT FINDS THE MARK ON THE ROW ITS CLAIM READ ([HeldResume.Call]), and answers
-// from it before it holds the call to the tools and skills it carries the run
-// on with: those decide whether a call nobody has made may be made now, and a
-// call an earlier attempt made — its relaunch refused after it, say, by the
-// floor of the session it continued — is past deciding. A tool blocked or
-// changed, or a skill made required, while that attempt's answer waited to be
-// tried again must not tell the run a call it made was never made.
-//
-// # The call it makes is a call of its round
-//
-// The resume makes the call on the engine host, not the job over its bridge,
-// and the call is recorded beside every call the round's jobs made ([HeldMade],
-// [BridgeCall.Approved]): answered as the tool answered it, its arguments and
-// output left sealed on the held call. Every reader of whether the turn
-// replied reads the round's log — the collection's own delivery check, a
-// stop's or a loss's account of the turn, a later round's earlier calls — and
-// a call recorded nowhere but in the sealed result read as a reply that never
-// went out: a person told the agent did not answer them, and the next turn
-// invited to post it again.
-//
-// The row and the log are two keys, written in no one step
-// ([PendingStore.RecordHeldResult]): the result goes on the row with the
-// call's entry ([HeldCall.Call]), and the call is appended to the log after
-// it, once by the held call's id ([BridgeCall.HeldID]). An append that never
-// landed loses nothing: an ending reads the call off the row
-// ([PendingStore.TurnLog]), and the reset that opens the next job carries it
-// to that job's opening on the row ([PendingRun.OwedCall]), which appends it.
+// A tool call at Needs approval parks its run as a run's ask does (ADR-0077
+// holds the argument): the bridge records it as the job's question
+// ([PendingStore.RecordAsk], an [Ask] carrying a [HeldCall]), and only a
+// person (an administrator or a lead of the seat's unit, never the assistant)
+// answers it, at `POST /mcp-approvals/{id}` alone, with one of [HeldChoices]:
+// a chat reply ([ConversationRef.Answers]) or `answer_executor` never does, and
+// the seat's holder spends an answer not naming it by its id ([heldMismatch]).
+// Its arguments and result ride the row sealed ([CallSeal]). The engine host
+// makes the call at most once, since it may have taken effect: marked first
+// ([PendingStore.MarkHeldCall]), and a resume finding the mark answers from it
+// before holding the call to the run's tools and skills ([HeldResume.Call]).
+// It joins its round's log ([HeldMade]), or reads as a reply never sent.
 
 // The three answers every held call offers, as a [decision.Option] id the
 // person's answer names ([HeldDecision]).
@@ -101,9 +39,8 @@ const (
 	// HeldOnce makes the call, this once.
 	HeldOnce = "once"
 	// HeldAlways makes the call and sets the tool to Always allow on its
-	// server's entry, so the next call runs without asking. The route
-	// writes the level before it answers, as a configuration write at a
-	// recent step-up (internal/api/mcpapi).
+	// server's entry. The route writes the level first, as a configuration
+	// write at a recent step-up (internal/api/mcpapi).
 	HeldAlways = "always"
 	// HeldDeny does not make the call: the run is told it was refused
 	// ([RefusalForbidden]).
@@ -168,28 +105,27 @@ func heldMismatch(run PendingRun, given types.ExecutorAnswerGiven) bool {
 }
 
 // HeldResume is the held call an answer carries its run on with
-// ([AskedRun.Held]): the call as the claimed row recorded it, the choice the
-// person made, and the two writes the resume makes it under, on the claim's
-// terms and fence ([PendingStore.MarkHeldCall],
-// [PendingStore.RecordHeldResult]).
+// ([AskedRun.Held]): the call as the claimed row recorded it, the choice, and
+// the two writes the resume makes under the claim's fence
+// ([PendingStore.MarkHeldCall], [PendingStore.RecordHeldResult]).
 type HeldResume struct {
 	// TurnID is the run, which every seal of the call is bound to.
 	TurnID string
-	// Call is the held call as the claim read it: marked, and its result
-	// recorded, where an earlier attempt at the same answer got that far,
-	// which the resume answers from before it asks anything else of the
-	// call, since nothing clears a mark while the claim holds the row.
+	// Call is the held call as the claim read it, marked and its result
+	// recorded where an earlier attempt at the same answer got that far. The
+	// resume answers from those first, since nothing clears a mark while the
+	// claim holds the row.
 	Call HeldCall
 	// Choice is the answer: [HeldOnce], [HeldAlways] or [HeldDeny].
 	Choice string
 	// By is who answered, as the answer's own record names them.
 	By string
-	// Mark records that the call is being made, and answers the held call
-	// as the row then holds it and whether this mark is the first: false
-	// means some attempt marked it before, and it is not made again.
+	// Mark records that the call is being made, returning the row's held
+	// call and whether this mark is the first: false means an earlier
+	// attempt marked it, and it is not made again.
 	Mark func(ctx context.Context) (HeldCall, bool, error)
-	// Record records what the call came to: its result, sealed, and the
-	// call as its round's log keeps it.
+	// Record records what the call came to: its sealed result and the call
+	// as its round's log keeps it.
 	Record func(ctx context.Context, made HeldMade) error
 }
 
@@ -200,13 +136,11 @@ type HeldMade struct {
 	// the job that carries the work on.
 	Result string
 
-	// Call is the call as its round's log keeps it, in the shape every call
-	// a job made over its bridge takes ([BridgeLog.Calls]): whether
-	// it failed, and who answered it — its origin, server, source and a
-	// refusal's class — as the surface that made it said. The store names
-	// it, places it, marks it approved and names its held call
-	// ([BridgeCall.HeldID]); its arguments and output are never written
-	// beside it, since they ride the row sealed.
+	// Call is the call as its round's log keeps it, shaped as a bridged call
+	// ([BridgeLog.Calls]): whether it failed and who answered it (origin,
+	// server, source, a refusal's class). The store names, places and marks
+	// it approved and sets [BridgeCall.HeldID]; its arguments and output are
+	// never beside it, since they ride the row sealed.
 	Call BridgeCall
 }
 
@@ -239,9 +173,9 @@ func (c *Coordinator) askedWith(claimed PendingRun, words AnswerWords) *AskedRun
 func HeldMakes(choice string) bool { return choice == HeldOnce || choice == HeldAlways }
 
 // HeldDecision is the decision a held call is asked as: its question, the
-// three answers, and the evidence (the work item the run was on, where it was
-// on one). Role approver, since the answer decides the call. No
-// recommendation: the engine asks on the model's behalf and has no view.
+// three answers, and the evidence (the run's work item, if any). Role
+// approver, since the answer decides the call; no recommendation, since the
+// engine asks on the model's behalf and has no view.
 func HeldDecision(question string, evidence []decision.Evidence) *decision.Decision {
 	return heldDecision(question, evidence, HeldChoices)
 }
@@ -273,21 +207,20 @@ func heldDecision(question string, evidence []decision.Evidence, choices []strin
 // THE JSON TAGS ARE A WIRE FORMAT, as the row's are, and the section carries
 // the keys a later build adds to it ([HeldCall.Extra]).
 type HeldCall struct {
-	// ID names the held call: what `POST /mcp-approvals/{id}` answers it
-	// by, and what the answer the seat's holder records must name. Minted
-	// when the call is held; a uuid.
+	// ID names the held call, a uuid minted when it is held: what `POST
+	// /mcp-approvals/{id}` answers it by, and what the answer the seat's
+	// holder records must name.
 	ID string `json:"id"`
 
-	// LaunchID is the job that made the call, which the question is
-	// pinned to as every question is.
+	// LaunchID is the job that made the call, which the question is pinned
+	// to.
 	LaunchID string `json:"launch_id"`
 
 	// Server is the MCP server's configured name; Tool the tool's name as
-	// the run called it (the server's `tool_prefix` applied), Raw the
-	// server's own name for it, which a level is set by; Digest the
-	// definition the run was offered and a person approves
-	// (internal/mcp's Definition.Digest), which the resume holds the call
-	// to.
+	// the run called it (`tool_prefix` applied); Raw the server's own name
+	// for it, which a level is set by; Digest the definition a person
+	// approves (internal/mcp's Definition.Digest), which the resume holds
+	// the call to.
 	Server string `json:"server"`
 	Tool   string `json:"tool"`
 	Raw    string `json:"raw"`
@@ -347,11 +280,12 @@ type HeldCall struct {
 	Result string    `json:"result,omitempty"`
 	MadeAt time.Time `json:"made_at,omitzero"`
 
-	// Call is the call as its round's log keeps it, written with the
-	// result ([PendingStore.RecordHeldResult]): what the log is appended
-	// after the result, and what the next job's opening appends where that
-	// append never landed ([OwedCall]). Its arguments and output are never
-	// here.
+	// Call is the call as its round's log keeps it, written with the result
+	// ([PendingStore.RecordHeldResult]): the row and the log are two keys
+	// written in no one step, so the log is appended after, once by the held
+	// call's id, and an append that never landed is read off the row by an
+	// ending ([PendingStore.TurnLog]) or appended by the next job's opening
+	// ([OwedCall]). Never its arguments or output.
 	Call *BridgeCall `json:"call,omitempty"`
 
 	// Extra is every key of the section this build does not know: see
@@ -623,16 +557,13 @@ func HeldArgumentsDigest(args map[string]any) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// MaxHeldResultBytes bounds what a held call's result hands the run that
-// carries the work on, cut past it with the cut said
-// (internal/textcut.Within).
+// MaxHeldResultBytes bounds a held call's result as handed to the run that
+// carries the work on, cut past it with the cut said (internal/textcut.Within).
 //
-// THE PAGE AN ANSWER IS HELD TO ([MaxAnswerTextBytes], which is
-// [MaxAskContextBytes]), because it travels where an answer does: sealed onto
-// the run's row, read whole on every status flip and listing of active runs
-// until the run is carried on, and then the next prompt of the run, which its
-// harness re-sends with every request it makes from then on. A tool's answer
-// past a page is one the run reads again by calling the tool, now that it may.
+// An answer's page ([MaxAnswerTextBytes]), since it travels where an answer
+// does: sealed on the row, read whole on every status flip and active-run
+// listing, then into the run's next prompt, which its harness re-sends with
+// every request. A longer result the run reads by calling the tool again.
 const MaxHeldResultBytes = MaxAskContextBytes
 
 // HeldResult is what a held call returned once a person let it be made: its
@@ -654,17 +585,13 @@ func (s *CallSeal) SealResult(turnID string, h HeldCall, result HeldResult) (str
 	return s.cipher.Encrypt(string(body), heldAAD("result", turnID, h))
 }
 
-// HeldKept is what a held call returned as its run's row sealed it
-// ([HeldCall.Result]), beside the fields of the call its seal binds
-// ([heldAAD]): what a lead that told the result keeps of it
-// ([LeadHeld.Result]), once the reset that opens the next job has cleared the
-// held call from the row.
+// HeldKept is a held call's result as its row sealed it ([HeldCall.Result]),
+// with the fields its seal binds ([heldAAD]): what a lead that told the result
+// keeps ([LeadHeld.Result]) once the next job's reset clears the held call.
 //
-// KEPT SEALED, NEVER IN THE CLEAR: the result is words the row must not show,
-// sealed under the fleet keyring's AEAD by the node that made the call, and a
-// lead is signed, not encrypted ([LeadSeal]). Kept with the fields its seal is
-// bound to, so a later node opens it as that call's result alone
-// ([CallSeal.OpenKept]), or tells it as one it cannot read.
+// KEPT SEALED, NEVER IN THE CLEAR, since a lead is signed, not encrypted
+// ([LeadSeal]); kept with those fields so a later node opens it as that call's
+// result alone ([CallSeal.OpenKept]), or tells it as one it cannot read.
 type HeldKept struct {
 	Result   string `json:"result"`
 	LaunchID string `json:"launch_id"`

@@ -18,35 +18,23 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A BOX URL THAT IS SET AND UNUSABLE REFUSES THE BOOT, naming the variable,
-// before anything is opened.
+// A BOX URL THAT IS SET AND UNUSABLE REFUSES THE BOOT before anything is
+// opened, naming the variable and never the value (its user information is a
+// credential): otherwise every run's endpoints fail silently, inside a box the
+// engine never hears from again.
 //
-// The URLs a box dials back to the engine were handed on as they were: a
-// telemetry receiver URL with no scheme minted every run an endpoint its
-// exporter could not use, and a bridge URL with none mounted a bridge whose
-// every minted endpoint failed, so every executor's tool calls failed —
-// each silently, inside a box the engine never hears from again; and
-// Gitlet's base is every run's clone and push. And the refusal never repeats
-// the value: its user information is a credential.
+// THE CONTROL: plain http to a non-loopback host boots as https does, and a
+// run's endpoints and Gitlet's base start with the value as written, trailing
+// '/' trimmed: code-sandbox.md ("Security model") makes the scheme the
+// operator's call, so a later refusal breaks here rather than silently.
 //
-// THE CONTROL holds the other half of the grammar: plain http to a host that
-// is not loopback — the box's own host, or a name on the network — boots
-// exactly as https does, and every endpoint minted for a run, and
-// Gitlet's base a run is handed, starts with the value as the operator wrote
-// it, its trailing '/' trimmed. The docs (code-sandbox.md, "Security model")
-// promise that a box URL's scheme is the operator's call and say what plain
-// http costs; a refusal added later would break that promise here rather than
-// silently.
-//
-// Mutations: read CREWLET_BOX_GIT_URL raw rather than through ParseBoxURL, or
-// outside ReadBoxURLs → its refused rows boot, or the one-list assertion
-// fails, red; refuse a non-loopback http:// at boot → the control, red.
+// Mutations: read CREWLET_BOX_GIT_URL raw, or outside ReadBoxURLs → red;
+// refuse a non-loopback http:// at boot → the control, red.
 func TestABadBoxURLRefusesTheBoot(t *testing.T) {
 	t.Parallel()
 	variables := []string{sandbox.OtelReceiverURLVar, mcpbridge.BaseURLVar, sandbox.BoxGitURLVar}
-	// ONE LIST: what this test boots on is what ReadBoxURLs reads, which is
-	// also what `crewlet llm doctor` reports — so a box URL the boot refuses
-	// is never one the doctor passes.
+	// ONE LIST: this test, the boot and `crewlet llm doctor` read the same
+	// variables, so the doctor never passes a box URL the boot refuses.
 	var listed []string
 	for _, url := range engine.ReadBoxURLs(func(string) string { return "" }).All() {
 		listed = append(listed, url.Variable)

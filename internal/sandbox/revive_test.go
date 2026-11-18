@@ -16,13 +16,12 @@ import (
 // A DEAD CLAIM'S ANSWER IS REVIVED, ACROSS A CRASH AT EACH STEP, AND BOUNDED.
 //
 // The seat's next holder gives a claim whose node stopped before its turn took
-// the person's answer back to that answer ([Coordinator.reapTail]): the run is
-// answered again, fenced to the holder's lease and the lost claim counted on
-// the row, and the holder resumes it as it resumes any answer its last holder
-// recorded and never resumed with. Each case below stops a holder at one step
-// of reap → revival → resume and hands the seat to a successor over the same
-// store, or refuses the step and lets the same holder retry it; and the last
-// two run the series past the bounds that stop a revival.
+// the person's answer back to that answer ([Coordinator.reapTail]): answered
+// again, fenced to the holder's lease, the lost claim counted on the row, and
+// resumed as any recorded answer is. Each case stops a holder at one step of
+// reap → revival → resume and hands the seat to a successor over the same store,
+// or refuses the step for the same holder to retry; the bound cases run the
+// series past the bounds that stop a revival.
 
 // revivalRefused is a store that refuses every revival.
 func revivalRefused(rig *coordRig) *refusingStore {
@@ -64,11 +63,9 @@ func TestARevivalStoppedBeforeItLandedIsRevivedByTheNextHolder(t *testing.T) {
 }
 
 // A REVIVAL THE STORE REFUSED IS RETRIED BY THE HOLDER THAT OWES IT, rather than
-// read as a reason to end the run: on the hand-back's spacing it reaps the claim
-// afresh, revives it and resumes the run once, the seat's mail held until then.
-// It used to fall straight through to the reap — the run ended and the answer
-// handed to the seat as an ordinary message — over a store that did not answer
-// once.
+// read as a reason to end the run and hand the answer to the seat as an ordinary
+// message: on the hand-back's spacing it reaps the claim afresh, revives it and
+// resumes the run once, the seat's mail held until then.
 func TestARevivalTheStoreRefusedIsRetriedByItsHolder(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -162,9 +159,8 @@ func dieOnTheWayToTheTurn(t *testing.T, rig, holder *coordRig) {
 
 // A REVIVED RUN WHOSE CLAIM DIES AGAIN IS REVIVED AGAIN, the second lost claim
 // counted on the same answer from the same first instant, and resumed once. The
-// rig's clock moves on between the two losses, so a revival that dated the
-// first loss again would date it at the second, where the clock left standing
-// read the two equal.
+// rig's clock moves between the losses, so a revival that re-dated the first
+// loss would show.
 func TestARevivedRunWhoseClaimDiesAgainIsRevivedAgain(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -183,12 +179,11 @@ func TestARevivedRunWhoseClaimDiesAgainIsRevivedAgain(t *testing.T) {
 	resumedOnceWith(t, rig, next, "use main")
 }
 
-// THE REVIVALS OF ONE ANSWER ARE BOUNDED. A resume that takes its node down
-// before its turn begins would otherwise be handed to every next holder to fall
-// over the same way, the seat's mail held behind it each time. After
-// [MaxAnswerRevivals] revivals, the next claim that dies is reaped: the reply
-// goes back to the seat once, the run is announced lost once, saying why it was
-// not resumed again, and no holder ever resumed it.
+// THE REVIVALS OF ONE ANSWER ARE BOUNDED, or a resume that takes its node down
+// before its turn begins is handed to every next holder, the seat's mail held
+// behind it each time. After [MaxAnswerRevivals] revivals the next claim that
+// dies is reaped: the reply goes back to the seat once, the run is announced
+// lost once, saying why, and no holder resumed it.
 func TestTheRevivalsOfOneAnswerAreBounded(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -220,11 +215,10 @@ func TestTheRevivalsOfOneAnswerAreBounded(t *testing.T) {
 	}
 }
 
-// AND BY THE RUN'S OWN WINDOW. A claim that dies once its answer has been owed
-// its resume for longer than the run's pause_ttl_seconds since the first claim
-// of it died is reaped, the reply handed back, however few claims have died:
-// past the tolerance the run itself declared for a reply, a resume that keeps
-// dying with its node is not a transient worth waiting out.
+// AND BY THE RUN'S OWN WINDOW. A claim that dies more than the run's
+// pause_ttl_seconds after the answer's first claim died is reaped, the reply
+// handed back, however few claims have died: past the tolerance the run
+// declared, a resume that keeps dying is no transient worth waiting out.
 func TestARevivalPastTheRunsWindowHandsTheReplyBack(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -304,11 +298,10 @@ func TestARevivalIsDatedWhenItLanded(t *testing.T) {
 	}
 }
 
-// raceTheRevival fails the first revival it is asked for, and races the second:
-// the claim is given back and taken again around it, so the revival finds no
-// claim and the reap's read after it finds one — another resume of the answer,
-// by a node still running under the same lease. Every later revival is the
-// store's own.
+// raceTheRevival fails the first revival, and races the second: the claim is
+// given back and taken again around it, so the revival finds no claim and the
+// reap's read after it finds one, as another resume under the same lease would
+// leave. Every later revival is the store's own.
 type raceTheRevival struct {
 	PendingStore
 	calls int
@@ -341,10 +334,9 @@ func (s *raceTheRevival) ReviveAnswer(ctx context.Context, turnID string, reviva
 }
 
 // A CLAIM TAKEN AGAIN UNDER A RETRIED REVIVAL IS REVIVED ON THE NEXT RETRY. The
-// holder's retry finds the row moved under its revival, reads it again and finds
-// a claim once more; it keeps the revival owed rather than settling the series,
-// which would leave that claim — if its node stops too — to nothing but the
-// seat's next move.
+// retry finds the row moved under its revival and a claim on it once more; it
+// keeps the revival owed rather than settling the series, which would leave that
+// claim, if its node stops too, to nothing but the seat's next move.
 func TestAClaimTakenAgainUnderARetriedRevivalIsRevivedOnTheNextRetry(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -439,12 +431,10 @@ func (s *claimLandsThenFails) ClaimForResume(ctx context.Context, turnID string,
 }
 
 // A CLAIM THAT LANDED UNSEEN IS REVIVED BY THE SERIES THAT MADE IT. The answer's
-// inline attempt claims the run and the store's reply is lost, so the attempt
-// counts a failure — but the claim landed, and no resume holds it. The next
-// attempt finds it, revives it under this node's lease and resumes the run
-// once. It used to read the claim as the run having moved on and settle: the
-// run sat in a claim nothing drives, the person's answer with it, until the
-// seat changed hands.
+// inline attempt claims the run and the store's reply is lost: a failure, yet
+// the claim landed and no resume holds it. The next attempt revives it under
+// this node's lease and resumes the run once; read as the run having moved on,
+// the claim would sit undriven with the answer until the seat changed hands.
 func TestAClaimThatLandedUnseenIsRevivedByItsOwnSeries(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -469,13 +459,11 @@ func TestAClaimThatLandedUnseenIsRevivedByItsOwnSeries(t *testing.T) {
 	resumedOnceWith(t, rig, rig, "use main")
 }
 
-// A HEALTHY NODE'S OWN UNCONFIRMED CLAIMS ARE NO LOST CLAIMS. Every claim of the
-// answer lands and reports a failure, more times than the revivals of a dead
-// claim are bounded by: no node stopped, so none of them is counted on the row,
-// nothing ends the run, and the series resumes it once the store answers — with
-// the person's answer, nothing handed back and nothing announced lost. Counted as
-// lost claims, the fourth ended the run as an abandoned tail, announced as a node
-// that had stopped, on a node that never did.
+// A HEALTHY NODE'S OWN UNCONFIRMED CLAIMS ARE NO LOST CLAIMS. Every claim lands
+// and reports a failure, more times than [MaxAnswerRevivals]: no node stopped,
+// so none is counted on the row, and the series resumes the run once the store
+// answers, nothing handed back or announced lost. Counted as lost, they would
+// end the run as an abandoned tail of a node that never stopped.
 func TestAHealthyNodesUnconfirmedClaimsAreNotLostClaims(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -502,10 +490,9 @@ func TestAHealthyNodesUnconfirmedClaimsAreNotLostClaims(t *testing.T) {
 }
 
 // suspectOnTheLastAttempt records R1 with every resume failing, runs beforeLast
-// — the attempts it spends before the last one — and then makes the next
-// attempt's claim land and report a failure, running slow before the failure is
-// reported: the series' last failure leaves a claim on the row that no resume
-// holds. Returns R1 and the seat's hold.
+// (the attempts before the last), then makes the next claim land and report a
+// failure, running slow first: the series' last failure leaves a claim no
+// resume holds. Returns R1 and the seat's hold.
 func suspectOnTheLastAttempt(t *testing.T, rig *coordRig, beforeLast, slow func()) (*holdSpy, *events.Event) {
 	t.Helper()
 	holds := rig.withHold()
@@ -569,10 +556,9 @@ func declinedOnceAfterTheClaim(t *testing.T, rig *coordRig, holds *holdSpy, r1 *
 
 // A CLAIM THAT LANDED UNSEEN ON THE ANSWER'S LAST ATTEMPT IS GIVEN BACK BEFORE
 // THE DECLINE. The attempt that spends the budget claims the run and the store's
-// reply is lost; the decline that used to follow at once found the run in that
-// claim rather than answered, was refused, and the series settled on the
-// refusal: the run left in a claim nothing drove, the person's answer untaken
-// on it, nothing handed back — and the seat held behind it on its next recount.
+// reply is lost; a decline at once would find the claim, not an answered run, be
+// refused, and leave the run in a claim nothing drives, the answer untaken,
+// nothing handed back and the seat held behind it.
 func TestAClaimThatLandedUnseenOnTheLastAttemptIsGivenBackBeforeTheDecline(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -604,10 +590,10 @@ func TestAClaimThatLandedUnseenAsTheWindowLapsedIsGivenBackBeforeTheDecline(t *t
 }
 
 // A SUSPECTED CLAIM IS NEVER SETTLED AWAY. Whatever path settles the series of
-// an answer whose claim it suspects — a refusal that says only that the row is
-// not what that path expected — the series stays, with an attempt armed, and the
-// seat's mail stays behind it: nothing but the series ever looks at that claim,
-// and a series dropped on such a refusal left the run in it, undriven.
+// an answer whose claim it suspects (a refusal saying only that the row is not
+// what that path expected), the series stays with an attempt armed and the
+// seat's mail behind it: nothing else looks at that claim, and dropped, the
+// series would leave the run in it, undriven.
 func TestASuspectedClaimKeepsItsSeries(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)

@@ -17,89 +17,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE UNIT ROOMS, which are the one kind of channel the ENGINE fills.
-//
-// # What this is for
-//
-// A unit that DECLARES a `channel` in the org chart gets that room, with its
-// subtree's seats and its lead in it, and nothing else keeps a room's members
-// to the chart: `crewlet validate` says so to a Chatlet company that
-// declares none ("no team here has a room of its own until somebody opens one
-// by hand"), and it was the only claim about chat in this tree that nothing
-// performed.
-//
-// # Why it runs on every node rather than under a duty lease
-//
-// Because the broker already arbitrates it, which is cheaper than a lease and
-// strictly safer. A create takes the channel NAME as its subject, so two nodes
-// reconciling the same unit contend at the broker and exactly one wins; the
-// loser is told the name is claimed, which is this function's success case and
-// not an error. A membership write arbitrates on the room. So the worst a
-// second node costs is a refused record, and the worst a LEASE would cost is
-// the whole company's team rooms waiting on whichever node held it.
-//
-// It is the shape [Engine.applyChart] already uses for the same job — the org
-// chart projected into a domain's own objects, following every published
-// company ([Engine.followCompany]), best effort, retried by the next one — and
-// it runs beside it, before the mailboxes are let through, because a released
-// inbox runs a turn that reads its team's room.
-//
-// # Why every create is a fresh operation
-//
-// On [Engine.applyChart]'s and [Engine.applyContainers]' reasoning: this is a
-// reconcile decided from the rows, so a second call — on another node, at the
-// next boot, after a lost acknowledgement — finds the room there and decides
-// nothing, and N nodes creating one room in one apply are settled by the
-// broker. Deriving the create from the activation instead, so the N creates
-// were ONE operation the ledger collapses, would stamp it with the
-// ACTIVATION's instant: once the operation ledger had swept past an activation
-// — thirty days on, for a company that has not been reconfigured since — a
-// room whose create never landed would be answered `unknown` without being
-// published, on every node and at every apply, for the life of that
-// activation. A fresh operation is minted now and is never that old.
-//
-// # Stamped with the ACTIVATION, on the chart's terms
-//
-// c.ActivatedAt is the instant the fleet activated c, and every unit room's
-// create and membership is stamped with it exactly as [Engine.applyChart]
-// stamps a project and [Engine.applyContainers] a knowledge container — for
-// the same two reasons: a node that boots on a revision the fleet has since
-// replaced must not write its own chart's membership back over the current
-// one, and a reapply of one activation must write nothing. A company no
-// activation has named yet is not applied here either; its first activation
-// is. See [chatlet.Store.SetUnitMembers].
-//
-// # A room follows its channel
-//
-// A room records the unit it was made for, and the CHANNEL is what the chart
-// gives a unit — so when the chart gives a channel to another unit (moved to
-// the team that replaced its own in a reorg), the room goes with it: the next
-// activation re-homes it to the unit that declares it now, staffed with that
-// unit's people, in the same record that sets its membership
-// ([chatlet.Store.SetUnitMembers]). A room never moves
-// while the unit it is recorded under still declares it, so two units
-// declaring one channel in an applied revision leave it where it is. The room's
-// transcript moves with it and nothing is disclosed: a unit room is readable
-// by every seat of the company. Without this a validated document — a
-// channel moved to another unit — refused its new declarer the room on every
-// apply of every data node for good, and emptied the room besides.
-//
-// # What it does NOT do
-//
-// It never removes a room. A unit that drops its `channel`, or is deleted
-// outright, keeps what was said in it: a transcript is the only copy of what
-// people said, and an org chart edit is not a request to destroy one. What
-// the chart DOES own is the room's membership, and a room it no longer names
-// is staffed by nobody — so its members are taken out (see
-// [applyChartRooms]) while every word of it stays readable, and an operator
-// archives it if they want it closed.
-//
-// # Behind the mode gate, and Chatlet's alone
-//
-// The writer is [Engine.ChatStore], which is [Engine.writeSide]'s: a node in a
-// maintenance mode hands out none, so a boot or an apply there writes no room
-// into a log whose usage the window is measuring. And the company has to be
-// on Chatlet — see [applyCompanyRooms].
+// applyUnitRooms gives every unit that DECLARES a `channel` its room, staffed
+// with its subtree's seats and lead; nothing else keeps a room to the chart.
+// Every node runs it, under no duty lease: a create's subject is the channel
+// name, so the broker settles a race ([applyUnitRoom]), where a lease would
+// hold every team room on one node. Like [Engine.applyChart] it runs before
+// the mailboxes open (a released inbox reads its team's room) and stamps every
+// write with c.ActivatedAt, so a stale node cannot overwrite a newer chart and
+// a reapply writes nothing. Each create is a fresh operation: one derived from
+// the activation would carry its instant, and once the ledger swept past it a
+// create that never landed would read `unknown` for good. A room is emptied,
+// never removed: its transcript is the only copy ([applyChartRooms]). A node
+// in a maintenance mode gets no [Engine.ChatStore], so it writes no room.
 func (e *Engine) applyUnitRooms(ctx context.Context, c *Company) {
 	rooms := e.ChatStore()
 	if rooms == nil || c == nil {
@@ -110,27 +39,15 @@ func (e *Engine) applyUnitRooms(ctx context.Context, c *Company) {
 }
 
 // applyCompanyRooms is the reconcile's two gates over [applyChartRooms]: a
-// company whose chat is the engine's own, and an activation to stamp with.
+// company on Chatlet, and an activation to stamp with. A function over its
+// seams so both gates are tested with a writer that records every call.
 //
-// A FUNCTION OVER ITS SEAMS for [applyUnitRoom]'s reason, and so that both
-// gates are exercised with a writer that records every call.
-//
-// # Only on Chatlet
-//
-// [Engine.chatRetentionPolicy] states the rule for this domain: a company
-// that moved to a vendor surface publishes nothing, because its rooms are
-// another product's archive now. The chat store is built once per process,
-// from the first company that ran Chatlet, so without this gate a
-// revision moving to `chat.backend: vendor` or `none` went on creating and
-// re-stamping unit rooms on every boot and every apply of every data node —
-// onto a log nothing reads any more and whose prune duty has stopped.
-//
-// # And only with an activation
-//
-// A company no activation has named is not applied: its first activation is,
-// for [Engine.applyChart]'s reason. The store refuses a zero instant
-// ([chatlet.ErrNoActivation]) rather than guessing one, so reaching it would log
-// one ERROR per unit at every unactivated boot.
+// Only on Chatlet ([Engine.chatRetentionPolicy]): the chat store is built once
+// per process, so without this gate a company moved to `chat.backend: vendor`
+// or `none` would keep writing unit rooms onto a log nothing reads and no
+// prune duty trims. Only with an activation, for [Engine.applyChart]'s reason:
+// the store refuses a zero instant ([chatlet.ErrNoActivation]), so reaching it
+// would log an ERROR per unit at every unactivated boot.
 func applyCompanyRooms(ctx context.Context, rooms unitRoomWriter, rows unitRoomReader,
 	c *Company, activatedAt time.Time) []unitRoomResult {
 
@@ -144,9 +61,8 @@ func applyCompanyRooms(ctx context.Context, rooms unitRoomWriter, rows unitRoomR
 				"unit rooms wait for the reconcile that activates it")
 		return nil
 	}
-	// THE ENGINE NARRATING, not a seat and not an operator token. See
-	// [chatlet.AuthorSystem]: attributing this to either would make the
-	// engine a participant in a conversation it only shaped.
+	// The engine narrating, not a seat or an operator ([chatlet.AuthorSystem]):
+	// either would make it a participant in a conversation it only shaped.
 	actor := chatlet.Actor{Handle: chatUnitActor, Kind: chatlet.AuthorSystem}
 	return applyChartRooms(ctx, rooms, rows, actor, c.Org, activatedAt)
 }
@@ -183,18 +99,11 @@ func reportUnitRooms(ctx context.Context, results []unitRoomResult) {
 }
 
 // unitRoomEvent is the line one room's result is logged as, or "" for none.
-//
-// EVERY FAILURE, AT ERROR, and BEST EFFORT PER UNIT: one unit's failure must
-// not stop the next one's room — they are independent records on independent
-// subjects, and a company whose first unit hit a conflict would otherwise
-// have no rooms at all.
-//
-// NOTHING AT INFO FOR A ROOM THAT WAS ALREADY RIGHT, which is every room of
-// every boot of a company nobody edited — and a RE-STAMP is that too: every
-// activation moves every unit room's stamp on the node that wins it,
-// re-activating an unchanged revision (the credential-rotation gesture)
-// included, and nobody moved. It is a DEBUG line, because a stamp that moved
-// is still worth finding when a room's activation is the question.
+// Every failure is an ERROR, and one unit's failure never stops the next
+// unit's room: they are independent records on independent subjects. A room
+// already right logs nothing, and a re-stamp (every activation moves every
+// stamp, re-activating an unchanged revision included) is only DEBUG: nobody
+// moved, but a stamp is worth finding when a room's activation is the question.
 func unitRoomEvent(r unitRoomResult) (slog.Level, string) {
 	switch {
 	case r.err != nil:
@@ -239,57 +148,17 @@ type unitRoomResult struct {
 }
 
 // applyChartRooms brings the room of every unit that DECLARES a channel into
-// line with the chart, takes everybody out of a unit room the chart no longer
-// names, and reports what it did to each.
+// line with the chart, empties every live unit room the chart no longer names,
+// and reports what it did to each. A function over its seams, for
+// [applyUnitRoom]'s reason.
 //
-// A FUNCTION OVER ITS TWO SEAMS, for [applyUnitRoom]'s reason: which units
-// get a room is decided here, and it is exercised without a broker.
-//
-// # The DECLARED channel, never the effective one
-//
-// [org.Unit.Channel] is what a unit talks in AFTER the cascade, and a child
-// that names no channel inherits its parent's ([org.Organization.Normalize]).
-// So iterating the effective field hands the reconcile the parent's room once
-// for every descendant that wrote nothing: whichever unit the walk reached
-// first created it under its OWN key and subtree, and every other one then
-// found a room belonging to somebody else and was refused as a takeover —
-// an ERROR line per inheriting unit on every boot and every apply, for a
-// chart that is exactly what its author meant. A room belongs to the unit
-// that names it, and [org.Unit.DeclaredChannel] is that name; an inheriting
-// child's seats are in the room already, as the parent's subtree.
-// [liveChannels.UnitChannels] reads the same field for the same reason. Two
-// units DECLARING one channel are refused when the document is written
-// (config's validateUnitRooms); an applied revision carrying that shape — an
-// admission rule's violation still runs — has its second unit reported here,
-// by [applyUnitRoom].
-//
-// # Whose a room is, is [org.Organization.UnitByRef]'s answer
-//
-// A room records its unit's KEY at the create — the id where the unit has
-// one, the name where it does not — and that string is read back here at
-// every later activation, so it is a DURABLE unit reference, and every one of
-// those goes through the chart's one resolver: it matches an id or a name,
-// folds case the way the admission rule claims a key, and lets an id win an
-// ambiguity. A private exact match here used to disagree with it, and with
-// the room's own answerer, which already resolved through it, so a
-// unit whose name changed only in case (the same team, to the chart) was
-// refused its own room and had it emptied on every pass, and a stored chart
-// where one unit's id is another's name had the per-unit pass staff a room
-// the sweep then emptied, both at one activation.
-//
-// # A room the chart no longer names is staffed by nobody
-//
-// The chart is the only writer of a unit room's membership — every other
-// membership gesture is refused for this kind — so a room whose unit stopped
-// declaring it, or left the chart, kept its last members for good: agents
-// with FollowAll among them, woken into a turn, its executor in a box, by every
-// message posted there, in a room no prompt names as theirs and nothing else
-// could ever change. So every unit room NO unit in the chart declares —
-// [unitRoomOwner] answers nil, and a room another unit declares has followed
-// its channel there above — is emptied at this activation, under whatever
-// unit it is recorded under ([chatlet.Store.ReleaseUnitRoom]). The room and its
-// transcript stay; its people are what the chart says, which is nobody.
-// Declaring it again, on any unit, staffs it again.
+// It walks [org.Unit.DeclaredChannel], never the effective [org.Unit.Channel]:
+// an inheriting child's seats are already in its parent's room, and walking
+// the effective field claims that room once per such child, each refused as a
+// takeover ([liveChannels.UnitChannels] reads the same field). Two units
+// declaring one channel are refused when the document is written (config's
+// validateUnitRooms); an applied revision still carrying it has the second
+// unit's refusal reported by [applyUnitRoom].
 func applyChartRooms(ctx context.Context, rooms unitRoomWriter, rows unitRoomReader,
 	actor chatlet.Actor, chart *org.Organization, activatedAt time.Time) []unitRoomResult {
 
@@ -305,6 +174,11 @@ func applyChartRooms(ctx context.Context, rooms unitRoomWriter, rows unitRoomRea
 			membership: did.membership, from: did.from, err: err})
 	}
 
+	// The chart is the only writer of a unit room's membership, so a room no
+	// unit declares ([unitRoomOwner] answers nil) would keep its last members
+	// for good, its FollowAll agents woken into a turn by every message. It is
+	// emptied at this activation ([chatlet.Store.ReleaseUnitRoom]); the room
+	// and its transcript stay, and declaring it again staffs it again.
 	held, err := rows.unitRooms(ctx)
 	if err != nil {
 		return append(out, unitRoomResult{err: fmt.Errorf(
@@ -331,11 +205,9 @@ func applyChartRooms(ctx context.Context, rooms unitRoomWriter, rows unitRoomRea
 	return out
 }
 
-// chatUnitActor is the name the engine writes unit-room changes under.
-//
-// A NAME RATHER THAN A HANDLE, and it is not a seat: [chatlet.AuthorSystem] is
-// what makes it render as a system line and wake nobody, and the string is
-// what a reader sees beside it.
+// chatUnitActor is the name the engine writes unit-room changes under: a
+// display name, not a seat's handle. [chatlet.AuthorSystem] is what renders it
+// as a system line that wakes nobody.
 const chatUnitActor = "org-chart"
 
 // unitRoomDid is what [applyUnitRoom] did to one declaring unit's room.
@@ -349,19 +221,14 @@ type unitRoomDid struct {
 	from string
 }
 
-// applyUnitRoom brings one unit's room into line with the chart.
+// applyUnitRoom brings one unit's room into line with the chart. A function
+// over its two seams rather than an engine method, so what it decides (a race
+// lost to another node, an unknown create, a name somebody else holds) is
+// tested without a broker or an engine.
 //
-// A FUNCTION OVER ITS TWO SEAMS rather than a method on the engine, so what it
-// decides — a race lost to another node, an unknown create, a name somebody
-// else holds — is exercised without a broker or an engine.
-//
-// NOT `reconcileUnitRoom`, and the prefix is the reason: `reconcile*` is a
-// RESERVED VOCABULARY here — [TestEveryVendorReconcilerRunsOnApply] derives
-// the vendor reconcilers from the source by that prefix and asserts
-// [Engine.Apply] calls each one, because a third-party wiring that is not
-// rebuilt keeps its boot-time org chart and a credential the revision may have
-// rotated. This is neither a vendor wiring nor called by Apply directly, so
-// naming it `reconcile*` would have diluted what that list means.
+// Not named `reconcile*`: [TestEveryVendorReconcilerRunsOnApply] derives the
+// vendor reconcilers by that prefix and asserts [Engine.Apply] calls each, and
+// this is neither a vendor wiring nor called by Apply.
 func applyUnitRoom(ctx context.Context, rooms unitRoomWriter,
 	rows unitRoomReader, actor chatlet.Actor, chart *org.Organization,
 	unit *org.Unit, name string, activatedAt time.Time) (unitRoomDid, error) {
@@ -373,13 +240,9 @@ func applyUnitRoom(ctx context.Context, rooms unitRoomWriter,
 	}
 	if !found {
 		if len(want) == 0 {
-			// A UNIT WITH NOBODY IN IT GETS NO ROOM CREATED. An empty
-			// room is not the same as a room somebody may join later
-			// — this kind refuses a join — so it would be a room
-			// nothing could reach, and creating it would claim the
-			// name against the day the unit is staffed. A room that
-			// already EXISTS is another matter: it is emptied below,
-			// because the chart says nobody is in it.
+			// A UNIT WITH NOBODY IN IT GETS NO ROOM: this kind refuses a
+			// join, so an empty room is unreachable and would only claim
+			// the name. A room that already exists is emptied below.
 			return unitRoomDid{}, nil
 		}
 		written, createErr := rooms.CreateChannel(ctx, actor, chatlet.NewChannel{
@@ -388,9 +251,8 @@ func applyUnitRoom(ctx context.Context, rooms unitRoomWriter,
 		})
 		switch {
 		case createErr == nil && written.Outcome.Outcome == statelog.OutcomeUnknown:
-			// NOT A CREATED ROOM. The create may have landed and it may
-			// not, so the next pass — which reads the row first — is
-			// what decides it again.
+			// NOT A CREATED ROOM: the create may or may not have landed,
+			// so the next pass, which reads the row first, decides again.
 			return unitRoomDid{}, fmt.Errorf("whether the room was created is "+
 				"unknown (operation %s); the next config apply or restart "+
 				"decides it again", written.Outcome.OpID)
@@ -398,15 +260,12 @@ func applyUnitRoom(ctx context.Context, rooms unitRoomWriter,
 			return unitRoomDid{created: true, members: len(want),
 				id: written.Channel.ID}, nil
 		case errors.Is(createErr, chatlet.ErrNameTaken):
-			// ANOTHER NODE GOT THERE — every node runs this on every
-			// apply, and the broker lets exactly one create take the
-			// name — or an earlier pass did and this node had not
-			// applied it when it read. The refusal is decided against
-			// this node's own rows once it has caught up with the
-			// winner, so the room that holds the name is read again
-			// here and judged like any room that was already there:
-			// this unit's is this function working, and anybody
-			// else's is the takeover the chart refuses below.
+			// ANOTHER NODE, or an earlier pass this node had not applied,
+			// holds the name: the broker lets one create win, and the
+			// refusal comes once this node has caught up with the winner.
+			// So re-read the room and judge it like any existing one:
+			// this unit's is success, anybody else's the takeover
+			// refused below.
 			held, found, err = rows.room(ctx, name)
 			switch {
 			case err != nil:
@@ -423,11 +282,10 @@ func applyUnitRoom(ctx context.Context, rooms unitRoomWriter,
 		}
 	}
 
-	// THE ROOM EXISTS AND MAY NOT BE THIS UNIT'S — by [unitRoomOwner],
-	// the one rule the sweep and the room's answerer ask too. A unit
-	// room it names THIS unit for is this unit's to staff, whoever it is
-	// recorded under: a room its recorded unit no longer declares follows
-	// its channel here, and the write below re-homes it.
+	// The room exists and may not be this unit's: [unitRoomOwner] decides,
+	// the one rule the sweep and the answerer ask too. A unit room it gives
+	// this unit is this unit's to staff, whatever unit it is recorded
+	// under; the write below re-homes it.
 	if held.kind != string(chatlet.KindUnit) {
 		return unitRoomDid{}, heldElsewhere(held, unit, nil, name)
 	}
@@ -435,19 +293,13 @@ func applyUnitRoom(ctx context.Context, rooms unitRoomWriter,
 		return unitRoomDid{}, heldElsewhere(held, unit, owner, name)
 	}
 
-	// THE STORE DECIDES, INSIDE ITS OWN SNAPSHOT, and this does not
-	// compare first: whether the set moved is only half the question, the
-	// other half being whether the room already carries this activation —
-	// and a room at an OLDER one over the same set is re-stamped, which a
-	// comparison here would skip. An unchanged room at this activation
-	// publishes nothing, which is every boot of every node on a company
-	// nobody edited. An EMPTY set is written like any other: a unit whose
-	// last seat left keeps its room and loses its members.
-	//
-	// AND THE UNIT IS STATED BY ITS KEY, so the store re-homes a room
-	// recorded under any other spelling — a unit that gained an id, or
-	// one whose name changed only in case, is recorded under the key that
-	// survives its next rename.
+	// THE STORE DECIDES, inside its own snapshot, so nothing is compared
+	// here: a room at an OLDER activation over the same set must still be
+	// re-stamped, which a comparison here would skip. An unchanged room at
+	// this activation publishes nothing; an EMPTY set is written like any
+	// other. The unit is stated by its KEY, so the store re-homes a room
+	// recorded under another spelling (a unit that gained an id, or renamed
+	// only in case) to the key that survives its next rename.
 	written, wrote, err := rooms.SetUnitMembers(ctx, actor, held.id, unit.Key(),
 		want, activatedAt)
 	switch {
@@ -469,19 +321,13 @@ func applyUnitRoom(ctx context.Context, rooms unitRoomWriter,
 // the remedy that works for THAT reason. owner is the unit [unitRoomOwner]
 // gives a unit room to, and nil for a room of another kind.
 //
-// A ROOM'S NAME NEVER CHANGES — this build has no rename ([chatlet.ChannelPatch])
-// — and an archived room keeps its name, so "rename the room" is never a
-// remedy. A unit room that the unit it is recorded under no longer declares
-// is not here at all: it follows its channel to this unit ([applyUnitRoom]).
-// What is left are the two ways a declared name is somebody else's:
-//
-//   - a room a person opened by hand: taking it over would hand a public
-//     room's transcript to a membership the chart decides, which is a
-//     disclosure rather than a reconcile;
-//   - the room of another unit that declares it too — the unit it is
-//     recorded under, or the first in the chart that declares it — which a
-//     document is refused for when it is next written (config's
-//     validateUnitRooms) and a stored one still carries.
+// A room's name never changes (no rename in [chatlet.ChannelPatch], and an
+// archived room keeps its name), so "rename the room" is never a remedy. A
+// declared name is somebody else's in two ways: a room a person opened by
+// hand, never taken over since that hands a public room's transcript to a
+// membership the chart decides; or the room of another unit that declares it
+// too, which config's validateUnitRooms refuses when a document is next
+// written and a stored one still carries.
 func heldElsewhere(held heldRoom, unit, owner *org.Unit, name string) error {
 	if held.kind != string(chatlet.KindUnit) || owner == nil {
 		return fmt.Errorf("#%s is a %s room somebody opened, so the chart will "+
@@ -495,36 +341,18 @@ func heldElsewhere(held heldRoom, unit, owner *org.Unit, name string) error {
 		name, owner.Name, unit.Name)
 }
 
-// unitRoomOwner is the unit this chart says a unit room belongs to, or nil for
-// a room it staffs with nobody.
+// unitRoomOwner is the unit this chart says a unit room belongs to, or nil
+// when no unit declares it. First the unit its stored key names, if that unit
+// still declares the room, so a room never moves while its unit keeps it;
+// otherwise the FIRST unit declaring it, where a create would have put it, so
+// a moved channel takes its room along ([applyUnitRoom] re-homes it), which
+// discloses nothing: every seat of the company may read a unit room.
 //
-// TWO STEPS, IN THIS ORDER:
-//
-//   - the unit its stored key names, if that unit still declares the room —
-//     so a room never moves while the unit it is recorded under keeps it,
-//     and two units declaring one channel in an applied revision leave it
-//     where it is;
-//   - otherwise the FIRST unit in the chart that declares it, which is the
-//     unit a create would have given the room to had it not existed — so a
-//     channel moved to another unit takes its room with it ([applyUnitRoom]
-//     re-homes it), and the room ends up where a fresh reconcile would have
-//     put it.
-//
-// nil only when no unit in the chart declares the room at all.
-//
-// ONE RULE, ASKED BY EVERYTHING THAT DECIDES ON A ROOM'S OWNER: the per-unit
-// pass staffing a room, the sweep emptying one, and the room's answerer
-// ([unitRoomLead]). The sweep used to decide "nobody's" while the answerer
-// still resolved the stored unit's lead regardless, so a unit that dropped
-// its channel had its room emptied and its lead woken — under a reason that
-// obliges an answer — by every message a person posted there, from a room no
-// prompt names as theirs: the very cost the sweep exists to remove. And the
-// answerer asking the second step too is what has a person's post reach the
-// new owner's lead before this node's re-home has landed.
-//
-// The stored key goes through [org.Organization.UnitByRef], the chart's one
-// resolver of a durable unit reference — see [applyChartRooms]. room is the
-// room's NORMALISED name, which is how a declared channel is compared.
+// The per-unit pass, the sweep and the answerer ([unitRoomLead]) all ask this
+// one rule, so an emptied room wakes no lead and a post reaches a new owner's
+// lead before the re-home lands. stored, a durable unit reference, resolves
+// through [org.Organization.UnitByRef] (id or name, case-folded, id wins), so
+// a case-only rename keeps its room. room is the room's NORMALISED name.
 func unitRoomOwner(chart *org.Organization, stored, room string) *org.Unit {
 	if chart == nil {
 		return nil
@@ -542,38 +370,25 @@ func unitRoomOwner(chart *org.Organization, stored, room string) *org.Unit {
 }
 
 // unitRoomLead is who answers for a unit's room: the lead of the unit
-// [unitRoomOwner] says it belongs to, or empty where none does.
-//
-// IT IS WHAT [chatlet.Roster.Lead] ANSWERS, and the chat write path puts it on
-// the record a person's post publishes as the unit room's answerer
-// ([chatlet.ReasonAnswerer]).
+// [unitRoomOwner] gives it to, or empty where none does. It is what
+// [chatlet.Roster.Lead] answers, put on a person's post as the room's
+// answerer ([chatlet.ReasonAnswerer]).
 func unitRoomLead(chart *org.Organization, stored, room string) string {
 	return leadOfUnit(chart, unitRoomOwner(chart, stored, chatlet.NormalizeName(room)))
 }
 
 // unitRoomMembers is who belongs in a unit's room: every seat in its subtree,
-// plus the lead that answers for it.
+// plus the lead that answers for it. The subtree, because a division's room is
+// where its teams are reachable.
 //
-// THE SUBTREE RATHER THAN THE DIRECT MEMBERS, because a division's room is
-// where its teams are reachable — the alternative leaves a lead talking to an
-// empty room while the people doing the work sit one level down.
+// FollowAll (every message wakes them, [chatlet.Member.FollowAll]) is set for
+// this unit's OWN agent seats only. A descendant's agents, an inheriting
+// child's included, are members reached by a mention, a thread, `@channel` or
+// the lead, or one message in a division's room would be a turn, and a box,
+// for every agent beneath it. A human is never woken: a person runs no turn.
 //
-// FollowAll IS SET FOR THIS UNIT'S OWN AGENT SEATS AND NOBODY ELSE'S, which is
-// the rule [chatlet.Member.FollowAll] states: every message in the room wakes
-// them. A DESCENDANT'S agents are members and not followers — and that holds
-// for a child that INHERITS this channel too, whose prompt names this room as
-// its team's: its agents are reached here by a mention, a thread they are in,
-// `@channel` or the lead, and the room's own seats route the rest down the
-// chart as they would any other ask. A HUMAN is never woken by anything,
-// because a person is addressable and runs no turn. Without that split, one
-// message in a division's room would be a turn for every agent beneath it —
-// every inheriting team's included, since a channel cascades down a whole
-// branch — each with its own executor in a box.
-//
-// DEDUPLICATED, because the lead is nearly always also a member of the subtree
-// and the record names each member once; SORTED so the record is the same
-// bytes on every node that writes it. Whether the set moved is the store's
-// comparison, inside its own snapshot ([chatlet.Store.SetUnitMembers]).
+// Deduplicated (the lead is nearly always in the subtree) and SORTED, so every
+// node writes the same bytes; whether the set moved is the store's comparison.
 func unitRoomMembers(chart *org.Organization, unit *org.Unit) []chatlet.Member {
 	direct := map[string]bool{}
 	for _, r := range unit.Roles {
@@ -634,16 +449,14 @@ type unitRoomReader interface {
 	unitRooms(ctx context.Context) ([]heldRoom, error)
 }
 
-// unitRoomRows reads the replicated rows this reconcile compares against.
-//
-// ITS OWN SQL rather than the chat reader's, for [chatRoomRows]'s reason: a
-// reader answers a VIEWER's question and filters by what that viewer may see,
-// and this is the engine asking what is there.
+// unitRoomRows reads the replicated rows this reconcile compares against, with
+// its own SQL for [chatRoomRows]'s reason: the chat reader filters by what a
+// viewer may see, and this is the engine asking what is there.
 type unitRoomRows struct{ db store.ReplicatedReader }
 
 // heldRoom is a room as the reconcile needs it: which room holds the name, and
-// whose it is. Its membership is not here — the store compares that inside
-// its own snapshot ([chatlet.Store.SetUnitMembers]).
+// whose it is. Membership is compared inside the store
+// ([chatlet.Store.SetUnitMembers]).
 type heldRoom struct {
 	id   string
 	name string
@@ -668,10 +481,8 @@ func (r unitRoomRows) room(ctx context.Context, name string) (heldRoom, bool, er
 	return out, true, nil
 }
 
-// unitRooms is every unit room that is not archived.
-//
-// NOT ARCHIVED, because an archived room takes no message and so wakes
-// nobody: emptying one would be a record on the log that changes what no
+// unitRooms is every unit room that is not archived: an archived room takes
+// no message and so wakes nobody, and emptying one would publish a record no
 // reader can notice, once per activation.
 func (r unitRoomRows) unitRooms(ctx context.Context) ([]heldRoom, error) {
 	var out []heldRoom

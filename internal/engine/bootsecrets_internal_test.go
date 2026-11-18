@@ -80,11 +80,9 @@ func nodeBeforeItsSnapshot(t *testing.T, fails int, seal secrets.Cipher) (*Engin
 }
 
 // A BOOT WAITS FOR THE SECRET STORE rather than resolving its company from the
-// environment. The store not answering is what a boot meets while a
-// coordination group is still electing its leader, and the boot's read used to
-// log it and go on, building the company from whatever the process was started
-// with: a stale token wherever the environment held one, nothing wherever it
-// did not.
+// environment: a boot meets a silent store while a coordination group elects
+// its leader, and building on would resolve a stale token wherever the
+// environment held one and nothing wherever it did not.
 //
 // Mutation: let bootSecrets return after a failed read, and ${ACME_TOKEN} is
 // the environment's stale value.
@@ -160,10 +158,9 @@ func TestABootStoppedWhileTheStoreIsSilentReturns(t *testing.T) {
 }
 
 // AN APPLY NEVER BUILDS FROM THE ENVIRONMENT ALONE on a node holding a secret
-// store it has never read. It used to: the read's failure was logged, the
-// epoch was built from the environment and recorded as applied, and nothing
-// read the store again for that revision. [New] does not return without a
-// snapshot, so this is a node built some other way — and it is refused before
+// store it has never read: that epoch would be recorded as applied, and the
+// store never read again for the revision. [New] does not return without a
+// snapshot, so this node is built some other way; it is refused before
 // anything changed.
 //
 // Mutation: drop the guard in Apply, and the revision is built from the

@@ -14,60 +14,38 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
-// e2bLog names the REMOTE backend. Without it these events logged through the
-// package var that local.go bound to "sandbox.local", so every remote-box line
-// claimed to come from the local backend.
+// e2bLog names the remote backend, so its lines are not attributed to local.go's
+// "sandbox.local" logger.
 var e2bLog = logging.Get("sandbox.e2b")
 
-// The remote backend: every box a real VM, on E2B cloud or a
-// self-hosted cluster.
+// The remote backend: every box a fresh VM, on E2B cloud or a self-hosted
+// cluster, never the engine host, so an agent's mistake takes only its own box
+// (the local backend suits a company on its own machine and checkouts).
 //
-// # What this backend is FOR, next to the local one
+// A [Spec]'s subscription login files are IGNORED here, the one field the two
+// backends deliberately treat apart: their refresh token's rotation is shared
+// fleet state, too much trust to push onto a VM somebody else operates. A
+// subscription still works through the scoped headless token the run
+// environment exports; a harness that mints none needs the local backend.
 //
-// The local backend runs the harness on the engine host, which is right
-// for a company running on somebody's own machine against their own
-// checkouts, and wrong for anything shared. This one gives every run a fresh
-// machine that is not the engine's: an agent that deletes the wrong directory
-// takes its own box with it.
-//
-// # Credential files never leave the engine host
-//
-// A [Spec] can carry a subscription harness's login files, and this backend
-// IGNORES them — the one place the two backends deliberately diverge on the
-// same field. Those files hold a refresh token whose rotation is shared fleet
-// state, so pushing them onto a VM somebody else operates is a materially
-// larger trust step than the scoped headless token the run environment
-// already exports. A subscription still works here through that token; a harness
-// that mints no headless token needs the local backend.
-//
-// # One template per harness, by default
-//
-// E2B publishes prebuilt templates with each harness installed, so a
-// company that names none still gets a box the agent can run in. Naming one
-// is how a box is SIZED — vCPU and RAM are properties of a template, fixed
-// when it is built, and the create API takes no resource arguments at all.
+// A template is how a box is SIZED: vCPU and RAM are fixed when it is built,
+// and the create API takes no resource arguments ([e2bAgentTemplates]).
 
 // E2BKind is the backend's name on the operator surface.
 const E2BKind = "e2b"
 
-// e2bAgentTemplates are E2B's prebuilt images, by harness.
-//
-// A company that names no template gets the one matching its agent rather
-// than a bare box, because a bare box has no harness in it and the
-// run fails at the first command with "command not found" — a template
-// problem that reads as a broken runner.
+// e2bAgentTemplates are E2B's prebuilt images, by harness: a company naming no
+// template gets its agent's, since a bare box has no harness and fails at the
+// first command with "command not found", which reads as a broken runner.
 var e2bAgentTemplates = map[string]string{
 	"claude-code": "claude",
 	"opencode":    "opencode",
 }
 
-// e2bFallbackTemplate is what an unrecognised harness gets.
-//
-// "base" is E2B's own minimum-viable image. It carries no harness,
-// so a run on it fails — which is correct and is the honest outcome: a
-// company naming an agent this build does not know has a config problem, and
-// inventing a template for it would hide that behind a runtime error further
-// in.
+// e2bFallbackTemplate is what an unrecognised harness gets: E2B's minimal
+// "base", with no harness, so the run fails. That is deliberate: an agent this
+// build does not know is a config problem, and inventing a template for it
+// would hide it behind a runtime error further in.
 const e2bFallbackTemplate = "base"
 
 // E2BProvider mints sandboxes on E2B.
@@ -99,10 +77,8 @@ type E2BOptions struct {
 // NewE2B builds the remote backend.
 func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 	if strings.TrimSpace(opts.APIKey) == "" {
-		// REFUSED AT CONSTRUCTION, so an apply fails rather than every
-		// launch: a provider built without a key would report a
-		// configured sandbox and 401 at the first create, minutes into a
-		// turn that has already spent its own rounds.
+		// REFUSED AT CONSTRUCTION, so the apply fails rather than every
+		// launch, each a 401 at its first create, minutes into a turn.
 		return nil, errors.New(
 			"e2b: providers.sandbox.api_key resolved empty — the API " +
 				"authenticates every call, including against a self-hosted " +
@@ -123,11 +99,8 @@ func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 // Kind implements [Provider].
 func (p *E2BProvider) Kind() string { return E2BKind }
 
-// templateFor is the image one run gets: the company's, then the harness's
-// own.
-//
-// Sizing is a property of the TEMPLATE, so this is also where a box's vCPU,
-// RAM and disk are decided — see providers.sandbox.e2b.template.
+// templateFor is the image one run gets: the company's, then the harness's own.
+// It also decides the box's vCPU, RAM and disk (providers.sandbox.e2b.template).
 func (p *E2BProvider) templateFor(spec Spec) string {
 	if p.template != "" {
 		return p.template
@@ -157,20 +130,16 @@ func (p *E2BProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 
 // Connect implements [Provider].
 //
-// ONE CALL, WHATEVER STATE THE BOX IS IN. [e2bAPI.connectBox] reads the box
-// and resumes it if it was paused, so this path neither has to know which
-// happened nor ask first — and cannot be raced by a reaper between a read and
-// a decision, which the GET-then-resume pair it replaced could be.
+// ONE CALL, WHATEVER STATE THE BOX IS IN: [e2bAPI.connectBox] reads the box and
+// resumes it if paused, so no reaper can race a read and a decision.
 //
-// A FAILURE IS RETURNED RATHER THAN SWALLOWED. "Already running" is a success
-// status on this endpoint, not the conflict the deprecated resume reported, so
-// anything left really failed — and handing back a handle to a box that is
-// still paused would make every command on it fail one layer further in, with
-// envd's message rather than the control plane's.
+// A FAILURE IS RETURNED, never swallowed: "already running" is a success here,
+// so anything left really failed, and a handle to a still-paused box would fail
+// every command one layer further in, with envd's message instead.
 func (p *E2BProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, error) {
-	// A FRESH TTL. A snapshot has no kill timer running, so a box woken
-	// without one would carry whatever remained of the timer it was paused
-	// with — which for a run parked overnight is nothing.
+	// A FRESH TTL: a snapshot has no kill timer running, so a box woken without
+	// one keeps what remained of its old timer — for a run parked overnight,
+	// nothing.
 	box, err := p.api.connectBox(ctx, sandboxID, defaultSandboxTTLSeconds)
 	if err != nil {
 		var apiErr *E2BError
@@ -183,14 +152,11 @@ func (p *E2BProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, e
 	return p.box(box), nil
 }
 
-// Attach implements [Provider]: the box READ, never resumed.
-//
-// A paused box is a snapshot with no envd running to answer, so there is
-// nothing to read without waking it, and waking it is what a reader must not
-// do — it is refused with [ErrBoxPaused]. A running one is reached exactly as
-// a connected one is, through envd on its own hostname, and its timer is left
-// where the waiter's keepalive set it: /connect would have moved it to its own
-// 900 seconds on every read.
+// Attach implements [Provider]: the box READ, never resumed. A paused box has
+// no envd to answer and a reader must not wake it, so it is refused with
+// [ErrBoxPaused]. A running one is reached through envd as a connected one is,
+// its timer left where the waiter's keepalive set it (/connect would reset it
+// to 900 seconds on every read).
 func (p *E2BProvider) Attach(ctx context.Context, sandboxID string) (Sandbox, error) {
 	box, err := p.api.getBox(ctx, sandboxID)
 	if err != nil {
@@ -207,14 +173,10 @@ func (p *E2BProvider) Attach(ctx context.Context, sandboxID string) (Sandbox, er
 	return p.box(box), nil
 }
 
-// defaultSandboxTTLSeconds is the kill timer a resumed box wakes with.
-//
-// It matches the config layer's own default box TTL. The value is repeated
-// rather than imported because this package does not import config — and the
-// box's timer is the engine's again at once, so this only has to be long
-// enough to survive the gap until then: the waiter refreshes it on its first
-// tick once the reused box's job runs, which the launch starts at once, since
-// a reused box is given no setup.
+// defaultSandboxTTLSeconds is the kill timer a resumed box wakes with: the
+// config layer's default box TTL, repeated because this package does not import
+// config. It need only outlast the gap until the waiter's first keepalive tick,
+// which comes at once since a reused box's job starts with no setup.
 const defaultSandboxTTLSeconds = 900
 
 // Kill implements [Provider].
@@ -244,29 +206,22 @@ type E2BSandbox struct {
 // ID implements [Sandbox].
 func (s *E2BSandbox) ID() string { return s.id }
 
-// Home implements [Sandbox].
-//
-// Every E2B template runs as one account with one home, so this is the
-// package default rather than a per-box path — unlike the local backend,
-// where many boxes share a filesystem and each needs its own.
+// Home implements [Sandbox]: every E2B template runs as one account with one
+// home, so it is the package default, not a per-box path as on the local
+// backend, where boxes share a filesystem.
 func (s *E2BSandbox) Home() string { return DefaultHome }
 
 // Exec implements [Sandbox].
 //
-// A NON-ZERO EXIT IS DATA, NOT AN ERROR. Callers depend on it: the liveness
-// probe reads a failed `kill -0` as "the process is gone", and setup turns a
-// failed provisioning command into a reportable failure. An error return is
-// reserved for a command the box gave no status for at all.
+// A NON-ZERO EXIT IS DATA, NOT AN ERROR: the liveness probe reads a failed
+// `kill -0` as "gone", and setup reports a failed command. An error is for a
+// command the box gave no status for at all.
 //
-// A STATUS IS READ AS A LOCAL BOX REPORTS ONE, so a setup failure says the
-// same thing whichever cell ran it: a command that outlived its timeout is
-// 124, its timeout named on stderr before whatever it printed, and one a
-// signal ended — the shell the command runs as killed, an out-of-memory kill
-// of a program it exec'd into — is 128 plus the signal's number, the signal
-// named after what it printed. envd reports the second as an exit code of -1
-// beside the signal's name, and the first as a stream it closed with
-// `deadline_exceeded`, usually before any end event: read as a missing
-// verdict, both said the box had gone away while it was still there.
+// A STATUS IS READ AS A LOCAL BOX REPORTS ONE, so a setup failure reads the same
+// in either cell: a timeout is 124, named on stderr before the output; a signal
+// (an OOM kill included) is 128 plus its number, named after the output. envd
+// reports a signal as exit -1 beside its name, and a timeout as a stream closed
+// with `deadline_exceeded`, usually before any end event — neither is a box gone.
 func (s *E2BSandbox) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error) {
 	res, err := s.envd.start(ctx, cmd, opts, false)
 	if err != nil {
@@ -306,10 +261,9 @@ func (s *E2BSandbox) Exec(ctx context.Context, cmd string, opts ExecOptions) (Ex
 			"ended the command's stream with %s (%s) before it reported an exit code "+
 			"(sandbox %s)", res.Trailer.Code, res.Trailer.Message, s.id))
 	default:
-		// The stream ended without a verdict or a reason — the box was
-		// paused or reclaimed mid-command. Reported as a failure with what
-		// was captured, because claiming exit 0 would have the caller
-		// treat an abandoned command as a successful one.
+		// No verdict and no reason: the box was paused or reclaimed
+		// mid-command. A failure with what was captured, never exit 0,
+		// which would pass an abandoned command as a success.
 		return failed, Because(WhyProviderUnavailable, fmt.Errorf("e2b: the command's "+
 			"stream ended before it reported an exit code, so the box went away "+
 			"mid-command (sandbox %s)", s.id))
@@ -343,18 +297,16 @@ func (s *E2BSandbox) EndJob(ctx context.Context, _ string, script int) error {
 }
 
 // KillJob implements [Sandbox]: EVERY PROCESS OF THE BOX'S USER, `kill -1` as
-// `user` ([killUserScript]). envd starts a job with no process group of its
-// own — in envd's, which no signal may reach — so the job's tree has no group
-// to address; envd runs as root, out of the user's reach, and spared with it;
-// and the box is the run's alone and reclaimed right after, so a template's
-// own service running as the user goes a few seconds early.
+// `user` ([killUserScript]). envd starts a job in envd's own process group,
+// which no signal may reach, so the job's tree has no group to address; envd
+// runs as root and is spared; and the box is the run's alone and reclaimed
+// right after, so a template's service running as the user goes a little early.
 //
-// THE SCRIPT'S SHELL IS THE PROCESS ENVD ANSWERS BY, and kill(-1) spares its
-// caller: envd starts a command as `/bin/sh -c` of a line that sets its OOM
-// score and then execs — through ionice and nice, which exec in turn — the
-// `/bin/bash -l -c` of the script (e2b-dev/infra's envd, its process
-// handler), one process all the way down, so the call returns once the script
-// has run its waits. Whether what it killed is over is the job's poll to say.
+// kill(-1) spares its caller, and the script's shell is the process envd
+// answers by: envd runs `/bin/sh -c` of a line that execs, through ionice and
+// nice, the script's `/bin/bash -l -c` (e2b-dev/infra's envd process handler),
+// one process all the way down, so the call returns once the script has run
+// its waits. Whether what it killed is over is the job's poll to say.
 func (s *E2BSandbox) KillJob(ctx context.Context, _ string) error {
 	if _, err := s.Exec(ctx, killUserScript(), ExecOptions{Cwd: DefaultHome}); err != nil {
 		return fmt.Errorf("e2b: ending the job in box %s: %w", s.id, err)
@@ -362,28 +314,23 @@ func (s *E2BSandbox) KillJob(ctx context.Context, _ string) error {
 	return nil
 }
 
-// killUserScript is [E2BSandbox.KillJob]'s script: every process of the box's
-// user, `kill -1`, in [killScript]'s shape — each wait over as soon as no
-// process of the user's is left but the script itself ([userLive]), and NOT
-// once `kill -0 -1` fails, which in a VM it never does. kill(-1) counts every
-// process it is refused as well as every one it reaches, and answers success
-// wherever it counted one (the kernel's kill_something_info); a VM's kernel
-// threads and envd, root's, are always there to refuse it, so waited on that,
-// every kill of an E2B job — a sweep after a clean end included — ran both its
-// graces out, ten seconds of every stop's and every loss's read. The user's id
-// is the shell's own, read as the walk reads every process's.
+// killUserScript is [E2BSandbox.KillJob]'s script: `kill -1` as the box's user,
+// in [killScript]'s shape, each wait over once no process of the user's is left
+// but the script itself ([userLive]) — NOT once `kill -0 -1` fails, which in a
+// VM it never does: kill(-1) succeeds wherever it counted a process, refused
+// ones included (the kernel's kill_something_info), and root's kernel threads
+// and envd are always there, so every kill would run both its graces out. The
+// user's id is the shell's own, read as the walk reads every process's.
 func killUserScript() string {
 	return `u=; while read -r k v r; do [ "$k" != Uid: ] || { u=$v; break; }; done < /proc/$$/status
 ` + userLive("/proc") + killAndAwait("-1", "userlive")
 }
 
-// userLive defines the shell function `userlive`, which answers whether root —
-// a /proc — holds a process other than the shell itself that kill(-1), sent
-// by user id $u, reaches and that has not exited: one whose real or saved
-// user id is $u, which are the ids the kernel lets a sender of that id signal,
-// and that is no zombie, which has nothing left to signal. Builtins alone, so
-// the walk forks nothing it would then find; a record that goes as it is read
-// is a process that went.
+// userLive defines the shell function `userlive`: whether root (a /proc) holds a
+// process, other than the shell itself, that kill(-1) sent as user id $u reaches
+// and that has not exited — real or saved uid $u, the ids the kernel lets that
+// sender signal, and no zombie. Builtins only, so the walk forks nothing it
+// would then find; a record that goes as it is read is a process that went.
 func userLive(root string) string {
 	quoted := "'" + strings.ReplaceAll(root, "'", `'\''`) + "'"
 	return `userlive() { for d in ` + quoted + `/[0-9]*; do [ "${d##*/}" != "$$" ] || continue; z= m=; ` +
@@ -434,11 +381,8 @@ func (s *E2BSandbox) SetTimeout(ctx context.Context, seconds float64) error {
 	return s.api.setBoxTimeout(ctx, s.id, seconds)
 }
 
-// Pause implements [Sandbox].
-//
-// E2B holds a paused box INDEFINITELY and bills for the snapshot, which is
-// exactly why expiring it is the engine's job rather than the provider's —
-// see the waiter's pause reaper.
+// Pause implements [Sandbox]. E2B holds a paused box INDEFINITELY and bills for
+// the snapshot, so expiring it is the engine's job: the waiter's pause reaper.
 func (s *E2BSandbox) Pause(ctx context.Context) error {
 	return s.api.pauseBox(ctx, s.id)
 }

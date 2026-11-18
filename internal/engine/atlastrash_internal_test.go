@@ -36,13 +36,10 @@ func (f *atlasExpiriesFake) Expire(_ context.Context, c atlasdomain.Call, hour, 
 	return statelog.Result{Outcome: statelog.OutcomeApplied}, f.err
 }
 
-// THE REAPER EXPIRES THE ATLAS'S HISTORY HOUR BY HOUR, on the company's own
-// retention: it nominates the hours the log says hold history past the cutoff,
-// expires each as the reaper itself, and takes an hour with nothing left as one
-// no longer eligible rather than a failure.
-//
-// Mutation: nominate the hours in another spelling than atlasdomain.Bucket and
-// the purge of each refuses it.
+// The reaper expires the atlas's history hour by hour, as itself, on the
+// company's retention, and an hour with nothing left is not eligible rather
+// than a failure. Mutation: nominate the hours in another spelling than
+// atlasdomain.Bucket and the purge of each refuses it.
 func TestTheReaperExpiresTheAtlasHistoryHourByHour(t *testing.T) {
 	t.Parallel()
 	first := time.Date(2030, 1, 1, 9, 0, 0, 0, time.UTC)
@@ -77,8 +74,8 @@ func TestTheReaperExpiresTheAtlasHistoryHourByHour(t *testing.T) {
 	}
 }
 
-// THE COMPANY'S OWN RETENTION is what the reaper reads, and the block's default
-// where the company states none.
+// The reaper reads the company's own retention, the default where it states
+// none.
 func TestTheAtlasRetentionIsTheCompanys(t *testing.T) {
 	t.Parallel()
 	set := &Company{Config: &config.Company{Atlas: config.Atlas{RetentionDays: 120}}}

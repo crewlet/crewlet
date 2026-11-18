@@ -8,24 +8,9 @@ import (
 )
 
 // A NODE WITH NO COMPANY RUNS THE CORE RUNTIME FROM BOOT: every domain's log,
-// the identity estate, the node gate and the duties that keep them — and none
-// of the native halves only a company can ask for.
-//
-// # Why the line is here and not at the first company
-//
-// The whole of a node's durable state used to wait for its first company, so a
-// node started with none — the quickstart's own route — had no identity
-// estate: nobody could sign in, a Tier A token's session included, which is
-// what the company is created through. Everything here is asserted before any
-// company is applied, on a running node.
-//
-// # And why it is every domain, the tracker's and the knowledge base's too
-//
-// A join replaces the whole replicated file and a snapshot names every
-// registered domain, so a node running part of the register can neither adopt
-// nor donate; and the trim counts nodes per log, so a node not running the
-// tracker's log would pin that log's trim for as long as it was up. What waits
-// for the company is only the WRITERS and READERS over those logs.
+// the identity estate, the node gate and the duties that keep them, and none of
+// the native halves only a company asks for — asserted on a running node before
+// any company is applied (package doc, "The core runtime").
 //
 // Mutations, each run: start the core with the native halves at the first
 // company and every accessor below is nil; arm the core's duties with the
@@ -56,9 +41,8 @@ func TestANodeWithNoCompanyRunsTheCoreRuntime(t *testing.T) {
 		domains = append(domains, row.Name)
 	}
 	slices.Sort(domains)
-	// THE REGISTER'S OWN LIST, never a literal: a literal of five outlived
-	// the usage log joining the register, and asserted the node was missing
-	// a domain it runs.
+	// The register's own list, never a literal, which goes stale the day a
+	// domain joins.
 	var want []string
 	for _, d := range engine.Domains() {
 		want = append(want, d.Name())

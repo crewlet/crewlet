@@ -18,41 +18,31 @@ import (
 
 // Equipping an epoch: putting this NODE's tools into it.
 //
-// NewCompany deliberately builds an epoch without them, because building one
-// must be something `crewlet validate` can do on a laptop — a constructor that
-// needed a database would make config validation depend on having one. So the
-// epoch arrives with an empty registry and the engine fills it, here, with the
-// tools its own backends can actually serve.
-//
-// Which is also why this runs on EVERY apply and not once at boot: an epoch is
-// published, never mutated, so each new one gets a new
-// registry — and a node that equipped only its first epoch would serve a
-// company whose agents lost every builtin at the first config change, with
-// nothing failing. (The registry's shared MCP tools are the one part refiled
-// after it is published, by the shared bridge's own supervision; the builtins
-// never are. See mcpsupervise.go.)
+// NewCompany builds an epoch without them so `crewlet validate` needs no
+// database; the engine fills the empty registry here with what its own
+// backends serve. This runs on EVERY apply, not once at boot: an epoch is
+// never mutated, so each new one has a new registry, and equipping only the
+// first would silently strip every builtin at the first config change. (The
+// shared MCP tools alone are refiled after publication, by the shared
+// bridge's supervision: mcpsupervise.go.)
 
 // equip registers the node-backed builtins into an epoch.
 //
-// A failure here fails the APPLY. The alternative — log it and serve the epoch
-// anyway — publishes a company whose agents cannot look up a colleague or
-// recall their own work, which looks from the outside like a model that has
-// stopped trying rather than a node that is missing half its tool surface.
+// A failure fails the APPLY: serving the epoch anyway publishes agents that
+// cannot look up a colleague or recall their work, which reads as a model
+// that stopped trying rather than a node missing half its tool surface.
 func (e *Engine) equip(ctx context.Context, c *Company) error {
 	if c == nil {
 		return fmt.Errorf("engine: cannot equip a nil epoch")
 	}
 	e.tuneBatching(c)
-	// THE COMPANY'S OWN NUMBERS, not the builtins' defaults. Each of these
-	// was validated, schema'd and documented and read by nobody, so setting
-	// one produced a revision and changed nothing an operator could observe.
+	// THE COMPANY'S OWN NUMBERS, not the builtins' defaults.
 	refinement := c.Config.Learning.SkillRefinement
 	deps := builtin.Deps{
 		A2A: e.a2aFor(c),
-		// THIS NODE'S CHAIN for the chart's `${VAR}` contacts — what the
-		// notification routing that mentions the same people reads — and
-		// never the process environment, which an engine handed an
-		// environment of its own does not read anywhere else.
+		// THIS NODE'S CHAIN for the chart's `${VAR}` contacts, as notification
+		// routing reads them — never the process environment, which an engine
+		// handed an environment of its own reads nowhere else.
 		Env:               e.LookupSecret,
 		Knowledge:         knowledgeSearch(e, c),
 		GrantHeld:         e.grantHeld,
@@ -68,12 +58,9 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 		skills := learning.NewSkills(db)
 		deps.Skills = skills
 		if refinement.Refines() {
-			// learning.skill_refinement.enabled gates BOTH halves — the
-			// post-turn refiner and this tool — because they write the
-			// same rows through the same version archive. A company that
-			// turned refinement off and still had the tool would have
-			// skills changing under it with the knob that says they
-			// cannot set to false.
+			// learning.skill_refinement.enabled gates BOTH the post-turn
+			// refiner and this tool: they write the same rows, so the tool
+			// alone would change skills under a knob set to false.
 			deps.Refinable = skills
 		}
 		deps.Episodes = learning.NewEpisodes(db)
@@ -82,26 +69,21 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 		deps.Diary = learning.NewDiary(db, learning.WithEmbed(e.embedText))
 		deps.Onboarding = learning.NewOnboarding(db)
 	}
-	// THE REGISTRY, NOT ITS CONTENT. load_tool_skill is registered
-	// whenever a node HAS a registry, empty or not — because whether a
-	// company has published skills is a fact about the knowledge base
-	// that changes without an apply, and a tool that appeared and
-	// disappeared with the sync would make the required-skill guard
-	// unarmable exactly when the first skill lands.
+	// THE REGISTRY, NOT ITS CONTENT: load_tool_skill is registered whenever
+	// a node HAS a registry, empty or not. Published skills change without an
+	// apply, and a tool that came and went with the sync would leave the
+	// required-skill guard unarmable when the first skill lands.
 	if e.skills != nil {
 		deps.ToolSkills = e.skills
 	}
-	// THE AUTHORITY DECISION, over the chart READ PER CALL for the reason
-	// the lead seam below is: a seat's tools are cloned into its lease and
-	// an apply does not rebuild the clone, so a decision holding this
-	// epoch's chart would refuse a seat its own work the moment somebody
-	// reorganised. [ChartAuthorityOf] holds the engine and asks it each
-	// time, three-valued.
+	// THE AUTHORITY DECISION, over the chart READ PER CALL: a seat's tools
+	// are cloned into its lease and an apply does not rebuild the clone, so a
+	// decision holding this epoch's chart would refuse a seat its own work
+	// after a reorganisation. [ChartAuthorityOf] asks the engine each time.
 	deps.Authorize = builtin.Decide(ChartAuthorityOf(e))
-	// AND WHO EACH TURN IS ACTING FOR, which the gate binds to every call a
-	// seat makes in a turn somebody woke: every app verb is held to the apps
-	// that somebody uses (ADR-0109), and the relation families read the same
-	// composition. Left out, a seat would use every app for anybody.
+	// AND WHO EACH TURN ACTS FOR, bound by the gate to every call in a turn
+	// somebody woke: each app verb is held to the apps that somebody uses
+	// (ADR-0109). Left out, a seat would use every app for anybody.
 	deps.Requesters = turnRequesters{engine: e}
 	deps.Work = e.workDeps(c)
 	deps.Pages = e.pageDeps(c)
@@ -109,31 +91,24 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// author through the tracker's writer, and a run's answered through the
 	// desk every answer by turn is delivered by.
 	deps.Withdraw = e.withdrawDeps()
-	// THE ARTIFACTS TOOLS, over the same deps the operator catalogue is
-	// handed: every data node runs the artifacts domain, so these depend on
-	// the node taking uploads rather than on the company's native halves.
+	// THE ARTIFACTS TOOLS, over the operator catalogue's deps: every data
+	// node runs the artifacts domain, so they depend on the node taking
+	// uploads, not on the company's native halves.
 	deps.Artifacts = ArtifactToolDeps(e)
-	// AND THE DATASTORE'S, beside them: the data tools act through the
-	// artifacts half and add only the datastore, the turn guardrail and
-	// the presence hub.
+	// AND THE DATASTORE'S: the artifacts half plus the datastore, the turn
+	// guardrail and the presence hub.
 	deps.ArtifactData = ArtifactDataToolDeps(e)
 	// AND THE RENDER, a seat's alone: the page as a viewer sees it, in the
 	// browser Tier A names, its screenshots into the run's own box.
 	deps.Render = RenderToolDeps(e)
-	// AND THE CODE TOOLS, where this node's running runtime serves
-	// Gitlet — read after the runtime this apply starts, as
-	// the native halves are: the same deps the operator catalogue builds
-	// per call, over the router, so a seat on a node without the code log or
-	// the `gitlet` role reads and changes the company's repositories through
-	// the nodes that hold them. Registered for every seat; the code writes
-	// are offered only to a seat whose code tier writes, and left off every
-	// other seat's surfaces ([Company.withheldFrom]).
+	// AND THE CODE TOOLS, read after the runtime this apply starts, over the
+	// router, so a seat on a node without the code log or the `gitlet` role
+	// reaches the repositories through the nodes that hold them. Registered
+	// for every seat; the writes are offered only to a seat whose code tier
+	// writes ([Company.withheldFrom]).
 	deps.Code = CodeToolDeps(e)
-	// AND THE HEALTH TOOLS, on the same deps the operator catalogue builds
-	// per call: registered for every seat, as everything here is, and
-	// offered only to a seat whose role carries the health grant — the
-	// table refuses every other seat, which is what leaves them off its
-	// surfaces ([Company.withheldFrom]).
+	// AND THE HEALTH TOOLS: registered for every seat, offered only to one
+	// whose role carries the health grant ([Company.withheldFrom]).
 	deps.Health = HealthToolDeps(e)
 	// AND THE SSH TOOLS, the same way: registered for every seat, offered
 	// only to a seat whose SSH access grants them ([Company.withheldFrom]).
@@ -151,11 +126,9 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	if gh := c.Config.Integrations.GitHub; gh != nil && gh.Enabled {
 		deps.Pulls = releasePulls{engine: e}
 	}
-	// AND THE ROOMS. Without this the nine chat tools were built,
-	// documented and registered against a zero [builtin.ChatDeps] — which
-	// gates every one of them off — so a company on `chat.backend: chatlet`
-	// ran the domain, applied its records and woke its seats about
-	// messages they had no tool to answer with.
+	// AND THE ROOMS: a zero [builtin.ChatDeps] gates every chat tool off,
+	// leaving a `chat.backend: chatlet` company's seats woken about messages
+	// they have no tool to answer.
 	deps.Chat = e.chatDeps(c)
 	// AND THE SEAT'S OWN SESSIONS, which its executor lists and reads back,
 	// where this epoch keeps them — see [Engine.sessionDeps].
@@ -186,29 +159,22 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 			c.CheckoutTool = tool
 		}
 	}
-	// THE SHARED MCP SERVERS, into the same registry and straight after
-	// the builtins, because this is the surface every seat's is cloned
-	// from. Per-role children are NOT here: they belong to a seat's lease
-	// rather than to the epoch, and this node holds only some of the
-	// company's seats, so they are reconciled seat by seat once this epoch
-	// is current — see seatservers.go.
-	//
-	// A server that will not start does not fail the apply. It costs that
-	// server's tools; refusing the epoch over it would take a working
-	// company down because one vendor's binary was missing.
+	// THE SHARED MCP SERVERS, straight after the builtins, since every
+	// seat's surface is cloned from this one. Per-role children belong to a
+	// seat's lease and this node holds only some seats, so they are
+	// reconciled seat by seat once this epoch is current (seatservers.go). A
+	// server that will not start costs its own tools, not the apply: one
+	// missing vendor binary must not take a working company down.
 	e.startSharedServers(ctx, c)
-	// The operator's ${var} map is CONFIG, so it is refreshed per epoch —
-	// unlike the skills themselves, which come from the knowledge base and
-	// outlive one. A variable a revision removed then surfaces here rather
-	// than on that skill's next edit, which might be never. The trigger
-	// audit is NOT here: it reads the epoch that is current, so it runs
-	// once this one is (see [Engine.installEpoch]).
+	// The operator's ${var} map is CONFIG, refreshed per epoch, unlike the
+	// skills, which outlive one: a removed variable surfaces here, not on the
+	// skill's next edit. The trigger audit reads the current epoch, so it
+	// runs once this one is ([Engine.installEpoch]).
 	e.refreshSkillVariables(c)
 
-	// THE EMBEDDER IS BUILT AT THE APPLY, which is what makes a width
-	// change fail where somebody is watching rather than weeks later at
-	// the first recall. A company with none configured gets nil, and every
-	// consumer treats that as "no similarity search" rather than a fault.
+	// THE EMBEDDER IS BUILT AT THE APPLY, so a width change fails where
+	// somebody is watching, not at the first recall. None configured is
+	// nil, which every consumer reads as "no similarity search".
 	embedder, err := e.buildEmbedder(c)
 	if err != nil {
 		return err
@@ -218,23 +184,17 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 }
 
 // sessionDeps is the session tools' deps for the epoch c: the executor log's
-// reads through the estate router, so a node without `data` reads a seat's
-// rows through one that holds them, the engine's store a sealed session opens
-// from, and the switch as the revision this node runs states it at each call
-// ([Engine.keepsSessionsNow]) — or none, which omits both tools:
+// reads through the estate router (a node without `data` reads through one
+// that holds them), the store a sealed session opens from, and the switch as
+// the revision this node runs states it at each call
+// ([Engine.keepsSessionsNow]). None, omitting both tools:
 //
 //   - where c keeps no session (`turn_engine.conversation_session.enabled:
-//     false`): the one switch for everything a conversation carries between
-//     turns, which an operator turns off over a leak expecting every model's
-//     reads of the sessions to stop too. The sessions kept before it went off
-//     stay a person's to read, as the seat's trail. The tools are offered off
-//     the epoch being equipped — a turn's surface is the revision's it pinned
-//     — and each call asks the switch again, so a launch already running when
-//     the node applies a revision that turns it off is refused at its next
-//     call rather than reading on until it ends;
-//   - on an engine with no router, which reaches no executor log;
-//   - on a node with no object store, which keeps no session to read, and on
-//     one whose keyring cannot open a sealed stream, which is logged.
+//     false`), which an operator turns off over a leak expecting every
+//     model's reads to stop; each call asks the switch again, so a launch
+//     running when a revision turns it off is refused at its next call;
+//   - with no router, or no object store;
+//   - when the keyring cannot open a sealed stream, which is logged.
 func (e *Engine) sessionDeps(c *Company) builtin.SessionDeps {
 	if !keepsSessions(c) || e.router == nil {
 		return builtin.SessionDeps{}
@@ -260,14 +220,10 @@ func (e *Engine) keepsSessionsNow() bool { return keepsSessions(e.Company()) }
 
 // a2aFor builds the agent-to-agent service for one epoch, or nil.
 //
-// Per EPOCH, because its directory answers "is this handle an agent seat" out
-// of the org — and a service holding the previous epoch's org would refuse an
-// ask to a seat the current revision added, or accept one to a seat it removed.
-//
-// Nil when the node has no FLEET store: a channel is the authorization record
-// the ANSWERING seat's node reads, so it has to be somewhere both nodes can
-// see. It used to be the node's own database, which is why a cross-node ask
-// woke its target and then dropped the reply as "no such channel".
+// Per EPOCH: its directory answers "is this handle an agent seat" from the
+// org, and the previous epoch's would refuse a seat just added or accept one
+// just removed. Nil without a FLEET store: a channel is the authorization
+// record the ANSWERING seat's node reads, so both nodes must see it.
 func (e *Engine) a2aFor(c *Company) builtin.Asker {
 	svc := e.a2aService(c)
 	if svc == nil {
@@ -282,10 +238,8 @@ func (e *Engine) a2aFor(c *Company) builtin.Asker {
 // different halves of it: the ask tool takes it as a [builtin.Asker], and the
 // answer leg needs Reply and Close, which that interface does not carry.
 //
-// Built per call rather than held on the epoch: it is a struct over the
-// coordination store and the queue with no state of its own, so two of them
-// are the same service, and holding one would only add a field that has to be
-// rebuilt on every apply for no reason.
+// Built per call rather than held on the epoch: it is stateless over the
+// coordination store and the queue, so holding one adds nothing.
 func (e *Engine) a2aService(c *Company) *a2a.Service {
 	if c == nil || e.backends == nil || e.backends.Fleet == nil || e.backends.Queue == nil {
 		return nil
@@ -293,9 +247,8 @@ func (e *Engine) a2aService(c *Company) *a2a.Service {
 	svc, err := a2a.New(a2a.NewCoordStore(e.backends.Fleet), e.wakes(),
 		a2a.Options{Directory: agentSeats{org: c.Org}, Mailboxes: e.mailboxConfirmer()})
 	if err != nil {
-		// Logged rather than returned: a company without agent-to-agent
-		// messaging is a real deployment, and refusing to boot over an
-		// optional surface would take the whole node down for it.
+		// Logged rather than returned: agent-to-agent messaging is
+		// optional, and refusing to boot over it takes the node down.
 		log.Warn("a2a_unavailable", "error", err,
 			"hint", "agents on this node cannot ask each other questions")
 		return nil
@@ -305,10 +258,8 @@ func (e *Engine) a2aService(c *Company) *a2a.Service {
 
 // agentSeats answers the A2A directory out of one epoch's org.
 //
-// AGENT seats only, which is the whole question it exists to answer: a human
-// seat is addressable and never spawned, so a channel opened to one is a
-// channel no turn will ever answer. The id it returns is the one derived from
-// the seat's handle (ADR-0013), resolved through the org's own lookup.
+// AGENT seats only: a human seat is never spawned, so a channel to one is
+// never answered. The id is the one derived from the handle (ADR-0013).
 type agentSeats struct{ org *org.Organization }
 
 func (d agentSeats) SeatInbox(handle string) (uuid.UUID, bool) {
@@ -341,17 +292,10 @@ func (e *Engine) telemetry() builtin.Telemetry {
 // tuneBatching writes the company's inbox coalescing knobs into the value
 // every seat attachment on this node already holds.
 //
-// IN PLACE rather than rebuilt, because that is what [queue.BatchOptions] is
-// for: it guards its own fields precisely so an apply lands on the next batch
-// with no re-subscription. A fresh value per attach would leave every seat
-// claimed before the apply reading the old window for as long as it held its
-// seat.
-//
-// Same history as the numbers above it: notification_coalesce_window_seconds
-// and notification_coalesce_max_batch were declared, defaulted, schema'd,
-// validated and documented, and node.Config.BatchOptions was never set — so
-// every seat took queue.DefaultBatchOptions and setting either knob produced a
-// revision that changed nothing an operator could observe.
+// IN PLACE rather than rebuilt: [queue.BatchOptions] guards its own fields so
+// an apply lands on the next batch with no re-subscription. A fresh value
+// would leave every seat claimed before the apply on the old window for as
+// long as it held its seat.
 func (e *Engine) tuneBatching(c *Company) {
 	if e.batch == nil || c == nil || c.Config == nil {
 		return
@@ -364,23 +308,16 @@ func (e *Engine) tuneBatching(c *Company) {
 // knowledge base at all.
 //
 // The GATE reads the company's config; the SEARCHER is resolved per call.
-// Those cannot be the same read: this runs before an apply reconciles the
-// knowledge base (see [Engine.reconcileConfluence]), so a searcher captured
-// here is the PREVIOUS epoch's — its lead map is the old org chart and its
-// credential is the pre-rotation one. Capturing it would give a seat a tool
-// that reads the company it used to be, silently, since a stale-credential
+// This runs before an apply reconciles the knowledge base
+// ([Engine.reconcileConfluence]), so a searcher captured here is the PREVIOUS
+// epoch's — old lead map, pre-rotation credential — and a stale-credential
 // search returns an empty result exactly like a real one.
 func knowledgeSearch(e *Engine, c *Company) builtin.KnowledgeSearcher {
 	if c.Config.KnowledgeBackendFor() == config.KnowledgeNone {
-		// A NIL INTERFACE, not a live adapter over a nil searcher: the
-		// tool is omitted rather than registered-and-empty, so a seat is
-		// never offered a search its company cannot serve.
-		//
-		// THE BACKEND, not the presence of an `integrations.confluence`
-		// block: a company on Doclet configures no
-		// vendor at all, and gating on the vendor block would have left
-		// the seats of every company on Doclet without search_knowledge
-		// while the pages they were meant to find were sitting in the index.
+		// A NIL INTERFACE, not a live adapter over a nil searcher: a seat is
+		// never offered a search its company cannot serve. Gated on THE
+		// BACKEND, not an `integrations.confluence` block, which a company
+		// on Doclet does not have.
 		return nil
 	}
 	return liveKnowledge{engine: e}
@@ -389,9 +326,9 @@ func knowledgeSearch(e *Engine, c *Company) builtin.KnowledgeSearcher {
 // liveKnowledge resolves the node's current knowledge searcher per call.
 type liveKnowledge struct{ engine *Engine }
 
-// CanSearch answers false while nothing is wired, which is what the tool
-// reports to the model — a company whose knowledge block is configured but
-// whose backend failed to start is a real state, and one the seat can act on.
+// CanSearch answers false while nothing is wired, which the tool reports to
+// the model: a configured backend that failed to start is a state the seat
+// can act on.
 func (k liveKnowledge) CanSearch(seat *org.Role, o *org.Organization) bool {
 	s := k.engine.Knowledge()
 	return s != nil && s.CanSearch(seat, o)

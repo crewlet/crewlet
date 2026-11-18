@@ -7,14 +7,9 @@ import (
 )
 
 // A LOOPBACK ADDRESS IN THE ENGINE'S NETWORK NAMES THE ENGINE HOST IN THE BOX'S.
-//
-// The tool bridge, the telemetry receiver and a seat's HTTP MCP servers are
-// configured once for the node, in the engine host's network. Inside a
-// container `127.0.0.1` is the container itself, so a single-host install
-// whose bridge is `http://127.0.0.1:8000` reached its tools from a `direct` box
-// and from no container. Only a loopback host moves; everything that already
-// names a machine both sides can see, and everything that is not a URL at
-// all, reaches the box exactly as written.
+// Inside a container 127.0.0.1 is the container itself, so a loopback host
+// moves; a host both sides can see, and anything that is not a URL, reaches
+// the box exactly as written.
 func TestALoopbackHostIsTheEngineHostInsideTheBox(t *testing.T) {
 	t.Parallel()
 	const alias = "host.docker.internal"
@@ -105,8 +100,8 @@ func TestTheSeatsServersAreTranslatedInACopy(t *testing.T) {
 
 // THE ALIAS RESOLVES IN THE CONTAINER. Docker Engine on Linux defines
 // host.docker.internal only for a container started with it, so the run line
-// carries it; Podman writes its own name into every container, so nothing is
-// added there. Before the operator's run_args, which win as they always do.
+// carries it, before the operator's run_args, which win; Podman writes its own
+// name into every container, so nothing is added there.
 func TestTheContainerIsStartedKnowingTheEngineHostsName(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -141,12 +136,10 @@ func TestTheContainerIsStartedKnowingTheEngineHostsName(t *testing.T) {
 }
 
 // EVERY NAME A BOX IS HANDED FOR THE ENGINE HOST IS ONE THE ENGINE ADMITS. The
-// tool bridge admits a call to a session held to this host's loopback under a
-// loopback name or an [EngineHostName], which is how Docker Desktop and
-// Podman's machine deliver a container's call to the host; a runtime whose
-// name it did not admit would leave every held run in that runtime's
-// containers without its tools. And nothing else is one: a name the runtimes
-// do not hand out, or one merely containing theirs, is not.
+// tool bridge admits a loopback-held session's call under a loopback name or an
+// [EngineHostName]; a runtime name it refused would leave every held run in
+// that runtime's containers without its tools. And no other name is one, not
+// even one merely containing theirs.
 func TestEveryRuntimesNameForTheEngineHostIsAdmitted(t *testing.T) {
 	t.Parallel()
 	for _, runtime := range []string{"docker", "podman"} {

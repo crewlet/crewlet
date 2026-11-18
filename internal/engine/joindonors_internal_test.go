@@ -15,14 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A JOIN NAMES EVERY NODE THAT CAN DONATE, AND ONLY THOSE.
-//
-// The collection ends on the last donor a join names, so a node that can offer
-// and is not named is a node whose offer is dropped whenever it lands second.
-// Named from presence alone, a DRAINING node — which gives its presence up
-// first and serves its donor until its state log stops — was one of those. A
-// node named that cannot answer costs the whole window instead, which is what
-// this node's own name did at boot, where its donor has not started.
+// A JOIN NAMES EVERY NODE THAT CAN DONATE, AND ONLY THOSE. The collection
+// ends on the last donor named, so an unnamed node that can offer (a DRAINING
+// one, which gives up its presence first but serves its donor until its state
+// log stops) has its offer dropped whenever it lands second; a named node that
+// cannot answer (this node at boot, its donor not started) costs the window.
 func TestAJoinNamesEveryNodeThatCanDonate(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
@@ -96,15 +93,11 @@ func TestAJoinNamesEveryNodeThatCanDonate(t *testing.T) {
 	}
 }
 
-// A JOIN COLLECTS A DRAINING NODE'S OFFER.
-//
-// The fleet a rolling upgrade makes: the joining node is the one live data
-// node and its own donor declines at once, while the node being drained has
-// given up its presence, still heartbeats a row naming its artefact, and
-// answers a moment after the decline — the order a node busy finishing its
-// turns, or one a zone away, answers in. Named from presence alone the
-// collection ended on the decline and dropped the only offer there was; named
-// from who can donate, it waits for that offer and takes it.
+// A JOIN COLLECTS A DRAINING NODE'S OFFER, in a rolling upgrade's fleet: the
+// joiner is the one live data node and its own donor declines at once, while
+// the draining node, with no presence but a fresh row naming its artefact,
+// answers a moment after the decline. Named from presence alone the
+// collection ends on the decline and drops the only offer.
 func TestAJoinCollectsADrainingNodesOffer(t *testing.T) {
 	t.Parallel()
 	broker := joinBroker(t)

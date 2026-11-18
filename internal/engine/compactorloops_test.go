@@ -36,10 +36,8 @@ func (l *listings) listed(k gitlet.ReadKind) bool {
 	return l.kinds[k] > 0
 }
 
-// compactorLoops is how many goroutines of the process are inside a
-// compactor's loop — the one frame all three of its loops run in, so the count
-// is of the loops running, whatever else an engine's boot and stop start and
-// end around them.
+// compactorLoops counts the process's goroutines inside a compactor's loop,
+// the one frame all three of its loops run in.
 func compactorLoops() int {
 	buf := make([]byte, 1<<20)
 	for {
@@ -51,23 +49,18 @@ func compactorLoops() int {
 	}
 }
 
-// THE ENGINE STARTS AND STOPS EVERY ONE OF A GITLET NODE'S MAINTENANCE LOOPS: a
-// Gitlet node's compactor runs its COMPACTION loop, its PUBLICATION loop and its
-// EXPUNGE loop, each on a goroutine of its own; none lists anything while the
-// node is built and not started — no listing of the Gitlet nodes carries a node
-// whose host has not beaten, so it maintains nothing — and each lists at once
-// through the router's code seam, `compaction_due`, `publication_due` and
-// `expunge_due`, once the started node is listed; and the engine's stop ends
-// all three, so no goroutine of any outlives the node.
+// THE ENGINE STARTS AND STOPS EVERY ONE OF A GITLET NODE'S MAINTENANCE LOOPS:
+// the compactor's COMPACTION, PUBLICATION and EXPUNGE loops each run on their
+// own goroutine, list nothing while the node is built and not yet listed among
+// the Gitlet nodes, each list their `*_due` listing once it is started, and all
+// end with the engine's stop.
 //
-// NOT PARALLEL, and read off the goroutines' own stacks rather than a settled
-// count: a paused parallel test has started no engine, so the loops counted
-// are this node's alone, and the loop's frame is the one all three share.
+// NOT PARALLEL: a paused parallel test has started no engine, so the loops
+// counted off the stacks are this node's alone.
 //
-// Mutations: start the publication loop on a lifetime of its own rather than
-// the compactor's, and a loop outlives the stop; start the compaction loop
-// alone, and the running node lists no publication and no expunge; pass at
-// once without waiting to be listed, and the node lists before it is started.
+// Mutations: start the publication loop on its own lifetime (it outlives the
+// stop); start only the compaction loop (no publication or expunge listed);
+// skip waiting to be listed (it lists before it is started).
 func TestTheEngineStartsAndStopsEveryMaintenanceLoop(t *testing.T) {
 	b := gitletNodeBootstrap(t, nil)
 	engine.RequireNodeGit(t, b, parsedCompany(t, gitCompany))
@@ -91,8 +84,7 @@ func TestTheEngineStartsAndStopsEveryMaintenanceLoop(t *testing.T) {
 		}
 	})
 
-	// BUILT, NOT STARTED: all three loops run, and for two of their
-	// rechecks none lists.
+	// BUILT, NOT STARTED: all three run, and none lists for two rechecks.
 	waitFor(t, "the compactor's three loops to run", func() bool { return compactorLoops()-before == 3 })
 	time.Sleep(2 * gitletcompact.ListedRecheck)
 	for _, kind := range []gitlet.ReadKind{gitlet.ReadCompactionDue, gitlet.ReadPublicationDue, gitlet.ReadExpungeDue} {

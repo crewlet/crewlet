@@ -23,10 +23,9 @@ import (
 )
 
 // WHETHER A QUIET CHANNEL IS STILL OWED ITS ANSWER: the idle sweep spares a
-// channel whose seat still holds the ask somewhere it will take it up from —
-// on a live run's record, or in its inbox held by a run, a person's pause or a
-// spent budget window — and closes one nothing holds, as it closed every idle
-// channel before.
+// channel whose seat still holds the ask somewhere it will take it up from (a
+// live run's record, or its inbox held by a run, a person's pause or a spent
+// budget window) and closes one nothing holds.
 
 // fakeSeatRuns is the fleet's executor records as [colleagueOwed] reads them.
 type fakeSeatRuns struct {
@@ -152,17 +151,13 @@ func TestAQuietChannelItCannotJudgeIsAnError(t *testing.T) {
 	}
 }
 
-// AN ASK BEHIND A PARK IS OWED ON WHICHEVER NODE THE SWEEP RUNS. The idle sweep
-// runs once across the fleet, under the maintenance duty, seldom on the node
-// holding the seat it judges. The Lead's holder parked its inbox below the
-// floor its first launch needs to continue its conversation's session, in a
-// window with room for the static floor, which a recount of the shared counters
-// finds: a duty node judging by its own parks read the ask behind that park as
-// not owed, and closed its channel under the answer still coming. It asks the
-// holder instead, and the ask is owed; a holder that does not say is no answer,
-// and the channel is spared for the tick. And a seat whose models are all
-// limited, which no counter records, holds its asks as surely: its provider
-// park is a park too.
+// AN ASK BEHIND A PARK IS OWED ON WHICHEVER NODE THE SWEEP RUNS, which is the
+// maintenance duty's, seldom the seat's holder. The Lead's holder parked its
+// inbox below the floor its first launch needs to continue its session, in a
+// window with room for the static floor, so no recount of the shared counters
+// finds the park and the duty node's own parks read the ask not owed. It is
+// asked of the holder; a holder that does not say spares the channel for the
+// tick. A seat whose models are all limited is held by its provider park too.
 //
 // Mutation: judge a seat by the judging node's own parks, read a silent holder
 // as a seat in no park, or count only the budget's parks, and a case goes red.

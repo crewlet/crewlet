@@ -30,18 +30,17 @@ import (
 
 // ---- the operator's listing and discard ------------------------------- //
 
-// subjectBox is a dead-letter store keyed by subject, as the broker's is: ONE
-// sequence across every subject, a listing a case can break per subject, marks
-// that count the feeds' subjects, and a drop that refuses a sequence held on
-// another subject and answers one already gone as done — the queue contract's
-// answers.
+// subjectBox is a dead-letter store keyed by subject with the queue contract's
+// answers: ONE sequence across every subject, a per-subject breakable listing,
+// and a drop that refuses a sequence held on another subject and answers one
+// already gone as done.
 type subjectBox struct {
 	mu    sync.Mutex
 	seq   uint64
 	held  map[string][]queue.Kept
 	fails map[string]error
-	// frames is how many frames anything read through the box: no
-	// operator's listing or discard reads one.
+	// frames counts frames read through the box: no listing or discard
+	// reads one.
 	frames int
 }
 
@@ -107,8 +106,8 @@ func (b *subjectBox) DropDeadLetter(_ context.Context, subject string, seq uint6
 	return nil
 }
 
-// keep holds an entry kept under header on subject as the broker would at
-// kept, letting it go at expires, and answers its sequence.
+// keep holds an entry under header on subject, kept at kept and let go at
+// expires, and answers its sequence.
 func (b *subjectBox) keep(subject string, header []byte, kept, expires time.Time) uint64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -132,8 +131,8 @@ func (b *subjectBox) holds(subject string, seq uint64) bool {
 	return slices.ContainsFunc(b.held[subject], func(k queue.Kept) bool { return k.Seq == seq })
 }
 
-// The feeds this build declares, from each domain's own constants: what the
-// listing must name, read independently of the register it is derived from.
+// The feeds this build declares, from each domain's own constants, independent
+// of the register the listing derives them from.
 var (
 	workFeed = changefeed.Source{Name: worklet.Source, Group: worklet.FeedGroup}
 	pageFeed = changefeed.Source{Name: doclet.Source, Group: doclet.FeedGroup}
@@ -190,15 +189,10 @@ func operatorOf(t *testing.T, store deadLetterStore, claims expiryClaims,
 }
 
 // THE LISTING NAMES EVERY FEED THE REGISTER DECLARES, EVERY ENTRY, AND EVERY
-// FEED IT COULD NOT READ — ON AN ENGINE RUNNING NO LOG.
-//
-// Which feeds exist is the domains' declaration, so an engine with no core and
-// no log running lists all four, in the register's order. An entry this build
-// reads is listed by every field its feed kept of the record; one a newer build
-// kept by its id, its instants and why this build cannot read it; a feed
-// holding nothing as an empty list; and a feed whose listing failed by its
-// error, never left out and never read as empty. A subscription's poison under
-// another `dlq.` subject is no feed's, and is not listed.
+// FEED IT COULD NOT READ — ON AN ENGINE RUNNING NO LOG: a readable entry by
+// every field, an undecodable one by its id, instants and why, an empty feed
+// as an empty list, a failed one by its error. A subscription's poison under
+// another `dlq.` subject is not listed.
 //
 // Mutation: list only the feeds a running log declares, leave a failed feed
 // out, or drop an entry this build cannot decode, and a case goes red.
@@ -270,25 +264,19 @@ func TestTheListingNamesEveryDeclaredFeedEveryEntryAndEveryFeedItCouldNotRead(t 
 			t.Errorf("the %s feed, holding nothing, reads %+v: want an empty list", f.Source, f)
 		}
 	}
-	// FROM THE HEADERS ALONE: an operator decides by what the feed recorded
-	// of the record, and its frame may be as large as its log admits.
+	// FROM THE HEADERS ALONE: a frame may be as large as its log admits.
 	if n := box.framesRead(); n != 0 {
 		t.Errorf("the listing read %d frames, want none", n)
 	}
 }
 
 // A DISCARD DROPS THE ENTRY IT NAMES AND NOTHING ELSE, ANSWERS IT, AND LOGS AND
-// COUNTS IT AS WHO PRESSED IT — over the queue's own memory twin.
+// COUNTS IT AS WHO PRESSED IT, over the queue's memory twin. A subscription's
+// poison id or an unheld id removes nothing; a second discard finds nothing
+// and counts and logs nothing.
 //
-// An id on a subscription's dead-letter subject is no feed's, and an id nothing
-// holds is nobody's: both answer that no feed holds it, and remove nothing. The
-// work feed's entry is dropped, answered whole, counted once on its source and
-// logged naming the person and the credential; the chat feed's entry beside
-// it, and the subscription's poison, stay. A second discard of the same entry
-// finds nothing, and counts and logs nothing.
-//
-// NOT PARALLEL: it swaps the process-wide logger, which this package otherwise
-// leaves at its boot default, and a parallel case's lines would be counted.
+// NOT PARALLEL: it swaps the process-wide logger, and a parallel case's lines
+// would be counted.
 //
 // Mutation: search every dead-letter subject rather than the feeds', count or
 // log a discard that found nothing, or log no presser, and a case goes red.
@@ -387,13 +375,10 @@ func TestADiscardDropsTheEntryItNamesAnswersItAndLogsAndCountsIt(t *testing.T) {
 	}
 }
 
-// A DISCARD THAT COULD NOT LIST EVERY FEED IS NEVER A "NO SUCH ENTRY".
-//
-// The entry may be the unread feed's, so an id no listed feed holds answers
-// that the feed could not be listed — a condition waiting may clear, where the
-// broker did not answer — and removes nothing. An id a listed feed does hold is
-// discarded all the same: an entry's id is unique across every subject, so the
-// feed that did not answer cannot hold it too.
+// A DISCARD THAT COULD NOT LIST EVERY FEED IS NEVER A "NO SUCH ENTRY": an id
+// no listed feed holds answers that a feed could not be listed (which waiting
+// may clear) and removes nothing, while an id a listed feed holds is discarded, since ids are
+// unique across subjects.
 //
 // Mutation: answer the unread case as no such entry, or refuse every discard
 // while any feed is unread, and a case goes red.
@@ -431,14 +416,9 @@ func TestADiscardThatCouldNotListEveryFeedIsNeverANoSuchEntry(t *testing.T) {
 }
 
 // A DISCARD IS ACCOUNTED FOR, SO NO NODE COUNTS IT AS A WAKE THE RETENTION
-// LOST.
-//
-// A discarded entry vanishes as an expired one does, so a node's alarm
-// reading that saw it within a beat of its expiry, and then no more, would
-// count it as expired. The discard drops it through the ledger, which takes
-// the claim the expiry count takes, so neither the node that discarded it nor
-// a peer that only saw it vanish counts it expired, and it is counted once, as
-// discarded, while an entry the retention took beside it is still counted.
+// LOST: dropped through the ledger's expiry claim, neither this node nor a
+// peer that saw it vanish counts it expired; it is counted once, as discarded,
+// while an entry the retention took beside it is still counted expired.
 //
 // Mutation: drop through the queue rather than the ledger, and the peer counts
 // the discarded entry as expired.
@@ -498,14 +478,8 @@ func TestADiscardIsAccountedSoNoNodeCountsItAsAWakeTheRetentionLost(t *testing.T
 }
 
 // A DISCARD SOMEBODY ELSE ACCOUNTED FOR FIRST SAYS IT DISCARDED NOTHING, AND
-// COUNTS NOTHING.
-//
-// Between a discard's listing and its drop a peer's replay can drop the same
-// entry — its wake published — or the retention let it go and an alarm
-// reading count it; the queue answers the discard's drop of an entry already
-// gone as done. The claim on the entry's going is what tells: here it is
-// already held, as that replay would hold it, so the discard answers that no
-// feed holds the entry and counts no loss — a published wake is none.
+// COUNTS NOTHING: the queue answers a drop of a gone entry as done, so the
+// claim on its going, here already held as a peer's replay would, decides.
 //
 // Mutation: count and answer a discard whose claim somebody else holds, and
 // the replayed wake reads as one an operator gave up.

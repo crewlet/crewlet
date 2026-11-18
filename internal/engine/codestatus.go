@@ -16,45 +16,27 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// GITLET'S STATUS, ANSWERED FOR THE FLEET: a node serving Gitlet
-// answers every peer's question about the fleet's Gitlet nodes on
-// topics.CodeStatus with what its host says of itself (host.Server.Status) —
-// its cache against its budget, the repositories it holds a copy of, and the
-// ones it served most this hour and today, with their copies in service.
+// GITLET'S STATUS, ANSWERED FOR THE FLEET: a node serving Gitlet answers
+// topics.CodeStatus with what its host says of itself (host.Server.Status),
+// registered with the host and withdrawn before it stops
+// ([Engine.buildGitletHost], [native.stopGitletHost]): a node with no host
+// answers nothing, which an asker reads as serving no git, the truth. UNSIGNED,
+// unlike the estate service: a node answers about itself and carries nothing
+// out (internal/signedask's rule), so a forged question moves nothing.
 //
-// REGISTERED WITH THE HOST AND WITHDRAWN BEFORE IT STOPS ([Engine.buildGitletHost],
-// [native.stopGitletHost]), on the broker's ephemeral verbs: a node whose company
-// hosts no code, or that has no gitlet role, builds no host and answers nothing,
-// which an asker reads as a node serving no git — the truth — and a node
-// stopping its host stops answering for it before the cache it reads goes.
-// UNSIGNED, unlike the estate service and the steer desk: a node answers it
-// about itself and carries nothing out for the asker (internal/signedask's own
-// rule), so a forged question gets an answer nobody needed and moves nothing.
-//
-// AND ASKED BY ANY NODE ([Engine.CodeStatus]), whatever its roles: the
-// code_status tool a granted seat or an administrator's assistant calls reads
-// the Gitlet nodes off the presence leases ([Engine.GitletNodes]), asks the page of
-// them it shows, and merges what came back, with the coverage the fleet's
-// every fanned answer carries.
-//
-// A QUESTION NAMES THE NODES THAT ANSWER IT, as a scatter divides its work by
-// what it names (queue.EventQueue.Serve): every Gitlet node receives every
-// question, and one it does not name answers nothing, so a page of a few Gitlet
-// nodes is answered by those few however large the fleet — not by all of
-// them, each with a hot list the page throws away.
+// Any node asks ([Engine.CodeStatus]) the page of Gitlet nodes it shows, off
+// the presence leases ([Engine.GitletNodes]). A question names the nodes that
+// answer it (queue.EventQueue.Serve): one it does not name answers nothing, so
+// a page costs those few nodes however large the fleet.
 
 // codeStatusProtocol is the version of a code status question and its answer.
-// An answerer refuses a question at a version it does not speak — answering
-// nothing, which its asker reads as a node that did not answer — and an asker
-// drops an answer at a version it does not, rather than guess at its fields.
+// An answerer answers nothing at a version it does not speak (its asker reads a
+// node that did not answer), and an asker drops an answer at one it does not.
 //
-// STILL 1 WITH Nodes AND WithoutHot, which are additive, each zero value the
-// question every build before them asked — every node, with its hot list: an
-// older answerer ignores both and answers, whatever the question names and
-// with its hot list, and the asker drops a reply from a node it did not ask
-// ([codeStatusReport]), so a rolling upgrade reads each page correctly, at the
-// older answer's cost; a newer answerer asked by an older asker answers it
-// whole, as that asker expects.
+// STILL 1 WITH Nodes AND WithoutHot: both are additive, each zero value the
+// older question (every node, with its hot list). An older answerer ignores
+// both, and the asker drops a reply from a node it did not ask
+// ([codeStatusReport]), so a rolling upgrade reads each page correctly.
 const codeStatusProtocol = 1
 
 // codeStatusQuestion is what an asker scatters on topics.CodeStatus.
@@ -68,8 +50,7 @@ type codeStatusQuestion struct {
 	// one. A node it does not name answers nothing ([answerCodeStatus]).
 	Nodes []string `json:"nodes,omitempty"`
 	// WithoutHot leaves the node's hot list out of its answer
-	// (host.StatusAsk.Hot) — false, the zero value, asks for it, as every
-	// question did before the field.
+	// (host.StatusAsk.Hot); false, the zero value, asks for it.
 	WithoutHot bool `json:"without_hot,omitempty"`
 }
 
@@ -93,8 +74,6 @@ var errCodeStatusNotAsked = errors.New("engine: a code status question that does
 // is handed a withdrawal that does nothing.
 func (e *Engine) serveCodeStatus(ctx context.Context, node string, h *host.Server) (queue.Unsubscribe, error) {
 	if e.backends == nil || e.backends.Queue == nil {
-		// A NODE WITH NO BROKER HAS NO PEER to be asked by: the fleet it would
-		// answer is itself, which reads its own host.
 		return func(context.Context) error { return nil }, nil
 	}
 	return e.backends.Queue.Serve(ctx, topics.CodeStatus, queue.ConcurrentAnswers,
@@ -123,19 +102,15 @@ func answerCodeStatus(node string, status func(host.StatusAsk) host.CodeStatus) 
 }
 
 // codeStatusBudget is how long a status question waits for the Gitlet nodes:
-// eventfan.FleetReadBudget, the bound every fleet read a person or a seat
-// waits on is held to. Borrowed rather than chosen (ADR-0015's rule for an
-// alarm, kept for a wait): a node's answer is running totals and windows in
-// its memory (host.Server.Status reads no row and no disk), so a Gitlet node that
-// has not answered inside the bound a store read is given is one worth naming
-// in the coverage rather than waiting for.
+// eventfan.FleetReadBudget, borrowed rather than chosen (ADR-0015). An answer
+// is in-memory totals (host.Server.Status reads no row and no disk), so a node
+// silent past a store read's bound is named in the coverage, not waited for.
 const codeStatusBudget = eventfan.FleetReadBudget
 
-// GitletNodes is every live Gitlet node by id: the roster code_status pages by
-// (builtin.StatusAsker), read off the presence leases as every keyed git walk
-// reads them ([gitletNodesOf]) — a read of the coordination store this node
-// holds, no Gitlet node asked. A node with no broker is the whole of its fleet:
-// itself where it serves Gitlet, and no Gitlet node where it does not.
+// GitletNodes is every live Gitlet node by id, the roster code_status pages by
+// (builtin.StatusAsker), read off the presence leases ([gitletNodesOf]) with no
+// Gitlet node asked. A node with no broker is its whole fleet: itself where it
+// serves Gitlet, none where it does not.
 func (e *Engine) GitletNodes(ctx context.Context) ([]string, error) {
 	if e.backends == nil || e.backends.Queue == nil {
 		if h, ok := e.GitletHost(); ok {
@@ -146,21 +121,14 @@ func (e *Engine) GitletNodes(ctx context.Context) ([]string, error) {
 	return e.gitRoster(ctx)
 }
 
-// CodeStatus asks the Gitlet nodes ask names what each one's host says of itself
-// — beside it the repository whose id is ask.Repo where that is not "", and its
-// hot list where ask.Hot — and answers what came back with which of them
-// answered: the code_status tool's report (builtin.StatusAsker).
-//
-// THE QUESTION NAMES ask.Nodes, so no other Gitlet node answers it, unless
-// ask.Every says they are every Gitlet node, when it names none and stays the
-// same few bytes however large the fleet. Either way the ask ends once every
-// node of ask.Nodes has answered — never at a count of replies
-// ([askCodeStatus]) — or at the budget, a node of ask.Nodes that did not
-// answer by then named in the coverage, never dropped from it; and only those
-// nodes' replies are read, whoever else answered ([codeStatusReport]). An ask
-// of no node asks nothing.
-//
-// A NODE WITH NO BROKER asks its own host: its fleet is itself.
+// CodeStatus asks the Gitlet nodes ask.Nodes names for their host's status,
+// with repository ask.Repo beside it where not "" and the hot list where
+// ask.Hot: the code_status tool's report (builtin.StatusAsker). The question
+// names ask.Nodes unless ask.Every, so it stays a few bytes for the whole
+// fleet. The ask ends once every node asked has answered ([askCodeStatus]) or
+// at the budget, a silent node named in the coverage; only the asked nodes'
+// replies are read ([codeStatusReport]). An ask of no node asks nothing, and a
+// node with no broker asks its own host.
 func (e *Engine) CodeStatus(ctx context.Context, ask builtin.CodeStatusAsk) (builtin.CodeStatusReport, error) {
 	ctx, cancel := context.WithTimeout(ctx, codeStatusBudget)
 	defer cancel()
@@ -187,17 +155,14 @@ func (e *Engine) CodeStatus(ctx context.Context, ask builtin.CodeStatusAsk) (bui
 }
 
 // askCodeStatus scatters question on topics.CodeStatus through askEach (the
-// queue's AskEach) and collects the replies until every Gitlet node of asked has
+// queue's AskEach) and collects the replies until every node of asked has
 // answered, or ctx is done.
 //
-// THE ASK ENDS ON WHO HAS ANSWERED, NOT ON HOW MANY. A node asked does not
-// always answer alone — an older build answers whatever the question names,
-// and a question naming every node is answered by one the roster does not
-// hold too (a draining Gitlet node gives its presence back first and its host
-// serves until it stops) — and a scatter's replies carry no sender, so an ask
-// told to stop at as many replies as it asked nodes ended on such a node's
-// answer before an asked one's, which the coverage then called silent and the
-// report went without. Each reply names its node ([codeStatusAnswer]'s status).
+// IT ENDS ON WHO HAS ANSWERED, NOT HOW MANY: a node not asked may answer too
+// (an older build answers whatever the question names, and a draining node off
+// the roster serves until it stops), so a count of replies could end before an
+// asked node's answer. A reply names its node only in [codeStatusAnswer]'s
+// status, since a scatter's replies carry no sender.
 func askCodeStatus(ctx context.Context,
 	askEach func(ctx context.Context, subject string, request []byte, each func([]byte) bool) error,
 	question []byte, asked []string,
@@ -218,11 +183,9 @@ func askCodeStatus(ctx context.Context,
 	return replies, err
 }
 
-// codeStatusReport is what replies answer of the Gitlet nodes asked: every reply
-// this build reads from one of them, one status a node, and the coverage —
-// each node asked answered or named — complete only where every one of them
-// answered. A reply from a node not asked is dropped: the report is about the
-// nodes asked, and a page shows those alone.
+// codeStatusReport is what replies answer of the nodes asked: one status a
+// node, and the coverage, complete only where every asked node answered. A
+// reply from a node not asked is dropped, since a page shows the asked alone.
 func codeStatusReport(asked []string, replies [][]byte) builtin.CodeStatusReport {
 	nodes := make(map[string]eventfan.NodeCoverage, len(asked))
 	for _, id := range asked {
@@ -233,21 +196,15 @@ func codeStatusReport(asked []string, replies [][]byte) builtin.CodeStatusReport
 	for _, raw := range replies {
 		var a codeStatusAnswer
 		if err := json.Unmarshal(raw, &a); err != nil || a.Status.Node == "" {
-			// A REPLY THIS BUILD CANNOT READ names nobody it could put in
-			// the coverage; its node, if it was asked, stays named as not
-			// answering.
+			// Unreadable: its node, if asked, stays named as not answering.
 			continue
 		}
 		prior, wasAsked := nodes[a.Status.Node]
 		switch {
 		case !wasAsked:
-			// A NODE NOT ASKED — an older build, which answers whatever the
-			// question names, or one the roster does not hold — is no part
-			// of this report.
 			continue
 		case prior.Answered:
-			// ONE STATUS A NODE, whatever its broker delivered twice — and a
-			// later reply never unsays one this build already read.
+			// ONE STATUS A NODE: a duplicate never unsays one already read.
 			continue
 		case a.Version != codeStatusProtocol:
 			nodes[a.Status.Node] = eventfan.NodeCoverage{ID: a.Status.Node, Error: fmt.Sprintf(
@@ -271,9 +228,8 @@ func codeStatusReport(asked []string, replies [][]byte) builtin.CodeStatusReport
 }
 
 // ownCodeStatus is the report of a node with no broker, whose fleet is itself:
-// its own host's status where it serves one and ask names it, each other node
-// ask names unanswered — there is no peer to ask — read off the same reply
-// as a peer's answer is ([codeStatusReport]).
+// its own host's status where it serves one, every other node ask names
+// unanswered, read off the same reply a peer's answer is ([codeStatusReport]).
 func (e *Engine) ownCodeStatus(ask builtin.CodeStatusAsk) (builtin.CodeStatusReport, error) {
 	var replies [][]byte
 	if h, ok := e.GitletHost(); ok {

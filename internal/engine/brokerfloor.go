@@ -9,23 +9,15 @@ import (
 // BrokerFloor is the least a broker must be able to reserve for a FRESH node of
 // one Tier A document to create everything it reserves: every state log at
 // the smallest ceiling sizing gives it, and the nats object bucket beside
-// them.
+// them. It is the least that BOOTS, not the least that runs a company for
+// long: mailboxes, coordination buckets and a joining node's snapshot reserve
+// nothing.
 //
-// # Why it is computed and never written down
-//
-// The figure is a sum over [register] and over [derivedObjectsReservation],
-// and both move: the artifact logs joined the register and raised it by two
-// gibibytes, and nothing said so until a host that used to boot refused to. So
-// the refusal a boot gives ([stateLog.storageRefused]), the advisory `crewlet
-// validate` gives ([BrokerFloorFor]'s caller in cmd/crewlet) and the figures
-// the deployment guide quotes are all read from this one computation, and the
-// guide's are held to it by a test.
-//
-// # What it does not count
-//
-// Mailboxes, coordination buckets and a joining node's snapshot reserve
-// nothing, so a broker grants them from whatever is left. The floor is the
-// least that BOOTS, not the least that runs a company for long.
+// It is computed, never written down, because [register] and
+// [derivedObjectsReservation] move: a boot's refusal ([stateLog.storageRefused]),
+// `crewlet validate`'s advisory ([BrokerFloorFor]'s caller in cmd/crewlet) and
+// the deployment guide's figures all read this one computation, the guide's
+// held to it by a test.
 type BrokerFloor struct {
 	// Logs is what the state logs reserve between them at their floors: an
 	// explicit ceiling as written, and an unset one at the smaller of what
@@ -131,19 +123,14 @@ func leastLimitHolding(logs, declared int64) int64 {
 }
 
 // BootstrapWarnings is every advisory about a Tier A document: its own
-// ([config.Bootstrap.Warnings]) and the ones only the engine can judge.
+// ([config.Bootstrap.Warnings]) and the ones only the engine can judge. It is
+// the one list `crewlet validate` and a node's start both read.
 //
-// ONE LIST FOR BOTH READERS, `crewlet validate` and the advisories a node
-// logs at every start, so an advisory said in one place is said in the other.
-//
-// # A broker limit set below the floor
-//
-// Judged only where it is exact: a node holding the estate (the one that
-// creates the state logs) on its own embedded broker, whose limit an
-// operator wrote down. A derived limit is three quarters of a volume this
-// command may not be running beside, and an external broker's is an account
-// it cannot read, so neither is guessed at; the boot's own refusal quotes the
-// same floor ([stateLog.storageRefused]) where it is the disk that falls short.
+// A broker limit below the floor is judged only where it is exact: an
+// estate-holding node on its own embedded broker, its limit written down. A
+// derived limit is three quarters of a volume this command may not run beside,
+// and an external broker's an account it cannot read; where the disk falls
+// short, the boot's refusal ([stateLog.storageRefused]) quotes the same floor.
 func BootstrapWarnings(boot *config.Bootstrap) []config.Warning {
 	out := boot.Warnings()
 	limit := boot.Stream.StoreMaxBytes

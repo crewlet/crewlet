@@ -14,15 +14,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// boxRuns is Gitlet's [host.Runs] — the executors' rows as a box's
-// admission reads them — over the sandbox's pending store on the FLEET'S
-// coordination store.
-//
-// BUILT ON EVERY NODE THAT SERVES GIT, whether or not it runs a sandbox
-// runtime of its own: a box's run may have been launched by any node, and its
-// row is readable from every one (sandbox.NewCoordStore over the fleet's
-// backend, the store the sandbox runtime builds over), so the Gitlet node a box
-// dials judges it by the same row the launching node wrote.
+// boxRuns is Gitlet's [host.Runs]: the executors' rows as a box's admission
+// reads them, from the sandbox's pending store on the FLEET'S coordination
+// store. Built on every node that serves git, sandbox runtime or not: any node
+// may have launched a box's run, so the Gitlet node a box dials judges it by
+// the same row the launching node wrote.
 type boxRuns struct {
 	pending sandbox.PendingStore
 	// stopped is the engine's one reading of a seat's stop (stoppedBy).
@@ -32,28 +28,25 @@ type boxRuns struct {
 
 var _ host.Runs = boxRuns{}
 
-// codeBoxRuns is Gitlet's view of this engine's executors: their rows
-// on the fleet's coordination store, and a seat's stop as this node reads it
-// (stoppedBy) — off the same pause record the fence every bridge session a
-// launch opens carries reads (Engine.seatFence), so a box's pushes and its
-// run's bridged calls are refused, and let through again, together.
+// codeBoxRuns is Gitlet's view of this engine's executors: their rows on the
+// fleet's coordination store, and a seat's stop (stoppedBy) off the same pause
+// record a launch's bridge fence reads (Engine.seatFence), so a box's pushes
+// and its run's bridged calls are refused, and let through again, together.
 func (e *Engine) codeBoxRuns(log *slog.Logger) boxRuns {
 	return boxRuns{pending: sandbox.NewCoordStore(e.backends.Fleet), stopped: e.stoppedBy, log: log}
 }
 
 // Run is the row of the run whose turn is turnID, as the host judges a box by
-// it: an error is the store unreachable, never "no run".
+// it: an error is the store unreachable, never "no run". Every request a box
+// sends reads it, a blobless clone's lazy blob fetch included, so it moves the
+// row alone (a few kilobytes), never the job's bridged-call log kept beside it
+// (sandbox.BridgeLog).
 //
-// ONE READ OF THE RUN'S FACTS, made by every request a box sends — a lazy
-// fetch of a blobless clone's blob included — so it moves the row and only the
-// row: its facts, a few kilobytes whatever the turn's size, never the job's
-// bridged-call log, which is kept beside it (sandbox.BridgeLog).
-//
-// LIVE is a row whose job is in its box: LAUNCHING — a job's first calls,
-// its checkouts' clones among them, can come before the launch marks it
-// suspended — or RUNNING, with no ending decided. A row parked on a question (awaiting, reseed, answered) or
-// resumed has no job in its box: a parked job's box is paused, and a resumed
-// one's job has ended while its collection reads what it pushed.
+// LIVE is a row whose job is in its box: LAUNCHING (a job's first calls, its
+// clones among them, can precede the launch marking it suspended) or RUNNING,
+// with no ending decided. A row parked on a question (awaiting, reseed,
+// answered) or resumed has no job in its box: a parked box is paused, and a
+// resumed job has ended while its collection reads what it pushed.
 func (b boxRuns) Run(ctx context.Context, turnID string) (host.BoxRun, bool, error) {
 	run, found, err := b.pending.Get(ctx, turnID)
 	if err != nil || !found {
@@ -75,11 +68,9 @@ func (b boxRuns) Run(ctx context.Context, turnID string) (host.BoxRun, bool, err
 		out.Holds[key] = true
 	}
 	if run.WorkItem != nil {
-		// THE ITEM'S IDENTITY AND PROJECT BESIDE ITS LABEL: a change the
-		// box's push opens from its options carries its item by its id and
-		// in its project (gitlet.RunProvenance.WorkID, .WorkProject), as the
-		// turn's own code_open_change and the engine's open at the run's
-		// collection do, while the push's row keeps the tracker and the key.
+		// The item's id and project beside its label: a change the box's push
+		// opens carries its item by them (gitlet.RunProvenance.WorkID,
+		// .WorkProject), as code_open_change and the collection's open do.
 		out.Provenance.WorkBackend, out.Provenance.WorkKey = string(run.WorkItem.Backend), run.WorkItem.Key
 		out.Provenance.WorkID, out.Provenance.WorkProject = run.WorkItem.ID, run.WorkItem.Project
 	}
@@ -96,9 +87,8 @@ func boxLive(run sandbox.PendingRun) bool {
 }
 
 // boxAccess is what a box may do with a repository its run was given: what
-// the launch recorded, and — for a value a newer build wrote that this one
-// does not know — READ, never more: a grant this build cannot read is held
-// to the narrow direction, as an unknown tier caps at nothing.
+// the launch recorded, or READ for a value a newer build wrote that this one
+// does not know — an unreadable grant is held to the narrow direction.
 func boxAccess(a sandbox.RepoAccess) gitlet.Access {
 	if a == sandbox.RepoWrite {
 		return gitlet.AccessWrite
@@ -106,12 +96,11 @@ func boxAccess(a sandbox.RepoAccess) gitlet.Access {
 	return gitlet.AccessRead
 }
 
-// floorOf is run's code floor as a position on the code log: ZERO for a row
-// that names none, and for one whose token this build cannot read or that
-// names another log — a zero floor reads LINEARIZABLE, the safe direction,
-// and the box's next ref answer raises the row to a readable one — logged
-// WARN code_box_floor_unreadable, since only a writer's bug or a newer
-// build's spelling puts one there.
+// floorOf is run's code floor as a position on the code log. No floor, an
+// unreadable token or another log's position all read ZERO, which reads
+// LINEARIZABLE, the safe direction (the box's next ref answer raises it); the
+// last two log WARN code_box_floor_unreadable, as only a writer's bug or a
+// newer build's spelling puts one there.
 func (b boxRuns) floorOf(run sandbox.PendingRun) statelog.Position {
 	if run.CodeFloor == "" {
 		return statelog.Position{}
@@ -128,10 +117,10 @@ func (b boxRuns) floorOf(run sandbox.PendingRun) statelog.Position {
 	return pos
 }
 
-// RaiseFloor raises the run's code floor to pos, and only while ref's launch
-// is the row's: a compare-and-set on the row (sandbox.PendingStore's
-// RaiseCodeFloor), writing only where pos is past the floor as it stands — a
-// floor this build cannot read is raised over, as Run reads it as none.
+// RaiseFloor raises the run's code floor to pos while ref's launch is the
+// row's, in a compare-and-set (sandbox.PendingStore's RaiseCodeFloor) that
+// writes only where pos is past the current floor; an unreadable floor is
+// raised over, as Run reads it as none.
 func (b boxRuns) RaiseFloor(ctx context.Context, ref host.BoxRunRef, pos statelog.Position) error {
 	if pos.Stream != topics.CodeLogStream {
 		return errForeignFloor
@@ -156,18 +145,14 @@ func (b boxRuns) Stopped(ctx context.Context, seat string) (string, error) {
 	return b.stopped(ctx, seat)
 }
 
-// Hold joins keys — the seat branches a box's push names — to the code holds
-// on ref's run's row, in one compare-and-set (sandbox.PendingStore's
-// AddCodeHolds), unioned with what the row holds as a launch's are: the same
-// set its turn's holds are written to, which Gitlet's retention reads
-// whole. Keyed by the run's TURN alone, since the holds are the turn's,
-// unioned across its launches. A row that is gone or whose ending is decided
-// holds nothing new and is NO ERROR — a run that has ended depends on
-// nothing, and the box's push is a late one — where a turn's hold on such a
-// row refuses its request (holdWriter): a turn's request is its own, while a
-// box's push outlives what its run will ever read again.
-// sandbox.ErrCodeHoldsFull is the row at its bound, nothing written; any other
-// error is the store unreachable.
+// Hold joins keys (the seat branches a box's push names) to the code holds on
+// ref's run's row in one compare-and-set (sandbox.PendingStore's AddCodeHolds):
+// the set its turn's holds are written to and Gitlet's retention reads, keyed
+// by the TURN alone, since the holds are the turn's across its launches. A row
+// gone or with its ending decided holds nothing new and is NO ERROR: a box's
+// push can outlive what its run will read again, unlike a turn's own request,
+// which holdWriter refuses there. sandbox.ErrCodeHoldsFull is the row at its
+// bound, nothing written; any other error is the store unreachable.
 func (b boxRuns) Hold(ctx context.Context, ref host.BoxRunRef, keys []string) error {
 	if _, err := b.pending.AddCodeHolds(ctx, ref.TurnID, keys); err != nil {
 		return fmt.Errorf("engine: hold %d seat branches on run %s: %w", len(keys), ref.TurnID, err)
@@ -179,25 +164,18 @@ func (b boxRuns) Hold(ctx context.Context, ref host.BoxRunRef, keys []string) er
 var errForeignFloor = errors.New("engine: an executor's code floor names a position on another log than " +
 	"the code log")
 
-// stoppedBy is Gitlet's reading of a seat's STOP — who paused the
-// seat and asked its running work to stop (coord.SeatPause's By, the person
-// a bound credential pauses as, ADR-0032) — read off this node's pause watch:
-// "" for a seat not paused, paused without stop_running, or a handle the
-// running company resolves to no agent seat (as pauseOfHandle answers it),
-// and errPausesUnread before the watch's first complete answer, UNKNOWN and
-// never "not stopped". Every node runs the watch from boot, so a Gitlet node
-// that serves no seat answers too.
+// stoppedBy is Gitlet's reading of a seat's STOP: who paused the seat and
+// asked its running work to stop (coord.SeatPause's By, ADR-0032), off this
+// node's pause watch, which every node runs from boot. "" is a seat not
+// paused, paused without stop_running, or a handle naming no agent seat
+// (pauseOfHandle); errPausesUnread before the watch's first complete answer
+// is UNKNOWN, never "not stopped", since a Gitlet node serves boxes from boot.
 //
-// Gitlet refuses a coding box's push on it (host.Runs.Stopped). A
-// box's git is not a bridged call, so the fence the run's bridge session asks
-// before and after every call (mcpbridge.Session.Fence, Engine.seatFence,
-// which reads the same pause through stopFor) never sees it: without this a
-// box went on pushing to the company's repositories as the seat after a
-// person stopped the seat "because it was doing damage". The same record and
-// the same StopRunning, so the two edges are stopped, and let through again,
-// together. Where the two differ is a node that has not read the pauses:
-// here that is unknown, because a Gitlet node serves boxes from boot, while no
-// turn runs there to ask the fence (the screening defers its delivery).
+// Gitlet refuses a box's push on it (host.Runs.Stopped), or a stopped seat's
+// box would push on: a box's git is not a bridged call, so the bridge fence
+// (mcpbridge.Session.Fence, Engine.seatFence, via stopFor) never sees it. One
+// record and one StopRunning stop both edges, and let them through, together;
+// only the fence never meets an unread watch (no turn runs before screening).
 func (e *Engine) stoppedBy(_ context.Context, handle string) (string, error) {
 	seat, err := e.seatID(handle)
 	if err != nil {

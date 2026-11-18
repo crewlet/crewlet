@@ -11,24 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A CALL NOBODY WAITED FOR IS TOLD TO THE COPY IN ITS BOX, end to end: through
-// the session's ledger as the bridge hands it a call whose harness had given up
-// on it (mcpbridge.Call.Abandoned), the coordination store's log of the round,
-// the conversion of that log into the runner's terms, and a runner relaunching
-// the round in the asking job's own box. A `delegate` the asking job's harness
-// gave up on — so its harness could end its own run, and the job park on its
-// question — lands while the job waits on its answer, before the answer's
-// resume reads the round's log: listed as the job's own call, numbered below
-// every read the relaunch makes, and marked. So the copy in the job's box is
-// told it, once, under the late calls' words: alone where its harness ended its
-// own run, which holds every other call of the round; and apart from the
-// round's other calls where it was cut off. Both arms' records carry the count
-// the job's collection writes of a copy far below its threshold, so the copy is
-// judged by its harness's end alone ([collectedFarBelow]).
+// A CALL NOBODY WAITED FOR IS TOLD TO THE COPY IN ITS BOX, end to end: a
+// `delegate` the job's harness gave up on (mcpbridge.Call.Abandoned) reaches the
+// session's ledger while the job is parked on its question, before the answer's
+// resume reads the round's log; it is logged as the job's own call, numbered
+// below every read the relaunch makes, and marked. The copy relaunched in its
+// box is told it once, under the late calls' words: alone where its harness
+// ended its own run (which holds every other call), apart from the round's
+// other calls where cut off. Both arms' records carry a collection far below
+// threshold ([collectedFarBelow]), so the harness's end alone decides.
 //
-// Mutation: drop the mark as the ledger appends the call, or as the resume
-// hands the runner the round's calls, and the copy whose harness ended its own
-// run is told nothing of a call it holds as timed out.
+// Mutation: drop the mark in the ledger or in the resume's hand-over, and a copy
+// whose harness ended its own run is told nothing of a call it holds as timed out.
 func TestACallNobodyWaitedForIsToldToTheCopyInItsBox(t *testing.T) {
 	t.Parallel()
 	const lateHeading = "## Calls the run that made them stopped waiting for, or whose outcome is unknown"

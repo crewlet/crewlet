@@ -28,13 +28,9 @@ func hourlyLog(records uint64, newestAgo time.Duration) (jetstream.LogStats, *pr
 }
 
 // THE DAY'S INTAKE IS THE DAY'S RECORDS AT THE LOG'S OWN RECORD SIZE, counted
-// out of the log itself.
-//
-// Every record younger than a day is still in the log — `min_age` is floored
-// at a day — and each carries the broker's stored instant, so the day is the
-// records at or after the cutoff. Counting one more (a record stored exactly
-// a day ago is inside the window) or one fewer is a rate that is off by an
-// hour's writing on every log.
+// out of the log itself: the records at or after the cutoff, the one stored
+// exactly a day ago included. One more or one fewer is a rate off by an hour's
+// writing on every log.
 func TestADaysIntakeIsTheRecordsOfTheDayAtTheLogsOwnRecordSize(t *testing.T) {
 	t.Parallel()
 	stats, p := hourlyLog(100, 0)
@@ -48,18 +44,16 @@ func TestADaysIntakeIsTheRecordsOfTheDayAtTheLogsOwnRecordSize(t *testing.T) {
 		t.Fatalf("measured %v, want %d — twenty-five hourly records of a "+
 			"kilobyte", deref(got), 25*1024)
 	}
-	// AND BY BISECTION, for the age floor's reason: a year-five log is a
-	// quarter of a million records, and this runs on every node every tick.
+	// AND BY BISECTION: a year-five log is a quarter of a million records,
+	// measured on every node every tick.
 	if len(p.asked) > 10 {
 		t.Errorf("the measurement probed %d records of a hundred", len(p.asked))
 	}
 }
 
-// A LOG THAT TOOK IN NOTHING MEASURES ZERO — a real value, not an absent one.
-//
-// Both shapes of it: a log whose newest record is older than the day, and an
-// established log the trim has emptied. Either would be a record written in
-// the last day still sitting in the log, so neither can be hiding one.
+// A LOG THAT TOOK IN NOTHING MEASURES ZERO — a real value, not an absent one —
+// whether its newest record is older than the day or the trim has emptied it:
+// a record written in the last day would still be in the log.
 func TestALogThatTookInNothingMeasuresZero(t *testing.T) {
 	t.Parallel()
 	stats, p := hourlyLog(100, 3*24*time.Hour)
@@ -83,20 +77,12 @@ func TestALogThatTookInNothingMeasuresZero(t *testing.T) {
 	}
 }
 
-// A LOG IN ITS FIRST TWO DAYS MEASURES NOTHING, which the alarm reads as "has
-// never measured" and is silent on — and the day it does measure never
-// contains the day it was created.
-//
-// Its first day is the one a company imports into, and a day extrapolated from
-// an import is a ceiling alarm for a log that settles an order of magnitude
-// lower. The guard used to ask only that the log be a day old, which is exactly
-// when the trailing day IS the first day: a log created a day and ten minutes
-// ago with ten thousand kilobyte records imported in its first two hours and a
-// hundred written since measured about nine mebibytes a day — ninety times the
-// intake it settles at, which is what a ceiling sized for that intake fires
-// log_ceiling_short on, on every node at once.
-// The control is the same company a day later, whose trailing day lies wholly
-// after the import and measures the steady intake it has.
+// A LOG IN ITS FIRST TWO DAYS MEASURES NOTHING, which the alarm is silent on,
+// and the day it does measure never contains the import day it was created on.
+// A log a day and ten minutes old, ten thousand kilobyte records imported in
+// its first two hours and a hundred written since, would otherwise measure about
+// ninety times its steady intake and fire log_ceiling_short on every node. The
+// control is the same company a day later, measuring its steady intake.
 func TestALogInItsFirstTwoDaysMeasuresNothing(t *testing.T) {
 	t.Parallel()
 	stats, p := importedLog(rateNow.Add(-(24*time.Hour + 10*time.Minute)))
@@ -147,13 +133,10 @@ func importedLog(created time.Time) (jetstream.LogStats, *probe) {
 	}, &probe{stored: stored}
 }
 
-// A GAUGE FOLLOWS A MEASUREMENT THAT BECAME UNKNOWN.
-//
-// A log re-anchored under a running fleet starts its first two days again, so
-// its intake is not measured and the report, the harness and the screen all show
-// it absent. The gauge used to keep the old stream's figure, which is one
-// evaluation giving two answers; it is withdrawn now. A log that merely could
-// not be read keeps its last measurement everywhere, the gauge included.
+// A GAUGE FOLLOWS A MEASUREMENT THAT BECAME UNKNOWN: a log re-anchored under a
+// running fleet starts its first two days again, so the report shows it
+// unmeasured and the gauge is withdrawn rather than giving a second answer. A
+// log that merely could not be read keeps its last measurement everywhere.
 func TestAGaugeFollowsAMeasurementThatBecameUnknown(t *testing.T) {
 	t.Parallel()
 	rec, err := metrics.New()
@@ -208,11 +191,8 @@ func TestTheCoverageGaugeFollowsAScanThatFailed(t *testing.T) {
 	}
 }
 
-// AN UNREADABLE LOG IS NOT AN IDLE ONE.
-//
-// A probe that failed says nothing about how many records the day holds, and
-// a zero taken from it would be a measured "nothing written" on a broker that
-// could not be asked.
+// AN UNREADABLE LOG IS NOT AN IDLE ONE: a zero taken from a failed probe would
+// be a measured "nothing written" on a broker that could not be asked.
 func TestAnUnreadableLogIsAnErrorNotAZero(t *testing.T) {
 	t.Parallel()
 	stats, _ := hourlyLog(100, 0)
@@ -242,13 +222,10 @@ func (f *fakeRateLog) At(_ context.Context, seq uint64) (string, []byte, time.Ti
 	return "", nil, stored, ok, err
 }
 
-// A COMPACTED LOG HAS NO RATE IN THIS SENSE, and is not asked for one.
-//
-// It keeps one message per subject, so its size follows the number of
-// subjects rather than the time written: a model change re-embedding the
-// corpus is a day of enormous intake that replaces what the log held rather
-// than adding to it. Holding its ceiling against min_age of that would page
-// an operator for a log that is not growing.
+// A COMPACTED LOG HAS NO RATE IN THIS SENSE, and is not asked for one: a
+// model change re-embedding the corpus replaces what it holds rather than
+// adding to it, so holding its ceiling to min_age of that would page for a log
+// that is not growing ([measureRate]).
 func TestACompactedLogIsNeverMeasured(t *testing.T) {
 	t.Parallel()
 	stats, p := hourlyLog(100, 0)
@@ -268,13 +245,9 @@ func TestACompactedLogIsNeverMeasured(t *testing.T) {
 }
 
 // A TICK THAT CANNOT READ A LOG KEEPS WHAT THE LAST ONE MEASURED, and publishes
-// what it did measure.
-//
-// Dropping the figure on a broker blip would clear a firing
-// `log_ceiling_short` and raise it again a quarter of an hour later — two log
-// lines and a gauge flap about a log whose rate did not change. And a node
-// that has not yet ticked holds nothing at all, which is the pointer the alarm
-// is silent on.
+// what it did measure: dropping the figure on a broker blip would clear a firing
+// `log_ceiling_short` and raise it again a tick later. A node that has not yet
+// ticked holds nothing, which the alarm is silent on.
 func TestATickThatCannotReadALogKeepsItsLastMeasurement(t *testing.T) {
 	t.Parallel()
 	rec, err := metrics.New()

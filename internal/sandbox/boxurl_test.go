@@ -7,34 +7,17 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A BOX URL IS AN ABSOLUTE HTTP URL WITH A HOST, or it is unset.
-//
-// Each caller appends its own path to the value and hands the result to a
-// client inside a box that the engine never hears from again: an exporter that
-// cannot use its endpoint drops the run's telemetry silently, and a harness
-// handed an unusable bridge fails every tool call. So a value that is set and
-// is not something a box can dial is refused, naming the variable and the part
-// that is wrong — and never repeating the value, whose user information is a
-// credential an operator pasted by mistake.
-//
-// The scheme is judged no further than http or https: plain http is accepted
-// to any host, because whether a URL's path leaves the box's own host is a fact
-// about the network this grammar cannot see.
-//
-// WHAT IT RETURNS IS A URL, which a box's client parses again: it is spelled
-// by net/url's own serializer, so a non-ASCII host keeps the escape a URI
-// needs, and every accepted value's answer parses back to itself. And what a
-// box's client cannot read is refused though net/url reads it: an IPv6 zone,
-// a host holding a character the WHATWG URL Standard forbids in a domain (an
-// unfilled `<host>` placeholder, an escaped '%', a ']'), a host whose escapes
-// decode to no UTF-8, a host that ends in a number and is no IPv4 address the
-// standard reads (a typo'd 10.0.0.300), and a port past 65535. Every host row
-// and every port row but zero has the verdict Node 22's and Bun's `new URL`
-// give it — the parsers of the two harnesses this build launches, which
-// agreed on every row, measured — and port zero, which both parse, is refused
-// because nothing listens on it. The IPv4 shorthand the standard does read
-// (127.1, 0x7f.1) boots, since the box dials the address its parser makes of
-// it.
+// A BOX URL IS AN ABSOLUTE HTTP URL WITH A HOST, or it is unset. A set value a
+// box cannot dial is refused, naming the variable and the wrong part and never
+// the value, whose user information is a credential; plain http to any host is
+// accepted, since whether the path leaves the box's host is a network fact.
+// The answer is spelled by net/url's serializer, so it parses back to itself;
+// and what a box's client cannot read is refused though net/url reads it: an
+// IPv6 zone, a forbidden domain character, escapes decoding to no UTF-8, a
+// name ending in a number that is no IPv4 address, and a port past 65535. Each
+// host and port row but port zero has the verdict Node 22's and Bun's `new
+// URL` give it; zero, which both parse, is refused as nothing listens on it,
+// and the IPv4 shorthand the standard reads (127.1) boots.
 func TestABoxURLIsAnAbsoluteHTTPURLWithAHost(t *testing.T) {
 	t.Parallel()
 	const variable = "CREWLET_TEST_BOX_URL"

@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/linktest"
 	"github.com/crewlet/crewlet/internal/runtoken"
-	seathost "github.com/crewlet/crewlet/internal/seat"
 )
 
 // A HYDRATION ACROSS A LEAF'S METERED LINK.
@@ -135,7 +134,7 @@ func (f meteredFleet) client(t *testing.T) jetstream.JetStream {
 func (f meteredFleet) syncer(t *testing.T) *Syncer {
 	t.Helper()
 	s := mustNew(openStore(t), f.client(t), func(string) string { return seat.AgentID },
-		Config{AcrossLink: true, LeaseHeartbeat: seathost.HeartbeatInterval, Clustered: true, Link: f.meter})
+		Config{AcrossLink: true, Clustered: true, Link: f.meter})
 	s.pace, s.window = meteredPace, meteredWindow
 	return s
 }

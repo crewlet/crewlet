@@ -50,18 +50,12 @@ func boundService(id, seat string) iamdomain.SeatBinding {
 }
 
 // A BINDING DANGLES EXACTLY WHEN THE REQUEST PATH WOULD REFUSE THE PERSON FOR
-// WANT OF THE SEAT, and nothing else.
+// WANT OF THE SEAT, and nothing else: a chart holding a row by the handle does
+// not save a person bound to an AGENT seat. This walks every row of the table.
 //
-// The predicate this replaced asked whether the chart held a row by that
-// handle, so a person bound to an AGENT seat — refused 403 on every request
-// they made — was one the report said nothing about. The rule is now the seat
-// table itself, and this walks every row of it.
-//
-// AND THE REMEDY IS THE BOUND PRINCIPAL'S. A person holds a human seat for as
-// long as they are here (ADR-0032), so the directory refuses to unbind one:
-// the sentence both kinds used to share sent an administrator to exactly that
-// gesture. A person's names a move or a removal and never an unbind; a
-// service account's names the unbind its optional seat allows.
+// AND THE REMEDY IS THE BOUND PRINCIPAL'S: a person's names a move or a
+// removal, never the unbind the directory refuses (ADR-0032); a service
+// account's names the unbind its optional seat allows.
 func TestABindingDanglesExactlyWhenTheSeatTableRefusesItsPerson(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -78,8 +72,7 @@ func TestABindingDanglesExactlyWhenTheSeatTableRefusesItsPerson(t *testing.T) {
 		"a service account on a held human seat": {
 			chart: companyChart(), row: boundService("m1", "platform-lead"),
 		},
-		// NO BINDING IS NEVER DANGLING: the seat table serves the row
-		// under its login, whatever kind of row carries it.
+		// NO BINDING IS NEVER DANGLING, whatever kind of row carries it.
 		"no binding at all": {
 			chart: companyChart(), row: bound("p1", ""),
 		},
@@ -147,8 +140,7 @@ func TestABindingDanglesExactlyWhenTheSeatTableRefusesItsPerson(t *testing.T) {
 				t.Errorf("detail %q does not name the seat %q", detail,
 					tc.row.Seat)
 			}
-			// CASE-BLIND, because the remedy opens its own sentence and
-			// what is asserted is what it says, not where it starts.
+			// CASE-BLIND: the remedy opens its own sentence.
 			lower := strings.ToLower(detail)
 			for _, want := range tc.says {
 				if !strings.Contains(lower, strings.ToLower(want)) {

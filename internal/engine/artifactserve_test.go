@@ -15,20 +15,18 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
-// nobody is a credential resolver that resolves nobody: what this case asks of
-// the origin is its wiring, never a decision.
+// nobody is a credential resolver that resolves nobody: this case tests the
+// origin's wiring, never a decision.
 type nobody struct{}
 
 func (nobody) Principal(context.Context, string) (iam.Principal, iam.Resolution) {
 	return iam.Principal{}, iam.Anonymous
 }
 
-// THE ARTIFACT ORIGIN IS BUILT OVER THIS ENGINE: the handler serves the binary's
-// embedded runtime from the `artifacts/` directory of the tree it is handed,
-// answers everything the API serves as an empty 404, and this data node's own
-// artifacts copy comes to answer for the authorizations it decides. The
-// origin's own behaviour is internal/artifactserve's to hold; this holds that a
-// node can build it at all, from its own Tier A.
+// THE ARTIFACT ORIGIN IS BUILT OVER THIS ENGINE, from its own Tier A: it serves
+// the embedded runtime from the tree's `artifacts/` directory, answers the API's
+// paths with an empty 404, and this data node's copy comes to answer for its
+// authorizations. The origin's behaviour is internal/artifactserve's to test.
 func TestTheArtifactOriginIsBuiltOverTheEngine(t *testing.T) {
 	t.Parallel()
 	boot := bootstrap(t, func(b *config.Bootstrap) {

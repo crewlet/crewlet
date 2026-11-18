@@ -12,14 +12,10 @@ import (
 // seats it holds hand their turns' reflection wakes to.
 func reflecting(_ *testing.T, e *engine.Engine) bool { return engine.Reflects(e) }
 
-// THE FIRST COMPANY ON AN UNCONFIGURED NODE REFLECTS.
-//
-// The dispatcher is built once per process, and boot builds it only for a
-// company it already has. Every apply after that only swaps the workers
-// behind it, and with no dispatcher to swap into, the swap returned early: a
-// company created on a fresh node, from the dashboard or by the first
-// PUT /config, wrote no diary row, no episode and no skill for any turn it
-// ran until the process restarted, and nothing anywhere said so.
+// THE FIRST COMPANY ON AN UNCONFIGURED NODE REFLECTS: boot builds the
+// dispatcher only for a company it already has, so the first apply on a fresh
+// node (from the dashboard or the first PUT /config) must build it, not only
+// swap the workers behind one.
 func TestTheFirstCompanyOnAnUnconfiguredNodeReflects(t *testing.T) {
 	t.Parallel()
 	e := unconfiguredEngine(t)
@@ -58,12 +54,9 @@ learning:
     scheduler_interval_seconds: 1
 `
 
-// THE FIRST COMPANY ON AN UNCONFIGURED NODE RUNS ITS BACKGROUND PASSES.
-//
-// The loops used to be built from the company the node booted with and never
-// again, so a node that booted with none (the node every company created from
-// the dashboard starts on) compacted, curated, clustered and promoted nothing
-// until the process restarted.
+// THE FIRST COMPANY ON AN UNCONFIGURED NODE RUNS ITS BACKGROUND PASSES, though
+// the node booted with no company (as every company created from the
+// dashboard starts), without waiting for a restart.
 func TestTheFirstCompanyOnAnUnconfiguredNodeRunsItsBackgroundPasses(t *testing.T) {
 	t.Parallel()
 	e := unconfiguredEngine(t)
@@ -75,12 +68,9 @@ func TestTheFirstCompanyOnAnUnconfiguredNodeRunsItsBackgroundPasses(t *testing.T
 	})
 }
 
-// AND A PROVIDER ADDED LATER TURNS ON THE PASSES THAT CALL A MODEL.
-//
-// A company with no providers.llm is valid and runs, and its compaction,
-// clustering and promotion wait for a model. Built once at boot, they waited
-// for a restart instead: the apply that added the provider changed nothing
-// about what the loops ran.
+// AND A PROVIDER ADDED LATER TURNS ON THE PASSES THAT CALL A MODEL: a company
+// with no providers.llm runs, its compaction, clustering and promotion waiting
+// for a model, and the apply that adds one starts them without a restart.
 func TestAProviderAddedLaterTurnsOnTheModelPasses(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, noModelsDoc+fastClustering)})

@@ -16,15 +16,11 @@ import (
 )
 
 // A SUSPENSION WITHDRAWS THE ACCOUNT A PERSON'S USERNAME NAMES, through the
-// directory's own trigger and with no configuration change.
-//
-// The account is registered by the Mattermost transport rather than by the
-// human reconcile, so it reaches a registry by another road than every other
-// contact identity — and the directory's rebuild has to reach it there too:
-// the registry it builds for the same company is handed to the transport,
-// which judges each person by that registry's reading. Suspended, the
-// founder's posts reach the agents from a stranger and nothing is reported;
-// reinstated, the next registry has their account again from the last answer.
+// directory's own trigger, with no configuration change. The Mattermost
+// transport, not the human reconcile, registers that account, so the
+// directory's rebuild reaches it by handing the transport the registry it
+// builds: suspended, the founder's posts reach the agents from a stranger and
+// nothing is reported; reinstated, the next registry has the account again.
 //
 // Mutations: let the transport judge people by no registry, and the suspended
 // founder keeps their account; skip handing the transport the rebuilt

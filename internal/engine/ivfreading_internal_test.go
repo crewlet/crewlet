@@ -14,14 +14,12 @@ import (
 // THE INDEX'S ALARM INPUT DESCRIBES THE SPACE THE COMPANY SEARCHES IN, and
 // carries the latest measurement exactly as the estate recorded it.
 //
-// An index trained under a model the company has since left serves no query:
-// every search is in the new space and scans until the duty retrains. Its
-// recall describes nothing a search does, so a reading carrying it would page
-// an operator about a model they already moved off — and the remedy the alarm
-// names (retrain, re-evaluate) does nothing to it. And the floor is the one
-// the measurement judged its worst shape against — the evaluation's curve at
-// the size of the corpus that shape searched, which only the measurement knew
-// — never one recomputed here from the size of the corpus the estate holds.
+// An index trained under a model the company has left serves no query (every
+// search scans until the duty retrains), so its recall would page an operator
+// about a model they moved off, with a remedy that does nothing to it. The
+// floor is the one the measurement judged its worst shape against, the curve
+// at the corpus that shape searched, never one recomputed from the size of
+// the estate's corpus.
 func TestTheIndexReadingDescribesOnlyTheSpaceTheCompanySearches(t *testing.T) {
 	t.Parallel()
 	const width = 64
@@ -49,8 +47,8 @@ func TestTheIndexReadingDescribesOnlyTheSpaceTheCompanySearches(t *testing.T) {
 				e.epoch.current.Store(companyWith(t, noEmbeddingsDoc))
 			}
 			// A FLOOR NO SIZE OF THIS ESTATE'S CORPUS GIVES: the measured
-			// shape searched a corpus of its own size, and a reading that
-			// recomputed the floor from the estate's would not carry it.
+			// shape searched a corpus of its own size, so a reading that
+			// recomputed it from the estate's would not carry it.
 			const measuredOn = 60_000
 			floor := search.FloorAt(9_000)
 			measurement := search.Measurement{Sources: measuredOn, Recall: 0.5,

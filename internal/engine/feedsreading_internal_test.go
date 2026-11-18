@@ -38,8 +38,8 @@ func (chatSource) Translate(context.Context, changefeed.Record) (changefeed.Deli
 // A FEED THIS NODE STARTED THAT IS DOWN REACHES THE ALARM READING, and through
 // it `feed_stopped` once it has been down for the stall grace. A feed with no
 // consumer publishes no wake, so nothing that judges the published wakes sees
-// it: the reading is the only surface it has, and before it a node whose feeds
-// had all stopped looked as healthy as one whose company was quiet.
+// it: the reading is its only surface, or a node whose feeds all stopped looks
+// as healthy as one whose company is quiet.
 //
 // Mutation: drop the feeds from the reading, and a feed down for three minutes
 // raises nothing.

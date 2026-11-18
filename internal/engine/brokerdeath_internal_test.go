@@ -55,30 +55,13 @@ const (
 // A NODE WHOSE EMBEDDED BROKER DECLARES ITSELF DEAD ENDS, through the
 // engine's own exit — and one whose teardown has begun does not.
 //
-// # The failure this pins
-//
-// nats-server's own logger exits the process on Fatalf; the engine's does not,
-// because the engine owns the process. So after the boot a Fatalf was an
-// Error line and nothing else, and the node went on answering /health on a
-// broker that had said it was dead — holding its seats' leases, running turns
-// whose results could never be acknowledged. The node now ends through the
-// seat watchdog's exit.
-//
-// # Why in a process of its own
-//
-// That exit is the property: os.Exit with the declared-death code, the
-// broker's reason on stderr, after an embedded_broker_died line through the
-// log. A case that stood the exit in with a recorder certified the recorder
-// and nothing that runs in production — replacing the exit with nothing left
-// it green. So this test binary runs itself again as a node: real backends,
-// a death the case declares, and the engine's own watch and watchdog, and the
-// parent reads what the process left behind — its exit status and its stderr.
-//
-// # And what it must not do
-//
-// End a node for its own shutdown. The teardown closes the broker this engine
-// owns, or hands back one it was lent — a declaration after it is about a
-// broker that is no longer this node's to serve on, and that child returns.
+// The engine's logger, unlike nats-server's, does not exit on Fatalf, so
+// without the watch the node would serve on a dead broker. The exit is the
+// property (the declared-death code, the reason on stderr, embedded_broker_died
+// logged first), and a recorder in its place certified nothing, so this binary
+// reruns itself as a node on real backends and the parent reads its exit
+// status and stderr. A declaration after the teardown is about a broker no
+// longer this node's, and that child returns.
 func TestABrokerThatDeclaresItselfDeadEndsTheNode(t *testing.T) {
 	if mode := os.Getenv(brokerDeathChildEnv); mode != "" {
 		runBrokerDeathChild(t, mode, os.Getenv(brokerDeathDirEnv))

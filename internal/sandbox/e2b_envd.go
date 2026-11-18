@@ -24,70 +24,45 @@ import (
 
 // envd: the agent inside the box.
 //
-// # Two protocols on one host, because envd serves two
+// Files are plain HTTP: a GET and a multipart POST on /files. Processes are
+// Connect RPC, server-streaming because output arrives as it is produced; its
+// envelope (a flag byte, then a big-endian uint32 length, before each JSON
+// message) is implemented here rather than pulling in a Connect runtime and
+// its protobuf toolchain for one small, stable, specified call shape.
 //
-// FILES are plain HTTP — a GET and a multipart POST on /files. Nothing exotic
-// and nothing to explain.
-//
-// PROCESSES are Connect RPC, and the reason matters: a command's output
-// arrives as it is produced, so the call is SERVER-STREAMING. Connect's
-// streaming framing is five bytes of envelope — one flag byte, then a
-// big-endian uint32 length — in front of each JSON message, and this file
-// implements exactly that rather than pulling in a Connect runtime and its
-// protobuf toolchain for one call shape. The framing is small, stable and
-// specified; the dependency is neither.
-//
-// # Why the streaming call is drained rather than followed
-//
-// The engine's own model of a launch is DETACHED: a job is started, the
-// turn suspends, and something later reads a result file. So nothing here
-// needs to watch output arrive — a foreground command is run to completion
-// and its frames are folded into one [ExecResult], and a background command
-// is started and abandoned deliberately, with the PID taken from the first
-// frame envd sends.
+// The stream is drained, not followed: a launch is detached and its result
+// read later from a file, so a foreground command's frames fold into one
+// [ExecResult], and a background command is abandoned once its first frame
+// gives the PID.
 
-// e2bEnvdUser is the account every E2B template runs as, and the owner every
-// envd call is made on behalf of.
-//
-// envd takes the user as a QUERY PARAMETER rather than inferring it, and it
-// has no default: a call that omits it fails with a permission error that
-// names no user, which reads as a broken template.
+// e2bEnvdUser is the account every E2B template runs as and every envd call
+// acts for. envd takes it as a query parameter with no default: a call
+// omitting it fails with a permission error naming no user, which reads as a
+// broken template.
 const e2bEnvdUser = "user"
 
-// e2bStreamIdleTimeout bounds how long one exec may go with NO output before
-// the call is abandoned.
-//
-// NOT A RUN DEADLINE — the engine imposes none, and this is measured between
-// FRAMES rather than over the call. The distinction is the whole point: a
-// harness's foreground command legitimately runs for many minutes, so an
-// overall timeout would kill working jobs, while a stream that has gone
-// completely silent is indistinguishable from a wedged envd holding the
-// request open for ever.
-//
-// Ten minutes is longer than any gap a real command leaves — a container
-// pull, a dependency install and a test suite all emit as they go — and short
-// enough that a hung box is noticed the same hour.
+// e2bStreamIdleTimeout bounds how long one exec may go with no output. It is
+// measured between frames, never over the call: the engine imposes no run
+// deadline and a foreground command may run for many minutes, while a stream
+// silent this long is indistinguishable from a wedged envd. Ten minutes is
+// past any gap a real command leaves (pulls, installs and test suites emit as
+// they go) and short enough to notice a hung box the same hour.
 const e2bStreamIdleTimeout = 10 * time.Minute
 
-// idleReader abandons a stream that stops arriving.
-//
-// It cancels the REQUEST rather than just failing the read, because a read
-// that returned an error while the connection stayed open would leak the
-// round-trip: the transport keeps the connection, and envd keeps the process.
+// idleReader abandons a stream that stops arriving by cancelling the request,
+// not just failing the read: otherwise the transport keeps the connection and
+// envd the process.
 type idleReader struct {
 	inner io.Reader
 	timer idleTimer
 
-	// idle is HELD, because the reset on progress needs the same value the
-	// first arming used. Reading the package constant there instead made
-	// the parameter a lie: a caller passing anything else got its budget
-	// once and ten minutes on every read after it.
+	// idle is held so every reset re-arms the caller's budget, not the
+	// package constant.
 	idle   time.Duration
 	cancel context.CancelFunc
 
-	// fired is whether the countdown ran out — what tells an exchange the
-	// bound abandoned from one the caller's own context ended, which both
-	// surface as the same "context canceled".
+	// fired tells an exchange this bound abandoned from one the caller's
+	// context ended; both surface as "context canceled".
 	fired atomic.Bool
 }
 
@@ -103,21 +78,13 @@ func newIdleReader(body io.Reader, cancel context.CancelFunc, idle time.Duration
 		func(d time.Duration, fire func()) idleTimer { return time.AfterFunc(d, fire) })
 }
 
-// newIdleReaderOn is newIdleReader with the countdown supplied.
-//
-// The seam carries ONE assertion that a real clock cannot make honestly.
-// "A delivery re-arms the budget" is shown by a stream that keeps delivering
-// NOT being abandoned, and an abandonment that has not happened has no signal
-// to wait on — so against wall time the case can only sleep, deliver, and
-// assert the timer stayed quiet, which asserts that the TEST's own goroutine
-// was scheduled within the budget. That is a claim about the machine rather
-// than about this reader, and it is false often enough to matter: the case
-// slept 10ms against a 40ms budget and went red on a loaded CI box, on code
-// that was doing exactly what it should.
-//
-// Only the negative needs this. That the armed countdown eventually fires is
-// asserted against a real timer, because waiting for something to HAPPEN is
-// the direction a slow machine helps.
+// newIdleReaderOn is newIdleReader with the countdown supplied, for the one
+// assertion a real clock cannot make honestly: that a delivery re-arms the
+// budget. An abandonment that has not happened has no signal to wait on, so
+// against wall time the case could only sleep and check the timer stayed
+// quiet, asserting the test goroutine's scheduling rather than this reader.
+// That the countdown fires is asserted against a real timer: a slow machine
+// only helps that direction.
 func newIdleReaderOn(
 	body io.Reader,
 	cancel context.CancelFunc,
@@ -132,9 +99,8 @@ func newIdleReaderOn(
 	return r
 }
 
-// silent names an error this reader's bound caused as exactly that, and leaves
-// every other error as it was: a bare "context canceled" reads as the caller's
-// own cancellation, which sends whoever reads it looking in the wrong place.
+// silent names an error this reader's bound caused as such: a bare "context
+// canceled" reads as the caller's own cancellation.
 func (r *idleReader) silent(err error) error {
 	if err != nil && r.fired.Load() {
 		return fmt.Errorf("envd moved no byte for %s, so the exchange was abandoned: %w", r.idle, err)
@@ -145,32 +111,26 @@ func (r *idleReader) silent(err error) error {
 func (r *idleReader) Read(p []byte) (int, error) {
 	n, err := r.inner.Read(p)
 	if n > 0 {
-		// RESET ON PROGRESS, not on entry: a read that blocked for nine
-		// minutes and then delivered a byte is a live command, and one
-		// that never delivers anything is what this exists to stop.
+		// Reset on progress, not on entry: a read that blocked nine minutes
+		// then delivered a byte is a live command.
 		r.timer.Reset(r.idle)
 	}
 	return n, err
 }
 
-// stop releases the idle timer. The BODY is closed by whoever opened the
-// response — a reader that closed somebody else's body would be a second
-// owner of it, and the one thing worse than a leaked body is two closes.
+// stop releases the idle timer. The body is closed by whoever opened the
+// response; a second owner would close it twice.
 func (r *idleReader) stop() {
 	r.timer.Stop()
-	// Cancelling releases the request context even on the ordinary path,
-	// where the stream ended by itself: a context that is never cancelled
-	// leaks its goroutine and its timer for the life of the process.
+	// Cancelled on the ordinary path too: a context never cancelled leaks
+	// its resources for the life of the process.
 	r.cancel()
 }
 
-// envdClient talks to one box's envd.
-//
-// ITS HTTP CLIENT CARRIES NO OVERALL TIMEOUT, and that is the one thing about
-// it that has to be got right. http.Client.Timeout covers the whole exchange
-// INCLUDING reading the body, so the control plane's bound — which is correct
-// for minting a VM — would kill every command that ran longer than it. What
-// bounds a command here is [e2bStreamIdleTimeout], measured between frames.
+// envdClient talks to one box's envd. Its HTTP client has no overall timeout:
+// http.Client.Timeout covers reading the body too, so the control plane's
+// bound would kill every longer command. [e2bStreamIdleTimeout] bounds a
+// command, between frames.
 type envdClient struct {
 	host string
 	http *http.Client
@@ -185,11 +145,8 @@ type envdClient struct {
 }
 
 // newEnvdClient derives envd's client from the caller's, keeping its
-// transport and dropping its deadline.
-//
-// The transport falls back to [httpx.Transport] rather than to nil, which
-// would be http.DefaultTransport and its two idle connections per host —
-// the one thing every other client here was moved off.
+// transport and dropping its deadline. It falls back to [httpx.Transport],
+// not nil: nil is http.DefaultTransport, with two idle connections per host.
 func newEnvdClient(host, token string, from *http.Client) *envdClient {
 	client := &http.Client{Transport: httpx.Transport()}
 	if from != nil {
@@ -210,10 +167,9 @@ const connectEnvelope = 5
 // the trailer rather than a message.
 const connectEndFlag = 0x02
 
-// e2bProcessResult is one command's outcome, folded from the frames: what
-// envd SAID about how it ended, each fact apart, so the caller reads a status
-// off them rather than off a sentinel standing for every way of not having
-// one.
+// e2bProcessResult is one command's outcome folded from the frames: each fact
+// envd said about its end, kept apart so the caller reads a status off them
+// rather than off one sentinel for every way of having none.
 type e2bProcessResult struct {
 	PID int
 	// Ended is whether envd sent the command's `end` event. A stream that
@@ -245,11 +201,9 @@ type connectError struct {
 	Message string `json:"message,omitempty"`
 }
 
-// connectDeadline is the code envd's stream closes with when the command's
-// timeout runs out: the handler's own context carries the request's
-// Connect-Timeout-Ms, and that context ending is what stops the stream —
-// usually before the end event of the process it then kills, and at best
-// beside one that reports the kill.
+// connectDeadline is the code envd's stream closes with when the request's
+// Connect-Timeout-Ms runs out: usually before the end event of the process it
+// then kills, at best beside one reporting the kill.
 const connectDeadline = "deadline_exceeded"
 
 // connectEnd is the payload of a Connect stream's last frame.
@@ -257,12 +211,9 @@ type connectEnd struct {
 	Error *connectError `json:"error,omitempty"`
 }
 
-// startRequest is envd's Process/Start body.
-//
-// The command is run THROUGH A SHELL, deliberately: every caller here hands
-// over a shell line — pipes, redirects, `&&` — because that is what a setup
-// step and a harness invocation are. envd's own API takes an argv, so
-// the shell is named explicitly rather than left to a runtime that has none.
+// startRequest is envd's Process/Start body. envd takes an argv, and every
+// caller hands over a shell line (pipes, redirects, `&&`), so the shell is
+// named explicitly.
 type startRequest struct {
 	Process struct {
 		Cmd  string            `json:"cmd"`
@@ -281,11 +232,9 @@ func newStartRequest(cmd string, opts ExecOptions) startRequest {
 	return req
 }
 
-// startResponse is one frame of the Process/Start stream.
-//
-// envd sends a `start` event first, carrying the pid, then any number of
-// `data` events, then an `end` event with the exit code. Every field is
-// optional because every frame carries exactly one of them.
+// startResponse is one frame of the Process/Start stream: a `start` event
+// with the pid, any number of `data` events, then an `end` event. Every field
+// is optional because each frame carries exactly one.
 type startResponse struct {
 	Event struct {
 		Start *struct {
@@ -303,11 +252,9 @@ type startResponse struct {
 	} `json:"event"`
 }
 
-// start runs a command and folds the stream into one result.
-//
-// `background` abandons the stream once the pid is known, which is the whole
-// of "start and walk away": the process keeps running inside the box because
-// envd owns it, not because anything here is still listening.
+// start runs a command and folds the stream into one result. background
+// abandons the stream once the pid is known; the process keeps running
+// because envd owns it.
 func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, background bool) (e2bProcessResult, error) {
 	body, err := json.Marshal(newStartRequest(cmd, opts))
 	if err != nil {
@@ -317,8 +264,8 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 	binary.BigEndian.PutUint32(framed[1:connectEnvelope], uint32(len(body)))
 	copy(framed[connectEnvelope:], body)
 
-	// CANCELLABLE INDEPENDENTLY OF THE CALLER, so a silent stream can be
-	// abandoned without disturbing the turn's own context.
+	// Its own cancel, so a silent stream is abandoned without ending the
+	// turn's context.
 	streamCtx, cancel := context.WithCancel(ctx)
 	req, err := http.NewRequestWithContext(streamCtx, http.MethodPost,
 		c.host+"/process.Process/Start", bytes.NewReader(framed))
@@ -329,8 +276,8 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 	req.Header.Set("Content-Type", "application/connect+json")
 	req.Header.Set("Connect-Protocol-Version", "1")
 	if opts.TimeoutSec > 0 {
-		// envd's own per-call cap, so a runaway command is stopped
-		// INSIDE the box rather than merely abandoned by this client.
+		// envd's per-call cap, so a runaway command is stopped inside the
+		// box, not merely abandoned here.
 		req.Header.Set("Connect-Timeout-Ms",
 			strconv.FormatInt(int64(opts.TimeoutSec*1000), 10))
 	}
@@ -343,8 +290,8 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 	}
 	defer resp.Body.Close()
 	stream := newIdleReader(resp.Body, cancel, e2bStreamIdleTimeout)
-	// The reader's own close only stops the idle timer; the body is closed
-	// above, where a linter can see it belongs to this response.
+	// stop only stops the timer; the body is closed above, where a linter
+	// sees it belongs to this response.
 	defer stream.stop()
 	if resp.StatusCode >= 400 {
 		return e2bProcessResult{}, envdRefused(resp.StatusCode, fmt.Errorf("e2b: start: %d: %s",
@@ -353,14 +300,11 @@ func (c *envdClient) start(ctx context.Context, cmd string, opts ExecOptions, ba
 	return foldStream(ctx, stream, background)
 }
 
-// foldStream reads Connect frames and folds them into one result.
-//
-// A STREAM THAT ENDS WITHOUT AN `end` EVENT IS NOT AN ERROR HERE. envd closes
-// the connection when a box is paused or reclaimed mid-command, and the
-// engine's own completion model already handles a job whose box went away —
-// raising instead would turn an ordinary pause into a failed run. What the
-// stream did say — an end event, the trailer's error — is kept apart in the
-// result, and the caller decides what the command's status is.
+// foldStream reads Connect frames and folds them into one result. A stream
+// ending without an `end` event is not an error: envd closes it when a box is
+// paused or reclaimed mid-command, which the completion model handles, so
+// raising would fail a run on an ordinary pause. What the stream did say is
+// kept apart, and the caller decides the command's status.
 func foldStream(ctx context.Context, r io.Reader, background bool) (e2bProcessResult, error) {
 	var (
 		out    e2bProcessResult
@@ -378,9 +322,8 @@ func foldStream(ctx context.Context, r io.Reader, background bool) (e2bProcessRe
 		}
 		length := binary.BigEndian.Uint32(header[1:])
 		if length > maxEnvdFrame {
-			// A length this large is a framing desync rather than a
-			// real message, and allocating it is how a desync becomes
-			// an out-of-memory instead of an error.
+			// A framing desync; allocating it would make the desync an
+			// out-of-memory.
 			return out, fmt.Errorf(
 				"e2b: stream frame claims %d bytes, which is past the %d-byte "+
 					"cap — the connection is out of frame", length, maxEnvdFrame)
@@ -390,10 +333,9 @@ func foldStream(ctx context.Context, r io.Reader, background bool) (e2bProcessRe
 			return out, unanswered(ctx, fmt.Errorf("e2b: read stream: %w", err))
 		}
 		if header[0]&connectEndFlag != 0 {
-			// The trailer, whose error is how a stream envd ended on a
-			// deadline says so. A stream that ends here without an
-			// `end` event leaves Ended false, which the caller reads as
-			// "no verdict" rather than as success.
+			// The trailer: its error is how envd reports a deadline.
+			// Without an `end` event Ended stays false, which the caller
+			// reads as no verdict, not success.
 			var end connectEnd
 			if err := json.Unmarshal(payload, &end); err != nil {
 				return out, fmt.Errorf("e2b: decode stream trailer: %w", err)
@@ -410,9 +352,8 @@ func foldStream(ctx context.Context, r io.Reader, background bool) (e2bProcessRe
 		case frame.Event.Start != nil:
 			out.PID = frame.Event.Start.PID
 			if background {
-				// The pid is the whole answer for a detached start.
-				// Reading on would block this turn for the length of
-				// the job.
+				// The pid is a detached start's whole answer; reading on
+				// would block the turn for the job's length.
 				return out, nil
 			}
 		case frame.Event.Data != nil:
@@ -428,11 +369,10 @@ func foldStream(ctx context.Context, r io.Reader, background bool) (e2bProcessRe
 				}
 				continue
 			}
-			// NO EXIT CODE: the process the box waited on — the shell
-			// a command runs as — was ended by a signal, which envd
-			// reports as os.ProcessState does: -1 beside a status naming
-			// the signal. Its Error is that same status, so it is not
-			// copied in; the caller names the signal.
+			// A signal ended the shell, which envd reports as
+			// os.ProcessState does: -1 beside a status naming it. Error
+			// repeats that status, so it is not copied; the caller names
+			// the signal.
 			out.Signal, out.SignalName = boxSignal(end.Status)
 			out.Status = end.Status
 		}
@@ -441,12 +381,10 @@ func foldStream(ctx context.Context, r io.Reader, background bool) (e2bProcessRe
 	return out, nil
 }
 
-// boxSignal is the signal a box's end event names in its status — the number
-// and the box's own name for it — and 0 for a status that names none.
-//
-// envd describes a process a signal ended as os.ProcessState.String does:
-// "signal: " and the signal's description, "(core dumped)" after it where one
-// was, or "signal: signal 34" for a number Go has no description for.
+// boxSignal is the signal number, and the box's name for it, that an end
+// event's status names, and 0 for none. envd formats it as
+// os.ProcessState.String: "signal: <description>", " (core dumped)" after it
+// where one was, or "signal: signal 34" for a number Go cannot describe.
 func boxSignal(status string) (int, string) {
 	name, ok := strings.CutPrefix(status, "signal: ")
 	if !ok {
@@ -464,13 +402,10 @@ func boxSignal(status string) (int, string) {
 	return 0, ""
 }
 
-// boxSignals is each Linux signal's description, as Go — and so envd — names
-// it, by the description: the only form an end event carries.
-//
-// The BOX's table rather than this process's syscall.Signal: a box is Linux
-// whatever the engine host runs, and the two disagree off Linux — on darwin
-// signal 10 is "bus error", in the box "user defined signal 1". A test built
-// only on Linux holds this to Go's own table there, so the two cannot drift.
+// boxSignals maps each Linux signal's Go description, the only form an end
+// event carries, to its number. The box's table, not this host's
+// syscall.Signal: a box is Linux whatever the engine runs on, and darwin's
+// signal 10 is "bus error". A Linux-only test holds it to Go's table there.
 var boxSignals = map[string]int{
 	"hangup": 1, "interrupt": 2, "quit": 3, "illegal instruction": 4,
 	"trace/breakpoint trap": 5, "aborted": 6, "bus error": 7,
@@ -485,39 +420,26 @@ var boxSignals = map[string]int{
 	"power failure": 30, "bad system call": 31,
 }
 
-// maxEnvdFrame caps one streamed message.
-//
-// A harness's output is the largest thing that comes through here and it
-// is line-shaped; 32 MiB is far past any real frame and small enough that a
-// desynced length cannot exhaust the process.
+// maxEnvdFrame caps one streamed message: 32 MiB is far past any frame of
+// line-shaped harness output, and small enough that a desynced length cannot
+// exhaust the process.
 const maxEnvdFrame = 32 << 20
 
-// e2bFileIdleTimeout bounds how long one file transfer may go with NO byte
-// moving in either direction before it is abandoned.
+// e2bFileIdleTimeout bounds how long one file transfer may go with no byte
+// moving either way. The in-box client has no overall deadline
+// ([envdClient]), so without it an envd that accepted and fell silent would
+// hold a collection or a live reading for its caller's whole life. (The
+// completion poll also bounds each box's poll whole; see [MaxConcurrentPolls].)
 //
-// A file transfer had no bound at all: the in-box client carries no overall
-// deadline (see [envdClient]), and a /files call was the one envd exchange
-// with no idle reader either, so a box whose envd accepted the connection and
-// then said nothing held the caller for as long as the caller's context lived
-// — which for a collection or a live reading is as long as its delivery or
-// its viewer lasts. (The completion poll bounds each box's poll as a whole
-// besides, and polls no box behind another — see [MaxConcurrentPolls].)
-//
-// MEASURED BETWEEN BYTES, not over the call, for the reason
-// [e2bStreamIdleTimeout] gives: a large read on a slow link legitimately takes
-// longer than any fixed bound. But a tenth of that bound, because unlike a
-// command, a file transfer has no legitimate reason to fall silent — envd
-// answers from a file that already exists. Sixty seconds is the control
-// plane's whole-request budget ([E2BClientTimeout]), which is the engine's
-// standing answer to "how long may E2B take to start answering".
+// Between bytes, as [e2bStreamIdleTimeout], since a large read on a slow link
+// outlasts any fixed bound; but a transfer has no reason to fall silent (envd
+// answers from a file that exists), so it is the control plane's
+// whole-request budget, [E2BClientTimeout]: how long E2B may take to answer.
 const e2bFileIdleTimeout = E2BClientTimeout
 
-// fileExchange makes one /files request whose every byte, sent or received,
-// re-arms [e2bFileIdleTimeout] — the wait for the response's headers
-// included, which is silence like any other. A request with no body passes
-// nil.
-//
-// The caller owns both returns: it closes the response's body and stops the
+// fileExchange makes one /files request under [e2bFileIdleTimeout], re-armed
+// by every byte sent or received; the wait for headers counts as silence too.
+// body is nil for none. The caller closes the response body and stops the
 // reader, which also releases the request's context.
 func (c *envdClient) fileExchange(ctx context.Context, method, path string,
 	body []byte, header http.Header,
@@ -525,17 +447,16 @@ func (c *envdClient) fileExchange(ctx context.Context, method, path string,
 	return c.exchange(ctx, method, c.host+"/files?"+filesQuery(path), body, header)
 }
 
-// exchange is one request to envd about the box's files — a /files transfer
-// ([envdClient.fileExchange]) or a call of its filesystem service
-// ([envdClient.filesystem]) — under the one bound every such request has:
-// [e2bFileIdleTimeout] between bytes, re-armed by each one sent or received.
-// The caller owns both returns, as [envdClient.fileExchange] says.
+// exchange is one request about the box's files, a /files transfer
+// ([envdClient.fileExchange]) or a filesystem-service call
+// ([envdClient.filesystem]), under [e2bFileIdleTimeout] between bytes. The
+// caller owns both returns, as [envdClient.fileExchange] says.
 func (c *envdClient) exchange(ctx context.Context, method, target string,
 	body []byte, header http.Header,
 ) (*http.Response, *idleReader, error) {
 	reqCtx, cancel := context.WithCancel(ctx)
-	// ARMED NOW, before the request is sent, so a connection that is never
-	// answered is abandoned exactly as one that stops mid-body is.
+	// Armed before sending, so a connection never answered is abandoned
+	// like one that stops mid-body.
 	idle := newIdleReader(nil, cancel, c.fileIdle)
 	var reader io.Reader
 	if body != nil {
@@ -547,13 +468,10 @@ func (c *envdClient) exchange(ctx context.Context, method, target string,
 		return nil, nil, err
 	}
 	if body != nil {
-		// BOTH STATED, because the progress wrapper hides the buffer the
-		// request would have taken them from. Without the length a body
-		// goes out chunked — a different wire shape for a write that has
-		// always carried its length — and without GetBody the transport
-		// cannot send the body again: an HTTP/2 connection the server
-		// closes with GOAWAY before reading the request is retried on a
-		// fresh one only when the body can be had twice.
+		// Both set, since the progress wrapper hides the buffer they would
+		// come from: without the length the body goes out chunked, and
+		// without GetBody an HTTP/2 GOAWAY before the server read the
+		// request cannot be retried on a fresh connection.
 		req.ContentLength = int64(len(body))
 		req.GetBody = func() (io.ReadCloser, error) {
 			return io.NopCloser(sendProgress{inner: bytes.NewReader(body), idle: idle}), nil
@@ -562,17 +480,12 @@ func (c *envdClient) exchange(ctx context.Context, method, target string,
 	return c.send(ctx, req, idle, header)
 }
 
-// streamExchange is [envdClient.exchange] for a body READ ONCE AS IT IS SENT —
-// a streamed write's upload ([envdClient.uploadStream]) — under the same bound
-// between bytes, each one the transport takes re-arming it.
-//
-// CHUNKED, AND SENT ONCE. Its length is not known until it has been read, so
-// it goes out chunked, which envd reads as any HTTP server does; and it cannot
-// be had twice, so a connection the server closes with GOAWAY before reading
-// the request fails the write rather than being retried on a fresh one, which
-// is what [envdClient.exchange]'s buffered body buys. The write is the caller's
-// to make again — a carried session's restore is one launch's step, which a
-// failed launch repeats whole.
+// streamExchange is [envdClient.exchange] for a body read once as it is sent
+// ([envdClient.uploadStream]), under the same bound, re-armed by each byte the
+// transport takes. Its length is unknown until read, so it goes out chunked;
+// and it cannot be read twice, so a GOAWAY before the server read it fails
+// the write rather than retrying. Making it again is the caller's: a carried
+// session's restore is one launch step, which a failed launch repeats whole.
 func (c *envdClient) streamExchange(ctx context.Context, method, target string,
 	body io.Reader, header http.Header,
 ) (*http.Response, *idleReader, error) {
@@ -586,10 +499,9 @@ func (c *envdClient) streamExchange(ctx context.Context, method, target string,
 	return c.send(ctx, req, idle, header)
 }
 
-// send makes one envd request built by [envdClient.exchange] or
-// [envdClient.streamExchange], its idle bound already armed: the headers, the
-// box's authorization, and the round trip, whose response body the bound then
-// watches.
+// send makes one request built by [envdClient.exchange] or
+// [envdClient.streamExchange], its idle bound already armed, and hands the
+// response body to that bound.
 func (c *envdClient) send(ctx context.Context, req *http.Request, idle *idleReader,
 	header http.Header,
 ) (*http.Response, *idleReader, error) {
@@ -606,9 +518,8 @@ func (c *envdClient) send(ctx context.Context, req *http.Request, idle *idleRead
 	return resp, idle, nil
 }
 
-// sendProgress re-arms an exchange's idle bound for every byte of the request
-// body the transport takes, so a large upload is not abandoned while it is
-// still moving.
+// sendProgress re-arms an exchange's idle bound for every request-body byte
+// the transport takes, so an upload still moving is not abandoned.
 type sendProgress struct {
 	inner io.Reader
 	idle  *idleReader
@@ -622,11 +533,9 @@ func (s sendProgress) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// readFile fetches a file from the box, WHOLE — see [Sandbox.ReadFile].
-//
-// EMPTY ON MISSING, not an error: the detached runner polls for a done marker
-// and a result file that do not exist until the job finishes, so "not there
-// yet" is the ordinary answer on most calls.
+// readFile fetches a file from the box whole ([Sandbox.ReadFile]). Missing is
+// empty, not an error: the detached runner polls for a done marker and a
+// result file that exist only once the job finishes.
 func (c *envdClient) readFile(ctx context.Context, path string) ([]byte, error) {
 	resp, idle, err := c.fileExchange(ctx, http.MethodGet, path, nil, nil)
 	if err != nil {
@@ -648,9 +557,8 @@ func (c *envdClient) readFile(ctx context.Context, path string) ([]byte, error) 
 	return raw, nil
 }
 
-// openFile streams a file out of the box — see [Sandbox.OpenFile]. The body
-// IS the stream: envd serves the file as it is, and nothing here holds more
-// of it than the caller's own read asks for.
+// openFile streams a file out of the box ([Sandbox.OpenFile]); the body is the
+// stream, so nothing here holds more than the caller's read asks for.
 func (c *envdClient) openFile(ctx context.Context, path string) (io.ReadCloser, error) {
 	resp, idle, err := c.fileExchange(ctx, http.MethodGet, path, nil, nil)
 	if err != nil {
@@ -676,9 +584,8 @@ type envdStream struct {
 	body io.ReadCloser
 	idle *idleReader
 	path string
-	// cancelled reports whether the caller that opened the file cancelled
-	// it: an io.Reader's Read takes no context, and a read the caller
-	// cancelled is no class at all ([unanswered]).
+	// cancelled reports whether the opener's context was cancelled, since
+	// Read takes none; a cancelled read is no class ([unanswered]).
 	cancelled func() bool
 }
 
@@ -698,22 +605,17 @@ func (s *envdStream) Close() error {
 	return s.body.Close()
 }
 
-// openTail streams the end of a file — see [Sandbox.OpenTail] — as the body
-// of an HTTP SUFFIX RANGE (`Range: bytes=-n`), read as it arrives: what
-// crosses the WAN is the n bytes kept, never the file before them.
-//
-// envd answers a range with 206 and the whole size in Content-Range
-// ([envdClient.readTail] says why). A server that ignores the range and
-// answers 200 with the whole file is still answered correctly: where it sends
-// the file's length, the bytes before the last n are read and dropped and the
-// rest streamed; where it sends none, the end is found only at the end, so
-// the last n bytes are kept in memory as they pass ([keepLast]) and handed
-// over from there — that box's envd costs the file's transfer either way,
-// which this engine does not get to choose.
+// openTail streams the end of a file ([Sandbox.OpenTail]) as an HTTP suffix
+// range (`Range: bytes=-n`), so only the n bytes kept cross the WAN; envd
+// answers 206 with the whole size in Content-Range ([envdClient.readTail]).
+// A server that ignores the range and answers 200 is still answered right:
+// with a length, the bytes before the last n are read and dropped; without
+// one, the last n are kept in memory as they pass ([keepLast]). That envd
+// costs the whole transfer either way.
 func (c *envdClient) openTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error) {
 	if n <= 0 {
-		// A suffix range of zero is unsatisfiable; what such a caller wants
-		// is the size, and no bytes.
+		// A zero suffix range is unsatisfiable; such a caller wants only
+		// the size.
 		tail, err := c.readTail(ctx, path, 0)
 		if err != nil {
 			return nil, 0, err
@@ -777,23 +679,17 @@ type limitedStream struct {
 	io.Closer
 }
 
-// readTail reads the end of a file — see [Sandbox.ReadTail] — as an HTTP
-// SUFFIX RANGE (`Range: bytes=-n`).
-//
-// envd serves /files through Go's http.ServeContent, which answers a range
-// with 206 and the file's whole size in Content-Range; with Range set it also
-// serves identity rather than gzip, so the bytes are the file's own
-// (packages/envd/internal/api/download.go in e2b-dev/infra; ServeContent has
-// been its writer since file handling landed, and the gzip support added
-// beside it in February 2026 steps aside for any Range or conditional
-// request). A server that ignores the range and answers 200 with the whole
-// file is still answered correctly — its body is read through and only the
-// last n bytes are kept — so the read is bounded in memory whatever the
-// box's envd does, and only its cost differs.
+// readTail reads the end of a file ([Sandbox.ReadTail]) as an HTTP suffix
+// range (`Range: bytes=-n`). envd serves /files through http.ServeContent,
+// which answers a range with 206 and the whole size in Content-Range, and
+// with Range set serves identity rather than gzip, so the bytes are the
+// file's own (packages/envd/internal/api/download.go in e2b-dev/infra). A
+// server answering 200 is read through keeping only the last n bytes, so
+// memory stays bounded whatever envd does; only the cost differs.
 func (c *envdClient) readTail(ctx context.Context, path string, n int) (FileTail, error) {
 	want := max(n, 0)
-	// A suffix range of zero is unsatisfiable, so the smallest real one is
-	// asked for and dropped: what such a caller wants is the size.
+	// A zero suffix range is unsatisfiable, so the smallest real one is
+	// asked for and dropped: such a caller wants the size.
 	header := http.Header{"Range": {fmt.Sprintf("bytes=-%d", max(want, 1))}}
 	resp, idle, err := c.fileExchange(ctx, http.MethodGet, path, nil, header)
 	if err != nil {
@@ -875,8 +771,7 @@ func parseContentRange(header string) (start, total int64, ok bool) {
 }
 
 // keepLast reads r to its end keeping only its last n bytes, and how many it
-// read in all — the end of a stream in memory bounded by n, whatever its
-// length.
+// read in all, in memory bounded by n whatever the stream's length.
 func keepLast(r io.Reader, n int) ([]byte, int64, error) {
 	buf := make([]byte, 0, 2*n)
 	chunk := make([]byte, 32<<10)
@@ -903,29 +798,17 @@ func keepLast(r io.Reader, n int) ([]byte, int64, error) {
 	return buf, total, nil
 }
 
-// writeFile puts a file into the box WHOLE ([Sandbox.WriteFile]): uploaded
-// under a fresh name beside the path, then moved over it.
-//
-// ENVD WRITES AN UPLOAD IN PLACE. Its /files handler opens the destination
-// with O_TRUNC and copies the request's body into it as the body arrives
-// (processFile in packages/envd/internal/api/upload.go, e2b-dev/infra), so a
-// file uploaded over one a run is using — a seat's GitHub App token file, which
-// the completion poll rewrites under the running job and its git credential
-// helper reads at every call — was empty, and then part written, for as long
-// as the body took to cross the network, and a push that read it then
-// authenticated with nothing. Uploaded under another name, the file the box
-// reads changes in one step: envd's own Move, which is a rename
-// (packages/envd/internal/services/filesystem/move.go), so a reader opens the
-// old file or the new one.
-//
-// THE STAGED FILE LIES BESIDE THE PATH, in the directory envd resolves the
-// path in, so the rename never crosses a filesystem ([stagedBeside]). NONE
-// OUTLIVES A WRITE THAT FAILED: an upload or a move that failed removes it
-// ([envdClient.discard]).
-//
-// What is at the path is REPLACED, a link included: the box is the VM, so
-// nothing written there reaches the engine host, and the rename writes through
-// no link. The new file has the mode and owner envd gives every upload.
+// writeFile puts a file into the box whole ([Sandbox.WriteFile]): uploaded
+// under a fresh name beside the path, then moved over it. envd writes an
+// upload in place, truncating first (processFile in
+// packages/envd/internal/api/upload.go, e2b-dev/infra), so a file a run reads,
+// such as a seat's GitHub App token file, would be empty or partial while the
+// body crossed; envd's Move is a rename
+// (packages/envd/internal/services/filesystem/move.go), so a reader sees old
+// or new. Staged beside the path, the rename never crosses a filesystem
+// ([stagedBeside]); a failed upload or move removes it ([envdClient.discard]).
+// A link at the path is replaced, not written through, and nothing reaches the
+// engine host: the box is the VM. The file gets envd's upload mode and owner.
 func (c *envdClient) writeFile(ctx context.Context, path string, content []byte) error {
 	return c.replace(ctx, path, func(staged string) error { return c.upload(ctx, staged, content) })
 }
@@ -957,9 +840,8 @@ func (c *envdClient) replace(ctx context.Context, path string, upload func(stage
 func (c *envdClient) upload(ctx context.Context, path string, content []byte) error {
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
-	// THE PART NAME IS THE PATH'S BASENAME and envd reads the destination
-	// from the query rather than from the part — a form that named the
-	// full path in the part would write to the wrong place with no error.
+	// The part takes the basename: envd reads the destination from the
+	// query, and a full path in the part would write elsewhere silently.
 	part, err := form.CreateFormFile("file", baseName(path))
 	if err != nil {
 		return err
@@ -979,21 +861,18 @@ func (c *envdClient) upload(ctx context.Context, path string, content []byte) er
 	return uploaded(resp, idle)
 }
 
-// uploadStream is [envdClient.upload] for content read as it is sent: the same
-// multipart form, written through a pipe straight into the request's body, so
-// nothing here holds more of it than one piece — never the whole archive a
-// buffer would, twice over with the form around it.
+// uploadStream is [envdClient.upload] with the form written through a pipe
+// into the request body, so nothing here holds more than one piece of the
+// content, never the whole archive.
 //
-// THE FORM IS WRITTEN ON A GOROUTINE OF THIS CALL'S, which the call stops and
-// waits for before it returns, whichever way the exchange ended: the reading
-// end is closed under it, so a writer the transport stopped reading — an envd
-// that answered before it read the body, an exchange abandoned for its silence
-// — fails its next write and goes, and content is never read once the call has
-// returned. A source that fails part way closes the pipe with its error, so the
-// request ends short of its form's last boundary, the upload fails, and the
-// staged file is removed rather than moved over the path. What a source
-// already blocked in a read does is the source's own, which a reader handed
-// out under the call's context answers by ending.
+// The form is written on a goroutine the call stops and waits for before
+// returning: closing the pipe's reading end makes a writer the transport
+// stopped reading (envd answered early, or the exchange went silent) fail its
+// next write, so content is never read after the call returns. A source that
+// fails part way closes the pipe with its error, the request ends short of the
+// form's last boundary, and the staged file is removed. A source already
+// blocked in a read is its own to end; one read under the call's context
+// ends with it.
 func (c *envdClient) uploadStream(ctx context.Context, path string, content io.Reader) error {
 	pr, pw := io.Pipe()
 	form := multipart.NewWriter(pw)
@@ -1042,16 +921,12 @@ func uploaded(resp *http.Response, idle *idleReader) error {
 }
 
 // discard removes the file a write staged and could not move over its path,
-// and returns failed — the write's own error — saying so where the removal
-// failed too, since the staged file then holds the content in the box under a
-// name nothing reads.
+// and returns failed, the write's own error, noting a failed removal too: the
+// staged file then holds the content under a name nothing reads.
 //
-// A ROLLBACK, so it takes [context.WithoutCancel] of the write's context: the
-// write often failed because that context ended, and a removal inheriting it
-// would remove nothing. It is bounded as every envd file exchange is
-// ([e2bFileIdleTimeout]). envd removes a path that is not there without
-// complaint, so a staged file the failed upload never created costs one
-// request.
+// A rollback, so under [context.WithoutCancel]: the write often failed because
+// its context ended. It is bounded like every envd file exchange
+// ([e2bFileIdleTimeout]), and envd removes a missing path without complaint.
 func (c *envdClient) discard(ctx context.Context, staged string, failed error) error {
 	err := c.filesystem(context.WithoutCancel(ctx), "Remove", envdRemove{Path: staged})
 	if err != nil {
@@ -1061,19 +936,16 @@ func (c *envdClient) discard(ctx context.Context, staged string, failed error) e
 }
 
 // stagedBeside is the name a write to path stages its content under: a fresh
-// one in path's own directory, as envd resolves it.
+// one in path's own directory, as envd resolves it. The last element is
+// replaced as written, never cleaned: envd joins a relative or `~/` path onto
+// the home and cleans only then, so a lexical clean here could name another
+// directory ([envdPath] keeps `a/../~/x` as written, whose directory envd
+// resolves to <home>/~). A trailing slash is dropped first, as envd's join
+// drops it.
 //
-// THE PATH'S LAST ELEMENT IS REPLACED AS WRITTEN, never cleaned: envd joins a
-// relative or `~/` path onto the account's home and cleans only then, so the
-// directory a lexical clean names here is not always the one envd writes the
-// path in ([envdPath] keeps `a/../~/x` as written for that reason, and its
-// directory is `a/../~/`, which envd resolves to <home>/~). A trailing slash
-// is dropped first, as envd's join drops it from the path itself.
-//
-// UNGUESSABLE, as the local cells' staged files are ([hostbox.ReplaceFileIn]):
-// the box's own processes write the directory, and a name one of them could
-// make first would fail the upload, or be moved over the file in place of the
-// write's own content.
+// Unguessable, as [hostbox.ReplaceFileIn]'s staged files are: the box's own
+// processes write the directory, and a name one of them made first would fail
+// the upload or be moved over the file in its place.
 func stagedBeside(path string) string {
 	dir := ""
 	if i := strings.LastIndex(strings.TrimRight(path, "/"), "/"); i >= 0 {
@@ -1099,16 +971,13 @@ type (
 	}
 )
 
-// filesystem makes one call of envd's filesystem service: a Connect UNARY
-// call, in JSON, answered whole — unlike Process/Start, whose answer is a
-// stream ([envdClient.start]). Only whether it succeeded is read.
-//
-// AS THE ACCOUNT EVERY /files CALL NAMES ([e2bEnvdUser]), by HTTP Basic: envd
-// reads a Connect call's user from that header alone (AuthenticateUsername in
-// packages/envd/internal/permissions/authenticate.go), and without it acts as
-// the template's default user, in whose home a relative or `~/` path would
-// then be resolved — another directory than the one the upload wrote, for a
-// template whose default user is not that account.
+// filesystem makes one unary Connect call of envd's filesystem service, in
+// JSON, answered whole (unlike [envdClient.start]'s stream); only success is
+// read. It acts as [e2bEnvdUser] by HTTP Basic, the only header envd reads a
+// Connect call's user from (AuthenticateUsername in
+// packages/envd/internal/permissions/authenticate.go): otherwise envd acts as
+// the template's default user and resolves a relative or `~/` path in that
+// user's home, not the one the upload wrote to.
 func (c *envdClient) filesystem(ctx context.Context, method string, request any) error {
 	body, err := json.Marshal(request)
 	if err != nil {
@@ -1138,11 +1007,10 @@ func (c *envdClient) filesystem(ctx context.Context, method string, request any)
 // names an account (the token that admits the call is X-Access-Token's).
 var envdBasicUser = "Basic " + base64.StdEncoding.EncodeToString([]byte(e2bEnvdUser+":"))
 
-// envdRefused is an answer of 400 or more from a box's agent, marked by what
-// its status means where it means something ([statusWhy]): the box failing on
-// its side, or the account at a limit. A refused access token is the box's own
-// credential, handed to the engine at its create, and no person's to fix, so
-// it is left for the caller to read as the fault it is.
+// envdRefused classes an answer of 400 or more from a box's agent by its
+// status where that means something ([statusWhy]): the box failing, or the
+// account at a limit. A refused access token is the box's own credential, no
+// person's to fix, so it is left for the caller to read as the fault it is.
 func envdRefused(status int, err error) error {
 	if why, ok := statusWhy(status, false); ok {
 		return Because(why, err)
@@ -1155,44 +1023,31 @@ func filesQuery(path string) string {
 	return url.Values{"path": {path}, "username": {e2bEnvdUser}}.Encode()
 }
 
-// authorize names the account a call acts as and presents the box's access
-// token — the two headers EVERY envd request carries, which is why each one
-// is built through here.
+// authorize sets the two headers every envd request carries: the account it
+// acts as and the box's access token.
 func (c *envdClient) authorize(req *http.Request) {
-	// Sent as a header AND as the query parameter above, because envd has
-	// read it from both across versions and a mismatch between the box's
-	// envd and this build shows up as a permission error naming no user.
+	// Also sent as the query parameter ([filesQuery]): envd has read it from
+	// each across versions, and a miss shows as a permission error naming
+	// no user.
 	req.Header.Set("X-User", e2bEnvdUser)
-	// envd's own header for the token (packages/envd/internal/api/auth.go
-	// in e2b-dev/infra). A secured box refuses a process call without it
-	// and a file call without it or a signature; a header is the form both
-	// accept, and the one E2B's SDKs send.
+	// envd's token header (packages/envd/internal/api/auth.go in
+	// e2b-dev/infra): a secured box refuses a process call without it and
+	// a file call without it or a signature, so the header serves both.
 	req.Header.Set("X-Access-Token", c.token)
 }
 
 // envdPath is a path to write as every other cell writes it: an absolute one
-// lexically clean, and every other form as envd itself reads it.
+// lexically clean, every other form as envd itself reads it.
 //
-// ONE MEANING IN EVERY CELL. envd joins a relative or `~/` path onto the
-// account's home, which cleans it, but takes an absolute path VERBATIM: it
-// creates the path's parent and then writes the path, so `/home/user/.npmrc/`
-// made `/home/user/.npmrc` a directory and was refused as one ("path is a
-// directory"), while both local cells clean the same key through
-// hostbox.InHome and write the file. The setup-file rule in internal/config
-// cleans before it judges, so it admitted a key every e2b box then failed on.
-// Cleaned here, an absolute key lands where the other forms do, and the
-// upload's part is named for the file rather than for the empty element after
-// a trailing slash.
+// envd writes an absolute path verbatim, so `/home/user/.npmrc/` would be
+// refused as a directory where the local cells (hostbox.InHome) and
+// internal/config's setup-file rule clean it to the file.
 //
-// NEVER CLEANED ACROSS THE TILDE. To a lexical clean `~` is an ordinary
-// element a following `..` removes: `~/../user/.npmrc` cleans to
-// `user/.npmrc`, which envd joins onto the home as `/home/user/user/.npmrc`,
-// where envd's own expansion — and the config rule, which resolves `~/` the
-// same way — put it at `/home/user/.npmrc`. So a `~/` path keeps its prefix and
-// only what follows it is cleaned, and any other form (a relative path, `~`,
-// `~name`) goes to envd as written: its join cleans a relative path itself,
-// and cleaning one here could even MAKE a tilde form, `a/../~/x` becoming the
-// `~/x` envd would read as the home.
+// Never cleaned across the tilde: `~/../user/.npmrc` would clean to
+// `user/.npmrc`, which envd puts at /home/user/user/.npmrc. So `~/` keeps its
+// prefix and only the rest is cleaned; any other form goes as written, since
+// envd's join cleans a relative path and a clean here could make a tilde form
+// (`a/../~/x` to `~/x`).
 func envdPath(p string) string {
 	if path.IsAbs(p) {
 		return path.Clean(p)
@@ -1203,9 +1058,8 @@ func envdPath(p string) string {
 	return p
 }
 
-// baseName is the last path element, without importing path/filepath for a
-// remote POSIX path — filepath is the HOST's separator, and on Windows it
-// would split a Linux box's path on the wrong character.
+// baseName is the last element of a box's POSIX path: path/filepath splits on
+// the host's separator, the wrong character on Windows.
 func baseName(path string) string {
 	if i := strings.LastIndex(path, "/"); i >= 0 {
 		return path[i+1:]

@@ -32,40 +32,24 @@ import (
 )
 
 // AN EVICTED NODE'S OWN WRITES, MADE THROUGH ITS REAL WRITERS, ARE DROPPED BY
-// THE APPLIER — on every identity-claiming log, on real streams.
+// THE APPLIER — on every identity-claiming log, on real streams. The eviction
+// gate (clause (iii) of the floor theorem) reads only the log's order and the
+// writer each record names, so the writes go through the production writers,
+// never hand-built records that fill the writer in for them.
 //
-// The eviction gate is clause (iii) of the floor theorem: the one that holds
-// when the other two are defeated, because it depends on nothing but the log's
-// own order and on each record naming the node that wrote it. No write path in
-// the tree named one. The tracker's writer and the page store both built an
-// envelope with an empty writer, so the gate's "is this writer evicted" never
-// matched a row, and a node the fleet had removed went on writing records every
-// applier took. The cases that exercised the gate all hand-built their records
-// with a writer filled in, which is exactly the half production never did.
-//
-// AND THE IDENTITY ESTATE'S WRITER WAS THE SAME: until its writes were
-// stamped, an identity record carried no writer at all, so an evicted node's
-// session invalidations applied on every data node while its tracker writes
-// were dropped.
-//
-// So the evictions here land on each log first — as a peer would publish them
-// — while this node's appliers are halted, which is what a node that has not
-// yet noticed its own eviction is. Its own writes then go through the writers
-// it serves every seat and person with, land above the eviction, and the
-// appliers, once running, must drop them.
-//
-// EVERY LOG THE NODE RUNS THAT CLAIMS IDENTITY, read off the running set: a
-// domain that claims identity and has no write here fails the case, so a log
-// added to the register is held to the gate the day it is added rather than
-// certified by a list of the ones that came first.
+// The evictions land first, as a peer would publish them, while this node's
+// appliers are halted (a node that has not noticed its own eviction); its
+// writes land above them, and the appliers, once running, must drop them.
+// Every log claiming identity is read off the running set, and one with no row
+// in evictedWriters fails the case, so a new log is held to the gate the day
+// it is added.
 func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
 	s := e.core.Load().log
 	self := s.nodeID
 	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: halted appliers look
-	// like a node below the log, and an adoption racing the writes below
-	// would be what they measured.
+	// like a node below the log, and an adoption would race the writes.
 	s.rejoinMu.Lock()
 	s.rejoin = func(context.Context) error { return nil }
 	s.rejoinMu.Unlock()
@@ -83,9 +67,8 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 		logs = append(logs, running)
 	}
 
-	// THE CONTROL: the same writes, made before any eviction, apply.
-	// Without it a harness that applied nothing of this node's would pass
-	// the case below.
+	// THE CONTROL: the same writes, made before any eviction, apply; without
+	// it a harness that applied nothing of this node's would pass.
 	for _, running := range logs {
 		w := evictedWriters[running.domain.Name()]
 		if _, _, err := w.write(t.Context(), t, e, "before"); err != nil {
@@ -108,11 +91,9 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	}
 
 	// ITS OWN WRITES, THROUGH ITS REAL WRITERS: its fence reads its own
-	// applied rows, which do not hold the eviction yet, so every one lands.
-	// None can resolve — the appliers are halted — so a writer that reports
-	// an outcome answers pending, which is the honest answer and the one
-	// asserted, after [haltedWriteBudget] rather than the publisher's whole
-	// default.
+	// applied rows, which lack the eviction, so every one lands. With the
+	// appliers halted none resolves, so a writer that reports an outcome
+	// answers pending, after [haltedWriteBudget].
 	halted := statelog.WithResolveBudget(t.Context(), haltedWriteBudget)
 	landed := map[string]statelog.Position{}
 	for _, running := range logs {
@@ -134,9 +115,8 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 		w := evictedWriters[name]
 		waitApplied(t, running)
 
-		// THE EVICTION APPLIED — which is what says the peer's record
-		// above was one this applier read, and the drop below is the
-		// gate's.
+		// THE EVICTION APPLIED, so this applier read the peer's record
+		// and the drop below is the gate's.
 		requireRow(t, back, w.evictions, "node_id", self, true)
 		if w.applied(t, back, "evicted") {
 			t.Errorf("the evicted node's %s write applied", name)
@@ -273,12 +253,10 @@ var evictedWriters = map[string]evictedWriter{
 		write: func(ctx context.Context, t *testing.T, e *Engine, tag string) (
 			statelog.Position, statelog.Outcome, error) {
 			t.Helper()
-			// THE CODE LOG'S OWN PUBLISHER, stamping this node's id — the
-			// one Gitlet's lifecycle store writes through, built here
-			// because this company hosts no code: the log runs on every data
-			// node whatever the company says, and so does its eviction gate.
-			// The write is an operator's eviction of ANOTHER node, which an
-			// evicted node's gate drops like any record it wrote.
+			// THE CODE LOG'S OWN PUBLISHER, stamping this node's id, as
+			// Gitlet's lifecycle store writes; built here because this company
+			// hosts no code, yet the log and its gate run on every data node.
+			// It evicts ANOTHER node, a record the gate drops like any other.
 			s := e.core.Load().log
 			store, err := gitlet.NewStore(gitlet.StoreOptions{
 				Publisher: s.Domain(gitlet.Domain{}.Name()).publisher,
@@ -305,10 +283,9 @@ var evictedWriters = map[string]evictedWriter{
 		write: func(ctx context.Context, t *testing.T, e *Engine, tag string) (
 			statelog.Position, statelog.Outcome, error) {
 			t.Helper()
-			// THE NODE GATE'S OWN GESTURE, through the node's artifacts
-			// writer: evicting a node nobody runs is the one write that
-			// writer makes with no artifact, object or seat behind it, and
-			// it leaves a row a case can look for.
+			// THE NODE GATE'S OWN GESTURE: evicting a node nobody runs is
+			// the artifacts writer's one write needing no artifact, object
+			// or seat, and it leaves a row a case can look for.
 			res, err := e.core.Load().artifactsWriter.EvictNode(ctx,
 				iam.ActorFor(gateOperator), statelog.NewOpID(time.Now(), "evict-"+tag),
 				"node-"+tag)
@@ -495,16 +472,15 @@ func sessionGeneration(t *testing.T, back *Backends) int64 {
 	return generation
 }
 
-// haltedWriteBudget is the resolution budget a case hands the writes it makes
-// while one of this node's appliers is halted ([statelog.WithResolveBudget]),
-// and those writes alone: every other write keeps the publisher's default.
+// haltedWriteBudget is the resolution budget ([statelog.WithResolveBudget])
+// for the writes a case makes while one of this node's appliers is halted, and
+// those alone.
 //
-// ONE SECOND. A write on a halted applier answers pending whatever the budget,
-// so its length is simply spent — the default's five seconds per write was
-// most of these cases' run time. But one gesture writes every identity log at
-// once, and a log whose applier is RUNNING must still resolve applied inside
-// the same budget, which a running applier does in milliseconds and a loaded
-// race runner in well under a second.
+// ONE SECOND: a write on a halted applier answers pending whatever the budget,
+// so each spends all of it (the publisher's five-second default would dominate
+// the run), yet one gesture writes every identity log at once, and a log whose
+// applier is RUNNING must still resolve applied within it: milliseconds, and
+// well under a second on a loaded race runner.
 const haltedWriteBudget = time.Second
 
 // evictedView is a shared workspace view, the smallest thing the tracker's
@@ -518,8 +494,8 @@ func evictedView(id string) worklet.View {
 
 // createConversation is a person starting the conversation tag names, through
 // the assistant writer w: the one write a person makes there that needs
-// nothing written before it, so it lands on a subject nobody has written, and
-// the conversation's own row is what it leaves.
+// nothing written before it (a fresh subject), and it leaves the
+// conversation's row.
 func createConversation(ctx context.Context, w *assistantdomain.Writer,
 	tag string) (statelog.Result, error) {
 

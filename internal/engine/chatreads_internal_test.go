@@ -13,17 +13,13 @@ import (
 	"github.com/crewlet/crewlet/internal/maintenance"
 )
 
-// THE CHAT READ STATE IS JUDGED AGAINST THE FLEET REVISION'S HUMAN SEATS, and
-// only those.
+// THE CHAT READ STATE IS JUDGED AGAINST THE FLEET REVISION'S HUMAN SEATS ONLY.
 //
-// A read state is kept under the seat a person acts as, so the roster is the
-// company's HUMAN seats: an agent seat in it would keep a record nobody can
-// reach for as long as the seat exists, and a roster of the agent seats — the
-// mailbox sweep's — would find every person missing and forget every cursor in
-// the company a day later. And it is the FLEET's revision, under
-// [Engine.fleetCompany]'s rule, because a forget cannot be undone and a seat
-// judged absent against a stale revision may be one the fleet has just added
-// back: every other answer is unknown.
+// Read state is kept under the seat a person acts as: an agent seat in the
+// roster keeps a record nobody reaches, and the agent roster (the mailbox
+// sweep's) would forget every cursor a day later. And the FLEET's revision
+// ([Engine.fleetCompany]), because a forget cannot be undone and a seat absent
+// from a stale revision may be one the fleet just added back.
 func TestTheChatReadRosterIsTheFleetRevisionsHumanSeats(t *testing.T) {
 	t.Parallel()
 	cfg, err := config.ParseCompany([]byte(`

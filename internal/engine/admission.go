@@ -7,71 +7,29 @@ import (
 )
 
 // THE SEAT-CLAIM GATE'S OPENING IS AN EVENT, and the seat host is told of it.
-//
-// The host claims a seat only while its gate admits ([Engine.seatsAdmitted]:
-// a mode that publishes, and [Engine.StateLogHydrated]), and it cannot see the
-// gate change — it learns the answer only by asking, which it does on each
-// pass. Its first pass is [seat.Host.Start]'s, and on the commonest boot the
-// answer there is no: a data node's appliers are still working through their
-// logs, so nothing is claimed. Nothing asked again until the sweep's next
-// tick, up to [seat.SweepInterval] later, so a node that caught up a moment
-// after it started ran none of its company for the rest of the interval — and
-// a node handed its first company, whose apply's own pass met appliers still
-// applying the records that apply had just written, waited the same way.
-//
-// So the engine, which owns what the gate reads, watches for what can open it
-// and asks the host for a pass ([seat.Host.Resweep]) when it has. The events
-// are the two it can see:
-//
-//   - A LOG WHOSE HEALTH GATES ADMISSION COMING LEVEL with its log
-//     ([statelog.RunnerDeps.OnLevel]): the strict half of the gate is that
-//     every such log is level now, and it turns true at the moment one of
-//     them comes level after a backlog, a burst of writes or an outage.
-//   - THE FLEET'S VIEW LISTING FOR THE FIRST TIME ([coord.LeaseView.Listed]),
-//     without which a node whose company runs a native half refuses every
-//     claim: its seats' calls could not be routed.
-//
-// What it cannot see is a PEER'S copy becoming one that admits: a node whose
-// own copy does not serve — one holding no data, or one whose copy is out of
-// service — is admitted on a data node's word, which it learns by asking, and
-// its sweep asks every interval.
-//
-// # Armed by the gate's own refusal
-//
-// An event is acted on only while the gate's last answer to a pass was a
-// refusal nothing has acted on ([gateWatch.refused]). A node whose last pass
-// was admitted has nothing waiting on the gate — a seat free since is the
-// fleet's news, which the tick is sized for — and evaluating the gate on every
-// burst of writes a healthy node applies would cost the broker a health read
-// per log for nothing. Armed, the watch evaluates the gate on its own
-// goroutine and asks for a pass only when it admits: a pass costs a listing of
-// the fleet, and the gate may still be closed for a reason no event here says
-// has cleared. Each refusal is acted on ONCE — the ask disarms the watch, and
-// the pass it brings asks the gate again, which re-arms it if it refuses.
-//
-// THE REFUSAL ITSELF IS AN EVENT TOO. A log can come level while a pass is
-// deciding, after the pass read its lag and before its refusal was recorded:
-// the watch told of it then found nothing armed, the refusal was recorded
-// after, and with every log level no further event came — the seats waited for
-// the tick, the latency this file exists to remove. So a refusal nudges the
-// watch as it is recorded, and the watch evaluates the gate after it: an
-// opening that raced the pass is found either way.
-//
-// NEVER THE HOST'S RECORD OF ITS LAST PASS ([seat.SweepResult.Withheld]),
-// which also reads withheld for a pass on a node that cannot serve its seats
-// at all — a pass that never asks the gate. Armed by that, every event on such
-// a node found the gate open and asked for a pass that withheld itself again,
-// and the host honours the next ask at once after a withheld pass that changed
-// nothing — a full pass for every burst of writes the node applied, for as
-// long as it could not serve.
-//
-// The host honours the watch's ask even inside the interval of the ask before
-// it when that ask's pass changed nothing because the gate withheld it
-// ([seat.Host.Resweep]) — an apply's, made while the node was still catching
-// up with the records it had just written.
+// The host learns whether the gate ([Engine.seatsAdmitted]) admits only by
+// asking on a pass, so a gate that opens just after a refused pass (appliers
+// still catching up at boot, or with the records an apply just wrote) would
+// leave the node's seats unclaimed until the sweep's next tick
+// ([seat.SweepInterval]). The engine owns what the gate reads, so it asks for a
+// pass ([seat.Host.Resweep]) on the two openings it can see: a log whose health
+// gates admission coming level ([statelog.RunnerDeps.OnLevel]), and the fleet's
+// view listing for the first time ([coord.LeaseView.Listed]), without which a
+// node running a native half refuses every claim. A peer's copy starting to
+// admit it cannot see; the tick covers that.
 
 // gateWatch is the seat-claim gate as the host asks it, and the watch that
 // asks the host for a pass when the gate opens after refusing one.
+//
+// It acts only while a refusal is unanswered ([gateWatch.refused]): an
+// admitted node has nothing waiting on the gate, and reading it on every burst
+// of writes would cost a broker health read per log. Armed, it asks for a pass
+// only once the gate admits (a pass lists the fleet, and the gate may be closed
+// for a reason no event here reports cleared), and answers each refusal once:
+// the ask disarms, and the pass re-arms it if refused. Armed by the gate's refusal,
+// never [seat.SweepResult.Withheld], which also reads withheld on a node that
+// cannot serve at all; the host honours an ask at once after a withheld pass,
+// so that would make every write burst a full pass.
 type gateWatch struct {
 	// admits is the gate itself ([Engine.seatsAdmitted]).
 	admits func(ctx context.Context) bool
@@ -95,9 +53,10 @@ func newGateWatch(admits func(ctx context.Context) bool) *gateWatch {
 	return &gateWatch{admits: admits, nudges: make(chan struct{}, 1)}
 }
 
-// gate is the claim gate as the seat host asks it ([seat.Config.Ready]): the
-// gate's answer, a refusal recorded and announced to the watch, and an
-// admission disarming it — a pass the gate admitted left nothing waiting.
+// gate is the claim gate as the seat host asks it ([seat.Config.Ready]). An
+// admission disarms the watch; a refusal arms and nudges it, because a log that
+// came level while this pass decided found the watch unarmed, and with every
+// log level no later event would come before the tick.
 func (w *gateWatch) gate(ctx context.Context) bool {
 	if w.admits(ctx) {
 		w.refused.Store(false)
@@ -139,9 +98,8 @@ func (w *gateWatch) readmit(ctx context.Context, host resweeper) {
 
 // run reads events until ctx ends, acting on each ([gateWatch.readmit]).
 //
-// IT ACTS ONCE AS IT STARTS, before waiting for any event, because what came
-// before it is not all still pending: the host's first pass ran in
-// [seat.Host.Start] before the watch did, and the fleet's view may have
+// IT ACTS ONCE AS IT STARTS, before any event: the host's first pass
+// ([seat.Host.Start]) ran before the watch did, and the fleet's view may have
 // listed already. listed is closed by the view's first listing, and nil where
 // the gate reads no view.
 func (w *gateWatch) run(ctx context.Context, host resweeper, listed <-chan struct{}) {
