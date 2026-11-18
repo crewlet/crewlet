@@ -24,28 +24,15 @@ import (
 )
 
 // `POST /mcp-servers/{name}/changes` decides changes a server made to its tools
-// since their levels were decided (ADR-0078):
-// `{"accept": {"<tool>": "<digest>"|null}, "block": {"<tool>": "<digest>"|null}}`,
-// each key the server's own name for a tool and each value the digest of the
-// definition reviewed, the `after.digest` of its change in the detail's
-// `changes`, or null for a removal.
+// (ADR-0078): each value is the reviewed definition's digest (`after.digest`),
+// or null for a removal. ACCEPTING releases the tool at its level; BLOCKING
+// sets it blocked and accepts the definition too, so a tool unblocked later
+// runs at the level set then. `config.write` at a recent step-up, audited as
+// `mcp_server_acted` `review_changes`.
 //
-// ACCEPTING releases the tool: its level holds for the definition accepted,
-// so an allowed one runs without asking again. BLOCKING keeps it from every
-// agent (its level set to blocked, as `PUT /mcp-servers/{name}/tools` sets it)
-// and accepts the definition too, since that is the definition the decision
-// was taken on: a tool unblocked later runs at the level set then, on it.
-//
-// A CONFIGURATION WRITE, decided as one: `config.write` at its recent step-up,
-// since accepting can return a tool to running unasked, and a block is a
-// revision of the company. Audited as `mcp_server_acted`, action
-// `review_changes`.
-//
-// A SERVER CANNOT MAKE A CHANGE LOOK ACCEPTED. Each decision names the digest
-// of the definition the person reviewed, and is refused `409 stale_version`
-// unless that is a definition the fleet lists for the tool now and nobody has
-// accepted: a server that swapped the definition between the review and the
-// answer is answered with the review to read again, and nothing is written.
+// A SERVER CANNOT MAKE A CHANGE LOOK ACCEPTED: a digest the fleet does not
+// list for the tool now, or already accepted, is refused `409 stale_version`
+// with the review to read again, and nothing is written.
 
 // Reviews is where a server's changes are read ([queries.Sources.MCPReview])
 // and a decision about one written ([coord.MCPAccepted]).

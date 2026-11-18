@@ -17,18 +17,15 @@ import (
 // Setting an MCP server's tool levels: `PUT /mcp-servers/{name}/tools`
 // (internal/api/mcpapi), written here.
 //
-// A CHANGE, NOT A REPLACEMENT: the request names the default and the tools it
-// sets, and every level it does not name stays. Two people blocking two tools
-// of one server each land, as two edits of one document do, so the write takes
-// no If-Match; it is built on the fleet's revision as it stands when it is
-// written, again on each attempt a concurrent write wins
-// ([entityAttempts]).
+// A CHANGE, NOT A REPLACEMENT: levels the request does not name stay. Two
+// people blocking two tools of one server each land, so the write takes no
+// If-Match; it is built on the fleet's revision as it stands, again on each
+// attempt a concurrent write wins ([entityAttempts]).
 //
-// THE WHOLE DOCUMENT IS HELD TO EVERY RULE an authored write is, so a level
-// that leaves a server some executor box lists with a tool held back is
-// refused at the box's entry ([config.Company.ValidateAdmission]), and a step-up
-// older than the window is refused by the route's own verb before anything is
-// read.
+// THE WHOLE DOCUMENT IS HELD TO EVERY RULE an authored write is: a level
+// leaving a server some executor box lists with a tool held back is refused at
+// the box's entry ([config.Company.ValidateAdmission]), and a step-up older
+// than the window by the route's own verb before anything is read.
 
 // MCPToolsChange is one change to an MCP server's tool levels
 // (`mcp_servers[].tools`).

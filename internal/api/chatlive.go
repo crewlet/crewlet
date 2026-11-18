@@ -9,31 +9,16 @@ import (
 )
 
 // EngineChatLive is the process's chat hub attached to the engine beside it:
-// the live half of the company's own chat — committed frames for the sockets
-// this node serves, a chat room's presence on the engine's presence hub, a
-// person's read state pushed to their own tabs, and the poster a Chatlet seat's
-// working indicator is raised on.
-//
-// # One per process, attached on every node, after the engine exists
-//
-// A seat raises its working indicator on whichever node its turn runs on, and
-// a node with the `seats` role alone — no listener, no `ingress` — runs turns
-// too: the indicator is the seat's member of the room's presence, which that
-// node's presence hub tells the node a person has the room open on.
-// So the hub is built and attached on EVERY node, whether or not it serves an
-// API, and its lifetime is the process's rather than an App's. [New] mounts
-// the socket over it where one is served ([Options.ChatLive]), which is what
-// tells the hub that what it hears is shown to somebody here.
-//
-// AFTER [engine.New], through the engine's own setter ([engine.Engine.SetChatLive])
-// rather than an option it was built with: the chat applier is handed the
-// engine's own post-commit hook at construction and that hook reads what is
-// attached when it is CALLED, so nothing has to exist before the engine does —
-// and the boot company's Chatlet indicator driver is rebuilt over the hub as it
-// arrives.
-//
-// ONE CONSTRUCTOR for `crewlet run` and the end-to-end suite, for
-// [NewHumanSurfaces]' reason: a copy of the wiring in either would be a
+// the live half of the company's own chat: committed frames for this node's
+// sockets, a room's presence, read state pushed to a person's tabs, and the
+// poster a Chatlet seat's working indicator is raised on.
+// One per process, attached on EVERY node, API or not: a `seats`-only node runs
+// turns too, and a seat's indicator is its member of the room's presence on the
+// node its turn runs on. [New] mounts the socket over it where one is served
+// ([Options.ChatLive]). Attached AFTER [engine.New] through
+// [engine.Engine.SetChatLive], not an option: the chat applier's post-commit
+// hook reads what is attached when CALLED. ONE CONSTRUCTOR for `crewlet run` and
+// the end-to-end suite, for [NewHumanSurfaces]' reason: a copy would be a
 // harness agreeing with itself.
 type EngineChatLive struct {
 	hub    *stream.ChatHub

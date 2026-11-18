@@ -19,25 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/session"
 )
 
-// AN ANSWER NAMED BY OBJECT IDS IS SENT AS ONE THAT NEVER CHANGES. A question
-// answering [queries.Immutable] — one whose bytes are a function of what its
-// request named, as a tree, a file's lines or a diff read by whole commit ids
-// can be — is sent over REST with a strong entity tag of the bytes it
-// answered, kept by the caller's own cache and never revalidated while kept
-// (`immutable`), under a cache key holding who the answer is for (the bearer
-// in `Authorization` and the dashboard's reader) and never the session cookie,
-// whose bytes every re-issue moves (see
-// [TestAKeptOidAnswerIsServedPastItsCookiesReissue]); a request
-// that already holds the tag is answered `304` with no body and the same
-// headers, by the weak comparison `If-None-Match` takes, in a list or as `*`.
-// The socket, which caches nothing, carries the answer itself and never the
-// wrapper. And an answer that is not wrapped carries none of it, since the
-// same question asked by a branch moves when the branch does.
+// AN ANSWER NAMED BY OBJECT IDS IS SENT AS ONE THAT NEVER CHANGES. A
+// [queries.Immutable] answer goes over REST with a strong entity tag, kept by
+// the caller's cache and never revalidated (`immutable`), keyed on who it is
+// for (`Authorization` bearer, the dashboard's reader) and never the session
+// cookie (see [TestAKeptOidAnswerIsServedPastItsCookiesReissue]). A request
+// holding the tag gets `304`, no body, same headers, by weak `If-None-Match`
+// comparison, in a list or as `*`. The socket carries the answer itself, never
+// the wrapper; an unwrapped answer (a branch's) carries none of this.
 //
-// Mutation: drop httpjson.Immutable's If-None-Match arm → every repeat is a
-// full 200, red; drop Immutable.MarshalJSON → the socket's frame carries
-// {"Answer": …}, red; add Cookie to the Vary → red; drop the reader from the
-// Vary → red.
+// Mutation: drop httpjson.Immutable's If-None-Match arm → red; drop
+// Immutable.MarshalJSON → the frame carries {"Answer": …}, red; add Cookie to
+// the Vary → red; drop the reader from the Vary → red.
 func TestAnOidAnswerIsImmutable(t *testing.T) {
 	t.Parallel()
 	tree := map[string]any{"oid": "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "entries": []any{}}
@@ -134,33 +127,16 @@ func TestAnOidAnswerIsImmutable(t *testing.T) {
 
 // A KEPT OID ANSWER IS SERVED PAST ITS SESSION COOKIE'S RE-ISSUE.
 //
-// A signed-in browser presents its session cookie on every request, and the
-// guard re-issues it once it is [session.ReissueAfter] old: new bytes, the same
-// person. A browser reuses a kept answer for a later request only while every
-// header the answer's `Vary` names is the same in both (RFC 9111 §4.1), so an
-// answer keyed on `Cookie` stopped matching at the first re-issue, and every
-// page a person went back to was asked of the node again — a read on the
-// repository's home Gitlet node per page, per person, every five minutes: the
-// read a year-long cache exists to save. So the key holds who the answer is
-// for, the bearer a client sets (`Authorization`) and the reader a dashboard
-// tab names (httpjson.ReaderHeader), and never the cookie; the re-issue that
-// fills the cache here empties nothing.
+// The guard re-issues a session cookie once it is [session.ReissueAfter] old:
+// new bytes, same person. A browser reuses a kept answer only while every
+// header its `Vary` names matches (RFC 9111 §4.1), so keying on `Cookie` would
+// re-ask the home Gitlet node per re-issue. The key holds the bearer and the
+// reader (httpjson.ReaderHeader), never the cookie. A REQUEST THAT NAMES NOBODY
+// IS KEPT BY NO CACHE: a cookie alone is shared by everyone signing in on that
+// browser, and code reads differ per person (ADR-0110): `no-store`, no tag.
 //
-// Through the whole app, the way a browser arrives: the request that fills the
-// cache is one the guard re-issues on, and the browser's next request for the
-// page — presenting the re-issued cookie and the same reader — is answered from
-// what it kept.
-//
-// A REQUEST THAT NAMES NOBODY IS KEPT BY NO CACHE: the cookie alone, with no
-// reader and no bearer, is the key every person who signs in on that browser
-// shares, and a read of the company's code is not the same for every person
-// (ADR-0110), so it is answered the value itself, `no-store`, with no tag.
-//
-// Mutation: add `Vary: Cookie` back to httpjson.Immutable → the request after
-// the re-issue misses the kept answer, red; empty the cache on a re-issue
-// (session.Issue sending Clear-Site-Data) → red; drop the reader from the Vary
-// → the next person's tab is answered from the last one's, red; mark a request
-// naming nobody immutable again → the cookie's own request is kept, red.
+// Mutation: `Vary: Cookie` back; clear the cache on a re-issue; drop the reader
+// from the Vary; mark a nobody-request immutable. Each goes red.
 func TestAKeptOidAnswerIsServedPastItsCookiesReissue(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()

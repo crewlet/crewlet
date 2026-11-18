@@ -76,38 +76,18 @@ type fleetRevision struct {
 	fleet bool
 }
 
-// current is the company this surface answers for: the FLEET's revision, the
-// one its activation pointer names, read on every call.
-//
-// # The pointer, never the revision this node boots on
-//
-// Every answer here — GET /config and its entity-tag, the revision list's
-// `is_active`, a diff against `active`, and the base every write is built on —
-// is about the company, and the company is the pointer. What this node boots on
-// is another fact (configplane's package doc): it trails the pointer by an
-// apply, and stays behind it for good on a node that refused the fleet's
-// revision. Answered from it, a write landing between a tick's read of the
-// pointer and its apply read back as the revision before it, so the next
-// `If-Match` naming the write was refused; and on a node that refused the
-// fleet's revision, every write was built on a revision the pointer no longer
-// named and lost the compare-and-set — a 409 nothing could clear, on the one
-// surface that writes the correction. Every node answers the same, whatever it
-// runs.
-//
-// FROM THIS NODE'S HISTORY WHERE IT HOLDS THE REVISION, and otherwise from the
-// body the pointer carries, as the reconciler meets it ([configplane.RevisionOf]):
-// a node that has not ticked since the pointer moved holds no row for it yet.
-// It is not kept here — A READ NEVER WRITES — and the reconciler's next tick
-// keeps it. At the pointer's instant either way.
-//
-// WITH NO POINTER, the company this node knows ([store.Configs.Restorable]):
-// what the fleet was on when this node last saw it, or the change an offline
-// command built on that. A write built on it is create-only at the pointer.
-//
-// A coordination store that cannot be read is an error that stays
-// [coord.ErrUnavailable], answered 503: "the fleet has no company" and "I could
-// not ask" send a write to opposite outcomes, and guessing the first is the one
-// that replaces a running company.
+// current is the company this surface answers for: the FLEET's revision, named
+// by its activation pointer, read on every call, not what this node boots on:
+// that trails it by an apply, and stays behind on a node that refused it
+// (configplane's package doc). Answered from it, the `If-Match` naming a write
+// that landed mid-tick was refused, and on a refusing node every write lost
+// the compare-and-set, a 409 nothing could clear. Every node answers alike.
+// FROM THIS NODE'S HISTORY WHERE IT HOLDS THE REVISION, else from the body the
+// pointer carries ([configplane.RevisionOf]); A READ NEVER WRITES. WITH NO
+// POINTER, the company this node knows ([store.Configs.Restorable]), and a
+// write built on it is create-only. An unreadable coordination store stays
+// [coord.ErrUnavailable], 503: "no company" and "could not ask" send a write
+// to opposite outcomes, and guessing the first replaces a running company.
 func (s *Service) current(ctx context.Context) (fleetRevision, bool, error) {
 	var bodiless *coord.Activation
 	for {
@@ -196,13 +176,11 @@ func (s *Service) activeCompany(ctx context.Context) (*config.Company, store.Rev
 // FleetCompany is the fleet's company UNREDACTED and the id of the revision it
 // is, from ONE read of the pointer ([Service.current]).
 //
-// For a surface built on this one that both describes the document its writes
-// change and names the revision they are checked against — the setup surface,
-// whose answers say what each field holds and hand back the revision to send
-// as `if_match`. Read apart, the two described different revisions on a node
-// whose engine runs another than the fleet's — one that refused it, or one
-// mid-apply — and a write decided on one document landed on the other. Never
-// answered to a caller as it stands: its literals are what redaction hides.
+// For the setup surface, which describes the document its writes change and
+// hands back the revision to send as `if_match`. Read apart, the two could
+// describe different revisions on a node whose engine runs another than the
+// fleet's, and a write decided on one landed on the other. Never answered to a
+// caller as it stands: its literals are what redaction hides.
 //
 // [ErrNoActiveRevision] where the fleet has no company, an
 // [*UnreadableRevisionError] where this node's keyring does not open it, and
@@ -218,34 +196,15 @@ func (s *Service) FleetCompany(ctx context.Context) (*config.Company, string, er
 // References is every ${VAR} the active document names, paired with the path
 // of the field that names it.
 //
-// THE QUESTION IS "WHAT BREAKS IF I REMOVE THIS", and it is asked from the
-// Secrets screen rather than from here: deleting or renaming a credential the
-// document still points at leaves that pointer resolving to nothing, and the
-// surfaces holding it start refusing deliveries with no error naming the row
-// that went away. The answer has to carry PATHS — a name on its own says a
-// reference exists somewhere, which nobody can act on.
+// THE QUESTION IS "WHAT BREAKS IF I REMOVE THIS", asked from the Secrets
+// screen: deleting a credential the document still names makes deliveries fail
+// with no error naming the row. The answer carries PATHS, not bare names.
 //
-// It lives on the config surface because it is a fact about the config
-// document, not about the secret store: the store holds the values, and the
-// only thing that knows a value is spoken for is the document that names it.
-// /secrets could not answer this without a second reader of the company
-// revision.
-//
-// Derived from the UNREDACTED document, and it answers only names and paths,
-// never a value. The redacted one GET /config serves would hide exactly the
-// references this question is about: redaction shows a value only when it is
-// one whole ${VAR}, so a credential written as "Bearer ${TOKEN}" reads as a
-// mask there, and an index built from that mask would tell an operator that
-// nothing points at TOKEN just before they delete it.
-//
-// And it counts a variable the company reads WITHOUT naming it — an entry's
-// empty credential field, filled from a conventional variable
-// ([config.Company.VariablesRead]) — because removing that row signs the
-// entry out just as surely.
-//
-// The revision travels with the answer because the index is derived from it
-// and changes exactly when it does, which is what the route's entity-tag
-// needs and what a caller comparing two answers has to key on.
+// Derived from the UNREDACTED document, naming paths, never a value: the
+// redacted one masks "Bearer ${TOKEN}", so it would say nothing points at
+// TOKEN just before an operator deletes it. It counts a variable the company
+// reads WITHOUT naming it ([config.Company.VariablesRead]). The revision
+// travels with the answer, which changes exactly when the index does.
 func (s *Service) References(ctx context.Context) ([]config.Reference, store.Revision, error) {
 	company, revision, err := s.activeCompany(ctx)
 	if err != nil {

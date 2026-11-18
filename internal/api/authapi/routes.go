@@ -32,32 +32,18 @@ const Prefix = "/auth/"
 //
 // # The auth column, stated here because it is the whole security shape
 //
-// SOME ARE UNGUARDED, because requiring a credential to obtain one is a
-// deployment nobody can enter: the posture read and the sign-in — and the
-// invitation's own two, its view and its redemption, and a password reset
-// link's two, because holding the link is the credential. The sign-in meets the
-// throttle's curve, keyed on the login as TYPED from the caller's source; the
-// rest present a credential that names nobody and meet no curve
-// ([Service.uncounted]). And the sign-out of THIS session, because a sign-out
-// clears the cookie whatever this node can read — guarded, a node that could
-// not read its identity estate answered it 503 before it ran — and it verifies
-// every bearer the browser holds for itself ([Service.Logout]). Every one is
-// origin-checked like any other state change.
-//
-// THE REST NEED A SESSION, and they are guarded by the same middleware every
-// other route is — reading what it resolved rather than validating a second
-// time, because two readings of one request eventually disagree and the one
-// that would be wrong here decides whether somebody is signed in.
-// [auth.Mux] RATHER THAN *http.ServeMux, and it is the package that owns the
-// exemption list that defines it — see there for why a mux this surface can
-// name is what makes the gate below possible at all.
-//
-// NOTHING HERE MAY BE STORED, and no route marks itself so: the guard marks
-// every answer under /auth `no-store` before anything beneath it writes —
-// its own refusals and the origin check's included — which a wrapper around
-// these routes could not reach. See [auth.Guard.Middleware].
+// Routes register on [auth.Mux], which owns the exemption list, not
+// *http.ServeMux. NOTHING HERE MAY BE STORED: the guard marks every answer
+// under /auth `no-store`, its own refusals included, which a wrapper could not
+// reach ([auth.Guard.Middleware]). Every route is origin-checked.
 func (s *Service) Routes(mux auth.Mux) {
-	// Unguarded.
+	// UNGUARDED, because requiring a credential to obtain one is a deployment
+	// nobody can enter: the posture read, the sign-in, the invitation's and a
+	// reset link's pairs (holding the link is the credential), and the sign-out
+	// of THIS session, which clears the cookie whatever this node can read and
+	// verifies every bearer itself ([Service.Logout]). The sign-in meets the
+	// throttle's curve, keyed on the login as TYPED; the rest name nobody and
+	// meet none ([Service.uncounted]).
 	mux.HandleFunc("GET "+auth.PathAuthConfig, s.Config)
 	mux.HandleFunc("POST "+auth.PathAuthLogin, s.Login)
 	// THE GET RENDERS AND THE POST SPENDS, and they are different
@@ -73,7 +59,8 @@ func (s *Service) Routes(mux auth.Mux) {
 	mux.HandleFunc("POST "+auth.AuthResetPrefix+"{id}", s.SpendReset)
 	mux.HandleFunc("POST "+auth.PathAuthLogout, s.Logout)
 
-	// Guarded.
+	// GUARDED: the shared middleware's resolution is read, never validated a
+	// second time, since two readings of one request eventually disagree.
 	mux.HandleFunc("GET "+auth.PathAuthSession, s.Session)
 	mux.HandleFunc("POST /auth/token", s.Token)
 	mux.HandleFunc("POST "+auth.PathAuthStepUp, s.StepUp)
@@ -100,50 +87,15 @@ const tokenLifetime = time.Hour
 
 // Token exchanges a Tier A bearer for a session cookie.
 //
-// # What it is for
-//
-// A browser cannot present a Tier A token on a WebSocket, and a script that
-// holds one should not have to re-send it on every request once it has been
-// accepted once. This turns the deployment's own machine credential into a
-// session, which every surface then treats identically.
-//
-// # The session IS the token, re-read from the configuration on every request
-//
-// Nothing about the token is enrolled and nothing is copied into the session:
-// its subject is the token's LOGIN (`token:<id>`), and the guard answers that
-// subject from the entry this node holds for it NOW — the same composition the
-// bearer gets, so the grants are the entry's as this node's admin posture
-// (`api.auth.admin`) lets it carry them on each request, a token the identity
-// directory binds to a seat acts as that seat, and removing the entry from the
-// configuration ends the session on the next request. It answers to the
-// entry's ID and not its VALUE: a new value put under the same id leaves the
-// sessions the old one opened working until their hour ends, so an operator
-// answering a leak who must cut them off at once rotates by giving the token a
-// new id. It used to be minted for the token's derived principal id, which no
-// directory row holds: once the start record applied every request answered
-// 401 and cleared the cookie, and before that it served a grantless nobody —
-// and a bound token was refused the exchange outright.
-//
-// IT IS STEPPED UP BY CONSTRUCTION, as the bearer is: presenting the token was
-// the proof, and there is nothing else a config-file credential could present.
-// A break-glass session that could reach no step-up surface would be no use
-// on the day it exists for — the day nobody can sign in as a person.
-//
-// # Only a presented token is exchanged
-//
-// A session — a person's, or one this route already minted — has no value to
-// exchange, and exchanging one for another would reset nothing anybody needs
-// reset. A personal access token is presented on every request by design.
-//
-// # It ends whatever session the browser held
-//
-// As every fresh sign-in does ([Service.openSignIn]): the cookie set here
-// replaces the one the browser sent, so the session that cookie named — a
-// person's, when the dashboard's "use an API token instead" is followed in a
-// browser already signed in — is held by no browser any more, and was left
-// live on every node until its absolute deadline. The header wins the
-// request; the cookie still names a session, and it is closed as a sign-out
-// closes it.
+// A browser cannot present a Tier A token on a WebSocket; this turns the
+// machine credential into a session every surface treats identically. The
+// session IS the token: its subject is the token's LOGIN (`token:<id>`), which
+// the guard answers from the entry this node holds NOW, so removing the entry
+// ends it. It answers to the entry's ID, not its VALUE: cutting off a leaked
+// value at once takes a new id. It is STEPPED UP BY CONSTRUCTION, as the
+// bearer is, or break-glass would reach no step-up surface. Only a presented
+// token is exchanged. As every fresh sign-in does ([Service.openSignIn]), it
+// closes the session the old cookie named; the header wins the request.
 func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	principal, resolution := iam.From(r.Context())
 	switch resolution {
@@ -235,23 +187,12 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 // token, and says whether it did.
 //
 // THE STEP-UP'S OWN, because confirming who you are is no verb in the
-// authority table — it is about no object and asks no grant, it is the
-// credential giving a proof — so the one refusal of a token this surface
-// still makes itself is this one: a token acts as its owner, so the kind check
-// before it passes, and nobody is at a keyboard to confirm anything. Every
-// gesture that NEEDS a person present is the table's to refuse
-// ([authz.Presence]).
-//
-// AND IN THE TABLE'S OWN WORDS for that fact, `token_refused` — the refusal
-// [authz.Decide] gives a token on every verb that needs a person present. It
-// was `step_up_required`, whose sentence asks the caller to confirm who they
-// are and replay the request: a client doing so sent the token back to this
-// route to be refused again, and the envelope's message contradicted its own
-// detail, which is the contradiction `token_refused` exists to end.
-//
-// ASKED OF THE CREDENTIAL, NEVER OF THE PRINCIPAL'S KIND OR ITS CLOCK: the one
-// thing on a token's principal that says nobody is present is what it came
-// THROUGH, which the guard stamps and [auth.PresentedToken] reads.
+// authority table: a token acts as its owner, so the kind check passes and
+// nobody is at a keyboard. Every other gesture needing a person present is the
+// table's to refuse ([authz.Presence]). It answers `token_refused`, as
+// [authz.Decide] does, not `step_up_required`, which a client would replay and
+// be refused again. ASKED OF THE CREDENTIAL, NEVER THE PRINCIPAL'S KIND OR
+// CLOCK: only what the request came THROUGH ([auth.PresentedToken]) says so.
 func machineToken(w http.ResponseWriter, r *http.Request) bool {
 	if _, fromToken := auth.PresentedToken(r.Context()); !fromToken {
 		return false
@@ -285,26 +226,15 @@ type stepUpRequest struct {
 // StepUp is a person confirming who they are, on a session that is already
 // valid.
 //
-// # Why it exists beside the sign-in
+// Sessions live for days, so surfaces that change what a company IS ask for
+// proof taken minutes ago; this is where it is given. It is the only route
+// BOTH guarded and throttled: unbounded retries against a known person are a
+// password oracle with the enumeration done.
 //
-// A session lives for days and a laptop is left unlocked. The surfaces that
-// change what a company IS — its credentials, its chart, its configuration —
-// ask for proof taken minutes ago rather than proof taken on Monday, and this
-// is where that proof is given. It is the only route here that is BOTH guarded
-// and throttled: the caller is known, and an unbounded retry against a known
-// person is a password oracle with the enumeration already done.
-//
-// # It REPLACES the session it was made from, and is not a new sign-in
-//
-// The proof is recorded by opening a fresh session — a new lineage, so the
-// identifier a privilege change is made under is not the one that circulated
-// before it — and the session it replaces is ENDED, first. It used to be left
-// running: every step-up left a second live session behind, a copy of the old
-// cookie went on working for the rest of its week, and a person's session
-// listing grew by one per confirmation. And the replacement CONFIRMS the
-// sign-in rather than repeating it, so it inherits that session's absolute
-// deadline: a step-up that restarted the absolute clock would let a session be
-// kept alive for ever by confirming it.
+// It REPLACES its session: a fresh one (new lineage, so a privilege change is
+// not made under a circulated identifier) is opened and the old ENDED first. The
+// replacement inherits the absolute deadline: restarting the clock would let
+// confirming keep a session alive for ever.
 func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	source := s.sourceOf(r)
 	principal, resolution := iam.From(r.Context())
@@ -419,18 +349,12 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 // replacedSession is the session a step-up confirms, validated here, or false
 // once it has written the refusal.
 //
-// # Read under the signature AND the rows, and never the bare cookie
-//
-// What a step-up inherits — the absolute deadline — and what it ends are the
-// session the caller PRESENTED, so it is read the way the guard read it: the
-// signature decides the lineage, and this node's rows decide that it is live.
-// A lineage off an unverified cookie would let a caller name somebody else's
-// session to end, and a deadline off one would let them choose their own.
-//
-// THE PERSON MUST BE THE ONE WHO PROVED: a principal resolved from a cookie
-// is its bearer's person, so a mismatch is a session that changed hands
-// between the guard and here, and the answer is the one the guard would now
-// give. A node that cannot say is the unknown arm, as it is everywhere.
+// Read under the signature AND the rows, never the bare cookie: the signature
+// decides the lineage, this node's rows that it is live, as the guard read it.
+// An unverified cookie would let a caller name somebody else's session to end,
+// or choose their deadline. THE PERSON MUST BE THE ONE WHO PROVED: a mismatch
+// is a session that changed hands, answered as the guard now would. A node
+// that cannot say is the unknown arm, as everywhere.
 func (s *Service) replacedSession(w http.ResponseWriter, r *http.Request,
 	held iamdomain.Sighting) (session.Validation, bool) {
 

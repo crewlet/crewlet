@@ -15,26 +15,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE WAKE FEEDS' DEAD LETTERS, over HTTP for the retention gestures' reason:
-// the entries are kept in the broker's dead-letter stream, which on the
-// default topology is the engine's own embedded broker binding no socket, so
+// THE WAKE FEEDS' DEAD LETTERS, over HTTP because the broker's dead-letter
+// stream is, by default, the engine's embedded broker binding no socket, so
 // `crewlet feeds dead-letters` and `discard` are clients of these routes.
 //
-//   - GET /feeds/dead-letters answers every wake feed's dead letters, by
-//     feed, each entry by its id and what the feed recorded of its record —
-//     never its frame. Every node serving the API answers alike, since the
-//     entries are the broker's; a feed whose listing failed is named with
-//     its error, and an entry this build cannot read with why, still listed
-//     by its id.
-//   - POST /feeds/dead-letters/{id}/discard?confirm={id} drops one entry,
-//     whichever feed's subject holds it, through the engine's ledger — so no
-//     node's alarm reading ever counts it as a wake the retention lost — and
-//     answers the entry it dropped. An id no feed's subject holds, a
-//     subscription's poison under another `dlq.` subject among them, is
-//     `404 no_dead_letter` and removes nothing.
+//   - GET /feeds/dead-letters answers every feed's dead letters by id and what
+//     the feed recorded, never the frame. A feed whose listing failed is named
+//     with its error; an entry this build cannot read is listed by id, with why.
+//   - POST /feeds/dead-letters/{id}/discard?confirm={id} drops one entry through
+//     the engine's ledger, so no alarm counts it as a wake the retention lost.
+//     An unknown id is `404 no_dead_letter`.
 //
-// Both are admin's, mounted on the deployment surface ([App.mountDeployment]),
-// and the discard asks the recent proof every write there asks.
+// Both are admin's, on [App.mountDeployment]; the discard asks the recent proof.
 
 // FeedDeadLetters is the wake feeds' dead letters — see
 // [engine.FeedDeadLetters].

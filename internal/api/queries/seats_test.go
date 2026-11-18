@@ -10,18 +10,12 @@ import (
 
 // EVERY AGENT SEAT IS IN THE SPEND ROLLUP'S DIRECTORY, BY AGENT ID.
 //
-// # What this is guarding
-//
-// The per-agent spend rollup files a seat's records under its agent id — the
-// one identifier a phase record carries that no namesake shares — and every
-// row links to that seat's page, which is addressed by its HANDLE. The
-// directory from one to the other is this.
-//
-// It was a map from role NAME to handle, which two seats sharing a name folded
-// into one entry. And before that it walked `company.Roles`, the seats
-// belonging to NO unit: a company of any size puts its agents in units, so the
-// map was short by exactly those seats and their rows linked nowhere, with
-// nothing failing — an absent cross-link renders as a row you cannot click.
+// The per-agent spend rollup files a seat's records under its agent id (the
+// one identifier a phase record carries that no namesake shares), and every
+// row links to that seat's page by its HANDLE. This is the directory between
+// the two. Keyed by role NAME, namesakes fold into one entry; walking only
+// `company.Roles` misses every seat in a unit. Either way rows link nowhere
+// with nothing failing.
 func TestEveryAgentSeatIsInTheRollupDirectory(t *testing.T) {
 	t.Parallel()
 	cfg := parse(t, `

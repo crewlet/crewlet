@@ -113,13 +113,11 @@ func renamed(name string) string {
 // EVERY READ AFTER A WRITE ANSWERS THE WRITE, on a node that has not applied it
 // (#316).
 //
-// The reconciler applies a revision some time after the pointer names it, and
-// on a node in the middle of applying the revision before, that is a whole
-// apply later. Answered from what the node boots on, every read in that window
-// named the revision before the write: the operator's next `If-Match`, naming
-// the write, was refused as stale, and the revision list said the write was not
-// the company. The read after a write is the pointer's, and the write moves
-// nothing this node boots on: only its reconciler does, once it has applied it.
+// The reconciler applies a revision some time after the pointer names it.
+// Answered from what the node boots on, reads in that window named the
+// revision before the write: the operator's next `If-Match` was refused as
+// stale. The read after a write is the pointer's; only the reconciler moves
+// what this node boots on, once it has applied it.
 //
 // Mutations: answer `current` from the boot row and the reads name the first
 // revision; move the boot row in the write's commit and this node boots on a
@@ -166,14 +164,12 @@ func TestEveryReadAfterAWriteAnswersTheWrite(t *testing.T) {
 
 // A WRITE THE WRITER'S OWN NODE REFUSES STAYS CORRECTABLE THROUGH ITS API (S2).
 //
-// A revision that lands and then fails to apply on the node that served it —
-// an unset `${VAR}`, a provider this build has no profile for — leaves that
-// node running the one before. Every write built on what the node runs lost
-// the compare-and-set against the pointer, which names the refused revision,
-// so every correction answered 409 and nothing the API could send would ever
-// clear it: the surface that writes the fix was the one surface that could
-// not. Built on the pointer, each correction lands, and each is built on the
-// one before it.
+// A revision that lands and then fails to apply on the node that served it
+// (an unset `${VAR}`, a provider with no profile) leaves that node running the
+// one before. A write built on what the node runs loses the compare-and-set
+// against the pointer, which names the refused revision, so every correction
+// answered 409 and the surface that writes the fix could not. Built on the
+// pointer, each correction lands on the one before it.
 //
 // Mutation: answer `current` from the boot row and the first correction is
 // refused.

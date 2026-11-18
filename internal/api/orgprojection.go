@@ -16,99 +16,26 @@ import (
 //
 // # An explicit type, never a marshal of the config's own structs
 //
-// These three surfaces answer EVERYBODY — every principal the guard resolves,
-// a colleague holding no permission at all included, since the org chart is
-// the overview (ADR-0033) — while the only surface that shows the whole
-// document, /config, is admin's. Every route and socket is authenticated; there
-// is no anonymous reader any more (`api.auth.allow_anonymous_read` is a named
-// refusal in internal/config), but the audience here is still far wider than
-// the configuration's. The projection used to marshal config.Role and
-// config.Unit verbatim and rely on nothing else, which made it
-// deny-by-omission: every field somebody added to a role reached this audience
-// the day it landed. That had already happened, back when the audience was
-// anybody at all. Contact identities (a person's Slack member id, GitHub
-// login, email), `${VAR}` names in a Mattermost username, placement labels and
-// sandbox setup commands (routinely the place a registry credential is
-// written) all reached it, and the secret tags redaction relies on covered
-// none of them because none of them is a credential in the narrow sense.
-//
-// So the reader's shape is spelled out here field by field, and a field
-// reaches everybody only by being written into one of these types on purpose.
-// Everything else stays behind the admin's configuration answers, which is
-// where the dashboard reads it. Configured work that has a read surface of its
-// own is not repeated here either: schedules are described by /schedules. A
-// token budget IS carried, as the ceilings in force, beside the /budgets
-// meters that say how much of each window is spent: a ceiling is a statement
-// of what the company may spend, not an account or a credential, and a seat's
-// page that could show the meter and not the rule behind it would be answering
-// "how close" without "to what".
-//
-// TestEveryOrgFieldIsClassified fails the day config.Company, config.Role or
-// config.Unit gains a field nobody has classified, so a new field needs a
-// decision rather than defaulting to either side.
-//
-// # The tree is the running organisation's
-//
-// The seats and units are read from the organisation this node runs
-// ([org.Organization]) — the document's `roles:` and `units:` as the engine
-// built them, every root seat a `unit:` reference moved already in its unit —
-// so the tree a reader is shown is the one a turn reads. The company's name,
-// mission, vision, policies, clock, own token budget and the services it runs
-// come from the document.
-//
-// # Authored values, not effective ones
-//
-// Each field carries what the founder WROTE: a seat's declared handle (empty
-// when the engine derives it from the name), a unit's own lead (empty when it
-// inherits one). The effective hierarchy the engine derives is a different
-// fact with a different shape, and mixing the two into one field would leave a
-// reader unable to tell a declared lead from an inherited one.
-//
-// The company's clock is the one exception, and it is not a mixture: an
-// unwritten `timezone` IS UTC, with no inheritance and nothing a reader could
-// want to tell apart, so [OrgProjection.Timezone] carries the clock the engine
-// resolved rather than leaving a client to default an empty string — which a
-// browser does to ITS OWN zone.
-//
-// # Resolved values: what a seat runs on and what it can reach
-//
-// Three seat fields are RESOLVED rather than authored, and all for the reason
-// the derived hierarchy is: the rule is one a second implementation gets
-// wrong. [OrgSeat.LLM] is every phase's provider chain as a turn resolves it
-// ([phase.Resolve], the function the turn's own chain goes through) — a seat
-// can write `llm` in three shapes, override any phase with a flat
-// `llm_<phase>` field, or write nothing and land on the company's `default`
-// provider or its first — so the authored fields alone would leave a reader
-// to re-run four levels of precedence. [OrgSeat.ToolSources] is the servers
-// the seat is GRANTED ([config.MCPServer.Grants], the rule the engine starts
-// a seat's children by), which depends on the company's server list and on
-// credentials the seat may inherit from its unit. Both are resolved from the
-// seat AS THE ENGINE RUNS IT — the running organisation, where a unit's
-// credentials are already layered under its agent members — never from the
-// authored role.
-//
-// NEITHER REACHES THE OVERVIEW. A provider key names a model entry and a
-// server name names a tool server, and both are read off a seat's RUNTIME
-// settings, which `GET /config` serves only to an admin; a label derived from
-// them follows the same rule, or the projection would be a way round that
-// guard. So the projection is [stream.Shaped]: an admin audience is handed the
-// resolved fields, and every other audience the same tree without them — on
-// the push, the snapshot and GET /org alike. What they never carry, for any audience, is anything a
-// reader could act with: the entries they name, and every credential under
-// `mcp_env`, stay guarded.
-//
-// [OrgSeat.Avatar] is resolved too, and reaches every audience: the character
-// and colour an agent seat is drawn as ([config.RoleAvatar.Resolved]), its
-// defaults filled in, so no screen keeps a copy of what an unset avatar looks
-// like. It is presentation and nothing else — no account, no credential and
-// nothing a reader could dial — and a seat drawn one way for one reader and
-// another way for the next would be two seats.
+// These surfaces answer EVERYBODY (the org chart is the overview, ADR-0033);
+// /config is admin's. Marshalling config.Role and Unit was deny-by-omission:
+// contact identities, `${VAR}` names, placement labels and sandbox setup
+// commands (where a registry credential is written) reached everybody, though
+// no secret tag covers them. A field now reaches everybody only by being
+// written into these types; TestEveryOrgFieldIsClassified fails on a config
+// field nobody has classified.
 
 // OrgProjection is the reader's view of a company: the overview everybody
 // sees, and an admin with the resolved fields beside it.
 //
+// Seats and units come from the organisation this node runs
+// ([org.Organization]), the tree a turn reads. Fields carry what the founder
+// WROTE (a declared handle, a unit's own lead) so declared reads apart from
+// inherited; Derived has the effective hierarchy. Timezone alone is resolved:
+// an unwritten one IS UTC, and an empty one a client defaults to the browser's
+// zone. Token budgets are ceilings in force, beside the /budgets meters.
+//
 // Every field is omitted when empty, so a node with no active company answers
-// `{}`, which is the shape the dashboard already reads as "nothing loaded".
+// `{}`, which the dashboard reads as "nothing loaded".
 type OrgProjection struct {
 	Name     string   `json:"name,omitempty"`
 	Mission  string   `json:"mission,omitempty"`
@@ -144,59 +71,28 @@ type OrgProjection struct {
 	// each seat's handle, its effective unit, its primary manager and
 	// reports, and each unit's effective type, lead and channel.
 	//
-	// THE ENGINE SAYS IT RATHER THAN A CLIENT WORKING IT OUT. Every rule
-	// here is one a second implementation gets wrong, and the dashboard's
-	// TypeScript had already diverged from the engine on three of them and
-	// on the handle of a name with a dotted capital I; see [config.Derive].
-	// The fields above stay as WRITTEN, so a reader can still tell a
-	// declared lead from an inherited one.
+	// THE ENGINE SAYS IT RATHER THAN A CLIENT WORKING IT OUT: every rule here
+	// is one a second implementation gets wrong (see [config.Derive]). The
+	// fields above stay as WRITTEN, so declared and inherited leads read apart.
 	//
-	// WITHOUT PATHS, which is the one difference from the admin's
-	// configuration answers: a reader is given no document to point into,
-	// and membership
-	// is in each unit's seats. Nothing else here is a fact the fields above
-	// do not already carry, so it needs no classification of its own beyond
-	// this: it is those values, resolved.
+	// WITHOUT PATHS, the one difference from the admin's configuration
+	// answers: a reader has no document to point into, and membership is in
+	// each unit's seats. Otherwise these are the fields above, resolved.
 	Derived *config.Derived `json:"derived,omitempty"`
 }
 
-// OrgServices is which tracker, which knowledge base, which chat and which git
-// host the company runs, each as [config.Company.TrackerBackendFor],
+// OrgServices is which tracker, knowledge base, chat and git host the company
+// runs, as [config.Company.TrackerBackendFor],
 // [config.Company.KnowledgeBackendFor], [config.Company.ChatBackendFor] and
-// [config.Company.CodeBackendFor] resolve it: the backend the document names,
-// else the vendor whose block is connected, else the engine's own: Worklet,
-// Doclet and Chatlet (`chatlet`) — except the git host, which no vendor's
-// block names and which is `none` unless the document names `gitlet`.
+// [config.Company.CodeBackendFor] resolve it: the named backend, else the connected vendor, else the engine's own. The
+// git host is `none` unless the document names `gitlet` (a GitHub or GitLab
+// repository is an integration, never a host drawn in Gitlet's place).
 //
-// AN OVERVIEW FIELD, and the one narrow exception to the `tracker:`,
-// `knowledge:`, `chat:` and `code:` blocks being guarded. What decides which
-// of the dashboard's own surfaces exist is whether the company runs Worklet,
-// Doclet, Chatlet and Gitlet at all: a company on Jira or on
-// none has no Worklet, no My work and no task to file, one on Slack has no
-// Chat, one that hosts no code has no Gitlet workspace, and a reader shown those
-// surfaces is shown screens whose every question is refused. Every reader
-// learns the first half already, from that refusal, and the vendor's name is
-// the one fact a screen needs to say where the work went instead. NOTHING ELSE
-// of any block reaches this audience: no project or space key, no site, no
-// URL, no room policy, no credential, no repository and no limit, which is
-// what the blocks were guarded for (see the classification test).
-//
-// CHAT NAMES A POSTURE, NOT A PRODUCT: `vendor` is a company talking on the
-// Mattermost or Slack it declares, either or both, so which of them is not a
-// closed set this field could carry. A reader holding Chat is told the
-// vendors on the `viewer` answer (`chat_vendors`); nobody else needs them,
-// since the place they would be named is hidden from everybody.
-//
-// A CLOSED SET on the wire, each member the backend's own constant: the
-// document's `backend` is refused at parse outside it, and a derived one is
-// one of the same constants. Present on every running company and absent only
-// on `{}`, so a reader tells "not known yet" from "none".
-//
-// THE GIT HOST NAMES NO VENDOR beside the engine's own: a company's
-// repositories on GitHub or GitLab are integrations its seats call, never a
-// host the dashboard draws in Gitlet's place, so where Gitlet does not run the
-// answer is `none` whatever else the company runs. The backend is the one fact
-// of the `code:` block a reader is handed.
+// AN OVERVIEW FIELD, the one narrow exception to the guarded `tracker:`,
+// `knowledge:`, `chat:` and `code:` blocks: which surfaces exist depends on it.
+// NOTHING ELSE of any block reaches this audience (see the classification
+// test). CHAT NAMES A POSTURE, NOT A PRODUCT: `vendor` may be Mattermost, Slack
+// or both, told to a Chat holder on the `viewer` answer (`chat_vendors`).
 type OrgServices struct {
 	// Tracker is `worklet`, `jira` or `none`.
 	Tracker string `json:"tracker"`
@@ -213,15 +109,12 @@ type OrgServices struct {
 	// was already running without them ([engine.Engine.AwaitingRestart]).
 	// Absent where the node serves everything the company runs.
 	//
-	// THE ONE NODE FACT ON A COMPANY'S PROJECTION, and here because it
-	// decides the same thing the four backends do: which of the dashboard's
-	// own surfaces exist FOR THIS READER, who reads through the node that
-	// built the projection. A backend that reads `chatlet` on a node that
-	// cannot serve Chatlet yet drew a workspace whose every screen was
-	// refused, and nothing said why or that a restart brings it. Named by
-	// key rather than as a second set of backends, so a reader still learns
-	// what the company runs and, beside it, what this node is waiting to
-	// serve.
+	// THE ONE NODE FACT ON A COMPANY'S PROJECTION, here because it decides
+	// which dashboard surfaces exist FOR THIS READER, who reads through the
+	// node that built it: `chatlet` on a node that cannot serve Chatlet yet
+	// would draw a workspace whose every screen is refused, with nothing saying
+	// a restart brings it. Named by key, not as a second set of backends, so
+	// a reader still learns what the company runs.
 	Restart []string `json:"restart,omitempty"`
 }
 
@@ -245,6 +138,14 @@ func servicesOf(c *config.Company, awaiting func(*config.Company) []string) *Org
 //
 // Plain strings rather than the config's enum types, so the wire contract does
 // not move when an internal type is renamed or reshaped.
+//
+// LLM and ToolSources are RESOLVED (a second implementation gets the rule
+// wrong): LLM per [phase.Resolve], ToolSources the servers GRANTED
+// ([config.MCPServer.Grants]), both from the seat AS THE ENGINE RUNS IT. NEITHER
+// REACHES THE OVERVIEW: provider keys and server names come from RUNTIME
+// settings `GET /config` serves only to admin, so the projection is
+// [stream.Shaped] on push, snapshot and GET /org, and nobody gets the entries
+// they name or any `mcp_env` credential.
 type OrgSeat struct {
 	Name                 string   `json:"name"`
 	Kind                 string   `json:"kind,omitempty"`
@@ -256,11 +157,9 @@ type OrgSeat struct {
 	Manages              []string `json:"manages,omitempty"`
 	Availability         string   `json:"availability,omitempty"`
 
-	// Avatar is RESOLVED (see the package doc): the Crewlet character and the
-	// colour an agent seat is drawn as, each as written or its default where
-	// the seat names none, so every reader draws the same seat the same way
-	// without knowing the defaults. Absent on a human seat, which is drawn as
-	// the person it is.
+	// Avatar is RESOLVED (see [OrgSeat]) and reaches every audience: the
+	// character and colour an agent seat is drawn as, defaults filled in so no
+	// screen keeps a copy of them. Presentation only. Absent on a human seat.
 	Avatar *OrgAvatar `json:"avatar,omitempty"`
 
 	// TokenBudget is this seat's own ceilings, as the document writes
@@ -268,22 +167,18 @@ type OrgSeat struct {
 	TokenBudget *OrgTokenBudget `json:"token_budget,omitempty"`
 
 	// LLM is RESOLVED, and only an admin audience is handed it (see
-	// the package doc): each phase's provider chain, keyed by the phase's
-	// wire name, the first key the model it runs on and every later one a
-	// fallback in the order they are tried. Every phase is present on an
-	// agent seat of a company with a provider, and the field is absent on a
-	// human seat, which runs no model, on a company that configures none,
-	// and for every reader who is not an admin.
+	// [OrgSeat]): each phase's provider chain keyed by the phase's wire name,
+	// the first entry the model it runs on, later ones fallbacks in the order
+	// tried. Present for every phase on an agent seat of a company with a
+	// provider; absent on a human seat, with no provider, and for non-admins.
 	LLM map[string][]string `json:"llm,omitempty"`
 
-	// ToolSources is RESOLVED, and only an admin audience is handed it
-	// (see the package doc): where this seat's tools come from, in the
-	// registry's own origin grammar — `builtin` first, then `mcp:<server>`
-	// for each server it is granted, in the order the company declares them.
-	// What the seat is GRANTED, not what is running: a server that failed to
-	// start is still listed, and the node status record's MCP report is what says
-	// it failed. Absent on a human seat and for every reader who is not an
-	// admin.
+	// ToolSources is RESOLVED, and only an admin audience is handed it (see
+	// [OrgSeat]): where this seat's tools come from, in the registry's origin
+	// grammar: `builtin`, then `mcp:<server>` per granted server in company
+	// order. What the seat is GRANTED, not what runs: a server that failed to
+	// start is still listed (the node status record's MCP report says it
+	// failed). Absent on a human seat and for non-admins.
 	ToolSources []string `json:"tool_sources,omitempty"`
 }
 
@@ -345,13 +240,10 @@ type OrgUnit struct {
 	// that is its key instead of with nothing.
 	//
 	// IT IS PUBLIC BECAUSE NOTHING ELSE HERE RESOLVES A REFERENCE. A seat's
-	// `manages` entry on this projection is the authored value, which may
-	// name a unit — and with only display names beside it a client had
-	// nothing in the same response to resolve that key against. It either
-	// matched on the name, which is a different value the moment a unit
-	// declares an id, or rendered the raw string and called the reference
-	// broken. Giving the client the id-or-name rule instead would be a
-	// second derivation of the one thing this engine keeps in one place.
+	// `manages` entry is the authored value, which may name a unit, and with
+	// only display names a client could not resolve it (a name differs from the
+	// key once a unit declares an id). Handing it the id-or-name rule instead
+	// would be a second derivation of what the engine keeps in one place.
 	ID        string    `json:"id,omitempty"`
 	Name      string    `json:"name"`
 	Type      string    `json:"type,omitempty"`
@@ -366,18 +258,15 @@ type OrgUnit struct {
 
 // orgProjection builds the reader's view of the current company.
 //
-// Read through the source on every call rather than captured, because an apply
-// replaces the company and a projection built at boot would keep showing a
-// seat a revision deleted.
+// Read through the source on every call, not captured: an apply replaces the
+// company, and a projection built at boot would show a deleted seat.
 //
 // awaiting is which services this node serves only once restarted, read off
 // the SAME company the rest is built from ([OrgServices.Restart]).
 //
-// Every slice is COPIED, which the marshal round trip this replaced did
-// implicitly. The projection is handed to the socket hub and to REST callers,
-// while the applied company is shared by every reader of the epoch, so an
-// aliased slice would make the projection only as immutable as every one of
-// those readers is careful.
+// Every slice is COPIED: the projection goes to the socket hub and REST
+// callers while the applied company is shared by every reader of the epoch, so
+// an aliased slice is only as immutable as the most careless reader.
 func orgProjection(company func() (*config.Company, *org.Organization),
 	awaiting func(*config.Company) []string) OrgProjection {
 

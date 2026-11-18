@@ -24,36 +24,16 @@ import (
 
 // THE NATIVE HALVES, AS EACH REQUEST FINDS THEM.
 //
-// # Why nothing here is captured when the API is built
-//
-// A node's own Worklet, Doclet and Chatlet come up with its FIRST COMPANY, and
-// a node that booted with none meets that at an apply — after its API has been
-// serving for as long as it took somebody to import one. The API used to take
-// every native source from the engine ONCE, while it was being wired: the read
-// surface's work and page questions, the human write surface, the operator's
-// assistant. On such a node every one of them was absent, and stayed absent
-// until a restart — so a company bootstrapped live, the quickstart's own
-// route, had no board, no pages and no assistant until somebody restarted the
-// node it was bootstrapped on.
-//
-// So each source here asks the engine per request — the read surface's
-// questions, and the halves the operator surface builds its catalogue from for
-// every call ([NativeOperatorHalves]). The identity estate and the org chart
-// need none of this: they are the engine's CORE, running from boot on every
-// node that holds the estate — which a node serving this API always is — and
-// are wired once like everything else.
-//
-// # Three answers, and why a half that is not up is not a half that is absent
-//
-// A native half is UP, NOT UP YET, or NOT THIS COMPANY'S. Not up yet is a node
-// that has met no company, and the answer is the engine's 503 — the halves are
-// coming with its first revision, and a client that waits is served. Not this
-// company's is a tracker or a wiki that is a vendor's, and the answer is the
-// one a missing source always had — the question unregistered, the route
-// absent — because no wait brings it: switching a backend takes a restart.
-// [engine.Engine.NativeStarted] is read FIRST and the half AFTER: the first is
-// monotonic, so a half read as absent after it said "started" is absent by
-// configuration, never merely not published yet.
+// Nothing here is captured when the API is built: a node's own Worklet, Doclet
+// and Chatlet come up with its FIRST COMPANY, at an apply after the API serves,
+// so a source taken once would stay absent until a restart. Each asks the
+// engine per request, as does [NativeOperatorHalves]; the identity estate and
+// org chart are CORE, up from boot, wired once. A half is UP, NOT UP YET (no
+// company met: the engine's 503, a waiting client is served) or NOT THIS
+// COMPANY'S (a vendor's tracker or wiki: question unregistered, route absent,
+// since no wait brings it). [engine.Engine.NativeStarted] is read FIRST and the
+// half AFTER: the first is monotonic, so a half absent after "started" is
+// absent by configuration, never merely unpublished.
 
 // errNoCompanyYet is a native question asked of a node that has not been handed
 // a company yet. It is [queries.ErrUnavailable] — a question this node
@@ -72,18 +52,10 @@ var errNoCompanyYet = fmt.Errorf("%w: %w", queries.ErrUnavailable, stream.ErrNoC
 //
 // THROUGH THIS NODE'S ESTATE ROUTER, as a seat's tools reach the same rows
 // ([engine.OperatorWork], [engine.OperatorPages], [engine.OperatorChat],
-// [engine.WorkSearcher]), so an operator and an agent looking at one item see
-// one item: answered from this node's copy while it serves and from another
-// data node's while it does not. Read off this node's copy directly, a data
-// node whose copy was out of service — wrong rather than behind, or its file
-// shut — went on drawing its operator's board from rows it would not vouch for
-// to its own seats. The links between pages too ([estate.Pages.LinkedFrom]):
-// they are a data node's own lexical index, named from its copies of Doclet
-// AND Worklet, so they are answered by a data node whose copies of both serve
-// (ADR-0079) — read off this node's index, a node whose pages or tracker copy
-// had stopped serving listed links derived from rows it no longer answered
-// for, beside a page a peer had answered. And a person's read cursors are the
-// fleet's coordination record, which every node reads directly.
+// [engine.WorkSearcher]): this node's copy while it serves, else another data
+// node's. Page links ([estate.Pages.LinkedFrom]) derive from both Doclet and
+// Worklet copies, so a node answers only while both serve (ADR-0079). Read
+// cursors are the fleet's coordination record, read directly.
 type NativeReads struct {
 	Work       queries.WorkReader
 	Pages      queries.PageReader
@@ -141,22 +113,14 @@ func (n NativeReads) Into(s *queries.Sources) {
 	s.PullRequests = n.PullRequests
 }
 
-// nativeAbsent is why a half is not here: the node has not met its company
-// yet, the company turned the half on while this node's runtime was already
-// running without it, or the company does not run this half (Worklet, Doclet
-// or Chatlet, named by half). See the file comment for why the first and the
-// last are different answers.
-//
-// # A half turned on live is not a half the company does not run
-//
-// A node builds its native runtime once per process, so a revision that turns
-// a half on activates here and is served only after a restart
-// ([engine.Engine.AwaitingRestart]). Answered as "this company does not run
-// it", the company's own Chatlet read on every screen as a surface this node
-// never has, with nothing saying a restart brings it. So it is an
-// `unavailable` answer under `native_backend_needs_restart` with no wait:
-// only the restart clears it, and another node serves the question meanwhile,
-// which is what Gitlet's own routes already answered for the same cause.
+// nativeAbsent is why a half is not here: no company met yet, the half turned
+// on while this runtime ran without it, or the company does not run it
+// (Worklet, Doclet or Chatlet, named by half); the file comment tells the first
+// and last apart. A half turned on live is not one the company does not run:
+// the native runtime is built once per process, so it is served only after a
+// restart ([engine.Engine.AwaitingRestart]). "Does not run it" would not say a
+// restart brings it, so it is `unavailable` under
+// `native_backend_needs_restart` with no wait, as Gitlet's routes answer.
 func nativeAbsent(e *engine.Engine, started bool, half string) error {
 	return halfAbsent(started, started && awaitsRestart(e, half), half)
 }

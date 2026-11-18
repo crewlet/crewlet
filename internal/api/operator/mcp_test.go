@@ -30,21 +30,14 @@ import (
 )
 
 // A SURFACE MISSING WHAT IT CANNOT SERVE WITHOUT IS NOT BUILT, and each
-// refusal names the field. A surface with nothing to read its catalogue from,
-// one wired with no authority decision, one that would write to the company
-// and record nothing about who called it, and one without a seat control — or
-// without any seam a control is required with, its announcer, its chart, its
-// signed wire, its run records — are each a wiring mistake that would
-// otherwise look exactly like a surface that worked: the last two a company
-// told it cannot pause a seat that every node could pause, or offered a
-// control that refuses every call as unavailable.
+// refusal names the field: no catalogue source, authority decision, audit,
+// seat control, or seam a control is required with (announcer, chart, signed
+// wire, run records) would look like a surface that worked, offering a control
+// that refuses every call.
 //
 // AND EVERY SEAM OF A CONTROL'S DEPENDENCIES HAS ITS ROW, read off builtin's
-// types themselves, but the actor the surface sets per call and a pause's
-// clock, whose nil is the wall clock. New's refusals are a list written beside
-// builtin's, and it missed the run records a note to a turn's executor is
-// filed on: steer_turn was listed, and refused every call, on a surface New
-// built without them.
+// types, but the actor set per call and a pause's clock (nil is the wall
+// clock). New's refusals are written beside builtin's, so one can be missed.
 //
 // Mutation: drop any one of New's refusals and its row is built; drop a seam's
 // row and the walk over the types names it.

@@ -17,121 +17,64 @@ import (
 )
 
 // A SOCKET IS AUTHENTICATED AT ITS HANDSHAKE AND ENDED BY WHAT ENDS ITS
-// CREDENTIAL.
+// CREDENTIAL, at no other time: it stays open for hours, so only the events
+// below decide it again, never a periodic re-check.
 //
-// A REST request is decided once and is over. A socket is decided at its
-// handshake and then stays open for as long as the tab does — hours, often a
-// day. Decided only at the handshake, a session revoked, a person suspended, a
-// seat taken away or a permission taken away would change nothing for a socket
-// already open. So an open socket is ended, or decided again, by the event
-// that could have changed its answer, and at no other time — there is no
-// periodic re-check:
+// A MOVE THAT NAMES ITS CREDENTIAL ([Service.CredentialsMoved]) is a committed
+// identity batch that ended its session (by lineage), moved its person's row
+// (by id: grants, stage, revocation epoch, seat binding, removal, a machine
+// token revoked) or the directory row a Tier A token is bound through (by
+// login, `token:<id>`). Only the named sockets are decided again, each on its
+// own goroutine, by [auth.Guard.ResolveOpen]. Every node serving the API
+// applies the identity log, so each decides its own sockets; nothing crosses
+// nodes.
+
+// A MOVE THAT NAMES NOBODY (the fleet session generation, an unreadable
+// retained identity record, an adopted estate, or this node ceasing to vouch
+// for its identity rows: internal/engine's identityvouch.go) closes EVERY
+// socket [CloseUndecided] WITHOUT READING: the reconnect's handshake decides
+// (401 signs in, 503 says not yet). A read per socket would queue one identity
+// read per open tab on the store's one reserved identity connection, ahead of
+// every request's authentication.
 //
-//   - A MOVE THAT NAMES ITS CREDENTIAL ([Service.CredentialsMoved]): a
-//     committed identity batch ended its session (by lineage), moved the row
-//     of the person it acts for (by id: their grants, stage, revocation
-//     epoch, seat binding, removal, or a machine token of theirs revoked), or
-//     moved the directory row a Tier A token is bound through (by that row's
-//     login, `token:<id>`). Only the sockets a move names are decided again,
-//     each on its own goroutine, by the guard over the request it was opened
-//     with ([auth.Guard.ResolveOpen]) — a direct read, and there are few.
-//     Every node serving the API holds the estate and applies the identity
-//     log, so every such node hears this from its own applier and decides its
-//     own sockets; nothing is sent between nodes.
-//   - A MOVE THAT NAMES NOBODY: the fleet-wide session generation moved, this
-//     node retained an identity record it cannot read (whose person is inside
-//     the payload), an adoption replaced the estate, or this node stopped
-//     vouching for its identity rows (internal/engine's identityvouch.go).
-//     EVERY socket closes [CloseUndecided] at once, WITHOUT reading anything:
-//     the client reconnects on its backoff and the handshake decides — 401
-//     sends it to sign in, 503 says this node cannot tell yet, and anybody
-//     the move did not touch is back on a fresh snapshot. Deciding every
-//     socket by a read instead would put one identity read per open tab on
-//     the store's one reserved identity connection at once, ahead of every
-//     request's own authentication.
-//   - A PUBLISHED COMPANY ([Service.CompanyPublished]): the org chart a seat
-//     binding resolves through, a watch is decided by and whose seats' trail
-//     a lead reads may have moved. It is decided IN MEMORY against the company
-//     just published, with no identity read: a socket whose principal acts as
-//     a seat that company no longer holds as a human seat closes
-//     [CloseUnauthorized]; one whose seat it has never seen that company hold
-//     closes [CloseUndecided], so its handshake resolves the binding afresh;
-//     one whose AUDIENCE the company changes — a lead moved onto or off a
-//     team, an agent seat added under one, so the seats whose body it reads
-//     are others ([Service.AudienceFor]) — closes [CloseUndecided] too, so
-//     its reconnect is built for the audience it has now; and every watch is
-//     decided again ([watching.recheck]).
-//   - ITS CREDENTIAL ENDS ON ITS OWN ([auth.Lifetime]): a session's absolute
-//     deadline, a machine token's expiry. No record is written at that
-//     instant, so a timer per socket notices it, and decides the credential
-//     by the guard.
-//   - AND ONCE, AS SOON AS IT IS REGISTERED. The handshake was decided before
-//     the socket was listening, so a record committed in between — a
-//     sign-out a second after the page loaded — would otherwise be heard by
-//     nobody; read after registering, the rows already hold it.
+// A PUBLISHED COMPANY ([Service.CompanyPublished]) is decided IN MEMORY: a
+// seat it no longer holds as a human seat closes [CloseUnauthorized]; an
+// unseen seat, or a changed AUDIENCE ([Service.AudienceFor]), [CloseUndecided];
+// and every watch is decided again ([watching.recheck]).
+
+// A credential's own end ([auth.Lifetime]: a session's absolute deadline, a
+// machine token's expiry) writes no record, so a timer per socket decides it
+// by the guard. Each socket is also decided ONCE as it is registered: the
+// handshake preceded the listening, so a record committed between would be
+// heard by nobody.
 //
-// # What a decision by the guard does
+// A guard decision resolved as the same principal leaves the socket open and
+// decides its watch again. As SOMEBODY ELSE, or UNKNOWN, it closes
+// [CloseUndecided] and the reconnect builds everything for whoever it is now:
+// kept open, the socket answered the new principal while the dashboard named
+// the old one. A seat refusal or a second-factor-only session closes
+// [CloseUnauthorized]; ANONYMOUS, [CloseUnauthenticated].
+
+// A session's IDLE deadline is moved by a REST re-issue a socket never gets,
+// so a guard decision sets it aside (an open live view is activity); the
+// absolute deadline still ends it. No permission closes a socket 4403
+// (ADR-0033: it carries the overview); a moved principal is [CloseUndecided].
 //
-//   - RESOLVED AS WHO THE SOCKET ALREADY ACTS AS — the same login, seat and
-//     permissions: the socket carries on, later questions are asked as the
-//     principal just resolved, and the watch is decided again.
-//   - RESOLVED AS SOMEBODY ELSE — a rename, a person moved to another seat,
-//     a service account bound or unbound, a permission given or taken
-//     (admin or an app — which is also every change this node's admin
-//     posture makes to what the principal carries): closed
-//     [CloseUndecided], and the reconnect's handshake builds everything for
-//     whoever it is now. The tab's own answer to "who am I" (the `viewer`
-//     question, asked again on every reconnect) is what moves with it: kept
-//     open, the socket went on answering the new principal while the
-//     dashboard still named the old one — "Your day" on a seat the person had
-//     just been moved off — until a reload. And
-//     a snapshot sent in place, which a changed audience used to get, moved
-//     the pushes and left that answer behind.
-//   - A SEAT REFUSAL (the seat is gone), or a session that may only enrol a
-//     second factor: closed [CloseUnauthorized], because the credential is
-//     fine and what it may do is not. There is no permission an open socket
-//     needs (ADR-0033) — what it carries is the overview, which is
-//     everybody's — so no permission taken away closes one 4403; it is a
-//     principal that moved, and closes [CloseUndecided] above.
-//   - ANONYMOUS (the session ended, expired or was revoked; the token is no
-//     longer accepted): closed [CloseUnauthenticated].
-//   - UNKNOWN (this node could not read what decides it): closed
-//     [CloseUndecided], and the reconnect's handshake answers
-//     `503 identity_unavailable` before any snapshot is built.
-//
-// # What an open socket does not end on
-//
-// A session's IDLE deadline is moved by a re-issue on a REST response, which a
-// socket can never receive. An open live view is activity, so a decision by
-// the guard sets that deadline aside ([auth.Guard.ResolveOpen]) and the
-// absolute deadline still ends it.
-//
-// A node BEHIND its identity log hears no record it has not applied, so inside
-// [statelog.StallGrace] it serves an open socket on its last decision, as its
-// REST routes serve the rows they have. Past the grace it stops vouching, and
-// that crossing is a move naming nobody (above).
-//
-// # Residual
-//
-// A move naming nobody closes every socket on the node, and one of them is a
-// batch that RETAINED a record — which, during a rolling upgrade, is every
-// batch an older node applies in a bucket a newer peer's record already holds
-// there. Its open tabs reconnect once per such batch until it is upgraded;
-// each reconnect is one handshake, which is the price of never reading on a
-// move that names nobody.
-//
-// The published-company decision finds the seat by its handle, which is
-// immutable (ADR-0013). A socket opened on a seat the published company did not
-// yet hold (a hire inside the publish's coalescing window) is kept by the next
-// publish that holds it, and closed [CloseUndecided] by one that does not.
+// A node BEHIND its identity log serves open sockets on their last decision
+// inside [statelog.StallGrace]; crossing it is a move naming nobody. During a
+// rolling upgrade such a move fires per batch an older node retains, so tabs
+// reconnect once per batch: the price of never reading. The published-company
+// decision finds the seat by its immutable handle (ADR-0013); a seat not yet
+// held (a hire inside the publish's coalescing window) is kept by the next
+// publish that holds it.
 
 // CloseUndecided ends a socket whose credential this node will not vouch for
 // now: a move that names nobody, a credential the guard could not decide, or a
-// seat the published company has never been seen to hold. It is the standard's 1013, "try again
-// later", rather than an application code, because what it asks of a client is
-// what any close outside the 4000 range asks: reconnect on a backoff. The
-// handshake that follows is what says why, over plain HTTP where the status is
-// visible.
+// seat the published company has never been seen to hold. It is the
+// standard's 1013, "try again later", rather than an application code, because
+// what it asks of a client is what any close outside the 4000 range asks:
+// reconnect on a backoff. The handshake that follows says why, over plain HTTP
+// where the status is visible.
 const CloseUndecided = websocket.StatusTryAgainLater
 
 // Moved is what the identity estate moved that an open socket's credential may

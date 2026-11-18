@@ -18,34 +18,22 @@ import (
 
 // Removing a model: `DELETE /config/llm-providers/{id}`.
 //
-// # One revision, every dependant repointed in it
-//
-// A providers.llm entry is named by every seat field and assistant field that
-// runs on it, so removing it alone leaves a document validation refuses: a seat
-// naming a key that is gone. The route therefore takes the removal and the
-// repoint of every dependant as ONE write, addressed by IDENTITY (a seat's
-// handle and the job the field points at a model, or the assistant's chat or
-// deep work), never by a list index, for the reason the entity routes give: a
-// position moves when anything above it does, and a repoint by index would
-// rewrite another seat's field. Each written reference
-// ([config.Company.ProviderReferences], the one implementation validation
-// reads too) has to be answered, and a reference left unanswered refuses the
-// write naming it, with the list of every reference, so a page can draw the
-// repoint list from the refusal.
-//
-// # A move nobody wrote is a warning
-//
-// A seat whose job names no entry runs on the company's fallback, the entry
-// keyed `default` or else the first in `llm_order`, so removing that entry
-// moves the job although no field named it. Resolution has one implementation,
-// [phase.ResolveWithSource]; the route asks it of both documents and says each
-// such move as a `resolution_moved` warning, which a dry run shows before the
-// write ("pm's memory and summaries will run on aux").
+// Every seat and assistant field running on an entry names it, so removing it
+// alone leaves a document validation refuses. The removal and the repoint of
+// every dependant are ONE write, addressed by IDENTITY (a seat's handle and
+// job, or the assistant's chat or deep work), never a list index (a position
+// moves with what is above it). Each reference
+// ([config.Company.ProviderReferences], validation's too) must be answered; an
+// unanswered one refuses the write naming every reference.
 
 // WarningResolutionMoved is the kind of a [config.Warning] about a seat's job
 // whose resolved model a write moves without a field naming the entry it
 // moved from: Seat is the seat, Ref the job, From and To the chain's head
 // before and after.
+//
+// A seat whose job names no entry runs on the fallback (`default`, else the
+// first in `llm_order`), so removing that entry moves it unnamed. The route
+// asks [phase.ResolveWithSource] of both documents; a dry run shows it.
 const WarningResolutionMoved = "resolution_moved"
 
 // RemovalAt addresses one written reference by identity: a seat's handle and

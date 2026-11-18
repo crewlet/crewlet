@@ -77,43 +77,16 @@ type SeatInvitation struct {
 }
 
 // GetSeats is `GET /iam/seats`: every human seat of the running company and
-// what holds it, and with `?unheld=true` only the seats nothing holds.
+// what holds it; `?unheld=true` only those nothing holds.
 //
-// # Everybody's, masked per reader
-//
-// The org chart is everybody's overview (ADR-0033), so the route admits every
-// resolved principal (`iam.seats.read`) and each row is shaped here for whoever
-// asked: a holder's NAME and kind to everybody; their directory id, login and
-// stage to an admin and to the holder about themselves; an OPEN INVITATION,
-// which carries the address it was sent to, to an admin alone; and
-// `?unheld=true` — the helper a create, an invitation or a move picks a seat
-// from, all of them admin's gestures — refused anybody else with the
-// permission that would admit them.
-//
-// # A listing, not a report
-//
-// It answers who sits where, which is what creating or inviting a person onto
-// a seat, and moving one, needs. What is WRONG with a binding — a seat gone —
-// is `GET /iam/check`'s, the one place a problem is reported.
-//
-// # Held is a binding at any stage short of removal, or an open invitation
-//
-// A suspended person still holds their seat — suspending somebody is not
-// giving it away — and an OPEN invitation (not redeemed, not aged out at this
-// node's clock) holds the seat it names until it is redeemed, cancelled or
-// lapses, the same rules a company write is held to before it removes a seat
-// and an invitation or a create is held to before it takes one. "Unheld" is a
-// seat with neither, which is exactly a seat a create, an invitation or a move
-// may name. A seat a holder and an invitation both claim — only a build before
-// invitations held their seats leaves that — lists both.
-//
-// # An unreadable directory is 503, never a list of vacancies
-//
-// The filter is never applied to what could not be read: answered as "nobody
-// holds anything", `?unheld=true` would list every seat in the company under a
-// parameter that promised the vacancies. A seat two rows bind — a record this
-// node retained, or a restore — is the same answer, since this node cannot say
-// which of them holds it ([iamdomain.ClaimsBySeat]).
+// Everybody's overview (ADR-0033), masked per reader: a holder's NAME and kind
+// to all; id, login and stage to an admin and the holder; an OPEN INVITATION
+// (it carries an address) and `?unheld=true` to an admin alone, the latter
+// refused others naming the permission. A listing, not a report: what is WRONG
+// with a binding is `GET /iam/check`'s. Held is any binding short of removal
+// (a suspended person keeps their seat) or an OPEN invitation. An unreadable
+// directory is 503, never a list of vacancies; a seat two rows bind is the same
+// answer, as this node cannot say which holds it ([iamdomain.ClaimsBySeat]).
 func (s *Service) GetSeats(w http.ResponseWriter, r *http.Request) {
 	unheld := false
 	if raw := r.URL.Query().Get("unheld"); raw != "" {

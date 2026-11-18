@@ -387,17 +387,12 @@ func TestASeatsSessionsAreItsTrail(t *testing.T) {
 }
 
 // A SESSION'S TRANSCRIPT IS READ THROUGH ITS SEALED OBJECT, A PAGE AT A TIME,
-// REDACTED. The row's object is opened under its own associated data and read
-// through the runner's format knowledge: the entries in order, a token the
-// session quoted redacted at this read, the bounds every read is held to
-// stated, and the page cut at the bound with a cursor the next page is read
-// from — and that cursor names the object it was read from and the count of
-// entries it was read under, so one handed out for an object the row no longer
-// names, one a build counting entries otherwise handed out, and one no page
-// handed out — an ordinal before the first entry among them — are each
-// refused, saying to read again from the start, rather than continued in
-// another archive or at an ordinal naming another entry, or answered as a
-// store that did not answer.
+// REDACTED: opened under its own associated data, a quoted token redacted at
+// this read, the bounds stated, and the page cut with a cursor naming the
+// object and entry count it was read under. A cursor for an object the row no
+// longer names, one from a build counting entries otherwise, and one no page
+// handed out (an ordinal before the first entry among them) are each refused,
+// saying to read again from the start, never continued in another archive.
 //
 // Mutation: hand an entry's text out unredacted, drop the cursor, continue a
 // cursor of another object or of another count, or take an ordinal before the
@@ -675,22 +670,17 @@ func TestAnEndingSendsAnUnkeptCaptureOnlyWhereItIsNewerThanTheRowsPlace(t *testi
 }
 
 // A ROW KEPT UP TO A SESSION ITS TURN WENT PAST CARRIES ITS NOTE, in both
-// questions: an ended row naming a session its turn went on past, beside a
-// newer capture that was not kept, and a lost turn's row, are each sent the
-// domain's own note of it (`kept_note`, executordomain.Session.WentOnNote) —
-// asked of the row's shown form, so the reason the unkept capture quotes is
-// redacted as the ending's is — and are not in progress; a live row naming a
-// session is sent in progress (`in_progress`, `in_progress_note`: the domain's
-// sentence for one, executordomain.Session.InProgressNote) and never a note of
-// a turn that went on past it; and a row at its turn's last word, and a live
-// one naming no session yet, are sent neither. A row read alone is told what a
-// row of the list is.
+// questions: an ended row naming a session its turn went on past, and a lost
+// turn's row, are sent the domain's note (`kept_note`,
+// executordomain.Session.WentOnNote), asked of the row's shown form so the
+// quoted reason is redacted, and are not in progress. A live row naming a
+// session is sent `in_progress` and `in_progress_note`
+// (executordomain.Session.InProgressNote) and never a went-on note; a row at
+// its turn's last word, and a live one naming no session, are sent neither.
 //
-// Mutation: send the note of the row as it is held rather than of its shown
-// form, and the token reaches the reader; send the in-progress sentence as
-// kept_note, or the went-on note as in_progress_note, and a row is sent the
-// other's; read in_progress off the row's object alone, and every ended row is
-// sent in progress; leave a field out of the row, and a check names it.
+// Mutation: send the row as held, not its shown form, and the token reaches
+// the reader; swap the notes, or read in_progress off the object alone, and a
+// row is sent the other's; leave a field out, a check names it.
 func TestARowKeptUpToASessionItsTurnWentPastCarriesItsNote(t *testing.T) {
 	t.Parallel()
 	store, _ := sessionObjectStore(t)
