@@ -3,6 +3,7 @@ package analyst
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,5 +142,42 @@ func TestASlotIsTheLatestScheduledStart(t *testing.T) {
 		if got := Slot(c.at, c.a); !got.Equal(c.want) {
 			t.Errorf("%s: %s, want %s", name, got, c.want)
 		}
+	}
+}
+
+// A NODE'S STOP CUTS ITS RUNS SHORT, a person's press too, and returns once each is recorded as
+// ended. Mutation: leave a press's run on its own context, and Serve never returns.
+func TestANodesStopCutsItsRunsShort(t *testing.T) {
+	t.Parallel()
+	c, err := config.ParseCompanyDocument([]byte(strings.Replace(serviceShape,
+		"llm: [assistant]", "llm: [assistant]\n    cadence: \"off\"", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{Records: memory.NewFleet(), Models: gatedModels{gate: make(chan struct{})},
+		Read:    func(context.Context, time.Time) (Data, error) { return Data{Company: c}, nil },
+		Company: func() *config.Company { return c }, Now: func() time.Time { return monday },
+		Zone: func() *time.Location { return time.UTC }}
+	ctx, stop := context.WithCancel(t.Context())
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		svc.Serve(ctx)
+	}()
+	press, err := svc.Start(t.Context(), "person", "owner")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	stop()
+	<-served
+	last, _, err := svc.Last(t.Context())
+	if err != nil || last.ID != press.ID || last.Status != advisor.StatusFailed {
+		t.Fatalf("after the stop the run reads %+v (%v), want the press's, ended failed", last, err)
+	}
+	if _, err := svc.Start(t.Context(), "person", "owner"); err != nil {
+		t.Fatalf("a press after the stop: %v", err)
+	}
+	if after, _, _ := svc.Last(t.Context()); after.Status != advisor.StatusFailed {
+		t.Errorf("a press after the stop reads %s, want it cut short at once", after.Status)
 	}
 }

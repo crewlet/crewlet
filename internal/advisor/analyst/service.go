@@ -56,17 +56,15 @@ type Service struct {
 	Now     func() time.Time
 	Zone    func() *time.Location
 
-	mu   sync.Mutex
-	base context.Context
-	runs sync.WaitGroup
+	mu      sync.Mutex
+	stopped bool
+	cancels map[string]context.CancelFunc
+	runs    sync.WaitGroup
 }
 
-// Serve runs the cadence until ctx ends, then waits for any run it started.
+// Serve runs the cadence until ctx ends, then cuts short every run Start began and waits for it.
 func (s *Service) Serve(ctx context.Context) {
-	s.mu.Lock()
-	s.base = ctx
-	s.mu.Unlock()
-	defer s.Wait()
+	defer s.stop()
 	t := time.NewTicker(tick)
 	defer t.Stop()
 	for {
@@ -87,6 +85,17 @@ func (s *Service) Serve(ctx context.Context) {
 
 // Wait returns once every run Start began has ended and been recorded.
 func (s *Service) Wait() { s.runs.Wait() }
+
+// stop cancels every run going, and any started after, then waits until each is recorded.
+func (s *Service) stop() {
+	s.mu.Lock()
+	s.stopped = true
+	for _, cancel := range s.cancels {
+		cancel()
+	}
+	s.mu.Unlock()
+	s.Wait()
+}
 
 // due reports whether the company's cadence asks for a run now: on, and no run
 // started since the cadence's last slot.
@@ -168,16 +177,28 @@ func (s *Service) Start(ctx context.Context, trigger, by string) (advisor.Analys
 	if !won {
 		return last, ErrRunning
 	}
+	// A RUN OUTLIVES THE PRESS THAT STARTED IT and ends with the node: Serve's stop cancels it.
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s.mu.Lock()
-	base := s.base
-	s.mu.Unlock()
-	if base == nil {
-		base = context.WithoutCancel(ctx)
+	if s.stopped {
+		s.mu.Unlock()
+		cancel()
+		s.finish(runCtx, claim)
+		return claim, nil
 	}
+	if s.cancels == nil {
+		s.cancels = map[string]context.CancelFunc{}
+	}
+	s.cancels[claim.ID] = cancel
 	s.runs.Add(1)
+	s.mu.Unlock()
 	go func() {
 		defer s.runs.Done()
-		s.finish(base, claim)
+		s.finish(runCtx, claim)
+		s.mu.Lock()
+		delete(s.cancels, claim.ID)
+		s.mu.Unlock()
+		cancel()
 	}()
 	return claim, nil
 }
