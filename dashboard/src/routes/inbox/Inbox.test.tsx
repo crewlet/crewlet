@@ -13,7 +13,16 @@
  */
 
 import { asReaders } from "~/test/decisions.ts";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Announcer, AppShell, LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -563,15 +572,24 @@ function inboxes({
   unread = [],
   snoozed = [],
   all,
+  beyond = [],
 }: {
   unread?: unknown[];
   snoozed?: unknown[];
   all?: unknown[];
+  /** Notices on no page any of the reads above answers, found only by their id. */
+  beyond?: unknown[];
 }): Answer {
-  return (p: Record<string, unknown>) =>
-    Promise.resolve(
+  return (p: Record<string, unknown>) => {
+    // ONE NOTICE BY ITS ID (`record`), whichever page holds it, or none.
+    if (typeof p.record === "string") {
+      const every = [...unread, ...snoozed, ...(all ?? []), ...beyond] as Record<string, unknown>[];
+      return Promise.resolve(inboxOf(every.filter((n) => n.record_id === p.record).slice(0, 1)));
+    }
+    return Promise.resolve(
       inboxOf(p.snoozed === "only" ? snoozed : p.unread === false ? (all ?? unread) : unread),
     );
+  };
 }
 
 const ASKED = {
@@ -907,7 +925,7 @@ describe("the list", () => {
 
   // THE OPEN ROW WAS DRAWN TWICE: a tint on the row and a rail beside it.
   test("the open row is the one row marked current, with one highlight", async () => {
-    location.hash = "#/inbox?row=r-2";
+    location.hash = "#/inbox/notice/r-2";
     mount({ answers: { inbox: inboxes({ unread: [notice("r-1"), notice("r-2")] }) } });
     await settle();
     const list = screen.getByRole("navigation", { name: "Inbox" });
@@ -931,7 +949,7 @@ describe("the list", () => {
       // The list alone: no row is opened beside it, so no pane is drawn.
       expect(screen.getByRole("navigation", { name: "Inbox" })).toBeTruthy();
       expect(document.querySelector(".crewlet-reading-pane")).toBeNull();
-      location.hash = "#/inbox?row=r-2";
+      location.hash = "#/inbox/notice/r-2";
       await settle();
       // The open row in the list's place, with its way back: a worded button
       // of its own above the byline, never an icon inside it.
@@ -945,7 +963,7 @@ describe("the list", () => {
   });
 
   test("j and k step through the rows, opening each in the pane", async () => {
-    location.hash = "#/inbox?row=r-1";
+    location.hash = "#/inbox/notice/r-1";
     mount({
       answers: {
         inbox: inboxes({ unread: [notice("r-1"), notice("r-2"), notice("r-3")] }),
@@ -954,11 +972,11 @@ describe("the list", () => {
     await settle();
     fireEvent.keyDown(window, { key: "j" });
     await settle();
-    expect(location.hash).toContain("row=r-2");
+    expect(location.hash).toContain("#/inbox/notice/r-2");
     fireEvent.keyDown(window, { key: "j" });
     fireEvent.keyDown(window, { key: "k" });
     await settle();
-    expect(location.hash).toContain("row=r-2");
+    expect(location.hash).toContain("#/inbox/notice/r-2");
   });
 
   // UPDATES ARE A CLOSED, COUNTED GROUP ON EVERY VISIT, like Answered: notices
@@ -981,24 +999,24 @@ describe("the list", () => {
     // Closed, j stays in what is open: the one question.
     fireEvent.keyDown(window, { key: "j" });
     await settle();
-    expect(location.hash).not.toContain("row=r-");
+    expect(location.hash).not.toContain("#/inbox/notice/r-");
     fireEvent.click(group);
     await settle();
     expect(group.getAttribute("aria-expanded")).toBe("true");
     expect(rows()).toHaveLength(2);
     fireEvent.keyDown(window, { key: "j" });
     await settle();
-    expect(location.hash).toContain("row=r-1");
+    expect(location.hash).toContain("#/inbox/notice/r-1");
     fireEvent.keyDown(window, { key: "j" });
     await settle();
-    expect(location.hash).toContain("row=r-2");
+    expect(location.hash).toContain("#/inbox/notice/r-2");
   });
 
   // THE ADVANCE NEVER OPENS A ROW IN A CLOSED GROUP: with Needs you answered
   // and Updates closed, the pane says All clear rather than opening an update.
   // Mutation: let the advance step into the updates, and this goes red.
   test("the next item after an answer is never a row in the closed Updates group", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({
       answers: {
         decisions: decisionsOf(askItem()),
@@ -1008,7 +1026,7 @@ describe("the list", () => {
     await settle();
     fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
     await settle();
-    expect(location.hash).not.toContain("row=r-1");
+    expect(location.hash).not.toContain("#/inbox/notice/r-1");
     expect(screen.getByRole("button", { name: "Updates, 1" }).getAttribute("aria-expanded")).toBe(
       "false",
     );
@@ -1046,7 +1064,7 @@ describe("a question asked before its agent's access changed", () => {
   // changed, with the change, short. Mutation: drop the note and an approval
   // the agent can no longer act on reads like any other.
   test("its row and its pane say so, with the change", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     const ask = {
       ...askItem(),
       access_changed: {
@@ -1068,7 +1086,7 @@ describe("a question asked before its agent's access changed", () => {
   // A READER WHO MAY NOT READ THE COMPANY'S SETUP is sent no change lines, and
   // is told only that the access changed.
   test("a reader sent no change lines is told only that it changed", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({ answers: { decisions: decisionsOf({ ...askItem(), access_changed: { lines: [] } }) } });
     await settle();
     const list = screen.getByRole("navigation", { name: "Inbox" });
@@ -1077,7 +1095,7 @@ describe("a question asked before its agent's access changed", () => {
   });
 
   test("a question asked under the access the agent holds now says nothing of it", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({ answers: { decisions: decisionsOf(askItem()) } });
     await settle();
     expect(document.body.textContent).not.toContain("access changed");
@@ -1152,7 +1170,7 @@ describe("the pane", () => {
   });
 
   test("the byline is one sentence: who, what is asked of you, and the task", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({ answers: { decisions: decisionsOf(askItem()) } });
     await settle();
     expect(byline()).toBe("CTO asks for your approval on LEAD-12 Q4 release plan");
@@ -1165,7 +1183,7 @@ describe("the pane", () => {
 
   // An ask's headline and reasoning were drawn as words, so their markdown showed.
   test("an ask's headline, reasoning and row read its markdown, not its syntax", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     const ask = askItem({
       ...DECISION,
       question: "Merge at head **b003820**?",
@@ -1187,7 +1205,7 @@ describe("the pane", () => {
 
   // A one-paragraph free-text ask used to be its own headline, unformatted.
   test("a free-text ask written as one paragraph is read formatted under a plain heading", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     const ask = askItem();
     (ask.ask as { decision?: unknown }).decision = undefined;
     ask.ask.body =
@@ -1217,7 +1235,7 @@ describe("the pane", () => {
   // the dashboard rebuilt it on the company's own host; and a cited task's
   // button names its key once, whatever an older label repeats.
   test("an ask's words link only what the dashboard built, and name a cited key once", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     const ask = askItem({
       ...DECISION,
       question: "How should the guard patch from the #11 PR body be applied?",
@@ -1265,7 +1283,7 @@ describe("the pane", () => {
   // Mutation: draw a url evidence as the live external button it was and the
   // evil address is an anchor labelled "Sign in to GitHub".
   test("a cited address opens only as the dashboard rebuilt it, never by the asker's label", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({
       answers: {
         decisions: decisionsOf(
@@ -1310,7 +1328,7 @@ describe("the pane", () => {
   // A CITED ARTIFACT OPENS IN THE DASHBOARD, on any deployment's URL.
   // Mutation: leave the kind unhandled, and the evidence draws nothing.
   test("a cited artifact links to the artifact", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     const id = "0f2a6c3e-6b1d-4e0a-9d6f-2b4c8a1e7f30";
     mount({
       answers: {
@@ -1331,7 +1349,7 @@ describe("the pane", () => {
   // Mutation: draw the evidence's mark and words by hand, without `kind` and
   // `code`, and a screen reader hears no "GitHub" and the reference is prose.
   test("a cited address says what its mark means, live or inert", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({
       answers: {
         decisions: decisionsOf(
@@ -1363,7 +1381,7 @@ describe("the pane", () => {
   // A REBUILT ADDRESS IS LABELLED FROM WHAT IT WAS REBUILT FROM: a Confluence
   // page's title is the asker's words, which the rebuilt address drops.
   test("a cited Confluence page's button names its space and id, never its title", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({
       answers: {
         decisions: decisionsOf(
@@ -1405,7 +1423,7 @@ describe("the pane", () => {
       el?.querySelectorAll("[data-vendor]").length ?? 0;
 
     test("the context, the reasoning, the recommendation and the options", async () => {
-      location.hash = "#/inbox?row=ask%3Ac-12";
+      location.hash = "#/inbox/ask/c-12";
       const ask = askItem({
         ...DECISION,
         question: "Ship acme/backend?",
@@ -1432,7 +1450,7 @@ describe("the pane", () => {
     });
 
     test("the question, in the pane, in its Inbox row and once answered", async () => {
-      location.hash = "#/inbox?row=ask%3Ac-12";
+      location.hash = "#/inbox/ask/c-12";
       const ask = askItem({ ...DECISION, question: "Apply #11?" });
       ask.ask.body = "Assigned in acme/backend.";
       mount({ answers: { decisions: decisionsOf(ask), link_hosts: HOSTS } });
@@ -1449,7 +1467,7 @@ describe("the pane", () => {
         decision: { ...DECISION, question: "Apply #11?" } as never,
       };
       answered.ask.body = "Assigned in acme/backend.";
-      location.hash = "#/inbox?row=ask%3Ac-20";
+      location.hash = "#/inbox/ask/c-20";
       mount({
         answers: {
           decisions: decisionsOf(),
@@ -1465,7 +1483,7 @@ describe("the pane", () => {
   // A REPLY IS ITS OWN MESSAGE: the ask's repository places the ask's numbers,
   // never a reply's.
   test("a reply's bare number is placed by the reply's own words", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     const ask = askItem({ ...DECISION, question: "Apply the #11 PR body?" });
     ask.ask.body = "Assigned to you in acme/backend.";
     const reply = (id: string, body: string) => ({
@@ -1503,7 +1521,7 @@ describe("the pane", () => {
   });
 
   test("an option answers with one press, through the one write, and marks its notice read", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({
       answers: {
         decisions: decisionsOf(askItem()),
@@ -1534,7 +1552,7 @@ describe("the pane", () => {
   //
   // Mutation: drop the outcome's focus, and the body holds it.
   test("an option's answer moves the focus to its outcome", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({ answers: { decisions: decisionsOf(askItem()) } });
     await settle();
     const option = screen.getByRole("button", { name: /Ship anyway/ });
@@ -1547,7 +1565,7 @@ describe("the pane", () => {
   });
 
   test("Something else answers in words, in the options' place", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({ answers: { decisions: decisionsOf(askItem()) } });
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Something else" }));
@@ -1579,20 +1597,20 @@ describe("the pane", () => {
       at: new Date(Date.now() - 60 * 60_000).toISOString(),
       ask: { ...askItem().ask, comment: "c-13", question: undefined },
     };
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({ answers: { decisions: decisionsOf(askItem(), second) } });
     await settle();
     fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
     await settle();
-    expect(location.hash).toContain("row=ask%3Ac-13");
+    expect(location.hash).toContain("#/inbox/ask/c-13");
     // THE COUNT IS WHAT IS STILL OPEN, and nothing in it is done.
     const region = screen.getByRole("region", { name: "Needs you, 1" });
-    expect(within(region).queryByRole("button", { name: /Answered$/ })).toBeNull();
+    expect(within(region).queryByRole("link", { name: /Answered$/ })).toBeNull();
     // LANDED IN ANSWERED, which stays closed and counts it.
     const group = screen.getByRole("button", { name: "Answered, 1" });
     expect(group.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(group);
-    const done = within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("button", {
+    const done = within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("link", {
       name: /Answered$/,
     });
     expect(done.textContent).toContain("You chose Hold release");
@@ -1617,7 +1635,7 @@ describe("the pane", () => {
       at: new Date(Date.now() - 60 * 60_000).toISOString(),
       ask: { ...next.ask, comment: "c-13" },
     };
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({ answers: { decisions: decisionsOf(askItem(), second) } });
     await settle();
     expect(document.querySelector(".crewlet-inbox-list__arrival")).toBeNull();
@@ -1644,7 +1662,7 @@ describe("the pane", () => {
       at: new Date(Date.now() - 60 * 60_000).toISOString(),
       ask: { ...askItem().ask, comment: "c-13", question: undefined },
     };
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({
       answers: {
         decisions: decisionsOf(askItem(), second),
@@ -1677,12 +1695,12 @@ describe("the pane", () => {
         at: new Date(Date.now() - 60 * 60_000).toISOString(),
         ask: { ...askItem().ask, comment: "c-13", question: undefined },
       };
-      location.hash = "#/inbox?row=ask%3Ac-12";
+      location.hash = "#/inbox/ask/c-12";
       mount({ shell: true, answers: { decisions: decisionsOf(askItem(), second) } });
       await settle();
       fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
       await settle();
-      expect(location.hash).toContain("row=ask%3Ac-13");
+      expect(location.hash).toContain("#/inbox/ask/c-13");
       fireEvent.click(screen.getByRole("button", { name: "Back to the inbox" }));
       await settle();
       expect(screen.getByRole("button", { name: "Answered, 1" })).toBeTruthy();
@@ -1703,16 +1721,16 @@ describe("the pane", () => {
       at: new Date(Date.now() - 60 * 60_000).toISOString(),
       ask: { ...next.ask, comment: "c-13" },
     };
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({ answers: { decisions: decisionsOf(askItem(), second) } });
     await settle();
-    const row = within(screen.getByRole("region", { name: "Needs you, 2" })).getByRole("button", {
+    const row = within(screen.getByRole("region", { name: "Needs you, 2" })).getByRole("link", {
       name: /Freeze the API for the release\?/,
     });
     row.focus();
     fireEvent.click(row);
     await settle();
-    expect(location.hash).toContain("row=ask%3Ac-13");
+    expect(location.hash).toContain("#/inbox/ask/c-13");
     expect(document.querySelector(".crewlet-reading-pane__title")?.textContent).toBe(
       "Freeze the API for the release?",
     );
@@ -1730,7 +1748,7 @@ describe("the pane", () => {
   test("the last row leaving Needs you takes the group with it once it has closed", async () => {
     const motion = fakeTransition(".crewlet-inbox-row", "grid-template-rows");
     try {
-      location.hash = "#/inbox?row=ask%3Ac-12";
+      location.hash = "#/inbox/ask/c-12";
       mount({ answers: { decisions: decisionsOf(askItem()) } });
       await settle();
       fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
@@ -1752,7 +1770,7 @@ describe("the pane", () => {
   // it, and the group and the empty state change with it. Mutation: never
   // hear the row close and the group is left over nothing.
   test("the last row leaving Needs you takes the group at once where nothing moves", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({ answers: { decisions: decisionsOf(askItem()) } });
     await settle();
     fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
@@ -1769,7 +1787,7 @@ describe("the pane", () => {
   test("the last row's group goes even where its motion never reports an end", async () => {
     const motion = fakeTransition(".crewlet-inbox-row", "grid-template-rows");
     try {
-      location.hash = "#/inbox?row=ask%3Ac-12";
+      location.hash = "#/inbox/ask/c-12";
       mount({ answers: { decisions: decisionsOf(askItem()) } });
       await settle();
       fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
@@ -1790,7 +1808,7 @@ describe("the pane", () => {
   test("in one pane, the list drawn after the last answer has no Needs you heading", async () => {
     const narrow = installScreen(443);
     try {
-      location.hash = "#/inbox?row=ask%3Ac-12";
+      location.hash = "#/inbox/ask/c-12";
       mount({ shell: true, answers: { decisions: decisionsOf(askItem()) } });
       await settle();
       fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
@@ -1810,7 +1828,7 @@ describe("the pane", () => {
   // is never one the list hides and j and k step from where it stands.
   // Mutation: leave the group closed, and the open row is nowhere in the list.
   test("answering the last item opens Answered on the row it left", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({ answers: { decisions: decisionsOf(askItem()) } });
     await settle();
     fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
@@ -1839,14 +1857,14 @@ describe("the pane", () => {
       at: new Date(Date.now() - 120 * 60_000).toISOString(),
       ask: { ...askItem().ask, comment: "c-14", question: undefined },
     };
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({ answers: { decisions: decisionsOf(askItem(), second, third) } });
     await settle();
     const press = screen.getByRole("button", { name: /Hold release/ });
     fireEvent.click(press);
     fireEvent.click(press);
     await settle();
-    expect(location.hash).toContain("row=ask%3Ac-13");
+    expect(location.hash).toContain("#/inbox/ask/c-13");
     expect(posted.filter((p) => p.tool === "comment_on_work_item")).toHaveLength(1);
   });
 
@@ -1862,7 +1880,7 @@ describe("the pane", () => {
     };
     seam.twice = true;
     try {
-      location.hash = "#/inbox?row=ask%3Ac-12";
+      location.hash = "#/inbox/ask/c-12";
       mount({ answers: { decisions: decisionsOf(askItem(), second) } });
       await settle();
       seam.announced.length = 0;
@@ -1870,14 +1888,14 @@ describe("the pane", () => {
       await settle();
       expect(seam.announced).toHaveLength(1);
       expect(seam.announced[0]).toMatch(/^Answered\. Next: /);
-      expect(location.hash).toContain("row=ask%3Ac-13");
+      expect(location.hash).toContain("#/inbox/ask/c-13");
     } finally {
       seam.twice = false;
     }
   });
 
   test("a run answered in words stays in place with what was written under it", async () => {
-    location.hash = "#/inbox?row=run%3Aturn-7";
+    location.hash = "#/inbox/run/turn-7";
     const run = {
       turn_id: "turn-7",
       launch_id: "q1",
@@ -1917,7 +1935,7 @@ describe("the pane", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
     await settle();
     await settle();
-    const row = within(screen.getByRole("region", { name: /^Needs you/ })).getByRole("button", {
+    const row = within(screen.getByRole("region", { name: /^Needs you/ })).getByRole("link", {
       name: /Answered$/,
     });
     expect(row.textContent).toContain("You replied “Yes, but keep the golden files.”");
@@ -1925,12 +1943,12 @@ describe("the pane", () => {
 
   // THE E-W9 LINE: only an ask that promised a channel says it posts to one.
   test("the posts-to line is drawn only for an ask that promised a channel", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({ answers: { decisions: decisionsOf(askItem()) } });
     await settle();
     expect(screen.queryByText(/also posted to #/)).toBeNull();
     cleanup();
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({
       answers: {
         decisions: decisionsOf(
@@ -1943,7 +1961,7 @@ describe("the pane", () => {
   });
 
   test("Mark as read marks the one update, and turns into its undo", async () => {
-    location.hash = "#/inbox?row=r-2";
+    location.hash = "#/inbox/notice/r-2";
     mount({ answers: { inbox: inboxes({ unread: [notice("r-1"), notice("r-2")] }) } });
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Mark as read" }));
@@ -1958,7 +1976,7 @@ describe("the pane", () => {
 
   // DONE AND SNOOZE ARE AN UPDATE'S: a question leaves when it is answered.
   test("a question carries no Mark as read and no Snooze", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({ answers: { decisions: decisionsOf(askItem()) } });
     await settle();
     expect(screen.queryByRole("button", { name: "Mark as read" })).toBeNull();
@@ -1970,7 +1988,7 @@ describe("the pane", () => {
   // update with mark_inbox — the code notice's read lands on Worklet's
   // record, red.
   test("a code notice is listed beside Worklet's and marked through its own tool", async () => {
-    location.hash = "#/inbox?row=change%3Ac-5";
+    location.hash = "#/inbox/change/c-5";
     mount({
       services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: { inbox: inboxes({ unread: [codeNotice("c-5"), notice("r-1")] }) },
@@ -1992,7 +2010,7 @@ describe("the pane", () => {
   // A COMMENT ON AN ARTIFACT IS ONE ROW SAYING WHO DID WHAT TO WHICH ARTIFACT, the remark as plain
   // words under it, marked through the artifacts' own tool at its own position.
   test("a comment on an artifact is listed beside the others and marked through its own tool", async () => {
-    location.hash = "#/inbox?row=artifact%3Aa-5";
+    location.hash = "#/inbox/artifact/a-5";
     mount({
       answers: { inbox: inboxes({ unread: [artifactNotice("a-5"), notice("r-1")] }) },
     });
@@ -2000,7 +2018,7 @@ describe("the pane", () => {
     const updates = within(screen.getByRole("region", { name: "Updates, 2" }));
     expect(updates.getAllByRole("listitem")).toHaveLength(2);
     // jsdom's name computation drops the spaces between a reference's parts.
-    const row = updates.getByRole("button", { name: /commented on Doc:\s*Q3\s*plan/ });
+    const row = updates.getByRole("link", { name: /commented on Doc:\s*Q3\s*plan/ });
     expect(row.textContent).toContain("Maya Ops");
     // THE ARTIFACT IS DRAWN AS A TASK'S KEY IS: its kind's glyph before its title.
     expect(row.textContent).toMatch(/commented on\s*Doc: Q3 plan/);
@@ -2030,7 +2048,7 @@ describe("the pane", () => {
   // ITS CARD: who, which artifact and why, the remark quoted, the thread's text and status, and the
   // way to the thread on the artifact's page; every word is the notice's, so opening asks nothing.
   test("a comment on an artifact opens as its card, with the thread one press away", async () => {
-    location.hash = "#/inbox?row=artifact%3Aa-5";
+    location.hash = "#/inbox/artifact/a-5";
     mount({
       answers: {
         inbox: inboxes({
@@ -2075,7 +2093,7 @@ describe("the pane", () => {
   // draw the card without its findings, its readiness or its diff link —
   // red; read the gate of every listed change, or of another — red.
   test("a code notice opens as an intent-first card that asks only its own gate", async () => {
-    location.hash = "#/inbox?row=change%3Ac-5";
+    location.hash = "#/inbox/change/c-5";
     mount({
       services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: {
@@ -2126,7 +2144,7 @@ describe("the pane", () => {
   // list a check the gate does not require, or the human paths waiting on
   // another person — red.
   test("a gated change's card says what its checks measured, its classes and the paths that asked you", async () => {
-    location.hash = "#/inbox?row=change%3Ac-5";
+    location.hash = "#/inbox/change/c-5";
     rest = gatedChange({ waitsOn: "jane" });
     mount({
       services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
@@ -2157,7 +2175,7 @@ describe("the pane", () => {
   // too. Mutations: draw the first page alone (no `next` followed) → unit is
   // missing, red; ask without `latest` → red.
   test("a gated change's card reads every page of its checks' latest attempts", async () => {
-    location.hash = "#/inbox?row=change%3Ac-5";
+    location.hash = "#/inbox/change/c-5";
     const gated = gatedChange({ waitsOn: "jane" });
     const [unit, e2e] = gated.code_checks.checks;
     rest = {
@@ -2187,7 +2205,7 @@ describe("the pane", () => {
   // waits on sees it, another does not. Mutation: drop the reader's handle
   // from the test — red.
   test("the human paths are said only to the person they wait on", async () => {
-    location.hash = "#/inbox?row=change%3Ac-5";
+    location.hash = "#/inbox/change/c-5";
     rest = gatedChange({ waitsOn: "ada" });
     mount({
       services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
@@ -2203,7 +2221,7 @@ describe("the pane", () => {
   // human paths — never "no check measured". Mutation: draw the measured
   // list whatever the readiness judges — red.
   test("a change into an ungated branch draws no gate", async () => {
-    location.hash = "#/inbox?row=change%3Ac-5";
+    location.hash = "#/inbox/change/c-5";
     rest = {
       code_change: {
         change: {
@@ -2238,7 +2256,7 @@ describe("the pane", () => {
   // of it instead. Mutation: draw the state only while a readiness is absent
   // AND the change is live — the merged change's card says nothing, red.
   test("a merged change's card says it merged, in place of where its merge stands", async () => {
-    location.hash = "#/inbox?row=change%3Ac-5";
+    location.hash = "#/inbox/change/c-5";
     mount({
       services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
       answers: {
@@ -2319,7 +2337,7 @@ describe("the pane", () => {
       grants: ["worklet", "doclet"],
       acts: EVERY_TOOL.filter((tool) => tool !== "code_mark_inbox"),
     };
-    location.hash = "#/inbox?row=change%3Ac-5";
+    location.hash = "#/inbox/change/c-5";
     mount({
       viewer: reader,
       services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
@@ -2371,7 +2389,7 @@ describe("the pane", () => {
   test("an update's heading says what it did, and a comment is quoted under it", async () => {
     const long =
       "Can you check the rounding on the last line? It drops a cent when three people split ten dollars, and the fix touches the ledger.";
-    location.hash = "#/inbox?row=r-1";
+    location.hash = "#/inbox/notice/r-1";
     mount({
       answers: {
         inbox: inboxes({
@@ -2395,7 +2413,7 @@ describe("the pane", () => {
   // AND THEN SAID TO BE THE COMMENT, never one of its replies: under "Replies
   // to this comment" the comment read as its own first reply.
   test("a comment quoted only in preview is read whole in its thread", async () => {
-    location.hash = "#/inbox?row=r-1";
+    location.hash = "#/inbox/notice/r-1";
     mount({
       answers: {
         inbox: inboxes({
@@ -2425,7 +2443,7 @@ describe("the pane", () => {
   });
 
   test("an update that only informs says why it reached you", async () => {
-    location.hash = "#/inbox?row=r-1";
+    location.hash = "#/inbox/notice/r-1";
     mount({
       answers: {
         inbox: inboxes({ unread: [notice("r-1", { kind: "status", excerpt: "" })] }),
@@ -2441,7 +2459,7 @@ describe("the pane", () => {
   });
 
   test("the conversation is read a page at a time and names each comment's author", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({
       answers: {
         decisions: decisionsOf(askItem()),
@@ -2488,7 +2506,7 @@ describe("the pane", () => {
   // answers as it does: the question's own thread is empty, the task is not.
   // Mutation: read `work_comments` without `thread`.
   test("a question nobody replied to offers no earlier comments", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({
       answers: {
         decisions: decisionsOf(askItem()),
@@ -2604,7 +2622,7 @@ describe("the pane", () => {
         confirmed++;
         return true;
       });
-      location.hash = "#/inbox?row=run%3Aturn-9";
+      location.hash = "#/inbox/run/turn-9";
       const run = heldRun({
         server: "ssh",
         tool: "ssh_operate",
@@ -2636,7 +2654,7 @@ describe("the pane", () => {
 
     test("an MCP tool's held call keeps its three answers, sent with the answer alone", async () => {
       const sent = approvals(false);
-      location.hash = "#/inbox?row=run%3Aturn-9";
+      location.hash = "#/inbox/run/turn-9";
       const run = heldRun({ server: "linear", tool: "linear_delete_issue", raw: "delete_issue" });
       mount({
         answers: {
@@ -2660,7 +2678,7 @@ describe("the pane", () => {
       const held = engineFile<Record<string, { question: string; context: string }>>(
         "internal/agent/builtin/testdata/ssh_operate_held.json",
       ).markdown!;
-      location.hash = "#/inbox?row=run%3Aturn-9";
+      location.hash = "#/inbox/run/turn-9";
       const run = {
         ...heldRun({
           server: "ssh",
@@ -2703,7 +2721,7 @@ describe("the pane", () => {
     // note after the question, or sort the findings, and this is red.
     test("an escalated operate call shows its delegates' answers before the command", async () => {
       approvals(false);
-      location.hash = "#/inbox?row=run%3Aturn-9";
+      location.hash = "#/inbox/run/turn-9";
       const run = heldRun({
         server: "ssh",
         tool: "ssh_operate",
@@ -2815,7 +2833,7 @@ describe("the pane", () => {
     // delegates' answers, or its reason through the Markdown renderer.
     test("an escalated merge shows its delegates' answers, then the merge as text", async () => {
       approvals(false);
-      location.hash = "#/inbox?row=run%3Aturn-9";
+      location.hash = "#/inbox/run/turn-9";
       const run = releaseRun("pr_merge", {
         change: "web!42",
         head: HEAD,
@@ -2860,7 +2878,7 @@ describe("the pane", () => {
     // list's row by the run's question and this is red.
     test("the list words a held call as the pane does", async () => {
       approvals(false);
-      location.hash = "#/inbox?row=run%3Aturn-9";
+      location.hash = "#/inbox/run/turn-9";
       const run = releaseRun("pr_merge", {
         change: "web!42",
         head: HEAD,
@@ -2882,7 +2900,7 @@ describe("the pane", () => {
 
     test("a held deploy shows its commit, changes, environment, rollback and reason as text", async () => {
       approvals(false);
-      location.hash = "#/inbox?row=run%3Aturn-9";
+      location.hash = "#/inbox/run/turn-9";
       const run = releaseRun("deploy", {
         repo: "web",
         commit: HEAD,
@@ -2920,7 +2938,7 @@ describe("the pane", () => {
     // words for the merge, and who may answer it.
     test("a merge whose arguments this reader is not sent reads the engine's words", async () => {
       approvals(false);
-      location.hash = "#/inbox?row=run%3Aturn-9";
+      location.hash = "#/inbox/run/turn-9";
       const run = releaseRun("pr_merge", undefined);
       mount({
         answers: {
@@ -2958,7 +2976,7 @@ describe("the pane", () => {
         pause_ttl_seconds: 3_600,
       },
     };
-    location.hash = "#/inbox?row=run%3Aturn-8";
+    location.hash = "#/inbox/run/turn-8";
     mount({ answers: { decisions: decisionsOf(run) } });
     await settle();
     expect(
@@ -3018,7 +3036,7 @@ describe("the pane", () => {
       actAnswers = {
         answer_executor: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
       };
-      location.hash = "#/inbox?row=run%3Aturn-7";
+      location.hash = "#/inbox/run/turn-7";
       mount({
         answers: {
           decisions: decisionsOf(run),
@@ -3075,7 +3093,7 @@ describe("the pane", () => {
           role: "contributor",
         },
       });
-      location.hash = "#/inbox?row=run%3Aturn-7";
+      location.hash = "#/inbox/run/turn-7";
       mount({ answers: { decisions: decisionsOf(run) } });
       await settle();
       fireEvent.click(screen.getByRole("button", { name: "Something else" }));
@@ -3099,7 +3117,7 @@ describe("the pane", () => {
         question: "Which retry ceiling should the client use?",
         question_context: "The API allows **five** retries.",
       });
-      location.hash = "#/inbox?row=run%3Aturn-7";
+      location.hash = "#/inbox/run/turn-7";
       mount({ answers: { decisions: decisionsOf(run) } });
       await settle();
       expect(
@@ -3133,7 +3151,7 @@ describe("the pane", () => {
     test("is its title whole, never split at a full stop inside it", async () => {
       const question = "Should I drop the legacy flag (e.g. --old) from the client?";
       const run = parkedRun({ question });
-      location.hash = "#/inbox?row=run%3Aturn-7";
+      location.hash = "#/inbox/run/turn-7";
       mount({ answers: { decisions: decisionsOf(run) } });
       await settle();
       expect(screen.getByRole("heading", { name: question })).toBeTruthy();
@@ -3154,7 +3172,7 @@ describe("the pane", () => {
           4,
         );
       const run = parkedRun({ question });
-      location.hash = "#/inbox?row=run%3Aturn-7";
+      location.hash = "#/inbox/run/turn-7";
       mount({ answers: { decisions: decisionsOf(run) } });
       await settle();
       const title = document.querySelector(".crewlet-reading-pane__title") as HTMLElement;
@@ -3199,7 +3217,7 @@ describe("the pane", () => {
           role: "approver",
         },
       });
-      location.hash = "#/inbox?row=run%3Aturn-7";
+      location.hash = "#/inbox/run/turn-7";
       mount({
         answers: {
           decisions: decisionsOf(run),
@@ -3240,7 +3258,7 @@ describe("the pane", () => {
       actAnswers = {
         answer_executor: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
       };
-      location.hash = "#/inbox?row=run%3Aturn-7";
+      location.hash = "#/inbox/run/turn-7";
       mount({ answers: { decisions: decisionsOf(run) } });
       await settle();
       const option = screen.getByRole("button", { name: /Delete it/ });
@@ -3275,7 +3293,7 @@ describe("the pane", () => {
         },
       };
       const sent = () => posted.some((p) => p.tool === "answer_executor");
-      location.hash = "#/inbox?row=run%3Aturn-7";
+      location.hash = "#/inbox/run/turn-7";
       mount({
         answers: {
           decisions: () => Promise.resolve(decisionsOf(sent() ? now : first)),
@@ -3338,7 +3356,7 @@ describe("the pane", () => {
       },
     ) => {
       actAnswers = { answer_executor: press };
-      location.hash = "#/inbox?row=run%3Aturn-7";
+      location.hash = "#/inbox/run/turn-7";
       mount({
         answers: {
           decisions: decisionsOf({ kind: "run", at: parked.paused_at, run: parked }),
@@ -3377,7 +3395,7 @@ describe("the pane", () => {
       ).toBe("pending");
       expect(outcome()).toBe("Answer sent. Waiting for CTO’s executor to take it.");
       expect(screen.queryByRole("button", { name: "Send answer" })).toBeNull();
-      expect(screen.queryByRole("button", { name: /Answered$/ })).toBeNull();
+      expect(screen.queryByRole("link", { name: /Answered$/ })).toBeNull();
     });
 
     test("says the executor ended, not that it was answered, when its record goes away", async () => {
@@ -3386,7 +3404,7 @@ describe("the pane", () => {
         document.querySelector(".crewlet-reading-pane__outcome")?.getAttribute("data-tone"),
       ).toBe("pending");
       expect(outcome()).toBe("Answer sent. CTO’s executor is no longer running.");
-      expect(screen.queryByRole("button", { name: /Answered$/ })).toBeNull();
+      expect(screen.queryByRole("link", { name: /Answered$/ })).toBeNull();
     });
 
     test("is answered once the run was resumed with it", async () => {
@@ -3528,7 +3546,7 @@ describe("the pane", () => {
   // NO EM DASH SHIPS: the copy the inbox draws is written with commas,
   // parentheses and full stops.
   test("nothing the inbox draws is written with an em dash", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({
       answers: {
         decisions: decisionsOf(
@@ -3619,7 +3637,7 @@ describe("who is looking", () => {
 
   test("a bound person the engine does not serve sees every control, disabled with the reason", async () => {
     const unserved = { ...JANE, acts: [] };
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({
       viewer: unserved,
       answers: {
@@ -3635,7 +3653,7 @@ describe("who is looking", () => {
       expect(reasonOf(button)).toContain(WRITE_REASONS.not_served);
     }
     cleanup();
-    location.hash = "#/inbox?row=r-1";
+    location.hash = "#/inbox/notice/r-1";
     mount({
       viewer: unserved,
       answers: { viewer: unserved, inbox: inboxes({ unread: [notice("r-1")] }) },
@@ -3658,7 +3676,7 @@ test("on a company running neither Worklet nor Gitlet the comments on artifacts 
   expect(asked.some((a) => a.kind === "inbox")).toBe(true);
   await openUpdates();
   const updates = within(screen.getByRole("region", { name: "Updates, 1" }));
-  expect(updates.getByRole("button", { name: /commented on Doc:\s*Q3\s*plan/ })).toBeTruthy();
+  expect(updates.getByRole("link", { name: /commented on Doc:\s*Q3\s*plan/ })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
   await settle();
   expect(posted).toEqual([
@@ -3728,13 +3746,13 @@ describe("what was answered", () => {
     const toggle = list.getByRole("button", { name: "Answered, 1" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     // CLOSED: its rows are neither drawn nor stepped through.
-    expect(screen.queryByRole("button", { name: /Maya Ops chose/ })).toBeNull();
+    expect(screen.queryByRole("link", { name: /Maya Ops chose/ })).toBeNull();
     const groups = list.getAllByRole("region").map((g) => g.getAttribute("aria-labelledby"));
     expect(groups).toHaveLength(3);
     fireEvent.click(toggle);
     await settle();
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    const row = within(list.getByRole("region", { name: "Answered, 1" })).getByRole("button", {
+    const row = within(list.getByRole("region", { name: "Answered, 1" })).getByRole("link", {
       name: /Answered$/,
     });
     // WHO ANSWERED IS SAID: a colleague may answer what was put to you.
@@ -3746,7 +3764,7 @@ describe("what was answered", () => {
   });
 
   test("a link to an answered ask opens its group and its pane, with what happened next", async () => {
-    location.hash = "#/inbox?row=ask%3Ac-20";
+    location.hash = "#/inbox/ask/c-20";
     mount({
       agents: [{ id: "cto", agent_id: "cto", handle: "cto", role: "CTO", activity: "idle" }],
       answers: {
@@ -3787,7 +3805,7 @@ describe("what was answered", () => {
       answer: { by: "jane", at: new Date().toISOString(), choice: "hold", body: "Hold release" },
     });
     let answeredYet = false;
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({
       answers: {
         decisions: decisionsOf(askItem()),
@@ -3803,7 +3821,7 @@ describe("what was answered", () => {
     // ONE ROW FOR THE QUESTION, though the engine now lists it as answered
     // too, in the group the last answer opened.
     expect(
-      within(screen.getByRole("region", { name: "Answered, 1" })).getAllByRole("button", {
+      within(screen.getByRole("region", { name: "Answered, 1" })).getAllByRole("link", {
         name: /Answered$/,
       }),
     ).toHaveLength(1);
@@ -3821,20 +3839,20 @@ describe("what was answered", () => {
       at: new Date(Date.now() - 60 * 60_000).toISOString(),
       ask: { ...askItem().ask, comment: "c-13", question: undefined },
     };
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({ answers: { decisions: decisionsOf(askItem(), second) } });
     await settle();
     fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
     await settle();
-    expect(location.hash).toContain("row=ask%3Ac-13");
+    expect(location.hash).toContain("#/inbox/ask/c-13");
     fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
     fireEvent.click(
-      within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("button", {
+      within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("link", {
         name: /Answered$/,
       }),
     );
     await settle();
-    expect(location.hash).toContain("row=ask%3Ac-12");
+    expect(location.hash).toContain("#/inbox/ask/c-12");
     const pane = within(document.querySelector<HTMLElement>(".inbox-pane")!);
     expect(pane.queryByRole("button", { name: /Hold release/ })).toBeNull();
     expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toContain(
@@ -3857,7 +3875,7 @@ describe("what was answered", () => {
       answer: { by: "jane", at: new Date().toISOString(), choice: "hold", body: "Hold release" },
     });
     let answeredYet = false;
-    location.hash = "#/inbox?row=ask%3Ac-12";
+    location.hash = "#/inbox/ask/c-12";
     mount({
       answers: {
         decisions: decisionsOf(askItem(), second),
@@ -3872,7 +3890,7 @@ describe("what was answered", () => {
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
     fireEvent.click(
-      within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("button", {
+      within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("link", {
         name: /Answered$/,
       }),
     );
@@ -3932,7 +3950,7 @@ describe("what was answered", () => {
     test("answered with an option is listed and read in full as an answered ask", async () => {
       mount({ answers: { answered_decisions: { handle: "jane", items: [answeredRun()] } } });
       await settle();
-      const row = (await openAnswered()).getByRole("button", { name: /Answered$/ });
+      const row = (await openAnswered()).getByRole("link", { name: /Answered$/ });
       expect(row.textContent).toContain("CTO");
       expect(row.textContent).toContain("Which branch should the fix target?");
       expect(row.textContent).toContain("You chose Target main");
@@ -3940,7 +3958,7 @@ describe("what was answered", () => {
       expect(row.textContent).toContain("1h");
       fireEvent.click(row);
       await settle();
-      expect(location.hash).toBe("#/inbox?row=run%3Aturn-7%3Aq1");
+      expect(location.hash).toBe("#/inbox/run/turn-7/q1");
       expect(byline()).toBe("CTO’s executor asked for your approval on LEAD-12");
       expect(
         screen.getByRole("heading", { name: "Which branch should the fix target?" }),
@@ -3986,7 +4004,7 @@ describe("what was answered", () => {
         },
       });
       await settle();
-      const row = (await openAnswered()).getByRole("button", { name: /Answered$/ });
+      const row = (await openAnswered()).getByRole("link", { name: /Answered$/ });
       expect(row.textContent).toContain("You replied “Neither, hold it until Friday.”");
       fireEvent.click(row);
       await settle();
@@ -4014,7 +4032,7 @@ describe("what was answered", () => {
         },
       });
       await settle();
-      const row = (await openAnswered()).getByRole("button", { name: /Answered$/ });
+      const row = (await openAnswered()).getByRole("link", { name: /Answered$/ });
       expect(row.textContent).toContain(
         "You chose Target main and wrote “Backport it after the freeze.”",
       );
@@ -4043,7 +4061,7 @@ describe("what was answered", () => {
         },
       });
       await settle();
-      fireEvent.click((await openAnswered()).getByRole("button", { name: /Answered$/ }));
+      fireEvent.click((await openAnswered()).getByRole("link", { name: /Answered$/ }));
       await settle();
       const lead = document.querySelector(".crewlet-reading-pane__lead") as HTMLElement;
       const hrefs = [...lead.querySelectorAll("a")].map((a) => a.getAttribute("href"));
@@ -4119,7 +4137,7 @@ describe("what was answered", () => {
         answer_executor: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
       };
       const sent = () => posted.some((p) => p.tool === "answer_executor");
-      location.hash = "#/inbox?row=run%3Aturn-7";
+      location.hash = "#/inbox/run/turn-7";
       mount({
         answers: {
           decisions: () =>
@@ -4163,7 +4181,7 @@ describe("what was answered", () => {
       await answerParkedRun();
       await act(async () => vi.advanceTimersByTimeAsync(30_000));
       await settle();
-      expect(location.hash).toBe("#/inbox?row=run%3Aturn-7");
+      expect(location.hash).toBe("#/inbox/run/turn-7");
       expect(byline()).toBe("CTO’s executor asked for your approval on LEAD-12");
       const answered = screen.getByRole("region", { name: "Answered, 1" });
       expect(answered.querySelector(".crewlet-inbox-row--selected")?.textContent).toContain(
@@ -4177,15 +4195,15 @@ describe("what was answered", () => {
     // "Something else" is back.
     test("answered here and reopened before it is listed reads as taken, with nothing to press", async () => {
       await answerParkedRun({ also: [askItem()], listed: false });
-      expect(location.hash).toContain("row=ask%3Ac-12");
+      expect(location.hash).toContain("#/inbox/ask/c-12");
       fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
       fireEvent.click(
-        within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("button", {
+        within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("link", {
           name: /Answered$/,
         }),
       );
       await settle();
-      expect(location.hash).toBe("#/inbox?row=run%3Aturn-7");
+      expect(location.hash).toBe("#/inbox/run/turn-7");
       const answers = within(screen.getByRole("group", { name: "Answers" }));
       expect(answers.getByRole("button", { pressed: true }).textContent).toContain("Target main");
       expect(screen.queryByRole("button", { name: "Something else" })).toBeNull();
@@ -4202,7 +4220,7 @@ describe("what was answered", () => {
         answers: { answered_decisions: { handle: "jane", items: [answeredRun()] } },
       });
       await settle();
-      const row = (await openAnswered()).getByRole("button", { name: /Answered$/ });
+      const row = (await openAnswered()).getByRole("link", { name: /Answered$/ });
       expect(row.textContent).toContain("You chose Target main");
     });
   });
@@ -4253,7 +4271,7 @@ describe("a burst of live pushes", () => {
   /** Every control in Needs you, in order: a row remounted or moved is a
    *  different element at its place. */
   function rows(): HTMLElement[] {
-    return within(screen.getByRole("region", { name: /^Needs you/ })).getAllByRole("button");
+    return within(screen.getByRole("region", { name: /^Needs you/ })).getAllByRole("link");
   }
 
   test("moves no row, remounts none, and says the limit once", async () => {
@@ -4313,6 +4331,376 @@ describe("a burst of live pushes", () => {
       now.forEach((row, n) =>
         expect(row, `flip ${i}: row ${n} was remounted or moved`).toBe(before[n]),
       );
+    }
+  });
+});
+
+// EVERY ITEM HAS ITS OWN ADDRESS, each row a real link to it, opening one pushes, and the address
+// opens its item again wherever it is now. Mutation: draw rows as buttons, open with a replace, or
+// resolve against the loaded pages alone, and this goes red.
+describe("every item has its own address", () => {
+  const LIMITED = {
+    id: "cto",
+    agent_id: "cto",
+    handle: "cto",
+    role: "CTO",
+    activity: "stopped",
+    stopped_reason: "provider",
+    provider_limit: {
+      parked: true,
+      resets_at: "2026-10-27T23:30:00Z",
+      since: "2026-10-27T23:16:00Z",
+      harness: "claude-code",
+      subscription: true,
+    },
+  };
+  const BUDGET = {
+    id: "pm",
+    agent_id: "pm",
+    handle: "pm",
+    role: "PM",
+    activity: "stopped",
+    stopped_reason: "budget",
+  };
+  const RUN = {
+    kind: "run",
+    at: new Date(Date.now() - 5 * 60_000).toISOString(),
+    run: {
+      turn_id: "turn-7",
+      launch_id: "q1",
+      agent_handle: "cto",
+      status: "awaiting_clarification",
+      question: "May I delete the fixtures directory?",
+      question_context: "",
+      paused_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      pause_ttl_seconds: 3_600,
+      work_item: { backend: "native", id: "t-12", key: "LEAD-12", project: "LEAD" },
+    },
+  };
+  /** An inbox holding a row of every kind. */
+  const everyKind = () => ({
+    agents: [LIMITED, BUDGET],
+    answers: {
+      decisions: decisionsOf(askItem(), RUN),
+      answered_decisions: { handle: "jane", items: [answeredItem()] },
+      inbox: inboxes({ unread: [notice("r-1"), codeNotice("c-5"), artifactNotice("a-5")] }),
+    },
+  });
+  /** Every row's control in the list. */
+  const rows = () => [
+    ...document.querySelectorAll<HTMLElement>(".inbox-list .crewlet-inbox-row__control"),
+  ];
+  /** The address of the row the list marks open, or null. */
+  const current = () =>
+    document
+      .querySelector(".inbox-list .crewlet-inbox-row__control[aria-current='true']")
+      ?.getAttribute("href") ?? null;
+  /** The row whose link is `address`. */
+  const rowAt = (address: string) => rows().find((r) => r.getAttribute("href") === address)!;
+  /** A plain press on a row, as a reader makes it; says whether the row took it. */
+  const press = (address: string, init: MouseEventInit = {}) => {
+    const row = rowAt(address);
+    const click = createEvent.click(row, init);
+    fireEvent(row, click);
+    return click.defaultPrevented;
+  };
+  const MISSING = "This item is not in your inbox";
+
+  test("every kind of row is a link to its own address, which opens it again from a new tab", async () => {
+    mount(everyKind());
+    await settle();
+    await openUpdates();
+    fireEvent.click(screen.getByRole("button", { name: /^Answered, 1/ }));
+    await settle();
+    expect(rows().every((r) => r.tagName === "A")).toBe(true);
+    const addresses = rows().map((r) => r.getAttribute("href")!);
+    for (const want of [
+      "#/inbox/ask/c-12",
+      "#/inbox/run/turn-7",
+      "#/inbox/seat/pm",
+      "#/inbox/notice/r-1",
+      "#/inbox/change/c-5",
+      "#/inbox/artifact/a-5",
+      "#/inbox/ask/c-20",
+    ]) {
+      expect(addresses).toContain(want);
+    }
+    expect(addresses.some((a) => a.startsWith("#/inbox/condition/"))).toBe(true);
+    // A NEW TAB holds nothing but the address: each opens its own row.
+    for (const at of addresses) {
+      cleanup();
+      location.hash = at;
+      mount(everyKind());
+      await settle();
+      expect(current(), at).toBe(at);
+      expect(document.querySelector(".crewlet-reading-pane"), at).not.toBeNull();
+      expect(screen.queryByText(MISSING), at).toBeNull();
+    }
+  });
+
+  test("an address carries ids alone, never what the item says", async () => {
+    mount(everyKind());
+    await settle();
+    await openUpdates();
+    fireEvent.click(screen.getByRole("button", { name: /^Answered, 1/ }));
+    await settle();
+    for (const row of rows()) {
+      const address = decodeURIComponent(row.getAttribute("href")!);
+      expect(address).toMatch(
+        /^#\/inbox\/(ask|run|seat|condition|notice|change|artifact)(\/[A-Za-z0-9_.:-]+)+$/,
+      );
+      for (const said of ["fixtures", "release", "Q3", "upload", "something about", "Ship"]) {
+        expect(address).not.toContain(said);
+      }
+    }
+  });
+
+  test("opening an item pushes, so Back and Forward step between the items read", async () => {
+    mount({
+      answers: { inbox: inboxes({ unread: [notice("r-1"), notice("r-2"), notice("r-3")] }) },
+    });
+    await settle();
+    await openUpdates();
+    const depth = history.length;
+    expect(press("#/inbox/notice/r-1")).toBe(true);
+    await settle();
+    expect(press("#/inbox/notice/r-3")).toBe(true);
+    await settle();
+    expect(location.hash).toBe("#/inbox/notice/r-3");
+    expect(history.length).toBe(depth + 2);
+    act(() => history.back());
+    await waitFor(() => expect(location.hash).toBe("#/inbox/notice/r-1"));
+    await settle();
+    expect(current()).toBe("#/inbox/notice/r-1");
+    expect(document.querySelector(".crewlet-reading-pane")?.textContent).toContain(
+      "something about r-1",
+    );
+    act(() => history.forward());
+    await waitFor(() => expect(location.hash).toBe("#/inbox/notice/r-3"));
+    await settle();
+    expect(current()).toBe("#/inbox/notice/r-3");
+    // THE KEYBOARD OPENS AN ITEM TOO, and pushes as a press does.
+    fireEvent.keyDown(window, { key: "k" });
+    await settle();
+    expect(location.hash).toBe("#/inbox/notice/r-2");
+    expect(history.length).toBe(depth + 3);
+    // THE OPEN ROW AGAIN is no move.
+    expect(press("#/inbox/notice/r-2")).toBe(true);
+    await settle();
+    expect(history.length).toBe(depth + 3);
+  });
+
+  test("a press with a modifier or the middle button is left to the browser, for a new tab", async () => {
+    mount({ answers: { inbox: inboxes({ unread: [notice("r-1")] }) } });
+    await settle();
+    await openUpdates();
+    // WHETHER THE ROW TOOK THE PRESS, read once it has passed the row, and the
+    // navigation jsdom would then make stopped, so no later case meets it.
+    const taken: boolean[] = [];
+    const after = (e: Event) => {
+      taken.push(e.defaultPrevented);
+      e.preventDefault();
+    };
+    window.addEventListener("click", after);
+    try {
+      for (const init of [
+        { ctrlKey: true },
+        { metaKey: true },
+        { shiftKey: true },
+        { button: 1 },
+      ]) {
+        fireEvent.click(rowAt("#/inbox/notice/r-1"), init);
+        expect(taken.at(-1), JSON.stringify(init)).toBe(false);
+      }
+      fireEvent.click(rowAt("#/inbox/notice/r-1"));
+      expect(taken.at(-1)).toBe(true);
+    } finally {
+      window.removeEventListener("click", after);
+    }
+  });
+
+  test("a read, snoozed or older update opens from its address, read by its id", async () => {
+    const read = notice("r-40", { read: true });
+    const later = notice("r-41", { snoozed: true, snoozed_until: "2026-10-30T09:00:00Z" });
+    const code = codeNotice("rec-9/change-42", { read: true });
+    const answers = {
+      inbox: inboxes({
+        unread: [notice("r-1")],
+        snoozed: [later],
+        all: [notice("r-2", { read: true })],
+        beyond: [read, code],
+      }),
+    };
+    location.hash = "#/inbox/notice/r-40";
+    mount({ answers });
+    await settle();
+    expect(
+      asked.find((q) => q.kind === "inbox" && q.params.record === "r-40")?.params,
+    ).toMatchObject({ handle: "jane", record: "r-40", snoozed: "include", cards: true });
+    expect(document.querySelector(".crewlet-reading-pane")?.textContent).toContain(
+      "something about r-40",
+    );
+    // ITS GROUP OPENS, as a listed one's does: a read update is under Earlier.
+    expect(
+      screen.getByRole("button", { name: "Earlier updates" }).getAttribute("aria-expanded"),
+    ).toBe("true");
+
+    cleanup();
+    location.hash = "#/inbox/notice/r-41";
+    mount({ answers });
+    await settle();
+    expect(current()).toBe("#/inbox/notice/r-41");
+    expect(screen.getByRole("button", { name: "1 snoozed" }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+
+    // A CODE NOTICE'S ID HOLDS ITS CHANGE, a segment of the address.
+    cleanup();
+    location.hash = "#/inbox/change/rec-9/change-42";
+    mount({ answers });
+    await settle();
+    expect(asked.some((q) => q.params.record === "rec-9/change-42")).toBe(true);
+    expect(document.querySelector(".crewlet-reading-pane")).not.toBeNull();
+    expect(screen.queryByText(MISSING)).toBeNull();
+  });
+
+  test("an item gone, or never the reader's, says so and opens nothing else", async () => {
+    for (const at of [
+      "#/inbox/ask/c-99",
+      "#/inbox/run/turn-99",
+      "#/inbox/seat/nobody",
+      "#/inbox/condition/nothing",
+      "#/inbox/notice/r-99",
+      "#/inbox/artifact/a-99",
+    ]) {
+      cleanup();
+      location.hash = at;
+      mount({
+        answers: {
+          decisions: decisionsOf(askItem()),
+          inbox: inboxes({ unread: [notice("r-1")] }),
+        },
+      });
+      await settle();
+      expect(screen.getByText(MISSING), at).toBeTruthy();
+      expect(current(), at).toBeNull();
+      expect(document.querySelector(".crewlet-reading-pane"), at).toBeNull();
+      expect(location.hash).toBe(at);
+    }
+    // ONLY EVER THE READER'S OWN: a notice is looked for in their record alone.
+    const sought = asked.filter((q) => q.params.record !== undefined);
+    expect(sought.length).toBeGreaterThan(0);
+    expect(sought.every((q) => q.params.handle === "jane")).toBe(true);
+  });
+
+  test("an answered ask opens from the address it had while open, in its group", async () => {
+    location.hash = "#/inbox/ask/c-20";
+    mount({ answers: { answered_decisions: { handle: "jane", items: [answeredItem()] } } });
+    await settle();
+    expect(current()).toBe("#/inbox/ask/c-20");
+    expect(screen.getByRole("button", { name: "Answered, 1" }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+  });
+
+  // A LINK COPIED WHILE AN EXECUTOR'S QUESTION WAS OPEN still opens it once answered: `run/<turn>`
+  // is the turn's newest answered question when none is open, and missing only when neither is.
+  test("an executor's open-question address opens its newest answer once it is answered", async () => {
+    const answeredRun = (launch: string, minutes: number) => ({
+      at: new Date(Date.now() - minutes * 60_000).toISOString(),
+      run: {
+        turn_id: "turn-7",
+        launch_id: launch,
+        agent_handle: "cto",
+        question: `Question ${launch}?`,
+        question_context: "",
+        asked_at: new Date(Date.now() - (minutes + 5) * 60_000).toISOString(),
+        work_item: { backend: "native", id: "t-12", key: "LEAD-12", project: "LEAD" },
+      },
+      answer: {
+        by: "jane",
+        by_kind: "human",
+        at: new Date(Date.now() - minutes * 60_000).toISOString(),
+        body: `Answer to ${launch}`,
+      },
+    });
+    location.hash = "#/inbox/run/turn-7";
+    mount({
+      answers: {
+        answered_decisions: {
+          handle: "jane",
+          items: [answeredRun("q2", 10), answeredRun("q1", 60)],
+        },
+      },
+    });
+    await settle();
+    expect(location.hash).toBe("#/inbox/run/turn-7");
+    expect(current()).toBe("#/inbox/run/turn-7/q2");
+    expect(screen.getByRole("button", { name: "Answered, 2" }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("heading", { name: "Question q2?" })).toBeTruthy();
+    expect(screen.queryByText(MISSING)).toBeNull();
+  });
+
+  test("a `?row=` address is replaced by the item's own, leaving no entry behind", async () => {
+    location.hash = "#/inbox?row=r-1";
+    const depth = history.length;
+    mount({ answers: { inbox: inboxes({ unread: [notice("r-1")] }) } });
+    await settle();
+    expect(location.hash).toBe("#/inbox/notice/r-1");
+    expect(history.length).toBe(depth);
+    expect(current()).toBe("#/inbox/notice/r-1");
+  });
+
+  test("an item opened from its address is scrolled into view in the list", async () => {
+    const seen: Element[] = [];
+    const was = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      seen.push(this);
+    };
+    try {
+      location.hash = "#/inbox/notice/r-3";
+      mount({
+        answers: { inbox: inboxes({ unread: [notice("r-1"), notice("r-2"), notice("r-3")] }) },
+      });
+      await settle();
+      expect(seen.map((el) => el.getAttribute("href"))).toContain("#/inbox/notice/r-3");
+    } finally {
+      Element.prototype.scrollIntoView = was;
+    }
+  });
+
+  test("on a narrow screen an address opens the item alone, and Back returns to the list", async () => {
+    const narrow = installScreen(443);
+    try {
+      location.hash = "#/inbox/ask/c-12";
+      mount({ shell: true, answers: { decisions: decisionsOf(askItem()) } });
+      await settle();
+      expect(screen.queryByRole("navigation", { name: "Inbox" })).toBeNull();
+      expect(screen.getByRole("heading", { name: DECISION.question })).toBeTruthy();
+      // FROM AN ADDRESS there is no list behind it: Back opens the list.
+      fireEvent.click(screen.getByRole("button", { name: "Back to the inbox" }));
+      await settle();
+      expect(location.hash).toBe("#/inbox");
+      expect(screen.getByRole("navigation", { name: "Inbox" })).toBeTruthy();
+      // FROM THE LIST, Back steps back to it, and Forward is the item again.
+      const depth = history.length;
+      expect(press("#/inbox/ask/c-12")).toBe(true);
+      await settle();
+      expect(history.length).toBe(depth + 1);
+      fireEvent.click(screen.getByRole("button", { name: "Back to the inbox" }));
+      await waitFor(() => expect(location.hash).toBe("#/inbox"));
+      expect(history.length).toBe(depth + 1);
+      // AND AN ITEM NOBODY HOLDS says so alone, with its way back.
+      location.hash = "#/inbox/ask/c-99";
+      await settle();
+      expect(screen.getByText(MISSING)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Back to the inbox" })).toBeTruthy();
+      expect(screen.queryByRole("navigation", { name: "Inbox" })).toBeNull();
+    } finally {
+      narrow.restore();
     }
   });
 });

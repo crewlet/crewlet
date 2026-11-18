@@ -935,12 +935,24 @@ and every entry reads its own:
   moves with it.
 
 **Which limit, and when it lifts, are read from the harness's fields first.** Claude
-Code writes a `rate_limit_event` on every run; a rejected one carries the reset
-as an epoch and the window by name (`five_hour` is a session, `seven_day` a
-week, `seven_day_opus` and `seven_day_sonnet` one model's), and the last one a
-run wrote dates the limit it reported (`limit_reset_events`). Where no event
+Code writes a `rate_limit_event` on every run, naming the window limiting the
+plan (`five_hour` is a session, `seven_day` a week, `seven_day_opus` and
+`seven_day_sonnet` one model's), its status, the fraction used and its reset as
+an epoch; the last rejected one a run wrote dates the limit it reported
+(`limit_reports`). Where no event
 names it, the sentence does: its reset (`reset_unit: clock`) and its wording
 (`limit_windows`: "weekly limit" is a week). A limit nothing names is `unknown`.
+
+**Every report is also a reading of the plan's windows.** Each run's reports, on
+this host and from an executor's box, leave the sign-in the newest reading of
+each window: its kind and length, its state (`ok`, `warning`, `reached`), the
+fraction used where the harness says it, its reset and when it was heard.
+Claude Code's subscription runs carry every window at once in `unifiedWindows`,
+which its CLI marks internal, so the profile reads it as optional and an event
+without it is read by its own window alone. The engine makes no call of its
+own to learn a window: an API-key session writes no such fields (the CLI reads
+only the plan's headers), and neither does any other harness today, so their
+models report no window until a limit sits them out.
 The window rides on the refusal (`window`), so what a person is told can say
 "weekly". The structured path is Claude Code's alone for now: Codex writes no
 rate-limit event on `codex exec --json` (its `rate_limits` are in a run's
@@ -1394,7 +1406,9 @@ started with `-p` and no prompt, reading its brief on standard input from a
 file in the box — a brief carries every note the turn has read, and one
 argument is capped at 128 KiB — and with `--settings` naming a file of two
 `mcp_tool` hooks, which call the bridge's unlisted `steer_take` tool after each
-batch of the main agent's tool calls and as the run is about to finish, beside
+batch of the main agent's tool calls and as the run is about to finish (each
+note a hook is handed is recorded read only once the job's own session shows
+the hook took it), beside
 the setting every run's settings hold, which keeps the box's own retention
 sweep off the session the engine carries. The wrapper unsets
 `CLAUDE_CODE_SIMPLE` and `CLAUDE_CODE_SAFE_MODE` first, since either switches
@@ -4095,8 +4109,8 @@ it runs on.
 | `limit_markers` | Sentences recognising a spent plan; see above. Each may carry `reset_separator` and `reset_unit` (`epoch`, `seconds` or `clock`). |
 | `auth_markers` | Sentences recognising an expired login. Each may carry `meaning`: `refused` (the default, the vendor turned the credential down) or `unread` (the harness did not use the credential it was handed, as Claude Code says "Not logged in" of a token with a space inside). Only the words a person is shown depend on it; the first marker that matches, in order, names the meaning. |
 | `auth_events` | The harness's own structured report of a refused sign-in, read before every limit report and sentinel: `match` (conditions on the event, naming the `event_type_path` discriminator and at least one field beside it) and `said_path` (the vendor's sentence). `jsonl` output only. Claude Code's are its result event with `api_error_status: 401` or `403` and its `system` event of subtype `api_retry` with `error: authentication_failed`. |
-| `limit_reset_events` | Events that date and name the limit a run reported, from the harness's own fields: `match` (as `limit_events`), `resets_at: {path, unit}` (`epoch`, `epoch_ms` or `rfc3339`) and `window: {path, map}` (the vendor's window names mapped to `session`, `weekly`, `model` or `unknown`; a name the map does not hold is `unknown`). The last match of a run wins. They classify nothing: a run still reports its limit by `limit_events` or a marker. `jsonl` output only. |
-| `limit_windows` | `{contains, window}`: the window a vendor's sentence names (`weekly limit` is `weekly`), for a limit no `limit_reset_events` entry named one for. Compared case-sensitively against the sentence already taken as the vendor's report. |
+| `limit_reports` | Events that say where the vendor's windows stand and date the limit a run reported, from the harness's own fields: `match` (naming the `event_type_path` discriminator), `state: {path, map}` (the vendor's words mapped to `ok`, `warning` or `reached`; an event whose state the map does not hold is no report), `window: {path, map}` (each vendor name mapped to `{window, hours, model}`: `session`, `weekly`, `model` or `unknown`, its length in hours, and the model family of a `model` window), `used` (the fraction used), `resets_at: {path, unit}` (`epoch`, `epoch_ms` or `rfc3339`), and optionally `windows: {path, state, used, resets_at}`, an object of every window keyed by the vendor's names. The last report of a run whose own window is `reached` dates its limit. `jsonl` output only. |
+| `limit_windows` | `{contains, window}`: the window a vendor's sentence names (`weekly limit` is `weekly`), for a limit no `limit_reports` entry named one for. Compared case-sensitively against the sentence already taken as the vendor's report. |
 | `sign_in_env` | The variables that sign the harness in when an entry's `env` sets one: a cloud provider's switch or a gateway's token (Claude Code's `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and `CLAUDE_CODE_USE_FOUNDRY`). [`auth.mode: env`](#7-a-cloud-provider-or-gateway-authmode-env) requires one. Never `token_env`, `api_key_env` or an isolation variable, and never beside `env_sign_in`. |
 | `identity_env` | Variables, none of them a credential, whose values say which account or endpoint a call reaches (Claude Code's `AWS_REGION`, `AWS_PROFILE`, `ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION`, `ANTHROPIC_FOUNDRY_RESOURCE` and the Bedrock, Vertex, Foundry and gateway base URLs). Folded into the entry's sign-in identity, so two entries in different regions, projects or gateways sit out their limits apart. Never an isolation variable. |
 | `token_prefix` | How the vendor's headless token begins (`sk-ant-oat01-`): what a stored token's hint shows, and what tells a key pasted where a token belongs from the token. Requires `token_env`. |
@@ -4194,15 +4208,20 @@ Ask Crewlet.
 
 **Status comes from every node's status record.** Each node publishes, per model,
 how it signs in there, whether it sits out a vendor's limit and until when,
-when it last answered and last failed, the seats parked on it and, for a model
-signed in with a harness login, that login's state on its disk. The page joins them:
+when it last answered and last failed, the seats parked on it, its sign-in's
+limit windows as its calls last heard them and, for a model signed in with a
+harness login, that login's state on its disk. The page joins them:
 a model is `sitting_out` while any live node sits it out, `no_sign_in` when
 nothing signs it in on the node answering, `rejected` after a refusal newer than
 its last answer or past its credential's expiry, `expiring` within seven days of
 that expiry, `untested` before anything said whether it works, and `ready`
 otherwise. A live node with no [status record](coordination.md#its-status-record)
 counted is shown as one that did not say,
-never as a node where nothing happened. Members read every model's condition;
+never as a node where nothing happened. Each model's **Limits** draw one bar per
+window from the newest report across nodes, a warning from 80% used, the window
+it sits out as reached until it is tried again, and a reading older than half an
+hour as stale; a model whose harness reports none says "None reported".
+Members read every model's condition;
 only an admin reads the credential's name, its hint, who stored it and when, the
 account a login names and the vendor's own sentence.
 

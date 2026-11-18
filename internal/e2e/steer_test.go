@@ -23,18 +23,16 @@ import (
 // The run is the stand-in Claude Code in a real `direct` box, held open, its
 // hooks the settings file the runner wrote. A person sends a note through the
 // route the dashboard presses (`/operator/act/steer_turn`) while the run
-// works: it waits sealed on the run's record, answered as read at the run's
-// next step. Released, the run makes its one call — a batch — and its
-// PostToolBatch hook calls steer_take over the run's own bridge session, which
-// takes the note: recorded read by the run's job, published delivered at the
-// `tool_batch` boundary under that job, and printed into the run's transcript
-// by the harness's own line. The run completes, the turn resumes, and its review
-// opens with the note — so the work is judged against the correction.
+// works: it waits sealed on the run's record. Released, the run makes its one
+// call, a batch, and its PostToolBatch hook's steer_take serves it the note,
+// which the harness prints in its own line and files in its session. The run's
+// collection finds the take there and publishes the note delivered at the
+// `tool_batch` boundary under the job; its review opens with the note.
 //
-// Mutations: write no settings file and no hook asks, so the note is read by the
-// review alone and the delivered record names no job; drop the informational
-// line from the transcript decoder and the run's record never shows it arrive;
-// answer no version probe and the held process is the probe, not the harness.
+// Mutations: write no settings file, or file no hook records, and the review
+// reads the note, naming no job; drop the informational line from the
+// transcript decoder and the run's record never shows it arrive; answer no
+// version probe and the held process is the probe, not the harness.
 func TestAPersonSteersALiveExecutor(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
@@ -112,6 +110,57 @@ func TestAPersonSteersALiveExecutor(t *testing.T) {
 		}
 		return false
 	}, n.diagnose)
+	waitFor(t, "the steered run to settle", func() bool { return len(n.activeRuns(t)) == 0 })
+}
+
+// A HOOK CALL ITS HARNESS GAVE UP SERVES ITS NOTE AT THE NEXT STEP, END TO END.
+// The released run's batch hook is served the note and gives the call up, as
+// Claude Code does past its hook's timeout: its answer discarded, nothing
+// filed in its session, a `notifications/cancelled` sent over the bridge. The
+// bridge's front hands the cancel to the run's inbox, which loses the serve,
+// so the run's finish is served the note again; its session shows that hook
+// took it, and the collection records it delivered there, by the job.
+//
+// Mutation: hear no cancel at the bridge's front, and the finish is served
+// nothing, the review reading the note instead.
+func TestAHookCallItsHarnessGaveUpServesItsNoteAtTheNextStep(t *testing.T) {
+	t.Parallel()
+	stateDir := t.TempDir()
+	release := filepath.Join(t.TempDir(), "release")
+	argv := filepath.Join(stateDir, "argv.txt")
+	env := map[string]string{codingModeEnv: codingModeHeld, codingReleaseEnv: release, codingArgvEnv: argv,
+		codingCancelEnv: "1"}
+	model := newScriptedModel(t)
+	n := &codingNode{node: bootCompany(t, sandboxCompany(t, model, stateDir), model, env),
+		stateDir: stateDir, argvPath: argv}
+	waitFor(t, "the seat to be claimed", func() bool {
+		return slices.Contains(n.engine.Node().Host().Held(), "swe")
+	})
+	n.wake(t, "swe", "the api test is flaking, please fix it")
+	waitFor(t, "the run to be out with its turn parked on it", func() bool {
+		for _, run := range n.activeRuns(t) {
+			if run.Status == sandbox.StatusRunning && len(run.ExecuteState) > 0 {
+				return true
+			}
+		}
+		return false
+	}, n.diagnose)
+	running := n.runFor(t, sandbox.StatusRunning)
+	waitFor(t, "the harness to start", func() bool {
+		_, err := os.Stat(argv)
+		return err == nil
+	}, n.diagnose)
+	const note = "Target the release/2 branch, not main: the fix ships in the patch release."
+	noteID := steerRunningTurn(t, n, running.TurnID, note)
+	if err := os.WriteFile(release, []byte("go"), 0o600); err != nil {
+		t.Fatalf("release the held run: %v", err)
+	}
+	reviewedWith(t, n, model, note)
+	delivered := deliveredRecord(t, n, running.TurnID, noteID)
+	if delivered["boundary"] != "finish" || delivered["launch_id"] != running.LaunchID {
+		t.Errorf("the note was delivered %v; want it read by job %s at its finish, served again there "+
+			"after its batch's hook gave the call up", delivered, running.LaunchID)
+	}
 	waitFor(t, "the steered run to settle", func() bool { return len(n.activeRuns(t)) == 0 })
 }
 

@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"slices"
+	"strings"
 	"unicode/utf8"
 	"unsafe"
 
@@ -88,6 +89,9 @@ type threadReader struct {
 	// differential raises both to compare the pass's facts with the whole
 	// decode's at any length (claudelinescan_internal_test.go).
 	valueMax, meterMax int
+	// asked is the take tokens each line names of a hook's words
+	// ([threadReader.Asking]).
+	asked []string
 }
 
 // newThreadReader reads r, one member, a line at a time: at most maxBytes of
@@ -123,7 +127,22 @@ func (t *threadReader) Reset(r io.Reader, maxBytes int64, maxLines int) {
 	maxBytes = max(maxBytes, 0)
 	t.r.Reset(r)
 	t.maxBytes, t.left = maxBytes, maxBytes
-	t.n, t.maxLines, t.torn, t.end = 0, max(maxLines, 0), false, nil
+	t.n, t.maxLines, t.torn, t.end, t.asked = 0, max(maxLines, 0), false, nil, nil
+}
+
+// Asking makes every line t reads from here on name which of tokens, take
+// tokens ([claudeTakeToken]), a hook's words hold ([threadLine.HookTakes]):
+// bit i for tokens[i]. Called before the first [threadReader.Next];
+// [threadReader.Reset] clears it. Past [maxAskedTakes] tokens it asks nothing
+// and answers [errAskedPastMasks]: the ask comes off a row, which a peer with
+// wider bounds may have written, so its caller decides nothing of them.
+func (t *threadReader) Asking(tokens []string) error {
+	if len(tokens) > maxAskedTakes {
+		t.asked = nil
+		return fmt.Errorf("%w: %d asked, %d held", errAskedPastMasks, len(tokens), maxAskedTakes)
+	}
+	t.asked = slices.Clone(tokens)
+	return nil
 }
 
 // Next is the member's next WHOLE line, one that ends in "\n", read without
@@ -146,6 +165,7 @@ func (t *threadReader) Next(ctx context.Context) (threadLine, error) {
 	facts := new(lineFacts)
 	t.scan.Reset(&t.src)
 	t.dec.reset(t.valueMax, t.meterMax)
+	t.dec.asked = t.asked
 	scanned := t.dec.line(t.scan, facts)
 	// A FAULT STOPS THE SCANNER BEFORE THE BREAK: the rest of the line is read
 	// through the meter and the tee, holding nothing, so a refused line's
@@ -519,6 +539,9 @@ type lineDecoder struct {
 	// entry any reader reads, a uuid's 36 bytes, one more, and room for one
 	// character more, which a read never splits.
 	open [uuidTextBytes + 1 + utf8.UTFMax]byte
+	// asked is the take tokens the line's reader asks of a hook's words
+	// ([threadReader.Asking]).
+	asked []string
 }
 
 // uuidTextBytes is a canonical uuid's length as written ([uuidBytes]), and
@@ -1191,14 +1214,11 @@ func (d *lineDecoder) clearHeld() (*[]byte, *[]byte, *[]byte) {
 
 // attachment reads an attachment record's `attachment`, whose first token, k,
 // the scanner stands at, into a: its kind; of an object, its `type`,
-// `toolUseID` and `by` kept as written, and what every attachment's shape rule
-// asks of its lists, every rule's at once, since its type may be its last key
-// ([threadLine.AttachmentWellFormed]): `content`'s kind and whether it is a
-// list of strings alone or of objects alone, `skills` whether it is a list of
-// objects and lists, `names` the skill listing's answer
-// ([lineDecoder.skillNames]), and `entries` whether every entry is one a
-// withheld memory keeps ([lineDecoder.withheldEntry]). No element of a list is
-// held: a file's content, its whole body, is passed over.
+// `toolUseID`, `by` and `hookEvent` kept as written; what every shape rule asks
+// of its lists, every rule's at once, since its type may be its last key
+// ([threadLine.AttachmentWellFormed]); and which asked take tokens a hook
+// record's string `content` ([hookRecordPrefix]), and a hook_success's string
+// `stdout`, name ([lineDecoder.takes]). No element of a list is held.
 func (d *lineDecoder) attachment(scan *jsonscan.Scanner, k jsonscan.Kind, a *attachmentFacts) error {
 	a.kind = scannedKind(k)
 	if k != jsonscan.ObjectStart {
@@ -1206,7 +1226,7 @@ func (d *lineDecoder) attachment(scan *jsonscan.Scanner, k jsonscan.Kind, a *att
 	}
 	// A listing that lacks its names is kept ([lineDecoder.skillNames]).
 	a.namesKept = true
-	return d.members(scan, func(name []byte, k jsonscan.Kind) error {
+	err := d.members(scan, func(name []byte, k jsonscan.Kind) error {
 		var err error
 		switch string(name) {
 		case "type":
@@ -1215,7 +1235,17 @@ func (d *lineDecoder) attachment(scan *jsonscan.Scanner, k jsonscan.Kind, a *att
 			a.toolUseID, err = d.keep(scan, k, "attachment.toolUseID")
 		case "by":
 			a.by, err = d.keep(scan, k, "attachment.by")
+		case "hookEvent":
+			a.event, err = d.keep(scan, k, "attachment.hookEvent")
+		case "stdout":
+			a.stdoutTokens, err = d.takes(scan, k)
 		case "content":
+			if k == jsonscan.String && len(d.asked) > 0 {
+				a.content, a.contentStrings, a.contentObjects = scannedKind(k), false, false
+				a.contentTokens, err = d.takes(scan, k)
+				break
+			}
+			a.contentTokens = 0
 			strs, objs := true, true
 			var list bool
 			list, err = d.elements(scan, k, func(k jsonscan.Kind) error {
@@ -1255,6 +1285,39 @@ func (d *lineDecoder) attachment(scan *jsonscan.Scanner, k jsonscan.Kind, a *att
 		}
 		return err
 	})
+	// A CONTENT'S TOKENS ARE A HOOK RECORD'S ALONE, and a stdout's a
+	// hook_success's, by its last type, which may come after them.
+	typ, typErr := wireRequiredString("type", a.typ)
+	if typErr != nil || !strings.HasPrefix(typ, hookRecordPrefix) {
+		a.contentTokens = 0
+	}
+	if typErr != nil || typ != hookSuccess {
+		a.stdoutTokens = 0
+	}
+	return err
+}
+
+// takes is which of d's asked take tokens the value the scanner stands at,
+// of kind k, names where it is a string ([textTakes]), its decoded text read
+// a piece at a time until every asked token is met, the rest left to the
+// scanner's next call; none, the value passed over, for any other value or
+// where nothing is asked. Bit i for asked[i].
+func (d *lineDecoder) takes(scan *jsonscan.Scanner, k jsonscan.Kind) (uint64, error) {
+	if k != jsonscan.String || len(d.asked) == 0 {
+		return 0, scan.Skip()
+	}
+	takes := textTakes{asked: d.asked}
+	for all := ^uint64(0) >> (64 - len(d.asked)); takes.bits != all; {
+		n, err := scan.Read(d.text[:])
+		takes.write(d.text[:n])
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
+	return takes.bits, nil
 }
 
 // skillNames reads a skill listing's `names`, whose first token, k, the

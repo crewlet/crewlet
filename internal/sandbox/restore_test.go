@@ -1095,21 +1095,17 @@ func TestACapturesNoteCursorStopsBeforeAReadItsHarnessNeverHad(t *testing.T) {
 	}
 }
 
-// EVERY STAMP OF A CAPTURE STATES THE NOTES ITS SESSION HOLDS, TAKEN OR REFUSED.
-// The note cursor on a capture's stamp is what a launch that continues it tells
-// it the notes past, on this build where its harness ended its own run and on
-// an older build whatever it ended: so the stamp of a session its harness ended
-// its own run in states every note the record says was read up to the first
-// read it marks unanswered — a take whose answer never reached the harness —
-// and the stamp of one cut off states none — the stamp of a capture taken, and
-// that of one refused before its place was reserved, alike. An older build
-// tells a continuation of a capture cut off every note the turn has read, and
-// one of a capture whose take went unanswered that take's notes, only because
-// its stamp states so.
+// EVERY STAMP OF A CAPTURE STATES THE NOTES ITS SESSION HOLDS, TAKEN OR REFUSED
+// ([SessionCapture.NoteCursor]): where the harness ended its own run, every
+// read up to the first marked unanswered; where it was cut off, none, for a
+// capture taken and one refused before its place alike, since an older build
+// tells a continuation by the stamp alone. A served note unread stops it before
+// its place, a read marked restarted stops it, a confirmed read counts, and an
+// item stops nothing.
 //
-// Mutation: stamp a capture cut off with every note read, or one whose take
-// went unanswered with that take's notes, where it is taken or where it is
-// refused before its place, and that case goes red.
+// Mutation: stamp a capture cut off with every note read, or past an unanswered
+// take, a served note's place or a restarted read, or short of a confirmed read
+// or an item's place, and that case goes red.
 func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1123,6 +1119,14 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 		// unanswered settles the job's second take as one whose answer never
 		// reached its harness.
 		unanswered bool
+		// served hands the job's second note over by a hook's serve rather
+		// than a take: "served" leaves the serve unconfirmed, and "held" and
+		// "restarted" confirm it, its session showing it taken after its last
+		// restart or only before.
+		served string
+		// item files an item for the job after both notes, and serves it,
+		// unconfirmed.
+		item bool
 	}{
 		{name: "a job whose harness ended its own run, its capture taken"},
 		{name: "a job whose harness was killed, its capture taken", cutOff: true},
@@ -1132,15 +1136,35 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 			unanswered: true},
 		{name: "a job whose harness ended its own run, a take of it unanswered, its take refused",
 			unanswered: true, untaken: true},
+		{name: "a job whose harness ended its own run, a note its hook was served unconfirmed",
+			served: "served"},
+		{name: "a job whose harness ended its own run, a note its session shows taken", served: "held"},
+		{name: "a job whose harness ended its own run, a note its session shows taken before a restart",
+			served: "restarted"},
+		{name: "a job whose harness ended its own run, an item for it served", item: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			inBubble(t, func(t *testing.T) {
 				rig, _, _ := keepingRig(t)
 				launched := rig.launchKept(t, "t1")
-				// TWO TAKES OF THE JOB'S NOTES, so the record says two were read.
+				serve := func(id string) {
+					t.Helper()
+					if served, err := rig.pending.ServeHook(t.Context(), "t1", HookServe{IDs: []string{id},
+						Launch: launched.LaunchID, Statuses: []string{StatusRunning},
+						Serve: HookServed{Take: "take-" + id,
+							Boundary: string(types.SteerBoundaryToolBatch)}}); err != nil || len(served) != 1 {
+						t.Fatalf("serving note %s served %d (%v), want it", id, len(served), err)
+					}
+				}
+				// TWO OF THE JOB'S NOTES HANDED OVER, so the record says two
+				// were read, or placed.
 				for _, id := range []string{"first", "second"} {
 					fileNote(t, rig.pending, "t1", id)
+					if id == "second" && tc.served != "" {
+						serve(id)
+						continue
+					}
 					taken, err := rig.pending.TakeNotes(t.Context(), "t1", NoteTake{IDs: []string{id},
 						Launch: launched.LaunchID, Statuses: []string{StatusRunning},
 						Read: NoteRead{Phase: "execute", Round: 1, Boundary: string(types.SteerBoundaryToolBatch),
@@ -1157,6 +1181,34 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 						NoteSettle{Take: "take-second", Unanswered: true}); err != nil || len(settled) != 1 {
 						t.Fatalf("settling the second take = %d, %v, want its note", len(settled), err)
 					}
+				}
+				verdict := HookSettle{Launch: launched.LaunchID}
+				switch tc.served {
+				case "held":
+					verdict.Held = []string{"take-second"}
+				case "restarted":
+					verdict.Restarted = []string{"take-second"}
+				}
+				if verdict.Held != nil || verdict.Restarted != nil {
+					if settled, err := rig.pending.SettleHook(t.Context(), "t1", verdict); err != nil ||
+						len(settled) != 1 {
+						t.Fatalf("the verdict on the second note = %d, %v, want its note", len(settled), err)
+					}
+				}
+				if tc.item {
+					// PUT ON THE RECORD BY THE STORE'S OWN WRITE, as an item
+					// is filed: no filer may file one ([ErrNoteKind]).
+					if _, won, _, err := rig.pending.writeFound(t.Context(), "t1", true, Fence{},
+						func(run *PendingRun) bool {
+							run.Steer.Seq++
+							run.Steer.Notes = append(slices.Clone(run.Steer.Notes), RunNote{ID: "item",
+								Seq: run.Steer.Seq, Sealed: []byte("sealed:item"), At: rig.now,
+								For: launched.LaunchID})
+							return true
+						}); err != nil || !won {
+						t.Fatalf("put the job's item on its record: %v, %v", won, err)
+					}
+					serve("item")
 				}
 				if tc.untaken {
 					rig.runner.Session.TakeErr = errors.New("the box's session could not be read")
@@ -1179,8 +1231,10 @@ func TestEveryStampOfACaptureStatesTheNotesItsSessionHolds(t *testing.T) {
 				switch {
 				case tc.cutOff:
 					want = 0
-				case tc.unanswered:
+				case tc.unanswered, tc.served == "served", tc.served == "restarted":
 					want = 1
+				case tc.item:
+					want = 3
 				}
 				capture := rig.get("t1").Capture
 				if capture == nil || capture.State != state || capture.Interrupted != tc.cutOff {

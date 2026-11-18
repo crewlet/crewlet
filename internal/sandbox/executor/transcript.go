@@ -362,11 +362,11 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // ([TranscriptBounds.LineBytes]), its gathering slice's growth and its decoded
 // copy, about 100 MiB, so about 200 MiB for two. Nothing else bounds this: a
 // node serves every tab open on it, and REST bounds none. One slot would queue
-// every reader behind the longest archive. A seat's read for words holds about
-// a third more, and a relaunch's [Runner.ReadHoldings] far less (43 MiB at most
-// measured, BenchmarkAReadingAtItsBounds), both in the seats' one slot
-// ([SeatTranscriptReadsAtOnce]). A read past them waits holding no decoder and
-// no opened object, and a slot frees within one bounded read.
+// every reader behind the longest archive. A seat's read for words holds a
+// third more, a relaunch's [Runner.ReadHoldings] far less (43 MiB measured at
+// most), both in the seats' one slot ([SeatTranscriptReadsAtOnce]); a
+// collection's pass in neither ([CollectionLargeReadsAtOnce]). A read past
+// them waits holding no decoder or opened object; a slot frees within one read.
 const TranscriptReadsAtOnce = 2
 
 // transcriptReads holds a slot for each transcript this process is reading,
@@ -380,12 +380,12 @@ var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 //
 // ONE, INSIDE THE PROCESS'S TWO, never a pool beside them, which would double
 // what reads hold at their worst: one slot is always a person's while a seat
-// reads. A relaunch's [Runner.ReadHoldings] takes it too, inside its own wait;
-// one that waits past it tells its session every call after its save point,
-// which is never wrong. On two dedicated cores (BenchmarkAReadingAtItsBounds)
-// an ordinary 1.6 MiB archive reads in 72 to 88 ms, so 32 relaunches in
-// 2.3 to 2.8 s, 255 MiB of ordinary lines in 3.1 to 3.2 s, and the slowest
-// archive measured at its bounds in 21.4 to 22.6 s.
+// reads (a collection's pool is apart, [CollectionLargeReadsAtOnce]). A
+// relaunch's [Runner.ReadHoldings] takes it too, inside its own wait; one that
+// waits past it tells its session every call after its save point, never
+// wrong. On two dedicated cores (BenchmarkAReadingAtItsBounds) an ordinary 1.6
+// MiB archive reads in 72 to 88 ms, so 32 relaunches in 2.3 to 2.8 s, 255 MiB
+// of ordinary lines in 3.1 to 3.2 s, the slowest at its bounds 21.4 to 22.6 s.
 const SeatTranscriptReadsAtOnce = 1
 
 // seatTranscriptReads holds a slot for each transcript a seat is reading, at

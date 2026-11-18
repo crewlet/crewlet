@@ -16,6 +16,30 @@
 // [github.com/crewlet/crewlet/internal/agent/structured]'s. What counts as a
 // VALID one stays here, in the decoders below, because that belongs to the
 // phase doing the asking.
+//
+// # The order a continuation tells a person's notes in
+//
+// A continuation tells a session the notes a person sent the turn
+// ([Runner.toldNotes]) in the order the run's record placed them, never in
+// the order the runner came to hold them ([Runner.inReadOrder]). The two
+// differ in three ways. A read this segment made reaches the runner before
+// the record has numbered it (Order zero), and the source that recorded it
+// says where it is ([Runner.placed]). A lost take's note (a take recorded it
+// and its answer was lost, and the take's settle handed it to this brief,
+// [steer.Briefing.Orders]) is handed over only once its settle is answered,
+// at a later round, after a later take's notes, or at a brief, while the
+// record numbered it where the take was made. And a note a hook's serve
+// placed waits at that place, which the launch's write reads it at, while a
+// later note, correcting it, is read at a later one. Told in the order the
+// runner came to hold them, a person's later note, correcting it, was told
+// ahead of the note it corrects.
+//
+// So every note of the brief's fresh ones whose place the record holds
+// already, a lost take's or one a hook's serve placed, is told among the
+// reads at that place, and the rest of fresh, which the launch's write reads
+// after every placed one, follow in their own order. A read the source has
+// not placed (the first segment's box keeps no record) keeps its turn, after
+// every placed one.
 package runner
 
 import (

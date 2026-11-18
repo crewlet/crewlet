@@ -121,14 +121,18 @@
 //     but a call's, through [threadMessage.Calls], and an attachment's
 //     `toolUseID` leaves it only as a key ([threadLine.AttachmentToolUseID]),
 //     since a PostToolUse hook's firing carries the id of the call it followed.
-//     An id written inside a record's text (a tool's output, a call's input)
-//     never leaves it as bytes: of a call's input, a result's text, a record's
-//     own toolUseResult and a message's text the layer hands out only the facts
-//     it reads of them ([threadCall], [threadLine.HandsBack],
-//     [threadLine.AgentAnswer], [threadMessage.NamesHandback]). A task
-//     notification's `<tool-use-id>`, the text's own claim, leaves it as the
-//     leg it names ([threadMessage.Notification]), which its one reader matches
-//     only against legs whose call it read.
+//     An id written inside a record's text (a tool's output, a call's input,
+//     a hook's words) never leaves it as bytes: of a call's input, a result's
+//     text, a record's own toolUseResult, a message's text and a hook's words
+//     (a system message, a success's stdout) the layer hands out only the
+//     facts it reads of them ([threadCall], [threadLine.HandsBack],
+//     [threadLine.AgentAnswer], [threadMessage.NamesHandback], and the asked
+//     take tokens a hook's words name, each whole and exactly:
+//     [threadReader.Asking], [threadLine.HookTakes], [claudeTakeToken]),
+//     beside the hook's event ([threadLine.HookEvent]). A task notification's
+//     `<tool-use-id>`, the text's own claim, leaves it as the leg it names
+//     ([threadMessage.Notification]), which its one reader matches only
+//     against legs whose call it read.
 //
 // What these rules were measured on is Claude Code 2.1.310 and 2.1.322, driven
 // as the engine drives a box's executor, and 2.1.118 beside 2.1.310 for a hook
@@ -153,6 +157,146 @@
 // depth-one subagent's thread and metadata, through the layer, metering the
 // archive at [threadPlainMax] with the scrub's own meter and handing each
 // member it reads what is left of that budget, and of [threadLinesMax].
+//
+// # A collection's read of a thread: a base, then one slot
+//
+// A pass over a session's main thread ([walkThread]) — a collection's read of
+// its job's copy ([ClaudeCode]'s readMainThread) and a take, its scrub and
+// its meter one pass — holds no token while what it holds stays within its
+// BASE, and holds ONE slot of a pool of its own ([CollectionLargeReadsAtOnce],
+// [passBudget]) while it holds more. Its triggers: a line past
+// [collectionBaseLineBytes] ([lineRun], beneath the line reader, so read-ahead
+// holds early and never late), and a reading keeping more than
+// [collectionBaseRecords] records ([recordKeeper], the chain). The take's
+// scrub holds its pieces to the same base: a line, a JSON document holding a
+// token past it (its decoder keeps that token's buffer to the document's end),
+// and a stretch of short lines a redaction holds ([scrubBounds]).
+//
+// HELD PER PIECE, KEPT ONLY WHERE A READING KEEPS RECORDS: a pass whose
+// readings keep records (the collection's chain, which may keep a long line's
+// facts) keeps the slot from its first hold to its end; every other reader,
+// the take's scrub and meter and a collection's count alone, holds it for its
+// piece past the base and drops it once done with it, the slot going back with
+// the pass's last hold. Kept to a take's end, the process's only slot would be
+// held for its whole scrub and spool, minutes, while its box's stream and every
+// take behind it waited. The scrub and the meter share one budget: with two,
+// the scrub's write would wait on the meter and the meter on the slot the
+// scrub holds. A wait its reader's context ends is [errLargeWait], a failure
+// of the read, never a reading of it. A take's Close ends both readers' waits.
+//
+// THE COEFFICIENTS are the layer's own worst measurements over its own
+// bounds: the chain at both bounds holds 43 MiB at End's peak, 344 bytes a
+// record of 2^17 ([threadChain], THE BOUNDS); and a line, read in the layer's
+// one pass, holds the reader's buffers, about 280 KiB once its values grew
+// them, and its facts, held to [threadLineMax] in sum whatever its length, the
+// most a byte where they are the smallest results: 2,450 KiB, the reader with
+// them, at a line of about 656 KiB ("A thread line is read in one scanner
+// pass, never held").
+//
+// THE BASE: a line of 256 KiB is four times the 61,170-byte p99 of 67,871
+// lines in 9,434 real threads (the census's longest, 2,002,134 bytes; 28
+// threads held a line past the base, each a large file read or written into
+// the thread), under 2.4 MiB at worst, the reader's buffers among it; and
+// 2^13 records, at 344 bytes 2.7 MiB, a thread of about 16 MiB at the 2,053
+// bytes a line probe P6 measured, eight times a day's session. With the
+// count's carry, a pass at its base holds about 5.1 MiB at its worst, by no
+// token, so a typical collection never waits. MEASURED on two cores
+// (BenchmarkACollectionPassAtItsBase, read off the GC trace as
+// BenchmarkAThreadChainAtItsBounds says): a main thread of 2^13 records the
+// chain files, one a user's line at the base of the smallest results, read by
+// the chain and the count in one walk, in 0.14 to 0.15 s, holding 5 MiB at
+// most at GOGC=10 and its heap peaking at 6 MiB at the default, about the
+// arithmetic, and taking no slot.
+//
+// THE BASE TIER'S COUNT: no token holds it, so it is every read in flight at
+// once, each about 5.1 MiB at its worst: one per seat collecting on this node,
+// one per take (its scrub's piece and its meter's line, each within the base),
+// and up to the box host's boxReadsHeld (64) reads for its peers, 326 MiB.
+//
+// THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
+// holds 43 MiB at most, the chain at both bounds; a take's piece at the
+// scrub's bound, its meter beside it under the same slot, 89 MiB
+// (BenchmarkATakeAtItsLargeTier: a main-thread line and a `.json` string each
+// at [scrubPieceMaxBytes] of bytes the decode triples, both readings and the
+// meter, read as above, 1.7 to 1.8 s on two cores, its heap peaking at
+// 142 MiB at the default GOGC against the pass's 62 MiB). Shared with
+// [TranscriptReadsAtOnce]'s two, a collection's large pass waits behind two
+// transcript reads of up to about 22 s each and spends internal/sandbox's
+// MainThreadReadWait (15 s), so a person paging a transcript would decide how
+// a turn's relaunch is told; apart, it never does. One slot, not two: the
+// process's thread readers then hold at worst 2 x 133 + 89 = 355 MiB beside
+// the base tier, and one waiter behind one pass at its worst (2.4 s, 4.8 s
+// loaded) is through in 9.6 s, within the 15 s. A later waiter, or one behind
+// a take's piece streaming from a slow box, may not be: its read ends with
+// [errLargeWait] and reads as no reading (count unread), the safe side, as a
+// read past MainThreadReadWait already is. The wait is spent inside that
+// wait, never added to it.
+//
+// THE LINE'S TRIGGER IS ITS LENGTH, though the layer holds a line's facts and
+// never the line: a line past the base holds at most those facts and the
+// reader's buffers, so the trigger takes the slot early for a long line of few
+// facts (a large file's Read, a document's base64), never late.
+//
+// # A hook's note, confirmed off its job's main thread
+//
+// A note a Claude Code hook served counts as read only once the job's session
+// shows it: the read of the job's main thread ([ClaudeCode]'s readMainThread)
+// asks the served takes (internal/sandbox's MainThreadAsk), and one reading in
+// the same walk ([hookReading]), beside the resume's model ([chainReading],
+// fed first on each line so the reading reads that line's handle), answers
+// each take Held, Restarted, Absent, or none of these with why. The release
+// and the saved compaction mark the count alone, never the receipts.
+//
+// A PAIR is a main-thread chained `hook_system_message` at event E whose
+// content names the take's token ([threadLine.HookTakes]), then the
+// `hook_additional_context` of the same firing at E after it. A firing is
+// keyed by the digest of its `toolUseID` and E, never the string, so what the
+// reading keeps is fixed in size whatever the thread wrote: per asked take
+// (at most 64; an ask of more, which a row a peer with wider bounds wrote may
+// make, decides none) the firing's digest, its event as one of two constants,
+// the two records' handles, the system message's line, and the firing of the
+// first success whose stdout names the take. A context before its system
+// message pairs nothing. The success's stdout is the hook's whole answer, so
+// it is never a confirmation.
+//
+// HELD where the pair's two records are handed ([threadChain.Handed]) on a
+// thread every size path of the resume reads alike ([threadChain.AnySize]:
+// the box's copy is read, and the archive's resume may take another path),
+// the job's release is one whose resume was read ([claudeResumeRead]), and no
+// restart ([threadRestarts.See]) lies after the system message. RESTARTED
+// where the same holds but one does, or, for a BATCH pair, a main reply after
+// it says its request cleared tool results or says it unreadably
+// ([threadLine.ToolResultsCleared]): a batch's note rides its batch's last
+// tool result into the request and is cleared with it, where a Stop's note is
+// a turn of its own. A pair the resume does not hand (a withdrawn record, a
+// parent naming no record) is neither, and is evidence its take arrived.
+//
+// SO A THREAD THAT COMPACTED DECIDES NO TAKE, wherever its pairs lie: a
+// compaction's boundary, or a record the dispatch from the last record does
+// not reach (a later root's thread), binds it to the small path, so it is no
+// thread every size path reads alike, and every take on it is undecided and
+// its note told again; Restarted is never reached through a compaction or a
+// later root. Holding the pairs after the last boundary needs what every size
+// path hands of the records after it, which the readers' ports have not
+// measured.
+//
+// No walk is made for takes on a release whose resume was not read, where
+// none can be held and so none absent, nor for more than 64, which a hook
+// record's masks cannot name ([unreadTakes]): each is undecided.
+//
+// ABSENT only where the thread proves it: its harness ended its own run, it
+// was read to its end with no refused line and no torn last piece, it never
+// restarts, another asked take at the same event is held (each event writes
+// its own shapes, so a release that rewords one event's pair proves nothing
+// at that event, and a held take at the other licenses nothing), no asked
+// take is named outside its own pair (a success's stdout of another firing,
+// or a system message whose firing never gets its context or names a take of
+// another event), every hook record's type, firing and event read, and the
+// chain places the thread (implied by the held take: a thread the chain
+// cannot place hands no record, so holds no take). A take whose pair was
+// found is never absent, and a `hook_cancelled` line names no take, so it
+// denies nothing. Anything else is undecided: the safe side, a note told
+// again.
 //
 // # A thread line is read in one scanner pass, never held
 //
@@ -201,12 +345,13 @@
 // object by the layer's one rule of it ([blockCallOf]) once every key of it
 // has been met. A text its readers ask a property of STREAMS into the
 // automaton that answers it at any length ([textSays], [textNotice],
-// [textHandback], [textResult]). A list is read an element at a time by the
-// layer's one rule of an element, up to the first it refuses, the rest passed
-// over; an entry read by its first characters (a retraction's, a kept uuid) is
-// read one byte past them ([lineDecoder.opening]), and a skill's name streams
-// into its UTF-16 length and whether its bytes were UTF-8
-// ([jsonscan.Scanner.InvalidUTF8]).
+// [textHandback], [textResult]), and a hook's words into the asked take
+// tokens they name ([textTakes], [threadReader.Asking]). A list is read an
+// element at a time by the layer's one rule of an element, up to the first it
+// refuses, the rest passed over; an entry read by its first characters (a
+// retraction's, a kept uuid) is read one byte past them
+// ([lineDecoder.opening]), and a skill's name streams into its UTF-16 length
+// and whether its bytes were UTF-8 ([jsonscan.Scanner.InvalidUTF8]).
 //
 // A RECORD'S TYPE GATES ITS FRAMES ([gates]): a frame read on records of some
 // types alone is passed over where the `type` written before it names none of
@@ -290,6 +435,22 @@
 // runner makes a save ([saver]). And a job that is over and left no archive is
 // packed on demand for its read alone too, by the run's own end's rule: the
 // capture is the job's own script's, which nothing else writes.
+//
+// # A box's release is pinned
+//
+// A box handed an archive is asked its harness's release ([Runner.CheckCarry]);
+// a relaunch that continues the copy of the session its job's box holds, in
+// that box, asks it only where an unheld telling is at stake, which is how the
+// engine learns the release that holds the copy (internal/sandbox's
+// continueKept). Either answer holds only while the box's release cannot
+// change under the session, and Claude Code updates itself in the background
+// by default, so the release that wrote a session, or answered for it, could
+// differ from the one that resumes it. So every Claude Code run pins
+// DISABLE_AUTOUPDATER=1, in the wrapper over the seat's, the image's or a
+// profile's value ([claudeSessionLayout]) and in its settings pin over a
+// repository's own ([claudeSettingsPin]), and the in-place path needs no
+// stricter telling. A managed settings file still wins over it, as over every
+// pin: an image's or a host's policy is its operator's own.
 //
 // # A run ends on request
 //

@@ -87,7 +87,9 @@ func cntThread(lines ...string) string { return strings.Join(lines, "\n") + "\n"
 // cntCount is what the count reads of lines.
 func cntCount(lines ...string) *sandbox.ResumedCount {
 	var r resumedReading
-	walkThread(context.Background(), strings.NewReader(cntThread(lines...)), threadPlainMax, &r)
+	var large passBudget
+	defer large.release()
+	walkThread(context.Background(), strings.NewReader(cntThread(lines...)), threadPlainMax, &large, &r)
 	return r.count(0)
 }
 
@@ -249,7 +251,7 @@ func TestTheTailIsChargedAtTheHarnessesLowestRate(t *testing.T) {
 		`"media_type":"text/plain","data":"`+strings.Repeat("a", 3000)+`"}}]`)
 	var r resumedReading
 	walkThread(t.Context(), strings.NewReader(cntThread(cntUser("", "u1", `"the brief"`),
-		cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), document)), threadPlainMax, &r)
+		cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), document)), threadPlainMax, testPass(t), &r)
 	if want := int64(len(document)+2) / 2; r.tail != want || r.tail < 1500 {
 		t.Errorf("the document's line is charged %d tokens, want %d, at least 1,500", r.tail, want)
 	}
@@ -394,7 +396,7 @@ func TestALineThatIsNoRecordLeavesNoCount(t *testing.T) {
 	walkThread(t.Context(), strings.NewReader(cntThread(cntUser("", "u1", `"the brief"`),
 		cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`),
 		`not a record`, cntAnchor("u4", "u5", "m2", 2000, 0, 0, 50))),
-		threadPlainMax, &count, &figure)
+		threadPlainMax, testPass(t), &count, &figure)
 	wantMark(t, count.count(0), sandbox.CountUnread)
 	if got := figure.context(); got != 2000 {
 		t.Errorf("the floor's figure is %d, want the last reply's 2,000", got)
@@ -413,7 +415,7 @@ func TestATornLastPieceIsNoLine(t *testing.T) {
 	)
 	body := cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50)) +
 		cntAnchor("u2", "u3", "m2", 2000, 0, 0, 50)
-	walkThread(t.Context(), strings.NewReader(body), threadPlainMax, &count, &figure)
+	walkThread(t.Context(), strings.NewReader(body), threadPlainMax, testPass(t), &count, &figure)
 	wantBound(t, count.count(0), 1050)
 	if got := figure.context(); got != 1000 {
 		t.Errorf("the floor's figure is %d, want the last whole reply's 1,000", got)
@@ -431,7 +433,7 @@ func TestAThreadPastItsBoundLeavesNoCount(t *testing.T) {
 	body := cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50),
 		cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`), cntAnchor("u4", "u5", "m2", 700, 0, 0, 30))
 	var r resumedReading
-	walkThread(t.Context(), strings.NewReader(body), int64(len(body)-1), &r)
+	walkThread(t.Context(), strings.NewReader(body), int64(len(body)-1), testPass(t), &r)
 	wantMark(t, r.count(0), sandbox.CountUnread)
 }
 
@@ -481,7 +483,7 @@ func TestOneWalkHandsEveryReadingEveryLine(t *testing.T) {
 	body := cntThread(cntUser("", "u1", `"the brief"`), `not a record`, cntAnchor("u1", "u2", "m1", 1, 0, 0, 1))
 	source := &countingReader{r: strings.NewReader(body)}
 	var a, b readings
-	walkThread(t.Context(), source, threadPlainMax, &a, &b)
+	walkThread(t.Context(), source, threadPlainMax, testPass(t), &a, &b)
 	if fmt.Sprint(a.lines) != "[1 -2 3]" || fmt.Sprint(b.lines) != fmt.Sprint(a.lines) || a.ends != 1 || b.ends != 1 {
 		t.Errorf("the readings were handed %v and %v, ending %d and %d times; want both [1 -2 3], once",
 			a.lines, b.lines, a.ends, b.ends)
@@ -516,7 +518,7 @@ func TestTheMetersFloorFigureIsWhatTheLayerReadsOfAReply(t *testing.T) {
 	meter := func(t *testing.T, body string) (int64, *sandbox.ResumedCount) {
 		t.Helper()
 		figure, count, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, body)), ctSession,
-			"2.1.310")
+			"2.1.310", testPass(t))
 		if err != nil {
 			t.Fatalf("meterArchive: %v", err)
 		}
@@ -578,7 +580,7 @@ func TestTheCaptureCountsTheSessionItKeeps(t *testing.T) {
 	result := cntUser("u2", "u3", `[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]`)
 	archive := cntArchive(t, cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 0, 0, 50),
 		result))
-	meter := newContextMeter(t.Context(), archiveTar, ctSession, "2.1.322")
+	meter := newContextMeter(t.Context(), archiveTar, ctSession, "2.1.322", new(passBudget))
 	_, _ = meter.Write(archive)
 	meter.finish(nil)
 	wantBound(t, meter.count(), 150+cntCharge(result))
@@ -595,7 +597,7 @@ func TestAPrecompactMemberMarksTheCapturesCount(t *testing.T) {
 	for _, name := range saved {
 		archive := cntArchive(t, cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1, 0, 0, 1)),
 			tarMember{h: tar.Header{Name: name, Mode: 0o600, Typeflag: tar.TypeReg}, body: "{}"})
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310")
+		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310", testPass(t))
 		if err != nil {
 			t.Fatalf("meterArchive: %v", err)
 		}
@@ -623,7 +625,7 @@ func TestAnArchiveTheLayerGivesNoReadingLeavesNoCount(t *testing.T) {
 	} {
 		archive := cntArchive(t, body, tarMember{h: tar.Header{Name: extra, Mode: 0o600, Typeflag: tar.TypeReg},
 			body: body})
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310")
+		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310", testPass(t))
 		if err != nil {
 			t.Fatalf("%s: meterArchive: %v", name, err)
 		}
@@ -644,7 +646,7 @@ func TestAWriterBelowTheCountFloorLeavesNoCount(t *testing.T) {
 	archive := cntArchive(t, cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1, 0, 0, 1),
 		cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`), cntAnchor("u4", "u5", "m2", 1, 0, 0, 1)))
 	for _, release := range []string{"2.1.300", ""} {
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, release)
+		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, release, testPass(t))
 		if err != nil {
 			t.Fatalf("meterArchive: %v", err)
 		}
@@ -776,7 +778,8 @@ func TestAReadCutShortBetweenLinesLeavesNoCount(t *testing.T) {
 	defer cancel()
 	var r resumedReading
 	walkThread(ctx, twoLines{body: strings.NewReader(cntThread(cntBoundary("b1"),
-		cntAnchor("b1", "u2", "m1", 100, 0, 0, 50)))}, threadPlainMax, cancelling{cancel: cancel}, &r)
+		cntAnchor("b1", "u2", "m1", 100, 0, 0, 50)))}, threadPlainMax, testPass(t), cancelling{cancel: cancel},
+		&r)
 	wantMark(t, r.count(0), sandbox.CountUnread)
 }
 
@@ -793,7 +796,7 @@ func TestAThreadWithNoChainedLineLeavesNoCount(t *testing.T) {
 		"bookkeeping alone": cntThread(cntBookkeeping),
 	} {
 		var r resumedReading
-		walkThread(t.Context(), strings.NewReader(body), threadPlainMax, &r)
+		walkThread(t.Context(), strings.NewReader(body), threadPlainMax, testPass(t), &r)
 		if got := r.count(0); got == nil || got.Mark != sandbox.CountUnread || got.Restart != nil {
 			t.Errorf("%s: the count is %+v, want unread, naming no restart", name, got)
 		}
@@ -945,7 +948,7 @@ func TestTheCountKeepsNoRestartsUUIDPastAnIdentitysBytes(t *testing.T) {
 		long + `"}`
 	var r resumedReading
 	walkThread(t.Context(), strings.NewReader(cntThread(cntUser("", "u1", `"the brief"`), boundary,
-		cntUser(long, "u4", `"s"`), cntAnchor("u4", "u5", "m2", 70, 0, 0, 30))), threadPlainMax, &r)
+		cntUser(long, "u4", `"s"`), cntAnchor("u4", "u5", "m2", 70, 0, 0, 30))), threadPlainMax, testPass(t), &r)
 	if len(r.newest) > sandbox.RestartIDMaxBytes || !r.flagged {
 		t.Errorf("the count keeps a restart of %d bytes (flagged %v), want at most %d", len(r.newest), r.flagged,
 			sandbox.RestartIDMaxBytes)
@@ -1002,7 +1005,7 @@ func TestACountMarkedForWhatItsBytesCannotBoundNamesItsRestart(t *testing.T) {
 	saved, _ := claudePrecompact(ctSession)
 	_, precompacted, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(restarted...),
 		tarMember{h: tar.Header{Name: saved[0], Mode: 0o600, Typeflag: tar.TypeReg}, body: "{}"})), ctSession,
-		"2.1.322")
+		"2.1.322", testPass(t))
 	if err != nil {
 		t.Fatalf("meterArchive: %v", err)
 	}
@@ -1057,7 +1060,7 @@ func TestAMarkedCaptureStillSaysWhetherAJobRestartedItsSession(t *testing.T) {
 	captured := func(lines ...string) *sandbox.ResumedCount {
 		t.Helper()
 		_, count, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(lines...))), ctSession,
-			"2.1.322")
+			"2.1.322", testPass(t))
 		if err != nil || count == nil || count.Mark != sandbox.CountMedia {
 			t.Fatalf("the capture counts %+v (%v), want the mark media", count, err)
 		}
@@ -1154,7 +1157,7 @@ func BenchmarkTheMeterAtItsBounds(b *testing.B) {
 	b.Run("meter", func(b *testing.B) {
 		for b.Loop() {
 			if _, count, err := meterArchive(b.Context(), bytes.NewReader(archive), ctSession,
-				"2.1.322"); err != nil || count == nil {
+				"2.1.322", testPass(b)); err != nil || count == nil {
 				b.Fatalf("meterArchive: %v", err)
 			}
 		}
@@ -1229,7 +1232,7 @@ func BenchmarkTheMainThreadReadAtItsBound(b *testing.B) {
 		b.Run(bc.name, func(b *testing.B) {
 			for b.Loop() {
 				var r resumedReading
-				walkThread(b.Context(), bc.thread(), threadPlainMax, &r)
+				walkThread(b.Context(), bc.thread(), threadPlainMax, testPass(b), &r)
 				if r.unread {
 					b.Fatal("the thread was not read whole")
 				}

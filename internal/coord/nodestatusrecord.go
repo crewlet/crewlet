@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -104,7 +105,39 @@ type NodeStatusRecord struct {
 	// Infra is what this node says of what it runs on ([NodeInfra]), read
 	// once from its own file at boot. The zero value says nothing.
 	Infra NodeInfra
+
+	// ResumesBlocked is the runs of seats this node holds whose executor's
+	// job finished and whose last resume here failed on a condition only an
+	// operator clears ([ResumesBlocked]). Nil is a node holding no such run,
+	// or one that does not say: one running no executor, or a build from
+	// before it. ON THE RECORD, since a satellite holding the seat evaluates
+	// no alarm; the count and the longest-waiting run, never how long it has
+	// waited (the package doc's "A node's runs waiting for an operator").
+	ResumesBlocked *ResumesBlocked
 }
+
+// ResumesBlocked is what a node says of the runs of seats it holds whose
+// executor's job finished and whose last resume there failed on a condition
+// only an operator clears ([NodeStatusRecord.ResumesBlocked]):
+// internal/sandbox's Coordinator.ResumesBlocked, as the record carries it.
+type ResumesBlocked struct {
+	// Runs is how many there are; at least one wherever the row says any.
+	Runs int
+
+	// Seat is the handle of the seat whose run has waited longest, bounded
+	// to [iam.MaxLogin], the longest handle a chart may name; Kind the
+	// condition its last resume failed on, one of internal/agent/builtin's
+	// kinds, bounded to [MaxResumeBlockedKindBytes]; and Since when the first
+	// such failure in a row was met, on the node's own clock.
+	Seat  string
+	Kind  string
+	Since time.Time
+}
+
+// MaxResumeBlockedKindBytes bounds [ResumesBlocked.Kind] on the wire: 64
+// bytes, past the longest kind internal/agent/builtin names (24), so a build
+// that adds one travels whole and a value nothing names cannot grow the record.
+const MaxResumeBlockedKindBytes = 64
 
 // NodeStatusRecords is the fleet's status records, one per node.
 type NodeStatusRecords interface {
@@ -175,6 +208,16 @@ func (r NodeStatusRecord) Encode() ([]byte, error) {
 	if infra := r.Infra.Meta(); infra != nil {
 		out["infra"] = infra
 	}
+	if b := r.ResumesBlocked; b != nil && b.Runs > 0 {
+		// OMITTED WHERE NOTHING WAITS, which is every record of a node whose
+		// seats wait for no operator: absent reads as none.
+		out["resumes_blocked"] = map[string]any{
+			"runs":  b.Runs,
+			"seat":  textcut.Within(b.Seat, iam.MaxLogin),
+			"kind":  textcut.Within(b.Kind, MaxResumeBlockedKindBytes),
+			"since": stamp(b.Since),
+		}
+	}
 	raw, err := json.Marshal(out)
 	if err != nil {
 		return nil, fmt.Errorf("coord: encode %s's status record: %w", r.Node, err)
@@ -220,7 +263,24 @@ func DecodeNodeStatusRecord(node string, raw []byte) (NodeStatusRecord, error) {
 	if infra, ok := meta["infra"].(map[string]any); ok {
 		r.Infra = infraFromMeta(infra)
 	}
+	r.ResumesBlocked = resumesBlockedFromMeta(meta["resumes_blocked"])
 	return r, nil
+}
+
+// resumesBlockedFromMeta reads a record's runs waiting for an operator, nil
+// where it names none: no row, one that is not a map, or one counting no run,
+// which no build writes.
+func resumesBlockedFromMeta(v any) *ResumesBlocked {
+	row, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	runs := intFromMeta(row["runs"])
+	if runs <= 0 {
+		return nil
+	}
+	return &ResumesBlocked{Runs: runs, Seat: stringFromMeta(row["seat"]), Kind: stringFromMeta(row["kind"]),
+		Since: instant(row["since"])}
 }
 
 // SortNodeStatusRecords orders records by node, the order every listing of
@@ -251,6 +311,32 @@ func LiveNodeStatuses(records []NodeStatusRecord, presence []Lease) map[string]N
 	for _, r := range records {
 		if epoch, ok := live[r.Node]; ok && epoch == r.Epoch {
 			out[r.Node] = r
+		}
+	}
+	return out
+}
+
+// LiveNodeStatusesKept is [LiveNodeStatuses] for a reader that judges the fleet
+// over and over, an alarm evaluation above all: last is what it counted on its
+// previous read, and a live node whose record is not counted now keeps the
+// record last holds for it while its presence stands at the epoch that record
+// was written under. A live node whose record is not counted is a node not
+// saying, never one whose rows went away; a node whose presence is gone or
+// moved to a new epoch keeps nothing (the package doc's "A live node not
+// saying keeps what it said").
+func LiveNodeStatusesKept(records []NodeStatusRecord, presence []Lease,
+	last map[string]NodeStatusRecord) map[string]NodeStatusRecord {
+	out := LiveNodeStatuses(records, presence)
+	for _, lease := range presence {
+		node, ok := NodeID(lease.Resource)
+		if !ok {
+			continue
+		}
+		if _, counted := out[node]; counted {
+			continue
+		}
+		if kept, ok := last[node]; ok && kept.Epoch == lease.Epoch {
+			out[node] = kept
 		}
 	}
 	return out
@@ -305,7 +391,29 @@ type ModelStatus struct {
 	// HostLogin is the entry's harness login on this node's disk, only for an
 	// entry that signs in with credential files: nil for every other.
 	HostLogin *HostLogin
+
+	// Limits are the windows of the entry's sign-in as this node's calls last
+	// heard the vendor report them, at most [MaxModelLimits].
+	Limits []ModelLimit
 }
+
+// ModelLimit is one of a sign-in's limit windows on the wire, in harness's
+// words (llm.LimitReading), with when a call last heard it.
+type ModelLimit struct {
+	Window         string
+	Hours          int
+	Model          string
+	State          string
+	Used           *float64
+	ResetsAt, Seen time.Time
+}
+
+// MaxModelLimits bounds the windows a model row carries: a plan has a handful
+// (Claude Code names four), and a profile's map is what names them.
+const MaxModelLimits = 8
+
+// MaxModelLimitModelBytes bounds a window's model family ("opus") on the wire.
+const MaxModelLimitModelBytes = 32
 
 // ModelSitOut is a sit-out window on the wire.
 type ModelSitOut struct {
@@ -735,7 +843,32 @@ func (m ModelStatus) meta() map[string]any {
 		}
 		row["host_login"] = login
 	}
+	if len(m.Limits) > 0 {
+		limits := make([]map[string]any, 0, min(len(m.Limits), MaxModelLimits))
+		for _, l := range m.Limits[:min(len(m.Limits), MaxModelLimits)] {
+			limits = append(limits, l.meta())
+		}
+		row["limits"] = limits
+	}
 	return row
+}
+
+// meta is one limit window on the wire, its unsaid parts omitted.
+func (l ModelLimit) meta() map[string]any {
+	out := map[string]any{"window": l.Window, "state": l.State, "seen": stamp(l.Seen)}
+	if l.Hours > 0 {
+		out["hours"] = l.Hours
+	}
+	if l.Model != "" {
+		out["model"] = textcut.Bytes(l.Model, MaxModelLimitModelBytes)
+	}
+	if l.Used != nil {
+		out["used"] = *l.Used
+	}
+	if !l.ResetsAt.IsZero() {
+		out["resets_at"] = stamp(l.ResetsAt)
+	}
+	return out
 }
 
 // meta is one runner cell on the wire.
@@ -863,7 +996,31 @@ func modelFromMeta(row map[string]any) (ModelStatus, bool) {
 			CheckedAt: instant(h["checked_at"]),
 		}
 	}
+	for _, v := range listFromMeta(row["limits"]) {
+		if l, ok := limitFromMeta(v); ok && len(m.Limits) < MaxModelLimits {
+			m.Limits = append(m.Limits, l)
+		}
+	}
 	return m, true
+}
+
+// limitFromMeta reads one limit window, false for one naming no window or
+// state, which a reader could not draw.
+func limitFromMeta(v any) (ModelLimit, bool) {
+	row, ok := v.(map[string]any)
+	if !ok {
+		return ModelLimit{}, false
+	}
+	l := ModelLimit{Window: stringFromMeta(row["window"]), Hours: intFromMeta(row["hours"]),
+		Model: stringFromMeta(row["model"]), State: stringFromMeta(row["state"]),
+		ResetsAt: instant(row["resets_at"]), Seen: instant(row["seen"])}
+	if l.Window == "" || l.State == "" {
+		return ModelLimit{}, false
+	}
+	if used, ok := row["used"].(float64); ok {
+		l.Used = &used
+	}
+	return l, true
 }
 
 // cellFromMeta reads one runner cell; a cell the peer did not send reads with

@@ -279,12 +279,12 @@ type chainCallID int32
 // sum, since a thread of ordinary calls fills each about halfway. Past either,
 // See files nothing more (whyBound). HELD AT MOST (GOGC=10, two dedicated
 // cores, BenchmarkAThreadChainAtItsBounds): 43 MiB at both, End 33 to 34 ms of
-// a 2.0 to 2.2 s read, and 41 MiB with a line at [threadLineMax] the record
-// filling both; End's worst, windows merging at the spread's bound, 1.8 to 1.9 s.
-// THE COLLECTION'S PASS charges the chain to the one walk a collection reads
-// its main thread in ([walkThread]), beside the resumed count, in no transcript
-// slot: 2.2 to 2.4 s, within internal/sandbox's MainThreadReadWait, and 39 MiB
-// at worst, within one slot's 133 MiB ([SeatTranscriptReadsAtOnce]).
+// a 2.0 to 2.2 s read, 41 MiB with a line at [threadLineMax] filling both;
+// End's worst, windows merging at the spread's bound, 1.8 to 1.9 s. THE
+// COLLECTION'S PASS charges the chain and the hook receipts ([hookReading]) to
+// its one walk of the main thread ([walkThread]), in no transcript slot: 2.2
+// to 2.4 s, within MainThreadReadWait, and 39 MiB at worst, in a large slot of
+// its own ([CollectionLargeReadsAtOnce]; the package doc says why).
 const (
 	// threadChainMaxRecords is the most items the chain files of one thread:
 	// its records, the retraction prefixes they carry, and the uuids its

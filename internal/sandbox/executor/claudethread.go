@@ -16,6 +16,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -254,6 +255,19 @@ func validClaudeAgent(agent string) bool {
 			return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
 		})
 }
+
+// maxAskedTakes is the most take tokens one reading asks
+// ([threadReader.Asking]): a hook record's masks' width, 64 bits.
+const maxAskedTakes = 64
+
+// The most takes a job's row asks ([sandbox.MainThreadAsk.Takes]): every
+// serve of each note and item it holds. A bound raised past the masks fails
+// this build, never a job's read.
+var _ [maxAskedTakes - (steer.MaxTurnNotes+sandbox.MaxJobItems)*sandbox.MaxNoteServes]struct{}
+
+// errAskedPastMasks is an ask of more take tokens than a hook record's masks
+// hold ([threadReader.Asking]).
+var errAskedPastMasks = errors.New("executor: more take tokens are asked than a hook record's masks hold")
 
 // threadLineError is a whole line that is not one record: not one JSON
 // object, or a head key of the wrong type ([threadHead]).
@@ -1044,6 +1058,16 @@ const (
 	// of old tool results ([threadLine.ToolResultsCleared]).
 	editClearToolUses = "clear_tool_uses_20250919"
 )
+
+// hookSystemMessage is the record of a hook's firing that holds its answer's
+// system message, the take's token among it: the reading that confirms a
+// hook's note reached its session reads it ([threadLine.HookTakes]).
+const hookSystemMessage = "hook_system_message"
+
+// hookRecordPrefix begins the type of every attachment a hook's firing
+// writes: only such a record's words name takes ([threadLine.HookTakes]),
+// judged by its last type once the attachment ends ([lineDecoder.attachment]).
+const hookRecordPrefix = "hook_"
 
 // The attachments whose payloads Claude Code's resume holds to a shape
 // ([threadLine.AttachmentWellFormed]): two of the records of a hook's firing,
@@ -2132,6 +2156,36 @@ func (l threadLine) AttachmentType() (string, error) {
 		return "", fmt.Errorf("an attachment: %w", a.err)
 	}
 	return wireString("attachment.type", a.typ)
+}
+
+// HookEvent is a hook record's event, its attachment's `hookEvent`: "" on
+// every other record and where the key is absent; an error where it is no
+// string, this accessor's alone, never the attachment's
+// ([threadLine.AttachmentWellFormed] reads no event). Read off the
+// attachment's own keys as written, which the line's one pass keeps.
+func (l threadLine) HookEvent() (string, error) {
+	a := &l.facts().attachment
+	if l.Head.Type != recordAttachment || a.kind == 0 {
+		return "", nil
+	}
+	if a.kind != '{' {
+		return "", fmt.Errorf("an attachment record's attachment is %s, not an object", a.kind)
+	}
+	if a.err != nil {
+		return "", fmt.Errorf("an attachment: %w", a.err)
+	}
+	return wireString("attachment.hookEvent", a.event)
+}
+
+// HookTakes is which of the take tokens its reader asked
+// ([threadReader.Asking]) a hook record's words name: content of its
+// attachment's `content`, stdout of a hook_success's `stdout`, each where it
+// is a string; bit i for token i, each whole and exactly ([textTakes]). Zero
+// on every other record, an attachment no hook wrote ([hookRecordPrefix])
+// among them. A hook's words leave the layer only so, never as bytes.
+func (l threadLine) HookTakes() (content, stdout uint64) {
+	a := &l.facts().attachment
+	return a.contentTokens, a.stdoutTokens
 }
 
 // ReplacedResults hands each, in order, the id of every tool result a

@@ -270,7 +270,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 			t.Fatalf("DeleteSubscription = (%v, %v), want (true, nil)", deleted, err)
 		}
 
-		if err := q.PauseTopic(ctx, topic, group, holdReason); err != nil {
+		if err := q.PauseTopic(ctx, topic, group, attachmentOf(ctx, t, q, topic, group), holdReason); err != nil {
 			// Refusing a hold on a pair it does not know is a fine answer.
 			t.Skipf("backend refuses a hold on an unknown pair: %v", err)
 		}

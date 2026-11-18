@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // recorded writes r through its wire form and reads it back under its node,
@@ -86,6 +87,55 @@ func TestANodesStatusRecordRoundTripsWhole(t *testing.T) {
 	got, err := coord.DecodeNodeStatusRecord("node-9", mustEncode(t, want))
 	if err != nil || got.Node != "node-9" {
 		t.Errorf("a record filed under node-9 read back as %q (%v)", got.Node, err)
+	}
+}
+
+// A NODE SAYS WHICH OF ITS SEATS' RUNS WAIT FOR AN OPERATOR, so a node with no
+// alarm table of its own (a satellite) is raised by those that have one: the
+// count and the run waiting longest, its seat, its condition and since when,
+// read back as written through the bytes a store keeps the record as; the seat
+// and the kind bounded on the wire, since the record is rewritten for as long
+// as the wait lasts. Nothing waiting is nothing on the wire, and a row that
+// counts no run, or is no row, names none.
+//
+// Mutation: leave the row off the wire, read it back without its instant, or
+// carry a seat past its bound, and a case goes red.
+func TestAStatusRecordCarriesTheResumesWaitingForAnOperator(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2026, 3, 4, 5, 6, 7, 891, time.UTC)
+	want := coord.NodeStatusRecord{Node: "n1", Epoch: 2, At: since, ResumesBlocked: &coord.ResumesBlocked{
+		Runs: 2, Seat: "swe", Kind: "disk_full", Since: since}}
+	if got := recorded(t, want); !reflect.DeepEqual(got, want) {
+		t.Errorf("read back %+v, want %+v", got.ResumesBlocked, want.ResumesBlocked)
+	}
+
+	long := coord.NodeStatusRecord{Node: "n1", Epoch: 2, ResumesBlocked: &coord.ResumesBlocked{Runs: 1,
+		Seat: strings.Repeat("s", 4*iam.MaxLogin), Kind: strings.Repeat("k", 4*coord.MaxResumeBlockedKindBytes),
+		Since: since}}
+	if b := recorded(t, long).ResumesBlocked; b == nil || len(b.Seat) > iam.MaxLogin ||
+		len(b.Kind) > coord.MaxResumeBlockedKindBytes {
+		t.Errorf("a seat of %d bytes and a kind of %d crossed as %+v, want them bounded to %d and %d",
+			len(long.ResumesBlocked.Seat), len(long.ResumesBlocked.Kind), b, iam.MaxLogin,
+			coord.MaxResumeBlockedKindBytes)
+	}
+
+	for name, r := range map[string]coord.NodeStatusRecord{
+		"nothing waiting": {Node: "n1", Epoch: 2},
+		"a row counting no run": {Node: "n1", Epoch: 2, ResumesBlocked: &coord.ResumesBlocked{Seat: "swe",
+			Kind: "disk_full", Since: since}},
+	} {
+		if _, sent := wireOf(t, r)["resumes_blocked"]; sent {
+			t.Errorf("%s: wrote a row of runs waiting for an operator", name)
+		}
+	}
+	for name, row := range map[string]any{
+		"a row that is no map":  "swe",
+		"a row counting no run": map[string]any{"runs": 0, "seat": "swe", "kind": "disk_full"},
+		"a row counting less":   map[string]any{"runs": -1, "seat": "swe", "kind": "disk_full"},
+	} {
+		if got := decoded(t, map[string]any{"epoch": 2, "resumes_blocked": row}); got.ResumesBlocked != nil {
+			t.Errorf("%s: read as %+v, want no run named", name, got.ResumesBlocked)
+		}
 	}
 }
 
@@ -261,6 +311,11 @@ func modelRecord() coord.NodeStatusRecord {
 				{Seat: uuid.MustParse("6f1c2a3b-4d5e-5f60-8172-839405a6b7c8"), Since: at.Add(time.Second)},
 			},
 			ParkedCount: 1, ParkedSince: at.Add(time.Second),
+			Limits: []coord.ModelLimit{
+				{Window: "session", Hours: 5, State: "reached", Used: ptr(1.02), ResetsAt: at.Add(3 * time.Hour), Seen: at},
+				{Window: "weekly", Hours: 168, State: "ok", Used: ptr(0.0), Seen: at},
+				{Window: "model", Hours: 168, Model: "opus", State: "warning", Seen: at.Add(-time.Minute)},
+			},
 		}, {
 			Key: "codex-review", SignIn: "credentials",
 			LastFailure: &coord.ModelFailure{Kind: "auth", At: at, Said: "Not logged in. Run codex login."},
@@ -386,6 +441,37 @@ func TestAModelRowsParkedSeatsAreBounded(t *testing.T) {
 			row.ParkedSince, row.Parked[0].Since, want)
 	}
 }
+
+// A MODEL ROW'S LIMIT WINDOWS ARE BOUNDED on the wire, and one naming no window
+// or state is dropped, since no reader can draw it.
+func TestAModelRowsLimitWindowsAreBounded(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 18, 7, 0, 0, 0, time.UTC)
+	var limits []coord.ModelLimit
+	for i := range 3 * coord.MaxModelLimits {
+		limits = append(limits, coord.ModelLimit{Window: "model", Model: strings.Repeat("x", i+40), State: "ok", Seen: at})
+	}
+	got := recorded(t, coord.NodeStatusRecord{Node: "n1", Epoch: 1,
+		Models: []coord.ModelStatus{{Key: "default", SignIn: "token", Limits: limits}}})
+	row := got.Models[0]
+	if len(row.Limits) != coord.MaxModelLimits {
+		t.Fatalf("the row carried %d window(s), want %d", len(row.Limits), coord.MaxModelLimits)
+	}
+	if len(row.Limits[0].Model) > coord.MaxModelLimitModelBytes {
+		t.Errorf("a window's model is %d bytes on the wire, want at most %d", len(row.Limits[0].Model),
+			coord.MaxModelLimitModelBytes)
+	}
+	wire := map[string]any{"node": "n1", "epoch": 1, "at": at.Format(time.RFC3339Nano),
+		"models": []any{map[string]any{"key": "default", "limits": []any{
+			map[string]any{"state": "ok"}, map[string]any{"window": "weekly"}, "nonsense",
+			map[string]any{"window": "weekly", "state": "ok", "used": 0.4},
+		}}}}
+	if read := decoded(t, wire).Models[0].Limits; len(read) != 1 || *read[0].Used != 0.4 {
+		t.Errorf("a peer's limits read %+v, want the one window naming its kind and state", read)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
 
 // AN MCP ROW'S OUTAGE, WAIT, CLASS AND RESTARTS CROSS THE STORE whole, through
 // the bytes a store keeps a status record as, and a healthy row carries none of

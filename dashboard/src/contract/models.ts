@@ -139,6 +139,12 @@ export type ModelSignInRoute =
 export type ModelLimitWindow = "session" | "weekly" | "model" | "unknown";
 
 /**
+ * Where a vendor says one of its windows stands (`llm.LimitState`), in
+ * escalating order. Held against `llm.LimitStates` by the sign-in gate.
+ */
+export type ModelLimitState = "ok" | "warning" | "reached";
+
+/**
  * One line of a model's test (`harness.CheckName`), in the doctor's order.
  * Held against the doctor's own order by the sign-in gate.
  */
