@@ -233,10 +233,16 @@
 // directory, and, read as a superset, every CLAUDE.md beside them), with a
 // removal sentence for each directory it walks; the run's skills and the
 // guidance of the MCP servers the run's bridge serves it, which the engine
-// knows; the date and the environment. A box document that adds a source the
-// read cannot size (MCP servers, skills, instruction entries, references,
-// Code Mode, an experimental key) and an MCP server the box dials itself,
-// whose instructions only it knows, are no point there. After an import into
+// knows; the date and the environment. Two are NOT CHARGED: the id of each
+// skill a changed list names as gone, and a skill OpenCode finds in a folder
+// of its own (a configuration directory's `skill` or `skills`, `.claude/skills`
+// and `.agents/skills` in the home and on the way up), which only a job that
+// changed such a folder since the session's last request in the box adds
+// unseen; the whole of every other source charged usually covers either. A
+// box document that adds a source the read cannot size (MCP servers, skills,
+// instruction entries, references, Code Mode, an experimental key) and an MCP
+// server the box dials itself, whose instructions only it knows, are no point
+// there. After an import into
 // another box OpenCode keeps no record of what it handed the session before,
 // and hands nothing.
 //

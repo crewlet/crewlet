@@ -48,14 +48,16 @@ const (
 
 // The bytes of OpenCode's renders the read charges beside what each renders
 // whole (read in 2.3.0's: the headers of a changed, added or removed
-// instruction, a list's preamble and its replacement sentence, a skill's and a
-// server's entry tags), each rounded up past the longest so a charge is never
-// under the render.
+// instruction, a list's preamble and its replacement sentence, a skill's entry
+// tags beside its listed name twice, a server's entry beside its name twice in
+// its Code Mode line, the date's line, the environment block beside its
+// working directory twice and the box's home), each rounded up past the
+// longest. What no constant bounds is the package doc's to say.
 const (
 	openCodeInstructionHeader = 64
 	openCodeListHeader        = 1024
 	openCodeSkillEntry        = 96
-	openCodeServerEntry       = 64
+	openCodeServerEntry       = 128
 	openCodeDateBytes         = 64
 	openCodeEnvironmentBytes  = 1024
 )
@@ -390,16 +392,17 @@ func openCodeBoxBytes(sources sandbox.RunSources, listing pointListing, paths Pa
 	if len(sources.Skills) > 0 {
 		total += openCodeListHeader
 		for _, skill := range sources.Skills {
-			total += openCodeSkillEntry + int64(2*len(skill.Name)+len(skill.Description))
+			total += openCodeSkillEntry + int64(2*len(skill.Listed())+len(skill.Description))
 		}
 	}
 	if len(sources.Guidance) > 0 {
 		total += openCodeListHeader
 		for server, said := range sources.Guidance {
-			total += openCodeServerEntry + int64(len(server)+len(said)+4*(strings.Count(said, "\n")+1))
+			total += openCodeServerEntry + int64(2*len(server)+len(said)+4*(strings.Count(said, "\n")+1))
 		}
 	}
-	return total + openCodeDateBytes + openCodeEnvironmentBytes + 2*int64(len(listing.cwd))
+	return total + openCodeDateBytes + openCodeEnvironmentBytes + 2*int64(len(listing.cwd)) +
+		int64(len(paths.Home))
 }
 
 // pointListing is the lines the read's script printed ([openCodePointScript]).

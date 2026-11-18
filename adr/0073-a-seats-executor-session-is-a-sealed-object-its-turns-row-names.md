@@ -3931,7 +3931,9 @@ decided by and the plugins' names, and removes its answers from the box.
 There OpenCode tells the session every context source that changed since its
 last request in that box: the run's instructions, every instruction file it
 discovers, the run's skills and its MCP servers' guidance, the date and the
-environment, each at most its whole render. The read sizes them; a box
+environment, each at most its whole render, but the id of a skill a changed
+list names as gone and a skill OpenCode finds in a skill folder of its own,
+which are not charged. The read sizes them; a box
 document that adds a source the read cannot size, and an MCP server the box
 dials itself, whose instructions nothing here knows, are no point there.
 After an import into another box nothing is charged.
@@ -3963,7 +3965,10 @@ not the count. The overflow route (a server whose window is under OpenCode's
 point), a catalog refreshed or a document changed between the read and the
 run, a credential only a file outside the run's paths names, and the copy
 replaced in the same box charged as an in-box one, each toward over-telling
-but the first, whose margin is the buffer. The base path is judged by neither
+but the first, whose margin is the buffer; and the two sources not charged in
+the box, a skill gone from a changed list and one a job put in a skill folder
+of OpenCode's own, which the whole of every other source charged usually
+covers. The base path is judged by neither
 harness.
 
 ## Amendment: a session the run started of its own is told its task again where it may be a summary

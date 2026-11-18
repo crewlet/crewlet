@@ -404,6 +404,61 @@ func TestTheBoxsSourcesAreSizedOnlyInItsOwnBox(t *testing.T) {
 	}
 }
 
+// EACH SOURCE IS CHARGED AT LEAST ITS RENDER. In the box that holds the copy,
+// OpenCode 2.3.0 hands a changed skill list an entry per skill whose id and
+// name are both its listed name ([sandbox.Skill.Listed]), and a changed day
+// and environment their lines, the working directory twice and the box's
+// temporary folder once ([openCodeRendered]); the charge of each is at least
+// that render.
+//
+// Mutation: charge a skill entry by its name or its description alone, or
+// drop the date's and the environment's charge, and a case goes red.
+func TestEachSourceIsChargedAtLeastItsRender(t *testing.T) {
+	t.Parallel()
+	models := modelsAnswer(pointModel{provider: "stub", model: "m", context: 200000})
+	config := configAnswer(stated(200000))
+	paths := Paths{Home: "/box"}
+	charge := func(sources sandbox.RunSources) int64 {
+		t.Helper()
+		got := readPoint("2.3.0", models, config, listingOf("walk /w", "walk /"), &sources)
+		if got.Mark != "" {
+			t.Fatalf("in its own box the point reads %+v, want one", got)
+		}
+		return got.BoxBytes
+	}
+	first := sandbox.Skill{Name: "deploy", Description: "how to deploy"}
+	second := sandbox.Skill{Name: "release-the-nightly-build", Description: "cut it"}
+	entry := fmt.Sprintf(openCodeRendered.skill, second.Listed(), second.Listed(), second.Description)
+	if got := charge(sandbox.RunSources{Skills: []sandbox.Skill{first, second}}) -
+		charge(sandbox.RunSources{Skills: []sandbox.Skill{first}}); got < int64(len(entry)) {
+		t.Errorf("a skill whose entry renders %d bytes is charged %d", len(entry), got)
+	}
+	system := "The instructions changed:\nInstructions from: " + paths.System() + "\n" +
+		finalSystem("", paths, nil) + "\n"
+	day := openCodeRendered.date
+	environment := fmt.Sprintf(openCodeRendered.environment, "/w", "/w", paths.Home+"/.tmp/opencode")
+	if got, want := charge(sandbox.RunSources{}), len(system)+len(day)+len(environment); got < int64(want) {
+		t.Errorf("the run's instructions, the day and the environment render %d bytes and are charged %d",
+			want, got)
+	}
+}
+
+// openCodeRendered is how OpenCode 2.3.0 renders a skill entry, the day and
+// the environment, as a probe's request carries them in its system message,
+// the day at its longest, each change after the line its code opens one with
+// (`Today's date is now:`, `The environment you are running in is now:`).
+var openCodeRendered = struct{ skill, date, environment string }{
+	skill: "  <skill>\n    <id>%s</id>\n    <name>%s</name>\n    <description>%s</description>\n" +
+		"  </skill>\n",
+	date: "Today's date is now:\nToday's date: Wed Sep 30 2026\n",
+	environment: "The environment you are running in is now:\n<env>\n  Working directory: %s\n" +
+		"  Workspace root folder: %s\n  Is directory a git repo: yes\n  Platform: linux\n  Prefer %s over " +
+		"generic system temporary directories such as /tmp; it is pre-created and approved for external " +
+		"access.\n</env>\nWhen you create a worktree outside the current working directory and intend to use " +
+		"it as your primary working directory, consider using `execute` to call `tools.opencode.session_move` " +
+		"and make the worktree the session's working directory.\n",
+}
+
 // THE READ KEEPS NO VALUE IT WAS HANDED. config.get answers a document's
 // `{env:…}` and `{file:…}` references resolved, so a plugin's options and a
 // provider's settings may hold a credential: the point keeps the plugins'
