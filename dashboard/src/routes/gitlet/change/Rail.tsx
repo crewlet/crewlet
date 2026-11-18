@@ -44,6 +44,7 @@ import { changeHref, changesHref, commitHref } from "../paths.ts";
 import { checksWords, readinessCount, readinessWaits, verdictPhrase } from "../readinessWords.ts";
 import { BranchChip, Face, ShaChip, useWhoName } from "../ui.tsx";
 import { AskDialog } from "./AskDialog.tsx";
+import { ConvertToDraft, EditTarget, EditWorkItem, RestoreBranch } from "./ChangeEdits.tsx";
 import { verdictTone } from "./Conversation.tsx";
 import { CopyButton } from "./CopyButton.tsx";
 import { CheckMark } from "../checks/marks.tsx";
@@ -260,6 +261,7 @@ function Branches({ change }: { change: CodeChangeDetail }) {
       <p className="code-rail__row">
         <BranchChip name={refName(change.source_ref).name} />
       </p>
+      <RestoreBranch change={change} />
       <p className="code-rail__row">
         <ArrowDownGlyph size="xs" aria-hidden="true" />
         <span className="code-rail__note">into</span>
@@ -429,6 +431,7 @@ export function ChangeRail({
     <div className="code-rail">
       <RailSection title="Reviewers" end={<RequestReview change={change} />}>
         <Reviewers change={change} standings={standings} again={again} asked={asked} />
+        <ConvertToDraft change={change} />
       </RailSection>
       {changeLive(change.state) && change.readiness && (
         <RailSection
@@ -445,11 +448,14 @@ export function ChangeRail({
       <RailSection
         title="Work item"
         end={
-          work?.backend === "worklet" ? (
-            <a className="t-link code-rail__note" href={href(itemPath(work))}>
-              Worklet <ArrowUpRightGlyph size="xs" aria-hidden="true" />
-            </a>
-          ) : undefined
+          <span className="code-rail__ends">
+            {work?.backend === "worklet" && (
+              <a className="t-link code-rail__note" href={href(itemPath(work))}>
+                Worklet <ArrowUpRightGlyph size="xs" aria-hidden="true" />
+              </a>
+            )}
+            <EditWorkItem change={change} />
+          </span>
         }
       >
         {work ? (
@@ -473,7 +479,7 @@ export function ChangeRail({
           </a>
         </p>
       </RailSection>
-      <RailSection title="Branches">
+      <RailSection title="Branches" end={<EditTarget change={change} />}>
         <Branches change={change} />
       </RailSection>
       <RailSection title="Head">

@@ -283,8 +283,22 @@ func failClass(w http.ResponseWriter, cause error, key string, detail,
 		httpjson.FailWithFields(w, http.StatusPreconditionFailed,
 			httpjson.CodeVersionMoved, detail)
 	default:
+		if field := refusedField(cause); class == crewletmcp.RefusalInvalid && field != "" {
+			detail[KeyFields] = []string{field}
+		}
 		httpjson.FailWithFields(w, answer.status, answer.code, detail)
 	}
+}
+
+// refusedField is the field a refusal's chain names as a value (gitlet.FieldRefused), "" for none:
+// a client says which value was refused in its own words (ADR-0060), never in the domain's
+// sentence, which is written for whoever built the request.
+func refusedField(cause error) string {
+	var named interface{ RefusedField() string }
+	if errors.As(cause, &named) {
+		return named.RefusedField()
+	}
+	return ""
 }
 
 // LogCondition writes what a node's condition says for whoever runs the node
@@ -517,7 +531,8 @@ func FailWrite(ctx context.Context, w http.ResponseWriter, err error, key string
 }
 
 // KeyFields names the arguments a call carried that its tool does not read, on
-// its `400 invalid_body`: values a client fixes its request by.
+// its `400 invalid_body`, and the field a domain refused a call by, on its
+// `422 invalid`: values a client fixes its request by.
 const KeyFields = "fields"
 
 // writeClass is the class a writer's error is refused under: the class its

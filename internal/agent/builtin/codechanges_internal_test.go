@@ -59,6 +59,7 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 		CodeRequestReviewTool:    gitlet.ConversationWrite{Reviewers: &gitlet.ReviewerRequest{}},
 		CodeReviewChangeTool:     gitlet.ConversationWrite{Review: &gitlet.Review{}},
 		CodeCommentOnChangeTool:  gitlet.ConversationWrite{Comment: &gitlet.Comment{}},
+		CodeDeleteCommentTool:    gitlet.ConversationWrite{CommentDelete: &gitlet.CommentDelete{}},
 		CodeResolveFindingTool:   gitlet.ConversationWrite{FindingResolve: &gitlet.FindingResolve{}},
 		CodeApplySuggestionsTool: gitlet.ConversationWrite{FindingResolve: &gitlet.FindingResolve{}},
 	}

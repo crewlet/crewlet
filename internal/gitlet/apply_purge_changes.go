@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-// A purge part's changes: their revisions, authors and bodies on the
+// A purge part's changes: their revisions, authors, moves and bodies on the
 // repository's subject, and their conversations on each change's own.
 
 // purgedChange is one change as a purge part's walk reads it: what its body and
@@ -22,9 +22,9 @@ type purgedChange struct {
 	// the wide ones by bytes as well as rows; body, mergeability and
 	// conversation go only with the change, whole (a mergeability's conflicted
 	// paths are bounded by MaxConflictBytes and weighed in the text).
-	revisions, authors, reviewers, participants, findings int
-	comments, findingTexts, reviews, facts                int
-	body, mergeability, conversation                      int
+	revisions, authors, moves, reviewers, participants, findings int
+	comments, findingTexts, reviews, facts                       int
+	body, mergeability, conversation                             int
 	// notices is code_changes.notices ([countNotices]): what a part charges
 	// for them, never the rows this node finds, which another may not.
 	notices int
@@ -33,7 +33,7 @@ type purgedChange struct {
 // rows is every row a part charges for c taken whole, its own and its notices'
 // count included.
 func (c purgedChange) rows() int {
-	return c.revisions + c.authors + c.reviewers + c.participants + c.findings + c.comments + c.findingTexts +
+	return c.revisions + c.authors + c.moves + c.reviewers + c.participants + c.findings + c.comments + c.findingTexts +
 		c.reviews + c.facts + c.body + c.mergeability + c.conversation + c.notices + 1
 }
 
@@ -88,7 +88,8 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, at applyContext,
 	var gone ChangeCounts
 	for weighed < PurgePartBytes && rows.Next() {
 		var c purgedChange
-		if err = rows.Scan(&c.id, &c.state, &c.bodyBytes, &c.text, &c.notices, &c.revisions, &c.authors, &c.reviewers,
+		if err = rows.Scan(&c.id, &c.state, &c.bodyBytes, &c.text, &c.notices, &c.revisions, &c.authors, &c.moves,
+			&c.reviewers,
 			&c.participants, &c.findings, &c.comments, &c.findingTexts, &c.reviews, &c.facts, &c.body,
 			&c.mergeability, &c.conversation); err != nil {
 			_ = rows.Close()
@@ -134,7 +135,8 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, at applyContext,
 		if err != nil {
 			return changesPurged{}, err
 		}
-		for _, stmt := range []string{purgeChangeRevisionsSQL, purgeChangeAuthorsSQL, purgeChangeReviewersSQL,
+		for _, stmt := range []string{purgeChangeRevisionsSQL, purgeChangeAuthorsSQL, purgeChangeMovesSQL,
+			purgeChangeReviewersSQL,
 			purgeChangeParticipantsSQL, purgeChangeFindingsSQL, purgeChangeCommentsSQL, purgeChangeFindingTextsSQL,
 			purgeChangeReviewsSQL, purgeChangeFactsSQL, purgeChangeBodiesSQL, purgeChangeMergeabilitySQL,
 			purgeChangeConversationsSQL, purgeChangeRowsSQL} {
@@ -173,8 +175,8 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, at applyContext,
 	// THE CUT CHANGE: its body, mergeability and own rows are never reached
 	// here.
 	if !byText {
-		for _, stmt := range []string{purgeCutRevisionsSQL, purgeCutAuthorsSQL, purgeCutReviewersSQL,
-			purgeCutParticipantsSQL, purgeCutFindingsSQL} {
+		for _, stmt := range []string{purgeCutRevisionsSQL, purgeCutAuthorsSQL, purgeCutMovesSQL,
+			purgeCutReviewersSQL, purgeCutParticipantsSQL, purgeCutFindingsSQL} {
 			if left == 0 {
 				break
 			}
@@ -298,6 +300,7 @@ const (
 		COALESCE((SELECT text_bytes FROM code_conversations WHERE change_id = c.id), 0), c.notices,
 		(SELECT COUNT(*) FROM (SELECT 1 FROM code_revisions WHERE change_id = c.id LIMIT ?2)),
 		(SELECT COUNT(*) FROM (SELECT 1 FROM code_change_authors WHERE change_id = c.id LIMIT ?2)),
+		(SELECT COUNT(*) FROM (SELECT 1 FROM code_change_moves WHERE change_id = c.id LIMIT ?2)),
 		(SELECT COUNT(*) FROM (SELECT 1 FROM code_reviewers WHERE change_id = c.id LIMIT ?2)),
 		(SELECT COUNT(*) FROM (SELECT 1 FROM code_participants WHERE change_id = c.id LIMIT ?2)),
 		(SELECT COUNT(*) FROM (SELECT 1 FROM code_findings WHERE change_id = c.id LIMIT ?2)),
@@ -318,6 +321,9 @@ const (
 	purgeChangeAuthorsSQL = `DELETE FROM code_change_authors WHERE rowid IN (SELECT a.rowid
 		FROM json_each(?) AS j CROSS JOIN code_change_authors AS a
 		WHERE a.change_id = CAST(j.value AS TEXT))`
+	purgeChangeMovesSQL = `DELETE FROM code_change_moves WHERE rowid IN (SELECT v.rowid
+		FROM json_each(?) AS j CROSS JOIN code_change_moves AS v
+		WHERE v.change_id = CAST(j.value AS TEXT))`
 	purgeChangeReviewersSQL = `DELETE FROM code_reviewers WHERE rowid IN (SELECT r.rowid
 		FROM json_each(?) AS j CROSS JOIN code_reviewers AS r
 		WHERE r.change_id = CAST(j.value AS TEXT))`
@@ -356,6 +362,8 @@ const (
 		FROM code_revisions WHERE change_id = ? ORDER BY n LIMIT ?)`
 	purgeCutAuthorsSQL = `DELETE FROM code_change_authors WHERE rowid IN (SELECT rowid
 		FROM code_change_authors WHERE change_id = ? ORDER BY author LIMIT ?)`
+	purgeCutMovesSQL = `DELETE FROM code_change_moves WHERE rowid IN (SELECT rowid
+		FROM code_change_moves WHERE change_id = ? ORDER BY position, kind LIMIT ?)`
 	purgeCutReviewersSQL = `DELETE FROM code_reviewers WHERE rowid IN (SELECT rowid
 		FROM code_reviewers WHERE change_id = ? ORDER BY reviewer LIMIT ?)`
 	purgeCutParticipantsSQL = `DELETE FROM code_participants WHERE rowid IN (SELECT rowid
@@ -392,6 +400,9 @@ const (
 	purgeAllAuthorsSQL = `DELETE FROM code_change_authors WHERE rowid IN (SELECT a.rowid
 		FROM code_changes AS c INDEXED BY ` + changesNumberKey + ` CROSS JOIN code_change_authors AS a
 		WHERE c.repo_id = ? AND a.change_id = c.id)`
+	purgeAllMovesSQL = `DELETE FROM code_change_moves WHERE rowid IN (SELECT v.rowid
+		FROM code_changes AS c INDEXED BY ` + changesNumberKey + ` CROSS JOIN code_change_moves AS v
+		WHERE c.repo_id = ? AND v.change_id = c.id)`
 	purgeAllReviewersSQL = `DELETE FROM code_reviewers WHERE rowid IN (SELECT r.rowid
 		FROM code_changes AS c INDEXED BY ` + changesNumberKey + ` CROSS JOIN code_reviewers AS r
 		WHERE c.repo_id = ? AND r.change_id = c.id)`

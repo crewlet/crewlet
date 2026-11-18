@@ -472,14 +472,15 @@ func (t *codeBranchWrite) args(args map[string]any) (gitlet.EngineWrite, revArgs
 func fileOpsArg(tool string, args map[string]any) ([]gitlet.FileOp, *tools.Result) {
 	raw, _ := argval.List(args["files"])
 	if len(raw) == 0 {
-		r := failed(fmt.Sprintf("%s needs `files`: one operation a path — put, edit, delete, move or mode.", tool))
+		r := failedArg("files",
+			fmt.Sprintf("%s needs `files`: one operation a path — put, edit, delete, move or mode.", tool))
 		return nil, &r
 	}
 	out := make([]gitlet.FileOp, 0, len(raw))
 	for i, entry := range raw {
 		m, ok := argval.Object(entry)
 		if !ok {
-			r := failed(fmt.Sprintf("%s: files[%d] is not an object of `op`, `path` and the fields its op "+
+			r := failedArg("files", fmt.Sprintf("%s: files[%d] is not an object of `op`, `path` and the fields its op "+
 				"takes.", tool, i))
 			return nil, &r
 		}
@@ -491,7 +492,7 @@ func fileOpsArg(tool string, args map[string]any) ([]gitlet.FileOp, *tools.Resul
 		if content, present := m["content"]; present {
 			text, ok := argval.String(content)
 			if !ok {
-				r := failed(fmt.Sprintf("%s: files[%d].content is the file's text; a binary file is put by "+
+				r := failedArg("files", fmt.Sprintf("%s: files[%d].content is the file's text; a binary file is put by "+
 					"`blob_oid`, or committed in a clone and pushed.", tool, i))
 				return nil, &r
 			}
@@ -904,7 +905,7 @@ func gateChangeArg(tool string, args map[string]any) (*gitlet.GateChange, *tools
 	}
 	var change gitlet.GateChange
 	if err := decodeArg(named, &change); err != nil {
-		r := failed(fmt.Sprintf("%s: a merge gate field is not as the schema says: %v.", tool, err))
+		r := failedArg("gate", fmt.Sprintf("%s: a merge gate field is not as the schema says: %v.", tool, err))
 		return nil, &r
 	}
 	change.Remove = remove
@@ -1045,7 +1046,7 @@ func ownerArg(tool, arg string, args map[string]any) (gitlet.Owner, bool, *tools
 	}
 	var o gitlet.Owner
 	if err := decodeArg(raw, &o); err != nil || !o.Kind.Valid() || strings.TrimSpace(o.Ref) == "" {
-		r := failed(fmt.Sprintf("%s: `%s` is {\"kind\": \"unit\", \"ref\": \"<unit key>\"} or {\"kind\": "+
+		r := failedArg(arg, fmt.Sprintf("%s: `%s` is {\"kind\": \"unit\", \"ref\": \"<unit key>\"} or {\"kind\": "+
 			"\"seat\", \"ref\": \"<handle>\"}.", tool, arg))
 		return gitlet.Owner{}, false, &r
 	}

@@ -923,7 +923,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	for _, stmt := range []string{
 		purgeAllPushesSQL, purgeAllRefsSQL, purgeAllPacksSQL, purgeAllRetiredSQL, purgeAllDropsSQL,
 		purgeAllPushDaysSQL, purgeAllPusherDaysSQL,
-		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllReviewersSQL, purgeAllParticipantsSQL,
+		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllMovesSQL, purgeAllReviewersSQL, purgeAllParticipantsSQL,
 		purgeAllFindingsSQL, purgeAllCommentsSQL, purgeAllFindingTextsSQL, purgeAllReviewsSQL,
 		purgeAllFactsSQL, purgeAllBodiesSQL, purgeAllMergeabilitySQL, purgeAllConversationsSQL,
 		purgeAllChangesSQL, purgeAllCheckLogsSQL, purgeAllChecksSQL, purgeAllDispatchesSQL, purgeAllCheckTargetsSQL,
