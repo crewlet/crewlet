@@ -61,7 +61,12 @@
   align-items: center;
 }
 
-/* THE LIST'S HEAD: the state tabs, then the pickers at the end of the line; each wraps. */
+/* THE LIST'S HEAD: the state tabs, then the pickers on the rest of their line, whatever is
+   filtered. A filter adds Every state to the tabs and names a seat in a picker; the pickers
+   take the space the tabs leave (a basis of 0, never their words' width, which wrapped them
+   whole under the tabs and moved the list), and the Repository field gives up its slack
+   down to the kit's smallest input step, so no picker loses a word. Only where even that
+   does not fit do the pickers wrap among themselves, beside the tabs. */
 .code-changes-head {
   display: flex;
   flex-wrap: wrap;
@@ -69,12 +74,28 @@
   gap: var(--spacing-2);
   inline-size: 100%;
 }
+.code-changes-head__states {
+  flex: none;
+}
 .code-changes-head__pickers {
   display: flex;
+  flex: 1 1 0;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--spacing-2);
-  margin-inline-start: auto;
+  min-inline-size: 0;
+}
+.code-changes-head__repo {
+  flex: 1 1 0;
+  min-inline-size: var(--crewlet-input-width-xs);
+}
+/* WHERE ITS ROWS FOLD (below 820 px of the list, as a change row does) the pickers take a
+   line of their own under the tabs. */
+@container code-list (width < 820px) {
+  .code-changes-head__pickers {
+    flex-basis: 100%;
+  }
 }
 /* How whole a search of words was: a quiet line under the head's rows. */
 .code-changes-head__note {

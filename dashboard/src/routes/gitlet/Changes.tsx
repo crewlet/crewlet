@@ -417,7 +417,13 @@ export function Changes() {
               repo={repo !== "" && isRepoName(repo) ? repo : ""}
             />
             <div className="code-changes-head__pickers">
-              <RepoPicker size="sm" repo={repo} onChoose={setRepo} every="Every repository" />
+              <RepoPicker
+                size="sm"
+                repo={repo}
+                onChoose={setRepo}
+                every="Every repository"
+                className="code-changes-head__repo"
+              />
               <SeatPicker label="Owner" value={owner} onChange={setOwner} />
               <SeatPicker label="Reviewer" value={reviewer} onChange={setReviewer} />
               <ReadinessPicker readiness={readiness} needs={needs} />
@@ -497,6 +503,7 @@ function StateTabs({
       activateHint={null}
       size="sm"
       label="Change state"
+      className="code-changes-head__states"
       value={state}
       onValueChange={setState}
       options={options}
