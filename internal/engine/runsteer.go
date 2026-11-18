@@ -122,19 +122,19 @@ import (
 //
 // # Who records what became of a note
 //
-// The node whose step read it: the runner for a round of the engine's loop or
-// a launch's brief, the run inbox of the node serving the run's bridge for
-// a read inside the run ([runInbox]), under ids derived from the turn and the
-// note. And the node that finishes the run's ending, for every note no step
-// reported reading when the turn is over, as the run's record knows it
-// ([runSteers.ended]): one still waiting, or read first by the brief of a job
-// that never started, expired; one served to a harness that never confirmed
-// it, unconfirmed; one a take marked unanswered recorded, missed, where no
-// later launch whose job started told it again; and one a later launch's brief
-// told again, its job started, delivered there. Under ids
-// derived from the ending, so a repeat of either is the same record. Never at
-// a park: a question can wait days, and the turn that resumes reads what
-// waited.
+// The node whose step read it: the runner for a round of the engine's loop or a
+// launch's brief, the run inbox of the node serving the run's bridge for a read
+// inside the run ([runInbox]), and a read of the job's box for a hook's serve
+// its session showed taken ([runSteers.confirmed]), under ids derived from the
+// turn and the note. And the node that finishes the run's ending, for every
+// note no step reported reading when the turn is over, as the run's record
+// knows it ([runSteers.ended]): one still waiting, or read first by the brief
+// of a job that never started, expired; one served to a harness that never
+// confirmed it, unconfirmed; one a take marked unanswered recorded, missed,
+// where no later launch whose job started told it again; and one a later
+// launch's brief told again, its job started, delivered there. Under ids
+// derived from the ending, so a repeat of either is the same record. Never at a
+// park: a question can wait days, and the turn that resumes reads what waited.
 //
 // # A note a take never handed over is told again by every later launch
 //
@@ -159,7 +159,7 @@ import (
 // item over, whatever its read: the carry ([runSteers.carried]), the notes a
 // continued session may already show ([servedNotes]), the marks a brief tells
 // again ([unansweredNotes]), the record of a note delivered
-// ([runInbox.delivered]) and the ending ([sandbox.PendingRun.EndedNotes]).
+// ([runSteers.delivered]) and the ending ([sandbox.PendingRun.EndedNotes]).
 
 // SteerNoteDomain is the key domain a note on a run's record is sealed in: its
 // own, so no frame of another channel or a state log opens as a note, and no
@@ -1149,6 +1149,28 @@ func (s *runSteers) source(ctx context.Context, run sandbox.PendingRun, fence sa
 	return &rowSource{steers: s, run: run, fence: fence, watch: s.watch(ctx, run.TurnID)}
 }
 
+// claimedNotes is run with the notes its record holds now, where the record
+// still holds the claim run was read under: the same job and the same lease's
+// epoch. A collection's read settles its job's hooks' serves after the claim
+// read the row ([sandbox.CoordinatorOptions.SteersConfirmed]), so the segment
+// carries a note the job's session showed it took as read there. The whole of
+// the record's Steer, never its Notes alone, so whatever it keeps beside them
+// comes too. An error is the resume's retry.
+func (s *runSteers) claimedNotes(ctx context.Context, run sandbox.PendingRun) (sandbox.PendingRun, error) {
+	if s == nil {
+		return run, nil
+	}
+	row, found, err := s.store.Get(ctx, run.TurnID)
+	if err != nil {
+		return run, fmt.Errorf("engine: reading run %s's notes again before its segment resumes: %w",
+			run.TurnID, err)
+	}
+	if found && row.LaunchID == run.LaunchID && row.Owner == run.Owner && row.OwnerEpoch == run.OwnerEpoch {
+		run.Steer = row.Steer
+	}
+	return run, nil
+}
+
 // live reports whether the record still holds this segment's claim: the job it
 // claimed, resumed, its ending not decided.
 func (r *rowSource) live(status, launch string, ending bool) bool {
@@ -1680,7 +1702,7 @@ func (i *runInbox) take(ctx context.Context, launch string, candidates []openedN
 		return nil
 	}
 	notes := notesTaken(candidates, taken)
-	i.delivered(ctx, taken, notes)
+	i.steers.delivered(ctx, i.ident, taken, notes)
 	return notes
 }
 
@@ -1691,8 +1713,11 @@ func (i *runInbox) take(ctx context.Context, launch string, candidates []openedN
 // is owed regardless. A PERSON'S NOTES ALONE: an item for one job
 // ([sandbox.RunNote.For]) is that job's, filed in the store's own writes, and
 // what becomes of it is the store's to say, so no record of a person's notes
-// names it.
-func (i *runInbox) delivered(ctx context.Context, taken []sandbox.RunNote, notes []steer.Note) {
+// names it. The one publish every reader that reports a read shares: a take, a
+// confirmation and a collection's read of its job's session
+// ([runSteers.confirmed]), so a note both reported is one record.
+func (s *runSteers) delivered(ctx context.Context, ident runIdentity, taken []sandbox.RunNote,
+	notes []steer.Note) {
 	if len(notes) == 0 {
 		return
 	}
@@ -1706,14 +1731,37 @@ func (i *runInbox) delivered(ctx context.Context, taken []sandbox.RunNote, notes
 			}
 			read := readingOf(*taken[k].Read)
 			id := uuid.NewSHA1(steerDeliveredNamespace,
-				[]byte(i.ident.turn.TurnID+"/"+note.ID+"/delivered"))
-			if err := i.steers.publish(ctx, i.ident, note, steer.Delivered(read), id, read.At); err != nil {
-				log.ErrorContext(ctx, "steer_delivery_unrecorded", "turn_id", i.ident.turn.TurnID,
+				[]byte(ident.turn.TurnID+"/"+note.ID+"/delivered"))
+			if err := s.publish(ctx, ident, note, steer.Delivered(read), id, read.At); err != nil {
+				log.ErrorContext(ctx, "steer_delivery_unrecorded", "turn_id", ident.turn.TurnID,
 					"note_id", note.ID, "boundary", string(read.Boundary), "error", err.Error(),
 					"detail", "the run read the note, and no record says so")
 			}
 		}
 	}()
+}
+
+// confirmed publishes as delivered every note of notes that opens: the notes a
+// hook's serve to run's job handed over that the job's session showed it took
+// ([sandbox.CoordinatorOptions.SteersConfirmed]), each at its read, through the
+// one publish ([runSteers.delivered]). Made on every read of the job's box, so
+// a read made again publishes the same records.
+func (s *runSteers) confirmed(ctx context.Context, run sandbox.PendingRun, notes []sandbox.RunNote) {
+	if s == nil {
+		return
+	}
+	var taken []sandbox.RunNote
+	var opened []steer.Note
+	for _, n := range notes {
+		if n.For != "" || n.Read == nil {
+			continue
+		}
+		if note, ok := s.open(run.TurnID, n); ok {
+			taken = append(taken, n)
+			opened = append(opened, note)
+		}
+	}
+	s.delivered(ctx, identityOfRun(run), taken, opened)
 }
 
 // markPulled records, once per job, that the job's harness has asked for notes —
@@ -2010,7 +2058,7 @@ func (i *runInbox) confirm(ctx context.Context, launch string, candidates []open
 		// RECORDED, ITS ANSWER LOST: reported now.
 		taken = settled
 	}
-	i.delivered(ctx, taken, notesTaken(candidates, taken))
+	i.steers.delivered(ctx, i.ident, taken, notesTaken(candidates, taken))
 	return taken, nil
 }
 
@@ -2038,7 +2086,7 @@ func (i *runInbox) confirmedBefore(ctx context.Context, run sandbox.PendingRun, 
 			notes = append(notes, note)
 		}
 	}
-	i.delivered(ctx, held, notes)
+	i.steers.delivered(ctx, i.ident, held, notes)
 }
 
 // Close ends the inbox — see [mcpbridge.SteerInbox].

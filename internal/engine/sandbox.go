@@ -1379,6 +1379,16 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			return &sandbox.TurnRefused{Refusal: refusal}
 		}
 	}
+	// THE TURN'S NOTES AS ITS RUN'S RECORD HOLDS THEM NOW, under the same
+	// claim: the read that collected the job settled its hooks' serves after
+	// the claim read the row ([runSteers.claimedNotes]). One place for every
+	// road here: a completion, the cap's collection, a parked job's answer, a
+	// lost carry. A RETRY, like every early return below.
+	claimed, err := e.runSteers.claimedNotes(ctx, in.Run)
+	if err != nil {
+		return err
+	}
+	in.Run = claimed
 	// THE TURN'S NOTES ARE ON ITS RUN'S RECORD, which this segment claimed:
 	// taken there, pinned to the claim — the job it collects, the resumed
 	// status and the lease the claim stamped — and carried from there, every
@@ -3127,6 +3137,10 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// (delivered where a later launch told it again, unconfirmed, missed
 		// or expired), before the record goes. See runsteer.go.
 		SteersEnded: e.runSteers.ended,
+		// AND EVERY NOTE A HOOK'S SERVE HANDED OVER THAT ITS JOB'S SESSION
+		// SHOWED IT TOOK is recorded delivered by every read of the job's box
+		// that settles its serves. See runsteer.go.
+		SteersConfirmed: e.runSteers.confirmed,
 		// A run that stops with a turn still suspended into it takes the
 		// working indicator down with it, whichever way it stopped: the
 		// agent is waiting on a person, or is never coming back at all,
