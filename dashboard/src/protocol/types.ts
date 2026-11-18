@@ -3082,9 +3082,9 @@ export interface WorkBlocker {
   key?: string;
   /** The blocker's key is one another task claimed first. */
   key_collision?: boolean;
-  /** Whether the blocker is still holding this task up. `false` is a settled
-   *  fact rather than a missing one — the blocker has finished. */
-  open?: boolean;
+  /** Whether the blocker is still holding this task up. Always stated:
+   *  `false` is a settled fact, the blocker has finished. */
+  open: boolean;
   /** The blocker not listing this task back: the residue of a dependency
    *  gesture whose mirror did not land, which the repair duty is working on. */
   one_sided?: boolean;
