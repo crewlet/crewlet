@@ -46,21 +46,23 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 		name  string
 		write func(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk
 		// read is what the case's reading is: benchReads, a reading;
-		// benchReadsNot, none, its thread past a bound of the model of
-		// Claude Code's resume; benchReadsEither, either, reported.
+		// benchReadsEither, either, reported.
 		read benchReading
 		// held is how many of its asked calls the reading holds.
 		held int
 	}{
-		{"an_ordinary_session", benchSessionLines(ordinary, line, measured), benchReads, sandbox.MaxBridgeCalls},
-		{"a_session_at_the_archives_bound", benchSessionLines(atBound, line, measured), benchReads,
+		{"an_ordinary_session", benchSessionLines(ordinary, line, measured, false), benchReads,
 			sandbox.MaxBridgeCalls},
-		{"lines_to_the_plaintexts_bound", benchSessionLines(threadPlainMax-benchSlack, line, bound), benchReads,
+		{"a_session_at_the_archives_bound", benchSessionLines(atBound, line, measured, false), benchReads,
+			sandbox.MaxBridgeCalls},
+		{"lines_to_the_plaintexts_bound", benchSessionLines(threadPlainMax-benchSlack, line, bound, false), benchReads,
 			sandbox.MaxBridgeCalls},
 		{"subagents_at_their_bound", benchSubagents, benchReads, sandbox.MaxBridgeCalls},
-		{"lines_at_the_lines_bound", benchSessionLines(threadPlainMax-benchSlack, threadLineMax, bound), benchReads, 0},
-		{"a_line_of_the_smallest_results", benchBlocks(`{"type":"tool_result","tool_use_id":"a"}`), benchReadsNot, 0},
-		{"a_line_of_unknown_blocks", benchBlocks(`{"type":"x"}`), benchReads, 0},
+		{"long_lines_to_the_plaintexts_bound", benchSessionLines(threadPlainMax-benchSlack,
+			int((threadPlainMax-benchSlack)/4), bound, true), benchReads, 0},
+		{"a_whole_pdf_read", benchWholePDFSession(measured), benchReads, 1},
+		{"a_line_of_the_smallest_results", benchBlocks(benchSmallest, benchFactsHeld), benchReads, 0},
+		{"a_line_of_unknown_blocks", benchBlocks(`{"type":"x"}`, benchFilling(8<<20)), benchReads, 0},
 		{"legs_of_ids_a_mebibyte_long", benchLongLegs, benchReads, 0},
 		{"metadata_of_ids_most_of_their_bound", benchLongMetas, benchReads, 0},
 		{"a_thread_at_its_records_bound", benchChainThread(benchAtTheBound, recordsCall), benchReadsEither, 0},
@@ -104,8 +106,6 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 					b.ReportMetric(0, "read")
 				case err != nil || !got.Read:
 					b.Fatalf("a reading = %+v, %v; want one", got.Read, err)
-				case bc.read == benchReadsNot:
-					b.Fatal("a reading; want none, the thread past a bound of the model of the resume")
 				default:
 					b.ReportMetric(1, "read")
 				}
@@ -131,13 +131,12 @@ func BenchmarkAReadingAtItsBounds(b *testing.B) {
 	}
 }
 
-// benchReading is what a case's reading is: one, none, or either, reported as
-// its read metric.
+// benchReading is what a case's reading is: one, or either, reported as its
+// read metric.
 type benchReading int
 
 const (
 	benchReads benchReading = iota
-	benchReadsNot
 	benchReadsEither
 )
 
@@ -212,9 +211,11 @@ func (f *benchFill) text(n, line int, ratio float64) string {
 
 // benchSessionLines writes a main thread of about plain bytes of lines of n
 // bytes each, its break included, each inflating from its gzip by about ratio:
-// a model's call and its result in turn, or, where n is the line's bound, user
-// records of text. The first [sandbox.MaxBridgeCalls] calls are asked.
-func benchSessionLines(plain int64, n int, ratio float64) func(*testing.B, *tar.Writer) sandbox.HoldingsAsk {
+// a model's call and its result in turn, or, where prompts is set, a person's
+// prompts. The first [sandbox.MaxBridgeCalls] calls are asked.
+func benchSessionLines(plain int64, n int, ratio float64,
+	prompts bool) func(*testing.B, *tar.Writer) sandbox.HoldingsAsk {
+
 	return func(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 		fill := newBenchFill()
 		lines := plain / int64(n)
@@ -236,7 +237,7 @@ func benchSessionLines(plain int64, n int, ratio float64) func(*testing.B, *tar.
 			own := `"uuid":"` + ctUUID(int(i)+2) + `","timestamp":"` + rcAt(int(i)) + `","version":"2.1.310"}`
 			var record string
 			switch {
-			case n == threadLineMax:
+			case prompts:
 				head := `{"parentUuid":` + parent + `,"isSidechain":false,"type":"user","message":` +
 					`{"role":"user","content":"`
 				tail := `"},` + own
@@ -390,16 +391,39 @@ func benchChainThread(write func(*benchThread),
 	}
 }
 
-// benchBlocks writes a main thread of one user record of blocks at the line's
-// bound, each block, a JSON object, as many times as fit.
-func benchBlocks(block string) func(*testing.B, *tar.Writer) sandbox.HoldingsAsk {
+// benchBlocks writes a main thread of one user record of a list of block, a
+// JSON object, as many times as count answers for the line's head and tail.
+func benchBlocks(block string, count func(head, block, tail string) int) func(*testing.B,
+	*tar.Writer) sandbox.HoldingsAsk {
+
 	return func(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
 		head := `{"parentUuid":"` + ctUUID(1) + `","isSidechain":false,"type":"user","message":{"role":"user",` +
-			`"content":[`
-		tail := `]},"uuid":"` + ctUUID(2) + `","version":"2.1.310"}`
-		blocks := (threadLineMax - 1 - len(head) - len(tail) + 1) / (len(block) + 1)
-		record := head + strings.Repeat(block+",", blocks-1) + block + tail
+			`"content":`
+		tail := `},"uuid":"` + ctUUID(2) + `","version":"2.1.310"}`
+		blocks := count(head, block, tail)
+		record := head + "[" + strings.Repeat(block+",", blocks-1) + block + "]" + tail
 		benchMember(b, tw, hsMain, ctBrief(ctUUID(1))+"\n"+record+"\n")
 		return hsAsk(sandbox.LoggedCall{ID: "toolu_bench_asked", Asked: true})
+	}
+}
+
+// benchFilling is how many blocks fill a line of n bytes, its break included.
+func benchFilling(n int) func(head, block, tail string) int {
+	return func(head, block, tail string) int { return (n - 1 - len(head) - len(tail) - 2 + 1) / (len(block) + 1) }
+}
+
+// benchWholePDFSession writes a main thread of a whole PDF's Read, its result's
+// base64 inflating from its gzip by about ratio, then one call, asked, and
+// its result.
+func benchWholePDFSession(ratio float64) func(*testing.B, *tar.Writer) sandbox.HoldingsAsk {
+	return func(b *testing.B, tw *tar.Writer) sandbox.HoldingsAsk {
+		const read, asked, output = "toolu_bench_pdf", "toolu_bench_asked", "asked done"
+		data := newBenchFill().text(benchPDF, 2*benchPDF, ratio)
+		lines := append([]string{
+			ctAssistant(ctUUID(1), ctUUID(2), hsCallOf(read, "Read", `{"file_path":"/w/x.pdf"}`)),
+			benchPDFLine(ctUUID(2), ctUUID(3), read, ctStamp, data),
+		}, hsCall(ctUUID(3), 4, asked, `[{"type":"text","text":"`+output+`"}]`)...)
+		benchMember(b, tw, hsMain, hsThread(lines...))
+		return hsAsk(hsLogged(asked, output))
 	}
 }

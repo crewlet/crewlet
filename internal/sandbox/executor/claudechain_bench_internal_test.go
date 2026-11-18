@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"math/bits"
 	"os"
@@ -45,25 +46,29 @@ func BenchmarkAThreadChainAtItsBounds(b *testing.B) {
 		agent string
 		write func(t *benchThread)
 		check func(b *testing.B, read benchRead, t *benchThread)
-		count bool
+		// count reads the resumed count beside the chain; refused, that the
+		// walk ends at a line past the layer's bounds ([errThreadBound]).
+		count, refused bool
 	}{
-		{"records_at_the_bound", "", benchAtTheBound, benchAtTheBoundRead, false},
-		{"leaf_set_at_the_bound", "", benchLeafSet, benchLeafSetRead, false},
-		{"calls_at_the_bound", "", benchCalls, benchCallsRead, false},
-		{"retractions_and_kept_at_the_bound", "", benchRetractionsAndKept, benchRetractionsAndKeptRead, false},
-		{"every_variant_distinct", "", benchEveryVariant, benchEveryVariantRead, false},
-		{"past_five_mebibytes", "", benchPastFive, benchPastFiveRead, false},
-		{"fallback_at_the_bound", ctAgent, benchFallback, benchFallbackRead, false},
-		{"newer_row_at_the_size_bound", "", benchNewerRow, benchNewerRowRead, false},
-		{"windows_merging_at_the_bound", "", benchWindows, benchWindowsRead, false},
-		{"the_reading_line_beside_it", "", benchReadingLine, benchReadingLineRead, false},
-		{"a_collections_read", "", benchCollection, benchCollectionRead, false},
-		{"a_collections_pass", "", benchCollection, benchCollectionPassRead, true},
-		{"the_reading_line_beside_the_count", "", benchReadingLine, benchReadingLineCountRead, true},
-		{"the_counts_id_line_beside_it", "", benchIDLine, benchCountsLineRead, true},
-		{"the_counts_iteration_line_beside_it", "", benchIterationLine, benchCountsLineRead, true},
-		{"the_counts_edit_line_beside_it", "", benchEditLine, benchCountsLineRead, true},
-		{"what_the_count_keeps_beside_it", "", benchCountKeeps, benchCountKeepsRead, true},
+		{"records_at_the_bound", "", benchAtTheBound, benchAtTheBoundRead, false, false},
+		{"leaf_set_at_the_bound", "", benchLeafSet, benchLeafSetRead, false, false},
+		{"calls_at_the_bound", "", benchCalls, benchCallsRead, false, false},
+		{"retractions_and_kept_at_the_bound", "", benchRetractionsAndKept, benchRetractionsAndKeptRead, false, false},
+		{"every_variant_distinct", "", benchEveryVariant, benchEveryVariantRead, false, false},
+		{"past_five_mebibytes", "", benchPastFive, benchPastFiveRead, false, false},
+		{"fallback_at_the_bound", ctAgent, benchFallback, benchFallbackRead, false, false},
+		{"newer_row_at_the_size_bound", "", benchNewerRow, benchNewerRowRead, false, false},
+		{"windows_merging_at_the_bound", "", benchWindows, benchWindowsRead, false, false},
+		{"the_reading_line_beside_it", "", benchReadingLine, benchReadingLineRead, false, false},
+		{"the_reading_line_past_it", "", benchReadingLinePast, benchReadingLinePastRead, false, true},
+		{"a_whole_pdf_line_beside_it", "", benchWholePDF, benchWholePDFRead, false, false},
+		{"a_collections_read", "", benchCollection, benchCollectionRead, false, false},
+		{"a_collections_pass", "", benchCollection, benchCollectionPassRead, true, false},
+		{"the_reading_line_beside_the_count", "", benchReadingLine, benchReadingLineCountRead, true, false},
+		{"the_counts_id_line_beside_it", "", benchIDLine, benchCountsLineRead, true, true},
+		{"the_counts_iteration_line_beside_it", "", benchIterationLine, benchCountsLineRead, true, true},
+		{"the_counts_edit_line_beside_it", "", benchEditLine, benchCountsLineRead, true, true},
+		{"what_the_count_keeps_beside_it", "", benchCountKeeps, benchCountKeepsRead, true, false},
 	} {
 		b.Run(bc.name, func(b *testing.B) {
 			t := benchWrite(b, filepath.Join(b.TempDir(), "thread.jsonl"), bc.write)
@@ -82,9 +87,13 @@ func BenchmarkAThreadChainAtItsBounds(b *testing.B) {
 			runtime.GC()
 			runtime.ReadMemStats(&after)
 			fmt.Fprintf(os.Stderr, "chain-bench %s: the read ends\n", bc.name)
+			if refused := errors.Is(read.err, errThreadBound); refused != bc.refused {
+				b.Fatalf("the walk ends with %v; want it refused at a line past the layer's bounds %t", read.err,
+					bc.refused)
+			}
 			// Reported after ResetTimer, which deletes every metric reported
 			// before it. look-ms is [benchLooks]'s longest stretch; filed-MiB
-			// is live as End starts and live-MiB once it decided, each less
+			// is live as the walk ended and live-MiB once End decided, each less
 			// what was live before the read; end-alloc-MiB bounds what End
 			// adds ([benchReadThread]).
 			b.ReportMetric(float64(t.bytes)/(1<<20), "thread-MiB")
@@ -148,14 +157,17 @@ func benchWrite(b *testing.B, file string, write func(t *benchThread)) *benchThr
 
 // benchRead is a thread read into a chain: the chain, the message See handed
 // back for the last line (held as a reader that reads its facts at End holds
-// it), End's time and longest stretch without a look, the heap live as End
-// started, what End allocated, and the count where the case reads one.
+// it), End's time and longest stretch without a look, the heap live as the
+// walk ended, what End allocated, the count where the case reads one, and
+// errThreadBound where a line past the layer's bounds ended the walk, which
+// leaves no reading, so End never runs.
 type benchRead struct {
 	c               *threadChain
 	held            threadMessage
 	end, look       time.Duration
 	filed, endAlloc uint64
 	count           *resumedReading
+	err             error
 }
 
 // benchChain reads the walk ([walkThread]) into the chain: every whole line to
@@ -197,10 +209,10 @@ func benchReadThread(b *testing.B, file, agent string, count bool) benchRead {
 		readings = append(readings, read.count)
 	}
 	walkThread(b.Context(), f, threadPlainMax, readings...)
-	if chain.err != nil {
+	if chain.err != nil && !errors.Is(chain.err, errThreadBound) {
 		b.Fatalf("the thread reads to %v", chain.err)
 	}
-	read.held = chain.held
+	read.held, read.err = chain.held, chain.err
 	// What the chain filed is what is live after a collection outside the
 	// timer; End adds at most what it allocates, since it frees nothing the
 	// chain filed before it returns.
@@ -209,6 +221,10 @@ func benchReadThread(b *testing.B, file, agent string, count bool) benchRead {
 	runtime.GC()
 	runtime.ReadMemStats(&filed)
 	b.StartTimer()
+	read.filed = filed.HeapAlloc
+	if read.err != nil {
+		return read
+	}
 	looks := &benchLooks{Context: b.Context()}
 	looks.start = time.Now()
 	looks.last = looks.start
@@ -217,7 +233,7 @@ func benchReadThread(b *testing.B, file, agent string, count bool) benchRead {
 	}
 	read.end, read.look = looks.ended()
 	runtime.ReadMemStats(&ended)
-	read.filed, read.endAlloc = filed.HeapAlloc, ended.TotalAlloc-filed.TotalAlloc
+	read.endAlloc = ended.TotalAlloc - filed.TotalAlloc
 	return read
 }
 
@@ -693,32 +709,85 @@ func benchWindowsRead(b *testing.B, read benchRead, t *benchThread) {
 
 // benchReadingLine writes the_reading_line_beside_it: records_at_the_bound's
 // thread, then the reading's worst line ([benchReadingLineLast]), which See
-// decodes beside the chain at both bounds before the line passes them.
+// reads beside the chain at both bounds before the line passes them.
 func benchReadingLine(t *benchThread) {
 	benchAtTheBound(t)
-	benchReadingLineLast(t)
+	benchReadingLineLast(t, 0)
 }
 
+// benchReadingLinePast writes the_reading_line_past_it: the_reading_line_beside_it
+// with one result more on its last line, whose facts then pass [threadLineMax].
+func benchReadingLinePast(t *benchThread) {
+	benchAtTheBound(t)
+	benchReadingLineLast(t, 1)
+}
+
+// benchSmallest is the smallest result a user record holds.
+const benchSmallest = `{"type":"tool_result","tool_use_id":"a"}`
+
 // benchReadingLineLast writes, under the record that fills the records bound,
-// a user record of as many of the smallest results as a line at threadLineMax
-// holds.
-func benchReadingLineLast(t *benchThread) {
+// a user record of as many of the smallest results as a line's facts hold
+// within [threadLineMax] ([benchFactsHeld]), and more besides.
+func benchReadingLineLast(t *benchThread, more int) {
 	n := t.records + 1
 	head := `{"parentUuid":"` + rcUUID(threadChainMaxRecords) + `","isSidechain":false,"type":"user",` +
-		`"message":{"role":"user","content":[`
-	tail := `]},"uuid":"` + rcUUID(n) + `","timestamp":"` + rcAt(n) + `","version":"2.1.310"}`
-	const block = `{"type":"tool_result","tool_use_id":"a"}`
-	t.blocks = (threadLineMax - 1 - len(head) - len(tail) + 1) / (len(block) + 1)
-	t.record(head + strings.Repeat(block+",", t.blocks-1) + block + tail)
+		`"message":{"role":"user","content":`
+	tail := `},"uuid":"` + rcUUID(n) + `","timestamp":"` + rcAt(n) + `","version":"2.1.310"}`
+	t.blocks = benchFactsHeld(head, benchSmallest, tail) + more
+	t.record(head + "[" + strings.Repeat(benchSmallest+",", t.blocks-1) + benchSmallest + "]" + tail)
 }
 
 // benchReadingLineRead holds the_reading_line_beside_it's chain to whyBound
-// after See decoded the line, every result held.
+// after See read the line, every result held.
 func benchReadingLineRead(b *testing.B, read benchRead, t *benchThread) {
 	if why, _ := read.c.Unknown(); why != whyBound || read.c.handles != threadChainMaxRecords ||
 		len(read.held.Calls()) != t.blocks {
 		b.Fatalf("the chain filed %d records, reads the thread as %q, and handed back a line of %d results; want %d, "+
 			"%q and %d", read.c.handles, why, len(read.held.Calls()), threadChainMaxRecords, whyBound, t.blocks)
+	}
+}
+
+// benchReadingLinePastRead holds the_reading_line_past_it to the walk ended at
+// its last line, every record before it filed: what it costs is the refusal's.
+func benchReadingLinePastRead(b *testing.B, read benchRead, _ *benchThread) {
+	if read.c.handles != threadChainMaxRecords || !strings.Contains(read.err.Error(), "facts run past") {
+		b.Fatalf("the chain filed %d records, the walk ended by %v; want %d, and the line's facts past their bound",
+			read.c.handles, read.err, threadChainMaxRecords)
+	}
+}
+
+// benchPDF is each of the two copies of a document's base64 a whole-PDF Read
+// writes on its one line, the result's and the tool's own: 55,924,056 bytes
+// in all, the longest line measured.
+const benchPDF = 27_962_028
+
+// benchPDFLine is the user record answering call, a Read of a whole PDF whose
+// base64 is data, under parent: a line no reader reads but for its call.
+func benchPDFLine(parent, uuid, call, at, data string) string {
+	return `{"parentUuid":"` + parent + `","isSidechain":false,"type":"user","message":{"role":"user","content":` +
+		`[{"type":"tool_result","tool_use_id":"` + call + `","content":[{"type":"document","source":` +
+		`{"type":"base64","media_type":"application/pdf","data":"` + data + `"}}]}]},"uuid":"` + uuid +
+		`","timestamp":"` + at + `","toolUseResult":{"type":"pdf","file":{"base64":"` + data +
+		`","filePath":"/w/x.pdf","originalSize":20971520}},"version":"2.1.310"}`
+}
+
+// benchWholePDF writes a_whole_pdf_line_beside_it: records_at_the_bound's
+// thread, then a whole PDF's Read result under its last record, answering
+// its call.
+func benchWholePDF(t *benchThread) {
+	benchAtTheBound(t)
+	n := t.records + 1
+	t.record(benchPDFLine(rcUUID(threadChainMaxRecords), rcUUID(n), fmt.Sprintf("toolu_%08d", threadChainMaxRecords),
+		rcAt(n), strings.Repeat("A", benchPDF)))
+}
+
+// benchWholePDFRead holds a_whole_pdf_line_beside_it's chain to whyBound after
+// See read the line, its one result held.
+func benchWholePDFRead(b *testing.B, read benchRead, t *benchThread) {
+	if why, _ := read.c.Unknown(); why != whyBound || read.c.handles != threadChainMaxRecords ||
+		len(read.held.Calls()) != 1 || t.bytes < 2*benchPDF {
+		b.Fatalf("the chain filed %d records, reads the thread as %q, and handed back a line of %d results; want %d, "+
+			"%q and 1", read.c.handles, why, len(read.held.Calls()), threadChainMaxRecords, whyBound)
 	}
 }
 
@@ -784,15 +853,16 @@ func benchReadingLineCountRead(b *testing.B, read benchRead, t *benchThread) {
 func benchInvalid(n int) string { return strings.Repeat("\xff", n) }
 
 // benchCountsReply writes records_at_the_bound's last record, which fills both
-// bounds, as a reply at threadLineMax with message keys keys, invalid UTF-8
-// filling the line at keys's "@": the count's own worst lines, each a string
-// it decodes, read as the chain holds all it filed.
+// bounds, as a reply with message keys keys, [threadValueMax] bytes of invalid
+// UTF-8 at keys's "@": the count's own worst lines, each a value it reads
+// whole past that bound, so the walk ends there, the chain holding all it
+// filed.
 func benchCountsReply(t *benchThread, keys string) {
 	n := threadChainMaxRecords
 	head, tail, _ := strings.Cut(benchRecord(benchAtTheBoundParent(n), benchMain, "assistant", `"message":{`+keys+
 		`,"type":"message","role":"assistant","content":`+benchCall(fmt.Sprintf("toolu_%08d", n))+
 		`,"stop_reason":"tool_use"},`, n, n), "@")
-	t.record(head + benchInvalid(threadLineMax-1-len(head)-len(tail)) + tail)
+	t.record(head + benchInvalid(threadValueMax) + tail)
 }
 
 // The usage every line benchCountsReply writes counts: two tokens.
@@ -821,37 +891,36 @@ func benchIDLine(t *benchThread) {
 	benchCountsReply(t, `"id":"@","model":"claude-sonnet-4-5","usage":{`+benchUsage+`}`)
 }
 
-// benchCountsLineRead holds the chain at both bounds, not past them, and the
-// count anchored on the last line's usage, so it read the line by every rule.
-func benchCountsLineRead(b *testing.B, read benchRead, t *benchThread) {
-	benchCountRead(b, read)
-	if read.c.handles != threadChainMaxRecords || read.c.past || len(read.c.occurs) != threadChainMaxCalls ||
-		read.count.tokens != 2 {
-		b.Fatalf("the chain filed %d records and %d calls, past its bound %t, and the count anchors at %d; want "+
-			"%d, %d, false and 2", read.c.handles, len(read.c.occurs), read.c.past, read.count.tokens,
-			threadChainMaxRecords, threadChainMaxCalls)
+// benchCountsLineRead holds the walk ended at the last line, its value past
+// [threadValueMax], every record before it filed, and the count unread.
+func benchCountsLineRead(b *testing.B, read benchRead, _ *benchThread) {
+	if read.c.handles != threadChainMaxRecords-1 || read.c.past || read.count == nil || !read.count.unread ||
+		!strings.Contains(read.err.Error(), "a value is read whole within") {
+		b.Fatalf("the chain filed %d records, past its bound %t, the walk ended by %v, the count unread %t; want "+
+			"%d, false, a value past its bound, and unread", read.c.handles, read.c.past, read.err,
+			read.count != nil && read.count.unread, threadChainMaxRecords-1)
 	}
 }
 
 // benchCountKeeps writes what_the_count_keeps_beside_it, the most the count
-// keeps from line to line: a result record whose uuid fills a line, the first
-// chained record, under a parent no record is, so a restart; a reply whose id
-// fills a line, the count's run; a sidechain's replies, each of its own id and
-// call, to the records bound, no main thread's to the count; and the reading's
-// worst line.
+// keeps from line to line: a result record whose uuid is [threadValueMax]
+// bytes as written, the first chained record, under a parent no record is, so
+// a restart; a reply whose id is as long, the count's run; a sidechain's
+// replies, each of its own id and call, to the records bound, no main
+// thread's to the count; and the reading's worst line.
 func benchCountKeeps(t *benchThread) {
 	head, tail, _ := strings.Cut(`{"parentUuid":"`+rcUUID(benchNowhere(0))+`","isSidechain":false,"type":"user",`+
 		`"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_00000001","content":"ok"}]},`+
 		`"uuid":"@","timestamp":"`+rcAt(1)+`"}`, "@")
-	t.record(head + benchInvalid(threadLineMax-1-len(head)-len(tail)) + tail)
+	t.record(head + benchInvalid(threadValueMax-2) + tail)
 	head, tail, _ = strings.Cut(benchRecord(benchOf(benchNowhere(1)), benchMain, "assistant",
 		benchReply("@", benchCall("toolu_00000002")), 2, 2), "@")
-	t.record(head + benchInvalid(threadLineMax-1-len(head)-len(tail)) + tail)
+	t.record(head + benchInvalid(threadValueMax-2) + tail)
 	for k := 3; k <= threadChainMaxRecords; k++ {
 		t.record(benchRecord(benchOf(k-1), `"isSidechain":true,`, "assistant", benchReply(fmt.Sprintf("msg_%08d", k),
 			benchCall(fmt.Sprintf("toolu_%08d", k))), k, k))
 	}
-	benchReadingLineLast(t)
+	benchReadingLineLast(t, 0)
 }
 
 // benchCountKeepsRead holds what_the_count_keeps_beside_it to the chain past
