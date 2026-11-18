@@ -18,55 +18,31 @@ import (
 // Where the certification suite binds to the Jira reconcile.
 //
 // [integrationtest] states [integration.Reconciler]'s safety contract as nine
-// cases, and until this file existed its only caller was a stub whose Run
-// returned (nil, nil): "a converged pass writes nothing" was true because
-// nothing happened, and the promise about what a pass does to somebody's Jira
-// instance was still checked by nobody. What follows stands a real instance
-// up in the state the loop spends its life in and drives the real
-// [jira.Reconcile] against it, counting every request that instance would
-// have to have undone.
+// cases. This file drives the real [jira.Reconcile] against a real instance in
+// the state the loop spends its life in, counting every request to undo.
 //
 // # TWO WORLDS, because the converged one cannot certify half the suite
 //
-// Four of the nine cases walk the findings list, and a converged pass reports
-// no findings — that is what converged MEANS. Driven over the steady state
-// alone they iterate an empty slice and pass whatever this package does, so
-// the file's first version put seven green ticks on a vendor that had been
-// checked about two of them. [convergedWorld] is still the world the
-// write-free clause is about; [outstandingWorld] below is a Jira somebody has
-// to go and fix, and it is what the findings cases actually read.
+// Four cases walk the findings list, and a converged pass reports none: over
+// the steady state alone they pass whatever this package does.
+// [convergedWorld] serves the write-free clause; [outstandingWorld] is a Jira
+// somebody has to fix, which the findings cases read.
 
 // convergedBase is the address this deployment is reachable on.
 const convergedBase = "https://engine.example.com"
 
 // conformer drives the REAL reconcile through [integration.Reconciler].
 //
-// TEST-ONLY, deliberately. The loop reaches this package through
-// engine.passConverger wrapping engine.jiraPass, so a second adapter in
-// production code here would be an implementation with no caller.
+// TEST-ONLY: the loop reaches this package through engine.jiraPass, so a
+// production adapter here would have no caller. Its body is jiraPass.Run's
+// from the point inputs are resolved: [jira.Reconcile], then
+// [jira.Result.Findings], and on failure the same `engine: jira pass: %w` wrap.
 //
-// # What it mirrors, and — precisely — what it does not
-//
-// The body is jiraPass.Run's body from the point that pass has resolved its
-// inputs: [jira.Reconcile], then [jira.Result.Findings] on success, and on
-// failure the same `engine: jira pass: %w` wrap the pass applies, which is
-// kept rather than paraphrased so that anything reading the error with
-// errors.Is or errors.As reads what the loop would.
-//
-// What is NOT mirrored is everything jiraPass does BEFORE that, and it is not
-// small: resolving the base URL through jiraBaseURL and
-// `integrations.jira.token`, the [integration.ErrNotConfigured] early return
-// for a company with no jira block, and the single
-// [integration.FindingCredentialMissing] it answers when the base or the
-// token resolve to nothing. None of that is certified here.
-//
-// Nor is [conformer.Kind]. It returns the same package-level constant
-// jiraPass.Kind() returns, so the two move together if the constant is
-// renamed — but engine's is the one the loop keys jira's status on, its
-// receiver is unexported, and nothing in THIS package names a kind at all.
-// So "the kind is one this build converges" and "the kind does not change
-// across passes" certify a constant rather than product code, and saying so
-// here is the honest alternative to implying otherwise.
+// NOT mirrored, so not certified: everything jiraPass does BEFORE that
+// (jiraBaseURL and `integrations.jira.token` resolution,
+// [integration.ErrNotConfigured], [integration.FindingCredentialMissing]).
+// [conformer.Kind] returns the constant jiraPass.Kind() does, so "the kind is
+// one this build converges" certifies a constant, not product code.
 type conformer struct{ opts jira.Options }
 
 func (*conformer) Kind() integration.Kind { return integration.KindJira }
@@ -120,34 +96,17 @@ func convergedCompany() *org.Organization {
 }
 
 // convergedWorld stands up an instance this pass has nothing to do to, and
-// the options that read it.
+// the options that read it. Every knob that decides convergence is set
+// explicitly, since each fails in a direction that reads as the product's:
 //
-// EVERY KNOB THAT DECIDES CONVERGENCE IS SET HERE, EXPLICITLY, because each
-// one fails in a direction that reads as the product's fault:
+//   - The seeded hook carries its own name, address and events; the fake
+//     defaults all three and would agree with anything.
+//   - Value resolves the signing secret, or the pass mints and re-registers.
+//   - WebhookBase is set, or the webhook half is skipped and every clause
+//     passes VACUOUSLY. RecreateWebhook stays unasked.
 //
-//   - The seeded hook carries its own name, its own address and its own event
-//     list. The fake defaults all three, so a fixture that said nothing would
-//     agree with whatever the reconcile asked it — a converged registration
-//     nobody wrote down.
-//   - Value resolves the signing secret. Left unresolved it is not a
-//     converged world at all: the pass mints, seals and re-registers, and
-//     "a converged pass writes nothing" goes red over a fixture rather than
-//     over the code.
-//   - WebhookBase is set. Left empty the pass skips the webhook half
-//     entirely and every clause passes VACUOUSLY, which is the failure this
-//     whole file exists to end. assertConverged below refuses that fixture.
-//   - RecreateWebhook stays unasked: it is the operator's rotate gesture and
-//     forces a delete and a create by design.
-//
-// The DEPLOYMENT is the one knob deliberately left underived, and that is
-// also why: engine.jiraPass builds its client with no Deployment field, so
-// production infers Cloud or Data Center from the address alone. Pinning
-// jira.DataCenter here would make the harness disagree with the pass it
-// claims to mirror on the value that selects the API path AND decides
-// whether a missing public base is reported at all. So the fixture lets
-// [jira.DeploymentOf] derive it, exactly as production does, and
-// assertConverged asserts the derivation landed on Data Center rather than
-// trusting it.
+// The DEPLOYMENT is left to [jira.DeploymentOf], as production does
+// (engine.jiraPass sets none); assertConverged asserts Data Center.
 func convergedWorld(t *testing.T) (*instance, *sink, jira.Options) {
 	t.Helper()
 	inst := newInstance(t)
@@ -191,33 +150,14 @@ func convergedWorld(t *testing.T) (*instance, *sink, jira.Options) {
 
 // assertConverged refuses a fixture that is not the steady state.
 //
-// THE HARNESS PROVES ITS OWN PREMISE FIRST. Every clause of the suite is
-// satisfied by a world where the pass did nothing because it was never given
-// anything to do, and the cheapest way to get one is a knob set wrong: an
-// empty public base skips the hook half, an org with no seats skips the walk.
-// The suite cannot see that — it asks the world how many writes it took, and
-// zero is zero.
+// Every suite clause is satisfied by a pass never given anything to do (empty
+// public base, org with no seats), so it asserts the WALKS RAN: no error, no
+// findings and zero writes all hold for `Org: nil`, which skips resolveSeats
+// and checkProjects. Each walk must show its work.
 //
-// # It asserts the WALKS RAN, not merely that nothing was reported
-//
-// Its first version checked no error, no findings, PhaseReady, a non-empty
-// Hooked and zero writes — and every one of those is satisfied by
-// `Org: nil`, which skips resolveSeats and checkProjects entirely. It
-// advertised refusing "an org with no seats" and checked nothing of the kind.
-// So each walk now has to show its work: an org account, at least one seat
-// that routes, at least one project that exists, and every one of them
-// converged. A fixture that reaches the webhook half and nothing else is
-// refused here rather than certified by the suite.
-//
-// # And it runs as a SUBTEST, so a real regression is still diagnosed
-//
-// It used to Fatalf on the parent, which meant that a genuine defect in
-// reconcile.go — a converged pass that mints — aborted the test before
-// [integrationtest.Run] was ever called: zero subtests, and the only message
-// printed was this file complaining about its own fixture, which sends the
-// reader to the harness instead of to the code. The precondition is a claim
-// about the fixture and the suite is a claim about the product; they are
-// reported separately so that both are.
+// It runs as a SUBTEST: a Fatalf on the parent would abort before
+// [integrationtest.Run] on a genuine reconcile.go defect and blame the
+// fixture.
 func assertConverged(t *testing.T, inst *instance, recorder *sink, opts jira.Options) {
 	t.Helper()
 	before := inst.mutations() + recorder.records()
@@ -313,35 +253,16 @@ func outstandingCompany() *org.Organization {
 
 // outstandingWorld is a Jira instance somebody has to go and fix.
 //
-// # Why this world and not an easier one
+// Broken in both walks a pass reports from, each certifying nothing of the other:
+// the SEAT walk (two seats with no account, see outstandingCompany:
+// `identity_failed`) and the PROJECT walk (the org names ENG, the instance
+// lacks it: `ingress_blocked`). The ingress half runs to the end: no secret
+// and no hook, so the first pass mints, seals and registers (WebhookBase is
+// set, or ensureWebhook returns early).
 //
-// [integrationtest.Reconciler.Outstanding] asks for a world where something
-// is wrong IN A WAY A PERSON MUST ACT ON, and the cheap way to satisfy that
-// is one broken thing. This deployment is broken in both of the walks a Jira
-// pass reports from, because the two are different walks and a world that
-// exercises one certifies nothing about the other:
-//
-//   - THE SEAT WALK. Two seats with no account — see outstandingCompany —
-//     which is `identity_failed`, owed by the admin who can issue a token.
-//   - THE PROJECT WALK. The org names ENG and this instance does not have it,
-//     which is `ingress_blocked` on the key: every issue routed by that
-//     project reaches nobody, and Jira answers the same 404 for a project a
-//     credential may not browse.
-//
-// AND THE INGRESS HALF RUNS TO THE END. The signing secret resolves to
-// nothing and this instance holds no hook, so the first pass asks the sink,
-// mints a secret, seals it and registers the hook; every later pass finds the
-// sealed value and the hook and changes nothing. WebhookBase is set for that
-// reason: left empty, ensureWebhook returns before it reads anything, and a
-// suite driven over that world would be certifying a pass that stopped early.
-//
-// NOTHING HERE RAISES, which is a property and not an accident: the four
-// findings cases Fatalf on an error, so a world that failed mid-pass would
-// report as a broken harness rather than as an outstanding integration. The
-// org credential answers, the refused seat is refused with a STATUS (a
-// connection the instance never answers is a fault, by design — see
-// TestASeatLookupTheInstanceDidNotAnswerIsAFaultNotAMissingAccount), the
-// project 404s, and the sink seals.
+// NOTHING HERE RAISES, since the findings cases Fatalf on an error: the
+// refused seat is refused with a STATUS, an unanswered connection being a
+// fault (TestASeatLookupTheInstanceDidNotAnswerIsAFaultNotAMissingAccount).
 func outstandingWorld(t *testing.T) (*instance, jira.Options) {
 	t.Helper()
 	inst := newInstance(t)
@@ -373,24 +294,16 @@ func outstandingWorld(t *testing.T) (*instance, jira.Options) {
 
 // THE WRITE COUNTER HAS TO BE ABLE TO COUNT.
 //
-// [integrationtest.Reconciler.Mutations] is the clause that package calls the
-// one most likely to be wrong, and on this side the whole of it is
-// [instance.mutations] plus [sink.records]. A counter that never increments
-// satisfies "a converged pass writes nothing" perfectly — zero equals zero —
-// so nothing in the suite can tell a pass that leaves the instance alone from
-// a harness that stopped watching. That is not hypothetical: with the
-// increment in instance.serve disabled, every case in this file stayed green,
-// including both preconditions. The counter was the one thing here with no
-// test behind it, and it is the thing the suite trusts most.
+// [integrationtest.Reconciler.Mutations] is [instance.mutations] plus
+// [sink.records]. A counter that never increments satisfies "a converged pass
+// writes nothing" (zero equals zero), so nothing else can tell a pass that
+// leaves the instance alone from a harness that stopped watching.
 //
-// So each of the three writes a Jira pass can make is driven through the real
-// reconcile and the counter is asserted to have seen it — which also pins the
-// ROUTE analysis instance.mutations writes out, because registering,
-// repointing and removing the inbound hook are the whole of what this pass
-// can change at an instance. The converged row is the other half: every one
-// of these passes also performs three identity lookups, a project read and a
-// hook listing, and a counter that took those for writes would make the
-// clause impossible to satisfy rather than merely unenforced.
+// Each of the three writes a pass can make (registering, repointing, removing
+// the inbound hook) is driven through the real reconcile and must be counted,
+// which also pins instance.mutations' route analysis. The converged row is
+// the other half: a counter taking the pass's reads for writes would make the
+// clause impossible to satisfy.
 func TestTheWriteCounterSeesEveryWriteAJiraPassCanMake(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -475,20 +388,13 @@ func TestTheSealCounterSeesAMintAndItsCompletion(t *testing.T) {
 // assertOutstanding refuses an outstanding world that is quietly converged,
 // or outstanding for a reason it did not intend.
 //
-// THE MIRROR OF assertConverged, and needed for the mirror reason.
-// [integrationtest]'s own anti-vacuity case asks for one finding and one
-// person owing something, which a world can satisfy by accident and keep
-// satisfying while the two walks this fixture is actually about stop running:
-// a pass that bailed after the seat walk would still report two
-// identity_failed findings and still look like a world with work in it. So
-// the fixture states exactly which three walks it expects to hear from, and
-// which finding each owes.
+// THE MIRROR OF assertConverged. [integrationtest]'s anti-vacuity case asks
+// for one finding and one person owing something, which a pass that bailed
+// after the seat walk still satisfies. So the fixture states exactly which
+// three findings it expects.
 //
-// Every one of them is owed by a PERSON, which is the second thing the suite
-// needs and cannot check: "a finding a person must act on says what to do"
-// skips every finding whose actor is the engine, so a world whose findings
-// were engine-owed would run that case over nothing while passing the case
-// above it.
+// Every one is owed by a PERSON: "a finding a person must act on says what to
+// do" skips engine-owed findings, and would run over nothing.
 func assertOutstanding(t *testing.T, inst *instance, opts jira.Options) {
 	t.Helper()
 	res, err := jira.Reconcile(context.Background(), opts)
@@ -673,22 +579,13 @@ func TestASecondPassDoesNotMintOverASecretThisDeploymentAlreadySealed(t *testing
 
 // A PASS THAT MINTED AND THEN FAILED STILL COMPLETES THE SINK.
 //
-// [provision.TokenSink.Flush] is where a run's writes STAND, and under the
-// reconcile loop that is not ceremony: engine's refreshingSink rebuilds the
-// `${VAR}` snapshot there and nowhere else. This pass returned its error
-// before reaching it, and the mint happens several frames earlier — so a pass
-// that sealed a signing secret and was then refused by the instance left the
-// value sealed and unannounced.
-//
-// # And on THIS pass that is permanent, not a rotation on a timer
-//
-// Elsewhere the unflushed value is simply re-minted on the next tick, which
-// is bad enough. Here the fix that came first makes it worse: the next pass
-// reads the sealed value back through [provision.TokenSink.Value] and never
-// Records again, so the sink never seals again, so the snapshot is never
-// rebuilt — for the life of the deployment. The instance is eventually
-// registered with a key the engine's own webhook route cannot resolve, every
-// delivery is refused at the edge, and the pass reports Ready every time.
+// [provision.TokenSink.Flush] is where a run's writes STAND: engine's
+// refreshingSink rebuilds the `${VAR}` snapshot there and nowhere else. A pass
+// that sealed a signing secret and was then refused by the instance must still
+// flush. The next pass reads the sealed value back through
+// [provision.TokenSink.Value] and never Records again, so an unflushed value
+// is permanent: the snapshot is never rebuilt, the webhook route cannot
+// resolve the key, every delivery is refused, and the pass reports Ready.
 func TestAPassThatMintedAndThenFailedStillCompletesTheSink(t *testing.T) {
 	t.Parallel()
 	inst, recorder, opts := convergedWorld(t)

@@ -30,21 +30,14 @@ const jwksEnd = "CREWLET_JWKS"
 // is held: pasted whole into Cloud Shell, it readies the identity project for
 // company, provisioner and the key's public half, and prints the provider's
 // full name as its last line.
-//
 // THE ISSUER, SUBJECT AND PRINCIPAL ARE THE CLIENT'S OWN ([Issuer], [Subject],
-// [Principal]), so the provider trusts exactly the token the engine signs.
-// Only the key's public half is written; the private half is refused by the
-// caller ([setup.PublicOf]).
-//
-// SAFE TO RUN AGAIN: each make is a describe first, and a provider that
-// exists is updated with the company's issuer, subject pin and current key,
-// which is how a changed key or a hand edit is put right. It runs in a
-// subshell, so a failed step stops the block without closing Cloud Shell.
-//
+// [Principal]), so the provider trusts exactly the token the engine signs; only the
+// public half is written, the private refused by the caller ([setup.PublicOf]).
+// SAFE TO RUN AGAIN: each make is a describe first, and an existing provider
+// is updated; a subshell stops a failed block, not Cloud Shell.
 // WITH ATLAS, it also makes the atlas's service account, lets Crewlet's
-// subject act as it, and grants it the one-permission role on every project
-// the provisioner holds a role in ([AtlasRoleID]); a project the person
-// running it may not change is named and skipped.
+// subject act as it, and grants it [AtlasRoleID] on the provisioner's projects;
+// a project the person running it may not change is named and skipped.
 func CloudShellBlock(company, provisioner, key string, atlas bool) (string, error) {
 	identity, ok := config.GoogleCloudServiceAccount(provisioner)
 	if !ok {

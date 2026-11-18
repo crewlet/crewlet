@@ -146,17 +146,14 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 // AdminCredential is the group Owner token this third-party app's provisioning and its
 // teardown both authenticate with.
 //
-// HELD, not transient, and that is a deliberate reversal. It used to be asked
-// for on every run and dropped straight after, because a token that can
-// create service accounts is a standing power once it is kept. What that cost
-// is a DISCONNECT: removing an account needs the authority that created it,
-// so with nothing held there was no way to take one away from here, and every
-// service account this engine made outlived the integration that made it.
+// HELD, not transient, though a token that can create service accounts is a
+// standing power once kept: a DISCONNECT needs the authority that created an
+// account, so with nothing held every service account would outlive the
+// integration that made it.
 //
-// Sealed like every other credential — the value goes to the fleet's secret
-// store and the document gets a ${VAR} — and named in the orphaned list when
-// the integration is disconnected, so an operator knows exactly what to
-// revoke afterwards.
+// Sealed like every other credential (the fleet's secret store, a ${VAR} in
+// the document) and named in the orphaned list on disconnect, so an operator
+// knows what to revoke afterwards.
 func AdminCredential() setup.Requirement {
 	return setup.Requirement{
 		Field:      "admin_token",

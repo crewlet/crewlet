@@ -25,35 +25,24 @@ import (
 // # Retrying is a question about SIDE EFFECTS, not about status codes
 //
 // A failure is retryable only when repeating the request cannot repeat an
-// effect. Two things prove that: a status that says the request was rejected
-// BEFORE it was processed, and a transport failure raised before any byte
-// left this process. Everything else — a proxy's 502, a read timeout, a
-// server that hung up mid-response — leaves it unknowable whether the
-// request was applied and only the answer lost.
-//
-// That distinction is not academic. It is the difference between a read
-// timeout on a token mint being harmless and it minting a SECOND access
-// token, live on the account, whose value the caller that would have
-// persisted or revoked it never saw.
-//
+// effect: a status saying it was rejected BEFORE it was processed, or a
+// transport failure raised before any byte left this process. Anything else (a
+// proxy's 502, a read timeout, a hang-up mid-response) leaves it unknowable
+// whether the request was applied, and a retried token mint would mint a
+// SECOND live access token nobody persisted or revoked.
+
 // # A redirect is refused, never followed
 //
-// Go's client follows a 301, 302 or 303 by resending the request as a GET,
-// without its body (net/http, redirectBehavior). For an API client that
-// turns every write into a read of the same path: a typing indicator or a
-// bot's disable fails on a route that takes no GET, and a bot's rename — PUT
-// /bots/{id} — arrives as GET /bots/{id}, which Mattermost answers 200 with
-// the unchanged bot, so the provisioner reported a rename that never
-// happened, and a teardown a marker it never wrote. And the address is
-// shared: the agents' Mattermost MCP server dials the same url, and its HTTP
-// client follows no redirect at all, so an engine that followed one would
-// connect and hear every message while its agents could not answer any.
+// Go's client follows a 301, 302 or 303 by resending a GET without the body
+// (net/http, redirectBehavior), turning every write into a read: a bot's
+// rename, PUT /bots/{id}, arrives as GET and Mattermost answers 200 with the
+// unchanged bot, so the provisioner reports a rename that never happened. The
+// agents' MCP server dials the same url and follows no redirect, so an engine
+// that followed one would hear every message its agents cannot answer.
 //
-// A server redirects the API only when the url is not the address it serves
-// it at — Mattermost sends a request outside its Site URL's path into that
-// path ([redirected]), a proxy sends http to https — so the redirect is
-// answered as the misconfiguration it is: an error on every call, naming the
-// address the server sent the request to.
+// The API redirects only when the url is not the address it serves (a request
+// outside Site URL's path, [redirected]; a proxy's http to https), so the
+// redirect is answered as that misconfiguration: an error naming the address.
 
 // RetryStatuses are worth a second try at all: 429 is the rate limiter, and
 // 502/503/504 are a proxy or a server mid-restart — which is the ordinary
