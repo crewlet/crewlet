@@ -436,9 +436,13 @@ const replyOverhead = 1 << 10
 // counted as a read's would hold a write on a dead link a third longer than
 // its bytes need.
 func Sending(messageBytes int, pace time.Duration) time.Duration {
-	request := messageBytes + requestOverhead
-	return time.Duration(float64(pace) * float64(request) / mebibyte)
+	return time.Duration(float64(pace) * float64(RequestBytes(messageBytes)) / mebibyte)
 }
+
+// RequestBytes is what the request of a write carrying a message of
+// messageBytes puts on a link: the message and its protocol line
+// ([requestOverhead]). It is a put's take of its link's [Window].
+func RequestBytes(messageBytes int) int { return messageBytes + requestOverhead }
 
 // requestOverhead is the most a write's request carries beside its message:
 // the protocol line ahead of it — the verb, the subject, the reply subject its
