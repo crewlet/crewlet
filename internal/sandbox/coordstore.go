@@ -676,30 +676,30 @@ func (l BridgeLog) lateAfter(told int) BridgeLog {
 // that read the log before this write loses its race and is decided again on a
 // log that takes the new job's calls alone.
 //
-// A NEW ROUND STARTS THE LOG AFRESH, so a second executor round under the same
-// turn id — what a reviewer's self_iterate produces — never replays the FIRST
-// round's submit_work: a round that in fact submitted nothing would report the
-// previous round's outcome instead of being rescued, and its deliveries would
-// satisfy this round's delivery check. A job that CONTINUES the round keeps its
-// calls ([PendingRun.Continues]) and, carried on by a person's answer, cuts it
-// after the last of them; one carried on after a loss keeps the cut it had.
+// A NEW ROUND STARTS THE LOG AFRESH of what its collection read, so a second
+// executor round under the same turn id (a reviewer's self_iterate) never
+// replays the FIRST round's submit_work: a round that submitted nothing would
+// report the previous round's outcome instead of being rescued, and its
+// deliveries would satisfy this round's delivery check. A job that CONTINUES
+// the round keeps its calls ([PendingRun.Continues]) and, carried on by a
+// person's answer, cuts it after the last of them; one carried on after a loss
+// keeps its cut.
 //
 // BY THE ROUND, NEVER BY THE JOB BEFORE: what the log keeps is decided by the
 // round the row's own write named ([PendingRun.Round]) and the answer it is
 // cut for ([PendingRun.AnsweredJob]). An opening that failed, or that its node
 // stopped before, leaves the log on an earlier job of the round; the next
 // relaunch that carries the round on still keeps its calls and takes the cut
-// that opening owed. A log of another round is started afresh.
+// that opening owed. A log of another round is replaced.
 //
 // AND WHAT A NEW ROUND TAKES OUT OF THE LOG IS FOLDED INTO THE TURN'S EARLIER
-// CALLS IN THE SAME WRITE ([BridgeLog.PriorCalls]), by name and outcome, all the
-// run's own ending reads. The new round keeps the old one's Committed whole,
-// and of its calls and absorbed tally only what its collection did not read,
-// carried late ([BridgeLog.carried]), counted by its delivery check: their
-// effect happened and no collection read them. One compare-and-swap, so no
-// crash leaves a round's calls out of both log and fold. The call a person
-// approved that the log is owed ([OwedCall]) is appended first, in the same
-// write, so it is kept with its round or folded with it.
+// CALLS IN THE SAME WRITE ([BridgeLog.PriorCalls]), by name and outcome, all
+// the run's own ending reads. The new round keeps the old one's Committed
+// whole, and carries late only the calls and absorbed tally its collection did
+// not read ([BridgeLog.carried]), which its delivery check counts. One
+// compare-and-swap, so no crash leaves a round's calls in neither log nor fold.
+// The call a person approved that the log is owed ([OwedCall]) is appended
+// first, in the same write, so it is kept with its round or folded with it.
 func (s *CoordStore) openLog(ctx context.Context, turnID, launch string, o logOpening) (int, []BridgeCall, bool,
 	error) {
 	last := 0
@@ -2672,14 +2672,13 @@ const (
 // BY THE LOG'S OWN FIELDS: the job it is open for, and the round it holds,
 // which an opening for a later job of the same round keeps and one of another
 // round replaces ([BridgeLog.opened]). So a call still running when a relaunch
-// carried its round on is listed in the round it was made in, and a RECORD of
-// an earlier round in the round after, late and with no place (the package
-// doc, "A call that outlives its round's collection is a late call of the round
-// after"). An append that names no round ([BridgeAppend.Round]) is taken by its
-// own job's log alone. A BEGIN IS TAKEN AS A RECORD IS within the round: a call
-// a replaced job's box makes while its opening still serves it — the relaunch
-// that replaced the job opens its own session a moment after it moved the log
-// on — is a call of the round, whose update the log marks late.
+// carried its round on is listed in its round, and a RECORD of an earlier
+// round in the round after, late with no place ([takeEarlier]). An append
+// naming no round ([BridgeAppend.Round]) is taken by its own job's log alone.
+// A BEGIN IS TAKEN AS A RECORD IS within the round: a call a replaced job's
+// box makes while its opening still serves it — the relaunch that replaced
+// the job opens its own session a moment after it moved the log on — is a
+// call of the round, whose update the log marks late.
 //
 // BY THE STEP ([AppendStep]):
 //

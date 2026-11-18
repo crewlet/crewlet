@@ -2242,7 +2242,8 @@ type BridgeLog struct {
 
 	// Round is the executor round the log holds the calls of
 	// ([PendingRun.Round]): a launch that opens the log to a job of the same
-	// round keeps them, and one of another round starts the log afresh.
+	// round keeps them, and one of another round starts it with only the
+	// calls the round before took past its collection's read.
 	Round string `json:"round"`
 
 	// CutFor names the job whose answered question the log's cut was taken
@@ -2304,12 +2305,11 @@ type BridgeLog struct {
 	//
 	// WHAT A RESUMED SEGMENT SEEDS ITS CALL LOG WITH beside the round's own
 	// calls, and nothing else reads: a later call made after a worker's
-	// differing one must count it, or it derives an earlier call's operation
-	// id — a join the worker's leave came between, answered `applied` without
-	// landing — and a worker's call is no call of the round's, so no reader
-	// of whether the turn replied counts it. Read through
-	// [BridgeLog.Absorbed]. A new round's starts with only what the round
-	// it replaces absorbed past its collection's read ([BridgeLog.carried]).
+	// differing one must count it, or it derives an earlier call's operation id
+	// — a join the worker's leave came between, answered `applied` without
+	// landing — and a worker's call is no call of the round's, so no reader of
+	// whether the turn replied counts it. Read through [BridgeLog.Absorbed]; a
+	// new round's is the round before's, less its read ([BridgeLog.carried]).
 	AbsorbedCalls []ElidedCall `json:"absorbed_calls,omitempty"`
 
 	// AnsweredThrough is the place ([BridgeCall.Seq]) of the last call the
@@ -2342,8 +2342,8 @@ type BridgeLog struct {
 	// opening of the log to a new round takes out of it, so the run's own
 	// ending, for a loss or a stop no frame of the turn reaches, still knows
 	// whether an earlier round delivered the turn's reply ([turn.Answered]
-	// reads names and outcomes alone). Folded in by the SAME compare-and-swap that starts the new
-	// round's log afresh ([CoordStore.openLog]), so no crash leaves a round's
+	// reads names and outcomes alone). Folded in by the SAME compare-and-swap that opens the
+	// log to the new round ([CoordStore.openLog]), so no crash leaves a round's
 	// calls neither in the log nor in the fold; kept by every opening of the
 	// same round, and removed with the log at the run's end.
 	//
@@ -2526,12 +2526,12 @@ func (l BridgeLog) LastSeq() int {
 }
 
 // Appends is how many calls the round's log has taken: every call it lists and
-// every call it counts without listing ([BridgeLog.Elided]). One append is the
-// only writer of either ([BridgeLog.appendCall]), adding one call to one of
-// them, and a new round's log starts from none of either ([BridgeLog.opened]);
-// so this is the place of the last call the log took ([BridgeCall.Appended]),
-// and the save point of a session placed by this read of the log
-// ([SessionCapture.Through]).
+// every call it counts without listing ([BridgeLog.Elided]). One writer adds
+// to either, a call at a time ([BridgeLog.appendCall]), and a new round's log
+// starts from none of either, taking the calls it carries the same way
+// ([BridgeLog.carried]); so this is the place of the last call the log took
+// ([BridgeCall.Appended]), and the save point of a session placed by this read
+// of the log ([SessionCapture.Through]).
 //
 // A COUNT, NEVER A SEARCH: unlike [BridgeLog.LastSeq] it counts the calls the
 // bound dropped from the middle ([MaxBridgeCalls]), and the calls an older
@@ -2557,11 +2557,11 @@ func (l BridgeLog) Read() LogRead {
 	return LogRead{Launch: l.Launch, Took: l.Appends(), Absorbed: l.Absorbed()}
 }
 
-// Changes is every kind of change the round's calls committed, each once,
-// whether the log still lists the call that committed it or has dropped it
-// from its middle — a late call and one nobody waited for among them: the log's
-// own record of them ([BridgeLog.Committed]), and any a listed call carries
-// that it lacks (an append an older build made).
+// Changes is every kind of change the turn's calls committed up to this
+// round's, each once, whether the log still lists the call that committed it or
+// has dropped it from its middle — a late call and one nobody waited for among
+// them: the log's own record of them ([BridgeLog.Committed]), and any a listed
+// call carries that it lacks (an append an older build made).
 func (l BridgeLog) Changes() []string {
 	out := slices.Clone(l.Committed)
 	for _, call := range l.Calls {

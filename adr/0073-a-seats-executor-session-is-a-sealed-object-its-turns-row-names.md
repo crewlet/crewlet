@@ -4686,9 +4686,12 @@ not its round's, as the amendments above put it.
 is told to nobody, its round's log deleted with the run. One the old log dropped
 from its middle past the read is carried by name and kinds only, told to no job.
 A record with no instant, a call answered without running, asked again within
-the ledger's retries, is listed twice and told twice; a carried call's identity
-is seeded twice into the turn's call log, once unfinished by the collection
-that read it in flight; both the safe direction.
+the ledger's retries, is listed twice and told twice, and so is a record that
+landed before the collection's read and lost its answer, asked again after the
+next opening: the read saw it, so no opening carries it, and the round after
+lists it again. A carried call's identity is seeded twice into the turn's call
+log, once unfinished by the collection that read it in flight. Each is the safe
+direction.
 
 **Mid-upgrade.** No wire key and no record version: a late call with no place
 is a shape the log already carries. An older build appending the record drops

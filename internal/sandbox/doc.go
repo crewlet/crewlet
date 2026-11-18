@@ -5061,9 +5061,10 @@
 // write that appends its call or opens a job's log, for a job launching or
 // running, and a relaunch's briefs read the log only once the collection has
 // claimed the job before. So a call filed for that job was in the log those
-// briefs read, and an opening walks only the calls past it. Were one call told to two jobs all the same, the telling keeps the
-// HIGHER place ([withTelling]): a session that took it only there holds it from
-// there alone, and the lower would credit a capture of it read between the two.
+// briefs read, and an opening walks only the calls past it. Were one call told
+// to two jobs all the same, the telling keeps the HIGHER place ([withTelling]):
+// a session that took it only there holds it from there alone, and the lower
+// would credit a capture of it read between the two.
 //
 // # A call that outlives its round's collection is a late call of the round after
 //
@@ -5135,7 +5136,10 @@
 // ([BridgeLog.PriorCalls]) and kinds alone, told to no job and its identity
 // seeded nowhere. A carried call's identity is seeded twice into the turn's
 // call log, once unfinished by the collection that read it in flight: an
-// over-count, the safe direction.
+// over-count, the safe direction. So is a record that landed in its round
+// before the read and lost its answer, asked again after the next opening: the
+// read saw it, so no opening carries it, and the round after lists it again,
+// late, and tells it again.
 //
 // # Stopping a seat's running work
 //
