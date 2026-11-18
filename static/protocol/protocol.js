@@ -4775,6 +4775,19 @@ var ACTIONS = {
 		refreshes: [],
 		scope: "person"
 	},
+	code_mark_viewed: {
+		args: [
+			"repo",
+			"change",
+			"viewed",
+			"unviewed",
+			"seen"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
 	atlas_add_entry: {
 		args: [
 			"kind",

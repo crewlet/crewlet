@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/scaleway"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/seataccess/seataccesstest"
 )
 
 // grantOf is a stored grant of set on projects, lapsing at expires (zero for
@@ -307,5 +308,28 @@ func TestABucketGrantRidesThePolicyForItsHoursAndLeaves(t *testing.T) {
 		return strings.Contains(f.Detail, "never permanently")
 	}) {
 		t.Errorf("findings %+v, want the permanent bucket grant reported as not applied", report.Findings)
+	}
+}
+
+// EVERY GRANT THE CATALOGUE OFFERS CAN BE ASKED FOR, each at its longest,
+// ObjectStorageBucketsWrite's note included ([seataccesstest.AskFaults]).
+// Mutation: put the note and the sign-in and provisioner sentences back in
+// each option's detail and this fails.
+func TestEveryGrantTheCatalogueOffersCanBeAsked(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, "", projectWeb)
+	session, err := w.vendor.Open(t.Context(), w.open())
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := seataccess.ReadOptions(t.Context(), session, seataccess.LaneScaleway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := opts.Grantable("ObjectStorageBucketsWrite"); !ok || e.Note == "" {
+		t.Fatalf("ObjectStorageBucketsWrite is offered as %+v (offered %v), want it with its note", e, ok)
+	}
+	for _, fault := range seataccesstest.AskFaults(opts) {
+		t.Error(fault)
 	}
 }

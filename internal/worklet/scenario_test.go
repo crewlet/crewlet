@@ -39,6 +39,8 @@ func TestEveryEngineDetectorFiresOnItsOwnTimelineAlone(t *testing.T) {
 		scenario.PatternAskOvertaken:             advisor.ClassAskOvertaken,
 		scenario.PatternReviewIdle:               advisor.ClassReviewIdle,
 		scenario.PatternApprovalRubberStamp:      advisor.ClassApprovalRubberStamp,
+		scenario.PatternWorkBottleneck:           advisor.ClassWorkBottleneck,
+		scenario.PatternWorkHeldByPerson:         advisor.ClassWorkHeldByPerson,
 	}
 	// ROUTING PREVENTS THIS ONE (ADR-0113), so no timeline makes it fire; its
 	// read is held by TestAStatedReferenceThatWokeIsCountedAndAnUnknownOneIsNot.
@@ -79,7 +81,7 @@ func TestEveryEngineDetectorFiresOnItsOwnTimelineAlone(t *testing.T) {
 			}
 			work, err := d.r.reader.WorkPatterns(t.Context(), worklet.PatternsQuery{
 				Since: d.start, Until: end, Level: statelog.ReadStale,
-				Reviewers: agents, QuietSince: d.quietSince(), People: people})
+				Reviewers: agents, QuietSince: d.quietSince(), People: people, Agents: agents})
 			if err != nil {
 				t.Fatalf("WorkPatterns: %v", err)
 			}
@@ -214,6 +216,12 @@ func (d *timelineDriver) update(i int, st scenario.Step, writer *worklet.Writer,
 			Task: id, Seat: st.Actor, TurnID: fmt.Sprintf("run-%d", i), Trigger: "work_pickup",
 		}); err != nil {
 			d.t.Fatalf("step %d: turn on %s: %v", i, st.Item, err)
+		}
+		return
+	case scenario.VerbWait:
+		if _, err := writer.Depend(d.t.Context(), opID, worklet.DependencyChange{Task: id,
+			Project: current.Project, WaitingOnAdd: []string{d.ids[st.On]}}, d.r.leads); err != nil {
+			d.t.Fatalf("step %d: %s waits on %s: %v", i, st.Item, st.On, err)
 		}
 		return
 	default:

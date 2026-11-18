@@ -536,8 +536,8 @@ func retireUndeclared(ctx context.Context, s *seatChildren, specs []mcp.Spec, he
 // is not already running, and reports what each declared child concluded, in
 // spec order, and whether one was left to retry.
 //
-// A child already running its spec is NOT handed to the bridge: leaving it is
-// what keeps an apply from re-handshaking every seat's vendor on every revision.
+// A child already running its spec's process is NOT restarted, which keeps an
+// apply from re-handshaking every vendor; a tool's level, prefix or hints refile it.
 // Nor is one that DIED from this very spec ([mcp.Bridge.Runs] answers yes, its
 // bridge bringing it back, and a second start would race that loop); an apply's
 // pass (retryNow) asks it to try now. Concurrent for [startAll]'s reason. A spec
@@ -551,6 +551,7 @@ func bringUp(ctx context.Context, s *seatChildren, specs []mcp.Spec, retryNow bo
 		outcomes[i].server = mcp.ServerName(spec.Name)
 		outcomes[i].bridge, outcomes[i].instance = s.bridge, spec.Name
 		if s.bridge.Runs(spec) {
+			s.bridge.Refile(spec)
 			if retryNow {
 				s.bridge.RetryNow(spec.Name)
 			}

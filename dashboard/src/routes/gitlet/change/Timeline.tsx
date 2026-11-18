@@ -5,7 +5,8 @@
  * somebody DID (a revision pushed, a review, an ask) a row with its disc on it.
  *
  * A review's disc wears its verdict's tone, the verdict said in words beside
- * it; nothing else here is coloured. A face is the seat's own (`ui.tsx`).
+ * it; the merge box's discs wear where each condition stands, as the readiness
+ * meter's segments do. A face is the seat's own (`ui.tsx`).
  */
 
 import type { ReactNode } from "react";
@@ -15,10 +16,18 @@ import { fmtDateTime } from "~/lib/format.ts";
 import { Face, useWhoName, type Who } from "../ui.tsx";
 import "~/styles/gitlet.css";
 
-/** The rail: an ordered list, each record one item on it. */
-export function TimelineList({ label, children }: { label: string; children: ReactNode }) {
+/** The rail: an ordered list, each record one item on it; `tail` the merge box and composer after the break. */
+export function TimelineList({
+  label,
+  tail = false,
+  children,
+}: {
+  label: string;
+  tail?: boolean;
+  children: ReactNode;
+}) {
   return (
-    <ol className="code-timeline" aria-label={label}>
+    <ol className={tail ? "code-timeline code-timeline--tail" : "code-timeline"} aria-label={label}>
       {children}
     </ol>
   );
@@ -102,6 +111,16 @@ export function TimelineCard({
   );
 }
 
+/** A card the caller draws itself beside a disc on the rail: the merge box. */
+export function TimelineMark({ disc, children }: { disc: ReactNode; children: ReactNode }) {
+  return (
+    <li className="code-timeline__item">
+      <span className="code-tl-face">{disc}</span>
+      {children}
+    </li>
+  );
+}
+
 /** A card the caller draws itself (a thread, the description), beside its writer's face. */
 export function TimelineItem({ face, children }: { face: Who; children: ReactNode }) {
   return (
@@ -112,8 +131,8 @@ export function TimelineItem({ face, children }: { face: Who; children: ReactNod
   );
 }
 
-/** A disc's tone: a review's verdict, or neutral. */
-export type DiscTone = "neutral" | "success" | "danger";
+/** A disc's tone: a review's verdict, a merge condition's standing, or neutral. */
+export type DiscTone = "neutral" | "success" | "info" | "warning" | "danger";
 
 /** A mark on the timeline's rail: its glyph on a disc in a tone, `small` for what somebody did in passing. */
 export function Disc({
@@ -124,7 +143,7 @@ export function Disc({
 }: {
   glyph: ReactNode;
   tone?: DiscTone;
-  size?: "small" | "regular";
+  size?: "small" | "regular" | "large";
   /** Named only where no sentence beside it says what it marks. */
   label?: string;
 }) {

@@ -94,6 +94,17 @@ const ENGINE: AdvisorFinding = {
   fix: { kind: "none", sentence: "The engine is reducing this.", options: [] },
 };
 
+/** The analyst, off: what a company that names no model for it reads. */
+const ANALYST_OFF = {
+  on: false,
+  cadence: "daily",
+  hour: 6,
+  ceiling: 200000,
+  stale: false,
+  findings: [],
+  set_aside: 0,
+};
+
 const SRE = { name: "SRE", handle: "sre", llm: "default" };
 const VALID = { kind: "valid", baseRevisionId: "r1", warnings: [], derived: null };
 
@@ -136,7 +147,15 @@ async function mount(
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-    Promise.resolve(what === "viewer" ? ADMIN_VIEWER : what === "go_live_review" ? review : answer);
+    Promise.resolve(
+      what === "viewer"
+        ? ADMIN_VIEWER
+        : what === "go_live_review"
+          ? review
+          : what === "advisor_analysis"
+            ? ANALYST_OFF
+            : answer,
+    );
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <SessionReading>
@@ -595,4 +614,80 @@ test("a lone finding about one agent names it once, before its title", async () 
     .closest("li")!;
   expect(row.querySelector(".crewlet-attention-list__subject")?.textContent).toBe("Engineer");
   expect(row.querySelector(".crewlet-attention-list__meta")).toBeNull();
+});
+
+/** One seat's learning finding, as the engine raises it for each seat alike. */
+function learns(seat: string, name: string): AdvisorFinding {
+  return {
+    ...HEALTH,
+    class: "learning.auxiliary_model",
+    severity: "note",
+    subject: { kind: "seat", seat, name },
+    title: "Agents that learn on their main model.",
+    why: "Learning costs a share of its spend.",
+    path: `roles[0].llm_auxiliary`,
+  };
+}
+
+// A CLASS RAISED FOR NINE SEATS IS ONE THING TO DO: one row naming them, and
+// one count in the go-live check.
+test("the go-live check counts a class said for several seats once", async () => {
+  const seats = ["a", "b", "c", "d", "e", "f", "g", "h", "i"].map((s) =>
+    learns(s, s.toUpperCase()),
+  );
+  await mount({ revision: "r1", findings: seats, unread: [] });
+  expect(goLive()[2]).toMatch(/Read what is worth knowing \(1\)/);
+  expect(screen.getAllByText(/Agents that learn on their main model/)).toHaveLength(1);
+});
+
+const BOTTLENECK: AdvisorFinding = {
+  ...HEALTH,
+  class: "work.bottleneck",
+  source: "evidence",
+  area: "work",
+  subject: { kind: "seat", seat: "dev", name: "Dev" },
+  title: "Open work waits on one item.",
+  why: "Everything waiting on it moves only when it does.",
+  item: "ENG-1: 12 items wait on it",
+  path: "",
+  records: [
+    { kind: "item", id: "ENG-1" },
+    { kind: "turn", id: "0123456789abcdef" },
+    { kind: "change", id: "https://github.com/acme/web/pull/42" },
+    { kind: "change", id: "web!7" },
+    { kind: "comment", id: "c-1" },
+  ],
+  fix: {
+    kind: "open_page",
+    page: "item",
+    target: "ENG-1",
+    sentence: "Open the item: move it first.",
+    options: [],
+  },
+};
+
+// A FINDING'S RECORDS ARE LINKS A PERSON OPENS, each to its own page, and its
+// page fix opens on its target.
+test("a finding names its records as links and opens the page it names", async () => {
+  await mount({ revision: "r1", findings: [BOTTLENECK], unread: [] });
+  expect(screen.getByRole("link", { name: "Open ENG-1" }).getAttribute("href")).toBe(
+    "#/worklet/ENG-1",
+  );
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /Details/ }));
+    await settled();
+  });
+  const links = Object.fromEntries(
+    screen
+      .getAllByRole("link", { hidden: true })
+      .map((a) => [a.textContent ?? "", a.getAttribute("href") ?? ""]),
+  );
+  expect(links["ENG-1"]).toBe("#/worklet/ENG-1");
+  expect(links["turn 01234567"]).toBe("#/live/turns/0123456789abcdef");
+  const pull = screen
+    .getAllByRole("link", { hidden: true })
+    .find((a) => a.getAttribute("href") === "https://github.com/acme/web/pull/42");
+  expect(pull?.textContent).toMatch(/^acme\/web#42/);
+  expect(links["web!7"]).toBe("#/gitlet/repos/web/changes/7");
+  expect(screen.getByText(/and 1 comment/)).toBeTruthy();
 });

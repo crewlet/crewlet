@@ -442,10 +442,10 @@ func TestAnArtifactsLinkIsItsDashboardAddress(t *testing.T) {
 	t.Parallel()
 	id := artifacts.IDFor("op")
 	e := &Engine{externalBase: "https://crewlet.example.com"}
-	if got, want := e.artifactLink(id), "https://crewlet.example.com/dashboard#/artifacts/"+id.String(); got != want {
+	if got, want := e.ArtifactLink(id), "https://crewlet.example.com/dashboard#/artifacts/"+id.String(); got != want {
 		t.Errorf("link = %q, want %q", got, want)
 	}
-	if got := (&Engine{}).artifactLink(id); got != "" {
+	if got := (&Engine{}).ArtifactLink(id); got != "" {
 		t.Errorf("a deployment with no external url linked %q", got)
 	}
 	if deps := ArtifactToolDeps(&Engine{}); deps.Reader != nil {

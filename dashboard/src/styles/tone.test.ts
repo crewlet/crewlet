@@ -85,6 +85,21 @@ const ACCENT: Site[] = [
     why: "The reader's own face in a change's row: the kit's selected badge, the one face there that means \"you\".",
   },
   {
+    file: "routes/gitlet/change/Merge.tsx",
+    line: `<Face key={h} who={h} ring={h === viewer.handle ? "brand" : undefined} />`,
+    why: "The reader's own face among a merge box's reviewers: the one face there that means \"you\".",
+  },
+  {
+    file: "routes/gitlet/change/Rail.tsx",
+    line: `<Face who={who} ring={who === viewer.handle ? "brand" : undefined} />`,
+    why: "The reader's own face among a change rail's reviewers.",
+  },
+  {
+    file: "routes/gitlet/change/Rail.tsx",
+    line: `ring={p.handle === viewer.handle ? "brand" : undefined}`,
+    why: "The reader's own face among a change rail's participants.",
+  },
+  {
     file: "routes/worklet/SavedViews.tsx",
     line: `<Tag key="pinned" variant="brand" title="Pinned by you">`,
     why: "A pin is PER READER; the view's own facts beside it are outline. The screen's own comment states the rule, and `viewMarks` is the ONE place that draws it — the grid and the facts block each had their own copy, already drifted.",
@@ -187,6 +202,11 @@ const ACCENT_RULES: SheetSite[] = [
     file: "gitlet.css",
     selector: ".code-branch-chip",
     why: "A branch on the kit's code-ref chip, the accent's soft step and ink, beside its glyph: a kind in Gitlet's code, never an action.",
+  },
+  {
+    file: "gitlet.css",
+    selector: ".code-gap",
+    why: "A diff's gap row on the diff family's hunk row, as the kit's DiffView draws its skipped lines: a place in a diff, never an action.",
   },
   {
     file: "gitlet-code.css",

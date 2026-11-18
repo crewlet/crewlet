@@ -37,8 +37,7 @@ func syncOf(n *node, repo string, epoch int64, cmds ...gitlet.Command) gitlet.Mi
 		Packs: []gitlet.PackRef{compactOutput(id, 0, 4, harnessAt)}, FetchedAt: harnessAt}
 }
 
-// requireSynced fails t unless res is an import or mirror record applied at a
-// position.
+// requireSynced fails t unless res is an import or mirror record applied at a position.
 func requireSynced(t *testing.T, what string, res gitlet.SyncResult, err error) {
 	t.Helper()
 	if err != nil {
@@ -49,8 +48,7 @@ func requireSynced(t *testing.T, what string, res gitlet.SyncResult, err error) 
 	}
 }
 
-// requireStale fails t unless res is refused refusal with nothing appended
-// since before.
+// requireStale fails t unless res is refused refusal with nothing appended since before.
 func requireStale(t *testing.T, n *node, what string, before uint64, res gitlet.SyncResult, err error,
 	refusal gitlet.Refusal) {
 	t.Helper()
@@ -62,22 +60,18 @@ func requireStale(t *testing.T, n *node, what string, before uint64, res gitlet.
 	}
 }
 
-// A CHUNK LANDS ONLY IN ITS TURN: an import's chunks land one after another,
-// each one more than the repository's import_seq — a chunk ahead of its turn
-// and a chunk landed already, asked again under a new attempt's id, are each
-// refused stale with nothing appended — and a chunk whose command names a ref
-// as it is not is refused stale whole. A chunk that lands writes its refs, its
-// pack as a live pack of kind import, its push row `via import` on the
-// engine's own account, and a drop for the object its forced command left;
-// the import's end makes the repository active — refused stale where it would
-// move the default branch off the declared one the import brought — and an
-// end, or a chunk, after it is stale. A chunk that lands no pack and sets no
-// ref is no record at all.
+// A CHUNK LANDS ONLY IN ITS TURN, one past the repository's import_seq: a chunk
+// ahead of its turn, one landed already (asked again under a new id) and one
+// naming a ref as it is not are each refused stale, unrecorded. A landed chunk
+// writes its refs, a live pack of kind import, a push row `via import` on the
+// engine's account and a drop for its forced command's old object. The end
+// makes the repository active, refused stale where it would move the default
+// off the declared branch the import brought; an end or chunk after it is
+// stale. A chunk landing no pack and setting no ref is refused invalid.
 //
 // Mutation: drop the decide's turn rule, and chunk 2 lands before chunk 1;
-// write a chunk's pack as a push's kind, and its row says push; drop the
-// end's rule for the declared branch, and the end moves the default to
-// feature.
+// write a chunk's pack as a push's kind, and its row says push; drop the end's
+// declared-branch rule, and the end moves the default to feature.
 func TestAChunkLandsOnlyInItsTurn(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -166,25 +160,18 @@ func TestAChunkLandsOnlyInItsTurn(t *testing.T) {
 	}
 }
 
-// A REPOSITORY'S DETAIL SAYS WHERE IT STANDS WITH OTHER HOSTS: an imported
-// repository's detail names the import's source, how many of its chunks have
-// landed and, once it ended, when and why it ended short; a pull mirror's names
-// its source and its last sync's instant — what a person who imported it or
-// set the mirror reads its progress by; a push mirror's names it whole, the
-// seat it pushes as and its refs included, and none once it is removed. A
-// repository with neither details none.
+// A REPOSITORY'S DETAIL SAYS WHERE IT STANDS WITH OTHER HOSTS, which is how
+// whoever imported it or set the mirror reads its progress: an import names its
+// source, its chunks landed and, once ended, when and why it ended short; a
+// pull mirror its source and last sync's instant; a push mirror itself whole
+// (seat and refs included), and none once removed. Neither details none.
 //
-// EVERY RECORD IS STAMPED BY A CLOCK THE CASE HOLDS: a minute past harnessAt
-// for each place in the log, the broker's instant the drain hands the
-// applier — so the sync's instant is past the import's end because its
-// record comes after the end's in the log, read with no wall clock between
-// them.
+// The case's clock, the broker's instant handed the applier, is a minute past
+// harnessAt per log place: the sync is past the import's end by log order.
 //
-// Mutations: serve no import progress (Chunks left 0) — the detail after a
-// chunk says none landed, red; drop the sync's instant from the read — the
-// mirror reads as never synced, red; serve no push mirror — the detail of one
-// says none, red; leave a sync's instant where its import's end put it — the
-// mirror reads as never synced since, red.
+// Mutations, each red: serve no import progress (Chunks left 0); drop the
+// sync's instant from the read, or leave it where the import's end put it (the
+// mirror reads as never synced since); serve no push mirror.
 func TestARepositorysDetailSaysWhereItStandsWithOtherHosts(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -249,9 +236,8 @@ func TestARepositorysDetailSaysWhereItStandsWithOtherHosts(t *testing.T) {
 		t.Fatalf("a pull mirror synced details %+v, want its last sync's instant past its import's end", got)
 	}
 
-	// A PUSH MIRROR WHOLE — its host, its credential, the seat it pushes as
-	// and its refs in their order — which the dashboard draws the mirror and
-	// its seat from; and none once its settings no longer name one.
+	// A PUSH MIRROR WHOLE (host, credential, seat, refs in order), which the
+	// dashboard draws the mirror and its seat from; none once settings drop it.
 	target := *mirrorTarget
 	target.Refs = []string{"refs/heads/main", "refs/tags/*"}
 	published := suiteSettings()
@@ -325,18 +311,16 @@ func TestAMirrorSyncIsStaleAgainstAMovedRef(t *testing.T) {
 }
 
 // A SYNC OF NOTHING MOVES THE MIRROR OFF THE LISTING'S HEAD: a pull mirror
-// whose home found its source level lands a sync carrying no pack and no
-// command — answered applied at its record, whatever drop epoch its copy held,
-// since it names no object — which writes no push row and moves the mirror's
-// last sync, so `mirrors_due`, least recently synced first, lists the mirror
-// never synced ahead of it. A sync of nothing for a repository that follows no
-// source is stale, and a sync of packs and no ref is no proposal at all.
+// whose home found its source level lands a sync of no pack and no command,
+// applied whatever drop epoch its copy held (it names no object); it writes no
+// push row and moves the last sync, so `mirrors_due`, least recently synced
+// first, lists the never-synced mirror ahead of it. For a repository following
+// no source it is stale; a sync of packs and no ref is refused invalid.
 //
-// Mutation: refuse a sync of nothing as a sync that moves no ref, and it is
-// refused invalid; drop the decide's way past the epoch rule, and it is refused
-// expunging; let its apply land a push, and a push row of nothing appears;
-// answer it from a push row, and it is answered unknown; leave its apply's
-// instant unwritten, and the mirror stays at the head of the listing.
+// Mutation: refuse it as a sync moving no ref (invalid); drop the decide's way
+// past the epoch rule (expunging); let its apply land a push (a push row of
+// nothing); answer it from a push row (unknown); leave its instant unwritten
+// (the mirror stays at the head).
 func TestASyncOfNothingMovesTheMirrorOffTheListingsHead(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -344,10 +328,9 @@ func TestASyncOfNothingMovesTheMirrorOffTheListingsHead(t *testing.T) {
 	plain := repoOn(t, n, "plain")
 	s := suiteSettings()
 	s.MirrorFrom = mirrorSource
-	// Every repository made at one activation before any is made a mirror at
-	// a later one: activations only move forward.
-	// Each import a mirror_from starts ends short, so each is an active
-	// pull mirror never synced: one that landed whole is synced at its end.
+	// Every repository is made before any becomes a mirror at a later
+	// activation: activations only move forward. Each mirror's import ends
+	// short, so it is active and never synced; a whole one syncs at its end.
 	names := []string{"first", "second"}
 	ids := map[string]string{}
 	for _, name := range names {
@@ -403,20 +386,17 @@ func TestASyncOfNothingMovesTheMirrorOffTheListingsHead(t *testing.T) {
 	}
 }
 
-// THE MIRRORS LISTING PAGES BOTH ARMS IN ITS ORDER: read two rows a page to
-// its end, `mirrors_due` names every push mirror and every pull mirror exactly
-// once — the push mirrors first, by id, handing over to the pull mirrors in
-// the middle of a page — and the pull mirrors LEAST RECENTLY SYNCED FIRST, the
-// two never synced (a tie at zero, which a page boundary splits) by id ahead
-// of the two synced, the one synced first ahead of the one synced after it
-// though its id is the greater: the order a home's stop at the first mirror
-// synced within MirrorInterval relies on.
+// THE MIRRORS LISTING PAGES BOTH ARMS IN ITS ORDER: read two rows a page,
+// `mirrors_due` names every mirror once, the push mirrors first by id, handing
+// over to the pull mirrors mid-page, and the pull mirrors LEAST RECENTLY SYNCED
+// FIRST: the two never synced (a zero tie a page boundary splits) by id, then
+// of the two synced, the one synced first though its id is the greater. A
+// home's stop at the first mirror synced within MirrorInterval relies on this.
 //
-// Mutation: order the pull mirrors newest first, and the never-synced come
-// last; drop the id from the pull keyset's tie, and the second never-synced
-// mirror is skipped; restart the push arm's cursor from its first row, and
-// page two reads page one again for ever; end a page at its push arm's end,
-// and no page hands over.
+// Mutation: order pulls newest first, and the never-synced come last; drop the
+// id from the pull keyset's tie, and the second never-synced is skipped;
+// restart the push arm's cursor, and page two repeats page one for ever; end a
+// page at the push arm's end, and no page hands over.
 func TestTheMirrorsListingPagesBothArmsInItsOrder(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -424,8 +404,8 @@ func TestTheMirrorsListingPagesBothArmsInItsOrder(t *testing.T) {
 	gitlet.SetPageLimits(n.reader, 2, 1<<20)
 	to, from := suiteSettings(), suiteSettings()
 	to.MirrorTo, from.MirrorFrom = mirrorTarget, mirrorSource
-	// Every repository made at one activation before any is made a mirror at
-	// a later one: activations only move forward.
+	// Every repository is made before any becomes a mirror at a later
+	// activation: activations only move forward.
 	var pushes, pulls []string
 	for i := range 3 {
 		pushes = append(pushes, repoOn(t, n, fmt.Sprintf("out-%d", i)))
@@ -436,8 +416,8 @@ func TestTheMirrorsListingPagesBothArmsInItsOrder(t *testing.T) {
 	for i := range 3 {
 		n.ensure(fmt.Sprintf("out-%d", i), to, t2)
 	}
-	// Each pull mirror's import ends short, so each is active and never
-	// synced until a sync lands: one that landed whole is synced at its end.
+	// Each import ends short, so each pull mirror is active and never synced
+	// until a sync lands; a whole one syncs at its end.
 	c, _ := committerOn(t, n, n.pub)
 	for i := range 4 {
 		n.ensure(fmt.Sprintf("in-%d", i), from, t2)
@@ -445,8 +425,7 @@ func TestTheMirrorsListingPagesBothArmsInItsOrder(t *testing.T) {
 	}
 	slices.Sort(pushes)
 	slices.Sort(pulls)
-	// The greater id synced first, so the order by instant is not the
-	// order by id.
+	// The greater id syncs first, so the order by instant is not by id.
 	for _, repo := range []string{pulls[3], pulls[2]} {
 		sync := syncOf(n, repo, 0, update("refs/heads/synced", gitlet.ZeroOID, oidOf("A")))
 		res, err := c.ProposeMirrorSync(ctx, gitlet.MirrorSyncProposal{Sync: sync})
@@ -498,17 +477,16 @@ func TestTheMirrorsListingPagesBothArmsInItsOrder(t *testing.T) {
 	}
 }
 
-// A RECORD IS CUT TO THE BYTES IT CARRIES: a chunk offered MaxImportRefs refs
-// whose names JSON spells long — `&`, six bytes each, at MaxRefNameBytes — is
-// past what one record carries, and Validate refuses it whole; Fitted cuts it
-// to the most of them, from the first, that fit beside its pack — laid out and
-// not yet stored, measured as stored — which Validate admits once the pack is
-// stored, where one more would not be. Refs of plain names are cut at
-// MaxImportRefs, the rows' bound, and a sync is cut as a chunk is.
+// A RECORD IS CUT TO THE BYTES IT CARRIES: MaxImportRefs refs whose names JSON
+// spells long (`&`, six bytes each, at MaxRefNameBytes) are past one record,
+// and Validate refuses the chunk whole; Fitted cuts it to the most, from the
+// first, that fit beside its pack (not yet stored, measured as stored), which
+// Validate admits once the pack is stored and one more would not. Plain refs
+// are cut at MaxImportRefs, the rows' bound; a sync is cut as a chunk is.
 //
 // Mutation: cut by the count alone, and the long refs are not cut; drop the
-// count, and the plain ones are not; measure a pack not yet stored as it
-// is, and no step is cut at all.
+// count, and the plain ones are not; measure a pack not yet stored as it is,
+// and nothing is cut at all.
 func TestARecordIsCutToTheBytesItCarries(t *testing.T) {
 	t.Parallel()
 	long := make([]gitlet.Command, gitlet.MaxImportRefs)
@@ -566,13 +544,11 @@ func TestARecordIsCutToTheBytesItCarries(t *testing.T) {
 	}
 }
 
-// THE IMPORT AND MIRROR LISTINGS NAME WHAT THEIR HOMES OWE: `imports_due`
-// lists the repository being imported with its source and its chunks, and
-// `mirrors_due` the push mirrors and then the pull mirrors, each naming its
-// own remote and no other repository.
+// THE IMPORT AND MIRROR LISTINGS NAME WHAT THEIR HOMES OWE: `imports_due` lists
+// the repository being imported with its source and chunks, and `mirrors_due`
+// the push then the pull mirrors, each naming its own remote and no other repo.
 //
-// Mutation: drop the pull arm from mirrorsDue, and the pull mirror is never
-// listed.
+// Mutation: drop the pull arm from mirrorsDue, and the pull mirror is never listed.
 func TestTheImportAndMirrorListingsNameWhatTheirHomesOwe(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)

@@ -119,10 +119,9 @@ func requireOpened(t *testing.T, ch <-chan error) {
 // push is answered while the stream still holds that announcement, which the
 // stream takes once released.
 //
-// Mutation: publish the push batch's openings on the repository's goroutine
-// (the inline call restored), or run every announcement where it is handed
-// over — the next push waits behind a publish the stream never acknowledges,
-// red.
+// Mutation: publish the push batch's openings on the repository's goroutine,
+// or run every announcement where it is handed over — the next push waits
+// behind a publish the stream never acknowledges, red.
 func TestARepositorysNextPushWaitsOnNoneOfItsAnnouncements(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -153,20 +152,13 @@ func TestARepositorysNextPushWaitsOnNoneOfItsAnnouncements(t *testing.T) {
 // one more takes the second open's and drops the third's — whose repository's
 // next write is answered all the same — and, released, the stream takes the
 // first two, the second stamped the instant its record landed, by the
-// committer's clock, rather than when it was published.
-//
-// Each handover is read off its repository's next write: a repository's
-// goroutine hands what a write landed to the announcer before it takes the
-// write after, so that write is answered only once the opening is held or
-// dropped. What the stream took is read once the committer has stopped, which
-// publishes everything its announcer holds. And the clock is the case's, moved
-// an hour between the handovers and the release.
+// committer's clock (moved an hour before the release), not when published.
+// Each handover is read off its repository's next write, answered once the
+// opening is held or dropped; what the stream took, once Stop has drained it.
 //
 // Mutations: wait for room in the announcer (a plain send) — api's next push
-// waits behind the held stream, red; stamp an announcement when it is
-// published (drop the Timestamp it was handed over at, or read the clock
-// then) — the second is stamped an hour late, red; hold one more than the
-// announcer may — the stream takes three, red.
+// waits behind the held stream, red; stamp it when published — the second is
+// an hour late, red; hold one more than it may — the stream takes three, red.
 func TestAFullAnnouncerDropsWhatItCannotHoldAndNeverWaits(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -204,13 +196,12 @@ func TestAFullAnnouncerDropsWhatItCannotHoldAndNeverWaits(t *testing.T) {
 	}
 }
 
-// A MERGE'S ANNOUNCEMENT HOLDS NO PUSH OF ITS REPOSITORY: the merge is where
-// the defect began — mergeWrite answers its asker and then announces — so it
-// is held to the announcer on its own: with the stream holding every publish,
+// A MERGE'S ANNOUNCEMENT HOLDS NO PUSH OF ITS REPOSITORY: mergeWrite answers
+// its asker and then announces, so with the stream holding every publish,
 // dev's merge of web's change is answered merged, a push to web proposed
 // behind it is answered while the merge's change_merged is still held, and,
-// released, the stream takes the merge once, at its commit — read once the
-// committer has stopped, which publishes everything its announcer holds.
+// released, the stream takes the merge once, at its commit (read once the
+// committer has stopped).
 //
 // Mutation: announce the merge inline in mergeWrite (announceMerged in place
 // of announceLater) — the push waits behind a publish the stream never

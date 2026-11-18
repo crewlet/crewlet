@@ -957,9 +957,17 @@ func taskCensuses() map[string]plannedRead {
 		statement, args := workloadStatement(units, store.EncodeTime(planNow))
 		out["the workload of "+scope] = plannedRead{statement, args}
 	}
+	// AND THE ADVISOR'S READ OF THE OPEN WORK: who holds it, every open
+	// wait, and every open question on an open item.
+	statement, args := openHoldersStatement()
+	out["the open work by holder"] = plannedRead{statement, append(args, MaxOpenRows+1)}
+	statement, args = openEdgesStatement()
+	out["every open wait"] = plannedRead{statement, append(args, MaxOpenRows+1)}
+	statement, args = openQuestionsStatement()
+	out["every open question on open work"] = plannedRead{statement, append(args, MaxOpenRows+1)}
 	// AND THE SEARCH PACKAGE'S: the lexical index's count of the live
 	// tasks, and the window report's read of every live task's text.
-	statement, args := search.TaskCountRead()
+	statement, args = search.TaskCountRead()
 	out["the lexical index's count"] = plannedRead{statement, args}
 	statement, args = search.TaskTextRead()
 	out["the window report's read of every task"] = plannedRead{statement, args}

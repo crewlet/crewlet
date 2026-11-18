@@ -43,12 +43,17 @@ func filesParam(patch bool) map[string]any {
 		"turn's box, relative to its workspace), `{from_project_file: {project, " +
 		"path}}` or `{from_brand: \"logo.primary\"}` (a logo or typeface of your company's " +
 		"adopted brand, copied in; " + CompanyBrandTool + " gives each ready to paste). Inline " +
-		"content is at most 1 MiB in all."
+		"content is at most 1 MiB in all. " + filesCap
 	if patch {
 		desc += " Null removes a file; files you leave out are kept."
 	}
 	return map[string]any{"type": "object", "description": desc}
 }
+
+// filesCap is the file bounds a publish is refused past, stated where its files
+// are named.
+var filesCap = fmt.Sprintf("A publish uploads at most %d new files, and a version "+
+	"holds at most %d.", artifacts.MaxFilesPerPublish, artifacts.MaxFilesPerVersion)
 
 func sourceParam() map[string]any {
 	return map[string]any{
@@ -62,7 +67,7 @@ func sourceParam() map[string]any {
 			},
 		},
 		"description": "Publish a build's whole output. Not combined with `content`, " +
-			"`edits` or `files`.",
+			"`edits` or `files`. " + filesCap,
 	}
 }
 

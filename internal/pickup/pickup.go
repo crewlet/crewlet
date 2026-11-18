@@ -45,6 +45,12 @@
 // seat running, waiting, paused, parked or refused, the node neither shedding
 // nor draining, and all of it true on two passes in a row.
 //
+// # Urgent work
+//
+// An urgent first item is handed without waiting for a turn to end, for mail
+// or for the settle ([UrgentMayJump], ADR-0159), on the inbox's priority lane,
+// so the seat's next turn takes it ahead of the background wakes queued first.
+//
 // # The cooldown
 //
 // A fleet claim on the seat ([CooldownKey]) spaces a pickup that passes over

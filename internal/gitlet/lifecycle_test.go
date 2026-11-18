@@ -201,12 +201,11 @@ func TestALifecycleRequestIsOneWrite(t *testing.T) {
 // A LIFECYCLE REQUEST WHOSE OUTCOME IS UNKNOWN IS ANSWERED SO — an outcome,
 // never an error. Its record is appended and the acknowledgement lost: the
 // answer says the outcome is unknown and names the operation, so whoever asked
-// makes the same request again, which the ledger answers with what landed. As
-// an error it crossed the estate's wire as words with no sentinel, and the
-// tool that asked a data node for it read the node as broken and told its
-// caller that trying again could not help.
+// makes the same request again, which the ledger answers with what landed. An
+// error would cross the estate's wire with no sentinel, and the asking tool
+// would read the node as broken and tell its caller a retry could not help.
 //
-// Mutation: answer the lost acknowledgement as an error again → red.
+// Mutation: answer the lost acknowledgement as an error → red.
 func TestALifecycleRequestWhoseOutcomeIsUnknownIsAnsweredSo(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -240,23 +239,16 @@ func TestALifecycleRequestWhoseOutcomeIsUnknownIsAnsweredSo(t *testing.T) {
 
 // WHO MAY CHANGE A REPOSITORY is one judgement over the chart, every kind's: a
 // person maintains every tool-made repository and creates projects for any
-// owner the chart holds, never a seat's scratch repository; a seat what its
-// grant on the repository maintains — the owning unit's effective lead at
-// full_access a project, the seat a scratch repository carries its own — and a
-// settings change as the repository stands AND as the change leaves it, so a
-// seat cannot hand a repository to an owner under which it would not maintain
-// it. Below maintain — a lead at review, a member, an outsider, another seat —
-// is not_permitted, with nothing written. And a seat leaves no project owned
-// by a seat, its own included, by a create or a settings change, though it
-// would maintain one it owned: a seat's own repositories are its scratch
-// repositories, capped and expiring, and only a person makes a project a
-// seat's.
+// owner the chart holds, never a seat's scratch; a seat what its grant
+// maintains — the owning unit's effective lead at full_access a project, a
+// scratch repository's own seat — a settings change judged as the repository
+// stands AND as it leaves it, so a seat cannot hand one to an owner it would
+// not maintain it under. Below maintain is not_permitted, nothing written.
+// Only a person makes a project a seat's: a seat's own are its scratch ones.
 //
-// Mutations: judge a settings change as the repository stands alone — the
-// lead hands its project to Sales, red; drop the owner-kind check from a
-// seat's project create and settings change — a full_access member creates a
-// project owned by itself, and the lead takes its unit's project for itself,
-// red.
+// Mutations: judge a settings change as the repository stands alone — the lead
+// hands its project to Sales, red; drop the owner-kind check from a seat's
+// project create and settings change — a seat takes a project for itself, red.
 func TestWhoMayChangeARepository(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -385,23 +377,17 @@ func TestWhoMayChangeARepository(t *testing.T) {
 }
 
 // A SEAT'S LIFECYCLE REQUEST IS DECIDED AGAIN FOR WHOEVER WOKE ITS TURN
-// (LifecycleRequest.Ceiling, M3-decisions U40 (a)): the lead, who maintains
-// Engineering's project, changes neither its settings nor its protections for
-// nobody — a stranger, a person who may not act — nor for dev, a member who
-// only writes it, each refused not_permitted naming whom the work is for and,
-// for a colleague, the colleague's own refusal. Its own work is steered by
-// either: dev creates its scratch repository and changes its description
-// there, and protects a branch of the project a person handed it (a scratch
-// repository takes no protections); what discloses a repository or retires it
-// — its visibility, a delete — is decided for them like anything else, and
-// refused.
+// (LifecycleRequest.Ceiling, M3-decisions U40 (a)): the lead changes neither
+// the settings nor the protections of Engineering's project for nobody, nor
+// for dev, who only writes it — each refused not_permitted naming whom the work
+// is for and, for a colleague, its own refusal. Dev's own work lands for a
+// stranger or nobody: its scratch create and description, and a branch rule on
+// a project a person handed it; a visibility change or a delete is refused.
 //
-// Mutations: steeredOwnWork answering false — dev's own create and edit are
-// refused, red; its protect answering false — dev's own protection is
-// refused, red; or true whoever owns the repository — the lead's protection
-// lands for both, red; answering true for every kind on its own repository —
-// the visibility change and the delete land, red; lifecycleRefusal skipping
-// the ceiling — the lead's change for dev and for nobody lands, red.
+// Mutations: steeredOwnWork answering false — dev's create, edit or protect is
+// refused, red; true whatever the owner or kind — the lead's protection, the
+// visibility change and the delete land, red; lifecycleRefusal skipping the
+// ceiling — the lead's change for dev and for nobody lands, red.
 func TestALifecycleRequestIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -523,21 +509,17 @@ func TestAProtectionChangeIsResolvedInsideTheDecide(t *testing.T) {
 }
 
 // A PROTECT REQUEST IS REFUSED A RULE NO RECORD MAY CARRY at its own
-// validation, naming the field its caller sent — a direct_push this build does
-// not know, empty among them, allow_force on a tag, a removal naming a control
-// or a gate change, and a gate change no rule could take: on a tag, naming
-// nothing, removing the gate and naming a field, naming a field a record may
-// not carry, or a list's change that is none — naming no item, an item twice,
-// one both added and removed, or a value the list may not hold — for whoever
-// asks and before any decide judges who may: a person, the unit's lead and a
-// member that may not protect the repository are all told the one thing, and
-// nothing is written. A rule a record may carry passes, a branch rule's gate
-// change included.
+// validation, for whoever asks and before any decide, naming the field sent: a
+// direct_push this build does not know (empty among them), allow_force on a
+// tag, a removal naming a control or a gate change, and a gate change no rule
+// could take — on a tag, naming nothing, removing the gate and naming a field,
+// naming a field no record carries, or a list's change naming no item, an item
+// twice, one added and removed, or a value the list may not hold. Nothing is
+// written; a branch rule's gate change passes.
 //
 // Mutations: drop the gate change's check from the request's validation — the
-// change naming nothing reaches the decide, resolves to the default gate and
-// lands, red; drop the both-added-and-removed check from ListChange.invalid —
-// the check added and removed at once reaches the decide and lands, red.
+// empty change lands as the default gate, red; drop the both-added-and-removed
+// check from ListChange.invalid — that change lands, red.
 func TestAProtectRequestIsRefusedARuleNoRecordMayCarry(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -599,26 +581,17 @@ func TestAProtectRequestIsRefusedARuleNoRecordMayCarry(t *testing.T) {
 }
 
 // A PROTECTION BINDS EVERY SEAT, ITS UNIT'S LEAD INCLUDED (ADR-0088): a seat
-// that maintains a repository may add a protection rule or tighten one, and
-// never remove one or loosen one, whatever its grant — that is a person's. Each
-// control is judged against the rule the repository's rows hold for the
-// pattern, inside the decide: direct_push made to admit more (none → persons),
-// allow_force or allow_delete turned on, the rule's merge gate removed or
-// lowered, and the rule removed are each refused not_permitted with the
-// sentence naming what the change opens, and nothing is written; a change that
-// tightens one control and opens another is refused for the one it opens, and
-// only that one is named. A pattern no rule holds loosens nothing, so the lead
-// adds a rule, and removing one nobody holds is answered from the row; a gate
-// added to a rule that had none only holds merges to more, so the lead adds
-// one, sends it back as it stands, and tightens direct_push beside it with a
-// request naming no gate field, which keeps the gate. A person's same requests
-// land. (A gate's every field is TestAnAgentCannotLoosenAGate's.)
+// may add or tighten a rule, never remove or loosen one. Judged inside the
+// decide against the rows' rule, direct_push none → persons, allow_force or
+// allow_delete on, the gate removed or lowered, and the rule removed are each
+// refused not_permitted naming only what it opens, even beside a tightening,
+// nothing written. A pattern no rule holds loosens nothing, nor does a gate
+// added, sent back as it stands, or kept by a request naming no gate field. A
+// person's requests land (gate fields: TestAnAgentCannotLoosenAGate).
 //
-// Mutations: drop the protect branch of lifecycleRefusal — the lead's removal
-// lands, red; drop allow_delete's clause from loosenings — the lead turns it
-// on, red; take persons rather than none for the value that admits nobody in
-// direct_push's clause — the lead's tightening to none is refused, red; drop
-// the gate's removal arm — the lead removes stable's gate, red.
+// Mutations: drop lifecycleRefusal's protect branch, loosenings' allow_delete
+// clause or the gate's removal arm — the lead's loosening lands, red; take
+// persons for none in direct_push's clause — its tightening is refused, red.
 func TestAnAgentCannotLoosenAProtection(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -908,21 +881,18 @@ func TestARenameKeepsItsKindsForm(t *testing.T) {
 	n.lands(lcRename(dev, scratch, "dev.y"))
 }
 
-// A SCRATCH REPOSITORY REFUSES AN INDEX, whoever asks: a seat's own experiment
-// is searched with grep, so settings naming it indexed are no settings a record
-// may carry, a create asking for one is refused before it is decided, and a
-// settings change asking for one is refused not_permitted with the sentence
-// naming grep — its own seat's and a person's alike — with nothing written. A
-// PROJECT's mode is a setting like its description: a person sets it, the
-// owning unit's lead (maintain) sets it back, a member below maintain is
-// refused, and each applied change is what the row then reads.
+// A SCRATCH REPOSITORY REFUSES AN INDEX, whoever asks: a seat's experiment is
+// searched with grep, so indexed scratch settings are none a record may carry —
+// a create asking for one is refused before it is decided, and a settings
+// change refused not_permitted naming grep, its seat's and a person's alike,
+// nothing written. A PROJECT's mode is a setting like its description: a
+// person sets it, the owning unit's lead sets it back, a member below maintain
+// is refused, and each applied change is what the row then reads.
 //
-// Mutations: drop the scratch arm of RepoSettings.Validate — the indexed
-// scratch settings validate and the create lands, red; drop the decide's
-// scratch refusal — the change is refused only by the settings' validation, as
-// ErrInvalid rather than not_permitted, red; apply the change's mode to the
-// settings no more (next.Search kept) — the project's change writes nothing,
-// red.
+// Mutations: drop RepoSettings.Validate's scratch arm — the indexed create
+// lands, red; drop the decide's scratch refusal — the change is refused
+// ErrInvalid rather than not_permitted, red; stop applying the change's mode
+// (next.Search kept) — the project's change writes nothing, red.
 func TestAScratchRepositoryRefusesAnIndex(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1058,9 +1028,8 @@ func TestTheRepoLimitCountsProjectRepositories(t *testing.T) {
 	}
 }
 
-// A SCRATCH CREATE COSTS THE LOG ONE SMALL RECORD — the figure the dropped
-// validate warning would have multiplied (M3-decisions M3-O44): the signed
-// frame of a seat's create at the longest name, under a kibibyte with no
+// A SCRATCH CREATE COSTS THE LOG ONE SMALL RECORD (M3-decisions M3-O44): the
+// signed frame of a seat's create at the longest name, under a kibibyte with no
 // description and under two with the longest one, once a repository.
 func TestAScratchCreateCostsTheLogOneSmallRecord(t *testing.T) {
 	t.Parallel()

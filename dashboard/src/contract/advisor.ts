@@ -24,10 +24,6 @@ export const PAUSED_SEAT_CLASSES = [
   "sandbox.image_unstartable",
 ] as const;
 
-/**
- * The dashboard pages an `open_page` fix is taken on, each one gesture there:
- * `backups` is Backups & retention's Take a backup. Held to the engine's own
- * `advisor.Pages`, in both directions: a page the engine names that this list
- * lacks is a finding whose row offers no way to take its step.
- */
-export const ADVISOR_PAGES = ["backups"] as const;
+/** Pages an `open_page` fix opens on its `target`: `backups` (Take a backup), `item`, `seat`.
+ *  Held both ways to the engine's `advisor.Pages`, so no finding's row lacks its step. */
+export const ADVISOR_PAGES = ["backups", "item", "seat"] as const;

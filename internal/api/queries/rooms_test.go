@@ -2,6 +2,7 @@ package queries_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"reflect"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/advisor/analyst"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api/livestate"
@@ -97,6 +99,13 @@ func roomQueries(t *testing.T) map[string][]string {
 	return calls
 }
 
+// noModels is an analyst whose models never start.
+type noModels struct{}
+
+func (noModels) Deps(context.Context, *config.Company) (analyst.Deps, error) {
+	return analyst.Deps{}, errors.New("no models in this sweep")
+}
+
 // everySeam is a Sources with every seam present, which is what makes the
 // registry list everything this build can answer.
 //
@@ -156,6 +165,9 @@ func everySeam(t *testing.T) queries.Sources {
 		// THE ATLAS, read off a node that runs no company yet.
 		Atlas:    builtin.AtlasDeps{},
 		Insights: coordmemory.NewFleet(),
+		// THE ADVISOR'S ANALYST: its records, and models no run here reaches.
+		Analysis: coordmemory.NewFleet(),
+		Analyst:  noModels{},
 		// THE FLEET'S BACKUP REGISTER, which every node opens.
 		Backups: register{},
 		// THE ARTIFACTS AND THEIR DATASTORES, each its own seam because a

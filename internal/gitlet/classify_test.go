@@ -142,14 +142,13 @@ func Sum(
 	}
 }
 
-// A DIRECTIVE IS CODE: a comment the compiler, cgo, go generate, go test, the
-// build or a linter reads gets no class when it is edited, added, removed or
-// moved — each of Go's own, a generator's marker, and every linter's
-// suppression, a header's generated-code marker among them, each read as its
-// tool reads it (revive's after the blanks it allows) — and nor does a
-// comment slipped between a directive and what it governs. The same edits of
-// documentation in their place are comment_only: a class is refused for what
-// a comment instructs, never for its being a comment.
+// A DIRECTIVE IS CODE: editing, adding, removing or moving a comment the
+// compiler, cgo, go generate, go test, the build or a linter reads gets no
+// class — Go's own, a generator's marker, every linter's suppression, a
+// generated-code header — each read as its tool reads it (revive's after the
+// blanks it allows), and nor does a comment slipped between a directive and
+// what it governs. The same edits of documentation are comment_only: a class
+// is refused for what a comment instructs, never for its being a comment.
 func TestADirectiveCommentIsNeverCommentOnly(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, before, after string }{
@@ -356,17 +355,16 @@ func TestAWhitespaceChangeAroundADirectiveIsCode(t *testing.T) {
 }
 
 // A SUPPRESSION'S REACH IS LINES, so in a file holding a linter's directive
-// the line each code token sits on is code, wherever the token is: which
-// lines a suppression covers is each linter's own rule over the node go/ast
-// attaches it to and the lines around it, and revive's //revive:disable
-// reaches to its enable or the file's end. A token moved onto or off a line
-// gets no class there, nor does a comment that, grown by a line, moves a
-// suppression a line from the statement go/ast attached it to, or moves the
+// the line each code token sits on is code: which lines a suppression covers
+// is each linter's own rule over the node go/ast attaches it to and the lines
+// around it, and revive's //revive:disable reaches to its enable or the file's
+// end. A token moved onto
+// or off a line gets no class there, nor does a comment that, grown by a line,
+// moves a suppression off the statement go/ast attached it to or moves the
 // code after it off its line — documentation in a suppression's own group
-// among them, whose words are free. What moves no token off its line — a
-// blank line, a reindent, a comment's text — keeps its class, and a file
-// whose directives are Go's own, which attach by order rather than by line,
-// keeps a reflow's.
+// among them. What moves no token off its line (a blank line, a reindent, a
+// comment's text) keeps its class, and a file whose directives are Go's own,
+// which attach by order rather than by line, keeps a reflow's.
 func TestASuppressionHoldsTheLinesOfItsFile(t *testing.T) {
 	t.Parallel()
 	const suppressed = "package p\n\nfunc f() {\n\tg() //nolint:errcheck\n}\n\nfunc k() {\n\th(a,\n\t\tb)\n\tm()\n}\n"
@@ -439,11 +437,10 @@ func TestAGoGenerateLineIsCodeWhereverItSits(t *testing.T) {
 	} {
 		wantClass(t, tc.name, tc.before, tc.after, noClass)
 	}
-	// go generate reads a line through a bufio.Reader of the default size, its
-	// newline included, and fails on a command the reader cannot hold, running
-	// nothing after it: a carriage return at the end of a command that fills
-	// the reader to the byte stops go generate there, and dropping it runs the
-	// command. One byte shorter, the command fits either way.
+	// go generate reads lines through a default-size bufio.Reader, newline
+	// included, and fails on a command the reader cannot hold: a carriage
+	// return ending a command that fills it to the byte stops go generate
+	// there. One byte shorter, the command fits either way.
 	fits := "//go:generate echo " + strings.Repeat("x", bufio.NewReader(nil).Size()-len("//go:generate echo \n"))
 	wantClass(t, "a carriage return taking a command past go generate's reader",
 		"package p\n\n"+fits+"\ntype Kind int\n", "package p\n\n"+fits+"\r\ntype Kind int\n", noClass)
@@ -598,19 +595,16 @@ func TestAnUnclassableVersionGetsNoClass(t *testing.T) {
 		atBound, strings.Replace(atBound, "package p", "package  p", 1), noClass)
 }
 
-// A CLASSIFICATION'S MEMORY FOLLOWS ITS BYTES, NOT ITS COMMENTS: the walk
-// holds the comments of one gap at a time, as records of 24 bytes in a gap
-// that doubles as it grows — under four records a comment allocated in all —
-// so past what the lexer allocates reading the two versions it allocates
-// under 32 bytes a byte of them, since a comment takes three at the least,
-// its slashes and its newline. That holds where the file is one gap of
-// comments, every one of which a directive governs, the costliest shape.
-// Keeping every comment of both versions to the walk's end, and a
-// directive's entries made of them, allocated 231 bytes a byte of it.
+// A CLASSIFICATION'S MEMORY FOLLOWS ITS BYTES, NOT ITS COMMENTS: past what
+// the lexer allocates reading both versions, it allocates under 32 bytes a
+// byte of them. The walk holds one gap's comments at a time, as 24-byte
+// records in a slice that doubles (under four records a comment), and a
+// comment takes three bytes at the least, its slashes and its newline. The
+// case is the costliest shape: one gap of comments a directive governs.
+// Keeping every comment to the walk's end allocated 231 bytes a byte.
 //
-// NOT PARALLEL, because an allocation figure is the whole process's; each
-// figure is the least of three runs, so another goroutine's allocation
-// during one is not counted.
+// NOT PARALLEL: an allocation figure is the whole process's. Each figure is
+// the least of three runs, so another goroutine's allocation is not counted.
 func TestAClassificationAllocatesByItsBytes(t *testing.T) {
 	before := filled("package p\n\n//go:noinline\n", "//\n", "func f() {}\n", 64<<10)
 	after := bytes.Clone(before)

@@ -19,150 +19,84 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE CHECKS A REPOSITORY DEFINES: `.crewlet/checks.yaml` at the root of its
-// tree, read as the one grammar every reader of it shares — the home Gitlet node
-// that queues a change's checks from it, the runner that runs one, and
-// `crewlet validate -tier checks` on a laptop before anything is pushed.
+// The checks a repository defines: `.crewlet/checks.yaml`, one grammar for every
+// reader (the home Gitlet node dispatching a change's checks, the runner, and
+// `crewlet validate -tier checks`). A change's checks are defined by the file its
+// TARGET holds, never by the change's own edit of it (ADR-0098).
 //
-// # Why a file in the repository, read at the TARGET
-//
-// A check is a measurement of a commit, so what it measures is defined beside
-// the code it measures and moves with it — a new test target lands in the same
-// change as the tests. But a change must never define the measurement it is
-// judged by: the file that governs a change's checks is the one its TARGET
-// branch holds, so a change that edits checks.yaml is judged by the file it
-// edits, never by its own edit. Reading the file there is the dispatch's.
-//
-// # Why strict
-//
-// Every key is one this grammar knows, and an unknown one is refused rather
-// than ignored, as every config document's is: `timout_seconds:` ignored would
-// run the check under no timeout its author believes it has, and a check whose
-// typo'd `paths:` is ignored runs on every change instead of the few it meant.
-// So the parser walks the YAML tree itself and refuses, located at its line,
-// every key it does not know, every key written twice, every value of the
-// wrong shape — a number or a boolean where text belongs, which YAML reads
-// without a word (`name: 1.10` is the number 1.1) — every alias and merge key,
-// and every value outside its bound. EVERY failure, not the first: an author
-// fixing one field at a time pays a push per mistake, and they are usually
-// made together. Up to [MaxChecksFileFaults] of them are listed and the rest
-// counted.
-//
-// # Why a parse costs the file's bound, never more
-//
-// The home Gitlet node reads the file on every change it dispatches, so a file a
-// person can write costs that node no more than its bound: a LIST PAST ITS
-// BOUND IS REFUSED BY ITS COUNT ALONE, before any item of it is read
-// ([checkList]) — a 64 KiB file can hold some eleven thousand items, which
-// read, judged and each compared with every one before it took a parse
-// 162–198 ms on two E-cores and made a fault of each — duplicates are found
-// through a set, and a refusal lists at most MaxChecksFileFaults faults. What
-// a parse then costs is the YAML decode of at most MaxChecksFileBytes and a
-// walk of what it read: measured (BenchmarkParseChecks; one bounded run,
-// -benchtime 5x and one count, on two E-cores of a Core Ultra 7 265U under
-// other sessions' load), 5.3 ms for the largest file whose every item is read
-// and judged — sixty-four checks, every list of each at its bound — and
-// 4.1–6.9 ms for a 64 KiB file packing one list past its bound, or thousands
-// of keys the grammar does not know, into the same bytes.
-//
-// The faults are config's own ([config.Fault]: the authored path, the kind and
-// the line), so `crewlet validate -json` reports a checks file exactly as it
-// reports a company document, and an authoring loop reads one shape.
-//
-// # What the file does not decide
-//
-// Which checks a merge REQUIRES is the target's protection rule's, never the
-// file's: a file that could mark its own checks optional is a change that
-// could waive its own gate. How long a company lets a check run
-// (code.checks.max_timeout_seconds), which cell runs one the file leaves to
-// the company (code.checks.run_in) and which secrets exist to be named are the
-// company's configuration's: the file names, the company decides.
+// Strict: an unknown key, a key written twice, a value of the wrong shape
+// (`name: 1.10` is the number 1.1), an alias or merge key and a value past its
+// bound are each refused at its line, all in one refusal, so an author fixes
+// them in one push. A list past its bound is refused by its count alone
+// ([checkList]), so a parse costs the file's bound, 4-7 ms (BenchmarkParseChecks).
+// Which checks a merge requires is the target's protection rule's, or a change
+// could waive its own gate; timeouts, cells and secrets are the company's.
 
 // ChecksFilePath is where a repository defines its checks: the path, from the
 // root of its tree, of the file [ParseChecks] reads.
 const ChecksFilePath = ".crewlet/checks.yaml"
 
 // ChecksDirGlob is the part of a repository's tree its checks are made of:
-// the directory [ChecksFilePath] lives in, whole — the file, and whatever
-// script or fixture beside it a check's run executes. It is the human path
-// every merge gate requiring checks holds a change to unless the rule sets
-// agents_edit_checks ([GateRulesOf], U44): a change to the measurement a
-// target is measured with is a person's to approve, so no seat merges a
-// weakened check on another seat's approval. The whole directory rather than
-// the file alone, because a check whose script a change rewrote is changed as
-// surely as one whose definition it rewrote.
+// [ChecksFilePath]'s whole directory, since a rewritten check script changes a
+// check as surely as its definition. Every merge gate requiring checks holds a
+// change to it as a human path unless the rule sets agents_edit_checks
+// ([GateRulesOf], U44), so no seat merges a weakened check on another's approval.
 const ChecksDirGlob = ".crewlet/**"
 
-// The file's bounds. Each one is a refusal at its field, so a file that passes
-// is one every reader holds whole: a check's definition rides every queued
-// record of it ([CheckDef]), and a home node reads the file on every change it
-// dispatches.
+// The file's bounds, each a refusal at its field: a check's definition rides
+// every queued record of it ([CheckDef]), and a home node reads the file on
+// every change it dispatches.
 const (
-	// MaxChecksFileBytes is the largest checks file read: 64 KiB. A file of
-	// MaxChecksPerFile checks at a few lines each is a few KiB; one past this
-	// is generated, and generated configuration belongs to a build tool the
-	// check runs, never to the file the engine parses on every dispatch.
+	// MaxChecksFileBytes is the largest checks file read: 64 KiB. MaxChecksPerFile
+	// checks take a few KiB; a larger file is generated, and belongs to a build tool
+	// the check runs, not to the file parsed on every dispatch.
 	MaxChecksFileBytes = 64 << 10
 
-	// MaxChecksPerFile is how many checks one file defines: 64, past any CI
-	// pipeline's job list a person maintains (a large monorepo's runs tens),
-	// and the bound that keeps a commit's dispatch — a record a check — a
-	// burst the code log takes in stride.
+	// MaxChecksPerFile is how many checks one file defines: 64, past any CI job list
+	// a person maintains, and it keeps a commit's dispatch (a record a check) a burst
+	// the code log takes in stride.
 	MaxChecksPerFile = 64
 
-	// MaxCheckRunBytes is the longest command a check runs: 4 KiB. A check's
-	// command is handed to `sh -c` whole — a script a block scalar spells over
-	// several lines included — and one past a few hundred bytes is a script
-	// that belongs in the repository, where it is reviewed as code.
+	// MaxCheckRunBytes is the longest command a check runs: 4 KiB, handed to `sh -c`
+	// whole. A longer script belongs in the repository, where it is reviewed as code.
 	MaxCheckRunBytes = 4 << 10
 
-	// CheckTimeoutCeiling is config.CodeCheckTimeoutCeiling: the longest a
-	// check may run, six hours, GitHub Actions' own per-job ceiling. What a
-	// company lets its checks run is its own, at or under this
-	// (code.checks.max_timeout_seconds, which config holds to the same
-	// constant); the file is held to the ceiling.
+	// CheckTimeoutCeiling is config.CodeCheckTimeoutCeiling: the longest a check may
+	// run, six hours, GitHub Actions' per-job ceiling. The file is held to it, and a
+	// company's code.checks.max_timeout_seconds at or under it.
 	CheckTimeoutCeiling = config.CodeCheckTimeoutCeiling
 
-	// MaxCheckPaths is how many path globs one check names: 32, past the
-	// directories any one check is about (a service, its shared libraries,
-	// its build files), and with gitref's 128-byte glob a check's paths stay
-	// a few KiB on every record that carries its definition.
+	// MaxCheckPaths is how many path globs one check names: 32, past what one check
+	// is about; with gitref's 128-byte glob, a few KiB on every record carrying it.
 	MaxCheckPaths = 32
 
-	// MaxCheckEnv is how many of the company's check secrets one check is
-	// given: 32, past what a build reads (a registry token, a cloud key, a
-	// database URL). Each one is a credential a change's own code reads, so a
-	// check names those it needs and nothing is handed to it by default.
+	// MaxCheckEnv is how many of the company's check secrets one check is given: 32,
+	// past what a build reads. Each is a credential the change's own code reads, so a
+	// check names those it needs and is handed none by default.
 	MaxCheckEnv = 32
 
-	// MaxCheckEnvNameBytes is config.CodeMaxCheckEnvNameBytes: the longest
-	// variable name a check names ([config.ValidCodeCheckEnvName]), 128 bytes,
-	// so with MaxCheckEnv a check's list is at most 4 KiB.
+	// MaxCheckEnvNameBytes is config.CodeMaxCheckEnvNameBytes: the longest variable
+	// name a check names ([config.ValidCodeCheckEnvName]), 128 bytes, so with
+	// MaxCheckEnv a check's list is at most 4 KiB.
 	MaxCheckEnvNameBytes = config.CodeMaxCheckEnvNameBytes
 
-	// MaxCheckNameBytes is config.CodeMaxCheckNameBytes: the longest check
-	// name ([config.ValidCodeCheckName]), 64 bytes, a CI job name's length. A
-	// name is a key in every check row and a component of the token a check's
-	// box fetches with.
+	// MaxCheckNameBytes is config.CodeMaxCheckNameBytes: the longest check name
+	// ([config.ValidCodeCheckName]), 64 bytes, a CI job name's length. A name keys
+	// every check row and is part of the token a check's box fetches with.
 	MaxCheckNameBytes = config.CodeMaxCheckNameBytes
 
-	// MaxChecksFileFaults is the most faults one refusal of a checks file
-	// LISTS; the faults past it are counted, in one more line. 128, twice
-	// MaxChecksPerFile: the mistake a person makes in every check of a file at
-	// its bound — a key spelled as the CI the file was moved from spells it,
-	// `script:` for `run:`, which is a key the grammar does not know beside
-	// one a check must have — is listed whole. NO MORE, because a refusal is
-	// read where its file is: a 64 KiB file can hold some eleven thousand
-	// faulty keys or items, and listing each built a multi-megabyte error,
-	// one line a fault, on every dispatch that read the file.
+	// MaxChecksFileFaults is the most faults one refusal LISTS; the rest are counted
+	// in one more line. 128, twice MaxChecksPerFile, so a mistake made in every check
+	// of a full file (`script:` for `run:` is two faults, an unknown key and a missing
+	// one) is listed whole. No more, because a 64 KiB file can hold thousands of
+	// faults, and every dispatch reading it would build that error.
 	MaxChecksFileFaults = 2 * MaxChecksPerFile
 )
 
-// checkList is one of a check's lists and its bound: THE ONE STATEMENT OF ITS
-// COUNT RULE, which the parser applies to the list's node BEFORE it reads an
-// item — so a list past its bound costs a parse its count, whatever it holds,
-// and is one fault rather than one an item — and [defFaults] to a definition's
-// list before it judges an item, for the same reason.
+// checkList is one of a check's lists and its bound: the one statement of its
+// count rule, applied before any item is read, by the parser to the list's node
+// and by [defFaults] to a definition's, so a list past its bound costs a parse
+// its count and is one fault, not one an item.
 type checkList struct {
 	// max is how many items the list may hold.
 	max int
@@ -186,14 +120,10 @@ func (l checkList) over(n int) (string, bool) {
 	return fmt.Sprintf("%d %s, past the %d %s", n, l.items, l.max, l.bound), true
 }
 
-// CheckCell is the kind of box a check runs in.
-//
-// TWO OF THE SANDBOX'S THREE PLACEMENTS: a container on a Gitlet node, or a remote
-// E2B box — config.CodeCheckCells, the one list the company's code.checks is
-// held to as well, so a file can name no cell the company could not allow and
-// the company allow none a file could not name. A check runs a change's own
-// code — its build, its tests, whatever its author put there — so it never
-// runs where that code reaches the engine: `direct` is refused by name, with
+// CheckCell is the kind of box a check runs in: a container on a Gitlet node or
+// a remote E2B box. config.CodeCheckCells is the one list, which code.checks is
+// held to too, so a file and its company name the same cells. A check runs a
+// change's own code, so `direct` (the engine host) is refused by name, with
 // config.CodeCheckCellRefusal's sentence (U1 a).
 type CheckCell string
 
@@ -217,27 +147,26 @@ func CheckCells() []CheckCell {
 // Valid reports a cell this build runs a check in.
 func (c CheckCell) Valid() bool { return slices.Contains(config.CodeCheckCells, config.Placement(c)) }
 
-// CheckReport names the files a check writes its results to, each a path
-// inside its checkout that the runner reads once the command ends: a JUnit
-// XML file, and a SARIF log. Either, both or neither — a check with neither is
-// judged by its exit code alone.
+// CheckReport names the files, inside its checkout, a check writes its results
+// to and the runner reads once the command ends: JUnit XML and a SARIF log. With
+// neither, a check is judged by its exit code alone.
 type CheckReport struct {
 	JUnit string `json:"junit,omitempty"`
 	SARIF string `json:"sarif,omitempty"`
 }
 
-// CheckCheckout is what of the repository a check's box checks out: the
-// whole tree (the zero value), a CONE — the directories named, git's sparse
-// checkout — or nothing at all (None, the file's scalar `none`), for a check
-// that reads what it needs by object id through the API instead of a clone.
+// CheckCheckout is what of the repository a check's box checks out: the whole
+// tree (the zero value), a cone of the directories named (git's sparse checkout),
+// or nothing (None, the file's `none`), for a check reading by object id through
+// the API.
 type CheckCheckout struct {
 	None bool     `json:"none,omitempty"`
 	Cone []string `json:"cone,omitempty"`
 }
 
-// CheckDef is one check as the file defines it — and as every queued record
-// of a check carries it, so the definition a run was queued under is the one
-// it runs under, whatever the file says by the time its box starts.
+// CheckDef is one check as the file defines it, and as every queued record of it
+// carries it, so a run runs under the definition it was queued under, whatever
+// the file says by the time its box starts.
 type CheckDef struct {
 	// Name is the check's name in its file ([config.ValidCodeCheckName]),
 	// unique there.
@@ -264,10 +193,8 @@ type CheckDef struct {
 // Timeout is TimeoutSeconds as a duration — the one conversion, at the edge.
 func (d CheckDef) Timeout() time.Duration { return time.Duration(d.TimeoutSeconds) * time.Second }
 
-// Validate refuses a definition no file passes ([ErrInvalid], naming the
-// field): the rules [ParseChecks] holds each of a file's checks to, for a
-// definition that arrives some other way — on a queued check's record, whose
-// writer read it from a file.
+// Validate refuses, as [ErrInvalid] naming the field, a definition [ParseChecks]
+// would refuse: for one that arrives on a queued check's record instead.
 func (d CheckDef) Validate() error {
 	if faults := defFaults(d); len(faults) > 0 {
 		f := faults[0]
@@ -283,18 +210,13 @@ type ChecksFile struct {
 }
 
 // checksFileError is every fault [ParseChecks] found in a file, each a
-// [config.Fault] at the authored path and line it is about.
+// [config.Fault] at its authored path and line. It is a join by contract (one
+// fault a line, unwrapping to each), so config.Problems reads it as a company
+// document's refusal and errors.As finds each *config.Fault; and it IS [ErrInvalid].
 //
-// IT IS A JOIN BY CONTRACT — it renders one fault a line and unwraps to them —
-// so config.Problems reads it as it reads a company document's refusal, one
-// problem a fault, and errors.As finds each *config.Fault; and it IS
-// [ErrInvalid], this domain's refusal of a declaration by field.
-//
-// UNEXPORTED, because a checks file is parsed where its bytes are read and
-// its refusal is answered there: no estate operation answers one, so the type
-// crosses no wire — and the estate carries every EXPORTED error type of this
-// package across it by its fields, which a fault's kind, an error, would not
-// survive. What a caller reads of it is the contract above, never the type.
+// Unexported, because the estate carries this package's exported error types
+// across its wire by their fields, which a fault's error kind would not survive;
+// a checks file's refusal is answered where its bytes are read.
 type checksFileError struct {
 	Faults []*config.Fault
 }
@@ -320,9 +242,9 @@ func (e *checksFileError) Unwrap() []error {
 // Is reports that the file was refused by field.
 func (e *checksFileError) Is(target error) bool { return target == ErrInvalid }
 
-// ParseChecks reads a `.crewlet/checks.yaml` STRICTLY: one YAML document, a
-// mapping holding `checks:` — a list of at most [MaxChecksPerFile] checks,
-// `checks: []` for none — each a mapping of these keys and no other:
+// ParseChecks reads a `.crewlet/checks.yaml` strictly (a file past [MaxChecksFileBytes]
+// refused unread), refusing every fault as one [checksFileError]: one document holding
+// `checks:` (`[]` for none, at most [MaxChecksPerFile]) of mappings of these keys alone:
 //
 //	name             required; a check name (config.ValidCodeCheckName), once
 //	run              required; the command, at most MaxCheckRunBytes
@@ -332,13 +254,6 @@ func (e *checksFileError) Is(target error) bool { return target == ErrInvalid }
 //	run_in           container or e2b (never direct)
 //	checkout         a list of a cone's directories, or the scalar none
 //	env              a list of at most MaxCheckEnv variable names
-//
-// A file past [MaxChecksFileBytes] is refused unread, and a list past its
-// bound by its count, its items unread. Every refusal is one error holding
-// every fault found — a join of [config.Fault]s, each located at the field and
-// the line it is about, that IS [ErrInvalid] — the first
-// [MaxChecksFileFaults] of them listed and the rest counted by one more fault,
-// at no field.
 func ParseChecks(raw []byte) (ChecksFile, error) {
 	p := &checksParser{}
 	if len(raw) > MaxChecksFileBytes {
@@ -360,10 +275,8 @@ func ParseChecks(raw []byte) (ChecksFile, error) {
 	}
 	var next yaml.Node
 	if err := dec.Decode(&next); !errors.Is(err, io.EOF) {
-		// A SECOND DOCUMENT, or text past the first that is not YAML: either
-		// way the file is not the one document a reader takes it for — a
-		// parser reading only the first would run checks a person reading
-		// the whole file never sees run, or the reverse.
+		// A second document, or text past the first that is not YAML: a parser
+		// reading only the first would run checks a person reading the file never sees.
 		p.fault(nil, nil, config.ErrShape, "the file holds more than one YAML document, or text past the "+
 			"first that is not YAML; a checks file is one document")
 		return ChecksFile{}, p.err()
@@ -377,11 +290,10 @@ func ParseChecks(raw []byte) (ChecksFile, error) {
 
 // checksParser walks one file's tree, gathering every fault it finds.
 type checksParser struct {
-	// faults is the first MaxChecksFileFaults faults found, which the
-	// refusal lists.
+	// faults is the first MaxChecksFileFaults faults found, which the refusal lists.
 	faults []*config.Fault
-	// found counts every fault found, listed or not: a check is refused by
-	// a fault past the listed ones as by any other.
+	// found counts every fault, listed or not: one past the listed ones refuses a
+	// check as any other does.
 	found int
 }
 
@@ -402,8 +314,7 @@ func (p *checksParser) fault(path config.Path, n *yaml.Node, kind error, detail 
 	p.faults = append(p.faults, f)
 }
 
-// full reports that the refusal lists all the faults it lists: a further one
-// is counted.
+// full reports that the refusal's list is full: a further fault is only counted.
 func (p *checksParser) full() bool { return len(p.faults) == MaxChecksFileFaults }
 
 // err is every fault found, as one [checksFileError], or nil for none: the
@@ -413,9 +324,8 @@ func (p *checksParser) err() error {
 		return nil
 	}
 	if more := p.found - len(p.faults); more > 0 {
-		// A FAULT AT NO FIELD, out of range: what is past the bound is the
-		// file's count of faults, and a reader fixing the ones listed reads
-		// the file again for the next.
+		// A fault at no field, out of range: what is past the bound is the file's
+		// count of faults.
 		return &checksFileError{Faults: append(p.faults, &config.Fault{Kind: config.ErrOutOfRange,
 			Detail: fmt.Sprintf("%d more faults past the first %d a refusal lists (gitlet.MaxChecksFileFaults); "+
 				"fix those and read the file again", more, MaxChecksFileFaults)})}
@@ -488,13 +398,10 @@ var (
 	reportKeys    = []string{"junit", "sarif"}
 )
 
-// check reads one entry of `checks:`, answering false where any fault is
-// about it.
-//
-// A FIELD THAT DID NOT READ is not judged again by the rules over its value
-// ([defFaults]), which would only restate the fault it already has — a missing
-// timeout is not also out of range — while every field that did read is, so a
-// check with a typo'd key and a name outside the grammar reports both.
+// check reads one entry of `checks:`, answering false where any fault is about
+// it. A field that did not read is not judged again by [defFaults], which would
+// only restate its fault (a missing timeout is not also out of range); every
+// field that did read is, so a typo'd key and a bad name both report.
 func (p *checksParser) check(path config.Path, n *yaml.Node) (CheckDef, bool) {
 	switch {
 	case n.Kind == yaml.AliasNode:
@@ -548,8 +455,8 @@ func (p *checksParser) check(path config.Path, n *yaml.Node) (CheckDef, bool) {
 		}
 		var at *yaml.Node
 		if !p.full() {
-			// THE LINE ONLY OF A FAULT THE REFUSAL LISTS: finding it walks
-			// the check's keys, which a file can hold thousands of.
+			// Locate only a fault the refusal lists: finding its line walks the
+			// check's keys, which a file can hold thousands of.
 			at = nodeAt(n, f.path)
 		}
 		p.fault(under(path, f.path...), at, f.kind, "%s", f.detail)
@@ -600,9 +507,9 @@ func nodeAt(check *yaml.Node, path config.Path) *yaml.Node {
 
 // mapping walks a mapping's pairs, handing fn each key once, and answers the
 // keys it handed. A key that is not text, an alias, a merge key (`<<`) and a
-// key written twice are faults of their own and handed to nobody: a merge key
-// spells a check's fields somewhere else, and a key written twice is one YAML
-// reads as its last and a person reading the file as its first.
+// key written twice are faults handed to nobody: a merge key spells a check's
+// fields elsewhere, and YAML reads a twice-written key as its last while a
+// person reads it as its first.
 func (p *checksParser) mapping(path config.Path, n *yaml.Node,
 	fn func(key string, keyNode, value *yaml.Node)) map[string]bool {
 
@@ -645,9 +552,8 @@ func (p *checksParser) alias(path config.Path, n *yaml.Node) {
 		"written out where it stands", n.Value)
 }
 
-// text reads a scalar that is TEXT — never a number, a boolean or a null YAML
-// resolved it to, which a check's text never means: `name: 1.10` is the
-// number 1.1, and `run: true` a boolean.
+// text reads a scalar that is text, never a number, boolean or null YAML
+// resolved it to (`name: 1.10` is the number 1.1, `run: true` a boolean).
 func (p *checksParser) text(path config.Path, n *yaml.Node) (string, bool) {
 	switch tag := n.ShortTag(); {
 	case n.Kind == yaml.AliasNode:
@@ -665,8 +571,8 @@ func (p *checksParser) text(path config.Path, n *yaml.Node) (string, bool) {
 	return "", false
 }
 
-// texts reads a list of text, held to list's bound: a list past it is one
-// fault, BY ITS COUNT, and none of its items is read ([checkList]).
+// texts reads a list of text held to list's bound, refusing one past it by its
+// count alone ([checkList]).
 func (p *checksParser) texts(path config.Path, n *yaml.Node, list checkList) ([]string, bool) {
 	switch {
 	case n.Kind == yaml.AliasNode:
@@ -691,8 +597,7 @@ func (p *checksParser) texts(path config.Path, n *yaml.Node, list checkList) ([]
 	return out, ok
 }
 
-// seconds reads a whole number of seconds, which a timeout is: never a
-// fraction, which a reading into a whole number would cut without a word.
+// seconds reads a whole number of seconds: a fraction is refused, never cut.
 func (p *checksParser) seconds(path config.Path, n *yaml.Node) (int, bool) {
 	switch {
 	case n.Kind == yaml.AliasNode:
@@ -800,8 +705,8 @@ type defFault struct {
 	detail string
 }
 
-// defFaults is every rule d breaks — the one statement of them, which
-// [ParseChecks] locates in the file and [CheckDef.Validate] reports by field.
+// defFaults is every rule d breaks, stated once: [ParseChecks] locates each in
+// the file and [CheckDef.Validate] reports it by field.
 func defFaults(d CheckDef) []defFault {
 	var out []defFault
 	add := func(path config.Path, kind error, detail string, args ...any) {
@@ -827,9 +732,8 @@ func defFaults(d CheckDef) []defFault {
 		add(config.Path{"timeout_seconds"}, config.ErrOutOfRange, "%d seconds: a check runs for 1 to %d "+
 			"seconds (gitlet.CheckTimeoutCeiling, six hours)", d.TimeoutSeconds, ceiling)
 	}
-	// A LIST PAST ITS BOUND IS ITS COUNT'S FAULT ALONE and no item of it is
-	// judged ([checkList]); within it, a repeated item is found through the
-	// items before it as a set.
+	// A list past its bound is its count's fault alone ([checkList]); within
+	// it, a repeated item is found through a set.
 	if detail, over := pathsList.over(len(d.Paths)); over {
 		add(config.Path{"paths"}, config.ErrOutOfRange, "%s", detail)
 	} else {

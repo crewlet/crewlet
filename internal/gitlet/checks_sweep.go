@@ -12,38 +12,27 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE CHECKS SWEEP: what removes an IDLE repository's check rows once they
-// outlive [CheckHistory].
-//
-// A repository's rows past the history are removed by its own endings — each
-// check_finished record removes its repository's oldest past its broker
-// instant — so a repository whose checks keep ending keeps its history at
-// thirty days by itself. One whose checks stopped ending keeps whatever it
-// held for ever, since nothing of its own would ever remove it; so the
-// code-retention duty lists the repositories holding a row past the history
-// by [CheckSweepGrace] — which no repository whose checks keep ending holds —
-// and publishes a checks_sweep record on each one's checks subject
-// ([Retention.Pass]'s checks step) removing its rows past the history, which
-// every node applies as the horizon an ending applies.
-//
-// BY RECORDS, NEVER BY A NODE-LOCAL JOB, as the retired packs' sweep: the rows
-// are replicated, and a delete each node made on its own clock would leave
-// every data node's copy different.
+// THE CHECKS SWEEP removes an IDLE repository's check rows past
+// [CheckHistory]. Each check_finished record removes its own repository's
+// rows past the history, so only a repository whose checks stopped ending
+// keeps them for ever. The code-retention duty lists the repositories holding
+// a row past the history by [CheckSweepGrace], which no repository whose
+// checks keep ending holds, and publishes a checks_sweep on each one's checks
+// subject ([Retention.Pass]'s checks step), applied as an ending's horizon.
+// BY RECORDS, NEVER A NODE-LOCAL JOB: the rows are replicated, and a delete on
+// each node's own clock would leave the data nodes' copies different.
 
 // ChecksSweep takes ONE step of sweeping repoID's check rows past
 // [CheckHistory]: a checks_sweep record removing, oldest first, the rows that
-// ended before now less the history — at most what one record's horizon
-// removes ([CheckHorizonRows], [CheckHorizonBytes]) — and reports what it
-// did. A caller steps a repository while the result says More.
+// ended before now less the history, at most one horizon's worth
+// ([CheckHorizonRows], [CheckHorizonBytes]). A caller steps a repository while
+// the result says More.
 //
-// now is the DUTY HOLDER'S clock, and the record carries the cutoff it
-// judged — never its broker instant's — so the apply removes what this decide
-// saw past the history, and a step that read rows past it never appends a
-// record that removes none of them (a holder whose clock runs ahead by d
-// removes rows up to d early, which a thirty-day history does not notice).
-//
-// ADDITIVE, as every record on the subject: the apply is the horizon's join,
-// which commutes with every other record there. A repository with no row
+// now is the DUTY HOLDER'S clock, and the record carries the cutoff it judged,
+// never its broker instant's, so a step that saw rows past it never appends
+// one removing none (a clock ahead by d removes rows up to d early, which a
+// thirty-day history does not notice). ADDITIVE: the apply is the horizon's
+// join, commuting with every record on the subject. A repository with no row
 // appends nothing: its checks went with its purge.
 func (s *Store) ChecksSweep(ctx context.Context, repoID string, now time.Time) (SweepResult, error) {
 	if now.IsZero() {
@@ -54,9 +43,8 @@ func (s *Store) ChecksSweep(ctx context.Context, repoID string, now time.Time) (
 	cutoff := store.EncodeTime(through)
 	subject := ChecksSubject(repoID)
 	scope := []string{ChecksPath(repoID)}
-	// THE WALL CLOCK, as every op id of this domain is minted: its instant is
-	// judged against the ledger's watermark, never the decide's clock, which a
-	// caller may have set anywhere.
+	// THE WALL CLOCK, never now: an op id's instant is judged against the
+	// ledger's watermark, and a caller may set now anywhere.
 	opID := statelog.NewOpID(time.Now(), "code_checks_sweep")
 	at := s.now()
 	var swept SweepResult
@@ -110,8 +98,8 @@ type checksCursor struct {
 // checksQuery asks for one page of the checks listing.
 type checksQuery struct {
 	// cutoff is now less CheckHistory less CheckSweepGrace: an ending is
-	// listed only once its finished_at is before it, and its repository's
-	// step then sweeps every row past the history.
+	// listed once it finished before it, and its repository's step then sweeps
+	// every row past the history.
 	cutoff time.Time
 
 	// after is the last entry of the page before; nil for the first.
@@ -123,9 +111,8 @@ type checksQuery struct {
 
 // checksPage is one page of the checks listing.
 type checksPage struct {
-	// repos is the repository of every entry the page names, in their order —
-	// a repository once for each instant its rows ended at on the page, which
-	// the pass steps once.
+	// repos is each entry's repository, in order: a repository once for each
+	// instant its rows ended at on the page, which the pass steps once.
 	repos []string
 
 	// next is where the next page resumes; nil when this page ended the
@@ -134,15 +121,12 @@ type checksPage struct {
 }
 
 // checksDue lists one page of the repositories holding check rows that ended
-// before q.cutoff — past the history by the grace — oldest ending first,
-// resuming after q.after.
+// before q.cutoff, oldest ending first, resuming after q.after.
 //
-// ONE ENTRY AN (INSTANT, REPOSITORY), never a row: an ending's rows of one
-// repository at one instant are swept together, so the statement groups them
-// by the pair, in code_checks_recent_idx's own order, and answers one row for
-// each; the keyset on the same pair resumes after the last a page named. A
-// STALE READ of this node's rows, as the purge listing is: every step decides
-// again in its own snapshot.
+// ONE ENTRY AN (INSTANT, REPOSITORY), never a row: one repository's rows
+// ending at one instant are swept together, so checksDueSQL groups by the pair
+// and the keyset resumes on it. A STALE READ, as the purge listing's: every
+// step decides again in its own snapshot.
 func (r *Reader) checksDue(ctx context.Context, q checksQuery) (checksPage, error) {
 	if q.limit <= 0 {
 		return checksPage{}, fmt.Errorf("%w: a page of the checks listing names at least one entry", ErrInvalid)
@@ -184,12 +168,10 @@ func (r *Reader) checksDue(ctx context.Context, q checksQuery) (checksPage, erro
 	return page, nil
 }
 
-// checksDueSQL is the code-retention pass's listing of the repositories
-// holding checks past the history by the grace, one row an (instant,
-// repository): grouped by code_checks_recent_idx's own two leading columns, so
-// the plan reads the groups in its order and sorts nothing, the index's
-// predicate repeated as written so the planner may use it at all, and the >=
-// beside the OR what keeps the index's range seek (planner.go).
+// checksDueSQL is checksDue's listing, grouped by code_checks_recent_idx's two
+// leading columns so the plan reads the groups in index order and sorts
+// nothing. The index's predicate is repeated as written so the planner may
+// use it at all, and the >= beside the OR keeps its range seek (planner.go).
 const checksDueSQL = `SELECT repo_id, finished_at FROM code_checks INDEXED BY code_checks_recent_idx
 	WHERE finished_at > 0 AND finished_at < ? AND finished_at >= ? AND (finished_at > ? OR repo_id > ?)
 	GROUP BY finished_at, repo_id

@@ -37,9 +37,8 @@ type ViewedGesture struct {
 }
 
 // ViewedFile is one file marked viewed: its path, and the object id and mode the revision read gives
-// it ([DiffFile.NewOID], [DiffFile.NewMode]), neither for a file the revision deletes. The mark stays
-// current while a later revision gives the file the same id and mode, and reads unviewed once either
-// changes.
+// it ([DiffFile.NewOID], [DiffFile.NewMode]), neither for a file the revision deletes. The mark reads
+// unviewed once a later revision changes either.
 type ViewedFile struct {
 	Path    string `json:"path"`
 	BlobOID string `json:"blob_oid,omitempty"`
@@ -268,9 +267,8 @@ func (m *Marks) publishViewed(ctx context.Context, w MarkWrite, seen statelog.Po
 
 	g := w.Files
 	subject := PersonSubject(w.Handle)
-	// The publish probes the change's repository beside the marks, so a node holding back a record
-	// about it declines; the record declares the marks alone, so a build holding it back holds back
-	// nothing of the repository.
+	// Probe the repository too, so a node holding back a record about it declines; declare the marks
+	// alone, so a build holding this record back holds back nothing of the repository.
 	probe := []string{ViewedPath(w.Handle), RepoPath(g.RepoID)}
 	scope := []string{ViewedPath(w.Handle)}
 	actor := Actor{ID: w.Handle, Kind: ActorOperator, OperatorID: w.Asker.OperatorID}

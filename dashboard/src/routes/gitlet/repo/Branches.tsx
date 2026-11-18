@@ -50,12 +50,12 @@ import {
   type CodeRefListing,
   type CodeTip,
   type CodeGitAnswer,
-  type CodeRefProtection,
   type CodeRefsAnswer,
   type CodeRepoDetail,
   type CodeTagRow,
 } from "~/protocol/index.ts";
 import { ChangeRefPill } from "../ChangeRow.tsx";
+import { protectionTitle, useBranchDetail, type BranchDetail } from "../branchDetail.ts";
 import { useListKeys } from "../CodeList.tsx";
 import { moverOf } from "../movers.ts";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
@@ -74,8 +74,6 @@ const HEADS = "refs/heads/";
 const PAGE_LIMIT = 50;
 /** The Overview's active branches, the default branch left out. */
 const OVERVIEW_ACTIVE = 10;
-/** A page of the find that looks for the default branch by its name. */
-const DEFAULT_FIND_LIMIT = 20;
 /** The Overview's newest tags. */
 const OVERVIEW_TAGS = 3;
 /** How long typing rests before a find is written to the address. */
@@ -195,7 +193,7 @@ function listingParams(
 
 /** The Overview: the default branch, the active branches, and the newest tags. */
 function Overview({ repo, since }: { repo: CodeRepoDetail; since: string | undefined }) {
-  const found = useDefaultBranch(repo);
+  const found = useBranchDetail(repo.name, repo.default_branch);
   const active = useActiveBranches(repo, since);
   // ONE MARKS READ for the heads of both boxes, asked once both are here.
   const heads =
@@ -220,7 +218,7 @@ function DefaultBox({
   facts,
 }: {
   repo: CodeRepoDetail;
-  found: ReturnType<typeof useDefaultBranch>;
+  found: BranchDetail;
   facts: Facts;
 }) {
   const now = useNow();
@@ -242,52 +240,6 @@ function DefaultBox({
       )}
     </RefsBox>
   );
-}
-
-/** The default branch read in detail: found page by page, since a find matches any part of a name. */
-export function useDefaultBranch(repo: CodeRepoDetail, enabled = true) {
-  const params = useMemo(
-    () => ({
-      name: repo.name,
-      contains: repo.default_branch,
-      detail: true,
-      limit: DEFAULT_FIND_LIMIT,
-    }),
-    [repo.name, repo.default_branch],
-  );
-  const first = useCodeQuery("code_refs", params, { enabled });
-  const want = HEADS + repo.default_branch;
-  const inFirst = first.data?.refs_detail?.find((r) => r.ref === want);
-  const next = first.data?.next ?? "";
-  const key = `${JSON.stringify(params)}\n${next}`;
-  const [later, setLater] = useState<{ key: string; row: CodeRefListing | null } | null>(null);
-  useEffect(() => {
-    if (inFirst || !next || later?.key === key) return undefined;
-    let live = true;
-    void (async () => {
-      let cursor = next;
-      let row: CodeRefListing | null = null;
-      while (cursor && !row) {
-        const page: CodeRefsAnswer | null = await codeRest
-          .query("code_refs", { ...params, cursor })
-          .catch(() => null);
-        row = page?.refs_detail?.find((r) => r.ref === want) ?? null;
-        cursor = page?.next ?? "";
-      }
-      if (live) setLater({ key, row });
-    })();
-    return () => {
-      live = false;
-    };
-  }, [inFirst, next, key, later, params, want]);
-  const searching = !inFirst && next !== "" && later?.key !== key;
-  return {
-    row: inFirst ?? (later?.key === key ? later.row : null),
-    loading: first.loading || searching,
-    error: first.error,
-    refusal: first.refusal,
-    detail: first.detail,
-  };
 }
 
 /** The default branch drawn from the repository's own detail, where its listing did not find it. */
@@ -616,27 +568,6 @@ function CopyName({ name }: { name: string }) {
       onClick={() => void copy(name)}
     />
   );
-}
-
-/** A branch's rules as clauses: "no force-push, no delete, pushes through changes only". */
-export function protectionWords(p: CodeRefProtection): string {
-  return [
-    p.allow_force ? "force-push allowed" : "no force-push",
-    p.allow_delete ? "delete allowed" : "no delete",
-    p.direct_push === "none"
-      ? "pushes through changes only"
-      : p.direct_push === "persons"
-        ? "persons push directly"
-        : `direct pushes by ${p.direct_push}`,
-  ].join(", ");
-}
-
-/** A branch's rules in words: "Protected by release/*: no force-push, no delete, pushes through changes only". */
-export function protectionTitle(p: CodeRefProtection): string {
-  const names = p.patterns.map((pattern) =>
-    pattern.startsWith(HEADS) ? pattern.slice(HEADS.length) : pattern,
-  );
-  return `Protected by ${names.join(" and ")}: ${protectionWords(p)}`;
 }
 
 /** One branch: its name and marks, who moved it and when, its change, and its controls. */

@@ -897,7 +897,7 @@ vendor named and how far its backoff has stepped, since its plan is no less
 spent for a new configuration revision; one whose credential changed starts
 clean ([below](#a-limit-is-the-sign-ins)).
 
-**A login is never sat out.** An expired or missing login is `auth`, which also
+**A login is never sat out.** An expired, missing or unentitled login is `auth`, which also
 moves the seat down its chain, but the very next call tries the entry again:
 `crewlet llm login` mends a login from another process, usually while seats are
 running, and a window would hold a signed-in seat on its fallback for nothing.
@@ -963,7 +963,8 @@ defaulted to, which the engine could only guess. An entry's `env` may not set
 the engine's own environment to move every harness's zone.
 
 **A refused sign-in is read from the harness's fields first too** (`auth_events`): a
-Claude Code run that ends on `api_error_status: 401`, or retried with
+Claude Code run that ends on `api_error_status: 401` or `403` (a login its
+account does not entitle to Claude Code), or retried with
 `error: authentication_failed`, is an `auth` failure whatever its sentence says,
 in a run the harness reported failed. It is never sat out; it is the sign-in's last
 failure, and the readiness verdict of every entry on the same account.
@@ -4093,7 +4094,7 @@ it runs on.
 | `limit_events` | The harness's own structured limit report, matched before any sentinel: `match` (conditions on the event, naming the `event_type_path` discriminator and at least one field beside it), `said_path` (the vendor's sentence) and `reset_separator`/`reset_unit` (the reset in that sentence). `jsonl` output only. |
 | `limit_markers` | Sentences recognising a spent plan; see above. Each may carry `reset_separator` and `reset_unit` (`epoch`, `seconds` or `clock`). |
 | `auth_markers` | Sentences recognising an expired login. Each may carry `meaning`: `refused` (the default, the vendor turned the credential down) or `unread` (the harness did not use the credential it was handed, as Claude Code says "Not logged in" of a token with a space inside). Only the words a person is shown depend on it; the first marker that matches, in order, names the meaning. |
-| `auth_events` | The harness's own structured report of a refused sign-in, read before every limit report and sentinel: `match` (conditions on the event, naming the `event_type_path` discriminator and at least one field beside it) and `said_path` (the vendor's sentence). `jsonl` output only. Claude Code's are its result event with `api_error_status: 401` and its `system` event of subtype `api_retry` with `error: authentication_failed`. |
+| `auth_events` | The harness's own structured report of a refused sign-in, read before every limit report and sentinel: `match` (conditions on the event, naming the `event_type_path` discriminator and at least one field beside it) and `said_path` (the vendor's sentence). `jsonl` output only. Claude Code's are its result event with `api_error_status: 401` or `403` and its `system` event of subtype `api_retry` with `error: authentication_failed`. |
 | `limit_reset_events` | Events that date and name the limit a run reported, from the harness's own fields: `match` (as `limit_events`), `resets_at: {path, unit}` (`epoch`, `epoch_ms` or `rfc3339`) and `window: {path, map}` (the vendor's window names mapped to `session`, `weekly`, `model` or `unknown`; a name the map does not hold is `unknown`). The last match of a run wins. They classify nothing: a run still reports its limit by `limit_events` or a marker. `jsonl` output only. |
 | `limit_windows` | `{contains, window}`: the window a vendor's sentence names (`weekly limit` is `weekly`), for a limit no `limit_reset_events` entry named one for. Compared case-sensitively against the sentence already taken as the vendor's report. |
 | `sign_in_env` | The variables that sign the harness in when an entry's `env` sets one: a cloud provider's switch or a gateway's token (Claude Code's `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and `CLAUDE_CODE_USE_FOUNDRY`). [`auth.mode: env`](#7-a-cloud-provider-or-gateway-authmode-env) requires one. Never `token_env`, `api_key_env` or an isolation variable, and never beside `env_sign_in`. |

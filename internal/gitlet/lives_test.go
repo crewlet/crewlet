@@ -14,10 +14,9 @@ import (
 )
 
 // THE RECONCILE'S WALK READS EVERY REPOSITORY IT ACTS ON, ONCE, IN NAME ORDER,
-// across pages — importing, active, archived and deleted, whoever manages them
-// — and no purge, which is the code-retention duty's: two and a half pages of rows,
-// seeded in every status and two managers, come back whole, each with the
-// status and manager its row holds. A visit's error ends the walk with it.
+// across pages: every status but purging (the code-retention duty's), whoever
+// manages it, each with its row's status and manager. A visit's error ends
+// the walk with it.
 //
 // Mutation: resume a page at its last name inclusively and a row repeats;
 // drop deleted from the statuses and a restore is reported as a create; drop

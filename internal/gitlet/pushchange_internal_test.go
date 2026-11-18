@@ -7,13 +7,11 @@ import (
 )
 
 // A BATCH NAMES THE CHANGE ITS EARLIER PUSH OPENED: two pushes of one batch to
-// one new branch, each asking for a change. The first opens it in its own
-// entry, its target the repository's default branch STAMPED there, so the
-// apply reads it from the record alone; the second NAMES that change — its
-// own move revises it — and its entry carries none, the change's number the
-// apply's to give, so the decision answers none for it yet. Its rows are
-// counted with the record's: the open's change, author and revision, the
-// second's revision.
+// one new branch each ask for a change. The first opens it, the default
+// branch STAMPED as its target so the apply reads it from the record alone;
+// the second NAMES it and carries none, and no number is answered yet, the
+// apply's to give. The record counts the open's change, author and revision
+// rows and the second's revision.
 //
 // Mutation: leave the target to the apply, and the first entry names none.
 func TestABatchNamesTheChangeItsEarlierPushOpened(t *testing.T) {
@@ -30,8 +28,7 @@ func TestABatchNamesTheChangeItsEarlierPushOpened(t *testing.T) {
 	)
 	if err := e.db.Read(t.Context(), func(tx *sql.Tx) error {
 		var err error
-		// ON THE CHART: a push asking for a change holds its options' text
-		// to it for whom it mentions.
+		// On the chart, so the options' text is read for whom it mentions.
 		var moves batchMoves
 		entries, answers, moves, _, err = decideBatch(t.Context(), tx, decideRepo, []Proposal{first, second},
 			DefaultLimits(), DefaultDeletedRetention, onTheChart, decideAt, &verdicts{})

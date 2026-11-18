@@ -112,15 +112,13 @@ func (n *node) livePacks(repo string) []string {
 	return out
 }
 
-// A COMPACTION ASKED TWICE IS ONE COMPACTION: proposed again after it landed —
-// as its builder's router asks the repository's runner-up after a committer
-// went silent — it is answered applied at the record it landed in, from the
-// rows, and no second record is appended. Its operation id is the
-// compaction's own, so the ledger collapses the second asking onto the first.
+// A COMPACTION ASKED TWICE IS ONE COMPACTION: proposed again after it landed
+// (as its router asks the runner-up after a committer went silent), it is
+// answered applied at its record, from the rows, and nothing is appended: its
+// operation id is the compaction's own, so the ledger collapses the asking.
 //
-// Mutation: publish a compaction under an operation id minted for its batch,
-// and the second asking is decided again — its inputs gone — and answered
-// stale.
+// Mutation: publish under an operation id minted for its batch, and the second
+// asking is decided again — its inputs gone — and answered stale.
 func TestACompactionAskedTwiceIsOneCompaction(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -148,16 +146,14 @@ func TestACompactionAskedTwiceIsOneCompaction(t *testing.T) {
 }
 
 // A COMPACTION RETRIED AFTER ITS OUTPUTS WERE RETIRED IS APPLIED: a later
-// compaction may merge its outputs before its builder hears back — its answer
-// lost, its builder's router asking the runner-up under the same id — and the
-// ledger collapses the asking onto the record that landed, whose outputs are
-// rows of code_packs_retired by then, which keep the position each was added
-// at. It is answered applied at that record, from those rows, with no record
-// appended and nothing logged as a domain that lies.
+// compaction may merge its outputs before its builder hears back, and the
+// ledger collapses the retry onto the landed record, whose outputs are
+// code_packs_retired rows by then, keeping their added position. It is
+// answered applied at that record, from those rows, nothing appended or logged.
 //
 // Mutation: answer from code_packs alone, and the asking is answered unknown
-// and logged code_compaction_unanswerable at ERROR — and the node that built
-// the compaction adopts nothing.
+// and logged code_compaction_unanswerable at ERROR — and the builder adopts
+// nothing.
 func TestACompactionRetriedAfterItsOutputsWereRetiredIsApplied(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -195,11 +191,11 @@ func TestACompactionRetriedAfterItsOutputsWereRetiredIsApplied(t *testing.T) {
 	}
 }
 
-// A COMPACTION OF A PACK NO LONGER LIVE IS STALE, and so is one of a pack that
-// is full or split into parts: every input is held to the rows of the
-// committer's snapshot — one row, of part `pack`, live and not full
-// (gitlet.PackRow.Full) — and the first that is not is named, the compaction
-// refused undecided, nothing appended, and the next pass plans again.
+// A COMPACTION OF A PACK NO LONGER LIVE IS STALE, as is one of a pack full or
+// split into parts: every input must be one live, not full
+// (gitlet.PackRow.Full) row of part `pack` in the committer's snapshot; the
+// first that is not is named, the compaction refused undecided, nothing
+// appended, and the next pass plans again.
 //
 // Mutation: drop the full check, and a compaction retiring a full pack is
 // applied — and merged again at every pass.
@@ -265,19 +261,17 @@ func sorted(ids ...string) []string {
 }
 
 // A COMPACTION IS REFUSED FOR WHAT ITS REPOSITORY IS: a deleted one is
-// repo_deleted, told — through the committer's own retention — when its
-// purge may begin, as a push to it is; one BEING PURGED, one PURGED to its
-// marker and an id no repository ever had are repo_deleted too, each in the
-// sentence of its own state (gitlet.RepoGone), and none appends a record; an
-// ARCHIVED one is compacted, since it is still read and every cold sync of it
-// pays for every pack it holds.
+// repo_deleted, told through the committer's own retention when its purge may
+// begin, as a push is; one BEING PURGED, PURGED to its marker, or never created
+// is repo_deleted too, each in its own sentence (gitlet.RepoGone), none
+// appending a record; an ARCHIVED one is compacted, since it is still read and
+// every cold sync pays for every pack it holds.
 //
-// Mutations: refuse an archived repository's compaction as a push to it is
-// refused, and an archived repository is never compacted; drop the rule's
-// check of what the repository is, and a compaction is decided and applied
-// against one being purged, whose packs are still live between the purge's
-// parts, while one purged or never created is answered stale — as if a next
-// pass could plan again.
+// Mutations: refuse an archived repository's compaction as a push is refused,
+// and it is never compacted; drop the check of what the repository is, and one
+// being purged (its packs live between the purge's parts) is compacted, while
+// one purged or never created is answered stale, as if a next pass could plan
+// again.
 func TestACompactionIsRefusedForWhatItsRepositoryIs(t *testing.T) {
 	t.Parallel()
 	const retention = 11 * 24 * time.Hour
@@ -384,24 +378,17 @@ func TestACompactionIsRefusedForWhatItsRepositoryIs(t *testing.T) {
 }
 
 // A COMPACTION IS DECIDED AT THE PACK BOUND, AND MAKES ROOM: the bound holds
-// pushes back and never a compaction, which adds no pack and is the one way a
-// repository at MaxPacksPerRepo live packs ever takes a pack again. At the
-// bound, and past it as a later build's committer may leave a repository, a
-// push carrying a pack is refused compaction_behind whole and undecided,
-// while a compaction of two of the repository's live packs into one is
-// applied, its live packs dropping by exactly one, since the apply counts the
-// rows it moves. At the bound that one pack is room, and the same push run
-// again is an entry of a record; past it the bound still holds the push back,
-// its sentence naming what the repository still holds.
+// back pushes, never a compaction, which adds no pack and is the one way a
+// repository at MaxPacksPerRepo takes a pack again. At or past the bound (as a
+// later build may leave it), a push carrying a pack is refused
+// compaction_behind whole and undecided, while compacting two live packs into
+// one is applied, live packs dropping by exactly one (the apply counts rows
+// moved). At the bound that is room for the push; past it the push is still
+// held back, naming what remains. Each repository holds two real packs and its
+// row counts the rest, which the decides read off the row.
 //
-// Each repository holds two real live packs and its row counts the rest: the
-// decides read the count off the row and the inputs off their own rows, so
-// the case stores no two thousand pushes.
-//
-// Mutation: refuse a compaction of a repository holding MaxPacksPerRepo live
-// packs or more, and both arms fail on the compaction's answer — the build
-// under which a repository that reached the bound would refuse every push
-// carrying a pack for good.
+// Mutation: refuse a compaction at MaxPacksPerRepo or more, and both arms fail:
+// a repository at the bound would refuse every push carrying a pack for good.
 func TestACompactionIsDecidedAtThePackBoundAndMakesRoom(t *testing.T) {
 	t.Parallel()
 	for name, held := range map[string]int64{
@@ -452,12 +439,11 @@ func TestACompactionIsDecidedAtThePackBoundAndMakesRoom(t *testing.T) {
 	}
 }
 
-// A COMPACTION THAT INVENTS OBJECTS IS REFUSED BEFORE ITS RECORD: outputs that
-// hold more objects than the rows of the packs they replace count are a
-// builder's bug — a merge writes no object its inputs did not hold — so the
-// decide refuses it ErrInvalidProposal, nothing is appended, and the node logs
-// it at ERROR where an operator reads it. No lower bound: outputs that hold
-// FEWER are inputs that shared objects, merged once.
+// A COMPACTION THAT INVENTS OBJECTS IS REFUSED BEFORE ITS RECORD: outputs
+// holding more objects than their inputs' rows count are a builder's bug (a
+// merge writes no new object), so the decide refuses ErrInvalidProposal,
+// appends nothing, and logs it at ERROR. No lower bound: FEWER is inputs that
+// shared objects, merged once.
 //
 // Mutation: drop the arithmetic, and the compaction lands.
 func TestACompactionThatInventsObjectsIsRefusedBeforeItsRecord(t *testing.T) {
@@ -485,9 +471,8 @@ func TestACompactionThatInventsObjectsIsRefusedBeforeItsRecord(t *testing.T) {
 }
 
 // A COMPACTION IS NEVER BATCHED WITH PUSHES: queued between two pushes behind
-// a batch in flight, it is decided as a record of its own, after the push
-// before it and before the push after it — a record carries one op, and the
-// repository's proposals land in the order they arrived.
+// a batch in flight, it is a record of its own, between them: a record carries
+// one op, and a repository's proposals land in arrival order.
 //
 // Mutation: let a batch gather a compaction behind its pushes, and the three
 // are decided as one push record.
@@ -546,15 +531,13 @@ func TestACompactionIsNeverBatchedWithPushes(t *testing.T) {
 }
 
 // A COMPACTION BEHIND WHAT ITS BUILDER SAW IS ASKED OF ANOTHER NODE: decided
-// from a snapshot at or past its Seen — the rows the builder planned from — or,
-// where the committer's node cannot reach that position in time, refused about
-// that node (ErrNotServing), which the router reads as a node that ran nothing
-// and asks the repository's runner-up under the same compaction id. Nothing is
-// appended.
+// from a snapshot at or past its Seen (the rows its builder planned from), or,
+// where the committer's node cannot reach that position in time, refused
+// ErrNotServing, which the router reads as a node that ran nothing, asking the
+// runner-up under the same id. Nothing is appended.
 //
-// Mutation: publish with no session floor, and the node behind decides the
-// compaction from rows that do not hold the inputs — stale, for ever, from the
-// node that would be asked first.
+// Mutation: publish with no session floor, and the node behind decides from
+// rows without the inputs — stale, for ever, from the node asked first.
 func TestACompactionIsDecidedPastWhatItsBuilderSaw(t *testing.T) {
 	t.Parallel()
 	a, b := newTwoNodes(t)
@@ -574,10 +557,10 @@ func TestACompactionIsDecidedPastWhatItsBuilderSaw(t *testing.T) {
 	requireApplied(t, res, err)
 }
 
-// A COMPACTION IS ANSWERED ONLY FROM ITS OUTPUTS' ROWS: a publish that answers
-// applied for a record that wrote no row is answered unknown, never applied —
-// which would hand its builder outputs to adopt that no row names — and logged
-// at ERROR, since no committer of this domain forms such a record.
+// A COMPACTION IS ANSWERED ONLY FROM ITS OUTPUTS' ROWS: a publish answering
+// applied for a record that wrote no row is answered unknown, never applied
+// (which would hand its builder outputs no row names), and logged at ERROR,
+// since no committer of this domain forms such a record.
 //
 // Mutation: answer applied from the publish's word, and the compaction is
 // applied with no output in the rows.
@@ -599,11 +582,10 @@ func TestACompactionIsAnsweredOnlyFromItsOutputsRows(t *testing.T) {
 }
 
 // A BUSY COMPACTION IS COUNTED APART FROM A BUSY PUSH, and a busy expunge
-// record from both: all meet the same queue and the same node's bounds, and
-// all are refused busy undecided past them — a push's commands each refused, a
-// compaction and an expunge record whole — each counted under its own `kind`,
-// so an operator tells pushes refused for a backlog from a compaction or an
-// expunge that met one.
+// record from both: all meet the same queue and node bounds and are refused
+// busy undecided past them (a push per command, a compaction or expunge
+// whole), each counted under its own `kind` so an operator tells which met the
+// backlog.
 //
 // Mutation: count every busy refusal without its kind, and no series names
 // whose proposal it was.
@@ -677,20 +659,17 @@ func (l *lineLog) lines(msg string) []map[string]any {
 	return out
 }
 
-// THE DUE LISTING IS MOST PACKS FIRST: every active and archived repository
-// holding at least the floor of live packs, the most first and then by id,
-// each with the version its row holds — paged by its cursor, a page's rows in
-// that order across the pages — and never a deleted one, nor one under the
-// floor. THREE REPOSITORIES TIE for the most, so a page of two ends INSIDE
-// the tie, and the next resumes within it: after the cursor's id among the
-// repositories at the cursor's count, then below that count, each listed
-// once.
+// THE DUE LISTING IS MOST PACKS FIRST: every active and archived repository at
+// or over the floor of live packs, most first then by id, with its row's
+// version, in that order across cursor pages; never a deleted one nor one
+// under the floor. THREE TIE for the most, so a page of two ends INSIDE the
+// tie and the next resumes within it: after the cursor's id at the cursor's
+// count, then below it, each listed once.
 //
-// Mutations: order the listing by id, and a repository near the bound waits
-// behind every barely due one; drop or blank the cursor's `id < ?` arm, and
-// the page after the cursor skips the rest of the tie, passed over for a
-// poll however near MaxPacksPerRepo it stands; resume by `id > ?`, and the
-// page lists the tie's first again in place of its rest.
+// Mutations: order by id, and a repository near the bound waits behind every
+// barely due one; drop or blank the cursor's `id < ?` arm, and the page after
+// the cursor skips the rest of the tie, however near MaxPacksPerRepo it
+// stands; resume by `id > ?`, and the page lists the tie's first again.
 func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -774,14 +753,12 @@ func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 	}
 }
 
-// A DUTY LISTING NAMES NO ASKER: the compactor's `compaction_due` read, the
-// publisher's `publication_due` read, and the maintainer's `expunge_due` read
-// and its `expunge_tips` read of a repository's ref drops, and a home's
-// `mirror_push` read of the push mirror and the green rows it publishes, are
-// the engine's own, so the domain refuses each with an asker — the one place
-// every surface a principal reads Gitlet through meets — answers it
-// with none, and still refuses a principal's read that names none; and each
-// takes nothing its listing does not read.
+// A DUTY LISTING NAMES NO ASKER: the compactor's `compaction_due`, the
+// publisher's `publication_due`, the maintainer's `expunge_due` and
+// `expunge_tips`, and a home's `mirror_push` reads are the engine's own, so
+// the domain (where every principal's read surface meets) refuses each with an
+// asker, answers it with none, still refuses a principal's read naming none,
+// and each takes nothing its listing does not read.
 //
 // Mutation: accept an asker on any duty listing, and a principal's read could
 // list every repository's packs past its grant — or the objects a
@@ -890,16 +867,14 @@ func TestADutyListingNamesNoAsker(t *testing.T) {
 }
 
 // A COMPACTION IS CHECKED UNSTORED AS IT WILL BE STORED: ValidateUnstored
-// answers what Validate answers once every output's put has filled in its key
-// and digest — a compaction both take, one writing more outputs than a
-// compaction records both refuse, an output whose sizes lay out no bundle
-// both refuse — so the Gitlet node that built one holds it to every rule its
-// committer will before a byte of it is uploaded (internal/gitlet/compact). An
-// output already stored is refused: Validate is the check of that.
+// answers what Validate answers once every output's put fills in its key and
+// digest (both take a good compaction; both refuse too many outputs or sizes
+// laying out no bundle), so the builder (internal/gitlet/compact) is held to
+// its committer's rules before uploading a byte. An output already stored is
+// refused: Validate checks that.
 //
-// Mutation: hold the outputs to Validate as they stand — no key, no digest —
-// rather than as they will be stored, and the compaction both take is refused
-// unstored.
+// Mutation: hold the outputs to Validate as they stand (no key, no digest),
+// and the compaction both take is refused unstored.
 func TestAnUnstoredCompactionIsCheckedAsItWillBeStored(t *testing.T) {
 	t.Parallel()
 	cid := statelog.NewOpID(time.Now(), "")
@@ -948,12 +923,11 @@ func TestAnUnstoredCompactionIsCheckedAsItWillBeStored(t *testing.T) {
 	}
 }
 
-// A PACK IS FULL AT ITS CUT, SCALED: FullAt at the production cut is Full — a
-// pack section at FullPackBytes, or a bundle at FullBundleBytes — and at a
-// smaller cut both bounds scale by that cut's share of CompactPackBytes, so an
-// output of a suite's cut, built over mebibytes (internal/gitlet/compact's test
-// knob), is full by the rule production's outputs are, and a plan made at that
-// cut never merges it again.
+// A PACK IS FULL AT ITS CUT, SCALED: FullAt at the production cut is Full (a
+// pack section at FullPackBytes or a bundle at FullBundleBytes), and at a smaller
+// cut both bounds scale by its share of CompactPackBytes, so an output of a
+// suite's cut (internal/gitlet/compact's test knob) is full by production's
+// rule and a plan at that cut never merges it again.
 //
 // Mutation: hold FullAt to the production bounds whatever its cut, and no
 // output of a scaled cut is ever full.

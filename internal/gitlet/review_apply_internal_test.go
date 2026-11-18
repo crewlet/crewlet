@@ -32,9 +32,8 @@ func (c *countingTx) QueryRowContext(ctx context.Context, query string, args ...
 	return c.tx.QueryRowContext(ctx, query, args...)
 }
 
-// reviewRaising is a review of change at revision by seat-r asking for
-// changes, raising n blocker findings, each with a title and a body, and
-// carrying carries.
+// reviewRaising is seat-r's request-changes review of change at revision,
+// raising n blocker findings (each titled, with a body) and carrying carries.
 func reviewRaising(change string, revision int64, n int, carries []string) Review {
 	r := Review{RepoID: "repo-a", ChangeID: change, ReviewID: fmt.Sprintf("review-%d", revision),
 		Revision: revision, Verdict: VerdictRequestChanges, By: Principal{Kind: PrincipalAgent, Seat: "seat-r"},
@@ -48,20 +47,17 @@ func reviewRaising(change string, revision int64, n int, carries []string) Revie
 	return r
 }
 
-// reviewApplyStatements is how many statements a review's apply issues
-// whatever it raises and supersedes: its reviewer's standing verdict, the
-// review, its reviewer's standing findings, their supersession, its findings,
-// their texts, its reviewer as a participant and the ask it answers.
+// reviewApplyStatements is what a review's apply issues whatever it raises and
+// supersedes: the reviewer's standing verdict, the review, the reviewer's
+// standing findings, their supersession, its findings, their texts, the
+// reviewer as a participant and the ask it answers.
 const reviewApplyStatements = 8
 
-// THE WIDEST REVIEW APPLIES IN A FIXED NUMBER OF STATEMENTS: a review's
-// findings and their texts are each one collection, written through as few
-// multi-row statements as the engine's bind limit allows, and the findings it
-// supersedes one statement driven from their list — so a review raising
-// MaxFindingsPerReview findings and superseding one, and one raising one and
-// superseding MaxFindingsPerReview, each issue reviewApplyStatements, where a
-// statement a row issued two a finding. This apply runs in the code domain's
-// one applier on every data node, which the pushes queue behind.
+// THE WIDEST REVIEW APPLIES IN A FIXED NUMBER OF STATEMENTS: findings and
+// their texts go in as few multi-row statements as the bind limit allows, and
+// supersession is one statement, so raising MaxFindingsPerReview and
+// superseding one, or the reverse, each issue reviewApplyStatements. The apply
+// runs in the code domain's one applier, which pushes queue behind.
 //
 // Mutation: write the findings, or their texts, a statement a row → the
 // widest review issues 63 more.
@@ -106,15 +102,14 @@ func TestTheWidestReviewAppliesInAFixedNumberOfStatements(t *testing.T) {
 	}
 }
 
-// errRolledBack ends a benchmark's transaction undone, so its next round reads
-// the rows its first did.
+// errRolledBack rolls a benchmark round back, so every round reads the same
+// rows.
 var errRolledBack = errors.New("rolled back")
 
 // BenchmarkTheWidestReview is the widest review's decide and apply in one
-// transaction, rolled back: its reviewer holding MaxStandingFindings standing
-// findings on the change, of which it carries half and supersedes the rest,
-// raising MaxFindingsPerReview more — what MaxStandingFindings's doc reads the
-// cost of its bound from. Run it bounded:
+// rolled-back transaction: the reviewer holds MaxStandingFindings, carries half,
+// supersedes the rest and raises MaxFindingsPerReview more. MaxStandingFindings's
+// doc reads its bound's cost from it. Run it bounded:
 // -run '^$' -bench '^BenchmarkTheWidestReview$' -benchtime 20x -count 1.
 func BenchmarkTheWidestReview(b *testing.B) {
 	e := openApplyEstate(b)

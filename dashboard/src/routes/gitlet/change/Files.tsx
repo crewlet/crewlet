@@ -1,78 +1,101 @@
 /**
- * A change's diff: the files a revision changes, one file's patch drawn by
- * `DiffView` with its code coloured by kind, and every finding and thread on
- * the line it is about.
+ * A change's Files changed tab: every file a revision changes on one page, a
+ * stack of sticky-headed diffs (`../FileStack.tsx`) beside the files' tree in
+ * its own scroller, with what lies on each line drawn under it (`StackNotes.tsx`).
  *
  * # Read by object id, placed by the engine
  *
- * A revision's files, a file's patch and where each finding sits in the
- * revision asked about are the engine's reads of the repository's content
- * (`code_change` parts `files`, `diff` and `findings`): the diff from the base
- * the revision's facts record — or, with `since=`, what changed since an
- * earlier revision — and each finding placed by the engine's one rule
- * (`gitlet.PlaceFindings`), which a seat's own `code_get_change` reads by too.
- * So a seat and a screen are shown one diff and one finding on one line; the
- * page compares and moves nothing itself.
+ * A revision's files, their patches and where each finding sits are the
+ * engine's reads (`code_change` parts `files`, `diff` and `findings`): the
+ * diff from the base the revision's facts record, or with `since=` what
+ * changed since an earlier revision, and each finding placed by the engine's
+ * one rule (`gitlet.PlaceFindings`), which a seat's `code_get_change` reads by
+ * too. The page compares and moves nothing itself.
  *
  * # Outdated is said, never hidden
  *
- * A finding whose own lines changed since it was raised is OUTDATED, and one
- * whose file the revision no longer holds is GONE; a thread on a line of
- * another revision has no line here. Each is drawn above the file's diff
- * under a Disclosure that counts them, never dropped: a reviewer who cannot
- * find what they raised re-raises it. For the same reason a change whose
- * findings or comments run past one page says so above the diff: the pages
- * are oldest first, so what is left off is the newest.
+ * A finding whose own lines changed since it was raised, one whose file is
+ * gone, and a thread on another revision are drawn above their file's diff
+ * under a Disclosure that counts them; findings and comments past one page
+ * are said above the stack, since the pages are oldest first.
  *
  * # A finding is drafted on its lines, and sent with a review
  *
- * On the head revision, pressing a line's number picks it (Shift extends the
- * pick), and the composer drawn under the pick drafts a finding — its weight
- * and subject in the engine's words (`FINDING_SEVERITIES`,
- * `FINDING_CATEGORIES`), a title, a body and, on the newer side, the lines it
- * suggests in their place. A draft is the tab's (`lib/reviewDrafts.ts`) until
- * a review sends every draft of the revision in ONE `code_review_change`.
+ * On the head, pressing a line's number picks it and a finding is drafted
+ * under the pick; a draft is the tab's (`lib/reviewDrafts.ts`) until Finish
+ * review sends every draft of the head in ONE `code_review_change`.
  */
 
-import { useMemo, useState, type ReactNode } from "react";
-import { Button, Disclosure, Input, Select, Skeleton, Stack, Tag, Textarea } from "@crewlethq/ui";
-import { useDraftBox } from "~/app/assistant/boxes.ts";
-import { useDraftState } from "~/app/assistant/draft.ts";
+import { useCallback, useMemo, useRef, useState } from "react";
+import {
+  Button,
+  Checkbox,
+  Combobox,
+  IconButton,
+  Input,
+  Kbd,
+  Popover,
+  SegmentedControl,
+  Select,
+  Skeleton,
+  Stack,
+  useToast,
+  type ComboboxOption,
+} from "@crewlethq/ui";
+import {
+  Columns2Glyph,
+  FlagGlyph,
+  ListFilterGlyph,
+  PanelLeftGlyph,
+  PencilGlyph,
+  Rows2Glyph,
+  SearchGlyph,
+  Settings2Glyph,
+} from "@crewlethq/icons/glyphs";
+import { capsOf, keyRow, useKeymap } from "~/app/keymap.ts";
 import { useParam } from "~/app/router.tsx";
-import { DiffView, type DiffLine } from "~/components/DiffView.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
-import { CATEGORY_CHOICES, SEVERITY_CHOICES, changeLive, severityWord } from "~/lib/code.ts";
-import { renderMarkdown } from "~/lib/markdown.ts";
-import { lineSide } from "~/lib/patch.ts";
-import { usePatchPages } from "~/lib/patchPages.ts";
-import { useReviewDrafts, type DraftFinding, type ReviewDrafts } from "~/lib/reviewDrafts.ts";
+import { changeLive, refName, shortOID } from "~/lib/code.ts";
+import { fmtCount, plural } from "~/lib/format.ts";
+import { useReviewDrafts } from "~/lib/reviewDrafts.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
+import { spellPosition } from "~/protocol/session.ts";
 import { usePaged } from "~/lib/usePaged.ts";
-import { useDiffTokens } from "../syntax.tsx";
 import type {
   CodeChangeAnswer,
   CodeChangeDetail,
-  CodeCommentRow,
   CodeDiffFile,
-  CodeFindingPlace,
-  CodeFindingRow,
   CodeRevisionRow,
 } from "~/protocol/index.ts";
-import { plural } from "~/lib/format.ts";
-import { DiffCounts, DiffHead, FileTree } from "../FileTree.tsx";
-import { PatchPager } from "../PatchPager.tsx";
-import { repoHref } from "../paths.ts";
-import { Thread } from "./Conversation.tsx";
-import { FindingCard } from "./Finding.tsx";
+import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import { type FileBadges } from "../FileTree.tsx";
+import { FIND_LIMIT, Matched } from "../repo/GoToFile.tsx";
+import {
+  FileStack,
+  fileKey,
+  matchPath,
+  type StackHeadSlot,
+  type StackJump,
+  type StackSource,
+} from "../FileStack.tsx";
+import { FilesPane, TREE_BESIDE_FROM, useFileArrival } from "../FilesPane.tsx";
+import { changeHref } from "../paths.ts";
+import { ChangeLines, StackNotesContext } from "./StackNotes.tsx";
+import { findingStands } from "./FindingAnswer.tsx";
+import { FinishReview } from "./ReviewDialog.tsx";
 import {
   changePartParams,
   partMovedBy,
   revisionInputs,
   useAskAgainWhenMoved,
+  partRefusal,
+  refusedWords,
   usePagedComments,
+  usePagedFindingPaths,
   usePagedFindings,
 } from "./reads.ts";
-import { PageToolbar } from "~/app/frame/PageToolbar.tsx";
+import { useViewedMarks, ViewedMarksContext, ViewedProgress, ViewedToggle } from "./Viewed.tsx";
 import "~/styles/gitlet.css";
 
 /** A whole number from 1 off the address, or null. */
@@ -82,31 +105,26 @@ function wholeParam(value: string): number | null {
   return Number.isSafeInteger(n) ? n : null;
 }
 
-/** The lines a reviewer has picked: one side's run, from its first line to its last. */
-interface Pick {
-  side: "old" | "new";
-  start: number;
-  end: number;
+/** A file's extension, "" where its name has none. */
+function extOf(path: string): string {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot + 1) : "";
 }
 
-/** A line's number on one side of the diff: its newer one, or its older on a line the newer lacks. */
-function numberOn(line: DiffLine, side: "old" | "new"): number | null {
-  if (side === "new") return line.after;
-  return line.kind === "add" ? null : line.before;
-}
+/** A list in the address: "a,b" as its items, none for "". */
+const listParam = (value: string): string[] => (value ? value.split(",").filter(Boolean) : []);
 
-// A PAGE OF A REVISION'S FILES, as `usePaged` reads it: its files, each by its
-// path (base64 where git cannot spell it as text), and the cursor to the next.
-// MODULE CONSTANTS, so the list is the same list until a page arrives.
+/** An extension as `ext=` writes it: "." for none, which no extension can be, and commas escaped. */
+const extToken = (ext: string): string =>
+  ext === "" ? "." : ext.replace(/%/g, "%25").replace(/,/g, "%2C");
+const tokenExt = (token: string): string =>
+  token === "." ? "" : token.replace(/%2C/gi, ",").replace(/%25/g, "%");
+
+// A PAGE OF A REVISION'S FILES, as `usePaged` reads it. MODULE CONSTANTS, so
+// the list is the same list until a page arrives.
 const filesOf = (a: CodeChangeAnswer): readonly CodeDiffFile[] => a.diff?.files ?? [];
-const fileId = (f: CodeDiffFile): string => f.path_b64 ?? f.path;
 const nextOf = (a: CodeChangeAnswer): string => a.next ?? "";
-
-/** One finding as its revision places it: raised here, moved, outdated or gone. */
-interface Placed {
-  finding: CodeFindingRow;
-  place: CodeFindingPlace | undefined;
-}
 
 export function Files({
   change,
@@ -121,10 +139,12 @@ export function Files({
   const [fileParam, setFile] = useParam("file", "", "filter");
   const [layout, setLayout] = useParam("layout", "unified", "filter");
   const [thread] = useParam("thread", "", "filter");
+  const [q, setQ] = useParam("q", "", "filter");
+  const [extParam, setExt] = useParam("ext", "", "filter");
+  const [onlyParam, setOnly] = useParam("only", "", "filter");
   const comments = usePagedComments(change);
   const threadRoot = comments.items.find((c) => c.id === thread && c.anchor);
-  // A THREAD NAMED BY THE ADDRESS opens the file and the revision it is on,
-  // where the address names neither.
+  // A THREAD NAMED BY THE ADDRESS opens the revision and the file it is on.
   const rev = Math.min(
     wholeParam(revParam) ?? threadRoot?.anchor?.revision ?? change.revision,
     change.revision,
@@ -132,15 +152,10 @@ export function Files({
   const sinceAsked = wholeParam(sinceParam);
   const since = sinceAsked !== null && sinceAsked < rev ? sinceAsked : null;
   const file = fileParam || threadRoot?.anchor?.path || "";
-  // THE DIFF IS ASKED AGAIN ONLY WHEN WHAT IT IS READ FROM MOVES: the
-  // revisions' heads and the bases their facts record (reads.ts).
+  // THE DIFF IS ASKED AGAIN ONLY WHEN WHAT IT IS READ FROM MOVES (reads.ts).
   const diffMoved = `${change.version}/${revisionInputs(rows, rev)}/${
     since !== null ? revisionInputs(rows, since) : ""
   }`;
-  // THE REVISION'S FILES, EVERY PAGE THE READER ASKS FOR: a revision of a
-  // large change lists past one answer (a few hundred files a page), and each
-  // later page is the `files` part's own question from the cursor the page
-  // before ended at, joined to it (`lib/usePaged.ts`).
   const filesParams = useMemo(
     () =>
       changePartParams({ repo: change.repo, number: change.number }, "files", {
@@ -155,519 +170,655 @@ export function Files({
     filesParams,
     (cursor) => codeRest.query("code_change", { ...filesParams, cursor }),
     filesOf,
-    fileId,
+    fileKey,
     nextOf,
   );
-  // Every page the reader holds is asked again: a moved input is a new listing.
   useAskAgainWhenMoved(diffMoved, true, pagedFiles.refresh);
   const findings = usePagedFindings(
     change,
     rev,
     `${partMovedBy(change, "findings")}/${revisionInputs(rows, rev)}`,
   );
-  // WHERE EACH FINDING SITS ON THE REVISION READ, from every page loaded: each
-  // page places its own findings.
   const placed = useMemo(
     () => Object.assign({}, ...findings.answers.map((a) => a.placed ?? {})),
     [findings.answers],
   );
   // THE NEXT PAGE OF EACH PART THAT HAS ONE, at one press: a line's findings
-  // and its threads are drawn together, so one read further than the other
-  // would leave a line half drawn.
+  // and its threads are drawn together.
   const loadMoreSaid = () => {
     if (findings.more) findings.next();
     if (comments.more) comments.next();
   };
   const pagingSaid = findings.paging || comments.paging;
-  // A PAGE THAT FAILED is said beside the press that asks it again.
   const saidPageError = findings.pageError ?? comments.pageError;
-  // A FINDING IS DRAFTED ON THE HEAD, read whole: the lines a review of the
-  // head judges, never an interdiff's or an earlier revision's.
-  const drafting = rev === change.revision && since === null && changeLive(change.state);
-  const drafts = useReviewDrafts(change.id, rev);
+  // A FINDING IS DRAFTED ON THE HEAD, read whole: never an interdiff's or an earlier revision's.
+  const live = changeLive(change.state);
+  const drafting = rev === change.revision && since === null && live;
+  const drafts = useReviewDrafts(change.id, change.revision);
+  // WHAT LIES ON THE LINES, one object until it moves: each section is drawn
+  // again only when what it shows does.
+  const { drafts: drafted, add, remove, update, clear } = drafts;
+  const notesOf = useMemo(
+    () => ({
+      change,
+      rev,
+      since,
+      notes: {
+        findings: findings.items,
+        placed,
+        comments: comments.items,
+        drafts: drafting ? { drafts: drafted, add, remove, update, clear } : null,
+        thread,
+      },
+    }),
+    [
+      change,
+      rev,
+      since,
+      findings.items,
+      placed,
+      comments.items,
+      drafting,
+      drafted,
+      add,
+      remove,
+      update,
+      clear,
+      thread,
+    ],
+  );
   const listed = pagedFiles.items;
-  // THE FIRST FILE, where the address names none, as a commit and a
-  // comparison open: a diff is read for its changes.
-  const shown = file || listed[0]?.path || "";
-  const revisions = Array.from({ length: change.revision }, (_, i) => change.revision - i);
-  return (
-    <Stack gap={3}>
-      <PageToolbar>
-        <Select
-          size="sm"
-          width="auto"
-          value={String(rev)}
-          onChange={(value) =>
-            setRev(String(value) === String(change.revision) ? "" : String(value))
-          }
-          options={revisions.map((n) => ({
-            value: String(n),
-            label: n === change.revision ? `Revision ${n} (head)` : `Revision ${n}`,
-          }))}
-          ariaLabel="Revision"
-        />
-        <Select
-          size="sm"
-          width="auto"
-          value={since === null ? "" : String(since)}
-          onChange={(value) => setSince(String(value))}
-          options={[
-            { value: "", label: "Since its base" },
-            ...revisions
-              .filter((n) => n < rev)
-              .map((n) => ({ value: String(n), label: `Since revision ${n}` })),
-          ]}
-          ariaLabel="Compared with"
-          active={since !== null}
-        />
-        <Select
-          size="sm"
-          width="auto"
-          value={layout}
-          onChange={(value) => setLayout(String(value))}
-          options={[
-            { value: "unified", label: "Unified" },
-            { value: "split", label: "Side by side" },
-          ]}
-          ariaLabel="Layout"
-        />
-        {drafts.drafts.length > 0 && (
-          <Tag appearance="outline">
-            {drafts.drafts.length} drafted finding{drafts.drafts.length === 1 ? "" : "s"}
-          </Tag>
-        )}
-      </PageToolbar>
-      {(findings.more || comments.more) && (
-        <Button
-          variant="secondary"
-          onClick={loadMoreSaid}
-          disabled={pagingSaid}
-          loading={pagingSaid}
-        >
-          Load more findings and comments
-        </Button>
-      )}
-      {saidPageError && <PageFailed error={saidPageError} />}
-      {files.loading && !files.data && (
-        <Skeleton variant="text" rows={4} label="Loading the files" />
-      )}
-      <QueryState
-        error={files.error}
-        refusal={files.refusal}
-        detail={files.detail}
-        loading={files.loading && !files.data}
-        empty={
-          files.data && listed.length === 0 && !pagedFiles.more
-            ? {
-                title: "No file changed",
-                hint: "This revision changes nothing against what it is compared with.",
-              }
-            : undefined
-        }
-      >
-        <div className="code-files">
-          <Stack gap={2}>
-            {files.data?.diff && (
-              <p className="code-files__totals">
-                {`${plural(files.data.diff.total, "file")} changed, `}
-                <DiffCounts added={files.data.diff.added} deleted={files.data.diff.deleted} />
-              </p>
-            )}
-            <FileTree files={listed} current={shown} onOpen={(f) => setFile(f.path)} />
-            {pagedFiles.more && (
-              <span>
-                <Button
-                  size="small"
-                  variant="secondary"
-                  onClick={pagedFiles.next}
-                  disabled={pagedFiles.paging}
-                  loading={pagedFiles.paging}
-                >
-                  Load more files
-                </Button>
-              </span>
-            )}
-            {pagedFiles.pageError && <PageFailed error={pagedFiles.pageError} />}
-          </Stack>
-          {shown ? (
-            <FileDiff
-              change={change}
-              head={
-                rows.find((r) => r.n === rev)?.head ?? (rev === change.revision ? change.head : "")
-              }
-              rev={rev}
-              since={since}
-              path={shown}
-              entry={listed.find((f) => f.path === shown)}
-              layout={layout === "split" ? "split" : "unified"}
-              findings={findings.items}
-              placed={placed}
-              comments={comments.items}
-              drafts={drafting ? drafts : null}
-              thread={thread}
-              moved={diffMoved}
-            />
-          ) : (
-            <p className="muted">Choose a file to read its changes.</p>
+  // THE READER'S VIEWED FILES, marked at the position the listing was read at: a viewed file is folded.
+  const position = files.data?.position;
+  const marks = useViewedMarks({
+    change,
+    listed,
+    seen: position ? spellPosition(position) : "",
+  });
+  // THE TOGGLE READS THE MARKS from context, so its control and each head stay put across reads.
+  const viewedControl = useCallback((f: CodeDiffFile) => <ViewedToggle file={f} />, []);
+  const headSlot = useMemo<StackHeadSlot>(
+    () => ({
+      control: viewedControl,
+      foldedByHost: (f) => !f.path_b64 && marks.viewed.has(f.path),
+    }),
+    [viewedControl, marks.viewed],
+  );
+  // WHAT THE FILTERS KEEP: the words a path holds, the extensions shown, and
+  // the files with a standing finding.
+  const findingPaths = usePagedFindingPaths(change);
+  const standing = useMemo(() => {
+    const at = new Map<string, number>();
+    for (const row of findingPaths.items) {
+      if (findingStands(row.state)) at.set(row.path, (at.get(row.path) ?? 0) + row.findings);
+    }
+    return at;
+  }, [findingPaths.items]);
+  const pathsRefused = partRefusal(findingPaths);
+  // WITH FINDINGS IS HELD until every page of the counts is read: a partial
+  // count would hide files without saying so.
+  const pathsRead =
+    pathsRefused === null && !findingPaths.loading && !findingPaths.more && !findingPaths.error;
+  const exts = useMemo(() => {
+    const at = new Map<string, number>();
+    for (const f of listed) at.set(extOf(f.path), (at.get(extOf(f.path)) ?? 0) + 1);
+    return at;
+  }, [listed]);
+  const shownExts = listParam(extParam).map(tokenExt);
+  const only = listParam(onlyParam);
+  const byFindings = only.includes("findings") && pathsRead;
+  // UNVIEWED IS HELD until every mark is read: a partial read would keep a viewed file.
+  const byUnviewed = only.includes("unviewed") && marks.read === "read";
+  const unviewedHeld =
+    typeof marks.read === "object"
+      ? marks.read.refused
+      : marks.read === "reading"
+        ? "Still reading your viewed files."
+        : undefined;
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const keeps = (f: CodeDiffFile) =>
+    words.every((w) => f.path.toLowerCase().includes(w)) &&
+    (shownExts.length === 0 || shownExts.includes(extOf(f.path))) &&
+    (!byFindings || standing.has(f.path)) &&
+    (!byUnviewed || !marks.viewed.has(f.path) || Boolean(f.path_b64));
+  const filtering = words.length > 0 || shownExts.length > 0 || byFindings || byUnviewed;
+  const visible = filtering ? listed.filter(keeps) : listed;
+  const clearFilters = () => {
+    setQ("");
+    setExt("");
+    setOnly("");
+  };
+  const indexOf = useMemo(() => {
+    const at = new Map(listed.map((f, i) => [fileKey(f), i]));
+    return (f: CodeDiffFile) => at.get(fileKey(f)) ?? -1;
+  }, [listed]);
+  // THE TREE BESIDE THE STACK on a wide page; on a narrow one, once asked for.
+  const box = useRef<HTMLDivElement>(null);
+  const narrow = useNarrowerThan(box, TREE_BESIDE_FROM);
+  const [treeChoice, setTreeChoice] = useState<boolean | null>(null);
+  const treeShown = treeChoice ?? !narrow;
+  const [current, setCurrent] = useState("");
+  const [jump, setJump] = useState<StackJump | null>(null);
+  const toast = useToast();
+  const go = useCallback(
+    (f: CodeDiffFile) => {
+      // A FILE A FILTER HIDES is shown by clearing the filters first.
+      if (!visible.includes(f)) {
+        setQ("");
+        setExt("");
+        setOnly("");
+        toast.ok(`Filters cleared to show ${f.path}`);
+      }
+      if (!f.path_b64) setFile(f.path);
+      setCurrent(f.path);
+      setJump((was) => ({ key: fileKey(f), seq: (was?.seq ?? 0) + 1 }));
+    },
+    [setFile, visible, setQ, setExt, setOnly, toast],
+  );
+  // THE FILE THE ADDRESS NAMES, once it is listed: the stack opens at it.
+  const source = useMemo<StackSource>(
+    () => ({ kind: "change", change: { repo: change.repo, number: change.number }, rev, since }),
+    [change.repo, change.number, rev, since],
+  );
+  const onArrive = useCallback((f: CodeDiffFile) => {
+    setCurrent(f.path);
+    setJump({ key: fileKey(f), seq: 1 });
+  }, []);
+  const { unchanged } = useFileArrival({
+    source,
+    file,
+    listed,
+    loaded: files.data !== undefined,
+    more: pagedFiles.more,
+    paging: pagedFiles.paging,
+    pageError: pagedFiles.pageError,
+    next: pagedFiles.next,
+    onArrive,
+  });
+  const linkOf = useCallback(
+    (f: CodeDiffFile) =>
+      changeHref(change.repo, change.number, {
+        tab: "files",
+        ...(rev !== change.revision ? { rev } : {}),
+        file: f.path,
+      }),
+    [change.repo, change.number, change.revision, rev],
+  );
+  const draftsOn = new Map<string, number>();
+  if (drafting)
+    for (const d of drafts.drafts) draftsOn.set(d.path, (draftsOn.get(d.path) ?? 0) + 1);
+  const badges = (f: CodeDiffFile): FileBadges | null => {
+    const found = standing.get(f.path) ?? 0;
+    const mine = draftsOn.get(f.path) ?? 0;
+    if (found + mine === 0) return null;
+    return {
+      node: (
+        <>
+          {found > 0 && (
+            <span
+              className="code-ftree__badge"
+              title={`${plural(found, "open finding")} raised on this path`}
+            >
+              <FlagGlyph size="xs" aria-hidden="true" />
+              {found}
+            </span>
           )}
-        </div>
-      </QueryState>
-    </Stack>
+          {mine > 0 && (
+            <span
+              className="code-ftree__badge"
+              title={`${plural(mine, "draft")} of yours on this file`}
+            >
+              <PencilGlyph size="xs" aria-hidden="true" />
+              {mine}
+            </span>
+          )}
+        </>
+      ),
+      words: [found > 0 && plural(found, "open finding"), mine > 0 && plural(mine, "draft")]
+        .filter(Boolean)
+        .join(", "),
+    };
+  };
+  const openFindings = [...standing.values()].reduce((n, k) => n + k, 0);
+  const showing = filtering && (
+    <p className="code-files__showing">
+      {visible.length === 0
+        ? "No file matches these filters."
+        : pagedFiles.more
+          ? `Showing ${fmtCount(visible.length)} of the ${plural(listed.length, "file")} loaded`
+          : `Showing ${fmtCount(visible.length)} of ${plural(listed.length, "file")}`}{" "}
+      <Button size="small" variant="ghost" onClick={clearFilters}>
+        Clear filters
+      </Button>
+    </p>
+  );
+  const head = rows.find((r) => r.n === rev)?.head ?? (rev === change.revision ? change.head : "");
+  const revisions = Array.from({ length: change.revision }, (_, i) => change.revision - i);
+  const target = refName(change.target_ref).name;
+  const loadMoreFiles = pagedFiles.more && (
+    <Button
+      size="small"
+      variant="secondary"
+      onClick={pagedFiles.next}
+      disabled={pagedFiles.paging}
+      loading={pagedFiles.paging}
+    >
+      Load more files
+    </Button>
+  );
+  return (
+    <div ref={box}>
+      <Stack gap={3}>
+        <PageToolbar className="code-files-bar">
+          <IconButton
+            label={treeShown ? "Hide the file tree" : "Show the file tree"}
+            icon={<PanelLeftGlyph />}
+            size="sm"
+            variant="ghost"
+            aria-pressed={treeShown}
+            onClick={() => setTreeChoice(!treeShown)}
+          />
+          <Select
+            size="sm"
+            width="auto"
+            value={String(rev)}
+            onChange={(value) =>
+              setRev(String(value) === String(change.revision) ? "" : String(value))
+            }
+            options={revisions.map((n) => ({
+              value: String(n),
+              label: n === change.revision ? `Revision ${n} · head` : `Revision ${n}`,
+            }))}
+            ariaLabel="Revision"
+          />
+          <span className="code-files-bar__words">compared with</span>
+          <Select
+            size="sm"
+            width="auto"
+            value={since === null ? "" : String(since)}
+            onChange={(value) => setSince(String(value))}
+            options={[
+              { value: "", label: `${target} · base` },
+              ...revisions
+                .filter((n) => n < rev)
+                .map((n) => ({ value: String(n), label: `Revision ${n}` })),
+            ]}
+            ariaLabel="Compared with"
+            active={since !== null}
+          />
+          <GoToChanged files={listed} onGo={go} />
+          {live && marks.read === "read" && listed.length > 0 && (
+            <ViewedProgress
+              viewed={marks.viewed.size}
+              listed={listed.length}
+              changed={files.data?.diff?.total}
+              more={pagedFiles.more}
+            />
+          )}
+          <span className="code-files-bar__end">
+            <span className="code-files-bar__layout">
+              <SegmentedControl
+                label="Layout"
+                semantics="radio"
+                size="sm"
+                value={layout === "split" ? "split" : "unified"}
+                onValueChange={(value) => setLayout(value)}
+                options={[
+                  { value: "unified", label: "Unified", icon: <Rows2Glyph size="sm" /> },
+                  { value: "split", label: "Split", icon: <Columns2Glyph size="sm" /> },
+                ]}
+              />
+            </span>
+            {live && <FinishReview change={change} drafts={drafts.drafts.length} />}
+          </span>
+        </PageToolbar>
+        {(findings.more || comments.more) && (
+          <Button
+            variant="secondary"
+            onClick={loadMoreSaid}
+            disabled={pagingSaid}
+            loading={pagingSaid}
+          >
+            Load more findings and comments
+          </Button>
+        )}
+        {saidPageError && <PageFailed error={saidPageError} />}
+        {files.loading && !files.data && (
+          <Skeleton variant="text" rows={4} label="Loading the files" />
+        )}
+        <QueryState
+          error={files.error}
+          refusal={files.refusal}
+          detail={files.detail}
+          loading={files.loading && !files.data}
+          empty={
+            files.data && listed.length === 0 && !pagedFiles.more
+              ? {
+                  title: "No file changed",
+                  hint: "This revision changes nothing against what it is compared with.",
+                }
+              : undefined
+          }
+        >
+          <div className="code-files" data-tree={treeShown ? "shown" : "hidden"}>
+            {treeShown && (
+              <FilesPane
+                files={visible}
+                current={current || file}
+                onOpen={go}
+                badges={badges}
+                label={`Files changed in revision ${rev}`}
+                head={
+                  <div className="code-files__filter">
+                    <Input
+                      inputSize="sm"
+                      aria-label="Filter files"
+                      placeholder="Filter files"
+                      leading={<ListFilterGlyph size="sm" />}
+                      value={q}
+                      onChange={(event) => setQ(event.target.value)}
+                      containerClassName="code-files__words"
+                    />
+                    <FilterOptions
+                      exts={exts}
+                      shown={shownExts}
+                      onExts={(next) =>
+                        setExt(next.length === exts.size ? "" : next.map(extToken).join(","))
+                      }
+                      only={only}
+                      onOnly={(next) => setOnly(next.join(","))}
+                      withFindings={listed.filter((f) => standing.has(f.path)).length}
+                      unviewed={listed.length - marks.viewed.size}
+                      unviewedHeld={unviewedHeld}
+                      findingsHeld={
+                        pathsRefused !== null
+                          ? refusedWords("Findings by file are unavailable", pathsRefused)
+                          : !pathsRead
+                            ? "Findings by file are still being read."
+                            : undefined
+                      }
+                      narrowing={filtering}
+                      onClear={clearFilters}
+                    />
+                  </div>
+                }
+                foot={
+                  <>
+                    <ComparedWith
+                      change={change}
+                      rows={rows}
+                      rev={rev}
+                      since={since}
+                      target={target}
+                    />
+                    {pathsRefused !== null ? (
+                      <p className="code-tree__said">
+                        Findings by file are unavailable on this fleet yet.
+                      </p>
+                    ) : (
+                      (openFindings > 0 || drafts.drafts.length > 0) && (
+                        <p className="code-tree__said code-files__counts">
+                          {openFindings > 0 && (
+                            <span>
+                              <FlagGlyph size="xs" aria-hidden="true" />
+                              {plural(openFindings, "open finding")}
+                            </span>
+                          )}
+                          {openFindings > 0 && drafts.drafts.length > 0 && " · "}
+                          {drafts.drafts.length > 0 && (
+                            <span>
+                              <PencilGlyph size="xs" aria-hidden="true" />
+                              {`your ${plural(drafts.drafts.length, "draft")}${drafting ? "" : ` on revision ${change.revision}`}`}
+                            </span>
+                          )}
+                        </p>
+                      )
+                    )}
+                    {showing}
+                  </>
+                }
+              >
+                {loadMoreFiles && <span>{loadMoreFiles}</span>}
+                {pagedFiles.pageError && <PageFailed error={pagedFiles.pageError} />}
+              </FilesPane>
+            )}
+            <ViewedMarksContext.Provider value={marks}>
+              <StackNotesContext.Provider value={notesOf}>
+                <FileStack
+                  source={source}
+                  repo={change.repo}
+                  head={head}
+                  moved={diffMoved}
+                  files={visible}
+                  lead={
+                    <>
+                      {unchanged && (
+                        <p className="muted" role="status">
+                          {since !== null
+                            ? `${file} is not among the files changed since revision ${since}.`
+                            : `${file} is not among the files revision ${rev} changes.`}
+                        </p>
+                      )}
+                      {showing}
+                    </>
+                  }
+                  indexOf={indexOf}
+                  layout={layout === "split" ? "split" : "unified"}
+                  linkOf={linkOf}
+                  lines={ChangeLines}
+                  jump={jump}
+                  onCurrent={setCurrent}
+                  foot={loadMoreFiles && <span>{loadMoreFiles}</span>}
+                  headSlot={headSlot}
+                />
+              </StackNotesContext.Provider>
+            </ViewedMarksContext.Provider>
+          </div>
+        </QueryState>
+      </Stack>
+    </div>
   );
 }
 
-/** One file's patch, with what is anchored to its lines drawn under them. */
-function FileDiff({
+/** "Compared with main at c71d0e9", or the revision a comparison reads since. */
+function ComparedWith({
   change,
-  head,
+  rows,
   rev,
   since,
-  path,
-  entry,
-  layout,
-  findings,
-  placed,
-  comments,
-  drafts,
-  thread,
-  moved,
+  target,
 }: {
   change: CodeChangeDetail;
-  /** The revision's head, whole: where the file itself is read, or none where it is not known. */
-  head: string;
+  rows: readonly CodeRevisionRow[];
   rev: number;
   since: number | null;
-  path: string;
-  entry: CodeDiffFile | undefined;
-  layout: "unified" | "split";
-  findings: readonly CodeFindingRow[];
-  placed: Readonly<Record<string, CodeFindingPlace>>;
-  comments: readonly CodeCommentRow[];
-  drafts: ReviewDrafts | null;
-  thread: string;
-  /** What the patch is read from, as `Files` keys it. */
-  moved: string;
+  target: string;
 }) {
-  const params = useMemo(
-    // THE CHANGE BY ITS NAME: a new detail of the same change is the same
-    // question.
-    () =>
-      changePartParams({ repo: change.repo, number: change.number }, "diff", {
-        revision: rev,
-        file: path,
-        ...(since !== null ? { since_revision: since } : {}),
-      }),
-    [change.repo, change.number, rev, path, since],
-  );
-  const patch = useCodeQuery("code_change", params, { enabled: !entry?.binary });
-  // EVERY PAGE OF THE PATCH the reader asks for, each its part's own question
-  // from the cursor the page before it ended at (`lib/patchPages.ts`).
-  const { paged, hunks, file } = usePatchPages(patch, params, (cursor) =>
-    codeRest.query("code_change", { ...params, cursor }),
-  );
-  // Every page held is asked again when what the patch is read from moves.
-  useAskAgainWhenMoved(moved, !entry?.binary, paged.refresh);
-  // A FILE PAST THE LISTING'S PAGES READ is coloured from its patch's own entry.
-  const tokens = useDiffTokens({ repo: change.repo, file: entry ?? file, hunks });
-  const [pick, setPick] = useState<Pick | null>(null);
-  const ofFile: Placed[] = findings
-    .filter((f) => f.path === path)
-    .map((f) => ({ finding: f, place: placed[f.id] }));
-  const placedHere = ofFile.filter((p) => p.place && !p.place.outdated && !p.place.gone);
-  const outdated = ofFile.filter((p) => !p.place || p.place.outdated || p.place.gone);
-  const threads = threadsOf(comments).filter((t) => t.root.anchor?.path === path);
-  const threadsHere = threads.filter((t) => t.root.anchor?.revision === rev);
-  const threadsElsewhere = threads.filter((t) => t.root.anchor?.revision !== rev);
-  const repliesTo = (finding: string) => comments.filter((c) => c.finding_id === finding);
-
-  const notes = (line: DiffLine) => {
-    const drawn: ReactNode[] = [];
-    for (const side of ["new", "old"] as const) {
-      const n = numberOn(line, side);
-      if (n === null) continue;
-      for (const p of placedHere) {
-        if (p.finding.side === side && (p.place?.end ?? p.place?.start) === n) {
-          drawn.push(
-            <FindingCard
-              key={p.finding.id}
-              change={change}
-              finding={p.finding}
-              place={p.place}
-              replies={repliesTo(p.finding.id)}
-              applicable={rev === change.revision && since === null}
-              where="line"
-            />,
-          );
-        }
-      }
-      for (const t of threadsHere) {
-        if (t.root.anchor?.side === side && t.root.anchor.line === n) {
-          drawn.push(
-            <div key={t.root.id} data-current={t.root.id === thread || undefined}>
-              <Thread root={t.root} replies={t.replies} change={change} />
-            </div>,
-          );
-        }
-      }
-      for (const d of drafts?.drafts ?? []) {
-        if (d.path === path && d.side === side && d.line_end === n) {
-          drawn.push(<DraftNote key={d.id} draft={d} remove={() => drafts!.remove(d.id)} />);
-        }
-      }
-      if (drafts && pick && pick.side === side && pick.end === n) {
-        drawn.push(
-          <FindingComposer
-            key="composer"
-            pick={pick}
-            onAdd={(draft) => {
-              drafts.add({
-                ...draft,
-                path,
-                side: pick.side,
-                line_start: pick.start,
-                line_end: pick.end,
-              });
-              setPick(null);
-            }}
-            onCancel={() => setPick(null)}
-          />,
-        );
-      }
-    }
-    return drawn.length > 0 ? <>{drawn}</> : null;
-  };
-
-  return (
-    <section aria-label={`Changes to ${path}`} className="code-file">
-      <DiffHead
-        path={path}
-        file={entry}
-        viewHref={head ? repoHref(change.repo, { ref: head, path }) : undefined}
-      />
-      {(outdated.length > 0 || threadsElsewhere.length > 0) && (
-        <Disclosure title={`${outdated.length + threadsElsewhere.length} outdated on this file`}>
-          <Stack gap={2}>
-            {outdated.map((p) => (
-              <FindingCard
-                key={p.finding.id}
-                change={change}
-                finding={p.finding}
-                place={p.place}
-                replies={repliesTo(p.finding.id)}
-                applicable={false}
-                where="line"
-              />
-            ))}
-            {threadsElsewhere.map((t) => (
-              <Thread key={t.root.id} root={t.root} replies={t.replies} change={change} />
-            ))}
-          </Stack>
-        </Disclosure>
-      )}
-      {entry?.binary ? (
-        <p className="muted">A binary file: git draws no lines of it.</p>
-      ) : patch.loading && !patch.data ? (
-        <Skeleton variant="text" rows={8} label="Loading the patch" />
-      ) : patch.error ? (
-        <QueryState
-          error={patch.error}
-          refusal={patch.refusal}
-          detail={patch.detail}
-          loading={false}
-        >
-          {null}
-        </QueryState>
-      ) : (
-        <>
-          <DiffView
-            tokens={tokens}
-            hunks={hunks}
-            layout={layout}
-            aria-label={`Changes to ${path}`}
-            notes={notes}
-            onPick={
-              drafts
-                ? (line, extend) => {
-                    const at = lineSide(line);
-                    if (!at) return;
-                    setPick((was) =>
-                      extend && was && was.side === at.side
-                        ? {
-                            side: at.side,
-                            start: Math.min(was.start, at.n),
-                            end: Math.max(was.end, at.n),
-                          }
-                        : { side: at.side, start: at.n, end: at.n },
-                    );
-                  }
-                : undefined
-            }
-            picked={(line) => {
-              if (!pick) return false;
-              const n = numberOn(line, pick.side);
-              return n !== null && n >= pick.start && n <= pick.end;
-            }}
-          />
-          <PatchPager paged={paged} />
-        </>
-      )}
-    </section>
-  );
-}
-
-/** A change's threads on lines, each by its first comment with its replies. */
-function threadsOf(comments: readonly CodeCommentRow[]) {
-  const threads = new Map<string, { root: CodeCommentRow; replies: CodeCommentRow[] }>();
-  for (const c of comments) {
-    if (c.finding_id) continue;
-    if (!c.parent_id) threads.set(c.id, { root: c, replies: [] });
-    else threads.get(c.parent_id)?.replies.push(c);
-  }
-  return [...threads.values()].filter((t) => t.root.anchor);
-}
-
-/** A drafted finding, marked as one, with the press that drops it. */
-function DraftNote({ draft, remove }: { draft: DraftFinding; remove: () => void }) {
-  return (
-    <article className="code-finding" aria-label={`Drafted finding: ${draft.title}`}>
-      <p className="row gap-1 wrap">
-        <Tag size="sm" appearance="outline">
-          Draft
-        </Tag>
-        <Tag size="sm" variant={draft.severity === "blocker" ? "danger" : "neutral"}>
-          {severityWord(draft.severity)}
-        </Tag>
-        <strong>{draft.title}</strong>
-        <Button size="small" variant="ghost" onClick={remove}>
-          Drop
-        </Button>
+  if (since !== null) {
+    const was = rows.find((r) => r.n === since)?.head;
+    return (
+      <p className="code-tree__said">
+        Compared with <strong>revision {since}</strong>
+        {was && (
+          <>
+            {" "}
+            at <code>{shortOID(was)}</code>
+          </>
+        )}
       </p>
-      {draft.body && <div className="prose md">{renderMarkdown(draft.body)}</div>}
-    </article>
+    );
+  }
+  const base = rows.find((r) => r.n === rev)?.facts?.base_oid;
+  if (!base) {
+    return <p className="code-tree__said">Compared with its base once it is recorded</p>;
+  }
+  return (
+    <p className="code-tree__said">
+      Compared with <strong>{change.target_ref ? target : "its base"}</strong> at{" "}
+      <code>{shortOID(base)}</code>
+    </p>
   );
 }
 
-/**
- * The composer under a pick: a finding drafted on the picked lines. It writes
- * nothing to the engine — a draft is the tab's until a review sends it.
- */
-function FindingComposer({
-  pick,
-  onAdd,
-  onCancel,
+/** Go to file over a diff's own listed files: `t` focuses it, a choice brings its head to the top. */
+function GoToChanged({
+  files,
+  onGo,
 }: {
-  pick: Pick;
-  onAdd: (draft: Omit<DraftFinding, "id" | "path" | "side" | "line_start" | "line_end">) => void;
-  onCancel: () => void;
+  files: readonly CodeDiffFile[];
+  onGo: (f: CodeDiffFile) => void;
 }) {
-  const [severity, setSeverity] = useState("major");
-  const [category, setCategory] = useState("correctness");
-  const [title, setTitle] = useDraftState("");
-  const [body, setBody] = useDraftState("");
-  const [suggesting, setSuggesting] = useState(false);
-  const [suggestion, setSuggestion] = useDraftState("");
-  const lines = pick.start === pick.end ? `line ${pick.start}` : `lines ${pick.start}–${pick.end}`;
-  // THE FINDING'S BOXES AS FIELDS of the change page's one draft
-  // (`ChangePage.tsx`), so the person's assistant reads and can fill what is
-  // being written on these lines; adding it to the review stays the person's.
-  useDraftBox({
-    path: "finding.title",
-    label: `Finding on ${lines}: title`,
-    hint: "One line",
-    rank: 10,
-    value: title,
-    set: setTitle,
-    refuses: (next) => (next.includes("\n") ? "A finding's title is one line." : null),
-  });
-  useDraftBox({
-    path: "finding.body",
-    label: `Finding on ${lines}: why, and what to do`,
-    hint: "Plain text",
-    rank: 11,
-    value: body,
-    set: setBody,
-    refuses: () => null,
-  });
-  useDraftBox(
-    suggesting
-      ? {
-          path: "finding.suggestion",
-          label: `Finding on ${lines}: the lines to put in their place`,
-          hint: "The replacement lines, exactly",
-          rank: 12,
-          value: suggestion,
-          set: setSuggestion,
-          refuses: () => null,
-        }
-      : null,
-  );
+  const field = useRef<HTMLInputElement>(null);
+  const [typed, setTyped] = useState("");
+  const [open, setOpen] = useState(false);
+  useKeymap({ "code.find": { run: () => field.current?.focus(), when: true } });
+  const ranked = useMemo(() => {
+    if (typed.trim() === "") return [];
+    return files
+      .filter((f) => !f.path_b64)
+      .flatMap((f) => {
+        const spans = matchPath(typed, f.path);
+        return spans ? [{ f, spans, width: spans.at(-1)![1] - spans[0]![0] }] : [];
+      })
+      .sort((a, b) => a.width - b.width || a.f.path.length - b.f.path.length);
+  }, [files, typed]);
+  const options: ComboboxOption[] = ranked.slice(0, FIND_LIMIT).map(({ f, spans }) => ({
+    value: f.path,
+    label: (
+      <span className="code-find__row">
+        <Matched path={f.path} spans={spans} />
+      </span>
+    ),
+  }));
+  if (ranked.length > FIND_LIMIT) {
+    options.push({
+      value: "",
+      disabled: true,
+      label: `${fmtCount(ranked.length - FIND_LIMIT)} more match: keep typing`,
+    });
+  }
+  const cap = capsOf(keyRow("code.find").presses[0]!);
   return (
-    <form
-      className="code-finding"
-      aria-label={`A finding on ${lines}`}
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!title.trim()) return;
-        onAdd({ severity, category, title, body, ...(suggesting ? { suggestion } : {}) });
+    <Combobox
+      ref={field}
+      label="Files"
+      aria-label="Go to file"
+      placeholder="Go to file"
+      inputSize="sm"
+      containerClassName="code-find code-files-bar__find"
+      leading={<SearchGlyph size="sm" />}
+      trailing={typed === "" ? <Kbd subtle keys={cap} /> : undefined}
+      mono
+      value={typed}
+      onValueChange={(next) => {
+        setTyped(next);
+        setOpen(next !== "");
       }}
-    >
-      <p className="muted">A finding on {lines}, sent with your review.</p>
-      <div className="row gap-2 wrap">
-        <Select
-          width="auto"
-          value={severity}
-          onChange={(value) => setSeverity(String(value))}
-          options={SEVERITY_CHOICES.map((c) => ({ value: c.value, label: c.label }))}
-          ariaLabel="Weight"
-        />
-        <Select
-          width="auto"
-          value={category}
-          onChange={(value) => setCategory(String(value))}
-          options={CATEGORY_CHOICES.map((c) => ({ value: c.value, label: c.label }))}
-          ariaLabel="About"
-        />
-      </div>
-      <Input
-        aria-label="Title"
-        placeholder="What is wrong, in a line"
-        value={title}
-        onChange={(event) => setTitle(event.target.value)}
-      />
-      <Textarea
-        aria-label="Body"
-        placeholder="Why, and what to do (optional)"
-        value={body}
-        rows={3}
-        onChange={(event) => setBody(event.target.value)}
-      />
-      {pick.side === "new" && (
-        <label className="row gap-1">
-          <input
-            type="checkbox"
-            checked={suggesting}
-            onChange={(event) => setSuggesting(event.target.checked)}
+      open={open && typed.trim() !== ""}
+      onOpenChange={setOpen}
+      options={options}
+      emptyMessage={`No changed file's path holds “${typed}”`}
+      onCommit={(option) => {
+        const f = files.find((one) => one.path === option.value);
+        if (!f) return;
+        setTyped("");
+        setOpen(false);
+        onGo(f);
+      }}
+    />
+  );
+}
+
+/** Filter options: the diff's own extensions, With findings and Unviewed, each a checkbox. */
+function FilterOptions({
+  exts,
+  shown,
+  onExts,
+  only,
+  onOnly,
+  withFindings,
+  findingsHeld,
+  unviewed,
+  unviewedHeld,
+  narrowing,
+  onClear,
+}: {
+  exts: ReadonlyMap<string, number>;
+  /** The extensions shown; none is every one. */
+  shown: readonly string[];
+  onExts: (next: string[]) => void;
+  only: readonly string[];
+  onOnly: (next: string[]) => void;
+  withFindings: number;
+  /** Why With findings is held, where finding_paths was refused. */
+  findingsHeld: string | undefined;
+  unviewed: number;
+  /** Why Unviewed is held, while the marks are read or where they were refused. */
+  unviewedHeld: string | undefined;
+  narrowing: boolean;
+  onClear: () => void;
+}) {
+  const all = [...exts.keys()].sort();
+  const isShown = (ext: string) => shown.length === 0 || shown.includes(ext);
+  // THE LAST BOX CHECKED STAYS: no extension at all would show no file.
+  const lastShown = all.filter(isShown).length === 1;
+  const toggleOnly = (key: string, on: boolean) =>
+    onOnly(on ? [...only.filter((k) => k !== key), key] : only.filter((k) => k !== key));
+  return (
+    <Popover
+      label="Filter options"
+      align="end"
+      trigger={(open, toggle) => (
+        <span className="code-files__options">
+          <IconButton
+            label="Filter options"
+            icon={<Settings2Glyph />}
+            size="sm"
+            variant="ghost"
+            aria-expanded={open}
+            onClick={toggle}
           />
-          Suggest the lines to put in their place
-        </label>
+          {narrowing && <span className="code-files__dot" aria-hidden="true" />}
+        </span>
       )}
-      {suggesting && (
-        <Textarea
-          aria-label="Suggestion"
-          className="mono"
-          value={suggestion}
-          rows={4}
-          onChange={(event) => setSuggestion(event.target.value)}
-        />
-      )}
-      <div className="row gap-2">
-        <Button type="submit" size="small" variant="primary" disabled={!title.trim()}>
-          Add to review
-        </Button>
-        <Button size="small" variant="ghost" onClick={onCancel}>
-          Cancel
+    >
+      <div className="code-files__popover">
+        <fieldset className="code-files__set">
+          <legend>File extensions</legend>
+          {all.map((ext) => (
+            <Checkbox
+              key={ext || "none"}
+              size="sm"
+              label={`${ext ? `.${ext}` : "No extension"} ${fmtCount(exts.get(ext) ?? 0)}`}
+              checked={isShown(ext)}
+              disabled={lastShown && isShown(ext)}
+              onCheckedChange={(on) => onExts(all.filter((e) => (e === ext ? on : isShown(e))))}
+            />
+          ))}
+        </fieldset>
+        <fieldset className="code-files__set">
+          <legend>Show only</legend>
+          <Checkbox
+            size="sm"
+            label={`With findings ${fmtCount(withFindings)}`}
+            description={findingsHeld}
+            disabled={findingsHeld !== undefined}
+            checked={only.includes("findings") && findingsHeld === undefined}
+            onCheckedChange={(on) => toggleOnly("findings", on)}
+          />
+          <Checkbox
+            size="sm"
+            label={`Unviewed ${fmtCount(unviewed)}`}
+            description={unviewedHeld}
+            disabled={unviewedHeld !== undefined}
+            checked={only.includes("unviewed") && unviewedHeld === undefined}
+            onCheckedChange={(on) => toggleOnly("unviewed", on)}
+          />
+        </fieldset>
+        <Button size="small" variant="ghost" onClick={onClear} disabled={!narrowing}>
+          Clear filters
         </Button>
       </div>
-    </form>
+    </Popover>
   );
 }

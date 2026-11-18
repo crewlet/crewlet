@@ -5,19 +5,16 @@ import (
 	"database/sql"
 )
 
-// A PUSH THAT LANDS ON A PROTECTED BRANCH (M5-D17): every record that moves a
-// protected branch leaves its LANDING ROW — a merge's ([Merge]), a queue's
-// ([Land]) and a push's — so a branch's tip checks judge, and its green row
-// follows, every way it moved. A push moves a protected branch only as a
-// person's own push under direct_push persons, their recorded override
-// (ADR-0096): no protection takes a seat's direct push.
+// A PUSH THAT LANDS ON A PROTECTED BRANCH leaves its landing row, as a merge
+// ([Merge]) and a queue ([Land]) do, so a branch's tip checks judge, and its
+// green row follows, every way it moved. Who may push there is the package
+// doc's "A change is rows on its repository's subject" (ADR-0096).
 //
-// The push's DECIDE stamps its landings ([PushEntry.Landings]) from the rules
-// its snapshot holds — the push half it already asks every command about, and
-// the branch's gate only for a round with a landing ([pushGates]) — so the
-// apply writes the rows without matching a rule itself: kind `push`, naming
-// the pusher, green where the branch's gate requires no check, the branch's
-// green row then moving with it as a direct merge's does.
+// The push's decide stamps its landings ([PushEntry.Landings]) from its
+// snapshot's rules, reading the branch's gate only for a round with a landing
+// ([pushGates]), so the apply writes the rows without matching a rule: kind
+// `push`, naming the pusher, green where the gate requires no check, the
+// branch's green row then moving as a direct merge's does.
 
 // pushGates is one push round's reading of its repository's merge gates — the
 // checks each branch a push lands on requires — read on the round's first
@@ -28,10 +25,10 @@ type pushGates struct {
 	read   bool
 }
 
-// landings is the landings cmds — an entry's commands as its decide found them
-// — make under rules, the round's push rules: one for each ok command moving a
-// branch a rule protects onto a commit, in command order, green where the
-// branch's gate requires no check.
+// landings is the landings cmds (an entry's commands as its decide found them)
+// make under rules, the round's push rules: one per ok command moving a
+// protected branch onto a commit, in command order, green where the branch's
+// gate requires no check.
 func (g *pushGates) landings(ctx context.Context, tx *sql.Tx, rules Protections, cmds []Command) ([]PushLanding,
 	error) {
 
@@ -72,10 +69,9 @@ func writePushLandings(ctx context.Context, tx *sql.Tx, at applyContext, repoID 
 		}
 		for _, l := range e.Landings {
 			if l.Command < 0 || l.Command >= len(e.Commands) || e.Commands[l.Command].Result != ResultOK {
-				// A RECORD NO CORRECT LOG CARRIES — its decide stamps a
-				// landing on an ok command alone — lands the push and writes
-				// no such landing, logged: a refusal would stop the log on
-				// every node.
+				// No correct log carries this (decide stamps only ok
+				// commands): land the push without the landing, logged, since
+				// a refusal would stop the log on every node.
 				applyLog.WarnContext(ctx, "code_landing_not_applied", "repo", repoID, "push", e.PushID,
 					"command", l.Command, "position", at.position.String())
 				continue

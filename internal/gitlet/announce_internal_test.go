@@ -49,16 +49,13 @@ func (noRecords) Publish(context.Context, statelog.Request) (statelog.Result, er
 }
 
 // A STOPPING COMMITTER PUBLISHES WHAT IT LANDED BEFORE IT RETURNS: Stop waits
-// for the announcer to drain what the repositories handed it, so a node that
-// stops loses no announcement of a record it landed while its stream still
-// takes them.
+// for the announcer to drain what the repositories handed it, so a stopping
+// node loses no announcement of a record it landed while its stream takes them.
 //
-// In a bubble, where synctest.Wait returns once every goroutine but the
-// case's is durably blocked: the announcer is parked on the held publish, so
-// a Stop that was going to return without waiting for it has returned by
-// then, and one that waits is parked behind it. The opening is handed over as
-// a repository's goroutine hands what its write landed (announceLater); the
-// committer lands no record here, so it is built over a store it never reads.
+// synctest.Wait returns once the announcer is parked on the held publish: a
+// Stop that would not wait for it has returned by then, one that waits is
+// parked behind it. The opening is handed over as a repository's goroutine
+// would (announceLater); the committer lands no record, so its store is unread.
 //
 // Mutation: return from Stop once the repositories' goroutines are done,
 // without waiting for the announcer — Stop has returned while the stream

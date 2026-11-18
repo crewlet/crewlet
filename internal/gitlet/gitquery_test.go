@@ -15,12 +15,11 @@ import (
 )
 
 // A READ BY OBJECT ID NAMES OBJECTS, NEVER REVISIONS, AND PATHS NO GRAMMAR
-// READS. Every revision is a whole id or an abbreviation of git's default
-// length or more — never a ref, `^`, `~` or `:`, which would hand git's
-// revision grammar to the Gitlet node, nor fewer digits than name one object of a
-// large repository — every path is clean and relative (git reads `./` and
-// `../` as relative to a work tree, which dies over a bare repository's whole
-// batch), and each refusal names its field.
+// READS. A revision is a whole id or an abbreviation of git's default length
+// or more: never a ref, `^`, `~` or `:` (which would hand git's revision
+// grammar to the Gitlet node), nor too few digits to name one object of a large repository. A path
+// is clean and relative (git reads `./` and `../` against a work tree, which
+// kills a bare repository's whole batch). Each refusal names its field.
 func TestAGitQueryIsRefusedByField(t *testing.T) {
 	t.Parallel()
 	const id = "0123456789abcdef0123456789abcdef01234567"
@@ -151,16 +150,13 @@ func TestAGitQueryIsRefusedByField(t *testing.T) {
 }
 
 // A HISTORY'S AND A BLAME'S READ IS REFUSED BY FIELD. A log names a commit, a
-// clean path or none (every commit), a literal of at most MaxLogGrepBytes that
-// is UTF-8 holding no NUL, a page of up to MaxLogLimit commits (none the
-// default), and a Since no earlier than the first instant a commit's date can
-// name and no later than a day past the node's clock (a year typed wrong is
-// told so rather than answered an empty history). An Until is after the epoch,
-// after a Since and no later than a day ahead, and a PushedBy is a seat's
-// handle, whether a Since is set or not. A blame names a commit, a file (never
-// the root), and a range of at most MaxBlameLines lines counted from 1, its end
-// at or after its start; a start with no end is a range all the same, however
-// far out. Each refusal names its field.
+// clean path or none, a NUL-free UTF-8 literal of at most MaxLogGrepBytes, up
+// to MaxLogLimit commits, and a Since from the epoch to a day past the node's
+// clock (a mistyped year is refused, not answered an empty history). An Until
+// is after the epoch and any Since and at most a day ahead; a PushedBy is a
+// handle, Since or not. A blame names a commit, a file, and at most
+// MaxBlameLines lines from 1, end at or after start; a start with no end is a
+// range however far out. Each refusal names its field.
 //
 // Mutation: the Until and PushedBy arms inside the Since switch → accepted with no since, red.
 func TestAHistoryAndABlameAreRefusedByField(t *testing.T) {
@@ -261,14 +257,12 @@ func TestAHistoryAndABlameAreRefusedByField(t *testing.T) {
 	}
 }
 
-// A READ OF A CHANGE'S REVISIONS NAMES THEM AS THEIR ROWS DO. A revision's
-// facts, a re-anchoring and an interdiff name every commit by the whole id
-// its rows recorded — never an abbreviation, which would make an interdiff's
-// two bases unequal ids of one commit — a re-anchoring places a bounded list
-// of ranges, each named once and within the lines a file can hold
-// (gitlet.MaxAnchorLine), and an interdiff's touched lists are the ones
-// facts give: within their bounds, beside no word that they touch all, and
-// clean paths. Each refusal names its field.
+// A READ OF A CHANGE'S REVISIONS NAMES THEM AS THEIR ROWS DO: every commit by
+// the whole id its rows recorded (an abbreviation would make an interdiff's
+// two bases unequal ids of one commit); a re-anchoring's bounded ranges each
+// named once, within gitlet.MaxAnchorLine; an interdiff's touched lists as
+// facts give them, bounded, clean, and never beside touching all. Each
+// refusal names its field.
 //
 // Mutation: drop the bound on an anchor's last line — the line past any
 // file's is admitted, red.
@@ -277,8 +271,7 @@ func TestAReadOfAChangesRevisionsIsRefusedByField(t *testing.T) {
 	const a, b = "0123456789abcdef0123456789abcdef01234567", "89abcdef0123456789abcdef0123456789abcdef"
 	asker := gitlet.Principal{Kind: gitlet.PrincipalOperator, OperatorID: "token:ci"}
 	repo := "01920000-0000-7000-8000-000000000001"
-	// A REVISION'S FACTS ARE THE ENGINE'S OWN READ, its repository's home's,
-	// which names no asker.
+	// A REVISION'S FACTS ARE THE ENGINE'S OWN READ (the home's): no asker.
 	facts := func(m func(q *gitlet.RevisionFactsQuery)) gitlet.GitQuery {
 		q := gitlet.GitQuery{Kind: gitlet.GitRevisionFacts, RepoID: repo,
 			RevisionFacts: &gitlet.RevisionFactsQuery{Head: a, Target: b}}
@@ -378,8 +371,8 @@ func TestAReadOfAChangesRevisionsIsRefusedByField(t *testing.T) {
 				q.FromTouched[i] = "p"
 			}
 		}), "interdiff.from_touched"},
-		// Nine paths of a thousand `<` are some nine kilobytes as bytes and
-		// past the bound as JSON, which writes each `<` in six.
+		// Nine paths of a thousand `<` are ~9 KB as bytes, past the bound as
+		// JSON, which writes each `<` in six.
 		{"a list past its bytes", interdiff(func(q *gitlet.InterdiffQuery) {
 			for i := range 9 {
 				q.FromTouched = append(q.FromTouched, fmt.Sprintf("%d%s", i, strings.Repeat("<", 999)))
@@ -456,10 +449,9 @@ func TestAReadOfAChangesRevisionsIsRefusedByField(t *testing.T) {
 	}
 }
 
-// A PATH IS CARRIED WHOLE: as itself where it is UTF-8, and beside its exact
-// bytes where it is not — JSON would otherwise answer every such path with
-// U+FFFD, and two paths differing only there as one — and read back from
-// those bytes exactly.
+// A PATH IS CARRIED WHOLE: as itself where it is UTF-8, beside its exact
+// bytes where not (JSON would turn them to U+FFFD, merging two paths), and
+// read back from those bytes exactly.
 func TestAPathThatIsNoUTF8IsCarriedAsItsBytes(t *testing.T) {
 	t.Parallel()
 	for _, p := range []string{"src/main.go", "caf\xe9/x", "nl\nname"} {
@@ -476,9 +468,9 @@ func TestAPathThatIsNoUTF8IsCarriedAsItsBytes(t *testing.T) {
 }
 
 // A SEARCH'S BOUNDS ARE REFUSED BY FIELD before anything is read: a context
-// past gitlet.MaxSearchContext or below none, a per-file bound past
-// gitlet.MaxSearchHits or below none, and a limit past
-// gitlet.MaxSearchContextHits beside context, which a limit alone may pass.
+// outside 0..gitlet.MaxSearchContext, a per-file bound outside
+// 0..gitlet.MaxSearchHits, and a limit past gitlet.MaxSearchContextHits
+// beside context (a limit alone may pass it).
 //
 // Mutation: drop the context bound (ValidateBounds), red.
 func TestASearchsBoundsAreRefused(t *testing.T) {

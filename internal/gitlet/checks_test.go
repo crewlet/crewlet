@@ -51,10 +51,9 @@ func (n *node) publishCheck(repo string, op gitlet.OpKind, payload any) (statelo
 	return res, err
 }
 
-// seedEnded writes count check rows of repoID straight into a node's estate,
-// each ended at the instant at and keyed by it — rows a case needs past or
-// inside the history, which no record of this build can end at an instant it
-// chooses.
+// seedEnded writes count check rows of repoID, each ended at the instant at
+// and keyed by it, straight into a node's estate: no record of this build ends
+// a row at an instant a case chooses.
 func (n *node) seedEnded(repoID string, at time.Time, count int) {
 	n.t.Helper()
 	for i := range count {
@@ -76,21 +75,18 @@ func (n *node) checksOf(repoID string) int {
 	return n.count(`SELECT COUNT(*) FROM code_checks WHERE repo_id = ?`, repoID)
 }
 
-// AN IDLE REPOSITORY'S CHECKS ARE SWEPT (M5-D34): a repository whose checks
-// keep ending removes its own history with each ending, and one whose checks
-// stopped ending has nothing of its own that ever would — so the retention
-// pass lists the repositories holding a check row that ended before its clock
-// less CheckHistory less CheckSweepGrace, and publishes a checks_sweep on
-// each one's checks subject which removes EVERY row of it past the history,
-// the ones inside the grace too: a swept repository is swept whole. A
-// repository whose rows are past the history but inside the grace — its next
-// ending may yet come — is not listed and keeps them, and nor is one whose
-// rows are inside the history.
+// AN IDLE REPOSITORY'S CHECKS ARE SWEPT (M5-D34): one whose checks stopped
+// ending has no ending left to remove its history, so the retention pass lists
+// each repository holding a row ended before its clock less CheckHistory less
+// CheckSweepGrace and publishes a checks_sweep removing EVERY row of it past
+// the history, those inside the grace too. A repository whose rows are past
+// the history but inside the grace (its next ending may yet come), or inside
+// the history, is not listed and keeps them.
 //
-// Mutation: leave the checks step out of the pass, and the idle repository
-// keeps its rows — red; sweep to the listing's cutoff rather than the
-// history, and it keeps the two inside the grace — red; list at the history
-// itself, and the recent repository is swept too — red.
+// Mutation: leave the checks step out of the pass (the idle repository keeps
+// its rows), sweep to the listing's cutoff rather than the history (it keeps
+// the two inside the grace), or list at the history itself (the recent
+// repository is swept) — each red.
 func TestAnIdleRepositorysChecksAreSwept(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -134,17 +130,15 @@ func TestAnIdleRepositorysChecksAreSwept(t *testing.T) {
 	}
 }
 
-// AN ACTIVE REPOSITORY'S CHECKS ARE LEFT TO ITS ENDINGS: a repository whose
-// checks keep ending removes its history with each ending, so a row that
-// crossed the history since its last ending — here half a minute before the
-// pass, its last ending a minute before — is its next ending's to remove. The
-// pass appends nothing for it: a sweep would be a record that ending makes
-// anyway, applied by every data node, ahead of the purges on the pass's one
-// budget — at Gitlet's design point, thousands of them a pass. Its
-// next ending removes the row.
+// AN ACTIVE REPOSITORY'S CHECKS ARE LEFT TO ITS ENDINGS: each ending removes
+// its repository's history, so a row that crossed the history since the last
+// ending (here half a minute before the pass, the ending a minute before) is
+// the next ending's to remove, and the pass appends nothing: a sweep would
+// repeat that ending's work on every data node, ahead of the purges on the
+// pass's one budget, thousands a pass at Gitlet's design point.
 //
-// Mutation: list the repositories holding rows past the history itself, with
-// no grace, and the pass sweeps the active repository — red.
+// Mutation: list the repositories holding rows past the history with no
+// grace, and the pass sweeps the active repository — red.
 func TestAnActiveRepositorysChecksAreLeftToItsEndings(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -196,11 +190,10 @@ func TestAnActiveRepositorysChecksAreLeftToItsEndings(t *testing.T) {
 	}
 }
 
-// A PURGED REPOSITORY'S CHECK WRITES NOTHING: a repository's purge removes
-// its checks and their logs with the rest of it, and a check record about it
-// that lands after the purge — a runner that ended a check its repository's
-// purge outran — is dropped by the deletion gate on every node, which reads
-// the repository off the checks subject itself, record body or none.
+// A PURGED REPOSITORY'S CHECK WRITES NOTHING: the purge removes its checks
+// and their logs, and a check record landing after it (a runner's ending the
+// purge outran) is dropped by the deletion gate on every node, which reads the
+// repository off the checks subject itself, record body or none.
 //
 // Mutation: leave the checks subject out of the deletion gate (gatedRepo) and
 // the late ending writes a row for a purged repository — red.
@@ -271,12 +264,11 @@ func TestAPurgedRepositorysCheckWritesNothing(t *testing.T) {
 
 // A CHECK'S LOG IS NAMED BY THE ENDING THAT KEEPS ONE (ADR-0082's contract for
 // a Required table): an ending carrying a log names the attempt's
-// code_check_logs row and its object, spelled as the walk spells the row; an
-// ending carrying none names NOTHING — never a removal, since the join may keep
-// another ending's log, and a removal read where the row stands would lose
-// that log to a backup; every other record names none; and a record this build
-// cannot read that may reach a repository's checks refuses, while one whose
-// writer scoped it to a repository's own rows does not.
+// code_check_logs row and its object, spelled as the walk spells the row; one
+// carrying none names NOTHING, never a removal, since the join may keep
+// another ending's log, which a removal would lose to a backup; every other
+// record names none; and an unreadable record that may reach a repository's
+// checks refuses, while one scoped to a repository's own rows does not.
 //
 // Mutation: answer an ending with no log as a removal of the row, and the
 // ending-with-no-log case goes red; read a newer record scoped to checks as
@@ -338,21 +330,18 @@ func TestACheckLogIsNamedByTheEndingThatKeepsOne(t *testing.T) {
 	}
 }
 
-// THE LARGEST CHECK RECORDS FIT A RECORD: a queued attempt carrying the
-// widest definition a file can hold — every list at its bound, every text at
-// its bytes in the character JSON spells in six — and an ending carrying every
-// field at its bound each validate, and encode with the longest node id and
-// widest generation under MaxRecordBytes, so no check a writer forms is one
-// the committer's log refuses — the ending too once its writer has stamped
-// whom a failed head concerns, its routing at the bounds of the roles it
-// fills, and with the whole of MaxRoutingBytes to spare beside it, the most
-// any routing may take; and one record's apply — its row, its log dropped and
-// written, its horizon's check rows with theirs, and the notice rows its
-// routing writes — stays inside MaxRecordRows.
+// THE LARGEST CHECK RECORDS FIT A RECORD: the widest queued attempt (every
+// list at its bound, every text in the character JSON spells in six) and the
+// widest ending validate and, with the longest node id and widest generation,
+// encode under MaxRecordBytes, so the committer's log refuses no check a
+// writer forms: the ending too with a failed head's routing at its roles'
+// bounds, and with all of MaxRoutingBytes beside it. One record's apply (its
+// row, its log dropped and written, its horizon's rows with theirs, its
+// routing's notices) stays inside MaxRecordRows.
 //
-// Mutation: keep more room for a routing (MaxRoutingBytes past what the
-// widest ending leaves) — red; charge a routing more notice rows than a
-// record leaves (routingNoticeRows) — red.
+// Mutation: raise MaxRoutingBytes past what the widest ending leaves, or
+// charge a routing more notice rows than a record leaves (routingNoticeRows)
+// — each red.
 func TestTheLargestCheckRecordsFitARecord(t *testing.T) {
 	t.Parallel()
 	const repo = "0190f3c4-0000-7000-8000-00000000b0b0"
@@ -407,11 +396,10 @@ func TestTheLargestCheckRecordsFitARecord(t *testing.T) {
 		Log:      &gitlet.CheckLog{Object: keyOf("log"), Hash: objstore.HashOf([]byte("log")), Size: gitlet.MaxCheckLogBytes},
 		Reporter: person, URL: "https://ci.example.com/" + wide(gitlet.MaxCheckURLBytes-len("https://ci.example.com/")),
 		FinishedAt: harnessAt}
-	// WHOM A FAILED HEAD CONCERNS, as routeFailedHead stamps it on the ending
-	// its decide validated: the change's authors at MaxRoutedParticipants and
-	// the head's pusher, each a person at a login's whole width, the change's
-	// title in the character JSON spells in six, and a work item — whose
-	// fields no bound of their own holds; the routing's room does.
+	// WHOM A FAILED HEAD CONCERNS, as routeFailedHead stamps it: the authors at
+	// MaxRoutedParticipants and the pusher, each at a login's whole width, the
+	// title in the character JSON spells in six, and a work item, whose fields
+	// only the routing's room bounds.
 	handle := func(i int) string { return fmt.Sprintf("%02d", i) + strings.Repeat("h", iam.MaxLogin-2) }
 	routing := &gitlet.ChangeRouting{ChangeID: queued.ChangeID,
 		ChangeRef: gitlet.ChangeRef(strings.Repeat("r", gitref.MaxRepoNameBytes), 1<<40),
@@ -489,10 +477,9 @@ func TestTheLargestCheckRecordsFitARecord(t *testing.T) {
 }
 
 // A CHECK AT THE COMPANY'S DEFAULT TIMEOUT FITS THE SHORTEST REMOTE SESSION: an
-// unset code.checks.max_timeout_seconds and the time a check's box is given
-// past its timeout for its setup (CheckBoxGrace) sum to the hour a box on
-// E2B's smallest plan lives — the one figure config's default is derived from,
-// which config cannot read here, since the grace is the sandbox's.
+// unset code.checks.max_timeout_seconds plus CheckBoxGrace (a box's setup time
+// past its timeout) is the hour a box on E2B's smallest plan lives. Held here,
+// not in config, which cannot read the grace.
 //
 // Mutation: raise config.CodeDefaultCheckMaxTimeout to an hour — red.
 func TestTheDefaultCheckTimeoutFitsTheShortestRemoteSession(t *testing.T) {

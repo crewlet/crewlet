@@ -32,7 +32,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import type { CodeRepoDetail } from "~/protocol/index.ts";
 import { repoHref } from "../paths.ts";
 import { Face } from "../ui.tsx";
-import { protectionWords, useDefaultBranch } from "./Branches.tsx";
+import { protectionWords, useBranchDetail } from "../branchDetail.ts";
 import "~/styles/gitlet.css";
 
 /** Which seats read a repository, in words. Every person reads every repository (ADR-0088). */
@@ -113,7 +113,7 @@ function DocLink({ repo, doc, label }: { repo: string; doc: "readme" | "license"
 
 /** The default branch's protection in its rules' words, else how many rules the repository holds. */
 function Protection({ repo }: { repo: CodeRepoDetail }) {
-  const found = useDefaultBranch(repo);
+  const found = useBranchDetail(repo.name, repo.default_branch);
   const branch = <strong>{repo.default_branch}</strong>;
   const settings = repoHref(repo.name, { tab: "settings" });
   if (found.loading) {

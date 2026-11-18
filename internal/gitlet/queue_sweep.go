@@ -11,40 +11,28 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE QUEUE SWEEP: what removes an IDLE repository's queue history — its ended
-// entries and its landings below their target's green row — once it outlives
-// [QueueHistory] (M5-D34).
+// THE QUEUE SWEEP removes an IDLE repository's queue history (ended entries,
+// and landings below their target's green row) once it outlives
+// [QueueHistory] (M5-D34). A working queue's own records trim it
+// ([sweepQueueHistory]); one whose queues stopped, or whose landings are only
+// pushes and merges, would keep it for ever. So the code-retention duty lists
+// the repositories past the horizon by [QueueSweepGrace], which no working
+// queue reaches, and publishes a queue_sweep on each one's subject
+// ([Retention.Pass]'s queue step), applied as a queue record's horizon is.
 //
-// A repository's history past the horizon is removed by its own queue's
-// records — each candidate, eject and land removes the oldest past its broker
-// instant ([sweepQueueHistory]) — so a repository whose queues keep working
-// keeps its thirty days by itself. One whose queues stopped, or whose landings
-// are a person's pushes and its merges' alone, keeps whatever it held for
-// ever, since nothing of its own would remove it; so the code-retention duty
-// lists the repositories holding history past the horizon by
-// [QueueSweepGrace] — which no repository whose queues keep working holds —
-// and publishes a queue_sweep record on each one's subject ([Retention.Pass]'s
-// queue step), which every node applies as a queue record's horizon is
-// applied.
-//
-// ON THE REPOSITORY'S SUBJECT, ARBITRATED, as a retired-pack sweep is
-// ([Store.RetireSweep]): the rows are the repository's own records', and the
-// broker orders the sweep among them, so the decide's count is what the apply
-// removes. BY RECORDS, NEVER BY A NODE-LOCAL JOB: the rows are replicated, and
-// a delete each node made on its own clock would leave every data node's copy
-// different.
+// ARBITRATED ON THE REPOSITORY'S SUBJECT, as [Store.RetireSweep], ordered among
+// its own records so the decide's count is what the apply removes; BY RECORDS,
+// never a node-local job, whose deletes would leave the replicas differing.
 
 // QueueSweep takes ONE step of sweeping repoID's queue history past
 // [QueueHistory]: a queue_sweep record removing, oldest first, the ended
 // entries and the landings below their green row from before now less the
-// history — at most [QueueSweepRows], its ejections within [QueueSweepBytes] —
-// and reports what it did. A caller
-// steps a repository while the result says More.
+// history, at most [QueueSweepRows] with ejections within [QueueSweepBytes].
+// A caller steps a repository while the result says More.
 //
-// now is the DUTY HOLDER'S clock, and the record carries the cutoff it
-// judged — never its broker instant's — so the apply removes what this decide
-// saw past the history, and a step that read rows past it never appends a
-// record that removes none of them.
+// now is the DUTY HOLDER'S clock, and the record carries the cutoff it judged,
+// never its broker instant's, so the apply removes what this decide saw and a
+// step never appends a record that removes none of the rows it read.
 func (s *Store) QueueSweep(ctx context.Context, repoID string, now time.Time) (SweepResult, error) {
 	if now.IsZero() {
 		return SweepResult{}, fmt.Errorf("%w: now: a queue sweep judges the history by the duty holder's "+
@@ -55,8 +43,8 @@ func (s *Store) QueueSweep(ctx context.Context, repoID string, now time.Time) (S
 	subject := RepoSubject(repoID)
 	scope := []string{RepoPath(repoID)}
 	// THE WALL CLOCK, as every op id of this domain is minted: its instant is
-	// judged against the ledger's watermark, never against the decide's
-	// clock, which a caller may have set anywhere.
+	// judged against the ledger's watermark, not the decide's clock, which a
+	// caller may set anywhere.
 	opID := statelog.NewOpID(time.Now(), "code_queue_sweep")
 	at := s.now()
 	var swept SweepResult
@@ -65,9 +53,8 @@ func (s *Store) QueueSweep(ctx context.Context, repoID string, now time.Time) (S
 		OpID: opID, Pattern: statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			swept = SweepResult{}
-			// NO ROW, NO RECORD: a purged repository's queues went with its
-			// purge, and a record about a repository this node's rows do not
-			// hold is one the applier refuses.
+			// NO ROW, NO RECORD: a purged repository's queues went with it, and
+			// the applier refuses a record about a repository its rows lack.
 			var name string
 			switch err := tx.QueryRowContext(ctx, repoNameSQL, repoID).Scan(&name); {
 			case errors.Is(err, sql.ErrNoRows):
@@ -112,23 +99,17 @@ type queueSweepQuery struct {
 }
 
 // queueSweepDue lists one page of the repositories holding queue history from
-// before q.cutoff — an ended entry, or a landing below its target's green row
-// — by id, after q.after, and whether the listing goes on past it.
+// before q.cutoff (an ended entry, or a landing below its target's green row),
+// by id after q.after, and whether the listing goes on past it.
 //
-// A WALK OF THE REPOSITORIES BY THEIR KEY, two seeks each: a repository's
-// oldest ended entry over code_queue_ended_idx, and each of its targets' oldest
-// landing below its green row by the landings' key — the oldest, since a
-// target's landings below its green are removed oldest first. No index orders
-// either by instant across repositories, so the walk's cost follows the
-// repositories rather than the history that is due: MEASURED, 80 ms a pass
-// over config.CodeMaxRepos repositories with nothing due, each with an ended
-// entry and two protected branches' green rows (BenchmarkQueueSweepListing;
-// one bounded run, -benchtime 3x and one count, on two E-cores of a Core
-// Ultra 7 265U). Its decision rule is the ref expiry listing's: past a tenth
-// of [RetentionPassBudget] (6 s) at that size, the listing moves to seeks of
-// the due rows by instant, in a migration of its own; at 80 ms the walk
-// stays. A STALE READ of this node's rows, as the purge listing is, which
-// holds no write lane: every step decides again in its own snapshot.
+// A WALK OF THE REPOSITORIES BY KEY, two seeks each: the oldest ended entry
+// over code_queue_ended_idx, and each target's oldest landing below green by
+// the landings' key (removed oldest first). No index orders either by instant
+// across repositories, so the cost follows the repositories: 80 ms a pass at
+// config.CodeMaxRepos, nothing due (BenchmarkQueueSweepListing, -benchtime 3x,
+// two E-cores of a Core Ultra 7 265U); past a tenth of [RetentionPassBudget]
+// (6 s), the ref expiry listing's rule, it moves to seeks by instant. A STALE
+// READ holding no write lane: every step decides again in its own snapshot.
 func (r *Reader) queueSweepDue(ctx context.Context, q queueSweepQuery) ([]string, bool, error) {
 	if q.limit <= 0 {
 		return nil, false, fmt.Errorf("%w: a page of the queue sweep's listing names at least one repository",
@@ -160,12 +141,10 @@ func (r *Reader) queueSweepDue(ctx context.Context, q queueSweepQuery) ([]string
 	return page, len(page) == q.limit, nil
 }
 
-// queueSweepDueSQL is the code-retention pass's listing of the repositories
-// holding queue history past the history by the grace: the repositories by
-// their key after the cursor, each kept where an ended entry ended before the
-// cutoff — one seek of code_queue_ended_idx, its predicate repeated as the
-// index declares it — or where a target's oldest landing below its green row
-// landed before it, one seek of the landings' key a green row.
+// queueSweepDueSQL lists, by key after the cursor, the repositories with an
+// entry ended before the cutoff (one seek of code_queue_ended_idx, its
+// predicate repeated as the index declares it) or a target whose oldest
+// landing below its green row landed before it (one seek of the landings' key).
 const queueSweepDueSQL = `SELECT r.id FROM code_repos AS r WHERE r.id > ?1
 	AND (EXISTS (SELECT 1 FROM code_queue AS q INDEXED BY code_queue_ended_idx
 			WHERE q.repo_id = r.id AND q.state IN ('landed', 'ejected', 'dequeued') AND q.ended_at < ?2)

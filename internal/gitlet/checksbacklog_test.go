@@ -37,17 +37,14 @@ func (e *estate) backlog(now time.Time) ChecksBacklog {
 }
 
 // THE BACKLOG FINDS AN OVERDUE CHECK BEHIND A QUEUE OF LONGER ONES: more
-// attempts of a fifty-minute check than a reading counts, all queued first,
-// and then one attempt of a one-minute lint. Ten minutes on, the lint alone
-// has waited past its own timeout — and the reading counts it, named, however
-// many attempts were queued ahead of it, since it reads the queue in the order
-// the attempts fell overdue. An hour on every attempt is past its own: the
-// reading counts BacklogScan of them, says there are more, and names the
-// longest wait among those it counted.
+// attempts of a fifty-minute check than a reading counts, queued first, then
+// one of a one-minute lint. Ten minutes on the lint alone is past its timeout,
+// and the reading counts it, named, since it walks the queue in the order the
+// attempts fell overdue. An hour on, it counts BacklogScan, says there are
+// more, and names the longest wait it counted.
 //
-// Mutation: walk the queue by when each attempt was queued, as the reading
-// once did — the window holds the long check's attempts, none of them overdue
-// ten minutes on, and the lint is never read — red.
+// Mutation: walk the queue by when each attempt was queued — the window holds
+// only the long check's attempts, none overdue ten minutes on — red.
 func TestTheBacklogFindsAnOverdueCheckBehindLongerOnes(t *testing.T) {
 	t.Parallel()
 	e := openChecksEstate(t)
@@ -74,14 +71,12 @@ func TestTheBacklogFindsAnOverdueCheckBehindLongerOnes(t *testing.T) {
 	}
 }
 
-// A DELETED REPOSITORY'S QUEUE IS NOBODY'S BACKLOG: an attempt past its own
-// timeout counts while its repository is active, and while it is archived —
-// a runner still claims and ends an archived repository's attempts — and not
-// once the repository is deleted: every write of a deleted repository's
-// checks is refused repo_deleted, the home's cancel and a runner's claim
-// alike, so the attempt stays queued until the purge removes it, and counted
-// it raised the alarm on every data node for the retention's days, sending an
-// operator to Gitlet nodes that were healthy. Restored, it counts again.
+// A DELETED REPOSITORY'S QUEUE IS NOBODY'S BACKLOG: an overdue attempt counts
+// while its repository is active or archived (a runner still claims and ends
+// an archived one's attempts), and not once it is deleted: every write of its
+// checks is refused repo_deleted, so the attempt stays queued until the purge,
+// and counting it would raise the alarm on every data node for the retention's
+// days, at Gitlet nodes that are healthy. Restored, it counts again.
 //
 // Mutation: drop the walk's test of the repository's state, and the deleted
 // repository's attempt is counted — red.

@@ -10,28 +10,18 @@ import (
 	"testing"
 )
 
-// THE LISTINGS SEEK THEIR INDEXES: every combination of the four filters a
-// listing of changes may name walks the index its filters lead — a work
-// item's; an owner's in a state; a repository's in a state; a repository's;
-// the company's in a state — and every filter the listing names is either
-// sought by that index or tested on each row the page read: none is dropped,
-// which would list more than its caller asked for and say nothing. A listing
-// naming no repository, work item or state is refused, since no index holds
-// every change the company has.
+// THE LISTINGS SEEK THEIR INDEXES: every combination of the four filters walks
+// the index they lead, and each named filter is sought by it or tested on each
+// row, never dropped (which would silently list more); naming no repository,
+// work item or state is refused. Each walk READS ITS INDEX: a page and the page
+// after its cursor are exactly the rows its index holds for its keys, newest
+// first: this holds which statements a walk issues, which no one-statement
+// plan (TestEveryCodeIndexServesARegisteredQuery) sees.
 //
-// And each walk READS ITS INDEX: a page of it is exactly the rows its index
-// holds for the walk's keys, newest first in the index's order, and a page
-// after its own cursor the rows that follow — on the plan estate, against the
-// rows read whole. TestEveryCodeIndexServesARegisteredQuery holds each
-// statement to its seek and to reading in its index's order, sorting nothing;
-// this holds which statements a walk issues, which no plan of one statement
-// sees.
-//
-// Mutations: walk a repository's changes in one state by the number index →
-// the walk names another index than its filters lead; drop the owner test
-// from a repository's walk → the owner is neither sought nor tested; hand a
-// walk another's statements (an owner's walk the state's) → its page holds
-// rows of other owners.
+// Mutations: a repository's walk in one state by the number index → wrong
+// index; drop the owner test from a repository's walk → owner neither sought
+// nor tested; hand an owner's walk the state's statements → rows of other
+// owners.
 func TestTheListingsSeekTheirIndexes(t *testing.T) {
 	t.Parallel()
 	db := seededPlanEstate(t)
@@ -123,8 +113,7 @@ func TestTheListingsSeekTheirIndexes(t *testing.T) {
 		t.Fatalf("read the plan estate's changes whole: %v", err)
 	}
 	for index, w := range walks {
-		// held is every change the walk's index holds for its keys, in the
-		// index's order, newest first.
+		// held is every change the walk's index holds for its keys, newest first.
 		var held []changeRow
 		for _, row := range every {
 			var match bool
@@ -186,16 +175,14 @@ func TestTheListingsSeekTheirIndexes(t *testing.T) {
 	}
 }
 
-// A WINDOW LEADS NO LIVE STATE: a listing narrowed to a window walks the two
-// indexes of when changes last moved beside every state, a merged or a closed
-// one, and tests that state on the rows it read — but beside a draft or an
-// open state it walks that state's own index and tests the window on each
-// row, since the state's index holds the live set alone where the window's
-// hold every change that moved within it, every merged one among them.
+// A WINDOW LEADS NO LIVE STATE: beside no state or a terminal one a window
+// walks the indexes of when changes moved and tests the state on each row;
+// beside a draft or open state it walks that state's index, which holds the
+// live set alone, and tests the window on each row.
 //
-// Mutation: put the window ahead of a live state again → the open changes in
-// a window walk code_changes_updated_idx; drop the window test from the live
-// state's walk → its rows are kept whenever they moved.
+// Mutation: put the window ahead of a live state → open changes in a window
+// walk code_changes_updated_idx; drop the window test from the live state's
+// walk → its rows are kept whenever they moved.
 func TestAWindowLeadsNoLiveState(t *testing.T) {
 	t.Parallel()
 	const since = 1_000
